@@ -192,6 +192,10 @@ export default function Triage() {
   const [statusFilter, setStatusFilter] = useState<StatusFilter>(undefined)
   const [sourceFilter, setSourceFilter] = useState<SourceFilter>(undefined)
   const [sortOrder, setSortOrder] = useState<SortOrder>('newest')
+  // 2026-09 P0-4: Triage list can render flat (default) or grouped by
+  // source (each source becomes a collapsible folder). The grouping mode
+  // sits next to the source filter dropdown so the relationship reads.
+  const [groupBySource, setGroupBySource] = useState<boolean>(false)
   const [selectedIds, setSelectedIds] = useState<Set<number>>(new Set())
   const [bulkRunning, setBulkRunning] = useState(false)
   const [focusedIndex, setFocusedIndex] = useState<number | null>(null)
@@ -367,6 +371,23 @@ export default function Triage() {
             label={t('inbox.source.label')}
           />
           <Button
+            type="button"
+            variant="ghost"
+            onClick={() => setGroupBySource(v => !v)}
+            aria-pressed={groupBySource}
+            aria-label={t('inbox.groupBySource')}
+            title={t('inbox.groupBySource')}
+            className={cn(
+              'px-sm py-xs rounded-full text-label-sm transition-colors cursor-pointer',
+              groupBySource
+                ? 'bg-primary/10 text-primary font-bold'
+                : 'bg-surface-container-low text-on-surface-variant hover:text-primary hover:bg-primary/10',
+            )}
+          >
+            <span className="material-symbols-outlined text-[14px] mr-xs align-middle" aria-hidden="true">folder_open</span>
+            {t('inbox.groupBySource')}
+          </Button>
+          <Button
             variant="ghost"
             onClick={() => setSortOrder(sortOrder === 'newest' ? 'oldest' : 'newest')}
             aria-label={t('inbox.sort.aria')}
@@ -458,19 +479,47 @@ export default function Triage() {
               onKeyDown={handleListKey}
               className="space-y-md outline-none"
             >
-              {visibleItems.map((item, i) => (
-                <InboxCard
-                  key={item.id}
-                  item={item}
-                  selected={effectiveSelected.has(item.id)}
-                  focused={focusedIndex === i}
-                  onToggleSelected={toggleSelected}
-                  onMarkRead={markRead}
-                  onArchive={archive}
-                  onContinue={item => void handleContinue(item)}
-                  onRerun={item => void handleRerun(item)}
-                />
-              ))}
+              {groupBySource
+                ? SOURCE_OPTIONS.filter(s => s !== 'all').map(src => {
+                    const bucket = visibleItems.filter(i => i.source === src)
+                    if (bucket.length === 0) return null
+                    const meta = sourceMeta(src)
+                    return (
+                      <div key={src} className="space-y-xs">
+                        <div className="flex items-center gap-xs px-1 pt-2 pb-1 text-[11px] font-bold uppercase tracking-wider text-on-surface-variant/80">
+                          <span className="material-symbols-outlined text-[14px]" aria-hidden="true">{meta.icon}</span>
+                          <span className={meta.color}>{t(meta.labelKey)}</span>
+                          <span className="text-on-surface-variant/60">· {bucket.length}</span>
+                        </div>
+                        {bucket.map((item, j) => (
+                          <InboxCard
+                            key={item.id}
+                            item={item}
+                            selected={effectiveSelected.has(item.id)}
+                            focused={focusedIndex === j}
+                            onToggleSelected={toggleSelected}
+                            onMarkRead={markRead}
+                            onArchive={archive}
+                            onContinue={item => void handleContinue(item)}
+                            onRerun={item => void handleRerun(item)}
+                          />
+                        ))}
+                      </div>
+                    )
+                  })
+                : visibleItems.map((item, i) => (
+                  <InboxCard
+                    key={item.id}
+                    item={item}
+                    selected={effectiveSelected.has(item.id)}
+                    focused={focusedIndex === i}
+                    onToggleSelected={toggleSelected}
+                    onMarkRead={markRead}
+                    onArchive={archive}
+                    onContinue={item => void handleContinue(item)}
+                    onRerun={item => void handleRerun(item)}
+                  />
+                ))}
             </div>
           </>
         )}

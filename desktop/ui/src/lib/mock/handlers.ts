@@ -11,7 +11,7 @@ import type { InboxItem, ProviderInput, SessionInfo, TerminalInfo } from '@/type
 import { MOCK_TERMINAL_OUTPUT_EVENT } from '../runtime/terminalEvents'
 import { MOCK_MEMORIES, MOCK_MEMORY_PROJECTS, MOCK_MEMORY_STATS, MOCK_FEATURED_VENDORS } from './data/memory'
 import type { MemoryGraph } from '@/lib/tauri-api'
-import type { WorkspaceLayout } from '@/components/workspace/layout'
+import type { WorkspaceLayout } from '@/lib/types/workspaceLayout'
 import {
   MOCK_SKILL_CATALOG,
   MOCK_AGENT_CATALOG,

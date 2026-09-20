@@ -3090,5 +3090,8 @@
   "usage.view.audit": "审计（表格）",
   "usage.view.audit.aria": "显示审计表格（精确数字）",
   "sidebar.sessions.grouping.session": "按会话",
-  "sidebar.sessions.grouping.session.desc": "单一扁平列表，按最近活跃排序"
+  "sidebar.sessions.grouping.session.desc": "单一扁平列表，按最近活跃排序",
+  "settings.advanced.devSection.title": "开发者选项",
+  "settings.advanced.devSection.hint": "低峰、语音、CLI、更新、重置",
+  "inbox.groupBySource": "按来源分组"
 }
