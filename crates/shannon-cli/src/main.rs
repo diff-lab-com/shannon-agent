@@ -164,6 +164,30 @@ fn run_retry_limit() -> u32 {
     parse_run_retries(std::env::var("SHANNON_RUN_RETRIES").ok())
 }
 
+/// Resolve the effective turn limit (A12).
+///
+/// Explicit `--max-turns` always wins, in every mode. When the flag is
+/// unset: interactive sessions keep the product default of 20 turns
+/// (`QueryEngineConfig::default`, types.rs), while headless runs get 100 —
+/// long headless tasks are exactly the ones that used to die at 20 turns
+/// with the work done but uncommitted (w4: arcane / dynamodb, exit 2 with
+/// an empty patch; docs/deepswe-eval-findings-2026-09.md).
+///
+/// Pure: `(explicit, headless) -> usize` so both the engine setup and the
+/// headless event loop's TurnLimit / budget-pressure checks agree on one
+/// number (they previously only agreed when the flag was passed).
+fn resolve_max_turns(explicit: Option<u32>, headless: bool) -> usize {
+    // Keep in sync with `QueryEngineConfig::default()` (types.rs) — the
+    // interactive value here IS that default, restated for symmetry.
+    const DEFAULT_INTERACTIVE_MAX_TURNS: usize = 20;
+    const DEFAULT_HEADLESS_MAX_TURNS: usize = 100;
+    match explicit {
+        Some(turns) => turns as usize,
+        None if headless => DEFAULT_HEADLESS_MAX_TURNS,
+        None => DEFAULT_INTERACTIVE_MAX_TURNS,
+    }
+}
+
 /// Backoff before run-level retry attempt `attempt` (1-based). 20 s per
 /// attempt, capped at 60 s — long enough to outlive provider cutoff windows
 /// (minutes-scale), short enough to keep headless automation responsive.
@@ -617,7 +641,9 @@ struct Cli {
     #[arg(long = "output-format", default_value = "text")]
     output_format: OutputFormat,
 
-    /// Maximum turns in headless mode before exiting with code 2.
+    /// Maximum turns in headless mode before exiting with code 2. When
+    /// unset, headless runs default to 100 turns (interactive sessions use
+    /// 20).
     #[arg(long = "max-turns")]
     max_turns: Option<u32>,
 
@@ -2076,10 +2102,12 @@ fn run_headless_query(
         let mut engine = QueryEngine::with_defaults(client, tools, permissions, state)
             .with_plan_mode_active(plan_mode_flag);
 
-        // Apply max_turns if specified
-        if let Some(turns) = max_turns {
-            engine.set_max_turns(turns as usize);
-        }
+        // A12: headless runs default to the larger 100-turn budget; an
+        // explicit --max-turns always wins. The resolved limit also drives
+        // the budget-pressure warnings and the TurnLimit exit below, so the
+        // engine's hard stop and the CLI's exit code can no longer disagree.
+        let max_turns_limit = resolve_max_turns(max_turns, true);
+        engine.set_max_turns(max_turns_limit);
 
         // Memory store
         {
@@ -2340,8 +2368,11 @@ fn run_headless_query(
                         // warning): fire once per threshold, before the hard
                         // TurnLimit break below, so headless callers can wrap up
                         // or checkpoint instead of being cut mid-task.
-                        if let Some(max) = max_turns {
-                            let max = max.max(1) as usize;
+                        // A12: driven by the RESOLVED limit, so the warnings
+                        // also protect default-budget runs (previously they
+                        // only fired when --max-turns was passed explicitly).
+                        {
+                            let max = max_turns_limit;
                             let pct = turn_number.saturating_mul(100) / max;
                             let threshold = if pct >= 95 && !turn_budget_warning_95_fired {
                                 turn_budget_warning_95_fired = true;
@@ -2367,15 +2398,17 @@ fn run_headless_query(
                                 }
                             }
                         }
-                        // Check max turns
-                        if let Some(max) = max_turns {
-                            if turn_number >= max as usize {
-                                if !quiet {
-                                    eprintln!("Max turns ({max}) reached");
-                                }
-                                exit_code = HeadlessExitCode::TurnLimit;
-                                break;
+                        // Check max turns — A12: against the RESOLVED limit,
+                        // so a default-budget run that exhausts 100 turns
+                        // still exits with the honest TurnLimit code instead
+                        // of the engine's Completed.
+                        if turn_number >= max_turns_limit {
+                            let max = max_turns_limit;
+                            if !quiet {
+                                eprintln!("Max turns ({max}) reached");
                             }
+                            exit_code = HeadlessExitCode::TurnLimit;
+                            break;
                         }
                     }
                     Ok(QueryEvent::Usage { input_tokens, output_tokens, .. }) => {
@@ -7387,6 +7420,39 @@ profile_routes = []
         assert_eq!(parse_run_retries(Some("-1".into())), 2);
         assert_eq!(parse_run_retries(Some("".into())), 2);
         assert_eq!(parse_run_retries(Some(" 2 ".into())), 2, "trim tolerated");
+    }
+
+    /// A12: the effective turn limit — explicit `--max-turns` always wins;
+    /// unset means 20 for interactive sessions (unchanged product default)
+    /// and 100 for headless runs (long tasks were dying at 20 with work
+    /// uncommitted — w4 arcane/dynamodb, docs/deepswe-eval-findings-2026-09.md).
+    #[test]
+    fn test_resolve_max_turns_four_branches() {
+        assert_eq!(
+            resolve_max_turns(None, false),
+            20,
+            "unset + interactive keeps the product default of 20"
+        );
+        assert_eq!(
+            resolve_max_turns(None, true),
+            100,
+            "unset + headless defaults to the larger 100-turn budget"
+        );
+        assert_eq!(
+            resolve_max_turns(Some(5), false),
+            5,
+            "explicit --max-turns wins over the interactive default"
+        );
+        assert_eq!(
+            resolve_max_turns(Some(5), true),
+            5,
+            "explicit --max-turns wins over the headless default"
+        );
+        assert_eq!(
+            resolve_max_turns(Some(0), true),
+            0,
+            "explicit 0 stays explicit (immediate hard stop, unchanged semantics)"
+        );
     }
 
     #[test]

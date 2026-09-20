@@ -8,9 +8,168 @@ use serde_json::{Value, json};
 
 use super::error::ApiError;
 use super::types::{
-    ContentBlock, ContentDelta, LlmProvider, Message, MessageDeltaDelta, MessageRequest,
-    StreamEvent, Usage, WireFormat,
+    ContentBlock, ContentDelta, LlmProvider, Message, MessageContent, MessageDeltaDelta,
+    MessageRequest, StreamEvent, ToolResultContent, Usage, WireFormat,
 };
+
+// ── A13: wire sanitizer for OpenAI-compatible (strict) providers ───────────
+//
+// minimax-M3 validates that every tool result immediately follows the
+// assistant message that declared the call and rejects orphans with
+// `invalid params, tool result's tool id(..) not found (2013)` —
+// ~/.shannon/eval/deepswe-smoke/jobs/deepswe-smoke-mm1/. The engine's turn
+// loop (A13 root fix) no longer produces orphan sequences, but any upstream
+// assembly bug must still fail closed: this sanitizer runs at the
+// OpenAI-compatible serialization exit and (1) drops tool results that no
+// preceding assistant declared and (2) settles dangling declarations with a
+// synthetic "(interrupted)" result. Anthropic-wire serialization (tolerant
+// providers: Anthropic / Zhipu-coding path) deliberately does NOT run it.
+
+/// Placeholder content for a tool result whose call was interrupted before
+/// producing anything (A13 wire sanitizer).
+const INTERRUPTED_TOOL_RESULT: &str = "(interrupted)";
+
+/// A13-c: minimax's backend parses `tool_calls[].function.arguments` and
+/// requires a JSON object — the literal `"null"` (and any other non-object
+/// JSON value) is rejected with `400 (2013) invalid params`, while `"{}"`
+/// succeeds (decisive live-API comparison, request_id
+/// 06fc6407792530aa1d9df28fe350fd1a → 400 vs
+/// 06fc64093ab64d878b704669ba551957 → 200). Normalize any non-object
+/// arguments to the empty object; valid objects pass through untouched.
+fn normalize_tool_arguments(input: &Value) -> Value {
+    let rendered = input.to_string();
+    match serde_json::from_str::<Value>(&rendered) {
+        Ok(v) if v.is_object() => input.clone(),
+        Ok(other) => {
+            tracing::warn!(
+                arguments = %rendered,
+                "A13 wire sanitizer: tool_call arguments is a non-object JSON value ({other}) — normalizing to {{}}"
+            );
+            json!({})
+        }
+        Err(_) => {
+            tracing::warn!(
+                arguments = %rendered,
+                "A13 wire sanitizer: tool_call arguments is not valid JSON — normalizing to {{}}"
+            );
+            json!({})
+        }
+    }
+}
+
+/// Settle dangling tool-call declarations with synthetic `"(interrupted)"`
+/// results so the wire never carries an unanswered `tool_call`.
+fn synthesize_interrupted_results(out: &mut Vec<Message>, pending: &mut Vec<(String, String)>) {
+    if pending.is_empty() {
+        return;
+    }
+    tracing::warn!(
+        count = pending.len(),
+        calls = ?pending.iter().map(|(id, name)| format!("{name}#{id}")).collect::<Vec<_>>(),
+        "A13 wire sanitizer: tool call(s) interrupted before their results — synthesizing placeholders"
+    );
+    let blocks: Vec<ContentBlock> = pending
+        .drain(..)
+        .map(|(id, name)| ContentBlock::ToolResult {
+            tool_use_id: id,
+            content: Some(ToolResultContent::Single(format!(
+                "{INTERRUPTED_TOOL_RESULT} — tool '{name}' was interrupted before producing a result"
+            ))),
+            is_error: Some(true),
+        })
+        .collect();
+    out.push(Message {
+        role: "user".to_string(),
+        content: MessageContent::Blocks(blocks),
+    });
+}
+
+/// Enforce a strict tool-call/tool-result conversation shape (A13):
+///
+/// 1. A tool result whose `tool_use_id` was never declared by a preceding
+///    assistant message is dropped.
+/// 2. A declared call that would be left dangling — because the sequence
+///    ends, a new declaration round starts, or any unrelated message
+///    intervenes — is settled with a synthetic `"(interrupted)"` result so
+///    strict providers (minimax 2013, OpenAI tool-message adjacency) always
+///    see a legal sequence.
+///
+/// Pure: returns a cleaned copy; the input is untouched.
+pub(crate) fn sanitize_tool_sequence(messages: &[Message]) -> Vec<Message> {
+    let mut out: Vec<Message> = Vec::new();
+    // (tool_use_id, tool name) declared and still awaiting its result.
+    let mut pending: Vec<(String, String)> = Vec::new();
+
+    for msg in messages {
+        match (&msg.content, msg.role.as_str()) {
+            (MessageContent::Blocks(blocks), "assistant") => {
+                // A new declaration round begins: settle any leftovers from
+                // the previous round so results cannot interleave.
+                if blocks.iter().any(|b| matches!(b, ContentBlock::ToolUse { .. })) {
+                    synthesize_interrupted_results(&mut out, &mut pending);
+                }
+                let mut kept: Vec<ContentBlock> = Vec::with_capacity(blocks.len());
+                for b in blocks {
+                    if let ContentBlock::ToolUse { id, name, input } = b {
+                        pending.push((id.clone(), name.clone()));
+                        kept.push(ContentBlock::ToolUse {
+                            id: id.clone(),
+                            name: name.clone(),
+                            input: normalize_tool_arguments(input),
+                        });
+                    } else {
+                        kept.push(b.clone());
+                    }
+                }
+                out.push(Message {
+                    role: msg.role.clone(),
+                    content: MessageContent::Blocks(kept),
+                });
+            }
+            (MessageContent::Blocks(blocks), "user") => {
+                let mut kept: Vec<ContentBlock> = Vec::with_capacity(blocks.len());
+                let mut dropped = 0usize;
+                for b in blocks {
+                    if let ContentBlock::ToolResult { tool_use_id, .. } = b {
+                        match pending.iter().position(|(id, _)| id == tool_use_id) {
+                            Some(pos) => {
+                                pending.remove(pos);
+                                kept.push(b.clone());
+                            }
+                            None => {
+                                dropped += 1;
+                                continue;
+                            }
+                        }
+                    } else {
+                        kept.push(b.clone());
+                    }
+                }
+                if dropped > 0 {
+                    tracing::warn!(
+                        dropped,
+                        "A13 wire sanitizer: dropped orphaned tool_result block(s) with no declaring assistant (minimax 2013 guard)"
+                    );
+                }
+                if !kept.is_empty() {
+                    out.push(Message {
+                        role: msg.role.clone(),
+                        content: MessageContent::Blocks(kept),
+                    });
+                }
+            }
+            _ => {
+                // Any other message (pure text, system, plain assistant)
+                // intervening between a declaration and its result breaks
+                // strict adjacency — settle first.
+                synthesize_interrupted_results(&mut out, &mut pending);
+                out.push(msg.clone());
+            }
+        }
+    }
+    synthesize_interrupted_results(&mut out, &mut pending);
+    out
+}
 
 // ── Request Serialization ──────────────────────────────────────────────────
 
@@ -213,9 +372,11 @@ fn serialize_openai_request(request: &MessageRequest) -> Value {
         }
     }
 
-    // Convert messages
-    for msg in &request.messages {
-        messages.extend(convert_message_for_openai(msg));
+    // Convert messages — A13: sanitize the sequence first so orphaned tool
+    // results and dangling tool calls never reach strict providers (minimax
+    // 2013).
+    for msg in sanitize_tool_sequence(&request.messages) {
+        messages.extend(convert_message_for_openai(&msg));
     }
 
     let mut body = json!({
@@ -1721,23 +1882,43 @@ mod tests {
             max_tokens: 1024,
             system: None,
             system_blocks: None,
-            messages: vec![Message {
-                role: "user".to_string(),
-                content: crate::api::types::MessageContent::Blocks(vec![
-                    ContentBlock::ToolResult {
-                        tool_use_id: "batch_1".to_string(),
-                        content: Some(crate::api::types::ToolResultContent::Multiple(vec![
-                            ContentBlock::Text {
-                                text: "## /tmp/a.png".to_string(),
-                            },
-                            ContentBlock::Image {
-                                source: crate::api::types::ImageSource::base64("image/png", "AAAA"),
-                            },
-                        ])),
-                        is_error: Some(false),
-                    },
-                ]),
-            }],
+            // A13: the sequence must be wire-legal — the assistant declaring
+            // the tool call precedes its result (otherwise the sanitizer
+            // drops the result as orphaned).
+            messages: vec![
+                Message {
+                    role: "assistant".to_string(),
+                    content: crate::api::types::MessageContent::Blocks(vec![
+                        ContentBlock::ToolUse {
+                            id: "batch_1".to_string(),
+                            name: "read_image".to_string(),
+                            input: serde_json::json!({}),
+                        },
+                    ]),
+                },
+                Message {
+                    role: "user".to_string(),
+                    content: crate::api::types::MessageContent::Blocks(vec![
+                        ContentBlock::ToolResult {
+                            tool_use_id: "batch_1".to_string(),
+                            content: Some(crate::api::types::ToolResultContent::Multiple(
+                                vec![
+                                    ContentBlock::Text {
+                                        text: "## /tmp/a.png".to_string(),
+                                    },
+                                    ContentBlock::Image {
+                                        source: crate::api::types::ImageSource::base64(
+                                            "image/png",
+                                            "AAAA",
+                                        ),
+                                    },
+                                ],
+                            )),
+                            is_error: Some(false),
+                        },
+                    ]),
+                },
+            ],
             tools: None,
             stream: Some(false),
             temperature: None,
@@ -1750,7 +1931,7 @@ mod tests {
         };
 
         let val = serialize_request(&req, &LlmProvider::OpenAI);
-        let tool_msg = &val["messages"][0];
+        let tool_msg = &val["messages"][1];
         assert_eq!(tool_msg["role"], "tool");
         let text = tool_msg["content"].as_str().unwrap();
         assert!(text.contains("## /tmp/a.png"));
@@ -4000,5 +4181,257 @@ mod tests {
             !json.contains("cache_control"),
             "cache_control should be omitted when None: {json}"
         );
+    }
+
+    // ── A13: wire sanitizer for OpenAI-compatible providers ─────────────
+
+    fn tool_use_msg(id: &str, name: &str) -> Message {
+        Message {
+            role: "assistant".to_string(),
+            content: MessageContent::Blocks(vec![ContentBlock::ToolUse {
+                id: id.to_string(),
+                name: name.to_string(),
+                input: serde_json::json!({}),
+            }]),
+        }
+    }
+
+    fn tool_result_msg(id: &str) -> Message {
+        Message {
+            role: "user".to_string(),
+            content: MessageContent::Blocks(vec![ContentBlock::ToolResult {
+                tool_use_id: id.to_string(),
+                content: Some(ToolResultContent::Single("ok".to_string())),
+                is_error: Some(false),
+            }]),
+        }
+    }
+
+    fn text_msg(text: &str) -> Message {
+        Message {
+            role: "user".to_string(),
+            content: MessageContent::Text(text.to_string()),
+        }
+    }
+
+    fn result_ids(messages: &[Message]) -> Vec<String> {
+        messages
+            .iter()
+            .filter_map(|m| match &m.content {
+                MessageContent::Blocks(blocks) => Some(
+                    blocks
+                        .iter()
+                        .filter_map(|b| match b {
+                            ContentBlock::ToolResult { tool_use_id, .. } => {
+                                Some(tool_use_id.clone())
+                            }
+                            _ => None,
+                        })
+                        .collect::<Vec<_>>(),
+                ),
+                _ => None,
+            })
+            .flatten()
+            .collect()
+    }
+
+    /// Orphaned tool results (no preceding assistant declared the call) are
+    /// dropped — the exact minimax 400 2013 "tool result's tool id not
+    /// found" shape.
+    #[test]
+    fn sanitize_drops_orphaned_tool_result() {
+        let input = vec![text_msg("task"), tool_result_msg("toolu_orphan")];
+        let out = sanitize_tool_sequence(&input);
+        assert!(
+            !result_ids(&out).contains(&"toolu_orphan".to_string()),
+            "the orphaned result must be dropped: {out:?}"
+        );
+        // The non-tool message is preserved.
+        assert_eq!(out.len(), 1);
+        assert_eq!(out[0].role, "user");
+    }
+
+    /// A dangling tool call (declared but never answered) gets a synthetic
+    /// "(interrupted)" result appended, so strict providers never see an
+    /// unanswered tool_call.
+    #[test]
+    fn sanitize_synthesizes_interrupted_for_dangling_call() {
+        let input = vec![text_msg("task"), tool_use_msg("toolu_dangle", "Bash")];
+        let out = sanitize_tool_sequence(&input);
+        let ids = result_ids(&out);
+        assert_eq!(
+            ids,
+            vec!["toolu_dangle".to_string()],
+            "exactly one synthetic result for the dangling call: {out:?}"
+        );
+        let synthetic = out
+            .last()
+            .expect("synthetic result message appended")
+            .clone();
+        let rendered = serde_json::to_string(&synthetic).unwrap();
+        assert!(
+            rendered.contains("(interrupted)"),
+            "placeholder content must contain '(interrupted)': {rendered}"
+        );
+    }
+
+    /// A legal sequence passes through semantically unchanged.
+    #[test]
+    fn sanitize_keeps_legal_sequence_verbatim() {
+        let input = vec![
+            text_msg("task"),
+            tool_use_msg("toolu_ok", "Read"),
+            tool_result_msg("toolu_ok"),
+            text_msg("mid-conversation user note"),
+            tool_use_msg("toolu_ok2", "Bash"),
+            tool_result_msg("toolu_ok2"),
+            text_msg("done"),
+        ];
+        let out = sanitize_tool_sequence(&input);
+        assert_eq!(
+            serde_json::to_value(&out).unwrap(),
+            serde_json::to_value(&input).unwrap(),
+            "legal sequences must pass through unchanged"
+        );
+    }
+
+    /// Strict adjacency: when an unrelated message would intervene between a
+    /// tool call and its result, the sanitizer settles the dangling call with
+    /// the placeholder FIRST, so the wire never carries
+    /// assistant(tool_call) → user(text) → …
+    #[test]
+    fn sanitize_settles_dangling_call_before_intervening_message() {
+        let input = vec![
+            text_msg("task"),
+            tool_use_msg("toolu_cut", "Edit"),
+            text_msg("continuation prompt"),
+        ];
+        let out = sanitize_tool_sequence(&input);
+        let ids = result_ids(&out);
+        assert_eq!(
+            ids,
+            vec!["toolu_cut".to_string()],
+            "the placeholder must land before the intervening text message: {out:?}"
+        );
+        // Order: text(task) → assistant(call) → user(placeholder) → user(text).
+        let rendered: Vec<String> = out
+            .iter()
+            .map(|m| serde_json::to_string(m).unwrap())
+            .collect();
+        assert_eq!(rendered.len(), 4, "one placeholder settles the dangling call: {rendered:?}");
+        assert!(rendered[2].contains("(interrupted)"), "{rendered:?}");
+        assert_eq!(rendered[3], serde_json::to_string(&text_msg("continuation prompt")).unwrap());
+    }
+
+    /// A13-c: minimax's backend parses `tool_calls[].function.arguments`
+    /// and requires a JSON object — the literal "null" (and any other
+    /// non-object) is rejected 400 (2013) while "{}" succeeds (decisive
+    /// live-API test: request_id 06fc6407792530aa1d9df28fe350fd1a → 400 vs
+    /// 06fc64093ab64d878b704669ba551957 → 200). Five argument shapes.
+    #[test]
+    fn normalize_tool_arguments_five_shapes() {
+        // 1. JSON null → {}.
+        assert_eq!(
+            normalize_tool_arguments(&serde_json::Value::Null),
+            serde_json::json!({})
+        );
+        // 2. Empty string → {}.
+        assert_eq!(
+            normalize_tool_arguments(&serde_json::Value::String(String::new())),
+            serde_json::json!({})
+        );
+        // 3. Garbage string (invalid JSON tail from a cut stream) → {}.
+        assert_eq!(
+            normalize_tool_arguments(&serde_json::Value::String("{\"na".to_string())),
+            serde_json::json!({})
+        );
+        // 4. Array (valid JSON, not an object) → {}.
+        assert_eq!(
+            normalize_tool_arguments(&serde_json::json!(["a", "b"])),
+            serde_json::json!({})
+        );
+        // 5. Valid object → preserved verbatim.
+        let obj = serde_json::json!({"path": "src/lib.rs", "limit": 10});
+        assert_eq!(normalize_tool_arguments(&obj), obj);
+    }
+
+    /// Wire-level: a Null-input tool_use serializes with arguments "{}",
+    /// never the "null" literal minimax rejects.
+    #[test]
+    fn serialize_openai_normalizes_non_object_arguments() {
+        let request = MessageRequest {
+            model: "test-model".to_string(),
+            max_tokens: 100,
+            system: None,
+            system_blocks: None,
+            messages: vec![
+                Message {
+                    role: "assistant".to_string(),
+                    content: MessageContent::Blocks(vec![ContentBlock::ToolUse {
+                        id: "toolu_null".to_string(),
+                        name: "Edit".to_string(),
+                        input: serde_json::Value::Null,
+                    }]),
+                },
+                tool_result_msg("toolu_null"),
+            ],
+            tools: None,
+            stream: Some(false),
+            temperature: None,
+            top_p: None,
+            top_k: None,
+            stop_sequences: None,
+            budget_tokens: None,
+            thinking_budget: None,
+            reasoning_effort: None,
+        };
+        let wire = serde_json::to_string(&serialize_openai_request(&request)).unwrap();
+        assert!(
+            wire.contains("\"arguments\":\"{}\""),
+            "arguments must normalize to an object literal: {wire}"
+        );
+        assert!(
+            !wire.contains("\"arguments\":\"null\""),
+            "arguments must never be the null literal: {wire}"
+        );
+    }
+
+
+    #[test]
+    fn serialize_openai_request_sanitizes_orphans() {
+        let request = MessageRequest {
+            model: "test-model".to_string(),
+            max_tokens: 100,
+            system: None,
+            system_blocks: None,
+            messages: vec![
+                text_msg("task"),
+                tool_use_msg("toolu_w", "Edit"),
+                text_msg("continuation"),
+                tool_result_msg("toolu_w"),
+            ],
+            tools: None,
+            stream: Some(true),
+            temperature: None,
+            top_p: None,
+            top_k: None,
+            stop_sequences: None,
+            budget_tokens: None,
+            thinking_budget: None,
+            reasoning_effort: None,
+        };
+        let json = serialize_openai_request(&request);
+        let wire = serde_json::to_string(&json).unwrap();
+        let tool_msgs = json["messages"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter(|m| m["role"] == "tool")
+            .count();
+        assert_eq!(
+            tool_msgs, 1,
+            "the real result must be the only tool message; wire: {wire}"
+        );
+        assert!(wire.contains("(interrupted)"), "wire: {wire}");
     }
 }
