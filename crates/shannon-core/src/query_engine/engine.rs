@@ -498,6 +498,46 @@ fn think_only_min_answer_chars() -> usize {
     ) as usize
 }
 
+// ── Tool-result cap ────────────────────────────────────────────────────────
+// A single tool result is capped before it enters model context. Claude Code
+// caps tool outputs (~25k tokens); without a cap one noisy Bash call (e.g.
+// `cat` of a multi-MB file) evicts the working context and triggers cascading
+// compaction. Override: `SHANNON_MAX_TOOL_OUTPUT_CHARS`.
+
+/// Default cap for a single tool result, in bytes.
+const DEFAULT_MAX_TOOL_RESULT_CHARS: usize = 40_000;
+
+/// Resolve the tool-result cap. `0` disables the cap entirely.
+fn max_tool_result_chars() -> usize {
+    env_num_override(
+        "SHANNON_MAX_TOOL_OUTPUT_CHARS",
+        DEFAULT_MAX_TOOL_RESULT_CHARS as u32,
+    ) as usize
+}
+
+/// Cap a tool result's content at [`max_tool_result_chars`] bytes on a char
+/// boundary, appending a truncation notice. Returns `(content, truncated)`.
+fn cap_tool_result(content: String) -> (String, bool) {
+    let cap = max_tool_result_chars();
+    if cap == 0 || content.len() <= cap {
+        return (content, false);
+    }
+    let mut end = cap;
+    while end > 0 && !content.is_char_boundary(end) {
+        end -= 1;
+    }
+    let omitted = content.len() - end;
+    (
+        format!(
+            "{}\n\n[shannon: output truncated — {omitted} of {} bytes omitted. \
+             Re-run with a narrower scope (head/tail/grep) to read specific content.]",
+            &content[..end],
+            content.len()
+        ),
+        true,
+    )
+}
+
 // ── B.6 ────────────────────────────────────────────────────────────────────
 // SHANNON_TOKEN_BUDGET: a hard cap on cumulative input tokens. When the cap
 // is exceeded the engine synthesizes a user-side message that pushes the
@@ -2233,6 +2273,11 @@ impl QueryEngine {
 
             let mut turn = 0;
             let mut tool_results: Vec<ToolResultEntry> = Vec::new();
+            // Runtime notices (permission soft-limit warnings, auto-test
+            // results) that travel as plain user text — never as tool_result
+            // blocks, whose synthetic ids would reference no assistant
+            // ToolUse and draw a provider 400 ("unexpected tool_use_id").
+            let mut user_notices: Vec<String> = Vec::new();
             let mut total_input_tokens: u64 = 0;
             let mut total_output_tokens: u64 = 0;
             let mut file_edits_made = false;
@@ -2350,6 +2395,21 @@ impl QueryEngine {
                     };
                     messages.push(tool_msg.clone());
                     conversation.messages.push(tool_msg);
+                }
+
+                // Drain runtime notices as a plain user text message. They must
+                // land AFTER the tool_result drain (same pairing constraint as
+                // the turn-N checkpoint below): a synthetic user message before
+                // `user(tool_result)` violates the assistant(tool_use) →
+                // user(tool_result) API contract.
+                if !user_notices.is_empty() {
+                    let notice_msg = Message {
+                        role: "user".to_string(),
+                        content: MessageContent::Text(user_notices.join("\n\n")),
+                    };
+                    messages.push(notice_msg.clone());
+                    conversation.messages.push(notice_msg);
+                    user_notices.clear();
                 }
 
                 // ── P-B: turn-N checkpoint ─────────────────────────────────
@@ -2583,7 +2643,14 @@ impl QueryEngine {
                         if compaction_failures >= MAX_COMPACTION_FAILURES {
                             let keep = config.keep_recent_messages;
                             if messages.len() > keep {
-                                messages = messages.split_off(messages.len() - keep);
+                                // Pair-aware: never split a tool_use/tool_result pair
+                                // when cutting history (an orphaned half is rejected by
+                                // providers with a 400).
+                                let split = shannon_engine::compact::safe_split_point(
+                                    &messages,
+                                    messages.len() - keep,
+                                );
+                                messages = messages.split_off(split);
                             }
                             send_event!(tx, QueryEvent::Progress {
                                 query_id,
@@ -2659,7 +2726,12 @@ impl QueryEngine {
                                     // as failure so the circuit breaker engages.
                                     compaction_failures += 1;
                                 }
-                                continue;
+                                // No `continue` here: fall through to the
+                                // conversation sync below so the compaction result
+                                // is not discarded by the top-of-loop re-clone
+                                // (which previously caused a compaction livelock:
+                                // the threshold check re-fired every turn with the
+                                // compaction silently dropped).
                             }
 
                             match shannon_engine::compact::CompactEngine::with_llm_summarizer(
@@ -2734,8 +2806,11 @@ impl QueryEngine {
                                             );
                                             let keep = 20;
                                             if messages.len() > keep {
-                                                messages =
-                                                    messages.split_off(messages.len() - keep);
+                                                let split = shannon_engine::compact::safe_split_point(
+                                                    &messages,
+                                                    messages.len() - keep,
+                                                );
+                                                messages = messages.split_off(split);
                                             }
                                         }
                                     }
@@ -2748,7 +2823,11 @@ impl QueryEngine {
                                     );
                                     let keep = 20;
                                     if messages.len() > keep {
-                                        messages = messages.split_off(messages.len() - keep);
+                                        let split = shannon_engine::compact::safe_split_point(
+                                            &messages,
+                                            messages.len() - keep,
+                                        );
+                                        messages = messages.split_off(split);
                                     }
                                 }
                             }
@@ -2883,6 +2962,16 @@ impl QueryEngine {
                                 } else {
                                     break;
                                 }
+                            }
+                            // Front-removal can orphan the first kept message: if it
+                            // holds a ToolResult whose assistant ToolUse partner was
+                            // dropped with the prefix, providers reject the request.
+                            // Drop leading tool_result-only messages as well.
+                            while messages.len() > 2
+                                && shannon_engine::compact::has_tool_result(&messages[0])
+                                && !shannon_engine::compact::has_tool_use(&messages[0])
+                            {
+                                messages.remove(0);
                             }
                             let new_estimate =
                                 shannon_engine::compact::helpers::estimate_tokens(&messages);
@@ -3964,11 +4053,9 @@ impl QueryEngine {
                                                                     ));
                                                                 }
 
-                                                                let mut batch_had_denial = false;
                                                                 for (saved_tool_id, handle) in
                                                                     exec_handles
-                                                                {
-                                                                    match handle.await {
+                                                                {                                                                    match handle.await {
                                                                         Ok((
                                                                             tool_id,
                                                                             tool_name,
@@ -4039,9 +4126,6 @@ impl QueryEngine {
                                                                             match result {
                                                                                 Ok(output) => {
                                                                                     let is_err = output.is_error;
-                                                                                    if is_err {
-                                                                                        batch_had_denial = true;
-                                                                                    }
                                                                                     send_event!(tx, QueryEvent::ToolUseResult {
                                                                                         query_id,
                                                                                         tool_use_id: tool_id.clone(),
@@ -4050,12 +4134,17 @@ impl QueryEngine {
                                                                                         is_error: is_err,
                                                                                         meta: Box::new(crate::tools::sandbox_meta_from(&output.metadata)),
                                                                                         });
+                                                                                    let (capped, truncated) = cap_tool_result(output.content.clone());
+                                                                                    let mut meta = output.metadata.clone();
+                                                                                    if truncated {
+                                                                                        meta.insert("truncated".to_string(), serde_json::json!(true));
+                                                                                    }
                                                                                     tool_results
                                                                                         .push(ToolResultEntry {
                                                                                         tool_use_id: tool_id,
-                                                                                        content: output.content.clone(),
+                                                                                        content: capped,
                                                                                         is_error: is_err,
-                                                                                        metadata: Default::default(),
+                                                                                        metadata: meta,
                                                                                     });
                                                                                 }
                                                                                 Err(e) => {
@@ -4103,9 +4192,12 @@ impl QueryEngine {
                                                                         }
                                                                     }
                                                                 }
-                                                                if !batch_had_denial {
-                                                                    consecutive_denials = 0;
-                                                                }
+                                                                // Every call in a parallel batch
+                                                                // already passed the permission gate,
+                                                                // so the denial counter resets here
+                                                                // unconditionally (runtime errors are
+                                                                // not denials).
+                                                                consecutive_denials = 0;
                                                             }
                                                             crate::tools::ToolBatch::Serial((
                                                                 tool_id,
@@ -4218,17 +4310,18 @@ impl QueryEngine {
                                                                             is_error: is_err,
                                                                             meta: Box::new(crate::tools::sandbox_meta_from(&output.metadata)),
                                                                             });
+                                                                        let (capped, truncated) = cap_tool_result(output.content.clone());
+                                                                        let mut meta = output.metadata.clone();
+                                                                        if truncated {
+                                                                            meta.insert("truncated".to_string(), serde_json::json!(true));
+                                                                        }
                                                                         tool_results.push(
                                                                             ToolResultEntry {
                                                                                 tool_use_id:
                                                                                     tool_id,
-                                                                                content: output
-                                                                                    .content
-                                                                                    .clone(),
+                                                                                content: capped,
                                                                                 is_error: is_err,
-                                                                                metadata: output
-                                                                                    .metadata
-                                                                                    .clone(),
+                                                                                metadata: meta,
                                                                             },
                                                                         );
                                                                         if matches!(
@@ -4245,6 +4338,9 @@ impl QueryEngine {
                                                                         let error_msg = format!(
                                                                             "Tool error: {e}"
                                                                         );
+                                                                        // Gate-approved call: a runtime
+                                                                        // error is not a denial.
+                                                                        consecutive_denials = 0;
                                                                         send_event!(tx, QueryEvent::ToolUseResult {
                                                                             query_id,
                                                                             tool_use_id: tool_id.clone(),
@@ -4280,7 +4376,7 @@ impl QueryEngine {
                                                         maybe_run_auto_test(
                                                             &auto_cfg,
                                                             &mut auto_test_state,
-                                                            &mut tool_results,
+                                                            &mut user_notices,
                                                             &tx,
                                                             query_id,
                                                         )
@@ -4292,17 +4388,15 @@ impl QueryEngine {
                                                 if (DENIAL_SOFT_LIMIT..DENIAL_HARD_LIMIT)
                                                     .contains(&consecutive_denials)
                                                 {
-                                                    let warning = format!(
+                                                    // Delivered as a plain user notice, NOT a
+                                                    // tool_result: the synthetic
+                                                    // "denial-warning" id references no assistant
+                                                    // ToolUse and providers reject the request.
+                                                    user_notices.push(format!(
                                                         "The user has denied {consecutive_denials} consecutive tool calls. \
                                                          Stop retrying the same or similar operations. \
                                                          Ask the user for clarification or try a completely different approach."
-                                                    );
-                                                    tool_results.push(ToolResultEntry {
-                                                        tool_use_id: "denial-warning".to_string(),
-                                                        content: warning,
-                                                        is_error: false,
-                                                        metadata: Default::default(),
-                                                    });
+                                                    ));
                                                 }
 
                                                 turn += 1;
@@ -5227,7 +5321,11 @@ impl QueryEngine {
                                 tracing::warn!(
                                     "Token overflow detected, auto-compacting and retrying"
                                 );
-                                messages = messages.split_off(messages.len() - compact_keep);
+                                let split = shannon_engine::compact::safe_split_point(
+                                    &messages,
+                                    messages.len() - compact_keep,
+                                );
+                                messages = messages.split_off(split);
                                 // Re-inject system prompt at front
                                 if let Some(ref sp) = system_prompt {
                                     if !sp.is_empty() {
@@ -5653,13 +5751,13 @@ impl QueryEngine {
 
 /// Run one auto-test iteration if appropriate.
 ///
-/// Called after each successful file-modifying tool. Pushes a
-/// [`ToolResultEntry`] into `tool_results` describing what happened so the
-/// next API call sees it. Returns `()`; loop-state lives in `auto_test_state`.
+/// Called after each successful file-modifying tool. Pushes a user notice
+/// into `user_notices` describing what happened so the next API call sees
+/// it. Returns `()`; loop-state lives in `auto_test_state`.
 async fn maybe_run_auto_test(
     cfg: &crate::auto_test::AutoTestConfig,
     state: &mut crate::auto_test::AntiLoopState,
-    tool_results: &mut Vec<ToolResultEntry>,
+    user_notices: &mut Vec<String>,
     tx: &EventTx,
     query_id: Uuid,
 ) {
@@ -5687,18 +5785,12 @@ async fn maybe_run_auto_test(
 
     let decision = state.record(cfg, &outcome);
 
-    // Build a synthetic tool-result so the next API call sees it. We use a
-    // synthetic tool_use_id — these entries don't correspond to a real tool
-    // invocation but `user(tool_result)` is the only way to push text into
-    // the model's context mid-loop.
+    // Delivered as a plain user notice so the next API call sees it. A
+    // synthetic `user(tool_result)` would reference a tool_use_id that never
+    // appeared in any assistant message, which providers reject with
+    // 400 "unexpected tool_use_id".
     let description = outcome.describe();
-    let entry = ToolResultEntry {
-        tool_use_id: format!("auto_test_iter_{}", state.iterations),
-        content: description,
-        is_error: !outcome.is_passed(),
-        metadata: Default::default(),
-    };
-    tool_results.push(entry);
+    user_notices.push(description);
 
     // Emit a structured progress event with the outcome so the UI can show
     // pass/fail badges without parsing the description string.
@@ -5747,6 +5839,52 @@ mod tests {
         assert!(!is_truncation_stop(Some("stop")));
         assert!(!is_truncation_stop(Some("tool_use")));
         assert!(!is_truncation_stop(None));
+    }
+
+    #[test]
+    fn cap_tool_result_passthrough_under_cap() {
+        let (capped, truncated) = cap_tool_result("short output".to_string());
+        assert_eq!(capped, "short output");
+        assert!(!truncated);
+    }
+
+    #[test]
+    fn cap_tool_result_truncates_on_char_boundary_and_notifies() {
+        let big = "x".repeat(DEFAULT_MAX_TOOL_RESULT_CHARS + 1000);
+        let (capped, truncated) = cap_tool_result(big);
+        assert!(truncated);
+        assert!(capped.contains("[shannon: output truncated"));
+        assert!(capped.len() < DEFAULT_MAX_TOOL_RESULT_CHARS + 200);
+        // CJK content must be cut on a char boundary, never mid-codepoint.
+        let cjk = "漢字".repeat(DEFAULT_MAX_TOOL_RESULT_CHARS);
+        let (capped, truncated) = cap_tool_result(cjk);
+        assert!(truncated);
+        assert!(capped.is_char_boundary(
+            capped.find("[shannon: output truncated").unwrap_or(capped.len())
+        ));
+    }
+
+    #[test]
+    fn cap_tool_result_zero_disables_cap() {
+        // env::set_var is process-wide and unsafe under edition 2024 —
+        // serialize against other env tests and wrap each call.
+        static ENV_LOCK: std::sync::OnceLock<std::sync::Mutex<()>> =
+            std::sync::OnceLock::new();
+        let _guard = ENV_LOCK
+            .get_or_init(|| std::sync::Mutex::new(()))
+            .lock()
+            .expect("env-var test mutex poisoned");
+        let key = "SHANNON_MAX_TOOL_OUTPUT_CHARS";
+        let saved = std::env::var(key).ok();
+        unsafe { std::env::set_var(key, "0") };
+        let big = "y".repeat(DEFAULT_MAX_TOOL_RESULT_CHARS * 2);
+        let (capped, truncated) = cap_tool_result(big.clone());
+        assert!(!truncated);
+        assert_eq!(capped, big);
+        match saved {
+            Some(v) => unsafe { std::env::set_var(key, v) },
+            None => unsafe { std::env::remove_var(key) },
+        }
     }
 
     #[test]
