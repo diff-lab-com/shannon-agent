@@ -3093,8 +3093,30 @@ impl QueryEngine {
                         let mut request_input_tokens: u64 = 0;
                         let mut request_output_tokens: u64 = 0;
 
-                        // Process streaming events
-                        while let Some(event_result) = stream.next().await {
+                        // Process streaming events.
+                        // C-2: a stalled stream (no events for `timeout_seconds`,
+                        // default 300s) is fed into the loop as a synthetic
+                        // `Err(ApiError::Timeout)` so the existing recovery
+                        // ladder applies — partial content is preserved, and a
+                        // dead stream can no longer hang the query forever.
+                        while let Some(event_result) = match
+                            tokio::time::timeout(
+                                std::time::Duration::from_secs(
+                                    config.timeout_seconds.max(30) as u64
+                                ),
+                                stream.next(),
+                            )
+                            .await
+                        {
+                            Ok(item) => item,
+                            Err(_elapsed) => {
+                                tracing::warn!(
+                                    timeout_secs = config.timeout_seconds,
+                                    "LLM stream stalled — no events within timeout"
+                                );
+                                Some(Err(shannon_engine::api::ApiError::Timeout))
+                            }
+                        } {
                             match event_result {
                                 Ok(stream_event) => {
                                     match stream_event {
@@ -3635,13 +3657,40 @@ impl QueryEngine {
                                                     );
 
                                                     // Plan mode gate: block write tools when plan mode is active.
+                                                    // Derives mutability from the tool's own trait
+                                                    // metadata instead of a name list, so newly
+                                                    // registered mutators (NotebookEdit, git
+                                                    // mutators, Worktree, Cron, …) are covered.
+                                                    // Pure bookkeeping tools stay allowed.
                                                     let is_plan_active = plan_mode_active
                                                         .read()
                                                         .map(|g| *g)
                                                         .unwrap_or(false);
                                                     if is_plan_active {
-                                                        let is_write_tool = crate::tool_execution::is_file_modifying_tool(&tool_name);
-                                                        if is_write_tool {
+                                                        const PLAN_ALLOWED_STATELESS: &[&str] = &[
+                                                            "TodoWrite",
+                                                            "TaskCreate",
+                                                            "TaskList",
+                                                            "TaskUpdate",
+                                                            "TaskGet",
+                                                            "TaskTool",
+                                                            "AskUserQuestion",
+                                                            "EnterPlanMode",
+                                                            "ExitPlanMode",
+                                                            "GetPlanStatus",
+                                                            "Brief",
+                                                            "StructuredOutput",
+                                                            "Sleep",
+                                                        ];
+                                                        let tool_is_mutating = match tools.get(&tool_name) {
+                                                            Some(t) => !t.is_read_only(),
+                                                            None => crate::tool_execution::is_file_modifying_tool(&tool_name),
+                                                        };
+                                                        if tool_is_mutating
+                                                            && !PLAN_ALLOWED_STATELESS
+                                                                .iter()
+                                                                .any(|n| n.eq_ignore_ascii_case(&tool_name))
+                                                        {
                                                             let error_msg = format!(
                                                                 "Plan mode: write operations blocked. \
                                                                  Use exit_plan_mode to resume editing. \

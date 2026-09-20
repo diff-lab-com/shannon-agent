@@ -25,8 +25,12 @@ pub enum PermissionError {
 /// Returns true if the tool name corresponds to a read-only operation (no side effects).
 /// Used by both `Readonly` mode enforcement and `Suggest` mode auto-approval.
 fn is_read_only_tool_name(tool_name: &str) -> bool {
+    // Case-insensitive: the model-facing registry uses capitalized display
+    // names ("Read", "Grep", "WebFetch") while this list was lowercase-only,
+    // which silently broke Suggest/Readonly/PlanReadonly fast paths.
+    let lower = tool_name.to_ascii_lowercase();
     matches!(
-        tool_name,
+        lower.as_str(),
         "read"
             | "read_file"
             | "search"
@@ -246,10 +250,13 @@ impl ApprovalMode {
             }
             Self::Plan => false,
             Self::AutoEdit => {
-                // Auto-approve file operations; ask for everything else
+                // Auto-approve file operations; ask for everything else.
+                // Case-insensitive for the same reason as
+                // `is_read_only_tool_name` above.
+                let lower = tool_name.to_ascii_lowercase();
                 let is_file_tool = matches!(
-                    tool_name,
-                    "edit" | "write" | "create_file" | "replace" | "file_edit"
+                    lower.as_str(),
+                    "edit" | "write" | "create_file" | "replace" | "file_edit" | "multiedit"
                 );
                 is_file_tool && risk_level <= RiskLevel::Medium
             }
