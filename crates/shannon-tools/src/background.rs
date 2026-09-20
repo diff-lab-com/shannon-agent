@@ -191,6 +191,19 @@ impl Tool for RunBackgroundTool {
                 "`command` must be a non-empty string".to_string(),
             ));
         }
+        // P0-11: RunBackground previously bypassed the Bash security gate, so
+        // a command the sandbox/policy blocked could simply be re-run in the
+        // background. Apply the same Critical-level gate (background processes
+        // are LONG-LIVED, so destructive commands are strictly worse here).
+        {
+            let analysis = crate::system::analyze_command_security(&parsed.command);
+            if analysis.risk_level >= crate::system::SecurityLevel::Critical {
+                return Err(ToolError::ExecutionFailed(
+                    "Security gate: command rejected as Critical-risk. Background                      execution of destructive or system-compromising commands is not                      permitted. Use Bash (sandboxed) for approved work."
+                        .to_string(),
+                ));
+            }
+        }
 
         // If a previous entry exists under this name, kill it before
         // re-spawning. We do NOT remove it from the registry yet — the

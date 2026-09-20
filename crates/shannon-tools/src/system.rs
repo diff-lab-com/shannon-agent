@@ -1176,7 +1176,22 @@ impl Tool for BashTool {
             bash_input.use_pty || self.sandbox.is_some() || self.process_sandbox.is_some();
 
         // Execute the command (PTY mode for interactive, otherwise sandboxed/direct)
-        let output_result = if bash_input.use_pty && !remote_world {
+        // P0-11: PTY execution is inherently unsandboxed (raw pty, no argv
+        // rewrite). When a process sandbox is active, PTY would silently
+        // bypass it — refuse the combination instead of escaping the sandbox.
+        let output_result = if bash_input.use_pty
+            && !remote_world
+            && (self.sandbox.is_some() || self.process_sandbox.is_some())
+        {
+            Ok(CommandOutput {
+                stdout: String::new(),
+                stderr: "PTY mode is unavailable while a process sandbox is active \
+                         (PTY cannot be sandboxed). Re-run without use_pty."
+                    .to_string(),
+                exit_code: 126,
+                success: false,
+            })
+        } else if bash_input.use_pty && !remote_world {
             let cmd = bash_input.command.clone();
             let cwd = bash_input.cwd.clone();
             let env = bash_input.env.clone();
