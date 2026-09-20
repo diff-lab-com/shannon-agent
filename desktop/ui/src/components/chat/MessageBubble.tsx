@@ -320,7 +320,7 @@ export const MessageBubble = memo(function MessageBubble({ message, messageIndex
   const isTool = message.role === 'tool'
 
   return (
-    <Message from={isTool ? 'system' : 'assistant'} className="flex gap-md max-w-[90%] group">
+    <Message from={isTool ? 'system' : 'assistant'} className="flex gap-md max-w-4xl group">
       <MessageAvatar from="assistant" icon={isTool ? 'build' : 'smart_toy'} />
       <MessageContent className="space-y-md flex-1">
         <MessageHeader role={isTool ? 'tool' : 'assistant'} timestamp={message.timestamp} />

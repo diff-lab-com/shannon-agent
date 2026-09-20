@@ -3074,5 +3074,8 @@
   "tasks.tab.history.title": "已完成、失败与取消的任务",
   "tasks.tab.worktrees.title": "后台工作树会话",
   "inbox.source.trigger.title": "由外部事件（Webhook、文件变更、定时）触发的任务",
-  "chat.scrollToLatest.aria": "滚到最新消息"
+  "chat.scrollToLatest.aria": "滚到最新消息",
+  "chat.dock.hint": "提示：按 Ctrl+\\ 切换此面板",
+  "memory.empty.title": "暂无记忆",
+  "memory.empty.desc": "记下重要的事——偏好、决策、反复出现的上下文——Shannon 会在后续会话中自动召回。"
 }

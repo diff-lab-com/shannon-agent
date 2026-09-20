@@ -304,14 +304,17 @@ export default function MemoryPanel({
             {t('memory.loading')}
           </div>
         ) : isEmpty ? (
-          <div className="text-center py-3xl">
-            <span className="material-symbols-outlined icon-2xl text-on-surface-variant/40 mb-md block">
-              psychology
-            </span>
-            <p className="text-on-surface-variant mb-lg">{t('memory.empty')}</p>
+          <div className="flex flex-col items-center justify-center text-center py-3xl px-lg">
+            <div className="w-20 h-20 rounded-2xl bg-primary-container/30 flex items-center justify-center mb-lg">
+              <span className="material-symbols-outlined text-[40px] text-primary" aria-hidden="true">
+                psychology
+              </span>
+            </div>
+            <h2 className="font-headline-sm text-on-surface mb-xs">{t('memory.empty.title')}</h2>
+            <p className="text-on-surface-variant mb-lg max-w-md">{t('memory.empty.desc')}</p>
             <Button
               onClick={() => setCreating(true)}
-              className="gap-xs px-md py-sm text-[14px] font-bold"
+              className="gap-xs px-md py-sm text-[14px] font-bold bg-primary text-on-primary"
             >
               <span className="material-symbols-outlined text-[18px]">add</span>
               {t('memory.action.createFirst')}

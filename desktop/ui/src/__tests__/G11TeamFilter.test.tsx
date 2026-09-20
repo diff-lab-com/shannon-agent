@@ -8,17 +8,17 @@ import type { TaskItem } from '@/types'
 
 describe('G11 TasksHeader team filter', () => {
   it('hides team filter when teams is empty', () => {
-    render(<TasksHeader teams={[]} teamFilter="all" onTeamFilterChange={() => {}} onToggleFilters={() => {}} onToggleCalendar={() => {}} onToggleNewTask={() => {}} onToggleSchedule={() => {}} />)
+    render(<TasksHeader mode="dev" teams={[]} teamFilter="all" onTeamFilterChange={() => {}} onToggleFilters={() => {}} onToggleCalendar={() => {}} onToggleNewTask={() => {}} onToggleSchedule={() => {}} />)
     expect(screen.queryByLabelText('Filter by team')).not.toBeInTheDocument()
   })
 
   it('hides team filter when no teams prop is passed', () => {
-    render(<TasksHeader onToggleFilters={() => {}} onToggleCalendar={() => {}} onToggleNewTask={() => {}} onToggleSchedule={() => {}} />)
+    render(<TasksHeader mode="dev" onToggleFilters={() => {}} onToggleCalendar={() => {}} onToggleNewTask={() => {}} onToggleSchedule={() => {}} />)
     expect(screen.queryByLabelText('Filter by team')).not.toBeInTheDocument()
   })
 
   it('renders team filter with team names when provided', () => {
-    render(<TasksHeader teams={['red', 'blue']} teamFilter="all" onTeamFilterChange={() => {}} onToggleFilters={() => {}} onToggleCalendar={() => {}} onToggleNewTask={() => {}} onToggleSchedule={() => {}} />)
+    render(<TasksHeader mode="dev" teams={['red', 'blue']} teamFilter="all" onTeamFilterChange={() => {}} onToggleFilters={() => {}} onToggleCalendar={() => {}} onToggleNewTask={() => {}} onToggleSchedule={() => {}} />)
     const sel = screen.getByLabelText('Filter by team') as HTMLSelectElement
     expect(sel).toBeInTheDocument()
     const opts = Array.from(sel.options).map(o => o.value)
@@ -27,13 +27,13 @@ describe('G11 TasksHeader team filter', () => {
 
   it('emits selected team on change', () => {
     const onChange = vi.fn()
-    render(<TasksHeader teams={['red', 'blue']} teamFilter="all" onTeamFilterChange={onChange} onToggleFilters={() => {}} onToggleCalendar={() => {}} onToggleNewTask={() => {}} onToggleSchedule={() => {}} />)
+    render(<TasksHeader mode="dev" teams={['red', 'blue']} teamFilter="all" onTeamFilterChange={onChange} onToggleFilters={() => {}} onToggleCalendar={() => {}} onToggleNewTask={() => {}} onToggleSchedule={() => {}} />)
     fireEvent.change(screen.getByLabelText('Filter by team'), { target: { value: 'blue' } })
     expect(onChange).toHaveBeenCalledWith('blue')
   })
 
   it('reflects current teamFilter value', () => {
-    render(<TasksHeader teams={['red', 'blue']} teamFilter="red" onTeamFilterChange={() => {}} onToggleFilters={() => {}} onToggleCalendar={() => {}} onToggleNewTask={() => {}} onToggleSchedule={() => {}} />)
+    render(<TasksHeader mode="dev" teams={['red', 'blue']} teamFilter="red" onTeamFilterChange={() => {}} onToggleFilters={() => {}} onToggleCalendar={() => {}} onToggleNewTask={() => {}} onToggleSchedule={() => {}} />)
     const sel = screen.getByLabelText('Filter by team') as HTMLSelectElement
     expect(sel.value).toBe('red')
   })

@@ -189,7 +189,9 @@ describe('Triage page (inbox)', () => {
   it('source filter chips push the source onto the hook filter', () => {
     const { setFilter } = setItems([makeItem({ id: 1 })])
     renderPage()
-    fireEvent.click(screen.getByRole('button', { name: 'Goal' }))
+    // Q4 2026-09: source filter is a dropdown — open it first, then click the option.
+    fireEvent.click(screen.getByRole('button', { name: 'Source' }))
+    fireEvent.click(screen.getByRole('menuitem', { name: 'Goal' }))
     expect(setFilter).toHaveBeenCalledWith({ status: undefined, source: 'goal' })
   })
 
@@ -211,7 +213,13 @@ describe('Triage page (inbox)', () => {
   it('batch source chip pushes source=batch onto the hook filter', () => {
     const { setFilter } = setItems([makeItem({ id: 7, source: 'batch' })])
     renderPage()
-    fireEvent.click(screen.getByRole('button', { name: 'Batch' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Source' }))
+    // Menu items render label inside a <span>; query by partial match to
+    // tolerate i18n locale changes ("Best-of-N" / "多方案").
+    const items = screen.getAllByRole('menuitem')
+    const target = items.find(el => /best-of|多方案|batch/i.test(el.textContent || ''))
+    expect(target).toBeTruthy()
+    fireEvent.click(target!)
     expect(setFilter).toHaveBeenCalledWith({ status: undefined, source: 'batch' })
   })
 

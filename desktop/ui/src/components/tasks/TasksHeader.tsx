@@ -1,12 +1,10 @@
-// Tasks page header — title, subtitle, and the action cluster.
+// Tasks page header — action cluster. The page-level h1/h2 was retired
+// (P0-3); the global app Header carries the page name, and the page-level
+// subtitle lives one level down. This component is the toolbar only.
 //
-// Review 2026-09-16 (UI-review §17): the header used to show seven equally
-// weighted buttons, burying the primary action. Now grouped by purpose and
-// separated by dividers:
-//   [ 新建后台任务 (primary) | ▾ 例行任务 / 多方案对比 ]  ─ create (split button)
-//   [ 团队 select ] [ 筛选 ]                              ─ filter
-//   [ 月历 ] [ 关系图 ]                                    ─ view toggles
-// MD3 tokens. Toggle active state uses ring-2 ring-primary.
+// 2026-09 Q1+Q2 (review): in Simple mode the header should look like a
+// flat "+ New background task" button — no team filter, no view toggles,
+// no nested split menu. Dev mode exposes the full toolbar.
 
 import { useState } from 'react'
 import { useIntl } from 'react-intl'
@@ -30,6 +28,8 @@ interface TasksHeaderProps {
   /** Current team filter value ('all' or a specific team name). */
   teamFilter?: string
   onTeamFilterChange?: (team: string) => void
+  /** Simple (default) hides all the developer surfaces. */
+  mode?: 'simple' | 'dev'
 }
 
 const toggleClass = (active: boolean) =>
@@ -53,6 +53,7 @@ export default function TasksHeader({
   teams,
   teamFilter,
   onTeamFilterChange,
+  mode = 'simple',
 }: TasksHeaderProps) {
   const intl = useIntl()
   const t = (id: string) => intl.formatMessage({ id })
@@ -75,13 +76,30 @@ export default function TasksHeader({
       : []),
   ]
 
-  return (
-    <div className="flex flex-col md:flex-row md:items-end justify-between mb-xl gap-md">
-      <div>
-        <h2 className="font-headline-lg text-headline-lg text-on-surface">{t('tasks.tasksHeader.title')}</h2>
-        <p className="text-on-surface-variant mt-xs">{t('tasks.tasksHeader.subtitle')}</p>
+  // Simple mode (default) — a one-line subtitle (the page-level h1/h2 is
+  // retired; the global app Header carries the page name) plus a flat
+  // "+ New background task" button. Anything else (the split menu, team
+  // filter, view toggles, batch entry) is dev-only; first-run users
+  // shouldn't have to learn the task-ops taxonomy to find the single
+  // primary action.
+  if (mode === 'simple') {
+    return (
+      <div className="flex items-center justify-between gap-md mb-lg flex-wrap">
+        <p className="text-on-surface-variant font-body-sm">{t('tasks.tasksHeader.subtitle')}</p>
+        <Button
+          aria-label={t('tasks.tasksHeader.newBackgroundTask')}
+          className="px-md py-sm bg-primary text-on-primary rounded-xl flex items-center gap-sm font-label-md cursor-pointer hover:shadow-md active:scale-95 transition-all"
+          onClick={onToggleNewTask}
+        >
+          <span className="material-symbols-outlined icon-md">add</span>
+          {t('tasks.tasksHeader.newBackgroundTask')}
+        </Button>
       </div>
-      <div className="flex items-center gap-sm flex-wrap">
+    )
+  }
+
+  return (
+    <div className="flex items-center gap-sm flex-wrap mb-xl">
         {/* ── create ─────────────────────────────────────────────────── */}
         <div className="flex items-stretch">
           <Button
@@ -162,7 +180,6 @@ export default function TasksHeader({
             {dagView ? t('tasks.tasksHeader.hideGraph') : t('tasks.tasksHeader.graph')}
           </Button>
         ) : null}
-      </div>
     </div>
   )
 }

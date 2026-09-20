@@ -20,6 +20,7 @@ import { toast } from 'sonner'
 import EmptyState from '@/components/ui/empty-state'
 import { CardSkeleton } from '@/components/SkeletonLoader'
 import { Button } from '@/components/ui/button'
+import { DropdownMenu, type DropdownMenuItem } from '@/components/ui/dropdown-menu'
 import { useInboxItems, useInboxStats } from '@/hooks/inbox'
 import { useSessions } from '@/context/SessionContext'
 import type { InboxItem, InboxItemStatus, InboxSource } from '@/types'
@@ -355,24 +356,16 @@ export default function Triage() {
           })}
         </div>
 
-        {/* Filter bar: source + sort */}
+        {/* Q4 2026-09: source chips (6) overflow on narrow windows — collapse
+            them into a dropdown that mirrors the wide layout's semantics. */}
         <div className="flex items-center gap-sm mb-lg flex-wrap">
-          <span className="font-label-sm text-on-surface-variant uppercase tracking-wider mr-xs">{t('inbox.source.label')}</span>
-          {SOURCE_OPTIONS.map(opt => {
-            const active = sourceFilter === (opt === 'all' ? undefined : opt)
-            const label = opt === 'all' ? t('inbox.filter.all') : t(sourceMeta(opt).labelKey)
-            return (
-              <Button
-                key={opt}
-                variant="ghost"
-                onClick={() => setSourceFilter(opt === 'all' ? undefined : opt)}
-                aria-pressed={active}
-                className={cn("px-sm py-xs rounded-full text-label-sm transition-colors cursor-pointer", active ? 'bg-primary/10 text-primary font-bold' : 'bg-surface-container-low text-on-surface-variant hover:text-primary hover:bg-primary/10')}
-              >
-                {label}
-              </Button>
-            )
-          })}
+          <SourceFilterDropdown
+            value={sourceFilter}
+            onChange={setSourceFilter}
+            sourceMeta={sourceMeta}
+            allLabel={t('inbox.filter.all')}
+            label={t('inbox.source.label')}
+          />
           <Button
             variant="ghost"
             onClick={() => setSortOrder(sortOrder === 'newest' ? 'oldest' : 'newest')}
@@ -482,6 +475,80 @@ export default function Triage() {
           </>
         )}
       </div>
+    </div>
+  )
+}
+
+type SourceMeta = { icon: string; color: string; labelKey: string }
+
+/** Source filter — collapsed dropdown (Q4: avoids horizontal overflow on
+ *  narrow windows). The trigger shows the active source icon + label; the
+ *  menu lists every source with its own icon so colour and label disambiguate
+ *  the picker. */
+function SourceFilterDropdown({
+  value,
+  onChange,
+  sourceMeta,
+  allLabel,
+  label,
+}: {
+  value: InboxSource | undefined
+  onChange: (next: InboxSource | undefined) => void
+  sourceMeta: (s: InboxSource) => SourceMeta
+  allLabel: string
+  label: string
+}) {
+  const intl = useIntl()
+  const t = (id: string) => intl.formatMessage({ id })
+  const [open, setOpen] = useState(false)
+  const meta = value ? sourceMeta(value) : null
+  const triggerLabel = value ? t(meta!.labelKey) : allLabel
+  const triggerIcon = value ? meta!.icon : 'layers'
+  const items: DropdownMenuItem[] = SOURCE_OPTIONS.map(opt => {
+    if (opt === 'all') {
+      return {
+        id: 'all',
+        label: allLabel,
+        icon: 'layers',
+        onSelect: () => { onChange(undefined); setOpen(false) },
+      }
+    }
+    const m = sourceMeta(opt)
+    return {
+      id: opt,
+      label: t(m.labelKey),
+      icon: m.icon,
+      onSelect: () => { onChange(opt); setOpen(false) },
+    }
+  })
+  return (
+    <div className="relative">
+      <Button
+        variant="ghost"
+        aria-haspopup="menu"
+        aria-expanded={open}
+        aria-label={label}
+        title={label}
+        onClick={() => setOpen(v => !v)}
+        className={cn(
+          'inline-flex items-center gap-xs px-sm py-xs rounded-full text-label-sm transition-colors cursor-pointer',
+          value ? 'bg-primary/10 text-primary font-bold' : 'bg-surface-container-low text-on-surface-variant hover:text-primary hover:bg-primary/10'
+        )}
+      >
+        <span className="material-symbols-outlined text-[14px] align-middle" aria-hidden="true">{triggerIcon}</span>
+        <span className="align-middle">{triggerLabel}</span>
+        <span className="material-symbols-outlined text-[14px] align-middle" aria-hidden="true">expand_more</span>
+      </Button>
+      {open && (
+        <DropdownMenu
+          open
+          onClose={() => setOpen(false)}
+          items={items}
+          align="start"
+          className="w-48 min-w-0"
+          ariaLabel={label}
+        />
+      )}
     </div>
   )
 }

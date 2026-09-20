@@ -231,6 +231,7 @@ export default function Tasks() {
           teams={teams}
           teamFilter={teamFilter}
           onTeamFilterChange={setTeamFilter}
+          mode={mode}
         />
 
         {/* P2.2: Active / History / Worktrees tab switcher — Simple mode

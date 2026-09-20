@@ -3074,5 +3074,8 @@
   "tasks.tab.history.title": "Completed, failed and cancelled tasks",
   "tasks.tab.worktrees.title": "Background worktree sessions",
   "inbox.source.trigger.title": "Tasks triggered by an external event (webhook, file change, schedule)",
-  "chat.scrollToLatest.aria": "Scroll to latest message"
+  "chat.scrollToLatest.aria": "Scroll to latest message",
+  "chat.dock.hint": "Tip: press Ctrl+\\ to toggle this panel.",
+  "memory.empty.title": "Your memory is empty",
+  "memory.empty.desc": "Save what matters — preferences, decisions, recurring context — and Shannon will recall it across future sessions."
 }

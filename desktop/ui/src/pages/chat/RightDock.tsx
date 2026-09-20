@@ -91,6 +91,15 @@ export default function RightDock({
   const { artifacts, setActive, close: closeArtifact } = useArtifact()
   const [tab, setTab] = useState<DockTab>(readTab)
   const [width, setWidth] = useState<number>(readWidth)
+  // Q11: a one-time hint the first time the user opens the dock — they
+  // learn Ctrl+\ can toggle it. Dismissed by interaction; never shown twice.
+  const [hintDismissed, setHintDismissed] = useState<boolean>(
+    () => typeof window !== 'undefined' && localStorage.getItem('shannon.dock.hintSeen') === '1'
+  )
+  const dismissHint = useCallback(() => {
+    setHintDismissed(true)
+    try { localStorage.setItem('shannon.dock.hintSeen', '1') } catch { /* noop */ }
+  }, [])
   const draggingRef = useRef(false)
 
   useEffect(() => {
@@ -142,6 +151,13 @@ export default function RightDock({
     }
     prevArtifactCount.current = artifacts.length
   }, [artifacts, onOpen])
+
+  // Q11: dismiss the Ctrl+\ hint once the user actively picks a tab —
+  // engagement is a stronger dismissal signal than time alone.
+  const handleTabPick = useCallback((next: DockTab) => {
+    setTab(next)
+    if (!hintDismissed) dismissHint()
+  }, [hintDismissed, dismissHint])
 
   // Entering plan mode docks the plan document (ZCode's 计划 tab behavior).
   const prevPlanMode = useRef(planModeActive)
@@ -209,6 +225,24 @@ export default function RightDock({
             className="absolute left-0 top-0 bottom-0 w-1 cursor-col-resize hover:bg-primary/30 transition-colors z-raised"
             aria-label={t('chat.dock.resize.aria')}
           />
+          {!hintDismissed && (
+            <div
+              role="status"
+              data-testid="dock-shortcut-hint"
+              className="mx-sm mt-sm flex items-center gap-sm px-sm py-xs rounded-lg bg-primary-container/40 text-on-surface text-label-xs animate-in fade-in"
+            >
+              <span className="material-symbols-outlined text-[14px] text-primary shrink-0">lightbulb</span>
+              <span className="flex-1 min-w-0 truncate">{t('chat.dock.hint')}</span>
+              <button
+                type="button"
+                aria-label={t('chat.dock.close.aria')}
+                onClick={dismissHint}
+                className="rounded p-0.5 hover:bg-surface-container text-on-surface-variant hover:text-primary"
+              >
+                <span className="material-symbols-outlined text-[14px]">close</span>
+              </button>
+            </div>
+          )}
           <div role="tablist" aria-label={t('chat.dock.aria')} className="flex items-center gap-xs px-sm py-xs border-b border-outline-variant/10 shrink-0 overflow-x-auto">
             {(Object.keys(utilityLabels) as UtilityTab[]).map(key => {
               const meta = utilityLabels[key]
@@ -223,7 +257,7 @@ export default function RightDock({
                   id={`dock-tab-${key}`}
                   aria-selected={tab === key}
                   disabled={disabled}
-                  onClick={() => setTab(key)}
+                  onClick={() => handleTabPick(key)}
                   title={meta.label}
                   className={cn(tabClass(tab === key), disabled && 'opacity-40 pointer-events-none')}
                 >
@@ -242,7 +276,7 @@ export default function RightDock({
                 role="tab"
                 id={`dock-tab-a-${a.id}`}
                 aria-selected={tab === `a:${a.id}`}
-                onClick={() => { setActive(a.id); setTab(`a:${a.id}`) }}
+                onClick={() => { setActive(a.id); handleTabPick(`a:${a.id}`) }}
                 title={a.title}
                 className={tabClass(tab === `a:${a.id}`)}
               >
