@@ -358,6 +358,23 @@ w4 发车 ~4.5h：11 启动 / 8 判分 / 3 在跑（健康：pier 存活、网�
    但若按 API 折算约 $1-2/题 vs 官方 $0.24——**token 效率列为 P3/P4 观察项**
    （不因单波数据行动，L4 纪律）。
 
+### F20（网络池耗尽二番事故：watchdog 双 bug + 修正后第三次 resume，2026-09-20 下午）
+1. **事故**：夜间恢复波（03:40-10:16）正常判分 ~14 题后，docker 网络地址池于 09:20
+   耗尽（`all predefined address pools have been fully subnetted`，与 w3 同源），
+   **剩余 ~50 题 1 分钟内全部秒死为 RuntimeError**。job 终态：113 completed（41 干净
+   + 72 errored）/ 0 pending；判分 63（24 绿）。
+2. **watchdog 双 bug（F18 恢复时引入）**：①阈值 `>24` 在恰好 24 时永不触发；
+   ②`docker network prune` 不能删除**被已停止容器引用**的网络——12 个退出容器把
+   网络钉死，prune 形同虚设。修正版（v2）：阈值 ≥20 + 先 `docker rm -f` 退出的
+   trial 容器再 prune，日志落 `~/.shannon/eval/w7-watchdog.log`。
+3. **清理与恢复**：移除 12 个泄漏容器、网络 24→14；杀僵死 wave/pier 壳进程；
+   第三次 resume（`--filter-error-type RuntimeError`，pier 逐个移除 50 个 infra
+   错误 trial 重排队），preflight 4/4、锚二进制仍 000619cb。踩坑：setsid 内相对
+   路径失效（cwd 丢失）——resume 脚本必须绝对路径/cd 前缀；/tmp 会被系统清理，
+   波次日志改放 `~/.shannon/eval/`。
+4. **现状**：47 pending + 3 running 重跑中，ETA ~9-21 深夜。教训固化：每波收尾后
+   必须核对 `docker ps -a | grep -c Exited` 与网络数（trial 容器退出即应清理）。
+
 ## 二、基线波次记录（P2）
 
 - **wave-1 处置与提速改版（2026-09-18）**：首发的 wave-1 在旧二进制事故（F8）后以
