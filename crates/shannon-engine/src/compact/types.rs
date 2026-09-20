@@ -1,6 +1,6 @@
 //! Core types for context compression.
 
-use crate::api::Message;
+use crate::api::{ContentBlock, Message, MessageContent};
 use serde::{Deserialize, Serialize};
 use std::time::Duration;
 use thiserror::Error;
@@ -307,22 +307,30 @@ pub struct ContextAnalysis {
 pub struct CompactPrompt;
 
 impl CompactPrompt {
-    /// Build the summarization system prompt
+    /// Build the summarization system prompt.
+    ///
+    /// Structured sections follow the state of the art for compaction
+    /// summaries (goals / concepts / files+code / errors / next steps /
+    /// user messages preserved verbatim): the post-compaction agent resumes
+    /// from this text alone, so losing a constraint or a file path is the
+    /// most expensive possible failure.
     pub fn system_prompt(max_tokens: usize) -> String {
         format!(
-            "You are a conversation compression assistant. Your task is to produce a concise \
-            summary of the conversation below, preserving:\n\n\
-            1. The user's goals and intent\n\
-            2. Key decisions made\n\
-            3. Important findings and conclusions\n\
-            4. File paths and code references that were discussed\n\
-            5. Tool calls that were made and their results (abbreviated)\n\
-            6. Any errors encountered and their resolutions\n\
-            7. Pending tasks or next steps\n\n\
-            The summary must be under {max_tokens} tokens. Focus on information that would be \
-            needed to continue the conversation productively. Omit redundant explanations, \
-            failed attempts that were abandoned, and verbose tool output.\n\n\
-            Format the summary as a structured but readable text. Use headings if helpful."
+            "You are a conversation compression assistant. Produce a structured summary \
+            of the conversation below with these sections:\n\n\
+            1. Primary Request and Intent — the user's goals; quote explicit constraints \
+            and requirements VERBATIM (they must survive compression word-for-word)\n\
+            2. Key Technical Concepts\n\
+            3. Files and Code Sections — every file path touched or discussed, with the \
+            relevant functions/symbols and what was done or planned there\n\
+            4. Errors and Fixes — each error, its cause, and the resolution or current status\n\
+            5. Problem Solving — approaches tried and their outcomes\n\
+            6. Pending Tasks and Next Steps — exact remaining work\n\
+            7. User Messages — a chronological list of the user's messages, condensed but \
+            faithful to the wording of any constraint\n\n\
+            The summary must be under {max_tokens} tokens. Focus on information needed to \
+            continue the conversation productively. Omit redundant explanations, abandoned \
+            failed attempts, and verbose tool output. Use the numbered headings above."
         )
     }
 
@@ -330,16 +338,30 @@ impl CompactPrompt {
     pub fn conversation_to_summarize(messages: &[Message]) -> String {
         use super::helpers::extract_text_content;
 
+        const PLAIN_CAP: usize = 500;
+        const TOOL_RESULT_CAP: usize = 4000;
+
         let mut parts = Vec::new();
         for msg in messages {
             let role = &msg.role;
             let content_text = extract_text_content(msg);
-            let preview = if content_text.len() > 500 {
-                let mut end = 497;
+            // Tool results carry the file paths, command output, and error
+            // details the summary prompt explicitly asks to preserve — a
+            // flat 500-char cut destroyed exactly those artifacts. Give
+            // tool-result messages an 8× larger budget.
+            let has_tool_result = matches!(
+                &msg.content,
+                MessageContent::Blocks(blocks)
+                    if blocks.iter().any(|b| matches!(b, ContentBlock::ToolResult { .. }))
+            );
+            let cap = if has_tool_result { TOOL_RESULT_CAP } else { PLAIN_CAP };
+            let preview = if content_text.len() > cap {
+                let mut end = cap.saturating_sub(3);
                 while !content_text.is_char_boundary(end) {
                     end -= 1;
                 }
-                format!("{}...", &content_text[..end])
+                let omitted = content_text.len() - end;
+                format!("{}...[+{omitted} chars truncated]", &content_text[..end])
             } else {
                 content_text
             };

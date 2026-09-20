@@ -507,6 +507,10 @@ fn think_only_min_answer_chars() -> usize {
 /// Default cap for a single tool result, in bytes.
 const DEFAULT_MAX_TOOL_RESULT_CHARS: usize = 40_000;
 
+/// Context-usage ratio above which stale tool results in older turns are
+/// cleared (micro-compaction) before full lossy compaction is considered.
+const MICRO_PRUNE_THRESHOLD: f32 = 0.7;
+
 /// Resolve the tool-result cap. `0` disables the cap entirely.
 fn max_tool_result_chars() -> usize {
     env_num_override(
@@ -1926,7 +1930,7 @@ impl QueryEngine {
         }
 
         // Memory entries — scoped injection, grouped by category (ADR-0010 D2).
-        if let Some(mem_text) = memory_injection {
+        if let Some(mem_text) = memory_injection.clone() {
             stable_blocks.push(mem_text);
         }
 
@@ -2337,6 +2341,8 @@ impl QueryEngine {
             let mut token_warning_60_fired = false;
             let mut token_warning_80_fired = false;
             let mut compaction_failures: u32 = 0;
+            // Micro-compaction (tool-result clearing) fires once per query.
+            let mut micro_pruned_fired = false;
             const MAX_COMPACTION_FAILURES: u32 = 2;
 
             // Denial circuit breaker: track consecutive permission denials.
@@ -2574,7 +2580,8 @@ impl QueryEngine {
                                 })
                                 .unwrap_or(0);
                     let max_context = effective_max_context.max(1); // Guard against division by zero
-                    let usage_ratio = estimated_tokens as f32 / max_context as f32;
+                    let mut estimated_tokens = estimated_tokens;
+                    let mut usage_ratio = estimated_tokens as f32 / max_context as f32;
 
                     // Pre-compaction warning at 60% — gives users visibility before compression fires.
                     // P-M: also inject a SYNTHETIC USER MESSAGE at 60% so the model itself
@@ -2684,6 +2691,43 @@ impl QueryEngine {
                         }
                     }
 
+                    // Micro-compaction (tool-result clearing): once per query,
+                    // above MICRO_PRUNE_THRESHOLD but BEFORE lossy full
+                    // compaction, shrink stale tool results in older turns to
+                    // 200-char previews (error results kept in full). This is
+                    // the cheapest context win and often avoids summarization
+                    // entirely. Pruning edits content in place — no messages
+                    // are removed, so tool_use/tool_result pairing is safe;
+                    // the unconditional sync below persists it.
+                    if !micro_pruned_fired && usage_ratio > MICRO_PRUNE_THRESHOLD {
+                        micro_pruned_fired = true;
+                        let keep = config.keep_recent_messages.min(messages.len());
+                        let head = messages.len() - keep;
+                        let before = estimated_tokens;
+                        shannon_engine::compact::CompactEngine::prune_stale_tool_results(
+                            &mut messages[..head],
+                        );
+                        estimated_tokens = shannon_engine::compact::helpers::estimate_tokens(&messages)
+                            + config
+                                .system_prompt
+                                .as_ref()
+                                .map(|sp| {
+                                    shannon_engine::compact::helpers::estimate_text_tokens(sp)
+                                })
+                                .unwrap_or(0);
+                        usage_ratio = estimated_tokens as f32 / max_context as f32;
+                        send_event!(
+                            tx,
+                            QueryEvent::Progress {
+                                query_id,
+                                message: format!(
+                                    "Cleared stale tool results from older turns: ~{before} → ~{estimated_tokens} tokens (context now {:.0}% full)",
+                                    usage_ratio * 100.0,
+                                ),
+                            }
+                        );
+                    }
+
                     if usage_ratio > config.compression_threshold {
                         // Circuit breaker: if compaction has failed repeatedly, skip it and just truncate
                         if compaction_failures >= MAX_COMPACTION_FAILURES {
@@ -2750,10 +2794,22 @@ impl QueryEngine {
                                     );
                                     // Re-inject critical context after compaction
                                     // so the model retains project instructions.
-                                    let reinjection = context_injector
+                                    let mut reinjection = context_injector
                                         .as_ref()
                                         .map(|ci| ci.reinjection_context())
                                         .unwrap_or_default();
+                                    // Curated project memories must survive the
+                                    // compaction boundary too — system blocks are
+                                    // rebuilt next query, but the compacted
+                                    // history loses them until then.
+                                    if let Some(mem) = memory_injection.as_ref() {
+                                        if !mem.is_empty() {
+                                            if !reinjection.is_empty() {
+                                                reinjection.push_str("\n\n");
+                                            }
+                                            reinjection.push_str(mem);
+                                        }
+                                    }
                                     if !reinjection.is_empty() && !messages.is_empty() {
                                         let ctx_msg = shannon_engine::api::Message {
                                             role: "system".to_string(),
@@ -2790,10 +2846,20 @@ impl QueryEngine {
                                     // Build re-injection context from ContextInjector if available,
                                     // otherwise fall back to the system prompt (truncated).
                                     // Build re-injection context from ContextInjector if available
-                                    let reinjection = context_injector
+                                    let mut reinjection = context_injector
                                         .as_ref()
                                         .map(|ci| ci.reinjection_context())
                                         .unwrap_or_default();
+                                    // Curated project memories survive the
+                                    // compaction boundary too.
+                                    if let Some(mem) = memory_injection.as_ref() {
+                                        if !mem.is_empty() {
+                                            if !reinjection.is_empty() {
+                                                reinjection.push_str("\n\n");
+                                            }
+                                            reinjection.push_str(mem);
+                                        }
+                                    }
 
                                     match compact_engine.compact(&mut messages) {
                                         Ok(result) => {
