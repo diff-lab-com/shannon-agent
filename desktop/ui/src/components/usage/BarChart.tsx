@@ -76,23 +76,40 @@ export function BarChart({ data, series, height = 220, formatValue }: BarChartPr
         style={{ height }}
         role="img"
       >
-        {/* Y-axis grid lines */}
-        {[0.25, 0.5, 0.75, 1].map(t => (
-          <line
-            key={t}
-            x1={padX}
-            x2={VB_W - padX}
-            y1={padTop + chartH * (1 - t)}
-            y2={padTop + chartH * (1 - t)}
-            stroke="currentColor"
-            strokeOpacity="0.08"
-            strokeDasharray="2 4"
-          />
+        {/* Y-axis grid lines + tick labels (0%, 25%, 50%, 75%, 100%) */}
+        {[0, 0.25, 0.5, 0.75, 1].map(t => (
+          <g key={t}>
+            <line
+              x1={padX}
+              x2={VB_W - padX}
+              y1={padTop + chartH * (1 - t)}
+              y2={padTop + chartH * (1 - t)}
+              stroke="currentColor"
+              strokeOpacity={t === 0 ? 0.15 : 0.08}
+              strokeDasharray={t === 0 ? undefined : '2 4'}
+            />
+            <text
+              x={padX - 6}
+              y={padTop + chartH * (1 - t) + 4}
+              textAnchor="end"
+              fontSize="11"
+              fill="currentColor"
+              fillOpacity="0.6"
+              className="font-mono"
+            >
+              {fmt(max * t)}
+            </text>
+          </g>
         ))}
 
         {data.map((point, idx) => {
           const groupX = padX + groupW * idx + (groupW - colW) / 2
           let y = padTop + chartH
+          // Adaptive X-axis density: when there are too many columns to
+          // fit legible labels, drop every other one — otherwise 30 / 90
+          // day views crowd into a single illegible row.
+          const labelEvery = data.length > 21 ? 5 : data.length > 10 ? 3 : 1
+          const showLabel = idx % labelEvery === 0 || idx === data.length - 1
           return (
             <g key={point.label + idx}>
               {point.series.map((seg, sIdx) => {
@@ -120,33 +137,22 @@ export function BarChart({ data, series, height = 220, formatValue }: BarChartPr
                 )
               })}
               {/* X-axis label */}
-              <text
-                x={groupX + colW / 2}
-                y={VB_H - padBottom + 18}
-                textAnchor="middle"
-                fontSize="11"
-                fill="currentColor"
-                fillOpacity="0.6"
-                className="font-mono"
-              >
-                {point.label}
-              </text>
+              {showLabel && (
+                <text
+                  x={groupX + colW / 2}
+                  y={VB_H - padBottom + 18}
+                  textAnchor="middle"
+                  fontSize="11"
+                  fill="currentColor"
+                  fillOpacity="0.6"
+                  className="font-mono"
+                >
+                  {point.label}
+                </text>
+              )}
             </g>
           )
         })}
-
-        {/* Y-axis top label */}
-        <text
-          x={padX - 6}
-          y={padTop + 4}
-          textAnchor="end"
-          fontSize="11"
-          fill="currentColor"
-          fillOpacity="0.6"
-          className="font-mono"
-        >
-          {fmt(max)}
-        </text>
       </svg>
 
       {/* Legend */}
