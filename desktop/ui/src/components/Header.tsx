@@ -193,7 +193,7 @@ export function Header() {
             <Button
               variant="ghost"
               aria-label={t('header.contextPanel.toggle')}
-              title={t('header.contextPanel.toggle')}
+              title={`${t('header.contextPanel.toggle')} (Ctrl+\\)`}
               aria-expanded={contextPanelOpen}
               aria-pressed={contextPanelOpen}
               className="p-2 rounded-lg hover:bg-surface-container-low text-on-surface-variant hover:text-primary transition-colors"

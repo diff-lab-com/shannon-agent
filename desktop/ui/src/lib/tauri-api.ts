@@ -1,5 +1,4 @@
 import { invoke } from '@tauri-apps/api/core'
-import type { WorkspaceLayout } from '@/components/workspace/layout'
 import type {
   ChatMessage,
   StatusResponse,
@@ -28,6 +27,7 @@ import type {
   SendMessageResponse,
   HunkAction,
   SessionInfo,
+  SessionPlan,
   TurnTimeline,
   McpServerInfo,
   McpServerConfig,
@@ -76,6 +76,7 @@ import type {
   TaskEvaluation,
   EvaluationResult,
   SkillProposal,
+  SubAgentDto,
 } from '@/types'
 
 export async function readAttachment(path: string): Promise<AttachmentPayload> {
@@ -512,6 +513,12 @@ export async function newSession(): Promise<string> {
 
 export async function listSessions(): Promise<SessionInfo[]> {
   return invoke('list_sessions')
+}
+
+/** P0 plan dock — the session working dir's most recent persisted plan
+ *  (`<workingDir>/.shannon/plans/*.md`, newest by mtime); null when none. */
+export async function getSessionPlan(workingDir: string): Promise<SessionPlan | null> {
+  return invoke('get_session_plan', { workingDir })
 }
 
 /** Turn Timeline (§4.14) — L0-derived turns/tools/token-cost view of one session. */
@@ -1357,6 +1364,13 @@ export async function startGoalRun(
 
 export async function listGoalRuns(): Promise<GoalRunDto[]> {
   return invoke('list_goal_runs')
+}
+
+// B2 follow-up — list sub-agents currently registered in the agent-teams
+// context. Returns an empty array when the user has not enabled agent
+// teams; the Tasks-page panel renders its empty state.
+export async function listSubagents(): Promise<SubAgentDto[]> {
+  return invoke('list_subagents')
 }
 
 export async function getGoalRun(sessionId: string): Promise<GoalRunDto | null> {
@@ -2209,19 +2223,8 @@ export async function terminalList(): Promise<TerminalInfo[]> {
   return invoke('terminal_list')
 }
 
-// Draggable panel workspace (P1-5 C-2 — frozen contract). Layout geometry
-// types live with the model in components/workspace/layout.ts; the backend
-// stores per-project layouts in ~/.shannon/desktop/workspace-layouts.json.
-
-/**
- * The saved layout for `projectKey`, or `null` when none is stored **or the
- * stored version is unsupported** (both reset the UI to the default preset).
- */
-export async function workspaceGetLayout(projectKey: string): Promise<WorkspaceLayout | null> {
-  return invoke('workspace_get_layout', { projectKey })
-}
-
-/** Persist the layout for `projectKey` (validated backend-side). */
-export async function workspaceSetLayout(projectKey: string, layout: WorkspaceLayout): Promise<void> {
-  await invoke('workspace_set_layout', { projectKey, layout })
-}
+// Draggable panel workspace (P1-5 C-2 — frozen contract) was retired in
+// e786ec25 alongside the WorkspaceGrid / Toolbar components. The
+// workspace_get_layout / workspace_set_layout Tauri commands and their
+// types still live on disk but are no longer wired into the chat page.
+// Keep the mock layer aware so existing data files don't trip type-check.

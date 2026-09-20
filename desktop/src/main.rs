@@ -148,6 +148,7 @@ fn main() {
             commands_sessions::new_session,
             commands_sessions::list_sessions,
             commands_sessions::search_sessions,
+            commands_sessions::get_session_plan,
             commands_sessions::load_session,
             commands_sessions::export_session,
             commands_sessions::switch_session,
@@ -247,6 +248,8 @@ fn main() {
             commands_agents::list_agent_definitions,
             commands_agents::create_agent_definition,
             commands_agents::delete_agent_definition,
+            // B2 follow-up — live sub-agent registry listing (Tasks page panel).
+            commands_agents::list_subagents,
             // Inter-agent message history (Phase D C3)
             commands_agents::list_agent_messages,
             commands_agents::list_agent_message_teams,
@@ -447,6 +450,23 @@ fn main() {
                     *slot = Some(engine_mode);
                 }
                 tracing::info!(?engine_mode, "engine discovery complete");
+
+                // B2 — when the persisted Settings toggle is on, inject the
+                // agent-teams context so `agent_spawn` executes real
+                // sub-agents and bridges lifecycle events to the frontend.
+                // Failure is non-fatal: the tool keeps placeholder behavior
+                // and the user can retry from Settings.
+                if shannon_desktop::agent_teams::config_enabled(state_ref.inner()).await {
+                    if let Err(e) = shannon_desktop::agent_teams::enable(
+                        state_ref.inner(),
+                        app_handle_for_block.clone(),
+                    )
+                    .await
+                    {
+                        tracing::warn!("agent teams enable failed: {e}");
+                    }
+                }
+
                 if engine_mode == engine_discovery::EngineMode::Hosted {
                     // P0.1 — spawn the loopback engine API server BEFORE the
                     // gateway so its `engine.wsUrl` (ws://127.0.0.1:33420/api/ws)

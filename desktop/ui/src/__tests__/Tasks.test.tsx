@@ -20,7 +20,7 @@ function wrap(ui: React.ReactElement) {
 describe('Tasks page', () => {
   it('renders scheduled tasks heading', async () => {
     render(wrap(<Tasks />))
-    await waitFor(() => expect(screen.getByText('Tasks')).toBeInTheDocument())
+    await waitFor(() => expect(screen.getByText(/Create and monitor automations/)).toBeInTheDocument())
   })
 
   it('renders new background task button', async () => {

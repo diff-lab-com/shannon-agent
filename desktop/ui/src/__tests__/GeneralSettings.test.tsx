@@ -19,9 +19,9 @@ function wrap(ui: React.ReactElement) {
 }
 
 describe('GeneralSettings', () => {
-  it('renders system settings heading', () => {
+  it('renders general settings subtitle', () => {
     render(wrap(<GeneralSettings />))
-    expect(screen.getByText('System Settings')).toBeInTheDocument()
+    expect(screen.getByText(/Refine your AI workflow and interface preferences/)).toBeInTheDocument()
   })
 
   it('renders approval mode section', () => {

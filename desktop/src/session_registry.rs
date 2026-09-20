@@ -269,6 +269,22 @@ impl SessionRegistry {
         }
     }
 
+    /// P0 sidebar telemetry: whether this session currently has a live
+    /// query. Sessions never registered here report `false` — the registry
+    /// only tracks sessions touched since process start.
+    pub async fn is_querying(&self, session_id: Uuid) -> bool {
+        // Clone the Arc out of the shard guard before awaiting the flag's
+        // mutex — a held DashMap guard is not Send and must not cross await.
+        let state = self
+            .sessions
+            .get(&SessionKey(session_id))
+            .map(|entry| Arc::clone(entry.value()));
+        match state {
+            Some(state) => *state.querying.lock().await,
+            None => false,
+        }
+    }
+
     /// Create a new session with a freshly-generated UUID, insert it into
     /// the registry, and mark it as the active session. Returns the key.
     ///

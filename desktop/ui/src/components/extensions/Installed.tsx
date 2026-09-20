@@ -118,17 +118,12 @@ export default function Installed() {
 
   return (
     <div className="p-lg max-w-4xl mx-auto">
-      <header className="mb-lg">
-        <h1 className="text-headline-sm font-bold text-on-surface">
-          {t('extensions.installed.title')}
-        </h1>
-        <p className="text-label-sm text-on-surface-variant">
-          {intl.formatMessage({ id: 'extensions.installed.count' }, {
-            entries: filtered.length,
-            categories: populatedKinds.length,
-          })}
-        </p>
-      </header>
+      <p className="text-label-sm text-on-surface-variant mb-lg">
+        {intl.formatMessage({ id: 'extensions.installed.count' }, {
+          entries: filtered.length,
+          categories: populatedKinds.length,
+        })}
+      </p>
 
       <div className="space-y-xl">
         {populatedKinds.map((kind) => {
@@ -151,9 +146,26 @@ export default function Installed() {
   );
 }
 
+const KIND_TO_PATH: Record<AddonKind, string> = {
+  mcp: '/extensions/mcp-servers',
+  skill: '/extensions/skills',
+  agent: '/extensions/agents',
+  data_source: '/extensions/datasources',
+  plugin: '/extensions/plugins',
+};
+
+const KIND_TO_MANAGE_TAB: Record<AddonKind, string> = {
+  mcp: 'extensions.mcpServers',
+  skill: 'extensions.skills',
+  agent: 'extensions.myAgents',
+  data_source: 'extensions.dataSources',
+  plugin: 'extensions.plugins',
+};
+
 function InstalledRow({ row, isLast }: { row: InstalledAddonSummary; isLast: boolean }) {
   const intl = useIntl();
   const t = (id: string) => intl.formatMessage({ id });
+  const navigate = useNavigate();
   return (
     <div className={cn("flex items-start gap-md px-md py-sm", isLast ? "" : "border-b border-outline-variant/15")}>
       <div className={cn("w-9 h-9 rounded-lg flex items-center justify-center shrink-0", row.enabled ? "bg-primary/10" : "bg-surface-container-low")}>
@@ -184,6 +196,19 @@ function InstalledRow({ row, isLast }: { row: InstalledAddonSummary; isLast: boo
           <p className="text-label-xs text-on-surface-variant mt-[2px]">
             {intl.formatMessage({ id: 'extensions.installed.installedAt' }, { date: formatDate(row.installed_at) })}
           </p>
+        )}
+        {/* Disabled entries have no in-row toggle (no write Tauri command yet),
+            but they must never be a dead-end: jump to the matching 管理 tab. */}
+        {!row.enabled && (
+          <button
+            type="button"
+            onClick={() => navigate(KIND_TO_PATH[row.kind])}
+            className="mt-xs inline-flex items-center gap-0.5 text-label-xs text-primary hover:underline focus-visible:outline focus-visible:outline-2 focus-visible:outline-primary/40 rounded px-0.5 -mx-0.5"
+            title={intl.formatMessage({ id: 'extensions.installed.disabledCtaHint' }, { tab: t(KIND_TO_MANAGE_TAB[row.kind]) })}
+          >
+            <span className="material-symbols-outlined text-[14px]" aria-hidden="true">arrow_forward</span>
+            {t('extensions.installed.disabledCta')} {t(KIND_TO_MANAGE_TAB[row.kind])} →
+          </button>
         )}
       </div>
     </div>

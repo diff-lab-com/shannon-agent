@@ -3,6 +3,7 @@ import { useIntl } from 'react-intl'
 import { open } from '@tauri-apps/plugin-dialog'
 import { Button } from '@/components/ui/button'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
+import { DropdownMenu, type DropdownMenuItem } from '@/components/ui/dropdown-menu'
 import { useCatalog } from '@/context/CatalogContext'
 import { useVoice } from '@/hooks/useVoice'
 import { MicButton } from '@/components/voice/MicButton'
@@ -14,6 +15,14 @@ import { toastError } from '@/lib/errorToast'
 import { cn } from '@/lib/utils'
 
 const IMAGE_EXTENSIONS = new Set(['png', 'jpg', 'jpeg', 'gif', 'webp', 'bmp', 'svg'])
+
+/** Last path segment, no extension — used by the contextual placeholder so a
+ *  repo named "shannon-desktop" reads as "Working in shannon-desktop …". */
+function basename(p: string): string {
+  const trimmed = p.replace(/\\/g, '/').replace(/\/+$/, '')
+  const last = trimmed.split('/').pop() ?? ''
+  return last || trimmed
+}
 
 /* Char-count thresholds.
  *   showAt — start showing the live counter
@@ -37,11 +46,14 @@ interface ChatInputProps {
   onCancelQuery: () => void
   onOpenQuickFix: () => void
   onOpenEditor: () => void
+  /** Session working directory — picks a context-aware composer placeholder. */
+  sessionWorkingDir?: string
 }
 
-// U2: the model Select and the working-directory chip were removed — the
-// global Header owns model switching, and the composer footer (ComposerPanel)
-// is the single working-directory entry point.
+// U2 removed the composer's model Select; the ZCode delta P0-③ brings a
+// model chip back (per-message switching without reaching for the Header)
+// while the global Header selector stays in sync — both write the same
+// engine config keys (`model` holds a model NAME, not the catalog id).
 export default function ChatInput({
   value,
   onChange,
@@ -55,10 +67,14 @@ export default function ChatInput({
   onCancelQuery,
   onOpenQuickFix,
   onOpenEditor,
+  sessionWorkingDir,
 }: ChatInputProps) {
   const intl = useIntl()
   const t = (id: string) => intl.formatMessage({ id })
-  const { config, refreshConfig } = useCatalog()
+  const { config, status, models, refreshConfig, refreshStatus } = useCatalog()
+  // Tests (and degraded catalogs) may omit the model list — the chip then
+  // falls back to the placeholder and lists nothing.
+  const modelList = models ?? []
   const textareaRef = useRef<HTMLTextAreaElement>(null)
   const [isDragging, setIsDragging] = useState(false)
 
@@ -100,12 +116,32 @@ export default function ChatInput({
   })
 
   const handleModeChange = async (mode: string | null) => {
+    console.log('[dbg] handleModeChange', mode)
     if (!mode) return
     try {
+      console.log('[dbg] calling api.configure')
       await api.configure({ key: 'approval_mode', value: mode })
+      console.log('[dbg] configure resolved')
       await refreshConfig()
     } catch (err) {
       toastError(t('chat.input.mode.failed'), err)
+    }
+  }
+
+  // P0-③ (ZCode delta): composer model chip. Mirrors Header.handleModelSwitch
+  // exactly — configure the model NAME plus its provider, then refresh both
+  // config and status so the two selectors stay in sync.
+  const currentModel = modelList.find(m => m.name === status?.model || m.id === status?.model)
+  const handleModelSwitch = async (modelId: string | null) => {
+    const model = modelList.find(m => m.id === modelId)
+    if (!model) return
+    try {
+      await api.configure({ key: 'model', value: model.name })
+      await api.configure({ key: 'provider', value: model.provider })
+      await refreshConfig()
+      await refreshStatus()
+    } catch (err) {
+      toastError(t('chat.input.model.failed'), err)
     }
   }
 
@@ -113,6 +149,12 @@ export default function ChatInput({
   // `effort_level` (CLI /effort → config) and maps it to the provider's
   // reasoning parameter; the desktop composer previously had no surface for it.
   const currentEffort = (config as Record<string, unknown> | undefined)?.effort_level as string | undefined ?? 'medium'
+  const effortOptions = [
+    { value: 'low', label: t('chat.input.effort.low') },
+    { value: 'medium', label: t('chat.input.effort.medium') },
+    { value: 'high', label: t('chat.input.effort.high') },
+    { value: 'max', label: t('chat.input.effort.max') },
+  ]
   const handleEffortChange = async (effort: string | null) => {
     if (!effort) return
     try {
@@ -221,6 +263,11 @@ export default function ChatInput({
   const currentMode = config?.approval_mode || 'suggest'
   const planModeActive = currentMode === 'plan'
 
+  // The composer owns ONE mode surface (the unified pill below); the
+  // keyboard shortcut and the plan banner's exit button both funnel here.
+  // (The old design had a separate 计划模式 toggle button alongside the
+  // approval-mode select that also contained 计划/只读 — two controls
+  // writing the same `approval_mode` key, which read as overlapping modes.)
   const handlePlanToggle = async () => {
     try {
       await api.configure({ key: 'approval_mode', value: planModeActive ? 'suggest' : 'plan' })
@@ -264,14 +311,22 @@ export default function ChatInput({
   }, [value, autosizeTextarea])
 
   const modeOptions = [
-    { value: 'readonly', label: t('chat.input.mode.readonly'), icon: 'lock', color: 'border-success/50' },
-    { value: 'plan', label: t('chat.input.mode.plan'), icon: 'description', color: 'border-success/50' },
-    { value: 'suggest', label: t('chat.input.mode.suggest'), icon: 'shield', color: 'border-warning/50' },
-    { value: 'auto', label: t('chat.input.mode.auto'), icon: 'flash_auto', color: 'border-warning/50' },
-    { value: 'full_auto', label: t('chat.input.mode.full_auto'), icon: 'bolt', color: 'border-error/50' },
+    { value: 'readonly', label: t('chat.input.mode.readonly'), desc: t('chat.input.mode.readonly.desc'), icon: 'lock', color: 'border-success/50' },
+    { value: 'plan', label: t('chat.input.mode.plan'), desc: t('chat.input.mode.plan.desc'), icon: 'description', color: 'border-success/50' },
+    { value: 'suggest', label: t('chat.input.mode.suggest'), desc: t('chat.input.mode.suggest.desc'), icon: 'shield', color: 'border-warning/50' },
+    { value: 'auto', label: t('chat.input.mode.auto'), desc: t('chat.input.mode.auto.desc'), icon: 'flash_auto', color: 'border-warning/50' },
+    { value: 'full_auto', label: t('chat.input.mode.full_auto'), desc: t('chat.input.mode.full_auto.desc'), icon: 'bolt', color: 'border-error/50' },
   ]
 
   const selectedMode = modeOptions.find(m => m.value === currentMode) || modeOptions[2]
+
+  /* "+" menu — attachments and the two inline tools, one click each. */
+  const [plusOpen, setPlusOpen] = useState(false)
+  const plusItems: DropdownMenuItem[] = [
+    { id: 'attach', label: t('chat.input.attach.aria'), icon: 'attach_file', onSelect: () => { setPlusOpen(false); void handleAttachClick() } },
+    { id: 'quickfix', label: t('nav.quickFix'), icon: 'build', onSelect: () => { setPlusOpen(false); onOpenQuickFix() } },
+    { id: 'editor', label: t('nav.editor'), icon: 'code', onSelect: () => { setPlusOpen(false); onOpenEditor() } },
+  ]
 
   /* Char count UI */
   const charCount = value.length
@@ -376,7 +431,13 @@ export default function ChatInput({
           <textarea
             ref={textareaRef}
             className="flex-1 bg-transparent border-none outline-none focus:ring-0 font-body-lg py-md px-sm placeholder:text-on-surface-variant/70 text-on-surface resize-none min-h-[24px] max-h-[200px]"
-            placeholder={isQuerying ? t('chat.input.processing') : t('chat.input.placeholder')}
+            placeholder={
+              isQuerying
+                ? t('chat.input.processing')
+                : sessionWorkingDir
+                  ? `${t('chat.input.placeholder.project')} — ${basename(sessionWorkingDir)}`
+                  : t('chat.input.placeholder.empty')
+            }
             aria-label={t('chat.input.ariaLabel')}
             value={value}
             onChange={e => onChange(e.target.value)}
@@ -387,64 +448,122 @@ export default function ChatInput({
         </div>
 
         <div className="flex items-center justify-between gap-xs px-sm py-xs border-t border-outline-variant/20">
+          {/* Classic AI-composer layout: one "+" menu, ONE mode surface, the
+              model pill (reasoning effort folded into its dropdown) on the
+              left; mic / counter / send on the right. The old row showed a
+              separate 计划模式 toggle next to the approval-mode select that
+              also held 计划/只读 — two controls for the same key. */}
           <div className="flex items-center gap-xs flex-wrap min-w-0">
-            <Button
-              variant="outline"
-              size="sm"
-              onClick={handlePlanToggle}
-              aria-pressed={planModeActive}
-              aria-label={t('chat.input.planMode.aria')}
-              title={t('chat.input.planMode.tooltip')}
-              className={cn('h-auto gap-xs px-sm py-xs rounded-full text-label-sm shrink-0',
-                planModeActive
-                  ? 'border-primary bg-primary/10 text-primary'
-                  : 'border-outline-variant/30 bg-surface-container-lowest/60 text-on-surface-variant hover:bg-surface-container-low hover:border-outline-variant hover:text-primary'
+            <span className="relative shrink-0">
+              <Button
+                variant="ghost"
+                aria-haspopup="menu"
+                aria-expanded={plusOpen}
+                aria-label={t('chat.input.plus.aria')}
+                title={t('chat.input.plus.aria')}
+                className="p-md text-on-surface-variant hover:text-primary"
+                onClick={() => setPlusOpen(v => !v)}
+              >
+                <span className="material-symbols-outlined icon-md">add_circle_outline</span>
+              </Button>
+              {plusOpen && (
+                <DropdownMenu
+                  open
+                  onClose={() => setPlusOpen(false)}
+                  items={plusItems}
+                  align="start"
+                  className="w-48 min-w-0"
+                  ariaLabel={t('chat.input.plus.aria')}
+                />
               )}
-            >
-              <span className="material-symbols-outlined icon-sm">route</span>
-              <span>{t('chat.input.planMode.label')}</span>
-            </Button>
+            </span>
 
             <Select value={currentMode} onValueChange={handleModeChange}>
               <SelectTrigger
                 size="sm"
                 aria-label={t('chat.input.mode.label')}
-                className={cn('border', selectedMode.color, 'bg-transparent hover:bg-surface-container-low/50 transition-colors')}
+                title={selectedMode.desc}
+                className={cn('rounded-full border', selectedMode.color, 'bg-transparent hover:bg-surface-container-low/50 transition-colors')}
               >
                 <span className="material-symbols-outlined icon-sm">{selectedMode.icon}</span>
-                <SelectValue placeholder={t('chat.input.mode.label')} />
+                {/* Render the matched mode's local label, not the raw value
+                    — an unknown approval_mode (e.g. legacy 'standard') now
+                    falls back to the Suggest label instead of bleeding into
+                    the pill chrome. */}
+                <SelectValue placeholder={t('chat.input.mode.label')}>
+                  {() => <span className="truncate">{selectedMode.label}</span>}
+                </SelectValue>
               </SelectTrigger>
               <SelectContent>
                 {modeOptions.map(mode => (
                   <SelectItem key={mode.value} value={mode.value}>
-                    <div className="flex items-center gap-xs">
-                      <span className="material-symbols-outlined icon-sm">{mode.icon}</span>
-                      <span>{mode.label}</span>
+                    <div className="flex items-start gap-xs py-0.5">
+                      <span className="material-symbols-outlined icon-sm mt-0.5" aria-hidden="true">{mode.icon}</span>
+                      <span className="min-w-0">
+                        <span className="block font-label-md text-on-surface whitespace-nowrap">{mode.label}</span>
+                        <span className="block font-label-xs text-on-surface-variant whitespace-normal">{mode.desc}</span>
+                      </span>
                     </div>
                   </SelectItem>
                 ))}
               </SelectContent>
             </Select>
 
-            <Select value={currentEffort} onValueChange={handleEffortChange}>
+            <Select
+              value={currentModel?.id ?? ''}
+              onValueChange={value => {
+                // Reasoning effort is folded into the model dropdown as a
+                // namespaced section — one pill instead of two.
+                if (value && value.startsWith('effort:')) {
+                  void handleEffortChange(value.slice('effort:'.length))
+                  return
+                }
+                if (value) void handleModelSwitch(value)
+              }}
+            >
               <SelectTrigger
                 size="sm"
-                aria-label={t('chat.input.effort.label')}
-                title={t('chat.input.effort.title')}
-                className="border border-outline-variant/50 bg-transparent hover:bg-surface-container-low/50 transition-colors"
+                aria-label={t('chat.input.model.label')}
+                title={t('chat.input.model.title')}
+                className="max-w-[170px] rounded-full border border-outline-variant/50 bg-transparent hover:bg-surface-container-low/50 transition-colors"
               >
-                <span className="material-symbols-outlined icon-sm">neurology</span>
-                <SelectValue placeholder={t('chat.input.effort.label')} />
+                <span className="material-symbols-outlined icon-sm">smart_toy</span>
+                {/* Render the model NAME (what config `model` stores and what
+                    the Header displays), not the catalog id. */}
+                <SelectValue placeholder={status?.model || t('chat.input.model.label')}>
+                  {(value: unknown) => {
+                    if (typeof value === 'string' && value.startsWith('effort:')) {
+                      const eff = effortOptions.find(e => e.value === value.slice('effort:'.length))
+                      return eff ? `${currentModel?.name ?? status?.model} · ${eff.label}` : (status?.model || t('chat.input.model.label'))
+                    }
+                    const m = modelList.find(x => x.id === value)
+                    return m ? m.name : (status?.model || t('chat.input.model.label'))
+                  }}
+                </SelectValue>
               </SelectTrigger>
               <SelectContent>
-                {[
-                  { value: 'low', label: t('chat.input.effort.low') },
-                  { value: 'medium', label: t('chat.input.effort.medium') },
-                  { value: 'high', label: t('chat.input.effort.high') },
-                  { value: 'max', label: t('chat.input.effort.max') },
-                ].map(effort => (
-                  <SelectItem key={effort.value} value={effort.value}>
-                    {effort.label}
+                {modelList.map(m => (
+                  <SelectItem key={m.id} value={m.id}>
+                    <span className="font-mono">{m.name}</span>
+                  </SelectItem>
+                ))}
+                {modelList.length > 0 && (
+                  <div role="presentation" className="mx-sm my-xs border-t border-outline-variant/20" />
+                )}
+                <div role="presentation" className="px-sm pt-0 pb-1 font-label-xs uppercase tracking-wider text-on-surface-variant">
+                  {t('chat.input.effort.section')}
+                </div>
+                {effortOptions.map(effort => (
+                  <SelectItem
+                    key={`effort-${effort.value}`}
+                    value={`effort:${effort.value}`}
+                  >
+                    <span className="flex items-center gap-xs">
+                      <span className="material-symbols-outlined icon-sm" aria-hidden="true">
+                        {currentEffort === effort.value ? 'radio_button_checked' : 'radio_button_unchecked'}
+                      </span>
+                      {effort.label}
+                    </span>
                   </SelectItem>
                 ))}
               </SelectContent>
@@ -452,36 +571,6 @@ export default function ChatInput({
           </div>
 
           <div className="flex items-center gap-xs shrink-0">
-            <Button
-              variant="ghost"
-              aria-label={t('chat.input.attach.aria')}
-              title={t('chat.input.attach.aria')}
-              className="p-md text-on-surface-variant hover:text-primary"
-              onClick={handleAttachClick}
-            >
-              <span className="material-symbols-outlined icon-md">attach_file</span>
-            </Button>
-
-            <Button
-              variant="ghost"
-              aria-label={t('nav.quickFix')}
-              title={t('nav.quickFix')}
-              className="p-md text-on-surface-variant hover:text-primary"
-              onClick={onOpenQuickFix}
-            >
-              <span className="material-symbols-outlined icon-md">build</span>
-            </Button>
-
-            <Button
-              variant="ghost"
-              aria-label={t('nav.editor')}
-              title={t('nav.editor')}
-              className="p-md text-on-surface-variant hover:text-primary"
-              onClick={onOpenEditor}
-            >
-              <span className="material-symbols-outlined icon-md">code</span>
-            </Button>
-
             <MicButton
               state={voice.state}
               disabled={disabled}

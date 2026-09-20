@@ -5,9 +5,16 @@
 // inline rename, export/print, and delete-with-confirm. The former Chat-page
 // session sidebar was removed (U1); this list is its replacement.
 //
+// P0 (ZCode delta ②/④): the rail is also a run monitor — every row carries
+// a live running dot + elapsed badge (from SessionActivity), and the list
+// supports two grouping views, 按项目 (Codex/Claude "project" mental model,
+// default) and 按时间 (today/yesterday/this-week/earlier, the ZCode mental
+// model). Grouping preference persists to localStorage.
+//
 // Persisted keys:
-//   shannon-sessions-order  — Record<sessionId, index> written on drag reorder
-//   shannon-sessions-pinned — string[] of pinned session ids
+//   shannon-sessions-order    — Record<sessionId, index> written on drag reorder
+//   shannon-sessions-pinned   — string[] of pinned session ids
+//   shannon-sessions-grouping — 'project' | 'time'
 
 import { useState, useCallback, useEffect, useMemo, useRef, Fragment } from 'react'
 import { useNavigate } from 'react-router-dom'
@@ -20,12 +27,21 @@ import { useT } from '@/i18n'
 import * as api from '@/lib/tauri-api'
 import { exportSessionAsMarkdown, printSession } from '@/lib/sessionActions'
 import { toastError } from '@/lib/errorToast'
-import type { SessionInfo } from '@/types'
+import type { GoalRunDto, SessionActivity, SessionInfo } from '@/types'
 import DeleteSessionModal from '@/pages/chat/DeleteSessionModal'
 import HighlightText from './HighlightText'
 
 const SESSIONS_ORDER_KEY = 'shannon-sessions-order'
 const SESSIONS_PINNED_KEY = 'shannon-sessions-pinned'
+const SESSIONS_GROUPING_KEY = 'shannon-sessions-grouping'
+const SESSIONS_FOLDED_KEY = 'shannon-sessions-folded'
+
+// IA (2026-09 review): two grouping modes — by project (folders nest
+// their conversations, the ZCode mental model) and by session (one flat
+// list sorted by recency). The session mode is what users want when
+// they're hunting for "the chat I had an hour ago"; project mode wins
+// once they have more than ~10 conversations.
+type GroupingMode = 'project' | 'session'
 
 function readOrderOverride(): Record<string, number> {
   if (typeof window === 'undefined') return {}
@@ -43,12 +59,61 @@ function readPinned(): ReadonlySet<string> {
   } catch { return new Set() }
 }
 
+function readGrouping(): GroupingMode {
+  if (typeof window === 'undefined') return 'project'
+  try {
+    return window.localStorage.getItem(SESSIONS_GROUPING_KEY) === 'session' ? 'session' : 'project'
+  } catch { return 'project' }
+}
+
+function readFolded(): ReadonlySet<string> {
+  if (typeof window === 'undefined') return new Set()
+  try {
+    const raw = window.localStorage.getItem(SESSIONS_FOLDED_KEY)
+    return new Set(raw ? JSON.parse(raw) : [])
+  } catch { return new Set() }
+}
+
 function persist(key: string, value: unknown) {
   try { window.localStorage.setItem(key, JSON.stringify(value)) } catch { /* noop */ }
 }
 
+function persistGrouping(mode: GroupingMode) {
+  // Raw string (not JSON-encoded) — readGrouping compares bare values.
+  try { window.localStorage.setItem(SESSIONS_GROUPING_KEY, mode) } catch { /* noop */ }
+}
+
+/** Compact elapsed label for a running session: 42s · 8m · 1h12m. */
+function formatElapsed(ms: number): string {
+  const sec = Math.max(0, Math.floor(ms / 1000))
+  if (sec < 60) return `${sec}s`
+  const min = Math.floor(sec / 60)
+  if (min < 60) return `${min}m`
+  return `${Math.floor(min / 60)}h${min % 60}m`
+}
+
+function projectOf(s: { working_dir?: string | null }): string | null {
+  const dir = s.working_dir?.trim()
+  if (!dir) return null
+  const parts = dir.split('/').filter(Boolean)
+  return parts.length > 0 ? parts[parts.length - 1] : null
+}
+
+interface SessionGroup {
+  key: string
+  icon: string
+  label: string
+  sessions: SessionInfo[]
+  /** Project groups render as collapsible folder rows (ZCode 项目 tree). */
+  isProject?: boolean
+}
+
 interface SessionsSectionProps {
   sessions: SessionInfo[]
+  /** P0 sidebar telemetry: live run state per session id. */
+  sessionActivity: Record<string, SessionActivity>
+  /** P2-⑥: goal runs keyed by the session they own (badge + iterations). */
+  goalRunsBySession: Record<string, GoalRunDto>
   currentSessionId: string | null
   switchSession: (id: string) => Promise<void>
   renameSession: (id: string, title: string) => Promise<void>
@@ -56,7 +121,7 @@ interface SessionsSectionProps {
   closeMobile?: () => void
 }
 
-export function SessionsSection({ sessions, currentSessionId, switchSession, renameSession, deleteSession, closeMobile }: SessionsSectionProps) {
+export function SessionsSection({ sessions, sessionActivity, goalRunsBySession = {}, currentSessionId, switchSession, renameSession, deleteSession, closeMobile }: SessionsSectionProps) {
   const t = useT()
   const navigate = useNavigate()
   const [query, setQuery] = useState('')
@@ -68,10 +133,62 @@ export function SessionsSection({ sessions, currentSessionId, switchSession, ren
   const [deleteTarget, setDeleteTarget] = useState<string | null>(null)
   const [orderOverride, setOrderOverride] = useState<Record<string, number>>(readOrderOverride)
   const [pinnedIds, setPinnedIds] = useState<ReadonlySet<string>>(readPinned)
+  const [grouping, setGrouping] = useState<GroupingMode>(readGrouping)
+  // ZCode 项目 tree: folded project folders persist; the active session's
+  // project always auto-expands so the current conversation stays visible.
+  const [foldedProjects, setFoldedProjects] = useState<ReadonlySet<string>>(readFolded)
+  // Wall-clock tick that drives the elapsed badges while anything runs.
+  const [nowTick, setNowTick] = useState(() => Date.now())
   // U5: touch long-press (500ms) opens the ⋯ menu; the click that follows a
   // completed long-press must not also switch the session.
   const longPressTimer = useRef<number | null>(null)
   const suppressClickRef = useRef(false)
+
+  const anyRunning = useMemo(
+    () => Object.values(sessionActivity).some(a => a.running) || sessions.some(s => s.running === true),
+    [sessionActivity, sessions],
+  )
+
+  // Refresh "now" immediately when activity changes, then keep the elapsed
+  // badges ticking (cheap: only while a run is live).
+  useEffect(() => {
+    setNowTick(Date.now())
+  }, [sessionActivity])
+  useEffect(() => {
+    if (!anyRunning) return
+    const id = window.setInterval(() => setNowTick(Date.now()), 5000)
+    return () => window.clearInterval(id)
+  }, [anyRunning])
+
+  const setGroupingPersisted = useCallback((mode: GroupingMode) => {
+    setGrouping(mode)
+    persistGrouping(mode)
+  }, [])
+
+  const toggleFold = useCallback((key: string) => {
+    setFoldedProjects(prev => {
+      const next = new Set(prev)
+      if (next.has(key)) next.delete(key); else next.add(key)
+      try { window.localStorage.setItem(SESSIONS_FOLDED_KEY, JSON.stringify([...next])) } catch { /* noop */ }
+      return next
+    })
+  }, [])
+
+  // The active session's project folder always stays expanded — switching to
+  // a conversation in a folded project reveals it instead of hiding the row.
+  const activeProject = currentSessionId
+    ? projectOf(sessions.find(s => s.id === currentSessionId) ?? {})
+    : null
+  useEffect(() => {
+    if (!activeProject) return
+    setFoldedProjects(prev => {
+      if (!prev.has(activeProject)) return prev
+      const next = new Set(prev)
+      next.delete(activeProject)
+      return next
+    })
+  }, [activeProject])
+
   const clearLongPress = useCallback(() => {
     if (longPressTimer.current !== null) {
       clearTimeout(longPressTimer.current)
@@ -138,6 +255,38 @@ export function SessionsSection({ sessions, currentSessionId, switchSession, ren
     return [...sorted.filter(s => hitIds.has(s.id)), ...backendHits.filter(h => !known.has(h.id))]
   }, [sorted, query, backendHits, sessions])
 
+  // Grouping (P0-④). null = render flat. While searching the list stays
+  // flat (matches hit ranking); project mode stays flat while there is at
+  // most one project (small lists stay uncluttered).
+  //
+  // Session mode (2026-09): a single flat list sorted by recency — no
+  // today/yesterday/this-week/earlier buckets. The buckets read as
+  // redundant once the user knows the list is "all my sessions, newest
+  // first"; pinning the active session to the top of an un-bucketed list
+  // is the ZCode-style mental model.
+  const groups = useMemo<SessionGroup[] | null>(() => {
+    if (query.trim()) return null
+    if (grouping === 'project') {
+      const distinct = new Set(filtered.map(projectOf))
+      if (distinct.size <= 1) return null
+      const buckets = new Map<string, SessionInfo[]>()
+      for (const s of filtered) {
+        const key = projectOf(s) ?? ''
+        if (!buckets.has(key)) buckets.set(key, [])
+        buckets.get(key)!.push(s)
+      }
+      return [...buckets.entries()].map(([key, list]) => ({
+        key,
+        icon: 'folder',
+        label: key === '' ? t('sidebar.sessions.project.untitled') : key,
+        sessions: list,
+        isProject: true,
+      }))
+    }
+    // Session mode — flat, no headers. The list itself is the order.
+    return null
+  }, [filtered, grouping, query, t])
+
   const persistOrder = useCallback((next: Record<string, number>) => {
     setOrderOverride(next)
     persist(SESSIONS_ORDER_KEY, next)
@@ -161,8 +310,9 @@ export function SessionsSection({ sessions, currentSessionId, switchSession, ren
 
   // U5: keyboard alternative to drag reorder — Alt+↑/↓ on a focused row
   // swaps it with its neighbor and writes through the same order-override
-  // path as handleDrop. Inert mid-search: reordering a filtered subset is
-  // ambiguous (the neighbor may be filtered out).
+  // path as handleDrop. Inert mid-search and in time grouping: reordering a
+  // filtered/bucketed subset is ambiguous (the neighbor may be filtered out
+  // or live in another day bucket).
   const moveRow = useCallback((id: string, dir: -1 | 1) => {
     const ids = sorted.map(s => s.id)
     const fromIdx = ids.indexOf(id)
@@ -178,10 +328,10 @@ export function SessionsSection({ sessions, currentSessionId, switchSession, ren
     if (!e.altKey) return
     if (e.key === 'ArrowUp' || e.key === 'ArrowDown') {
       e.preventDefault()
-      if (query.trim()) return
+      if (query.trim() || grouping === 'session') return
       moveRow(id, e.key === 'ArrowUp' ? -1 : 1)
     }
-  }, [moveRow, query])
+  }, [moveRow, query, grouping])
 
   const togglePin = useCallback((id: string) => {
     setPinnedIds(prev => {
@@ -226,15 +376,235 @@ export function SessionsSection({ sessions, currentSessionId, switchSession, ren
     ]
   }, [pinnedIds, t, sessions, startRename, togglePin, navigate])
 
+  const renderGroupHeader = (group: SessionGroup) => {
+    if (group.isProject) {
+      // ZCode 项目 tree row: a folder button (chevron + name + count) that
+      // folds/unfolds its conversations. The active session's project is
+      // force-expanded by the effect above.
+      const isFolded = foldedProjects.has(group.key)
+      return (
+        <button
+          type="button"
+          role="presentation"
+          aria-expanded={!isFolded}
+          title={group.label}
+          onClick={() => toggleFold(group.key)}
+          className="w-full flex items-center gap-1.5 px-3 pt-2 pb-1 font-label-sm text-[11px] font-bold text-on-surface-variant/90 hover:text-primary transition-colors min-w-0 cursor-pointer"
+        >
+          <span
+            className="material-symbols-outlined text-[14px] shrink-0 transition-transform duration-150"
+            style={{ transform: isFolded ? 'rotate(-90deg)' : 'rotate(0deg)' }}
+            aria-hidden="true"
+          >
+            expand_more
+          </span>
+          <span className="material-symbols-outlined text-[13px] shrink-0" aria-hidden="true">{group.icon}</span>
+          <span className="truncate flex-1 min-w-0 text-left">{group.label}</span>
+          <span className="font-mono text-[10px] tabular-nums text-on-surface-variant/70 shrink-0">{group.sessions.length}</span>
+        </button>
+      )
+    }
+    return (
+      <div
+        key={`group-${group.key}`}
+        role="presentation"
+        className="px-3 pt-2 pb-1 font-label-sm text-[10px] font-bold uppercase tracking-wider text-on-surface-variant/80 flex items-center gap-1.5 min-w-0"
+      >
+        <span className="material-symbols-outlined text-[12px] shrink-0" aria-hidden="true">{group.icon}</span>
+        <span className="truncate min-w-0">{group.label}</span>
+      </div>
+    )
+  }
+
+  const renderRow = (session: SessionInfo) => {
+    const isActive = session.id === currentSessionId
+    const isEditing = editingId === session.id
+    const isMenuOpen = menuFor === session.id
+    const activity = sessionActivity[session.id]
+    const isRunning = activity?.running === true || session.running === true
+    const goalRun = goalRunsBySession[session.id]
+    const elapsed = isRunning && activity?.startedAt != null
+      ? formatElapsed(nowTick - activity.startedAt)
+      : null
+    return (
+      <div
+        key={session.id}
+        role="listitem"
+        draggable={!isEditing && grouping !== 'session'}
+        onDragStart={() => setDraggedId(session.id)}
+        onDragOver={e => e.preventDefault()}
+        onDrop={() => handleDrop(session.id)}
+        onTouchStart={() => startLongPress(session.id)}
+        onTouchEnd={clearLongPress}
+        onTouchMove={clearLongPress}
+        onTouchCancel={clearLongPress}
+        className={cn('group relative flex items-center gap-1', draggedId === session.id && 'opacity-40')}
+      >
+        {isEditing ? (
+          <Input
+            className="w-full text-label-md py-1 px-2 rounded-lg bg-surface-container-lowest border-primary/40"
+            value={editTitle}
+            onChange={e => setEditTitle(e.target.value)}
+            onBlur={() => commitRename(session)}
+            onKeyDown={e => {
+              if (e.key === 'Enter') commitRename(session)
+              else if (e.key === 'Escape') setEditingId(null)
+            }}
+            aria-label={t('chat.session.rename')}
+            autoFocus
+          />
+        ) : (
+          <>
+            <button
+              type="button"
+              aria-current={isActive ? 'page' : undefined}
+              data-testid={`desktop-session-row-${session.id}`}
+              aria-label={t('chat.session.aria', { title: session.title || untitled })}
+              title={session.title || untitled}
+              onClick={() => handleSwitch(session.id)}
+              onKeyDown={e => handleRowKeyDown(e, session.id)}
+              className={cn(
+                'flex-1 min-w-0 text-left px-3 py-2 rounded-lg font-label-md text-label-md transition-all duration-200 flex items-center gap-2 cursor-pointer select-none whitespace-nowrap',
+                'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/30',
+                isActive
+                  ? 'bg-primary-container text-on-primary-container font-bold'
+                  : 'text-on-surface-variant hover:bg-surface-container-low hover:text-primary',
+              )}
+            >
+              {/* U5: affordance only — the grip shows on hover/focus
+                  (Alt+↑/↓ or drag does the work), cutting per-row
+                  visual noise. Superseded while the run dot is live. */}
+              <span className="material-symbols-outlined text-[14px] text-outline-variant shrink-0 opacity-0 transition-opacity group-hover:opacity-100 group-focus-within:opacity-100" aria-hidden="true">drag_indicator</span>
+              {isRunning && (
+                <span
+                  role="img"
+                  aria-label={activity?.activeTool
+                    ? t('sidebar.sessions.running.tool', { tool: activity.activeTool })
+                    : t('sidebar.sessions.running.badge')}
+                  title={activity?.activeTool
+                    ? t('sidebar.sessions.running.tool', { tool: activity.activeTool })
+                    : t('sidebar.sessions.running.badge')}
+                  className="w-2 h-2 rounded-full bg-secondary animate-pulse shrink-0"
+                />
+              )}
+              {pinnedIds.has(session.id) && (
+                // U8: filled pin marks the active state; the menu
+                // action stays outlined.
+                <span className="material-symbols-outlined text-[14px] text-primary shrink-0" style={{ fontVariationSettings: "'FILL' 1" }} aria-hidden="true">push_pin</span>
+              )}
+              {/* P2-⑥: goal-run badge — a session a goal run owns shows the
+                  run's iteration progress right on the rail. */}
+              {goalRun && (
+                <span
+                  role="img"
+                  aria-label={t('sidebar.sessions.goal.badge.aria', {
+                    title: goalRun.title,
+                    done: goalRun.iterations,
+                    total: goalRun.maxTurns ?? goalRun.iterations,
+                  })}
+                  title={t('sidebar.sessions.goal.badge.aria', {
+                    title: goalRun.title,
+                    done: goalRun.iterations,
+                    total: goalRun.maxTurns ?? goalRun.iterations,
+                  })}
+                  className={cn(
+                    'flex items-center gap-[2px] shrink-0 rounded px-[3px]',
+                    // E10: a stalled run (repeated no-progress strikes) gets a
+                    // red badge so the user can spot it on the rail itself.
+                    (goalRun.stallStrikes ?? 0) > 0 && 'bg-error/15',
+                  )}
+                >
+                  <span
+                    className={cn('material-symbols-outlined text-[13px]', (goalRun.stallStrikes ?? 0) > 0 ? 'text-error' : 'text-primary')}
+                    style={{ fontVariationSettings: goalRun.status === 'running' ? "'FILL' 1" : undefined }}
+                    aria-hidden="true"
+                  >
+                    {(goalRun.stallStrikes ?? 0) > 0 ? 'warning' : 'flag'}
+                  </span>
+                  <span className="font-mono text-[10px] tabular-nums text-on-surface" aria-hidden="true">
+                    {goalRun.iterations}/{goalRun.maxTurns ?? goalRun.iterations}
+                  </span>
+                </span>
+              )}
+              <span className="flex-1 truncate">
+                <HighlightText text={session.title || untitled} query={query.trim()} />
+              </span>
+              {/* P0-②: live elapsed badge — the ZCode-style "run monitor"
+                  signal on the rail itself. */}
+              {elapsed && (
+                <span className="font-mono text-[10px] tabular-nums text-secondary shrink-0" aria-hidden="true">
+                  {elapsed}
+                </span>
+              )}
+            </button>
+            <div className="relative shrink-0">
+              <Button
+                variant="ghost"
+                size="icon-xs"
+                aria-label={t('chat.session.menu.aria', { title: session.title || untitled })}
+                className={cn(
+                  'rounded hover:bg-surface-container text-on-surface-variant hover:text-primary transition-opacity focus-visible:ring-2 focus-visible:ring-primary/30 focus-visible:outline-none',
+                  isMenuOpen ? 'opacity-100' : 'opacity-0 group-hover:opacity-100 focus-visible:opacity-100',
+                )}
+                onClick={e => { e.stopPropagation(); setMenuFor(isMenuOpen ? null : session.id) }}
+              >
+                <span className="material-symbols-outlined text-[16px]">more_horiz</span>
+              </Button>
+              {isMenuOpen && (
+                <DropdownMenu
+                  open
+                  onClose={() => setMenuFor(null)}
+                  items={menuItems(session)}
+                  align="end"
+                  className="w-40 min-w-0"
+                  ariaLabel={t('chat.session.menu.aria', { title: session.title || untitled })}
+                />
+              )}
+            </div>
+          </>
+        )}
+      </div>
+    )
+  }
+
   return (
     <div className="flex flex-col h-full min-h-0">
-      <div className="flex items-center justify-between px-2 mb-xs shrink-0">
-        <span className="font-label-sm text-label-sm text-on-surface-variant uppercase tracking-wider">
+      <div className="flex items-center justify-between px-2 mb-xs shrink-0 gap-1 min-w-0">
+        <span className="font-label-sm text-label-sm text-on-surface-variant uppercase tracking-wider truncate">
           {t('sidebar.sessions.title')}
         </span>
-        <span className="font-label-sm text-label-sm text-on-surface-variant">
+        <span className="font-label-sm text-label-sm text-on-surface-variant shrink-0">
           {filtered.length}{filtered.length !== sessions.length ? `/${sessions.length}` : ''}
         </span>
+        {/* P0-④ grouping view switch — ZCode 项目|时间 style labeled
+            segmented control (按项目文件夹 vs 按会话顺序). Renamed
+            "time → session" in 2026-09: the second mode is just a flat
+            session list sorted by recency — labelling it "session" reads
+            more honestly to the user than abstract "time". */}
+        <div role="group" aria-label={t('sidebar.sessions.grouping.aria')} className="flex items-center rounded-md bg-surface-container-low p-0.5 shrink-0">
+          {([
+            { mode: 'project' as const, icon: 'folder', label: t('sidebar.sessions.grouping.project') },
+            { mode: 'session' as const, icon: 'view_list', label: t('sidebar.sessions.grouping.session') },
+          ]).map(opt => (
+            <button
+              key={opt.mode}
+              type="button"
+              aria-pressed={grouping === opt.mode}
+              aria-label={opt.label}
+              title={opt.label}
+              onClick={() => setGroupingPersisted(opt.mode)}
+              className={cn(
+                'flex items-center gap-0.5 px-1.5 py-0.5 rounded font-label-xs transition-colors cursor-pointer whitespace-nowrap',
+                grouping === opt.mode
+                  ? 'bg-surface-container-lowest text-primary shadow-sm'
+                  : 'text-on-surface-variant/70 hover:text-primary',
+              )}
+            >
+              <span className="material-symbols-outlined text-[12px]" aria-hidden="true">{opt.icon}</span>
+              <span className="hidden xl:inline">{opt.label}</span>
+            </button>
+          ))}
+        </div>
       </div>
       <input
         type="search"
@@ -242,138 +612,31 @@ export function SessionsSection({ sessions, currentSessionId, switchSession, ren
         onChange={e => setQuery(e.target.value)}
         placeholder={t('sidebar.sessions.search.placeholder')}
         aria-label={t('sidebar.sessions.search.aria')}
-        className="w-full mb-xs px-2 py-1 rounded-md bg-surface-container-lowest border border-outline-variant/30 font-label-md text-label-md text-on-surface placeholder:text-on-surface-variant/70 focus-visible:border-primary focus-visible:ring-2 focus-visible:ring-primary/30 shrink-0"
+        className="w-full mb-xs px-2 py-1 rounded-md bg-surface-container-lowest border border-outline-variant/30 font-label-md text-label-md text-on-surface placeholder:text-on-surface-variant/70 focus-visible:border-primary focus-visible:ring-2 focus-visible:ring-primary/30 shrink-0 min-w-0"
       />
       <ScrollArea className="flex-1 min-h-0">
         {filtered.length === 0 ? (
           <div className="px-2 py-3 text-center font-label-sm text-label-sm text-on-surface-variant">
             {t('sidebar.sessions.noResults')}
           </div>
+        ) : groups === null ? (
+          <div className="space-y-0.5 pr-1" role="list" aria-label={t('sidebar.sessions.list.aria')}>
+            {filtered.map(renderRow)}
+          </div>
         ) : (
           <div className="space-y-0.5 pr-1" role="list" aria-label={t('sidebar.sessions.list.aria')}>
-            {(() => {
-              // Project grouping (UI audit Wave 3): sessions sharing a
-              // working_dir get a project header — the Codex/Claude "project"
-              // mental model. Only when browsing (not searching) and only
-              // when there is more than one distinct project, so small lists
-              // stay flat.
-              const projectOf = (s: { working_dir?: string | null }) => {
-                const dir = s.working_dir?.trim()
-                if (!dir) return null
-                const parts = dir.split('/').filter(Boolean)
-                return parts.length > 0 ? parts[parts.length - 1] : null
-              }
-              const distinct = new Set(filtered.map(projectOf))
-              const showGroups = !query.trim() && distinct.size > 1
-              let lastProject: string | null | undefined = undefined
-              return filtered.map((session) => {
-                const isActive = session.id === currentSessionId
-                const isEditing = editingId === session.id
-                const isMenuOpen = menuFor === session.id
-                const project = projectOf(session)
-                const groupHeader = showGroups && project !== lastProject
-                  ? (
-                    <div
-                      key={`group-${project ?? 'default'}`}
-                      role="presentation"
-                      className="px-3 pt-2 pb-1 font-label-sm text-[10px] font-bold uppercase tracking-wider text-on-surface-variant/80 flex items-center gap-1.5"
-                    >
-                      <span className="material-symbols-outlined text-[12px]" aria-hidden="true">folder</span>
-                      <span className="truncate">{project ?? t('sidebar.sessions.project.untitled')}</span>
-                    </div>
-                  )
-                  : null
-                lastProject = project
-                return (
-                  <Fragment key={session.id}>
-                    {groupHeader}
-                    <div
-                  role="listitem"
-                  draggable={!isEditing}
-                  onDragStart={() => setDraggedId(session.id)}
-                  onDragOver={e => e.preventDefault()}
-                  onDrop={() => handleDrop(session.id)}
-                  onTouchStart={() => startLongPress(session.id)}
-                  onTouchEnd={clearLongPress}
-                  onTouchMove={clearLongPress}
-                  onTouchCancel={clearLongPress}
-                  className={cn('group relative flex items-center gap-1', draggedId === session.id && 'opacity-40')}
-                >
-                  {isEditing ? (
-                    <Input
-                      className="w-full text-label-md py-1 px-2 rounded-lg bg-surface-container-lowest border-primary/40"
-                      value={editTitle}
-                      onChange={e => setEditTitle(e.target.value)}
-                      onBlur={() => commitRename(session)}
-                      onKeyDown={e => {
-                        if (e.key === 'Enter') commitRename(session)
-                        else if (e.key === 'Escape') setEditingId(null)
-                      }}
-                      aria-label={t('chat.session.rename')}
-                      autoFocus
-                    />
-                  ) : (
-                    <>
-                      <button
-                        type="button"
-                        aria-current={isActive ? 'page' : undefined}
-                        data-testid={`desktop-session-row-${session.id}`}
-                        aria-label={t('chat.session.aria', { title: session.title || untitled })}
-                        title={session.title || untitled}
-                        onClick={() => handleSwitch(session.id)}
-                        onKeyDown={e => handleRowKeyDown(e, session.id)}
-                        className={cn(
-                          'flex-1 min-w-0 text-left px-3 py-2 rounded-lg font-label-md text-label-md transition-all duration-200 flex items-center gap-2 cursor-pointer select-none',
-                          'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/30',
-                          isActive
-                            ? 'bg-primary-container text-on-primary-container font-bold'
-                            : 'text-on-surface-variant hover:bg-surface-container-low hover:text-primary',
-                        )}
-                      >
-                        {/* U5: affordance only — the grip shows on hover/focus
-                            (Alt+↑/↓ or drag does the work), cutting per-row
-                            visual noise. */}
-                        <span className="material-symbols-outlined text-[14px] text-outline-variant shrink-0 opacity-0 transition-opacity group-hover:opacity-100 group-focus-within:opacity-100" aria-hidden="true">drag_indicator</span>
-                        {pinnedIds.has(session.id) && (
-                          // U8: filled pin marks the active state; the menu
-                          // action stays outlined.
-                          <span className="material-symbols-outlined text-[14px] text-primary shrink-0" style={{ fontVariationSettings: "'FILL' 1" }} aria-hidden="true">push_pin</span>
-                        )}
-                        <span className="flex-1 truncate">
-                          <HighlightText text={session.title || untitled} query={query.trim()} />
-                        </span>
-                      </button>
-                      <div className="relative shrink-0">
-                        <Button
-                          variant="ghost"
-                          size="icon-xs"
-                          aria-label={t('chat.session.menu.aria', { title: session.title || untitled })}
-                          className={cn(
-                            'rounded hover:bg-surface-container text-on-surface-variant hover:text-primary transition-opacity focus-visible:ring-2 focus-visible:ring-primary/30 focus-visible:outline-none',
-                            isMenuOpen ? 'opacity-100' : 'opacity-0 group-hover:opacity-100 focus-visible:opacity-100',
-                          )}
-                          onClick={e => { e.stopPropagation(); setMenuFor(isMenuOpen ? null : session.id) }}
-                        >
-                          <span className="material-symbols-outlined text-[16px]">more_horiz</span>
-                        </Button>
-                        {isMenuOpen && (
-                          <DropdownMenu
-                            open
-                            onClose={() => setMenuFor(null)}
-                            items={menuItems(session)}
-                            align="end"
-                            className="w-40 min-w-0"
-                            ariaLabel={t('chat.session.menu.aria', { title: session.title || untitled })}
-                          />
-                        )}
-                      </div>
-                    </>
-                  )}
-                </div>
-                </Fragment>
-              )
-            })
-          })()}
+            {groups.map(group => (
+              <Fragment key={group.key}>
+                {renderGroupHeader(group)}
+                {/* Project conversations nest under their folder (ZCode
+                    项目 tree); folded projects collapse their rows. */}
+                {!(group.isProject && foldedProjects.has(group.key)) && (
+                  <div className={group.isProject ? 'pl-4' : undefined}>
+                    {group.sessions.map(renderRow)}
+                  </div>
+                )}
+              </Fragment>
+            ))}
           </div>
         )}
       </ScrollArea>

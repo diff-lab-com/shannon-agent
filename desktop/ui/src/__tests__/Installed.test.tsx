@@ -113,8 +113,8 @@ describe('Installed extensions tab', () => {
   it('shows header with entry count', async () => {
     vi.mocked(api.listInstalledAddons).mockResolvedValueOnce(sampleRows)
     renderInstalled()
+    // The h1 was retired; the entry count is now the page's distinctive marker.
     await waitFor(() => {
-      expect(screen.getByText('Installed Extensions')).toBeInTheDocument()
       expect(screen.getByText(/4 entries across 3 categories/)).toBeInTheDocument()
     })
   })

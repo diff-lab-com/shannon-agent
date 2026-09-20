@@ -1,5 +1,6 @@
 import { useState, memo } from 'react'
 import { useIntl } from 'react-intl'
+import { useNavigate } from 'react-router-dom'
 import { toast } from 'sonner'
 import { toastError } from '@/lib/errorToast'
 import { messageFeedbackKey } from '@/lib/feedbackKey'
@@ -9,6 +10,7 @@ import { Button } from '@/components/ui/button'
 import { Modal } from '@/components/ui/modal'
 import { useChat } from '@/context/ChatContext'
 import { useSessions } from '@/context/SessionContext'
+import { useCatalog } from '@/context/CatalogContext'
 import * as api from '@/lib/tauri-api'
 import { Markdown } from '@/components/chat/Markdown'
 import { FootnoteMarkdown } from '@/components/chat/FootnoteMarkdown'
@@ -38,6 +40,10 @@ interface MessageBubbleProps {
   /** Conversation turn this message owns, when it is rewindable (/rewind). */
   rewindTurnIndex?: number | null
   onRewind?: (turnIndex: number) => Promise<void>
+  /** P1-⑤ telemetry: tool_use_id → duration (ms) from the session's L0
+   *  trace timeline — the authoritative durations for historical messages
+   *  (live tool calls carry their own client-measured duration_ms). */
+  durationLookup?: Map<string, number>
 }
 
 const IMAGE_EXTENSIONS = new Set(['png', 'jpg', 'jpeg', 'gif', 'webp', 'bmp', 'svg'])
@@ -164,7 +170,7 @@ function AttachmentPreview({ attachment }: { attachment: FileAttachment }) {
   )
 }
 
-export const MessageBubble = memo(function MessageBubble({ message, messageIndex, isBranch, onViewDiff, onViewDiffMulti, rewindTurnIndex, onRewind }: MessageBubbleProps) {
+export const MessageBubble = memo(function MessageBubble({ message, messageIndex, isBranch, onViewDiff, onViewDiffMulti, rewindTurnIndex, onRewind, durationLookup }: MessageBubbleProps) {
   const isUser = message.role === 'user'
   const [isBranching, setIsBranching] = useState(false)
   const [pendingBranch, setPendingBranch] = useState(false)
@@ -314,7 +320,7 @@ export const MessageBubble = memo(function MessageBubble({ message, messageIndex
   const isTool = message.role === 'tool'
 
   return (
-    <Message from={isTool ? 'system' : 'assistant'} className="flex gap-md max-w-[90%] group">
+    <Message from={isTool ? 'system' : 'assistant'} className="flex gap-md max-w-4xl group">
       <MessageAvatar from="assistant" icon={isTool ? 'build' : 'smart_toy'} />
       <MessageContent className="space-y-md flex-1">
         <MessageHeader role={isTool ? 'tool' : 'assistant'} timestamp={message.timestamp} />
@@ -363,9 +369,60 @@ export const MessageBubble = memo(function MessageBubble({ message, messageIndex
                   </div>
                 ) : null
               })()}
-              {message.tool_calls.map(tc => (
-                <ToolCallDisplay key={tc.tool_use_id} toolCall={tc} onViewDiff={onViewDiff} />
-              ))}
+              {/* P2-⑨ (ZCode delta): a run of consecutive same-tool failures is
+                  prefaced by a retry-chain banner linking to the turn timeline
+                  — the long-horizon "failed → retried → recovered" narrative
+                  stays readable without expanding every card. */}
+              {(() => {
+                const tcs = message.tool_calls
+                const out: React.ReactNode[] = []
+                const renderTool = (tc: ToolCall, key: string) =>
+                  tc.tool_name === 'agent_spawn' ? (
+                    <SubagentBlock key={key} toolCall={tc} />
+                  ) : (
+                    <ToolCallDisplay
+                      key={key}
+                      toolCall={tc}
+                      onViewDiff={onViewDiff}
+                      durationMs={durationLookup?.get(tc.tool_use_id)}
+                    />
+                  )
+                let i = 0
+                while (i < tcs.length) {
+                  const tc = tcs[i]
+                  if (tc.status === 'error') {
+                    let j = i
+                    while (
+                      j + 1 < tcs.length &&
+                      tcs[j + 1].status === 'error' &&
+                      tcs[j + 1].tool_name === tc.tool_name
+                    ) { j++ }
+                    const chainLen = j - i + 1
+                    if (chainLen >= 2) {
+                      // D7: inline each attempt's first error line so the
+                      // failure→retry→recovery narrative reads without
+                      // expanding every card.
+                      const reasons = tcs.slice(i, j + 1).map(tc => {
+                        const line = (tc.result ?? '').split('\n').find(l => l.trim()) ?? ''
+                        return line.trim().slice(0, 120)
+                      })
+                      out.push(
+                        <RetryChainBanner
+                          key={`chain-${tc.tool_use_id}`}
+                          count={chainLen}
+                          reasons={reasons}
+                        />,
+                      )
+                      for (let k = i; k <= j; k++) out.push(renderTool(tcs[k], tcs[k].tool_use_id))
+                      i = j + 1
+                      continue
+                    }
+                  }
+                  out.push(renderTool(tc, tc.tool_use_id))
+                  i++
+                }
+                return out
+              })()}
             </div>
           )}
         </div>
@@ -433,20 +490,105 @@ function extractFilePath(toolName: string, input: unknown): string | null {
   return FILE_MUTATING_TOOLS.has(toolName) ? raw : null
 }
 
-export const ToolCallDisplay = memo(function ToolCallDisplay({ toolCall, onViewDiff }: { toolCall: ToolCall; onViewDiff: (path: string) => void }) {
+/** P2-⑨: banner preceding a run of consecutive same-tool failures — links
+ *  to the session's turn timeline where the retry narrative is visualized. */
+function RetryChainBanner({ count, reasons = [] }: { count: number; reasons?: string[] }) {
   const intl = useIntl()
   const t = (id: string) => intl.formatMessage({ id })
-  const [expanded, setExpanded] = useState(false)
+  const navigate = useNavigate()
+  const { currentSessionId } = useSessions()
+  return (
+    <div className="px-md py-xs rounded-lg bg-error/5 border border-error/20" data-testid="retry-chain-banner">
+      <div className="flex items-center gap-sm">
+        <span className="material-symbols-outlined icon-sm text-error shrink-0" aria-hidden="true">replay</span>
+        <span className="font-label-sm text-error flex-1 truncate">
+          {intl.formatMessage({ id: 'chat.message.retryChain' }, { count })}
+        </span>
+        {currentSessionId && (
+          <Button
+            variant="ghost"
+            size="sm"
+            className="shrink-0 gap-xs px-sm py-xs text-on-surface-variant hover:text-primary"
+            onClick={() => navigate(`/timeline/${currentSessionId}`)}
+          >
+            <span className="material-symbols-outlined icon-sm" aria-hidden="true">timeline</span>
+            {t('chat.message.retryChain.view')}
+          </Button>
+        )}
+      </div>
+      {reasons.length > 0 && (
+        <ul className="mt-xs space-y-[2px]">
+          {reasons.map((line, idx) => (
+            <li key={idx} className="flex items-start gap-xs font-label-xs text-on-surface-variant">
+              <span className="font-mono text-on-surface-variant/70 shrink-0" aria-hidden="true">
+                {intl.formatMessage({ id: 'chat.message.retryChain.attempt' }, { n: idx + 1 })}
+              </span>
+              <span className="truncate" title={line}>{line}</span>
+            </li>
+          ))}
+        </ul>
+      )}
+    </div>
+  )
+}
+
+/** P1-⑤ telemetry: compact wall-clock label — 842 ms · 5.2 s · 1m04s. */
+export function formatToolDuration(ms: number): string {
+  if (ms < 1000) return `${Math.round(ms)} ms`
+  const s = ms / 1000
+  if (s < 60) return `${s < 10 ? s.toFixed(1) : Math.round(s)} s`
+  const m = Math.floor(s / 60)
+  return `${m}m${String(Math.round(s % 60)).padStart(2, '0')}s`
+}
+
+export const ToolCallDisplay = memo(function ToolCallDisplay({ toolCall, onViewDiff, durationMs: durationMsProp }: { toolCall: ToolCall; onViewDiff: (path: string) => void; durationMs?: number }) {
+  const intl = useIntl()
+  const t = (id: string) => intl.formatMessage({ id })
+  // P1-⑤: error cards default open — the failure text is the content the
+  // user asked about; healthy calls stay collapsed (ZCode delta ⑤).
+  const [expanded, setExpanded] = useState(toolCall.is_error === true)
   const statusIcon = toolCall.status === 'running' ? 'hourglass_empty' : toolCall.status === 'error' ? 'error' : 'check_circle'
   const statusColor = toolCall.status === 'running' ? 'text-secondary' : toolCall.status === 'error' ? 'text-error' : 'text-tertiary'
   const filePath = extractFilePath(toolCall.tool_name, toolCall.tool_input)
   const canDiff = filePath != null && toolCall.status === 'completed' && !toolCall.is_error
+  const durationMs = toolCall.duration_ms ?? durationMsProp
+  // P1-⑤: the engine's §4.12 metadata — surface a sandbox-denied verdict on
+  // the card itself instead of burying it in the expanded JSON.
+  const sandboxDenied = (() => {
+    const meta = toolCall.meta
+    if (!meta || typeof meta !== 'object') return false
+    return (meta as Record<string, unknown>).classification === 'sandbox_denied'
+  })()
 
   return (
     <Tool name={toolCall.tool_name} status={toolCall.status} className="p-sm">
       <ToolHeader onClick={() => setExpanded(!expanded)}>
         <span className={cn('material-symbols-outlined icon-sm', statusColor, toolCall.status === 'running' ? 'animate-spin' : '')}>{statusIcon}</span>
         <span className="font-label-md text-on-surface flex-1 truncate">{toolCall.tool_name}</span>
+        {sandboxDenied && (
+          <span
+            role="img"
+            aria-label={t('chat.tool.sandboxDenied')}
+            title={t('chat.tool.sandboxDenied')}
+            className="flex items-center gap-[2px] shrink-0 px-xs py-[1px] rounded bg-error/10 text-error font-label-xs"
+          >
+            <span className="material-symbols-outlined text-[12px]" aria-hidden="true">shield</span>
+            {t('chat.tool.sandboxDenied')}
+          </span>
+        )}
+        {toolCall.status !== 'running' && durationMs != null && (
+          <span className="font-mono text-label-xs tabular-nums text-on-surface-variant/80 shrink-0" aria-hidden="true">
+            {formatToolDuration(durationMs)}
+          </span>
+        )}
+        {toolCall.status !== 'running' && (toolCall.tokens_used ?? 0) > 0 && (
+          <span
+            className="font-mono text-label-xs tabular-nums text-on-surface-variant/80 shrink-0"
+            title={t('chat.tool.tokens.title')}
+          >
+            {toolCall.tokens_used!.toLocaleString()} tok
+          </span>
+        )}
         {canDiff && (
           <Button
             variant="ghost"
@@ -464,7 +606,7 @@ export const ToolCallDisplay = memo(function ToolCallDisplay({ toolCall, onViewD
       {expanded && (
         <ToolContent>
           {toolCall.tool_input ? (
-            <pre className="text-body-sm text-on-surface-variant bg-surface-container p-sm rounded-lg overflow-x-auto max-h-[200px]">{JSON.stringify(toolCall.tool_input ?? null, null, 2)}</pre>
+            <ToolInputSummary input={toolCall.tool_input} />
           ) : null}
           {toolCall.result && (
             toolCall.is_error ? (
@@ -478,5 +620,191 @@ export const ToolCallDisplay = memo(function ToolCallDisplay({ toolCall, onViewD
         </ToolContent>
       )}
     </Tool>
+  )
+})
+
+/**
+ * Render a tool call's input in a human-readable summary instead of dumping
+ * the full JSON. Picks the most meaningful field per tool (bash → command,
+ * file write → path + content preview), keeps short inputs as a single line
+ * for visual rhythm, and offers a "查看详情" toggle for longer payloads.
+ *
+ * Falls back to compact JSON for unknown tools.
+ */
+function ToolInputSummary({ input }: { input: unknown }) {
+  const obj = (input ?? {}) as Record<string, unknown>
+  const command = pickString(obj, ['command', 'cmd', 'shell_command'])
+  const filePath = pickString(obj, ['path', 'file_path', 'filepath', 'notebook_path'])
+  const content = pickString(obj, ['content', 'text', 'source', 'body'])
+  const query = pickString(obj, ['query', 'pattern', 'q'])
+
+  // bash / shell: command is the story
+  if (command != null) {
+    return <ToolInputPrimary label="command" body={command} />
+  }
+  // file write: path + content preview
+  if (filePath != null || content != null) {
+    const body = filePath
+      ? content
+        ? `${filePath} — ${summarize(content)}`
+        : filePath
+      : summarize(content!)
+    return <ToolInputPrimary label={filePath ? 'file' : 'content'} body={body} />
+  }
+  // search: just the query
+  if (query != null) {
+    return <ToolInputPrimary label="query" body={query} />
+  }
+
+  // Unknown tool — fall back to compact JSON
+  return (
+    <pre className="text-body-sm text-on-surface-variant bg-surface-container p-sm rounded-lg overflow-x-auto max-h-[200px]">
+      {JSON.stringify(obj, null, 2)}
+    </pre>
+  )
+}
+
+function pickString(obj: Record<string, unknown>, keys: string[]): string | null {
+  for (const key of keys) {
+    const v = obj[key]
+    if (typeof v === 'string' && v.length > 0) return v
+  }
+  return null
+}
+
+/** First line + char count when truncated, so a 4 KB file write stays one row. */
+function summarize(s: string): string {
+  const newline = s.indexOf('\n')
+  const firstLine = newline >= 0 ? s.slice(0, newline) : s
+  const extraLines = s.split('\n').length - 1
+  const extraChars = s.length - firstLine.length
+  if (newline < 0 && extraChars === 0) return firstLine
+  const head = firstLine.length > 120 ? `${firstLine.slice(0, 120)}…` : firstLine
+  return extraLines > 0
+    ? `${head}  (+${extraLines} ${extraLines === 1 ? 'line' : 'lines'})`
+    : `${head}  (${extraChars} chars)`
+}
+
+const SHORT_LINE_LIMIT = 80
+function ToolInputPrimary({ label, body }: { label: string; body: string }) {
+  const intl = useIntl()
+  const t = (id: string) => intl.formatMessage({ id })
+  const [showAll, setShowAll] = useState(false)
+  const isShort = body.length <= SHORT_LINE_LIMIT && !body.includes('\n')
+  if (isShort) {
+    return (
+      <div className="text-body-sm bg-surface-container px-sm py-xs rounded-lg max-h-[200px] overflow-x-auto">
+        <span className="font-mono text-on-surface-variant/70 mr-xs">{label}:</span>
+        <span className="font-mono text-on-surface">{body}</span>
+      </div>
+    )
+  }
+  return (
+    <div className="bg-surface-container rounded-lg overflow-hidden">
+      <pre className="text-body-sm text-on-surface px-sm py-xs overflow-x-auto max-h-[200px] whitespace-pre-wrap break-words font-mono">{showAll ? body : firstLines(body, 3)}</pre>
+      <div className="flex items-center gap-sm px-sm py-xs border-t border-outline-variant/15">
+        <button
+          type="button"
+          className="font-label-xs text-primary hover:underline focus-visible:outline focus-visible:outline-2 focus-visible:outline-primary/40 rounded px-1 -mx-1"
+          onClick={() => setShowAll(v => !v)}
+        >
+          {showAll ? intl.formatMessage({ id: 'chat.tool.input.collapse' }) : intl.formatMessage({ id: 'chat.tool.input.expand' })}
+        </button>
+        <span className="font-label-xs text-on-surface-variant/70">{intl.formatMessage({ id: 'chat.tool.input.length' }, { chars: body.length })}</span>
+      </div>
+      <span className="sr-only">{t('chat.tool.input.srHint')}</span>
+    </div>
+  )
+}
+
+function firstLines(s: string, n: number): string {
+  const lines = s.split('\n')
+  if (lines.length <= n) return s
+  return `${lines.slice(0, n).join('\n')}\n…`
+}
+
+/**
+ * P1-⑥ (ZCode delta): first-class collapsible block for `agent_spawn` tool
+ * calls — sub-agent runs render as their own timeline section (name, model,
+ * team, spawn prompt + result summary) instead of a generic tool card.
+ * Engine note: with agent teams enabled (B2), the registry bridges spawn
+ * lifecycle to `subagent:start` / `subagent:stop` — while the spawn tool is
+ * running, the block surfaces the live registry agent id via `subagentLive`.
+ */
+export const SubagentBlock = memo(function SubagentBlock({ toolCall }: { toolCall: ToolCall }) {
+  const intl = useIntl()
+  const t = (id: string, values?: Record<string, string | number>) => intl.formatMessage({ id }, values)
+  const { subagentLive } = useSessions()
+  const { config } = useCatalog()
+  const [expanded, setExpanded] = useState(false)
+  const input = (toolCall.tool_input ?? {}) as Record<string, unknown>
+  const name = typeof input.name === 'string' ? input.name : ''
+  const model = typeof input.model === 'string' ? input.model : null
+  const team = typeof input.team === 'string' ? input.team : null
+  const maxTurns = typeof input.max_turns === 'number' ? input.max_turns : null
+  const systemPrompt = typeof input.system_prompt === 'string' ? input.system_prompt : ''
+  const statusIcon = toolCall.status === 'running' ? 'hourglass_empty' : toolCall.status === 'error' ? 'error' : 'check_circle'
+  const statusColor = toolCall.status === 'running' ? 'text-secondary' : toolCall.status === 'error' ? 'text-error' : 'text-tertiary'
+  const durationMs = toolCall.duration_ms
+
+  return (
+    <div
+      className="rounded-xl border border-primary/20 bg-primary/5 overflow-hidden"
+      data-testid="subagent-block"
+    >
+      <button
+        type="button"
+        onClick={() => setExpanded(!expanded)}
+        aria-expanded={expanded}
+        className="w-full flex items-center gap-sm px-sm py-xs text-left cursor-pointer hover:bg-primary/10 transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/30"
+      >
+        <span className="material-symbols-outlined icon-sm text-primary shrink-0" aria-hidden="true">account_tree</span>
+        <span className="font-label-md text-on-surface flex-1 truncate">
+          {t('chat.subagent.title', { name: name || t('chat.subagent.unnamed') })}
+        </span>
+        {model && (
+          <span className="font-mono text-label-xs text-on-surface-variant px-xs py-[1px] rounded bg-surface-container shrink-0" aria-hidden="true">{model}</span>
+        )}
+        {team && (
+          <span className="font-label-xs text-on-surface-variant px-xs py-[1px] rounded bg-surface-container shrink-0" aria-hidden="true">{team}</span>
+        )}
+        {toolCall.status === 'running' && subagentLive && (
+          <span className="font-mono text-label-xs px-xs py-[1px] rounded bg-primary/10 text-primary shrink-0 flex items-center gap-1" aria-live="polite">
+            <span className="size-1.5 rounded-full bg-primary animate-pulse" aria-hidden="true" />
+            {t('chat.subagent.registryId', { id: subagentLive.agentId })}
+          </span>
+        )}
+        {toolCall.status !== 'running' && durationMs != null && (
+          <span className="font-mono text-label-xs tabular-nums text-on-surface-variant/80 shrink-0" aria-hidden="true">
+            {formatToolDuration(durationMs)}
+          </span>
+        )}
+        <span className={cn('material-symbols-outlined icon-sm shrink-0', statusColor, toolCall.status === 'running' ? 'animate-spin' : '')} aria-hidden="true">{statusIcon}</span>
+        <span className="material-symbols-outlined icon-sm text-on-surface-variant" aria-hidden="true">{expanded ? 'expand_less' : 'expand_more'}</span>
+      </button>
+      {expanded && (
+        <div className="px-sm pb-sm space-y-sm">
+          {maxTurns != null && (
+            <p className="font-label-sm text-on-surface-variant">{t('chat.subagent.maxTurns', { count: maxTurns })}</p>
+          )}
+          {/* B2 follow-up — surface the parent's approval policy so the
+              user can see what sandbox/permissions the sub-agent runs under. */}
+          {config?.approval_mode && (
+            <p className="font-label-sm text-on-surface-variant" data-testid="subagent-inherit-mode">
+              {t('chat.subagent.inheritsMode', { mode: config.approval_mode })}
+            </p>
+          )}
+          {systemPrompt && (
+            <pre className="text-body-sm text-on-surface-variant bg-surface-container p-sm rounded-lg overflow-x-auto max-h-[160px] whitespace-pre-wrap">{systemPrompt}</pre>
+          )}
+          {toolCall.result && (
+            <pre className={cn(
+              'text-body-sm p-sm rounded-lg overflow-x-auto max-h-[200px]',
+              toolCall.is_error ? 'bg-error/5 text-error' : 'bg-surface-container text-on-surface-variant',
+            )}>{toolCall.result}</pre>
+          )}
+        </div>
+      )}
+    </div>
   )
 })

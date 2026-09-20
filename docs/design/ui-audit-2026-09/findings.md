@@ -43,6 +43,12 @@
   三栏深色布局。左侧窄栏：新任务/搜索/自动化/并行任务/项目分组/会话列表/底部账号+设置；
   中央：会话流（工具调用折叠块）+ composer（输入框 + 权限模式下拉「完全访问」+ 模型 GLM-5.3-Flash + 推理档「最高」+ 发送）；
   右侧：内置浏览器面板（URL 栏 + 视口 1440×900）。自定义标题栏、近黑背景 (#0d0d0d)、细灰分隔线、无重装饰。
+- **ZCode Desktop 新截图**（zcode-desktop-plan-dock.png，2026-09-18，版本 ≥ v3.11.2，原件留存 reference/zcode/）：
+  相对 v3.11.2 主视图的增量——右侧 dock 变为「计划」标签页（计划 Markdown 文档 + 计划步骤弹层 + turn 预算门控叙述）；
+  左栏一级入口第 4 项变为「技能市场」，任务列表为「计划/已完成」分段 + 「今天」日期分组 + 行内实时时长徽章；
+  转录流遥测密度提高（耗时/行数/PID/attempt 重试链默认外显）并内嵌「子智能体」折叠段；composer 增「无头浏览器」chip。
+  深度对比与改进建议见 [ZCODE-DELTA-ANALYSIS-2026-09.md](./ZCODE-DELTA-ANALYSIS-2026-09.md)。
+- **实施记录（2026-09-18，两批）**：第一批 PR #89（侧栏运行遥测/分组双视图/计划 dock/composer 模型芯片/dock tab 化/工具卡遥测/子智能体块）；第二批 fix/select-commit（**Radix Select 迁移修复全 app 下拉无法提交的预存缺陷**——Base UI anti-misclick pointer-tracker 拒绝常规 click；demo mock configure wire-shape 修复——此前 demo 里所有 configure 均为静默 no-op；goal 卡死徽标/mock 重试链/attempt 明细/密度按模式默认/compact×暗色/C5 guard 脚本）。桌面 agent_spawn TeamContext 注入待产品决策。
 
 ### 官方文档全文（code.claude.com/docs/en/desktop.md，100KB 已存 /tmp/cc-desktop.md）
 - **Claude Desktop 应用三 tab：Chat（对话）/ Cowork（Dispatch 长任务）/ Code（开发）**；Code tab 内会话= sidebar 并行列表，会话内 pane 自由拼装（chat/diff/browser/terminal/file editor/iOS simulator），diff 评论、PR 监控、side chats、浏览器自检（截图/DOM/点击/表单）、checkpoints、connectors。

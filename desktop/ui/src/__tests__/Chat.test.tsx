@@ -77,7 +77,7 @@ describe('Chat page', () => {
   it('renders message input area', () => {
     resetCtx()
     renderChat()
-    expect(screen.getByPlaceholderText('Ask Shannon anything...')).toBeInTheDocument()
+    expect(screen.getByPlaceholderText('Try: "Explain this repo" or "Plan a refactor for src/foo.rs"')).toBeInTheDocument()
   })
 
   // U1: the Chat page no longer renders its own session list — the app
@@ -92,7 +92,7 @@ describe('Chat page', () => {
   it('sends message on Enter key and clears input', () => {
     resetCtx()
     renderChat()
-    const input = screen.getByPlaceholderText('Ask Shannon anything...')
+    const input = screen.getByPlaceholderText('Try: "Explain this repo" or "Plan a refactor for src/foo.rs"')
     fireEvent.change(input, { target: { value: 'Hello agent' } })
     fireEvent.keyDown(input, { key: 'Enter' })
     expect(ctx.sendMessage).toHaveBeenCalledWith('Hello agent', undefined)
@@ -101,7 +101,7 @@ describe('Chat page', () => {
   it('does not send empty message on Enter', () => {
     resetCtx()
     renderChat()
-    const input = screen.getByPlaceholderText('Ask Shannon anything...')
+    const input = screen.getByPlaceholderText('Try: "Explain this repo" or "Plan a refactor for src/foo.rs"')
     fireEvent.change(input, { target: { value: '' } })
     fireEvent.keyDown(input, { key: 'Enter' })
     expect(ctx.sendMessage).not.toHaveBeenCalled()
@@ -160,6 +160,8 @@ describe('Chat page', () => {
 
   it('renders usage section when usage data present', () => {
     resetCtx()
+    // The usage cards live in the right dock's Context tab (P1-⑦).
+    ctx.contextPanelOpen = true
     ctx.usage = { input_tokens: 1000, output_tokens: 500, cost_usd: 0.05 }
     renderChat()
     expect(screen.getByText('Usage')).toBeInTheDocument()
@@ -170,6 +172,7 @@ describe('Chat page', () => {
 
   it('renders active tool calls section', () => {
     resetCtx()
+    ctx.contextPanelOpen = true
     ctx.activeToolCalls = [{ tool_use_id: 'tc1', tool_name: 'bash', status: 'running' }]
     renderChat()
     expect(screen.getByText('Active Tools')).toBeInTheDocument()
@@ -216,7 +219,9 @@ describe('Chat page', () => {
     }]
     renderChat()
     fireEvent.click(screen.getByText('bash'))
-    expect(screen.getByText(/"cmd"/)).toBeInTheDocument()
+    // 2026-09 P1-3: tool input renders a human summary (label: value) instead
+    // of the raw JSON dump — short commands read as one line and stay scannable.
+    expect(screen.getByText('ls')).toBeInTheDocument()
     expect(screen.getByText('output here')).toBeInTheDocument()
   })
 
@@ -239,17 +244,20 @@ describe('Chat page', () => {
     expect(likeBtn.querySelector('.material-symbols-outlined')).toHaveTextContent('thumb_up')
   })
 
-  // US-CHAT-08: Attach file button — wired to Tauri native dialog.
-  it('has attach file button', () => {
+  // US-CHAT-08: Attach file — wired to Tauri native dialog, behind the
+  // composer "+" menu (2026-09 review).
+  it('has attach entry in the composer "+" menu', () => {
     resetCtx()
     renderChat()
-    expect(screen.getByLabelText('Attach file')).toBeInTheDocument()
+    fireEvent.click(screen.getByLabelText('Attachments and tools'))
+    expect(screen.getByRole('menuitem', { name: 'Attach file' })).toBeInTheDocument()
   })
 
-  it('clicking attach button opens Tauri file dialog', async () => {
+  it('clicking attach menu item opens Tauri file dialog', async () => {
     resetCtx()
     renderChat()
-    fireEvent.click(screen.getByLabelText('Attach file'))
+    fireEvent.click(screen.getByLabelText('Attachments and tools'))
+    fireEvent.click(screen.getByRole('menuitem', { name: 'Attach file' }))
     await waitFor(() => {
       expect(dialog.open).toHaveBeenCalledWith(expect.objectContaining({ multiple: true }))
     })
@@ -259,7 +267,8 @@ describe('Chat page', () => {
     resetCtx()
     vi.mocked(dialog.open).mockResolvedValueOnce('/home/alice/Downloads/report.pdf')
     renderChat()
-    fireEvent.click(screen.getByLabelText('Attach file'))
+    fireEvent.click(screen.getByLabelText('Attachments and tools'))
+    fireEvent.click(screen.getByRole('menuitem', { name: 'Attach file' }))
     await waitFor(() => {
       expect(screen.getByText('report.pdf')).toBeInTheDocument()
     })

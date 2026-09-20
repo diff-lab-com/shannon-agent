@@ -235,7 +235,7 @@ describe('Header component', () => {
 
   it('renders Extensions title on /extensions route', () => {
     render(wrap(<Header />, { route: '/extensions/skills' }))
-    expect(screen.getByText('Connectors')).toBeInTheDocument()
+    expect(screen.getByText('Extensions')).toBeInTheDocument()
   })
 
   it('renders notifications and help buttons', () => {

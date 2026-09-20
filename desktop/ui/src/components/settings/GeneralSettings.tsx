@@ -10,6 +10,7 @@ import { useI18n, SUPPORTED_LOCALES, type Locale } from '@/i18n'
 import { useNotification } from '@/hooks/useNotification'
 import * as api from '@/lib/tauri-api'
 import { toastError } from '@/lib/errorToast'
+import { readDensityPref, setDensityPref, type DensityPref } from '@/lib/density'
 import type { ApprovalMode } from '@/types'
 import { WELCOME_SEEN_KEY } from '@/pages/Welcome'
 import MigrationWizard from '@/components/migration/MigrationWizard'
@@ -28,6 +29,15 @@ const APPROVAL_MODE_KEYS: { value: ApprovalModeKey; labelKey: string; descriptio
 
 export default function GeneralSettings() {
   const { config, refreshConfig } = useCatalog()
+  // P2-⑧/D6 display density: 'auto' follows the sidebar mode (Advanced →
+  // Compact); an explicit choice overrides and persists.
+  const [density, setDensityState] = useState<DensityPref>(readDensityPref)
+  const handleDensityChange = (d: DensityPref) => {
+    setDensityState(d)
+    setDensityPref(d)
+    // Re-apply immediately: resolve against the current sidebar mode.
+    import('@/lib/density').then(m => m.initDensity())
+  }
   const intl = useIntl()
   const navigate = useNavigate()
   const t = (id: string) => intl.formatMessage({ id })
@@ -86,10 +96,7 @@ export default function GeneralSettings() {
 
   return (
     <div className="max-w-3xl">
-      <header className="mb-xl">
-        <h2 className="font-headline-lg text-headline-lg text-on-surface mb-xs">{t('settings.general.header')}</h2>
-        <p className="font-body-md text-on-surface-variant">{t('settings.general.subheader')}</p>
-      </header>
+      <p className="font-body-md text-on-surface-variant mb-md">{t('settings.general.subheader')}</p>
 
       <div className="space-y-lg">
         {/* Autonomy Level */}
@@ -153,6 +160,37 @@ export default function GeneralSettings() {
                 className={cn(
                   'px-lg py-sm rounded-lg font-label-md cursor-pointer transition-all focus-visible:outline focus-visible:outline-2 focus-visible:outline-primary',
                   locale === opt.id
+                    ? 'bg-primary text-on-primary'
+                    : 'bg-surface-container-low text-on-surface hover:bg-surface-container-high border border-outline-variant/50',
+                )}
+              >
+                {intl.formatMessage({ id: opt.labelKey })}
+              </Button>
+            ))}
+          </div>
+        </section>
+
+        {/* P2-⑧ Display density */}
+        <section className="bg-surface-container-lowest rounded-xl border border-outline-variant/30 p-xl shadow-sm transition-all hover:shadow-md">
+          <div className="flex items-center gap-md mb-xs">
+            <span className="material-symbols-outlined text-primary" style={{fontVariationSettings: "'FILL' 1"}}>format_line_spacing</span>
+            <h3 className="font-headline-md text-headline-md">{intl.formatMessage({ id: 'settings.density.title' })}</h3>
+          </div>
+          <p className="font-body-sm text-on-surface-variant mb-xl">{intl.formatMessage({ id: 'settings.density.help' })}</p>
+          <div className="flex flex-wrap gap-sm">
+            {([
+              { id: 'auto' as const, labelKey: 'settings.density.auto' },
+              { id: 'comfortable' as const, labelKey: 'settings.density.comfortable' },
+              { id: 'compact' as const, labelKey: 'settings.density.compact' },
+            ]).map(opt => (
+              <Button
+                key={opt.id}
+                variant={density === opt.id ? 'default' : 'outline'}
+                onClick={() => handleDensityChange(opt.id)}
+                aria-pressed={density === opt.id}
+                className={cn(
+                  'px-lg py-sm rounded-lg font-label-md cursor-pointer transition-all focus-visible:outline focus-visible:outline-2 focus-visible:outline-primary',
+                  density === opt.id
                     ? 'bg-primary text-on-primary'
                     : 'bg-surface-container-low text-on-surface hover:bg-surface-container-high border border-outline-variant/50',
                 )}

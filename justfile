@@ -64,6 +64,11 @@ lint:
     cd desktop/ui && pnpm lint
     cd gateway && pnpm typecheck
 
+# C5: fast local guard — bare `#[allow(dead_code)]` added by the working
+# tree vs origin/dev (full baseline rule: architecture_invariants test, run
+# by CI's Test job). Implemented as a Node script for cross-platform use:
+#   node scripts/check-dead-code-keep.mjs
+
 # ── Dev experience (从 shannon-code justfile 恢复) ──
 #
 # dev        - 提交前快路径(check + clippy + test)

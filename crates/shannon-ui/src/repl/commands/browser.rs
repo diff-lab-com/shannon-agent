@@ -175,8 +175,12 @@ fn handle_doctor(repl: &mut Repl) -> Result<()> {
         lines.push_str("  ✗ Playwright MCP: not configured (/browser setup)\n");
     }
 
-    lines.push('\n');
-    lines.push_str(shannon_remote::browser::install_hint());
+    if !cdp_set && shannon_remote::browser::detect_system_browser().is_err() {
+        // Install guidance is only actionable when nothing was found; with a
+        // working browser (or CDP attach) it is noise.
+        lines.push('\n');
+        lines.push_str(shannon_remote::browser::install_hint());
+    }
     repl.chat.add_message(ChatRole::System, lines);
     Ok(())
 }

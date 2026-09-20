@@ -28,7 +28,7 @@ Two commitments shape every design decision:
 
 ### 1. Open source, total control
 
-- **Every line auditable** — Apache-2.0, no black boxes. <!-- metrics:start:intro -->Every behavior is verified by **12,370 automated tests**.<!-- metrics:end:intro -->
+- **Every line auditable** — Apache-2.0, no black boxes. <!-- metrics:start:intro -->Every behavior is verified by **12,388 automated tests**.<!-- metrics:end:intro -->
 - **Every agent action replayable** — sessions are event-sourced: each turn lands in an append-only `events.jsonl`, and `shannon trace show / replay / diff / export` lets you reconstruct exactly what happened, like a dashcam for your agents.
 - **Every cost visible** — BYOK pay-per-use with session budget caps, context breakdown by category, cache hit-rate visibility, and no subscription quotas.
 - **No vendor lock-in** — switch providers anytime; upstream price hikes and model retirements don't strand you. Claude Code ecosystem compatible: `CLAUDE.md`, `.claude/` agents, skills, hooks, and `.mcp.json` work out of the box.

@@ -96,7 +96,7 @@ describe('Sidebar — Simple mode (default)', () => {
     // P1-2: Simple mode surfaces a flat Extensions link to the Hub index so
     // general users can reach it without dev mode. The dev-mode collapsible
     // group (with Skills / My Agents / Connections sub-links) stays hidden.
-    expect(screen.getByText('Connectors')).toBeInTheDocument()
+    expect(screen.getByText('Extensions')).toBeInTheDocument()
     expect(screen.queryByText('Skills')).not.toBeInTheDocument()
     expect(screen.queryByText('My Agents')).not.toBeInTheDocument()
   })
@@ -123,7 +123,7 @@ describe('Sidebar — Simple mode (default)', () => {
     render(wrap(<Sidebar />))
     fireEvent.click(screen.getByRole('button', { name: /Switch to Advanced mode/ }))
     // Now in Advanced mode — Extensions visible
-    expect(screen.getByText('Connectors')).toBeInTheDocument()
+    expect(screen.getByText('Extensions')).toBeInTheDocument()
     expect(screen.getByText('Advanced mode')).toBeInTheDocument()
   })
 
@@ -136,7 +136,7 @@ describe('Sidebar — Simple mode (default)', () => {
   it('remembers Advanced mode from localStorage on subsequent mount', () => {
     window.localStorage.setItem(SIDEBAR_MODE_KEY, 'dev')
     render(wrap(<Sidebar />))
-    expect(screen.getByText('Connectors')).toBeInTheDocument()
+    expect(screen.getByText('Extensions')).toBeInTheDocument()
     expect(screen.getByText('Advanced mode')).toBeInTheDocument()
   })
 
@@ -157,7 +157,7 @@ describe('Sidebar — Advanced mode', () => {
 
   it('renders Connectors section', () => {
     render(wrap(<Sidebar />))
-    expect(screen.getByText('Connectors')).toBeInTheDocument()
+    expect(screen.getByText('Extensions')).toBeInTheDocument()
   })
 
   it('renders Mission Control section', () => {
@@ -165,11 +165,14 @@ describe('Sidebar — Advanced mode', () => {
     expect(screen.getByText('Mission Control')).toBeInTheDocument()
   })
 
-  it('renders extension sub-links when expanded', () => {
+  it('keeps type-specific extension management OUT of the sidebar', () => {
     render(wrap(<Sidebar />))
-    expect(screen.getByText('Skills')).toBeInTheDocument()
-    expect(screen.getByText('My Agents')).toBeInTheDocument()
-    expect(screen.getByText('Connections')).toBeInTheDocument()
+    // 2026-09 review: the Extensions disclosure was retired — Skills /
+    // My Agents / Data Sources now live in the Extensions page's 管理 menu,
+    // not in the app sidebar.
+    expect(screen.queryByText('Skills')).not.toBeInTheDocument()
+    expect(screen.queryByText('My Agents')).not.toBeInTheDocument()
+    expect(screen.queryByText('Data Sources')).not.toBeInTheDocument()
   })
 
   it('renders Mission Control as a direct link in the Experiments group (U6 flatten)', () => {
@@ -188,26 +191,20 @@ describe('Sidebar — Advanced mode', () => {
     expect(screen.getByText('Advanced')).toBeInTheDocument()
   })
 
-  it('collapses and expands Connectors section', () => {
+  it('Connectors is a flat link straight to the marketplace', () => {
     render(wrap(<Sidebar />))
-    // Extensions is open by default
-    expect(screen.getByText('Skills')).toBeInTheDocument()
-
-    // Click Extensions button to collapse
-    const integrationsButtons = screen.getAllByText('Connectors')
-    fireEvent.click(integrationsButtons[0])
-
-    // Sub-links should be gone
-    expect(screen.queryByText('Skills')).not.toBeInTheDocument()
-
-    // Click again to expand
-    fireEvent.click(screen.getByText('Connectors'))
-    expect(screen.getByText('Skills')).toBeInTheDocument()
+    // 2026-09 review: no collapsible Connectors group — a flat nav link to
+    // /extensions/featured (the marketplace index).
+    const connectors = screen.getByText('Extensions').closest('a')
+    expect(connectors).toHaveAttribute('href', '/extensions/featured')
   })
 
-  it('shows experiment badge on OPC', () => {
+  it('shows OPC without the experiment badge (dev mode)', () => {
     render(wrap(<Sidebar />))
-    expect(screen.getByText('Experimental')).toBeInTheDocument()
+    // 2026-09 review: OPC is dev-only and the "Experimental" pill was
+    // dropped with the flat-nav simplification.
+    expect(screen.getByText('Mission Control')).toBeInTheDocument()
+    expect(screen.queryByText('Experimental')).not.toBeInTheDocument()
   })
 
   it('toggles back to Simple mode on click', () => {
@@ -215,7 +212,7 @@ describe('Sidebar — Advanced mode', () => {
     fireEvent.click(screen.getByRole('button', { name: /Switch to Simple mode/ }))
     // P1-2: Simple mode still shows the flat Extensions link; what disappears
     // is the dev-mode Extensions group and its sub-links (Skills).
-    expect(screen.getByText('Connectors')).toBeInTheDocument()
+    expect(screen.getByText('Extensions')).toBeInTheDocument()
     expect(screen.queryByText('Skills')).not.toBeInTheDocument()
     expect(screen.getByText('Simple mode')).toBeInTheDocument()
   })
@@ -629,63 +626,42 @@ describe('Sidebar — resize handle (U5)', () => {
   })
 })
 
-describe('Sidebar — nav IA groups (U6)', () => {
+describe('Sidebar — flat nav (2026-09 ZCode-style simplification)', () => {
   beforeEach(() => {
     window.localStorage.clear()
   })
 
-  it('groups nav: Work visible, Resources folded in Simple mode', () => {
+  it('shows the five simple-mode nav rows with NO group disclosures', () => {
     render(wrap(<Sidebar />))
-    expect(screen.getByRole('button', { name: /Work/ })).toHaveAttribute('aria-expanded', 'true')
-    const resources = screen.getByRole('button', { name: /Resources/ })
-    expect(resources).toHaveAttribute('aria-expanded', 'false')
-    // Work group is open: Chat / Scheduled / Triage visible.
+    // Flat rows: Chat / Tasks / Inbox / Connectors / Memory.
     expect(screen.getByText('Chat')).toBeInTheDocument()
     expect(screen.getByText('Tasks')).toBeInTheDocument()
     expect(screen.getByText('Inbox')).toBeInTheDocument()
-    // Resources folded: Memory / Usage hidden; Extensions stays a flat entry.
-    expect(screen.queryByText('Memory')).not.toBeInTheDocument()
-    expect(screen.queryByText('Usage')).not.toBeInTheDocument()
-    expect(screen.getByText('Connectors')).toBeInTheDocument()
-  })
-
-  it('expanding Resources reveals Memory and Usage', () => {
-    render(wrap(<Sidebar />))
-    fireEvent.click(screen.getByRole('button', { name: /Resources/ }))
+    expect(screen.getByText('Extensions')).toBeInTheDocument()
     expect(screen.getByText('Memory')).toBeInTheDocument()
+    // The old Work/Resources/Experiments disclosure buttons are gone.
+    expect(screen.queryByRole('button', { name: /^Work/ })).not.toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: /Resources/ })).not.toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: /Experiments/ })).not.toBeInTheDocument()
+  })
+
+  it('Usage and Mission Control are dev-only extras', () => {
+    render(wrap(<Sidebar />))
+    expect(screen.queryByText('Usage')).not.toBeInTheDocument()
+    expect(screen.queryByText('Mission Control')).not.toBeInTheDocument()
+    fireEvent.click(screen.getByRole('button', { name: /Switch to Advanced mode/ }))
     expect(screen.getByText('Usage')).toBeInTheDocument()
-  })
-
-  it('collapsing the Work group hides Chat/Scheduled', () => {
-    render(wrap(<Sidebar />))
-    fireEvent.click(screen.getByRole('button', { name: /Work/ }))
-    expect(screen.queryByText('Chat')).not.toBeInTheDocument()
-    expect(screen.queryByText('Scheduled')).not.toBeInTheDocument()
-  })
-
-  // Audit §14 — Mission Control is now reachable from both simple and dev
-  // modes; the "Experimental" badge still flags it as higher-density.
-  it('Experiments group holds the Mission Control link in both modes', () => {
-    render(wrap(<Sidebar />))
     expect(screen.getByText('Mission Control')).toBeInTheDocument()
   })
 
-  it('persists group + settings expansion to shannon-nav-open across remounts', () => {
+  it('persists settings expansion across remounts', () => {
     const { unmount } = render(wrap(<Sidebar />))
-    fireEvent.click(screen.getByRole('button', { name: /Resources/ }))
     fireEvent.click(screen.getByText('Settings'))
-    const stored = JSON.parse(window.localStorage.getItem('shannon-nav-open')!)
-    expect(stored).toMatchObject({ resources: true, settings: true, work: true })
+    expect(screen.getByText('General')).toBeInTheDocument()
     unmount()
     render(wrap(<Sidebar />))
-    // Remounted: Resources still open, Settings still expanded.
-    expect(screen.getByText('Memory')).toBeInTheDocument()
+    // Remounted: Settings still expanded (shannon-nav-settings-open).
     expect(screen.getByText('General')).toBeInTheDocument()
-    // Collapse Work, remount: still collapsed.
-    fireEvent.click(screen.getByRole('button', { name: /Work/ }))
-    cleanup()
-    render(wrap(<Sidebar />))
-    expect(screen.queryByText('Chat')).not.toBeInTheDocument()
   })
 })
 

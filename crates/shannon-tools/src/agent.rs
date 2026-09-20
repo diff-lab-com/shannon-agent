@@ -10,14 +10,48 @@ use futures::StreamExt;
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 use shannon_agents::{
-    AgentConfig, AgentDefinitionRegistry, AgentMessage, MessageContent, ProtocolMessage,
-    TeamContext,
+    AgentConfig, AgentDefinitionRegistry, AgentMessage, MessageContent, MessageType,
+    ProtocolMessage, TeamContext,
 };
+use std::time::Duration;
+const AGENT_REPLY_TIMEOUT: Duration = Duration::from_secs(5);
+const AGENT_SHUTDOWN_TIMEOUT: Duration = Duration::from_secs(3);
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 
+use shannon_engine::permissions::ApprovalMode;
+
 /// Type alias for backward compatibility.
 pub type AgentToolContext = TeamContext;
+
+/// Merge the per-call `allowed_tools`, the per-call `disallowed_tools`, and
+/// the parent's process-level denylist into a single `ToolFilter` list.
+/// Allow entries pass through verbatim; deny entries are emitted as
+/// `!pattern` so `ToolFilter.is_allowed`'s deny precedence beats allow.
+///
+/// `pub(crate)` so unit tests in this crate can assert on the exact
+/// composition without spinning up a `QueryEngine`.
+pub(crate) fn merge_tool_filter(
+    allowed_tools: Option<&[String]>,
+    disallowed_tools: Option<&[String]>,
+    parent_disallowed_tools: &[String],
+) -> Vec<String> {
+    let mut merged: Vec<String> = Vec::new();
+    if let Some(allowed) = allowed_tools {
+        merged.extend(allowed.iter().cloned());
+    }
+    for tool in disallowed_tools.unwrap_or(&[]) {
+        if !merged.iter().any(|p| p == &format!("!{tool}")) {
+            merged.push(format!("!{tool}"));
+        }
+    }
+    for tool in parent_disallowed_tools {
+        if !merged.iter().any(|p| p == &format!("!{tool}")) {
+            merged.push(format!("!{tool}"));
+        }
+    }
+    merged
+}
 
 /// Agent operation types
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -205,6 +239,20 @@ impl AgentTool {
         self.context.clone()
     }
 
+    /// Replace the context handle entirely.
+    ///
+    /// Used by surfaces that build their own per-run tool registry (the
+    /// desktop goal runner) but must share the parent's team state: the
+    /// freshly-registered `AgentTool` starts with its own empty handle, and
+    /// swapping in the chat session's handle makes `agent_spawn` /
+    /// `send_message` / `shutdown` land on the same coordinator.
+    ///
+    /// Only call this between registry construction and first engine use —
+    /// it is not synchronised against concurrent tool execution.
+    pub fn set_context_handle(&mut self, handle: Arc<Mutex<Option<AgentToolContext>>>) {
+        self.context = handle;
+    }
+
     /// Inject the team context for real coordinator-backed execution.
     pub fn inject_context(&self, ctx: AgentToolContext) {
         if let Ok(mut guard) = self.context.lock() {
@@ -364,12 +412,27 @@ impl AgentTool {
                     input,
                     subagent_config,
                     Some(resolved_prompt_for_subagent),
+                    // P1 — inherit parent's approval policy + tool denylist.
+                    // The previous shape hard-coded `FullAuto` and dropped
+                    // both `ctx.permission_mode` and `ctx.parent_disallowed_tools`,
+                    // which silently downgraded the lead's sandbox/permissions
+                    // when sub-agents ran real LLM turns. See `execute_subagent`.
+                    ctx.permission_mode.clone(),
+                    ctx.parent_disallowed_tools.clone(),
                 )
                 .await?;
 
-            // 3. Update agent status in registry (use list to find and update)
-            // The SubAgentRegistry tracks agents internally; the coordinator
-            // tracks teammates. Both are updated by the spawn.
+            // 3. Write the run outcome back to the registry — previously the
+            // entry stayed `Idle` forever (stale-status bug) — and publish
+            // the lifecycle transition to observers (P0-⑥).
+            let ok = result.status != "failed";
+            let result_summary = result
+                .result
+                .clone()
+                .unwrap_or_else(|| result.message.clone());
+            ctx.registry
+                .record_run_outcome(&agent_uid, ok, result_summary)
+                .await;
             tracing::info!(
                 agent_id = %agent_uid,
                 agent_name = %agent_name,
@@ -396,8 +459,20 @@ impl AgentTool {
             match client_config {
                 Some(client_config) => {
                     let prompt = agent_def.as_ref().and_then(|d| d.system_prompt.clone());
-                    self.execute_subagent(agent_id, agent_type, input, client_config, prompt)
-                        .await
+                    // No TeamContext → inherit nothing. Use AutoEdit (engine
+                    // default) and no extra denylist. Same hardening as the
+                    // real path: deny patterns still apply if the caller put
+                    // them in `input.disallowed_tools`.
+                    self.execute_subagent(
+                        agent_id,
+                        agent_type,
+                        input,
+                        client_config,
+                        prompt,
+                        ApprovalMode::AutoEdit.to_string(),
+                        Vec::new(),
+                    )
+                    .await
                 }
                 None => Ok(AgentSpawnOutput {
                     agent_id,
@@ -414,6 +489,13 @@ impl AgentTool {
     }
 
     /// Execute a task in a real sub-agent QueryEngine.
+    ///
+    /// P1 — the sub-agent inherits the lead's approval policy + tool
+    /// denylist (`ctx.permission_mode` and `ctx.parent_disallowed_tools`,
+    /// forwarded here from `spawn_agent`). The previous shape hard-coded
+    /// `FullAuto` and dropped the denylist, which silently downgraded the
+    /// lead's sandbox when sub-agents ran real LLM turns.
+    #[allow(clippy::too_many_arguments)]
     async fn execute_subagent(
         &self,
         agent_id: String,
@@ -421,6 +503,8 @@ impl AgentTool {
         input: AgentSpawnInput,
         client_config: shannon_engine::api::LlmClientConfig,
         resolved_system_prompt: Option<String>,
+        parent_permission_mode: String,
+        parent_disallowed_tools: Vec<String>,
     ) -> Result<AgentSpawnOutput, ToolError> {
         use shannon_core::query_engine::{QueryContext, QueryEvent, QueryMetadata};
         use uuid::Uuid;
@@ -430,18 +514,29 @@ impl AgentTool {
         Self::register_subagent_tools(&mut sub_tools)
             .map_err(|e| ToolError::ExecutionFailed(format!("sub-agent tool setup failed: {e}")))?;
 
-        // Apply tool allowlist if specified
-        if let Some(ref allowed) = input.allowed_tools {
-            if !allowed.is_empty() {
-                sub_tools.set_allowed_tools(Some(allowed.clone()));
-            }
+        // Merge allowlist + denylist into the sub-agent's `ToolFilter`. The
+        // deny entries are emitted as `!pattern` (the same convention the
+        // spawned-subprocess path uses) so `ToolFilter.is_allowed`'s deny
+        // precedence beats allow — i.e. even if a tool name is in
+        // `allowed_tools`, the parent denylist still rejects it.
+        let merged = merge_tool_filter(
+            input.allowed_tools.as_deref(),
+            input.disallowed_tools.as_deref(),
+            &parent_disallowed_tools,
+        );
+        if !merged.is_empty() {
+            sub_tools.set_allowed_tools(Some(merged));
         }
 
-        // Create sub-agent engine with FullAuto permissions
+        // Create sub-agent engine with the inherited approval mode.
+        // `from_str_ci` accepts Shannon + Claude Code aliases; fallback to
+        // `AutoEdit` (the engine default) when the parent didn't set one.
         let model_name = client_config.model.clone();
         let client = shannon_engine::api::LlmClient::new(client_config);
         let mut permissions = shannon_engine::permissions::PermissionManager::new();
-        permissions.set_approval_mode(shannon_engine::permissions::ApprovalMode::FullAuto);
+        let approval_mode =
+            ApprovalMode::from_str_ci(&parent_permission_mode).unwrap_or(ApprovalMode::AutoEdit);
+        permissions.set_approval_mode(approval_mode);
         let state = shannon_engine::state::StateManager::new();
 
         let engine = shannon_core::query_engine::QueryEngine::with_defaults(
@@ -558,24 +653,57 @@ impl AgentTool {
         let message_id = format!("msg_{}", uuid::Uuid::new_v4());
 
         if let Some(ctx) = self.get_team_context() {
-            // Real message routing through the coordinator
+            // B2 follow-up — send and wait for a real reply.
+            // The previous shape returned the synthetic ack ("Message
+            // received by <agent>") as if it were the agent's LLM reply —
+            // a wire-only stub. Now we route through the coordinator and
+            // subscribe to broadcast events for a real `MessageSent` whose
+            // `from` matches the target agent and `to == "lead"`, up to a
+            // 5 s timeout. The synthetic ack is the fallback when no
+            // teammate work loop is consuming the inbox yet (e.g. before a
+            // future "Teammate::spawn_work_loop on spawn" lands), so this
+            // API is stable across that milestone.
+            let mut rx = ctx.coordinator.subscribe_events();
             let responses = ctx
                 .registry
                 .send_message(
                     "lead",
                     &input.agent_id,
-                    serde_json::Value::String(input.message),
+                    serde_json::Value::String(input.message.clone()),
                 )
                 .await
                 .map_err(|e| ToolError::ExecutionFailed(format!("Failed to send message: {e}")))?;
 
-            let response_text = responses
-                .first()
-                .map(|r| match &r.content {
-                    MessageContent::Text(t) => t.clone(),
-                    other => format!("{other:?}"),
-                })
-                .unwrap_or_default();
+            let target = input.agent_id.clone();
+            let mut real_reply: Option<String> = None;
+            let deadline = tokio::time::Instant::now() + AGENT_REPLY_TIMEOUT;
+            loop {
+                let remaining = deadline.saturating_duration_since(tokio::time::Instant::now());
+                if remaining.is_zero() {
+                    break;
+                }
+                match tokio::time::timeout(remaining, rx.recv()).await {
+                    Ok(Ok(shannon_agents::CoordinatorEvent::MessageSent(msg))) => {
+                        if let Some(text) = Self::extract_real_reply(&msg, &target) {
+                            real_reply = Some(text);
+                            break;
+                        }
+                    }
+                    Ok(Ok(_)) => {}
+                    Ok(Err(_)) => break, // lagged/closed
+                    Err(_) => break,     // timeout
+                }
+            }
+
+            let response_text = real_reply.unwrap_or_else(|| {
+                responses
+                    .first()
+                    .map(|r| match &r.content {
+                        MessageContent::Text(t) => t.clone(),
+                        other => format!("{other:?}"),
+                    })
+                    .unwrap_or_default()
+            });
 
             Ok(SendMessageOutput {
                 delivered: true,
@@ -583,13 +711,28 @@ impl AgentTool {
                 message_id,
             })
         } else {
-            // Fallback: no coordinator
             Ok(SendMessageOutput {
                 delivered: true,
                 response: None,
                 message_id,
             })
         }
+    }
+
+    /// Filter helper — given a `MessageSent` broadcast event, decide whether
+    /// it is a real reply from `target` back to `"lead"`. Pure function,
+    /// unit-tested in `tests::extract_real_reply_*`.
+    fn extract_real_reply(msg: &shannon_agents::AgentMessage, target: &str) -> Option<String> {
+        if msg.message_type != MessageType::Chat {
+            return None;
+        }
+        if msg.from != target || msg.to != "lead" {
+            return None;
+        }
+        if let MessageContent::Text(t) = &msg.content {
+            return Some(t.clone());
+        }
+        None
     }
 
     async fn create_team(&self, input: CreateTeamInput) -> Result<CreateTeamOutput, ToolError> {
@@ -662,8 +805,13 @@ impl AgentTool {
 
     async fn shutdown_agent(&self, input: ShutdownInput) -> Result<ShutdownOutput, ToolError> {
         if let Some(ctx) = self.get_team_context() {
-            // Send shutdown protocol message through coordinator
-            let msg = AgentMessage::protocol(
+            // B2 follow-up — wait for the teammate's ShutdownResponse
+            // instead of returning unconditional `success: true`. The
+            // `request_id` is generated here and mirrored back by the
+            // teammate so we can correlate the reply across the broadcast.
+            let mut rx = ctx.coordinator.subscribe_events();
+            let request_id = uuid::Uuid::new_v4();
+            let mut msg = AgentMessage::protocol(
                 "lead".to_string(),
                 input.agent_id.clone(),
                 ProtocolMessage::ShutdownRequest {
@@ -672,17 +820,69 @@ impl AgentTool {
                         .unwrap_or_else(|| "Graceful shutdown".to_string()),
                 },
             );
+            msg.id = request_id;
 
             ctx.coordinator
                 .send_message(msg)
                 .await
                 .map_err(|e| ToolError::ExecutionFailed(format!("Shutdown failed: {e}")))?;
 
-            Ok(ShutdownOutput {
-                agent_id: input.agent_id,
-                success: true,
-                message: "Agent shutdown request sent".to_string(),
-            })
+            let target = input.agent_id.clone();
+            let mut approved: Option<bool> = None;
+            let deadline = tokio::time::Instant::now() + AGENT_SHUTDOWN_TIMEOUT;
+            loop {
+                let remaining = deadline.saturating_duration_since(tokio::time::Instant::now());
+                if remaining.is_zero() {
+                    break;
+                }
+                match tokio::time::timeout(remaining, rx.recv()).await {
+                    Ok(Ok(shannon_agents::CoordinatorEvent::MessageSent(reply))) => {
+                        if reply.message_type != MessageType::Protocol {
+                            continue;
+                        }
+                        if reply.from != target || reply.to != "lead" {
+                            continue;
+                        }
+                        if let MessageContent::Structured(v) = &reply.content {
+                            if let Ok(ProtocolMessage::ShutdownResponse {
+                                request_id: req_id,
+                                approve,
+                                ..
+                            }) = serde_json::from_value::<ProtocolMessage>(v.clone())
+                            {
+                                if req_id == request_id {
+                                    approved = Some(approve);
+                                    break;
+                                }
+                            }
+                        }
+                    }
+                    Ok(Ok(_)) => {}
+                    Ok(Err(_)) => break,
+                    Err(_) => break,
+                }
+            }
+
+            match approved {
+                Some(true) => Ok(ShutdownOutput {
+                    agent_id: target,
+                    success: true,
+                    message: "Agent shutdown acknowledged".to_string(),
+                }),
+                Some(false) => Ok(ShutdownOutput {
+                    agent_id: target,
+                    success: false,
+                    message: "Agent refused shutdown".to_string(),
+                }),
+                None => Ok(ShutdownOutput {
+                    agent_id: target,
+                    success: false,
+                    message: format!(
+                        "Shutdown request sent (no acknowledgement in {}s)",
+                        AGENT_SHUTDOWN_TIMEOUT.as_secs()
+                    ),
+                }),
+            }
         } else {
             Ok(ShutdownOutput {
                 agent_id: input.agent_id,
@@ -1311,5 +1511,113 @@ mod tests {
         let tool = AgentTool::new();
         let defs = tool.get_agent_defs();
         assert!(defs.get("nonexistent-agent-type-xyz").is_none());
+    }
+
+    // P1 — sub-agent permission / sandbox inheritance (B2 follow-up).
+
+    #[test]
+    fn test_merge_tool_filter_combines_allow_and_two_denylists() {
+        // Both per-call deny + parent deny land as `!pattern`. Allowlist
+        // entries pass through verbatim. Order: allow first, then
+        // per-call deny, then parent deny — so the deny semantics the
+        // `ToolFilter` consumes are stable across callers.
+        let allowed = vec!["Bash".to_string(), "Read".to_string()];
+        let input_denied = vec!["Write".to_string()];
+        let parent_denied = vec!["Bash".to_string(), "PowerShell".to_string()];
+        let merged = merge_tool_filter(Some(&allowed), Some(&input_denied), &parent_denied);
+        // Allow first, then per-call deny, then parent deny. The deny
+        // precedence lives in `ToolFilter.is_allowed` (not here), so we
+        // emit every deny independently — even if its name already lives
+        // in the allowlist, since `!pattern` correctly overrides it.
+        assert_eq!(
+            merged,
+            vec![
+                "Bash".to_string(),
+                "Read".to_string(),
+                "!Write".to_string(),
+                "!Bash".to_string(),
+                "!PowerShell".to_string(),
+            ]
+        );
+    }
+
+    #[test]
+    fn test_merge_tool_filter_empty_inputs_yields_empty() {
+        // No filter → registry keeps every tool the sub-agent registered.
+        let merged = merge_tool_filter(None, None, &[]);
+        assert!(merged.is_empty());
+    }
+
+    #[test]
+    fn test_merge_tool_filter_deduplicates_deny_pattern() {
+        // Same name in input.denied + parent.denied → one `!pattern` only.
+        // Allow-list overlap is NOT dedup'd (deny semantics vs allow are
+        // resolved by `ToolFilter.is_allowed`, not here).
+        let merged = merge_tool_filter(None, Some(&["Bash".to_string()]), &["Bash".to_string()]);
+        assert_eq!(merged, vec!["!Bash".to_string()]);
+    }
+
+    #[test]
+    fn test_merge_tool_filter_allow_overlap_with_deny_kept() {
+        // Belt-and-suspenders: when `Bash` is in allowlist AND denied by
+        // the parent, we emit BOTH entries. The deny semantics override
+        // allow in `ToolFilter.is_allowed`; we never silently remove the
+        // deny when the name happens to also live in the allowlist.
+        let merged = merge_tool_filter(Some(&["Bash".to_string()]), None, &["Bash".to_string()]);
+        assert_eq!(merged, vec!["Bash".to_string(), "!Bash".to_string()]);
+    }
+
+    // B2 follow-up — `extract_real_reply` filter (used by `send_message`
+    // to upgrade the synthetic ack into the agent's real LLM reply). The
+    // broadcast ordering is non-deterministic without a running Teammate
+    // work loop, so we test the filter pure-functionally; the integrated
+    // `send_message` / `shutdown_agent` paths are exercised by the live
+    // agent-teams desktop smoke tests instead.
+
+    #[test]
+    fn extract_real_reply_accepts_matching_chat_from_target() {
+        let msg = shannon_agents::AgentMessage::new_text(
+            "ghost-agent".into(),
+            "lead".into(),
+            "real reply".into(),
+        );
+        assert_eq!(
+            AgentTool::extract_real_reply(&msg, "ghost-agent").as_deref(),
+            Some("real reply")
+        );
+    }
+
+    #[test]
+    fn extract_real_reply_rejects_outbound_lead_message() {
+        // The lead's own outbound message to the agent is NOT a reply —
+        // it's the send, not the response.
+        let msg = shannon_agents::AgentMessage::new_text(
+            "lead".into(),
+            "ghost-agent".into(),
+            "outbound ping".into(),
+        );
+        assert_eq!(AgentTool::extract_real_reply(&msg, "ghost-agent"), None);
+    }
+
+    #[test]
+    fn extract_real_reply_rejects_wrong_target() {
+        let msg = shannon_agents::AgentMessage::new_text(
+            "other-agent".into(),
+            "lead".into(),
+            "from the wrong agent".into(),
+        );
+        assert_eq!(AgentTool::extract_real_reply(&msg, "ghost-agent"), None);
+    }
+
+    #[test]
+    fn extract_real_reply_rejects_protocol_messages() {
+        let msg = shannon_agents::AgentMessage::protocol(
+            "ghost-agent".into(),
+            "lead".into(),
+            ProtocolMessage::ShutdownRequest {
+                reason: "n/a".into(),
+            },
+        );
+        assert_eq!(AgentTool::extract_real_reply(&msg, "ghost-agent"), None);
     }
 }

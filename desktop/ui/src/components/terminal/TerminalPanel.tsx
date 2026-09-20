@@ -84,12 +84,11 @@ function dirLabel(projectDir: string): string {
 export interface TerminalPanelProps {
   projectDir?: string | null
   /**
-   * P1-5 C-2 — `drawer` (default) is the chat-page bottom drawer.
-   * `panel` renders the same component as an always-open WorkspaceGrid
-   * panel: it fills its container, skips the drawer toggle affordances and
-   * the Ctrl+` window handler (the grid host owns panel presence instead).
-   * The Chat page renders ONE instance and physically moves its dock DOM
-   * node between the two containers (manual reparenting — NOT a portal
+   * `drawer` (default) is the chat-page bottom drawer.
+   * `panel` renders the same component as an always-open embedded panel:
+   * it fills its container and skips the drawer toggle affordances. The
+   * Chat page renders ONE instance and physically moves its dock DOM node
+   * between the two containers (manual reparenting — NOT a portal
    * container swap, which in React 19 remounts the subtree), so xterm
    * instances (and their scrollback) survive the drawer↔grid handoff. The
    * embedded variant additionally reconciles with `terminal_list` on mount,

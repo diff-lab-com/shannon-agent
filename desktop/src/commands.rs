@@ -31,8 +31,10 @@ use crate::events::{self};
 use crate::session_registry::SessionRegistry;
 use tokio_util::sync::CancellationToken;
 
-/// Parse approval mode string into ApprovalMode enum
-fn parse_approval_mode(mode_str: &str) -> ApprovalMode {
+/// Parse approval mode string into ApprovalMode enum. `pub(crate)` so the
+/// agent-teams bridge (`crate::agent_teams::enable`) can reuse the same
+/// case-insensitive mapping for sub-agent permission inheritance.
+pub(crate) fn parse_approval_mode(mode_str: &str) -> ApprovalMode {
     match mode_str.to_lowercase().as_str() {
         "suggest" | "default" => ApprovalMode::Suggest,
         "plan" => ApprovalMode::Plan,
@@ -102,6 +104,12 @@ pub struct AppState {
     qe_config: Arc<RwLock<shannon_core::query_engine::QueryEngineConfig>>,
     /// Desktop config (persisted).
     pub(crate) desktop_config: Arc<RwLock<DesktopConfig>>,
+    /// B2 — handle shared with the engine's `AgentTool`. Empty until the
+    /// user enables agent teams (`crate::agent_teams::enable` injects the
+    /// `TeamContext` here; `disable` revokes it). The tool consults this
+    /// handle on every `agent_spawn` call, so inject/revoke take effect
+    /// immediately without a restart.
+    pub(crate) agent_tool_context: Arc<std::sync::Mutex<Option<shannon_tools::AgentToolContext>>>,
     /// Pending permission requests (request_id -> sender + tool name, so
     /// "always allow" can persist a rule for the tool).
     pub(crate) pending_permissions: Arc<Mutex<HashMap<String, PendingPermission>>>,
@@ -371,7 +379,14 @@ impl AppState {
                 None
             }
         };
-        let _agent_context = {
+        // B2 — the handle is kept in `AppState::agent_tool_context` (not
+        // discarded). It stays empty until the user enables agent teams in
+        // Settings (`agent_teams_enabled`, default off); `crate::agent_teams`
+        // then injects a `TeamContext` (TUI injection pattern,
+        // crates/shannon-ui/src/repl/mod.rs ~L828) and bridges the registry
+        // lifecycle to `subagent:start|stop` events. Until then `agent_spawn`
+        // keeps its zero-cost placeholder behavior.
+        let agent_context_handle = {
             let _ = &assembly;
             register_default_tools_with_providers(
                 &mut tool_registry,
@@ -396,6 +411,7 @@ impl AppState {
         Self {
             registry: Arc::new(SessionRegistry::new()),
             client_config: Arc::new(RwLock::new(client_config)),
+            agent_tool_context: agent_context_handle,
             provider_store: Arc::new(tokio::sync::Mutex::new(provider_store)),
             tools: Arc::new(tool_registry),
             permissions: Arc::new(RwLock::new(PermissionManager::new())),
@@ -925,6 +941,10 @@ pub async fn send_message(
             std::collections::HashSet::new();
         // /rewind: file paths mutated by this turn's write/edit tool calls.
         let mut turn_files: std::collections::BTreeSet<String> = std::collections::BTreeSet::new();
+        // P1-⑤ telemetry: usage frames arrive per LLM request with no
+        // tool_use_id; approximate per-tool attribution collapses the usage
+        // observed while a tool call is the session's pending one.
+        let mut pending_tool_tokens: Option<(String, u64)> = None;
 
         // Consume the stream using futures::StreamExt
         use futures::StreamExt;
@@ -968,6 +988,7 @@ pub async fn send_message(
                     } => {
                         tool_call_count += 1;
                         tool_names_used.insert(tool_name.clone());
+                        pending_tool_tokens = Some((tool_use_id.clone(), 0));
                         if let Some(path) =
                             crate::commands_rewind::mutated_file_path(&tool_name, &tool_input)
                         {
@@ -990,8 +1011,18 @@ pub async fn send_message(
                         tool_name,
                         result,
                         is_error,
+                        meta,
                         ..
                     } => {
+                        // P1-⑤: forward the engine's tool metadata (sandbox
+                        // classification) and collapse the usage frames that
+                        // arrived while this call was pending.
+                        let meta_val = if meta.is_null() { None } else { Some(*meta) };
+                        let tokens_used = pending_tool_tokens
+                            .take()
+                            .filter(|(pending_id, _)| *pending_id == tool_use_id)
+                            .map(|(_, tokens)| tokens)
+                            .filter(|tokens| *tokens > 0);
                         let payload = events::ToolResultPayload {
                             query_id: qid_str.clone(),
                             tool_use_id,
@@ -999,6 +1030,8 @@ pub async fn send_message(
                             result,
                             is_error,
                             session_id: Some(session_id_str.clone()),
+                            meta: meta_val,
+                            tokens_used,
                         };
                         route_event(crate::session_registry::SessionEvent::ToolResult(
                             payload.clone(),
@@ -1044,6 +1077,12 @@ pub async fn send_message(
                         cache_read_tokens,
                         ..
                     } => {
+                        // P1-⑤ telemetry: attribute this usage frame to the
+                        // session's pending tool call, if any (approximate —
+                        // the frame itself carries no tool_use_id).
+                        if let Some((_, tokens)) = pending_tool_tokens.as_mut() {
+                            *tokens += input_tokens + output_tokens;
+                        }
                         // Persist to the local usage ledger. Best-effort:
                         // a log write failure must never break the stream.
                         let cc_now = client_config_arc.read().await;

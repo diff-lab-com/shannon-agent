@@ -43,10 +43,13 @@ export interface ChatContextValue {
   feedback: Record<string, FeedbackRating>
   /** Set/clear a message's rating (null clears). Optimistic, then persisted. */
   recordFeedback: (key: string, rating: FeedbackRating | null) => Promise<void>
-  /** U2: ContextPanel open state lives here so the global Header (in
-   * Layout, outside the /chat route) can toggle the panel that Chat renders. */
+  /** U2: dock open state lives here so the global Header (in Layout,
+   * outside the /chat route) can toggle the dock that Chat renders.
+   * P1-⑦: Chat also sets it directly — RightDock auto-docks itself on
+   * plan-mode entry / artifact detection / a "Diff" click. */
   contextPanelOpen: boolean
   toggleContextPanel: () => void
+  setContextPanelOpen: (open: boolean) => void
 }
 
 export const ChatContext = createContext<ChatContextValue | null>(null)

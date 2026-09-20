@@ -22,6 +22,12 @@ export interface ToolResultPayload {
   tool_name: string
   result: string
   is_error: boolean
+  /** P1-⑤: engine tool metadata (e.g. sandbox classification). Absent on
+   *  older engines. */
+  meta?: unknown
+  /** P1-⑤ telemetry: approximate per-tool token attribution collapsed by
+   *  the desktop forwarder. */
+  tokens_used?: number
 }
 
 export interface ToolProgressPayload {
@@ -103,6 +109,39 @@ export interface ToolCall {
   progress?: number
   progress_message?: string
   status: 'running' | 'completed' | 'error'
+  /** P1-⑤ telemetry: wall-clock start (epoch ms) captured at tool-start. */
+  started_at?: number
+  /** P1-⑤ telemetry: client-measured duration (ms), set when the result
+   *  arrives. Historical messages get durations from the L0 trace timeline
+   *  instead (see MessageArea's duration lookup). */
+  duration_ms?: number
+  /** P1-⑤: engine tool metadata (e.g. `{ classification: 'sandbox_denied' }`). */
+  meta?: unknown
+  /** P1-⑤ telemetry: approximate per-tool token attribution (collapsed by
+   *  the desktop forwarder). Historical cards don't carry this. */
+  tokens_used?: number
+}
+
+/** B2: live registry state of a running sub-agent, bridged from the
+ *  desktop agent-teams observer via `subagent:start` / `subagent:stop`. */
+export interface SubAgentLive {
+  agentId: string
+  agentName: string
+  team: string | null
+}
+
+/** B2 follow-up — desktop backend DTO mirroring
+ *  `desktop/src/commands_agents.rs::SubAgentDto`. Stable wire shape used
+ *  by the Tasks page panel + the `useSubagents` hook. */
+export interface SubAgentDto {
+  id: string
+  name: string
+  team: string | null
+  status: string
+  turnsUsed: number
+  maxTurns: number
+  model: string
+  createdAtMs: number
 }
 
 export interface ResearchReport {
@@ -150,6 +189,42 @@ export interface SessionInfo {
   parent_id?: string | null
   /** Message index in parent where this branch diverged */
   branch_point?: number | null
+  /** P0 sidebar telemetry: live-query flag joined from the session registry.
+   *  Absent on older engines — treat as unknown, not false. */
+  running?: boolean
+  /** P0 sidebar telemetry: epoch **ms** of the session's last activity
+   *  (L0 log mtime). Absent on older engines / brand-new sessions. */
+  updated_at?: number
+}
+
+/**
+ * P0 plan dock: one persisted plan file from the session working dir
+ * (`<workingDir>/.shannon/plans/*.md`), parsed by the `get_session_plan`
+ * command. Mirrors the engine `PlanManager::save_plan_to_file` format.
+ */
+export interface SessionPlan {
+  /** Plan file stem (the engine's plan id). */
+  id: string
+  title: string
+  /** `"approved" | "pending"` — raw header value. */
+  status: string
+  /** RFC3339 creation timestamp (raw header value). */
+  created_at: string
+  /** Markdown body (everything after the header block). */
+  content: string
+}
+
+/**
+ * P0 sidebar telemetry: live per-session activity derived from the query:*
+ * event stream (and reconciled with `SessionInfo.running` on refresh).
+ * `startedAt === null` means "running, start unknown" (e.g. a goal-owned run
+ * that began before this window joined the event stream).
+ */
+export interface SessionActivity {
+  running: boolean
+  startedAt: number | null
+  lastActivity: number
+  activeTool: string | null
 }
 
 export interface StatusResponse {
@@ -396,6 +471,9 @@ export interface DesktopConfig {
   skill_loop_min_duration_secs?: number
   skill_loop_min_tool_calls?: number
   skill_detection_enabled?: boolean
+  /** B2: real sub-agent execution (agent teams). Default off — placeholder
+   *  agent_spawn only, until opted in (real LLM spend). */
+  agent_teams_enabled?: boolean
   stt?: SttConfig
   /** P2-5e local-only STT (whisper-rs). Independent of `stt`
    *  so a user can keep a cloud key for fallback while local
@@ -1129,6 +1207,10 @@ export const EVENT_NAMES = {
   BUDGET_WARNING: 'budget:warning',
   /** P0-4: budget cap hit — send rejected pre-turn or turn cancelled. */
   BUDGET_EXCEEDED: 'budget:exceeded',
+  /** B2: the agent-teams registry accepted a new sub-agent (desktop bridge). */
+  SUBAGENT_START: 'subagent:start',
+  /** B2: a sub-agent run finished (ok or failed; desktop bridge). */
+  SUBAGENT_STOP: 'subagent:stop',
   /** P1-5 D: PTY output for the integrated terminal (data is base64). */
   TERMINAL_OUTPUT: 'terminal:output',
 } as const

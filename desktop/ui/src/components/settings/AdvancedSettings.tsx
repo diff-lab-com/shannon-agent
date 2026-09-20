@@ -25,6 +25,9 @@ export default function AdvancedSettings() {
   const [debugConsole, setDebugConsole] = useState(config?.debug_console ?? false)
   const [skillLoopEnabled, setSkillLoopEnabled] = useState(config?.skill_loop_enabled ?? false)
   const [skillDetectionEnabled, setSkillDetectionEnabled] = useState(config?.skill_detection_enabled ?? true)
+  // B2: real sub-agent execution toggle (agent teams). Live effect — no
+  // restart needed (the backend injects/revokes the context per call).
+  const [agentTeamsEnabled, setAgentTeamsEnabled] = useState(config?.agent_teams_enabled ?? false)
   // P2-5: `offpeak.model_override` — model used for routine executions that
   // start inside their off-peak execution window. Empty input = disabled.
   const [offpeakModel, setOffpeakModel] = useState(config?.offpeak?.model_override ?? '')
@@ -67,6 +70,10 @@ export default function AdvancedSettings() {
   useEffect(() => {
     setOffpeakModel(config?.offpeak?.model_override ?? '')
   }, [config?.offpeak?.model_override])
+
+  useEffect(() => {
+    setAgentTeamsEnabled(config?.agent_teams_enabled ?? false)
+  }, [config?.agent_teams_enabled])
 
   const handleToggle = async (key: string, value: boolean, setter: (v: boolean) => void) => {
     setter(value)
@@ -153,10 +160,7 @@ export default function AdvancedSettings() {
 
   return (
     <div className="pb-xl">
-      <div className="mb-xl">
-        <h2 className="font-headline-lg text-headline-lg text-on-surface mb-sm">{t('settings.advanced.title')}</h2>
-        <p className="text-on-surface-variant font-body-md">{t('settings.advanced.subtitle')}</p>
-      </div>
+      <p className="text-on-surface-variant font-body-md mb-xl">{t('settings.advanced.subtitle')}</p>
 
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-gutter">
         {/* Skill Extraction */}
@@ -197,6 +201,24 @@ export default function AdvancedSettings() {
               {t('settings.skillLoop.review')}
             </Button>
           )}
+        </div>
+
+        {/* B2 — Agent teams (real sub-agent execution) */}
+        <div className="bg-surface-container-lowest p-lg rounded-xl shadow-sm border border-outline-variant/30 group hover:shadow-md transition-shadow" data-testid="agent-teams-card">
+          <div className="flex items-center gap-md mb-md">
+            <div className="p-2 bg-primary/10 rounded-lg text-primary flex items-center justify-center">
+              <span className="material-symbols-outlined">account_tree</span>
+            </div>
+            <h3 className="font-headline-md text-[24px] font-bold text-on-surface">{t('settings.advanced.agentTeamsTitle')}</h3>
+          </div>
+          <p className="text-on-surface-variant text-body-sm mb-lg">{t('settings.advanced.agentTeamsDesc')}</p>
+          <div className="flex items-center justify-between py-sm gap-md">
+            <div>
+              <div className="font-label-md text-[14px] text-on-surface font-semibold mb-1">{t('settings.advanced.agentTeamsToggle')}</div>
+              <div className="font-label-sm text-[12px] text-on-surface-variant leading-tight">{t('settings.advanced.agentTeamsLive')}</div>
+            </div>
+            <Switch checked={agentTeamsEnabled} onCheckedChange={v => handleToggle('agent_teams_enabled', v, setAgentTeamsEnabled)} className="shrink-0" />
+          </div>
         </div>
 
         {/* Memory Management */}

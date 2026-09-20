@@ -19,8 +19,10 @@ import type { CheckpointInfo, FeedbackRating } from '@/lib/tauri-api'
 import {
   EVENT_NAMES,
   type ChatMessage,
+  type GoalRunDto,
   type ToolCall,
   type SessionInfo,
+  type SessionActivity,
   type StatusResponse,
   type DesktopConfig,
   type ModelInfo,
@@ -30,6 +32,7 @@ import {
   type AgentInfo,
   type UsagePayload,
   type McpServerInfo,
+  type SubAgentLive,
 } from '@/types'
 import { ChatProvider, useChat, type ChatContextValue } from './ChatContext'
 import { SessionContext, useSessions, type SessionContextValue } from './SessionContext'
@@ -65,10 +68,25 @@ export function AppProvider({ children }: { children: ReactNode }) {
   const [isQuerying, setIsQuerying] = useState(false)
   const [activeToolCalls, setActiveToolCalls] = useState<ToolCall[]>([])
   const [usage, setUsage] = useState<UsagePayload | null>(null)
+  // B2: live registry state of the currently running sub-agent, from the
+  // subagent:start / subagent:stop bridge. Single slot — one live spawn per
+  // session is the engine's practical pattern (agent_spawn blocks until the
+  // run completes). Cleared on stop and on query end (crash safety).
+  const [subagentLive, setSubagentLive] = useState<SubAgentLive | null>(null)
   // U2: ContextPanel visibility — owned here (not in the /chat page) so the
   // global Header can host the toggle while Chat renders the panel.
   const [contextPanelOpen, setContextPanelOpen] = useState(false)
   const [sessions, setSessions] = useState<SessionInfo[]>([])
+  // P0 sidebar telemetry: live per-session activity (running / elapsed /
+  // active tool) for the session rail. Derived from the same query:* events
+  // the chat slice consumes — the main window receives every session's
+  // events (isEventForCurrentWindow passes all through), so the rail can
+  // show cross-session runs; a dedicated window only ever sees its own
+  // session's events, which is all its rail shows. High-frequency events
+  // (text/thinking/usage) only touch the ref; state updates are limited to
+  // membership/tool transitions so streaming never re-renders the sidebar.
+  const [sessionActivity, setSessionActivity] = useState<Record<string, SessionActivity>>({})
+  const sessionActivityRef = useRef<Map<string, SessionActivity>>(new Map())
   const [currentSessionId, setCurrentSessionId] = useState<string | null>(null)
   // P1-1 window mode: this webview was opened as a dedicated session window
   // (`/?windowSession=<id>`). In-memory only — parsed from the URL once,
@@ -91,6 +109,9 @@ export function AppProvider({ children }: { children: ReactNode }) {
   // Manual sends to these are blocked — goal and manual input are mutually
   // exclusive; the backend `send_message` guard is the backstop.
   const [goalOwnedSessionIds, setGoalOwnedSessionIds] = useState<string[]>([])
+  // P2-⑥: full goal-run info keyed by session — the sidebar renders a goal
+  // badge + iteration progress for sessions a run owns.
+  const [goalRunsBySession, setGoalRunsBySession] = useState<Record<string, GoalRunDto>>({})
   const [loading, setLoading] = useState(true)
   // First paint of the app depends on these loads succeeding; a silent
   // failure here used to leave the user on an empty UI with only a generic
@@ -107,12 +128,69 @@ export function AppProvider({ children }: { children: ReactNode }) {
   const streamingTextRef = useRef('')
   streamingTextRef.current = streamingText
 
+  // P0 sidebar telemetry: record one query-stream observation for a session.
+  // `kind === 'event'` (text/thinking/usage) only refreshes the ref's
+  // lastActivity; every other kind publishes a state update so the sidebar
+  // sees running/tool transitions immediately.
+  const noteSessionActivity = useCallback((
+    sessionId: string | null | undefined,
+    kind: 'event' | 'tool-start' | 'tool-end' | 'end',
+    toolName?: string,
+  ) => {
+    if (!sessionId) return
+    const map = sessionActivityRef.current
+    const now = Date.now()
+    const prev = map.get(sessionId)
+    const base: SessionActivity = prev ?? { running: true, startedAt: now, lastActivity: now, activeTool: null }
+    let next = base
+    switch (kind) {
+      case 'event':
+        next = { ...base, running: true, lastActivity: now }
+        break
+      case 'tool-start':
+        next = { ...base, running: true, lastActivity: now, activeTool: toolName ?? null }
+        break
+      case 'tool-end':
+        next = { ...base, lastActivity: now, activeTool: null }
+        break
+      case 'end':
+        next = { ...base, running: false, lastActivity: now, activeTool: null }
+        break
+    }
+    map.set(sessionId, next)
+    if (kind !== 'event') setSessionActivity(Object.fromEntries(map))
+  }, [])
+
   const refreshSessions = useCallback(async () => {
-    try { setSessions(await api.listSessions()) } catch (e) { logSoftFailure('refresh sessions', e) }
+    try {
+      const list = await api.listSessions()
+      setSessions(list)
+      // P0 sidebar telemetry: reconcile the live map with backend truth —
+      // seeds runs that started before this window joined the event stream
+      // (goal-owned runs, cold start) and drops deleted sessions.
+      const map = sessionActivityRef.current
+      const alive = new Set(list.map(s => s.id))
+      let changed = false
+      for (const s of list) {
+        if (s.running && !map.has(s.id)) {
+          map.set(s.id, { running: true, startedAt: null, lastActivity: Date.now(), activeTool: null })
+          changed = true
+        }
+      }
+      for (const id of [...map.keys()]) {
+        if (!alive.has(id)) { map.delete(id); changed = true }
+      }
+      if (changed) setSessionActivity(Object.fromEntries(map))
+    } catch (e) { logSoftFailure('refresh sessions', e) }
   }, [])
 
   const toggleContextPanel = useCallback(() => {
     setContextPanelOpen(v => !v)
+  }, [])
+  // P1-⑦: RightDock auto-docks (plan mode / artifact / diff) by opening
+  // the dock directly.
+  const openContextPanel = useCallback(() => {
+    setContextPanelOpen(true)
   }, [])
 
   const refreshStatus = useCallback(async () => {
@@ -357,6 +435,13 @@ export function AppProvider({ children }: { children: ReactNode }) {
     }
   }, [currentSessionId, refreshSessions, refreshCheckpoints])
 
+  // P0-2/P2-⑥: derive both the goal-owned id set (composer guard) and the
+  // full per-session run map (sidebar badge) from one fetch.
+  const applyGoalRuns = useCallback((runs: GoalRunDto[]) => {
+    setGoalOwnedSessionIds(runs.filter(r => r.status === 'running' || r.status === 'paused').map(r => r.sessionId))
+    setGoalRunsBySession(Object.fromEntries(runs.map(r => [r.sessionId, r])))
+  }, [])
+
   // Register Tauri event listeners
   useEffect(() => {
     const unlisteners: UnlistenFn[] = []
@@ -367,49 +452,67 @@ export function AppProvider({ children }: { children: ReactNode }) {
         listen(EVENT_NAMES.QUERY_TEXT, (e) => {
           const p = e.payload as { content: string; session_id?: string }
           if (!isEventForCurrentWindow(p.session_id, windowSessionId)) return
+          noteSessionActivity(p.session_id, 'event')
           setStreamingText(prev => prev + p.content)
         }),
         listen(EVENT_NAMES.QUERY_TOOL_START, (e) => {
           const p = e.payload as { tool_use_id: string; tool_name: string; tool_input: unknown; session_id?: string }
           if (!isEventForCurrentWindow(p.session_id, windowSessionId)) return
+          noteSessionActivity(p.session_id, 'tool-start', p.tool_name)
           setActiveToolCalls(prev => [...prev, {
             tool_use_id: p.tool_use_id,
             tool_name: p.tool_name,
             tool_input: p.tool_input,
             status: 'running',
+            started_at: Date.now(),
           }])
         }),
         listen(EVENT_NAMES.QUERY_TOOL_RESULT, (e) => {
-          const p = e.payload as { tool_use_id: string; result: string; is_error: boolean; session_id?: string }
+          const p = e.payload as { tool_use_id: string; result: string; is_error: boolean; meta?: unknown; tokens_used?: number; session_id?: string }
           if (!isEventForCurrentWindow(p.session_id, windowSessionId)) return
-          setActiveToolCalls(prev => prev.map(tc =>
-            tc.tool_use_id === p.tool_use_id
-              ? { ...tc, result: p.result, is_error: p.is_error, status: p.is_error ? 'error' : 'completed' }
-              : tc
-          ))
+          noteSessionActivity(p.session_id, 'tool-end')
+          setActiveToolCalls(prev => prev.map(tc => {
+            if (tc.tool_use_id !== p.tool_use_id) return tc
+            // P1-⑤ telemetry: client-side wall-clock duration for the card.
+            const duration_ms = tc.started_at != null ? Date.now() - tc.started_at : undefined
+            return { ...tc, result: p.result, is_error: p.is_error, status: p.is_error ? 'error' : 'completed', duration_ms, meta: p.meta, tokens_used: p.tokens_used }
+          }))
         }),
         listen(EVENT_NAMES.QUERY_TOOL_PROGRESS, (e) => {
           const p = e.payload as { tool_use_id: string; progress: number; message: string; session_id?: string }
           if (!isEventForCurrentWindow(p.session_id, windowSessionId)) return
+          noteSessionActivity(p.session_id, 'event')
           setActiveToolCalls(prev => prev.map(tc =>
             tc.tool_use_id === p.tool_use_id
               ? { ...tc, progress: p.progress, progress_message: p.message }
               : tc
           ))
         }),
+        listen(EVENT_NAMES.SUBAGENT_START, (e) => {
+          const p = e.payload as SubAgentLive
+          setSubagentLive({ agentId: p.agentId, agentName: p.agentName, team: p.team ?? null })
+        }),
+        listen(EVENT_NAMES.SUBAGENT_STOP, (e) => {
+          const p = e.payload as { agentId: string }
+          setSubagentLive(prev => (prev && prev.agentId === p.agentId ? null : prev))
+        }),
         listen(EVENT_NAMES.QUERY_THINKING, (e) => {
           const p = e.payload as { content: string; session_id?: string }
           if (!isEventForCurrentWindow(p.session_id, windowSessionId)) return
+          noteSessionActivity(p.session_id, 'event')
           setThinkingText(prev => prev + p.content)
         }),
         listen(EVENT_NAMES.QUERY_USAGE, (e) => {
           const p = e.payload as UsagePayload
           if (!isEventForCurrentWindow(p.session_id, windowSessionId)) return
+          noteSessionActivity(p.session_id, 'event')
           setUsage(p)
         }),
         listen(EVENT_NAMES.QUERY_COMPLETED, (e) => {
           if (!isEventForCurrentWindow((e.payload as { session_id?: string }).session_id, windowSessionId)) return
+          noteSessionActivity((e.payload as { session_id?: string }).session_id, 'end')
           setIsQuerying(false)
+          setSubagentLive(null)
           // Commit the streamed text as a finished assistant message. Read
           // via the ref (kept in sync on every render) instead of nesting
           // setMessages inside the setStreamingText updater.
@@ -425,12 +528,14 @@ export function AppProvider({ children }: { children: ReactNode }) {
         listen(EVENT_NAMES.QUERY_FAILED, (e) => {
           const p = e.payload as { error: string; session_id?: string }
           if (!isEventForCurrentWindow(p.session_id, windowSessionId)) return
+          noteSessionActivity(p.session_id, 'end')
           setError(p.error)
           setIsQuerying(false)
           setCurrentQueryId(null)
         }),
         listen(EVENT_NAMES.QUERY_CANCELLED, (e) => {
           if (!isEventForCurrentWindow((e.payload as { session_id?: string }).session_id, windowSessionId)) return
+          noteSessionActivity((e.payload as { session_id?: string }).session_id, 'end')
           setIsQuerying(false)
           setCurrentQueryId(null)
         }),
@@ -450,7 +555,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
           void api.listGoalRuns()
             .then(runs => {
               if (cancelled) return
-              setGoalOwnedSessionIds(runs.filter(r => r.status === 'running' || r.status === 'paused').map(r => r.sessionId))
+              applyGoalRuns(runs)
             })
             .catch((e) => { logSoftFailure('refresh goal runs', e) })
         }),
@@ -497,14 +602,12 @@ export function AppProvider({ children }: { children: ReactNode }) {
       record('getConversation', windowSessionId != null
         ? switchToSession(windowSessionId)
         : api.getConversation().then(setMessages)),
-      record('goalOwnedSessions', api.listGoalRuns().then(runs =>
-        setGoalOwnedSessionIds(runs.filter(r => r.status === 'running' || r.status === 'paused').map(r => r.sessionId))
-      )),
+      record('goalOwnedSessions', api.listGoalRuns().then(runs => applyGoalRuns(runs))),
     ])
     if (failures.length > 0) setInitError(failures[0])
     setLoading(false)
   }, [refreshStatus, refreshConfig, refreshSessions, refreshModels, refreshTasks,
-    refreshAgents, refreshMcpServers, refreshBackgroundTasks, windowSessionId, switchToSession])
+    refreshAgents, refreshMcpServers, refreshBackgroundTasks, windowSessionId, switchToSession, applyGoalRuns])
 
   useEffect(() => {
     void loadInitialData()
@@ -512,15 +615,15 @@ export function AppProvider({ children }: { children: ReactNode }) {
 
   const chatValue = useMemo<ChatContextValue>(() => ({
     messages, streamingText, thinkingText, isQuerying, activeToolCalls, usage,
-    sendMessage, cancelQuery, contextPanelOpen, toggleContextPanel,
+    sendMessage, cancelQuery, contextPanelOpen, toggleContextPanel, setContextPanelOpen: openContextPanel,
     checkpoints, rewindSession: rewindSessionAction, compactSession: compactSessionAction,
     feedback, recordFeedback: recordFeedbackAction,
-  }), [messages, streamingText, thinkingText, isQuerying, activeToolCalls, usage, sendMessage, cancelQuery, contextPanelOpen, toggleContextPanel, checkpoints, rewindSessionAction, compactSessionAction, feedback, recordFeedbackAction])
+  }), [messages, streamingText, thinkingText, isQuerying, activeToolCalls, usage, sendMessage, cancelQuery, contextPanelOpen, toggleContextPanel, openContextPanel, checkpoints, rewindSessionAction, compactSessionAction, feedback, recordFeedbackAction])
 
   const sessionValue = useMemo<SessionContextValue>(() => ({
-    sessions, currentSessionId, windowSessionId, createSession, createSessionInWorktree, switchSession: switchToSession,
+    sessions, sessionActivity, goalRunsBySession, subagentLive, currentSessionId, windowSessionId, createSession, createSessionInWorktree, switchSession: switchToSession,
     deleteSession: deleteSessionAction, renameSession: renameSessionAction, refreshSessions,
-  }), [sessions, currentSessionId, windowSessionId, createSession, createSessionInWorktree, switchToSession,
+  }), [sessions, sessionActivity, goalRunsBySession, subagentLive, currentSessionId, windowSessionId, createSession, createSessionInWorktree, switchToSession,
     deleteSessionAction, renameSessionAction, refreshSessions])
 
   const catalogValue = useMemo<CatalogContextValue>(() => ({

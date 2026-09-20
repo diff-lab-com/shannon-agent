@@ -20,6 +20,7 @@ import { toast } from 'sonner'
 import EmptyState from '@/components/ui/empty-state'
 import { CardSkeleton } from '@/components/SkeletonLoader'
 import { Button } from '@/components/ui/button'
+import { DropdownMenu, type DropdownMenuItem } from '@/components/ui/dropdown-menu'
 import { useInboxItems, useInboxStats } from '@/hooks/inbox'
 import { useSessions } from '@/context/SessionContext'
 import type { InboxItem, InboxItemStatus, InboxSource } from '@/types'
@@ -191,6 +192,10 @@ export default function Triage() {
   const [statusFilter, setStatusFilter] = useState<StatusFilter>(undefined)
   const [sourceFilter, setSourceFilter] = useState<SourceFilter>(undefined)
   const [sortOrder, setSortOrder] = useState<SortOrder>('newest')
+  // 2026-09 P0-4: Triage list can render flat (default) or grouped by
+  // source (each source becomes a collapsible folder). The grouping mode
+  // sits next to the source filter dropdown so the relationship reads.
+  const [groupBySource, setGroupBySource] = useState<boolean>(false)
   const [selectedIds, setSelectedIds] = useState<Set<number>>(new Set())
   const [bulkRunning, setBulkRunning] = useState(false)
   const [focusedIndex, setFocusedIndex] = useState<number | null>(null)
@@ -319,12 +324,11 @@ export default function Triage() {
   return (
     <div className="flex-1 overflow-y-auto w-full pb-16">
       <div className="max-w-[1200px] mx-auto px-lg py-xl">
-        {/* Header */}
+        {/* Header — the page title is rendered globally in the app Header;
+            here we keep the one-line subtitle so first-time users get the
+            "计划任务、目标与触发器..." context without a duplicate H1. */}
         <div className="flex flex-col md:flex-row md:items-end justify-between mb-xl gap-md">
-          <div>
-            <h2 className="font-headline-lg text-headline-lg text-on-surface">{t('inbox.title')}</h2>
-            <p className="text-on-surface-variant mt-xs">{t('inbox.subtitle')}</p>
-          </div>
+          <p className="text-on-surface-variant">{t('inbox.subtitle')}</p>
           <div className="flex items-center gap-md">
             <div className="flex items-center gap-sm px-md py-sm rounded-xl bg-surface-container-lowest border border-outline-variant/30">
               <span className="material-symbols-outlined text-[18px] text-primary" aria-hidden="true">mark_email_unread</span>
@@ -356,24 +360,33 @@ export default function Triage() {
           })}
         </div>
 
-        {/* Filter bar: source + sort */}
+        {/* Q4 2026-09: source chips (6) overflow on narrow windows — collapse
+            them into a dropdown that mirrors the wide layout's semantics. */}
         <div className="flex items-center gap-sm mb-lg flex-wrap">
-          <span className="font-label-sm text-on-surface-variant uppercase tracking-wider mr-xs">{t('inbox.source.label')}</span>
-          {SOURCE_OPTIONS.map(opt => {
-            const active = sourceFilter === (opt === 'all' ? undefined : opt)
-            const label = opt === 'all' ? t('inbox.filter.all') : t(sourceMeta(opt).labelKey)
-            return (
-              <Button
-                key={opt}
-                variant="ghost"
-                onClick={() => setSourceFilter(opt === 'all' ? undefined : opt)}
-                aria-pressed={active}
-                className={cn("px-sm py-xs rounded-full text-label-sm transition-colors cursor-pointer", active ? 'bg-primary/10 text-primary font-bold' : 'bg-surface-container-low text-on-surface-variant hover:text-primary hover:bg-primary/10')}
-              >
-                {label}
-              </Button>
-            )
-          })}
+          <SourceFilterDropdown
+            value={sourceFilter}
+            onChange={setSourceFilter}
+            sourceMeta={sourceMeta}
+            allLabel={t('inbox.filter.all')}
+            label={t('inbox.source.label')}
+          />
+          <Button
+            type="button"
+            variant="ghost"
+            onClick={() => setGroupBySource(v => !v)}
+            aria-pressed={groupBySource}
+            aria-label={t('inbox.groupBySource')}
+            title={t('inbox.groupBySource')}
+            className={cn(
+              'px-sm py-xs rounded-full text-label-sm transition-colors cursor-pointer',
+              groupBySource
+                ? 'bg-primary/10 text-primary font-bold'
+                : 'bg-surface-container-low text-on-surface-variant hover:text-primary hover:bg-primary/10',
+            )}
+          >
+            <span className="material-symbols-outlined text-[14px] mr-xs align-middle" aria-hidden="true">folder_open</span>
+            {t('inbox.groupBySource')}
+          </Button>
           <Button
             variant="ghost"
             onClick={() => setSortOrder(sortOrder === 'newest' ? 'oldest' : 'newest')}
@@ -466,23 +479,125 @@ export default function Triage() {
               onKeyDown={handleListKey}
               className="space-y-md outline-none"
             >
-              {visibleItems.map((item, i) => (
-                <InboxCard
-                  key={item.id}
-                  item={item}
-                  selected={effectiveSelected.has(item.id)}
-                  focused={focusedIndex === i}
-                  onToggleSelected={toggleSelected}
-                  onMarkRead={markRead}
-                  onArchive={archive}
-                  onContinue={item => void handleContinue(item)}
-                  onRerun={item => void handleRerun(item)}
-                />
-              ))}
+              {groupBySource
+                ? SOURCE_OPTIONS.filter(s => s !== 'all').map(src => {
+                    const bucket = visibleItems.filter(i => i.source === src)
+                    if (bucket.length === 0) return null
+                    const meta = sourceMeta(src)
+                    return (
+                      <div key={src} className="space-y-xs">
+                        <div className="flex items-center gap-xs px-1 pt-2 pb-1 text-[11px] font-bold uppercase tracking-wider text-on-surface-variant/80">
+                          <span className="material-symbols-outlined text-[14px]" aria-hidden="true">{meta.icon}</span>
+                          <span className={meta.color}>{t(meta.labelKey)}</span>
+                          <span className="text-on-surface-variant/60">· {bucket.length}</span>
+                        </div>
+                        {bucket.map((item, j) => (
+                          <InboxCard
+                            key={item.id}
+                            item={item}
+                            selected={effectiveSelected.has(item.id)}
+                            focused={focusedIndex === j}
+                            onToggleSelected={toggleSelected}
+                            onMarkRead={markRead}
+                            onArchive={archive}
+                            onContinue={item => void handleContinue(item)}
+                            onRerun={item => void handleRerun(item)}
+                          />
+                        ))}
+                      </div>
+                    )
+                  })
+                : visibleItems.map((item, i) => (
+                  <InboxCard
+                    key={item.id}
+                    item={item}
+                    selected={effectiveSelected.has(item.id)}
+                    focused={focusedIndex === i}
+                    onToggleSelected={toggleSelected}
+                    onMarkRead={markRead}
+                    onArchive={archive}
+                    onContinue={item => void handleContinue(item)}
+                    onRerun={item => void handleRerun(item)}
+                  />
+                ))}
             </div>
           </>
         )}
       </div>
+    </div>
+  )
+}
+
+type SourceMeta = { icon: string; color: string; labelKey: string }
+
+/** Source filter — collapsed dropdown (Q4: avoids horizontal overflow on
+ *  narrow windows). The trigger shows the active source icon + label; the
+ *  menu lists every source with its own icon so colour and label disambiguate
+ *  the picker. */
+function SourceFilterDropdown({
+  value,
+  onChange,
+  sourceMeta,
+  allLabel,
+  label,
+}: {
+  value: InboxSource | undefined
+  onChange: (next: InboxSource | undefined) => void
+  sourceMeta: (s: InboxSource) => SourceMeta
+  allLabel: string
+  label: string
+}) {
+  const intl = useIntl()
+  const t = (id: string) => intl.formatMessage({ id })
+  const [open, setOpen] = useState(false)
+  const meta = value ? sourceMeta(value) : null
+  const triggerLabel = value ? t(meta!.labelKey) : allLabel
+  const triggerIcon = value ? meta!.icon : 'layers'
+  const items: DropdownMenuItem[] = SOURCE_OPTIONS.map(opt => {
+    if (opt === 'all') {
+      return {
+        id: 'all',
+        label: allLabel,
+        icon: 'layers',
+        onSelect: () => { onChange(undefined); setOpen(false) },
+      }
+    }
+    const m = sourceMeta(opt)
+    return {
+      id: opt,
+      label: t(m.labelKey),
+      icon: m.icon,
+      onSelect: () => { onChange(opt); setOpen(false) },
+    }
+  })
+  return (
+    <div className="relative">
+      <Button
+        variant="ghost"
+        aria-haspopup="menu"
+        aria-expanded={open}
+        aria-label={label}
+        title={label}
+        onClick={() => setOpen(v => !v)}
+        className={cn(
+          'inline-flex items-center gap-xs px-sm py-xs rounded-full text-label-sm transition-colors cursor-pointer',
+          value ? 'bg-primary/10 text-primary font-bold' : 'bg-surface-container-low text-on-surface-variant hover:text-primary hover:bg-primary/10'
+        )}
+      >
+        <span className="material-symbols-outlined text-[14px] align-middle" aria-hidden="true">{triggerIcon}</span>
+        <span className="align-middle">{triggerLabel}</span>
+        <span className="material-symbols-outlined text-[14px] align-middle" aria-hidden="true">expand_more</span>
+      </Button>
+      {open && (
+        <DropdownMenu
+          open
+          onClose={() => setOpen(false)}
+          items={items}
+          align="start"
+          className="w-48 min-w-0"
+          ariaLabel={label}
+        />
+      )}
     </div>
   )
 }

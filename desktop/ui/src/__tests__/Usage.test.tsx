@@ -45,18 +45,36 @@ describe('Usage page', () => {
     vi.mocked(api.getUsageStats).mockReset()
   })
 
-  it('renders totals and breakdowns when data is present', async () => {
+  it('renders totals and charts when data is present (overview)', async () => {
     vi.mocked(api.getUsageStats).mockResolvedValue(fixture)
     renderUsage()
 
     await waitFor(() => {
       expect(screen.getByText('claude-sonnet-4-6')).toBeInTheDocument()
     })
-    expect(screen.getByText('By model')).toBeInTheDocument()
-    expect(screen.getByText('By provider')).toBeInTheDocument()
-    expect(screen.getByText('By day')).toBeInTheDocument()
-    expect(screen.getByText('anthropic')).toBeInTheDocument()
-    expect(screen.getByText('2024-01-02')).toBeInTheDocument()
+    // Overview is the default surface — assert the chart titles, not the
+    // audit-mode table headers.
+    expect(screen.getByText('Daily tokens')).toBeInTheDocument()
+    expect(screen.getByText('Tokens by provider')).toBeInTheDocument()
+    // 2024-01-02 still appears in the chart's x-axis labels (MM-DD slice).
+    expect(screen.getByText('01-02')).toBeInTheDocument()
+  })
+
+  it('switches to audit tables when the toggle is pressed', async () => {
+    vi.mocked(api.getUsageStats).mockResolvedValue(fixture)
+    renderUsage()
+
+    await waitFor(() => {
+      expect(screen.getByText('claude-sonnet-4-6')).toBeInTheDocument()
+    })
+    fireEvent.click(screen.getByRole('tab', { name: /Audit \(table\)/ }))
+    await waitFor(() => {
+      expect(screen.getByText('By model')).toBeInTheDocument()
+      expect(screen.getByText('By provider')).toBeInTheDocument()
+      expect(screen.getByText('By day')).toBeInTheDocument()
+      expect(screen.getByText('anthropic')).toBeInTheDocument()
+      expect(screen.getByText('2024-01-02')).toBeInTheDocument()
+    })
   })
 
   it('shows the empty state when nothing is recorded yet', async () => {

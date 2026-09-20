@@ -10,6 +10,7 @@
 use crate::TaskBoard;
 use crate::coordinator::{AgentCoordinator, CoordinatorEvent};
 use crate::error::{AgentError, CoordinationError};
+use crate::executor::AgentExecutor;
 use crate::message::{AgentMessage, MessageContent, MessageType};
 use crate::teammate::TeammateConfig;
 use async_trait::async_trait;
@@ -167,6 +168,31 @@ impl SubAgent {
 // SubAgentRegistry — in-process bookkeeping for spawned agents
 // ---------------------------------------------------------------------------
 
+/// Lifecycle transition of a sub-agent, published to registered observers.
+/// P0-⑥: embedders (the desktop shell) bridge these to UI events; this also
+/// fixes the stale-status bug where a registry entry stayed `Idle` forever
+/// after `agent_spawn` finished executing.
+#[derive(Debug, Clone)]
+pub enum SubAgentLifecycle {
+    /// The registry accepted a new sub-agent (`spawn`).
+    Spawned {
+        agent_id: String,
+        agent_name: String,
+        team: Option<String>,
+    },
+    /// A spawned run finished (`record_run_outcome`).
+    Completed {
+        agent_id: String,
+        agent_name: String,
+        ok: bool,
+        result_summary: String,
+    },
+}
+
+/// Synchronous callback invoked on every lifecycle transition. Keep it cheap
+/// (e.g. forward to an event emitter) — it runs on the caller's task.
+pub type SubAgentLifecycleObserver = Arc<dyn Fn(SubAgentLifecycle) + Send + Sync>;
+
 /// In-process registry that tracks all sub-agents and teams.
 /// This bridges the Tool trait (which takes `&self` and `Value`) to the
 /// async `AgentCoordinator` API.
@@ -177,16 +203,103 @@ pub struct SubAgentRegistry {
     agents: Arc<RwLock<HashMap<String, SubAgent>>>,
     /// Team name -> (team_name, description)
     teams: Arc<RwLock<HashMap<String, String>>>,
+    /// Lifecycle observers (std RwLock — notify is a short sync critical
+    /// section and must not require an await).
+    observers: Arc<std::sync::RwLock<Vec<SubAgentLifecycleObserver>>>,
+    /// Shared executor forwarded to every spawned `Teammate`. `None` means
+    /// `add_teammate` is called without an executor and sub-agents fall back
+    /// to placeholder replies (legacy behaviour + process-mode path).
+    ///
+    /// Wrapped in `Mutex<Option<...>>` so `TeamContext::with_executor` can
+    /// inject after the registry is constructed (the registry is created
+    /// inside `TeamContext::new_unchecked` before the caller has a chance to
+    /// provide an executor).
+    executor: Arc<std::sync::Mutex<Option<Arc<dyn AgentExecutor>>>>,
 }
 
 impl SubAgentRegistry {
     /// Create a new registry backed by the given coordinator.
+    ///
+    /// `executor` may be `None` initially — call `set_executor` later to
+    /// inject the shared executor that `spawn` will then forward to each
+    /// spawned `Teammate`. This split exists because `TeamContext` builds
+    /// the registry inside `new_unchecked` before the caller supplies an
+    /// executor via `with_executor`.
     pub fn new(coordinator: Arc<AgentCoordinator>) -> Self {
         Self {
             coordinator,
             agents: Arc::new(RwLock::new(HashMap::new())),
             teams: Arc::new(RwLock::new(HashMap::new())),
+            observers: Arc::new(std::sync::RwLock::new(Vec::new())),
+            executor: Arc::new(std::sync::Mutex::new(None)),
         }
+    }
+
+    /// Inject the shared executor that `spawn` forwards to each new
+    /// teammate. Idempotent — replacing overwrites the previous value.
+    pub fn set_executor(&self, executor: Arc<dyn AgentExecutor>) {
+        let mut guard = self
+            .executor
+            .lock()
+            .expect("sub-agent registry executor lock poisoned");
+        *guard = Some(executor);
+    }
+
+    fn current_executor(&self) -> Option<Arc<dyn AgentExecutor>> {
+        self.executor
+            .lock()
+            .expect("sub-agent registry executor lock poisoned")
+            .clone()
+    }
+
+    /// Register a lifecycle observer (P0-⑥). Observers fire synchronously on
+    /// spawn and on run completion.
+    pub fn register_observer(&self, observer: SubAgentLifecycleObserver) {
+        self.observers
+            .write()
+            .expect("sub-agent observers lock poisoned")
+            .push(observer);
+    }
+
+    fn notify_lifecycle(&self, event: SubAgentLifecycle) {
+        let observers = self
+            .observers
+            .read()
+            .expect("sub-agent observers lock poisoned");
+        for observer in observers.iter() {
+            observer(event.clone());
+        }
+    }
+
+    /// Record the outcome of an executed sub-agent run: transitions the
+    /// registry entry out of `Idle` (the stale-status bug) and publishes
+    /// `SubAgentLifecycle::Completed` to observers.
+    pub async fn record_run_outcome(&self, agent_id: &str, ok: bool, result_summary: String) {
+        let agents = self.agents.read().await;
+        let agent = match agents.values().find(|a| a.id == agent_id) {
+            Some(a) => a,
+            None => return,
+        };
+        let agent_name = agent.name.clone();
+        drop(agents);
+
+        {
+            let mut agents = self.agents.write().await;
+            if let Some(agent) = agents.get_mut(agent_name.as_str()) {
+                if ok {
+                    agent.mark_completed();
+                } else {
+                    agent.mark_failed(result_summary.clone());
+                }
+            }
+        }
+
+        self.notify_lifecycle(SubAgentLifecycle::Completed {
+            agent_id: agent_id.to_string(),
+            agent_name,
+            ok,
+            result_summary,
+        });
     }
 
     /// Subscribe to coordinator events (agent output, status changes, etc.).
@@ -257,7 +370,12 @@ impl SubAgentRegistry {
         };
 
         self.coordinator
-            .add_teammate(&team_name, name.clone(), teammate_config)
+            .add_teammate(
+                &team_name,
+                name.clone(),
+                teammate_config,
+                self.current_executor(),
+            )
             .await?;
 
         // Build the SubAgent handle
@@ -269,6 +387,12 @@ impl SubAgentRegistry {
             .write()
             .await
             .insert(name.clone(), agent.clone());
+
+        self.notify_lifecycle(SubAgentLifecycle::Spawned {
+            agent_id: agent.id.clone(),
+            agent_name: name.clone(),
+            team: Some(team_name.clone()),
+        });
 
         tracing::info!(
             agent_id = %agent.id,
@@ -758,6 +882,7 @@ impl Default for AgentConfig {
 #[allow(clippy::unwrap_used)]
 mod tests {
     use super::*;
+    use crate::MockAgentExecutor;
     use crate::coordinator::CoordinatorConfig;
     use crate::task::{AgentTask, TaskPriority, TaskStatus};
     use std::path::PathBuf;
@@ -1448,5 +1573,111 @@ mod tests {
         let summary = board.summary().await;
         assert_eq!(summary.total_tasks, 3);
         assert_eq!(summary.pending_tasks, 3);
+    }
+
+    // ---- Executor wiring tests (B2-1: send_message real reply) ----
+
+    /// `set_executor` is plumbed through `spawn` to the underlying
+    /// `Teammate`, so `send_message` to the spawned agent hits
+    /// `handle_chat_message`'s LLM path (the `executor.is_some()` branch)
+    /// and yields a real reply instead of the placeholder.
+    #[tokio::test]
+    async fn test_spawn_propagates_executor_to_teammate() {
+        let (registry, _) = setup().await;
+        registry.set_executor(Arc::new(MockAgentExecutor::new("hi from mock")));
+
+        let cfg = AgentConfig {
+            name: "exec-agent".into(),
+            model: "m".into(),
+            system_prompt: "p".into(),
+            tools: vec![],
+            working_directory: PathBuf::from("."),
+            max_turns: 5,
+            ..Default::default()
+        };
+        registry.spawn(cfg).await.unwrap();
+
+        // The teammate stored on the coordinator should carry the executor.
+        let has_exec = registry
+            .coordinator
+            .teammate_has_executor("_global", "exec-agent")
+            .await
+            .unwrap();
+        assert!(
+            has_exec,
+            "set_executor on registry should propagate to the spawned Teammate"
+        );
+    }
+
+    /// Without `set_executor`, the registry keeps the placeholder
+    /// behaviour (matches pre-B2-1 callers — TUI spawners that build
+    /// their own LLM loops in-process, tests that don't care about LLM).
+    #[tokio::test]
+    async fn test_spawn_without_executor_keeps_placeholder() {
+        let (registry, _) = setup().await;
+
+        let cfg = AgentConfig {
+            name: "placeholder-agent".into(),
+            model: "m".into(),
+            system_prompt: "p".into(),
+            tools: vec![],
+            working_directory: PathBuf::from("."),
+            max_turns: 5,
+            ..Default::default()
+        };
+        registry.spawn(cfg).await.unwrap();
+
+        let has_exec = registry
+            .coordinator
+            .teammate_has_executor("_global", "placeholder-agent")
+            .await
+            .unwrap();
+        assert!(
+            !has_exec,
+            "default registry should leave Teammate without executor"
+        );
+    }
+
+    /// End-to-end: with the executor wired, a chat message routed through
+    /// the coordinator reaches `Teammate::handle_chat_message` and the
+    /// mock executor's canned response comes back — i.e. the wire path
+    /// (used by `shannon_tools::send_message` via `coordinator.send_direct_message`)
+    /// no longer falls back to the synthetic ack.
+    #[tokio::test]
+    async fn test_send_direct_message_with_executor_returns_mock_reply() {
+        use crate::message::MessageContent;
+
+        let (registry, coordinator) = setup().await;
+        registry.set_executor(Arc::new(MockAgentExecutor::new("ack from mock")));
+
+        let cfg = AgentConfig {
+            name: "responder".into(),
+            model: "m".into(),
+            system_prompt: "p".into(),
+            tools: vec![],
+            working_directory: PathBuf::from("."),
+            max_turns: 5,
+            ..Default::default()
+        };
+        registry.spawn(cfg).await.unwrap();
+
+        let reply = coordinator
+            .send_direct_message(
+                "_global",
+                "lead",
+                "responder",
+                MessageContent::Text("ping".into()),
+            )
+            .await
+            .unwrap();
+
+        let reply_text = match &reply.content {
+            MessageContent::Text(t) => t.clone(),
+            other => panic!("expected Text reply, got {other:?}"),
+        };
+        assert!(
+            reply_text.contains("ack from mock"),
+            "real LLM reply expected, got: {reply_text:?}"
+        );
     }
 }

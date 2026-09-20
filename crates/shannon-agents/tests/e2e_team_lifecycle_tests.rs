@@ -57,15 +57,15 @@ async fn full_team_lifecycle_create_to_disband() {
 
     // 2. Add lead + workers
     coord
-        .add_teammate("project-x", "lead".into(), lead("lead"))
+        .add_teammate("project-x", "lead".into(), lead("lead"), None)
         .await
         .unwrap();
     coord
-        .add_teammate("project-x", "worker-a".into(), teammate("worker-a"))
+        .add_teammate("project-x", "worker-a".into(), teammate("worker-a"), None)
         .await
         .unwrap();
     coord
-        .add_teammate("project-x", "worker-b".into(), teammate("worker-b"))
+        .add_teammate("project-x", "worker-b".into(), teammate("worker-b"), None)
         .await
         .unwrap();
 
@@ -152,7 +152,7 @@ async fn dependency_chain_blocks_dependents() {
         .await
         .unwrap();
     coord
-        .add_teammate("chain", "worker".into(), teammate("worker"))
+        .add_teammate("chain", "worker".into(), teammate("worker"), None)
         .await
         .unwrap();
 
@@ -223,11 +223,11 @@ async fn two_agents_claim_different_tasks() {
         .await
         .unwrap();
     coord
-        .add_teammate("race", "fast-agent".into(), teammate("fast-agent"))
+        .add_teammate("race", "fast-agent".into(), teammate("fast-agent"), None)
         .await
         .unwrap();
     coord
-        .add_teammate("race", "slow-agent".into(), teammate("slow-agent"))
+        .add_teammate("race", "slow-agent".into(), teammate("slow-agent"), None)
         .await
         .unwrap();
 
@@ -278,7 +278,7 @@ async fn tasks_isolated_between_teams() {
         .await
         .unwrap();
     coord
-        .add_teammate("team-a", "alice".into(), teammate("alice"))
+        .add_teammate("team-a", "alice".into(), teammate("alice"), None)
         .await
         .unwrap();
 
@@ -288,7 +288,7 @@ async fn tasks_isolated_between_teams() {
         .await
         .unwrap();
     coord
-        .add_teammate("team-b", "bob".into(), teammate("bob"))
+        .add_teammate("team-b", "bob".into(), teammate("bob"), None)
         .await
         .unwrap();
 
@@ -347,7 +347,7 @@ async fn idle_agent_discovers_ready_tasks() {
         .await
         .unwrap();
     coord
-        .add_teammate("pipeline", "worker".into(), teammate("worker"))
+        .add_teammate("pipeline", "worker".into(), teammate("worker"), None)
         .await
         .unwrap();
 
@@ -403,15 +403,15 @@ async fn lead_broadcasts_then_sends_dm() {
         .await
         .unwrap();
     coord
-        .add_teammate("comms", "lead".into(), lead("lead"))
+        .add_teammate("comms", "lead".into(), lead("lead"), None)
         .await
         .unwrap();
     coord
-        .add_teammate("comms", "w1".into(), teammate("w1"))
+        .add_teammate("comms", "w1".into(), teammate("w1"), None)
         .await
         .unwrap();
     coord
-        .add_teammate("comms", "w2".into(), teammate("w2"))
+        .add_teammate("comms", "w2".into(), teammate("w2"), None)
         .await
         .unwrap();
 
@@ -447,7 +447,7 @@ async fn team_and_tasks_persist_to_disk() {
         .await
         .unwrap();
     coord
-        .add_teammate("persist-test", "agent-1".into(), teammate("agent-1"))
+        .add_teammate("persist-test", "agent-1".into(), teammate("agent-1"), None)
         .await
         .unwrap();
 
@@ -483,7 +483,7 @@ async fn claimed_task_status_reflects_on_disk() {
         .await
         .unwrap();
     coord
-        .add_teammate("disk-claim", "claimer".into(), teammate("claimer"))
+        .add_teammate("disk-claim", "claimer".into(), teammate("claimer"), None)
         .await
         .unwrap();
 
@@ -548,7 +548,7 @@ async fn multiple_teams_independent_lifecycles() {
         .await
         .unwrap();
     coord
-        .add_teammate("backend", "rust-dev".into(), teammate("rust-dev"))
+        .add_teammate("backend", "rust-dev".into(), teammate("rust-dev"), None)
         .await
         .unwrap();
 
@@ -558,7 +558,7 @@ async fn multiple_teams_independent_lifecycles() {
         .await
         .unwrap();
     coord
-        .add_teammate("frontend", "ts-dev".into(), teammate("ts-dev"))
+        .add_teammate("frontend", "ts-dev".into(), teammate("ts-dev"), None)
         .await
         .unwrap();
 
@@ -623,7 +623,7 @@ async fn high_priority_tasks_claimed_first() {
         .await
         .unwrap();
     coord
-        .add_teammate("prio", "worker".into(), teammate("worker"))
+        .add_teammate("prio", "worker".into(), teammate("worker"), None)
         .await
         .unwrap();
 
@@ -674,7 +674,7 @@ async fn new_task_discovered_after_idle_notification() {
         .await
         .unwrap();
     coord
-        .add_teammate("dynamic", "worker".into(), teammate("worker"))
+        .add_teammate("dynamic", "worker".into(), teammate("worker"), None)
         .await
         .unwrap();
 
@@ -709,7 +709,7 @@ async fn broadcast_to_single_member_team_returns_one() {
         .await
         .unwrap();
     coord
-        .add_teammate("solo", "lone".into(), teammate("lone"))
+        .add_teammate("solo", "lone".into(), teammate("lone"), None)
         .await
         .unwrap();
 
@@ -730,11 +730,11 @@ async fn dm_with_structured_content() {
         .await
         .unwrap();
     coord
-        .add_teammate("struct", "sender".into(), teammate("sender"))
+        .add_teammate("struct", "sender".into(), teammate("sender"), None)
         .await
         .unwrap();
     coord
-        .add_teammate("struct", "receiver".into(), teammate("receiver"))
+        .add_teammate("struct", "receiver".into(), teammate("receiver"), None)
         .await
         .unwrap();
 
@@ -764,11 +764,11 @@ async fn broadcast_content_response_from_workers() {
         .await
         .unwrap();
     coord
-        .add_teammate("bcast", "lead".into(), lead("lead"))
+        .add_teammate("bcast", "lead".into(), lead("lead"), None)
         .await
         .unwrap();
     coord
-        .add_teammate("bcast", "worker".into(), teammate("worker"))
+        .add_teammate("bcast", "worker".into(), teammate("worker"), None)
         .await
         .unwrap();
 
@@ -791,7 +791,7 @@ async fn task_completion_auto_unblocks_multiple_dependents() {
         .await
         .unwrap();
     coord
-        .add_teammate("multi-dep", "worker".into(), teammate("worker"))
+        .add_teammate("multi-dep", "worker".into(), teammate("worker"), None)
         .await
         .unwrap();
 

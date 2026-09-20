@@ -38,6 +38,11 @@ export function SkillApprovalModal({ open, candidate, onClose, onApproved, onRej
     try {
       const skill = await api.approveSkillCandidate(candidate.id, { name, trigger })
       toast.success(t('skills.approval.approved'))
+      // Notify other listeners (header bell + toast) so they re-fetch
+      // their pending count. The AdvancedSettings save action is the
+      // only path that doesn't already emit `skill-proposal-available`
+      // from the backend.
+      window.dispatchEvent(new CustomEvent('skill-catalog-changed', { detail: { source: 'advanced' } }))
       onApproved?.(skill)
       onClose()
     } catch (err) {
@@ -52,6 +57,7 @@ export function SkillApprovalModal({ open, candidate, onClose, onApproved, onRej
     try {
       await api.rejectSkillCandidate(candidate.id)
       toast.success(t('skills.approval.rejected'))
+      window.dispatchEvent(new CustomEvent('skill-catalog-changed', { detail: { source: 'advanced' } }))
       onRejected?.(candidate.id)
       onClose()
     } catch (err) {

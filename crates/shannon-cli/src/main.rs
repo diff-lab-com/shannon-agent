@@ -1486,6 +1486,7 @@ fn run_noninteractive_query(
     disallowed_tools: Vec<String>,
     goal: Option<String>,
     attachments: Vec<shannon_engine::api::ContentBlock>,
+    permission_mode: Option<&str>,
 ) -> Result<()> {
     let rt = tokio::runtime::Runtime::new()?;
 
@@ -1696,7 +1697,13 @@ fn run_noninteractive_query(
         let mut permissions = shannon_engine::permissions::PermissionManager::new();
         // Non-interactive mode: use FullAuto by default (allows all non-critical tools),
         // or BypassPermissions with --yes flag (allows everything including critical).
-        if bypass_all {
+        // An explicit --permission-mode wins over both defaults (it was silently
+        // ignored on this path before — roadmap E7 QA finding).
+        if let Some(mode) = permission_mode {
+            let mode = shannon_engine::permissions::ApprovalMode::from_str_ci(mode)
+                .ok_or_else(|| anyhow::anyhow!("unknown --permission-mode '{mode}'"))?;
+            permissions.set_approval_mode(mode);
+        } else if bypass_all {
             permissions.set_approval_mode(shannon_engine::permissions::ApprovalMode::BypassPermissions);
         } else {
             permissions.set_approval_mode(shannon_engine::permissions::ApprovalMode::FullAuto);
@@ -4771,6 +4778,7 @@ fn run_with_cli(cli: Cli) -> Result<()> {
             cli.disallowed_tools.clone(),
             cli.goal.clone(),
             parse_attachments(&cli.attach)?,
+            cli.permission_mode.as_deref(),
         );
     }
 
@@ -4795,12 +4803,19 @@ fn run_with_cli(cli: Cli) -> Result<()> {
             cli.disallowed_tools.clone(),
             cli.goal.clone(),
             parse_attachments(&cli.attach)?,
+            cli.permission_mode.as_deref(),
         );
     }
 
-    // No prompt argument: check stdin for piped input
+    // No prompt argument: check stdin for piped input. Piped content that
+    // starts with `/` alongside an explicit `shannon repl` invocation is a
+    // REPL slash command — route it through the REPL's pipe mode (which
+    // dispatches commands locally) instead of silently feeding it to the
+    // model as a chat prompt (roadmap E7, found by /browser doctor QA).
     let stdin_content = read_stdin();
-    if !stdin_content.is_empty() {
+    let repl_pipe_slash_command =
+        stdin_content.starts_with('/') && matches!(cli.command, Some(Commands::Repl { .. }));
+    if !stdin_content.is_empty() && !repl_pipe_slash_command {
         let config = build_cli_config(
             cli.model.as_deref(),
             cli.provider.as_deref(),
@@ -4820,6 +4835,7 @@ fn run_with_cli(cli: Cli) -> Result<()> {
             cli.disallowed_tools.clone(),
             cli.goal.clone(),
             parse_attachments(&cli.attach)?,
+            cli.permission_mode.as_deref(),
         );
     }
 
@@ -4977,7 +4993,14 @@ fn run_with_cli(cli: Cli) -> Result<()> {
                     Err(e) => eprintln!("Warning: could not resume session: {e}"),
                 }
             }
-            repl.run().map_err(|e| anyhow::anyhow!("{e:?}"))?;
+            if repl_pipe_slash_command {
+                // stdin was already drained by read_stdin() above; hand the
+                // slash command straight to the REPL pipe dispatcher.
+                repl.run_pipe_with(stdin_content)
+                    .map_err(|e| anyhow::anyhow!("{e:?}"))?;
+            } else {
+                repl.run().map_err(|e| anyhow::anyhow!("{e:?}"))?;
+            }
         }
         Some(Commands::Version { verbose }) => {
             println!("Shannon Code v{}", env!("CARGO_PKG_VERSION"));
@@ -5056,6 +5079,7 @@ fn run_with_cli(cli: Cli) -> Result<()> {
                 cli.disallowed_tools.clone(),
                 cli.goal.clone(),
                 parse_attachments(&cli.attach)?,
+                cli.permission_mode.as_deref(),
             )?;
         }
         Some(Commands::Serve {

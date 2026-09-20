@@ -74,9 +74,11 @@ beforeEach(() => {
 })
 
 describe('NotificationsSettings — layout', () => {
-  it('renders the page title, DND section, and webhook section', async () => {
+  it('renders the page subtitle, DND section, and webhook section', async () => {
     render(<NotificationsSettings />)
-    expect(screen.getByRole('heading', { name: 'Notifications', level: 2 })).toBeInTheDocument()
+    // h2 retired — the global Header carries the page title; here we pin
+    // the subtitle as the page's distinctive marker.
+    expect(screen.getByText(/Configure webhook delivery for desktop notifications/)).toBeInTheDocument()
     expect(screen.getByRole('heading', { name: /Desktop & quiet hours/i, level: 3 })).toBeInTheDocument()
     await waitForWebhookLoaded()
     expect(screen.getByRole('heading', { name: /Webhook Notifications/i, level: 3 })).toBeInTheDocument()

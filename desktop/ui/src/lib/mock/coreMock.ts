@@ -8,6 +8,7 @@ export interface InvokeArgs {
 }
 
 export async function invoke<T = unknown>(cmd: string, args?: InvokeArgs): Promise<T> {
+  if (cmd === 'configure') console.log('[mock] invoke configure', JSON.stringify(args))
   const handler = handlers[cmd]
   if (handler) {
     try {
@@ -40,18 +41,24 @@ export function transformCallback(): number {
   return Math.floor(Math.random() * 1_000_000)
 }
 
-// Install the visible DEMO MODE badge once on module load (browser only)
+// Install the visible DEMO MODE badge once on module load (browser only).
+// Audit §P2-1 (round 6): restyled from a loud violet pill to a low-contrast
+// dev-marker so reviewers don't mistake it for a finished production
+// element. Still serves its job: anyone running `pnpm demo` instantly knows
+// the binary isn't talking to a real Tauri backend.
 if (typeof window !== 'undefined' && typeof document !== 'undefined') {
   const ready = () => {
     if (document.querySelector('[data-mock-badge]')) return
     const badge = document.createElement('div')
     badge.setAttribute('data-mock-badge', '')
-    badge.textContent = 'DEMO MODE'
+    badge.textContent = 'DEMO MODE · mock backend'
     badge.style.cssText = [
-      'position:fixed', 'bottom:12px', 'left:12px', 'z-index:9999',
-      'background:#7c3aed', 'color:white', 'font:600 11px/1 system-ui, sans-serif',
-      'padding:4px 10px', 'border-radius:999px', 'letter-spacing:0.05em',
-      'box-shadow:0 2px 8px rgba(124,58,237,0.4)', 'pointer-events:none',
+      'position:fixed', 'bottom:10px', 'left:10px', 'z-index:9999',
+      'background:rgba(120,120,140,0.18)', 'color:rgba(180,180,200,0.85)',
+      'font:500 10px/1 ui-monospace, SFMono-Regular, Menlo, monospace',
+      'padding:3px 8px', 'border-radius:6px', 'letter-spacing:0.04em',
+      'border:1px solid rgba(120,120,140,0.22)',
+      'pointer-events:none', 'user-select:none',
     ].join(';')
     document.body.appendChild(badge)
   }

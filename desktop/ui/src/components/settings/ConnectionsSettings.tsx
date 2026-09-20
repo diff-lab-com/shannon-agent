@@ -83,12 +83,9 @@ export default function ConnectionsSettings() {
 
   return (
     <div className="space-y-lg">
-      <header className="space-y-1">
-        <h1 className="font-display-md text-on-surface">{t('settings.connections.title')}</h1>
-        <p className="text-on-surface-variant font-body-sm max-w-prose">
-          {t('settings.connections.subtitle')}
-        </p>
-      </header>
+      <p className="text-on-surface-variant font-body-sm max-w-prose">
+        {t('settings.connections.subtitle')}
+      </p>
 
       <EngineConnectionCard
         config={config}

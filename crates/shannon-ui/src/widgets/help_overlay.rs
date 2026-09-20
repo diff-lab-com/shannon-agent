@@ -148,8 +148,10 @@ mod tests {
     fn render_help_overlay_highlights_selected_category() {
         let backend = TestBackend::new(80, 24);
         let mut terminal = Terminal::new(backend).unwrap();
-        let mut state = HelpOverlayState::default();
-        state.selected_category_idx = 1; // select EDITING
+        let state = HelpOverlayState {
+            selected_category_idx: 1, // select EDITING
+            ..HelpOverlayState::default()
+        };
         let categories = vec![
             (
                 "NAVIGATION",
@@ -179,10 +181,12 @@ mod tests {
         // not the old hardcoded {/help, /edit} sample.
         let backend = TestBackend::new(100, 30);
         let mut terminal = Terminal::new(backend).unwrap();
-        let mut state = HelpOverlayState::default();
         // Git is the first category in HelpCategory::all(); selecting index 0
         // renders Git commands (incl. /commit) in the right pane.
-        state.selected_category_idx = 0;
+        let state = HelpOverlayState {
+            selected_category_idx: 0,
+            ..HelpOverlayState::default()
+        };
 
         let categories = shannon_commands::help_utils::categorize_commands();
         assert!(!categories.is_empty(), "registry must provide categories");

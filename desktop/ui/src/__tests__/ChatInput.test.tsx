@@ -21,6 +21,7 @@ vi.mock('react-router-dom', async () => {
 
 // Mock useApp hook
 const mockRefreshConfig = vi.fn()
+const mockRefreshStatus = vi.fn()
 vi.mock('@/context/CatalogContext', () => ({
   useCatalog: () => ({
     config: {
@@ -29,11 +30,13 @@ vi.mock('@/context/CatalogContext', () => ({
       provider: 'anthropic',
       working_dir: '/home/user/projects',
     },
+    status: { model: 'Claude Sonnet 4.6', provider: 'anthropic', querying: false, message_count: 0, working_dir: '/home/user/projects' },
     models: [
       { id: 'anthropic-claude-sonnet-4-6', name: 'Claude Sonnet 4.6', provider: 'anthropic', context_window: 200000 },
       { id: 'openai-gpt-4o', name: 'GPT-4o', provider: 'openai', context_window: 128000 },
     ],
     refreshConfig: mockRefreshConfig,
+    refreshStatus: mockRefreshStatus,
   }),
 }))
 
@@ -59,21 +62,29 @@ describe('ChatInput', () => {
   beforeEach(() => {
     vi.clearAllMocks()
     mockRefreshConfig.mockReset()
+    mockRefreshStatus.mockReset()
     vi.mocked(api.configure).mockReset()
   })
 
-  // U2: model switching moved to the global Header and the working-directory
-  // picker to the composer footer — neither control lives in the strip anymore.
-  it('does not render a model selector or working-directory chip (U2)', () => {
+  // P0-③ (ZCode delta): the composer carries a model chip again — synced
+  // with the Header (both write config `model`/`provider`). The
+  // working-directory picker stays in the composer footer (U2).
+  it('renders a model chip showing the active model, but no working-directory chip', () => {
     renderChatInput()
-    expect(screen.queryByLabelText('Model')).not.toBeInTheDocument()
+    const chip = screen.getByLabelText('Model')
+    expect(chip).toBeInTheDocument()
+    // Selected value mirrors status.model by NAME — config `model` holds a
+    // name, not the catalog id, and the mock catalog matches it.
+    expect(chip).toHaveTextContent('Claude Sonnet 4.6')
     expect(screen.queryByLabelText('Change working directory')).not.toBeInTheDocument()
   })
 
-  it('renders the plan-mode and permission-mode controls', () => {
+  it('renders the unified permission-mode control and no separate plan toggle', () => {
     renderChatInput()
-    expect(screen.getByRole('button', { name: 'Toggle plan mode' })).toBeInTheDocument()
+    // 2026-09 review: the standalone 计划模式 toggle was folded into the
+    // permission-mode select (one surface owns `approval_mode`).
     expect(screen.getByLabelText('Permission mode')).toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: 'Toggle plan mode' })).not.toBeInTheDocument()
   })
 
   it('calls handleSend when Send button is clicked', async () => {
@@ -132,7 +143,7 @@ describe('ChatInput', () => {
     const onChange = vi.fn()
     renderChatInput({ value: 'Test message', onChange, onSend })
 
-    const textarea = screen.getByPlaceholderText('Ask Shannon anything...')
+    const textarea = screen.getByPlaceholderText('Try: "Explain this repo" or "Plan a refactor for src/foo.rs"')
     fireEvent.keyDown(textarea, { key: 'Enter', code: 'Enter' })
 
     expect(onSend).toHaveBeenCalledTimes(1)
@@ -143,7 +154,7 @@ describe('ChatInput', () => {
     const onChange = vi.fn()
     renderChatInput({ value: 'Test\nmessage', onChange, onSend })
 
-    const textarea = screen.getByPlaceholderText('Ask Shannon anything...')
+    const textarea = screen.getByPlaceholderText('Try: "Explain this repo" or "Plan a refactor for src/foo.rs"')
     fireEvent.keyDown(textarea, { key: 'Enter', code: 'Enter', shiftKey: true })
 
     expect(onSend).not.toHaveBeenCalled()
@@ -154,7 +165,7 @@ describe('ChatInput', () => {
   it('sends on Ctrl+Enter', () => {
     const onSend = vi.fn()
     renderChatInput({ value: 'a', onSend })
-    const ta = screen.getByPlaceholderText('Ask Shannon anything...')
+    const ta = screen.getByPlaceholderText('Try: "Explain this repo" or "Plan a refactor for src/foo.rs"')
     fireEvent.keyDown(ta, { key: 'Enter', code: 'Enter', ctrlKey: true })
     expect(onSend).toHaveBeenCalledTimes(1)
   })
@@ -185,22 +196,23 @@ describe('ChatInput', () => {
     expect(counter?.className).toMatch(/text-error/)
   })
 
-  it('calls onOpenQuickFix when Quick Fix button is clicked', () => {
+  it('calls onOpenQuickFix from the "+" menu', () => {
     const onOpenQuickFix = vi.fn()
     renderChatInput({ onOpenQuickFix })
 
-    const quickFixButton = screen.getByTitle('Quick Fix')
-    fireEvent.click(quickFixButton)
+    // 2026-09 review: QuickFix/Editor/attach live behind one "+" menu button.
+    fireEvent.click(screen.getByLabelText('Attachments and tools'))
+    fireEvent.click(screen.getByRole('menuitem', { name: 'Quick Fix' }))
 
     expect(onOpenQuickFix).toHaveBeenCalledTimes(1)
   })
 
-  it('calls onOpenEditor when Editor button is clicked', () => {
+  it('calls onOpenEditor from the "+" menu', () => {
     const onOpenEditor = vi.fn()
     renderChatInput({ onOpenEditor })
 
-    const editorButton = screen.getByTitle('Editor')
-    fireEvent.click(editorButton)
+    fireEvent.click(screen.getByLabelText('Attachments and tools'))
+    fireEvent.click(screen.getByRole('menuitem', { name: 'Editor' }))
 
     expect(onOpenEditor).toHaveBeenCalledTimes(1)
   })
@@ -259,15 +271,16 @@ describe('ChatInput', () => {
     renderChatInput()
     const modeSelect = screen.getByLabelText('Permission mode')
     expect(modeSelect).toBeInTheDocument()
-    // Check the select has the suggest value in its hidden input
-    const hiddenInput = document.querySelector('input[value="suggest"]')
-    expect(hiddenInput).toBeInTheDocument()
+    // The trigger renders the selected item's label via Select.Value (plus
+    // the option's icon ligature text). Case-insensitive: the ligature/icon
+    // rendering differs between jsdom environments.
+    expect(modeSelect).toHaveTextContent(/suggest/i)
   })
 
   it('shows correct icons for querying states', () => {
     renderChatInput()
 
-    const container = screen.getByPlaceholderText('Ask Shannon anything...').closest('.group')
+    const container = screen.getByPlaceholderText('Try: "Explain this repo" or "Plan a refactor for src/foo.rs"').closest('.group')
     expect(container).not.toHaveClass('ring-2')
 
     fireEvent.dragOver(container!, { dataTransfer: { files: [] } })
@@ -280,7 +293,7 @@ describe('ChatInput', () => {
     const onChange = vi.fn()
     renderChatInput({ value: '', onChange })
 
-    const textarea = screen.getByPlaceholderText('Ask Shannon anything...')
+    const textarea = screen.getByPlaceholderText('Try: "Explain this repo" or "Plan a refactor for src/foo.rs"')
     fireEvent.change(textarea, { target: { value: 'New message' } })
 
     expect(onChange).toHaveBeenCalledWith('New message')
@@ -313,7 +326,10 @@ describe('ChatInput', () => {
     vi.mocked(api.configure).mockRejectedValueOnce(new Error('engine down'))
     renderChatInput()
 
-    fireEvent.click(screen.getByRole('button', { name: 'Toggle plan mode' }))
+    // The Ctrl/Cmd+Shift+P shortcut routes through the same unified toggle
+    // as the mode select — a failure must still surface as a toast.
+    const evt = new KeyboardEvent('keydown', { key: 'P', shiftKey: true, ctrlKey: true, bubbles: true })
+    window.dispatchEvent(evt)
 
     await waitFor(() => {
       expect(toast.error).toHaveBeenCalledWith(

@@ -32,7 +32,8 @@ vi.mock('@/lib/tauri-api', async () => {
   }
 })
 
-function renderTasks() {
+function renderTasks(mode: 'simple' | 'dev' = 'simple') {
+  if (mode === 'dev') localStorage.setItem('shannon-sidebar-mode', 'dev')
   return render(
     <I18nProvider>
       <MemoryRouter initialEntries={['/tasks']}>
@@ -49,10 +50,19 @@ function setContext(ctx: any) {
 }
 
 describe('Tasks Enhanced', () => {
-  it('shows Scheduled Tasks heading', () => {
+  beforeEach(() => {
+    // 2026-09 P1-1: the page shape depends on sidebar mode — keep this
+    // suite pinned to Simple mode unless a test explicitly opts in.
+    localStorage.removeItem('shannon-sidebar-mode')
+  })
+
+  it('shows the page-level subtitle', () => {
+    // 2026-09 P0-3 + P1-1: page-level h2 was retired; the global Header
+    // carries the page title. Pin the TasksHeader subtitle as the
+    // page's distinctive marker in both Simple and Dev modes.
     setContext({ tasks: [], backgroundTasks: [], agents: [] })
     renderTasks()
-    expect(screen.getByText('Tasks')).toBeInTheDocument()
+    expect(screen.getByText(/Create and monitor automations/)).toBeInTheDocument()
   })
 
   it('shows empty state when no tasks', () => {
@@ -63,13 +73,13 @@ describe('Tasks Enhanced', () => {
 
   it('has Filters button', () => {
     setContext({ tasks: [], backgroundTasks: [], agents: [] })
-    renderTasks()
+    renderTasks('dev')
     expect(screen.getByText('Filters')).toBeInTheDocument()
   })
 
   it('has Month View toggle', () => {
     setContext({ tasks: [], backgroundTasks: [], agents: [] })
-    renderTasks()
+    renderTasks('dev')
     expect(screen.getByText('Month View')).toBeInTheDocument()
   })
 
@@ -81,14 +91,14 @@ describe('Tasks Enhanced', () => {
 
   it('toggles filters on click', () => {
     setContext({ tasks: [], backgroundTasks: [], agents: [] })
-    renderTasks()
+    renderTasks('dev')
     fireEvent.click(screen.getByText('Filters'))
     expect(screen.getByText('All')).toBeInTheDocument()
   })
 
   it('toggles calendar view on click', () => {
     setContext({ tasks: [], backgroundTasks: [], agents: [] })
-    renderTasks()
+    renderTasks('dev')
     fireEvent.click(screen.getByText('Month View'))
     expect(screen.getByText('List View')).toBeInTheDocument()
   })
@@ -145,9 +155,11 @@ describe('Tasks Enhanced', () => {
   })
 
   it('renders background tasks in execution log', () => {
+    // 2026-09 P1-1: pipelines tab is dev-only — flip the sidebar mode so the
+    // test exercises the real public surface (background-task execution log).
+    localStorage.setItem('shannon-sidebar-mode', 'dev')
     setContext({ tasks: [], backgroundTasks: [{ task_id: 'bt1', prompt: 'test prompt', status: 'completed', started_at: Date.now(), completed_at: Date.now(), output: 'done' }], agents: [] })
     renderTasks()
-    // IA regroup: the execution log lives on the Pipelines tab now.
     fireEvent.click(screen.getByRole('tab', { name: 'Pipelines' }))
     expect(screen.getByText('Task Execution Log')).toBeInTheDocument()
     expect(screen.getByText('test prompt')).toBeInTheDocument()
@@ -189,15 +201,18 @@ describe('Tasks Enhanced', () => {
   })
 
   it('shows running background task with cancel button', () => {
+    // Pipelines (and the execution log with cancel buttons) is dev-only.
+    localStorage.setItem('shannon-sidebar-mode', 'dev')
     setContext({ tasks: [], backgroundTasks: [{ task_id: 'bt2', prompt: 'running bg', status: 'running', started_at: Date.now(), completed_at: null, output: '' }], agents: [] })
     renderTasks()
-    // IA regroup: the execution log (with its cancel buttons) is on Pipelines.
     fireEvent.click(screen.getByRole('tab', { name: 'Pipelines' }))
     expect(screen.getByLabelText('Cancel background task')).toBeInTheDocument()
   })
 
   // US-TASK-04: Filter Tasks by status
   describe('Filter functionality', () => {
+    // Filters button is dev-only.
+    const renderDev = () => renderTasks('dev')
     // Use tasks without 'running' status to avoid sidebar "Active Now" duplication
     const mixedTasks = [
       { id: '1', title: 'Build API', status: 'completed' },
@@ -208,7 +223,7 @@ describe('Tasks Enhanced', () => {
 
     it('shows all tasks by default', () => {
       setContext({ tasks: mixedTasks, backgroundTasks: [], agents: [] })
-      renderTasks()
+      renderDev()
       expect(screen.getByText('Build API')).toBeInTheDocument()
       expect(screen.getByText('Write Tests')).toBeInTheDocument()
       expect(screen.getByText('Code Review')).toBeInTheDocument()
@@ -217,7 +232,7 @@ describe('Tasks Enhanced', () => {
 
     it('filters to completed tasks only', () => {
       setContext({ tasks: mixedTasks, backgroundTasks: [], agents: [] })
-      renderTasks()
+      renderDev()
       fireEvent.click(screen.getByText('Filters'))
       fireEvent.click(screen.getByRole('button', { name: 'Completed' }))
       expect(screen.getByText('Build API')).toBeInTheDocument()
@@ -228,7 +243,7 @@ describe('Tasks Enhanced', () => {
 
     it('filters to pending tasks only', () => {
       setContext({ tasks: mixedTasks, backgroundTasks: [], agents: [] })
-      renderTasks()
+      renderDev()
       fireEvent.click(screen.getByText('Filters'))
       fireEvent.click(screen.getByRole('button', { name: 'Pending' }))
       expect(screen.getByText('Write Tests')).toBeInTheDocument()
@@ -243,7 +258,7 @@ describe('Tasks Enhanced', () => {
         { id: '2', title: 'Deploy App', status: 'running' },
       ]
       setContext({ tasks: withRunning, backgroundTasks: [], agents: [] })
-      renderTasks()
+      renderDev()
       fireEvent.click(screen.getByText('Filters'))
       fireEvent.click(screen.getByRole('button', { name: 'Running' }))
       // Running tasks appear in both task list and "Active Now" sidebar
@@ -253,7 +268,7 @@ describe('Tasks Enhanced', () => {
 
     it('resets to all tasks when All is clicked', () => {
       setContext({ tasks: mixedTasks, backgroundTasks: [], agents: [] })
-      renderTasks()
+      renderDev()
       fireEvent.click(screen.getByText('Filters'))
       fireEvent.click(screen.getByRole('button', { name: 'Completed' }))
       expect(screen.queryByText('Write Tests')).not.toBeInTheDocument()
@@ -265,7 +280,7 @@ describe('Tasks Enhanced', () => {
 
     it('highlights active filter button', () => {
       setContext({ tasks: mixedTasks, backgroundTasks: [], agents: [] })
-      renderTasks()
+      renderDev()
       fireEvent.click(screen.getByText('Filters'))
       const completedBtn = screen.getByRole('button', { name: 'Completed' })
       fireEvent.click(completedBtn)
@@ -274,7 +289,7 @@ describe('Tasks Enhanced', () => {
 
     it('shows empty state when filter matches no tasks', () => {
       setContext({ tasks: [{ id: '1', title: 'Done', status: 'completed' }], backgroundTasks: [], agents: [] })
-      renderTasks()
+      renderDev()
       fireEvent.click(screen.getByText('Filters'))
       fireEvent.click(screen.getByRole('button', { name: 'Running' }))
       expect(screen.getByText('No tasks yet.')).toBeInTheDocument()

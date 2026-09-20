@@ -14,10 +14,6 @@ interface MemoryCardProps {
   onOpenMemorySource?: (memoryId: string, sourceSessionId: string) => void
 }
 
-function shortSession(id: string): string {
-  return id.length > 10 ? `${id.slice(0, 8)}…` : id
-}
-
 export function MemoryCard({ entry, onEdit, onDelete, onOpenMemorySource }: MemoryCardProps) {
   const intl = useIntl()
   const t = (id: string, values?: Record<string, string | number>) =>
@@ -51,7 +47,10 @@ export function MemoryCard({ entry, onEdit, onDelete, onOpenMemorySource }: Memo
               </span>
             )}
             {/* P2-4 provenance: badge (with source kind) shown only when the
-                entry carries a source session id, per the frozen UX contract. */}
+                entry carries a source session id, per the frozen UX contract.
+                2026-09 P2-2: drop the session-hash snippet — the session
+                id is meaningless to non-engineers and the source-kind label
+                already tells them where this came from. */}
             {entry.source_session_id && (
               <span
                 className="inline-flex items-center gap-xs text-label-xs px-sm py-[2px] rounded-full bg-primary-container/40 text-on-surface"
@@ -60,8 +59,7 @@ export function MemoryCard({ entry, onEdit, onDelete, onOpenMemorySource }: Memo
                 <span className="material-symbols-outlined text-[12px]" aria-hidden>
                   history
                 </span>
-                {entry.source_kind ? t(`memory.source.kind.${entry.source_kind}`) : t('memory.source.badge', { session: shortSession(entry.source_session_id) })}
-                {entry.source_kind ? ` · ${shortSession(entry.source_session_id)}` : ''}
+                {entry.source_kind ? t(`memory.source.kind.${entry.source_kind}`) : t('memory.source.badge')}
               </span>
             )}
           </div>

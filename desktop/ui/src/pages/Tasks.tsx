@@ -31,6 +31,7 @@ import { useScheduledTasks, useTaskExecutions } from '@/hooks/scheduled-tasks'
 import { useBatchRuns } from '@/hooks/batchRuns'
 import type { CreateTaskPayload } from '@/types'
 import { type FilterStatus, statusMatchesFilter, TASKS_PER_PAGE } from '@/components/tasks/shared'
+import { useSidebarMode } from '@/components/Sidebar'
 import { Banner } from '@/components/ui/banner'
 import TasksHeader from '@/components/tasks/TasksHeader'
 import RoutineTemplatesBrowser from '@/components/routines/RoutineTemplatesBrowser'
@@ -52,20 +53,27 @@ import WorktreePanel from '@/components/tasks/WorktreePanel'
 import GoalRunPanel from '@/components/tasks/GoalRunPanel'
 import BatchRunPanel from '@/components/tasks/BatchRunPanel'
 import BatchForm from '@/components/tasks/BatchForm'
+import SubagentPanel from '@/components/tasks/SubagentPanel'
 import WebhookTriggerCard from '@/components/tasks/WebhookTriggerCard'
 import ScheduleDAGView from '@/components/tasks/ScheduleDAGView'
 import HookTaskPipeline from '@/components/tasks/HookTaskPipeline'
 
 // IA (2026-09): tabs map to user jobs, not implementation panels —
-// active work / recurring routines / execution pipelines / history / worktrees.
-// Previously every panel (DAG, templates, hook pipeline, execution log)
-// stacked on one scrolling page.
-type Tab = 'active' | 'routines' | 'pipelines' | 'history' | 'worktrees'
+// active work / history / routines / pipelines / worktrees. Active + history
+// lead because users check live status and recent results far more often than
+// they configure scheduled pipelines. In Simple mode only the universal two
+// (active / history) are surfaced; the developer-only surfaces (routines /
+// pipelines / worktrees) move behind the Dev-mode toggle so casual users
+// don't have to learn the task-ops taxonomy before they can find their tasks.
+type Tab = 'active' | 'history' | 'routines' | 'pipelines' | 'worktrees'
+const SIMPLE_TABS: readonly Tab[] = ['active', 'history']
+const DEV_TABS: readonly Tab[] = ['active', 'history', 'routines', 'pipelines', 'worktrees']
 
 export default function Tasks() {
   const { tasks, backgroundTasks, agents, refreshTasks, loading } = useCatalog()
   const { switchSession, currentSessionId } = useSessions()
   const navigate = useNavigate()
+  const [mode] = useSidebarMode()
   const { tasks: scheduledTasks, create: createScheduled, refresh: refreshScheduled } = useScheduledTasks()
   // P2-5: recent executions across all routines — drives the "queued for
   // off-peak window" status chip on the routines DAG nodes.
@@ -224,11 +232,14 @@ export default function Tasks() {
           teams={teams}
           teamFilter={teamFilter}
           onTeamFilterChange={setTeamFilter}
+          mode={mode}
         />
 
-        {/* P2.2: Active / History / Worktrees tab switcher */}
+        {/* P2.2: Active / History / Worktrees tab switcher — Simple mode
+            only shows the two universal tabs; the dev-only surfaces move
+            behind the sidebar Dev-mode toggle. */}
         <div role="tablist" aria-label={t('tasks.tabs.aria')} className="flex gap-xs mb-lg border-b border-outline-variant/30">
-          {(['active', 'routines', 'pipelines', 'history', 'worktrees'] as const).map(tabId => {
+          {(mode === 'dev' ? DEV_TABS : SIMPLE_TABS).map(tabId => {
             const selected = tab === tabId
             return (
               <Button
@@ -237,6 +248,7 @@ export default function Tasks() {
                 variant="ghost"
                 aria-selected={selected}
                 onClick={() => setTab(tabId)}
+                title={t(`tasks.tab.${tabId}.title`)}
                 className={cn(
                   'h-auto px-md py-sm font-label-md text-[13px] font-bold cursor-pointer border-b-2 -mb-px transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-primary/30 rounded-none',
                   selected ? 'border-primary text-primary' : 'border-transparent text-on-surface-variant hover:text-on-surface',
@@ -283,6 +295,10 @@ export default function Tasks() {
 
         {/* P0-2: live goal-run cards sit above the regular task list. */}
         <GoalRunPanel onViewSession={handleViewGoalSession} />
+
+        {/* B2 follow-up: live sub-agent inventory (system-wide). Hidden
+            when the user has not enabled agent teams. */}
+        <SubagentPanel />
 
         {errorMsg && (
           <Banner

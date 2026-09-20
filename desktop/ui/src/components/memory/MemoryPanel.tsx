@@ -56,11 +56,20 @@ export default function MemoryPanel({
 
   const [projectFilter, setProjectFilter] = useState<string>('all')
   const [categoryFilter, setCategoryFilter] = useState<CategoryFilter>('all')
+  // 2026-09 review: typing used to fire an IPC round-trip on every
+  // keystroke. We split the live query (instant UI feedback) from the
+  // backend-bound query (debounced 250 ms).
   const [query, setQuery] = useState('')
+  const [debouncedQuery, setDebouncedQuery] = useState('')
   const [pendingDeleteId, setPendingDeleteId] = useState<string | null>(null)
 
   const [editing, setEditing] = useState<MemoryEntry | null>(null)
   const [creating, setCreating] = useState(false)
+
+  useEffect(() => {
+    const id = window.setTimeout(() => setDebouncedQuery(query), 250)
+    return () => window.clearTimeout(id)
+  }, [query])
 
   const fetchAll = useCallback(async () => {
     setLoading(true)
@@ -70,7 +79,7 @@ export default function MemoryPanel({
         listMemories({
           project: projectFilter === 'all' ? null : projectFilter,
           category: categoryFilter === 'all' ? null : categoryFilter,
-          query: query.trim() || null,
+          query: debouncedQuery.trim() || null,
         }),
         listMemoryProjects(),
         getMemoryStats(),
@@ -83,7 +92,7 @@ export default function MemoryPanel({
     } finally {
       setLoading(false)
     }
-  }, [projectFilter, categoryFilter, query])
+  }, [projectFilter, categoryFilter, debouncedQuery])
 
   useEffect(() => {
     void fetchAll()
@@ -164,14 +173,9 @@ export default function MemoryPanel({
   return (
     <div className="flex-1 overflow-y-auto w-full pb-16">
       <div className="max-w-[1100px] mx-auto px-lg py-xl">
-        <header className="mb-xl">
-          <h1 className="text-headline-md font-headline-md text-on-surface mb-xs">
-            {t('memory.title')}
-          </h1>
-          <p className="text-body-md text-on-surface-variant">
-            {t('memory.subtitle')}
-          </p>
-        </header>
+        <p className="text-body-md text-on-surface-variant mb-xl">
+          {t('memory.subtitle')}
+        </p>
 
         {stats && (
           <div className="grid grid-cols-2 md:grid-cols-5 gap-md mb-xl">
@@ -292,9 +296,15 @@ export default function MemoryPanel({
           </Button>
         </div>
 
-        <div className="text-label-sm text-on-surface-variant mb-md">
-          {intl.formatMessage({ id: 'memory.listCount' }, { count: filteredCount })}
-        </div>
+        {/* Audit §P2-2 (round 6): suppress the count line during a reload so
+            "暂无记忆" + "正在加载记忆…" never appear at the same time. The
+            loading block (below) is the single source of truth while
+            loading is true. */}
+        {!loading && (
+          <div className="text-label-sm text-on-surface-variant mb-md">
+            {intl.formatMessage({ id: 'memory.listCount' }, { count: filteredCount })}
+          </div>
+        )}
 
         {view === 'graph' ? (
           <MemoryGraphView
@@ -309,14 +319,17 @@ export default function MemoryPanel({
             {t('memory.loading')}
           </div>
         ) : isEmpty ? (
-          <div className="text-center py-3xl">
-            <span className="material-symbols-outlined icon-2xl text-on-surface-variant/40 mb-md block">
-              psychology
-            </span>
-            <p className="text-on-surface-variant mb-lg">{t('memory.empty')}</p>
+          <div className="flex flex-col items-center justify-center text-center py-3xl px-lg">
+            <div className="w-20 h-20 rounded-2xl bg-primary-container/30 flex items-center justify-center mb-lg">
+              <span className="material-symbols-outlined text-[40px] text-primary" aria-hidden="true">
+                psychology
+              </span>
+            </div>
+            <h2 className="font-headline-sm text-on-surface mb-xs">{t('memory.empty.title')}</h2>
+            <p className="text-on-surface-variant mb-lg max-w-md">{t('memory.empty.desc')}</p>
             <Button
               onClick={() => setCreating(true)}
-              className="gap-xs px-md py-sm text-[14px] font-bold"
+              className="gap-xs px-md py-sm text-[14px] font-bold bg-primary text-on-primary"
             >
               <span className="material-symbols-outlined text-[18px]">add</span>
               {t('memory.action.createFirst')}

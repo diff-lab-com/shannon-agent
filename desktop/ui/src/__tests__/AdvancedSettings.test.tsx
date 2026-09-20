@@ -16,9 +16,9 @@ function wrap(ui: React.ReactElement) {
 }
 
 describe('AdvancedSettings', () => {
-  it('renders advanced settings heading', () => {
+  it('renders advanced settings subtitle', () => {
     render(wrap(<AdvancedSettings />))
-    expect(screen.getByText('Advanced Settings')).toBeInTheDocument()
+    expect(screen.getByText(/Configure underlying engine parameters/i)).toBeInTheDocument()
   })
 
   it('renders memory management section', () => {
@@ -146,6 +146,18 @@ describe('AdvancedSettings', () => {
   it('renders skill extraction description', () => {
     render(wrap(<AdvancedSettings />))
     expect(screen.getByText(/After complex tasks, Shannon evaluates/)).toBeInTheDocument()
+  })
+
+  // B2 — agent teams (real sub-agent execution) card
+  it('renders agent teams section', () => {
+    render(wrap(<AdvancedSettings />))
+    expect(screen.getByText('Agent teams (subagents)')).toBeInTheDocument()
+  })
+
+  it('renders agent teams toggle with live-effect hint', () => {
+    render(wrap(<AdvancedSettings />))
+    expect(screen.getByText('Enable real sub-agent execution')).toBeInTheDocument()
+    expect(screen.getByText('Takes effect immediately — no restart needed.')).toBeInTheDocument()
   })
 })
 

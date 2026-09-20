@@ -14,6 +14,8 @@
 //   - OPCAgentSwarm: agent sidebar + Spawn/Reassign modals + action menu.
 //   - OPCKanbanBoard: 5-column kanban with bucketFor() status mapping.
 
+import { useMemo, useState } from 'react'
+import { useIntl } from 'react-intl'
 import { CardSkeleton } from '@/components/SkeletonLoader'
 import { useCatalog } from '@/context/CatalogContext'
 import OpcAnalyticsDashboard from '@/components/opc/OpcAnalyticsDashboard'
@@ -22,7 +24,25 @@ import OPCAgentSwarm from '@/components/opc/OPCAgentSwarm'
 import OPCKanbanBoard from '@/components/opc/OPCKanbanBoard'
 
 export default function OPC() {
+  const intl = useIntl()
   const { agents, tasks, config, loading, refreshTasks } = useCatalog()
+  // 2026-09 review: teams / projects appear in real multi-team deployments
+  // but the Kanban used to be a single flat tasks array. Surface a team
+  // filter at the page level so a controller with several teams can scope
+  // the Kanban to one team at a time.
+  const teamNames = useMemo(() => {
+    const set = new Set<string>()
+    for (const t of tasks) {
+      if ((t as { team?: string | null }).team) set.add((t as { team: string }).team)
+      else if (t.assignee) set.add(t.assignee)
+    }
+    return [...set].sort()
+  }, [tasks])
+  const [teamFilter, setTeamFilter] = useState<string>('all')
+  const filteredTasks = useMemo(() => {
+    if (teamFilter === 'all') return tasks
+    return tasks.filter((t) => (t as { team?: string | null }).team === teamFilter || t.assignee === teamFilter)
+  }, [tasks, teamFilter])
 
   return (
     <div className="flex-1 w-full bg-background overflow-y-auto h-full px-lg py-xl">
@@ -36,9 +56,42 @@ export default function OPC() {
         ) : (
           <>
             <OpcAnalyticsDashboard />
+            {teamNames.length > 1 && (
+              <div
+                className="flex items-center gap-sm flex-wrap mb-md"
+                role="group"
+                aria-label={intl.formatMessage({ id: 'opc.teamFilter.aria' })}
+              >
+                <span className="font-label-sm text-on-surface-variant uppercase tracking-wider mr-xs">
+                  {intl.formatMessage({ id: 'opc.teamFilter.label' })}
+                </span>
+                <button
+                  type="button"
+                  aria-pressed={teamFilter === 'all'}
+                  onClick={() => setTeamFilter('all')}
+                  className={`px-sm py-xs rounded-full text-label-sm transition-colors cursor-pointer ${teamFilter === 'all' ? 'bg-primary/10 text-primary font-bold' : 'bg-surface-container-low text-on-surface-variant hover:text-primary hover:bg-primary/10'}`}
+                >
+                  {intl.formatMessage({ id: 'opc.teamFilter.all' })} ({tasks.length})
+                </button>
+                {teamNames.map(name => {
+                  const count = tasks.filter(t => (t as { team?: string | null }).team === name || t.assignee === name).length
+                  return (
+                    <button
+                      key={name}
+                      type="button"
+                      aria-pressed={teamFilter === name}
+                      onClick={() => setTeamFilter(name)}
+                      className={`px-sm py-xs rounded-full text-label-sm transition-colors cursor-pointer ${teamFilter === name ? 'bg-primary/10 text-primary font-bold' : 'bg-surface-container-low text-on-surface-variant hover:text-primary hover:bg-primary/10'}`}
+                    >
+                      {name} ({count})
+                    </button>
+                  )
+                })}
+              </div>
+            )}
             <div className="flex flex-col lg:flex-row gap-lg items-start">
-              <OPCAgentSwarm agents={agents} tasks={tasks} />
-              <OPCKanbanBoard tasks={tasks} refreshTasks={refreshTasks} />
+              <OPCAgentSwarm agents={agents} tasks={filteredTasks} />
+              <OPCKanbanBoard tasks={filteredTasks} refreshTasks={refreshTasks} />
             </div>
           </>
         )}

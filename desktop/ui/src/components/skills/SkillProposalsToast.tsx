@@ -1,12 +1,16 @@
 // Toast notification for pending skill proposals.
 //
 // Fixed position bottom-right. Listens to skill-proposal-available events
-// and shows count with "View" button that opens the review panel.
+// (the primary channel — backend emits this when a new candidate arrives
+// or when one is approved/rejected from Advanced Settings). The
+// skill-catalog-changed listener is the fallback path used when another
+// surface saves a candidate without going through the toast flow.
 
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import { useIntl } from 'react-intl'
 import { Button } from '@/components/ui/button'
 import { useTauriEventValidated } from '@/hooks/useTauriEventValidated'
+import { skillLoop } from '@/lib/tauri-api'
 import type { SkillProposalCountPayload } from '@/types'
 
 interface SkillProposalsToastProps {
@@ -25,6 +29,22 @@ export default function SkillProposalsToast({ onOpenReview }: SkillProposalsToas
       setVisible(true)
     }
   })
+
+  // 2026-09 P0-5: keep the badge in sync after actions taken from the
+  // Advanced Settings "Save as skill" modal — the backend may not emit
+  // `skill-proposal-available` for that path. Cheap re-fetch (mock only);
+  // real backend already maintains the source of truth.
+  useEffect(() => {
+    const handler = () => {
+      skillLoop.listProposals().then((list) => {
+        const next = list.length
+        setPendingCount(next)
+        setVisible(next > 0)
+      }).catch(() => { /* best-effort */ })
+    }
+    window.addEventListener('skill-catalog-changed', handler)
+    return () => window.removeEventListener('skill-catalog-changed', handler)
+  }, [])
 
   if (!visible || pendingCount === 0) return null
 

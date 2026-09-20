@@ -17,10 +17,7 @@ export default function ThemeSettings() {
 
   return (
     <div className="max-w-3xl">
-      <header className="mb-xl">
-        <h2 className="font-headline-lg text-headline-lg text-on-surface mb-xs">{t('settings.theme.title')}</h2>
-        <p className="font-body-md text-on-surface-variant">{t('settings.theme.subtitle')}</p>
-      </header>
+      <p className="font-body-md text-on-surface-variant mb-md">{t('settings.theme.subtitle')}</p>
 
       <div className="space-y-lg pb-10">
         {/* Theme Selection */}

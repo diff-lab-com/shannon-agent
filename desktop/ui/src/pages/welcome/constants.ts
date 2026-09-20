@@ -79,13 +79,8 @@ export const SHORTCUT_ROWS = [
   { keys: () => 'Esc', actionKey: 'shortcuts.cancel' },
 ] as const
 
-// Display labels for the Stepper (Step 0..3). Order matches STEPS_INDEX.
-export const STEP_LABEL_KEYS = [
-  'welcome.step.task',
-  'welcome.step.model',
-  'welcome.step.tools',
-  'welcome.step.done',
-] as const
+// (Round 6 §P3-1) The 4-key STEP_LABEL_KEYS array was unused after the
+// batch-5 Welcome refactor moved to a 2-key inline list. Removed.
 
 // ─── Documents skill recommendations (P2.4) ─────────────────────────────────
 // Instead of building a Documents engine inside Shannon (Phase D's MVP), we
