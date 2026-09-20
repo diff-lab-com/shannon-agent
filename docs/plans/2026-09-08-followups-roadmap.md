@@ -12,7 +12,7 @@
 |---|---|---|---|---|
 | A1 | **T13-T2 macOS AX 适配器完整实现** | ~~无 Mac 开发机~~（**2026-09-10 起已有 Mac**，见 A2）；剩余门槛是 telemetry：AXUIElement 行为（TCC 授权流、AXObserver、Electron 树差异）需真机投入验证，盲写风险仍高 | ① ~~一台 Mac~~ ✅；② telemetry 显示 macOS 用户占比可观 | `platform_adapter.rs` 的 `MacosAxAdapter` 骨架已合并，实现即插即用 |
 | A2 | **applescript 工具 macOS 真机 QA**（T13-T1 的 TCC 授权流 + 真实 osascript 执行） | 剩余 4 步需真人操作：TCC 弹窗点击（#2）、权限开关切换（#3）、快捷指令名（#5）、provider + REPL 审批流（#6） | 步骤与复跑命令见 [QA 清单 QA-1](../qa/2026-09-07-computer-use-browser-qa-checklist.md) 与 [2026-09-10 结果文档](../qa/2026-09-10-macos-real-machine-qa-results.md)；#1/#4/#7 已 ✅（harness `tests/macos_real_machine.rs`） | T13-T1 代码已合并 |
-| A3 | ~~chromiumoxide / computer-use 在 Windows 与 macOS 的编译与运行验证~~ | **macOS 半边已完成（2026-09-10）**：编译修复（xcap 0.0.13→0.9.8，见 F1）、screenshot/browser E2E 真机通过。**剩余：Windows 真机验证** | Windows 真机 | T14 / T10；macOS 证据见结果文档 |
+| A3 | ~~chromiumoxide / computer-use 在 Windows 与 macOS 的编译与运行验证~~ | **macOS 半边已完成（2026-09-10）**：编译修复（xcap 0.0.13→0.9.8，见 F1）、screenshot/browser E2E 真机通过。**Windows 侧（2026-09-21）：编译验证已闭合**——`--features computer-use,local-browser` 在 Windows CI 腿（ci.yml）与本机 `cargo check` 通过，enigo(Win32 SendInput)/xcap(GDI)/chromiumoxide 链路可编译；Windows 发布产物（CLI + desktop NSIS）已默认启用双 feature；真机 harness `tests/windows_real_machine.rs` 已就位（截图/UIA/窗口/剪贴板/Edge 检测/浏览器元素点击循环，`--ignored` 手动跑）。**剩余：Windows 真机执行 harness + 人工输入回归** | Windows 真机执行 `cargo test -p shannon-tools --features computer-use,local-browser --test windows_real_machine -- --ignored` | T14 / T10；macOS 证据见结果文档 |
 | A4 | **computer-use libei 后端的 Wayland 真机会话验证**（Portal 授权流 + 原生 Wayland 点击） | 本机无原生 Wayland 会话可自动化；Portal 授权需人工点击 | 带 GNOME-Wayland 的测试机或自托管 runner；步骤见 QA 清单 QA-2 | T10-Phase1 已合并（编译门在 CI） |
 
 ## B. 工程量大，按排期延后（有就绪的底座）

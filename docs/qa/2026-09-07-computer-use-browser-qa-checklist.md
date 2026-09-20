@@ -93,6 +93,7 @@ QA-4 属体验项，失败不阻塞合并，但需记录到 issue。
 
 ## 已知非目标（不做）
 
-- Windows 的 computer 工具真机回归（enigo/xcap 上游已覆盖，行为与合并前一致）。
+- ~~Windows 的 computer 工具真机回归（enigo/xcap 上游已覆盖，行为与合并前一致）。~~
+  （2026-09-21 起不再是"非目标"：Windows CI 编译腿 + 双 feature 发布产物已落地，真机 harness `tests/windows_real_machine.rs` 就位——截图/UIA/窗口/剪贴板可自动验证，剩余人工项为输入合成回归：开 notepad 后用 `ui_tree`→`ui_click`/`type` 手动驱动）
   （macOS 半边已于 2026-09-10 完成真机验证并补齐 harness，见结果文档——不再是非目标）
 - SkyLight 背景虚拟光标（T13-Tier3，不做）
