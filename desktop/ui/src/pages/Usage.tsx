@@ -266,13 +266,7 @@ export default function Usage() {
 
   return (
     <div className="p-lg max-w-6xl mx-auto">
-      <div className="mb-xl">
-        <h1 className="font-headline-lg text-[28px] font-bold text-on-surface flex items-center gap-sm">
-          <span className="material-symbols-outlined">monitoring</span>
-          {t('usage.title')}
-        </h1>
-        <p className="text-on-surface-variant font-body-md mt-xs">{t('usage.subtitle')}</p>
-      </div>
+      <p className="text-on-surface-variant font-body-md mb-lg">{t('usage.subtitle')}</p>
 
       <div className="flex items-center gap-xs mb-lg flex-wrap">
         {/* P0-4: overview vs per-session segmented toggle */}

@@ -62,10 +62,7 @@ export default function Extensions() {
           outlet context. */}
       <div className="flex flex-col gap-sm w-full px-lg py-sm border-b border-outline-variant/20 bg-surface/80 backdrop-blur-md sticky top-0 z-subheader">
         <div className="flex items-center justify-between gap-md flex-wrap min-w-0">
-          <div className="min-w-0">
-            <h1 className="font-display-sm text-on-surface truncate">{t('extensions.hub.title')}</h1>
-            <p className="font-body-sm text-on-surface-variant truncate">{t('extensions.hub.subtitle')}</p>
-          </div>
+          <p className="font-body-sm text-on-surface-variant truncate">{t('extensions.hub.subtitle')}</p>
           <div className="flex items-center bg-surface-container-lowest/50 rounded-full px-md py-xs border border-outline-variant/30 w-full max-w-[360px] focus-within:border-primary/40 focus-within:ring-2 focus-within:ring-primary/20 transition-colors shrink-0">
             <span className="material-symbols-outlined text-outline mr-sm text-[18px]">search</span>
             <Input

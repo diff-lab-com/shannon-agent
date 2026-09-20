@@ -96,10 +96,7 @@ export default function GeneralSettings() {
 
   return (
     <div className="max-w-3xl">
-      <header className="mb-xl">
-        <h2 className="font-headline-lg text-headline-lg text-on-surface mb-xs">{t('settings.general.header')}</h2>
-        <p className="font-body-md text-on-surface-variant">{t('settings.general.subheader')}</p>
-      </header>
+      <p className="font-body-md text-on-surface-variant mb-md">{t('settings.general.subheader')}</p>
 
       <div className="space-y-lg">
         {/* Autonomy Level */}

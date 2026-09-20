@@ -1,7 +1,7 @@
 import { useT } from '@/i18n'
 import { Banner } from '@/components/ui/banner'
 import type { RefObject } from 'react'
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useMemo, useState, useCallback } from 'react'
 import type { Virtualizer } from '@tanstack/react-virtual'
 import { Button } from '@/components/ui/button'
 import WelcomeState from '@/components/WelcomeState'
@@ -57,6 +57,12 @@ interface MessageAreaProps {
   setDiffPaths: (p: string[] | null) => void
 }
 
+/** True when the user is scrolled away from the very bottom by at least
+ *  the threshold below. The chat page surfaces a "scroll to latest" FAB
+ *  whenever this is the case — and also when the active run starts so the
+ *  user can return to live output after reading an older turn. */
+const SCROLL_FROM_BOTTOM_THRESHOLD_PX = 200
+
 // Virtualized + non-virtualized message list. Below the threshold (30
 // messages) we render everything in a flat log so jsdom tests still see the
 // bubbles — virtualization's measureElement needs a real DOM with height.
@@ -93,6 +99,26 @@ export default function MessageArea({
   const { error } = useCatalog()
   const t = useT()
   const shouldVirtualize = messages.length > VIRTUALIZE_THRESHOLD
+
+  // X-2: surface a "scroll to latest" FAB whenever the user is scrolled
+  // away from the bottom. Cheap: one passive scroll listener, no re-render
+  // unless the boolean actually flips.
+  const [showScrollFab, setShowScrollFab] = useState(false)
+  useEffect(() => {
+    const el = scrollParentRef.current
+    if (!el) return
+    const update = () => {
+      const dist = el.scrollHeight - el.clientHeight - el.scrollTop
+      setShowScrollFab(dist > SCROLL_FROM_BOTTOM_THRESHOLD_PX)
+    }
+    update()
+    el.addEventListener('scroll', update, { passive: true })
+    return () => el.removeEventListener('scroll', update)
+  }, [scrollParentRef, messages.length])
+  const scrollToBottom = useCallback(() => {
+    const el = scrollParentRef.current
+    if (el) el.scrollTo({ top: el.scrollHeight, behavior: 'smooth' })
+  }, [scrollParentRef])
 
   return (
     <div ref={scrollParentRef} className="flex-1 overflow-y-auto px-xl pt-lg pb-md">
@@ -155,6 +181,19 @@ export default function MessageArea({
       )}
 
       <div ref={messagesEndRef} />
+
+      {showScrollFab && messages.length > 0 && (
+        <Button
+          type="button"
+          variant="outline"
+          aria-label={t('chat.scrollToLatest.aria')}
+          title={t('chat.scrollToLatest.aria')}
+          onClick={scrollToBottom}
+          className="sticky bottom-md left-full -translate-x-full ml-sm w-10 h-10 rounded-full bg-surface-container-lowest/95 backdrop-blur-md border border-outline-variant/30 shadow-lg hover:bg-primary-container hover:border-primary/40 text-on-surface hover:text-primary transition-all flex items-center justify-center"
+        >
+          <span className="material-symbols-outlined icon-md" aria-hidden="true">arrow_downward</span>
+        </Button>
+      )}
     </div>
   )
 }

@@ -160,10 +160,7 @@ export default function AdvancedSettings() {
 
   return (
     <div className="pb-xl">
-      <div className="mb-xl">
-        <h2 className="font-headline-lg text-headline-lg text-on-surface mb-sm">{t('settings.advanced.title')}</h2>
-        <p className="text-on-surface-variant font-body-md">{t('settings.advanced.subtitle')}</p>
-      </div>
+      <p className="text-on-surface-variant font-body-md mb-xl">{t('settings.advanced.subtitle')}</p>
 
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-gutter">
         {/* Skill Extraction */}

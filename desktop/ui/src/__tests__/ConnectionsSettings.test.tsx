@@ -10,9 +10,11 @@ import * as api from '@/lib/tauri-api'
 // (no beforeEach restore: that would wipe the factory mocks' mockResolvedValue).
 
 describe('ConnectionsSettings', () => {
-  it('renders the title and all eight platforms, none configured by default', async () => {
+  it('renders the gateway subtitle and all eight platforms, none configured by default', async () => {
     render(<ConnectionsSettings />)
-    await waitFor(() => expect(screen.getByText('Social Connections')).toBeInTheDocument())
+    // The page-level h1 was retired — the global Header carries the page
+    // title; here we pin the subtitle as the page's distinctive marker.
+    await waitFor(() => expect(screen.getByText(/Wire chat platforms and external systems/)).toBeInTheDocument())
     expect(screen.getByText('Slack')).toBeInTheDocument()
     expect(screen.getByText('DingTalk (钉钉)')).toBeInTheDocument()
     // P1-4 status model: no credentials stored → every platform is 未配置.

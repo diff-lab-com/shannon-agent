@@ -212,8 +212,7 @@ export function MemoryGraphView({
                 >
                   {selected.sourceKind
                     ? t(`memory.source.kind.${selected.sourceKind}`)
-                    : t('memory.source.badge', { session: shortSession(selected.sourceSessionId) })}
-                  {selected.sourceKind ? ` · ${shortSession(selected.sourceSessionId)}` : ''}
+                    : t('memory.source.badge')}
                 </span>
                 {onOpenMemorySource && (
                   <Button
@@ -234,8 +233,4 @@ export function MemoryGraphView({
       </div>
     </div>
   )
-}
-
-function shortSession(id: string): string {
-  return id.length > 10 ? `${id.slice(0, 8)}…` : id
 }

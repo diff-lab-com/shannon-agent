@@ -319,12 +319,11 @@ export default function Triage() {
   return (
     <div className="flex-1 overflow-y-auto w-full pb-16">
       <div className="max-w-[1200px] mx-auto px-lg py-xl">
-        {/* Header */}
+        {/* Header — the page title is rendered globally in the app Header;
+            here we keep the one-line subtitle so first-time users get the
+            "计划任务、目标与触发器..." context without a duplicate H1. */}
         <div className="flex flex-col md:flex-row md:items-end justify-between mb-xl gap-md">
-          <div>
-            <h2 className="font-headline-lg text-headline-lg text-on-surface">{t('inbox.title')}</h2>
-            <p className="text-on-surface-variant mt-xs">{t('inbox.subtitle')}</p>
-          </div>
+          <p className="text-on-surface-variant">{t('inbox.subtitle')}</p>
           <div className="flex items-center gap-md">
             <div className="flex items-center gap-sm px-md py-sm rounded-xl bg-surface-container-lowest border border-outline-variant/30">
               <span className="material-symbols-outlined text-[18px] text-primary" aria-hidden="true">mark_email_unread</span>

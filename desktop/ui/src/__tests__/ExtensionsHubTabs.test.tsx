@@ -39,9 +39,8 @@ describe('Extensions hub tabs (2026-09 marketplace simplification)', () => {
     expect(screen.getByRole('menuitem', { name: 'Plugins' })).toBeInTheDocument()
   })
 
-  it('renders the marketplace title + subtitle', () => {
+  it('renders the marketplace subtitle', () => {
     renderWithRoute('/extensions/featured')
-    expect(screen.getByText('Extensions Marketplace')).toBeInTheDocument()
     expect(screen.getByText(/Install MCP servers, skills, agents and data sources/)).toBeInTheDocument()
   })
 

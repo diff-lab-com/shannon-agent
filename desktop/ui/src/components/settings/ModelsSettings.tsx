@@ -63,10 +63,7 @@ export default function ModelsSettings() {
 
   return (
     <div className="max-w-[1200px] pr-8 pb-10">
-      <header className="mb-md">
-        <h2 className="font-headline-lg text-headline-lg text-on-surface mb-xs">{t('settings.models.title')}</h2>
-        <p className="font-body-md text-on-surface-variant">{t('settings.models.subtitle')}</p>
-      </header>
+      <p className="font-body-md text-on-surface-variant mb-md">{t('settings.models.subtitle')}</p>
 
       <div className="space-y-lg">
         {/* Performance Strategy */}

@@ -460,14 +460,9 @@ export default function NotificationsSettings() {
 
   return (
     <div className="pb-xl">
-      <div className="mb-xl">
-        <h2 className="font-headline-lg text-headline-lg text-on-surface mb-sm">
-          {t('settings.notifications.title')}
-        </h2>
-        <p className="text-on-surface-variant font-body-md">
-          {t('settings.notifications.subtitle')}
-        </p>
-      </div>
+      <p className="text-on-surface-variant font-body-md mb-md">
+        {t('settings.notifications.subtitle')}
+      </p>
 
       <section className="mt-xl">
         <div className="mb-lg">

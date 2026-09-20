@@ -96,7 +96,7 @@ describe('Sidebar — Simple mode (default)', () => {
     // P1-2: Simple mode surfaces a flat Extensions link to the Hub index so
     // general users can reach it without dev mode. The dev-mode collapsible
     // group (with Skills / My Agents / Connections sub-links) stays hidden.
-    expect(screen.getByText('Connectors')).toBeInTheDocument()
+    expect(screen.getByText('Extensions')).toBeInTheDocument()
     expect(screen.queryByText('Skills')).not.toBeInTheDocument()
     expect(screen.queryByText('My Agents')).not.toBeInTheDocument()
   })
@@ -123,7 +123,7 @@ describe('Sidebar — Simple mode (default)', () => {
     render(wrap(<Sidebar />))
     fireEvent.click(screen.getByRole('button', { name: /Switch to Advanced mode/ }))
     // Now in Advanced mode — Extensions visible
-    expect(screen.getByText('Connectors')).toBeInTheDocument()
+    expect(screen.getByText('Extensions')).toBeInTheDocument()
     expect(screen.getByText('Advanced mode')).toBeInTheDocument()
   })
 
@@ -136,7 +136,7 @@ describe('Sidebar — Simple mode (default)', () => {
   it('remembers Advanced mode from localStorage on subsequent mount', () => {
     window.localStorage.setItem(SIDEBAR_MODE_KEY, 'dev')
     render(wrap(<Sidebar />))
-    expect(screen.getByText('Connectors')).toBeInTheDocument()
+    expect(screen.getByText('Extensions')).toBeInTheDocument()
     expect(screen.getByText('Advanced mode')).toBeInTheDocument()
   })
 
@@ -157,7 +157,7 @@ describe('Sidebar — Advanced mode', () => {
 
   it('renders Connectors section', () => {
     render(wrap(<Sidebar />))
-    expect(screen.getByText('Connectors')).toBeInTheDocument()
+    expect(screen.getByText('Extensions')).toBeInTheDocument()
   })
 
   it('renders Mission Control section', () => {
@@ -195,7 +195,7 @@ describe('Sidebar — Advanced mode', () => {
     render(wrap(<Sidebar />))
     // 2026-09 review: no collapsible Connectors group — a flat nav link to
     // /extensions/featured (the marketplace index).
-    const connectors = screen.getByText('Connectors').closest('a')
+    const connectors = screen.getByText('Extensions').closest('a')
     expect(connectors).toHaveAttribute('href', '/extensions/featured')
   })
 
@@ -212,7 +212,7 @@ describe('Sidebar — Advanced mode', () => {
     fireEvent.click(screen.getByRole('button', { name: /Switch to Simple mode/ }))
     // P1-2: Simple mode still shows the flat Extensions link; what disappears
     // is the dev-mode Extensions group and its sub-links (Skills).
-    expect(screen.getByText('Connectors')).toBeInTheDocument()
+    expect(screen.getByText('Extensions')).toBeInTheDocument()
     expect(screen.queryByText('Skills')).not.toBeInTheDocument()
     expect(screen.getByText('Simple mode')).toBeInTheDocument()
   })
@@ -637,7 +637,7 @@ describe('Sidebar — flat nav (2026-09 ZCode-style simplification)', () => {
     expect(screen.getByText('Chat')).toBeInTheDocument()
     expect(screen.getByText('Tasks')).toBeInTheDocument()
     expect(screen.getByText('Inbox')).toBeInTheDocument()
-    expect(screen.getByText('Connectors')).toBeInTheDocument()
+    expect(screen.getByText('Extensions')).toBeInTheDocument()
     expect(screen.getByText('Memory')).toBeInTheDocument()
     // The old Work/Resources/Experiments disclosure buttons are gone.
     expect(screen.queryByRole('button', { name: /^Work/ })).not.toBeInTheDocument()

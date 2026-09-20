@@ -71,6 +71,22 @@ export default function Chat() {
     }
   }, [location.state, location.pathname, navigate])
 
+  // Cmd/Ctrl+\ toggles the right dock — same one in AppContext the Header
+  // button drives. Mirrors the terminal's Ctrl+` and keeps the keyboard
+  // layer self-discoverable from the shortcuts help panel.
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (!(e.metaKey || e.ctrlKey) || e.shiftKey || e.altKey) return
+      if (e.key !== '\\' && e.key !== '|') return
+      const el = e.target as HTMLElement | null
+      if (el && (el.tagName === 'INPUT' || el.tagName === 'TEXTAREA' || el.isContentEditable)) return
+      e.preventDefault()
+      setContextPanelOpen(!contextPanelOpen)
+    }
+    window.addEventListener('keydown', onKey)
+    return () => window.removeEventListener('keydown', onKey)
+  }, [contextPanelOpen, setContextPanelOpen])
+
   const [bannerDismissed, setBannerDismissed] = useState(false)
 
   // P0-4: session-budget advisory/choice bars. "Continue once" resends the

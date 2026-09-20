@@ -606,7 +606,7 @@ export const ToolCallDisplay = memo(function ToolCallDisplay({ toolCall, onViewD
       {expanded && (
         <ToolContent>
           {toolCall.tool_input ? (
-            <pre className="text-body-sm text-on-surface-variant bg-surface-container p-sm rounded-lg overflow-x-auto max-h-[200px]">{JSON.stringify(toolCall.tool_input ?? null, null, 2)}</pre>
+            <ToolInputSummary input={toolCall.tool_input} />
           ) : null}
           {toolCall.result && (
             toolCall.is_error ? (
@@ -622,6 +622,106 @@ export const ToolCallDisplay = memo(function ToolCallDisplay({ toolCall, onViewD
     </Tool>
   )
 })
+
+/**
+ * Render a tool call's input in a human-readable summary instead of dumping
+ * the full JSON. Picks the most meaningful field per tool (bash → command,
+ * file write → path + content preview), keeps short inputs as a single line
+ * for visual rhythm, and offers a "查看详情" toggle for longer payloads.
+ *
+ * Falls back to compact JSON for unknown tools.
+ */
+function ToolInputSummary({ input }: { input: unknown }) {
+  const obj = (input ?? {}) as Record<string, unknown>
+  const command = pickString(obj, ['command', 'cmd', 'shell_command'])
+  const filePath = pickString(obj, ['path', 'file_path', 'filepath', 'notebook_path'])
+  const content = pickString(obj, ['content', 'text', 'source', 'body'])
+  const query = pickString(obj, ['query', 'pattern', 'q'])
+
+  // bash / shell: command is the story
+  if (command != null) {
+    return <ToolInputPrimary label="command" body={command} />
+  }
+  // file write: path + content preview
+  if (filePath != null || content != null) {
+    const body = filePath
+      ? content
+        ? `${filePath} — ${summarize(content)}`
+        : filePath
+      : summarize(content!)
+    return <ToolInputPrimary label={filePath ? 'file' : 'content'} body={body} />
+  }
+  // search: just the query
+  if (query != null) {
+    return <ToolInputPrimary label="query" body={query} />
+  }
+
+  // Unknown tool — fall back to compact JSON
+  return (
+    <pre className="text-body-sm text-on-surface-variant bg-surface-container p-sm rounded-lg overflow-x-auto max-h-[200px]">
+      {JSON.stringify(obj, null, 2)}
+    </pre>
+  )
+}
+
+function pickString(obj: Record<string, unknown>, keys: string[]): string | null {
+  for (const key of keys) {
+    const v = obj[key]
+    if (typeof v === 'string' && v.length > 0) return v
+  }
+  return null
+}
+
+/** First line + char count when truncated, so a 4 KB file write stays one row. */
+function summarize(s: string): string {
+  const newline = s.indexOf('\n')
+  const firstLine = newline >= 0 ? s.slice(0, newline) : s
+  const extraLines = s.split('\n').length - 1
+  const extraChars = s.length - firstLine.length
+  if (newline < 0 && extraChars === 0) return firstLine
+  const head = firstLine.length > 120 ? `${firstLine.slice(0, 120)}…` : firstLine
+  return extraLines > 0
+    ? `${head}  (+${extraLines} ${extraLines === 1 ? 'line' : 'lines'})`
+    : `${head}  (${extraChars} chars)`
+}
+
+const SHORT_LINE_LIMIT = 80
+function ToolInputPrimary({ label, body }: { label: string; body: string }) {
+  const intl = useIntl()
+  const t = (id: string) => intl.formatMessage({ id })
+  const [showAll, setShowAll] = useState(false)
+  const isShort = body.length <= SHORT_LINE_LIMIT && !body.includes('\n')
+  if (isShort) {
+    return (
+      <div className="text-body-sm bg-surface-container px-sm py-xs rounded-lg max-h-[200px] overflow-x-auto">
+        <span className="font-mono text-on-surface-variant/70 mr-xs">{label}:</span>
+        <span className="font-mono text-on-surface">{body}</span>
+      </div>
+    )
+  }
+  return (
+    <div className="bg-surface-container rounded-lg overflow-hidden">
+      <pre className="text-body-sm text-on-surface px-sm py-xs overflow-x-auto max-h-[200px] whitespace-pre-wrap break-words font-mono">{showAll ? body : firstLines(body, 3)}</pre>
+      <div className="flex items-center gap-sm px-sm py-xs border-t border-outline-variant/15">
+        <button
+          type="button"
+          className="font-label-xs text-primary hover:underline focus-visible:outline focus-visible:outline-2 focus-visible:outline-primary/40 rounded px-1 -mx-1"
+          onClick={() => setShowAll(v => !v)}
+        >
+          {showAll ? intl.formatMessage({ id: 'chat.tool.input.collapse' }) : intl.formatMessage({ id: 'chat.tool.input.expand' })}
+        </button>
+        <span className="font-label-xs text-on-surface-variant/70">{intl.formatMessage({ id: 'chat.tool.input.length' }, { chars: body.length })}</span>
+      </div>
+      <span className="sr-only">{t('chat.tool.input.srHint')}</span>
+    </div>
+  )
+}
+
+function firstLines(s: string, n: number): string {
+  const lines = s.split('\n')
+  if (lines.length <= n) return s
+  return `${lines.slice(0, n).join('\n')}\n…`
+}
 
 /**
  * P1-⑥ (ZCode delta): first-class collapsible block for `agent_spawn` tool

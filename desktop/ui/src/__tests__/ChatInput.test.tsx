@@ -143,7 +143,7 @@ describe('ChatInput', () => {
     const onChange = vi.fn()
     renderChatInput({ value: 'Test message', onChange, onSend })
 
-    const textarea = screen.getByPlaceholderText('Ask Shannon anything...')
+    const textarea = screen.getByPlaceholderText('Try: "Explain this repo" or "Plan a refactor for src/foo.rs"')
     fireEvent.keyDown(textarea, { key: 'Enter', code: 'Enter' })
 
     expect(onSend).toHaveBeenCalledTimes(1)
@@ -154,7 +154,7 @@ describe('ChatInput', () => {
     const onChange = vi.fn()
     renderChatInput({ value: 'Test\nmessage', onChange, onSend })
 
-    const textarea = screen.getByPlaceholderText('Ask Shannon anything...')
+    const textarea = screen.getByPlaceholderText('Try: "Explain this repo" or "Plan a refactor for src/foo.rs"')
     fireEvent.keyDown(textarea, { key: 'Enter', code: 'Enter', shiftKey: true })
 
     expect(onSend).not.toHaveBeenCalled()
@@ -165,7 +165,7 @@ describe('ChatInput', () => {
   it('sends on Ctrl+Enter', () => {
     const onSend = vi.fn()
     renderChatInput({ value: 'a', onSend })
-    const ta = screen.getByPlaceholderText('Ask Shannon anything...')
+    const ta = screen.getByPlaceholderText('Try: "Explain this repo" or "Plan a refactor for src/foo.rs"')
     fireEvent.keyDown(ta, { key: 'Enter', code: 'Enter', ctrlKey: true })
     expect(onSend).toHaveBeenCalledTimes(1)
   })
@@ -280,7 +280,7 @@ describe('ChatInput', () => {
   it('shows correct icons for querying states', () => {
     renderChatInput()
 
-    const container = screen.getByPlaceholderText('Ask Shannon anything...').closest('.group')
+    const container = screen.getByPlaceholderText('Try: "Explain this repo" or "Plan a refactor for src/foo.rs"').closest('.group')
     expect(container).not.toHaveClass('ring-2')
 
     fireEvent.dragOver(container!, { dataTransfer: { files: [] } })
@@ -293,7 +293,7 @@ describe('ChatInput', () => {
     const onChange = vi.fn()
     renderChatInput({ value: '', onChange })
 
-    const textarea = screen.getByPlaceholderText('Ask Shannon anything...')
+    const textarea = screen.getByPlaceholderText('Try: "Explain this repo" or "Plan a refactor for src/foo.rs"')
     fireEvent.change(textarea, { target: { value: 'New message' } })
 
     expect(onChange).toHaveBeenCalledWith('New message')

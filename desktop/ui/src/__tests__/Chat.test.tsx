@@ -77,7 +77,7 @@ describe('Chat page', () => {
   it('renders message input area', () => {
     resetCtx()
     renderChat()
-    expect(screen.getByPlaceholderText('Ask Shannon anything...')).toBeInTheDocument()
+    expect(screen.getByPlaceholderText('Try: "Explain this repo" or "Plan a refactor for src/foo.rs"')).toBeInTheDocument()
   })
 
   // U1: the Chat page no longer renders its own session list — the app
@@ -92,7 +92,7 @@ describe('Chat page', () => {
   it('sends message on Enter key and clears input', () => {
     resetCtx()
     renderChat()
-    const input = screen.getByPlaceholderText('Ask Shannon anything...')
+    const input = screen.getByPlaceholderText('Try: "Explain this repo" or "Plan a refactor for src/foo.rs"')
     fireEvent.change(input, { target: { value: 'Hello agent' } })
     fireEvent.keyDown(input, { key: 'Enter' })
     expect(ctx.sendMessage).toHaveBeenCalledWith('Hello agent', undefined)
@@ -101,7 +101,7 @@ describe('Chat page', () => {
   it('does not send empty message on Enter', () => {
     resetCtx()
     renderChat()
-    const input = screen.getByPlaceholderText('Ask Shannon anything...')
+    const input = screen.getByPlaceholderText('Try: "Explain this repo" or "Plan a refactor for src/foo.rs"')
     fireEvent.change(input, { target: { value: '' } })
     fireEvent.keyDown(input, { key: 'Enter' })
     expect(ctx.sendMessage).not.toHaveBeenCalled()
@@ -219,7 +219,9 @@ describe('Chat page', () => {
     }]
     renderChat()
     fireEvent.click(screen.getByText('bash'))
-    expect(screen.getByText(/"cmd"/)).toBeInTheDocument()
+    // 2026-09 P1-3: tool input renders a human summary (label: value) instead
+    // of the raw JSON dump — short commands read as one line and stay scannable.
+    expect(screen.getByText('ls')).toBeInTheDocument()
     expect(screen.getByText('output here')).toBeInTheDocument()
   })
 

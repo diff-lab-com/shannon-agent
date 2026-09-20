@@ -211,8 +211,11 @@ export default function Featured() {
                     onClick={() => handleConnect(vendor)}
                     disabled={isBusy}
                     className={cn(
-                      "w-full px-md py-sm rounded-xl bg-gradient-to-r text-white text-label-md font-bold shadow-sm hover:shadow-md hover:brightness-110 disabled:cursor-not-allowed disabled:hover:brightness-100 transition-all",
-                      accent.button,
+                      // 2026-09 P2-1: brand color now lives only in the icon
+                      // block at the top of the card; the install button is
+                      // always the Shannon primary so "安装" reads as a
+                      // system action, not a third-party checkout button.
+                      "w-full px-md py-sm rounded-xl bg-primary text-on-primary text-label-md font-bold shadow-sm hover:shadow-md hover:brightness-110 disabled:cursor-not-allowed disabled:hover:brightness-100 disabled:opacity-60 transition-all",
                     )}
                   >
                     {isBusy ? (

@@ -16,6 +16,14 @@ import { cn } from '@/lib/utils'
 
 const IMAGE_EXTENSIONS = new Set(['png', 'jpg', 'jpeg', 'gif', 'webp', 'bmp', 'svg'])
 
+/** Last path segment, no extension — used by the contextual placeholder so a
+ *  repo named "shannon-desktop" reads as "Working in shannon-desktop …". */
+function basename(p: string): string {
+  const trimmed = p.replace(/\\/g, '/').replace(/\/+$/, '')
+  const last = trimmed.split('/').pop() ?? ''
+  return last || trimmed
+}
+
 /* Char-count thresholds.
  *   showAt — start showing the live counter
  *   softWarnAt — visually promote (orange/yellow) without blocking
@@ -38,6 +46,8 @@ interface ChatInputProps {
   onCancelQuery: () => void
   onOpenQuickFix: () => void
   onOpenEditor: () => void
+  /** Session working directory — picks a context-aware composer placeholder. */
+  sessionWorkingDir?: string
 }
 
 // U2 removed the composer's model Select; the ZCode delta P0-③ brings a
@@ -57,6 +67,7 @@ export default function ChatInput({
   onCancelQuery,
   onOpenQuickFix,
   onOpenEditor,
+  sessionWorkingDir,
 }: ChatInputProps) {
   const intl = useIntl()
   const t = (id: string) => intl.formatMessage({ id })
@@ -420,7 +431,13 @@ export default function ChatInput({
           <textarea
             ref={textareaRef}
             className="flex-1 bg-transparent border-none outline-none focus:ring-0 font-body-lg py-md px-sm placeholder:text-on-surface-variant/70 text-on-surface resize-none min-h-[24px] max-h-[200px]"
-            placeholder={isQuerying ? t('chat.input.processing') : t('chat.input.placeholder')}
+            placeholder={
+              isQuerying
+                ? t('chat.input.processing')
+                : sessionWorkingDir
+                  ? `${t('chat.input.placeholder.project')} — ${basename(sessionWorkingDir)}`
+                  : t('chat.input.placeholder.empty')
+            }
             aria-label={t('chat.input.ariaLabel')}
             value={value}
             onChange={e => onChange(e.target.value)}
@@ -469,7 +486,13 @@ export default function ChatInput({
                 className={cn('rounded-full border', selectedMode.color, 'bg-transparent hover:bg-surface-container-low/50 transition-colors')}
               >
                 <span className="material-symbols-outlined icon-sm">{selectedMode.icon}</span>
-                <SelectValue placeholder={t('chat.input.mode.label')} />
+                {/* Render the matched mode's local label, not the raw value
+                    — an unknown approval_mode (e.g. legacy 'standard') now
+                    falls back to the Suggest label instead of bleeding into
+                    the pill chrome. */}
+                <SelectValue placeholder={t('chat.input.mode.label')}>
+                  {() => <span className="truncate">{selectedMode.label}</span>}
+                </SelectValue>
               </SelectTrigger>
               <SelectContent>
                 {modeOptions.map(mode => (

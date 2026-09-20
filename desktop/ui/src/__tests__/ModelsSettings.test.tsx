@@ -19,9 +19,9 @@ function wrap(ui: React.ReactElement) {
 }
 
 describe('ModelsSettings', () => {
-  it('renders model configuration heading', () => {
+  it('renders model configuration subtitle', () => {
     render(wrap(<ModelsSettings />))
-    expect(screen.getByText('Model Configuration')).toBeInTheDocument()
+    expect(screen.getByText(/Manage your active AI providers/)).toBeInTheDocument()
   })
 
   it('renders the managed providers section with an add button', () => {

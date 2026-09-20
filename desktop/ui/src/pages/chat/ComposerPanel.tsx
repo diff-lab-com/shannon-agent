@@ -59,6 +59,7 @@ export default function ComposerPanel({ setQuickFixOpen, setEditorOpen }: Compos
             onCancelQuery={cancelQuery}
             onOpenQuickFix={() => setQuickFixOpen(true)}
             onOpenEditor={() => setEditorOpen(true)}
+            sessionWorkingDir={sessionWorkingDir}
           />
         </div>
         <div className="mt-xs flex items-center justify-between gap-md px-sm text-label-sm text-on-surface-variant">

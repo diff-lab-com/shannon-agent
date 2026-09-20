@@ -16,9 +16,9 @@ function wrap(ui: React.ReactElement) {
 }
 
 describe('AdvancedSettings', () => {
-  it('renders advanced settings heading', () => {
+  it('renders advanced settings subtitle', () => {
     render(wrap(<AdvancedSettings />))
-    expect(screen.getByText('Advanced Settings')).toBeInTheDocument()
+    expect(screen.getByText(/Configure underlying engine parameters/i)).toBeInTheDocument()
   })
 
   it('renders memory management section', () => {
