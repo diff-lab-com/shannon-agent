@@ -28,6 +28,12 @@ pub struct CompactEngine {
 }
 
 impl CompactEngine {
+    /// Access the engine's summarizer (used by `/handoff` to distill a
+    /// thread through the same LLM/rule pipeline as compaction).
+    pub fn summarizer(&self) -> &dyn Summarizer {
+        self.summarizer.as_ref()
+    }
+
     /// Create a new compact engine with the given config and summarizer
     pub fn new(
         config: CompactConfig,

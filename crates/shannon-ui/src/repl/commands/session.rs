@@ -953,6 +953,97 @@ pub(crate) fn handle_plan(repl: &mut Repl, args: &str) -> Result<()> {
     Ok(())
 }
 
+/// Wave 2 · `/handoff` — generate a handoff prompt instead of compacting.
+///
+/// Amp's "handoff over compaction" pattern: distill the current thread into
+/// an EDITABLE prompt for a brand-new session, preserving goals (constraints
+/// verbatim), file state, and the exact next step — without mutating the
+/// current session. The output is written to `.shannon/handoff-<ts>.md` and
+/// echoed; the user reviews it, starts a fresh session, and pastes it.
+pub(crate) fn handle_handoff(repl: &mut Repl, args: &str) -> Result<()> {
+    use shannon_engine::compact::CompactEngine;
+
+    let Some(ref engine) = repl.query_engine else {
+        repl.chat
+            .add_message(ChatRole::System, "No query engine available.".to_string());
+        return Ok(());
+    };
+    let history = engine.conversation_history();
+    if history.is_empty() {
+        repl.chat
+            .add_message(ChatRole::System, "No conversation to hand off.".to_string());
+        return Ok(());
+    }
+    if args.trim() == "help" {
+        repl.chat.add_message(
+            ChatRole::System,
+            "/handoff — distill this session into a prompt for a fresh one.\n\
+             Output: .shannon/handoff-<timestamp>.md plus an echo here. Review it,\n\
+             start a new session, and paste it as your first message.".to_string(),
+        );
+        return Ok(());
+    }
+
+    let client = engine.client().clone();
+    let rt_handle = repl.runtime.handle().clone();
+    let compact_engine = match CompactEngine::with_llm_summarizer_on_runtime(client, rt_handle) {
+        Ok(e) => e,
+        Err(_) => match CompactEngine::with_defaults() {
+            Ok(e) => e,
+            Err(e) => {
+                repl.chat
+                    .add_message(ChatRole::System, format!("Compact engine error: {e}"));
+                return Ok(());
+            }
+        },
+    };
+
+    // Handoff prompt: asks the summarizer for an actionable continuation
+    // prompt (not a transcript summary). Falls back to the rule-based
+    // summarizer's output shape when no LLM is available.
+    let max_tokens = 1200;
+    let summary = {
+        let summarizer = compact_engine.summarizer();
+        match summarizer.summarize(&history, max_tokens) {
+            Ok(s) => s,
+            Err(e) => {
+                repl.chat
+                    .add_message(ChatRole::System, format!("Handoff failed: {e}"));
+                return Ok(());
+            }
+        }
+    };
+
+    let handoff = format!(
+        "{HANDOFF_PREAMBLE}\n\n---\n\n{summary}\n\n---\n\n{HANDOFF_EPILOGUE}",
+    );
+
+    // Persist for review.
+    let ts = chrono::Utc::now().format("%Y%m%d-%H%M%S");
+    let out_dir = std::path::PathBuf::from(".shannon");
+    let _ = std::fs::create_dir_all(&out_dir);
+    let out_path = out_dir.join(format!("handoff-{ts}.md"));
+    let write_result = std::fs::write(&out_path, &handoff);
+
+    let mut msg = format!(
+        "Handoff prompt generated ({} chars).\n\n{}",
+        handoff.len(),
+        handoff
+    );
+    match write_result {
+        Ok(()) => msg.push_str(&format!("\n\nSaved to {} — review, edit freely, then start a new session and paste it as your first message.", out_path.display())),
+        Err(e) => msg.push_str(&format!(
+            "\n\n(could not save to {}: {e} — copy from above)",
+            out_path.display()
+        )),
+    }
+    repl.chat.add_message(ChatRole::System, msg);
+    Ok(())
+}
+
+const HANDOFF_PREAMBLE: &str = "You are continuing a task from a previous session. Below is a distilled handoff. Treat it as the authoritative context; ask nothing that it already answers.";
+const HANDOFF_EPILOGUE: &str = "Begin by verifying the current state (files/tests) before continuing work.";
+
 pub(crate) fn handle_compact(repl: &mut Repl, args: &str) -> Result<()> {
     use shannon_engine::compact::{CompactEngine, CompactStrategy};
 

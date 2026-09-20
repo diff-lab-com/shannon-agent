@@ -57,6 +57,7 @@ use super::env_config::{
 };
 #[allow(unused_imports)]
 use super::env_config::DEFAULT_THINK_ONLY_MIN_ANSWER_CHARS;
+#[allow(unused_imports)] // split_think_content: used by tests in this module
 use super::parsers::{
     is_think_only_response, is_truncation_stop, markdown_bash_command, parse_text_tool_calls,
     split_think_content, ThinkStreamSplitter,
