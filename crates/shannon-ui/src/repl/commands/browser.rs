@@ -124,7 +124,31 @@ fn handle_uninstall(repl: &mut Repl) -> Result<()> {
 /// chromiumoxide integration target) alongside the MCP configuration
 /// state, with actionable install hints when neither is available.
 fn handle_doctor(repl: &mut Repl) -> Result<()> {
-    let mut lines = String::from("Browser diagnostics:\n");
+    let mut lines = String::from("Browser & desktop-control diagnostics:\n");
+
+    // Build capability status first — every other line depends on what this
+    // binary can actually do. Windows/macOS release bundles ship both
+    // features; source builds may not have them.
+    let builtin = shannon_tools::local_browser_enabled();
+    lines.push_str(&format!(
+        "  {} Built-in browser tools (CDP): {}\n",
+        if builtin { "✓" } else { "✗" },
+        if builtin {
+            "enabled in this build"
+        } else {
+            "not compiled in (release bundles ship enabled; source: --features local-browser)"
+        }
+    ));
+    let computer_use = shannon_tools::computer_use_enabled();
+    lines.push_str(&format!(
+        "  {} Desktop control (`computer` tool): {}\n",
+        if computer_use { "✓" } else { "✗" },
+        if computer_use {
+            "enabled in this build"
+        } else {
+            "not compiled in (release bundles ship enabled; source: --features computer-use)"
+        }
+    ));
 
     // B1-方案B: a CDP endpoint takes precedence — when set, the built-in
     // tools attach to that Chrome instead of launching a local one, so a

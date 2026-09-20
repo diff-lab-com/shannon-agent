@@ -525,6 +525,15 @@ jobs:
         # default features only. Keep the macOS capture path compiling.
         if: runner.os == 'macOS'
         run: cargo check -p shannon-tools --features computer-use
+      - name: Check computer-use + local-browser features (Windows only)
+        # Windows release artifacts ship with these features enabled
+        # (release.yml), yet before 2026-09 no CI leg ever compiled them on
+        # Windows — the enigo Win32 / xcap GDI / chromiumoxide CDP surface
+        # was verified nowhere. Both shapes must keep compiling.
+        if: runner.os == 'Windows'
+        run: |
+          cargo check -p shannon-tools --features computer-use,local-browser
+          cargo check -p shannon-cli --features computer-use,local-browser
       - name: Check all features (Linux only)
         # Feature-universe compile: --all-features unions optional deps no
         # default-features gate ever sees. Three carve-outs, each with its

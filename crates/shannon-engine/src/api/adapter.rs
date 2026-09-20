@@ -300,7 +300,7 @@ fn serialize_ollama_request(request: &MessageRequest) -> Value {
     }
 
     for msg in &request.messages {
-        messages.extend(convert_message_for_openai(msg)); // same format as OpenAI
+        messages.extend(convert_message_for_openai_flavor(msg, OpenAiFlavor::Ollama));
     }
 
     let mut body = json!({
@@ -359,6 +359,19 @@ fn serialize_ollama_request(request: &MessageRequest) -> Value {
 
 /// Convert a single `Message` to OpenAI-style JSON value.
 fn convert_message_for_openai(msg: &Message) -> Vec<Value> {
+    convert_message_for_openai_flavor(msg, OpenAiFlavor::OpenAi)
+}
+
+/// Which OpenAI-shaped wire dialect to emit. Ollama shares the message
+/// structure but not OpenAI's vision format: it takes base64 images in a
+/// top-level `images` array, not `image_url` content parts.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum OpenAiFlavor {
+    OpenAi,
+    Ollama,
+}
+
+fn convert_message_for_openai_flavor(msg: &Message, flavor: OpenAiFlavor) -> Vec<Value> {
     match &msg.content {
         crate::api::types::MessageContent::Text(text) => {
             vec![json!({
@@ -442,42 +455,90 @@ fn convert_message_for_openai(msg: &Message) -> Vec<Value> {
                     .collect::<Vec<_>>()
                     .join("\n");
 
-                // Check for tool_result blocks (tool response messages)
-                let tool_results: Vec<Value> = blocks
-                    .iter()
-                    .filter_map(|b| match b {
+                // Tool result messages: one `role:"tool"` message per result.
+                // OpenAI-style tool messages cannot carry images, so when a
+                // tool_result contains image blocks (screenshots from the
+                // `computer`/browser tools) the pixels ride in a follow-up
+                // user message right after the tool reply — the same
+                // convention the OpenAI ecosystem uses for tool-result
+                // vision. Ollama gets its native `images` array instead.
+                let mut out: Vec<Value> = Vec::new();
+                let mut saw_tool_results = false;
+                for b in blocks {
+                    match b {
                         ContentBlock::ToolResult {
                             tool_use_id,
                             content,
                             ..
                         } => {
-                            let result_text = match content {
-                                Some(crate::api::types::ToolResultContent::Single(s)) => s.clone(),
-                                Some(crate::api::types::ToolResultContent::Multiple(blocks)) => {
-                                    blocks
-                                        .iter()
-                                        .filter_map(|b| match b {
-                                            ContentBlock::Text { text } => Some(text.as_str()),
-                                            _ => None,
-                                        })
-                                        .collect::<Vec<_>>()
-                                        .join("\n")
-                                }
-                                None => String::new(),
-                            };
-                            Some(json!({
+                            saw_tool_results = true;
+                            let (result_text, image_sources): (String, Vec<(&String, &String)>) =
+                                match content {
+                                    Some(crate::api::types::ToolResultContent::Single(s)) => {
+                                        (s.clone(), Vec::new())
+                                    }
+                                    Some(crate::api::types::ToolResultContent::Multiple(inner)) => {
+                                        let mut texts: Vec<String> = Vec::new();
+                                        let mut imgs: Vec<(&String, &String)> = Vec::new();
+                                        for ib in inner {
+                                            match ib {
+                                                ContentBlock::Text { text } => {
+                                                    texts.push(text.clone())
+                                                }
+                                                ContentBlock::Image { source } => {
+                                                    imgs.push((&source.media_type, &source.data))
+                                                }
+                                                _ => {}
+                                            }
+                                        }
+                                        (texts.join("\n"), imgs)
+                                    }
+                                    None => (String::new(), Vec::new()),
+                                };
+                            out.push(json!({
                                 "role": "tool",
                                 "tool_call_id": tool_use_id,
                                 "content": result_text,
-                            }))
+                            }));
+                            if image_sources.is_empty() {
+                                continue;
+                            }
+                            match flavor {
+                                OpenAiFlavor::OpenAi => {
+                                    let mut parts = vec![json!({
+                                        "type": "text",
+                                        "text": format!(
+                                            "[image(s) returned by tool result {tool_use_id}]"
+                                        ),
+                                    })];
+                                    for (media_type, data) in &image_sources {
+                                        parts.push(json!({
+                                            "type": "image_url",
+                                            "image_url": {
+                                                "url": format!("data:{media_type};base64,{data}")
+                                            }
+                                        }));
+                                    }
+                                    out.push(json!({"role": "user", "content": parts}));
+                                }
+                                OpenAiFlavor::Ollama => {
+                                    let images: Vec<&String> =
+                                        image_sources.iter().map(|(_, data)| *data).collect();
+                                    out.push(json!({
+                                        "role": "user",
+                                        "content": format!(
+                                            "[image(s) returned by tool result {tool_use_id}]"
+                                        ),
+                                        "images": images,
+                                    }));
+                                }
+                            }
                         }
-                        _ => None,
-                    })
-                    .collect();
-
-                if !tool_results.is_empty() {
-                    // OpenAI expects one message per tool result — return all
-                    tool_results
+                        _ => {}
+                    }
+                }
+                if saw_tool_results {
+                    out
                 } else {
                     vec![json!({
                         "role": msg.role,
@@ -1215,6 +1276,11 @@ fn serialize_gemini_request(request: &MessageRequest) -> Value {
         };
 
         let mut parts: Vec<Value> = Vec::new();
+        // functionResponse parts can only carry JSON — image blocks that
+        // ride in a tool_result (screenshots from the `computer`/browser
+        // tools) are emitted as a follow-up user turn with inlineData,
+        // mirroring the official Gemini computer-use reference design.
+        let mut tool_result_images: Vec<Value> = Vec::new();
 
         match &msg.content {
             super::types::MessageContent::Text(t) => {
@@ -1250,24 +1316,29 @@ fn serialize_gemini_request(request: &MessageRequest) -> Value {
                             content,
                             is_error,
                         } => {
-                            let result_text = match content {
-                                Some(super::types::ToolResultContent::Single(s)) => s.clone(),
-                                Some(super::types::ToolResultContent::Multiple(bs)) => bs
-                                    .iter()
-                                    .filter_map(|b| match b {
-                                        ContentBlock::Text { text } => Some(text.as_str()),
-                                        _ => None,
-                                    })
-                                    .collect::<Vec<_>>()
-                                    .join("\n"),
-                                None => String::new(),
-                            };
-                            let response = json!({
-                                "name": tool_use_id, // Best effort; real name is in the preceding functionCall
-                                "response": {
-                                    "result": result_text,
-                                }
-                            });
+                            let (result_text, image_sources): (String, Vec<(&String, &String)>) =
+                                match content {
+                                    Some(super::types::ToolResultContent::Single(s)) => {
+                                        (s.clone(), Vec::new())
+                                    }
+                                    Some(super::types::ToolResultContent::Multiple(bs)) => {
+                                        let mut texts: Vec<String> = Vec::new();
+                                        let mut imgs: Vec<(&String, &String)> = Vec::new();
+                                        for b in bs {
+                                            match b {
+                                                ContentBlock::Text { text } => {
+                                                    texts.push(text.clone())
+                                                }
+                                                ContentBlock::Image { source } => {
+                                                    imgs.push((&source.media_type, &source.data))
+                                                }
+                                                _ => {}
+                                            }
+                                        }
+                                        (texts.join("\n"), imgs)
+                                    }
+                                    None => (String::new(), Vec::new()),
+                                };
                             if is_error.unwrap_or(false) {
                                 parts.push(json!({
                                     "functionResponse": {
@@ -1278,9 +1349,21 @@ fn serialize_gemini_request(request: &MessageRequest) -> Value {
                                     }
                                 }));
                             } else {
-                                let _ = &response; // Use the success version
                                 parts.push(json!({
-                                    "functionResponse": response
+                                    "functionResponse": {
+                                        "name": tool_use_id,
+                                        "response": {
+                                            "result": result_text,
+                                        }
+                                    }
+                                }));
+                            }
+                            for (media_type, data) in image_sources {
+                                tool_result_images.push(json!({
+                                    "inline_data": {
+                                        "mime_type": media_type,
+                                        "data": data,
+                                    }
                                 }));
                             }
                         }
@@ -1296,6 +1379,19 @@ fn serialize_gemini_request(request: &MessageRequest) -> Value {
             contents.push(json!({
                 "role": gemini_role,
                 "parts": parts,
+            }));
+        }
+
+        // Tool-result pixels ride in a follow-up user turn (functionResponse
+        // itself can only carry JSON).
+        if !tool_result_images.is_empty() {
+            let mut image_parts = vec![json!({
+                "text": "[image(s) returned by the tool results above]",
+            })];
+            image_parts.extend(tool_result_images);
+            contents.push(json!({
+                "role": "user",
+                "parts": image_parts,
             }));
         }
     }
@@ -1710,12 +1806,14 @@ mod tests {
         assert_eq!(headings.len(), 2);
     }
 
-    /// Documents the current degraded behavior (C-ImgBatch): the OpenAI
-    /// adapter flattens `tool_result` content to text, so image parts inside
-    /// a tool result are dropped. Follow-up: emit multi-image content parts
-    /// for tool results on OpenAI-compatible wire formats too.
+    /// OpenAI-style `role:"tool"` messages cannot carry images, so a
+    /// tool_result with image blocks (screenshots from the `computer` /
+    /// browser tools) emits the tool text reply PLUS a follow-up user
+    /// message carrying the image as an `image_url` data part — pixels
+    /// reach the model instead of being flattened away (pre-2026-09
+    /// behavior).
     #[test]
-    fn test_openai_tool_result_multi_image_currently_flattens_to_text() {
+    fn test_openai_tool_result_multi_image_emits_followup_user_vision_turn() {
         let req = MessageRequest {
             model: "gpt-test".to_string(),
             max_tokens: 1024,
@@ -1750,11 +1848,127 @@ mod tests {
         };
 
         let val = serialize_request(&req, &LlmProvider::OpenAI);
+        // messages[0]: the tool text reply — no pixel data in the text.
         let tool_msg = &val["messages"][0];
         assert_eq!(tool_msg["role"], "tool");
         let text = tool_msg["content"].as_str().unwrap();
         assert!(text.contains("## /tmp/a.png"));
         assert!(!text.contains("AAAA"), "image data must not leak into text");
+        // messages[1]: the follow-up user turn carrying the pixels.
+        let vision_msg = &val["messages"][1];
+        assert_eq!(vision_msg["role"], "user");
+        let parts = vision_msg["content"].as_array().unwrap();
+        let image_parts: Vec<&Value> = parts.iter().filter(|p| p["type"] == "image_url").collect();
+        assert_eq!(image_parts.len(), 1, "one image part expected");
+        assert_eq!(
+            image_parts[0]["image_url"]["url"],
+            "data:image/png;base64,AAAA"
+        );
+    }
+
+    /// Ollama shares the message structure with OpenAI but takes base64
+    /// images in a top-level `images` array instead of image_url parts.
+    #[test]
+    fn test_ollama_tool_result_image_uses_images_array() {
+        let req = MessageRequest {
+            model: "llava-test".to_string(),
+            max_tokens: 1024,
+            system: None,
+            system_blocks: None,
+            messages: vec![Message {
+                role: "user".to_string(),
+                content: crate::api::types::MessageContent::Blocks(vec![
+                    ContentBlock::ToolResult {
+                        tool_use_id: "shot_1".to_string(),
+                        content: Some(crate::api::types::ToolResultContent::Multiple(vec![
+                            ContentBlock::Text {
+                                text: "screenshot".to_string(),
+                            },
+                            ContentBlock::Image {
+                                source: crate::api::types::ImageSource::base64("image/png", "BBBB"),
+                            },
+                        ])),
+                        is_error: Some(false),
+                    },
+                ]),
+            }],
+            tools: None,
+            stream: Some(false),
+            temperature: None,
+            top_p: None,
+            top_k: None,
+            stop_sequences: None,
+            budget_tokens: None,
+            thinking_budget: None,
+            reasoning_effort: None,
+        };
+
+        let val = serialize_request(&req, &LlmProvider::Ollama);
+        let msgs = val["messages"].as_array().unwrap();
+        assert_eq!(msgs[0]["role"], "tool");
+        let vision_msg = &msgs[1];
+        assert_eq!(vision_msg["role"], "user");
+        assert_eq!(vision_msg["images"][0], "BBBB");
+        assert!(
+            vision_msg["content"].as_str().unwrap().len() > 0,
+            "context note present"
+        );
+        assert!(
+            !serde_json::to_string(&vision_msg)
+                .unwrap()
+                .contains("image_url"),
+            "Ollama wire must not use OpenAI image_url parts"
+        );
+    }
+
+    /// Gemini functionResponse carries only JSON, so tool-result images are
+    /// emitted as a follow-up user turn with inlineData parts.
+    #[test]
+    fn test_gemini_tool_result_image_emits_inline_data_turn() {
+        let req = MessageRequest {
+            model: "gemini-test".to_string(),
+            max_tokens: 1024,
+            system: None,
+            system_blocks: None,
+            messages: vec![Message {
+                role: "user".to_string(),
+                content: crate::api::types::MessageContent::Blocks(vec![
+                    ContentBlock::ToolResult {
+                        tool_use_id: "shot_1".to_string(),
+                        content: Some(crate::api::types::ToolResultContent::Multiple(vec![
+                            ContentBlock::Text {
+                                text: "screenshot".to_string(),
+                            },
+                            ContentBlock::Image {
+                                source: crate::api::types::ImageSource::base64("image/png", "CCCC"),
+                            },
+                        ])),
+                        is_error: Some(false),
+                    },
+                ]),
+            }],
+            tools: None,
+            stream: Some(false),
+            temperature: None,
+            top_p: None,
+            top_k: None,
+            stop_sequences: None,
+            budget_tokens: None,
+            thinking_budget: None,
+            reasoning_effort: None,
+        };
+
+        let val = serialize_request(&req, &LlmProvider::Gemini);
+        let contents = val["contents"].as_array().unwrap();
+        assert_eq!(contents[0]["role"], "user");
+        assert!(
+            contents[0]["parts"][0]["functionResponse"].is_object(),
+            "first turn carries the functionResponse"
+        );
+        assert_eq!(contents[1]["role"], "user");
+        let inline = &contents[1]["parts"][1]["inline_data"];
+        assert_eq!(inline["mime_type"], "image/png");
+        assert_eq!(inline["data"], "CCCC");
     }
 
     #[test]

@@ -37,7 +37,7 @@ pub fn install_hint() -> &'static str {
     if cfg!(target_os = "macos") {
         "To enable browser control, install one of:\n  • brew: brew install --cask chromium\n  • or download Google Chrome from https://www.google.com/chrome/"
     } else if cfg!(target_os = "windows") {
-        "To enable browser control, install one of:\n  • winget: winget install Google.Chrome\n  • or download Chrome from https://www.google.com/chrome/"
+        "To enable browser control, install one of:\n  • use the bundled Microsoft Edge (no install needed)\n  • winget: winget install Google.Chrome\n  • or download Chrome from https://www.google.com/chrome/"
     } else {
         "To enable browser control, install one of:\n  • apt:    sudo apt install chromium-browser\n  • dnf:    sudo dnf install chromium\n  • pacman: sudo pacman -S chromium\n  • snap:   sudo snap install chromium\n  • Or use the Playwright MCP instead: /browser setup"
     }
@@ -81,6 +81,10 @@ pub fn candidate_paths() -> Vec<(PathBuf, &'static str)> {
         {
             for rel in [
                 r"Google\Chrome\Application\chrome.exe",
+                // Edge ships with Windows 10/11 — without it a stock install
+                // would report "no browser found" despite a CDP-capable
+                // Chromium sitting right there.
+                r"Microsoft\Edge\Application\msedge.exe",
                 r"Chromium\Application\chrome.exe",
             ] {
                 out.push((PathBuf::from(&base).join(rel), "windows-path"));
