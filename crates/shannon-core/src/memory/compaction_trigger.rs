@@ -404,17 +404,10 @@ mod tests {
         store.add(ours).unwrap();
 
         // Another agent appends to the same project file on disk.
-        let path = dir.path().join(format!(
-            "{}.jsonl",
-            // same hash the store uses for project "p"
-            {
-                use std::collections::hash_map::DefaultHasher;
-                use std::hash::{Hash, Hasher};
-                let mut h = DefaultHasher::new();
-                "p".hash(&mut h);
-                format!("{:016x}", h.finish())
-            }
-        ));
+        // Same (stable) hash the store uses for project "p".
+        let path = dir
+            .path()
+            .join(format!("{}.jsonl", crate::memory::store::project_hash("p")));
         let theirs = entry_at(
             "y",
             "p",

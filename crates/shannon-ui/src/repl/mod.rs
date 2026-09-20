@@ -1023,9 +1023,18 @@ impl Repl {
             let memory_path = dirs::home_dir()
                 .map(|h| h.join(".shannon").join("memories"))
                 .unwrap_or_else(|| std::path::PathBuf::from(".shannon/memories"));
-            let mut mem_store = shannon_core::MemoryStore::new(memory_path);
+            let mut mem_store = shannon_core::MemoryStore::new(memory_path.clone());
             // Load existing memories from disk (ignore errors on first run)
             let _ = mem_store.load();
+            // Model-facing memory tools: the agent curates the same store it
+            // is injected from (M-1). A second handle on the same storage dir
+            // is safe — the store is multi-writer by design.
+            let _ = tool_registry.register(Box::new(
+                shannon_core::memory::tools::MemorySaveTool::new(memory_path.clone()),
+            ));
+            let _ = tool_registry.register(Box::new(
+                shannon_core::memory::tools::MemoryForgetTool::new(memory_path),
+            ));
             base_engine.with_memory(mem_store)
         };
 

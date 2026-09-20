@@ -1480,6 +1480,22 @@ fn run_noninteractive_query(
         // Load and register skills from shannon-skills as tools
         let _ = shannon_ui::skill_bridge::register_skills_as_tools(&mut tools);
 
+        // Model-facing memory tools (M-1): the agent curates the same
+        // `~/.shannon/memories` store it is injected from. Registered with the
+        // engine's registry; a second store handle on the same dir is safe
+        // (multi-writer by design).
+        {
+            let memory_tools_path = dirs::home_dir()
+                .map(|h| h.join(".shannon").join("memories"))
+                .unwrap_or_else(|| std::path::PathBuf::from(".shannon/memories"));
+            let _ = tools.register(Box::new(
+                shannon_core::memory::tools::MemorySaveTool::new(memory_tools_path.clone()),
+            ));
+            let _ = tools.register(Box::new(
+                shannon_core::memory::tools::MemoryForgetTool::new(memory_tools_path),
+            ));
+        }
+
         // Discover MCP server configurations and register their tools dynamically
         {
             let mut mcp_registry = shannon_core::mcp_advanced::McpServerRegistry::new();
@@ -1692,7 +1708,7 @@ fn run_noninteractive_query(
             let memory_path = dirs::home_dir()
                 .map(|h| h.join(".shannon").join("memories"))
                 .unwrap_or_else(|| std::path::PathBuf::from(".shannon/memories"));
-            let mut mem_store = shannon_core::MemoryStore::new(memory_path);
+            let mut mem_store = shannon_core::MemoryStore::new(memory_path.clone());
             if let Err(e) = mem_store.load() {
                 tracing::debug!("Failed to load memory store: {e}");
             }
@@ -1962,6 +1978,36 @@ fn run_headless_query(
         // Load and register skills
         let _ = shannon_ui::skill_bridge::register_skills_as_tools(&mut tools);
 
+        // Model-facing memory tools (M-1): the agent curates the same
+        // `~/.shannon/memories` store it is injected from.
+        {
+            let memory_tools_path = dirs::home_dir()
+                .map(|h| h.join(".shannon").join("memories"))
+                .unwrap_or_else(|| std::path::PathBuf::from(".shannon/memories"));
+            let _ = tools.register(Box::new(
+                shannon_core::memory::tools::MemorySaveTool::new(memory_tools_path.clone()),
+            ));
+            let _ = tools.register(Box::new(
+                shannon_core::memory::tools::MemoryForgetTool::new(memory_tools_path),
+            ));
+        }
+
+        // Model-facing memory tools (M-1): the agent curates the same
+        // `~/.shannon/memories` store it is injected from. Registered with the
+        // engine's registry; a second store handle on the same dir is safe
+        // (multi-writer by design).
+        {
+            let memory_tools_path = dirs::home_dir()
+                .map(|h| h.join(".shannon").join("memories"))
+                .unwrap_or_else(|| std::path::PathBuf::from(".shannon/memories"));
+            let _ = tools.register(Box::new(
+                shannon_core::memory::tools::MemorySaveTool::new(memory_tools_path.clone()),
+            ));
+            let _ = tools.register(Box::new(
+                shannon_core::memory::tools::MemoryForgetTool::new(memory_tools_path),
+            ));
+        }
+
         // Discover MCP servers
         {
             let mut mcp_registry = shannon_core::mcp_advanced::McpServerRegistry::new();
@@ -2084,7 +2130,7 @@ fn run_headless_query(
             let memory_path = dirs::home_dir()
                 .map(|h| h.join(".shannon").join("memories"))
                 .unwrap_or_else(|| std::path::PathBuf::from(".shannon/memories"));
-            let mut mem_store = shannon_core::MemoryStore::new(memory_path);
+            let mut mem_store = shannon_core::MemoryStore::new(memory_path.clone());
             if let Err(e) = mem_store.load() {
                 tracing::debug!("Failed to load memory store: {e}");
             }
@@ -3131,7 +3177,7 @@ fn run_team_agent_mode(
             let memory_path = dirs::home_dir()
                 .map(|h| h.join(".shannon").join("memories"))
                 .unwrap_or_else(|| std::path::PathBuf::from(".shannon/memories"));
-            let mut mem_store = shannon_core::MemoryStore::new(memory_path);
+            let mut mem_store = shannon_core::MemoryStore::new(memory_path.clone());
             if let Err(e) = mem_store.load() {
                 tracing::debug!("Failed to load memory store: {e}");
             }

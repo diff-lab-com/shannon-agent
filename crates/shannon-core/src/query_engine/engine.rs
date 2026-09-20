@@ -993,6 +993,9 @@ pub struct QueryEngine {
     pub(crate) plan_mode_active: Arc<RwLock<bool>>,
     /// Effective maximum context tokens — resolved from user config > Ollama num_ctx > model registry.
     pub(crate) effective_max_context_tokens: usize,
+    /// Index into the conversation up to which AutoDream memory extraction has
+    /// run (P0-10: extraction is incremental, not a full rescan per query).
+    pub(crate) memory_extract_cursor: Arc<std::sync::atomic::AtomicUsize>,
     /// Custom permission profiles loaded from `.shannon/profiles/*.toml` and `.claude/profiles/*.toml`.
     pub(crate) custom_profiles:
         Arc<tokio::sync::RwLock<shannon_engine::custom_profiles::CustomProfileRegistry>>,
@@ -1154,6 +1157,7 @@ impl QueryEngine {
             repo_map_injector,
             plan_mode_active: Arc::new(RwLock::new(false)),
             effective_max_context_tokens,
+            memory_extract_cursor: Arc::new(std::sync::atomic::AtomicUsize::new(0)),
             custom_profiles: Arc::new(tokio::sync::RwLock::new(
                 shannon_engine::custom_profiles::CustomProfileRegistry::load_from_dirs(),
             )),
@@ -1210,6 +1214,7 @@ impl QueryEngine {
             repo_map_injector,
             plan_mode_active: Arc::new(RwLock::new(false)),
             effective_max_context_tokens,
+            memory_extract_cursor: Arc::new(std::sync::atomic::AtomicUsize::new(0)),
             custom_profiles: Arc::new(tokio::sync::RwLock::new(
                 shannon_engine::custom_profiles::CustomProfileRegistry::load_from_dirs(),
             )),
@@ -1299,6 +1304,7 @@ impl QueryEngine {
             repo_map_injector,
             plan_mode_active: Arc::new(RwLock::new(false)),
             effective_max_context_tokens,
+            memory_extract_cursor: Arc::new(std::sync::atomic::AtomicUsize::new(0)),
             custom_profiles: Arc::new(tokio::sync::RwLock::new(
                 shannon_engine::custom_profiles::CustomProfileRegistry::load_from_dirs(),
             )),
@@ -2165,6 +2171,11 @@ impl QueryEngine {
 
         // Clone memory store for post-query extraction (fire-and-forget)
         let memory_for_extraction = self.memory.clone();
+        // Extraction cursor (P0-10 incremental extraction): index into the
+        // conversation up to which facts have already been extracted.
+        let memory_extract_cursor_cell = self.memory_extract_cursor.clone();
+        let memory_extract_cursor_cursor = memory_extract_cursor_cell
+            .load(std::sync::atomic::Ordering::Relaxed);
 
         // Engine-config snapshot embedded in every `request/header` (§4.2),
         // so each logged request is a pure function of the log.
@@ -5826,28 +5837,40 @@ impl QueryEngine {
                 }
             }
 
-            // Post-query: fire-and-forget memory extraction via AutoDreamService
+            // Post-query: fire-and-forget memory extraction via AutoDreamService.
+            // INCREMENTAL (P0-10): only the post-cursor delta is extracted.
+            // The previous full-conversation rescan on every query re-matched
+            // old facts each turn, refreshing `accessed_at` on noise and
+            // spawning paraphrase siblings at a rate the 0.8 Jaccard dedup
+            // could not absorb.
             if let Some(ref mem_store) = memory_for_extraction {
                 let store_arc = mem_store.clone();
-                let msgs = conversation.messages.clone();
+                let total = conversation.messages.len();
+                let cursor = memory_extract_cursor_cursor.min(total);
+                let delta: Vec<Message> = conversation.messages[cursor..].to_vec();
                 // P2-4 provenance: stamp extracted entries with the session
                 // that produced them so the Memory page can jump back.
                 let session_for_extraction = self_session_id.clone();
                 tokio::spawn(async move {
-                    let dream = AutoDreamService::new(store_arc);
-                    let project = std::env::current_dir()
-                        .map(|p| p.display().to_string())
-                        .unwrap_or_else(|_| "default".to_string());
-                    let _ = dream.process_conversation_with_session(
-                        &msgs,
-                        &project,
-                        Some(&session_for_extraction),
-                    );
-                    // Periodic compaction (ADR-0010 C5'): dedupe + prune + size
-                    // control, gated by a persisted sidecar schedule. Each query
-                    // is one session; compaction fires at ~24 h or ≥ 5 sessions.
-                    let _ = dream.maybe_compact(&project, &SessionMemoryConfig::default());
+                    if !delta.is_empty() {
+                        let dream = AutoDreamService::new(store_arc);
+                        let project = std::env::current_dir()
+                            .map(|p| p.display().to_string())
+                            .unwrap_or_else(|_| "default".to_string());
+                        let _ = dream.process_conversation_with_session(
+                            &delta,
+                            &project,
+                            Some(&session_for_extraction),
+                        );
+                        // Periodic compaction (ADR-0010 C5'): dedupe + prune +
+                        // size control, gated by a persisted sidecar schedule.
+                        // Each query is one session; compaction fires at ~24 h
+                        // or ≥ 5 sessions.
+                        let _ = dream.maybe_compact(&project, &SessionMemoryConfig::default());
+                    }
                 });
+                memory_extract_cursor_cell
+                    .store(total, std::sync::atomic::Ordering::Relaxed);
             }
         });
 

@@ -33,6 +33,8 @@ pub use error::MemoryError;
 pub use store::{AddOutcome, MemoryStore};
 pub use types::{MemoryCategory, MemoryEntry, MemoryType, SessionMemoryConfig};
 
+pub mod tools;
+
 // Private modules
 mod auto_dream;
 mod compaction_trigger;
