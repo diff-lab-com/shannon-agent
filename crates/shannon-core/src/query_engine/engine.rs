@@ -1899,8 +1899,16 @@ impl QueryEngine {
         };
 
         // Build structured system prompt with cache breakpoints.
-        // Layout: [base prompt] → [memory (cached)] → [smart context (cached)] → [project instructions (cached)]
-        let mut system_blocks: Vec<SystemContentBlock> = Vec::new();
+        //
+        // Cache policy: Anthropic allows at most 4 `cache_control` breakpoints
+        // per request, and the adapter adds two more (last tool definition +
+        // last user message). Marking every block cached could emit up to 11
+        // system breakpoints and overflow that budget. Mark exactly two system
+        // breakpoints instead: the base prompt (never changes) and the LAST
+        // stable block (covers the whole stable prefix). Query-dependent and
+        // per-turn blocks (smart context, setup hints, focus, goal,
+        // environment) are emitted AFTER the last breakpoint so they never
+        // bust the cached prefix.
         let use_cache = matches!(
             client_provider,
             shannon_engine::api::LlmProvider::Anthropic
@@ -1908,45 +1916,18 @@ impl QueryEngine {
                 | shannon_engine::api::LlmProvider::Custom
         );
 
-        // Base system prompt — always cache the system prompt prefix for Anthropic,
-        // as it's identical across all turns and the largest cache savings come from here.
+        // ── Stable zone (cacheable prefix; order matters) ──
+        let mut stable_blocks: Vec<String> = Vec::new();
+
+        // Base system prompt — the anchor breakpoint: identical across all
+        // turns and the largest cache savings come from here.
         if let Some(ref base) = config.system_prompt {
-            let block = if use_cache {
-                SystemContentBlock::cached(base.clone())
-            } else {
-                SystemContentBlock::text(base.clone())
-            };
-            system_blocks.push(block);
+            stable_blocks.push(base.clone());
         }
 
         // Memory entries — scoped injection, grouped by category (ADR-0010 D2).
         if let Some(mem_text) = memory_injection {
-            let block = if use_cache {
-                SystemContentBlock::cached(mem_text)
-            } else {
-                SystemContentBlock::text(mem_text)
-            };
-            system_blocks.push(block);
-        }
-
-        // Smart context: auto-include relevant files based on query.
-        // Gated by `auto_context_enabled` — the scan reads ambient
-        // filesystem state, so hosts that need byte-deterministic requests
-        // (payload-verifying tests, context-injecting shells) turn it off.
-        if config.auto_context_enabled {
-            let smart_context = {
-                let working_dir =
-                    std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."));
-                crate::smart_context::find_relevant_context(&user_message, &working_dir)
-            };
-            if let Some(ctx) = crate::smart_context::format_context_for_prompt(&smart_context) {
-                let block = if use_cache {
-                    SystemContentBlock::cached(ctx)
-                } else {
-                    SystemContentBlock::text(ctx)
-                };
-                system_blocks.push(block);
-            }
+            stable_blocks.push(mem_text);
         }
 
         // Inject CLAUDE.md / AGENTS.md / GEMINI.md project instructions —
@@ -1955,35 +1936,26 @@ impl QueryEngine {
             let working_dir =
                 std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."));
             if let Some(ctx) = crate::project_instructions::load_full_context(&working_dir) {
-                let block = if use_cache {
-                    SystemContentBlock::cached(ctx.content)
-                } else {
-                    SystemContentBlock::text(ctx.content)
-                };
-                system_blocks.push(block);
+                stable_blocks.push(ctx.content);
             }
         }
 
         // Inject context from ContextInjector (preference memory + hot-reloaded instructions)
         if let Some(ref injector) = self.context_injector {
-            let extra_blocks = injector.build_system_blocks(use_cache);
-            system_blocks.extend(extra_blocks);
+            let extra_blocks = injector.build_system_blocks(false);
+            for block in extra_blocks {
+                stable_blocks.push(block.text);
+            }
         }
 
         // Inject the project repo map (P1-4) — a per-project, budget-trimmed
         // symbol overview rendered as markdown. Best-effort: a None return
-        // (parse / walk failure) means we skip silently. We use `cached`
-        // because the repo map is stable across turns within a session —
-        // changing only when source files change, which we invalidate via
-        // `notify_file_changed`.
+        // (parse / walk failure) means we skip silently. Stable across turns
+        // within a session — changing only when source files change, which we
+        // invalidate via `notify_file_changed`.
         if config.repo_map_enabled {
             if let Some(repo_map_md) = self.repo_map_injector.build() {
-                let block = if use_cache {
-                    SystemContentBlock::cached(repo_map_md)
-                } else {
-                    SystemContentBlock::text(repo_map_md)
-                };
-                system_blocks.push(block);
+                stable_blocks.push(repo_map_md);
             }
         }
 
@@ -1991,12 +1963,37 @@ impl QueryEngine {
         {
             let tool_names = tools.list();
             if let Some(browser_text) = crate::query_engine::browser_control_prompt(&tool_names) {
-                let block = if use_cache {
-                    SystemContentBlock::cached(browser_text)
-                } else {
-                    SystemContentBlock::text(browser_text)
-                };
-                system_blocks.push(block);
+                stable_blocks.push(browser_text);
+            }
+        }
+
+        // Inject team coordination instructions when team tools are present
+        {
+            let tool_names = tools.list();
+            if let Some(team_text) =
+                crate::query_engine::team_prompt::team_coordination_prompt(&tool_names)
+            {
+                stable_blocks.push(team_text);
+            }
+        }
+
+        // ── Dynamic zone (after the last breakpoint — never cache-busting) ──
+        let mut dynamic_blocks: Vec<SystemContentBlock> = Vec::new();
+
+        // Smart context: auto-include relevant files based on query.
+        // Query-dependent content must NOT sit inside the cached prefix —
+        // every new query would invalidate the breakpoints. Gated by
+        // `auto_context_enabled` — the scan reads ambient filesystem state,
+        // so hosts that need byte-deterministic requests (payload-verifying
+        // tests, context-injecting shells) turn it off.
+        if config.auto_context_enabled {
+            let smart_context = {
+                let working_dir =
+                    std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."));
+                crate::smart_context::find_relevant_context(&user_message, &working_dir)
+            };
+            if let Some(ctx) = crate::smart_context::format_context_for_prompt(&smart_context) {
+                dynamic_blocks.push(SystemContentBlock::text(ctx));
             }
         }
 
@@ -2007,22 +2004,7 @@ impl QueryEngine {
             let tool_names = tools.list();
             if let Some(hint) = crate::query_engine::browser_setup_hint(&tool_names, &user_message)
             {
-                system_blocks.push(SystemContentBlock::text(hint));
-            }
-        }
-
-        // Inject team coordination instructions when team tools are present
-        {
-            let tool_names = tools.list();
-            if let Some(team_text) =
-                crate::query_engine::team_prompt::team_coordination_prompt(&tool_names)
-            {
-                let block = if use_cache {
-                    SystemContentBlock::cached(team_text)
-                } else {
-                    SystemContentBlock::text(team_text)
-                };
-                system_blocks.push(block);
+                dynamic_blocks.push(SystemContentBlock::text(hint));
             }
         }
 
@@ -2034,15 +2016,35 @@ impl QueryEngine {
                  Prioritize this area in your responses. Give extra attention to \
                  aspects related to {focus} when analyzing, coding, or reviewing."
             );
-            system_blocks.push(SystemContentBlock::text(focus_text));
+            dynamic_blocks.push(SystemContentBlock::text(focus_text));
         }
 
         // Inject session goal from /goal command into system prompt.
         // Non-cached block so goal edits don't bust the cached prompt prefix;
         // rebuilt on every query so the goal survives compaction.
         if let Some(ref goal) = config.goal {
-            system_blocks.push(goal_system_block(goal));
+            dynamic_blocks.push(goal_system_block(goal));
         }
+
+        // Assemble: stable zone with at most two cache breakpoints (first +
+        // last block), then the dynamic zone (never cached).
+        let mut system_blocks: Vec<SystemContentBlock> = Vec::new();
+        if use_cache {
+            let last_stable = stable_blocks.len().saturating_sub(1);
+            for (i, text) in stable_blocks.into_iter().enumerate() {
+                let block = if i == 0 || i == last_stable {
+                    SystemContentBlock::cached(text)
+                } else {
+                    SystemContentBlock::text(text)
+                };
+                system_blocks.push(block);
+            }
+        } else {
+            for text in stable_blocks {
+                system_blocks.push(SystemContentBlock::text(text));
+            }
+        }
+        system_blocks.extend(dynamic_blocks);
 
         // Decide whether to use structured blocks or fallback to plain string.
         // Use structured blocks only when we have content (avoids empty system arrays).
@@ -7049,6 +7051,50 @@ mod tests {
         assert!(!crate::tool_execution::is_file_modifying_tool("Glob"));
         assert!(!crate::tool_execution::is_file_modifying_tool("Grep"));
         assert!(!crate::tool_execution::is_file_modifying_tool("LSP"));
+    }
+
+    #[test]
+    fn test_cache_breakpoint_budget_respected() {
+        // P0-6 regression: the system block assembly must emit at most 2
+        // cache breakpoints. Anthropic caps a request at 4 and the adapter
+        // adds two more (last tool def + last user message), so any more
+        // than 2 system breakpoints overflows the budget.
+        //
+        // Simulate the assembly policy: N stable blocks + 3 dynamic blocks.
+        let stable_texts: Vec<String> = (0..9).map(|i| format!("stable {i}")).collect();
+        let use_cache = true;
+
+        let mut system_blocks: Vec<SystemContentBlock> = Vec::new();
+        if use_cache {
+            let last_stable = stable_texts.len().saturating_sub(1);
+            for (i, text) in stable_texts.into_iter().enumerate() {
+                let block = if i == 0 || i == last_stable {
+                    SystemContentBlock::cached(text)
+                } else {
+                    SystemContentBlock::text(text)
+                };
+                system_blocks.push(block);
+            }
+        }
+        for i in 0..3 {
+            system_blocks.push(SystemContentBlock::text(format!("dynamic {i}")));
+        }
+
+        let cached_count = system_blocks
+            .iter()
+            .filter(|b| b.cache_control.is_some())
+            .count();
+        assert!(
+            cached_count <= 2,
+            "system blocks must carry at most 2 cache breakpoints, got {cached_count}"
+        );
+        // First (base) and last stable block are the cached ones.
+        assert!(system_blocks[0].cache_control.is_some());
+        assert!(system_blocks[8].cache_control.is_some());
+        // Dynamic zone stays uncached.
+        for block in &system_blocks[9..] {
+            assert!(block.cache_control.is_none());
+        }
     }
 
     // ── Context resolution tests ──────────────────────────────────
