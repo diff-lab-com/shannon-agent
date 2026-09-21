@@ -445,7 +445,18 @@ fn register_all_tools(
     registry.register(Box::new(TaskListTool::new()))?;
     registry.register(Box::new(TaskUpdateTool::new()))?;
     registry.register(Box::new(TaskGetTool::new()))?;
-    registry.register(Box::new(TaskTool::new()))?;
+    // C+D Phase 3: the op-enum `Task` tool (crates/shannon-tools/src/task.rs)
+    // collided with Claude Code's "Task" = subagent-spawn convention. Its
+    // operations are fully covered by TodoWrite + TaskCreate/List/Update/Get
+    // above. Removed from the default registry; re-introducible via
+    // `SHANNON_LEGACY_TASK_TOOLS=1` (R1 Phase 2) if any host needs it.
+    if std::env::var("SHANNON_LEGACY_TASK_TOOLS")
+        .ok()
+        .map(|s| s == "1")
+        .unwrap_or(false)
+    {
+        registry.register(Box::new(TaskTool::new()))?;
+    }
     registry.register(Box::new(TaskOutputTool::new()))?;
     registry.register(Box::new(TaskStopTool::new()))?;
 
