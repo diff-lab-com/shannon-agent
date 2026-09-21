@@ -552,27 +552,44 @@ jobs:
           for p in $(cargo metadata --no-deps --format-version 1 | jq -r '.packages[].name' | grep -vx -e shannon-desktop -e shannon-tools -e shannon-cli); do
             cargo check -p "$p" --all-features
           done
-      - name: Check computer-use feature builds (Linux only)
-        # One leg per feature shape: the umbrella backend existing builds
-        # use, each alternative Linux input backend, the Wayland capture
-        # composition, and the local-browser forward — on shannon-tools and
-        # on its shannon-cli forwarder. The plain `computer-use` build broke
-        # unseen for weeks before the #81 hotfix — these legs keep every
-        # shape compiling.
-        # libxdo-dev: enigo's default Linux backend needs libxdo headers on
-        # a fresh runner (cargo check type-checks the FFI surface); jq is
-        # needed by the per-member loop above and this job has no other
-        # step installing it.
+      # One step per feature shape so a red run names the exact shape that
+      # broke instead of a 10-command blob (the 2026-09-21 dev red took a
+      # full static-audit pass because the failing command was unlogged).
+      # libxdo-dev: enigo's default Linux backend needs libxdo headers on
+      # a fresh runner (cargo check type-checks the FFI surface); jq is
+      # needed by the per-member loop above and this job has no other
+      # step installing it.
+      - name: Install computer-use check deps (Linux only)
+        if: runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends jq libxdo-dev
+      - name: Check computer-use (Linux only)
         if: runner.os == 'Linux'
         run: |
-          sudo apt-get update && sudo apt-get install -y --no-install-recommends jq libxdo-dev
-          for f in computer-use computer-use-libei computer-use-wayland computer-use-x11rb; do
-            cargo check -p shannon-tools --features "$f"
-            cargo check -p shannon-cli --features "$f"
-          done
+          cargo check -p shannon-tools --features computer-use
+          cargo check -p shannon-cli --features computer-use
+      - name: Check computer-use-libei (Linux only)
+        if: runner.os == 'Linux'
+        run: |
+          cargo check -p shannon-tools --features computer-use-libei
+          cargo check -p shannon-cli --features computer-use-libei
+      - name: Check computer-use-wayland (Linux only)
+        if: runner.os == 'Linux'
+        run: |
+          cargo check -p shannon-tools --features computer-use-wayland
+          cargo check -p shannon-cli --features computer-use-wayland
+      - name: Check computer-use-x11rb (Linux only)
+        if: runner.os == 'Linux'
+        run: |
+          cargo check -p shannon-tools --features computer-use-x11rb
+          cargo check -p shannon-cli --features computer-use-x11rb
+      - name: Check computer-use-wayland-capture (Linux only)
+        if: runner.os == 'Linux'
+        run: |
           cargo check -p shannon-tools --features computer-use-wayland-capture
           cargo check -p shannon-tools --features computer-use-wayland,computer-use-wayland-capture
-          cargo check -p shannon-tools --features local-browser
+      - name: Check local-browser (Linux only)
+        if: runner.os == 'Linux'
+        run: cargo check -p shannon-tools --features local-browser
 
   check-linux-musl:
     # Linux-only musl smoke test. Renamed from `check-cross-platform` so
