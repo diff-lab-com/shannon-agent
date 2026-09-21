@@ -446,9 +446,15 @@ pub struct FileHistoryManager {
 pub enum RewindAction {
     /// Restore the file to this content.
     Restore(String),
-    /// The file's earliest turn-tagged snapshot is newer than the target turn, so it
-    /// did not exist at the target — delete it.
+    /// The file's earliest snapshot is turn-tagged, i.e. the file was first
+    /// captured as an end-of-turn state with no pre-modify snapshot before it
+    /// — provably created by this session. Safe to delete.
     Delete,
+    /// Every turn-tagged snapshot is newer than the target but the file's
+    /// earliest snapshot is a pre-modify capture — the file existed before
+    /// the session and must NOT be deleted on inference (E-2). Callers leave
+    /// it untouched and inform the user.
+    SkipNoBaseline,
     /// No turn-tagged history for this file — leave it untouched.
     NoChange,
 }
@@ -781,11 +787,27 @@ impl FileHistoryManager {
             Some(s) => Ok(RewindAction::Restore(s.content.clone())),
             None => {
                 if history.snapshots.iter().any(|s| s.turn_index.is_some()) {
-                    Ok(RewindAction::Delete)
+                    Ok(Self::delete_or_skip(&history))
                 } else {
                     Ok(RewindAction::NoChange)
                 }
             }
+        }
+    }
+
+    /// Decide between [`RewindAction::Delete`] and [`RewindAction::SkipNoBaseline`]
+    /// when every turn-tagged snapshot is newer than the rewind target.
+    ///
+    /// Evidence rule: a file CREATED by this session has its earliest snapshot
+    /// turn-tagged (nothing existed before the first turn's end-of-turn
+    /// capture). A file that predated the session was captured by a
+    /// pre-modify snapshot when the agent first touched it, so its earliest
+    /// snapshot is NOT turn-tagged — deleting it would destroy pre-session
+    /// content, so we skip and let the user decide (E-2).
+    fn delete_or_skip(history: &super::history::FileHistory) -> RewindAction {
+        match history.snapshots.first() {
+            Some(first) if first.turn_index.is_some() => RewindAction::Delete,
+            _ => RewindAction::SkipNoBaseline,
         }
     }
 
@@ -821,7 +843,7 @@ impl FileHistoryManager {
             Some(s) => Ok(RewindAction::Restore(s.content.clone())),
             None => {
                 if history.snapshots.iter().any(|s| s.turn_index.is_some()) {
-                    Ok(RewindAction::Delete)
+                    Ok(Self::delete_or_skip(&history))
                 } else {
                     Ok(RewindAction::NoChange)
                 }

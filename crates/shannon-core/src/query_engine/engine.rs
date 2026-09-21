@@ -48,6 +48,21 @@ use crate::query_engine::repo_map_injector::RepoMapInjector;
 // path is preserved as the LLM-backed summarizer; the facade's token-based
 // strategy is what fires when no summarizer is available or when the
 // selector chooses the cheap path.
+#[allow(unused_imports)]
+use super::env_config::DEFAULT_THINK_ONLY_MIN_ANSWER_CHARS;
+#[allow(unused_imports)]
+// DEFAULT_MAX_TOOL_RESULT_CHARS/env_num_override: test-only in this module
+use super::env_config::{
+    DEFAULT_MAX_TOOL_RESULT_CHARS, MICRO_PRUNE_THRESHOLD, THINK_ONLY_NUDGE_PROMPT,
+    TRUNCATION_CONTINUATION_PROMPT, cap_tool_result, env_num_override, think_only_min_answer_chars,
+    think_only_nudge_max, token_budget_limit, token_budget_nudge_for,
+};
+#[allow(unused_imports)] // split_think_content: used by tests in this module
+use super::parsers::{
+    ThinkStreamSplitter, is_think_only_response, is_truncation_stop, markdown_bash_command,
+    parse_text_tool_calls, split_think_content,
+};
+use super::routing::{QueryComplexity, classify_query_complexity};
 use crate::compact as p2_compact;
 use crate::query_engine::streaming::ConversationState;
 use crate::query_engine::types::{
@@ -420,39 +435,137 @@ enum StreamingPhase {
     Finalized,
 }
 
-/// `stop_reason` values meaning "output was cut off by the output token
-/// limit before the model finished": OpenAI-compatible `length`,
-/// Anthropic/Gemini `max_tokens`.
-fn is_truncation_stop(reason: Option<&str>) -> bool {
-    matches!(reason, Some("length" | "max_tokens"))
+// ── Turn-level stream-death continuation (A8) ─────────────────────────────
+//
+// DeepSWE smoke RCA (smoke-2 turn 8 / smoke-4 turn 14, three attempts all
+// dead; docs/research/pier-adapter-notes-2026-09.md §五): the GLM
+// coding-plan gateway hard-cuts a single LLM call at ~6 minutes. With
+// thinking=max a long-thinking turn routinely crosses that line, the stream
+// dies mid-turn, the engine surfaced a Timeout-class `QueryEvent::Failed`,
+// and the whole headless run was lost — every prior turn and tool result
+// with it (rc=3, empty patch). The client-level reconnect and the run-level
+// A7 restart both replay from scratch and re-enter the same >6min call.
+//
+// A8 instead continues THE TURN in place: on a timeout-class stream death
+// (establishment or mid-stream), re-send with all history and prior tool
+// state intact, plus a one-shot continuation nudge from the second attempt
+// on. Bounded by `SHANNON_TURN_RETRIES` (default 2, 0 disables — naming
+// aligned with the run-level `SHANNON_RUN_RETRIES`); on exhaustion the
+// existing failure path runs unchanged so A7 remains the last line.
+
+/// Re-prompt appended when a turn's LLM call is retried after a
+/// timeout-class stream death. Verbatim from the A8 plan; pinned by test.
+const TURN_CONTINUATION_NUDGE_PROMPT: &str = "Your previous response stream was \
+     interrupted by a network fault. Continue from where you stopped. Keep this \
+     response focused and moderately sized.";
+
+/// Default per-turn retry budget for A8 continuation
+/// (`SHANNON_TURN_RETRIES`; "0" legitimately disables).
+const DEFAULT_TURN_RETRIES: u32 = 2;
+
+/// A14: cap for the stream-idle watchdog budget when the engine escalates
+/// it across timeout-class turn continuations. The base budget is read
+/// from `SHANNON_STREAM_IDLE_SECS` (default 420s); each escalation step
+/// scales it by the current retry index but never above this ceiling.
+/// Beyond this, an actively-silent stream is genuinely stalled and should
+/// not be rescued.
+const STREAM_IDLE_ESCALATION_CAP_SECS: u64 = 1200;
+
+/// A14: how much each successive timeout-class continuation within the
+/// same turn multiplies the stream-idle watchdog budget. Index 1 (first
+/// escalation) → ×2 = 840s, index 2 → ×3 = 1260s, then capped.
+const STREAM_IDLE_ESCALATION_FACTOR_BASE: u64 = 1;
+
+// ── Wrap-up protocol before the final turn (A10) ──────────────────────────
+//
+// DeepSWE w4: arcane / dynamodb died at the turn limit with the work done
+// but nothing committed — exit 2, empty patch (F10,
+// docs/deepswe-eval-findings-2026-09.md). A one-shot nudge entering the
+// LAST turn tells the model to land its work and summarize. The hard stop
+// itself is unchanged: exhausting the budget still ends the run exactly as
+// before (the nudge lands work, it does not lie about success).
+
+/// Re-prompt injected once when the upcoming iteration is the final turn.
+/// Verbatim from the A10 plan; pinned by test.
+const WRAP_UP_NUDGE_PROMPT: &str = "Your turn budget is nearly exhausted — this is \
+     your final turn. Finish your current work now: if you are working in a git \
+     repository, commit your changes; then give a brief summary of what was \
+     completed and what remains.";
+
+/// Append the A8 continuation nudge (role=user, same injection shape as the
+/// A1 think-only nudge) unless it is already the last message. The
+/// one-shot guard keeps a repeated stall from stacking copies: the first
+/// retry appends, a second consecutive retry reuses the existing nudge so
+/// every retry request carries exactly one.
+fn push_turn_continuation_nudge(messages: &mut Vec<Message>) {
+    if let Some(last) = messages.last() {
+        if last.role == "user" {
+            if let MessageContent::Text(text) = &last.content {
+                if text == TURN_CONTINUATION_NUDGE_PROMPT {
+                    return;
+                }
+            }
+        }
+    }
+    messages.push(Message {
+        role: "user".to_string(),
+        content: MessageContent::Text(TURN_CONTINUATION_NUDGE_PROMPT.to_string()),
+    });
 }
 
-/// Re-prompt sent when a response is truncated by the output token limit:
-/// the model must resume mid-task rather than restart or restate itself.
-const TRUNCATION_CONTINUATION_PROMPT: &str = "Your previous response was cut off by the \
-     output token limit before you finished. Continue exactly where you left off and \
-     complete the task. Do not repeat what you already wrote.";
+/// A14: compute the escalated stream-idle watchdog budget for the next
+/// continuation attempt. `turn_retries_used` is the 1-indexed count of
+/// escalations already issued on this turn (0 for the original attempt,
+/// 1 after the first timeout-class continuation, etc). The escalation
+/// follows `min(base * (1 + retry + STREAM_IDLE_ESCALATION_FACTOR_BASE),
+/// STREAM_IDLE_ESCALATION_CAP_SECS)`:
+///   - retry 0 (original attempt): no override — the base env budget is
+///     used as-is, identical to pre-A14 behavior.
+///   - retry 1: base × 2 → 420s × 2 = 840s.
+///   - retry 2: base × 3 → 420s × 3 = 1260s (would be capped at 1200s
+///     when the cap equals the natural value).
+///
+/// Returns `None` when no base budget is configured (env unset / 0 / 负数),
+/// preserving the pre-A14 "watchdog disabled" path. The cap is hard so an
+/// actively-silent stream is never rescued past
+/// `STREAM_IDLE_ESCALATION_CAP_SECS`.
+fn stream_idle_escalated_budget(
+    base_secs: Option<u64>,
+    turn_retries_used: u32,
+) -> Option<std::time::Duration> {
+    let base = base_secs?;
+    if turn_retries_used == 0 {
+        return None;
+    }
+    let factor = STREAM_IDLE_ESCALATION_FACTOR_BASE + u64::from(turn_retries_used);
+    let raw = base.saturating_mul(factor);
+    let capped = raw.min(STREAM_IDLE_ESCALATION_CAP_SECS);
+    Some(std::time::Duration::from_secs(capped))
+}
 
-// ── Think-only continuation nudge (A1) ───────────────────────────────
-//
-// eval-findings-2026-09-glm.md A1: models occasionally return a
-// "think-only" response — reasoning content only, no tool_use, no
-// user-facing answer. The engine treated that as a normal completion,
-// ended the session headless, and produced an empty patch (minimax b11
-// lost 3/50 SWE tasks — 4-8pp — to exactly this pattern). When the final
-// response carries no tool call and no substantive answer, the engine now
-// synthesizes a user-side re-prompt instead of completing.
+/// A14: apply the escalated stream-idle budget to the client before the
+/// next continuation attempt. No-op when `base_secs` is unset (watchdog
+/// was off before A14; A14 does not turn it on for anyone).
+///
+/// `turn_retries_used` reflects the index of the continuation we are
+/// about to issue — i.e. 1 after the first timeout-class continuation.
+/// The escalation is cleared by [`clear_stream_idle_override`] when the
+/// stream finalizes normally.
+fn escalate_stream_idle_override(
+    client: &shannon_engine::api::client::LlmClient,
+    base_secs: Option<u64>,
+    turn_retries_used: u32,
+) {
+    let budget = stream_idle_escalated_budget(base_secs, turn_retries_used);
+    client.set_stream_idle_override(budget);
+}
 
-/// Re-prompt sent when a response has no tool calls and no usable final
-/// answer (see [`is_think_only_response`]).
-const THINK_ONLY_NUDGE_PROMPT: &str = "Your previous response contained no tool calls \
-     and no final answer. Either invoke the appropriate tool to continue the task, or \
-     reply with your final answer to the user.";
-
-/// Default cap on consecutive think-only nudges per query. Override with
-/// `SHANNON_THINK_ONLY_NUDGE_MAX`. When exhausted the query ends exactly as
-/// it did before this feature existed.
-const DEFAULT_THINK_ONLY_NUDGE_MAX: u32 = 2;
+/// A14: clear any A14 escalation on the client. Called when a stream
+/// finalizes normally (turn_retries_used reset path) so the next fresh
+/// turn starts again from the base budget.
+fn clear_stream_idle_override(client: &shannon_engine::api::client::LlmClient) {
+    client.set_stream_idle_override(None);
+}
 
 /// Default minimum length (chars) of the visible — i.e. non-reasoning —
 /// answer for a response to count as substantive. Override with
@@ -465,434 +578,13 @@ const DEFAULT_THINK_ONLY_NUDGE_MAX: u32 = 2;
 /// reasoning models into a self-doubt loop (7k–21k tokens for one Q&A, field-
 /// observed on MiniMax M3). An unhelpfully-short-but-present answer is the
 /// model's call; blank-only replies still get one chance to recover.
-const DEFAULT_THINK_ONLY_MIN_ANSWER_CHARS: usize = 0;
-
-/// Read a non-negative integer env override, falling back to `default` when
-/// unset, empty, or unparseable (same conventions as
-/// [`QueryEngine::apply_env_overrides`]: only non-empty values are
-/// intentional overrides; garbage is silently ignored).
-fn env_num_override(name: &str, default: u32) -> u32 {
-    match std::env::var(name) {
-        Ok(v) if !v.trim().is_empty() => v.trim().parse::<u32>().unwrap_or_else(|_| {
-            tracing::warn!("Invalid {name}={v:?} — using default {default}");
-            default
-        }),
-        _ => default,
-    }
-}
-
-/// Max consecutive think-only nudges for this query
-/// (`SHANNON_THINK_ONLY_NUDGE_MAX`, default
-/// [`DEFAULT_THINK_ONLY_NUDGE_MAX`]).
-fn think_only_nudge_max() -> u32 {
-    env_num_override("SHANNON_THINK_ONLY_NUDGE_MAX", DEFAULT_THINK_ONLY_NUDGE_MAX)
+fn turn_retries_max() -> u32 {
+    env_num_override("SHANNON_TURN_RETRIES", DEFAULT_TURN_RETRIES)
 }
 
 /// Visible-answer threshold in chars for the think-only classifier
 /// (`SHANNON_THINK_ONLY_MIN_ANSWER_CHARS`, default
 /// [`DEFAULT_THINK_ONLY_MIN_ANSWER_CHARS`]).
-fn think_only_min_answer_chars() -> usize {
-    env_num_override(
-        "SHANNON_THINK_ONLY_MIN_ANSWER_CHARS",
-        DEFAULT_THINK_ONLY_MIN_ANSWER_CHARS as u32,
-    ) as usize
-}
-
-// ── B.6 ────────────────────────────────────────────────────────────────────
-// SHANNON_TOKEN_BUDGET: a hard cap on cumulative input tokens. When the cap
-// is exceeded the engine synthesizes a user-side message that pushes the
-// model away from full-file reads (the eval failure mode measured in
-// eval-findings-2026-09-glm.md F2 — single-shot `cat` of multi-MB files
-// burned the remaining turn budget). Disabling the cap = SHANNON_TOKEN_BUDGET=0.
-
-/// Default value for the B.6 token-budget watchdog (`SHANNON_TOKEN_BUDGET`).
-/// Zero disables it entirely so non-eval users are unaffected.
-const DEFAULT_TOKEN_BUDGET: u64 = 0;
-
-/// Recommended eval setting for SWE-bench / TB2.1 runs (120k tokens ≈
-/// the cap after which the model starts losing recent context in
-/// `estimate_tokens`).
-#[allow(dead_code)] // KEEP: documentation anchor; eval reads the env directly.
-pub const RECOMMENDED_TOKEN_BUDGET: u64 = 120_000;
-
-/// Resolve the configured B.6 budget. `0` (default) disables the watchdog.
-/// Honors the same parse contract as [`env_num_override`]: unset, empty,
-/// or unparseable → `DEFAULT_TOKEN_BUDGET`.
-fn token_budget_limit() -> u64 {
-    env_num_override("SHANNON_TOKEN_BUDGET", DEFAULT_TOKEN_BUDGET as u32) as u64
-}
-
-/// Build the targeted-read nudge the model receives when the B.6 budget is
-/// exceeded. Pure: depends only on `(used, budget)` so the call site can
-/// pass live counts and unit tests can pin both arguments.
-///
-/// Returns `None` when `budget == 0` (disabled) or `used <= budget`. The
-/// text is the exact phrase required by the plan — verbatim so the unit
-/// test's `contains("Context is large")` assertion matches.
-fn token_budget_nudge_for(used: u64, budget: u64) -> Option<String> {
-    if budget == 0 || used <= budget {
-        return None;
-    }
-    Some(format!(
-        "Context is large ({used}/{budget} tokens). Prefer targeted reads \
-         (`Grep`, `head -c`, `Read` with offset+limit) over full-file reads \
-         or `cat`. Re-read only what you need; commit fixes promptly."
-    ))
-}
-
-/// Split inline `<think>...</think>` reasoning out of assistant text.
-///
-/// Returns `(saw_reasoning, visible_text)` where `visible_text` is the text
-/// outside reasoning blocks (reasoning-family providers — MiniMax M-series,
-/// GLM — stream `<think>` inline in the content deltas). An unclosed
-/// `<think>` swallows the rest of the text: a response cut mid-reasoning
-/// has no visible answer by definition.
-fn split_think_content(text: &str) -> (bool, String) {
-    const OPEN: &str = "<think>";
-    const CLOSE: &str = "</think>";
-    let mut visible = String::with_capacity(text.len());
-    let mut rest = text;
-    let mut saw_think = false;
-    loop {
-        match rest.find(OPEN) {
-            Some(start) => {
-                saw_think = true;
-                visible.push_str(&rest[..start]);
-                let after_open = &rest[start + OPEN.len()..];
-                match after_open.find(CLOSE) {
-                    Some(close) => rest = &after_open[close + CLOSE.len()..],
-                    // Unclosed reasoning block — nothing visible after it.
-                    None => return (true, visible),
-                }
-            }
-            None => {
-                visible.push_str(rest);
-                return (saw_think, visible);
-            }
-        }
-    }
-}
-
-/// Streaming splitter for inline `<think>...</think>` reasoning blocks
-/// (WP-15 P0-2). Reasoning-family providers on the OpenAI wire (MiniMax
-/// M-series, GLM) stream `<think>` inline in the content deltas instead of
-/// using a thinking channel, so the raw delta stream has to be re-split:
-/// reasoning goes out as [`QueryEvent::Thinking`], the answer stays a plain
-/// `Text` event. Tag-aware across chunk boundaries — `<think>` / `</think>`
-/// may split across deltas, so a tail that could be a tag prefix is held
-/// back (up to 7 chars of display lag; flushed by `finish`).
-#[derive(Default)]
-struct ThinkStreamSplitter {
-    /// Bytes held back because they may be a partial `<think>`/`</think>` tag.
-    pending: String,
-    /// True while inside a `<think>` block.
-    in_think: bool,
-}
-
-impl ThinkStreamSplitter {
-    const OPEN: &'static str = "<think>";
-    const CLOSE: &'static str = "</think>";
-
-    /// Consume one content delta. Returns `(thinking, visible)` — either
-    /// side may be empty for a given chunk.
-    fn feed(&mut self, chunk: &str) -> (String, String) {
-        let mut thinking = String::new();
-        let mut visible = String::new();
-        let mut buf = std::mem::take(&mut self.pending);
-        buf.push_str(chunk);
-        loop {
-            let (tag, is_open) = if self.in_think {
-                (Self::CLOSE, false)
-            } else {
-                (Self::OPEN, true)
-            };
-            match buf.find(tag) {
-                Some(pos) => {
-                    let head = &buf[..pos];
-                    if self.in_think {
-                        thinking.push_str(head);
-                    } else {
-                        visible.push_str(head);
-                    }
-                    buf = buf[pos + tag.len()..].to_string();
-                    self.in_think = is_open;
-                }
-                None => {
-                    // Hold back a tail that could be a tag prefix split across
-                    // the next chunk boundary. The tag is ASCII, so a real
-                    // prefix always starts on a char boundary — walk back only
-                    // along boundaries (a raw `buf[len-n..]` panics on
-                    // multi-byte text, e.g. Chinese replies).
-                    let max_keep = tag.len().saturating_sub(1).min(buf.len());
-                    let mut keep = 0;
-                    for n in 1..=max_keep {
-                        if !buf.is_char_boundary(buf.len() - n) {
-                            continue;
-                        }
-                        if tag.starts_with(&buf[buf.len() - n..]) {
-                            keep = n;
-                            break;
-                        }
-                    }
-                    let split_at = buf.len() - keep;
-                    if self.in_think {
-                        thinking.push_str(&buf[..split_at]);
-                    } else {
-                        visible.push_str(&buf[..split_at]);
-                    }
-                    self.pending = buf[split_at..].to_string();
-                    return (thinking, visible);
-                }
-            }
-        }
-    }
-
-    /// Flush at stream end. A dangling partial tag is literal text; an
-    /// unclosed `<think>` swallows the tail (a response cut mid-reasoning
-    /// has no visible answer by definition). Idempotent.
-    fn finish(&mut self) -> (String, String) {
-        let pending = std::mem::take(&mut self.pending);
-        if self.in_think {
-            self.in_think = false;
-            (pending, String::new())
-        } else {
-            (String::new(), pending)
-        }
-    }
-}
-
-/// WP-15 P0-1 fallback: extract a Bash tool command from an assistant reply
-/// that tried to call the tool as a markdown code block instead of through
-/// the native tool-calling API (observed in the field with MiniMax M-series).
-///
-/// Deliberately conservative — false positives mean executing example code
-/// from an ordinary answer, so the fallback only fires when the *whole*
-/// visible reply is one bare shell block (prose outside the fence ≤
-/// `MAX_PROSE_CHARS`, one block, shell-ish or missing language tag):
-///
-/// - "```\nrm -rf build/\n```" → Some("rm -rf build/")
-/// - "Creating the file:\n```bash\ncat > a.txt <<EOF\nhi\nEOF\n```" → Some(...)
-/// - a long explanation that merely *contains* an example block → None
-fn markdown_bash_command(text: &str) -> Option<String> {
-    const MAX_PROSE_CHARS: usize = 200;
-    const SHELL_LANGS: &[&str] = &["bash", "sh", "shell", "zsh", "console"];
-
-    let mut blocks: Vec<(bool, String)> = Vec::new(); // (shell_candidate, content)
-    let mut prose_len = 0usize;
-    let mut in_fence = false;
-    let mut fence_shell = false;
-    let mut fence_content = String::new();
-    for line in text.lines() {
-        let trimmed = line.trim_start();
-        if let Some(rest) = trimmed.strip_prefix("```") {
-            if in_fence {
-                blocks.push((fence_shell, std::mem::take(&mut fence_content)));
-                in_fence = false;
-            } else {
-                in_fence = true;
-                let lang = rest.trim().to_ascii_lowercase();
-                fence_shell = lang.is_empty() || SHELL_LANGS.contains(&lang.as_str());
-            }
-            continue;
-        }
-        if in_fence {
-            fence_content.push_str(line);
-            fence_content.push('\n');
-        } else {
-            prose_len += trimmed.chars().count();
-        }
-    }
-    // Unclosed fence still counts (stream cut after the opening).
-    if in_fence {
-        blocks.push((fence_shell, std::mem::take(&mut fence_content)));
-    }
-
-    if blocks.len() != 1 || prose_len > MAX_PROSE_CHARS {
-        return None;
-    }
-    let (shell, content) = blocks.into_iter().next()?;
-    if !shell {
-        return None;
-    }
-    let command = content.trim().to_string();
-    if command.is_empty() {
-        return None;
-    }
-    Some(command)
-}
-
-/// WP-15 P0-1 (upgraded): parse GLM/MiniMax-style *textual* tool calls out of
-/// an assistant reply. When these models bypass the native tool-calling API,
-/// they don't always fall back to a bare shell block — MiniMax M3 was observed
-/// emitting its vendor-token-wrapped XML form as plain text:
-///
-/// ```text
-/// ]<]minimax[>[<tool_call>
-/// <invoke name="Write">
-/// <parameter name="file_path">/tmp/demo.txt</parameter>
-/// <parameter name="content">hello</parameter>
-/// </invoke>
-/// </tool_call>
-/// ```
-///
-/// (The `] < ]minimax[ > [` prefix is the model's vendor special token leaking
-/// into the text stream — the scan anchors on `<tool_call>` and ignores
-/// anything before it.) Returns one `(name, input)` per `<invoke>`, or `None`
-/// when the text contains no complete invoke. Parameter values that parse as
-/// JSON keep their type; everything else becomes a string. Unclosed blocks are
-/// skipped — a stream cut mid-call is a truncation case, not a tool call.
-fn parse_text_tool_calls(text: &str) -> Option<Vec<(String, serde_json::Value)>> {
-    const CALL_OPEN: &str = "<tool_call>";
-    const CALL_CLOSE: &str = "</tool_call>";
-    const INVOKE_OPEN: &str = "<invoke name=\"";
-    const INVOKE_CLOSE: &str = "</invoke>";
-    const PARAM_OPEN: &str = "<parameter name=\"";
-    const PARAM_CLOSE: &str = "</parameter>";
-
-    let mut calls: Vec<(String, serde_json::Value)> = Vec::new();
-    let mut rest = text;
-    while let Some(pos) = rest.find(CALL_OPEN) {
-        let after = &rest[pos + CALL_OPEN.len()..];
-        let Some(call_end) = after.find(CALL_CLOSE) else {
-            break; // unclosed block — truncation, not a call
-        };
-        let block = &after[..call_end];
-        rest = &after[call_end + CALL_CLOSE.len()..];
-
-        let mut brest = block;
-        while let Some(ipos) = brest.find(INVOKE_OPEN) {
-            let iafter = &brest[ipos + INVOKE_OPEN.len()..];
-            let Some(name_end) = iafter.find("\">") else {
-                break;
-            };
-            let name = iafter[..name_end].trim().to_string();
-            let Some(invoke_end) = iafter.find(INVOKE_CLOSE) else {
-                break;
-            };
-            let body = &iafter[name_end + 2..invoke_end];
-            brest = &iafter[invoke_end + INVOKE_CLOSE.len()..];
-            if name.is_empty() {
-                continue;
-            }
-
-            let mut input = serde_json::Map::new();
-            let mut prest = body;
-            while let Some(ppos) = prest.find(PARAM_OPEN) {
-                let pafter = &prest[ppos + PARAM_OPEN.len()..];
-                let Some(key_end) = pafter.find("\">") else {
-                    break;
-                };
-                let key = pafter[..key_end].trim().to_string();
-                let Some(param_end) = pafter.find(PARAM_CLOSE) else {
-                    break;
-                };
-                let raw = pafter[key_end + 2..param_end].trim();
-                prest = &pafter[param_end + PARAM_CLOSE.len()..];
-                if key.is_empty() {
-                    continue;
-                }
-                let value = serde_json::from_str(raw)
-                    .unwrap_or_else(|_| serde_json::Value::String(raw.to_string()));
-                input.insert(key, value);
-            }
-            calls.push((name, serde_json::Value::Object(input)));
-        }
-    }
-    if calls.is_empty() { None } else { Some(calls) }
-}
-
-/// True when the response carries no tool calls and no substantive
-/// user-facing answer:
-///
-/// - empty text (covers reasoning that arrived only via thinking deltas), or
-/// - reasoning markup present and the visible residue is shorter than
-///   `min_answer_chars` — a think-only response.
-///
-/// Text *without* any reasoning markup is treated as a deliberate (possibly
-/// terse) answer and never nudged: nudging every short "Done." would wreck
-/// normal sessions for no eval benefit — the measured failure mode is always
-/// reasoning-dominated.
-fn is_think_only_response(text: &str, tool_use_count: usize, min_answer_chars: usize) -> bool {
-    if tool_use_count > 0 {
-        return false;
-    }
-    let trimmed = text.trim();
-    if trimmed.is_empty() {
-        return true;
-    }
-    let (saw_think, visible) = split_think_content(trimmed);
-    if !saw_think {
-        return false;
-    }
-    // `.max(1)` makes threshold 0 mean "nudge only when the visible answer is
-    // blank" (0 < 0 would never fire — see DEFAULT_THINK_ONLY_MIN_ANSWER_CHARS).
-    visible.trim().chars().count() < min_answer_chars.max(1)
-}
-
-// ── Query complexity classification ──────────────────────────────────
-
-/// Query complexity level for model routing.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum QueryComplexity {
-    /// Simple lookup, short question — route to fast_model
-    Simple,
-    /// Planning, architecture, design — route to plan_model
-    Planning,
-    /// Standard coding task — use primary model
-    Standard,
-}
-
-/// Keywords that signal planning/architecture queries.
-const PLANNING_KEYWORDS: &[&str] = &[
-    "architect",
-    "architecture",
-    "design",
-    "plan",
-    "planning",
-    "refactor",
-    "migrate",
-    "strategy",
-    "blueprint",
-    "roadmap",
-    "system design",
-    "evaluate",
-    "analyze",
-    "review",
-];
-
-/// Keywords that signal complex implementation queries.
-const COMPLEX_KEYWORDS: &[&str] = &[
-    "implement",
-    "build",
-    "create",
-    "develop",
-    "integrate",
-    "debug",
-    "fix",
-    "solve",
-    "troubleshoot",
-];
-
-/// Classify a user query by complexity for model routing.
-fn classify_query_complexity(query: &str) -> QueryComplexity {
-    let lower = query.to_lowercase();
-
-    // Short queries with no complex keywords → Simple
-    if query.len() < 200
-        && !PLANNING_KEYWORDS.iter().any(|k| lower.contains(k))
-        && !COMPLEX_KEYWORDS.iter().any(|k| lower.contains(k))
-    {
-        return QueryComplexity::Simple;
-    }
-
-    // Planning/architecture keywords → Planning
-    if PLANNING_KEYWORDS.iter().any(|k| lower.contains(k)) {
-        return QueryComplexity::Planning;
-    }
-
-    QueryComplexity::Standard
-}
-
 /// Verdict for a single provider returned by [`QueryEngine::probe_all_health`].
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ProviderHealthStatus {
@@ -949,6 +641,9 @@ pub struct QueryEngine {
     pub(crate) plan_mode_active: Arc<RwLock<bool>>,
     /// Effective maximum context tokens — resolved from user config > Ollama num_ctx > model registry.
     pub(crate) effective_max_context_tokens: usize,
+    /// Index into the conversation up to which AutoDream memory extraction has
+    /// run (P0-10: extraction is incremental, not a full rescan per query).
+    pub(crate) memory_extract_cursor: Arc<std::sync::atomic::AtomicUsize>,
     /// Custom permission profiles loaded from `.shannon/profiles/*.toml` and `.claude/profiles/*.toml`.
     pub(crate) custom_profiles:
         Arc<tokio::sync::RwLock<shannon_engine::custom_profiles::CustomProfileRegistry>>,
@@ -1110,6 +805,7 @@ impl QueryEngine {
             repo_map_injector,
             plan_mode_active: Arc::new(RwLock::new(false)),
             effective_max_context_tokens,
+            memory_extract_cursor: Arc::new(std::sync::atomic::AtomicUsize::new(0)),
             custom_profiles: Arc::new(tokio::sync::RwLock::new(
                 shannon_engine::custom_profiles::CustomProfileRegistry::load_from_dirs(),
             )),
@@ -1166,6 +862,7 @@ impl QueryEngine {
             repo_map_injector,
             plan_mode_active: Arc::new(RwLock::new(false)),
             effective_max_context_tokens,
+            memory_extract_cursor: Arc::new(std::sync::atomic::AtomicUsize::new(0)),
             custom_profiles: Arc::new(tokio::sync::RwLock::new(
                 shannon_engine::custom_profiles::CustomProfileRegistry::load_from_dirs(),
             )),
@@ -1255,6 +952,7 @@ impl QueryEngine {
             repo_map_injector,
             plan_mode_active: Arc::new(RwLock::new(false)),
             effective_max_context_tokens,
+            memory_extract_cursor: Arc::new(std::sync::atomic::AtomicUsize::new(0)),
             custom_profiles: Arc::new(tokio::sync::RwLock::new(
                 shannon_engine::custom_profiles::CustomProfileRegistry::load_from_dirs(),
             )),
@@ -1859,8 +1557,16 @@ impl QueryEngine {
         };
 
         // Build structured system prompt with cache breakpoints.
-        // Layout: [base prompt] → [memory (cached)] → [smart context (cached)] → [project instructions (cached)]
-        let mut system_blocks: Vec<SystemContentBlock> = Vec::new();
+        //
+        // Cache policy: Anthropic allows at most 4 `cache_control` breakpoints
+        // per request, and the adapter adds two more (last tool definition +
+        // last user message). Marking every block cached could emit up to 11
+        // system breakpoints and overflow that budget. Mark exactly two system
+        // breakpoints instead: the base prompt (never changes) and the LAST
+        // stable block (covers the whole stable prefix). Query-dependent and
+        // per-turn blocks (smart context, setup hints, focus, goal,
+        // environment) are emitted AFTER the last breakpoint so they never
+        // bust the cached prefix.
         let use_cache = matches!(
             client_provider,
             shannon_engine::api::LlmProvider::Anthropic
@@ -1868,45 +1574,18 @@ impl QueryEngine {
                 | shannon_engine::api::LlmProvider::Custom
         );
 
-        // Base system prompt — always cache the system prompt prefix for Anthropic,
-        // as it's identical across all turns and the largest cache savings come from here.
+        // ── Stable zone (cacheable prefix; order matters) ──
+        let mut stable_blocks: Vec<String> = Vec::new();
+
+        // Base system prompt — the anchor breakpoint: identical across all
+        // turns and the largest cache savings come from here.
         if let Some(ref base) = config.system_prompt {
-            let block = if use_cache {
-                SystemContentBlock::cached(base.clone())
-            } else {
-                SystemContentBlock::text(base.clone())
-            };
-            system_blocks.push(block);
+            stable_blocks.push(base.clone());
         }
 
         // Memory entries — scoped injection, grouped by category (ADR-0010 D2).
-        if let Some(mem_text) = memory_injection {
-            let block = if use_cache {
-                SystemContentBlock::cached(mem_text)
-            } else {
-                SystemContentBlock::text(mem_text)
-            };
-            system_blocks.push(block);
-        }
-
-        // Smart context: auto-include relevant files based on query.
-        // Gated by `auto_context_enabled` — the scan reads ambient
-        // filesystem state, so hosts that need byte-deterministic requests
-        // (payload-verifying tests, context-injecting shells) turn it off.
-        if config.auto_context_enabled {
-            let smart_context = {
-                let working_dir =
-                    std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."));
-                crate::smart_context::find_relevant_context(&user_message, &working_dir)
-            };
-            if let Some(ctx) = crate::smart_context::format_context_for_prompt(&smart_context) {
-                let block = if use_cache {
-                    SystemContentBlock::cached(ctx)
-                } else {
-                    SystemContentBlock::text(ctx)
-                };
-                system_blocks.push(block);
-            }
+        if let Some(mem_text) = memory_injection.clone() {
+            stable_blocks.push(mem_text);
         }
 
         // Inject CLAUDE.md / AGENTS.md / GEMINI.md project instructions —
@@ -1915,35 +1594,26 @@ impl QueryEngine {
             let working_dir =
                 std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."));
             if let Some(ctx) = crate::project_instructions::load_full_context(&working_dir) {
-                let block = if use_cache {
-                    SystemContentBlock::cached(ctx.content)
-                } else {
-                    SystemContentBlock::text(ctx.content)
-                };
-                system_blocks.push(block);
+                stable_blocks.push(ctx.content);
             }
         }
 
         // Inject context from ContextInjector (preference memory + hot-reloaded instructions)
         if let Some(ref injector) = self.context_injector {
-            let extra_blocks = injector.build_system_blocks(use_cache);
-            system_blocks.extend(extra_blocks);
+            let extra_blocks = injector.build_system_blocks(false);
+            for block in extra_blocks {
+                stable_blocks.push(block.text);
+            }
         }
 
         // Inject the project repo map (P1-4) — a per-project, budget-trimmed
         // symbol overview rendered as markdown. Best-effort: a None return
-        // (parse / walk failure) means we skip silently. We use `cached`
-        // because the repo map is stable across turns within a session —
-        // changing only when source files change, which we invalidate via
-        // `notify_file_changed`.
+        // (parse / walk failure) means we skip silently. Stable across turns
+        // within a session — changing only when source files change, which we
+        // invalidate via `notify_file_changed`.
         if config.repo_map_enabled {
             if let Some(repo_map_md) = self.repo_map_injector.build() {
-                let block = if use_cache {
-                    SystemContentBlock::cached(repo_map_md)
-                } else {
-                    SystemContentBlock::text(repo_map_md)
-                };
-                system_blocks.push(block);
+                stable_blocks.push(repo_map_md);
             }
         }
 
@@ -1951,12 +1621,37 @@ impl QueryEngine {
         {
             let tool_names = tools.list();
             if let Some(browser_text) = crate::query_engine::browser_control_prompt(&tool_names) {
-                let block = if use_cache {
-                    SystemContentBlock::cached(browser_text)
-                } else {
-                    SystemContentBlock::text(browser_text)
-                };
-                system_blocks.push(block);
+                stable_blocks.push(browser_text);
+            }
+        }
+
+        // Inject team coordination instructions when team tools are present
+        {
+            let tool_names = tools.list();
+            if let Some(team_text) =
+                crate::query_engine::team_prompt::team_coordination_prompt(&tool_names)
+            {
+                stable_blocks.push(team_text);
+            }
+        }
+
+        // ── Dynamic zone (after the last breakpoint — never cache-busting) ──
+        let mut dynamic_blocks: Vec<SystemContentBlock> = Vec::new();
+
+        // Smart context: auto-include relevant files based on query.
+        // Query-dependent content must NOT sit inside the cached prefix —
+        // every new query would invalidate the breakpoints. Gated by
+        // `auto_context_enabled` — the scan reads ambient filesystem state,
+        // so hosts that need byte-deterministic requests (payload-verifying
+        // tests, context-injecting shells) turn it off.
+        if config.auto_context_enabled {
+            let smart_context = {
+                let working_dir =
+                    std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."));
+                crate::smart_context::find_relevant_context(&user_message, &working_dir)
+            };
+            if let Some(ctx) = crate::smart_context::format_context_for_prompt(&smart_context) {
+                dynamic_blocks.push(SystemContentBlock::text(ctx));
             }
         }
 
@@ -1967,22 +1662,7 @@ impl QueryEngine {
             let tool_names = tools.list();
             if let Some(hint) = crate::query_engine::browser_setup_hint(&tool_names, &user_message)
             {
-                system_blocks.push(SystemContentBlock::text(hint));
-            }
-        }
-
-        // Inject team coordination instructions when team tools are present
-        {
-            let tool_names = tools.list();
-            if let Some(team_text) =
-                crate::query_engine::team_prompt::team_coordination_prompt(&tool_names)
-            {
-                let block = if use_cache {
-                    SystemContentBlock::cached(team_text)
-                } else {
-                    SystemContentBlock::text(team_text)
-                };
-                system_blocks.push(block);
+                dynamic_blocks.push(SystemContentBlock::text(hint));
             }
         }
 
@@ -1994,15 +1674,49 @@ impl QueryEngine {
                  Prioritize this area in your responses. Give extra attention to \
                  aspects related to {focus} when analyzing, coding, or reviewing."
             );
-            system_blocks.push(SystemContentBlock::text(focus_text));
+            dynamic_blocks.push(SystemContentBlock::text(focus_text));
         }
 
         // Inject session goal from /goal command into system prompt.
         // Non-cached block so goal edits don't bust the cached prompt prefix;
         // rebuilt on every query so the goal survives compaction.
         if let Some(ref goal) = config.goal {
-            system_blocks.push(goal_system_block(goal));
+            dynamic_blocks.push(goal_system_block(goal));
         }
+
+        // Plan-mode awareness: previously the only signal was the per-tool
+        // write-block error, so the model burned turns probing what was
+        // allowed instead of producing the requested plan.
+        if self.is_plan_mode_active() {
+            dynamic_blocks.push(SystemContentBlock::text(
+                "## Plan Mode Active\n\
+                 You are in plan mode: file writes and state-mutating tools are disabled.\n\
+                 Research the codebase (read-only tools are available), then present a\n\
+                 clear, step-by-step implementation plan for the user to review and\n\
+                 approve before any code is changed."
+                    .to_string(),
+            ));
+        }
+
+        // Assemble: stable zone with at most two cache breakpoints (first +
+        // last block), then the dynamic zone (never cached).
+        let mut system_blocks: Vec<SystemContentBlock> = Vec::new();
+        if use_cache {
+            let last_stable = stable_blocks.len().saturating_sub(1);
+            for (i, text) in stable_blocks.into_iter().enumerate() {
+                let block = if i == 0 || i == last_stable {
+                    SystemContentBlock::cached(text)
+                } else {
+                    SystemContentBlock::text(text)
+                };
+                system_blocks.push(block);
+            }
+        } else {
+            for text in stable_blocks {
+                system_blocks.push(SystemContentBlock::text(text));
+            }
+        }
+        system_blocks.extend(dynamic_blocks);
 
         // Decide whether to use structured blocks or fallback to plain string.
         // Use structured blocks only when we have content (avoids empty system arrays).
@@ -2021,24 +1735,54 @@ impl QueryEngine {
             Some(LOCAL_MODEL_SYSTEM_PROMPT.to_string())
         };
 
-        // Inject the working directory so the model knows where to write files.
+        // Inject the environment block (cwd, date/time, platform, git context,
+        // sandbox self-description). Deliberately LAST and non-cached: it is
+        // per-turn mutable state, and keeping it after all cache breakpoints
+        // means it never invalidates the cached prompt prefix. Git context
+        // previously lived inside the cached instructions payload, busting
+        // the cache on every edit the agent made.
         if let Ok(cwd) = std::env::current_dir() {
-            let mut cwd_text =
+            let mut env_text =
                 format!("\n\n## Environment\n\nWorking directory: {}", cwd.display());
+            // Date/time + platform: ground "today"-relative reasoning and
+            // platform-specific commands without any cache cost (this block
+            // sits after every breakpoint).
+            {
+                let now = chrono::Local::now();
+                env_text.push_str(&format!(
+                    "\nToday's date: {} ({})",
+                    now.format("%Y-%m-%d"),
+                    now.format("%A")
+                ));
+                env_text.push_str(&format!(
+                    "\nPlatform: {} ({})",
+                    std::env::consts::OS,
+                    std::env::consts::ARCH
+                ));
+            }
+            // Git context (branch, recent commits, dirty state) — per-turn
+            // mutable, so it lives here with the rest of the env block.
+            if let Some(git_ctx) = crate::project_instructions::git_context(&cwd) {
+                let trimmed = git_ctx.trim_start();
+                if !trimmed.is_empty() {
+                    env_text.push_str("\n\n");
+                    env_text.push_str(trimmed);
+                }
+            }
             // Sandbox self-description (§ sandbox self-description): the
             // model cannot otherwise know the sandbox's path remapping or
             // that host toolchains may be absent — eval runs showed it
             // burning turns probing the filesystem / running apt-get.
             if let Some(sandbox_text) = crate::sandbox::sandbox_self_description(&cwd) {
-                cwd_text.push_str("\n\n");
-                cwd_text.push_str(&sandbox_text);
+                env_text.push_str("\n\n");
+                env_text.push_str(&sandbox_text);
             }
             if let Some(ref mut prompt) = system_prompt {
-                prompt.push_str(&cwd_text);
+                prompt.push_str(&env_text);
             }
             if let Some(ref mut blocks) = system_blocks_opt {
                 blocks.push(shannon_engine::api::types::SystemContentBlock::text(
-                    cwd_text,
+                    env_text,
                 ));
             }
         }
@@ -2075,6 +1819,11 @@ impl QueryEngine {
 
         // Clone memory store for post-query extraction (fire-and-forget)
         let memory_for_extraction = self.memory.clone();
+        // Extraction cursor (P0-10 incremental extraction): index into the
+        // conversation up to which facts have already been extracted.
+        let memory_extract_cursor_cell = self.memory_extract_cursor.clone();
+        let memory_extract_cursor_cursor =
+            memory_extract_cursor_cell.load(std::sync::atomic::Ordering::Relaxed);
 
         // Engine-config snapshot embedded in every `request/header` (§4.2),
         // so each logged request is a pure function of the log.
@@ -2233,6 +1982,11 @@ impl QueryEngine {
 
             let mut turn = 0;
             let mut tool_results: Vec<ToolResultEntry> = Vec::new();
+            // Runtime notices (permission soft-limit warnings, auto-test
+            // results) that travel as plain user text — never as tool_result
+            // blocks, whose synthetic ids would reference no assistant
+            // ToolUse and draw a provider 400 ("unexpected tool_use_id").
+            let mut user_notices: Vec<String> = Vec::new();
             let mut total_input_tokens: u64 = 0;
             let mut total_output_tokens: u64 = 0;
             let mut file_edits_made = false;
@@ -2242,10 +1996,17 @@ impl QueryEngine {
             let mut session_file_edits_made = false;
             // P-B: fires once per query when the checkpoint turn is reached.
             let mut turn_checkpoint_fired = false;
+            // A10: fires once per query when the upcoming iteration is the
+            // final turn. The A8 continuation re-enters the same turn
+            // without advancing the counter, so the flag — not the turn
+            // arithmetic — is what keeps the nudge one-shot.
+            let mut wrap_up_nudge_fired = false;
             // P-M: fires once per threshold per query (60% and 80% independently).
             let mut token_warning_60_fired = false;
             let mut token_warning_80_fired = false;
             let mut compaction_failures: u32 = 0;
+            // Micro-compaction (tool-result clearing) fires once per query.
+            let mut micro_pruned_fired = false;
             const MAX_COMPACTION_FAILURES: u32 = 2;
 
             // Denial circuit breaker: track consecutive permission denials.
@@ -2291,7 +2052,25 @@ impl QueryEngine {
             let mut seen_tool_use_ids_query: std::collections::HashSet<String> =
                 std::collections::HashSet::new();
 
-            loop {
+            // A8: per-turn budget of timeout-class continuation retries.
+            // Incremented when a dead LLM call is re-sent in place; reset
+            // whenever a stream completes normally so every fresh turn gets
+            // its own budget. A retry does NOT consume the max_turns budget
+            // (the turn is re-entered, not advanced).
+            let mut turn_retries_used: u32 = 0;
+            let max_turn_retries = turn_retries_max();
+
+            // A14: base stream-idle budget, read once per query from the
+            // engine-side SHANNON_STREAM_IDLE_SECS env (default 420s, the
+            // same constant the streaming layer reads directly — we duplicate
+            // the lookup here so we can compute escalations without poking
+            // engine internals from the test suite).
+            let stream_idle_base_secs = std::env::var("SHANNON_STREAM_IDLE_SECS")
+                .ok()
+                .and_then(|v| v.parse::<u64>().ok())
+                .filter(|v| *v > 0);
+
+            'agent_loop: loop {
                 if turn >= config.max_turns {
                     let total_cost = CostTracker::calculate_cost(
                         &client_model,
@@ -2352,6 +2131,21 @@ impl QueryEngine {
                     conversation.messages.push(tool_msg);
                 }
 
+                // Drain runtime notices as a plain user text message. They must
+                // land AFTER the tool_result drain (same pairing constraint as
+                // the turn-N checkpoint below): a synthetic user message before
+                // `user(tool_result)` violates the assistant(tool_use) →
+                // user(tool_result) API contract.
+                if !user_notices.is_empty() {
+                    let notice_msg = Message {
+                        role: "user".to_string(),
+                        content: MessageContent::Text(user_notices.join("\n\n")),
+                    };
+                    messages.push(notice_msg.clone());
+                    conversation.messages.push(notice_msg);
+                    user_notices.clear();
+                }
+
                 // ── P-B: turn-N checkpoint ─────────────────────────────────
                 // Fires ONCE per query when `turn` (the count of completed
                 // turns, incremented at the bottom of each iteration) first
@@ -2402,6 +2196,48 @@ impl QueryEngine {
                         conversation.messages.push(synth_msg);
                         turn_checkpoint_fired = true;
                     }
+                }
+
+                // ── A10: wrap-up protocol entering the final turn ──────────
+                // Fires ONCE per query when the upcoming iteration is the
+                // last one (`turn + 1 == max_turns`): the model is told to
+                // land its work (commit) and summarize. w4 evidence: arcane
+                // / dynamodb hit the turn limit with the work done but
+                // nothing committed — exit 2, empty patch (F10,
+                // docs/deepswe-eval-findings-2026-09.md; backlog A10). The
+                // hard stop below is UNCHANGED — exhausting the budget still
+                // ends the run exactly as before; the nudge lands work, it
+                // does not lie about success. Placed after the tool_results
+                // drain for the same wire-order reason as the P-B checkpoint
+                // above (synthetic user message must follow user(tool_result)).
+                // One-shot by flag: the A8 continuation re-enters this same
+                // iteration without advancing `turn`, and must not stack a
+                // second wrap-up nudge.
+                if !wrap_up_nudge_fired && turn + 1 == config.max_turns {
+                    wrap_up_nudge_fired = true;
+                    tracing::info!(
+                        turn,
+                        max_turns = config.max_turns,
+                        "final-turn wrap-up nudge injected"
+                    );
+                    send_event!(
+                        tx,
+                        QueryEvent::Progress {
+                            query_id,
+                            message: format!(
+                                "Agent turn budget nearly exhausted — final turn \
+                                 ({}/{}): wrap up, commit your work, and summarize.",
+                                turn + 1,
+                                config.max_turns
+                            ),
+                        }
+                    );
+                    let wrap_up_msg = Message {
+                        role: "user".to_string(),
+                        content: MessageContent::Text(WRAP_UP_NUDGE_PROMPT.to_string()),
+                    };
+                    messages.push(wrap_up_msg.clone());
+                    conversation.messages.push(wrap_up_msg);
                 }
 
                 // Resolve effective max context FIRST: Ollama num_ctx > model registry > fallback.
@@ -2468,7 +2304,8 @@ impl QueryEngine {
                                 })
                                 .unwrap_or(0);
                     let max_context = effective_max_context.max(1); // Guard against division by zero
-                    let usage_ratio = estimated_tokens as f32 / max_context as f32;
+                    let mut estimated_tokens = estimated_tokens;
+                    let mut usage_ratio = estimated_tokens as f32 / max_context as f32;
 
                     // Pre-compaction warning at 60% — gives users visibility before compression fires.
                     // P-M: also inject a SYNTHETIC USER MESSAGE at 60% so the model itself
@@ -2578,12 +2415,57 @@ impl QueryEngine {
                         }
                     }
 
+                    // Micro-compaction (tool-result clearing): once per query,
+                    // above MICRO_PRUNE_THRESHOLD but BEFORE lossy full
+                    // compaction, shrink stale tool results in older turns to
+                    // 200-char previews (error results kept in full). This is
+                    // the cheapest context win and often avoids summarization
+                    // entirely. Pruning edits content in place — no messages
+                    // are removed, so tool_use/tool_result pairing is safe;
+                    // the unconditional sync below persists it.
+                    if !micro_pruned_fired && usage_ratio > MICRO_PRUNE_THRESHOLD {
+                        micro_pruned_fired = true;
+                        let keep = config.keep_recent_messages.min(messages.len());
+                        let head = messages.len() - keep;
+                        let before = estimated_tokens;
+                        shannon_engine::compact::CompactEngine::prune_stale_tool_results(
+                            &mut messages[..head],
+                        );
+                        estimated_tokens =
+                            shannon_engine::compact::helpers::estimate_tokens(&messages)
+                                + config
+                                    .system_prompt
+                                    .as_ref()
+                                    .map(|sp| {
+                                        shannon_engine::compact::helpers::estimate_text_tokens(sp)
+                                    })
+                                    .unwrap_or(0);
+                        usage_ratio = estimated_tokens as f32 / max_context as f32;
+                        send_event!(
+                            tx,
+                            QueryEvent::Progress {
+                                query_id,
+                                message: format!(
+                                    "Cleared stale tool results from older turns: ~{before} → ~{estimated_tokens} tokens (context now {:.0}% full)",
+                                    usage_ratio * 100.0,
+                                ),
+                            }
+                        );
+                    }
+
                     if usage_ratio > config.compression_threshold {
                         // Circuit breaker: if compaction has failed repeatedly, skip it and just truncate
                         if compaction_failures >= MAX_COMPACTION_FAILURES {
                             let keep = config.keep_recent_messages;
                             if messages.len() > keep {
-                                messages = messages.split_off(messages.len() - keep);
+                                // Pair-aware: never split a tool_use/tool_result pair
+                                // when cutting history (an orphaned half is rejected by
+                                // providers with a 400).
+                                let split = shannon_engine::compact::safe_split_point(
+                                    &messages,
+                                    messages.len() - keep,
+                                );
+                                messages = messages.split_off(split);
                             }
                             send_event!(tx, QueryEvent::Progress {
                                 query_id,
@@ -2637,10 +2519,22 @@ impl QueryEngine {
                                     );
                                     // Re-inject critical context after compaction
                                     // so the model retains project instructions.
-                                    let reinjection = context_injector
+                                    let mut reinjection = context_injector
                                         .as_ref()
                                         .map(|ci| ci.reinjection_context())
                                         .unwrap_or_default();
+                                    // Curated project memories must survive the
+                                    // compaction boundary too — system blocks are
+                                    // rebuilt next query, but the compacted
+                                    // history loses them until then.
+                                    if let Some(mem) = memory_injection.as_ref() {
+                                        if !mem.is_empty() {
+                                            if !reinjection.is_empty() {
+                                                reinjection.push_str("\n\n");
+                                            }
+                                            reinjection.push_str(mem);
+                                        }
+                                    }
                                     if !reinjection.is_empty() && !messages.is_empty() {
                                         let ctx_msg = shannon_engine::api::Message {
                                             role: "system".to_string(),
@@ -2659,7 +2553,12 @@ impl QueryEngine {
                                     // as failure so the circuit breaker engages.
                                     compaction_failures += 1;
                                 }
-                                continue;
+                                // No `continue` here: fall through to the
+                                // conversation sync below so the compaction result
+                                // is not discarded by the top-of-loop re-clone
+                                // (which previously caused a compaction livelock:
+                                // the threshold check re-fired every turn with the
+                                // compaction silently dropped).
                             }
 
                             match shannon_engine::compact::CompactEngine::with_llm_summarizer(
@@ -2672,10 +2571,20 @@ impl QueryEngine {
                                     // Build re-injection context from ContextInjector if available,
                                     // otherwise fall back to the system prompt (truncated).
                                     // Build re-injection context from ContextInjector if available
-                                    let reinjection = context_injector
+                                    let mut reinjection = context_injector
                                         .as_ref()
                                         .map(|ci| ci.reinjection_context())
                                         .unwrap_or_default();
+                                    // Curated project memories survive the
+                                    // compaction boundary too.
+                                    if let Some(mem) = memory_injection.as_ref() {
+                                        if !mem.is_empty() {
+                                            if !reinjection.is_empty() {
+                                                reinjection.push_str("\n\n");
+                                            }
+                                            reinjection.push_str(mem);
+                                        }
+                                    }
 
                                     match compact_engine.compact(&mut messages) {
                                         Ok(result) => {
@@ -2734,8 +2643,12 @@ impl QueryEngine {
                                             );
                                             let keep = 20;
                                             if messages.len() > keep {
-                                                messages =
-                                                    messages.split_off(messages.len() - keep);
+                                                let split =
+                                                    shannon_engine::compact::safe_split_point(
+                                                        &messages,
+                                                        messages.len() - keep,
+                                                    );
+                                                messages = messages.split_off(split);
                                             }
                                         }
                                     }
@@ -2748,7 +2661,11 @@ impl QueryEngine {
                                     );
                                     let keep = 20;
                                     if messages.len() > keep {
-                                        messages = messages.split_off(messages.len() - keep);
+                                        let split = shannon_engine::compact::safe_split_point(
+                                            &messages,
+                                            messages.len() - keep,
+                                        );
+                                        messages = messages.split_off(split);
                                     }
                                 }
                             }
@@ -2884,6 +2801,16 @@ impl QueryEngine {
                                     break;
                                 }
                             }
+                            // Front-removal can orphan the first kept message: if it
+                            // holds a ToolResult whose assistant ToolUse partner was
+                            // dropped with the prefix, providers reject the request.
+                            // Drop leading tool_result-only messages as well.
+                            while messages.len() > 2
+                                && shannon_engine::compact::has_tool_result(&messages[0])
+                                && !shannon_engine::compact::has_tool_use(&messages[0])
+                            {
+                                messages.remove(0);
+                            }
                             let new_estimate =
                                 shannon_engine::compact::helpers::estimate_tokens(&messages);
                             tracing::info!(
@@ -3002,8 +2929,39 @@ impl QueryEngine {
                         let mut request_input_tokens: u64 = 0;
                         let mut request_output_tokens: u64 = 0;
 
-                        // Process streaming events
-                        while let Some(event_result) = stream.next().await {
+                        // Process streaming events.
+                        // C-2: a stalled stream (no events within the stall
+                        // budget) is fed into the loop as a synthetic
+                        // `Err(ApiError::Timeout)` so the existing recovery
+                        // ladder applies — partial content is preserved, and a
+                        // dead stream can no longer hang the query forever.
+                        //
+                        // Composition with A8 (turn-level stream-death
+                        // continuation): A8 escalates the client idle budget
+                        // up to `STREAM_IDLE_ESCALATION_CAP_SECS` and retries
+                        // timeout-class deaths in place. This loop-level
+                        // timeout is therefore a LAST-RESORT backstop that
+                        // must never fire before A8's escalation ceiling —
+                        // floor it above the cap.
+                        let stall_budget = config
+                            .timeout_seconds
+                            .max(30)
+                            .max(STREAM_IDLE_ESCALATION_CAP_SECS + 60);
+                        while let Some(event_result) = match tokio::time::timeout(
+                            std::time::Duration::from_secs(stall_budget),
+                            stream.next(),
+                        )
+                        .await
+                        {
+                            Ok(item) => item,
+                            Err(_elapsed) => {
+                                tracing::warn!(
+                                    timeout_secs = stall_budget,
+                                    "LLM stream stalled — no events within stall budget"
+                                );
+                                Some(Err(shannon_engine::api::ApiError::Timeout))
+                            }
+                        } {
                             match event_result {
                                 Ok(stream_event) => {
                                     match stream_event {
@@ -3216,10 +3174,20 @@ impl QueryEngine {
                                                         // synthetic ToolUse block. The
                                                         // Anthropic API requires the two to
                                                         // match on the next request; pairing
-                                                        // the real id with a null-input ToolUse
-                                                        // lets the model see "Malformed tool
-                                                        // input" as a tool_result and retry
+                                                        // the real id with an empty-object
+                                                        // ToolUse lets the model see "Malformed
+                                                        // tool input" as a tool_result and retry
                                                         // with corrected JSON.
+                                                        // A13-c: the input MUST be a JSON
+                                                        // object, never Null — minimax parses
+                                                        // tool_calls arguments and rejects the
+                                                        // "null" literal with 400 (2013) while
+                                                        // "{}" succeeds (live-API decisive
+                                                        // test, request_ids 06fc6407792530aa1d
+                                                        // 9df28fe350fd1a / 06fc64093ab64d878
+                                                        // b704669ba551957). The synthetic error
+                                                        // result below still tells the model the
+                                                        // call failed.
                                                         tool_results.push(ToolResultEntry {
                                                             tool_use_id: id.clone(),
                                                             content: format!(
@@ -3232,7 +3200,7 @@ impl QueryEngine {
                                                             ContentBlock::ToolUse {
                                                                 id,
                                                                 name,
-                                                                input: serde_json::Value::Null,
+                                                                input: serde_json::json!({}),
                                                             },
                                                         );
                                                     }
@@ -3417,14 +3385,27 @@ impl QueryEngine {
                                                         tracing::warn!(
                                                             "Malformed tool input (post-stream flush): {e}"
                                                         );
+                                                        // A13-c: pair the synthetic result
+                                                        // with an assistant ToolUse block
+                                                        // (empty-object input — Null is
+                                                        // wire-illegal for minimax, see the
+                                                        // ContentBlockStop site) so the result
+                                                        // is never orphaned on the wire.
                                                         tool_results.push(ToolResultEntry {
-                                                            tool_use_id: id,
+                                                            tool_use_id: id.clone(),
                                                             content: format!(
                                                                 "Malformed tool input: {e}"
                                                             ),
                                                             is_error: true,
                                                             metadata: Default::default(),
                                                         });
+                                                        assistant_tool_uses.push(
+                                                            ContentBlock::ToolUse {
+                                                                id,
+                                                                name,
+                                                                input: serde_json::json!({}),
+                                                            },
+                                                        );
                                                     }
                                                 }
                                             }
@@ -3544,13 +3525,44 @@ impl QueryEngine {
                                                     );
 
                                                     // Plan mode gate: block write tools when plan mode is active.
+                                                    // Derives mutability from the tool's own trait
+                                                    // metadata instead of a name list, so newly
+                                                    // registered mutators (NotebookEdit, git
+                                                    // mutators, Worktree, Cron, …) are covered.
+                                                    // Pure bookkeeping tools stay allowed.
                                                     let is_plan_active = plan_mode_active
                                                         .read()
                                                         .map(|g| *g)
                                                         .unwrap_or(false);
                                                     if is_plan_active {
-                                                        let is_write_tool = crate::tool_execution::is_file_modifying_tool(&tool_name);
-                                                        if is_write_tool {
+                                                        const PLAN_ALLOWED_STATELESS: &[&str] = &[
+                                                            "TodoWrite",
+                                                            "TaskCreate",
+                                                            "TaskList",
+                                                            "TaskUpdate",
+                                                            "TaskGet",
+                                                            "TaskTool",
+                                                            "AskUserQuestion",
+                                                            "EnterPlanMode",
+                                                            "ExitPlanMode",
+                                                            "GetPlanStatus",
+                                                            "Brief",
+                                                            "StructuredOutput",
+                                                            "Sleep",
+                                                        ];
+                                                        let tool_is_mutating = match tools.get(&tool_name) {
+                                                            Some(t) => !t.is_read_only(),
+                                                            None => crate::tool_execution::is_file_modifying_tool(&tool_name),
+                                                        };
+                                                        if tool_is_mutating
+                                                            && !PLAN_ALLOWED_STATELESS.iter().any(
+                                                                |n| {
+                                                                    n.eq_ignore_ascii_case(
+                                                                        &tool_name,
+                                                                    )
+                                                                },
+                                                            )
+                                                        {
                                                             let error_msg = format!(
                                                                 "Plan mode: write operations blocked. \
                                                                  Use exit_plan_mode to resume editing. \
@@ -3964,7 +3976,6 @@ impl QueryEngine {
                                                                     ));
                                                                 }
 
-                                                                let mut batch_had_denial = false;
                                                                 for (saved_tool_id, handle) in
                                                                     exec_handles
                                                                 {
@@ -4039,9 +4050,6 @@ impl QueryEngine {
                                                                             match result {
                                                                                 Ok(output) => {
                                                                                     let is_err = output.is_error;
-                                                                                    if is_err {
-                                                                                        batch_had_denial = true;
-                                                                                    }
                                                                                     send_event!(tx, QueryEvent::ToolUseResult {
                                                                                         query_id,
                                                                                         tool_use_id: tool_id.clone(),
@@ -4050,12 +4058,17 @@ impl QueryEngine {
                                                                                         is_error: is_err,
                                                                                         meta: Box::new(crate::tools::sandbox_meta_from(&output.metadata)),
                                                                                         });
+                                                                                    let (capped, truncated) = cap_tool_result(output.content.clone());
+                                                                                    let mut meta = output.metadata.clone();
+                                                                                    if truncated {
+                                                                                        meta.insert("truncated".to_string(), serde_json::json!(true));
+                                                                                    }
                                                                                     tool_results
                                                                                         .push(ToolResultEntry {
                                                                                         tool_use_id: tool_id,
-                                                                                        content: output.content.clone(),
+                                                                                        content: capped,
                                                                                         is_error: is_err,
-                                                                                        metadata: Default::default(),
+                                                                                        metadata: meta,
                                                                                     });
                                                                                 }
                                                                                 Err(e) => {
@@ -4103,9 +4116,12 @@ impl QueryEngine {
                                                                         }
                                                                     }
                                                                 }
-                                                                if !batch_had_denial {
-                                                                    consecutive_denials = 0;
-                                                                }
+                                                                // Every call in a parallel batch
+                                                                // already passed the permission gate,
+                                                                // so the denial counter resets here
+                                                                // unconditionally (runtime errors are
+                                                                // not denials).
+                                                                consecutive_denials = 0;
                                                             }
                                                             crate::tools::ToolBatch::Serial((
                                                                 tool_id,
@@ -4218,17 +4234,30 @@ impl QueryEngine {
                                                                             is_error: is_err,
                                                                             meta: Box::new(crate::tools::sandbox_meta_from(&output.metadata)),
                                                                             });
+                                                                        let (capped, truncated) =
+                                                                            cap_tool_result(
+                                                                                output
+                                                                                    .content
+                                                                                    .clone(),
+                                                                            );
+                                                                        let mut meta =
+                                                                            output.metadata.clone();
+                                                                        if truncated {
+                                                                            meta.insert(
+                                                                                "truncated"
+                                                                                    .to_string(),
+                                                                                serde_json::json!(
+                                                                                    true
+                                                                                ),
+                                                                            );
+                                                                        }
                                                                         tool_results.push(
                                                                             ToolResultEntry {
                                                                                 tool_use_id:
                                                                                     tool_id,
-                                                                                content: output
-                                                                                    .content
-                                                                                    .clone(),
+                                                                                content: capped,
                                                                                 is_error: is_err,
-                                                                                metadata: output
-                                                                                    .metadata
-                                                                                    .clone(),
+                                                                                metadata: meta,
                                                                             },
                                                                         );
                                                                         if matches!(
@@ -4245,6 +4274,9 @@ impl QueryEngine {
                                                                         let error_msg = format!(
                                                                             "Tool error: {e}"
                                                                         );
+                                                                        // Gate-approved call: a runtime
+                                                                        // error is not a denial.
+                                                                        consecutive_denials = 0;
                                                                         send_event!(tx, QueryEvent::ToolUseResult {
                                                                             query_id,
                                                                             tool_use_id: tool_id.clone(),
@@ -4280,7 +4312,7 @@ impl QueryEngine {
                                                         maybe_run_auto_test(
                                                             &auto_cfg,
                                                             &mut auto_test_state,
-                                                            &mut tool_results,
+                                                            &mut user_notices,
                                                             &tx,
                                                             query_id,
                                                         )
@@ -4292,17 +4324,15 @@ impl QueryEngine {
                                                 if (DENIAL_SOFT_LIMIT..DENIAL_HARD_LIMIT)
                                                     .contains(&consecutive_denials)
                                                 {
-                                                    let warning = format!(
+                                                    // Delivered as a plain user notice, NOT a
+                                                    // tool_result: the synthetic
+                                                    // "denial-warning" id references no assistant
+                                                    // ToolUse and providers reject the request.
+                                                    user_notices.push(format!(
                                                         "The user has denied {consecutive_denials} consecutive tool calls. \
                                                          Stop retrying the same or similar operations. \
                                                          Ask the user for clarification or try a completely different approach."
-                                                    );
-                                                    tool_results.push(ToolResultEntry {
-                                                        tool_use_id: "denial-warning".to_string(),
-                                                        content: warning,
-                                                        is_error: false,
-                                                        metadata: Default::default(),
-                                                    });
+                                                    ));
                                                 }
 
                                                 turn += 1;
@@ -4594,12 +4624,58 @@ impl QueryEngine {
                                                             ),
                                                         }
                                                     );
-                                                    if !assistant_text.is_empty() {
+                                                    if !assistant_text.is_empty()
+                                                        || !assistant_tool_uses.is_empty()
+                                                    {
+                                                        // A13: persist the truncated
+                                                        // assistant message with BOTH the
+                                                        // text and any tool_use blocks
+                                                        // captured before the cut (malformed
+                                                        // tails arrive as null-input ToolUse
+                                                        // paired with a synthetic result).
+                                                        // Dropping the ToolUse here is what
+                                                        // orphaned its tool_result on the
+                                                        // next request (minimax 400 2013
+                                                        // "tool result's tool id not found").
+                                                        let mut blocks: Vec<ContentBlock> =
+                                                            Vec::new();
+                                                        if !assistant_text.is_empty() {
+                                                            blocks.push(ContentBlock::Text {
+                                                                text: std::mem::take(
+                                                                    &mut assistant_text,
+                                                                ),
+                                                            });
+                                                        }
+                                                        blocks.append(&mut assistant_tool_uses);
                                                         conversation.messages.push(Message {
                                                             role: "assistant".to_string(),
-                                                            content: MessageContent::Text(
-                                                                std::mem::take(&mut assistant_text),
-                                                            ),
+                                                            content: MessageContent::Blocks(blocks),
+                                                        });
+                                                    }
+                                                    // A13: flush the results already executed
+                                                    // for this truncated response BEFORE the
+                                                    // continuation prompt, so the wire
+                                                    // sequence is assistant(tool_use) →
+                                                    // user(tool_result) →
+                                                    // user(continuation). Draining at the
+                                                    // next loop top (the old behavior)
+                                                    // appended the result after the prompt,
+                                                    // which strict providers reject as an
+                                                    // orphaned tool_result. Pure-text
+                                                    // truncations drain nothing here and are
+                                                    // unchanged.
+                                                    for entry in tool_results.drain(..) {
+                                                        let content =
+                                                            entry.to_tool_result_content();
+                                                        conversation.messages.push(Message {
+                                                            role: "user".to_string(),
+                                                            content: MessageContent::Blocks(vec![
+                                                                ContentBlock::ToolResult {
+                                                                    tool_use_id: entry.tool_use_id,
+                                                                    content,
+                                                                    is_error: Some(entry.is_error),
+                                                                },
+                                                            ]),
                                                         });
                                                     }
                                                     conversation.messages.push(Message {
@@ -4728,6 +4804,50 @@ impl QueryEngine {
                                     }
                                 }
                                 Err(e) => {
+                                    // A8/A8b: a timeout-class mid-stream death
+                                    // (GLM coding-plan hard-cuts calls at
+                                    // ~6min; smoke-2/4 RCA) or an abnormal
+                                    // stream interruption (A8b/smoke-5: the
+                                    // response body dies before any terminal
+                                    // frame) is continued in place instead of
+                                    // failing or masquerading as a completion.
+                                    // This check intentionally precedes the
+                                    // partial-content preservation below: a
+                                    // cut tail is not a usable response
+                                    // (saving it produced the empty/truncated
+                                    // patches in the RCA), so on retry the
+                                    // partial accumulation is discarded and
+                                    // the model regenerates from the intact
+                                    // history.
+                                    if (e.is_timeout_class() || e.is_stream_interrupted())
+                                        && turn_retries_used < max_turn_retries
+                                    {
+                                        turn_retries_used += 1;
+                                        tracing::warn!(
+                                            "Turn LLM call interrupted by timeout-class stream error ({e}); continuing turn {turn_retries_used}/{max_turn_retries}"
+                                        );
+                                        send_event!(
+                                            tx,
+                                            QueryEvent::Progress {
+                                                query_id,
+                                                message: format!(
+                                                    "Turn LLM call interrupted (upstream cutoff); continuing turn {turn_retries_used}/{max_turn_retries}"
+                                                ),
+                                            }
+                                        );
+                                        push_turn_continuation_nudge(&mut conversation.messages);
+                                        continue 'agent_loop;
+                                    } // A14: escalate the stream-idle watchdog budget so the
+                                    // continuation attempt is not killed by the same 420s
+                                    // base budget that killed the previous attempt (w7
+                                    // csstree/expr/superjson — three consecutive runs all
+                                    // died at exactly 421s = base + 1s).
+                                    escalate_stream_idle_override(
+                                        &client,
+                                        stream_idle_base_secs,
+                                        turn_retries_used,
+                                    );
+
                                     // Content-first: if partial content was streamed before the error,
                                     // preserve it immediately. Local models (Ollama) often generate
                                     // valid text before hitting a malformed tool-call error, and
@@ -4963,6 +5083,15 @@ impl QueryEngine {
                             }
                         }
 
+                        // The stream completed without a terminal error —
+                        // this LLM call succeeded, so the A8 continuation
+                        // budget is whole again for the next turn (per-turn
+                        // budget, not per-query).
+                        turn_retries_used = 0;
+                        // A14: clear any watchdog escalation so the next
+                        // fresh turn starts from the base budget again.
+                        clear_stream_idle_override(&client);
+
                         // Parse-error recovery: when the model emitted a malformed
                         // tool_call (no text content, no successfully-parsed tool
                         // inputs, but a synthetic tool_result was queued and a
@@ -5137,6 +5266,26 @@ impl QueryEngine {
                                         ),
                                     }
                                 );
+                                // A13: the truncated response's tool results
+                                // (already executed inline) must land BEFORE
+                                // the continuation prompt — assistant(tool_use)
+                                // → user(tool_result) → user(continuation) — or
+                                // strict providers (minimax 400 2013) reject the
+                                // result as orphaned. Pure-text truncations
+                                // drain nothing here and are unchanged.
+                                for entry in tool_results.drain(..) {
+                                    let content = entry.to_tool_result_content();
+                                    conversation.messages.push(Message {
+                                        role: "user".to_string(),
+                                        content: MessageContent::Blocks(vec![
+                                            ContentBlock::ToolResult {
+                                                tool_use_id: entry.tool_use_id,
+                                                content,
+                                                is_error: Some(entry.is_error),
+                                            },
+                                        ]),
+                                    });
+                                }
                                 conversation.messages.push(Message {
                                     role: "user".to_string(),
                                     content: MessageContent::Text(
@@ -5220,6 +5369,42 @@ impl QueryEngine {
                         }
                     }
                     Err(e) => {
+                        // A8/A8b: timeout-class stream-establishment death is
+                        // continued in place (same rationale as the
+                        // mid-stream site above; the GLM coding-plan gateway
+                        // hard-cuts ~6min calls before a single byte of the
+                        // response arrives). History and prior tool state
+                        // are untouched; only the continuation nudge is
+                        // added.
+                        if (e.is_timeout_class() || e.is_stream_interrupted())
+                            && turn_retries_used < max_turn_retries
+                        {
+                            turn_retries_used += 1;
+                            tracing::warn!(
+                                "Turn LLM call interrupted by timeout-class error ({e}); continuing turn {turn_retries_used}/{max_turn_retries}"
+                            );
+                            send_event!(
+                                tx,
+                                QueryEvent::Progress {
+                                    query_id,
+                                    message: format!(
+                                        "Turn LLM call interrupted (upstream cutoff); continuing turn {turn_retries_used}/{max_turn_retries}"
+                                    ),
+                                }
+                            );
+                            push_turn_continuation_nudge(&mut conversation.messages);
+                            continue 'agent_loop;
+                        } // A14: escalate the stream-idle watchdog budget so the
+                        // continuation attempt is not killed by the same 420s
+                        // base budget that killed the previous attempt (w7
+                        // csstree/expr/superjson — three consecutive runs all
+                        // died at exactly 421s = base + 1s).
+                        escalate_stream_idle_override(
+                            &client,
+                            stream_idle_base_secs,
+                            turn_retries_used,
+                        );
+
                         // Check if this is a token overflow — attempt auto-compaction and retry once
                         if e.is_token_overflow() {
                             let compact_keep = config.keep_recent_messages;
@@ -5227,7 +5412,11 @@ impl QueryEngine {
                                 tracing::warn!(
                                     "Token overflow detected, auto-compacting and retrying"
                                 );
-                                messages = messages.split_off(messages.len() - compact_keep);
+                                let split = shannon_engine::compact::safe_split_point(
+                                    &messages,
+                                    messages.len() - compact_keep,
+                                );
+                                messages = messages.split_off(split);
                                 // Re-inject system prompt at front
                                 if let Some(ref sp) = system_prompt {
                                     if !sp.is_empty() {
@@ -5567,28 +5756,39 @@ impl QueryEngine {
                 }
             }
 
-            // Post-query: fire-and-forget memory extraction via AutoDreamService
+            // Post-query: fire-and-forget memory extraction via AutoDreamService.
+            // INCREMENTAL (P0-10): only the post-cursor delta is extracted.
+            // The previous full-conversation rescan on every query re-matched
+            // old facts each turn, refreshing `accessed_at` on noise and
+            // spawning paraphrase siblings at a rate the 0.8 Jaccard dedup
+            // could not absorb.
             if let Some(ref mem_store) = memory_for_extraction {
                 let store_arc = mem_store.clone();
-                let msgs = conversation.messages.clone();
+                let total = conversation.messages.len();
+                let cursor = memory_extract_cursor_cursor.min(total);
+                let delta: Vec<Message> = conversation.messages[cursor..].to_vec();
                 // P2-4 provenance: stamp extracted entries with the session
                 // that produced them so the Memory page can jump back.
                 let session_for_extraction = self_session_id.clone();
                 tokio::spawn(async move {
-                    let dream = AutoDreamService::new(store_arc);
-                    let project = std::env::current_dir()
-                        .map(|p| p.display().to_string())
-                        .unwrap_or_else(|_| "default".to_string());
-                    let _ = dream.process_conversation_with_session(
-                        &msgs,
-                        &project,
-                        Some(&session_for_extraction),
-                    );
-                    // Periodic compaction (ADR-0010 C5'): dedupe + prune + size
-                    // control, gated by a persisted sidecar schedule. Each query
-                    // is one session; compaction fires at ~24 h or ≥ 5 sessions.
-                    let _ = dream.maybe_compact(&project, &SessionMemoryConfig::default());
+                    if !delta.is_empty() {
+                        let dream = AutoDreamService::new(store_arc);
+                        let project = std::env::current_dir()
+                            .map(|p| p.display().to_string())
+                            .unwrap_or_else(|_| "default".to_string());
+                        let _ = dream.process_conversation_with_session(
+                            &delta,
+                            &project,
+                            Some(&session_for_extraction),
+                        );
+                        // Periodic compaction (ADR-0010 C5'): dedupe + prune +
+                        // size control, gated by a persisted sidecar schedule.
+                        // Each query is one session; compaction fires at ~24 h
+                        // or ≥ 5 sessions.
+                        let _ = dream.maybe_compact(&project, &SessionMemoryConfig::default());
+                    }
                 });
+                memory_extract_cursor_cell.store(total, std::sync::atomic::Ordering::Relaxed);
             }
         });
 
@@ -5653,13 +5853,13 @@ impl QueryEngine {
 
 /// Run one auto-test iteration if appropriate.
 ///
-/// Called after each successful file-modifying tool. Pushes a
-/// [`ToolResultEntry`] into `tool_results` describing what happened so the
-/// next API call sees it. Returns `()`; loop-state lives in `auto_test_state`.
+/// Called after each successful file-modifying tool. Pushes a user notice
+/// into `user_notices` describing what happened so the next API call sees
+/// it. Returns `()`; loop-state lives in `auto_test_state`.
 async fn maybe_run_auto_test(
     cfg: &crate::auto_test::AutoTestConfig,
     state: &mut crate::auto_test::AntiLoopState,
-    tool_results: &mut Vec<ToolResultEntry>,
+    user_notices: &mut Vec<String>,
     tx: &EventTx,
     query_id: Uuid,
 ) {
@@ -5687,18 +5887,12 @@ async fn maybe_run_auto_test(
 
     let decision = state.record(cfg, &outcome);
 
-    // Build a synthetic tool-result so the next API call sees it. We use a
-    // synthetic tool_use_id — these entries don't correspond to a real tool
-    // invocation but `user(tool_result)` is the only way to push text into
-    // the model's context mid-loop.
+    // Delivered as a plain user notice so the next API call sees it. A
+    // synthetic `user(tool_result)` would reference a tool_use_id that never
+    // appeared in any assistant message, which providers reject with
+    // 400 "unexpected tool_use_id".
     let description = outcome.describe();
-    let entry = ToolResultEntry {
-        tool_use_id: format!("auto_test_iter_{}", state.iterations),
-        content: description,
-        is_error: !outcome.is_passed(),
-        metadata: Default::default(),
-    };
-    tool_results.push(entry);
+    user_notices.push(description);
 
     // Emit a structured progress event with the outcome so the UI can show
     // pass/fail badges without parsing the description string.
@@ -5747,6 +5941,55 @@ mod tests {
         assert!(!is_truncation_stop(Some("stop")));
         assert!(!is_truncation_stop(Some("tool_use")));
         assert!(!is_truncation_stop(None));
+    }
+
+    #[test]
+    fn cap_tool_result_passthrough_under_cap() {
+        let (capped, truncated) = cap_tool_result("short output".to_string());
+        assert_eq!(capped, "short output");
+        assert!(!truncated);
+    }
+
+    #[test]
+    fn cap_tool_result_truncates_on_char_boundary_and_notifies() {
+        let big = "x".repeat(DEFAULT_MAX_TOOL_RESULT_CHARS + 1000);
+        let (capped, truncated) = cap_tool_result(big);
+        assert!(truncated);
+        assert!(capped.contains("[shannon: output truncated"));
+        assert!(capped.len() < DEFAULT_MAX_TOOL_RESULT_CHARS + 200);
+        // CJK content must be cut on a char boundary, never mid-codepoint.
+        let cjk = "漢字".repeat(DEFAULT_MAX_TOOL_RESULT_CHARS);
+        let (capped, truncated) = cap_tool_result(cjk);
+        assert!(truncated);
+        assert!(
+            capped.is_char_boundary(
+                capped
+                    .find("[shannon: output truncated")
+                    .unwrap_or(capped.len())
+            )
+        );
+    }
+
+    #[test]
+    fn cap_tool_result_zero_disables_cap() {
+        // env::set_var is process-wide and unsafe under edition 2024 —
+        // serialize against other env tests and wrap each call.
+        static ENV_LOCK: std::sync::OnceLock<std::sync::Mutex<()>> = std::sync::OnceLock::new();
+        let _guard = ENV_LOCK
+            .get_or_init(|| std::sync::Mutex::new(()))
+            .lock()
+            .expect("env-var test mutex poisoned");
+        let key = "SHANNON_MAX_TOOL_OUTPUT_CHARS";
+        let saved = std::env::var(key).ok();
+        unsafe { std::env::set_var(key, "0") };
+        let big = "y".repeat(DEFAULT_MAX_TOOL_RESULT_CHARS * 2);
+        let (capped, truncated) = cap_tool_result(big.clone());
+        assert!(!truncated);
+        assert_eq!(capped, big);
+        match saved {
+            Some(v) => unsafe { std::env::set_var(key, v) },
+            None => unsafe { std::env::remove_var(key) },
+        }
     }
 
     #[test]
@@ -6840,9 +7083,10 @@ mod tests {
 
         let injector = engine.context_injector().unwrap();
         let blocks = injector.build_system_blocks(true);
-        assert!(!blocks.is_empty());
-        // Should have cache_control set
-        assert!(blocks[0].cache_control.is_some());
+        // Instructions are injected by the engine (stable cache zone), so
+        // build_system_blocks only carries MEMORY.md / rules / prefs — all
+        // absent in this fixture.
+        assert!(blocks.is_empty(), "blocks: {blocks:?}");
 
         // Cleanup
         let _ = std::fs::remove_dir_all(project_dir);
@@ -6911,6 +7155,50 @@ mod tests {
         assert!(!crate::tool_execution::is_file_modifying_tool("Glob"));
         assert!(!crate::tool_execution::is_file_modifying_tool("Grep"));
         assert!(!crate::tool_execution::is_file_modifying_tool("LSP"));
+    }
+
+    #[test]
+    fn test_cache_breakpoint_budget_respected() {
+        // P0-6 regression: the system block assembly must emit at most 2
+        // cache breakpoints. Anthropic caps a request at 4 and the adapter
+        // adds two more (last tool def + last user message), so any more
+        // than 2 system breakpoints overflows the budget.
+        //
+        // Simulate the assembly policy: N stable blocks + 3 dynamic blocks.
+        let stable_texts: Vec<String> = (0..9).map(|i| format!("stable {i}")).collect();
+        let use_cache = true;
+
+        let mut system_blocks: Vec<SystemContentBlock> = Vec::new();
+        if use_cache {
+            let last_stable = stable_texts.len().saturating_sub(1);
+            for (i, text) in stable_texts.into_iter().enumerate() {
+                let block = if i == 0 || i == last_stable {
+                    SystemContentBlock::cached(text)
+                } else {
+                    SystemContentBlock::text(text)
+                };
+                system_blocks.push(block);
+            }
+        }
+        for i in 0..3 {
+            system_blocks.push(SystemContentBlock::text(format!("dynamic {i}")));
+        }
+
+        let cached_count = system_blocks
+            .iter()
+            .filter(|b| b.cache_control.is_some())
+            .count();
+        assert!(
+            cached_count <= 2,
+            "system blocks must carry at most 2 cache breakpoints, got {cached_count}"
+        );
+        // First (base) and last stable block are the cached ones.
+        assert!(system_blocks[0].cache_control.is_some());
+        assert!(system_blocks[8].cache_control.is_some());
+        // Dynamic zone stays uncached.
+        for block in &system_blocks[9..] {
+            assert!(block.cache_control.is_none());
+        }
     }
 
     // ── Context resolution tests ──────────────────────────────────
@@ -8186,9 +8474,32 @@ mod tests {
                     .lock()
                     .unwrap()
                     .push(String::from_utf8_lossy(&buf[..read]).to_string());
-                let resp = r#"{"id":"msg_loop","role":"assistant","content":[{"type":"text","text":"done"}],"model":"test-model","stop_reason":"end_turn","usage":{"input_tokens":2,"output_tokens":1}}"#;
+                // A8b: serve a proper terminal-framed SSE stream. The old
+                // non-SSE JSON body produced a zero-event stream that ended
+                // without any terminal frame and is now (correctly) typed as
+                // an interrupted stream instead of silently completing.
+                let resp = concat!(
+                    "event: message_start\n",
+                    r#"data: {"type":"message_start","message":{"id":"msg_loop","role":"assistant","content":[],"model":"test-model","stop_reason":null,"usage":{"input_tokens":2,"output_tokens":0}}}"#,
+                    "\n\n",
+                    "event: content_block_start\n",
+                    r#"data: {"type":"content_block_start","index":0,"content_block":{"type":"text","text":""}}"#,
+                    "\n\n",
+                    "event: content_block_delta\n",
+                    r#"data: {"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"done"}}"#,
+                    "\n\n",
+                    "event: content_block_stop\n",
+                    r#"data: {"type":"content_block_stop","index":0}"#,
+                    "\n\n",
+                    "event: message_delta\n",
+                    r#"data: {"type":"message_delta","delta":{"stop_reason":"end_turn"},"usage":{"input_tokens":2,"output_tokens":1}}"#,
+                    "\n\n",
+                    "event: message_stop\n",
+                    r#"data: {"type":"message_stop"}"#,
+                    "\n\n"
+                );
                 let http = format!(
-                    "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+                    "HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
                     resp.len(),
                     resp
                 );
@@ -8263,6 +8574,1306 @@ mod tests {
         assert!(
             bodies.iter().all(|b| !b.contains(SECRET)),
             "raw secret must never reach the wire: {bodies:?}"
+        );
+    }
+
+    // ---- A8: turn-level continuation after timeout-class stream death -----
+    //
+    // The GLM coding-plan gateway hard-cuts single LLM calls at ~6min
+    // (smoke-2/4 RCA). The turn loop must continue THE TURN on a
+    // timeout-class failure — keeping all history and prior tool state —
+    // instead of failing the whole run. These tests drive the full
+    // process_query loop against a local mock Anthropic server whose
+    // per-request behavior is indexed by request count.
+
+    /// Serializes tests that mutate `SHANNON_TURN_RETRIES` (plain `cargo
+    /// test` runs them on shared threads; nextest isolates per process).
+    static TURN_RETRIES_ENV_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+    /// A local mock Anthropic server; request `i` gets whatever
+    /// `responder(i)` returns, and every raw request body is captured for
+    /// wire-level assertions (nudge present/absent, history shape).
+    struct TurnRetryMockServer {
+        captured: std::sync::Arc<std::sync::Mutex<Vec<String>>>,
+        base_url: String,
+    }
+
+    impl TurnRetryMockServer {
+        fn start(responder: std::sync::Arc<dyn Fn(usize) -> String + Send + Sync>) -> Self {
+            use std::io::Read as _;
+            use std::io::Write as _;
+
+            let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("bind");
+            let port = listener.local_addr().expect("addr").port();
+            let captured: std::sync::Arc<std::sync::Mutex<Vec<String>>> =
+                std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+            let captured_clone = captured.clone();
+            // Detached: the accept loop lives until process exit (same
+            // contract as the T4 secret-guard loop mock above).
+            std::thread::spawn(move || {
+                for mut stream in listener.incoming().flatten() {
+                    let mut buf = vec![0u8; 1 << 16];
+                    let mut read = 0usize;
+                    loop {
+                        let n = match stream.read(&mut buf[read..]) {
+                            Ok(0) | Err(_) => break,
+                            Ok(n) => n,
+                        };
+                        read += n;
+                        let s = String::from_utf8_lossy(&buf[..read]).to_string();
+                        if let Some(header_end) = s.find("\r\n\r\n") {
+                            let cl: usize = s[..header_end]
+                                .to_ascii_lowercase()
+                                .split("\r\n")
+                                .find_map(|l| l.strip_prefix("content-length:"))
+                                .and_then(|v| v.trim().parse().ok())
+                                .unwrap_or(0);
+                            if read >= header_end + 4 + cl {
+                                break;
+                            }
+                        }
+                        if read == buf.len() {
+                            break;
+                        }
+                    }
+                    let body = String::from_utf8_lossy(&buf[..read]).to_string();
+                    let index = {
+                        let mut guard = captured_clone.lock().unwrap();
+                        guard.push(body);
+                        guard.len() - 1
+                    };
+                    let http = responder(index);
+                    stream.write_all(http.as_bytes()).ok();
+                    stream.flush().ok();
+                }
+            });
+            Self {
+                captured,
+                base_url: format!("http://127.0.0.1:{port}"),
+            }
+        }
+
+        fn bodies(&self) -> Vec<String> {
+            self.captured.lock().unwrap().clone()
+        }
+    }
+
+    /// Raw HTTP/1.1 response with a `Connection: close` header.
+    fn a8_http_response(status_line: &str, content_type: &str, body: &str) -> String {
+        format!(
+            "HTTP/1.1 {status_line}\r\nContent-Type: {content_type}\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+            body.len()
+        )
+    }
+
+    /// Anthropic-style 408 whose body parses into `ApiError::ProviderError`
+    /// carrying the words "upstream request timeout". ProviderError is not
+    /// retried by the client's request-level retry nor reconnected by the
+    /// resumable stream, so it surfaces to the engine's turn loop
+    /// immediately (fast, deterministic) with exactly the string the
+    /// headless classifier maps to `Timeout`.
+    fn a8_timeout_response() -> String {
+        a8_http_response(
+            "408 Request Timeout",
+            "application/json",
+            r#"{"type":"error","error":{"type":"timeout_error","message":"upstream request timeout"}}"#,
+        )
+    }
+
+    /// Anthropic-style 401 → `ApiError::AuthenticationFailed` — a
+    /// non-timeout class A8 must never continue on.
+    fn a8_auth_response() -> String {
+        a8_http_response(
+            "401 Unauthorized",
+            "application/json",
+            r#"{"type":"error","error":{"type":"authentication_error","message":"invalid x-api-key"}}"#,
+        )
+    }
+
+    /// Full Anthropic SSE stream ending in a `tool_use` block for a tool
+    /// that is not in the (empty) test registry — the engine records an
+    /// error tool_result and advances to the next turn.
+    fn a8_tool_call_sse() -> String {
+        let sse = [
+            r#"event: message_start"#,
+            r#"data: {"type":"message_start","message":{"id":"msg_a8_tool","role":"assistant","content":[],"model":"test-model","stop_reason":null,"usage":{"input_tokens":10,"output_tokens":1}}}"#,
+            r#"event: content_block_start"#,
+            r#"data: {"type":"content_block_start","index":0,"content_block":{"type":"tool_use","id":"toolu_a8_1","name":"no_such_tool","input":{}}}"#,
+            r#"event: content_block_delta"#,
+            r#"data: {"type":"content_block_delta","index":0,"delta":{"type":"input_json_delta","partial_json":"{}"}}"#,
+            r#"event: content_block_stop"#,
+            r#"data: {"type":"content_block_stop","index":0}"#,
+            r#"event: message_delta"#,
+            r#"data: {"type":"message_delta","delta":{"stop_reason":"tool_use"},"usage":{"input_tokens":10,"output_tokens":5}}"#,
+            r#"event: message_stop"#,
+            r#"data: {"type":"message_stop"}"#,
+        ]
+        .join("\n\n");
+        a8_http_response("200 OK", "text/event-stream", &sse)
+    }
+
+    /// Full Anthropic SSE stream with a plain text answer and `end_turn`.
+    fn a8_text_sse(text: &str) -> String {
+        let payload = format!(r#"{{"type":"text_delta","text":"{text}"}}"#);
+        let sse = [
+            r#"event: message_start"#,
+            r#"data: {"type":"message_start","message":{"id":"msg_a8_text","role":"assistant","content":[],"model":"test-model","stop_reason":null,"usage":{"input_tokens":10,"output_tokens":1}}}"#,
+            r#"event: content_block_start"#,
+            r#"data: {"type":"content_block_start","index":0,"content_block":{"type":"text","text":""}}"#,
+            "event: content_block_delta",
+            format!("data: {{\"type\":\"content_block_delta\",\"index\":0,\"delta\":{payload}}}").as_str(),
+            r#"event: content_block_stop"#,
+            r#"data: {"type":"content_block_stop","index":0}"#,
+            r#"event: message_delta"#,
+            r#"data: {"type":"message_delta","delta":{"stop_reason":"end_turn"},"usage":{"input_tokens":10,"output_tokens":7}}"#,
+            r#"event: message_stop"#,
+            r#"data: {"type":"message_stop"}"#,
+        ]
+        .join("\n\n");
+        a8_http_response("200 OK", "text/event-stream", &sse)
+    }
+
+    /// Drive one full `process_query` against the mock (default turn budget)
+    /// and return (completed, failed_error, progress_messages,
+    /// warning_messages, final_history).
+    #[allow(clippy::type_complexity)]
+    async fn a8_run_query(
+        server: &TurnRetryMockServer,
+    ) -> (bool, String, Vec<String>, Vec<String>, Vec<Message>) {
+        a8_run_query_with(server, 20).await
+    }
+
+    /// Variant with an explicit turn budget (A10 tests drive small budgets).
+    #[allow(clippy::type_complexity)]
+    async fn a8_run_query_with(
+        server: &TurnRetryMockServer,
+        max_turns: usize,
+    ) -> (bool, String, Vec<String>, Vec<String>, Vec<Message>) {
+        use futures::StreamExt as _;
+        let config = LlmClientConfig {
+            api_key: "test-key".to_string(),
+            base_url: server.base_url.clone(),
+            model: "test-model".to_string(),
+            provider: shannon_engine::api::LlmProvider::Anthropic,
+            ..Default::default()
+        };
+        let client = LlmClient::new(config);
+        let engine = QueryEngine::new(
+            client,
+            ToolRegistry::new(),
+            PermissionManager::new(),
+            StateManager::new(),
+            QueryEngineConfig {
+                max_turns,
+                ..Default::default()
+            },
+        );
+        let context = QueryContext {
+            query_id: uuid::Uuid::new_v4(),
+            session_id: uuid::Uuid::new_v4(),
+            user_message: "original user task".to_string(),
+            attachments: Vec::new(),
+            metadata: QueryMetadata {
+                timestamp: chrono::Utc::now(),
+                tools_allowed: false,
+                max_tokens: None,
+                model: "test-model".to_string(),
+                temperature: None,
+                top_p: None,
+            },
+        };
+        let mut stream = engine.process_query(context, None).await;
+        let mut completed = false;
+        let mut failed = String::new();
+        let mut progress: Vec<String> = Vec::new();
+        let mut warnings: Vec<String> = Vec::new();
+        let mut history: Vec<Message> = Vec::new();
+        while let Some(ev) = stream.next().await {
+            match ev {
+                Ok(QueryEvent::Completed { .. }) => {
+                    completed = true;
+                    break;
+                }
+                Ok(QueryEvent::Failed { error, .. }) => {
+                    failed = error;
+                    break;
+                }
+                Ok(QueryEvent::Progress { message, .. }) => {
+                    progress.push(message);
+                }
+                Ok(QueryEvent::Warning { message, .. }) => {
+                    warnings.push(message);
+                }
+                Ok(QueryEvent::ConversationUpdate { messages, .. }) => {
+                    history = messages;
+                }
+                Err(e) => {
+                    failed = e.to_string();
+                    break;
+                }
+                _ => {}
+            }
+        }
+        (completed, failed, progress, warnings, history)
+    }
+
+    /// Env contract: default 2; "0" legitimately disables; unparseable and
+    /// negative values fall back to the default (same contract as the
+    /// run-level `SHANNON_RUN_RETRIES` in the CLI).
+    #[test]
+    fn a8_turn_retries_env_parse_contract() {
+        let _guard = TURN_RETRIES_ENV_LOCK
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        let saved = env::var("SHANNON_TURN_RETRIES").ok();
+
+        unsafe { env::remove_var("SHANNON_TURN_RETRIES") };
+        assert_eq!(turn_retries_max(), 2, "unset must yield the default of 2");
+
+        for garbage in ["0", "abc", "-1", " 3 "] {
+            unsafe { env::set_var("SHANNON_TURN_RETRIES", garbage) };
+            let expected = garbage.trim().parse::<u32>().unwrap_or(2);
+            assert_eq!(
+                turn_retries_max(),
+                expected,
+                "SHANNON_TURN_RETRIES={garbage:?} must parse like SHANNON_RUN_RETRIES"
+            );
+        }
+
+        match saved {
+            Some(v) => unsafe { env::set_var("SHANNON_TURN_RETRIES", v) },
+            None => unsafe { env::remove_var("SHANNON_TURN_RETRIES") },
+        }
+    }
+
+    /// A14: the helper computes the right Duration for every escalation
+    /// step. Index 0 (the original attempt before any continuation) yields
+    /// `None` — pre-A14 semantics. Index 1 = ×2, index 2 = ×3, both capped
+    /// at `STREAM_IDLE_ESCALATION_CAP_SECS`. A `None` base is also `None`
+    /// (watchdog was disabled → A14 does not turn it on).
+    #[test]
+    fn a14_stream_idle_escalation_math() {
+        // base unset → never escalates.
+        assert_eq!(stream_idle_escalated_budget(None, 0), None);
+        assert_eq!(stream_idle_escalated_budget(None, 1), None);
+
+        // retry 0 = original attempt = no override.
+        assert_eq!(stream_idle_escalated_budget(Some(420), 0), None);
+
+        // retry 1 = base × 2 = 840s.
+        assert_eq!(
+            stream_idle_escalated_budget(Some(420), 1),
+            Some(std::time::Duration::from_secs(840))
+        );
+
+        // retry 2 = base × 3 = 1260s, capped at 1200s.
+        assert_eq!(
+            stream_idle_escalated_budget(Some(420), 2),
+            Some(std::time::Duration::from_secs(1200))
+        );
+
+        // retry 10 would be huge but the cap holds.
+        assert_eq!(
+            stream_idle_escalated_budget(Some(420), 10),
+            Some(std::time::Duration::from_secs(1200))
+        );
+
+        // base below the cap is preserved (no spurious uplift).
+        assert_eq!(
+            stream_idle_escalated_budget(Some(60), 1),
+            Some(std::time::Duration::from_secs(120))
+        );
+    }
+
+    /// Core A8 behavior: attempt 1 dies with a timeout-class error, the
+    /// turn is continued in place (attempt 2 returns a tool_call, attempt 3
+    /// the final answer). The query must COMPLETE with the full history
+    /// preserved, a visible Progress event, and the nudge present only on
+    /// retry requests.
+    #[tokio::test]
+    async fn a8_turn_retry_continues_after_timeout_class_stream_death() {
+        let _guard = TURN_RETRIES_ENV_LOCK
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        let saved = env::var("SHANNON_TURN_RETRIES").ok();
+        unsafe { env::set_var("SHANNON_TURN_RETRIES", "2") };
+
+        let responder: std::sync::Arc<dyn Fn(usize) -> String + Send + Sync> =
+            std::sync::Arc::new(|i: usize| match i {
+                0 => a8_timeout_response(),
+                1 => a8_tool_call_sse(),
+                _ => a8_text_sse("final answer after continuation"),
+            });
+        let server = TurnRetryMockServer::start(responder);
+
+        let (completed, failed, progress, _warnings, history) = a8_run_query(&server).await;
+
+        match saved {
+            Some(v) => unsafe { env::set_var("SHANNON_TURN_RETRIES", v) },
+            None => unsafe { env::remove_var("SHANNON_TURN_RETRIES") },
+        }
+
+        assert!(
+            completed,
+            "the turn must complete after continuation; failed: {failed}"
+        );
+        let bodies = server.bodies();
+        assert_eq!(
+            bodies.len(),
+            3,
+            "attempt 1 + continued attempt 2 + post-tool turn 3; got {} requests",
+            bodies.len()
+        );
+
+        // Nudge only on retry requests (attempts 2+), exactly once each;
+        // the first attempt must be nudge-free.
+        let nudge = TURN_CONTINUATION_NUDGE_PROMPT;
+        assert!(
+            !bodies[0].contains(nudge),
+            "the first attempt must not carry the continuation nudge"
+        );
+        for (idx, body) in bodies.iter().enumerate().skip(1) {
+            assert_eq!(
+                body.matches(nudge).count(),
+                1,
+                "retry request {idx} must carry the nudge exactly once: {body}"
+            );
+        }
+
+        // Progress visibility, formatted like the existing API-retry surfacing.
+        assert!(
+            progress
+                .iter()
+                .any(|m| m
+                    .contains("Turn LLM call interrupted (upstream cutoff); continuing turn 1/2")),
+            "expected an A8 continuation Progress event; got: {progress:?}"
+        );
+
+        // History integrity: original task first, tool round-trip intact,
+        // final assistant answer last.
+        assert!(!history.is_empty(), "a ConversationUpdate must have fired");
+        assert_eq!(history[0].role, "user");
+        let first_text = match &history[0].content {
+            MessageContent::Text(t) => t.clone(),
+            other => panic!("expected text first message, got {other:?}"),
+        };
+        assert_eq!(first_text, "original user task");
+        let has_tool_result = history.iter().any(|m| {
+            matches!(
+                &m.content,
+                MessageContent::Blocks(blocks)
+                    if blocks.iter().any(|b| matches!(b, shannon_engine::api::ContentBlock::ToolResult { .. }))
+            )
+        });
+        assert!(
+            has_tool_result,
+            "tool round-trip must be preserved: {history:?}"
+        );
+        let last = history.last().expect("non-empty history");
+        assert_eq!(last.role, "assistant", "final message must be the answer");
+        let last_text = match &last.content {
+            MessageContent::Blocks(blocks) => blocks.iter().find_map(|b| match b {
+                shannon_engine::api::ContentBlock::Text { text } => Some(text.clone()),
+                _ => None,
+            }),
+            MessageContent::Text(t) => Some(t.clone()),
+        }
+        .unwrap_or_default();
+        assert!(
+            last_text.contains("final answer after continuation"),
+            "final answer must land in history; got: {last_text:?}"
+        );
+    }
+
+    /// Budget exhaustion: with SHANNON_TURN_RETRIES=2 and a server that
+    /// always times out, the engine makes 1 + 2 attempts, emits two
+    /// continuation Progress events (1/2, 2/2), then fails through the
+    /// EXISTING path with the original error text (so the headless A7
+    /// classifier still sees "timeout").
+    #[tokio::test]
+    async fn a8_turn_retry_budget_exhaustion_falls_through_to_failed() {
+        let _guard = TURN_RETRIES_ENV_LOCK
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        let saved = env::var("SHANNON_TURN_RETRIES").ok();
+        unsafe { env::set_var("SHANNON_TURN_RETRIES", "2") };
+
+        let responder: std::sync::Arc<dyn Fn(usize) -> String + Send + Sync> =
+            std::sync::Arc::new(|_i: usize| a8_timeout_response());
+        let server = TurnRetryMockServer::start(responder);
+
+        let (completed, failed, progress, _warnings, _history) = a8_run_query(&server).await;
+
+        match saved {
+            Some(v) => unsafe { env::set_var("SHANNON_TURN_RETRIES", v) },
+            None => unsafe { env::remove_var("SHANNON_TURN_RETRIES") },
+        }
+
+        assert!(!completed, "an always-timeout server must not complete");
+        assert!(
+            failed.contains("upstream request timeout"),
+            "the original error text must survive into Failed for A7 classification; got: {failed}"
+        );
+        let bodies = server.bodies();
+        assert_eq!(
+            bodies.len(),
+            3,
+            "initial attempt + 2 retries, then fail; got {}",
+            bodies.len()
+        );
+        let nudge = TURN_CONTINUATION_NUDGE_PROMPT;
+        assert!(!bodies[0].contains(nudge), "first attempt is nudge-free");
+        assert_eq!(
+            bodies[1].matches(nudge).count(),
+            1,
+            "retry 1 carries one nudge"
+        );
+        assert_eq!(
+            bodies[2].matches(nudge).count(),
+            1,
+            "retry 2 carries one nudge — never accumulated"
+        );
+        let continuations = progress
+            .iter()
+            .filter(|m| m.contains("Turn LLM call interrupted (upstream cutoff)"))
+            .count();
+        assert_eq!(
+            continuations, 2,
+            "one Progress per continuation; got {progress:?}"
+        );
+    }
+
+    /// Mid-stream death (the production shape of the GLM ~6min hard cut):
+    /// attempt 1 returns HTTP 200, streams message_start and a partial text
+    /// delta, then dies on an upstream timeout error frame. The A8 check
+    /// must precede the partial-content preservation in the mid-stream
+    /// error arm: the partial tail is discarded (a hard-cut tail is what
+    /// produced the truncated/empty patches in the RCA) and the turn is
+    /// retried to a clean completion.
+    #[tokio::test]
+    async fn a8_turn_retry_covers_mid_stream_death_and_discards_partial() {
+        let _guard = TURN_RETRIES_ENV_LOCK
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        let saved = env::var("SHANNON_TURN_RETRIES").ok();
+        unsafe { env::set_var("SHANNON_TURN_RETRIES", "2") };
+
+        // Dead stream: valid frames, then an error frame our StreamEvent
+        // model cannot parse. The parse failure surfaces as InvalidResponse
+        // whose Display embeds the provider's "upstream request timeout"
+        // wording — timeout-class by the pinned word list, and NOT
+        // reconnectable, so it reaches the engine's mid-stream error arm
+        // immediately (no reconnect backoff in the test).
+        let dead_sse = [
+            r#"event: message_start"#,
+            r#"data: {"type":"message_start","message":{"id":"msg_dead","role":"assistant","content":[],"model":"test-model","stop_reason":null,"usage":{"input_tokens":10,"output_tokens":1}}}"#,
+            r#"event: content_block_start"#,
+            r#"data: {"type":"content_block_start","index":0,"content_block":{"type":"text","text":""}}"#,
+            r#"event: content_block_delta"#,
+            r#"data: {"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"partial answer before the cut"}}"#,
+            r#"event: error"#,
+            r#"data: {"type":"error","error":{"type":"timeout_error","message":"upstream request timeout"}}"#,
+        ]
+        .join("\n\n");
+        let dead = a8_http_response("200 OK", "text/event-stream", &dead_sse);
+
+        let responder: std::sync::Arc<dyn Fn(usize) -> String + Send + Sync> =
+            std::sync::Arc::new(move |i: usize| match i {
+                0 => dead.clone(),
+                _ => a8_text_sse("recovered after mid-stream continuation"),
+            });
+        let server = TurnRetryMockServer::start(responder);
+
+        let (completed, failed, progress, _warnings, history) = a8_run_query(&server).await;
+
+        match saved {
+            Some(v) => unsafe { env::set_var("SHANNON_TURN_RETRIES", v) },
+            None => unsafe { env::remove_var("SHANNON_TURN_RETRIES") },
+        }
+
+        assert!(
+            completed,
+            "the turn must complete after a mid-stream continuation; failed: {failed}"
+        );
+        let bodies = server.bodies();
+        assert_eq!(bodies.len(), 2, "dead attempt + one continuation");
+        let nudge = TURN_CONTINUATION_NUDGE_PROMPT;
+        assert!(!bodies[0].contains(nudge), "first attempt is nudge-free");
+        assert_eq!(bodies[1].matches(nudge).count(), 1);
+        assert!(
+            progress
+                .iter()
+                .any(|m| m
+                    .contains("Turn LLM call interrupted (upstream cutoff); continuing turn 1/2")),
+            "expected A8 Progress; got {progress:?}"
+        );
+        let history_text: String = history
+            .iter()
+            .map(|m| match &m.content {
+                MessageContent::Text(t) => t.clone(),
+                MessageContent::Blocks(blocks) => blocks
+                    .iter()
+                    .map(|b| match b {
+                        shannon_engine::api::ContentBlock::Text { text } => text.clone(),
+                        _ => String::new(),
+                    })
+                    .collect(),
+            })
+            .collect();
+        assert!(
+            !history_text.contains("partial answer before the cut"),
+            "the hard-cut partial tail must NOT be committed as a complete response: {history_text:?}"
+        );
+        assert!(
+            history_text.contains("recovered after mid-stream continuation"),
+            "the continuation's answer must land in history: {history_text:?}"
+        );
+    }
+
+    /// Truncated stream (A8b / smoke-5 shape): valid partial frames, then
+    /// the connection ends WITHOUT any terminal frame (no message_delta
+    /// stop reason, no message_stop) — an abnormal EOF, never a completion.
+    fn a8_truncated_sse() -> String {
+        let sse = [
+            r#"event: message_start"#,
+            r#"data: {"type":"message_start","message":{"id":"msg_dead","role":"assistant","content":[],"model":"test-model","stop_reason":null,"usage":{"input_tokens":10,"output_tokens":1}}}"#,
+            r#"event: content_block_start"#,
+            r#"data: {"type":"content_block_start","index":0,"content_block":{"type":"text","text":""}}"#,
+            r#"event: content_block_delta"#,
+            r#"data: {"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"partial answer before the cut"}}"#,
+        ]
+        .join("\n\n");
+        a8_http_response("200 OK", "text/event-stream", &sse)
+    }
+
+    /// A8b core behavior (smoke-5): a mid-stream abnormal EOF
+    /// (`ApiError::StreamEndedUnexpectedly`) must continue THE TURN — the
+    /// truncated partial is discarded as an unusable tail, the continuation
+    /// nudge is injected, and the retried stream completes the turn.
+    /// Without A8b this query "completes" with the partial saved as a final
+    /// answer (rc=0, empty patch — exactly smoke-5). The engine's default
+    /// config sends structured system blocks, so the stream is the plain
+    /// (non-reconnecting) SseStream: the typed EOF surfaces on the first
+    /// dead response and the retry is immediate.
+    #[tokio::test]
+    async fn a8_stream_interrupted_triggers_continuation_and_discards_partial() {
+        let _guard = TURN_RETRIES_ENV_LOCK
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        let saved = env::var("SHANNON_TURN_RETRIES").ok();
+        unsafe { env::set_var("SHANNON_TURN_RETRIES", "2") };
+
+        let responder: std::sync::Arc<dyn Fn(usize) -> String + Send + Sync> =
+            std::sync::Arc::new(|i: usize| match i {
+                0 => a8_truncated_sse(),
+                _ => a8_text_sse("recovered after interrupted continuation"),
+            });
+        let server = TurnRetryMockServer::start(responder);
+
+        let (completed, failed, progress, warnings, history) = a8_run_query(&server).await;
+
+        match saved {
+            Some(v) => unsafe { env::set_var("SHANNON_TURN_RETRIES", v) },
+            None => unsafe { env::remove_var("SHANNON_TURN_RETRIES") },
+        }
+
+        assert!(
+            completed,
+            "the turn must complete after the interrupted-stream continuation; failed: {failed}"
+        );
+        let bodies = server.bodies();
+        assert_eq!(
+            bodies.len(),
+            2,
+            "dead attempt + 1 A8 continuation; got {}",
+            bodies.len()
+        );
+        let nudge = TURN_CONTINUATION_NUDGE_PROMPT;
+        assert!(
+            !bodies[0].contains(nudge),
+            "the first attempt must be nudge-free"
+        );
+        assert_eq!(
+            bodies[1].matches(nudge).count(),
+            1,
+            "the A8 continuation request must carry the nudge exactly once"
+        );
+        assert!(
+            progress
+                .iter()
+                .any(|m| m
+                    .contains("Turn LLM call interrupted (upstream cutoff); continuing turn 1/2")),
+            "expected A8 Progress for the interrupted stream; got {progress:?}"
+        );
+        assert!(
+            warnings.is_empty(),
+            "no partial-preserve Warning may fire when the turn was continued: {warnings:?}"
+        );
+        let history_text: String = history
+            .iter()
+            .map(|m| match &m.content {
+                MessageContent::Text(t) => t.clone(),
+                MessageContent::Blocks(blocks) => blocks
+                    .iter()
+                    .map(|b| match b {
+                        shannon_engine::api::ContentBlock::Text { text } => text.clone(),
+                        _ => String::new(),
+                    })
+                    .collect(),
+            })
+            .collect();
+        assert!(
+            !history_text.contains("partial answer before the cut"),
+            "the truncated tail must NOT be committed as a complete response: {history_text:?}"
+        );
+        assert!(
+            history_text.contains("recovered after interrupted continuation"),
+            "the continuation's answer must land in history: {history_text:?}"
+        );
+    }
+
+    /// A8b budget exhausted / disabled: the abnormal EOF falls through to
+    /// the EXISTING has_partial path — partial preserved, Warning fired,
+    /// query Completed — so the degraded behavior is byte-identical to
+    /// pre-A8b when SHANNON_TURN_RETRIES=0.
+    #[tokio::test]
+    async fn a8_stream_interrupted_budget_exhausted_falls_back_to_partial_preserve() {
+        let _guard = TURN_RETRIES_ENV_LOCK
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        let saved = env::var("SHANNON_TURN_RETRIES").ok();
+        unsafe { env::set_var("SHANNON_TURN_RETRIES", "0") };
+
+        let responder: std::sync::Arc<dyn Fn(usize) -> String + Send + Sync> =
+            std::sync::Arc::new(|_i: usize| a8_truncated_sse());
+        let server = TurnRetryMockServer::start(responder);
+
+        let (completed, failed, progress, warnings, history) = a8_run_query(&server).await;
+
+        match saved {
+            Some(v) => unsafe { env::set_var("SHANNON_TURN_RETRIES", v) },
+            None => unsafe { env::remove_var("SHANNON_TURN_RETRIES") },
+        }
+
+        assert!(
+            completed,
+            "the preserve fallback must complete the query as before; failed: {failed}"
+        );
+        assert_eq!(
+            server.bodies().len(),
+            1,
+            "SHANNON_TURN_RETRIES=0: single dead attempt, no continuation"
+        );
+        assert!(
+            warnings
+                .iter()
+                .any(|w| w.contains("Partial response preserved")),
+            "the existing partial-preserve Warning must fire; got {warnings:?}"
+        );
+        assert!(
+            !progress
+                .iter()
+                .any(|m| m.contains("Turn LLM call interrupted (upstream cutoff)")),
+            "no A8 continuation may fire when disabled; got {progress:?}"
+        );
+        let history_text: String = history
+            .iter()
+            .map(|m| match &m.content {
+                MessageContent::Text(t) => t.clone(),
+                MessageContent::Blocks(blocks) => blocks
+                    .iter()
+                    .map(|b| match b {
+                        shannon_engine::api::ContentBlock::Text { text } => text.clone(),
+                        _ => String::new(),
+                    })
+                    .collect(),
+            })
+            .collect();
+        assert!(
+            history_text.contains("partial answer before the cut"),
+            "with the budget exhausted the partial must be preserved exactly as before: {history_text:?}"
+        );
+    }
+
+    /// A13 truncated-with-tool-call stream (path 1): partial text, then a
+    /// tool_use whose JSON was cut by the output limit (ContentBlockStop
+    /// fires on the truncated frame and pairs a synthetic "Malformed tool
+    /// input" result with a null-input ToolUse block), then
+    /// message_delta(stop_reason "length"). This is the exact minimax-M3
+    /// orphan shape: the truncation continuation must not strand the
+    /// tool_result after itself.
+    fn a13_truncated_text_plus_tool_sse(zero_usage: bool) -> String {
+        a13_truncated_tool_sse_impl(zero_usage, true)
+    }
+
+    /// Variant without the tool block's ContentBlockStop: the partial JSON
+    /// never parses at block scope and fails again in the MessageDelta
+    /// post-stream flush (A13-c site 2).
+    fn a13_truncated_unclosed_tool_sse(zero_usage: bool) -> String {
+        a13_truncated_tool_sse_impl(zero_usage, false)
+    }
+
+    fn a13_truncated_tool_sse_impl(zero_usage: bool, close_tool_block: bool) -> String {
+        let usage = if zero_usage {
+            r#"{"input_tokens":0,"output_tokens":0}"#
+        } else {
+            r#"{"input_tokens":10,"output_tokens":9}"#
+        };
+        let stop_frame = if zero_usage {
+            // Sentinel zero-usage frame defers finalization (MiniMax splits
+            // usage across frames); no message_stop follows — the stream is
+            // cut, so the safety net finalizes instead (path 2).
+            format!(
+                "event: message_delta\ndata: {{\"type\":\"message_delta\",\"delta\":{{\"stop_reason\":\"length\"}},\"usage\":{usage}}}\n\n"
+            )
+        } else {
+            format!(
+                "event: message_delta\ndata: {{\"type\":\"message_delta\",\"delta\":{{\"stop_reason\":\"length\"}},\"usage\":{usage}}}\n\nevent: message_stop\ndata: {{\"type\":\"message_stop\"}}\n\n"
+            )
+        };
+        let sse = [
+            r#"event: message_start"#,
+            r#"data: {"type":"message_start","message":{"id":"msg_trunc","role":"assistant","content":[],"model":"test-model","stop_reason":null,"usage":{"input_tokens":10,"output_tokens":1}}}"#,
+            r#"event: content_block_start"#,
+            r#"data: {"type":"content_block_start","index":0,"content_block":{"type":"text","text":""}}"#,
+            r#"event: content_block_delta"#,
+            r#"data: {"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"partial text before the cut"}}"#,
+            r#"event: content_block_stop"#,
+            r#"data: {"type":"content_block_stop","index":0}"#,
+            r#"event: content_block_start"#,
+            r#"data: {"type":"content_block_start","index":1,"content_block":{"type":"tool_use","id":"toolu_trunc_1","name":"no_such_tool","input":{}}}"#,
+            r#"event: content_block_delta"#,
+            r#"data: {"type":"content_block_delta","index":1,"delta":{"type":"input_json_delta","partial_json":"{\"na"}}"#,
+        ]
+        .join("\n\n");
+        let tool_stop = if close_tool_block {
+            "\n\nevent: content_block_stop\n\ndata: {\"type\":\"content_block_stop\",\"index\":1}\n\n"
+        } else {
+            ""
+        };
+        let sse = format!("{sse}{tool_stop}");
+        // Splice the stop frame (keeps the usage variants in one place).
+        let sse = format!("{sse}\n\n{stop_frame}");
+        a8_http_response("200 OK", "text/event-stream", &sse)
+    }
+
+    #[tokio::test]
+    async fn a13_truncation_with_tool_use_flushes_results_before_continuation() {
+        let responder: std::sync::Arc<dyn Fn(usize) -> String + Send + Sync> =
+            std::sync::Arc::new(|i: usize| match i {
+                0 => a13_truncated_text_plus_tool_sse(false),
+                _ => a8_text_sse("wrapped up after continuation"),
+            });
+        let server = TurnRetryMockServer::start(responder);
+
+        let (completed, failed, _progress, _warnings, _history) = a8_run_query(&server).await;
+
+        assert!(
+            completed,
+            "the continuation turn must complete; failed: {failed}"
+        );
+        let bodies = server.bodies();
+        assert_eq!(bodies.len(), 2, "truncated turn + continuation turn");
+        assert!(
+            !bodies[0].contains(TRUNCATION_CONTINUATION_PROMPT),
+            "the truncated request itself carries no continuation prompt"
+        );
+        let body = &bodies[1];
+        assert!(
+            body.contains(TRUNCATION_CONTINUATION_PROMPT),
+            "the continuation request must carry the continuation prompt"
+        );
+        // Wire order: the assistant's tool_call declaration first, then its
+        // tool_result, then the continuation prompt. The id appears exactly
+        // twice (declaration + result); anything else is an orphan.
+        let first = body
+            .find("toolu_trunc_1")
+            .expect("tool call id must reach the wire");
+        let second = body
+            .rfind("toolu_trunc_1")
+            .expect("tool result id must reach the wire");
+        let cont = body
+            .find(TRUNCATION_CONTINUATION_PROMPT)
+            .expect("continuation prompt must reach the wire");
+        assert_ne!(
+            first, second,
+            "the id must appear as BOTH a tool_call declaration and a tool_result"
+        );
+        assert!(
+            first < second && second < cont,
+            "wire order must be assistant(tool_call) → user(tool_result) → \
+             user(continuation); got call@{first}, result@{second}, cont@{cont}"
+        );
+        // A13-c: minimax parses tool_calls arguments and requires a JSON
+        // object — "null" is rejected 400 (2013) while "{}" succeeds. The
+        // malformed synthesis must therefore serialize as an empty object.
+        assert!(
+            body.contains("\"input\":{}"),
+            "the synthesized tool_use input must be {{}} on the wire"
+        );
+        assert!(
+            !body.contains("\"input\":null"),
+            "a null tool_use input is wire-illegal for minimax (2013)"
+        );
+    }
+
+    /// A13 path 2 (safety net): the same truncated text+tool stream, but the
+    /// only message_delta carries the sentinel zero-usage frame (MiniMax
+    /// splits usage across frames) and the stream is cut before message_stop.
+    /// The safety net finalizes; the same wire-order contract applies.
+    #[tokio::test]
+    async fn a13_safety_net_truncation_with_tool_use_flushes_results_before_continuation() {
+        let responder: std::sync::Arc<dyn Fn(usize) -> String + Send + Sync> =
+            std::sync::Arc::new(|i: usize| match i {
+                0 => a13_truncated_text_plus_tool_sse(true),
+                _ => a8_text_sse("wrapped up after continuation"),
+            });
+        let server = TurnRetryMockServer::start(responder);
+
+        let (completed, failed, _progress, _warnings, _history) = a8_run_query(&server).await;
+
+        assert!(
+            completed,
+            "the continuation turn must complete; failed: {failed}"
+        );
+        let bodies = server.bodies();
+        assert_eq!(bodies.len(), 2);
+        let body = &bodies[1];
+        assert!(body.contains(TRUNCATION_CONTINUATION_PROMPT));
+        let first = body
+            .find("toolu_trunc_1")
+            .expect("tool call id must reach the wire");
+        let second = body
+            .rfind("toolu_trunc_1")
+            .expect("tool result id must reach the wire");
+        let cont = body
+            .find(TRUNCATION_CONTINUATION_PROMPT)
+            .expect("continuation prompt must reach the wire");
+        assert_ne!(first, second);
+        assert!(
+            first < second && second < cont,
+            "safety-net wire order must be assistant(tool_call) → user(tool_result) → \
+             user(continuation); got call@{first}, result@{second}, cont@{cont}"
+        );
+    }
+
+    /// A13-c site 2: the tool_use frame is cut WITHOUT a ContentBlockStop —
+    /// the partial JSON fails again in the MessageDelta post-stream flush.
+    /// The synthetic result must be PAIRED with an assistant ToolUse block
+    /// carrying an empty-object input (previously no block was pushed at
+    /// all, so the flushed result reached the wire orphaned).
+    #[tokio::test]
+    async fn a13_post_stream_flush_malformed_call_pairs_with_empty_object() {
+        let responder: std::sync::Arc<dyn Fn(usize) -> String + Send + Sync> =
+            std::sync::Arc::new(|i: usize| match i {
+                0 => a13_truncated_unclosed_tool_sse(false),
+                _ => a8_text_sse("wrapped up after continuation"),
+            });
+        let server = TurnRetryMockServer::start(responder);
+
+        let (completed, failed, _progress, _warnings, _history) = a8_run_query(&server).await;
+
+        assert!(
+            completed,
+            "the continuation turn must complete; failed: {failed}"
+        );
+        let bodies = server.bodies();
+        assert_eq!(bodies.len(), 2);
+        let body = &bodies[1];
+        assert!(body.contains(TRUNCATION_CONTINUATION_PROMPT));
+        let first = body
+            .find("toolu_trunc_1")
+            .expect("tool call id must reach the wire");
+        let second = body
+            .rfind("toolu_trunc_1")
+            .expect("tool result id must reach the wire");
+        let cont = body
+            .find(TRUNCATION_CONTINUATION_PROMPT)
+            .expect("continuation prompt must reach the wire");
+        assert_ne!(
+            first, second,
+            "the id must appear as BOTH a tool_call declaration and a tool_result"
+        );
+        assert!(
+            first < second && second < cont,
+            "wire order must be assistant(tool_call) → user(tool_result) → \
+             user(continuation); got call@{first}, result@{second}, cont@{cont}"
+        );
+        assert!(
+            body.contains("\"input\":{}") && !body.contains("\"input\":null"),
+            "the paired tool_call input must be an empty object (A13-c)"
+        );
+    }
+
+    /// Regression: a PURE-TEXT truncation keeps its existing shape — the
+    /// partial text lands before the continuation prompt, no tool traffic
+    /// is introduced, and the query completes.
+    #[tokio::test]
+    async fn a13_truncated_text_only_path_unchanged() {
+        let sse = [
+            r#"event: message_start"#,
+            r#"data: {"type":"message_start","message":{"id":"msg_ttext","role":"assistant","content":[],"model":"test-model","stop_reason":null,"usage":{"input_tokens":10,"output_tokens":1}}}"#,
+            r#"event: content_block_start"#,
+            r#"data: {"type":"content_block_start","index":0,"content_block":{"type":"text","text":""}}"#,
+            r#"event: content_block_delta"#,
+            r#"data: {"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"partial reasoning was cut"}}"#,
+            r#"event: content_block_stop"#,
+            r#"data: {"type":"content_block_stop","index":0}"#,
+            r#"event: message_delta"#,
+            r#"data: {"type":"message_delta","delta":{"stop_reason":"length"},"usage":{"input_tokens":10,"output_tokens":9}}"#,
+            r#"event: message_stop"#,
+            r#"data: {"type":"message_stop"}"#,
+        ]
+        .join("\n\n");
+        let truncated = a8_http_response("200 OK", "text/event-stream", &sse);
+        let responder: std::sync::Arc<dyn Fn(usize) -> String + Send + Sync> =
+            std::sync::Arc::new(move |i: usize| match i {
+                0 => truncated.clone(),
+                _ => a8_text_sse("final answer"),
+            });
+        let server = TurnRetryMockServer::start(responder);
+
+        let (completed, failed, _progress, _warnings, history) = a8_run_query(&server).await;
+
+        assert!(
+            completed,
+            "text-only truncation must complete; failed: {failed}"
+        );
+        let bodies = server.bodies();
+        assert_eq!(bodies.len(), 2);
+        let body = &bodies[1];
+        assert!(body.contains(TRUNCATION_CONTINUATION_PROMPT));
+        assert!(
+            body.contains("partial reasoning was cut"),
+            "the partial text must be preserved"
+        );
+        assert!(
+            body.find("partial reasoning was cut").unwrap()
+                < body.find(TRUNCATION_CONTINUATION_PROMPT).unwrap(),
+            "partial text must precede the continuation prompt"
+        );
+        assert!(
+            !body.contains("toolu_"),
+            "text-only truncation must not introduce tool traffic"
+        );
+        let _ = history;
+    }
+
+    /// Boundary guard for the terminal-frame latch: a stream that ends with
+    /// a `message_delta` carrying a stop reason but NO `message_stop` (the
+    /// only terminal signal several providers emit — Ollama's done chunk,
+    /// Gemini's final chunk) is a CLEAN completion. It must finish in one
+    /// request with no reconnects and no A8 continuation.
+    #[tokio::test]
+    async fn a8_clean_end_without_message_stop_is_not_continued() {
+        let _guard = TURN_RETRIES_ENV_LOCK
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        let saved = env::var("SHANNON_TURN_RETRIES").ok();
+        unsafe { env::set_var("SHANNON_TURN_RETRIES", "2") };
+
+        let sse = [
+            r#"event: message_start"#,
+            r#"data: {"type":"message_start","message":{"id":"msg_clean","role":"assistant","content":[],"model":"test-model","stop_reason":null,"usage":{"input_tokens":10,"output_tokens":1}}}"#,
+            r#"event: content_block_start"#,
+            r#"data: {"type":"content_block_start","index":0,"content_block":{"type":"text","text":""}}"#,
+            r#"event: content_block_delta"#,
+            r#"data: {"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"clean end without message_stop"}}"#,
+            r#"event: content_block_stop"#,
+            r#"data: {"type":"content_block_stop","index":0}"#,
+            r#"event: message_delta"#,
+            r#"data: {"type":"message_delta","delta":{"stop_reason":"end_turn"},"usage":{"input_tokens":10,"output_tokens":7}}"#,
+        ]
+        .join("\n\n");
+        let body = a8_http_response("200 OK", "text/event-stream", &sse);
+        let responder: std::sync::Arc<dyn Fn(usize) -> String + Send + Sync> =
+            std::sync::Arc::new(move |_i: usize| body.clone());
+        let server = TurnRetryMockServer::start(responder);
+
+        let (completed, failed, progress, warnings, history) = a8_run_query(&server).await;
+
+        match saved {
+            Some(v) => unsafe { env::set_var("SHANNON_TURN_RETRIES", v) },
+            None => unsafe { env::remove_var("SHANNON_TURN_RETRIES") },
+        }
+
+        assert!(
+            completed,
+            "a clean text completion must complete; failed: {failed}"
+        );
+        assert_eq!(
+            server.bodies().len(),
+            1,
+            "a terminal-frame stream must not be reconnected or continued"
+        );
+        assert!(
+            !progress
+                .iter()
+                .any(|m| m.contains("Turn LLM call interrupted (upstream cutoff)")),
+            "no A8 continuation for a clean completion; got {progress:?}"
+        );
+        assert!(
+            warnings.is_empty(),
+            "no warnings expected for a clean completion: {warnings:?}"
+        );
+        let history_text: String = history
+            .iter()
+            .map(|m| match &m.content {
+                MessageContent::Text(t) => t.clone(),
+                MessageContent::Blocks(blocks) => blocks
+                    .iter()
+                    .map(|b| match b {
+                        shannon_engine::api::ContentBlock::Text { text } => text.clone(),
+                        _ => String::new(),
+                    })
+                    .collect(),
+            })
+            .collect();
+        assert!(
+            history_text.contains("clean end without message_stop"),
+            "the answer must land in history exactly once: {history_text:?}"
+        );
+        assert_eq!(
+            history_text
+                .matches("clean end without message_stop")
+                .count(),
+            1,
+            "content must not be duplicated by reconnect replays"
+        );
+    }
+
+    // ---- A10: wrap-up protocol before the final turn ----------------------
+    //
+    // w4: arcane / dynamodb died at the turn limit with work done but
+    // nothing committed (exit 2, empty patch, F10). The nudge entering the
+    // final turn lands the work; the hard stop keeps its semantics.
+
+    /// ① The wrap-up nudge is injected exactly once, and only in the wire
+    /// body of the request that OPENS the final turn. ② After the budget
+    /// is exhausted the query still completes through the unchanged hard
+    /// stop (Completed, no Failed).
+    #[tokio::test]
+    async fn a10_wrap_up_nudge_injected_once_before_final_turn() {
+        // Every turn ends in a tool_use (the empty registry answers with an
+        // error tool_result), so no response ever ends the query early and
+        // the budget genuinely exhausts through the hard stop.
+        let responder: std::sync::Arc<dyn Fn(usize) -> String + Send + Sync> =
+            std::sync::Arc::new(|_i: usize| a8_tool_call_sse());
+        let server = TurnRetryMockServer::start(responder);
+
+        let (completed, failed, progress, warnings, _history) = a8_run_query_with(&server, 3).await;
+
+        assert!(
+            completed,
+            "budget exhaustion must still complete via the hard stop; failed: {failed}"
+        );
+        assert!(failed.is_empty());
+        let bodies = server.bodies();
+        assert_eq!(
+            bodies.len(),
+            3,
+            "exactly max_turns requests must run; got {}",
+            bodies.len()
+        );
+        let wrap = WRAP_UP_NUDGE_PROMPT;
+        assert!(!bodies[0].contains(wrap), "turn 1 of 3 must be nudge-free");
+        assert!(!bodies[1].contains(wrap), "turn 2 of 3 must be nudge-free");
+        assert_eq!(
+            bodies[2].matches(wrap).count(),
+            1,
+            "the final-turn request must carry the wrap-up nudge exactly once"
+        );
+        assert!(
+            progress
+                .iter()
+                .any(|m| m.contains("turn budget") && m.contains("final turn")),
+            "a wrap-up Progress event must fire; got {progress:?}"
+        );
+        assert_eq!(
+            progress
+                .iter()
+                .filter(|m| m.contains("turn budget") && m.contains("final turn"))
+                .count(),
+            1,
+            "the wrap-up Progress event is one-shot; got {progress:?}"
+        );
+        // Note: tool-only mock turns legitimately emit the pre-existing
+        // "Model produced no text output" Warning — not an A10 concern.
+        let _ = warnings;
+    }
+
+    /// ③ With max_turns = 1 the very first request IS the final turn and
+    /// must already carry the nudge.
+    #[tokio::test]
+    async fn a10_wrap_up_nudge_fires_on_first_turn_when_max_turns_is_one() {
+        let responder: std::sync::Arc<dyn Fn(usize) -> String + Send + Sync> =
+            std::sync::Arc::new(|_i: usize| a8_tool_call_sse());
+        let server = TurnRetryMockServer::start(responder);
+
+        let (completed, failed, progress, _warnings, _history) =
+            a8_run_query_with(&server, 1).await;
+
+        assert!(completed, "single-turn run must complete; failed: {failed}");
+        let bodies = server.bodies();
+        assert_eq!(bodies.len(), 1, "exactly one request must run");
+        assert_eq!(
+            bodies[0].matches(WRAP_UP_NUDGE_PROMPT).count(),
+            1,
+            "with max_turns=1 the first request is the final turn"
+        );
+        assert!(
+            progress
+                .iter()
+                .any(|m| m.contains("turn budget") && m.contains("final turn")),
+            "wrap-up Progress must fire; got {progress:?}"
+        );
+    }
+
+    /// ④ A8 stacking: the wrap-up turn's stream dies with a timeout-class
+    /// error and the A8 continuation re-enters the SAME turn (turn count
+    /// unchanged, never越过 max_turns). The wrap-up nudge must NOT be
+    /// re-injected on the retry request, and the A8 nudge rides after it.
+    #[tokio::test]
+    async fn a10_wrap_up_and_a8_stacking_no_double_injection() {
+        let _guard = TURN_RETRIES_ENV_LOCK
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        let saved = env::var("SHANNON_TURN_RETRIES").ok();
+        unsafe { env::set_var("SHANNON_TURN_RETRIES", "2") };
+
+        // turn 0: dead → A8 retry succeeds (tool turn). turn 1 (final):
+        // dead → A8 retry succeeds → budget exhausted at max_turns=2 → hard
+        // stop. Recoveries are tool turns so no response ends the query.
+        let responder: std::sync::Arc<dyn Fn(usize) -> String + Send + Sync> =
+            std::sync::Arc::new(|i: usize| match i {
+                0 | 2 => a8_timeout_response(),
+                _ => a8_tool_call_sse(),
+            });
+        let server = TurnRetryMockServer::start(responder);
+
+        let (completed, failed, progress, warnings, _history) = a8_run_query_with(&server, 2).await;
+
+        match saved {
+            Some(v) => unsafe { env::set_var("SHANNON_TURN_RETRIES", v) },
+            None => unsafe { env::remove_var("SHANNON_TURN_RETRIES") },
+        }
+
+        assert!(completed, "both turns must land; failed: {failed}");
+        let bodies = server.bodies();
+        assert_eq!(
+            bodies.len(),
+            4,
+            "2 turns × (dead attempt + A8 retry); got {}",
+            bodies.len()
+        );
+        let wrap = WRAP_UP_NUDGE_PROMPT;
+        let a8nudge = TURN_CONTINUATION_NUDGE_PROMPT;
+        assert!(!bodies[0].contains(wrap) && !bodies[0].contains(a8nudge));
+        assert!(
+            !bodies[1].contains(wrap) && bodies[1].matches(a8nudge).count() == 1,
+            "turn-0 retry carries only the A8 nudge (wrap-up not yet due)"
+        );
+        // A8/A1 nudges are session-persistent by design, so turn 1's
+        // requests legitimately still carry turn 0's A8 nudge. The A10
+        // contract: the wrap-up nudge appears EXACTLY once per request —
+        // the in-turn A8 re-entry must not stack a second copy.
+        assert!(
+            bodies[2].matches(wrap).count() == 1 && bodies[2].matches(a8nudge).count() == 1,
+            "the final-turn request carries one wrap-up nudge (plus turn 0's persistent A8 nudge)"
+        );
+        assert!(
+            bodies[3].matches(wrap).count() == 1 && bodies[3].matches(a8nudge).count() == 2,
+            "the in-turn A8 retry must NOT re-inject the wrap-up nudge; the A8 nudge \
+             grows by exactly the one new continuation"
+        );
+        let continuations = progress
+            .iter()
+            .filter(|m| m.contains("Turn LLM call interrupted (upstream cutoff)"))
+            .count();
+        assert_eq!(continuations, 2, "one A8 continuation per turn");
+        assert_eq!(
+            progress
+                .iter()
+                .filter(|m| m.contains("turn budget") && m.contains("final turn"))
+                .count(),
+            1,
+            "wrap-up Progress stays one-shot across A8 re-entries"
+        );
+        let _ = warnings;
+    }
+
+    /// SHANNON_TURN_RETRIES=0 disables continuation entirely: one request,
+    /// immediate failure through the existing path.
+    #[tokio::test]
+    async fn a8_turn_retry_zero_disables_continuation() {
+        let _guard = TURN_RETRIES_ENV_LOCK
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        let saved = env::var("SHANNON_TURN_RETRIES").ok();
+        unsafe { env::set_var("SHANNON_TURN_RETRIES", "0") };
+
+        let responder: std::sync::Arc<dyn Fn(usize) -> String + Send + Sync> =
+            std::sync::Arc::new(|_i: usize| a8_timeout_response());
+        let server = TurnRetryMockServer::start(responder);
+
+        let (completed, failed, progress, _warnings, _history) = a8_run_query(&server).await;
+
+        match saved {
+            Some(v) => unsafe { env::set_var("SHANNON_TURN_RETRIES", v) },
+            None => unsafe { env::remove_var("SHANNON_TURN_RETRIES") },
+        }
+
+        assert!(!completed, "disabled continuation must fail");
+        assert!(
+            failed.contains("upstream request timeout"),
+            "existing failure path must be preserved: {failed}"
+        );
+        assert_eq!(
+            server.bodies().len(),
+            1,
+            "SHANNON_TURN_RETRIES=0 must not re-send the turn"
+        );
+        assert!(
+            !progress
+                .iter()
+                .any(|m| m.contains("Turn LLM call interrupted (upstream cutoff)")),
+            "no continuation Progress may fire when disabled; got {progress:?}"
+        );
+    }
+
+    /// Non-timeout errors (auth failure) are never continued: A8 must not
+    /// swallow deterministic failures.
+    #[tokio::test]
+    async fn a8_non_timeout_errors_do_not_continue_turn() {
+        let _guard = TURN_RETRIES_ENV_LOCK
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        let saved = env::var("SHANNON_TURN_RETRIES").ok();
+        unsafe { env::set_var("SHANNON_TURN_RETRIES", "2") };
+
+        let responder: std::sync::Arc<dyn Fn(usize) -> String + Send + Sync> =
+            std::sync::Arc::new(|_i: usize| a8_auth_response());
+        let server = TurnRetryMockServer::start(responder);
+
+        let (completed, failed, progress, _warnings, _history) = a8_run_query(&server).await;
+
+        match saved {
+            Some(v) => unsafe { env::set_var("SHANNON_TURN_RETRIES", v) },
+            None => unsafe { env::remove_var("SHANNON_TURN_RETRIES") },
+        }
+
+        assert!(!completed, "auth failure must not complete");
+        assert!(!failed.is_empty(), "auth failure must surface Failed");
+        assert_eq!(
+            server.bodies().len(),
+            1,
+            "an AuthenticationFailed must not be continued"
+        );
+        assert!(
+            !progress
+                .iter()
+                .any(|m| m.contains("Turn LLM call interrupted (upstream cutoff)")),
+            "no A8 Progress for non-timeout errors; got {progress:?}"
         );
     }
 }

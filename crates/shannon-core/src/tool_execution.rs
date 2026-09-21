@@ -510,7 +510,10 @@ const FILE_MODIFYING_TOOLS: &[&str] = &[
 
 /// Returns true if the tool is known to modify files.
 pub fn is_file_modifying_tool(tool_name: &str) -> bool {
-    FILE_MODIFYING_TOOLS.contains(&tool_name)
+    // Case-insensitive: registered display names are capitalized ("Write").
+    FILE_MODIFYING_TOOLS
+        .iter()
+        .any(|n| n.eq_ignore_ascii_case(tool_name))
 }
 
 /// Configuration for the tool execution service.

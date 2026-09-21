@@ -10,7 +10,23 @@ use super::types::{MemoryCategory, MemoryEntry, MemoryType, SessionMemoryConfig}
 use fs2::FileExt;
 
 // Hash a project path to a safe filename.
-fn project_hash(project: &str) -> String {
+//
+// FNV-1a (not `DefaultHasher`): std's hasher is SipHash with
+// implementation-defined keys whose output may change across Rust releases —
+// a toolchain bump would re-key every project and orphan all JSONL stores.
+// FNV-1a output is stable forever.
+pub(crate) fn project_hash(project: &str) -> String {
+    let mut hash: u64 = 0xcbf2_9ce4_8422_2325;
+    for byte in project.as_bytes() {
+        hash ^= u64::from(*byte);
+        hash = hash.wrapping_mul(0x0000_0100_0000_01b3);
+    }
+    format!("{hash:016x}")
+}
+
+/// Hash with the legacy `DefaultHasher` scheme, used only to migrate
+/// pre-existing store files to the stable hash on load.
+fn project_hash_legacy(project: &str) -> String {
     use std::collections::hash_map::DefaultHasher;
     use std::hash::{Hash, Hasher};
 
@@ -133,6 +149,10 @@ pub struct MemoryStore {
 /// `memory/` volume). Tuned empirically once injection is exercised.
 const MAX_INJECTED_MEMORIES: usize = 50;
 
+/// Injection token budget for [`MemoryStore::format_for_injection`]
+/// (ADR-0010 C5'). Enforced at injection time, not just at compaction time.
+const MAX_INJECTED_TOKENS: usize = 2000;
+
 /// Jaccard word-overlap at/above which two same-project, same-category entries
 /// are treated as the same fact at write time (ADR-0010 D4). Matches the
 /// compaction-time threshold used by [`MemoryStore::merge_duplicates`] and the
@@ -241,6 +261,19 @@ impl MemoryStore {
     /// the next compaction pass reclaims. The merged entry keeps the newer
     /// content, the higher confidence, the union of tags, the earliest
     /// `created_at`, and a refreshed `accessed_at`.
+    /// Like [`add_or_update`](Self::add_or_update) but also returns the id of
+    /// the entry that now holds the fact (the matched id on merge, the new
+    /// id on insert). Used by the model-facing `MemorySave` tool.
+    pub fn add_or_update_with_id(
+        &mut self,
+        entry: MemoryEntry,
+    ) -> Result<(AddOutcome, String), MemoryError> {
+        let matched = self.find_dedup_match(&entry);
+        let final_id = matched.unwrap_or_else(|| entry.id.clone());
+        let outcome = self.add_or_update(entry)?;
+        Ok((outcome, final_id))
+    }
+
     pub fn add_or_update(&mut self, mut entry: MemoryEntry) -> Result<AddOutcome, MemoryError> {
         let matched_id = self.find_dedup_match(&entry);
         if let Some(id) = matched_id {
@@ -372,9 +405,23 @@ impl MemoryStore {
             return None;
         }
         entries.truncate(MAX_INJECTED_MEMORIES);
+        // Injection-time token budget (~`MAX_INJECTED_TOKENS`): previously the
+        // only budget check ran at compaction time, so between compactions 50
+        // long entries could blow well past the intended prompt volume. Oldest
+        // entries beyond the budget are simply not injected — never deleted
+        // (size control must not destroy data).
+        let budget_chars = MAX_INJECTED_TOKENS * CHARS_PER_TOKEN;
+        let mut used = "## Project Memories\n".len();
         let mut by_cat: std::collections::BTreeMap<&MemoryCategory, Vec<&str>> =
             std::collections::BTreeMap::new();
+        let mut omitted = 0usize;
         for e in &entries {
+            let cost = e.content.len() + 2;
+            if used + cost > budget_chars {
+                omitted += 1;
+                continue;
+            }
+            used += cost;
             by_cat.entry(&e.category).or_default().push(&e.content);
         }
         let mut out = String::from("## Project Memories\n");
@@ -383,6 +430,11 @@ impl MemoryStore {
             for c in contents {
                 out.push_str(&format!("- {c}\n"));
             }
+        }
+        if omitted > 0 {
+            out.push_str(&format!(
+                "\n({omitted} older memories not shown — use /recall to search the full store)\n"
+            ));
         }
         Some(out)
     }
@@ -496,8 +548,12 @@ impl MemoryStore {
             return Ok(());
         }
 
-        // A fresh load has no deliberate deletions to carry forward.
+        // A fresh load has no deliberate deletions to carry forward, and the
+        // in-memory view must be REBUILT from disk (M-4): insert-only loading
+        // resurrected entries another process had deleted, which the next
+        // local save() then re-persisted.
         self.tombstones.clear();
+        self.entries.clear();
 
         // One-shot migration: legacy `<hash>.json` → `<hash>.jsonl`. Skipped
         // when the `.jsonl` already exists (already migrated, or written by a
@@ -531,6 +587,46 @@ impl MemoryStore {
                     PathBuf::from(s)
                 };
                 let _ = fs::rename(&path, &migrated);
+            }
+        }
+
+        // One-shot migration: legacy `DefaultHasher`-hashed `.jsonl` files →
+        // stable-hash names (see `project_hash`). The hash is not
+        // reversible, so the target name is recovered from the first
+        // entry's `project` field inside each candidate file.
+        {
+            if let Ok(dir_entries) = fs::read_dir(&self.storage_path) {
+                for dir_entry in dir_entries.flatten() {
+                    let path = dir_entry.path();
+                    let Some(name) = path.file_name().and_then(|n| n.to_str()) else {
+                        continue;
+                    };
+                    let Some(stem) = name.strip_suffix(".jsonl") else {
+                        continue;
+                    };
+                    // Legacy and stable hashes are both 16 lowercase hex
+                    // chars — a collision on the new scheme would mean the
+                    // file is already migrated; only rename when the stem
+                    // equals the LEGACY hash of that file's own project.
+                    if stem.len() != 16 || !stem.chars().all(|c| c.is_ascii_hexdigit()) {
+                        continue;
+                    }
+                    let Some(project) = parse_jsonl_file(&path)
+                        .into_iter()
+                        .next()
+                        .map(|f| f.project)
+                    else {
+                        continue;
+                    };
+                    if project_hash_legacy(&project) == stem && project_hash(&project) != stem {
+                        let target = self
+                            .storage_path
+                            .join(format!("{}.jsonl", project_hash(&project)));
+                        if !target.exists() {
+                            let _ = fs::rename(&path, &target);
+                        }
+                    }
+                }
             }
         }
 

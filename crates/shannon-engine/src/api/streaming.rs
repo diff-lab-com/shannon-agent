@@ -58,6 +58,19 @@ fn is_keepalive_event(event: &StreamEvent) -> bool {
     matches!(event, StreamEvent::Ping)
 }
 
+/// True for the frames that mark a clean completion (A8b): `MessageStop`, or
+/// a `MessageDelta` carrying a stop reason. Several providers never send
+/// `MessageStop` at all — Ollama's `done` chunk and Gemini's final chunk end
+/// with a `MessageDelta` — so BOTH frames count as terminal; a stream that
+/// ends without either is an abnormal EOF, never a completion.
+fn is_terminal_frame(event: &StreamEvent) -> bool {
+    match event {
+        StreamEvent::MessageStop => true,
+        StreamEvent::MessageDelta { delta, .. } => delta.stop_reason.is_some(),
+        _ => false,
+    }
+}
+
 /// Shared last-event-id tracker for reconnection support.
 ///
 /// Wrapped in `Arc<Mutex<>>` so both the inner `SseStream` and the
@@ -122,6 +135,15 @@ pub struct SseStream {
     /// inside `poll_next` so `SseStream` can be built outside a Tokio
     /// runtime.
     idle_timer: Option<Pin<Box<tokio::time::Sleep>>>,
+    /// A8b: set once a terminal frame was observed — `MessageStop`, or a
+    /// `MessageDelta` carrying a stop reason (the only terminal signal
+    /// several providers emit: Ollama's done chunk and Gemini's final chunk
+    /// end with MessageDelta, never MessageStop).
+    saw_terminal_frame: bool,
+    /// A8b: the byte stream ended without a terminal frame — the typed
+    /// `StreamEndedUnexpectedly` is surfaced once on the follow-up poll
+    /// (after any final buffered events), then the stream ends.
+    premature_eof: bool,
 }
 
 impl SseStream {
@@ -165,6 +187,8 @@ impl SseStream {
             last_event_id,
             idle_timeout,
             idle_timer: None,
+            saw_terminal_frame: false,
+            premature_eof: false,
         }
     }
 
@@ -181,6 +205,14 @@ impl SseStream {
             .idle_timer
             .get_or_insert_with(|| Box::pin(tokio::time::sleep(timeout)));
         timer.as_mut().reset(tokio::time::Instant::now() + timeout);
+    }
+
+    /// Record that a terminal frame was observed (A8b). Only streams that
+    /// saw one may end cleanly; anything else is an abnormal EOF.
+    fn note_terminal_frame(&mut self, event: &StreamEvent) {
+        if is_terminal_frame(event) {
+            self.saw_terminal_frame = true;
+        }
     }
 
     /// Parse all complete SSE lines from the buffer, queuing parsed events.
@@ -259,11 +291,19 @@ impl Stream for SseStream {
             let event = self.pending_events.pop_front().expect("checked non-empty");
             if let Ok(event) = &event {
                 self.note_content(event);
+                self.note_terminal_frame(event);
             }
             return Poll::Ready(Some(event));
         }
 
         if self.done {
+            // After a premature EOF the typed error is surfaced exactly once
+            // on the follow-up poll (the final buffered events themselves were
+            // delivered first), then the stream ends.
+            if self.premature_eof {
+                self.premature_eof = false;
+                return Poll::Ready(Some(Err(ApiError::StreamEndedUnexpectedly)));
+            }
             return Poll::Ready(None);
         }
 
@@ -279,6 +319,7 @@ impl Stream for SseStream {
                         let event = self.pending_events.pop_front().expect("checked non-empty");
                         if let Ok(event) = &event {
                             self.note_content(event);
+                            self.note_terminal_frame(event);
                         }
                         return Poll::Ready(Some(event));
                     }
@@ -286,10 +327,28 @@ impl Stream for SseStream {
                 }
                 Poll::Ready(Some(Err(e))) => {
                     self.done = true;
+                    // A8b (smoke-5): a failure of the response BODY mid-stream
+                    // is the upstream cutting the connection (GLM gateway hard
+                    // cut; reqwest reports it as a body/decode error) — type it
+                    // as an interrupted stream so the reconnect layer retries
+                    // and the engine's turn loop can continue the turn instead
+                    // of committing a truncated generation as a complete answer.
+                    if e.is_body() || e.is_decode() {
+                        tracing::warn!(
+                            "Response body failed mid-stream ({e}) — treating as interrupted stream"
+                        );
+                        return Poll::Ready(Some(Err(ApiError::StreamEndedUnexpectedly)));
+                    }
                     return Poll::Ready(Some(Err(ApiError::HttpError(e))));
                 }
                 Poll::Ready(None) => {
-                    // Stream ended — process any remaining data in buffer
+                    // Byte stream ended. A stream that never delivered a
+                    // terminal frame (MessageStop, or a MessageDelta carrying a
+                    // stop reason) did NOT complete — it was cut. Type the
+                    // premature EOF so callers never mistake it for a clean end.
+                    self.premature_eof = !self.saw_terminal_frame;
+                    // Process any remaining data in buffer first — a final
+                    // line without a trailing newline still carries content.
                     if !self.buffer.trim().is_empty() {
                         let remaining = std::mem::take(&mut self.buffer);
                         let events = self.parse_sse_line(&remaining);
@@ -298,12 +357,17 @@ impl Stream for SseStream {
                             let event = self.pending_events.pop_front().expect("checked non-empty");
                             if let Ok(event) = &event {
                                 self.note_content(event);
+                                self.note_terminal_frame(event);
                             }
                             self.done = true;
                             return Poll::Ready(Some(event));
                         }
                     }
                     self.done = true;
+                    if self.premature_eof {
+                        self.premature_eof = false;
+                        return Poll::Ready(Some(Err(ApiError::StreamEndedUnexpectedly)));
+                    }
                     return Poll::Ready(None);
                 }
                 Poll::Pending => {
@@ -345,12 +409,24 @@ impl Stream for SseStream {
 ///
 /// Properly handles SSE events that span HTTP chunk boundaries
 /// by buffering partial lines until complete.
+///
+/// `idle_override` (A14) is the caller-supplied content-idle watchdog
+/// budget; when `None` the legacy `SHANNON_STREAM_IDLE_SECS` env default
+/// applies. The engine escalates this budget on timeout-class turn
+/// continuations so a legitimately long-thinking model is not killed at
+/// the base budget on every retry of the same hard turn.
 pub fn sse_stream_from_response(
     response: reqwest::Response,
     provider: LlmProvider,
+    idle_override: Option<Duration>,
 ) -> MessageStream {
     let last_event_id = Arc::new(Mutex::new(None));
-    let sse = SseStream::new(response, provider, last_event_id);
+    let sse = SseStream::with_idle_timeout(
+        response,
+        provider,
+        last_event_id,
+        idle_override.or_else(stream_idle_timeout_from_env),
+    );
     Box::pin(sse)
 }
 
@@ -359,6 +435,12 @@ pub fn sse_stream_from_response(
 /// When the underlying SSE stream ends prematurely (not via `MessageStop`),
 /// this wrapper uses `send_message_stream_resumable` to reconnect with
 /// `Last-Event-ID`, up to `max_reconnects` times.
+///
+/// The argument list mirrors `send_message_stream_resumable` so the
+/// caller can replay the same reconnect parameters verbatim on every
+/// mid-stream resume. A14 added `idle_override` to thread the engine-
+/// escalated watchdog budget through to the resumed stream.
+#[allow(clippy::too_many_arguments)]
 pub fn sse_stream_from_response_resumable(
     response: reqwest::Response,
     provider: LlmProvider,
@@ -367,9 +449,15 @@ pub fn sse_stream_from_response_resumable(
     tools: Option<Vec<super::types::ToolDefinition>>,
     system: Option<String>,
     max_reconnects: u32,
+    idle_override: Option<Duration>,
 ) -> MessageStream {
     let last_event_id = Arc::new(Mutex::new(None));
-    let sse = SseStream::new(response, provider, last_event_id.clone());
+    let sse = SseStream::with_idle_timeout(
+        response,
+        provider,
+        last_event_id.clone(),
+        idle_override.or_else(stream_idle_timeout_from_env),
+    );
     let resumable = ResumableSseStream {
         inner: Box::pin(sse),
         last_event_id,
@@ -1201,6 +1289,8 @@ mod tests {
                 last_event_id,
                 idle_timeout: None,
                 idle_timer: None,
+                saw_terminal_frame: false,
+                premature_eof: false,
             }
         }
 
@@ -1221,6 +1311,8 @@ mod tests {
                 last_event_id: Arc::new(Mutex::new(None)),
                 idle_timeout,
                 idle_timer: None,
+                saw_terminal_frame: false,
+                premature_eof: false,
             }
         }
     }
@@ -1430,5 +1522,31 @@ mod tests {
                 std::env::remove_var("SHANNON_STREAM_IDLE_SECS");
             },
         }
+    }
+
+    /// A14: the resolution precedence used by `sse_stream_from_response`
+    /// and `sse_stream_from_response_resumable`. We test the small pure
+    /// combinator because the construction path is otherwise hidden inside
+    /// `SseStream::with_idle_timeout` (private `idle_timeout` field).
+    ///
+    /// Contract:
+    ///   - `Some(override)` → always wins, regardless of env.
+    ///   - `None` + env set → env value.
+    ///   - `None` + env unset → `None` (watchdog disabled, pre-A14 default).
+    ///
+    /// The production call sites use the equivalent `.or(env)` chain; this
+    /// test pins the contract independently of the (private) construction
+    /// path so future refactors don't silently change the precedence.
+    #[test]
+    fn a14_idle_resolution_precedence() {
+        // Some override always wins (engine escalation).
+        let override_v = Some(Duration::from_secs(840));
+        let env_v = Some(Duration::from_secs(420));
+        assert_eq!(override_v.or(env_v), Some(Duration::from_secs(840)));
+        // None override + env → env.
+        let none_v: Option<Duration> = None;
+        assert_eq!(none_v.or(env_v), Some(Duration::from_secs(420)));
+        // None + None → None.
+        assert_eq!(none_v.or(None), None);
     }
 }

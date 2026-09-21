@@ -709,10 +709,11 @@ mod tests {
     }
 
     /// Wait (bounded) for the spawned run of `run_id` to leave `running`.
-    /// Generous bound: the engine's retry policy (3 retries with exponential
-    /// backoff) applies before a failed run finalizes.
+    /// Generous bound: a failing run now traverses the client retry ladder
+    /// (3 retries, exponential backoff) up to A8's turn-retry count (3
+    /// ladders ≈ 21-25 s) before finalizing.
     async fn wait_for_run(inbox: &InboxStore, run_id: &str) {
-        for _ in 0..300 {
+        for _ in 0..1000 {
             let runs = inbox.list_runs(50).unwrap();
             if runs.iter().any(|r| r.id == run_id && r.status != "running") {
                 return;

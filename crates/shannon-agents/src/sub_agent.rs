@@ -423,11 +423,15 @@ impl SubAgentRegistry {
             let mut responses = Vec::new();
 
             for (agent_name, _agent) in agents.iter() {
-                let msg = AgentMessage::new_text(
-                    from.to_string(),
-                    agent_name.clone(),
-                    format!("{message_content:?}"),
-                );
+                // A-5: render the actual text content. The previous
+                // `{message_content:?}` broadcast Rust Debug output
+                // (`Text("hello")`) to every teammate.
+                let rendered = match &message_content {
+                    MessageContent::Text(t) => t.clone(),
+                    MessageContent::Structured(v) => v.to_string(),
+                    MessageContent::Protocol(p) => format!("{p:?}"),
+                };
+                let msg = AgentMessage::new_text(from.to_string(), agent_name.clone(), rendered);
                 self.coordinator.send_message(msg).await?;
 
                 // For broadcast we just emit the sent messages

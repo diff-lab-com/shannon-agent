@@ -163,7 +163,12 @@ async fn execute_probe(url: &str, auth_header: Option<&str>) -> Result<(), ApiEr
         200..=299 => Ok(()),
         401 | 403 => Err(ApiError::AuthenticationFailed),
         429 => Err(ApiError::RateLimitExceeded {
-            retry_after_secs: None,
+            // Honor the server's Retry-After hint when present (C-3).
+            retry_after_secs: resp
+                .headers()
+                .get("retry-after")
+                .and_then(|v| v.to_str().ok())
+                .and_then(|v| v.parse::<u64>().ok()),
         }),
         other => Err(ApiError::ApiError {
             status: other,

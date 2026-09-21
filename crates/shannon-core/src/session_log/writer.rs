@@ -12,6 +12,7 @@ use shannon_types::session_event::{
 };
 use tracing::warn;
 
+use super::session_index::{SessionIndex, SessionIndexAccumulator};
 use super::{SessionLogError, session_events_path};
 
 /// Aggregate this many `assistant/chunk` events before flushing.
@@ -85,6 +86,11 @@ struct TailScan {
 ///   guaranteeing the appended event bytes are retrievable after power
 ///   loss — the property the "authoritative record" promise needs. Chunk
 ///   aggregation stays flush-only; see [`FlushPolicy`].
+/// - **Derived index sidecar** (E-9): successful writes feed an incremental
+///   accumulator, and `close` republishes `index.json` next to the log so
+///   `SessionStore::list` never re-projects the log. The sidecar is a pure
+///   cache validated against the log's length/mtime — see
+///   [`super::session_index`].
 pub struct SessionLogWriter {
     out: BufWriter<File>,
     path: PathBuf,
@@ -101,6 +107,10 @@ pub struct SessionLogWriter {
     failures: u64,
     /// Successful `sync_data` calls since open (observability / test seam).
     syncs: u64,
+    /// E-9: incremental accumulator behind the `index.json` sidecar. Seeded
+    /// from the previous valid index at open, fed by every recorded event,
+    /// and published by [`Self::close`].
+    index_acc: SessionIndexAccumulator,
     /// Test seam: force the next write attempt to fail once.
     #[cfg(test)]
     fail_next_write: bool,
@@ -156,6 +166,28 @@ impl SessionLogWriter {
             file.set_len(scan.complete_bytes)?;
         }
 
+        // E-9: seed the index accumulator. A valid prior index over exactly
+        // the prefix being resumed (post-recovery byte length + event count)
+        // lets this episode keep the sidecar stats incrementally. Anything
+        // else marks the base partial: close() then stays silent instead of
+        // publishing partial stats, and the next `SessionStore::list`
+        // rebuilds the cache from the full log.
+        let index_path = super::session_index::index_path_for(&path);
+        let index_acc = match SessionIndex::load_if_valid(&path, &index_path) {
+            Some(index)
+                if index.log_len == scan.complete_bytes
+                    && index.event_count == scan.complete_lines =>
+            {
+                SessionIndexAccumulator::from_index(&index)
+            }
+            _ if scan.complete_lines == 0 => SessionIndexAccumulator::fresh(),
+            _ => {
+                let mut acc = SessionIndexAccumulator::fresh();
+                acc.mark_base_partial();
+                acc
+            }
+        };
+
         let mut writer = Self {
             out: BufWriter::new(file),
             path,
@@ -169,6 +201,7 @@ impl SessionLogWriter {
             policy: FlushPolicy::default(),
             failures: 0,
             syncs: 0,
+            index_acc,
             #[cfg(test)]
             fail_next_write: false,
             #[cfg(test)]
@@ -219,6 +252,9 @@ impl SessionLogWriter {
         match self.write_event(&event) {
             Ok(()) => {
                 self.next_seq += 1;
+                // Only events that actually landed feed the index cache —
+                // a dropped write never existed in the log (seq not consumed).
+                self.index_acc.observe(&event);
                 self.maybe_flush(kind);
             }
             Err(e) => {
@@ -334,9 +370,31 @@ impl SessionLogWriter {
     }
 
     /// Flush and close the log, surfacing the final flush error that the
-    /// `Drop` of `BufWriter` would otherwise swallow.
+    /// `Drop` of `BufWriter` would otherwise swallow. On success, republish
+    /// the E-9 `index.json` sidecar over the now-complete log.
+    ///
+    /// The index publish is best-effort: it is a pure cache, so a failed
+    /// write only costs one full rebuild on the next `SessionStore::list`
+    /// and must never fail the session close. When the accumulator's base
+    /// was partial (see `open_path`), no index is written at all rather than
+    /// a wrong one.
     pub fn close(mut self) -> Result<(), SessionLogError> {
-        self.flush()
+        self.flush()?;
+        let index_path = super::session_index::index_path_for(&self.path);
+        if let Some(index) = self
+            .index_acc
+            .finish(super::session_index::stat_len_mtime(&self.path))
+        {
+            if let Err(e) = index.store(&index_path) {
+                warn!(
+                    path = %index_path.display(),
+                    session_id = %self.session_id,
+                    error = %e,
+                    "session index write failed; cache will be rebuilt by the next list()"
+                );
+            }
+        }
+        Ok(())
     }
 
     /// Override the flush policy (defaults: 50 chunks / 50ms).
