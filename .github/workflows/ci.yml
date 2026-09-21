@@ -76,10 +76,23 @@ jobs:
         # settings: per-test retries (2, exponential backoff) so known
         # load-sensitive tests (e.g. the byte-exact session-log tee mock
         # round-trip) don't fail the whole gate on a runner hiccup.
+        #
+        # On failure the repro lines + output tail are re-emitted as
+        # ::error:: annotations — the only failure detail readable through
+        # the public API without an authenticated log download.
         run: |
+          set -o pipefail
           # Guard against stale cached binaries with unexpected feature sets.
           cargo clean -p shannon-tools
-          cargo nextest run --workspace --config-file .config/nextest.toml --profile ci
+          if cargo nextest run --workspace --config-file .config/nextest.toml --profile ci 2>&1 | tee /tmp/nextest-test.log; then
+            exit 0
+          fi
+          status=$?
+          repros=$(grep -E "TRY 3 FAIL" /tmp/nextest-test.log | cut -c1-160 | sed 's/%/%25/g;s/\r/%0D/g' | tr '\n' '\001' | sed 's/\x01/%0A/g' | cut -c1-3600)
+          echo "::error::nextest repros (TRY 3 FAIL): ${repros:-none captured}"
+          tail=$(tail -25 /tmp/nextest-test.log | cut -c1-160 | sed 's/%/%25/g;s/\r/%0D/g' | tr '\n' '\001' | sed 's/\x01/%0A/g' | cut -c1-3600)
+          echo "::error::nextest output tail: ${tail:-none captured}"
+          exit $status
       # Feature-gated builds/tests (downscale_dims, click_spec, key combos,
       # libei backend). Runs AFTER the main gate, in an ISOLATED target dir:
       # sharing `target/` with feature-OFF steps leaked the enabled feature
@@ -583,10 +596,27 @@ jobs:
           cargo check -p shannon-tools --features computer-use-x11rb
           cargo check -p shannon-cli --features computer-use-x11rb
       - name: Check computer-use-wayland-capture (Linux only)
+        # This is the shape that went red on dev while every other leg
+        # stayed green; the rustc error tail is re-emitted as a ::error::
+        # annotation so the failure is diagnosable through the public
+        # check-runs API without an authenticated log download.
         if: runner.os == 'Linux'
         run: |
-          cargo check -p shannon-tools --features computer-use-wayland-capture
-          cargo check -p shannon-tools --features computer-use-wayland,computer-use-wayland-capture
+          set -o pipefail
+          if cargo check -p shannon-tools --features computer-use-wayland-capture 2>&1 | tee /tmp/wc-alone.log; then
+            echo "wayland-capture alone: OK"
+          else
+            tail=$(tail -30 /tmp/wc-alone.log | cut -c1-160 | sed 's/%/%25/g;s/\r/%0D/g' | tr '\n' '\001' | sed 's/\x01/%0A/g' | cut -c1-3600)
+            echo "::error::wayland-capture (alone) error tail: ${tail:-none captured}"
+            exit 1
+          fi
+          if cargo check -p shannon-tools --features computer-use-wayland,computer-use-wayland-capture 2>&1 | tee /tmp/wc-combined.log; then
+            echo "wayland+wayland-capture combined: OK"
+          else
+            tail=$(tail -30 /tmp/wc-combined.log | cut -c1-160 | sed 's/%/%25/g;s/\r/%0D/g' | tr '\n' '\001' | sed 's/\x01/%0A/g' | cut -c1-3600)
+            echo "::error::wayland+wayland-capture (combined) error tail: ${tail:-none captured}"
+            exit 1
+          fi
       - name: Check local-browser (Linux only)
         if: runner.os == 'Linux'
         run: cargo check -p shannon-tools --features local-browser
@@ -749,7 +779,19 @@ jobs:
         # the bin/lib unit tests, so a single invocation is enough.
         # `--profile ci` mirrors the Test job (retries for load-sensitive
         # tests; a retried-then-passing snapshot test leaves no .snap.new).
-        run: cargo nextest run --workspace --config-file .config/nextest.toml --profile ci
+        # Failure details are re-emitted as ::error:: annotations (public
+        # API readable — see the Test job note).
+        run: |
+          set -o pipefail
+          if cargo nextest run --workspace --config-file .config/nextest.toml --profile ci 2>&1 | tee /tmp/nextest-insta.log; then
+            exit 0
+          fi
+          status=$?
+          repros=$(grep -E "TRY 3 FAIL" /tmp/nextest-insta.log | cut -c1-160 | sed 's/%/%25/g;s/\r/%0D/g' | tr '\n' '\001' | sed 's/\x01/%0A/g' | cut -c1-3600)
+          echo "::error::nextest repros (TRY 3 FAIL): ${repros:-none captured}"
+          tail=$(tail -25 /tmp/nextest-insta.log | cut -c1-160 | sed 's/%/%25/g;s/\r/%0D/g' | tr '\n' '\001' | sed 's/\x01/%0A/g' | cut -c1-3600)
+          echo "::error::nextest output tail: ${tail:-none captured}"
+          exit $status
       - name: Reject pending snapshots
         # If any `.snap.new` file exists, the snapshot test recorded a
         # diff the contributor did not accept. Fail the build so the PR
