@@ -28,7 +28,7 @@ const MAX_REDIRECTS: usize = 3;
 
 /// DNS resolver seam: maps a hostname to every address it resolves to.
 ///
-/// Production builds use the system resolver ([`system_resolve`]); tests
+/// Production builds use the system resolver (`system_resolve`); tests
 /// inject a fake so DNS-based SSRF (a public hostname resolving to
 /// `127.0.0.1` or an internal IP) can be exercised without a network.
 pub type HostResolver = Arc<dyn Fn(&str) -> std::io::Result<Vec<IpAddr>> + Send + Sync>;
@@ -216,7 +216,7 @@ fn check_resolved_ip(ip: IpAddr) -> Result<(), Box<dyn std::error::Error + Send 
 /// (`evil.example.com`) resolves to `127.0.0.1` or an internal IP.
 ///
 /// The resolver is a parameter so tests can inject addresses without a
-/// network; production passes [`system_resolve`].
+/// network; production passes `system_resolve`.
 fn validate_fetch_url_resolved(
     url_str: &str,
     resolve: &dyn Fn(&str) -> std::io::Result<Vec<IpAddr>>,

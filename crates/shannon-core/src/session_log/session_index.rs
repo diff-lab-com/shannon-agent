@@ -23,7 +23,7 @@
 //!   fully-read event slice), so the two can never drift.
 //! - **Self-invalidating.** The index records the `events.jsonl` byte length
 //!   and mtime it was computed over; readers re-stat and discard the cache
-//!   on mismatch. Raw rewrites ([`SessionStore::truncate_to_turn`] /
+//!   on mismatch. Raw rewrites (`SessionStore::truncate_to_turn` /
 //!   `rewrite_with_conversation`) and crash windows therefore degrade to one
 //!   full rebuild on the next `list()`, never to wrong answers.
 //! - **Never partial.** The writer only republishes the index when it could

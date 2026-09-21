@@ -615,7 +615,7 @@ impl SessionStore {
     ///
     /// Every session's `events.jsonl` is skimmed line-by-line with a
     /// [`BufReader`] (never loaded whole); lines over
-    /// [`SEARCH_MAX_LINE_BYTES`] are skipped (they are almost always one
+    /// `SEARCH_MAX_LINE_BYTES` are skipped (they are almost always one
     /// embedded blob — pasted file, base64 dump — whose processing cost
     /// outweighs its recall). The query is a case-insensitive substring;
     /// each hit carries the best identifying metadata available without a

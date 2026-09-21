@@ -544,7 +544,7 @@ const WRAP_UP_NUDGE_PROMPT: &str = "Your turn budget is nearly exhausted — thi
 ///
 /// Visible-answer threshold in chars for the think-only classifier
 /// (`SHANNON_THINK_ONLY_MIN_ANSWER_CHARS`, default
-/// [`DEFAULT_THINK_ONLY_MIN_ANSWER_CHARS`]).
+/// `DEFAULT_THINK_ONLY_MIN_ANSWER_CHARS`).
 /// Verdict for a single provider returned by [`QueryEngine::probe_all_health`].
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ProviderHealthStatus {

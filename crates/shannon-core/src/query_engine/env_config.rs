@@ -66,7 +66,7 @@ pub(super) fn think_only_nudge_max() -> u32 {
 
 /// Visible-answer threshold in chars for the think-only classifier
 /// (`SHANNON_THINK_ONLY_MIN_ANSWER_CHARS`, default
-/// [`DEFAULT_THINK_ONLY_MIN_ANSWER_CHARS`]).
+/// `DEFAULT_THINK_ONLY_MIN_ANSWER_CHARS`).
 pub(super) fn think_only_min_answer_chars() -> usize {
     env_num_override(
         "SHANNON_THINK_ONLY_MIN_ANSWER_CHARS",

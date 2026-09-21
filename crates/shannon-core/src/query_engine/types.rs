@@ -500,8 +500,8 @@ impl CostTracker {
     /// `cache_creation_tokens` are tokens written to it (Anthropic reports
     /// both separately from `input_tokens`, so there is no double counting).
     /// Each is priced at the model's cache rate when one is known
-    /// ([`ModelPricing::cache_read_per_mtok`] /
-    /// [`ModelPricing::cache_write_per_mtok`]); when the rate is `None` the
+    /// (`ModelPricing::cache_read_per_mtok` /
+    /// `ModelPricing::cache_write_per_mtok`); when the rate is `None` the
     /// tokens fall back to the plain input price, which reproduces the
     /// pre-cache-aware cost exactly.
     pub fn calculate_cost_with_cache(
