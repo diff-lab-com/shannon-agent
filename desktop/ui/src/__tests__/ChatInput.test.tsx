@@ -40,6 +40,35 @@ vi.mock('@/context/CatalogContext', () => ({
   }),
 }))
 
+// SessionUsageDialog mounts on first click — its own hooks (useSessions,
+// useSessionBudget → tauri-api) come from real modules, so this file must
+// supply the missing pieces. The dialog only renders after the user clicks
+// the entry button; we keep the data-fetch mocks returning empty values to
+// keep the assertion focused on the button + dialog mount wiring.
+//
+// `configure` is explicitly overridden as a vi.fn() so existing tests that
+// call `vi.mocked(api.configure).mockReset()` keep working (vitest's
+// auto-spy only kicks in when the module is NOT mocked).
+vi.mock('@/context/SessionContext', () => ({
+  useSessions: () => ({ currentSessionId: 'sess-1' }),
+}))
+vi.mock('@/lib/tauri-api', async () => {
+  const actual = await vi.importActual<object>('@/lib/tauri-api')
+  return {
+    ...actual,
+    configure: vi.fn().mockResolvedValue(undefined),
+    getSessionContextBreakdown: vi.fn().mockResolvedValue({
+      totalTokens: 0, contextWindow: null,
+      categories: [
+        { key: 'system', tokens: 0 }, { key: 'tools', tokens: 0 }, { key: 'skills', tokens: 0 },
+        { key: 'memory', tokens: 0 }, { key: 'mcp', tokens: 0 }, { key: 'conversation', tokens: 0 },
+      ],
+    }),
+    getSessionUsage: vi.fn().mockResolvedValue({ cost_usd: 0 }),
+    getSessionBudget: vi.fn().mockResolvedValue(null),
+  }
+})
+
 function renderChatInput(props: Partial<React.ComponentProps<typeof ChatInput>> = {}) {
   const defaultProps = {
     value: '',
@@ -400,5 +429,19 @@ describe('ChatInput — slash-command menu', () => {
     expect(screen.queryByRole('listbox', { name: 'Slash commands' })).toBeNull()
     fireEvent.keyDown(container.querySelector('textarea')!, { key: 'Enter' })
     expect(onSend).toHaveBeenCalledTimes(1)
+  })
+})
+
+// P3-③ (2026-09 三项 UX 修复 #3 收口): composer 模型 chip 旁新增
+// 会话用量入口 — 单击弹出 SessionUsageDialog,弹框标题与 i18n key
+// chat.input.usage.title 对应 (en: "Session usage")。
+describe('ChatInput — session usage entry', () => {
+  it('shows the usage button next to the model chip and opens the dialog', async () => {
+    renderChatInput()
+    const btn = screen.getByRole('button', { name: /session usage/i })
+    expect(btn).toHaveAttribute('aria-haspopup', 'dialog')
+    fireEvent.click(btn)
+    // 弹框标题(chat.input.usage.title 的 en 文案)
+    expect(await screen.findByText('Session usage')).toBeInTheDocument()
   })
 })

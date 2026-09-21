@@ -23,7 +23,7 @@ interface ComposerPanelProps {
 // picker button).
 export default function ComposerPanel({ setQuickFixOpen, setEditorOpen }: ComposerPanelProps) {
   const { input, setInput, handleSend, attachedFiles, handleAttach, handleDetachAll, executeSlash, slashResult, dismissSlashResult } = useComposer()
-  const { isQuerying, cancelQuery } = useChat()
+  const { isQuerying, cancelQuery, usage } = useChat()
   const { sessions, currentSessionId } = useSessions()
   const { config } = useCatalog()
   const t = useT()
@@ -60,6 +60,7 @@ export default function ComposerPanel({ setQuickFixOpen, setEditorOpen }: Compos
             onOpenQuickFix={() => setQuickFixOpen(true)}
             onOpenEditor={() => setEditorOpen(true)}
             sessionWorkingDir={sessionWorkingDir}
+            usageTick={usage}
           />
         </div>
         <div className="mt-xs flex items-center justify-between gap-md px-sm text-label-sm text-on-surface-variant">
