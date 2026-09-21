@@ -69,6 +69,10 @@ expression: output
       "description": "Optional priority level for the spawned agent (e.g. 'high')",
       "type": "string"
     },
+    "read_only": {
+      "description": "Restrict the sub-agent to read-only tools (Read/Grep/Glob/LSP lookups/WebFetch) — no file writes, no shell. Overrides any allowlist widening.",
+      "type": "boolean"
+    },
     "reason": {
       "description": "Reason for shutdown",
       "type": "string"
@@ -1059,51 +1063,6 @@ expression: output
   "type": "object"
 }
 
-## Task
-{
-  "properties": {
-    "description": {
-      "description": "Task description",
-      "type": "string"
-    },
-    "filter": {
-      "description": "Filter tasks by status",
-      "type": "string"
-    },
-    "operation": {
-      "description": "Operation type",
-      "enum": [
-        "Create",
-        "Update",
-        "Get",
-        "List"
-      ],
-      "type": "string"
-    },
-    "status": {
-      "description": "Task status",
-      "enum": [
-        "pending",
-        "in_progress",
-        "completed"
-      ],
-      "type": "string"
-    },
-    "subject": {
-      "description": "Task subject",
-      "type": "string"
-    },
-    "task_id": {
-      "description": "Task ID",
-      "type": "string"
-    }
-  },
-  "required": [
-    "operation"
-  ],
-  "type": "object"
-}
-
 ## TaskCreate
 {
   "properties": {
@@ -1436,6 +1395,20 @@ expression: output
   "type": "object"
 }
 
+## app_open
+{
+  "properties": {
+    "target": {
+      "description": "Path, folder, URL, or app name, e.g. 'notepad', 'C:/report.xlsx', 'https://example.com'",
+      "type": "string"
+    }
+  },
+  "required": [
+    "target"
+  ],
+  "type": "object"
+}
+
 ## applescript
 {
   "properties": {
@@ -1560,20 +1533,24 @@ expression: output
 ## browser_click
 {
   "properties": {
+    "ref": {
+      "description": "Element ref from browser_snapshot, e.g. \"e3\"",
+      "type": "string"
+    },
     "tab_id": {
       "type": "string"
     },
     "x": {
+      "description": "Viewport x (when no ref)",
       "type": "number"
     },
     "y": {
+      "description": "Viewport y (when no ref)",
       "type": "number"
     }
   },
   "required": [
-    "tab_id",
-    "x",
-    "y"
+    "tab_id"
   ],
   "type": "object"
 }
@@ -1605,6 +1582,46 @@ expression: output
   "type": "object"
 }
 
+## browser_evaluate
+{
+  "properties": {
+    "expression": {
+      "description": "JavaScript expression, e.g. \"document.querySelectorAll('h2').length\"",
+      "type": "string"
+    },
+    "tab_id": {
+      "type": "string"
+    }
+  },
+  "required": [
+    "tab_id",
+    "expression"
+  ],
+  "type": "object"
+}
+
+## browser_fill
+{
+  "properties": {
+    "ref": {
+      "description": "Element ref from browser_snapshot, e.g. \"e7\"",
+      "type": "string"
+    },
+    "tab_id": {
+      "type": "string"
+    },
+    "text": {
+      "type": "string"
+    }
+  },
+  "required": [
+    "tab_id",
+    "ref",
+    "text"
+  ],
+  "type": "object"
+}
+
 ## browser_navigate
 {
   "properties": {
@@ -1623,12 +1640,55 @@ expression: output
   "type": "object"
 }
 
+## browser_press_key
+{
+  "properties": {
+    "key": {
+      "description": "Key name, e.g. Enter/Escape/Tab/ArrowDown/F5 or a single character",
+      "type": "string"
+    },
+    "tab_id": {
+      "type": "string"
+    }
+  },
+  "required": [
+    "tab_id",
+    "key"
+  ],
+  "type": "object"
+}
+
 ## browser_screenshot
 {
   "properties": {
     "full_page": {
       "default": false,
       "type": "boolean"
+    },
+    "tab_id": {
+      "type": "string"
+    }
+  },
+  "required": [
+    "tab_id"
+  ],
+  "type": "object"
+}
+
+## browser_scroll
+{
+  "properties": {
+    "amount": {
+      "default": 600,
+      "type": "integer"
+    },
+    "direction": {
+      "default": "down",
+      "enum": [
+        "up",
+        "down"
+      ],
+      "type": "string"
     },
     "tab_id": {
       "type": "string"
@@ -1659,6 +1719,19 @@ expression: output
   "type": "object"
 }
 
+## browser_text
+{
+  "properties": {
+    "tab_id": {
+      "type": "string"
+    }
+  },
+  "required": [
+    "tab_id"
+  ],
+  "type": "object"
+}
+
 ## browser_type
 {
   "properties": {
@@ -1671,6 +1744,25 @@ expression: output
   },
   "required": [
     "tab_id",
+    "text"
+  ],
+  "type": "object"
+}
+
+## clipboard_read
+{
+  "properties": {},
+  "type": "object"
+}
+
+## clipboard_write
+{
+  "properties": {
+    "text": {
+      "type": "string"
+    }
+  },
+  "required": [
     "text"
   ],
   "type": "object"
@@ -1727,7 +1819,9 @@ expression: output
         "key_press",
         "wait",
         "mouse_move",
-        "left_click_drag"
+        "left_click_drag",
+        "ui_tree",
+        "ui_click"
       ],
       "type": "string"
     },
@@ -1744,9 +1838,21 @@ expression: output
       "description": "Seconds to wait (for 'wait' action, default 1.0)",
       "type": "number"
     },
+    "element": {
+      "description": "Element name substring to click (for 'ui_click'; run 'ui_tree' first to inspect names)",
+      "type": "string"
+    },
+    "index": {
+      "description": "0-based match index when several elements share the name (for 'ui_click')",
+      "type": "integer"
+    },
     "key": {
       "description": "Key or key combination, e.g. 'Return', 'ctrl+a', 'alt+F4'",
       "type": "string"
+    },
+    "monitor": {
+      "description": "0-based display index for multi-monitor setups (default: primary monitor). Applies to screenshot and coordinate actions.",
+      "type": "integer"
     },
     "scroll_amount": {
       "description": "Number of scroll ticks (default 3)",
@@ -1773,6 +1879,10 @@ expression: output
     },
     "text": {
       "description": "Text to type (for 'type' action)",
+      "type": "string"
+    },
+    "window": {
+      "description": "Window title substring to target (for 'ui_tree'/'ui_click'; default: foreground window)",
       "type": "string"
     }
   },
@@ -2131,6 +2241,26 @@ expression: output
     "character",
     "new_name"
   ],
+  "type": "object"
+}
+
+## window_focus
+{
+  "properties": {
+    "title": {
+      "description": "Title or process-name substring, e.g. 'Notepad' or '报告.docx - Word'",
+      "type": "string"
+    }
+  },
+  "required": [
+    "title"
+  ],
+  "type": "object"
+}
+
+## window_list
+{
+  "properties": {},
   "type": "object"
 }
 

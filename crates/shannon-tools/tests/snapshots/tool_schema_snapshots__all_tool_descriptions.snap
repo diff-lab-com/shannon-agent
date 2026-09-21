@@ -10,8 +10,11 @@ review that would flood the lead's context. Sub-agents run in their own
 session with their own tool registry (no recursive Agent tool) and return
 only their final result — they never see this conversation. Restrict what
 a sub-agent may do with `allowed_tools` (read-only exploration: Read/Grep/
-Glob/Bash) or `disallowed_tools`; otherwise it inherits the parent's tool
-surface minus the parent's denylist. Operations: Spawn (run a task),
+Glob/Bash), `read_only: true` (read-only tools only), or `disallowed_tools`;
+otherwise it inherits the parent's tool surface minus the parent's denylist.
+`model` overrides the sub-agent's model id. Built-in agent types include
+"oracle" (read-only senior staff reviewer — review/plan/analyze/advise),
+"explorer", "planner", "code-reviewer". Operations: Spawn (run a task),
 SendMessage (reply to a teammate), CreateTeam, Shutdown. Do NOT delegate
 trivial single-tool lookups — just do them directly.
 AnalyzeImage: Analyze an image file or URL. The image is sent to the LLM for visual analysis based on your prompt. Supports PNG, JPEG, GIF, WebP, BMP, ICO, and TIFF formats.
@@ -26,7 +29,9 @@ to 120000 when omitted (override with SHANNON_BASH_TIMEOUT_MS) and
 is hard-capped at 600000. Long-running or server processes should
 use RunBackground and be polled with WaitForLog. When a sandbox is
 active the command runs with restricted filesystem/network access —
-the tool result reports denials.
+the tool result reports denials. Sandboxing is applied by default
+when a platform sandbox backend is available; set SHANNON_SANDBOX=off
+to opt out.
 Brief: Generate a concise task summary from conversation history or content
 Config: Manage runtime configuration with get, set, list, delete, and reset operations
 Cron: Schedule recurring or one-shot prompts for time-based task execution
@@ -91,7 +96,6 @@ SendMessage: Send messages to agent teammates for collaborative problem-solving
 Skill: Invoke user-callable slash-command skills for specialized workflows
 Sleep: Wait for a specified duration without holding a shell process
 StructuredOutput: Return structured output in the requested format. Call this tool exactly once at the end of your response to provide the structured output.
-Task: Create and manage tasks for tracking work progress
 TaskCreate: Create a new task with subject, description, and optional metadata
 TaskGet: Get details of a specific task by ID
 TaskList: List all tasks with optional status filter
@@ -105,8 +109,7 @@ Use it for multi-step work — 3 or more steps, or any task complex enough
 that progress could be lost track of: write the plan as items up front,
 keep exactly one item in_progress while working, and mark items completed
 as soon as they finish. Each call REPLACES the whole list, so always send
-the full updated set; when every item is completed the list clears. Skip
-it for single trivial actions that need no tracking.
+the full updated set; when every item is completed the list clears. Skip it for single trivial actions that need no tracking.
 WaitForLog: Poll a background process's stdout/stderr ring buffer until a substring (match_kind=is) or regex (match_kind=re) matches, the process exits, or the timeout elapses. Returns immediately on match or exit.
 WebFetch: Fetches a URL from the internet and optionally extracts its contents
 WebSearch: Search the web for information using a real search API
@@ -119,17 +122,25 @@ whole content and silently discards anything not included, so re-read the
 file first if you only saw part of it. The write is atomic (temp file +
 rename): a failure never leaves a partial file. Results report the byte
 count written; content over 10 MB is rejected.
+app_open: Open a file, folder, URL, or application with the OS default handler (Windows ShellExecuteW / macOS open / Linux xdg-open).
 applescript: Run AppleScript or JXA against scriptable macOS applications (Mail, Calendar, Reminders, Messages, Finder, Notes, …), or run a Shortcuts shortcut. Requires macOS; the first call per application triggers Apple's standard Automation permission prompt.
 ask_user_question: Ask the user a question during execution. Supports single-select, multi-select, and free-text input. Use this when you need confirmation, option selection, or information from the user.
 auto_commit: Smart git commit tool. Stages changes (all or specific files), generates semantic commit messages from diffs, and creates commits. Supports dry-run preview and co-author trailers. Shows git status and diff stats before committing.
-browser_click: Click the mouse at (x, y) on the given tab.
+browser_click: Click on the given tab. Prefer `ref` (an element id like "e3" from browser_snapshot) — real mouse events fire at the element's center. Fall back to viewport coordinates (x, y) when no snapshot exists.
 browser_close: Close a browser tab. Use `"all": true` to close every tab (the Chrome process keeps running).
 browser_console: Return the buffered console messages (log/debug/info/error/warning) for the given tab, oldest first. Messages are captured from the moment the tab was opened; the buffer holds the most recent 500 entries.
+browser_evaluate: Run a JavaScript expression in the page and return its value (strings verbatim, other values as JSON). Full DOM access — use for data extraction or UI state the dedicated tools can't reach.
+browser_fill: Set the value of an input/textarea/contenteditable element by ref (from browser_snapshot). Fires input+change events so reactive frameworks see the value.
 browser_navigate: Open a URL in a new browser tab. Returns the new tab_id for subsequent actions. Requires the `local-browser` feature.
+browser_press_key: Press a key on the given tab (e.g. "Enter", "Escape", "Tab", "ArrowDown", "a", "F5"). Goes to the focused element.
 browser_screenshot: Capture a PNG screenshot of the given tab (viewport or full page). PNG bytes are returned in tool-result metadata under `image/png`.
-browser_snapshot: Return a text snapshot of the given tab: `<title>` + `<url>` + innerText (≤8KB).
+browser_scroll: Scroll the page by `amount` pixels (default 600). direction: "down" (default) or "up".
+browser_snapshot: Return the page's title, URL, and an index of visible interactive elements (links, buttons, inputs, …) with element refs usable by browser_click/browser_fill.
 browser_tabs: List the open browser tabs in this Shannon process.
+browser_text: Return the page's full text content (title + URL + innerText, ≤8KB) for reading articles/documentation. For interacting with controls use browser_snapshot instead.
 browser_type: Type text into the focused field on the given tab.
+clipboard_read: Read the current text (CF_UNICODETEXT) from the system clipboard. May contain secrets the user copied — never echo it verbatim unless asked.
+clipboard_write: Write text to the system clipboard (CF_UNICODETEXT), replacing whatever was there.
 code_actions: Get available code actions (quick fixes, refactorings) for a range in a file. Uses the language server to suggest fixes for diagnostics and available refactorings.
 computer: Interact with the computer desktop: take screenshots, click, type, scroll, and press keys. Coordinates are in [0-1024, 0-768] range and scaled to actual screen resolution.
 document_symbol: List all symbols (functions, classes, methods, variables, etc.) in a file. Uses the language server to provide a hierarchical view of the document's symbol structure.
@@ -149,4 +160,6 @@ list_mcp_prompts: List available prompts from MCP (Model Context Protocol) serve
 list_mcp_resources: List available resources from MCP (Model Context Protocol) servers. Returns resource URIs, names, descriptions, and MIME types. Optionally filter by server_name.
 read_mcp_resource: Read the content of a specific MCP (Model Context Protocol) resource by providing the server name and resource URI. Returns the resource content as text.
 rename_symbol: Rename a symbol (variable, function, class, etc.) across the entire codebase. Uses the language server to find all occurrences and compute the correct edits for renaming.
+window_focus: Bring a window to the foreground by title or process substring. Restores it if minimized.
+window_list: List visible top-level windows: title, owning process, and handle id. Use the title with `window_focus` or `computer` ui actions.
 workspace_symbol: Search for symbols across the entire workspace by name. Uses the language server to find functions, classes, structs, etc. matching a query pattern across all files in the project.
