@@ -78,6 +78,26 @@ shannon-browser = { path = "../shannon-browser" }
 # Landlock backend for the Linux kernel-enforced execution world (§4.12)
 [target.'cfg(target_os = "linux")'.dependencies]
 landlock = "0.4"
+# B3 / T10-Phase2: native Wayland screenshot stack (optional, behind the
+# computer-use-wayland-capture feature). wayland-client + the wlr screencopy
+# extension cover wlroots-family compositors; ashpd (xdg-desktop-portal)
+# covers GNOME/KDE. Versions track the ones already in the lockfile via
+# enigo's wayland/libei backends so no new versions enter the tree.
+# NOTE: keep this block inside the Linux target table — the Windows
+# desktop-control table below must not capture it. That swallow is exactly
+# how the wayland-capture CI leg rotted: on Windows the deps resolve fine
+# (and the Linux-only module is never compiled), while on Linux they
+# silently vanish and screen_capture.rs dies with E0433
+# `wayland_client`/`memmap2` unresolved.
+wayland-client = { version = "0.31", optional = true }
+wayland-protocols-wlr = { version = "0.2", optional = true, features = ["client"] }
+memmap2 = { version = "0.8", optional = true }
+# NOTE: must match enigo's ashpd feature set (default = async-std). Enabling
+# the tokio feature alongside enigo/libei turns on BOTH runtimes inside
+# ashpd 0.8 and its duplicate-import bug breaks the build. The async-io
+# reactor runs on its own driver thread, so the portal future is awaitable
+# from tokio regardless.
+ashpd = { version = "0.8", optional = true }
 
 # Windows desktop-control surface (DPI awareness, window enumeration/focus,
 # clipboard, UIA tree, foreground-window context metadata). Compiled on every
@@ -100,22 +120,6 @@ windows = { version = "0.62", features = [
     "Win32_UI_Shell",
     "Win32_UI_WindowsAndMessaging",
 ] }
-
-# B3 / T10-Phase2: native Wayland screenshot stack (optional, behind the
-# computer-use-wayland-capture feature). wayland-client + the wlr screencopy
-# extension cover wlroots-family compositors; ashpd (xdg-desktop-portal)
-# covers GNOME/KDE. Versions track the ones already in the lockfile via
-# enigo's wayland/libei backends so no new versions enter the tree.
-wayland-client = { version = "0.31", optional = true }
-wayland-protocols-wlr = { version = "0.2", optional = true, features = ["client"] }
-memmap2 = { version = "0.8", optional = true }
-# NOTE: must match enigo's ashpd feature set (default = async-std). Enabling
-# the tokio feature alongside enigo/libei turns on BOTH runtimes inside
-# ashpd 0.8 and its duplicate-import bug breaks the build. The async-io
-# reactor runs on its own driver thread, so the portal future is awaitable
-# from tokio regardless.
-ashpd = { version = "0.8", optional = true }
-
 
 [features]
 default = []
