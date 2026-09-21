@@ -4,6 +4,7 @@
 
 mod browser_control_prompt;
 mod context_injector;
+mod context_policy;
 mod engine;
 mod env_config;
 pub mod guard_nodes;
