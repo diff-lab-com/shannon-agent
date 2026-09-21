@@ -15,6 +15,7 @@ mod repo_map_injector;
 mod routing;
 mod streaming;
 mod system_prompt;
+mod tool_dispatch;
 mod team_prompt;
 mod types;
 
