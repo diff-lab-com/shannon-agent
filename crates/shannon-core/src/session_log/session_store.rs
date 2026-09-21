@@ -24,6 +24,7 @@
 //! Breaking change (DP4): legacy `sessions/<uuid>.json` snapshots are not
 //! read or migrated. Delete them once upgraded.
 
+use std::io::{BufRead, BufReader};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
@@ -609,6 +610,110 @@ impl SessionStore {
         Ok(search_events(&events, pattern))
     }
 
+    /// Cross-session full-text search over the whole container (audit:
+    /// nothing between "one session" and "open every picker" existed).
+    ///
+    /// Every session's `events.jsonl` is skimmed line-by-line with a
+    /// [`BufReader`] (never loaded whole); lines over
+    /// [`SEARCH_MAX_LINE_BYTES`] are skipped (they are almost always one
+    /// embedded blob — pasted file, base64 dump — whose processing cost
+    /// outweighs its recall). The query is a case-insensitive substring;
+    /// each hit carries the best identifying metadata available without a
+    /// full projection: the sidecar title, the E-9 index's first-user
+    /// summary, and the matched line's `ts_ns` when parseable.
+    ///
+    /// Sessions are visited most-recently-modified first (the
+    /// [`scan_session_summaries`] order) and the scan stops as soon as
+    /// `limit` hits are collected.
+    pub fn search_all(
+        &self,
+        query: &str,
+        limit: usize,
+    ) -> Result<Vec<SessionSearchHit>, SessionStoreError> {
+        Ok(self.search_all_with_stats(query, limit)?.hits)
+    }
+
+    /// [`SessionStore::search_all`] plus scan coverage, so callers can say
+    /// "searched N sessions" honestly even when the limit stopped the scan
+    /// early.
+    pub fn search_all_with_stats(
+        &self,
+        query: &str,
+        limit: usize,
+    ) -> Result<SessionSearchOutcome, SessionStoreError> {
+        let query = query.trim();
+        let total = self.session_count();
+        if query.is_empty() {
+            return Ok(SessionSearchOutcome {
+                hits: Vec::new(),
+                sessions_scanned: 0,
+                sessions_total: total,
+            });
+        }
+
+        let entries = scan_session_summaries(&self.container);
+        let mut hits = Vec::new();
+        let mut scanned = 0usize;
+        for entry in &entries {
+            if hits.len() >= limit {
+                break;
+            }
+            scanned += 1;
+            // Identify the session from the sidecars before touching the
+            // log: title from meta.json, summary from the E-9 index when it
+            // still validates (never re-project the log for a search hit).
+            let sidecar = SessionSidecar::load(&entry.meta_path);
+            let index =
+                SessionIndex::load_if_valid(&entry.events_path, &index_path_for(&entry.events_path));
+            let title = sidecar.title.clone();
+            let summary = index
+                .as_ref()
+                .and_then(|i| i.first_preview_text())
+                .map(|t| truncate_preview(t, 80));
+
+            let Ok(file) = std::fs::File::open(&entry.events_path) else {
+                continue;
+            };
+            let mut reader = BufReader::new(file);
+            let mut line = String::new();
+            loop {
+                line.clear();
+                match reader.read_line(&mut line) {
+                    Ok(0) | Err(_) => break,
+                    Ok(_) => {}
+                }
+                if line.len() > SEARCH_MAX_LINE_BYTES {
+                    continue;
+                }
+                let Some((match_start, match_end)) = find_case_insensitive(&line, query) else {
+                    continue;
+                };
+                let timestamp = ts_ns_from_raw_line(&line).map(|ns| ns_to_datetime(ns).to_rfc3339());
+                hits.push(SessionSearchHit {
+                    session_id: entry.session_id.clone(),
+                    title: title.clone(),
+                    summary: summary.clone(),
+                    timestamp,
+                    snippet: snippet_around(&line, match_start, match_end),
+                });
+                if hits.len() >= limit {
+                    break;
+                }
+            }
+        }
+        Ok(SessionSearchOutcome {
+            hits,
+            sessions_scanned: scanned,
+            sessions_total: total,
+        })
+    }
+
+    /// Number of sessions in the container (directory walk only, no log
+    /// reads) — cheap context for search/UI surfaces.
+    pub fn session_count(&self) -> usize {
+        scan_session_summaries(&self.container).len()
+    }
+
     /// Delete a session: removes its whole `<container>/<uuid>/` directory.
     ///
     /// Returns `Ok(false)` when nothing existed. Only UUID-shaped direct
@@ -794,6 +899,137 @@ impl SessionStore {
 /// Convenience: an shared handle rooted at the default container.
 pub fn default_store() -> Arc<SessionStore> {
     Arc::new(SessionStore::new(SessionStore::default_container()))
+}
+
+// ============================================================================
+// Cross-session search (search_all)
+// ============================================================================
+
+/// Default hit cap for [`SessionStore::search_all`] when the caller has no
+/// stronger opinion.
+pub const DEFAULT_SEARCH_LIMIT: usize = 50;
+
+/// Raw lines larger than this are skipped by cross-session search: a single
+/// `events.jsonl` row approaching 1 MB is almost always one embedded blob
+/// (pasted file, base64 dump) whose scan cost outweighs its recall value.
+const SEARCH_MAX_LINE_BYTES: usize = 1024 * 1024;
+
+/// Chars of context kept on each side of a search-hit snippet.
+const SEARCH_SNIPPET_CONTEXT_CHARS: usize = 80;
+
+/// One match of a cross-session search ([`SessionStore::search_all`]).
+#[derive(Debug, Clone, PartialEq, Serialize)]
+pub struct SessionSearchHit {
+    /// Owning session id (string form of the directory name).
+    pub session_id: String,
+    /// Curated title from the `meta.json` sidecar, when present.
+    pub title: Option<String>,
+    /// Best-effort summary from the E-9 index (first user-message prefix)
+    /// when no curated title exists.
+    pub summary: Option<String>,
+    /// Timestamp of the matched event (RFC 3339) when its `ts_ns` parsed.
+    pub timestamp: Option<String>,
+    /// Single-line excerpt around the match.
+    pub snippet: String,
+}
+
+/// Search hits plus scan coverage, so callers can report "searched N
+/// sessions" honestly even when the limit stopped the scan early.
+#[derive(Debug, Clone, PartialEq)]
+pub struct SessionSearchOutcome {
+    pub hits: Vec<SessionSearchHit>,
+    /// Sessions actually skimmed (the scan stops once `limit` is reached).
+    pub sessions_scanned: usize,
+    /// Sessions present in the container.
+    pub sessions_total: usize,
+}
+
+/// Case-insensitive char equality (full Unicode simple lowercase folding on
+/// both sides, so e.g. `Ä` matches `ä`).
+fn chars_eq_ignore_case(a: char, b: char) -> bool {
+    let mut la = a.to_lowercase();
+    let mut lb = b.to_lowercase();
+    loop {
+        match (la.next(), lb.next()) {
+            (None, None) => return true,
+            (Some(x), Some(y)) if x == y => continue,
+            _ => return false,
+        }
+    }
+}
+
+/// Case-insensitive substring search that does NOT allocate a lowercased
+/// copy of the haystack (`search_all` runs this per log line; lines can be
+/// large). Returns the `(start, end)` byte span of the first match, or
+/// `None`. An empty needle matches at 0.
+fn find_case_insensitive(haystack: &str, needle: &str) -> Option<(usize, usize)> {
+    if needle.is_empty() {
+        return Some((0, 0));
+    }
+    let needle_chars: Vec<char> = needle.chars().collect();
+    let first = needle_chars[0];
+    'outer: for (idx, ch) in haystack.char_indices() {
+        if !chars_eq_ignore_case(ch, first) {
+            continue;
+        }
+        let mut consumed = 0usize;
+        for (n, h) in needle_chars.iter().zip(haystack[idx..].chars()) {
+            if !chars_eq_ignore_case(*n, h) {
+                continue 'outer;
+            }
+            consumed += 1;
+        }
+        if consumed == needle_chars.len() {
+            // Match end: byte offset just past the matched chars (char-count
+            // based, since case folding can change byte lengths).
+            let end = haystack[idx..]
+                .char_indices()
+                .nth(needle_chars.len())
+                .map(|(o, _)| idx + o)
+                .unwrap_or(haystack.len());
+            return Some((idx, end));
+        }
+    }
+    None
+}
+
+/// Single-line excerpt of ±[`SEARCH_SNIPPET_CONTEXT_CHARS`] chars around the
+/// match, with `…` ellipses where content was cut and control chars
+/// (newlines, tabs) flattened to spaces.
+fn snippet_around(line: &str, match_start: usize, match_end: usize) -> String {
+    let line = line.trim();
+    let mut start = match_start.min(line.len()).saturating_sub(SEARCH_SNIPPET_CONTEXT_CHARS);
+    while start > 0 && !line.is_char_boundary(start) {
+        start -= 1;
+    }
+    let mut end = (match_end + SEARCH_SNIPPET_CONTEXT_CHARS).min(line.len());
+    while end > match_start && !line.is_char_boundary(end) {
+        end -= 1;
+    }
+    let mut snippet: String = line[start..end]
+        .chars()
+        .map(|c| if c.is_control() { ' ' } else { c })
+        .collect();
+    if start > 0 {
+        snippet.insert_str(0, "…");
+    }
+    if end < line.len() {
+        snippet.push('…');
+    }
+    snippet
+}
+
+/// Extract `ts_ns` from a raw JSONL line without deserializing the whole
+/// event: serde renders the field as `"ts_ns":<integer>`, so a targeted
+/// digit scan recovers it (cheap, and never fails the search).
+fn ts_ns_from_raw_line(line: &str) -> Option<u64> {
+    const KEY: &str = "\"ts_ns\":";
+    let idx = line.find(KEY)?;
+    let rest = &line[idx + KEY.len()..];
+    let digits_end = rest
+        .find(|c: char| !c.is_ascii_digit())
+        .unwrap_or(rest.len());
+    rest[..digits_end].parse().ok()
 }
 
 // ============================================================================
@@ -1308,6 +1544,179 @@ mod tests {
                 .unwrap()
                 .is_empty()
         );
+    }
+
+    // =========================================================================
+    // Cross-session search (search_all)
+    // =========================================================================
+
+    /// Seed a one-turn session whose prompt mentions `needle`.
+    fn seed_session_with_prompt(store: &SessionStore, id: &Uuid, prompt: &str) {
+        let mut w = SessionLogWriter::open_layout(store.container(), &id.to_string()).unwrap();
+        w.record(SessionEventBody::SessionStart(
+            shannon_types::session_event::SessionStartPayload {
+                model: "search-model".into(),
+                provider: None,
+                cwd: Some("/proj".into()),
+                app_version: None,
+                ..Default::default()
+            },
+        ));
+        w.record(SessionEventBody::TurnStart(TurnStartPayload {
+            query_id: None,
+        }));
+        w.record(SessionEventBody::UserMessage(UserMessagePayload {
+            source: UserMessagePayload::SOURCE_USER.into(),
+            content: prompt.into(),
+            attachment_count: 0,
+        }));
+        w.record(SessionEventBody::AssistantChunk(AssistantChunkPayload {
+            delta: "working on it".into(),
+            thinking: false,
+        }));
+        w.record(SessionEventBody::TurnEnd(TurnEndPayload {
+            reason: TurnEndPayload::REASON_COMPLETED.into(),
+            usage: None,
+            error: None,
+        }));
+        w.close().unwrap();
+    }
+
+    #[test]
+    fn search_all_matches_case_insensitively_across_sessions() {
+        let tmp = tempfile::tempdir().unwrap();
+        let store = store(&tmp);
+        let old = Uuid::new_v4();
+        seed_session_with_prompt(&store, &old, "the NEEDLE is buried here");
+        std::thread::sleep(std::time::Duration::from_millis(30));
+        let new = Uuid::new_v4();
+        seed_session_with_prompt(&store, &new, "please find my needle, thanks");
+
+        let outcome = store.search_all_with_stats("NeEdLe", DEFAULT_SEARCH_LIMIT).unwrap();
+        assert_eq!(outcome.sessions_total, 2);
+        assert_eq!(outcome.sessions_scanned, 2);
+        assert_eq!(outcome.hits.len(), 2);
+        // Most recently modified session first.
+        assert_eq!(outcome.hits[0].session_id, new.to_string());
+        assert_eq!(outcome.hits[1].session_id, old.to_string());
+        let hit = &outcome.hits[0];
+        assert!(hit.snippet.to_lowercase().contains("needle"));
+        assert!(!hit.snippet.contains('\n'), "snippet must be single-line");
+        // ts_ns parsed from the matched raw line → RFC 3339 timestamp.
+        assert!(hit.timestamp.is_some(), "matched line should carry ts_ns");
+    }
+
+    #[test]
+    fn search_all_reports_metadata_from_sidecars() {
+        let tmp = tempfile::tempdir().unwrap();
+        let store = store(&tmp);
+        let id = Uuid::new_v4();
+        seed_session_with_prompt(&store, &id, "the quokka habitat");
+        store
+            .save_sidecar(
+                &id,
+                &SessionSidecar {
+                    title: Some("Quokka research".into()),
+                    ..Default::default()
+                },
+            )
+            .unwrap();
+
+        let hits = store.search_all("QUOKKA", DEFAULT_SEARCH_LIMIT).unwrap();
+        assert_eq!(hits.len(), 1);
+        assert_eq!(hits[0].title.as_deref(), Some("Quokka research"));
+        // Without a title the index's first-user message summarizes.
+        let bare = Uuid::new_v4();
+        seed_session_with_prompt(&store, &bare, "aardvark migration");
+        std::thread::sleep(std::time::Duration::from_millis(20));
+        let hits = store.search_all("aardvark", DEFAULT_SEARCH_LIMIT).unwrap();
+        assert_eq!(hits.len(), 1);
+        assert!(hits[0].title.is_none());
+        assert_eq!(hits[0].summary.as_deref(), Some("aardvark migration"));
+    }
+
+    #[test]
+    fn search_all_respects_limit_and_stops_scanning() {
+        let tmp = tempfile::tempdir().unwrap();
+        let store = store(&tmp);
+        for _ in 0..3 {
+            seed_session_with_prompt(&store, &Uuid::new_v4(), "find the zebra");
+            std::thread::sleep(std::time::Duration::from_millis(20));
+        }
+        let outcome = store.search_all_with_stats("zebra", 2).unwrap();
+        assert_eq!(outcome.hits.len(), 2);
+        assert_eq!(outcome.sessions_total, 3);
+        assert_eq!(outcome.sessions_scanned, 2, "scan stops once limit is hit");
+    }
+
+    #[test]
+    fn search_all_skips_oversized_lines_and_empty_queries() {
+        let tmp = tempfile::tempdir().unwrap();
+        let store = store(&tmp);
+        let id = Uuid::new_v4();
+        seed_session_with_prompt(&store, &id, "start");
+        // A >1MB raw line (a blob without real JSON semantics) must be
+        // skipped rather than matched or loaded wholesale.
+        let log = store.container().join(id.to_string()).join("events.jsonl");
+        let mut big = std::fs::read_to_string(&log).unwrap();
+        big.push_str(&format!(
+            "{{\"blob\":\"{}\"}}\n",
+            "x".repeat(1024 * 1024 + 16)
+        ));
+        std::fs::write(&log, big).unwrap();
+
+        assert!(
+            store
+                .search_all("xxxx", DEFAULT_SEARCH_LIMIT)
+                .unwrap()
+                .is_empty(),
+            "oversized lines are skipped"
+        );
+        // Normal content in the same container still matches ("start" hits
+        // the user/message line plus the session/start and turn/start kind
+        // strings — all from the one seeded session).
+        let hits = store.search_all("start", DEFAULT_SEARCH_LIMIT).unwrap();
+        assert!(!hits.is_empty(), "normal content still matches");
+        assert!(hits.iter().all(|h| h.session_id == id.to_string()));
+        // Empty/whitespace queries match nothing.
+        assert!(
+            store
+                .search_all("   ", DEFAULT_SEARCH_LIMIT)
+                .unwrap()
+                .is_empty()
+        );
+        assert!(
+            store
+                .search_all("", DEFAULT_SEARCH_LIMIT)
+                .unwrap()
+                .is_empty()
+        );
+    }
+
+    #[test]
+    fn search_all_snippet_is_bounded_and_char_safe() {
+        let tmp = tempfile::tempdir().unwrap();
+        let store = store(&tmp);
+        let id = Uuid::new_v4();
+        let filler = "é".repeat(400);
+        seed_session_with_prompt(&store, &id, &format!("{filler} TARGET {filler}"));
+
+        let hits = store.search_all("target", DEFAULT_SEARCH_LIMIT).unwrap();
+        assert_eq!(hits.len(), 1);
+        let snippet = &hits[0].snippet;
+        assert!(snippet.contains("TARGET"));
+        assert!(snippet.starts_with('…') && snippet.ends_with('…'));
+        assert!(snippet.chars().count() <= 2 * 80 + "TARGET".len() + 2);
+        assert!(!snippet.contains('\n'));
+    }
+
+    #[test]
+    fn search_all_on_empty_container_is_empty() {
+        let tmp = tempfile::tempdir().unwrap();
+        let store = store(&tmp);
+        let outcome = store.search_all_with_stats("anything", DEFAULT_SEARCH_LIMIT).unwrap();
+        assert_eq!(outcome.sessions_total, 0);
+        assert!(outcome.hits.is_empty());
     }
 
     #[test]

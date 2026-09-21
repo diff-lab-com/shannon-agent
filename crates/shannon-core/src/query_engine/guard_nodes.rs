@@ -443,10 +443,32 @@ fn decode_trigger(trigger_type: &str, payload: &Value) -> Option<HookEvent> {
             tool_name: payload.get("tool_name")?.as_str()?.to_string(),
             input: payload.get("input").cloned()?,
             output: payload.get("output").cloned()?,
+            // Producers written before the field existed omit it; treat a
+            // missing key as a successful tool call.
+            is_error: payload
+                .get("is_error")
+                .and_then(Value::as_bool)
+                .unwrap_or(false),
         }),
         "PreToolUse" => Some(HookEvent::PreToolUse {
             tool_name: payload.get("tool_name")?.as_str()?.to_string(),
             input: payload.get("input").cloned()?,
+        }),
+        "SessionStart" => Some(HookEvent::SessionStart {
+            session_id: payload.get("session_id")?.as_str()?.to_string(),
+        }),
+        "SessionEnd" => Some(HookEvent::SessionEnd {
+            session_id: payload.get("session_id")?.as_str()?.to_string(),
+        }),
+        "Stop" => Some(HookEvent::Stop {
+            tool_calls_count: payload
+                .get("tool_calls_count")
+                .and_then(Value::as_u64)
+                .unwrap_or(0) as usize,
+            should_continue: payload
+                .get("should_continue")
+                .and_then(Value::as_bool)
+                .unwrap_or(false),
         }),
         _ => None,
     }
@@ -582,5 +604,73 @@ mod tests {
         expected.sort();
         assert_eq!(seen.len(), ALL_30.len(), "every distinct type routed once");
         assert_eq!(seen, expected);
+    }
+
+    #[test]
+    fn decode_trigger_resolves_lifecycle_events() {
+        // Engine producers (query_engine::engine) publish these as bus
+        // triggers; the adapter must decode them back into typed events.
+        let stop = decode_trigger(
+            "Stop",
+            &serde_json::json!({"tool_calls_count": 3, "should_continue": false}),
+        )
+        .expect("Stop must decode");
+        assert_eq!(stop.event_type(), HookEventType::Stop);
+        assert_eq!(stop.match_subject(), "3");
+
+        let start = decode_trigger("SessionStart", &serde_json::json!({"session_id": "s-1"}))
+            .expect("SessionStart must decode");
+        assert_eq!(start.event_type(), HookEventType::SessionStart);
+        assert_eq!(start.match_subject(), "s-1");
+
+        let end = decode_trigger("SessionEnd", &serde_json::json!({"session_id": "s-2"}))
+            .expect("SessionEnd must decode");
+        assert_eq!(end.event_type(), HookEventType::SessionEnd);
+        assert_eq!(end.match_subject(), "s-2");
+    }
+
+    #[test]
+    fn decode_trigger_tolerates_partial_lifecycle_payloads() {
+        // Optional numeric/bool fields fall back to defaults instead of
+        // dropping the event.
+        let stop = decode_trigger("Stop", &serde_json::json!({})).expect("Stop must decode");
+        assert_eq!(stop.event_type(), HookEventType::Stop);
+    }
+
+    #[test]
+    fn decode_trigger_post_tool_use_reads_is_error() {
+        let errored = decode_trigger(
+            "PostToolUse",
+            &serde_json::json!({
+                "tool_name": "Bash",
+                "input": {},
+                "output": "boom",
+                "is_error": true,
+            }),
+        )
+        .expect("PostToolUse must decode");
+        assert!(matches!(errored, HookEvent::PostToolUse { is_error: true, .. }));
+
+        // Legacy payload (pre-is_error producers) still decodes as success.
+        let legacy = decode_trigger(
+            "PostToolUse",
+            &serde_json::json!({"tool_name": "Bash", "input": {}, "output": "ok"}),
+        )
+        .expect("legacy PostToolUse must decode");
+        assert!(matches!(legacy, HookEvent::PostToolUse { is_error: false, .. }));
+    }
+
+    #[tokio::test]
+    async fn adapter_runs_stop_and_session_triggers_without_hooks_configured() {
+        // Parity with the PostToolUse adapter test: decoded lifecycle
+        // triggers execute cleanly (no-op) when no hooks are configured.
+        let bus = EventBus::new();
+        let adapter = HookManagerAdapter::new(empty_manager(), bus.shared());
+        for (ty, payload) in [
+            ("Stop", serde_json::json!({"tool_calls_count": 1})),
+            ("SessionStart", serde_json::json!({"session_id": "s"})),
+        ] {
+            adapter.run_decoded(ty, &payload).await;
+        }
     }
 }

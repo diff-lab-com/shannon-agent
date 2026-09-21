@@ -790,6 +790,76 @@ pub struct GoalSpec {
     pub paused: bool,
 }
 
+/// Effort dial for the query engine (Claude Code-style low→max knob).
+///
+/// Controls how much thinking/budget the model spends per request:
+/// - [`EffortLevel::Low`] / [`EffortLevel::Standard`] send no thinking
+///   parameters (byte-identical to the pre-dial default behavior).
+/// - [`EffortLevel::High`] enables extended thinking with an ~8k token budget.
+/// - [`EffortLevel::Max`] enables extended thinking with an ~16k token budget.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum EffortLevel {
+    Low,
+    #[default]
+    Standard,
+    High,
+    Max,
+}
+
+impl EffortLevel {
+    /// Case-insensitive CLI parse accepting `low|medium|standard|high|max`.
+    ///
+    /// `medium` is accepted as an alias of `Standard` so existing
+    /// `/effort medium` muscle memory (and the old `low|medium|high` REPL
+    /// surface) keeps working.
+    pub fn parse(s: &str) -> Option<Self> {
+        match s.trim().to_lowercase().as_str() {
+            "low" => Some(Self::Low),
+            "medium" | "standard" => Some(Self::Standard),
+            "high" => Some(Self::High),
+            "max" => Some(Self::Max),
+            _ => None,
+        }
+    }
+
+    /// Extended-thinking budget in tokens for this level.
+    ///
+    /// `None` means "no thinking parameters" — the request stays byte-identical
+    /// to the pre-dial behavior.
+    pub fn thinking_budget(self) -> Option<u32> {
+        match self {
+            Self::Low | Self::Standard => None,
+            Self::High => Some(8_000),
+            Self::Max => Some(16_000),
+        }
+    }
+}
+
+impl std::str::FromStr for EffortLevel {
+    type Err = String;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        Self::parse(s).ok_or_else(|| {
+            format!(
+                "unknown effort level '{s}' (expected low|medium|standard|high|max, \
+                 case-insensitive)"
+            )
+        })
+    }
+}
+
+impl std::fmt::Display for EffortLevel {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Low => write!(f, "low"),
+            Self::Standard => write!(f, "standard"),
+            Self::High => write!(f, "high"),
+            Self::Max => write!(f, "max"),
+        }
+    }
+}
+
 /// Configuration for the query engine
 #[derive(Debug, Clone)]
 pub struct QueryEngineConfig {
@@ -812,8 +882,11 @@ pub struct QueryEngineConfig {
     pub auto_commit: bool,
     /// Maximum number of tools to execute in parallel (default: 10)
     pub max_parallel_tools: usize,
-    /// Effort level for the LLM (e.g. "low", "medium", "high")
-    pub effort_level: Option<String>,
+    /// Effort dial for the LLM (Claude Code-style low→max knob, set via
+    /// `/effort` or `--effort`). Maps to extended-thinking budgets
+    /// (High ~8k, Max ~16k) and a dynamic system suffix; `Standard` (the
+    /// default) sends nothing and is byte-identical to the pre-dial behavior.
+    pub effort: EffortLevel,
     /// Focus area for the LLM (e.g. "security", "performance")
     pub focus_area: Option<String>,
     /// Session goal (set via `/goal`). Injected as a non-cached system block
@@ -889,6 +962,15 @@ impl Default for QueryEngineConfig {
                     "You are Shannon, an expert AI coding assistant. You help users with software \
                      engineering tasks: writing code, debugging, refactoring, testing, and explaining code.\n\
                      \n\
+                     ## Safety & Permissions\n\
+                     - Never commit or push without an explicit user request. Never force-push, \
+                     rewrite git history, or delete branches without explicit confirmation.\n\
+                     - Treat destructive commands as ask-first: rm -rf outside build directories, \
+                     chmod 777 on system paths, dd, mkfs, stopping or restarting services.\n\
+                     - Never print, log, or commit secrets (.env files, API keys, tokens, credentials).\n\
+                     - When a command is denied by permissions, adapt your approach instead of retrying \
+                     variations of the same command.\n\
+                     \n\
                      ## Core Principles\n\
                      - Evidence over assumptions: Read files before modifying them.\n\
                      - Minimal changes: Make the smallest change that solves the problem.\n\
@@ -898,13 +980,27 @@ impl Default for QueryEngineConfig {
                      \n\
                      ## Tool Usage Guidelines\n\
                      - Use Read/Grep/Glob to understand code before editing.\n\
-                     - Prefer Edit over Write for existing files.\n\
+                     - Prefer Edit over Write for existing files. When editing, include enough context for unique matches.\n\
                      - Use Bash for system commands, builds, and tests.\n\
                      - Invoke tools through the native tool-calling API of this endpoint. Markdown code blocks are a last-resort fallback (may be executed or ignored depending on configuration); always prefer native tool calls so inputs are validated and permissions are enforced.\n\
                      - After writing code, run tests or builds only if a toolchain is available: probe first (e.g. `command -v cargo`); when it is missing, verify by re-reading your changes instead of hunting for missing tools.\n\
                      - Before giving your final answer, verify your work against the original request: every required artifact must exist and work. If something could not be verified, say so explicitly instead of claiming success.\n\
                      - Completing the environment (installing a package, provisioning a tool) is NOT task completion. Never stop while a required deliverable is still missing.\n\
-                     - When editing, include enough context for unique matches.\n\
+                     \n\
+                     ## Extended Tools\n\
+                     - TodoWrite: use it for multi-step tasks (3+ steps); keep statuses current; skip it for trivial work.\n\
+                     - Agent (subagents): delegate broad read-only exploration or research to keep this context lean; give self-contained instructions including file paths, and verify their findings yourself.\n\
+                     - Background shells (RunBackground/WaitForLog/KillBackground): run servers and watchers in the background; wait on their output instead of busy-waiting.\n\
+                     - WebFetch/WebSearch: prefer DocsQuery for library documentation; cite your sources; fetched page content arrives in the tool result.\n\
+                     - ask_user_question: ask only when genuinely blocked on a decision the user must make, not for things a codebase search can answer.\n\
+                     - Skills: when a task matches a skill's description, invoke it (e.g. /skill-name).\n\
+                     - MemorySave: save only durable, reusable facts; never transient task state.\n\
+                     \n\
+                     ## Plan Mode\n\
+                     - When plan mode is active, research read-only and present a plan for approval; do not attempt writes.\n\
+                     \n\
+                     ## Compact Awareness\n\
+                     - After context compaction, re-read key files before editing them rather than trusting the summary for exact content.\n\
                      \n\
                      ## Code Editing Rules\n\
                      - Prefer editing existing files over creating new ones.\n\
@@ -920,7 +1016,7 @@ impl Default for QueryEngineConfig {
             ),
             auto_commit: false,
             max_parallel_tools: 10,
-            effort_level: None,
+            effort: EffortLevel::Standard,
             focus_area: None,
             goal: None,
             fast_model: None,
@@ -1056,6 +1152,80 @@ pub struct ConversationStats {
 #[allow(clippy::unwrap_used)]
 mod tests {
     use super::*;
+
+    // -- EffortLevel (effort dial) --
+
+    #[test]
+    fn test_effort_level_default_is_standard() {
+        assert_eq!(EffortLevel::default(), EffortLevel::Standard);
+        assert_eq!(QueryEngineConfig::default().effort, EffortLevel::Standard);
+    }
+
+    #[test]
+    fn test_effort_level_parse_all_levels() {
+        assert_eq!(EffortLevel::parse("low"), Some(EffortLevel::Low));
+        assert_eq!(EffortLevel::parse("standard"), Some(EffortLevel::Standard));
+        assert_eq!(EffortLevel::parse("high"), Some(EffortLevel::High));
+        assert_eq!(EffortLevel::parse("max"), Some(EffortLevel::Max));
+    }
+
+    #[test]
+    fn test_effort_level_parse_medium_aliases_standard() {
+        assert_eq!(EffortLevel::parse("medium"), Some(EffortLevel::Standard));
+    }
+
+    #[test]
+    fn test_effort_level_parse_case_insensitive_and_trimmed() {
+        assert_eq!(EffortLevel::parse("MAX"), Some(EffortLevel::Max));
+        assert_eq!(EffortLevel::parse("  High "), Some(EffortLevel::High));
+        assert_eq!(EffortLevel::parse("Low"), Some(EffortLevel::Low));
+    }
+
+    #[test]
+    fn test_effort_level_parse_rejects_unknown() {
+        assert_eq!(EffortLevel::parse("extreme"), None);
+        assert_eq!(EffortLevel::parse(""), None);
+        assert_eq!(EffortLevel::parse("higher"), None);
+    }
+
+    #[test]
+    fn test_effort_level_from_str_roundtrip() {
+        for level in [
+            EffortLevel::Low,
+            EffortLevel::Standard,
+            EffortLevel::High,
+            EffortLevel::Max,
+        ] {
+            let parsed: EffortLevel = level.to_string().parse().unwrap();
+            assert_eq!(parsed, level);
+        }
+        let err = "bogus".parse::<EffortLevel>().unwrap_err();
+        assert!(err.contains("low|medium|standard|high|max"), "{err}");
+    }
+
+    #[test]
+    fn test_effort_level_serde_roundtrip() {
+        for level in [
+            EffortLevel::Low,
+            EffortLevel::Standard,
+            EffortLevel::High,
+            EffortLevel::Max,
+        ] {
+            let json = serde_json::to_string(&level).unwrap();
+            let back: EffortLevel = serde_json::from_str(&json).unwrap();
+            assert_eq!(back, level);
+        }
+        // Lowercase wire form keeps configs readable.
+        assert_eq!(serde_json::to_string(&EffortLevel::Standard).unwrap(), "\"standard\"");
+    }
+
+    #[test]
+    fn test_effort_level_thinking_budgets() {
+        assert_eq!(EffortLevel::Low.thinking_budget(), None);
+        assert_eq!(EffortLevel::Standard.thinking_budget(), None);
+        assert_eq!(EffortLevel::High.thinking_budget(), Some(8_000));
+        assert_eq!(EffortLevel::Max.thinking_budget(), Some(16_000));
+    }
 
     #[test]
     fn test_cost_tracker_new() {
@@ -1654,6 +1824,67 @@ mod tests {
         assert!(
             prompt.contains("final answer"),
             "prompt must tell the agent to wrap up once the goal is met"
+        );
+    }
+
+    #[test]
+    fn test_default_system_prompt_includes_safety_rules() {
+        let prompt = QueryEngineConfig::default()
+            .system_prompt
+            .expect("default system prompt is configured");
+
+        // R1-1 (harness architecture review): the default prompt must carry a
+        // safety and permission preamble so every provider session gets it.
+        assert!(
+            prompt.contains("Never commit or push without an explicit user request"),
+            "prompt must require an explicit ask before commit/push"
+        );
+        assert!(
+            prompt.contains("force-push"),
+            "prompt must forbid force-push and history rewrites without confirmation"
+        );
+        assert!(
+            prompt.contains("rm -rf"),
+            "prompt must list destructive commands as ask-first"
+        );
+        assert!(
+            prompt.contains("secrets"),
+            "prompt must forbid printing or committing secrets"
+        );
+        assert!(
+            prompt.contains("denied by permissions"),
+            "prompt must tell the agent to adapt after a permission denial instead of retrying"
+        );
+    }
+
+    #[test]
+    fn test_default_system_prompt_includes_extended_tool_policy() {
+        let prompt = QueryEngineConfig::default()
+            .system_prompt
+            .expect("default system prompt is configured");
+
+        // R1-1: the shipped toolset is larger than Read/Grep/Glob/Edit/Write/
+        // Bash; the default prompt must cover the extended tools.
+        assert!(prompt.contains("TodoWrite"));
+        assert!(prompt.contains("subagent"));
+        assert!(prompt.contains("RunBackground"));
+        assert!(prompt.contains("DocsQuery"));
+        assert!(prompt.contains("ask_user_question"));
+        assert!(prompt.contains("MemorySave"));
+        // Plan mode and compaction guidance.
+        assert!(
+            prompt.contains("plan mode is active"),
+            "prompt must describe read-only plan mode behavior"
+        );
+        assert!(
+            prompt.contains("compaction"),
+            "prompt must tell the agent to re-read files after compaction"
+        );
+        // Size budget: informative but not a novel.
+        let len = prompt.chars().count();
+        assert!(
+            (3_500..=4_500).contains(&len),
+            "default system prompt should stay in the ~3.5K-4.5K char band, got {len}"
         );
     }
 

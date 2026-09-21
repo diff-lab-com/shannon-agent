@@ -1046,7 +1046,9 @@ impl Tool for DeferredSchemaSearchTool {
                 Some(schema) => {
                     let schema_str =
                         serde_json::to_string_pretty(schema).unwrap_or_else(|_| schema.to_string());
-                    Ok(ToolOutput::success(schema_str))
+                    // Header keeps the model oriented about whose schema this
+                    // is (mirrors the fuzzy-search listing format).
+                    Ok(ToolOutput::success(format!("## {name}\n{schema_str}")))
                 }
                 None => {
                     let available: Vec<&String> = schemas.keys().collect();

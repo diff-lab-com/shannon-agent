@@ -62,12 +62,13 @@ use super::parsers::{
     ThinkStreamSplitter, is_think_only_response, is_truncation_stop, markdown_bash_command,
     parse_text_tool_calls, split_think_content,
 };
+use super::recovery;
 use super::routing::{QueryComplexity, classify_query_complexity};
 use crate::compact as p2_compact;
 use crate::query_engine::streaming::ConversationState;
 use crate::query_engine::types::{
-    ConversationStats, CostTracker, GOAL_BLOCKED_MARKER, GOAL_COMPLETE_MARKER, GoalSpec,
-    QueryContext, QueryEngineConfig, QueryError, QueryEvent, QueryStream,
+    ConversationStats, CostTracker, EffortLevel, GOAL_BLOCKED_MARKER, GOAL_COMPLETE_MARKER,
+    GoalSpec, QueryContext, QueryEngineConfig, QueryError, QueryEvent, QueryStream,
 };
 use crate::tools::ToolRegistry;
 use shannon_engine::api::{
@@ -80,6 +81,30 @@ use shannon_engine::state::StateManager;
 /// Minimal system prompt for local/small models that cannot handle tool definitions.
 const LOCAL_MODEL_SYSTEM_PROMPT: &str =
     "You are Shannon, a helpful AI assistant. Respond concisely in the user's language.";
+
+/// Visible-answer headroom added on top of an extended-thinking budget:
+/// when the effort dial raises `budget_tokens`, `max_tokens` is lifted to at
+/// least `budget + EFFORT_THINKING_HEADROOM_TOKENS` (Anthropic requires
+/// `max_tokens > budget_tokens`; the headroom is the reply itself).
+const EFFORT_THINKING_HEADROOM_TOKENS: u32 = 4_096;
+
+/// Provider-neutral steering suffix for the effort dial, injected as an
+/// uncached dynamic system block. Only non-`Standard` levels produce text —
+/// `Standard` returns `None` so default requests stay byte-identical.
+pub(crate) fn effort_system_suffix(effort: EffortLevel) -> Option<&'static str> {
+    match effort {
+        EffortLevel::Standard => None,
+        EffortLevel::Low => Some(
+            "## Effort: Low\n\
+             Be brief; minimize exploration; state assumptions instead of long investigations.",
+        ),
+        EffortLevel::High | EffortLevel::Max => Some(
+            "## Effort: High\n\
+             Think carefully and exhaustively before answering; prefer thorough \
+             multi-step verification.",
+        ),
+    }
+}
 
 /// Build the `## Current Goal` system block for an active or paused goal.
 ///
@@ -124,6 +149,21 @@ use shannon_types::recover_lock;
 use std::sync::{Arc, RwLock};
 use tokio::sync::mpsc;
 use uuid::Uuid;
+
+/// Publish the `Stop` hook trigger (§4.8): fired when the agent finishes
+/// responding to a query, immediately before `QueryEvent::Completed` is
+/// sent. `should_continue` is always `false` — the engine never uses hook
+/// feedback to force an extra turn (exit code 2 semantics are advisory).
+fn publish_stop_trigger(bus: &crate::bus::EventBus, tool_calls_count: usize) {
+    crate::query_engine::guard_nodes::publish_hook_trigger(
+        bus,
+        "Stop",
+        serde_json::json!({
+            "tool_calls_count": tool_calls_count,
+            "should_continue": false,
+        }),
+    );
+}
 
 /// Send a query event, logging a warning if the receiver has been dropped.
 ///
@@ -492,80 +532,13 @@ const WRAP_UP_NUDGE_PROMPT: &str = "Your turn budget is nearly exhausted — thi
      repository, commit your changes; then give a brief summary of what was \
      completed and what remains.";
 
-/// Append the A8 continuation nudge (role=user, same injection shape as the
-/// A1 think-only nudge) unless it is already the last message. The
-/// one-shot guard keeps a repeated stall from stacking copies: the first
-/// retry appends, a second consecutive retry reuses the existing nudge so
-/// every retry request carries exactly one.
-fn push_turn_continuation_nudge(messages: &mut Vec<Message>) {
-    if let Some(last) = messages.last() {
-        if last.role == "user" {
-            if let MessageContent::Text(text) = &last.content {
-                if text == TURN_CONTINUATION_NUDGE_PROMPT {
-                    return;
-                }
-            }
-        }
-    }
-    messages.push(Message {
-        role: "user".to_string(),
-        content: MessageContent::Text(TURN_CONTINUATION_NUDGE_PROMPT.to_string()),
-    });
-}
-
-/// A14: compute the escalated stream-idle watchdog budget for the next
-/// continuation attempt. `turn_retries_used` is the 1-indexed count of
-/// escalations already issued on this turn (0 for the original attempt,
-/// 1 after the first timeout-class continuation, etc). The escalation
-/// follows `min(base * (1 + retry + STREAM_IDLE_ESCALATION_FACTOR_BASE),
-/// STREAM_IDLE_ESCALATION_CAP_SECS)`:
-///   - retry 0 (original attempt): no override — the base env budget is
-///     used as-is, identical to pre-A14 behavior.
-///   - retry 1: base × 2 → 420s × 2 = 840s.
-///   - retry 2: base × 3 → 420s × 3 = 1260s (would be capped at 1200s
-///     when the cap equals the natural value).
-///
-/// Returns `None` when no base budget is configured (env unset / 0 / 负数),
-/// preserving the pre-A14 "watchdog disabled" path. The cap is hard so an
-/// actively-silent stream is never rescued past
-/// `STREAM_IDLE_ESCALATION_CAP_SECS`.
-fn stream_idle_escalated_budget(
-    base_secs: Option<u64>,
-    turn_retries_used: u32,
-) -> Option<std::time::Duration> {
-    let base = base_secs?;
-    if turn_retries_used == 0 {
-        return None;
-    }
-    let factor = STREAM_IDLE_ESCALATION_FACTOR_BASE + u64::from(turn_retries_used);
-    let raw = base.saturating_mul(factor);
-    let capped = raw.min(STREAM_IDLE_ESCALATION_CAP_SECS);
-    Some(std::time::Duration::from_secs(capped))
-}
-
-/// A14: apply the escalated stream-idle budget to the client before the
-/// next continuation attempt. No-op when `base_secs` is unset (watchdog
-/// was off before A14; A14 does not turn it on for anyone).
-///
-/// `turn_retries_used` reflects the index of the continuation we are
-/// about to issue — i.e. 1 after the first timeout-class continuation.
-/// The escalation is cleared by [`clear_stream_idle_override`] when the
-/// stream finalizes normally.
-fn escalate_stream_idle_override(
-    client: &shannon_engine::api::client::LlmClient,
-    base_secs: Option<u64>,
-    turn_retries_used: u32,
-) {
-    let budget = stream_idle_escalated_budget(base_secs, turn_retries_used);
-    client.set_stream_idle_override(budget);
-}
-
-/// A14: clear any A14 escalation on the client. Called when a stream
-/// finalizes normally (turn_retries_used reset path) so the next fresh
-/// turn starts again from the base budget.
-fn clear_stream_idle_override(client: &shannon_engine::api::client::LlmClient) {
-    client.set_stream_idle_override(None);
-}
+// R2-6: A8/N-3/A14 ladder helpers live in `query_engine::recovery` so the
+// agent loop reads top-down as a pipeline rather than 200 lines of inline
+// retry-ladder logic. Call sites use:
+//   `recovery::push_turn_continuation_nudge(&mut conversation.messages)`
+//   `recovery::provider_error_retryable(&message)`
+//   `recovery::turn_retries_max()`
+//   `recovery::escalate_stream_idle_override(...)` / `recovery::clear_stream_idle_override(...)`
 
 /// Default minimum length (chars) of the visible — i.e. non-reasoning —
 /// answer for a response to count as substantive. Override with
@@ -578,10 +551,7 @@ fn clear_stream_idle_override(client: &shannon_engine::api::client::LlmClient) {
 /// reasoning models into a self-doubt loop (7k–21k tokens for one Q&A, field-
 /// observed on MiniMax M3). An unhelpfully-short-but-present answer is the
 /// model's call; blank-only replies still get one chance to recover.
-fn turn_retries_max() -> u32 {
-    env_num_override("SHANNON_TURN_RETRIES", DEFAULT_TURN_RETRIES)
-}
-
+///
 /// Visible-answer threshold in chars for the think-only classifier
 /// (`SHANNON_THINK_ONLY_MIN_ANSWER_CHARS`, default
 /// [`DEFAULT_THINK_ONLY_MIN_ANSWER_CHARS`]).
@@ -647,6 +617,16 @@ pub struct QueryEngine {
     /// Custom permission profiles loaded from `.shannon/profiles/*.toml` and `.claude/profiles/*.toml`.
     pub(crate) custom_profiles:
         Arc<tokio::sync::RwLock<shannon_engine::custom_profiles::CustomProfileRegistry>>,
+    /// Guards the once-per-session `SessionStart` hook emission: the first
+    /// `process_query` on this engine publishes it; interactive hosts that
+    /// fire it themselves at startup (REPL) pre-mark the flag via
+    /// [`QueryEngine::mark_session_start_emitted`] so it never double-fires.
+    pub(crate) session_start_emitted: Arc<std::sync::atomic::AtomicBool>,
+    /// R1-3: each provider returns a markdown block appended to the
+    /// post-compact reinjection payload. Used by host apps to keep
+    /// short-lived state (todo checklist, skill activations, etc.) alive
+    /// across the in-place context compaction boundary.
+    reinjection_providers: Arc<std::sync::Mutex<Vec<Arc<dyn Fn() -> Option<String> + Send + Sync>>>>,
 }
 
 impl QueryEngine {
@@ -809,6 +789,8 @@ impl QueryEngine {
             custom_profiles: Arc::new(tokio::sync::RwLock::new(
                 shannon_engine::custom_profiles::CustomProfileRegistry::load_from_dirs(),
             )),
+            session_start_emitted: Arc::new(std::sync::atomic::AtomicBool::new(false)),
+            reinjection_providers: Arc::new(std::sync::Mutex::new(Vec::new())),
         }
     }
 
@@ -866,6 +848,8 @@ impl QueryEngine {
             custom_profiles: Arc::new(tokio::sync::RwLock::new(
                 shannon_engine::custom_profiles::CustomProfileRegistry::load_from_dirs(),
             )),
+            session_start_emitted: Arc::new(std::sync::atomic::AtomicBool::new(false)),
+            reinjection_providers: Arc::new(std::sync::Mutex::new(Vec::new())),
         }
     }
 
@@ -956,6 +940,8 @@ impl QueryEngine {
             custom_profiles: Arc::new(tokio::sync::RwLock::new(
                 shannon_engine::custom_profiles::CustomProfileRegistry::load_from_dirs(),
             )),
+            session_start_emitted: Arc::new(std::sync::atomic::AtomicBool::new(false)),
+            reinjection_providers: Arc::new(std::sync::Mutex::new(Vec::new())),
         }
     }
 
@@ -976,11 +962,13 @@ impl QueryEngine {
         self.config.system_prompt.clone()
     }
 
-    /// Set the thinking effort level (`/effort`).
+    /// Set the effort dial (`/effort`, `--effort`).
     ///
-    /// Maps to `budget_tokens` for Anthropic and `reasoning_effort` for OpenAI.
-    pub fn set_effort_level(&mut self, level: Option<String>) {
-        self.config.effort_level = level;
+    /// Maps to `budget_tokens` (extended thinking) for Anthropic-style
+    /// providers and `reasoning_effort` for OpenAI-style providers;
+    /// `Standard` (the default) sends nothing.
+    pub fn set_effort(&mut self, effort: EffortLevel) {
+        self.config.effort = effort;
     }
 
     /// Set the focus area (`/focus`).
@@ -1092,6 +1080,32 @@ impl QueryEngine {
     /// Access the hook manager for firing lifecycle events (SessionStart, SessionEnd, etc.)
     pub fn hook_manager(&self) -> Arc<tokio::sync::RwLock<shannon_engine::hooks::HookManager>> {
         self.hook_manager.clone()
+    }
+
+    /// Record that the `SessionStart` hook has already been fired for this
+    /// session by the host (e.g. the REPL fires it at startup). The engine's
+    /// own once-per-session emission at the start of `process_query` then
+    /// stays silent, so the event never double-fires.
+    pub fn mark_session_start_emitted(&self) {
+        self.session_start_emitted
+            .store(true, std::sync::atomic::Ordering::Relaxed);
+    }
+
+    /// R1-3: register a provider whose return value (a markdown block, or
+    /// `None` for nothing to inject) is appended to the post-compact
+    /// reinjection payload. Providers fire in registration order; the first
+    /// non-empty value is used per slot, with each block preceded by a
+    /// blank line. Cheap to call repeatedly; idempotent semantics left to
+    /// the provider closure. Takes `&self` so the producer can register
+    /// from inside its spawned task if needed.
+    pub fn add_reinjection_provider<F>(&self, provider: F)
+    where
+        F: Fn() -> Option<String> + Send + Sync + 'static,
+    {
+        self.reinjection_providers
+            .lock()
+            .expect("reinjection_providers lock")
+            .push(Arc::new(provider));
     }
 
     /// Access the triggered routines registry.
@@ -1232,6 +1246,11 @@ impl QueryEngine {
             );
         }
         self.conversation.messages = messages;
+        // P3-15: seed the memory-extraction cursor to the restored history so
+        // the first post-resume query extracts only its own delta instead of
+        // re-importing the entire restored conversation as fresh memories.
+        self.memory_extract_cursor
+            .store(msg_count, std::sync::atomic::Ordering::Relaxed);
     }
 
     /// Estimate token count of the current conversation including system prompt.
@@ -1532,6 +1551,7 @@ impl QueryEngine {
         let attachment_count = user_attachments.len();
         let cost_tracker = self.cost_tracker.clone();
         let hook_manager = self.hook_manager.clone();
+        let session_start_emitted = self.session_start_emitted.clone();
         let triggered_routines = self.triggered_routines.clone();
         let context_injector = self.context_injector.clone();
         let plan_mode_active = self.plan_mode_active.clone();
@@ -1583,10 +1603,11 @@ impl QueryEngine {
             stable_blocks.push(base.clone());
         }
 
-        // Memory entries — scoped injection, grouped by category (ADR-0010 D2).
-        if let Some(mem_text) = memory_injection.clone() {
-            stable_blocks.push(mem_text);
-        }
+        // N-7: memory entries used to sit here in the stable zone, but
+        // AutoDream persists extracted memories after every query — a
+        // stable-zone placement re-cached the entire prefix (instructions,
+        // repomap) on every turn. They are injected in the dynamic zone
+        // below instead.
 
         // Inject CLAUDE.md / AGENTS.md / GEMINI.md project instructions —
         // same working-directory ambient read, same opt-out.
@@ -1638,6 +1659,14 @@ impl QueryEngine {
         // ── Dynamic zone (after the last breakpoint — never cache-busting) ──
         let mut dynamic_blocks: Vec<SystemContentBlock> = Vec::new();
 
+        // Memory entries — scoped injection, grouped by category (ADR-0010
+        // D2), dynamic-zone placement per N-7 (AutoDream persists new
+        // memories after every query, so a stable-zone placement busts the
+        // whole cached prefix each turn).
+        if let Some(mem_text) = memory_injection.clone() {
+            dynamic_blocks.push(SystemContentBlock::text(mem_text));
+        }
+
         // Smart context: auto-include relevant files based on query.
         // Query-dependent content must NOT sit inside the cached prefix —
         // every new query would invalidate the breakpoints. Gated by
@@ -1682,6 +1711,13 @@ impl QueryEngine {
         // rebuilt on every query so the goal survives compaction.
         if let Some(ref goal) = config.goal {
             dynamic_blocks.push(goal_system_block(goal));
+        }
+
+        // Effort dial steering (Low/High/Max): uncached dynamic block so
+        // toggling /effort never busts the cached prefix. Standard emits
+        // nothing (byte-identical default behavior).
+        if let Some(suffix) = effort_system_suffix(config.effort) {
+            dynamic_blocks.push(SystemContentBlock::text(suffix.to_string()));
         }
 
         // Plan-mode awareness: previously the only signal was the per-tool
@@ -1833,7 +1869,7 @@ impl QueryEngine {
             "timeout_seconds": config.timeout_seconds,
             "enable_thinking": config.enable_thinking,
             "effective_max_context_tokens": self.effective_max_context_tokens,
-            "effort_level": config.effort_level,
+            "effort": config.effort,
             "repo_map_enabled": config.repo_map_enabled,
             "tools_allowed": context.metadata.tools_allowed,
             "temperature": context.metadata.temperature,
@@ -1843,6 +1879,10 @@ impl QueryEngine {
         // Spawn background task to handle query processing. Its `JoinHandle`
         // is captured by `AbortOnDropStream` below so the task is aborted when
         // the consumer drops the `QueryStream` (the cancellation path).
+        // R1-3: capture a clone of the reinjection-provider handle so the
+        // producer task can read host-registered providers across the
+        // `'static` move boundary.
+        let reinjection_providers = self.reinjection_providers.clone();
         let producer = tokio::spawn(async move {
             // Prevent OS sleep during long-running queries (drops on exit)
             let _sleep_guard = crate::prevent_sleep::PreventSleepGuard::new();
@@ -1862,6 +1902,31 @@ impl QueryEngine {
                 crate::bus::TopicFilter::all(),
                 std::sync::Arc::new(crate::session_log::L0TeeSubscriber::new(l0_tee.clone())),
             );
+            // §4.8: mount the HookManagerAdapter — it decodes hook triggers
+            // published on this session's bus (UserPromptSubmit, PostToolUse,
+            // Stop, SessionStart, …) and runs them through the HookManager.
+            // Fire-and-forget per trigger (spawned), advisory (decisions are
+            // not enforced here), and a no-op when no hooks are configured.
+            let _hook_adapter_guard = session_bus.subscribe(
+                crate::bus::TopicFilter::kind(
+                    shannon_types::session_event::SessionEventKind::Custom,
+                ),
+                std::sync::Arc::new(crate::query_engine::guard_nodes::HookManagerAdapter::new(
+                    hook_manager.clone(),
+                    session_bus.shared(),
+                )),
+            );
+
+            // §4.8: SessionStart — once per engine session, at the start of
+            // the first query. Hosts that fire it themselves at startup (the
+            // REPL) pre-mark the flag so this stays silent for them.
+            if !session_start_emitted.swap(true, std::sync::atomic::Ordering::Relaxed) {
+                crate::query_engine::guard_nodes::publish_hook_trigger(
+                    &session_bus,
+                    "SessionStart",
+                    serde_json::json!({ "session_id": self_session_id }),
+                );
+            }
             // Plugin-gate decisions (§4.9 route (b)) republish onto the bus
             // as permission/decision rows via the process-wide sink; the
             // most recent query installs it (single-active-session flows).
@@ -1932,28 +1997,33 @@ impl QueryEngine {
                     provider: client_provider.clone(),
                     ..Default::default()
                 };
-                // Enable extended thinking with a budget if configured
+                // Enable extended thinking with a default budget if configured
+                // (legacy `enable_thinking` knob; an explicit effort level
+                // below overrides it).
                 if config.enable_thinking {
                     cfg.budget_tokens = Some(10000);
                 }
-                // Map effort_level from /effort command to provider-specific parameters
-                if let Some(ref effort) = config.effort_level {
-                    let reasoning_effort = match effort.as_str() {
-                        "low" => shannon_engine::api::types::ReasoningEffort::Low,
-                        "medium" => shannon_engine::api::types::ReasoningEffort::Medium,
-                        "high" => shannon_engine::api::types::ReasoningEffort::High,
-                        _ => shannon_engine::api::types::ReasoningEffort::Medium,
-                    };
-                    cfg.reasoning_effort = Some(reasoning_effort);
-                    // For Anthropic: also set budget_tokens based on effort level
-                    if matches!(
+                // Effort dial: High/Max enable extended thinking through the
+                // existing budget plumbing — Anthropic-style providers get an
+                // explicit `budget_tokens` (8k/16k), OpenAI-style providers get
+                // `reasoning_effort: high`. Standard (the default) sends
+                // nothing, byte-identical to the pre-dial behavior.
+                if let Some(budget) = config.effort.thinking_budget() {
+                    cfg.budget_tokens = Some(budget);
+                    // Extended thinking spends out of `max_tokens`: raise it so
+                    // it stays above the thinking budget with visible-answer
+                    // headroom instead of starving the reply.
+                    let needed = budget.saturating_add(EFFORT_THINKING_HEADROOM_TOKENS);
+                    if cfg.max_tokens < needed {
+                        cfg.max_tokens = needed;
+                    }
+                    if !matches!(
                         cfg.provider,
                         shannon_engine::api::LlmProvider::Anthropic
                             | shannon_engine::api::LlmProvider::Bedrock
                             | shannon_engine::api::LlmProvider::Custom
                     ) {
-                        let budget = reasoning_effort.to_anthropic_budget(200_000);
-                        cfg.budget_tokens = Some(budget as u32);
+                        cfg.reasoning_effort = Some(shannon_engine::api::types::ReasoningEffort::High);
                     }
                 }
                 cfg
@@ -2058,7 +2128,7 @@ impl QueryEngine {
             // its own budget. A retry does NOT consume the max_turns budget
             // (the turn is re-entered, not advanced).
             let mut turn_retries_used: u32 = 0;
-            let max_turn_retries = turn_retries_max();
+            let max_turn_retries = recovery::turn_retries_max();
 
             // A14: base stream-idle budget, read once per query from the
             // engine-side SHANNON_STREAM_IDLE_SECS env (default 420s, the
@@ -2093,6 +2163,7 @@ impl QueryEngine {
                             messages: conversation.messages.clone(),
                         }
                     );
+                    publish_stop_trigger(&session_bus, tool_results.len());
                     send_event!(tx, QueryEvent::Completed { query_id });
 
                     break;
@@ -2100,19 +2171,6 @@ impl QueryEngine {
 
                 // Build messages for API call
                 let mut messages = conversation.messages.clone();
-
-                // Auto-compress conversation when approaching token limits
-                if conversation.needs_compression(&config) {
-                    send_event!(
-                        tx,
-                        QueryEvent::Progress {
-                            query_id,
-                            message: "Compressing conversation context...".to_string(),
-                        }
-                    );
-                    conversation.compress(&config);
-                    messages = conversation.messages.clone();
-                }
 
                 // Add pending tool results from previous turn.
                 // Persist to conversation.messages as well so multi-turn context
@@ -2533,6 +2591,24 @@ impl QueryEngine {
                                                 reinjection.push_str("\n\n");
                                             }
                                             reinjection.push_str(mem);
+                                        }
+                                    }
+                                    // R1-3: host-registered providers (todo
+                                    // checklist, skill activations, etc.).
+                                    for provider in reinjection_providers
+                                        .lock()
+                                        .expect("reinjection_providers lock")
+                                        .iter()
+                                        .cloned()
+                                    {
+                                        if let Some(block) = provider() {
+                                            if block.is_empty() {
+                                                continue;
+                                            }
+                                            if !reinjection.is_empty() {
+                                                reinjection.push_str("\n\n");
+                                            }
+                                            reinjection.push_str(&block);
                                         }
                                     }
                                     if !reinjection.is_empty() && !messages.is_empty() {
@@ -3852,8 +3928,40 @@ impl QueryEngine {
                                                                         continue;
                                                                     }
                                                                 }
+                                                            } else {
+                                                                // N-1: fail closed. With no approval
+                                                                // channel attached (REST /api/query,
+                                                                // automation runners), an interactive
+                                                                // prompt can never be answered — deny
+                                                                // instead of silently auto-allowing.
+                                                                consecutive_denials += 1;
+                                                                crate::query_engine::guard_nodes::emit_decision(
+                                                                    &session_bus,
+                                                                    &tool_name,
+                                                                    "deny",
+                                                                    Some("no approval channel attached"),
+                                                                    "SYSTEM",
+                                                                    0,
+                                                                );
+                                                                let error_msg = format!(
+                                                                    "Permission required for '{tool_name}' but this session has no approval channel; the operation was denied. Re-run interactively or grant a broader permission mode."
+                                                                );
+                                                                send_event!(tx, QueryEvent::ToolUseResult {
+                                                                    query_id,
+                                                                    tool_use_id: tool_id.clone(),
+                                                                    tool_name,
+                                                                    result: error_msg.clone(),
+                                                                    is_error: true,
+                                                                    meta: Box::new(serde_json::Value::Null),
+                                                                });
+                                                                tool_results.push(ToolResultEntry {
+                                                                    tool_use_id: tool_id,
+                                                                    content: error_msg,
+                                                                    is_error: true,
+                                                                    metadata: Default::default(),
+                                                                });
+                                                                continue;
                                                             }
-                                                            // If no permission channel, assume auto-allow
                                                         }
                                                     }
 
@@ -4000,6 +4108,10 @@ impl QueryEngine {
                                                                                     Ok(o) => serde_json::Value::String(o.content.clone()),
                                                                                     Err(e) => serde_json::Value::String(format!("Error: {e}")),
                                                                                 };
+                                                                                let is_error = match &result {
+                                                                                    Ok(o) => o.is_error,
+                                                                                    Err(_) => true,
+                                                                                };
                                                                                 crate::query_engine::guard_nodes::publish_hook_trigger(
                                                                                     &session_bus,
                                                                                     "PostToolUse",
@@ -4007,6 +4119,7 @@ impl QueryEngine {
                                                                                         "tool_name": tool_name.clone(),
                                                                                         "input": effective_input.clone(),
                                                                                         "output": output_val,
+                                                                                        "is_error": is_error,
                                                                                     }),
                                                                                 );
                                                                             }
@@ -4176,6 +4289,10 @@ impl QueryEngine {
                                                                         Ok(o) => serde_json::Value::String(o.content.clone()),
                                                                         Err(e) => serde_json::Value::String(format!("Error: {e}")),
                                                                     };
+                                                                    let is_error = match &result {
+                                                                        Ok(o) => o.is_error,
+                                                                        Err(_) => true,
+                                                                    };
                                                                     crate::query_engine::guard_nodes::publish_hook_trigger(
                                                                         &session_bus,
                                                                         "PostToolUse",
@@ -4183,6 +4300,7 @@ impl QueryEngine {
                                                                             "tool_name": tool_name.clone(),
                                                                             "input": effective_input.clone(),
                                                                             "output": output_val,
+                                                                            "is_error": is_error,
                                                                         }),
                                                                     );
                                                                 }
@@ -4805,6 +4923,7 @@ impl QueryEngine {
                                                         messages: conversation.messages.clone(),
                                                     }));
 
+                                                publish_stop_trigger(&session_bus, tool_results.len());
                                                 let _ =
                                                     tx.send(Ok(QueryEvent::Completed { query_id }));
 
@@ -4812,15 +4931,74 @@ impl QueryEngine {
                                             }
                                         }
                                         StreamEvent::Error { message } => {
-                                            // Provider-reported mid-stream error,
-                                            // surfaced typed by the API layer
-                                            // (instead of failing the stream with
-                                            // InvalidResponse). Log so it is never
-                                            // silently swallowed; the stream ends
-                                            // right after it by provider design.
+                                            // N-3: provider-reported mid-stream error,
+                                            // surfaced typed by the API layer. Never
+                                            // book this as a success: retry retryable
+                                            // classes in place (same ladder as the A8
+                                            // timeout path below), else fail the query —
+                                            // even when partial text already streamed
+                                            // (a provider-cut tail is not a usable
+                                            // response; the old path recorded it as
+                                            // Completed and headless exited 0).
                                             tracing::warn!(
                                                 "LLM stream reported a provider error: {message}"
                                             );
+                                            if recovery::provider_error_retryable(&message)
+                                                && turn_retries_used < max_turn_retries
+                                            {
+                                                turn_retries_used += 1;
+                                                tracing::warn!(
+                                                    "Provider stream error is retryable; continuing turn {turn_retries_used}/{max_turn_retries}"
+                                                );
+                                                send_event!(
+                                                    tx,
+                                                    QueryEvent::Progress {
+                                                        query_id,
+                                                        message: format!(
+                                                            "Provider stream error (upstream); continuing turn {turn_retries_used}/{max_turn_retries}"
+                                                        ),
+                                                    }
+                                                );
+                                                recovery::push_turn_continuation_nudge(
+                                                    &mut conversation.messages,
+                                                );
+                                                continue 'agent_loop;
+                                            }
+                                            let has_partial = !assistant_text.is_empty()
+                                                || !assistant_tool_uses.is_empty();
+                                            if has_partial {
+                                                let mut blocks: Vec<ContentBlock> = Vec::new();
+                                                if !assistant_text.is_empty() {
+                                                    blocks.push(ContentBlock::Text {
+                                                        text: std::mem::take(&mut assistant_text),
+                                                    });
+                                                }
+                                                blocks.append(&mut assistant_tool_uses);
+                                                conversation.messages.push(Message {
+                                                    role: "assistant".to_string(),
+                                                    content: MessageContent::Blocks(blocks),
+                                                });
+                                                tracing::warn!(
+                                                    "Provider stream error after partial response — preserving content, failing query"
+                                                );
+                                                send_event!(
+                                                    tx,
+                                                    QueryEvent::ConversationUpdate {
+                                                        query_id,
+                                                        messages: conversation.messages.clone(),
+                                                    }
+                                                );
+                                            }
+                                            send_event!(
+                                                tx,
+                                                QueryEvent::Failed {
+                                                    query_id,
+                                                    error: format!(
+                                                        "Provider stream error: {message}"
+                                                    ),
+                                                }
+                                            );
+                                            return;
                                         }
                                         StreamEvent::MessageStop => {}
                                         StreamEvent::Ping => {}
@@ -4858,14 +5036,14 @@ impl QueryEngine {
                                                 ),
                                             }
                                         );
-                                        push_turn_continuation_nudge(&mut conversation.messages);
+                                        recovery::push_turn_continuation_nudge(&mut conversation.messages);
                                         continue 'agent_loop;
                                     } // A14: escalate the stream-idle watchdog budget so the
                                     // continuation attempt is not killed by the same 420s
                                     // base budget that killed the previous attempt (w7
                                     // csstree/expr/superjson — three consecutive runs all
                                     // died at exactly 421s = base + 1s).
-                                    escalate_stream_idle_override(
+                                    recovery::escalate_stream_idle_override(
                                         &client,
                                         stream_idle_base_secs,
                                         turn_retries_used,
@@ -4917,6 +5095,7 @@ impl QueryEngine {
                                                 messages: conversation.messages.clone(),
                                             }
                                         );
+                                        publish_stop_trigger(&session_bus, tool_results.len());
                                         send_event!(tx, QueryEvent::Completed { query_id });
 
                                         return;
@@ -5040,6 +5219,7 @@ impl QueryEngine {
                                                         messages: conversation.messages.clone(),
                                                     }
                                                 );
+                                                publish_stop_trigger(&session_bus, tool_results.len());
                                                 send_event!(tx, QueryEvent::Completed { query_id });
 
                                                 return;
@@ -5113,7 +5293,7 @@ impl QueryEngine {
                         turn_retries_used = 0;
                         // A14: clear any watchdog escalation so the next
                         // fresh turn starts from the base budget again.
-                        clear_stream_idle_override(&client);
+                        recovery::clear_stream_idle_override(&client);
 
                         // Parse-error recovery: when the model emitted a malformed
                         // tool_call (no text content, no successfully-parsed tool
@@ -5225,6 +5405,7 @@ impl QueryEngine {
                                     messages: conversation.messages.clone(),
                                 }
                             );
+                            publish_stop_trigger(&session_bus, tool_results.len());
                             send_event!(tx, QueryEvent::Completed { query_id });
 
                             return;
@@ -5386,6 +5567,7 @@ impl QueryEngine {
                                     messages: conversation.messages.clone(),
                                 }
                             );
+                            publish_stop_trigger(&session_bus, tool_results.len());
                             send_event!(tx, QueryEvent::Completed { query_id });
 
                             return;
@@ -5415,14 +5597,14 @@ impl QueryEngine {
                                     ),
                                 }
                             );
-                            push_turn_continuation_nudge(&mut conversation.messages);
+                            recovery::push_turn_continuation_nudge(&mut conversation.messages);
                             continue 'agent_loop;
                         } // A14: escalate the stream-idle watchdog budget so the
                         // continuation attempt is not killed by the same 420s
                         // base budget that killed the previous attempt (w7
                         // csstree/expr/superjson — three consecutive runs all
                         // died at exactly 421s = base + 1s).
-                        escalate_stream_idle_override(
+                        recovery::escalate_stream_idle_override(
                             &client,
                             stream_idle_base_secs,
                             turn_retries_used,
@@ -5528,6 +5710,10 @@ impl QueryEngine {
                                                                     .clone(),
                                                             }
                                                         );
+                                                        publish_stop_trigger(
+                                                            &session_bus,
+                                                            tool_results.len(),
+                                                        );
                                                         send_event!(
                                                             tx,
                                                             QueryEvent::Completed { query_id }
@@ -5583,6 +5769,7 @@ impl QueryEngine {
                                                 messages: conversation.messages.clone(),
                                             }
                                         );
+                                        publish_stop_trigger(&session_bus, tool_results.len());
                                         send_event!(tx, QueryEvent::Completed { query_id });
                                         return;
                                     }
@@ -5719,6 +5906,7 @@ impl QueryEngine {
                                             messages: conversation.messages.clone(),
                                         }
                                     );
+                                    publish_stop_trigger(&session_bus, tool_results.len());
                                     send_event!(tx, QueryEvent::Completed { query_id });
 
                                     return;
@@ -8060,13 +8248,13 @@ mod tests {
     #[test]
     fn test_set_effort_level() {
         let mut engine = create_test_engine();
-        assert!(engine.config.effort_level.is_none());
+        assert_eq!(engine.config.effort, EffortLevel::Standard);
 
-        engine.set_effort_level(Some("high".to_string()));
-        assert_eq!(engine.config.effort_level, Some("high".to_string()));
+        engine.set_effort(EffortLevel::High);
+        assert_eq!(engine.config.effort, EffortLevel::High);
 
-        engine.set_effort_level(None);
-        assert!(engine.config.effort_level.is_none());
+        engine.set_effort(EffortLevel::Standard);
+        assert_eq!(engine.config.effort, EffortLevel::Standard);
     }
 
     #[test]
@@ -8133,6 +8321,60 @@ mod tests {
         });
         assert_eq!(block.block_type, "text");
         assert!(block.cache_control.is_none());
+    }
+
+    #[test]
+    fn effort_suffix_standard_is_none() {
+        // Standard is the default: no suffix, byte-identical requests.
+        assert!(effort_system_suffix(EffortLevel::Standard).is_none());
+    }
+
+    #[test]
+    fn effort_suffix_low_content() {
+        let suffix = effort_system_suffix(EffortLevel::Low).expect("Low has a suffix");
+        assert!(suffix.contains("Be brief"));
+        assert!(suffix.contains("minimize exploration"));
+        assert!(suffix.contains("state assumptions"));
+    }
+
+    #[test]
+    fn effort_suffix_high_and_max_content() {
+        for level in [EffortLevel::High, EffortLevel::Max] {
+            let suffix = effort_system_suffix(level).expect("High/Max have a suffix");
+            assert!(suffix.contains("Think carefully and exhaustively"), "{suffix}");
+            assert!(suffix.contains("multi-step verification"), "{suffix}");
+        }
+    }
+
+    #[test]
+    fn effort_dial_sets_thinking_budgets_and_max_tokens_headroom() {
+        // The client-config build lives inside the producer; here we pin the
+        // dial's contract: High/Max budgets must stay below the raised
+        // max_tokens (budget + EFFORT_THINKING_HEADROOM_TOKENS), and a
+        // larger pre-set max_tokens is never lowered.
+        let default_max_tokens: u32 = 4_096;
+        for level in [EffortLevel::High, EffortLevel::Max] {
+            let budget = level.thinking_budget().expect("High/Max think");
+            let max_tokens = default_max_tokens.max(budget + EFFORT_THINKING_HEADROOM_TOKENS);
+            assert!(
+                max_tokens > budget,
+                "{level}: max_tokens ({max_tokens}) must exceed budget ({budget})"
+            );
+        }
+        // A pre-set max_tokens above the needed floor is preserved as-is.
+        let preset: u32 = 32_000;
+        let budget = EffortLevel::Max.thinking_budget().unwrap();
+        let needed = budget.saturating_add(EFFORT_THINKING_HEADROOM_TOKENS);
+        let max_tokens = preset.max(needed);
+        assert_eq!(max_tokens, preset);
+    }
+
+    #[test]
+    fn test_set_effort_updates_config() {
+        let mut engine = create_test_engine();
+        assert_eq!(engine.config.effort, EffortLevel::Standard);
+        engine.set_effort(EffortLevel::Max);
+        assert_eq!(engine.config.effort, EffortLevel::Max);
     }
 
     #[test]
@@ -8851,13 +9093,13 @@ mod tests {
         let saved = env::var("SHANNON_TURN_RETRIES").ok();
 
         unsafe { env::remove_var("SHANNON_TURN_RETRIES") };
-        assert_eq!(turn_retries_max(), 2, "unset must yield the default of 2");
+        assert_eq!(recovery::turn_retries_max(), 2, "unset must yield the default of 2");
 
         for garbage in ["0", "abc", "-1", " 3 "] {
             unsafe { env::set_var("SHANNON_TURN_RETRIES", garbage) };
             let expected = garbage.trim().parse::<u32>().unwrap_or(2);
             assert_eq!(
-                turn_retries_max(),
+                recovery::turn_retries_max(),
                 expected,
                 "SHANNON_TURN_RETRIES={garbage:?} must parse like SHANNON_RUN_RETRIES"
             );
@@ -8877,33 +9119,33 @@ mod tests {
     #[test]
     fn a14_stream_idle_escalation_math() {
         // base unset → never escalates.
-        assert_eq!(stream_idle_escalated_budget(None, 0), None);
-        assert_eq!(stream_idle_escalated_budget(None, 1), None);
+        assert_eq!(recovery::stream_idle_escalated_budget(None, 0), None);
+        assert_eq!(recovery::stream_idle_escalated_budget(None, 1), None);
 
         // retry 0 = original attempt = no override.
-        assert_eq!(stream_idle_escalated_budget(Some(420), 0), None);
+        assert_eq!(recovery::stream_idle_escalated_budget(Some(420), 0), None);
 
         // retry 1 = base × 2 = 840s.
         assert_eq!(
-            stream_idle_escalated_budget(Some(420), 1),
+            recovery::stream_idle_escalated_budget(Some(420), 1),
             Some(std::time::Duration::from_secs(840))
         );
 
         // retry 2 = base × 3 = 1260s, capped at 1200s.
         assert_eq!(
-            stream_idle_escalated_budget(Some(420), 2),
+            recovery::stream_idle_escalated_budget(Some(420), 2),
             Some(std::time::Duration::from_secs(1200))
         );
 
         // retry 10 would be huge but the cap holds.
         assert_eq!(
-            stream_idle_escalated_budget(Some(420), 10),
+            recovery::stream_idle_escalated_budget(Some(420), 10),
             Some(std::time::Duration::from_secs(1200))
         );
 
         // base below the cap is preserved (no spurious uplift).
         assert_eq!(
-            stream_idle_escalated_budget(Some(60), 1),
+            recovery::stream_idle_escalated_budget(Some(60), 1),
             Some(std::time::Duration::from_secs(120))
         );
     }
@@ -9124,10 +9366,11 @@ mod tests {
         assert!(!bodies[0].contains(nudge), "first attempt is nudge-free");
         assert_eq!(bodies[1].matches(nudge).count(), 1);
         assert!(
-            progress
-                .iter()
-                .any(|m| m
-                    .contains("Turn LLM call interrupted (upstream cutoff); continuing turn 1/2")),
+            progress.iter().any(|m| m.contains("continuing turn 1/2")
+                && (m.contains("Turn LLM call interrupted (upstream cutoff)")
+                    // N-3: provider-reported error events use their own
+                    // Progress wording but the same continuation ladder.
+                    || m.contains("Provider stream error (upstream)"))),
             "expected A8 Progress; got {progress:?}"
         );
         let history_text: String = history

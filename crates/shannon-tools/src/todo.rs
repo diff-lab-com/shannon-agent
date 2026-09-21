@@ -211,6 +211,127 @@ type TodoStore = Arc<RwLock<HashMap<String, Vec<TodoItem>>>>;
 /// Shared task store (shared across all tools)
 pub type TaskStore = Arc<RwLock<HashMap<String, TodoItem>>>;
 
+/// R1-3: one process-wide task store. TaskCreate/TaskUpdate/TaskGet/TaskList
+/// all default to this global, so an item created via one tool is visible to
+/// the others without explicit wiring. Persistence is layered on top: every
+/// mutation re-serializes the store to disk and the next process loads it.
+fn global_task_store() -> TaskStore {
+    use std::sync::OnceLock;
+    static STORE: OnceLock<TaskStore> = OnceLock::new();
+    STORE
+        .get_or_init(|| {
+            let store: TaskStore = Arc::new(RwLock::new(HashMap::new()));
+            if let Some(path) = todo_persist_path() {
+                if let Ok(bytes) = std::fs::read(&path) {
+                    if let Ok(items) = serde_json::from_slice::<Vec<TodoItem>>(&bytes) {
+                        if let Ok(mut guard) = store.write() {
+                            for item in items {
+                                guard.insert(item.task_id.clone(), item);
+                            }
+                        }
+                    }
+                }
+            }
+            store
+        })
+        .clone()
+}
+
+/// Resolve the per-process task-persistence path
+/// (`$SHANNON_HOME/todos/<fnv1a(cwd)>.json`; env override
+/// `SHANNON_TODO_PERSIST=0` disables).
+fn todo_persist_path() -> Option<std::path::PathBuf> {
+    if std::env::var("SHANNON_TODO_PERSIST")
+        .ok()
+        .map(|s| s == "0")
+        .unwrap_or(false)
+    {
+        return None;
+    }
+    let cwd = std::env::current_dir().ok()?;
+    let hash = fnv1a_64(cwd.to_string_lossy().as_bytes());
+    let home = if let Ok(custom) = std::env::var("SHANNON_HOME") {
+        std::path::PathBuf::from(custom)
+    } else {
+        dirs::home_dir()?.join(".shannon")
+    };
+    Some(home.join("todos").join(format!("{hash:016x}.json")))
+}
+
+/// R1-3: render the current todo/task checklist as a markdown block for the
+/// engine's reinjection path (memory/CLAUDE.md analog for tasks). Returns
+/// `None` when there's nothing to show.
+pub fn todo_reinjection_block() -> Option<String> {
+    let mut items: Vec<TodoItem> = Vec::new();
+    {
+        let store = global_task_store();
+        if let Ok(guard) = store.read() {
+            items.extend(guard.values().cloned());
+        }
+    }
+    if items.is_empty() {
+        return None;
+    }
+    let mut by_status = items
+        .into_iter()
+        .map(|t| {
+            let mark = match t.status {
+                TodoStatus::Pending => " ",
+                TodoStatus::InProgress => "~",
+                TodoStatus::Completed => "x",
+            };
+            let label = if t.subject.is_empty() {
+                t.content.clone()
+            } else {
+                t.subject.clone()
+            };
+            (mark, label)
+        })
+        .collect::<Vec<_>>();
+    by_status.sort_by(|a, b| a.0.cmp(&b.0).then(a.1.cmp(&b.1)));
+    let mut out = String::from("## Current Task List\n\n");
+    for (mark, label) in by_status {
+        out.push_str(&format!("- [{mark}] {label}\n"));
+    }
+    out.push_str("\n_Keep this list current via TodoWrite / TaskUpdate._\n");
+    Some(out)
+}
+
+/// Persist the current store contents to disk (atomic tmp+rename; log+swallow
+/// on error so a transient disk issue never fails a tool call).
+fn persist_todo_store(store: &TaskStore) {
+    let Some(path) = todo_persist_path() else {
+        return;
+    };
+    let items = match store.read() {
+        Ok(guard) => guard.values().cloned().collect::<Vec<_>>(),
+        Err(_) => return,
+    };
+    if let Some(parent) = path.parent() {
+        let _ = std::fs::create_dir_all(parent);
+    }
+    let tmp = path.with_extension("json.tmp");
+    let bytes = match serde_json::to_vec_pretty(&items) {
+        Ok(b) => b,
+        Err(_) => return,
+    };
+    if std::fs::write(&tmp, &bytes).is_err() {
+        return;
+    }
+    let _ = std::fs::rename(&tmp, &path);
+}
+
+const FNV_OFFSET: u64 = 0xcbf2_9ce4_8422_2325;
+const FNV_PRIME: u64 = 0x0000_0100_0000_01b3;
+fn fnv1a_64(bytes: &[u8]) -> u64 {
+    let mut h = FNV_OFFSET;
+    for b in bytes {
+        h ^= *b as u64;
+        h = h.wrapping_mul(FNV_PRIME);
+    }
+    h
+}
+
 /// Todo write tool
 pub struct TodoWriteTool {
     description: String,
@@ -400,7 +521,7 @@ impl TaskCreateTool {
         Self {
             description: "Create a new task with subject, description, and optional metadata"
                 .to_string(),
-            task_store: Arc::new(RwLock::new(HashMap::new())),
+            task_store: global_task_store(),
         }
     }
 
@@ -428,6 +549,7 @@ impl TaskCreateTool {
                 ToolError::ExecutionFailed(format!("Failed to acquire task store lock: {e}"))
             })?;
             store.insert(task_id.clone(), task);
+            persist_todo_store(&self.task_store);
         }
 
         Ok(TaskCreateOutput {
@@ -639,6 +761,7 @@ impl TaskUpdateTool {
         }
 
         let updated_task = task.clone();
+        persist_todo_store(&self.task_store);
 
         Ok(TaskUpdateOutput {
             task: updated_task,
@@ -1151,5 +1274,51 @@ mod tests {
         assert!(required.contains(&serde_json::json!("description")));
         assert!(!required.contains(&serde_json::json!("active_form")));
         assert!(!required.contains(&serde_json::json!("metadata")));
+    }
+
+    /// R1-3: an item inserted into the global task store is visible via the
+    /// reinjection helper (so a compacted session re-receives its checklist)
+    /// and the store respects a `None` reinjection when empty.
+    #[test]
+    fn reinjection_block_renders_tasks_and_returns_none_when_empty() {
+        // Empty store => None.
+        assert!(
+            todo_reinjection_block().is_none(),
+            "empty store must not produce a reinjection block"
+        );
+        // Seed two items into the global store and re-render.
+        let store = global_task_store();
+        {
+            let mut guard = store.write().expect("store lock");
+            guard.insert(
+                "task-1".to_string(),
+                TodoItem::with_details(
+                    "First task".to_string(),
+                    "First task".to_string(),
+                    None,
+                    None,
+                    Vec::new(),
+                ),
+            );
+            guard.insert(
+                "task-2".to_string(),
+                TodoItem::with_details(
+                    "Second task".to_string(),
+                    "Second task".to_string(),
+                    None,
+                    None,
+                    Vec::new(),
+                ),
+            );
+        }
+        let block = todo_reinjection_block().expect("populated store yields a block");
+        assert!(block.contains("## Current Task List"));
+        assert!(block.contains("First task"));
+        assert!(block.contains("Second task"));
+        // Clean up so other tests don't observe seeded state.
+        {
+            let mut guard = store.write().expect("store lock");
+            guard.clear();
+        }
     }
 }

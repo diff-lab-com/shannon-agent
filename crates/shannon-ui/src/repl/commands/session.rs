@@ -18,6 +18,69 @@ pub(crate) fn handle_sessions(repl: &mut Repl, _args: &str) -> Result<()> {
     Ok(())
 }
 
+/// `/search <query>` — full-text search across every stored session.
+///
+/// Read-only: skims each session's `events.jsonl` line-by-line via
+/// [`shannon_core::session_log::SessionStore::search_all_with_stats`] and
+/// renders the top hits (short session id + title/summary + timestamp +
+/// snippet), mirroring the other read-only inspectors (`/recall`, `/resume`).
+pub(crate) fn handle_search(repl: &mut Repl, args: &str) -> Result<()> {
+    let query = args.trim();
+    if query.is_empty() {
+        repl.chat.add_message(
+            ChatRole::System,
+            "Usage: /search <query>\n\nSearch every stored session's transcript (case-insensitive substring). Top hits show the session, time, and a snippet; use /resume <session-id> to open one.".to_string(),
+        );
+        return Ok(());
+    }
+
+    let outcome = repl
+        .l0_store()
+        .search_all_with_stats(query, shannon_core::session_log::DEFAULT_SEARCH_LIMIT);
+    let outcome = match outcome {
+        Ok(o) => o,
+        Err(e) => {
+            super::set_error(repl, &format!("searching sessions: {e}"));
+            return Ok(());
+        }
+    };
+
+    if outcome.hits.is_empty() {
+        repl.chat.add_message(
+            ChatRole::System,
+            format!(
+                "No matches for \"{query}\" (searched {} sessions).",
+                outcome.sessions_total
+            ),
+        );
+        return Ok(());
+    }
+
+    let mut out = format!(
+        "Found {} hit(s) for \"{}\" (searched {} of {} sessions):\n",
+        outcome.hits.len(),
+        query,
+        outcome.sessions_scanned,
+        outcome.sessions_total,
+    );
+    for hit in &outcome.hits {
+        let short_id = &hit.session_id[..hit.session_id.len().min(8)];
+        let label = hit
+            .title
+            .as_deref()
+            .or(hit.summary.as_deref())
+            .unwrap_or("Untitled");
+        let when = hit.timestamp.as_deref().unwrap_or("unknown time");
+        out.push_str(&format!(
+            "\n  [{short_id}] {label} ({when})\n    {}",
+            hit.snippet
+        ));
+    }
+    out.push_str("\n\nUse /resume <session-id> to open a session.");
+    repl.chat.add_message(ChatRole::System, out);
+    Ok(())
+}
+
 pub(crate) fn handle_resume(repl: &mut Repl, args: &str) -> Result<()> {
     let arg = args.trim();
     if arg.is_empty() {
@@ -1580,22 +1643,25 @@ pub(crate) fn handle_recap(repl: &mut Repl, _args: &str) -> Result<()> {
 /// /effort — Set or view the thinking effort level for the model.
 ///
 /// With no args: show current effort level.
-/// With args "low", "medium", "high": set the effort level.
+/// With args "low", "medium"/"standard", "high", "max": set the effort level.
+/// With "reset" or "off": clear back to the model default (`Standard`).
 pub(crate) fn handle_effort(repl: &mut Repl, args: &str) -> Result<()> {
-    let level = args.trim().to_lowercase();
+    let raw = args.trim();
 
-    if level.is_empty() {
+    if raw.is_empty() {
         match &repl.state.effort_level {
             Some(effort) => {
                 repl.chat.add_message(
                     ChatRole::System,
-                    format!("Current effort level: {effort}\nUsage: /effort <low|medium|high>"),
+                    format!(
+                        "Current effort level: {effort}\nUsage: /effort <low|standard|high|max>"
+                    ),
                 );
             }
             None => {
                 repl.chat.add_message(
                     ChatRole::System,
-                    "No effort level set (using model default).\nUsage: /effort <low|medium|high>"
+                    "No effort level set (using model default: standard).\nUsage: /effort <low|standard|high|max>"
                         .to_string(),
                 );
             }
@@ -1603,16 +1669,27 @@ pub(crate) fn handle_effort(repl: &mut Repl, args: &str) -> Result<()> {
         return Ok(());
     }
 
-    match level.as_str() {
-        "low" | "medium" | "high" => {
-            repl.state.effort_level = Some(level.clone());
+    if raw.eq_ignore_ascii_case("reset") || raw.eq_ignore_ascii_case("off") {
+        repl.state.effort_level = None;
+        repl.chat.add_message(
+            ChatRole::System,
+            "Effort level cleared (using model default: standard).".to_string(),
+        );
+        return Ok(());
+    }
+
+    // Case-insensitive parse via the engine's EffortLevel; the canonical
+    // lowercase name is stored so the status bar and config dump stay stable.
+    match raw.parse::<shannon_core::query_engine::EffortLevel>() {
+        Ok(level) => {
+            repl.state.effort_level = Some(level.to_string());
             repl.chat
                 .add_message(ChatRole::System, format!("Effort level set to: {level}"));
         }
-        _ => {
+        Err(_) => {
             repl.chat.add_message(
                 ChatRole::System,
-                "Invalid effort level. Use: low, medium, or high.".to_string(),
+                "Invalid effort level. Use: low, medium, standard, high, or max.".to_string(),
             );
         }
     }

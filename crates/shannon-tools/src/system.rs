@@ -920,13 +920,17 @@ pub struct BashTool {
     direct_process: Arc<dyn ProcessProvider>,
     /// Execution world with argv-level platform sandbox wrapping installed
     /// through the §4.11 spawn hook (`SandboxExecutorRewrite` over bwrap /
-    /// Seatbelt / Docker). `None` when no backend was detected.
+    /// Seatbelt / Docker). `None` when no backend was detected or the user
+    /// disabled sandboxing via `SHANNON_SANDBOX=off`.
     process_sandbox: Option<Arc<dyn ProcessProvider>>,
     /// §4.12 sandbox denial classifier: inspects a failed captured run of an
     /// enforcing world and, when it looks kernel-denied, yields structured
     /// `sandbox_denied` metadata for the L0 record. `None` = no enforcing
     /// world (the historical shape).
     denial_classifier: Option<crate::sandbox::DenialClassifier>,
+    /// Enforcement posture behind the structured `sandbox` metadata on
+    /// every result.
+    sandbox_posture: SandboxPosture,
 }
 
 impl Default for BashTool {
@@ -968,6 +972,72 @@ fn sandbox_failure_note(sandboxed: bool, output: &CommandOutput) -> Option<Strin
     )
 }
 
+/// Sandbox enforcement posture of a [`BashTool`] — drives the structured
+/// `sandbox` metadata stamped on every tool result.
+///
+/// The default posture is sandbox-on: when a platform backend is detected it
+/// is used without any opt-in. Unsandboxed execution is either a degraded
+/// host ([`SandboxPosture::Missing`], warned about loudly on every result)
+/// or an explicit [`SandboxPosture::OptedOut`] (`SHANNON_SANDBOX=off`).
+#[derive(Debug, Clone, PartialEq)]
+pub(crate) enum SandboxPosture {
+    /// A platform backend (bubblewrap/Seatbelt/Docker) wraps every command.
+    Active,
+    /// Detection ran but no backend exists: commands run unsandboxed and
+    /// every result carries the loud structured warning.
+    Missing,
+    /// Explicitly disabled via `SHANNON_SANDBOX=off`.
+    OptedOut,
+    /// No detection performed (plain constructor: sub-agent registries,
+    /// remote worlds). No sandbox metadata is emitted.
+    Undetected,
+}
+
+impl SandboxPosture {
+    /// Value of the structured `sandbox` metadata entry (`None` = emit
+    /// nothing).
+    fn metadata_label(&self) -> Option<&'static str> {
+        match self {
+            SandboxPosture::Active => Some("on"),
+            SandboxPosture::Missing | SandboxPosture::OptedOut => Some("off"),
+            SandboxPosture::Undetected => None,
+        }
+    }
+
+    /// One-line warning carried in the result metadata. `None` when the
+    /// posture needs no warning.
+    fn warning(&self) -> Option<&'static str> {
+        match self {
+            SandboxPosture::Missing => Some(
+                "Sandbox: OFF — no sandbox backend (bubblewrap/Seatbelt/Docker) was detected, \
+                 so commands run unsandboxed on the host. Shannon sandboxes by default when \
+                 a backend is available; set SHANNON_SANDBOX=off to disable sandboxing \
+                 explicitly.",
+            ),
+            SandboxPosture::OptedOut => Some(
+                "Sandbox: OFF — disabled via SHANNON_SANDBOX=off; commands run unsandboxed \
+                 on the host.",
+            ),
+            SandboxPosture::Active | SandboxPosture::Undetected => None,
+        }
+    }
+}
+
+/// Posture resolution from the detected backend type plus the
+/// `SHANNON_SANDBOX` env value (the explicit opt-out). Pure so tests can
+/// pin every combination without touching the host.
+pub(crate) fn resolve_sandbox_posture(
+    sandbox_type: SandboxType,
+    shannon_sandbox_env: Option<&str>,
+) -> SandboxPosture {
+    let backend_available = !matches!(sandbox_type, SandboxType::None);
+    match shannon_sandbox_env.map(str::trim).map(str::to_ascii_lowercase) {
+        Some(ref value) if value == "off" => SandboxPosture::OptedOut,
+        _ if backend_available => SandboxPosture::Active,
+        _ => SandboxPosture::Missing,
+    }
+}
+
 impl BashTool {
     /// Description advertised to the model. Shared by the plain and
     /// sandboxed constructors (runtime behavior differs; the contract is
@@ -984,7 +1054,9 @@ impl BashTool {
          is hard-capped at 600000. Long-running or server processes should\n\
          use RunBackground and be polled with WaitForLog. When a sandbox is\n\
          active the command runs with restricted filesystem/network access —\n\
-         the tool result reports denials."
+         the tool result reports denials. Sandboxing is applied by default\n\
+         when a platform sandbox backend is available; set SHANNON_SANDBOX=off\n\
+         to opt out."
     }
 
     pub fn new() -> Self {
@@ -994,6 +1066,10 @@ impl BashTool {
             direct_process: crate::defaults::process(),
             process_sandbox: None,
             denial_classifier: None,
+            // No detection was performed on this constructor (used for
+            // sub-agent registries / remote worlds) — emit no sandbox
+            // metadata rather than a misleading on/off.
+            sandbox_posture: SandboxPosture::Undetected,
         }
     }
 
@@ -1018,6 +1094,7 @@ impl BashTool {
             direct_process: crate::defaults::process(),
             process_sandbox: None,
             denial_classifier: None,
+            sandbox_posture: SandboxPosture::Active,
         }
     }
 
@@ -1033,8 +1110,10 @@ impl BashTool {
 
     /// Create a BashTool with a platform process sandbox (bwrap/Seatbelt/Docker).
     ///
-    /// The `SandboxExecutor` is auto-detected from the current platform.
-    /// If no sandbox backend is available, commands run unsandboxed.
+    /// Default-on posture: the auto-detected backend is used **without any
+    /// opt-in**; when no backend is available commands run unsandboxed and
+    /// every tool result carries a loud, structured `"sandbox": "off"`
+    /// warning. `SHANNON_SANDBOX=off` disables sandboxing explicitly.
     ///
     /// `SHANNON_SANDBOX_EXTRA_RO_MOUNTS` (colon-separated host directories) is
     /// added as extra read-only mounts on the Docker backend — the escape
@@ -1047,35 +1126,69 @@ impl BashTool {
                 config = config.readonly_mount(dir);
             }
         }
-        let executor = SandboxExecutor::new(config);
+        let env_override = std::env::var("SHANNON_SANDBOX").ok();
+        Self::with_detected_sandbox(SandboxExecutor::new(config), env_override.as_deref())
+    }
+
+    /// Assemble the tool from an already-constructed executor plus the
+    /// `SHANNON_SANDBOX` env value — the seam tests use to pin behavior per
+    /// detected backend without depending on the host's installed tooling.
+    pub(crate) fn with_detected_sandbox(
+        executor: SandboxExecutor,
+        shannon_sandbox_env: Option<&str>,
+    ) -> Self {
         let sandbox_type = executor.sandbox_type();
-        let has_sandbox = !matches!(sandbox_type, SandboxType::None);
+        let posture = resolve_sandbox_posture(sandbox_type, shannon_sandbox_env);
         // The legacy argv-level sandbox becomes a §4.11 SpawnRewrite installed
         // on a LocalProcess — identical wrapping, one seam further down.
-        let sandboxed_process: Option<Arc<dyn ProcessProvider>> = if has_sandbox {
-            Some(Arc::new(LocalProcess::with_rewrite(Arc::new(
+        let sandboxed_process: Option<Arc<dyn ProcessProvider>> = match posture {
+            SandboxPosture::Active => Some(Arc::new(LocalProcess::with_rewrite(Arc::new(
                 SandboxExecutorRewrite::new(Arc::new(executor)),
-            ))))
-        } else {
-            None
+            )))),
+            _ => None,
         };
         Self {
-            description: if has_sandbox {
-                format!(
+            description: match posture {
+                SandboxPosture::Active => format!(
                     "Executes bash commands (sandboxed via {sandbox_type}). Inside the \
                      sandbox the project is available at its mounted path (Docker: \
                      /workspace) and only the project plus /tmp are writable; paths \
                      outside the project are not visible and host toolchains may be \
                      absent — probe availability with `command -v <tool>` and adapt \
-                     instead of installing packages."
-                )
-            } else {
-                Self::default_description().to_string()
+                     instead of installing packages. Sandboxing is applied by default \
+                     when a backend is available; set SHANNON_SANDBOX=off to opt out."
+                ),
+                _ => Self::default_description().to_string(),
             },
             sandbox: None,
             direct_process: crate::defaults::process(),
             process_sandbox: sandboxed_process,
             denial_classifier: None,
+            sandbox_posture: posture,
+        }
+    }
+
+    /// Structured sandbox metadata for every result: `"sandbox"`:
+    /// `"on"|"off"` plus a one-line `"sandbox_warning"` whenever commands
+    /// run unsandboxed — so a degraded host is visible on every tool result,
+    /// not just in startup logs.
+    fn apply_sandbox_metadata(&self, map: &mut HashMap<String, serde_json::Value>) {
+        if let Some(label) = self.sandbox_posture.metadata_label() {
+            map.insert("sandbox".to_string(), json!(label));
+        }
+        if let Some(warning) = self.sandbox_posture.warning() {
+            map.insert("sandbox_warning".to_string(), json!(warning));
+        }
+    }
+
+    /// Content-suffix warning for the degraded (no-backend) posture. An
+    /// explicit `SHANNON_SANDBOX=off` stays metadata-only — the user chose
+    /// it — while a missing backend is warned about loudly in the content
+    /// the model reads.
+    fn sandbox_content_warning(&self) -> Option<String> {
+        match self.sandbox_posture {
+            SandboxPosture::Missing => self.sandbox_posture.warning().map(|w| format!("\n{w}")),
+            _ => None,
         }
     }
 
@@ -1302,12 +1415,18 @@ impl Tool for BashTool {
             }
         };
 
+        let sandbox_off_warning = self.sandbox_content_warning();
         let content = if output.success {
-            format!("{}{}", output.stdout, command_description)
+            format!(
+                "{}{}{}",
+                output.stdout,
+                command_description,
+                sandbox_off_warning.unwrap_or_default()
+            )
         } else {
             let sandbox_note = sandbox_failure_note(self.process_sandbox.is_some(), &output);
             format!(
-                "{}Command failed with exit code {}: {}{}{}",
+                "{}Command failed with exit code {}: {}{}{}{}",
                 command_description,
                 output.exit_code,
                 output.stderr,
@@ -1319,6 +1438,7 @@ impl Tool for BashTool {
                 sandbox_note
                     .map(|note| format!("\n{note}"))
                     .unwrap_or_default(),
+                sandbox_off_warning.unwrap_or_default(),
             )
         };
 
@@ -1337,6 +1457,10 @@ impl Tool for BashTool {
                 if !output.stderr.is_empty() {
                     map.insert("stderr".to_string(), json!(output.stderr));
                 }
+                // Structured sandbox posture: "sandbox": "on"|"off" (plus a
+                // one-line warning when off) on EVERY result — a degraded
+                // host is visible per-call, not just at startup.
+                self.apply_sandbox_metadata(&mut map);
                 // §4.12: kernel-denied operations of an enforcing world get
                 // the canonical classification so the L0 `tool/result.meta`
                 // records them.
@@ -1555,8 +1679,12 @@ impl BashTool {
         let exit_code = status.code.unwrap_or(-1);
         let success = status.success;
 
+        let sandbox_off_warning = self.sandbox_content_warning();
         let content = if success {
-            format!("{stdout_buf}{command_description}")
+            format!(
+                "{stdout_buf}{command_description}{}",
+                sandbox_off_warning.unwrap_or_default()
+            )
         } else {
             let sandbox_note = sandbox_failure_note(
                 self.process_sandbox.is_some(),
@@ -1568,7 +1696,7 @@ impl BashTool {
                 },
             );
             format!(
-                "{}Command failed with exit code {}: {}{}{}",
+                "{}Command failed with exit code {}: {}{}{}{}",
                 command_description,
                 exit_code,
                 stderr_buf,
@@ -1580,6 +1708,7 @@ impl BashTool {
                 sandbox_note
                     .map(|note| format!("\n{note}"))
                     .unwrap_or_default(),
+                sandbox_off_warning.unwrap_or_default(),
             )
         };
 
@@ -1598,6 +1727,8 @@ impl BashTool {
                 if !stderr_buf.is_empty() {
                     map.insert("stderr".to_string(), json!(stderr_buf));
                 }
+                // Same structured posture metadata as the captured path.
+                self.apply_sandbox_metadata(&mut map);
                 map
             },
         })
@@ -2011,6 +2142,144 @@ mod tests {
     }
 
     use super::*;
+
+    // ── Sandbox default-on posture (backend used without opt-in;
+    //    SHANNON_SANDBOX=off opts out; degraded hosts warn per result) ────
+
+    #[test]
+    fn sandbox_posture_is_active_by_default_when_backend_detected() {
+        assert_eq!(
+            resolve_sandbox_posture(SandboxType::Bubblewrap, None),
+            SandboxPosture::Active
+        );
+        assert_eq!(
+            resolve_sandbox_posture(SandboxType::Seatbelt, None),
+            SandboxPosture::Active
+        );
+        assert_eq!(
+            resolve_sandbox_posture(SandboxType::Docker, None),
+            SandboxPosture::Active
+        );
+        // Non-off env values keep the default-on posture.
+        assert_eq!(
+            resolve_sandbox_posture(SandboxType::Seatbelt, Some("local")),
+            SandboxPosture::Active
+        );
+    }
+
+    #[test]
+    fn sandbox_posture_is_missing_without_a_backend() {
+        assert_eq!(
+            resolve_sandbox_posture(SandboxType::None, None),
+            SandboxPosture::Missing
+        );
+    }
+
+    #[test]
+    fn sandbox_posture_env_off_overrides_an_available_backend() {
+        assert_eq!(
+            resolve_sandbox_posture(SandboxType::Bubblewrap, Some("off")),
+            SandboxPosture::OptedOut
+        );
+        // Case/whitespace tolerant, and off wins even with no backend.
+        assert_eq!(
+            resolve_sandbox_posture(SandboxType::None, Some(" OFF ")),
+            SandboxPosture::OptedOut
+        );
+    }
+
+    #[tokio::test]
+    async fn bash_without_backend_warns_in_metadata_and_content() {
+        let mut tool = BashTool::new();
+        tool.sandbox_posture = SandboxPosture::Missing; // degraded-host posture
+        let output = Tool::execute(&tool, json!({ "command": "echo hi" }))
+            .await
+            .unwrap();
+        assert_eq!(output.metadata["sandbox"], "off");
+        let warning = output.metadata["sandbox_warning"].as_str().unwrap();
+        assert!(warning.contains("no sandbox backend"), "{warning}");
+        assert!(
+            warning.contains("SHANNON_SANDBOX=off"),
+            "warning documents the opt-out: {warning}"
+        );
+        // Loud in the content too: the model reads the result, not the logs.
+        assert!(output.content.contains("Sandbox: OFF"), "{}", output.content);
+    }
+
+    #[tokio::test]
+    async fn bash_env_opt_out_reports_off_metadata_without_content_warning() {
+        let mut tool = BashTool::new();
+        tool.sandbox_posture = SandboxPosture::OptedOut; // explicit user choice
+        let output = Tool::execute(&tool, json!({ "command": "echo hi" }))
+            .await
+            .unwrap();
+        assert_eq!(output.metadata["sandbox"], "off");
+        assert!(
+            output.metadata["sandbox_warning"]
+                .as_str()
+                .unwrap()
+                .contains("SHANNON_SANDBOX=off")
+        );
+        assert!(
+            !output.content.contains("Sandbox: OFF"),
+            "an explicit opt-out must not spam every result: {}",
+            output.content
+        );
+    }
+
+    #[tokio::test]
+    async fn bash_active_posture_reports_on() {
+        let mut tool = BashTool::new();
+        tool.sandbox_posture = SandboxPosture::Active;
+        let output = Tool::execute(&tool, json!({ "command": "echo hi" }))
+            .await
+            .unwrap();
+        assert_eq!(output.metadata["sandbox"], "on");
+        assert!(output.metadata.get("sandbox_warning").is_none());
+        assert!(!output.content.contains("Sandbox: OFF"));
+    }
+
+    #[tokio::test]
+    async fn bash_undetected_posture_emits_no_sandbox_metadata() {
+        // Plain BashTool::new(): no detection ran, so no claim is made.
+        let tool = BashTool::new();
+        let output = Tool::execute(&tool, json!({ "command": "echo hi" }))
+            .await
+            .unwrap();
+        assert!(output.metadata.get("sandbox").is_none());
+    }
+
+    #[test]
+    fn with_detected_sandbox_honors_env_off_over_available_backend() {
+        let executor = SandboxExecutor::new(SandboxConfig::new("/tmp"));
+        let tool = BashTool::with_detected_sandbox(executor, Some("off"));
+        assert_eq!(tool.sandbox_posture, SandboxPosture::OptedOut);
+        assert!(
+            tool.process_sandbox.is_none(),
+            "SHANNON_SANDBOX=off must remove the argv-level sandbox"
+        );
+        assert_eq!(tool.description(), BashTool::default_description());
+    }
+
+    #[test]
+    fn with_detected_sandbox_installs_backend_by_default() {
+        // Host-shape-dependent like the other seam tests: on a backend-
+        // capable host the argv sandbox is installed with no opt-in; on a
+        // degraded host the posture degrades to Missing (never silently off).
+        let executor = SandboxExecutor::new(SandboxConfig::new("/tmp"));
+        let tool = BashTool::with_detected_sandbox(executor, None);
+        match tool.sandbox_posture {
+            SandboxPosture::Active => {
+                assert!(tool.process_sandbox.is_some());
+                assert!(tool.description.contains("sandboxed via"));
+                assert!(tool.description.contains("SHANNON_SANDBOX=off"));
+            }
+            SandboxPosture::Missing => {
+                assert!(tool.process_sandbox.is_none());
+            }
+            other => panic!("unexpected posture from detection: {other:?}"),
+        }
+    }
 
     // ── SandboxMode tests ──────────────────────────────────────────────
 

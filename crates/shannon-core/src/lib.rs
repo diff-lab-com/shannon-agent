@@ -260,7 +260,8 @@ pub use credential_manager::{
 };
 pub use housekeeping::{
     CacheRefreshTask, Housekeeper, HousekeepingConfig, HousekeepingError, HousekeepingTask,
-    LogRotationTask, OldSessionPruneTask, TaskResult, TempFileCleanupTask,
+    LogRotationTask, OldSessionPruneTask, SessionLogRetentionTask, SessionRetentionConfig,
+    SessionUsage, TaskResult, TempFileCleanupTask, plan_session_retention, scan_session_usage,
 };
 pub use lsp::{
     DiscoveredServer, LspClient, LspClientError, LspConfig, LspManager, LspResult, ServerConfig,

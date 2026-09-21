@@ -76,10 +76,11 @@ each in its own git worktree, and create a PR for each.
 
 ## Context
 
-- Current git status: !`git status --short`
-- Current branch: !`git branch --show-current`
-- Default branch: !`git remote show origin | head -5`
-- Existing worktrees: !`git worktree list`
+Run these git commands yourself first (Shannon does not pre-execute them for you):
+- `git status --short` — current working-tree state (validate the repo is clean before starting)
+- `git branch --show-current` — current branch
+- `git remote show origin` — default branch (HEAD line)
+- `git worktree list` — existing worktrees
 - User's tasks: {tasks}
 
 ## Step 1: Decompose Tasks
@@ -216,5 +217,26 @@ mod tests {
             }
             _ => panic!("Expected Prompt command"),
         }
+    }
+
+    /// Shannon does not implement Claude-Code `!`cmd`` interpolation: the
+    /// literal text would reach the model (the same drift /commit had).
+    /// The template must instruct the model to run the git context commands
+    /// itself instead — pin both halves so it cannot regress quietly.
+    #[test]
+    fn test_batch_prompt_has_no_bang_interpolation() {
+        assert!(
+            !BATCH_PROMPT.contains("!`"),
+            "batch template must not contain unimplemented !`...` interpolation"
+        );
+        assert!(
+            BATCH_PROMPT.contains("Run these git commands yourself first"),
+            "batch template must tell the model to gather git context itself"
+        );
+        // Each formerly-interpolated command survives as an instruction.
+        assert!(BATCH_PROMPT.contains("`git status --short`"));
+        assert!(BATCH_PROMPT.contains("`git branch --show-current`"));
+        assert!(BATCH_PROMPT.contains("`git remote show origin`"));
+        assert!(BATCH_PROMPT.contains("`git worktree list`"));
     }
 }

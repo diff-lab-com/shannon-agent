@@ -75,7 +75,29 @@ fn capture_turn_snapshots(files: &[String], turn_index: usize) {
         return;
     };
     let mut manager = shannon_tools::FileHistoryManager::new(config);
+    maybe_run_file_history_housekeeping(&mut manager);
     capture_turn_snapshots_with(&mut manager, files, turn_index);
+}
+
+/// N-8: run file-history housekeeping (TTL sweep + snapshot-cap enforcement —
+/// `cleanup_old_snapshots` previously had zero production callers, and quota
+/// exhaustion used to silently stop checkpointing) throttled to once per day
+/// per process. The post-turn snapshot hook is the natural caller: it already
+/// builds a manager over the on-disk history dir.
+fn maybe_run_file_history_housekeeping(manager: &mut shannon_tools::FileHistoryManager) {
+    use std::sync::atomic::{AtomicU64, Ordering};
+    static LAST_RUN_SECS: AtomicU64 = AtomicU64::new(0);
+    const DAY_SECS: u64 = 24 * 3600;
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs())
+        .unwrap_or(0);
+    let last = LAST_RUN_SECS.load(Ordering::Relaxed);
+    if last != 0 && now.saturating_sub(last) < DAY_SECS {
+        return;
+    }
+    LAST_RUN_SECS.store(now, Ordering::Relaxed);
+    manager.run_housekeeping();
 }
 
 /// Wrap a single line to fit within `max_width` columns, breaking at char boundaries.
@@ -295,7 +317,13 @@ pub fn handle_query(repl: &mut Repl, input: &str, terminal: &mut Option<&mut Ter
     repl.state.context_window = query_engine.resolved_context_window();
 
     // Sync effort_level and focus_area from REPL state into the query engine
-    query_engine.set_effort_level(repl.state.effort_level.clone());
+    query_engine.set_effort(
+        repl.state
+            .effort_level
+            .as_deref()
+            .and_then(|s| shannon_core::query_engine::EffortLevel::parse(s))
+            .unwrap_or_default(),
+    );
     query_engine.set_focus_area(repl.state.focus_area.clone());
     // Sync the session goal (/goal) so its system block is injected this query
     query_engine.set_goal(repl.state.goal.as_ref().and_then(|g| g.to_spec()));

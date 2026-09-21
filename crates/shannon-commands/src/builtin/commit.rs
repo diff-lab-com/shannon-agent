@@ -71,18 +71,20 @@ pub fn get_prompt_template(default_branch: &str, attribution: bool) -> String {
     format!(
         r##"## Context
 
-- Current git status: !`git status`
-- Current git diff (staged and unstaged changes): !`git diff HEAD`
-- Current branch: !`git branch --show-current`
+Run these git commands yourself first (Shannon does not pre-execute them for you):
+- `git status` — current working-tree state
+- `git diff HEAD` — staged and unstaged changes
+- `git branch --show-current` — current branch
+- `git log --oneline -10` — recent commits
+
 - Default branch: {default_branch}
-- Recent commits: !`git log --oneline -10`
 {GIT_SAFETY}
 ## Your task
 
-Based on the above changes, create a single git commit:
+Run `git log --oneline -10` and `git diff HEAD` yourself, then draft the message from the actual staged changes:
 
 1. Analyze all staged changes and draft a commit message:
-   - Look at the recent commits above to follow this repository's commit message style
+   - Look at the recent commits you ran to follow this repository's commit message style
    - Summarize the nature of the changes (new feature, enhancement, bug fix, refactoring, test, docs, etc.)
    - Ensure the message accurately reflects the changes and their purpose (i.e. "add" means a wholly new feature, "update" means an enhancement to an existing feature, "fix" means a bug fix, etc.)
    - Draft a concise (1-2 sentences) commit message that focuses on the "why" rather than the "what"
@@ -153,6 +155,17 @@ mod tests {
         let prompt = get_prompt_template("main", true);
         assert!(prompt.contains("Git Safety Protocol"));
         assert!(prompt.contains("Co-Authored-By"));
+        // Shannon does not implement Claude-Code `!`cmd`` interpolation: the
+        // literal text would reach the model. The template must instruct the
+        // model to run the commands itself instead.
+        assert!(
+            !prompt.contains("!`"),
+            "commit template must not contain unimplemented !`...` interpolation"
+        );
+        assert!(
+            prompt.contains("Run `git log --oneline -10` and `git diff HEAD` yourself"),
+            "commit template must tell the model to gather git context itself"
+        );
     }
 
     #[test]

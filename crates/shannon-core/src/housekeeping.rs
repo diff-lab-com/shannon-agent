@@ -28,7 +28,7 @@
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
-use std::time::Duration;
+use std::time::{Duration, SystemTime};
 
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
@@ -125,6 +125,9 @@ pub struct HousekeepingConfig {
     pub session_prune_interval: Option<Duration>,
     /// Interval for log rotation.
     pub log_rotation_interval: Option<Duration>,
+    /// Interval for session-log retention (GC over `sessions/`).
+    #[serde(default)]
+    pub session_retention_interval: Option<Duration>,
     /// Custom intervals for other tasks (name -> duration in seconds).
     pub custom_intervals: HashMap<String, u64>,
 }
@@ -136,6 +139,7 @@ impl Default for HousekeepingConfig {
             cache_refresh_interval: Some(Duration::from_secs(24 * 60 * 60)), // 24 hours
             session_prune_interval: Some(Duration::from_secs(24 * 60 * 60)), // 24 hours
             log_rotation_interval: Some(Duration::from_secs(24 * 60 * 60)), // 24 hours
+            session_retention_interval: Some(Duration::from_secs(24 * 60 * 60)), // 24 hours
             custom_intervals: HashMap::new(),
         }
     }
@@ -359,6 +363,329 @@ impl HousekeepingTask for LogRotationTask {
 }
 
 // ============================================================================
+// Session Log Retention (GC over the `sessions/` container)
+// ============================================================================
+
+/// One GiB, the unit of `SHANNON_SESSION_RETENTION_MAX_GB`.
+const GIB: u64 = 1024 * 1024 * 1024;
+
+/// Retention policy for stored session logs
+/// ([`SessionLogRetentionTask`]).
+///
+/// Defaults: 30 days, 5 GiB — overridable via the
+/// `SHANNON_SESSION_RETENTION_DAYS` / `SHANNON_SESSION_RETENTION_MAX_GB`
+/// environment variables.
+#[derive(Debug, Clone, PartialEq)]
+pub struct SessionRetentionConfig {
+    /// Sessions whose last activity is newer than this are never deleted,
+    /// no matter how far over budget the container is (the conservative
+    /// half of the rule).
+    pub retention_days: u64,
+    /// Total byte budget for the sessions container. Over budget, the
+    /// oldest past-retention sessions are deleted until the projected
+    /// total fits again.
+    pub max_bytes: u64,
+}
+
+impl Default for SessionRetentionConfig {
+    fn default() -> Self {
+        Self {
+            retention_days: 30,
+            max_bytes: 5 * GIB,
+        }
+    }
+}
+
+impl SessionRetentionConfig {
+    /// Resolve the policy from the environment, falling back to
+    /// [`SessionRetentionConfig::default`] per unparsable/absent variable.
+    pub fn from_env() -> Self {
+        let mut config = Self::default();
+        if let Ok(raw) = std::env::var("SHANNON_SESSION_RETENTION_DAYS") {
+            match raw.trim().parse::<u64>() {
+                Ok(days) => config.retention_days = days,
+                Err(_) => warn!(
+                    value = %raw,
+                    "SHANNON_SESSION_RETENTION_DAYS is not a number; using default \
+                     ({} days)",
+                    config.retention_days
+                ),
+            }
+        }
+        if let Ok(raw) = std::env::var("SHANNON_SESSION_RETENTION_MAX_GB") {
+            match raw.trim().parse::<f64>() {
+                Ok(gb) if gb.is_finite() && gb >= 0.0 => {
+                    config.max_bytes = (gb * GIB as f64) as u64;
+                }
+                _ => warn!(
+                    value = %raw,
+                    "SHANNON_SESSION_RETENTION_MAX_GB is not a number; using default \
+                     ({} GiB)",
+                    config.max_bytes / GIB
+                ),
+            }
+        }
+        config
+    }
+}
+
+/// Per-session disk-usage snapshot feeding the retention planner.
+#[derive(Debug, Clone, PartialEq)]
+pub struct SessionUsage {
+    /// Session id (the directory name under the container).
+    pub session_id: String,
+    /// The session directory itself (`<container>/<id>/`).
+    pub dir: PathBuf,
+    /// Total bytes of the session's files.
+    pub size_bytes: u64,
+    /// Last activity: the later of the directory and `events.jsonl` mtimes.
+    pub last_modified: SystemTime,
+}
+
+/// Size of one session directory. Prefers the E-9 index sidecar's `log_len`
+/// when it still validates against `events.jsonl` (an authoritative total
+/// without re-reading); otherwise stats each file directly. Sidecars
+/// (`meta.json`, `index.json`) are tiny but counted.
+fn session_dir_usage(entry: &crate::session_log::SessionScanEntry) -> u64 {
+    let index_path = crate::session_log::session_index::index_path_for(&entry.events_path);
+    let indexed_len =
+        crate::session_log::SessionIndex::load_if_valid(&entry.events_path, &index_path)
+            .map(|i| i.log_len);
+    let Some(dir) = entry.events_path.parent() else {
+        return 0;
+    };
+    let mut total = 0u64;
+    for file in std::fs::read_dir(dir).into_iter().flatten().flatten() {
+        let Ok(meta) = file.metadata() else {
+            continue;
+        };
+        if !meta.is_file() {
+            continue;
+        }
+        let path = file.path();
+        if path == entry.events_path {
+            total += indexed_len.unwrap_or_else(|| meta.len());
+        } else {
+            total += meta.len();
+        }
+    }
+    total
+}
+
+/// Scan a sessions container for per-session usage, oldest activity first.
+///
+/// Only UUID-named directories with an `events.jsonl` are considered —
+/// housekeeping GC never touches foreign siblings.
+pub fn scan_session_usage(sessions_dir: &Path) -> Vec<SessionUsage> {
+    let mut usage: Vec<SessionUsage> = crate::session_log::scan_session_summaries(sessions_dir)
+        .into_iter()
+        .filter(|entry| uuid::Uuid::parse_str(&entry.session_id).is_ok())
+        .map(|entry| {
+            let events_mtime = entry
+                .events_path
+                .metadata()
+                .and_then(|m| m.modified())
+                .unwrap_or(SystemTime::UNIX_EPOCH);
+            let dir_mtime = entry
+                .events_path
+                .parent()
+                .and_then(|d| d.metadata().ok())
+                .and_then(|m| m.modified().ok())
+                .unwrap_or(SystemTime::UNIX_EPOCH);
+            SessionUsage {
+                session_id: entry.session_id.clone(),
+                dir: entry.events_path.parent().unwrap_or(Path::new(".")).to_path_buf(),
+                size_bytes: session_dir_usage(&entry),
+                last_modified: events_mtime.max(dir_mtime),
+            }
+        })
+        .collect();
+    usage.sort_by_key(|u| u.last_modified); // oldest first
+    usage
+}
+
+/// Pure retention planner: which sessions to delete so the container fits
+/// its budget.
+///
+/// Deliberately conservative — a session is deleted only when it is **both**
+/// past `retention_days` since its last activity **and** the container
+/// exceeds `max_bytes` (retention-days alone never deletes anything).
+/// Candidates go oldest-activity-first until the projected total fits the
+/// budget or the candidates run out. Returns the deletions in that order.
+pub fn plan_session_retention(
+    usage: &[SessionUsage],
+    config: &SessionRetentionConfig,
+    now: SystemTime,
+) -> Vec<SessionUsage> {
+    let total: u64 = usage.iter().map(|u| u.size_bytes).sum();
+    if total <= config.max_bytes {
+        return Vec::new();
+    }
+    let day_secs = config
+        .retention_days
+        .checked_mul(24 * 60 * 60)
+        .unwrap_or(u64::MAX);
+    let cutoff = now
+        .checked_sub(Duration::from_secs(day_secs))
+        .unwrap_or(SystemTime::UNIX_EPOCH);
+    // Oldest activity first, regardless of the caller's input order.
+    let mut candidates: Vec<&SessionUsage> =
+        usage.iter().filter(|u| u.last_modified < cutoff).collect();
+    candidates.sort_by_key(|u| u.last_modified);
+    let mut projected = total;
+    let mut deletions = Vec::new();
+    for session in candidates {
+        if projected <= config.max_bytes {
+            break;
+        }
+        projected = projected.saturating_sub(session.size_bytes);
+        deletions.push(session.clone());
+    }
+    deletions
+}
+
+/// Human-readable byte size for task messages ("8.00 MiB", "1.50 GiB").
+fn human_bytes(bytes: u64) -> String {
+    if bytes >= GIB {
+        format!("{:.2} GiB", bytes as f64 / GIB as f64)
+    } else if bytes >= 1024 * 1024 {
+        format!("{:.2} MiB", bytes as f64 / (1024 * 1024) as f64)
+    } else if bytes >= 1024 {
+        format!("{:.2} KiB", bytes as f64 / 1024.0)
+    } else {
+        format!("{bytes} B")
+    }
+}
+
+/// Delete whole session directories. Returns `(removed, bytes_freed)` —
+/// every successful deletion is logged individually (id + bytes) and the
+/// totals are logged by the caller.
+fn delete_session_dirs(deletions: &[SessionUsage]) -> (usize, u64) {
+    let mut removed = 0usize;
+    let mut freed = 0u64;
+    for deletion in deletions {
+        match std::fs::remove_dir_all(&deletion.dir) {
+            Ok(()) => {
+                removed += 1;
+                freed += deletion.size_bytes;
+                info!(
+                    session_id = %deletion.session_id,
+                    bytes = deletion.size_bytes,
+                    "session log retention: deleted session directory"
+                );
+            }
+            Err(e) => {
+                warn!(
+                    session_id = %deletion.session_id,
+                    dir = %deletion.dir.display(),
+                    error = %e,
+                    "session log retention: failed to delete session directory"
+                );
+            }
+        }
+    }
+    (removed, freed)
+}
+
+/// Session log GC: enforces the session retention policy over the sessions
+/// container (`<base>/sessions`).
+///
+/// Policy comes from `SHANNON_SESSION_RETENTION_DAYS` (default 30) and
+/// `SHANNON_SESSION_RETENTION_MAX_GB` (default 5), unless overridden with
+/// [`SessionLogRetentionTask::with_config`] (tests, embedders).
+///
+/// Housekeeping runs offline — no caller of this module holds an
+/// active-session handle to exempt, so planning exempts nothing. The
+/// retention-days gate is what keeps in-use data safe: a session younger
+/// than the window is never a deletion candidate, and over-budget deletion
+/// stops at recent sessions.
+pub struct SessionLogRetentionTask {
+    override_config: Option<SessionRetentionConfig>,
+}
+
+impl SessionLogRetentionTask {
+    /// Environment-driven configuration.
+    pub fn new() -> Self {
+        Self {
+            override_config: None,
+        }
+    }
+
+    /// Pin the policy explicitly (tests, embedders).
+    pub fn with_config(config: SessionRetentionConfig) -> Self {
+        Self {
+            override_config: Some(config),
+        }
+    }
+
+    fn effective_config(&self) -> SessionRetentionConfig {
+        self.override_config
+            .clone()
+            .unwrap_or_else(SessionRetentionConfig::from_env)
+    }
+}
+
+impl Default for SessionLogRetentionTask {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl HousekeepingTask for SessionLogRetentionTask {
+    fn name(&self) -> &str {
+        "session_log_retention"
+    }
+
+    fn description(&self) -> &str {
+        "Delete whole session directories older than the retention window, \
+         oldest first, only while the sessions container exceeds its size budget"
+    }
+
+    fn default_interval(&self) -> Duration {
+        Duration::from_secs(24 * 60 * 60) // 24 hours
+    }
+
+    fn execute(&self, base_dir: &Path) -> Result<(String, Option<usize>), String> {
+        let config = self.effective_config();
+        let sessions_dir = base_dir.join("sessions");
+        if !sessions_dir.exists() {
+            return Ok(("No sessions directory found".to_string(), Some(0)));
+        }
+
+        let usage = scan_session_usage(&sessions_dir);
+        let total: u64 = usage.iter().map(|u| u.size_bytes).sum();
+        let deletions = plan_session_retention(&usage, &config, std::time::SystemTime::now());
+
+        if deletions.is_empty() {
+            let msg = format!(
+                "Session logs within policy: {} session(s), {} / {} budget",
+                usage.len(),
+                human_bytes(total),
+                human_bytes(config.max_bytes),
+            );
+            return Ok((msg, Some(0)));
+        }
+
+        let (removed, freed) = delete_session_dirs(&deletions);
+        info!(
+            deleted_sessions = removed,
+            bytes_freed = freed,
+            retention_days = config.retention_days,
+            budget_bytes = config.max_bytes,
+            container_bytes_before = total,
+            "session log retention: pruned old session logs"
+        );
+        let msg = format!(
+            "Deleted {removed} old session(s), freed {} (container was {} / {} budget)",
+            human_bytes(freed),
+            human_bytes(total),
+            human_bytes(config.max_bytes),
+        );
+        Ok((msg, Some(removed)))
+    }
+}
+
+// ============================================================================
 // Housekeeper
 // ============================================================================
 
@@ -422,6 +749,7 @@ impl Housekeeper {
         self.register_task(Box::new(CacheRefreshTask));
         self.register_task(Box::new(OldSessionPruneTask));
         self.register_task(Box::new(LogRotationTask));
+        self.register_task(Box::new(SessionLogRetentionTask::new()));
     }
 
     /// Register a custom housekeeping task.
@@ -450,6 +778,7 @@ impl Housekeeper {
             "cache_refresh" => self.config.cache_refresh_interval.unwrap_or(default),
             "old_session_prune" => self.config.session_prune_interval.unwrap_or(default),
             "log_rotation" => self.config.log_rotation_interval.unwrap_or(default),
+            "session_log_retention" => self.config.session_retention_interval.unwrap_or(default),
             _ => self
                 .config
                 .custom_intervals
@@ -765,7 +1094,7 @@ mod tests {
     fn test_register_builtin_tasks() {
         let mut keeper = housekeeper();
         keeper.register_builtin_tasks();
-        assert_eq!(keeper.task_count(), 4);
+        assert_eq!(keeper.task_count(), 5);
     }
 
     #[test]
@@ -841,7 +1170,7 @@ mod tests {
         keeper.register_builtin_tasks();
 
         let results = keeper.run_all();
-        assert_eq!(results.len(), 4);
+        assert_eq!(results.len(), 5);
         for result in results.values() {
             assert!(result.success);
         }
@@ -854,7 +1183,7 @@ mod tests {
 
         // First run.
         let results1 = keeper.run_all();
-        assert_eq!(results1.len(), 4);
+        assert_eq!(results1.len(), 5);
 
         // Second run should skip everything.
         let results2 = keeper.run_all();
@@ -868,7 +1197,7 @@ mod tests {
 
         keeper.run_all();
         let results = keeper.run_all_forced();
-        assert_eq!(results.len(), 4);
+        assert_eq!(results.len(), 5);
     }
 
     #[test]
@@ -877,7 +1206,7 @@ mod tests {
         keeper.register_builtin_tasks();
 
         let due = keeper.due_tasks();
-        assert_eq!(due.len(), 4);
+        assert_eq!(due.len(), 5);
 
         keeper.run_all();
         let due_after = keeper.due_tasks();
@@ -893,6 +1222,7 @@ mod tests {
         assert!(tasks.contains(&"cache_refresh"));
         assert!(tasks.contains(&"old_session_prune"));
         assert!(tasks.contains(&"log_rotation"));
+        assert!(tasks.contains(&"session_log_retention"));
     }
 
     #[test]
@@ -923,5 +1253,209 @@ mod tests {
         let display = format!("{result}");
         assert!(display.contains("[FAILED]"));
         assert!(display.contains("fail_task"));
+    }
+
+    // -----------------------------------------------------------------------
+    // Session log retention (session log GC)
+    // -----------------------------------------------------------------------
+
+    /// One MiB.
+    const MIB: u64 = 1024 * 1024;
+    /// Fixed "now" for planner tests: some instant after every fixture time.
+    const PLAN_NOW_SECS: u64 = 10_000_000;
+
+    fn fixture_usage(id: &str, size_bytes: u64, last_modified_secs: u64) -> SessionUsage {
+        SessionUsage {
+            session_id: id.to_string(),
+            dir: PathBuf::from(format!("/nonexistent/{id}")),
+            size_bytes: size_bytes,
+            last_modified: SystemTime::UNIX_EPOCH + Duration::from_secs(last_modified_secs),
+        }
+    }
+
+    fn plan_config(days: u64, max_gib: u64) -> SessionRetentionConfig {
+        SessionRetentionConfig {
+            retention_days: days,
+            max_bytes: max_gib * GIB,
+        }
+    }
+
+    fn plan_now() -> SystemTime {
+        SystemTime::UNIX_EPOCH + Duration::from_secs(PLAN_NOW_SECS)
+    }
+
+    fn days_before_now(days: u64) -> u64 {
+        PLAN_NOW_SECS.saturating_sub(days * 24 * 60 * 60)
+    }
+
+    #[test]
+    fn plan_deletes_oldest_past_retention_first_until_under_budget() {
+        // Container: 3 GiB old (40d) + 2 GiB mid (35d) + 1 GiB recent (1d);
+        // budget 4 GiB → over by 2 GiB. Only the two old sessions are
+        // eligible; deleting the oldest (3 GiB) alone restores the budget,
+        // so the mid one must survive.
+        let usage = vec![
+            fixture_usage("recent", 1 * GIB, days_before_now(1)),
+            fixture_usage("mid", 2 * GIB, days_before_now(35)),
+            fixture_usage("oldest", 3 * GIB, days_before_now(40)),
+        ];
+        let plan = plan_session_retention(&usage, &plan_config(30, 4), plan_now());
+        let ids: Vec<&str> = plan.iter().map(|u| u.session_id.as_str()).collect();
+        assert_eq!(ids, vec!["oldest"], "single oldest-first deletion that fits");
+    }
+
+    #[test]
+    fn plan_deletes_multiple_oldest_first_when_needed() {
+        let usage = vec![
+            fixture_usage("recent", GIB, days_before_now(1)),
+            fixture_usage("old-b", 2 * GIB, days_before_now(31)),
+            fixture_usage("old-a", 3 * GIB, days_before_now(45)),
+        ];
+        // Budget 2 GiB: 6 GiB total → even after old-a (3 GiB) + old-b
+        // (2 GiB) the projected 1 GiB fits; both old sessions go, oldest first.
+        let plan = plan_session_retention(&usage, &plan_config(30, 2), plan_now());
+        let ids: Vec<&str> = plan.iter().map(|u| u.session_id.as_str()).collect();
+        assert_eq!(ids, vec!["old-a", "old-b"]);
+    }
+
+    #[test]
+    fn plan_under_budget_deletes_nothing_even_if_ancient() {
+        let usage = vec![
+            fixture_usage("ancient", GIB, days_before_now(400)),
+            fixture_usage("old", 2 * GIB, days_before_now(60)),
+        ];
+        // 3 GiB total ≤ 4 GiB budget: retention-days alone deletes nothing.
+        let plan = plan_session_retention(&usage, &plan_config(30, 4), plan_now());
+        assert!(plan.is_empty(), "size-budget-driven: nothing over budget");
+    }
+
+    #[test]
+    fn plan_keeps_recent_sessions_even_when_over_budget() {
+        let usage = vec![
+            fixture_usage("yesterday", 3 * GIB, days_before_now(1)),
+            fixture_usage("week-ago", 3 * GIB, days_before_now(7)),
+            fixture_usage("edge", 1 * GIB, days_before_now(29)),
+        ];
+        // 7 GiB over a 4 GiB budget, but every session is inside the 30-day
+        // window — the conservative rule keeps all of them.
+        let plan = plan_session_retention(&usage, &plan_config(30, 4), plan_now());
+        assert!(plan.is_empty(), "recent sessions are never candidates");
+    }
+
+    #[test]
+    fn plan_zero_retention_days_makes_everything_eligible() {
+        let usage = vec![
+            fixture_usage("newest", GIB, PLAN_NOW_SECS - 60),
+            fixture_usage("older", 4 * GIB, days_before_now(2)),
+        ];
+        let plan = plan_session_retention(&usage, &plan_config(0, 1), plan_now());
+        let ids: Vec<&str> = plan.iter().map(|u| u.session_id.as_str()).collect();
+        assert_eq!(ids, vec!["older"], "newest survives; budget restored");
+    }
+
+    /// Build a real session directory under `container` with an
+    /// `events.jsonl` of `size_bytes` and a last-modified stamp `age_secs`
+    /// in the past (relative to the real clock).
+    fn seed_real_session(
+        container: &Path,
+        id: &uuid::Uuid,
+        size_bytes: u64,
+        age_secs: u64,
+    ) -> PathBuf {
+        let dir = container.join(id.to_string());
+        std::fs::create_dir_all(&dir).unwrap();
+        let log = dir.join("events.jsonl");
+        std::fs::write(&log, vec![b'x'; size_bytes as usize]).unwrap();
+        // Backdate both the file and the directory (File::set_modified works
+        // through a read-only handle; the write happened just above).
+        let old = std::time::SystemTime::now() - Duration::from_secs(age_secs);
+        std::fs::File::open(&log).unwrap().set_modified(old).unwrap();
+        std::fs::File::open(&dir).unwrap().set_modified(old).unwrap();
+        dir
+    }
+
+    #[test]
+    fn scan_session_usage_sizes_and_orders_oldest_first() {
+        let tmp = tempfile::tempdir().unwrap();
+        let container = tmp.path().join("sessions");
+        std::fs::create_dir_all(&container).unwrap();
+        let small_id = uuid::Uuid::new_v4();
+        let big_id = uuid::Uuid::new_v4();
+        seed_real_session(&container, &small_id, 2 * MIB, 40 * 24 * 3600);
+        std::thread::sleep(std::time::Duration::from_millis(20));
+        seed_real_session(&container, &big_id, 5 * MIB, 5);
+
+        let usage = scan_session_usage(&container);
+        assert_eq!(usage.len(), 2);
+        assert_eq!(usage[0].session_id, small_id.to_string(), "oldest first");
+        assert_eq!(usage[0].size_bytes, 2 * MIB);
+        assert_eq!(usage[1].size_bytes, 5 * MIB);
+        assert_eq!(usage[1].dir, container.join(big_id.to_string()));
+    }
+
+    #[test]
+    fn retention_task_deletes_old_oversized_sessions_and_reports_freed_bytes() {
+        let tmp = tempfile::tempdir().unwrap();
+        let container = tmp.path().join("sessions");
+        std::fs::create_dir_all(&container).unwrap();
+        let old_id = uuid::Uuid::new_v4();
+        let recent_id = uuid::Uuid::new_v4();
+        seed_real_session(&container, &old_id, 8 * MIB, 60 * 24 * 3600);
+        seed_real_session(&container, &recent_id, 8 * MIB, 0);
+
+        // Budget 12 MiB, retention 30 days: total 16 MiB is over budget and
+        // only the old session is past retention → exactly it is deleted.
+        let task = SessionLogRetentionTask::with_config(SessionRetentionConfig {
+            retention_days: 30,
+            max_bytes: 12 * MIB,
+        });
+        let (msg, removed) = task.execute(tmp.path()).unwrap();
+        assert_eq!(removed, Some(1), "message: {msg}");
+        assert!(!container.join(old_id.to_string()).exists());
+        assert!(container.join(recent_id.to_string()).exists(), "recent kept");
+        assert!(msg.contains("1 old session") && msg.contains("8.00 MiB"), "{msg}");
+
+        // A second run is now within budget: nothing further is deleted.
+        let (_, removed_again) = task.execute(tmp.path()).unwrap();
+        assert_eq!(removed_again, Some(0));
+    }
+
+    #[test]
+    fn retention_task_keeps_recent_sessions_when_container_is_oversized() {
+        let tmp = tempfile::tempdir().unwrap();
+        let container = tmp.path().join("sessions");
+        std::fs::create_dir_all(&container).unwrap();
+        let a = uuid::Uuid::new_v4();
+        let b = uuid::Uuid::new_v4();
+        seed_real_session(&container, &a, 6 * MIB, 2 * 24 * 3600);
+        seed_real_session(&container, &b, 6 * MIB, 1 * 24 * 3600);
+
+        // Budget 4 MiB, retention 30 days: over budget but everything is
+        // recent — the conservative rule deletes nothing.
+        let task = SessionLogRetentionTask::with_config(SessionRetentionConfig {
+            retention_days: 30,
+            max_bytes: 4 * MIB,
+        });
+        let (msg, removed) = task.execute(tmp.path()).unwrap();
+        assert_eq!(removed, Some(0), "{msg}");
+        assert!(container.join(a.to_string()).exists());
+        assert!(container.join(b.to_string()).exists());
+        assert!(msg.contains("within policy"), "{msg}");
+    }
+
+    #[test]
+    fn retention_task_noop_when_no_sessions_dir() {
+        let tmp = tempfile::tempdir().unwrap();
+        let task = SessionLogRetentionTask::with_config(SessionRetentionConfig::default());
+        let (msg, removed) = task.execute(tmp.path()).unwrap();
+        assert_eq!(removed, Some(0));
+        assert!(msg.contains("No sessions directory"));
+    }
+
+    #[test]
+    fn retention_config_defaults_match_spec() {
+        let config = SessionRetentionConfig::default();
+        assert_eq!(config.retention_days, 30);
+        assert_eq!(config.max_bytes, 5 * GIB);
     }
 }

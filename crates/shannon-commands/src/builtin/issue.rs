@@ -52,9 +52,10 @@ pub fn command() -> Command {
 /// Prompt template for /issue command
 const ISSUE_PROMPT: &str = r##"## Context
 
-- Current git status: !`git status --short`
-- Current branch: !`git branch --show-current`
-- Recent commits: !`git log --oneline -5`
+Run these git commands yourself first (Shannon does not pre-execute them for you):
+- `git status --short` — current working-tree state
+- `git branch --show-current` — current branch
+- `git log --oneline -5` — recent commits
 
 ## Your task
 
@@ -116,5 +117,25 @@ mod tests {
     #[test]
     fn test_issue_prompt_contains_gh() {
         assert!(ISSUE_PROMPT.contains("gh issue"));
+    }
+
+    /// Shannon does not implement Claude-Code `!`cmd`` interpolation: the
+    /// literal text would reach the model (the same drift /commit had).
+    /// The template must instruct the model to run the git context commands
+    /// itself instead — pin both halves so it cannot regress quietly.
+    #[test]
+    fn test_issue_prompt_has_no_bang_interpolation() {
+        assert!(
+            !ISSUE_PROMPT.contains("!`"),
+            "issue template must not contain unimplemented !`...` interpolation"
+        );
+        assert!(
+            ISSUE_PROMPT.contains("Run these git commands yourself first"),
+            "issue template must tell the model to gather git context itself"
+        );
+        // Each formerly-interpolated command survives as an instruction.
+        assert!(ISSUE_PROMPT.contains("`git status --short`"));
+        assert!(ISSUE_PROMPT.contains("`git branch --show-current`"));
+        assert!(ISSUE_PROMPT.contains("`git log --oneline -5`"));
     }
 }
