@@ -206,9 +206,13 @@ pub struct TodoWriteOutput {
 }
 
 /// Todo store (shared state)
-type TodoStore = Arc<RwLock<HashMap<String, Vec<TodoItem>>>>;
-
-/// Shared task store (shared across all tools)
+/// Shared task store (shared across all tools).
+///
+/// C+D Phase 1: was joined with TodoWriteTool's session-scoped
+/// `TodoStore = HashMap<session_id, Vec<TodoItem>>`; that alias and the
+/// `session_id` field on TodoWriteTool were removed in favour of this
+/// flat-by-task_id store. Both TodoWrite and Task* now share the same
+/// map — items inserted via either surface are visible to both.
 pub type TaskStore = Arc<RwLock<HashMap<String, TodoItem>>>;
 
 /// R1-3: one process-wide task store. TaskCreate/TaskUpdate/TaskGet/TaskList
@@ -335,8 +339,11 @@ fn fnv1a_64(bytes: &[u8]) -> u64 {
 /// Todo write tool
 pub struct TodoWriteTool {
     description: String,
-    store: TodoStore,
-    session_id: String,
+    /// C+D Phase 1: now backed by the global TaskStore (HashMap<String,
+    /// TodoItem>) — the same store TaskCreate/TaskUpdate/TaskList use.
+    /// Was a session-scoped HashMap<String, Vec<TodoItem>> with a
+    /// `session_id` field as key; both removed.
+    store: TaskStore,
 }
 
 /// Task create tool
@@ -378,55 +385,95 @@ Use it for multi-step work — 3 or more steps, or any task complex enough\n\
 that progress could be lost track of: write the plan as items up front,\n\
 keep exactly one item in_progress while working, and mark items completed\n\
 as soon as they finish. Each call REPLACES the whole list, so always send\n\
-the full updated set; when every item is completed the list clears. Skip\n\
+the full updated set; when every item is completed the list clears. Skip \
 it for single trivial actions that need no tracking."
                 .to_string(),
-            store: Arc::new(RwLock::new(HashMap::new())),
-            session_id: Uuid::new_v4().to_string(),
+            // C+D Phase 1: TodoWriteTool now writes through the SAME global
+            // task store TaskCreate/TaskUpdate/TaskList use (was a separate
+            // session-scoped HashMap).
+            store: global_task_store(),
         }
     }
 
-    /// Write todos to store
+    /// Write todos to the shared task store (C+D Phase 1: was a separate
+    /// session-scoped HashMap; now backed by the global TaskStore so
+    /// TodoWrite and Task* tools see the same items).
+    ///
+    /// Merge semantics (preserves the model-visible contract: "each call
+    /// REPLACES the whole list"):
+    ///   1. Input `todos` are upserted by `task_id`.
+    ///   2. Items already in the store whose `task_id` is NOT in the input
+    ///      AND whose status is not `Completed` are removed (the model
+    ///      dropped them from the plan — they were never finished).
+    ///   3. Already-Completed items the input also drops are KEPT as
+    ///      history (the next TodoWrite that omits them removes them only
+    ///      if a follow-up call doesn't re-add them).
+    ///   4. "All done" rule: when every input item is Completed, the
+    ///      non-completed set is also cleared — completing the plan wipes
+    ///      in-flight work.
     async fn write_todos(&self, input: TodoWriteInput) -> Result<TodoWriteOutput, ToolError> {
-        let key = &self.session_id;
-
-        // Get old todos
-        let old_todos = {
-            let store = self.store.read().map_err(|e| {
-                ToolError::ExecutionFailed(format!("Failed to acquire store lock: {e}"))
-            })?;
-            store.get(key).cloned().unwrap_or_default()
-        };
-
-        // Check if all todos are completed
         let all_done = input
             .todos
             .iter()
             .all(|t| t.status == TodoStatus::Completed);
+        let input_ids: std::collections::HashSet<String> =
+            input.todos.iter().map(|t| t.task_id.clone()).collect();
 
-        // If all done, clear the list; otherwise, store new todos
-        let new_todos = if all_done {
-            // Clear completed todos
-            {
-                let mut store = self.store.write().map_err(|e| {
-                    ToolError::ExecutionFailed(format!("Failed to acquire store lock: {e}"))
-                })?;
-                store.insert(key.clone(), Vec::new());
-            }
-            Vec::new()
-        } else {
-            // Store new todos
-            {
-                let mut store = self.store.write().map_err(|e| {
-                    ToolError::ExecutionFailed(format!("Failed to acquire store lock: {e}"))
-                })?;
-                store.insert(key.clone(), input.todos.clone());
-            }
-            input.todos.clone()
+        // Snapshot what was in the store before the merge (for the
+        // `old_todos` output + verification nudge).
+        let old_todos: Vec<TodoItem> = {
+            let store = self.store.read().map_err(|e| {
+                ToolError::ExecutionFailed(format!("Failed to acquire store lock: {e}"))
+            })?;
+            store.values().cloned().collect::<Vec<_>>()
         };
 
-        // Check if verification nudge is needed
-        // (3+ items completed, none marked as verification)
+        // Apply the merge.
+        {
+            let mut store = self.store.write().map_err(|e| {
+                ToolError::ExecutionFailed(format!("Failed to acquire store lock: {e}"))
+            })?;
+            // Upsert the supplied items.
+            for item in &input.todos {
+                store.insert(item.task_id.clone(), item.clone());
+            }
+            // Determine the surviving ids after merge.
+            let surviving: std::collections::HashSet<String> = if all_done {
+                // Plan complete: keep only Completed items the input
+                // reasserted (history); drop any in-flight work the input
+                // dropped.
+                input_ids
+            } else {
+                let mut s = input_ids.clone();
+                // Keep completed items the input dropped so they remain
+                // visible in `todo_reinjection_block` until the next call
+                // explicitly removes them (next call's all_done==true will
+                // drop them).
+                for existing in old_todos.iter() {
+                    if existing.status == TodoStatus::Completed
+                        && !s.contains(&existing.task_id)
+                    {
+                        s.insert(existing.task_id.clone());
+                    }
+                }
+                s
+            };
+            // Remove anything not in the surviving set.
+            let to_remove: Vec<String> = store
+                .keys()
+                .filter(|k| !surviving.contains(*k))
+                .cloned()
+                .collect();
+            for k in to_remove {
+                store.remove(&k);
+            }
+            persist_todo_store(&self.store);
+        }
+
+        let new_todos = input.todos.clone();
+
+        // Verification nudge: 3+ items were completed by this write and
+        // none mention verification.
         let verification_nudge_needed = if all_done && old_todos.len() >= 3 {
             let has_verification = old_todos
                 .iter()
