@@ -14,6 +14,7 @@ mod recovery;
 mod repo_map_injector;
 mod routing;
 mod streaming;
+mod stream_finalization;
 mod system_prompt;
 mod tool_dispatch;
 mod team_prompt;
