@@ -5,20 +5,19 @@
 
 ## Snapshot
 
-- **Generated (UTC)**: `2026-08-08T04:03:59Z`
+- **Generated (UTC)**: `2026-09-21T16:08:52Z`
 - **Branch**: `dev`
-- **Commit**: `c90adf82`
-- **Describe**: `v0.8.0-11-gc90adf82`
+- **Commit**: `72208ae`
+- **Describe**: `72208ae-dirty`
 
 ## Summary
 
 | metric | value |
 |---|---:|
-| Tests (nextest, runnable) | 11752 |
-| Tests (source `#[test]`/`#[tokio::test]` attrs) | 11171 |
-| Rust source files | 624 |
-| Rust LOC (code) | 418458 |
-| Workspace members | 20 |
+| Tests (nextest, runnable) | 12565 |
+| Tests (source `#[test]`/`#[tokio::test]` attrs) | 12474 |
+| Rust source files | 752 |
+| Rust LOC (code) | 523085 |
 | `cargo clippy --workspace -- -D warnings` | pass |
 | `cargo deny check` | pass |
 
@@ -29,25 +28,27 @@ Counts below come from `cargo nextest list --workspace --message-format=json`
 
 | crate | tests | binaries |
 |---|---:|---:|
-| shannon-core | 3766 | 45 |
-| shannon-tools | 1630 | 14 |
-| shannon-ui | 1497 | 8 |
-| shannon-engine | 1113 | 3 |
-| shannon-agents | 897 | 10 |
-| shannon-desktop | 599 | 4 |
-| shannon-mcp | 578 | 9 |
-| shannon-cli | 486 | 9 |
-| shannon-commands | 416 | 5 |
+| shannon-core | 3997 | 46 |
+| shannon-tools | 1765 | 17 |
+| shannon-ui | 1525 | 8 |
+| shannon-engine | 1179 | 4 |
+| shannon-agents | 902 | 10 |
+| shannon-desktop | 859 | 5 |
+| shannon-mcp | 580 | 9 |
+| shannon-cli | 502 | 9 |
+| shannon-commands | 422 | 5 |
+| shannon-skills | 189 | 6 |
 | shannon-mcp-saas | 185 | 2 |
-| shannon-skills | 172 | 5 |
 | shannon-codegen | 100 | 4 |
-| shannon-types | 84 | 3 |
+| shannon-types | 88 | 3 |
 | shannon-agent | 65 | 2 |
-| shannon-remote | 55 | 1 |
+| shannon-remote | 59 | 1 |
 | shannon-tool-interface | 42 | 1 |
 | shannon-api-protocol | 37 | 3 |
 | shannon-repomap | 30 | 3 |
-| shannon-server | 0 | 1 |
+| shannon-server | 28 | 1 |
+| shannon-browser | 6 | 1 |
+| shannon-plugin-api | 5 | 1 |
 | shannon-stability-attr | 0 | 1 |
 
 ## Line counts
@@ -57,8 +58,8 @@ Legacy archives and vendored directories are excluded.
 
 | language | files | code |
 |---|---:|---:|
-| Rust (.rs) | 624 | 418458 |
-| TypeScript/TSX | 6151 | 4556 |
+| Rust (.rs) | 752 | 523085 |
+| TypeScript/TSX | 625 | 103398 |
 
 ## Lint / audit status
 
@@ -67,9 +68,9 @@ Legacy archives and vendored directories are excluded.
 - **Status**: pass
 
 ```text
-    Checking shannon-ui v0.8.0 (/home/ed/workspace/app/work/shannon/shannon-mono/crates/shannon-ui)
-    Checking shannon-cli v0.8.0 (/home/ed/workspace/app/work/shannon/shannon-mono/crates/shannon-cli)
-    Finished \`dev\` profile [unoptimized + debuginfo] target(s) in 40.54s
+[1m[33mwarning[0m[1m:[0m shannon-types@0.11.0: Generated ProviderModelConfig JSON Schema at: /home/runner/work/shannon-agent/shannon-agent/crates/shannon-types/schema/provider-model-config.schema.json
+[1m[32m   Compiling[0m shannon-desktop v0.11.0 (/home/runner/work/shannon-agent/shannon-agent/desktop)
+[1m[32m    Finished[0m \`dev\` profile [unoptimized + debuginfo] target(s) in 25.00s
 ```
 
 ### `cargo deny check`
@@ -77,9 +78,9 @@ Legacy archives and vendored directories are excluded.
 - **Status**: pass
 
 ```text
-   │      ━━━━━━━━━━━━━━━━━ no crate matched advisory criteria
+    [0m[36m│[0m [0m[33m╰[0m[0m[33m──────────────────────────────────────────────────────────────────────────┘ lock entries[0m
 
-advisories ok, bans ok, licenses ok, sources ok
+advisories [32mok[0m, bans [32mok[0m, licenses [32mok[0m, sources [32mok[0m
 ```
 
 ---
