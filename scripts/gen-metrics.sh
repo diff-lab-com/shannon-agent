@@ -156,6 +156,11 @@ if [ "${CLOC_USED}" = "true" ] && [ -s "${TMP_CLOC:-}" ]; then
   RUST_LINES_TOTAL="${RUST_LINES_TOTAL:-0}"
 fi
 
+# Workspace member count. `gen-facts.mjs` reads this summary row, so the
+# generated report must carry it — keep the row and this computation in sync.
+WORKSPACE_MEMBERS="$(cargo metadata --no-deps --format-version 1 2>/dev/null \
+  | jq '.packages | length' 2>/dev/null || echo 0)"
+
 # ----------------------------------------------------------------------------
 # 3. Clippy status (must succeed with -D warnings).
 # ----------------------------------------------------------------------------
@@ -216,6 +221,7 @@ fi
   echo "| Tests (source \`#[test]\`/\`#[tokio::test]\` attrs) | ${TEST_ATTR_TOTAL} |"
   echo "| Rust source files | ${RUST_FILES_TOTAL} |"
   echo "| Rust LOC (code) | ${RUST_LINES_TOTAL} |"
+  echo "| Workspace members | ${WORKSPACE_MEMBERS} |"
   echo "| \`cargo clippy --workspace -- -D warnings\` | ${CLIPPY_STATUS} |"
   echo "| \`cargo deny check\` | ${DENY_STATUS} |"
   echo

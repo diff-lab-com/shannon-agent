@@ -18,6 +18,7 @@
 | Tests (source `#[test]`/`#[tokio::test]` attrs) | 12474 |
 | Rust source files | 752 |
 | Rust LOC (code) | 523085 |
+| Workspace members | 22 |
 | `cargo clippy --workspace -- -D warnings` | pass |
 | `cargo deny check` | pass |
 
