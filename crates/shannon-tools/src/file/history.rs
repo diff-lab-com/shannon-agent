@@ -527,27 +527,56 @@ impl FileHistoryManager {
 
         let index_path = self.history_dir.join("_index.json");
         if index_path.exists() {
-            let content = self.fs.read_text_blocking(&index_path)?;
-            let index: HashMap<String, Vec<String>> = serde_json::from_str(&content)?;
+            match self.fs.read_text_blocking(&index_path) {
+                Ok(content) => match serde_json::from_str::<HashMap<String, Vec<String>>>(&content)
+                {
+                    Ok(index) => {
+                        for (file_path_str, snapshot_ids) in index {
+                            let file_path = PathBuf::from(&file_path_str);
+                            let mut snapshots = Vec::new();
 
-            for (file_path_str, snapshot_ids) in index {
-                let file_path = PathBuf::from(&file_path_str);
-                let mut snapshots = Vec::new();
-
-                for id in &snapshot_ids {
-                    let snapshot_path = self.file_dir(&file_path).join(format!("{id}.json"));
-                    if snapshot_path.exists() {
-                        if let Ok(content) = self.fs.read_text_blocking(&snapshot_path) {
-                            if let Ok(snapshot) = serde_json::from_str::<FileSnapshot>(&content) {
-                                snapshots.push(snapshot);
+                            for id in &snapshot_ids {
+                                let snapshot_path =
+                                    self.file_dir(&file_path).join(format!("{id}.json"));
+                                if snapshot_path.exists() {
+                                    if let Ok(content) = self.fs.read_text_blocking(&snapshot_path)
+                                    {
+                                        if let Ok(snapshot) =
+                                            serde_json::from_str::<FileSnapshot>(&content)
+                                        {
+                                            snapshots.push(snapshot);
+                                        }
+                                    }
+                                }
                             }
+
+                            let mut history =
+                                FileHistory::new(file_path.clone(), self.max_history_per_file);
+                            history.snapshots = snapshots;
+                            self.cache.insert(file_path, history);
                         }
                     }
+                    Err(e) => {
+                        // A corrupt or outdated-format index must not
+                        // permanently wedge history (every record/rollback
+                        // call would fail forever). Start from an empty
+                        // index — the next save rewrites it.
+                        tracing::warn!(
+                            "File history index at {} is unreadable ({}); \
+                             starting from an empty index",
+                            index_path.display(),
+                            e
+                        );
+                    }
+                },
+                Err(e) => {
+                    tracing::warn!(
+                        "File history index at {} could not be read ({}); \
+                         starting from an empty index",
+                        index_path.display(),
+                        e
+                    );
                 }
-
-                let mut history = FileHistory::new(file_path.clone(), self.max_history_per_file);
-                history.snapshots = snapshots;
-                self.cache.insert(file_path, history);
             }
         }
 
@@ -556,6 +585,10 @@ impl FileHistoryManager {
     }
 
     /// Save the index to disk.
+    ///
+    /// The write is atomic (temp file + rename): a crash mid-write used to
+    /// leave a truncated `_index.json`, which then failed to parse on every
+    /// later load and permanently disabled history.
     fn save_index(&self) -> Result<(), FileHistoryError> {
         self.ensure_dir()?;
 
@@ -567,8 +600,14 @@ impl FileHistoryManager {
 
         let index_path = self.history_dir.join("_index.json");
         let content = serde_json::to_string_pretty(&index)?;
-        self.fs
-            .write_bytes_blocking(&index_path, content.as_bytes())?;
+        let temp_path = self
+            .history_dir
+            .join(format!("_index.json.tmp-{}", Uuid::new_v4().as_simple()));
+        self.fs.write_bytes_blocking(&temp_path, content.as_bytes())?;
+        if let Err(e) = std::fs::rename(&temp_path, &index_path) {
+            let _ = self.fs.remove_file_blocking(&temp_path);
+            return Err(FileHistoryError::Io(e));
+        }
 
         Ok(())
     }
@@ -620,7 +659,8 @@ impl FileHistoryManager {
 
         let key = self.cache_key(file_path);
 
-        // Check storage quota
+        // Check storage quota: on exhaustion the oldest snapshots are evicted
+        // (globally oldest-first) instead of failing the record.
         self.check_storage_quota()?;
 
         let snapshot = FileSnapshot::new(file_path.to_path_buf(), content.to_string(), operation);
@@ -962,18 +1002,98 @@ impl FileHistoryManager {
         self.cleanup_expired_before(cutoff)
     }
 
-    /// Check total storage usage against the quota.
-    fn check_storage_quota(&self) -> Result<(), FileHistoryError> {
-        let total_bytes = dir_size(self.fs.as_ref(), &self.history_dir).unwrap_or(0);
-        let used_mb = total_bytes as f64 / (1024.0 * 1024.0);
+    /// Periodic maintenance hook for callers that own the manager (session
+    /// start, `/undo`, REPL idle): sweeps snapshots past the configured TTL
+    /// ([`Self::cleanup_expired`]) and any above the per-file cap
+    /// ([`Self::cleanup_old_snapshots`]). Housekeeping must never break the
+    /// caller's flow, so failures are logged, not propagated.
+    ///
+    /// Returns the total number of snapshots removed by both sweeps.
+    pub fn run_housekeeping(&mut self) -> usize {
+        let expired = match self.cleanup_expired() {
+            Ok(n) => n,
+            Err(e) => {
+                tracing::warn!("File history TTL sweep failed: {e}");
+                0
+            }
+        };
+        let over_cap = match self.cleanup_old_snapshots() {
+            Ok(n) => n,
+            Err(e) => {
+                tracing::warn!("File history cap sweep failed: {e}");
+                0
+            }
+        };
+        expired + over_cap
+    }
 
-        if used_mb > self.max_total_history_mb as f64 {
-            return Err(FileHistoryError::StorageQuota {
-                used_mb,
-                max_mb: self.max_total_history_mb,
-            });
+    /// Enforce the total-storage quota.
+    ///
+    /// When usage exceeds `max_total_history_mb`, snapshots are evicted
+    /// OLDEST-FIRST ACROSS ALL FILES (each removal takes the globally oldest
+    /// snapshot regardless of which file owns it) until usage is back within
+    /// quota, instead of failing the caller's `record_snapshot`. The
+    /// per-file `max_history_per_file` cap continues to apply on its own
+    /// through `FileHistory::add_snapshot`. Returns the number of snapshots
+    /// evicted.
+    fn evict_until_within_quota(&mut self) -> Result<usize, FileHistoryError> {
+        let max_bytes = self.max_total_history_mb as u64 * 1024 * 1024;
+        let mut used = dir_size(self.fs.as_ref(), &self.history_dir).unwrap_or(0);
+        if used <= max_bytes {
+            return Ok(0);
         }
 
+        let mut evicted = 0usize;
+        loop {
+            // Globally oldest snapshot across all files.
+            let oldest = self.cache.values().filter_map(|h| {
+                h.snapshots
+                    .first()
+                    .map(|s| (s.timestamp, h.file_path.clone(), s.id.clone()))
+            }).min_by_key(|(ts, _, _)| *ts);
+            let Some((_ts, file_path, snapshot_id)) = oldest else {
+                break; // nothing left to evict
+            };
+
+            let snapshot_path = self.file_dir(&file_path).join(format!("{snapshot_id}.json"));
+            let snapshot_bytes = self
+                .fs
+                .metadata_blocking(&snapshot_path)
+                .map(|m| m.len)
+                .unwrap_or(0);
+            if let Err(e) = self.fs.remove_file_blocking(&snapshot_path) {
+                tracing::debug!("Failed to remove evicted snapshot: {e}");
+            }
+            if let Some(history) = self.cache.get_mut(&file_path) {
+                history.snapshots.remove(0);
+            }
+            used = used.saturating_sub(snapshot_bytes);
+            evicted += 1;
+
+            if used <= max_bytes {
+                break;
+            }
+        }
+
+        if evicted > 0 {
+            self.save_index()?;
+        }
+        if used > max_bytes {
+            tracing::warn!(
+                "File history still over quota after evicting {evicted} snapshots \
+                 ({:.1} MB used of {} MB)",
+                used as f64 / (1024.0 * 1024.0),
+                self.max_total_history_mb
+            );
+        }
+        Ok(evicted)
+    }
+
+    /// Check total storage usage against the quota, evicting oldest snapshots
+    /// when over (see [`Self::evict_until_within_quota`]). Kept as the
+    /// call-site name used by the record paths.
+    fn check_storage_quota(&mut self) -> Result<(), FileHistoryError> {
+        self.evict_until_within_quota()?;
         Ok(())
     }
 }
@@ -1951,6 +2071,153 @@ mod tests {
             snapshot_id: "abc".to_string(),
         };
         assert!(err.to_string().contains("abc"));
+    }
+
+    // ---- Atomic index write (R0-5a) ----------------------------------------
+
+    #[test]
+    fn index_write_is_atomic_no_temp_left_behind() {
+        let mut manager = FileHistoryManager::new_temp().unwrap();
+        let path = Path::new("/tmp/test_atomic_index.rs");
+
+        manager
+            .record_snapshot(path, "v1", FileOperation::Create)
+            .unwrap();
+        manager
+            .record_snapshot(path, "v2", FileOperation::Edit)
+            .unwrap();
+
+        // The index exists and parses…
+        let index_path = manager.history_dir.join("_index.json");
+        let content = std::fs::read_to_string(&index_path).unwrap();
+        let index: HashMap<String, Vec<String>> = serde_json::from_str(&content).unwrap();
+        assert_eq!(index.len(), 1);
+
+        // …and no temp file from the tmp+rename commit is left behind.
+        for entry in std::fs::read_dir(&manager.history_dir).unwrap() {
+            let name = entry.unwrap().file_name();
+            assert!(
+                !name.to_str().unwrap().starts_with("_index.json.tmp"),
+                "temp index file left behind: {name:?}"
+            );
+        }
+    }
+
+    // ---- Corrupt index fallback (R0-5b) ------------------------------------
+
+    #[test]
+    fn corrupt_index_falls_back_to_empty_instead_of_failing_forever() {
+        let temp_dir = tempfile::tempdir().unwrap();
+        let config = FileHistoryConfig {
+            history_dir: temp_dir.path().to_path_buf(),
+            max_history_per_file: 10,
+            max_total_history_mb: 10,
+            ttl: Some(7 * 24 * 60 * 60),
+        };
+
+        // Poison the index: previously this made EVERY subsequent
+        // record/rollback call fail with a Serialization error, permanently.
+        std::fs::write(temp_dir.path().join("_index.json"), "{not valid json").unwrap();
+
+        let mut manager = FileHistoryManager::new(config.clone());
+        manager
+            .record_snapshot(Path::new("/tmp/test_corrupt_index.rs"), "v1", FileOperation::Create)
+            .expect("record must succeed despite a corrupt index");
+
+        // The new snapshot was saved; a fresh manager (which loads the
+        // rewritten, valid index) can read it back.
+        let mut fresh = FileHistoryManager::new(config);
+        let history = fresh
+            .get_history(Path::new("/tmp/test_corrupt_index.rs"))
+            .expect("rebuilt index must expose the new snapshot");
+        assert_eq!(history.len(), 1);
+        assert_eq!(history.snapshots[0].content, "v1");
+    }
+
+    // ---- Quota eviction (R0-5c) --------------------------------------------
+
+    #[test]
+    fn quota_exhaustion_evicts_oldest_snapshots_instead_of_failing() {
+        // 1 MB quota, ~300 KB snapshots: the 4th record crosses the quota and
+        // must evict the globally oldest snapshots rather than erroring.
+        let temp_dir = tempfile::tempdir().unwrap();
+        let config = FileHistoryConfig {
+            history_dir: temp_dir.path().to_path_buf(),
+            max_history_per_file: 50,
+            max_total_history_mb: 1,
+            ttl: None,
+        };
+        let mut manager = FileHistoryManager::new(config);
+
+        let path_a = Path::new("/tmp/test_quota_a.rs");
+        let path_b = Path::new("/tmp/test_quota_b.rs");
+        let big = "x".repeat(300_000);
+
+        let mut first_id: Option<String> = None;
+        let mut recorded = 0usize;
+        for i in 0..8 {
+            let path = if i % 2 == 0 { path_a } else { path_b };
+            let content = format!("{i}::{}", big);
+            let snapshot = manager
+                .record_snapshot(path, &content, FileOperation::Edit)
+                .unwrap_or_else(|e| panic!("record {i} must not fail on quota: {e}"));
+            if i == 0 {
+                first_id = Some(snapshot.id.clone());
+            }
+            recorded += 1;
+        }
+        assert_eq!(recorded, 8);
+
+        // Usage is back within (or near) the 1 MB quota.
+        let used = dir_size(manager.fs.as_ref(), &manager.history_dir).unwrap_or(0);
+        assert!(
+            used <= 1024 * 1024 + 400 * 1024,
+            "expected quota enforcement, {} bytes remain",
+            used
+        );
+
+        // The globally oldest snapshot (the first one recorded) is gone —
+        // eviction removes oldest-first across files.
+        let first_id = first_id.unwrap();
+        let history_a = manager.get_history(path_a).unwrap();
+        assert!(
+            history_a.get_by_id(&first_id).is_none(),
+            "the first-recorded snapshot must have been evicted"
+        );
+        // And the newest snapshot survives everywhere.
+        assert!(!history_a.is_empty());
+        assert!(!manager.get_history(path_b).unwrap().is_empty());
+    }
+
+    // ---- run_housekeeping (R0-5d) ------------------------------------------
+
+    #[test]
+    fn run_housekeeping_sweeps_expired_and_over_cap_snapshots() {
+        let mut manager = FileHistoryManager::new_temp().unwrap();
+        let path = Path::new("/tmp/test_housekeeping.rs");
+
+        manager
+            .record_snapshot(path, "ancient", FileOperation::Create)
+            .unwrap();
+        // Backdate past the 7-day TTL.
+        let ancient = Utc::now() - chrono::Duration::days(30);
+        for history in manager.cache.values_mut() {
+            for snap in &mut history.snapshots {
+                snap.timestamp = ancient;
+            }
+        }
+        manager
+            .record_snapshot(path, "fresh", FileOperation::Edit)
+            .unwrap();
+
+        let removed = manager.run_housekeeping();
+        assert!(removed >= 1, "the backdated snapshot must be swept");
+        let history = manager.get_history(path).unwrap();
+        assert_eq!(history.snapshots.len(), 1);
+        assert_eq!(history.snapshots[0].content, "fresh");
+
+        // Idempotent: nothing left to remove.
+        assert_eq!(manager.run_housekeeping(), 0);
     }
 
     // ---- from_env / from_env_vars (W6-2 A.4) ----------------------------

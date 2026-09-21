@@ -191,6 +191,29 @@ pub async fn execute_with(
         }
     }
 
+    // Binary sniff: a NUL byte in the first 8 KB marks a binary file almost
+    // certainly — return a friendly pointer instead of dumping utf8_lossy
+    // mojibake. Image extensions are handled above (svg stays text).
+    const BINARY_SNIFF_BYTES: usize = 8 * 1024;
+    if let Ok(prefix) = fs.read_prefix_blocking(Path::new(&input.file_path), BINARY_SNIFF_BYTES) {
+        if prefix.contains(&0u8) {
+            return Ok(ToolOutput {
+                content: format!(
+                    "Binary file, {} bytes — not displayed. Use Bash (e.g. `file {}`, `xxd {} | head -20`) to inspect it.",
+                    metadata.len, input.file_path, input.file_path
+                ),
+                is_error: false,
+                metadata: {
+                    let mut map = HashMap::new();
+                    map.insert("type".to_string(), json!("binary"));
+                    map.insert("file_path".to_string(), json!(input.file_path));
+                    map.insert("size".to_string(), json!(metadata.len));
+                    map
+                },
+            });
+        }
+    }
+
     // Original text file handling
     let content = fs
         .read_text(Path::new(&input.file_path))
@@ -211,7 +234,15 @@ pub async fn execute_with(
         (None, None) => (0, total_lines),
     };
 
-    let selected_lines = lines[start..end].join("\n");
+    // Number the lines cat -n style ("{n}\t{line}"), with n absolute to the
+    // file (an offset/limit window keeps its original line numbers) so the
+    // model can cite file_path:line straight from the output.
+    let selected_lines = lines[start..end]
+        .iter()
+        .enumerate()
+        .map(|(i, line)| format!("{}\t{line}", start + i + 1))
+        .collect::<Vec<_>>()
+        .join("\n");
 
     // Apply progressive truncation when no explicit offset/limit was given
     // and truncation is enabled (the default).
@@ -426,11 +457,85 @@ mod tests {
         };
 
         let result = execute(input).await.expect("execute should succeed");
-        assert_eq!(result.content, content);
+        // Output is numbered cat -n style: "N\tline".
+        assert_eq!(result.content, "1\tline 1\n2\tline 2\n3\tline 3");
         assert!(
             !result.metadata.contains_key("truncated"),
             "small files should not be truncated"
         );
+    }
+
+    #[tokio::test]
+    async fn test_read_numbers_are_absolute_with_offset() {
+        let dir = tempfile::tempdir().expect("create temp dir");
+        let path = dir.path().join("offset.txt");
+        let lines: Vec<String> = (1..=10).map(|i| format!("row {i}")).collect();
+        std::fs::write(&path, lines.join("\n")).expect("write temp file");
+
+        let input = ReadInput {
+            file_path: path.to_string_lossy().to_string(),
+            offset: Some(5),
+            limit: Some(2),
+            truncate_large_files: true,
+        };
+
+        let result = execute(input).await.expect("execute should succeed");
+        // A window keeps its absolute line numbers (5 offset → starts at 6).
+        assert_eq!(result.content, "6\trow 6\n7\trow 7");
+    }
+
+    #[tokio::test]
+    async fn test_read_binary_file_reports_instead_of_mojibake() {
+        let dir = tempfile::tempdir().expect("create temp dir");
+        let path = dir.path().join("payload.bin");
+        // ELF-ish header: NUL bytes early on.
+        let mut bytes = vec![0x7f, b'E', b'L', b'F'];
+        bytes.extend(std::iter::repeat_n(0u8, 64));
+        bytes.extend_from_slice(b"trailing text");
+        std::fs::write(&path, &bytes).expect("write temp file");
+
+        let input = ReadInput {
+            file_path: path.to_string_lossy().to_string(),
+            offset: None,
+            limit: None,
+            truncate_large_files: true,
+        };
+
+        let result = execute(input).await.expect("execute should succeed");
+        assert!(!result.is_error);
+        assert!(
+            result.content.contains("Binary file"),
+            "expected friendly binary notice, got: {}",
+            result.content
+        );
+        assert!(
+            result.content.contains("bytes"),
+            "notice should report the size, got: {}",
+            result.content
+        );
+        assert!(!result.content.contains("trailing text"));
+        assert_eq!(result.metadata["type"], "binary");
+        assert_eq!(result.metadata["size"], bytes.len() as u64);
+    }
+
+    #[tokio::test]
+    async fn test_read_text_with_nul_free_content_is_not_flagged_binary() {
+        let dir = tempfile::tempdir().expect("create temp dir");
+        let path = dir.path().join("plain.txt");
+        std::fs::write(&path, "just\ntext\n").expect("write temp file");
+
+        let input = ReadInput {
+            file_path: path.to_string_lossy().to_string(),
+            offset: None,
+            limit: None,
+            truncate_large_files: true,
+        };
+        let result = execute(input).await.expect("execute should succeed");
+        assert!(
+            result.metadata.get("type").is_none(),
+            "NUL-free text must not be flagged binary"
+        );
+        assert!(result.content.contains("just"));
     }
 
     #[tokio::test]

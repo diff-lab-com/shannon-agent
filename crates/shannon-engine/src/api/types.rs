@@ -1081,6 +1081,15 @@ pub enum StreamEvent {
 
     #[serde(rename = "ping")]
     Ping,
+
+    /// Provider-reported mid-stream error (Anthropic `{"type":"error",...}`
+    /// and the equivalent shapes from other wire formats), or an
+    /// unknown/unparseable SSE payload that would otherwise be dropped.
+    /// Terminal: the provider ends the stream after emitting it. Carried as
+    /// an event (not a stream `Err`) so consumers can match it typed and the
+    /// transport layer does not attempt to reconnect over it.
+    #[serde(rename = "error")]
+    Error { message: String },
 }
 
 /// Delta for content block streaming
@@ -1170,6 +1179,22 @@ mod tests {
         assert_eq!(src.source_type, "base64");
         assert_eq!(src.media_type, "image/png");
         assert_eq!(src.data, "abc123");
+    }
+
+    #[test]
+    fn test_stream_event_error_variant_contract() {
+        // The exact tagged-JSON contract of the Error variant: consumers
+        // (the query engine) match on this shape, so it must not drift.
+        let event = StreamEvent::Error {
+            message: "Overloaded".to_string(),
+        };
+        let json = serde_json::to_string(&event).unwrap();
+        assert_eq!(json, r#"{"type":"error","message":"Overloaded"}"#);
+        let back: StreamEvent = serde_json::from_str(&json).unwrap();
+        match back {
+            StreamEvent::Error { message } => assert_eq!(message, "Overloaded"),
+            other => panic!("Expected Error variant, got {other:?}"),
+        }
     }
 
     #[test]

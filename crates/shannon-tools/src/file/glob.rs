@@ -58,6 +58,12 @@ pub struct GlobOutput {
 // Core implementation
 // ---------------------------------------------------------------------------
 
+/// Maximum number of results returned. Very broad patterns (`**/*`) can
+/// match tens of thousands of files; without a cap the tool result floods
+/// the model's context. When the cap truncates, the output says so and
+/// `metadata` carries `truncated` + `total_matches`.
+const MAX_RESULTS: usize = 100;
+
 /// Match options where `*` does NOT match directory separators, matching the
 /// conventional glob semantics that Claude Code users expect.
 const MATCH_OPTS: glob::MatchOptions = glob::MatchOptions {
@@ -230,6 +236,11 @@ pub async fn execute_with(
     .map_err(|e| ToolError::ExecutionFailed(format!("glob walk failed: {e}")))?;
 
     sort_results(&mut results);
+    let total_matches = results.len();
+    let truncated = total_matches > MAX_RESULTS;
+    if truncated {
+        results.truncate(MAX_RESULTS);
+    }
     let count = results.len();
 
     // Build the output content summary.
@@ -237,12 +248,19 @@ pub async fn execute_with(
         format!("No files found matching pattern: {pattern}")
     } else {
         let file_list: Vec<String> = results.iter().map(|r| r.path.clone()).collect();
-        format!(
+        let mut content = format!(
             "Found {} files matching pattern: {}\n{}",
             count,
             pattern,
             file_list.join("\n")
-        )
+        );
+        if truncated {
+            content.push_str(&format!(
+                "\n\n(showing first {count} of {total_matches} matches — narrow the \
+                 pattern or set `path` to a subdirectory to see the rest)"
+            ));
+        }
+        content
     };
 
     // Build structured output.
@@ -250,6 +268,10 @@ pub async fn execute_with(
     metadata.insert("files".to_string(), json!(results));
     metadata.insert("count".to_string(), json!(count));
     metadata.insert("pattern".to_string(), json!(pattern));
+    if truncated {
+        metadata.insert("truncated".to_string(), json!(true));
+        metadata.insert("total_matches".to_string(), json!(total_matches));
+    }
 
     Ok(ToolOutput {
         content,
@@ -596,6 +618,57 @@ mod tests {
         let output = execute(input).await.unwrap();
         assert!(output.is_error);
         assert!(output.content.contains("not found"));
+    }
+
+    #[tokio::test]
+    async fn test_results_capped_at_100_with_truncation_metadata() {
+        let tmp = TempDir::new().unwrap();
+        let root = tmp.path();
+        fs::create_dir_all(root.join(".git")).unwrap();
+        // One file past the cap.
+        for i in 0..130 {
+            fs::write(root.join(format!("gen_{i:03}.rs")), "").unwrap();
+        }
+
+        let input = GlobInput {
+            pattern: "*.rs".to_string(),
+            path: Some(root.display().to_string()),
+            exclude_pattern: None,
+        };
+
+        let output = execute(input).await.unwrap();
+        assert!(!output.is_error);
+
+        // Hard cap on returned files…
+        let files = output.metadata["files"].as_array().unwrap();
+        assert_eq!(files.len(), 100);
+        assert_eq!(output.metadata["count"], 100);
+        // …with truncation surfaced in metadata…
+        assert_eq!(output.metadata["truncated"], true);
+        assert_eq!(output.metadata["total_matches"], 130);
+        // …and in the model-facing content.
+        assert!(
+            output.content.contains("first 100 of 130"),
+            "content must say the list was truncated, got: {}",
+            output.content
+        );
+        assert!(output.content.contains("narrow the pattern"));
+    }
+
+    #[tokio::test]
+    async fn test_results_under_cap_have_no_truncation_markers() {
+        let tmp = TempDir::new().unwrap();
+        let root = setup_test_tree(&tmp);
+
+        let input = GlobInput {
+            pattern: "**/*.rs".to_string(),
+            path: Some(root.display().to_string()),
+            exclude_pattern: None,
+        };
+        let output = execute(input).await.unwrap();
+        assert!(!output.metadata.contains_key("truncated"));
+        assert!(!output.metadata.contains_key("total_matches"));
+        assert!(!output.content.contains("narrow the pattern"));
     }
 
     #[tokio::test]

@@ -51,7 +51,7 @@ impl Default for RetryConfig {
             max_retries: 3,
             initial_backoff_ms: 1000,
             max_backoff_ms: 30_000,
-            retryable_status_codes: vec![429, 500, 502, 503, 504],
+            retryable_status_codes: vec![429, 500, 502, 503, 504, 529],
         }
     }
 }
@@ -63,7 +63,7 @@ impl RetryConfig {
             max_retries,
             initial_backoff_ms,
             max_backoff_ms,
-            retryable_status_codes: vec![429, 500, 502, 503, 504],
+            retryable_status_codes: vec![429, 500, 502, 503, 504, 529],
         }
     }
 
@@ -195,6 +195,7 @@ impl RetryPolicy {
     /// Retryable errors:
     /// - HTTP 429 (rate limit)
     /// - HTTP 500, 502, 503, 504 (server errors, except Ollama malformed output)
+    /// - HTTP 529 (Anthropic `overloaded_error`)
     /// - Network timeouts and connection errors
     /// - Explicit `Timeout` errors
     ///
@@ -386,6 +387,20 @@ mod tests {
             status: 503,
             message: "Service Unavailable".to_string(),
         }));
+    }
+
+    #[test]
+    fn test_is_retryable_529_overloaded() {
+        // Anthropic signals overload with HTTP 529 (overloaded_error). It is
+        // transient and must be retried like the other 5xx server errors.
+        let config = RetryConfig::default();
+        assert!(
+            config.is_retryable(&ApiError::ApiError {
+                status: 529,
+                message: "Overloaded".to_string(),
+            }),
+            "529 overloaded_error should be retryable"
+        );
     }
 
     #[test]
@@ -771,6 +786,15 @@ mod tests {
     fn test_retry_policy_is_retryable_timeout() {
         let policy = RetryPolicy::default();
         assert!(policy.is_retryable(&ApiError::Timeout));
+    }
+
+    #[test]
+    fn test_retry_policy_is_retryable_529_overloaded() {
+        let policy = RetryPolicy::default();
+        assert!(policy.is_retryable(&ApiError::ApiError {
+            status: 529,
+            message: "Overloaded".to_string(),
+        }));
     }
 
     #[test]

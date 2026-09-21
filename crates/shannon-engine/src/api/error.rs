@@ -93,8 +93,9 @@ impl ApiError {
             }
             // Server errors: use ApiError variant so the retry system can match
             // on the status code. ProviderError is for client errors with
-            // structured provider info.
-            500 | 502 | 503 | 504 => {
+            // structured provider info. 529 is Anthropic's `overloaded_error`
+            // and is transient — it must land in the retryable class too.
+            500 | 502 | 503 | 504 | 529 => {
                 return ApiError::ApiError {
                     status,
                     message: body.to_string(),
@@ -456,6 +457,24 @@ mod tests {
             }
             other => panic!("Expected ProviderError, got {other:?}"),
         }
+    }
+
+    /// Anthropic's HTTP 529 (overloaded_error) must land in the retryable
+    /// `ApiError` class — same as 500/502/503/504 — not the non-retryable
+    /// `ProviderError` class, so the retry system sees the status code.
+    #[test]
+    fn test_529_overloaded_maps_to_retryable_api_error() {
+        let body = r#"{"type":"error","error":{"type":"overloaded_error","message":"Overloaded"}}"#;
+        let err = ApiError::from_provider_response(&LlmProvider::Anthropic, 529, body);
+        match &err {
+            ApiError::ApiError { status, .. } => assert_eq!(*status, 529),
+            other => panic!("Expected ApiError for status 529, got {other:?}"),
+        }
+        // The classification must be consistent with the retry policy.
+        assert!(
+            crate::api::retry::RetryConfig::default().is_retryable(&err),
+            "529 must classify as retryable"
+        );
     }
 
     #[test]

@@ -88,18 +88,46 @@ pub struct ModelPricing {
     pub input_price_per_mtok: f64,
     /// Output price per million tokens (USD)
     pub output_price_per_mtok: f64,
+    /// Price per million prompt-cache READ tokens (USD). `None` (the default)
+    /// treats cache-read tokens at the plain input price, preserving the
+    /// pre-cache-aware behavior for models without a known cache rate.
+    #[serde(default)]
+    pub cache_read_per_mtok: Option<f64>,
+    /// Price per million prompt-cache WRITE (creation) tokens (USD). `None`
+    /// (the default) treats cache-creation tokens at the plain input price.
+    #[serde(default)]
+    pub cache_write_per_mtok: Option<f64>,
+}
+
+/// Anthropic prompt-cache pricing, derived from a model's input price.
+///
+/// Anthropic publishes cache pricing as fixed multipliers of the input rate:
+/// cache read = 0.1x input, cache write (creation) = 1.25x input. Deriving
+/// keeps every Anthropic entry data-driven from the input price already in
+/// the table — no invented numbers.
+fn anthropic_cache_rates(
+    input_price_per_mtok: f64,
+) -> (Option<f64>, Option<f64>) {
+    (
+        Some(input_price_per_mtok * 0.1),
+        Some(input_price_per_mtok * 1.25),
+    )
 }
 
 /// Default pricing table for known models.
 /// Prices per million tokens. Extend or override via `SHANNON_PRICING_JSON`
 /// env var or a `.shannon-pricing.json` file in the project directory.
 static DEFAULT_PRICING: &[(&str, ModelPricing)] = &[
-    // Anthropic Claude 4 series
+    // Anthropic Claude 4 series.
+    // Cache rates are Anthropic's published multipliers of the input price
+    // (read = 0.1x, write = 1.25x) — see `anthropic_cache_rates`.
     (
         "claude-opus-4",
         ModelPricing {
             input_price_per_mtok: 15.0,
             output_price_per_mtok: 75.0,
+            cache_read_per_mtok: Some(1.5),
+            cache_write_per_mtok: Some(18.75),
         },
     ),
     (
@@ -107,6 +135,8 @@ static DEFAULT_PRICING: &[(&str, ModelPricing)] = &[
         ModelPricing {
             input_price_per_mtok: 3.0,
             output_price_per_mtok: 15.0,
+            cache_read_per_mtok: Some(0.3),
+            cache_write_per_mtok: Some(3.75),
         },
     ),
     (
@@ -114,6 +144,8 @@ static DEFAULT_PRICING: &[(&str, ModelPricing)] = &[
         ModelPricing {
             input_price_per_mtok: 0.80,
             output_price_per_mtok: 4.0,
+            cache_read_per_mtok: Some(0.08),
+            cache_write_per_mtok: Some(1.0),
         },
     ),
     // Anthropic Claude 3.5 series
@@ -122,6 +154,8 @@ static DEFAULT_PRICING: &[(&str, ModelPricing)] = &[
         ModelPricing {
             input_price_per_mtok: 3.0,
             output_price_per_mtok: 15.0,
+            cache_read_per_mtok: Some(0.3),
+            cache_write_per_mtok: Some(3.75),
         },
     ),
     (
@@ -129,6 +163,8 @@ static DEFAULT_PRICING: &[(&str, ModelPricing)] = &[
         ModelPricing {
             input_price_per_mtok: 0.80,
             output_price_per_mtok: 4.0,
+            cache_read_per_mtok: Some(0.08),
+            cache_write_per_mtok: Some(1.0),
         },
     ),
     // Anthropic Claude 3 series
@@ -137,14 +173,19 @@ static DEFAULT_PRICING: &[(&str, ModelPricing)] = &[
         ModelPricing {
             input_price_per_mtok: 15.0,
             output_price_per_mtok: 75.0,
+            cache_read_per_mtok: Some(1.5),
+            cache_write_per_mtok: Some(18.75),
         },
     ),
-    // OpenAI GPT-4.1 series
+    // OpenAI GPT-4.1 series (no known cache rates — None prices cache
+    // tokens at the input rate)
     (
         "gpt-4.1",
         ModelPricing {
             input_price_per_mtok: 2.0,
             output_price_per_mtok: 8.0,
+            cache_read_per_mtok: None,
+            cache_write_per_mtok: None,
         },
     ),
     (
@@ -152,6 +193,8 @@ static DEFAULT_PRICING: &[(&str, ModelPricing)] = &[
         ModelPricing {
             input_price_per_mtok: 0.40,
             output_price_per_mtok: 1.60,
+            cache_read_per_mtok: None,
+            cache_write_per_mtok: None,
         },
     ),
     (
@@ -159,6 +202,8 @@ static DEFAULT_PRICING: &[(&str, ModelPricing)] = &[
         ModelPricing {
             input_price_per_mtok: 0.10,
             output_price_per_mtok: 0.40,
+            cache_read_per_mtok: None,
+            cache_write_per_mtok: None,
         },
     ),
     // OpenAI GPT-4o series
@@ -167,6 +212,8 @@ static DEFAULT_PRICING: &[(&str, ModelPricing)] = &[
         ModelPricing {
             input_price_per_mtok: 2.5,
             output_price_per_mtok: 10.0,
+            cache_read_per_mtok: None,
+            cache_write_per_mtok: None,
         },
     ),
     (
@@ -174,6 +221,8 @@ static DEFAULT_PRICING: &[(&str, ModelPricing)] = &[
         ModelPricing {
             input_price_per_mtok: 0.15,
             output_price_per_mtok: 0.60,
+            cache_read_per_mtok: None,
+            cache_write_per_mtok: None,
         },
     ),
     // OpenAI GPT-4 / 3.5
@@ -182,6 +231,8 @@ static DEFAULT_PRICING: &[(&str, ModelPricing)] = &[
         ModelPricing {
             input_price_per_mtok: 10.0,
             output_price_per_mtok: 30.0,
+            cache_read_per_mtok: None,
+            cache_write_per_mtok: None,
         },
     ),
     (
@@ -189,6 +240,8 @@ static DEFAULT_PRICING: &[(&str, ModelPricing)] = &[
         ModelPricing {
             input_price_per_mtok: 0.5,
             output_price_per_mtok: 1.5,
+            cache_read_per_mtok: None,
+            cache_write_per_mtok: None,
         },
     ),
     // Ollama / local models (free)
@@ -197,6 +250,8 @@ static DEFAULT_PRICING: &[(&str, ModelPricing)] = &[
         ModelPricing {
             input_price_per_mtok: 0.0,
             output_price_per_mtok: 0.0,
+            cache_read_per_mtok: None,
+            cache_write_per_mtok: None,
         },
     ),
     (
@@ -204,6 +259,8 @@ static DEFAULT_PRICING: &[(&str, ModelPricing)] = &[
         ModelPricing {
             input_price_per_mtok: 0.0,
             output_price_per_mtok: 0.0,
+            cache_read_per_mtok: None,
+            cache_write_per_mtok: None,
         },
     ),
     (
@@ -211,6 +268,8 @@ static DEFAULT_PRICING: &[(&str, ModelPricing)] = &[
         ModelPricing {
             input_price_per_mtok: 0.0,
             output_price_per_mtok: 0.0,
+            cache_read_per_mtok: None,
+            cache_write_per_mtok: None,
         },
     ),
 ];
@@ -219,6 +278,8 @@ static DEFAULT_PRICING: &[(&str, ModelPricing)] = &[
 const DEFAULT_PRICING_FALLBACK: ModelPricing = ModelPricing {
     input_price_per_mtok: 3.0,
     output_price_per_mtok: 15.0,
+    cache_read_per_mtok: None,
+    cache_write_per_mtok: None,
 };
 
 /// Lazily-built pricing table: merge the canonical catalog with runtime overrides.
@@ -232,9 +293,20 @@ static PRICING_TABLE: Lazy<HashMap<String, ModelPricing>> = Lazy::new(build_pric
 /// only a gap-filler for patterns the catalog does not yet cover.
 fn seed_catalog_pricing(table: &mut HashMap<String, ModelPricing>) {
     for info in crate::model_registry::MODEL_CATALOG {
+        // Anthropic publishes cache pricing as multipliers of the input rate
+        // (read = 0.1x, write = 1.25x); other providers stay `None`, which
+        // prices cache tokens at the input rate (current behavior).
+        let (cache_read_per_mtok, cache_write_per_mtok) = match info.provider {
+            shannon_engine::api::LlmProvider::Anthropic => {
+                anthropic_cache_rates(info.cost_per_m_input)
+            }
+            _ => (None, None),
+        };
         let pricing = ModelPricing {
             input_price_per_mtok: info.cost_per_m_input,
             output_price_per_mtok: info.cost_per_m_output,
+            cache_read_per_mtok,
+            cache_write_per_mtok,
         };
         // Canonical id is authoritative — plain insert lets it win over any
         // legacy duplicate.
@@ -290,7 +362,11 @@ fn apply_pricing_overrides(table: &mut HashMap<String, ModelPricing>, json: &str
         Ok(overrides) => {
             for (k, v) in overrides {
                 // Reject negative prices — a malicious override could bypass budget limits
-                if v.input_price_per_mtok < 0.0 || v.output_price_per_mtok < 0.0 {
+                if v.input_price_per_mtok < 0.0
+                    || v.output_price_per_mtok < 0.0
+                    || v.cache_read_per_mtok.is_some_and(|r| r < 0.0)
+                    || v.cache_write_per_mtok.is_some_and(|r| r < 0.0)
+                {
                     tracing::warn!(
                         "Ignoring pricing override from {}: {} has negative price (in=${:.2}, out=${:.2})",
                         source,
@@ -373,6 +449,31 @@ fn lookup_pricing(model: &str) -> ModelPricing {
     DEFAULT_PRICING_FALLBACK.clone()
 }
 
+/// Weighted cost for a usage report, pricing prompt-cache tokens at their
+/// model-specific rate when known and at the input rate otherwise. Anthropic
+/// reports cache read/creation tokens separately from `input_tokens`, so the
+/// four terms never overlap.
+fn cost_with_cache(
+    pricing: &ModelPricing,
+    input_tokens: u64,
+    output_tokens: u64,
+    cache_read_tokens: u64,
+    cache_creation_tokens: u64,
+) -> f64 {
+    let per_mtok = 1_000_000.0;
+    let input_cost = (input_tokens as f64 / per_mtok) * pricing.input_price_per_mtok;
+    let output_cost = (output_tokens as f64 / per_mtok) * pricing.output_price_per_mtok;
+    let cache_read_cost = (cache_read_tokens as f64 / per_mtok)
+        * pricing
+            .cache_read_per_mtok
+            .unwrap_or(pricing.input_price_per_mtok);
+    let cache_write_cost = (cache_creation_tokens as f64 / per_mtok)
+        * pricing
+            .cache_write_per_mtok
+            .unwrap_or(pricing.input_price_per_mtok);
+    input_cost + output_cost + cache_read_cost + cache_write_cost
+}
+
 impl CostTracker {
     /// Create a new cost tracker for a specific model
     pub fn new(model: String) -> Self {
@@ -391,10 +492,34 @@ impl CostTracker {
     /// Calculate cost based on model pricing (in USD).
     /// Prices per million tokens, looked up from the configurable pricing table.
     pub fn calculate_cost(model: &str, input_tokens: u64, output_tokens: u64) -> f64 {
-        let pricing = lookup_pricing(model);
-        let input_cost = (input_tokens as f64 / 1_000_000.0) * pricing.input_price_per_mtok;
-        let output_cost = (output_tokens as f64 / 1_000_000.0) * pricing.output_price_per_mtok;
-        input_cost + output_cost
+        Self::calculate_cost_with_cache(model, input_tokens, output_tokens, 0, 0)
+    }
+
+    /// Like [`CostTracker::calculate_cost`], but also prices prompt-cache
+    /// tokens.
+    ///
+    /// `cache_read_tokens` are tokens served from the prompt cache and
+    /// `cache_creation_tokens` are tokens written to it (Anthropic reports
+    /// both separately from `input_tokens`, so there is no double counting).
+    /// Each is priced at the model's cache rate when one is known
+    /// ([`ModelPricing::cache_read_per_mtok`] /
+    /// [`ModelPricing::cache_write_per_mtok`]); when the rate is `None` the
+    /// tokens fall back to the plain input price, which reproduces the
+    /// pre-cache-aware cost exactly.
+    pub fn calculate_cost_with_cache(
+        model: &str,
+        input_tokens: u64,
+        output_tokens: u64,
+        cache_read_tokens: u64,
+        cache_creation_tokens: u64,
+    ) -> f64 {
+        cost_with_cache(
+            &lookup_pricing(model),
+            input_tokens,
+            output_tokens,
+            cache_read_tokens,
+            cache_creation_tokens,
+        )
     }
 
     /// Record usage and update totals with turn tracking
@@ -1283,6 +1408,8 @@ mod tests {
             ModelPricing {
                 input_price_per_mtok: 5.0,
                 output_price_per_mtok: 25.0,
+                cache_read_per_mtok: None,
+                cache_write_per_mtok: None,
             },
         );
 
@@ -1302,6 +1429,8 @@ mod tests {
             ModelPricing {
                 input_price_per_mtok: 5.0,
                 output_price_per_mtok: 25.0,
+                cache_read_per_mtok: None,
+                cache_write_per_mtok: None,
             },
         );
 
@@ -1334,6 +1463,8 @@ mod tests {
             ModelPricing {
                 input_price_per_mtok: 5.0,
                 output_price_per_mtok: 25.0,
+                cache_read_per_mtok: None,
+                cache_write_per_mtok: None,
             },
         );
 
@@ -1369,11 +1500,15 @@ mod tests {
         let p = ModelPricing {
             input_price_per_mtok: 2.5,
             output_price_per_mtok: 10.0,
+            cache_read_per_mtok: None,
+            cache_write_per_mtok: None,
         };
         let json = serde_json::to_string(&p).unwrap();
         let back: ModelPricing = serde_json::from_str(&json).unwrap();
         assert!((back.input_price_per_mtok - 2.5).abs() < 0.001);
         assert!((back.output_price_per_mtok - 10.0).abs() < 0.001);
+        assert_eq!(back.cache_read_per_mtok, None);
+        assert_eq!(back.cache_write_per_mtok, None);
     }
 
     #[test]
@@ -1390,6 +1525,99 @@ mod tests {
         let cost = CostTracker::calculate_cost("gpt-4.1", 1_000_000, 500_000);
         // 1M * 2.0/1M + 500K * 8.0/1M = 2.0 + 4.0 = 6.0
         assert!((cost - 6.0).abs() < 0.001);
+    }
+
+    // -- Cache-aware cost calculation --
+
+    #[test]
+    fn test_calculate_cost_with_cache_rates() {
+        // claude-sonnet-4-20250514: input 3.0, output 15.0, cache read 0.3
+        // (0.1x input), cache write 3.75 (1.25x input) per Mtok.
+        let cost = CostTracker::calculate_cost_with_cache(
+            "claude-sonnet-4-20250514",
+            1_000_000, // plain input
+            1_000_000, // output
+            500_000,   // cache read
+            200_000,   // cache creation
+        );
+        let expected = 3.0 + 15.0 + 0.5 * 0.3 + 0.2 * 3.75;
+        assert!((cost - expected).abs() < 1e-9, "expected {expected}, got {cost}");
+    }
+
+    #[test]
+    fn test_calculate_cost_cache_fallback_to_input_price() {
+        // A model without cache rates (cache_read/write_per_mtok = None):
+        // cache tokens are priced at the plain input rate.
+        let cost = CostTracker::calculate_cost_with_cache("gpt-4o", 0, 0, 1_000_000, 1_000_000);
+        let expected = 2.5 + 2.5; // both at gpt-4o input price
+        assert!((cost - expected).abs() < 1e-9, "expected {expected}, got {cost}");
+    }
+
+    #[test]
+    fn test_calculate_cost_with_cache_zero_cache_tokens_matches_calculate_cost() {
+        // Without cache tokens the cache-aware path is exactly the legacy math.
+        for model in ["claude-sonnet-4-20250514", "gpt-4o", "unknown-model"] {
+            let legacy = CostTracker::calculate_cost(model, 12_345, 6_789);
+            let cache_aware = CostTracker::calculate_cost_with_cache(model, 12_345, 6_789, 0, 0);
+            assert!(
+                (legacy - cache_aware).abs() < 1e-12,
+                "{model}: {legacy} != {cache_aware}"
+            );
+        }
+    }
+
+    #[test]
+    fn test_anthropic_pricing_cache_rates_derived_from_input() {
+        // Every resolved Anthropic price carries the published multipliers
+        // (read = 0.1x input, write = 1.25x input); non-Anthropic entries
+        // carry None (→ input-rate fallback).
+        let anthropic_models = [
+            "claude-sonnet-4-20250514",
+            "claude-opus-4-20250514",
+            "claude-haiku-4-20250514",
+        ];
+        for model in anthropic_models {
+            let p = lookup_pricing(model);
+            assert_eq!(
+                p.cache_read_per_mtok,
+                Some(p.input_price_per_mtok * 0.1),
+                "{model}: cache read must be 0.1x input"
+            );
+            assert_eq!(
+                p.cache_write_per_mtok,
+                Some(p.input_price_per_mtok * 1.25),
+                "{model}: cache write must be 1.25x input"
+            );
+        }
+        let gpt = lookup_pricing("gpt-4o");
+        assert_eq!(gpt.cache_read_per_mtok, None);
+        assert_eq!(gpt.cache_write_per_mtok, None);
+    }
+
+    #[test]
+    fn test_model_pricing_cache_fields_serde_backcompat() {
+        // Override JSON written before the cache fields existed (no
+        // cache_*_per_mtok keys) must still parse, defaulting to None.
+        let legacy_json =
+            r#"{"custom-model": {"input_price_per_mtok": 1.0, "output_price_per_mtok": 2.0}}"#;
+        let parsed: HashMap<String, ModelPricing> = serde_json::from_str(legacy_json).unwrap();
+        let p = parsed.get("custom-model").unwrap();
+        assert_eq!(p.cache_read_per_mtok, None);
+        assert_eq!(p.cache_write_per_mtok, None);
+
+        // Cache fields roundtrip when present.
+        let p = ModelPricing {
+            input_price_per_mtok: 3.0,
+            output_price_per_mtok: 15.0,
+            cache_read_per_mtok: Some(0.3),
+            cache_write_per_mtok: Some(3.75),
+        };
+        let json = serde_json::to_string(&p).unwrap();
+        assert!(json.contains(r#""cache_read_per_mtok":0.3"#));
+        assert!(json.contains(r#""cache_write_per_mtok":3.75"#));
+        let back: ModelPricing = serde_json::from_str(&json).unwrap();
+        assert_eq!(back.cache_read_per_mtok, Some(0.3));
+        assert_eq!(back.cache_write_per_mtok, Some(3.75));
     }
 
     // -- Default system prompt verification guidance (A2) --

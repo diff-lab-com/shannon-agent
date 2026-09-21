@@ -218,7 +218,18 @@ impl Default for AgentTool {
 impl AgentTool {
     pub fn new() -> Self {
         Self {
-            description: "Spawn and manage AI agent teammates for collaborative problem-solving"
+            description: "Spawn and manage AI agent teammates for collaborative problem-solving.\n\
+\n\
+Delegate when a sub-task is self-contained and benefit from an isolated\n\
+context window: focused research, broad code exploration, or a specialist\n\
+review that would flood the lead's context. Sub-agents run in their own\n\
+session with their own tool registry (no recursive Agent tool) and return\n\
+only their final result — they never see this conversation. Restrict what\n\
+a sub-agent may do with `allowed_tools` (read-only exploration: Read/Grep/\n\
+Glob/Bash) or `disallowed_tools`; otherwise it inherits the parent's tool\n\
+surface minus the parent's denylist. Operations: Spawn (run a task),\n\
+SendMessage (reply to a teammate), CreateTeam, Shutdown. Do NOT delegate\n\
+trivial single-tool lookups — just do them directly."
                 .to_string(),
             context: Arc::new(Mutex::new(None)),
             agent_defs: Arc::new(Mutex::new(None)),
@@ -766,7 +777,12 @@ impl AgentTool {
                             .map(|d| d.allowed_tools.clone())
                             .unwrap_or_default(),
                         working_directory: std::path::PathBuf::from("."),
-                        max_turns: def.map(|d| d.max_concurrent_tasks as u32).unwrap_or(50),
+                        // Same rule as the spawn path: use the definition's own
+                        // `max_turns` budget. `max_concurrent_tasks` is a
+                        // concurrency knob — repurposing it here gave e.g. the
+                        // builtin `explorer` (max_concurrent_tasks = 1) a
+                        // single-turn loop.
+                        max_turns: def.and_then(|d| d.max_turns).unwrap_or(50),
                         team: Some(team_name.clone()),
                         // Inherit the parent's --disallowed-tools denylist as the
                         // baseline. Each sub-agent runs as a fresh `shannon --team-agent`
@@ -1023,6 +1039,10 @@ impl Tool for AgentTool {
                     "type": "object",
                     "description": "Optional context (can include 'team' for team assignment)"
                 },
+                "priority": {
+                    "type": "string",
+                    "description": "Optional priority level for the spawned agent (e.g. 'high')"
+                },
                 "model": {
                     "type": "string",
                     "description": "Optional model override for the sub-agent (e.g. 'claude-sonnet-4-6', 'gpt-4o')"
@@ -1067,7 +1087,8 @@ impl Tool for AgentTool {
                     "description": "Reason for shutdown"
                 }
             },
-            "required": ["operation"]
+            "required": ["operation"],
+            "additionalProperties": false
         })
     }
 }

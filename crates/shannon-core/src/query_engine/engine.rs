@@ -3244,10 +3244,16 @@ impl QueryEngine {
                                             }
                                             let input_tokens = usage.input_tokens as u64;
                                             let output_tokens = usage.output_tokens as u64;
-                                            let cost_usd = CostTracker::calculate_cost(
+                                            // Cache tokens are priced at the model's
+                                            // cache rate when known (fallback: input
+                                            // rate); Anthropic reports them separately
+                                            // from input_tokens, so no double counting.
+                                            let cost_usd = CostTracker::calculate_cost_with_cache(
                                                 &client_model,
                                                 input_tokens,
                                                 output_tokens,
+                                                usage.cache_read_input_tokens as u64,
+                                                usage.cache_creation_input_tokens as u64,
                                             );
 
                                             total_input_tokens += input_tokens;
@@ -4480,10 +4486,16 @@ impl QueryEngine {
                                                                 input_tokens: trailing_in,
                                                                 output_tokens: trailing_out,
                                                                 cost_usd:
-                                                                    CostTracker::calculate_cost(
+                                                                    CostTracker::calculate_cost_with_cache(
                                                                         &client_model,
                                                                         trailing_in,
                                                                         trailing_out,
+                                                                        trailing
+                                                                            .cache_read_input_tokens
+                                                                            as u64,
+                                                                        trailing
+                                                                            .cache_creation_input_tokens
+                                                                            as u64,
                                                                     ),
                                                                 cache_creation_tokens: trailing
                                                                     .cache_creation_input_tokens
@@ -4798,6 +4810,17 @@ impl QueryEngine {
 
                                                 return;
                                             }
+                                        }
+                                        StreamEvent::Error { message } => {
+                                            // Provider-reported mid-stream error,
+                                            // surfaced typed by the API layer
+                                            // (instead of failing the stream with
+                                            // InvalidResponse). Log so it is never
+                                            // silently swallowed; the stream ends
+                                            // right after it by provider design.
+                                            tracing::warn!(
+                                                "LLM stream reported a provider error: {message}"
+                                            );
                                         }
                                         StreamEvent::MessageStop => {}
                                         StreamEvent::Ping => {}

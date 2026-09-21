@@ -248,7 +248,8 @@ async fn write_then_read_roundtrip(world: Arc<dyn FileSystemProvider>, sandbox: 
         .await
         .expect("read succeeds through provider");
     assert!(!out.is_error);
-    assert_eq!(out.content, "hello world");
+    // Output is numbered cat -n style: "N\tcontent".
+    assert_eq!(out.content, "1\thello world");
 
     // Overwrite semantics match the local suite's expectations.
     let out = write_tool
@@ -266,7 +267,7 @@ async fn write_then_read_roundtrip(world: Arc<dyn FileSystemProvider>, sandbox: 
         }))
         .await
         .unwrap();
-    assert_eq!(out.content, "second", "overwrite must replace content");
+    assert_eq!(out.content, "1\tsecond", "overwrite must replace content");
 }
 
 #[tokio::test]

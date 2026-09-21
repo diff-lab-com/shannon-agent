@@ -251,7 +251,14 @@ impl Default for TodoWriteTool {
 impl TodoWriteTool {
     pub fn new() -> Self {
         Self {
-            description: "Create and manage session task checklists for tracking work progress"
+            description: "Create and manage a structured task checklist for the current session.\n\
+\n\
+Use it for multi-step work — 3 or more steps, or any task complex enough\n\
+that progress could be lost track of: write the plan as items up front,\n\
+keep exactly one item in_progress while working, and mark items completed\n\
+as soon as they finish. Each call REPLACES the whole list, so always send\n\
+the full updated set; when every item is completed the list clears. Skip\n\
+it for single trivial actions that need no tracking."
                 .to_string(),
             store: Arc::new(RwLock::new(HashMap::new())),
             session_id: Uuid::new_v4().to_string(),
@@ -376,7 +383,8 @@ impl Tool for TodoWriteTool {
                     }
                 }
             },
-            "required": ["todos"]
+            "required": ["todos"],
+            "additionalProperties": false
         })
     }
 }

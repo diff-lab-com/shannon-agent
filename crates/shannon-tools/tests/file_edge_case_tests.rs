@@ -185,25 +185,27 @@ async fn test_read_binary_file_detection() {
     let binary_content: Vec<u8> = vec![0x00, 0x01, 0x02, 0x03, 0xFF, 0xFE, 0x00, 0x42];
     fs::write(&path, &binary_content).unwrap();
 
-    // The read tool tries `read_to_string` which should fail for binary content
-    // with a null byte in the middle
+    // A NUL byte in the first 8 KB marks the file binary: Read returns a
+    // friendly notice instead of utf8_lossy mojibake or a raw read error.
     let input = ReadInput {
         file_path: path.to_string_lossy().to_string(),
         ..Default::default()
     };
 
     let result = read::execute(input).await;
-    // read_to_string should fail on content with null bytes
+    let output = result.expect("binary files get a friendly notice, not an error");
+    assert!(!output.is_error);
     assert!(
-        result.is_err(),
-        "Reading a binary file with null bytes should return an error, got: {:?}",
-        result
+        output.content.contains("Binary file"),
+        "content should be the binary-file notice, got: {}",
+        output.content
     );
-    let err_msg = result.unwrap_err().to_string();
     assert!(
-        err_msg.contains("Failed to read file") || err_msg.contains("stream"),
-        "Error should indicate read failure: {err_msg}"
+        output.content.contains("bytes"),
+        "notice should report the size, got: {}",
+        output.content
     );
+    assert_eq!(output.metadata["type"], "binary");
 }
 
 // ============================================================================

@@ -17,8 +17,37 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 use tokio::io::{AsyncBufReadExt, BufReader};
 
-/// Shared captured-run helper: builds the request, applies the optional
-/// timeout, and projects the provider result onto [`CommandOutput`].
+/// Default command timeout applied when the caller passes no `timeout`.
+/// Previously `None` meant *unbounded*, so a single hung command could stall
+/// a turn forever.
+const DEFAULT_BASH_TIMEOUT_MS: u64 = 120_000;
+
+/// Hard cap on the resolved command timeout, even when the caller or the
+/// `SHANNON_BASH_TIMEOUT_MS` override asks for more (10 minutes).
+const MAX_BASH_TIMEOUT_MS: u64 = 600_000;
+
+/// Timeout-resolution core: an explicit `timeout` wins, then the
+/// `SHANNON_BASH_TIMEOUT_MS` env override, then the default — clamped to the
+/// hard cap. Split from [`resolve_timeout_ms`] so the env lookup can be
+/// unit-tested without mutating process-global state.
+fn resolve_timeout_ms_with_env(timeout_ms: Option<u64>, env_value: Option<&str>) -> u64 {
+    let requested = timeout_ms
+        .or_else(|| env_value.and_then(|v| v.trim().parse::<u64>().ok()))
+        .unwrap_or(DEFAULT_BASH_TIMEOUT_MS);
+    requested.min(MAX_BASH_TIMEOUT_MS)
+}
+
+/// Resolve the effective command timeout against the live environment.
+fn resolve_timeout_ms(timeout_ms: Option<u64>) -> u64 {
+    resolve_timeout_ms_with_env(
+        timeout_ms,
+        std::env::var("SHANNON_BASH_TIMEOUT_MS").ok().as_deref(),
+    )
+}
+
+/// Shared captured-run helper: builds the request, applies the resolved
+/// timeout (never unbounded — see [`resolve_timeout_ms`]), and projects the
+/// provider result onto [`CommandOutput`].
 async fn run_shell_captured(
     world: &dyn ProcessProvider,
     program: &str,
@@ -38,24 +67,17 @@ async fn run_shell_captured(
         }
     }
 
-    // Execute with timeout if specified
-    let output = if let Some(timeout) = timeout_ms {
-        let duration = Duration::from_millis(timeout);
-        tokio::time::timeout(duration, world.run_async(&request))
-            .await
-            .map_err(|_| {
-                std::io::Error::new(
-                    std::io::ErrorKind::TimedOut,
-                    format!("Command timed out after {timeout}ms"),
-                )
-            })?
-            .map_err(|e| std::io::Error::other(format!("Failed to execute command: {e}")))?
-    } else {
-        world
-            .run_async(&request)
-            .await
-            .map_err(|e| std::io::Error::other(format!("Failed to execute command: {e}")))?
-    };
+    let timeout = resolve_timeout_ms(timeout_ms);
+    let duration = Duration::from_millis(timeout);
+    let output = tokio::time::timeout(duration, world.run_async(&request))
+        .await
+        .map_err(|_| {
+            std::io::Error::new(
+                std::io::ErrorKind::TimedOut,
+                format!("Command timed out after {timeout}ms"),
+            )
+        })?
+        .map_err(|e| std::io::Error::other(format!("Failed to execute command: {e}")))?;
 
     let stdout = String::from_utf8_lossy(&output.stdout).to_string();
     let stderr = String::from_utf8_lossy(&output.stderr).to_string();
@@ -781,23 +803,19 @@ impl DockerSandbox {
         let request = ProcessRequest::new("docker", &args);
         let world = crate::defaults::process();
 
-        let output = if let Some(timeout) = timeout_ms {
-            let duration = std::time::Duration::from_millis(timeout);
-            tokio::time::timeout(duration, world.run_async(&request))
-                .await
-                .map_err(|_| {
-                    std::io::Error::new(
-                        std::io::ErrorKind::TimedOut,
-                        format!("Docker command timed out after {timeout}ms"),
-                    )
-                })?
-                .map_err(|e| std::io::Error::other(format!("Docker execution failed: {e}")))?
-        } else {
-            world
-                .run_async(&request)
-                .await
-                .map_err(|e| std::io::Error::other(format!("Docker execution failed: {e}")))?
-        };
+        // Same resolution as the direct path: `None` means the 120 s default,
+        // not unbounded.
+        let timeout = resolve_timeout_ms(timeout_ms);
+        let duration = std::time::Duration::from_millis(timeout);
+        let output = tokio::time::timeout(duration, world.run_async(&request))
+            .await
+            .map_err(|_| {
+                std::io::Error::new(
+                    std::io::ErrorKind::TimedOut,
+                    format!("Docker command timed out after {timeout}ms"),
+                )
+            })?
+            .map_err(|e| std::io::Error::other(format!("Docker execution failed: {e}")))?;
 
         let stdout = String::from_utf8_lossy(&output.stdout).to_string();
         let stderr = String::from_utf8_lossy(&output.stderr).to_string();
@@ -961,10 +979,12 @@ impl BashTool {
          Each call runs in a fresh shell in the working directory (no state\n\
          carries over; use `&&` to combine steps). Output is capped by the\n\
          harness — avoid commands that dump large files; use head/tail/grep\n\
-         to scope output. A per-call `timeout` (ms) is supported. Long-running\n\
-         or server processes should use RunBackground and be polled with\n\
-         WaitForLog. When a sandbox is active the command runs with restricted\n\
-         filesystem/network access — the tool result reports denials."
+         to scope output. A per-call `timeout` (ms) is supported: it defaults\n\
+         to 120000 when omitted (override with SHANNON_BASH_TIMEOUT_MS) and\n\
+         is hard-capped at 600000. Long-running or server processes should\n\
+         use RunBackground and be polled with WaitForLog. When a sandbox is\n\
+         active the command runs with restricted filesystem/network access —\n\
+         the tool result reports denials."
     }
 
     pub fn new() -> Self {
@@ -980,7 +1000,20 @@ impl BashTool {
     /// Create a BashTool that routes commands through a Docker sandbox
     pub fn with_docker_sandbox(config: DockerSandboxConfig) -> Self {
         Self {
-            description: "Executes bash commands in Docker sandbox".to_string(),
+            // Keep the full default guidance (the contract is the same; only
+            // the execution environment differs) and append the sandbox
+            // specifics the model needs to plan around.
+            description: format!(
+                "{}\n\
+                 \n\
+                 All commands run inside a Docker sandbox: the project is\n\
+                 mounted at {}, the container network mode is '{}', and the\n\
+                 root filesystem is{} read-only.",
+                Self::default_description(),
+                config.workdir,
+                config.network,
+                if config.readonly_root { "" } else { " not" },
+            ),
             sandbox: Some(DockerSandbox::new(config)),
             direct_process: crate::defaults::process(),
             process_sandbox: None,
@@ -1120,14 +1153,25 @@ impl Tool for BashTool {
                 },
                 "timeout": {
                     "type": "integer",
-                    "description": "Optional timeout in milliseconds"
+                    "description": "Optional timeout in milliseconds (default 120000, hard cap 600000)",
+                    "default": 120000
                 },
                 "env": {
                     "type": "object",
-                    "description": "Optional environment variables"
+                    "description": "Optional environment variables",
+                    "additionalProperties": { "type": "string" }
+                },
+                "use_pty": {
+                    "type": "boolean",
+                    "description": "Run in a pseudo-terminal for interactive command support (default: false)"
+                },
+                "stream_delay_ms": {
+                    "type": "integer",
+                    "description": "Delay in ms before streamed output begins (default: 500); faster commands skip streaming entirely"
                 }
             },
-            "required": ["command"]
+            "required": ["command"],
+            "additionalProperties": false
         })
     }
 
@@ -1322,10 +1366,14 @@ impl Tool for BashTool {
 /// Strip non-renderable ANSI escape sequences, preserving SGR color/style codes.
 ///
 /// Keeps `\x1b[...m` sequences (colors, bold, underline, reset) but removes
-/// cursor movement, screen clearing, and other control sequences.
+/// cursor movement, screen clearing, and other control sequences. The regex
+/// is compiled once (this runs per streamed line) via `OnceLock`.
 fn strip_ansi(s: &str) -> String {
     // Strip all CSI sequences except SGR (which ends with 'm')
-    let re = regex::Regex::new(r"\x1b\[[0-9;]*[A-HJ-Za-ln-z]").unwrap();
+    static STRIP_ANSI_RE: std::sync::OnceLock<regex::Regex> = std::sync::OnceLock::new();
+    let re = STRIP_ANSI_RE.get_or_init(|| {
+        regex::Regex::new(r"\x1b\[[0-9;]*[A-HJ-Za-ln-z]").expect("strip_ansi regex is valid")
+    });
     re.replace_all(s, "").into_owned()
 }
 
@@ -1631,10 +1679,12 @@ impl Tool for PowerShellTool {
                 },
                 "env": {
                     "type": "object",
-                    "description": "Optional environment variables"
+                    "description": "Optional environment variables",
+                    "additionalProperties": { "type": "string" }
                 }
             },
-            "required": ["command"]
+            "required": ["command"],
+            "additionalProperties": false
         })
     }
 
@@ -2833,5 +2883,60 @@ mod test_runner_detection_tests {
     fn default_test_command_returns_none_for_empty_dir() {
         let dir = tempfile::tempdir().unwrap();
         assert!(default_test_command(dir.path()).is_none());
+    }
+
+    // ── Bash timeout resolution (R0: no more unbounded runs) ──────────
+
+    #[test]
+    fn timeout_resolution_defaults_to_120s_when_none() {
+        assert_eq!(resolve_timeout_ms_with_env(None, None), 120_000);
+    }
+
+    #[test]
+    fn timeout_resolution_prefers_explicit_timeout() {
+        // Explicit per-call timeout beats both default and env override.
+        assert_eq!(resolve_timeout_ms_with_env(Some(5_000), Some("9_999")), 5_000);
+        assert_eq!(resolve_timeout_ms_with_env(Some(5_000), None), 5_000);
+    }
+
+    #[test]
+    fn timeout_resolution_honors_env_override() {
+        assert_eq!(resolve_timeout_ms_with_env(None, Some("30000")), 30_000);
+        assert_eq!(resolve_timeout_ms_with_env(None, Some(" 45000 ")), 45_000);
+    }
+
+    #[test]
+    fn timeout_resolution_ignores_invalid_env() {
+        // Unparseable or negative-looking env values fall back to default.
+        assert_eq!(resolve_timeout_ms_with_env(None, Some("not-a-number")), 120_000);
+        assert_eq!(resolve_timeout_ms_with_env(None, Some("")), 120_000);
+        assert_eq!(resolve_timeout_ms_with_env(None, Some("-5")), 120_000);
+    }
+
+    #[test]
+    fn timeout_resolution_caps_at_600s() {
+        // Hard cap applies to explicit timeouts…
+        assert_eq!(resolve_timeout_ms_with_env(Some(u64::MAX), None), 600_000);
+        // …and to env overrides.
+        assert_eq!(resolve_timeout_ms_with_env(None, Some("999999999")), 600_000);
+    }
+
+    #[tokio::test]
+    async fn bash_tool_explicit_timeout_aborts_hanging_command() {
+        // End-to-end: the resolved timeout actually reaches the execution
+        // world — a `sleep 5` under a 300ms timeout fails with the timeout
+        // message instead of hanging the call.
+        let tool = BashTool::new();
+        let input = serde_json::json!({
+            "command": "sleep 5",
+            "timeout": 300,
+        });
+        let output = Tool::execute(&tool, input).await.unwrap();
+        assert!(output.is_error, "timed-out command must be an error");
+        assert!(
+            output.content.contains("timed out after 300ms"),
+            "expected timeout message, got: {}",
+            output.content
+        );
     }
 }

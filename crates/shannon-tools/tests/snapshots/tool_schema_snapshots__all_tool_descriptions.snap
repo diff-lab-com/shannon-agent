@@ -2,7 +2,18 @@
 source: crates/shannon-tools/tests/tool_schema_snapshots.rs
 expression: output
 ---
-Agent: Spawn and manage AI agent teammates for collaborative problem-solving
+Agent: Spawn and manage AI agent teammates for collaborative problem-solving.
+
+Delegate when a sub-task is self-contained and benefit from an isolated
+context window: focused research, broad code exploration, or a specialist
+review that would flood the lead's context. Sub-agents run in their own
+session with their own tool registry (no recursive Agent tool) and return
+only their final result — they never see this conversation. Restrict what
+a sub-agent may do with `allowed_tools` (read-only exploration: Read/Grep/
+Glob/Bash) or `disallowed_tools`; otherwise it inherits the parent's tool
+surface minus the parent's denylist. Operations: Spawn (run a task),
+SendMessage (reply to a teammate), CreateTeam, Shutdown. Do NOT delegate
+trivial single-tool lookups — just do them directly.
 AnalyzeImage: Analyze an image file or URL. The image is sent to the LLM for visual analysis based on your prompt. Supports PNG, JPEG, GIF, WebP, BMP, ICO, and TIFF formats.
 AnalyzeImages: Analyze multiple image files in ONE call (batch). Each image is sent to the LLM as part of a single vision request, with results organized under a '## <path>' heading per image. Accepts up to 20 paths; use this instead of calling AnalyzeImage repeatedly. Supports PNG, JPEG, GIF, WebP, BMP, ICO, and TIFF formats.
 Bash: Executes a bash command and returns stdout/stderr.
@@ -10,22 +21,52 @@ Bash: Executes a bash command and returns stdout/stderr.
 Each call runs in a fresh shell in the working directory (no state
 carries over; use `&&` to combine steps). Output is capped by the
 harness — avoid commands that dump large files; use head/tail/grep
-to scope output. A per-call `timeout` (ms) is supported. Long-running
-or server processes should use RunBackground and be polled with
-WaitForLog. When a sandbox is active the command runs with restricted
-filesystem/network access — the tool result reports denials.
+to scope output. A per-call `timeout` (ms) is supported: it defaults
+to 120000 when omitted (override with SHANNON_BASH_TIMEOUT_MS) and
+is hard-capped at 600000. Long-running or server processes should
+use RunBackground and be polled with WaitForLog. When a sandbox is
+active the command runs with restricted filesystem/network access —
+the tool result reports denials.
 Brief: Generate a concise task summary from conversation history or content
 Config: Manage runtime configuration with get, set, list, delete, and reset operations
 Cron: Schedule recurring or one-shot prompts for time-based task execution
 DocsQuery: Fetch up-to-date documentation for libraries and frameworks. Resolves package names via docs.rs (Rust), npm (JavaScript/TypeScript), and PyPI (Python). Returns documentation snippets useful for writing correct code.
-Edit: Perform exact string replacements in files
+Edit: Performs exact string replacement in a file and returns the replacement
+count, match locations and a unified diff.
+
+You MUST Read the file first: `old_string` must match the current content
+byte-for-byte (including whitespace/indentation) and be UNIQUE in the file
+unless `replace_all` is true — include enough surrounding lines to make a
+short snippet unique. A missing or ambiguous match fails with the nearest
+candidates shown. Fallback: when old_string is not in the current content
+but IS in the file's git HEAD version (the file moved under you), the edit
+is applied via a three-way merge; textual conflicts are returned in the
+result instead of being silently overwritten. Use MultiEdit for batched
+edits and Write only to replace a whole file.
 GitBranch: List, create, switch, and delete git branches
 GitDiff: Show git diffs with support for staged, unstaged, and commit range diffs
 GitLog: View git commit history with filtering and formatting options
 GitSafety: Check if a git command is safe before executing it
 GitStash: Manage git stashes: list, push, pop, drop, and apply stashed changes
-Glob: Fast file pattern matching tool that works with any codebase size
-Grep: A powerful search tool built on ripgrep. Searches file contents using regex patterns. Supports include/exclude globs, context lines, case-insensitive matching, and multiple output modes.
+Glob: Fast file-pattern matching tool that works with any codebase size.
+
+Patterns are matched against paths RELATIVE to the search directory (so
+`*.rs` matches only top-level files; use `**/*.rs` to recurse) and
+gitignore-aware traversal skips ignored paths like `target/`. Results are
+sorted by modification time (most recent first) with size/mtime metadata,
+and capped at 100 — when a broad pattern is truncated the result says so,
+so prefer a narrower pattern or a subdirectory `path` over enumerating
+everything. Escaping patterns (`..`, absolute) are rejected.
+Grep: Searches file contents with regex patterns across a directory tree.
+
+Returns matches grouped per file. Output modes: `content` (matching lines
+with optional context_before/context_after lines and line numbers),
+`files` (matching paths only — prefer this when you just need to locate
+code), and `count` (matches per file). Results are capped at `max_results`
+(default 1000); gitignored paths are skipped. Prefer Glob for finding files
+by name and Read for reading a whole file — Grep is for locating patterns
+inside file contents. Supports include/exclude globs and
+case_insensitive matching.
 KillBackground: Terminate a background child by name, wait for it to exit (bounded), and return its exit code plus the captured tail of stdout/stderr.
 McpAuth: Manage OAuth authentication for MCP servers that require it
 McpResource: Read and list resources from MCP (Model Context Protocol) servers
@@ -34,14 +75,16 @@ MultiEdit: Apply multiple file edits atomically — all edits succeed or none ar
 NotebookEdit: Edit Jupyter notebook (.ipynb) cells - replace, insert, or delete cells
 PowerShell: Executes PowerShell commands and returns output
 REPL: Execute a REPL command that wraps primitive tool calls for batch operations
-Read: Read file contents from the local filesystem.
+Read: Read a file from the filesystem.
 
-Returns up to 2000 lines per call; large files are truncated with a notice —
-use `offset`/`limit` to page through them. Output includes no line numbers:
-cite locations as file_path plus nearby unique text. Images (png/jpg/gif/webp)
-are returned as attachments the model can view. You MUST read a file before
-editing it — Edit requires that old_string matches the file exactly, which
-you can only know from a fresh Read.
+Output lines are numbered cat -n style ("{line_number}\t{content}"); cite
+locations as file_path:line. Returns up to 2000 lines per call; large files
+are truncated with a notice — use `offset`/`limit` to page through them (the
+line numbers stay absolute to the file). Images (png/jpg/gif/webp) are
+returned as attachments the model can view. Binary files are reported as
+such instead of being dumped as mojibake. You MUST read a file before editing
+it — Edit requires that old_string matches the file exactly, which you can
+only know from a fresh Read.
 RunBackground: Spawn a long-running bash command and stream stdout/stderr into a line-bounded ring buffer keyed by `name`. Re-calling with the same `name` kills the previous child first. Pair with `WaitForLog` to block until a regex/substring appears, and `KillBackground` to shut down.
 ScheduleWakeup: Schedule a prompt to be enqueued after a delay (for /loop dynamic pacing). Call with delaySeconds and prompt to schedule; omit or call without arguments to end the loop. Cache optimization: delays <= 270s keep the prompt cache warm; 270-300s risks cache expiry; > 300s pays cold read cost. Prefer 270s for active work, 600s+ for idle waits.
 SendMessage: Send messages to agent teammates for collaborative problem-solving
@@ -56,12 +99,26 @@ TaskOutput: Get the output/result of a task execution by its ID
 TaskStop: Stop or cancel a running task by its ID
 TaskUpdate: Update an existing task's status, subject, or description
 TeamDelete: Remove a team and clean up its associated task list
-TodoWrite: Create and manage session task checklists for tracking work progress
+TodoWrite: Create and manage a structured task checklist for the current session.
+
+Use it for multi-step work — 3 or more steps, or any task complex enough
+that progress could be lost track of: write the plan as items up front,
+keep exactly one item in_progress while working, and mark items completed
+as soon as they finish. Each call REPLACES the whole list, so always send
+the full updated set; when every item is completed the list clears. Skip
+it for single trivial actions that need no tracking.
 WaitForLog: Poll a background process's stdout/stderr ring buffer until a substring (match_kind=is) or regex (match_kind=re) matches, the process exits, or the timeout elapses. Returns immediately on match or exit.
 WebFetch: Fetches a URL from the internet and optionally extracts its contents
 WebSearch: Search the web for information using a real search API
 Worktree: Manage git worktree sessions for isolated branch work
-Write: Write content to a file, overwriting if it exists
+Write: Writes `content` to a file, overwriting it entirely if it exists and
+creating it (with any missing parent directories) if it does not.
+
+Prefer Edit for targeted changes to an existing file — Write replaces the
+whole content and silently discards anything not included, so re-read the
+file first if you only saw part of it. The write is atomic (temp file +
+rename): a failure never leaves a partial file. Results report the byte
+count written; content over 10 MB is rejected.
 applescript: Run AppleScript or JXA against scriptable macOS applications (Mail, Calendar, Reminders, Messages, Finder, Notes, …), or run a Shortcuts shortcut. Requires macOS; the first call per application triggers Apple's standard Automation permission prompt.
 ask_user_question: Ask the user a question during execution. Supports single-select, multi-select, and free-text input. Use this when you need confirmation, option selection, or information from the user.
 auto_commit: Smart git commit tool. Stages changes (all or specific files), generates semantic commit messages from diffs, and creates commits. Supports dry-run preview and co-author trailers. Shows git status and diff stats before committing.
