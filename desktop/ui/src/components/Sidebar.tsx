@@ -1,5 +1,5 @@
 import { useState, useCallback, useEffect, useRef, memo } from 'react';
-import { NavLink, useLocation, useNavigate } from 'react-router-dom';
+import { NavLink, useNavigate } from 'react-router-dom';
 import { useIntl } from 'react-intl';
 import { Button } from '@/components/ui/button';
 import { ScrollArea } from '@/components/ui/scroll-area';
@@ -17,14 +17,8 @@ const MIN_W = 200
 const MAX_W = 400
 const DEFAULT_W = 280
 const STORAGE_KEY = 'shannon-sidebar-width'
-const SETTINGS_OPEN_KEY = 'shannon-nav-settings-open'
 export const SIDEBAR_MODE_KEY = 'shannon-sidebar-mode'
 export type SidebarMode = 'simple' | 'dev'
-
-function readSettingsOpen(): boolean {
-  if (typeof window === 'undefined') return false
-  try { return window.localStorage.getItem(SETTINGS_OPEN_KEY) === '1' } catch { return false }
-}
 
 export function useSidebarMode(): [SidebarMode, () => void] {
   const [mode, setMode] = useState<SidebarMode>(() => {
@@ -59,21 +53,6 @@ const getNavClass = ({ isActive }: { isActive: boolean }) =>
       : "text-on-surface-variant hover:bg-surface-container-low hover:text-primary"
   );
 
-// Collapsible sub-navigation link (Settings section).
-function SubNavLink({ to, labelId }: { to: string; labelId: string }) {
-  const intl = useIntl()
-  return (
-    <NavLink to={to} className={getNavClass} title={intl.formatMessage({ id: labelId })}>
-      {({ isActive }) => (
-        <>
-          <span className={cn("w-1.5 h-1.5 rounded-full mr-1 shrink-0", isActive ? "bg-primary" : "bg-outline-variant")} />
-          <span className="flex-1 min-w-0 truncate">{intl.formatMessage({ id: labelId })}</span>
-        </>
-      )}
-    </NavLink>
-  )
-}
-
 /** One flat nav row: fixed icon + truncating label + optional trailing slot. */
 function NavRow({ to, icon, labelId, titleId, trail, onNavigate }: {
   to: string
@@ -101,20 +80,11 @@ function NavRow({ to, icon, labelId, titleId, trail, onNavigate }: {
 export const Sidebar = memo(function Sidebar({ mobile, open = true }: { mobile?: boolean; open?: boolean }) {
   const { close: closeMobile } = useSidebar();
   const [mode, toggleMode] = useSidebarMode();
-  const [settingsOpen, setSettingsOpen] = useState<boolean>(readSettingsOpen);
-  const toggleSettings = useCallback(() => {
-    setSettingsOpen(prev => {
-      const next = !prev
-      try { window.localStorage.setItem(SETTINGS_OPEN_KEY, next ? '1' : '0') } catch { /* noop */ }
-      return next
-    })
-  }, []);
   const [width, setWidth] = useState(() => {
     const stored = localStorage.getItem(STORAGE_KEY)
     return stored ? Math.min(MAX_W, Math.max(MIN_W, parseInt(stored, 10) || DEFAULT_W)) : DEFAULT_W
   });
   const dragging = useRef(false);
-  const location = useLocation();
   const navigate = useNavigate();
   // P2-⑩: split-"New" dropdown (goal / routine entry points).
   const [newMenuOpen, setNewMenuOpen] = useState(false);
@@ -364,33 +334,10 @@ export const Sidebar = memo(function Sidebar({ mobile, open = true }: { mobile?:
             {intl.formatMessage({ id: mode === 'simple' ? 'nav.simpleMode.badge' : 'nav.devMode.badge' })}
           </span>
         </Button>
-        <Button
-          variant="ghost"
-          onClick={toggleSettings}
-          aria-expanded={settingsOpen}
-          className={cn("w-full flex items-center justify-between gap-3 px-3 py-2 rounded-xl font-label-md text-[13px] transition-all duration-200 min-w-0 whitespace-nowrap", location.pathname.includes('/settings') ? "bg-primary/10 text-on-surface font-bold" : "text-on-surface-variant hover:bg-surface-container-low hover:text-primary")}
-        >
-          <div className="flex items-center gap-2.5 min-w-0">
-            <span className="material-symbols-outlined text-[20px] shrink-0" style={{fontVariationSettings: "'FILL' 1"}}>settings</span>
-            <span className="flex-1 min-w-0 truncate">{intl.formatMessage({ id: 'nav.settings' })}</span>
-          </div>
-          <span className="material-symbols-outlined icon-md transition-transform duration-200 shrink-0" style={{ transform: settingsOpen ? 'rotate(180deg)' : 'rotate(0deg)' }} aria-hidden="true">expand_more</span>
-        </Button>
-
-        {settingsOpen && (
-          <div className="pl-3 pr-2 space-y-0.5 mt-1 transition-all min-w-0" aria-label={intl.formatMessage({ id: 'nav.settings.section.aria' })}>
-             <SubNavLink to="/settings/general" labelId="nav.general" />
-             <SubNavLink to="/settings/theme" labelId="nav.theme" />
-             <SubNavLink to="/settings/models" labelId="nav.models" />
-             <SubNavLink to="/settings/permissions" labelId="nav.permissions" />
-             {mode === 'dev' && (
-               <SubNavLink to="/settings/advanced" labelId="nav.advanced" />
-             )}
-             <SubNavLink to="/settings/notifications" labelId="nav.notifications" />
-             <SubNavLink to="/settings/connections" labelId="nav.connections" />
-             <SubNavLink to="/settings/remotes" labelId="nav.remotes" />
-          </div>
-        )}
+        {/* 2026-09 dedup: one flat Settings entry — the section switcher
+    lives on the Settings page rail (pages/Settings.tsx). The old
+    disclosure duplicated it and drifted (dev-gated 高级 here only). */}
+        <NavRow to="/settings" icon="settings" labelId="nav.settings" onNavigate={handleNavClick} />
 
         {/* Status bar */}
         {status && (

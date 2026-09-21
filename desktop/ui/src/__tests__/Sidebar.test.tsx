@@ -63,20 +63,14 @@ describe('Sidebar', () => {
     expect(screen.getByText('Settings')).toBeInTheDocument()
   })
 
-  it('expands Settings section on click', () => {
+  it('Settings is one flat entry — the section switcher lives on the page', () => {
     render(wrap(<Sidebar />))
-    // Settings sub-links are collapsed by default
+    // 单行入口直达 /settings;NavLink 对 /settings/* 子路由保持激活态。
+    expect(screen.getByRole('link', { name: 'Settings' })).toHaveAttribute('href', '/settings')
+    // 旧 disclosure 的子项不再出现在 sidebar 里。
     expect(screen.queryByText('General')).not.toBeInTheDocument()
-
-    fireEvent.click(screen.getByText('Settings'))
-    expect(screen.getByText('General')).toBeInTheDocument()
-    expect(screen.getByText('Theme')).toBeInTheDocument()
-    expect(screen.getByText('Models')).toBeInTheDocument()
-    expect(screen.getByText('Notifications')).toBeInTheDocument()
-    // Billing was removed entirely (P0-4 decision D5); Advanced is dev-only
-    // (P3-2): both hidden in the default Simple mode.
-    expect(screen.queryByText('Usage & Billing')).not.toBeInTheDocument()
-    expect(screen.queryByText('Advanced')).not.toBeInTheDocument()
+    expect(screen.queryByText('Theme')).not.toBeInTheDocument()
+    expect(screen.queryByText('Models')).not.toBeInTheDocument()
   })
 })
 
@@ -181,14 +175,6 @@ describe('Sidebar — Advanced mode', () => {
     // now lives directly inside the Experiments group.
     const opc = screen.getByText('Mission Control').closest('a')
     expect(opc).toHaveAttribute('href', '/opc')
-  })
-
-  it('shows dev-only Settings sub-links (Advanced) when expanded', () => {
-    render(wrap(<Sidebar />))
-    fireEvent.click(screen.getByText('Settings'))
-    // P0-4 (D5): the Billing tab no longer exists anywhere in the app.
-    expect(screen.queryByText('Usage & Billing')).not.toBeInTheDocument()
-    expect(screen.getByText('Advanced')).toBeInTheDocument()
   })
 
   it('Connectors is a flat link straight to the marketplace', () => {
@@ -652,16 +638,6 @@ describe('Sidebar — flat nav (2026-09 ZCode-style simplification)', () => {
     fireEvent.click(screen.getByRole('button', { name: /Switch to Advanced mode/ }))
     expect(screen.getByText('Usage')).toBeInTheDocument()
     expect(screen.getByText('Mission Control')).toBeInTheDocument()
-  })
-
-  it('persists settings expansion across remounts', () => {
-    const { unmount } = render(wrap(<Sidebar />))
-    fireEvent.click(screen.getByText('Settings'))
-    expect(screen.getByText('General')).toBeInTheDocument()
-    unmount()
-    render(wrap(<Sidebar />))
-    // Remounted: Settings still expanded (shannon-nav-settings-open).
-    expect(screen.getByText('General')).toBeInTheDocument()
   })
 })
 
