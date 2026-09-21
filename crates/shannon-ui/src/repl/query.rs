@@ -321,7 +321,7 @@ pub fn handle_query(repl: &mut Repl, input: &str, terminal: &mut Option<&mut Ter
         repl.state
             .effort_level
             .as_deref()
-            .and_then(|s| shannon_core::query_engine::EffortLevel::parse(s))
+            .and_then(shannon_core::query_engine::EffortLevel::parse)
             .unwrap_or_default(),
     );
     query_engine.set_focus_area(repl.state.focus_area.clone());

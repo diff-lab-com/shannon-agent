@@ -629,76 +629,75 @@ fn convert_message_for_openai_flavor(msg: &Message, flavor: OpenAiFlavor) -> Vec
                 let mut out: Vec<Value> = Vec::new();
                 let mut saw_tool_results = false;
                 for b in blocks {
-                    match b {
-                        ContentBlock::ToolResult {
-                            tool_use_id,
-                            content,
-                            ..
-                        } => {
-                            saw_tool_results = true;
-                            let (result_text, image_sources): (String, Vec<(&String, &String)>) =
-                                match content {
-                                    Some(crate::api::types::ToolResultContent::Single(s)) => {
-                                        (s.clone(), Vec::new())
-                                    }
-                                    Some(crate::api::types::ToolResultContent::Multiple(inner)) => {
-                                        let mut texts: Vec<String> = Vec::new();
-                                        let mut imgs: Vec<(&String, &String)> = Vec::new();
-                                        for ib in inner {
-                                            match ib {
-                                                ContentBlock::Text { text } => {
-                                                    texts.push(text.clone())
-                                                }
-                                                ContentBlock::Image { source } => {
-                                                    imgs.push((&source.media_type, &source.data))
-                                                }
-                                                _ => {}
-                                            }
-                                        }
-                                        (texts.join("\n"), imgs)
-                                    }
-                                    None => (String::new(), Vec::new()),
-                                };
-                            out.push(json!({
-                                "role": "tool",
-                                "tool_call_id": tool_use_id,
-                                "content": result_text,
-                            }));
-                            if image_sources.is_empty() {
-                                continue;
-                            }
-                            match flavor {
-                                OpenAiFlavor::OpenAi => {
-                                    let mut parts = vec![json!({
-                                        "type": "text",
-                                        "text": format!(
-                                            "[image(s) returned by tool result {tool_use_id}]"
-                                        ),
-                                    })];
-                                    for (media_type, data) in &image_sources {
-                                        parts.push(json!({
-                                            "type": "image_url",
-                                            "image_url": {
-                                                "url": format!("data:{media_type};base64,{data}")
-                                            }
-                                        }));
-                                    }
-                                    out.push(json!({"role": "user", "content": parts}));
+                    let ContentBlock::ToolResult {
+                        tool_use_id,
+                        content,
+                        ..
+                    } = b
+                    else {
+                        continue;
+                    };
+                    {
+                        saw_tool_results = true;
+                        let (result_text, image_sources): (String, Vec<(&String, &String)>) =
+                            match content {
+                                Some(crate::api::types::ToolResultContent::Single(s)) => {
+                                    (s.clone(), Vec::new())
                                 }
-                                OpenAiFlavor::Ollama => {
-                                    let images: Vec<&String> =
-                                        image_sources.iter().map(|(_, data)| *data).collect();
-                                    out.push(json!({
-                                        "role": "user",
-                                        "content": format!(
-                                            "[image(s) returned by tool result {tool_use_id}]"
-                                        ),
-                                        "images": images,
+                                Some(crate::api::types::ToolResultContent::Multiple(inner)) => {
+                                    let mut texts: Vec<String> = Vec::new();
+                                    let mut imgs: Vec<(&String, &String)> = Vec::new();
+                                    for ib in inner {
+                                        match ib {
+                                            ContentBlock::Text { text } => texts.push(text.clone()),
+                                            ContentBlock::Image { source } => {
+                                                imgs.push((&source.media_type, &source.data))
+                                            }
+                                            _ => {}
+                                        }
+                                    }
+                                    (texts.join("\n"), imgs)
+                                }
+                                None => (String::new(), Vec::new()),
+                            };
+                        out.push(json!({
+                            "role": "tool",
+                            "tool_call_id": tool_use_id,
+                            "content": result_text,
+                        }));
+                        if image_sources.is_empty() {
+                            continue;
+                        }
+                        match flavor {
+                            OpenAiFlavor::OpenAi => {
+                                let mut parts = vec![json!({
+                                    "type": "text",
+                                    "text": format!(
+                                        "[image(s) returned by tool result {tool_use_id}]"
+                                    ),
+                                })];
+                                for (media_type, data) in &image_sources {
+                                    parts.push(json!({
+                                        "type": "image_url",
+                                        "image_url": {
+                                            "url": format!("data:{media_type};base64,{data}")
+                                        }
                                     }));
                                 }
+                                out.push(json!({"role": "user", "content": parts}));
+                            }
+                            OpenAiFlavor::Ollama => {
+                                let images: Vec<&String> =
+                                    image_sources.iter().map(|(_, data)| *data).collect();
+                                out.push(json!({
+                                    "role": "user",
+                                    "content": format!(
+                                        "[image(s) returned by tool result {tool_use_id}]"
+                                    ),
+                                    "images": images,
+                                }));
                             }
                         }
-                        _ => {}
                     }
                 }
                 if saw_tool_results {

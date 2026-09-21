@@ -316,7 +316,7 @@ pub(crate) fn todo_reinjection_block_for_store(store: &TaskStore) -> Option<Stri
             (mark, label)
         })
         .collect::<Vec<_>>();
-    by_status.sort_by(|a, b| a.0.cmp(&b.0).then(a.1.cmp(&b.1)));
+    by_status.sort_by(|a, b| a.0.cmp(b.0).then(a.1.cmp(&b.1)));
     let mut out = String::from("## Current Task List\n\n");
     for (mark, label) in by_status {
         out.push_str(&format!("- [{mark}] {label}\n"));
@@ -1136,12 +1136,7 @@ mod tests {
     }
 
     fn store_ids(store: &TaskStore) -> Vec<String> {
-        store
-            .read()
-            .expect("store lock")
-            .keys()
-            .cloned()
-            .collect()
+        store.read().expect("store lock").keys().cloned().collect()
     }
 
     /// Contract: "Each call REPLACES the whole list." A new plan whose
@@ -1154,15 +1149,19 @@ mod tests {
 
         let a = mk_item("A", TodoStatus::Completed);
         let b = mk_item("B", TodoStatus::Completed);
-        tool.write_todos(TodoWriteInput { todos: vec![a.clone(), b.clone()] })
-            .await
-            .expect("first write");
+        tool.write_todos(TodoWriteInput {
+            todos: vec![a.clone(), b.clone()],
+        })
+        .await
+        .expect("first write");
 
         // New plan: one fresh pending item; A and B are dropped.
         let c = mk_item("C", TodoStatus::Pending);
-        tool.write_todos(TodoWriteInput { todos: vec![c.clone()] })
-            .await
-            .expect("second write");
+        tool.write_todos(TodoWriteInput {
+            todos: vec![c.clone()],
+        })
+        .await
+        .expect("second write");
 
         let ids = store_ids(&store);
         assert_eq!(
@@ -1238,8 +1237,7 @@ mod tests {
             "TaskCreate item must survive TodoWrite rewrite"
         );
         // Reinjection still surfaces both surfaces' items.
-        let block = todo_reinjection_block_for_store(&store)
-            .expect("populated store yields block");
+        let block = todo_reinjection_block_for_store(&store).expect("populated store yields block");
         assert!(block.contains("Plan step") && block.contains("Backlog item"));
     }
 
@@ -1585,8 +1583,8 @@ mod tests {
                 ),
             );
         }
-        let block = todo_reinjection_block_for_store(&store)
-            .expect("populated store yields a block");
+        let block =
+            todo_reinjection_block_for_store(&store).expect("populated store yields a block");
         assert!(block.contains("## Current Task List"));
         assert!(block.contains("First task"));
         assert!(block.contains("Second task"));

@@ -48,6 +48,7 @@ use crate::query_engine::repo_map_injector::RepoMapInjector;
 // path is preserved as the LLM-backed summarizer; the facade's token-based
 // strategy is what fires when no summarizer is available or when the
 // selector chooses the cheap path.
+use super::context_policy::{self, ContextAction};
 #[allow(unused_imports)]
 use super::env_config::DEFAULT_THINK_ONLY_MIN_ANSWER_CHARS;
 #[allow(unused_imports)]
@@ -62,7 +63,6 @@ use super::parsers::{
     ThinkStreamSplitter, is_think_only_response, is_truncation_stop, markdown_bash_command,
     parse_text_tool_calls, split_think_content,
 };
-use super::context_policy::{self, ContextAction};
 use super::recovery;
 use super::routing::{QueryComplexity, classify_query_complexity};
 use crate::compact as p2_compact;
@@ -571,6 +571,12 @@ pub struct ProviderHealth {
     pub latency_ms: Option<u32>,
 }
 
+/// Post-compact reinjection hook: returns the markdown block to append to
+/// the reinjection payload for this compaction, or `None` to contribute
+/// nothing. Shared by hosts that keep short-lived state (todo checklist,
+/// skill activations, …) alive across the compaction boundary.
+pub(crate) type ReinjectionProvider = dyn Fn() -> Option<String> + Send + Sync;
+
 /// Main query engine orchestrator
 #[derive(Clone)]
 pub struct QueryEngine {
@@ -616,7 +622,7 @@ pub struct QueryEngine {
     /// post-compact reinjection payload. Used by host apps to keep
     /// short-lived state (todo checklist, skill activations, etc.) alive
     /// across the in-place context compaction boundary.
-    reinjection_providers: Arc<std::sync::Mutex<Vec<Arc<dyn Fn() -> Option<String> + Send + Sync>>>>,
+    reinjection_providers: Arc<std::sync::Mutex<Vec<Arc<ReinjectionProvider>>>>,
 }
 
 impl QueryEngine {
@@ -1573,7 +1579,7 @@ impl QueryEngine {
         // read the assembled blocks + plain-string fallback back out.
         let assembled = super::system_prompt::build(&super::system_prompt::SystemPromptInputs {
             config: &config,
-            tools: &*tools,
+            tools: &tools,
             memory_injection: memory_injection.clone(),
             repo_map_injector: &self.repo_map_injector,
             context_injector: self.context_injector.as_deref(),
@@ -1586,9 +1592,7 @@ impl QueryEngine {
             // Prefer the plain fallback assembled by the system_prompt
             // module (it appends the env block already); fall back to
             // the local minimal prompt for tool-less runs.
-            assembled
-                .plain
-                .or_else(|| config.system_prompt.clone())
+            assembled.plain.or_else(|| config.system_prompt.clone())
         } else if client_provider == shannon_engine::api::LlmProvider::Ollama {
             // Ollama models use their own chat templates; a system prompt
             // confuses small/unstable models causing malformed output.
@@ -1806,7 +1810,8 @@ impl QueryEngine {
                             | shannon_engine::api::LlmProvider::Bedrock
                             | shannon_engine::api::LlmProvider::Custom
                     ) {
-                        cfg.reasoning_effort = Some(shannon_engine::api::types::ReasoningEffort::High);
+                        cfg.reasoning_effort =
+                            Some(shannon_engine::api::types::ReasoningEffort::High);
                     }
                 }
                 cfg
@@ -2275,10 +2280,8 @@ impl QueryEngine {
                         );
                         // A PR-2 wiring: re-estimation via context_policy
                         // (single source for the tokens+system-prompt sum).
-                        estimated_tokens = context_policy::reestimate(
-                            &messages,
-                            config.system_prompt.as_deref(),
-                        );
+                        estimated_tokens =
+                            context_policy::reestimate(&messages, config.system_prompt.as_deref());
                         usage_ratio = estimated_tokens as f32 / max_context as f32;
                         send_event!(
                             tx,
@@ -3742,20 +3745,29 @@ impl QueryEngine {
                                                                 let error_msg = format!(
                                                                     "Permission required for '{tool_name}' but this session has no approval channel; the operation was denied. Re-run interactively or grant a broader permission mode."
                                                                 );
-                                                                send_event!(tx, QueryEvent::ToolUseResult {
-                                                                    query_id,
-                                                                    tool_use_id: tool_id.clone(),
-                                                                    tool_name,
-                                                                    result: error_msg.clone(),
-                                                                    is_error: true,
-                                                                    meta: Box::new(serde_json::Value::Null),
-                                                                });
-                                                                tool_results.push(ToolResultEntry {
-                                                                    tool_use_id: tool_id,
-                                                                    content: error_msg,
-                                                                    is_error: true,
-                                                                    metadata: Default::default(),
-                                                                });
+                                                                send_event!(
+                                                                    tx,
+                                                                    QueryEvent::ToolUseResult {
+                                                                        query_id,
+                                                                        tool_use_id: tool_id
+                                                                            .clone(),
+                                                                        tool_name,
+                                                                        result: error_msg.clone(),
+                                                                        is_error: true,
+                                                                        meta: Box::new(
+                                                                            serde_json::Value::Null
+                                                                        ),
+                                                                    }
+                                                                );
+                                                                tool_results.push(
+                                                                    ToolResultEntry {
+                                                                        tool_use_id: tool_id,
+                                                                        content: error_msg,
+                                                                        is_error: true,
+                                                                        metadata: Default::default(
+                                                                        ),
+                                                                    },
+                                                                );
                                                                 continue;
                                                             }
                                                         }
@@ -4719,7 +4731,10 @@ impl QueryEngine {
                                                         messages: conversation.messages.clone(),
                                                     }));
 
-                                                publish_stop_trigger(&session_bus, tool_results.len());
+                                                publish_stop_trigger(
+                                                    &session_bus,
+                                                    tool_results.len(),
+                                                );
                                                 let _ =
                                                     tx.send(Ok(QueryEvent::Completed { query_id }));
 
@@ -4832,7 +4847,9 @@ impl QueryEngine {
                                                 ),
                                             }
                                         );
-                                        recovery::push_turn_continuation_nudge(&mut conversation.messages);
+                                        recovery::push_turn_continuation_nudge(
+                                            &mut conversation.messages,
+                                        );
                                         continue 'agent_loop;
                                     } // A14: escalate the stream-idle watchdog budget so the
                                     // continuation attempt is not killed by the same 420s
@@ -5015,7 +5032,10 @@ impl QueryEngine {
                                                         messages: conversation.messages.clone(),
                                                     }
                                                 );
-                                                publish_stop_trigger(&session_bus, tool_results.len());
+                                                publish_stop_trigger(
+                                                    &session_bus,
+                                                    tool_results.len(),
+                                                );
                                                 send_event!(tx, QueryEvent::Completed { query_id });
 
                                                 return;
@@ -5929,8 +5949,8 @@ async fn maybe_run_auto_test(
 #[allow(clippy::unwrap_used)]
 mod tests {
     use super::*;
-    use crate::query_engine::recovery;
     use crate::query_engine::QueryMetadata;
+    use crate::query_engine::recovery;
     use crate::tools::ToolRegistry;
     use shannon_engine::api::ImageSource;
     use shannon_engine::api::{LlmClient, LlmClientConfig, MessageContent};
@@ -8138,7 +8158,10 @@ mod tests {
     fn effort_suffix_high_and_max_content() {
         for level in [EffortLevel::High, EffortLevel::Max] {
             let suffix = effort_system_suffix(level).expect("High/Max have a suffix");
-            assert!(suffix.contains("Think carefully and exhaustively"), "{suffix}");
+            assert!(
+                suffix.contains("Think carefully and exhaustively"),
+                "{suffix}"
+            );
             assert!(suffix.contains("multi-step verification"), "{suffix}");
         }
     }
@@ -8890,7 +8913,11 @@ mod tests {
         let saved = env::var("SHANNON_TURN_RETRIES").ok();
 
         unsafe { env::remove_var("SHANNON_TURN_RETRIES") };
-        assert_eq!(recovery::turn_retries_max(), 2, "unset must yield the default of 2");
+        assert_eq!(
+            recovery::turn_retries_max(),
+            2,
+            "unset must yield the default of 2"
+        );
 
         for garbage in ["0", "abc", "-1", " 3 "] {
             unsafe { env::set_var("SHANNON_TURN_RETRIES", garbage) };

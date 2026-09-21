@@ -464,7 +464,7 @@ fn session_dir_usage(entry: &crate::session_log::SessionScanEntry) -> u64 {
         }
         let path = file.path();
         if path == entry.events_path {
-            total += indexed_len.unwrap_or_else(|| meta.len());
+            total += indexed_len.unwrap_or(meta.len());
         } else {
             total += meta.len();
         }
@@ -494,7 +494,11 @@ pub fn scan_session_usage(sessions_dir: &Path) -> Vec<SessionUsage> {
                 .unwrap_or(SystemTime::UNIX_EPOCH);
             SessionUsage {
                 session_id: entry.session_id.clone(),
-                dir: entry.events_path.parent().unwrap_or(Path::new(".")).to_path_buf(),
+                dir: entry
+                    .events_path
+                    .parent()
+                    .unwrap_or(Path::new("."))
+                    .to_path_buf(),
                 size_bytes: session_dir_usage(&entry),
                 last_modified: events_mtime.max(dir_mtime),
             }
@@ -1301,7 +1305,11 @@ mod tests {
         ];
         let plan = plan_session_retention(&usage, &plan_config(30, 4), plan_now());
         let ids: Vec<&str> = plan.iter().map(|u| u.session_id.as_str()).collect();
-        assert_eq!(ids, vec!["oldest"], "single oldest-first deletion that fits");
+        assert_eq!(
+            ids,
+            vec!["oldest"],
+            "single oldest-first deletion that fits"
+        );
     }
 
     #[test]
@@ -1369,8 +1377,14 @@ mod tests {
         // Backdate both the file and the directory (File::set_modified works
         // through a read-only handle; the write happened just above).
         let old = std::time::SystemTime::now() - Duration::from_secs(age_secs);
-        std::fs::File::open(&log).unwrap().set_modified(old).unwrap();
-        std::fs::File::open(&dir).unwrap().set_modified(old).unwrap();
+        std::fs::File::open(&log)
+            .unwrap()
+            .set_modified(old)
+            .unwrap();
+        std::fs::File::open(&dir)
+            .unwrap()
+            .set_modified(old)
+            .unwrap();
         dir
     }
 
@@ -1412,8 +1426,14 @@ mod tests {
         let (msg, removed) = task.execute(tmp.path()).unwrap();
         assert_eq!(removed, Some(1), "message: {msg}");
         assert!(!container.join(old_id.to_string()).exists());
-        assert!(container.join(recent_id.to_string()).exists(), "recent kept");
-        assert!(msg.contains("1 old session") && msg.contains("8.00 MiB"), "{msg}");
+        assert!(
+            container.join(recent_id.to_string()).exists(),
+            "recent kept"
+        );
+        assert!(
+            msg.contains("1 old session") && msg.contains("8.00 MiB"),
+            "{msg}"
+        );
 
         // A second run is now within budget: nothing further is deleted.
         let (_, removed_again) = task.execute(tmp.path()).unwrap();

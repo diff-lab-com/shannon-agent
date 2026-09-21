@@ -663,8 +663,10 @@ impl SessionStore {
             // log: title from meta.json, summary from the E-9 index when it
             // still validates (never re-project the log for a search hit).
             let sidecar = SessionSidecar::load(&entry.meta_path);
-            let index =
-                SessionIndex::load_if_valid(&entry.events_path, &index_path_for(&entry.events_path));
+            let index = SessionIndex::load_if_valid(
+                &entry.events_path,
+                &index_path_for(&entry.events_path),
+            );
             let title = sidecar.title.clone();
             let summary = index
                 .as_ref()
@@ -688,7 +690,8 @@ impl SessionStore {
                 let Some((match_start, match_end)) = find_case_insensitive(&line, query) else {
                     continue;
                 };
-                let timestamp = ts_ns_from_raw_line(&line).map(|ns| ns_to_datetime(ns).to_rfc3339());
+                let timestamp =
+                    ts_ns_from_raw_line(&line).map(|ns| ns_to_datetime(ns).to_rfc3339());
                 hits.push(SessionSearchHit {
                     session_id: entry.session_id.clone(),
                     title: title.clone(),
@@ -998,7 +1001,9 @@ fn find_case_insensitive(haystack: &str, needle: &str) -> Option<(usize, usize)>
 /// (newlines, tabs) flattened to spaces.
 fn snippet_around(line: &str, match_start: usize, match_end: usize) -> String {
     let line = line.trim();
-    let mut start = match_start.min(line.len()).saturating_sub(SEARCH_SNIPPET_CONTEXT_CHARS);
+    let mut start = match_start
+        .min(line.len())
+        .saturating_sub(SEARCH_SNIPPET_CONTEXT_CHARS);
     while start > 0 && !line.is_char_boundary(start) {
         start -= 1;
     }
@@ -1011,7 +1016,7 @@ fn snippet_around(line: &str, match_start: usize, match_end: usize) -> String {
         .map(|c| if c.is_control() { ' ' } else { c })
         .collect();
     if start > 0 {
-        snippet.insert_str(0, "…");
+        snippet.insert(0, '…');
     }
     if end < line.len() {
         snippet.push('…');
@@ -1592,7 +1597,9 @@ mod tests {
         let new = Uuid::new_v4();
         seed_session_with_prompt(&store, &new, "please find my needle, thanks");
 
-        let outcome = store.search_all_with_stats("NeEdLe", DEFAULT_SEARCH_LIMIT).unwrap();
+        let outcome = store
+            .search_all_with_stats("NeEdLe", DEFAULT_SEARCH_LIMIT)
+            .unwrap();
         assert_eq!(outcome.sessions_total, 2);
         assert_eq!(outcome.sessions_scanned, 2);
         assert_eq!(outcome.hits.len(), 2);
@@ -1714,7 +1721,9 @@ mod tests {
     fn search_all_on_empty_container_is_empty() {
         let tmp = tempfile::tempdir().unwrap();
         let store = store(&tmp);
-        let outcome = store.search_all_with_stats("anything", DEFAULT_SEARCH_LIMIT).unwrap();
+        let outcome = store
+            .search_all_with_stats("anything", DEFAULT_SEARCH_LIMIT)
+            .unwrap();
         assert_eq!(outcome.sessions_total, 0);
         assert!(outcome.hits.is_empty());
     }

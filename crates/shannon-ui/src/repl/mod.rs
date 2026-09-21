@@ -1042,7 +1042,7 @@ impl Repl {
 
         // R1-3: re-inject the todo/task checklist after compaction so a
         // compacted agent retains its plan.
-        query_engine.add_reinjection_provider(|| shannon_tools::todo::todo_reinjection_block());
+        query_engine.add_reinjection_provider(shannon_tools::todo::todo_reinjection_block);
 
         // Auto-load project instructions (Claude Code compatible hierarchy).
         //
