@@ -70,10 +70,15 @@ mockito = "1.6"
 insta = { workspace = true }
 async-trait = { workspace = true }
 serial_test = { version = "3", features = ["file_locks"] }
-rexpect = "0.5"
 criterion = { version = "0.5", features = ["html_reports"] }
 tempfile = "3"
 reqwest = { version = "0.12", features = ["json"] }
+# rexpect is unix-only — its PTY APIs and nix dependency don't compile on
+# Windows toolchains (`nix 0.25`'s unix module isn't reachable from a
+# windows-msvc target). Keep the test-only dep gated to unix so
+# `cargo test --workspace --no-run` works on every CI matrix leg.
+[target.'cfg(unix)'.dev-dependencies]
+rexpect = "0.5"
 
 [[bench]]
 name = "cli_benchmarks"

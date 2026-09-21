@@ -80,6 +80,12 @@ struct LitellmEntry {
     input_cost_per_token: Option<f64>,
     #[serde(default)]
     output_cost_per_token: Option<f64>,
+    /// Prompt-cache read cost per token, when the feed publishes one.
+    #[serde(default)]
+    cache_read_input_token_cost: Option<f64>,
+    /// Prompt-cache write cost per token, when the feed publishes one.
+    #[serde(default)]
+    cache_creation_input_token_cost: Option<f64>,
 }
 
 /// Parse the raw LiteLLM payload into a `model-key → ModelPricing` map.
@@ -105,11 +111,19 @@ pub fn parse_litellm(payload: &str) -> Result<HashMap<String, ModelPricing>, Lit
         {
             continue;
         }
+        // Cache costs are optional ground truth from the feed: keep them only
+        // when sane (finite, non-negative), else fall back to `None`, which
+        // prices cache tokens at the input rate downstream.
+        let cache_cost = |c: Option<f64>| c.filter(|c| c.is_finite() && *c >= 0.0);
         table.insert(
             key,
             ModelPricing {
                 input_price_per_mtok: input_per_token * 1_000_000.0,
                 output_price_per_mtok: output_per_token * 1_000_000.0,
+                cache_read_per_mtok: cache_cost(entry.cache_read_input_token_cost)
+                    .map(|c| c * 1_000_000.0),
+                cache_write_per_mtok: cache_cost(entry.cache_creation_input_token_cost)
+                    .map(|c| c * 1_000_000.0),
             },
         );
     }
@@ -296,6 +310,35 @@ mod tests {
     }
 
     #[test]
+    fn parse_keeps_feed_cache_costs_and_rejects_bad_ones() {
+        // The LiteLLM feed publishes optional cache costs per token; sane
+        // values are scaled to per-Mtok, non-finite/negative ones fall back
+        // to None (input-rate pricing) without dropping the entry.
+        let payload = r#"{
+            "model-a": {
+                "input_cost_per_token": 0.000003,
+                "output_cost_per_token": 0.000015,
+                "cache_read_input_token_cost": 0.0000003,
+                "cache_creation_input_token_cost": 0.00000375
+            },
+            "model-b": {
+                "input_cost_per_token": 0.000003,
+                "output_cost_per_token": 0.000015,
+                "cache_read_input_token_cost": -1.0,
+                "cache_creation_input_token_cost": null
+            }
+        }"#;
+        let table = parse_litellm(payload).expect("parses");
+        let a = table.get("model-a").unwrap();
+        assert!((a.cache_read_per_mtok.unwrap() - 0.3).abs() < 1e-9);
+        assert!((a.cache_write_per_mtok.unwrap() - 3.75).abs() < 1e-9);
+        // Bad cache cost: entry kept, cache rates fall back to None.
+        let b = table.get("model-b").unwrap();
+        assert_eq!(b.cache_read_per_mtok, None);
+        assert_eq!(b.cache_write_per_mtok, None);
+    }
+
+    #[test]
     fn parse_rejects_garbage_and_negative_costs() {
         assert!(parse_litellm("not json").is_err());
         let payload = r#"{
@@ -327,6 +370,8 @@ mod tests {
             ModelPricing {
                 input_price_per_mtok: 3.0,
                 output_price_per_mtok: 15.0,
+                cache_read_per_mtok: None,
+                cache_write_per_mtok: None,
             },
         );
         table.insert(
@@ -334,6 +379,8 @@ mod tests {
             ModelPricing {
                 input_price_per_mtok: 15.0,
                 output_price_per_mtok: 75.0,
+                cache_read_per_mtok: None,
+                cache_write_per_mtok: None,
             },
         );
         with_overlay(table, || {

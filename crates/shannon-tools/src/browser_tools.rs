@@ -19,6 +19,15 @@ use serde_json::{Value, json};
 use std::collections::HashMap;
 use std::sync::Arc;
 
+// ── Concurrency-safety contract ──────────────────────────────────────────
+// All eight tools share one process-global ChromeSession. Mutating tools
+// (navigate / click / type / close) flip page and tab state, so parallel
+// invocations race the same session (a click landing on a tab another call
+// just navigated away) — they are NOT concurrency-safe and serialize.
+// Read-only tools (snapshot / screenshot / tabs / console) only observe
+// state and stay concurrency-safe, per the repo invariant that read-only
+// tools must always be concurrency-safe (tool_trait_compliance).
+
 // ── browser_navigate ────────────────────────────────────────────────────
 pub struct BrowserNavigateTool;
 
@@ -47,7 +56,9 @@ impl Tool for BrowserNavigateTool {
         false
     }
     fn is_concurrency_safe(&self) -> bool {
-        true
+        // Mutating: opens/reuses tabs and flips page state on the shared
+        // ChromeSession — concurrent navigations race each other.
+        false
     }
 
     async fn execute(&self, input: Value) -> crate::ToolResult<crate::ToolOutput> {
@@ -853,6 +864,13 @@ mod tests {
         // serialized but not destructive.
         assert!(!BrowserNavigateTool.is_destructive());
         assert!(!BrowserNavigateTool.is_read_only());
+        assert!(
+            !BrowserNavigateTool.is_concurrency_safe(),
+            "navigate mutates the shared ChromeSession and must serialize"
+        );
+        // Read-only tools observe the shared session without mutating it, so
+        // they stay concurrency-safe (read-only ⇒ concurrency-safe is a
+        // repo-wide invariant enforced by tool_trait_compliance).
         assert!(!BrowserScrollTool.is_destructive());
         assert!(!BrowserScrollTool.is_read_only());
         let readonly: Vec<&dyn Tool> = vec![

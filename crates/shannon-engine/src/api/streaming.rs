@@ -63,10 +63,16 @@ fn is_keepalive_event(event: &StreamEvent) -> bool {
 /// `MessageStop` at all — Ollama's `done` chunk and Gemini's final chunk end
 /// with a `MessageDelta` — so BOTH frames count as terminal; a stream that
 /// ends without either is an abnormal EOF, never a completion.
+///
+/// [`StreamEvent::Error`] is also terminal: the provider ends the stream
+/// after a mid-stream error event, so its EOF is intentional and must not be
+/// synthesized into a premature-EOF error on top of the error already
+/// delivered.
 fn is_terminal_frame(event: &StreamEvent) -> bool {
     match event {
         StreamEvent::MessageStop => true,
         StreamEvent::MessageDelta { delta, .. } => delta.stop_reason.is_some(),
+        StreamEvent::Error { .. } => true,
         _ => false,
     }
 }
@@ -470,6 +476,7 @@ pub fn sse_stream_from_response_resumable(
         reconnecting: false,
         saw_message_stop: false,
         pending_reconnect: None,
+        saw_error_event: false,
     };
     Box::pin(resumable)
 }
@@ -491,6 +498,11 @@ struct ResumableSseStream {
     reconnecting: bool,
     saw_message_stop: bool,
     pending_reconnect: Option<tokio::sync::oneshot::Receiver<Result<MessageStream, ApiError>>>,
+    /// Set once a [`StreamEvent::Error`] passed through. A provider error
+    /// event IS the provider's answer — it terminates the stream by design,
+    /// so nothing after it (its EOF, or a connection collapsing in its wake)
+    /// may trigger a reconnect.
+    saw_error_event: bool,
 }
 
 impl Stream for ResumableSseStream {
@@ -530,6 +542,9 @@ impl Stream for ResumableSseStream {
                 if matches!(event, StreamEvent::MessageStop) {
                     self.saw_message_stop = true;
                 }
+                if matches!(event, StreamEvent::Error { .. }) {
+                    self.saw_error_event = true;
+                }
                 Poll::Ready(Some(Ok(event)))
             }
             Poll::Ready(Some(Err(e))) => {
@@ -545,7 +560,9 @@ impl Stream for ResumableSseStream {
                             ..
                         }
                 );
-                if !is_reconnectable || self.reconnects_remaining == 0 {
+                // A delivered provider error event ends the exchange — never
+                // reconnect over it, whatever error follows.
+                if !is_reconnectable || self.saw_error_event || self.reconnects_remaining == 0 {
                     Poll::Ready(Some(Err(e)))
                 } else {
                     self.start_reconnect(cx);
@@ -554,7 +571,7 @@ impl Stream for ResumableSseStream {
             }
             Poll::Ready(None) => {
                 // Stream ended
-                if self.saw_message_stop || self.reconnects_remaining == 0 {
+                if self.saw_message_stop || self.saw_error_event || self.reconnects_remaining == 0 {
                     Poll::Ready(None)
                 } else {
                     // Premature end — reconnect
@@ -1031,11 +1048,21 @@ mod tests {
     }
 
     #[test]
-    fn test_invalid_json_returns_error() {
+    fn test_invalid_json_maps_to_typed_error_event() {
+        // Unparseable chunks surface as a typed StreamEvent::Error (not a
+        // stream-killing Err), carrying the parse failure message.
         let lines = vec!["data: {invalid json}"];
         let events = parse_sse_lines(&lines, LlmProvider::OpenAI);
         assert_eq!(events.len(), 1);
-        assert!(events[0].is_err());
+        match &events[0] {
+            Ok(StreamEvent::Error { message }) => {
+                assert!(
+                    message.contains("invalid json") || message.contains("{invalid json}"),
+                    "message should identify the bad chunk: {message}"
+                );
+            }
+            other => panic!("Expected typed Error event, got {other:?}"),
+        }
     }
 
     #[test]
@@ -1053,6 +1080,130 @@ mod tests {
             }
             other => panic!("Expected MessageDelta, got {other:?}"),
         }
+    }
+
+    // -- Provider mid-stream error events --
+
+    #[test]
+    fn test_anthropic_mid_stream_error_yields_typed_error() {
+        // An Anthropic stream that emits content, then a provider error event
+        // (e.g. overloaded), then ends. The error must surface as a typed
+        // StreamEvent::Error carrying the provider's message — not as a
+        // parse failure — and the content before it must be preserved.
+        let lines = vec![
+            r#"data: {"type":"message_start","message":{"id":"msg_err","role":"assistant","content":[],"model":"claude-3","stop_reason":null,"usage":{"input_tokens":10,"output_tokens":0}}}"#,
+            r#"data: {"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"partial answer"}}"#,
+            r#"data: {"type":"error","error":{"type":"overloaded_error","message":"Overloaded"}}"#,
+        ];
+        let events = parse_sse_lines(&lines, LlmProvider::Anthropic);
+
+        assert_eq!(events.len(), 3);
+        assert!(events.iter().take(2).all(|e| e.is_ok()));
+        match &events[2] {
+            Ok(StreamEvent::Error { message }) => {
+                assert_eq!(message, "Overloaded");
+            }
+            other => panic!("Expected typed StreamEvent::Error, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn test_anthropic_unknown_event_type_yields_typed_error() {
+        // A valid-JSON event whose type we don't know (future API revision):
+        // surfaced typed instead of killing the stream.
+        let lines = vec![r#"data: {"type":"some_future_event","payload":{"x":1}}"#];
+        let events = parse_sse_lines(&lines, LlmProvider::Anthropic);
+        assert_eq!(events.len(), 1);
+        match &events[0] {
+            Ok(StreamEvent::Error { message }) => {
+                assert!(
+                    message.contains("some_future_event"),
+                    "message should identify the unknown type: {message}"
+                );
+            }
+            other => panic!("Expected typed StreamEvent::Error, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn test_keepalive_ping_stays_ping() {
+        // Keepalives must NOT be converted to Error events.
+        let lines = vec![r#"data: {"type":"ping"}"#];
+        let events = parse_sse_lines(&lines, LlmProvider::Anthropic);
+        assert_eq!(events.len(), 1);
+        assert!(
+            matches!(&events[0], Ok(StreamEvent::Ping)),
+            "ping must stay a keepalive Ping, got {:?}",
+            events[0]
+        );
+    }
+
+    #[test]
+    fn test_openai_mid_stream_error_chunk_yields_typed_error() {
+        // OpenAI-compatible gateways stream errors as {"error":{...}} chunks
+        // (no choices): previously silently dropped.
+        let lines = vec![
+            r#"data: {"error":{"message":"rate limited upstream","type":"server_error","code":"429"}}"#,
+        ];
+        let events = parse_sse_lines(&lines, LlmProvider::OpenAI);
+        assert_eq!(events.len(), 1);
+        match &events[0] {
+            Ok(StreamEvent::Error { message }) => {
+                assert_eq!(message, "rate limited upstream");
+            }
+            other => panic!("Expected typed StreamEvent::Error, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn test_ollama_mid_stream_error_surfaces_and_continues() {
+        // Ollama in-stream errors stay NON-FATAL: the chunk's text content is
+        // still processed, but the error is now surfaced typed.
+        let lines = vec![
+            r#"data: {"message":{"role":"assistant","content":"partial"},"error":"model produced malformed output"}"#,
+        ];
+        let events = parse_sse_lines(&lines, LlmProvider::Ollama);
+        assert_eq!(events.len(), 2, "Error event + content delta");
+        assert!(
+            matches!(&events[0], Ok(StreamEvent::Error { message }) if message.contains("malformed"))
+        );
+        assert!(matches!(
+            &events[1],
+            Ok(StreamEvent::ContentBlockDelta {
+                delta: ContentDelta::TextDelta { text },
+                ..
+            }) if text == "partial"
+        ));
+    }
+
+    #[test]
+    fn test_gemini_mid_stream_error_yields_typed_error() {
+        let lines = vec![
+            r#"data: {"error":{"code":429,"message":"Quota exceeded","status":"RESOURCE_EXHAUSTED"}}"#,
+        ];
+        let events = parse_sse_lines(&lines, LlmProvider::Gemini);
+        assert_eq!(events.len(), 1);
+        match &events[0] {
+            Ok(StreamEvent::Error { message }) => {
+                assert!(message.contains("Quota exceeded"), "{message}");
+            }
+            other => panic!("Expected typed StreamEvent::Error, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn error_event_is_a_terminal_frame() {
+        // The provider ends the stream after an error event: its EOF is
+        // intentional and must not synthesize a premature-EOF error.
+        assert!(is_terminal_frame(&StreamEvent::Error {
+            message: "overloaded".to_string()
+        }));
+        assert!(!is_terminal_frame(&StreamEvent::ContentBlockDelta {
+            index: 0,
+            delta: ContentDelta::TextDelta {
+                text: "x".to_string()
+            },
+        }));
     }
 
     // -- Last-Event-ID tracking --
@@ -1251,23 +1402,28 @@ mod tests {
         ];
         let events = parse_sse_lines(&lines, LlmProvider::Anthropic);
 
+        // The malformed line surfaces as a typed Error event; the stream is
+        // not killed and the valid events still come through.
         let ok_count = events.iter().filter(|e| e.is_ok()).count();
-        let err_count = events.iter().filter(|e| e.is_err()).count();
+        let err_items = events.iter().filter(|e| e.is_err()).count();
 
-        assert_eq!(ok_count, 2, "Should have 2 successful events");
-        assert_eq!(err_count, 1, "Should have 1 error from malformed JSON");
+        assert_eq!(ok_count, 3, "Should have 3 successful events");
+        assert_eq!(err_items, 0, "No stream-level Err items anymore");
+        assert!(
+            events
+                .iter()
+                .any(|e| matches!(e, Ok(StreamEvent::Error { .. }))),
+            "the malformed line must surface as a typed Error event"
+        );
 
         // Verify the valid events' content
         let texts: Vec<String> = events
             .iter()
             .filter_map(|e| match e {
-                Ok(StreamEvent::ContentBlockDelta { delta, .. }) => {
-                    if let ContentDelta::TextDelta { text } = delta {
-                        Some(text.clone())
-                    } else {
-                        None
-                    }
-                }
+                Ok(StreamEvent::ContentBlockDelta {
+                    delta: ContentDelta::TextDelta { text },
+                    ..
+                }) => Some(text.clone()),
                 _ => None,
             })
             .collect();
@@ -1548,5 +1704,61 @@ mod tests {
         assert_eq!(none_v.or(env_v), Some(Duration::from_secs(420)));
         // None + None → None.
         assert_eq!(none_v.or(None), None);
+    }
+
+    /// A delivered `StreamEvent::Error` is the provider's answer: the
+    /// resumable wrapper must pass it through and then end the stream
+    /// WITHOUT attempting a reconnect, even though no `MessageStop` was
+    /// seen (a reconnect would replay a request the provider already
+    /// terminated with an error).
+    #[tokio::test]
+    async fn resumable_stream_does_not_reconnect_after_error_event() {
+        use std::time::Instant;
+
+        let inner: MessageStream = Box::pin(futures::stream::iter(vec![Ok(StreamEvent::Error {
+            message: "Overloaded".to_string(),
+        })]));
+        let mut s = ResumableSseStream {
+            inner,
+            last_event_id: Arc::new(Mutex::new(None)),
+            client: crate::api::client::LlmClient::new(crate::api::LlmClientConfig::default()),
+            messages: Vec::new(),
+            tools: None,
+            system: None,
+            reconnects_remaining: 3,
+            initial_reconnects: 3,
+            reconnecting: false,
+            saw_message_stop: false,
+            pending_reconnect: None,
+            saw_error_event: false,
+        };
+
+        // First event: the typed error, passed through.
+        let first = futures::StreamExt::next(&mut s).await;
+        assert!(
+            matches!(
+                first,
+                Some(Ok(StreamEvent::Error { ref message })) if message == "Overloaded"
+            ),
+            "expected the Error event, got {first:?}"
+        );
+        assert!(!s.reconnecting, "an Error event must not start a reconnect");
+        assert!(s.saw_error_event);
+
+        // The stream must then end cleanly (no reconnect backoff, no extra
+        // events). Bounded so a regressed reconnect cannot hang the test.
+        let started = Instant::now();
+        let rest: Vec<_> = tokio::time::timeout(
+            Duration::from_millis(500),
+            futures::StreamExt::by_ref(&mut s).collect(),
+        )
+        .await
+        .expect("stream must end without reconnecting after an Error event");
+        assert!(rest.is_empty(), "no further events expected: {rest:?}");
+        assert!(
+            started.elapsed() < Duration::from_millis(400),
+            "ending must be immediate, not a reconnect backoff: {:?}",
+            started.elapsed()
+        );
     }
 }

@@ -65,6 +65,10 @@ const WINDOWS_DESKTOP_CONTROL: bool = false;
 /// returns physical pixels, so every model-computed click lands off-target
 /// on any display scaling ≠ 100%. Best-effort: failures are logged and
 /// ignored (the call fails harmlessly if awareness was already set).
+#[cfg_attr(
+    not(all(target_os = "windows", feature = "computer-use")),
+    allow(dead_code)
+)]
 pub fn ensure_dpi_awareness() {
     #[cfg(all(target_os = "windows", feature = "computer-use"))]
     imp::ensure_dpi_awareness();
@@ -74,6 +78,10 @@ pub fn ensure_dpi_awareness() {
 /// provenance to `computer` action results (P2 security story: event logs
 /// show which app each action hit). `None` when unavailable (non-Windows,
 /// query failure, or the desktop shell's own windows).
+#[cfg_attr(
+    not(all(target_os = "windows", feature = "computer-use")),
+    allow(dead_code)
+)]
 pub fn foreground_window_context() -> Option<(String, String)> {
     if WINDOWS_DESKTOP_CONTROL {
         #[cfg(all(target_os = "windows", feature = "computer-use"))]
@@ -83,6 +91,14 @@ pub fn foreground_window_context() -> Option<(String, String)> {
 }
 
 /// Attach foreground-window provenance to a tool output's metadata.
+///
+/// Only invoked from the gated `computer` execution paths
+/// (`#[cfg(feature = "computer-use")]`); the bare lib build never reaches
+/// the callsites, so allow dead-code on the stub side.
+#[cfg_attr(
+    not(all(target_os = "windows", feature = "computer-use")),
+    allow(dead_code)
+)]
 pub(crate) fn attach_window_context(metadata: &mut HashMap<String, serde_json::Value>) {
     if let Some((title, process)) = foreground_window_context() {
         metadata.insert("window_title".to_string(), json!(title));
@@ -92,6 +108,10 @@ pub(crate) fn attach_window_context(metadata: &mut HashMap<String, serde_json::V
 
 /// Structured UIA tree of a window (foreground when `window` is empty).
 /// Error (not panic) on every non-gated shape.
+#[cfg_attr(
+    not(all(target_os = "windows", feature = "computer-use")),
+    allow(dead_code)
+)]
 pub fn ui_tree(window: &str) -> Result<String, String> {
     #[cfg(all(target_os = "windows", feature = "computer-use"))]
     return imp::ui_tree(window);
@@ -104,6 +124,10 @@ pub fn ui_tree(window: &str) -> Result<String, String> {
 
 /// Resolve a UIA element by name substring and return its bounding-rect
 /// center in physical pixels plus a description.
+#[cfg_attr(
+    not(all(target_os = "windows", feature = "computer-use")),
+    allow(dead_code)
+)]
 pub fn ui_click_center(
     window: &str,
     element: &str,
@@ -763,6 +787,10 @@ impl Tool for WindowFocusTool {
                 }
             }
         }
+        // Gated arm ran; if we reach here the build was non-Windows or the
+        // feature is off — drop the unused `title` binding so the stub
+        // compiles under `-D unused-variables`.
+        let _ = title;
         Ok(stub_output("window_focus"))
     }
 }
@@ -863,6 +891,7 @@ impl Tool for ClipboardWriteTool {
                 }
             }
         }
+        let _ = text;
         Ok(stub_output("clipboard_write"))
     }
 }

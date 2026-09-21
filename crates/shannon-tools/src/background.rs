@@ -174,6 +174,7 @@ impl Tool for RunBackgroundTool {
                 },
             },
             "required": ["name", "command"],
+            "additionalProperties": false,
         })
     }
 
@@ -193,15 +194,24 @@ impl Tool for RunBackgroundTool {
         }
         // P0-11: RunBackground previously bypassed the Bash security gate, so
         // a command the sandbox/policy blocked could simply be re-run in the
-        // background. Apply the same Critical-level gate (background processes
-        // are LONG-LIVED, so destructive commands are strictly worse here).
+        // background. Background shells bypass the interactive path entirely
+        // (no sandbox prompt, no confirmation round-trip), so High- AND
+        // Critical-risk commands are refused — a long-lived process makes a
+        // destructive command strictly worse.
         {
             let analysis = crate::system::analyze_command_security(&parsed.command);
-            if analysis.risk_level >= crate::system::SecurityLevel::Critical {
-                return Err(ToolError::ExecutionFailed(
-                    "Security gate: command rejected as Critical-risk. Background                      execution of destructive or system-compromising commands is not                      permitted. Use Bash (sandboxed) for approved work."
-                        .to_string(),
-                ));
+            if analysis.risk_level >= crate::system::SecurityLevel::High {
+                return Err(ToolError::ExecutionFailed(format!(
+                    "Security gate: command rejected as {}-risk. Background shells \
+                     bypass the interactive sandbox/confirmation path that Bash \
+                     applies to risky commands, so High- or Critical-risk work \
+                     cannot run here.\nCommand: {}\nWarnings:\n  - {}\n\nRun it \
+                     through Bash instead (risky commands get the interactive \
+                     confirmation/sandbox path), or split it into safer steps.",
+                    crate::system::describe_risk_level(analysis.risk_level),
+                    parsed.command,
+                    analysis.warnings.join("\n  - "),
+                )));
             }
         }
 
@@ -906,11 +916,66 @@ mod tests {
         )
     }
 
+    // ── Security gate (P0-11 extended): High AND Critical risk refused ─────
+
+    #[tokio::test]
+    async fn high_risk_command_rejected_in_background() {
+        // `shred` is High-risk (confirmation-required), not Critical — the
+        // old Critical-only gate let it through, and background shells skip
+        // the interactive confirmation/sandbox path entirely.
+        let (rb, _wf, _k) = make_tools();
+        let err = rb
+            .execute(json!({
+                "name": "gate-high",
+                "command": "shred secret.txt",
+            }))
+            .await
+            .expect_err("High-risk command must be rejected");
+        let msg = err.to_string();
+        assert!(msg.contains("Security gate"), "got: {msg}");
+        assert!(
+            msg.contains("bypass the interactive sandbox/confirmation path"),
+            "message must explain why, got: {msg}"
+        );
+        assert!(
+            msg.contains("Bash"),
+            "message must point at the sanctioned alternative, got: {msg}"
+        );
+    }
+
+    #[tokio::test]
+    async fn critical_risk_command_rejected_in_background() {
+        let (rb, _wf, _k) = make_tools();
+        let err = rb
+            .execute(json!({
+                "name": "gate-critical",
+                "command": "rm -rf /",
+            }))
+            .await
+            .expect_err("Critical-risk command must be rejected");
+        assert!(
+            err.to_string().contains("Security gate"),
+            "got: {err}"
+        );
+    }
+
+    #[tokio::test]
+    async fn low_risk_command_still_runs_in_background() {
+        let (rb, _wf, _k) = make_tools();
+        let out = rb
+            .execute(json!({
+                "name": "gate-ok",
+                "command": "echo gate-ok",
+            }))
+            .await
+            .expect("Low-risk command must still spawn");
+        assert_eq!(out.metadata["name"].as_str(), Some("gate-ok"));
+    }
+
     /// Spawn `sleep 5` and try to wait for a substring that never appears —
     /// should time out and report matched=false.
     #[tokio::test]
-    async fn wait_for_log_times_out_when_pattern_missing() {
-        let (rb, wf, _k) = make_tools();
+    async fn wait_for_log_times_out_when_pattern_missing() {        let (rb, wf, _k) = make_tools();
         let out = rb
             .execute(json!({
                 "name": "sleeper",

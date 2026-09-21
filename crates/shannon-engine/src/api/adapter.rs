@@ -729,15 +729,52 @@ pub fn normalize_sse_event(
     openai_state: &mut OpenaiStreamState,
 ) -> Vec<Result<StreamEvent, ApiError>> {
     match provider.wire_format() {
-        WireFormat::Anthropic => match serde_json::from_str::<StreamEvent>(json_str) {
-            Ok(event) => vec![Ok(event)],
-            Err(e) => vec![Err(ApiError::InvalidResponse(format!(
-                "Failed to parse Anthropic SSE event: {e} (data: {json_str})"
-            )))],
-        },
+        WireFormat::Anthropic => normalize_anthropic_event(json_str),
         WireFormat::OpenAI => normalize_openai_event(json_str, openai_state),
         WireFormat::Ollama => normalize_ollama_event(json_str),
         WireFormat::Gemini => normalize_gemini_event(json_str, openai_state),
+    }
+}
+
+/// Normalize an Anthropic SSE event.
+///
+/// Known event shapes pass through into `StreamEvent` unchanged. Two shapes
+/// are surfaced as typed [`StreamEvent::Error`] instead of killing the stream:
+/// - provider error events (`{"type":"error","error":{"message":...}}`) — the
+///   nested payload does not fit the tagged enum, so the message is extracted
+///   here; and
+/// - unknown/unparseable payloads (e.g. a new event type from a future API
+///   revision, or a broken frame), which used to fail the whole stream with
+///   `InvalidResponse`.
+///
+/// Keepalives (`{"type":"ping"}`, SSE comment/empty lines) are handled
+/// upstream in `parse_sse_line` and are unaffected.
+fn normalize_anthropic_event(json_str: &str) -> Vec<Result<StreamEvent, ApiError>> {
+    let val: Value = match serde_json::from_str(json_str) {
+        Ok(v) => v,
+        Err(e) => {
+            return vec![Ok(StreamEvent::Error {
+                message: format!("Unparseable Anthropic SSE event: {e} (data: {json_str})"),
+            })];
+        }
+    };
+
+    // Provider mid-stream error event: Anthropic terminates the stream after
+    // it, so surface the provider's message typed.
+    if val.get("type").and_then(Value::as_str) == Some("error") {
+        let message = val
+            .pointer("/error/message")
+            .and_then(Value::as_str)
+            .map(str::to_string)
+            .unwrap_or_else(|| json_str.to_string());
+        return vec![Ok(StreamEvent::Error { message })];
+    }
+
+    match serde_json::from_value::<StreamEvent>(val) {
+        Ok(event) => vec![Ok(event)],
+        Err(e) => vec![Ok(StreamEvent::Error {
+            message: format!("Unknown Anthropic SSE event type: {e} (data: {json_str})"),
+        })],
     }
 }
 
@@ -967,9 +1004,15 @@ pub fn normalize_response(
 
 #[derive(Deserialize)]
 struct OpenAiChunk {
+    #[serde(default)]
     choices: Vec<OpenAiChoice>,
     #[serde(default)]
     usage: Option<OpenAiUsage>,
+    /// Mid-stream error payload from OpenAI-compatible gateways:
+    /// `{"error":{"message":"...","type":"...","code":"..."}}`. Such chunks
+    /// carry no choices/usage and used to be silently dropped.
+    #[serde(default)]
+    error: Option<Value>,
 }
 
 #[derive(Deserialize, Default)]
@@ -1067,11 +1110,25 @@ fn normalize_openai_event(
     let chunk: OpenAiChunk = match serde_json::from_str(json_str) {
         Ok(c) => c,
         Err(e) => {
-            return vec![Err(ApiError::InvalidResponse(format!(
-                "Failed to parse OpenAI chunk: {e} (data: {json_str})"
-            )))];
+            return vec![Ok(StreamEvent::Error {
+                message: format!("Failed to parse OpenAI chunk: {e} (data: {json_str})"),
+            })];
         }
     };
+
+    // Provider mid-stream error event: OpenAI-compatible gateways stream
+    // errors as `{"error":{...}}` chunks. Surface the provider's message
+    // typed instead of dropping the frame.
+    if let Some(err) = &chunk.error {
+        if !err.is_null() {
+            let message = err
+                .get("message")
+                .and_then(Value::as_str)
+                .map(str::to_string)
+                .unwrap_or_else(|| err.to_string());
+            return vec![Ok(StreamEvent::Error { message })];
+        }
+    }
 
     // If we have usage info, emit a MessageDelta with usage.
     //
@@ -1315,14 +1372,22 @@ fn normalize_ollama_event(json_str: &str) -> Vec<Result<StreamEvent, ApiError>> 
         Ok(c) => c,
         Err(e) => {
             // Ollama sometimes sends incomplete JSON chunks during streaming.
-            // Log and skip rather than killing the entire query.
+            // Surface them as a typed error event instead of dropping the
+            // frame silently or killing the entire query.
             tracing::warn!(
                 "Skipping malformed Ollama chunk: {e} (data: {} bytes)",
                 json_str.len()
             );
-            return vec![];
+            return vec![Ok(StreamEvent::Error {
+                message: format!(
+                    "Malformed Ollama chunk: {e} (data: {} bytes)",
+                    json_str.len()
+                ),
+            })];
         }
     };
+
+    let mut events: Vec<Result<StreamEvent, ApiError>> = Vec::new();
 
     // Ollama can return errors mid-stream (e.g. model produces malformed output).
     // Guard: skip empty error strings (some Ollama versions include `"error":""`
@@ -1330,19 +1395,22 @@ fn normalize_ollama_event(json_str: &str) -> Vec<Result<StreamEvent, ApiError>> 
     //
     // Treat in-stream errors as NON-FATAL for Ollama. Many local models produce
     // valid text alongside (or before) a malformed tool-call error. Stopping the
-    // stream kills the entire response. Instead, log the warning and continue
-    // processing — any text content in this or subsequent chunks is still valid.
-    // This matches the pre-error-field behavior where errors were silently ignored.
+    // stream kills the entire response. Instead, surface the error as a typed
+    // event and continue processing — any text content in this or subsequent
+    // chunks is still valid. This keeps the previous fall-through behavior,
+    // where the error was only logged, while making it visible to consumers.
     if let Some(error) = &chunk.error {
         if !error.is_empty() {
             tracing::warn!("Ollama stream error (non-fatal, continuing): {error}");
-            // Fall through — process content/tool_calls from this chunk if present
+            events.push(Ok(StreamEvent::Error {
+                message: error.clone(),
+            }));
         }
     }
 
     if chunk.done {
         // Final chunk with usage info
-        return vec![Ok(StreamEvent::MessageDelta {
+        events.push(Ok(StreamEvent::MessageDelta {
             delta: MessageDeltaDelta {
                 stop_reason: Some("end_turn".to_string()),
                 stop_sequence: None,
@@ -1352,7 +1420,8 @@ fn normalize_ollama_event(json_str: &str) -> Vec<Result<StreamEvent, ApiError>> 
                 output_tokens: chunk.eval_count.unwrap_or(0),
                 ..Default::default()
             },
-        })];
+        }));
+        return events;
     }
 
     if let Some(ref msg) = chunk.message {
@@ -1361,41 +1430,41 @@ fn normalize_ollama_event(json_str: &str) -> Vec<Result<StreamEvent, ApiError>> 
         // This matches Anthropic's incremental pattern so the engine's
         // ContentBlockStop handler naturally finalizes the tool input.
         if let Some(ref tool_calls) = msg.tool_calls {
-            let mut events = Vec::new();
             for (idx, tc) in tool_calls.iter().enumerate() {
-                events.push(StreamEvent::ContentBlockStart {
+                events.push(Ok(StreamEvent::ContentBlockStart {
                     index: idx,
                     content_block: ContentBlock::ToolUse {
                         id: format!("call_{idx}"),
                         name: tc.function.name.clone(),
                         input: serde_json::Value::Object(Default::default()),
                     },
-                });
-                events.push(StreamEvent::ContentBlockDelta {
+                }));
+                events.push(Ok(StreamEvent::ContentBlockDelta {
                     index: idx,
                     delta: ContentDelta::InputJsonDelta {
                         partial_json: tc.function.arguments.to_string(),
                     },
-                });
-                events.push(StreamEvent::ContentBlockStop { index: idx });
+                }));
+                events.push(Ok(StreamEvent::ContentBlockStop { index: idx }));
             }
-            return events.into_iter().map(Ok).collect();
+            return events;
         }
 
         // Text content
         if let Some(ref content) = msg.content {
             if !content.is_empty() {
-                return vec![Ok(StreamEvent::ContentBlockDelta {
+                events.push(Ok(StreamEvent::ContentBlockDelta {
                     index: 0,
                     delta: ContentDelta::TextDelta {
                         text: content.clone(),
                     },
-                })];
+                }));
+                return events;
             }
         }
     }
 
-    vec![]
+    events
 }
 
 // ── Gemini Request Serialization ────────────────────────────────────────────
@@ -1652,9 +1721,18 @@ fn serialize_gemini_request(request: &MessageRequest) -> Value {
 #[derive(Deserialize)]
 struct GeminiResponse {
     candidates: Option<Vec<GeminiCandidate>>,
+    /// Mid-stream error payload: `{"error":{"code":...,"message":"...","status":"..."}}`.
+    #[serde(default)]
+    error: Option<GeminiError>,
     #[serde(default)]
     #[serde(rename = "usageMetadata")]
     usage_metadata: Option<GeminiUsageMetadata>,
+}
+
+#[derive(Deserialize)]
+struct GeminiError {
+    message: Option<String>,
+    status: Option<String>,
 }
 
 #[derive(Deserialize)]
@@ -1766,11 +1844,24 @@ fn normalize_gemini_event(
     let resp: GeminiResponse = match serde_json::from_str(json_str) {
         Ok(r) => r,
         Err(e) => {
-            return vec![Err(ApiError::InvalidResponse(format!(
-                "Failed to parse Gemini SSE event: {e} (data: {json_str})"
-            )))];
+            return vec![Ok(StreamEvent::Error {
+                message: format!("Failed to parse Gemini SSE event: {e} (data: {json_str})"),
+            })];
         }
     };
+
+    // Provider mid-stream error event: Gemini streams errors as
+    // `{"error":{...}}` chunks (no candidates), which used to normalize to
+    // an empty event list — silently dropped.
+    if let Some(err) = resp.error {
+        let message = match (err.message, err.status) {
+            (Some(m), Some(s)) => format!("{s}: {m}"),
+            (Some(m), None) => m,
+            (None, Some(s)) => s,
+            (None, None) => json_str.to_string(),
+        };
+        return vec![Ok(StreamEvent::Error { message })];
+    }
 
     let mut events = Vec::new();
 
@@ -2653,17 +2744,54 @@ mod tests {
     // -- Round-trip: no panic on malformed JSON --
 
     #[test]
-    fn test_malformed_json_returns_error() {
-        let result = normalize_sse_event("not json", &LlmProvider::OpenAI, &mut fresh_state());
-        assert!(result[0].is_err());
+    fn test_malformed_json_yields_typed_error_event() {
+        // Malformed chunks surface as a typed StreamEvent::Error for every
+        // wire format — never a panic, never a silently dropped frame.
+        for provider in [LlmProvider::OpenAI, LlmProvider::Anthropic] {
+            let result = normalize_sse_event("not json", &provider, &mut fresh_state());
+            assert_eq!(result.len(), 1, "{provider:?}");
+            assert!(
+                matches!(&result[0], Ok(StreamEvent::Error { .. })),
+                "{provider:?} should yield a typed Error event, got {:?}",
+                result[0]
+            );
+        }
 
-        // Ollama gracefully skips malformed chunks (logs warning, continues stream)
+        // Ollama also surfaces it typed (previously the frame was dropped).
         let result = normalize_sse_event("not json", &LlmProvider::Ollama, &mut fresh_state());
-        assert!(result.is_empty());
+        assert!(
+            matches!(&result[0], Ok(StreamEvent::Error { .. })),
+            "Ollama should yield a typed Error event, got {:?}",
+            result[0]
+        );
+    }
 
-        // Anthropic also returns error for invalid JSON
-        let result = normalize_sse_event("not json", &LlmProvider::Anthropic, &mut fresh_state());
-        assert!(result[0].is_err());
+    // -- Provider mid-stream error events --
+
+    #[test]
+    fn test_anthropic_sse_sequence_with_mid_stream_error_yields_typed_error() {
+        // An Anthropic SSE sequence carrying a mid-stream provider error
+        // event must yield StreamEvent::Error with the provider's message —
+        // not InvalidResponse — while earlier content stays intact.
+        let mut state = fresh_state();
+        let mut events = Vec::new();
+        for line in [
+            r#"{"type":"message_start","message":{"id":"msg_1","role":"assistant","content":[],"model":"claude-3","stop_reason":null,"usage":{"input_tokens":1,"output_tokens":0}}}"#,
+            r#"{"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"so far"}}"#,
+            r#"{"type":"error","error":{"type":"overloaded_error","message":"Overloaded"}}"#,
+        ] {
+            events.extend(normalize_sse_event(
+                line,
+                &LlmProvider::Anthropic,
+                &mut state,
+            ));
+        }
+        assert_eq!(events.len(), 3);
+        assert!(events.iter().take(2).all(|e| e.is_ok()));
+        match &events[2] {
+            Ok(StreamEvent::Error { message }) => assert_eq!(message, "Overloaded"),
+            other => panic!("Expected StreamEvent::Error, got {other:?}"),
+        }
     }
 
     // -- Non-streaming response normalization --
@@ -3761,27 +3889,38 @@ mod tests {
 
     #[test]
     fn test_ollama_stream_error_in_chunk() {
-        // Ollama errors in chunks are non-fatal: logged as warnings, stream continues.
-        // A chunk with only error (no content) produces no events (skipped).
+        // Ollama errors in chunks are non-fatal: the stream continues, and
+        // the error now surfaces as a typed StreamEvent::Error instead of
+        // only a log line.
         let chunk_json =
             r#"{"error":"Value looks like object, but can't find closing '}' symbol"}"#;
         let result = normalize_sse_event(chunk_json, &LlmProvider::Ollama, &mut fresh_state());
         assert_eq!(
             result.len(),
-            0,
-            "Error-only chunk should be skipped (non-fatal)"
+            1,
+            "Error-only chunk should yield one typed Error event"
+        );
+        assert!(
+            matches!(&result[0], Ok(StreamEvent::Error { message }) if message.contains("can't find closing")),
+            "expected typed Error with the Ollama message, got {:?}",
+            result[0]
         );
     }
 
     #[test]
     fn test_ollama_stream_error_generic() {
-        // Error-only chunk is non-fatal: skipped, stream continues
+        // Error-only chunk is non-fatal: surfaced typed, stream continues.
         let chunk_json = r#"{"error":"model not found"}"#;
         let result = normalize_sse_event(chunk_json, &LlmProvider::Ollama, &mut fresh_state());
         assert_eq!(
             result.len(),
-            0,
-            "Error-only chunk should be skipped (non-fatal)"
+            1,
+            "Error-only chunk should yield one typed Error event"
+        );
+        assert!(
+            matches!(&result[0], Ok(StreamEvent::Error { message }) if message == "model not found"),
+            "expected typed Error with the Ollama message, got {:?}",
+            result[0]
         );
     }
 
@@ -3809,15 +3948,21 @@ mod tests {
 
     #[test]
     fn test_ollama_chunk_with_both_message_and_error() {
-        // Error is non-fatal: content is preserved, error is just logged
+        // Error is non-fatal: the content is preserved AND the error is
+        // surfaced as a typed StreamEvent::Error (before the content).
         let chunk_json = r#"{"message":{"content":"hello"},"error":"something went wrong"}"#;
         let result = normalize_sse_event(chunk_json, &LlmProvider::Ollama, &mut fresh_state());
         assert_eq!(
             result.len(),
-            1,
-            "Should produce content delta only (error is non-fatal)"
+            2,
+            "Should produce a typed Error event plus the content delta"
         );
-        match &result[0] {
+        assert!(
+            matches!(&result[0], Ok(StreamEvent::Error { message }) if message == "something went wrong"),
+            "expected typed Error first, got {:?}",
+            result[0]
+        );
+        match &result[1] {
             Ok(StreamEvent::ContentBlockDelta { delta, .. }) => match delta {
                 ContentDelta::TextDelta { text } => assert_eq!(text, "hello"),
                 other => panic!("Expected TextDelta, got {other:?}"),

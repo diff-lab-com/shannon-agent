@@ -954,6 +954,9 @@ impl ToolExecutionService {
                 tool_name: tool_name.to_string(),
                 input: input.clone(),
                 output: output.clone(),
+                // This helper is only called on the success path; failures
+                // go through `fire_post_failure_hook` (PostToolUseFailure).
+                is_error: false,
             };
             let hm_guard = hm.read().await;
             if let Err(e) = hm_guard.run_hooks(&event).await {

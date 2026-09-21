@@ -663,8 +663,13 @@ pub fn plugin_spawn_world(
     workspace: &Path,
 ) -> Result<PluginSpawnWorld, SandboxError> {
     // The Linux fork-init world is fully determined by the policy; the
-    // workspace parameter exists for the macOS Seatbelt config.
-    #[cfg(target_os = "linux")]
+    // workspace parameter exists for the macOS Seatbelt config. The two
+    // #[cfg(target_os = "linux")] let _ =  lines below keep every host
+    // (incl. Windows builds of shannon-tools) using both parameters in
+    // some arm, so `-D warnings` doesn't fire `unused variables`.
+    #[cfg(not(target_os = "linux"))]
+    let _ = policy;
+    #[cfg(not(target_os = "macos"))]
     let _ = workspace;
     #[cfg(target_os = "linux")]
     {

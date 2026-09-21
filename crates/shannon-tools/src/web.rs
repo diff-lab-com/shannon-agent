@@ -11,10 +11,35 @@ use serde::{Deserialize, Serialize};
 use serde_json::json;
 use std::collections::HashMap;
 use std::net::IpAddr;
+use std::sync::Arc;
 
 // ---------------------------------------------------------------------------
 // Shared types
 // ---------------------------------------------------------------------------
+
+/// Hard cap on a fetched response body (10 MB). Bodies are streamed and
+/// aborted at this limit instead of being read into memory unbounded.
+const MAX_RESPONSE_BYTES: usize = 10 * 1024 * 1024;
+
+/// Maximum number of redirects the WebFetch client follows. Every hop must
+/// re-pass URL validation (see the custom redirect policy in
+/// [`WebFetchTool::new`]).
+const MAX_REDIRECTS: usize = 3;
+
+/// DNS resolver seam: maps a hostname to every address it resolves to.
+///
+/// Production builds use the system resolver ([`system_resolve`]); tests
+/// inject a fake so DNS-based SSRF (a public hostname resolving to
+/// `127.0.0.1` or an internal IP) can be exercised without a network.
+pub type HostResolver = Arc<dyn Fn(&str) -> std::io::Result<Vec<IpAddr>> + Send + Sync>;
+
+/// System resolver backing [`HostResolver`] in production builds.
+fn system_resolve(host: &str) -> std::io::Result<Vec<IpAddr>> {
+    use std::net::ToSocketAddrs;
+    // The port is a placeholder — getaddrinfo resolves by name only.
+    let addrs = (host, 0u16).to_socket_addrs()?;
+    Ok(addrs.map(|a| a.ip()).collect())
+}
 
 /// Web operation types
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -79,6 +104,12 @@ pub struct WebFetchOutput {
 /// - Loopback addresses
 /// - Cloud metadata endpoints (169.254.169.254)
 /// - Hostname-only URLs without a TLD that resolve to loopback
+/// - IPv6 unique-local (fc00::/7) and link-local (fe80::/10) literals
+/// - IPv4-mapped IPv6 literals (`::ffff:10.0.0.1` and friends)
+///
+/// This checks the URL *literally* only. Callers that actually fetch must
+/// also run [`validate_fetch_url_resolved`] so hostnames are resolved and
+/// every resolved IP passes the same block list.
 fn validate_fetch_url(url_str: &str) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let parsed = reqwest::Url::parse(url_str).map_err(|e| format!("Invalid URL: {e}"))?;
 
@@ -111,35 +142,7 @@ fn validate_fetch_url(url_str: &str) -> Result<(), Box<dyn std::error::Error + S
     // Also handle IPv6 bracket notation from URL host
     let ip_check_str = host.trim_start_matches('[').trim_end_matches(']');
     if let Ok(ip) = ip_check_str.parse::<IpAddr>() {
-        match ip {
-            IpAddr::V4(v4) => {
-                if v4.is_loopback() {
-                    return Err("Blocked: loopback address".into());
-                }
-                if v4.is_private() {
-                    return Err("Blocked: private IP address".into());
-                }
-                if v4.is_link_local() {
-                    return Err("Blocked: link-local address".into());
-                }
-                // is_unspecified catches 0.0.0.0
-                if v4.is_unspecified() {
-                    return Err("Blocked: unspecified address (0.0.0.0)".into());
-                }
-                // Check for broadcast (255.255.255.255)
-                if v4.is_broadcast() {
-                    return Err("Blocked: broadcast address".into());
-                }
-            }
-            IpAddr::V6(v6) => {
-                if v6.is_loopback() {
-                    return Err("Blocked: IPv6 loopback address".into());
-                }
-                if v6.is_unspecified() {
-                    return Err("Blocked: IPv6 unspecified address".into());
-                }
-            }
-        }
+        check_resolved_ip(ip)?;
     }
 
     // Block obvious localhost-like hostnames
@@ -154,10 +157,124 @@ fn validate_fetch_url(url_str: &str) -> Result<(), Box<dyn std::error::Error + S
     Ok(())
 }
 
+/// Validate one IP address against the SSRF block list. Shared by the
+/// literal-host check in [`validate_fetch_url`] and by DNS resolution in
+/// [`validate_fetch_url_resolved`], so a hostname can never reach an address
+/// a literal URL would be blocked for.
+fn check_resolved_ip(ip: IpAddr) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+    match ip {
+        IpAddr::V4(v4) => {
+            if v4.is_loopback() {
+                return Err("Blocked: loopback address".into());
+            }
+            if v4.is_private() {
+                return Err("Blocked: private IP address".into());
+            }
+            if v4.is_link_local() {
+                return Err("Blocked: link-local address".into());
+            }
+            // is_unspecified catches 0.0.0.0
+            if v4.is_unspecified() {
+                return Err("Blocked: unspecified address (0.0.0.0)".into());
+            }
+            // Check for broadcast (255.255.255.255)
+            if v4.is_broadcast() {
+                return Err("Blocked: broadcast address".into());
+            }
+        }
+        IpAddr::V6(v6) => {
+            if v6.is_loopback() {
+                return Err("Blocked: IPv6 loopback address".into());
+            }
+            if v6.is_unspecified() {
+                return Err("Blocked: IPv6 unspecified address".into());
+            }
+            // IPv4-mapped IPv6 (`::ffff:a.b.c.d`): unwrap and apply the v4
+            // rules, otherwise `http://[::ffff:10.0.0.1]/` sails through the
+            // v6 checks above.
+            if let Some(v4) = v6.to_ipv4_mapped() {
+                return check_resolved_ip(IpAddr::V4(v4));
+            }
+            // Unique-local fc00::/7: top 7 bits `1111 110x` (first byte of
+            // the first segment; segments are u16 so mask 0xfe00).
+            if (v6.segments()[0] & 0xfe00) == 0xfc00 {
+                return Err("Blocked: IPv6 unique-local address (fc00::/7)".into());
+            }
+            // Link-local fe80::/10: top 10 bits `1111 1110 10`.
+            if (v6.segments()[0] & 0xffc0) == 0xfe80 {
+                return Err("Blocked: IPv6 link-local address (fe80::/10)".into());
+            }
+        }
+    }
+    Ok(())
+}
+
+/// Full URL validation for an actual fetch: [`validate_fetch_url`] first
+/// (scheme + literal host + hostname heuristics), then — for hostname URLs —
+/// DNS resolution through `resolve`, with EVERY resolved address passing the
+/// same block list. This closes the SSRF hole where a public hostname
+/// (`evil.example.com`) resolves to `127.0.0.1` or an internal IP.
+///
+/// The resolver is a parameter so tests can inject addresses without a
+/// network; production passes [`system_resolve`].
+fn validate_fetch_url_resolved(
+    url_str: &str,
+    resolve: &dyn Fn(&str) -> std::io::Result<Vec<IpAddr>>,
+) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+    validate_fetch_url(url_str)?;
+
+    let parsed = reqwest::Url::parse(url_str).map_err(|e| format!("Invalid URL: {e}"))?;
+    let host = parsed
+        .host_str()
+        .ok_or_else(|| "Blocked: URL has no host".to_string())?;
+    let ip_check_str = host.trim_start_matches('[').trim_end_matches(']');
+    if ip_check_str.parse::<IpAddr>().is_ok() {
+        // IP literal — already validated above; nothing left to resolve.
+        return Ok(());
+    }
+
+    let ips = resolve(host)
+        .map_err(|e| format!("Blocked: DNS resolution failed for '{host}': {e}"))?;
+    if ips.is_empty() {
+        return Err(format!("Blocked: hostname '{host}' resolved to no addresses").into());
+    }
+    for ip in ips {
+        check_resolved_ip(ip).map_err(|e| format!("{e} (host '{host}' resolved to {ip})"))?;
+    }
+    Ok(())
+}
+
 /// WebFetch tool implementation
 pub struct WebFetchTool {
     description: String,
     client: Client,
+    /// DNS resolver used for SSRF host validation (injectable for tests).
+    resolver: HostResolver,
+}
+
+/// Custom redirect policy shared by every client WebFetchTool builds: each
+/// hop re-runs literal URL validation and the hop count is capped. Resolved-IP
+/// checks cannot run inside the (synchronous) policy; the final destination
+/// is re-validated with DNS resolution after `send()` instead, so a body is
+/// only ever read from a fully-validated URL.
+fn ssrf_redirect_policy() -> reqwest::redirect::Policy {
+    reqwest::redirect::Policy::custom(|attempt| {
+        if attempt.previous().len() >= MAX_REDIRECTS {
+            return attempt.error(format!("too many redirects (max {MAX_REDIRECTS})"));
+        }
+        match validate_fetch_url(attempt.url().as_str()) {
+            Ok(()) => attempt.follow(),
+            Err(e) => attempt.error(format!("redirect blocked by SSRF validation: {e}")),
+        }
+    })
+}
+
+fn build_client() -> Result<Client, reqwest::Error> {
+    Client::builder()
+        .user_agent("ShannonCode/1.0")
+        .timeout(std::time::Duration::from_secs(30))
+        .redirect(ssrf_redirect_policy())
+        .build()
 }
 
 impl Default for WebFetchTool {
@@ -171,18 +288,41 @@ impl WebFetchTool {
         Self {
             description: "Fetches a URL from the internet and optionally extracts its contents"
                 .to_string(),
-            client: Client::builder()
-                .user_agent("ShannonCode/1.0")
-                .timeout(std::time::Duration::from_secs(30))
-                .build()
-                .unwrap_or_else(|e| {
-                    tracing::error!("Failed to create HTTP client: {e}");
-                    Client::builder()
-                        .timeout(std::time::Duration::from_secs(30))
-                        .build()
-                        .unwrap_or_else(|_| Client::new())
-                }),
+            client: build_client().unwrap_or_else(|e| {
+                tracing::error!("Failed to create HTTP client: {e}");
+                // Fallback keeps the same SSRF redirect policy; only the
+                // user-agent is dropped.
+                Client::builder()
+                    .timeout(std::time::Duration::from_secs(30))
+                    .redirect(ssrf_redirect_policy())
+                    .build()
+                    .unwrap_or_else(|_| Client::new())
+            }),
+            resolver: Arc::new(system_resolve),
         }
+    }
+
+    /// Inject a DNS resolver override (test seam): lets tests map hostnames
+    /// to attacker-chosen addresses to exercise SSRF-by-DNS validation.
+    pub fn with_resolver(mut self, resolver: HostResolver) -> Self {
+        self.resolver = resolver;
+        self
+    }
+
+    /// Validate `url` (literal + resolved-IP checks) through the injected
+    /// resolver. DNS runs on the blocking thread pool — the resolver seam is
+    /// a synchronous system call, not async I/O.
+    async fn validate_url(
+        &self,
+        url: &str,
+    ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+        let resolver = self.resolver.clone();
+        let url = url.to_string();
+        tokio::task::spawn_blocking(move || {
+            validate_fetch_url_resolved(&url, resolver.as_ref())
+        })
+        .await
+        .map_err(|e| format!("URL validation task failed: {e}"))?
     }
 
     async fn fetch_url(
@@ -192,14 +332,20 @@ impl WebFetchTool {
         start_index: usize,
         raw: bool,
     ) -> Result<WebFetchOutput, Box<dyn std::error::Error + Send + Sync>> {
-        validate_fetch_url(url)?;
+        self.validate_url(url).await?;
         let response = self.client.get(url).send().await?;
 
         if !response.status().is_success() {
             return Err(format!("HTTP error: {}", response.status()).into());
         }
 
-        let full_content = response.text().await?;
+        // Redirects are followed by the client; re-validate where we actually
+        // landed (literal checks re-ran per hop in the redirect policy, and
+        // this pass adds the resolved-IP checks) before reading any body.
+        let final_url = response.url().clone();
+        self.validate_url(final_url.as_str()).await?;
+
+        let full_content = read_body_capped(response, MAX_RESPONSE_BYTES).await?;
 
         // Convert HTML to plain text unless raw mode is requested
         let processed = if raw {
@@ -306,7 +452,8 @@ impl Tool for WebFetchTool {
                     "description": "Return raw HTML instead of simplified content"
                 }
             },
-            "required": ["url"]
+            "required": ["url"],
+            "additionalProperties": false
         })
     }
     fn is_read_only(&self) -> bool {
@@ -576,7 +723,7 @@ impl WebSearchTool {
 
         let status = response.status();
         if !status.is_success() {
-            let body = response.text().await.unwrap_or_default();
+            let body = read_body_capped(response, MAX_RESPONSE_BYTES).await.unwrap_or_default();
             return Err(format!("Tavily API returned HTTP {status}: {body}").into());
         }
 
@@ -687,12 +834,49 @@ impl Tool for WebSearchTool {
                     "description": "Include raw content"
                 }
             },
-            "required": ["query"]
+            "required": ["query"],
+            "additionalProperties": false
         })
     }
     fn is_read_only(&self) -> bool {
         true
     }
+}
+
+// ---------------------------------------------------------------------------
+// Body reading
+// ---------------------------------------------------------------------------
+
+/// Read a response body as text with a hard byte cap.
+///
+/// The `content-length` header is checked first when present, then the body
+/// is streamed chunk-by-chunk and aborted as soon as the cap would be
+/// exceeded — a missing or lying header must not let an arbitrarily large
+/// response into memory. Replaces blind `response.text()` calls.
+async fn read_body_capped(
+    mut response: reqwest::Response,
+    cap: usize,
+) -> Result<String, Box<dyn std::error::Error + Send + Sync>> {
+    if let Some(len) = response.content_length() {
+        if len as usize > cap {
+            return Err(format!(
+                "Response body too large: {len} bytes (max {cap}) — fetch a narrower resource"
+            )
+            .into());
+        }
+    }
+
+    let mut bytes: Vec<u8> = Vec::new();
+    while let Some(chunk) = response.chunk().await? {
+        if bytes.len() + chunk.len() > cap {
+            return Err(format!(
+                "Response body exceeds the {cap} byte limit — fetch a narrower resource"
+            )
+            .into());
+        }
+        bytes.extend_from_slice(&chunk);
+    }
+    Ok(String::from_utf8_lossy(&bytes).to_string())
 }
 
 // ---------------------------------------------------------------------------
@@ -892,6 +1076,129 @@ mod tests {
     #[test]
     fn test_validate_allows_https() {
         assert!(validate_fetch_url("https://example.com/page").is_ok());
+    }
+
+    // ---- Resolved-IP validation (SSRF-by-DNS hardening) ------------------
+
+    /// Resolver fake: maps hostnames to fixed addresses, failing unknown ones.
+    fn static_resolver(
+        mapping: &'static [(&'static str, &[&str])],
+    ) -> impl Fn(&str) -> std::io::Result<Vec<IpAddr>> {
+        move |host: &str| {
+            for (name, ips) in mapping {
+                if *name == host {
+                    return Ok(ips
+                        .iter()
+                        .map(|ip| ip.parse::<IpAddr>().expect("test IP literal"))
+                        .collect());
+                }
+            }
+            Err(std::io::Error::other(format!("unresolved host {host}")))
+        }
+    }
+
+    #[test]
+    fn test_validate_resolved_blocks_loopback_via_dns() {
+        // Public hostname resolving to loopback: the classic SSRF-by-DNS
+        // bypass, caught only by validating the resolved addresses.
+        let resolve = static_resolver(&[("evil.example.com", &["127.0.0.1"])]);
+        let err = validate_fetch_url_resolved("http://evil.example.com/", &resolve).unwrap_err();
+        assert!(
+            err.to_string().contains("loopback"),
+            "expected loopback block, got: {err}"
+        );
+    }
+
+    #[test]
+    fn test_validate_resolved_blocks_private_via_dns() {
+        let resolve = static_resolver(&[("evil.example.com", &["10.1.2.3"])]);
+        let err = validate_fetch_url_resolved("http://evil.example.com/", &resolve).unwrap_err();
+        assert!(err.to_string().contains("private"), "got: {err}");
+    }
+
+    #[test]
+    fn test_validate_resolved_blocks_metadata_via_dns() {
+        let resolve = static_resolver(&[("evil.example.com", &["169.254.169.254"])]);
+        let err = validate_fetch_url_resolved("http://evil.example.com/", &resolve).unwrap_err();
+        assert!(err.to_string().contains("link-local"), "got: {err}");
+    }
+
+    #[test]
+    fn test_validate_resolved_blocks_ipv6_ula_via_dns() {
+        let resolve = static_resolver(&[("evil.example.com", &["fd12::1"])]);
+        let err = validate_fetch_url_resolved("http://evil.example.com/", &resolve).unwrap_err();
+        assert!(
+            err.to_string().contains("unique-local"),
+            "got: {err}"
+        );
+    }
+
+    #[test]
+    fn test_validate_resolved_checks_every_address() {
+        // First address is public, second is internal — ALL must be checked.
+        let resolve = static_resolver(&[("mixed.example.com", &["93.184.216.34", "192.168.0.5"])]);
+        let err = validate_fetch_url_resolved("http://mixed.example.com/", &resolve).unwrap_err();
+        assert!(err.to_string().contains("private"), "got: {err}");
+    }
+
+    #[test]
+    fn test_validate_resolved_accepts_public_host() {
+        let resolve = static_resolver(&[("example.com", &["93.184.216.34"])]);
+        assert!(validate_fetch_url_resolved("https://example.com/page", &resolve).is_ok());
+    }
+
+    #[test]
+    fn test_validate_resolved_accepts_public_ipv6() {
+        let resolve = static_resolver(&[("v6.example.com", &["2606:2800:220:1::1"])]);
+        assert!(validate_fetch_url_resolved("https://v6.example.com/", &resolve).is_ok());
+    }
+
+    #[test]
+    fn test_validate_resolved_fails_closed_on_dns_error() {
+        // Unknown host (resolver error): blocked, not allowed through.
+        let resolve = static_resolver(&[]);
+        let err = validate_fetch_url_resolved("http://nope.example.com/", &resolve).unwrap_err();
+        assert!(
+            err.to_string().contains("DNS resolution failed"),
+            "got: {err}"
+        );
+    }
+
+    #[test]
+    fn test_validate_blocks_ipv6_unique_local_literal() {
+        // fc00::/7 unique-local: fd00::/8 is the modern ULA range.
+        let err = validate_fetch_url("http://[fd00::1]/").unwrap_err();
+        assert!(err.to_string().contains("unique-local"), "got: {err}");
+        let err = validate_fetch_url("http://[fc00::1]/").unwrap_err();
+        assert!(err.to_string().contains("unique-local"), "got: {err}");
+    }
+
+    #[test]
+    fn test_validate_blocks_ipv6_link_local_literal() {
+        let err = validate_fetch_url("http://[fe80::1]/").unwrap_err();
+        assert!(err.to_string().contains("link-local"), "got: {err}");
+    }
+
+    #[test]
+    fn test_validate_blocks_ipv4_mapped_ipv6_literal() {
+        // ::ffff:a.b.c.d must inherit the v4 rules.
+        for (url, expected) in [
+            ("http://[::ffff:127.0.0.1]/", "loopback"),
+            ("http://[::ffff:10.0.0.1]/", "private"),
+            ("http://[::ffff:192.168.1.1]/", "private"),
+        ] {
+            let err = validate_fetch_url(url).unwrap_err();
+            assert!(
+                err.to_string().contains(expected),
+                "{url}: expected '{expected}', got: {err}"
+            );
+        }
+    }
+
+    #[test]
+    fn test_validate_allows_public_ipv6_literal() {
+        // A real public v6 literal (not ULA, not link-local, not mapped).
+        assert!(validate_fetch_url("http://[2606:2800:220:1::1]/").is_ok());
     }
 
     // ---- Tool-result rendering tests (P0-2 regression) -------------------

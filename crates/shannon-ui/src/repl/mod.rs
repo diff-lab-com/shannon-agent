@@ -1023,20 +1023,26 @@ impl Repl {
             let memory_path = dirs::home_dir()
                 .map(|h| h.join(".shannon").join("memories"))
                 .unwrap_or_else(|| std::path::PathBuf::from(".shannon/memories"));
-            let mut mem_store = shannon_core::MemoryStore::new(memory_path.clone());
+            let mut mem_store = shannon_core::MemoryStore::new(memory_path);
             // Load existing memories from disk (ignore errors on first run)
             let _ = mem_store.load();
-            // Model-facing memory tools: the agent curates the same store it
-            // is injected from (M-1). A second handle on the same storage dir
-            // is safe — the store is multi-writer by design.
+            // N-1: one shared in-memory instance for engine injection AND the
+            // model-facing tools — a MemorySave/MemoryForget takes effect on
+            // the very next prompt instead of after a process restart. The
+            // store stays multi-writer safe on disk for other processes.
+            let shared = std::sync::Arc::new(std::sync::RwLock::new(mem_store));
             let _ = tool_registry.register(Box::new(
-                shannon_core::memory::tools::MemorySaveTool::new(memory_path.clone()),
+                shannon_core::memory::tools::MemorySaveTool::with_shared_store(shared.clone()),
             ));
             let _ = tool_registry.register(Box::new(
-                shannon_core::memory::tools::MemoryForgetTool::new(memory_path),
+                shannon_core::memory::tools::MemoryForgetTool::with_shared_store(shared.clone()),
             ));
-            base_engine.with_memory(mem_store)
+            base_engine.with_memory_arc(shared)
         };
+
+        // R1-3: re-inject the todo/task checklist after compaction so a
+        // compacted agent retains its plan.
+        query_engine.add_reinjection_provider(|| shannon_tools::todo::todo_reinjection_block());
 
         // Auto-load project instructions (Claude Code compatible hierarchy).
         //
@@ -1601,6 +1607,9 @@ impl Repl {
                     tracing::debug!("SessionStart hook error: {e}");
                 }
             });
+            // The engine fires SessionStart itself at the start of the first
+            // query; tell it we already did, so it never double-fires.
+            engine.mark_session_start_emitted();
         }
 
         // Check for updates in background to avoid blocking startup

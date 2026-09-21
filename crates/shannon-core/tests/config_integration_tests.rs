@@ -1,4 +1,5 @@
 //! Integration tests for credential_manager, settings, and unified_config modules.
+#![cfg(unix)] // uses std::os::unix::fs::PermissionsExt.
 //!
 //! Covers:
 

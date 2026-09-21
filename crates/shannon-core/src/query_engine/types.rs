@@ -88,18 +88,44 @@ pub struct ModelPricing {
     pub input_price_per_mtok: f64,
     /// Output price per million tokens (USD)
     pub output_price_per_mtok: f64,
+    /// Price per million prompt-cache READ tokens (USD). `None` (the default)
+    /// treats cache-read tokens at the plain input price, preserving the
+    /// pre-cache-aware behavior for models without a known cache rate.
+    #[serde(default)]
+    pub cache_read_per_mtok: Option<f64>,
+    /// Price per million prompt-cache WRITE (creation) tokens (USD). `None`
+    /// (the default) treats cache-creation tokens at the plain input price.
+    #[serde(default)]
+    pub cache_write_per_mtok: Option<f64>,
+}
+
+/// Anthropic prompt-cache pricing, derived from a model's input price.
+///
+/// Anthropic publishes cache pricing as fixed multipliers of the input rate:
+/// cache read = 0.1x input, cache write (creation) = 1.25x input. Deriving
+/// keeps every Anthropic entry data-driven from the input price already in
+/// the table — no invented numbers.
+fn anthropic_cache_rates(input_price_per_mtok: f64) -> (Option<f64>, Option<f64>) {
+    (
+        Some(input_price_per_mtok * 0.1),
+        Some(input_price_per_mtok * 1.25),
+    )
 }
 
 /// Default pricing table for known models.
 /// Prices per million tokens. Extend or override via `SHANNON_PRICING_JSON`
 /// env var or a `.shannon-pricing.json` file in the project directory.
 static DEFAULT_PRICING: &[(&str, ModelPricing)] = &[
-    // Anthropic Claude 4 series
+    // Anthropic Claude 4 series.
+    // Cache rates are Anthropic's published multipliers of the input price
+    // (read = 0.1x, write = 1.25x) — see `anthropic_cache_rates`.
     (
         "claude-opus-4",
         ModelPricing {
             input_price_per_mtok: 15.0,
             output_price_per_mtok: 75.0,
+            cache_read_per_mtok: Some(1.5),
+            cache_write_per_mtok: Some(18.75),
         },
     ),
     (
@@ -107,6 +133,8 @@ static DEFAULT_PRICING: &[(&str, ModelPricing)] = &[
         ModelPricing {
             input_price_per_mtok: 3.0,
             output_price_per_mtok: 15.0,
+            cache_read_per_mtok: Some(0.3),
+            cache_write_per_mtok: Some(3.75),
         },
     ),
     (
@@ -114,6 +142,8 @@ static DEFAULT_PRICING: &[(&str, ModelPricing)] = &[
         ModelPricing {
             input_price_per_mtok: 0.80,
             output_price_per_mtok: 4.0,
+            cache_read_per_mtok: Some(0.08),
+            cache_write_per_mtok: Some(1.0),
         },
     ),
     // Anthropic Claude 3.5 series
@@ -122,6 +152,8 @@ static DEFAULT_PRICING: &[(&str, ModelPricing)] = &[
         ModelPricing {
             input_price_per_mtok: 3.0,
             output_price_per_mtok: 15.0,
+            cache_read_per_mtok: Some(0.3),
+            cache_write_per_mtok: Some(3.75),
         },
     ),
     (
@@ -129,6 +161,8 @@ static DEFAULT_PRICING: &[(&str, ModelPricing)] = &[
         ModelPricing {
             input_price_per_mtok: 0.80,
             output_price_per_mtok: 4.0,
+            cache_read_per_mtok: Some(0.08),
+            cache_write_per_mtok: Some(1.0),
         },
     ),
     // Anthropic Claude 3 series
@@ -137,14 +171,19 @@ static DEFAULT_PRICING: &[(&str, ModelPricing)] = &[
         ModelPricing {
             input_price_per_mtok: 15.0,
             output_price_per_mtok: 75.0,
+            cache_read_per_mtok: Some(1.5),
+            cache_write_per_mtok: Some(18.75),
         },
     ),
-    // OpenAI GPT-4.1 series
+    // OpenAI GPT-4.1 series (no known cache rates — None prices cache
+    // tokens at the input rate)
     (
         "gpt-4.1",
         ModelPricing {
             input_price_per_mtok: 2.0,
             output_price_per_mtok: 8.0,
+            cache_read_per_mtok: None,
+            cache_write_per_mtok: None,
         },
     ),
     (
@@ -152,6 +191,8 @@ static DEFAULT_PRICING: &[(&str, ModelPricing)] = &[
         ModelPricing {
             input_price_per_mtok: 0.40,
             output_price_per_mtok: 1.60,
+            cache_read_per_mtok: None,
+            cache_write_per_mtok: None,
         },
     ),
     (
@@ -159,6 +200,8 @@ static DEFAULT_PRICING: &[(&str, ModelPricing)] = &[
         ModelPricing {
             input_price_per_mtok: 0.10,
             output_price_per_mtok: 0.40,
+            cache_read_per_mtok: None,
+            cache_write_per_mtok: None,
         },
     ),
     // OpenAI GPT-4o series
@@ -167,6 +210,8 @@ static DEFAULT_PRICING: &[(&str, ModelPricing)] = &[
         ModelPricing {
             input_price_per_mtok: 2.5,
             output_price_per_mtok: 10.0,
+            cache_read_per_mtok: None,
+            cache_write_per_mtok: None,
         },
     ),
     (
@@ -174,6 +219,8 @@ static DEFAULT_PRICING: &[(&str, ModelPricing)] = &[
         ModelPricing {
             input_price_per_mtok: 0.15,
             output_price_per_mtok: 0.60,
+            cache_read_per_mtok: None,
+            cache_write_per_mtok: None,
         },
     ),
     // OpenAI GPT-4 / 3.5
@@ -182,6 +229,8 @@ static DEFAULT_PRICING: &[(&str, ModelPricing)] = &[
         ModelPricing {
             input_price_per_mtok: 10.0,
             output_price_per_mtok: 30.0,
+            cache_read_per_mtok: None,
+            cache_write_per_mtok: None,
         },
     ),
     (
@@ -189,6 +238,8 @@ static DEFAULT_PRICING: &[(&str, ModelPricing)] = &[
         ModelPricing {
             input_price_per_mtok: 0.5,
             output_price_per_mtok: 1.5,
+            cache_read_per_mtok: None,
+            cache_write_per_mtok: None,
         },
     ),
     // Ollama / local models (free)
@@ -197,6 +248,8 @@ static DEFAULT_PRICING: &[(&str, ModelPricing)] = &[
         ModelPricing {
             input_price_per_mtok: 0.0,
             output_price_per_mtok: 0.0,
+            cache_read_per_mtok: None,
+            cache_write_per_mtok: None,
         },
     ),
     (
@@ -204,6 +257,8 @@ static DEFAULT_PRICING: &[(&str, ModelPricing)] = &[
         ModelPricing {
             input_price_per_mtok: 0.0,
             output_price_per_mtok: 0.0,
+            cache_read_per_mtok: None,
+            cache_write_per_mtok: None,
         },
     ),
     (
@@ -211,6 +266,8 @@ static DEFAULT_PRICING: &[(&str, ModelPricing)] = &[
         ModelPricing {
             input_price_per_mtok: 0.0,
             output_price_per_mtok: 0.0,
+            cache_read_per_mtok: None,
+            cache_write_per_mtok: None,
         },
     ),
 ];
@@ -219,6 +276,8 @@ static DEFAULT_PRICING: &[(&str, ModelPricing)] = &[
 const DEFAULT_PRICING_FALLBACK: ModelPricing = ModelPricing {
     input_price_per_mtok: 3.0,
     output_price_per_mtok: 15.0,
+    cache_read_per_mtok: None,
+    cache_write_per_mtok: None,
 };
 
 /// Lazily-built pricing table: merge the canonical catalog with runtime overrides.
@@ -232,9 +291,20 @@ static PRICING_TABLE: Lazy<HashMap<String, ModelPricing>> = Lazy::new(build_pric
 /// only a gap-filler for patterns the catalog does not yet cover.
 fn seed_catalog_pricing(table: &mut HashMap<String, ModelPricing>) {
     for info in crate::model_registry::MODEL_CATALOG {
+        // Anthropic publishes cache pricing as multipliers of the input rate
+        // (read = 0.1x, write = 1.25x); other providers stay `None`, which
+        // prices cache tokens at the input rate (current behavior).
+        let (cache_read_per_mtok, cache_write_per_mtok) = match info.provider {
+            shannon_engine::api::LlmProvider::Anthropic => {
+                anthropic_cache_rates(info.cost_per_m_input)
+            }
+            _ => (None, None),
+        };
         let pricing = ModelPricing {
             input_price_per_mtok: info.cost_per_m_input,
             output_price_per_mtok: info.cost_per_m_output,
+            cache_read_per_mtok,
+            cache_write_per_mtok,
         };
         // Canonical id is authoritative — plain insert lets it win over any
         // legacy duplicate.
@@ -290,7 +360,11 @@ fn apply_pricing_overrides(table: &mut HashMap<String, ModelPricing>, json: &str
         Ok(overrides) => {
             for (k, v) in overrides {
                 // Reject negative prices — a malicious override could bypass budget limits
-                if v.input_price_per_mtok < 0.0 || v.output_price_per_mtok < 0.0 {
+                if v.input_price_per_mtok < 0.0
+                    || v.output_price_per_mtok < 0.0
+                    || v.cache_read_per_mtok.is_some_and(|r| r < 0.0)
+                    || v.cache_write_per_mtok.is_some_and(|r| r < 0.0)
+                {
                     tracing::warn!(
                         "Ignoring pricing override from {}: {} has negative price (in=${:.2}, out=${:.2})",
                         source,
@@ -373,6 +447,31 @@ fn lookup_pricing(model: &str) -> ModelPricing {
     DEFAULT_PRICING_FALLBACK.clone()
 }
 
+/// Weighted cost for a usage report, pricing prompt-cache tokens at their
+/// model-specific rate when known and at the input rate otherwise. Anthropic
+/// reports cache read/creation tokens separately from `input_tokens`, so the
+/// four terms never overlap.
+fn cost_with_cache(
+    pricing: &ModelPricing,
+    input_tokens: u64,
+    output_tokens: u64,
+    cache_read_tokens: u64,
+    cache_creation_tokens: u64,
+) -> f64 {
+    let per_mtok = 1_000_000.0;
+    let input_cost = (input_tokens as f64 / per_mtok) * pricing.input_price_per_mtok;
+    let output_cost = (output_tokens as f64 / per_mtok) * pricing.output_price_per_mtok;
+    let cache_read_cost = (cache_read_tokens as f64 / per_mtok)
+        * pricing
+            .cache_read_per_mtok
+            .unwrap_or(pricing.input_price_per_mtok);
+    let cache_write_cost = (cache_creation_tokens as f64 / per_mtok)
+        * pricing
+            .cache_write_per_mtok
+            .unwrap_or(pricing.input_price_per_mtok);
+    input_cost + output_cost + cache_read_cost + cache_write_cost
+}
+
 impl CostTracker {
     /// Create a new cost tracker for a specific model
     pub fn new(model: String) -> Self {
@@ -391,10 +490,34 @@ impl CostTracker {
     /// Calculate cost based on model pricing (in USD).
     /// Prices per million tokens, looked up from the configurable pricing table.
     pub fn calculate_cost(model: &str, input_tokens: u64, output_tokens: u64) -> f64 {
-        let pricing = lookup_pricing(model);
-        let input_cost = (input_tokens as f64 / 1_000_000.0) * pricing.input_price_per_mtok;
-        let output_cost = (output_tokens as f64 / 1_000_000.0) * pricing.output_price_per_mtok;
-        input_cost + output_cost
+        Self::calculate_cost_with_cache(model, input_tokens, output_tokens, 0, 0)
+    }
+
+    /// Like [`CostTracker::calculate_cost`], but also prices prompt-cache
+    /// tokens.
+    ///
+    /// `cache_read_tokens` are tokens served from the prompt cache and
+    /// `cache_creation_tokens` are tokens written to it (Anthropic reports
+    /// both separately from `input_tokens`, so there is no double counting).
+    /// Each is priced at the model's cache rate when one is known
+    /// ([`ModelPricing::cache_read_per_mtok`] /
+    /// [`ModelPricing::cache_write_per_mtok`]); when the rate is `None` the
+    /// tokens fall back to the plain input price, which reproduces the
+    /// pre-cache-aware cost exactly.
+    pub fn calculate_cost_with_cache(
+        model: &str,
+        input_tokens: u64,
+        output_tokens: u64,
+        cache_read_tokens: u64,
+        cache_creation_tokens: u64,
+    ) -> f64 {
+        cost_with_cache(
+            &lookup_pricing(model),
+            input_tokens,
+            output_tokens,
+            cache_read_tokens,
+            cache_creation_tokens,
+        )
     }
 
     /// Record usage and update totals with turn tracking
@@ -667,6 +790,76 @@ pub struct GoalSpec {
     pub paused: bool,
 }
 
+/// Effort dial for the query engine (Claude Code-style low→max knob).
+///
+/// Controls how much thinking/budget the model spends per request:
+/// - [`EffortLevel::Low`] / [`EffortLevel::Standard`] send no thinking
+///   parameters (byte-identical to the pre-dial default behavior).
+/// - [`EffortLevel::High`] enables extended thinking with an ~8k token budget.
+/// - [`EffortLevel::Max`] enables extended thinking with an ~16k token budget.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum EffortLevel {
+    Low,
+    #[default]
+    Standard,
+    High,
+    Max,
+}
+
+impl EffortLevel {
+    /// Case-insensitive CLI parse accepting `low|medium|standard|high|max`.
+    ///
+    /// `medium` is accepted as an alias of `Standard` so existing
+    /// `/effort medium` muscle memory (and the old `low|medium|high` REPL
+    /// surface) keeps working.
+    pub fn parse(s: &str) -> Option<Self> {
+        match s.trim().to_lowercase().as_str() {
+            "low" => Some(Self::Low),
+            "medium" | "standard" => Some(Self::Standard),
+            "high" => Some(Self::High),
+            "max" => Some(Self::Max),
+            _ => None,
+        }
+    }
+
+    /// Extended-thinking budget in tokens for this level.
+    ///
+    /// `None` means "no thinking parameters" — the request stays byte-identical
+    /// to the pre-dial behavior.
+    pub fn thinking_budget(self) -> Option<u32> {
+        match self {
+            Self::Low | Self::Standard => None,
+            Self::High => Some(8_000),
+            Self::Max => Some(16_000),
+        }
+    }
+}
+
+impl std::str::FromStr for EffortLevel {
+    type Err = String;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        Self::parse(s).ok_or_else(|| {
+            format!(
+                "unknown effort level '{s}' (expected low|medium|standard|high|max, \
+                 case-insensitive)"
+            )
+        })
+    }
+}
+
+impl std::fmt::Display for EffortLevel {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Low => write!(f, "low"),
+            Self::Standard => write!(f, "standard"),
+            Self::High => write!(f, "high"),
+            Self::Max => write!(f, "max"),
+        }
+    }
+}
+
 /// Configuration for the query engine
 #[derive(Debug, Clone)]
 pub struct QueryEngineConfig {
@@ -689,8 +882,11 @@ pub struct QueryEngineConfig {
     pub auto_commit: bool,
     /// Maximum number of tools to execute in parallel (default: 10)
     pub max_parallel_tools: usize,
-    /// Effort level for the LLM (e.g. "low", "medium", "high")
-    pub effort_level: Option<String>,
+    /// Effort dial for the LLM (Claude Code-style low→max knob, set via
+    /// `/effort` or `--effort`). Maps to extended-thinking budgets
+    /// (High ~8k, Max ~16k) and a dynamic system suffix; `Standard` (the
+    /// default) sends nothing and is byte-identical to the pre-dial behavior.
+    pub effort: EffortLevel,
     /// Focus area for the LLM (e.g. "security", "performance")
     pub focus_area: Option<String>,
     /// Session goal (set via `/goal`). Injected as a non-cached system block
@@ -766,6 +962,15 @@ impl Default for QueryEngineConfig {
                     "You are Shannon, an expert AI coding assistant. You help users with software \
                      engineering tasks: writing code, debugging, refactoring, testing, and explaining code.\n\
                      \n\
+                     ## Safety & Permissions\n\
+                     - Never commit or push without an explicit user request. Never force-push, \
+                     rewrite git history, or delete branches without explicit confirmation.\n\
+                     - Treat destructive commands as ask-first: rm -rf outside build directories, \
+                     chmod 777 on system paths, dd, mkfs, stopping or restarting services.\n\
+                     - Never print, log, or commit secrets (.env files, API keys, tokens, credentials).\n\
+                     - When a command is denied by permissions, adapt your approach instead of retrying \
+                     variations of the same command.\n\
+                     \n\
                      ## Core Principles\n\
                      - Evidence over assumptions: Read files before modifying them.\n\
                      - Minimal changes: Make the smallest change that solves the problem.\n\
@@ -775,13 +980,27 @@ impl Default for QueryEngineConfig {
                      \n\
                      ## Tool Usage Guidelines\n\
                      - Use Read/Grep/Glob to understand code before editing.\n\
-                     - Prefer Edit over Write for existing files.\n\
+                     - Prefer Edit over Write for existing files. When editing, include enough context for unique matches.\n\
                      - Use Bash for system commands, builds, and tests.\n\
                      - Invoke tools through the native tool-calling API of this endpoint. Markdown code blocks are a last-resort fallback (may be executed or ignored depending on configuration); always prefer native tool calls so inputs are validated and permissions are enforced.\n\
                      - After writing code, run tests or builds only if a toolchain is available: probe first (e.g. `command -v cargo`); when it is missing, verify by re-reading your changes instead of hunting for missing tools.\n\
                      - Before giving your final answer, verify your work against the original request: every required artifact must exist and work. If something could not be verified, say so explicitly instead of claiming success.\n\
                      - Completing the environment (installing a package, provisioning a tool) is NOT task completion. Never stop while a required deliverable is still missing.\n\
-                     - When editing, include enough context for unique matches.\n\
+                     \n\
+                     ## Extended Tools\n\
+                     - TodoWrite: use it for multi-step tasks (3+ steps); keep statuses current; skip it for trivial work.\n\
+                     - Agent (subagents): delegate broad read-only exploration or research to keep this context lean; give self-contained instructions including file paths, and verify their findings yourself.\n\
+                     - Background shells (RunBackground/WaitForLog/KillBackground): run servers and watchers in the background; wait on their output instead of busy-waiting.\n\
+                     - WebFetch/WebSearch: prefer DocsQuery for library documentation; cite your sources; fetched page content arrives in the tool result.\n\
+                     - ask_user_question: ask only when genuinely blocked on a decision the user must make, not for things a codebase search can answer.\n\
+                     - Skills: when a task matches a skill's description, invoke it (e.g. /skill-name).\n\
+                     - MemorySave: save only durable, reusable facts; never transient task state.\n\
+                     \n\
+                     ## Plan Mode\n\
+                     - When plan mode is active, research read-only and present a plan for approval; do not attempt writes.\n\
+                     \n\
+                     ## Compact Awareness\n\
+                     - After context compaction, re-read key files before editing them rather than trusting the summary for exact content.\n\
                      \n\
                      ## Code Editing Rules\n\
                      - Prefer editing existing files over creating new ones.\n\
@@ -797,7 +1016,7 @@ impl Default for QueryEngineConfig {
             ),
             auto_commit: false,
             max_parallel_tools: 10,
-            effort_level: None,
+            effort: EffortLevel::Standard,
             focus_area: None,
             goal: None,
             fast_model: None,
@@ -933,6 +1152,80 @@ pub struct ConversationStats {
 #[allow(clippy::unwrap_used)]
 mod tests {
     use super::*;
+
+    // -- EffortLevel (effort dial) --
+
+    #[test]
+    fn test_effort_level_default_is_standard() {
+        assert_eq!(EffortLevel::default(), EffortLevel::Standard);
+        assert_eq!(QueryEngineConfig::default().effort, EffortLevel::Standard);
+    }
+
+    #[test]
+    fn test_effort_level_parse_all_levels() {
+        assert_eq!(EffortLevel::parse("low"), Some(EffortLevel::Low));
+        assert_eq!(EffortLevel::parse("standard"), Some(EffortLevel::Standard));
+        assert_eq!(EffortLevel::parse("high"), Some(EffortLevel::High));
+        assert_eq!(EffortLevel::parse("max"), Some(EffortLevel::Max));
+    }
+
+    #[test]
+    fn test_effort_level_parse_medium_aliases_standard() {
+        assert_eq!(EffortLevel::parse("medium"), Some(EffortLevel::Standard));
+    }
+
+    #[test]
+    fn test_effort_level_parse_case_insensitive_and_trimmed() {
+        assert_eq!(EffortLevel::parse("MAX"), Some(EffortLevel::Max));
+        assert_eq!(EffortLevel::parse("  High "), Some(EffortLevel::High));
+        assert_eq!(EffortLevel::parse("Low"), Some(EffortLevel::Low));
+    }
+
+    #[test]
+    fn test_effort_level_parse_rejects_unknown() {
+        assert_eq!(EffortLevel::parse("extreme"), None);
+        assert_eq!(EffortLevel::parse(""), None);
+        assert_eq!(EffortLevel::parse("higher"), None);
+    }
+
+    #[test]
+    fn test_effort_level_from_str_roundtrip() {
+        for level in [
+            EffortLevel::Low,
+            EffortLevel::Standard,
+            EffortLevel::High,
+            EffortLevel::Max,
+        ] {
+            let parsed: EffortLevel = level.to_string().parse().unwrap();
+            assert_eq!(parsed, level);
+        }
+        let err = "bogus".parse::<EffortLevel>().unwrap_err();
+        assert!(err.contains("low|medium|standard|high|max"), "{err}");
+    }
+
+    #[test]
+    fn test_effort_level_serde_roundtrip() {
+        for level in [
+            EffortLevel::Low,
+            EffortLevel::Standard,
+            EffortLevel::High,
+            EffortLevel::Max,
+        ] {
+            let json = serde_json::to_string(&level).unwrap();
+            let back: EffortLevel = serde_json::from_str(&json).unwrap();
+            assert_eq!(back, level);
+        }
+        // Lowercase wire form keeps configs readable.
+        assert_eq!(serde_json::to_string(&EffortLevel::Standard).unwrap(), "\"standard\"");
+    }
+
+    #[test]
+    fn test_effort_level_thinking_budgets() {
+        assert_eq!(EffortLevel::Low.thinking_budget(), None);
+        assert_eq!(EffortLevel::Standard.thinking_budget(), None);
+        assert_eq!(EffortLevel::High.thinking_budget(), Some(8_000));
+        assert_eq!(EffortLevel::Max.thinking_budget(), Some(16_000));
+    }
 
     #[test]
     fn test_cost_tracker_new() {
@@ -1283,6 +1576,8 @@ mod tests {
             ModelPricing {
                 input_price_per_mtok: 5.0,
                 output_price_per_mtok: 25.0,
+                cache_read_per_mtok: None,
+                cache_write_per_mtok: None,
             },
         );
 
@@ -1302,6 +1597,8 @@ mod tests {
             ModelPricing {
                 input_price_per_mtok: 5.0,
                 output_price_per_mtok: 25.0,
+                cache_read_per_mtok: None,
+                cache_write_per_mtok: None,
             },
         );
 
@@ -1334,6 +1631,8 @@ mod tests {
             ModelPricing {
                 input_price_per_mtok: 5.0,
                 output_price_per_mtok: 25.0,
+                cache_read_per_mtok: None,
+                cache_write_per_mtok: None,
             },
         );
 
@@ -1369,11 +1668,15 @@ mod tests {
         let p = ModelPricing {
             input_price_per_mtok: 2.5,
             output_price_per_mtok: 10.0,
+            cache_read_per_mtok: None,
+            cache_write_per_mtok: None,
         };
         let json = serde_json::to_string(&p).unwrap();
         let back: ModelPricing = serde_json::from_str(&json).unwrap();
         assert!((back.input_price_per_mtok - 2.5).abs() < 0.001);
         assert!((back.output_price_per_mtok - 10.0).abs() < 0.001);
+        assert_eq!(back.cache_read_per_mtok, None);
+        assert_eq!(back.cache_write_per_mtok, None);
     }
 
     #[test]
@@ -1390,6 +1693,108 @@ mod tests {
         let cost = CostTracker::calculate_cost("gpt-4.1", 1_000_000, 500_000);
         // 1M * 2.0/1M + 500K * 8.0/1M = 2.0 + 4.0 = 6.0
         assert!((cost - 6.0).abs() < 0.001);
+    }
+
+    // -- Cache-aware cost calculation --
+
+    #[test]
+    fn test_calculate_cost_with_cache_rates() {
+        // claude-sonnet-4-20250514: input 3.0, output 15.0, cache read 0.3
+        // (0.1x input), cache write 3.75 (1.25x input) per Mtok.
+        let cost = CostTracker::calculate_cost_with_cache(
+            "claude-sonnet-4-20250514",
+            1_000_000, // plain input
+            1_000_000, // output
+            500_000,   // cache read
+            200_000,   // cache creation
+        );
+        let expected = 3.0 + 15.0 + 0.5 * 0.3 + 0.2 * 3.75;
+        assert!(
+            (cost - expected).abs() < 1e-9,
+            "expected {expected}, got {cost}"
+        );
+    }
+
+    #[test]
+    fn test_calculate_cost_cache_fallback_to_input_price() {
+        // A model without cache rates (cache_read/write_per_mtok = None):
+        // cache tokens are priced at the plain input rate.
+        let cost = CostTracker::calculate_cost_with_cache("gpt-4o", 0, 0, 1_000_000, 1_000_000);
+        let expected = 2.5 + 2.5; // both at gpt-4o input price
+        assert!(
+            (cost - expected).abs() < 1e-9,
+            "expected {expected}, got {cost}"
+        );
+    }
+
+    #[test]
+    fn test_calculate_cost_with_cache_zero_cache_tokens_matches_calculate_cost() {
+        // Without cache tokens the cache-aware path is exactly the legacy math.
+        for model in ["claude-sonnet-4-20250514", "gpt-4o", "unknown-model"] {
+            let legacy = CostTracker::calculate_cost(model, 12_345, 6_789);
+            let cache_aware = CostTracker::calculate_cost_with_cache(model, 12_345, 6_789, 0, 0);
+            assert!(
+                (legacy - cache_aware).abs() < 1e-12,
+                "{model}: {legacy} != {cache_aware}"
+            );
+        }
+    }
+
+    #[test]
+    fn test_anthropic_pricing_cache_rates_derived_from_input() {
+        // Every resolved Anthropic price carries the published multipliers
+        // (read = 0.1x input, write = 1.25x input); non-Anthropic entries
+        // carry None (→ input-rate fallback).
+        let rate_matches = |rate: Option<f64>, input: f64, multiplier: f64| {
+            rate.is_some_and(|r| (r - input * multiplier).abs() < 1e-9)
+        };
+        let anthropic_models = [
+            "claude-sonnet-4-20250514",
+            "claude-opus-4-20250514",
+            "claude-haiku-4-20250514",
+        ];
+        for model in anthropic_models {
+            let p = lookup_pricing(model);
+            assert!(
+                rate_matches(p.cache_read_per_mtok, p.input_price_per_mtok, 0.1),
+                "{model}: cache read must be 0.1x input, got {:?}",
+                p.cache_read_per_mtok
+            );
+            assert!(
+                rate_matches(p.cache_write_per_mtok, p.input_price_per_mtok, 1.25),
+                "{model}: cache write must be 1.25x input, got {:?}",
+                p.cache_write_per_mtok
+            );
+        }
+        let gpt = lookup_pricing("gpt-4o");
+        assert_eq!(gpt.cache_read_per_mtok, None);
+        assert_eq!(gpt.cache_write_per_mtok, None);
+    }
+
+    #[test]
+    fn test_model_pricing_cache_fields_serde_backcompat() {
+        // Override JSON written before the cache fields existed (no
+        // cache_*_per_mtok keys) must still parse, defaulting to None.
+        let legacy_json =
+            r#"{"custom-model": {"input_price_per_mtok": 1.0, "output_price_per_mtok": 2.0}}"#;
+        let parsed: HashMap<String, ModelPricing> = serde_json::from_str(legacy_json).unwrap();
+        let p = parsed.get("custom-model").unwrap();
+        assert_eq!(p.cache_read_per_mtok, None);
+        assert_eq!(p.cache_write_per_mtok, None);
+
+        // Cache fields roundtrip when present.
+        let p = ModelPricing {
+            input_price_per_mtok: 3.0,
+            output_price_per_mtok: 15.0,
+            cache_read_per_mtok: Some(0.3),
+            cache_write_per_mtok: Some(3.75),
+        };
+        let json = serde_json::to_string(&p).unwrap();
+        assert!(json.contains(r#""cache_read_per_mtok":0.3"#));
+        assert!(json.contains(r#""cache_write_per_mtok":3.75"#));
+        let back: ModelPricing = serde_json::from_str(&json).unwrap();
+        assert_eq!(back.cache_read_per_mtok, Some(0.3));
+        assert_eq!(back.cache_write_per_mtok, Some(3.75));
     }
 
     // -- Default system prompt verification guidance (A2) --
@@ -1419,6 +1824,67 @@ mod tests {
         assert!(
             prompt.contains("final answer"),
             "prompt must tell the agent to wrap up once the goal is met"
+        );
+    }
+
+    #[test]
+    fn test_default_system_prompt_includes_safety_rules() {
+        let prompt = QueryEngineConfig::default()
+            .system_prompt
+            .expect("default system prompt is configured");
+
+        // R1-1 (harness architecture review): the default prompt must carry a
+        // safety and permission preamble so every provider session gets it.
+        assert!(
+            prompt.contains("Never commit or push without an explicit user request"),
+            "prompt must require an explicit ask before commit/push"
+        );
+        assert!(
+            prompt.contains("force-push"),
+            "prompt must forbid force-push and history rewrites without confirmation"
+        );
+        assert!(
+            prompt.contains("rm -rf"),
+            "prompt must list destructive commands as ask-first"
+        );
+        assert!(
+            prompt.contains("secrets"),
+            "prompt must forbid printing or committing secrets"
+        );
+        assert!(
+            prompt.contains("denied by permissions"),
+            "prompt must tell the agent to adapt after a permission denial instead of retrying"
+        );
+    }
+
+    #[test]
+    fn test_default_system_prompt_includes_extended_tool_policy() {
+        let prompt = QueryEngineConfig::default()
+            .system_prompt
+            .expect("default system prompt is configured");
+
+        // R1-1: the shipped toolset is larger than Read/Grep/Glob/Edit/Write/
+        // Bash; the default prompt must cover the extended tools.
+        assert!(prompt.contains("TodoWrite"));
+        assert!(prompt.contains("subagent"));
+        assert!(prompt.contains("RunBackground"));
+        assert!(prompt.contains("DocsQuery"));
+        assert!(prompt.contains("ask_user_question"));
+        assert!(prompt.contains("MemorySave"));
+        // Plan mode and compaction guidance.
+        assert!(
+            prompt.contains("plan mode is active"),
+            "prompt must describe read-only plan mode behavior"
+        );
+        assert!(
+            prompt.contains("compaction"),
+            "prompt must tell the agent to re-read files after compaction"
+        );
+        // Size budget: informative but not a novel.
+        let len = prompt.chars().count();
+        assert!(
+            (3_500..=4_500).contains(&len),
+            "default system prompt should stay in the ~3.5K-4.5K char band, got {len}"
         );
     }
 

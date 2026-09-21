@@ -327,6 +327,9 @@ async fn test_pool_server_state_not_found() {
 #[test]
 fn test_tool_annotations_read_only() {
     let pool = Arc::new(McpProcessPool::new());
+    // P1-2: is_concurrency_safe = read_only AND idempotent. read_only alone
+    // is necessary but not sufficient (a read tool may still hold a
+    // non-reentrant resource; idempotency is what licenses parallel calls).
     let annotations = crate::ToolAnnotations {
         read_only_hint: true,
         ..Default::default()
@@ -340,7 +343,10 @@ fn test_tool_annotations_read_only() {
         Some(annotations),
     );
     assert!(adapter.is_read_only());
-    assert!(adapter.is_concurrency_safe());
+    assert!(
+        !adapter.is_concurrency_safe(),
+        "read_only alone is not enough — idempotent_hint must also be set"
+    );
 }
 
 #[test]
@@ -365,6 +371,10 @@ fn test_tool_annotations_destructive() {
 #[test]
 fn test_tool_annotations_idempotent() {
     let pool = Arc::new(McpProcessPool::new());
+    // P1-2: is_concurrency_safe requires BOTH read_only_hint AND
+    // idempotent_hint (conservative AND matrix — see adapter.rs). A tool
+    // that's only idempotent but not read-only can still mutate shared
+    // state across an idempotent cycle, so it must serialize.
     let annotations = crate::ToolAnnotations {
         idempotent_hint: true,
         ..Default::default()
@@ -378,6 +388,26 @@ fn test_tool_annotations_idempotent() {
         Some(annotations),
     );
     assert!(!adapter.is_read_only());
+    assert!(
+        !adapter.is_concurrency_safe(),
+        "idempotent alone is not enough — read_only_hint must also be set"
+    );
+
+    // Setting both flips the gate to safe.
+    let both = crate::ToolAnnotations {
+        read_only_hint: true,
+        idempotent_hint: true,
+        ..Default::default()
+    };
+    let adapter = PooledMcpToolAdapter::new(
+        Arc::new(McpProcessPool::new()),
+        "srv".to_string(),
+        "cache_tool".to_string(),
+        "Read-only + idempotent tool".to_string(),
+        serde_json::json!({"type": "object"}),
+        Some(both),
+    );
+    assert!(adapter.is_read_only());
     assert!(adapter.is_concurrency_safe());
 }
 

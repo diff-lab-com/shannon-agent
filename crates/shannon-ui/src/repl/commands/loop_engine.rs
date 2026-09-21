@@ -460,6 +460,10 @@ pub(crate) fn detect_platform_sandbox() -> &'static str {
 }
 
 /// Simple check if a command exists in PATH.
+#[allow(dead_code)] // KEEP: public-within-crate helper consumed by the Linux and
+// macOS sandbox detection arms; non-unix `detect_platform_sandbox`
+// never reaches it but the API stays reachable for future
+// shannon-ui consumers.
 pub(crate) fn which_exists(cmd: &str) -> bool {
     std::process::Command::new("which")
         .arg(cmd)

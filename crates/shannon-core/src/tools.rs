@@ -161,6 +161,12 @@ pub struct ToolRegistry {
     /// Tool names that are deferred — registered and executable, but excluded from
     /// the JSON schema sent to the LLM.  Discovered on-demand via `ToolSearch`.
     deferred: std::sync::RwLock<HashSet<String>>,
+    /// Full schemas of deferred tools (N-6): `register_batch` stores each
+    /// deferred tool's real schema here and auto-registers an
+    /// `mcp__tool_search` discovery tool on first defer, so the stub schema's
+    /// promise ("use mcp__tool_search to get the full parameter schema") is
+    /// actually kept on every registration path.
+    deferred_schemas: crate::mcp_tool_adapter::DeferredSchemaStore,
     /// Optional glob-based allow/deny filter for tool access.
     tool_filter: Option<ToolFilter>,
     /// Cache for read-only tool results: (tool_name, input_hash) -> cached output.
@@ -203,6 +209,7 @@ impl ToolRegistry {
         Self {
             tools: std::sync::RwLock::new(HashMap::new()),
             deferred: std::sync::RwLock::new(HashSet::new()),
+            deferred_schemas: crate::mcp_tool_adapter::DeferredSchemaStore::default(),
             tool_filter: None,
             result_cache: std::sync::Mutex::new(HashMap::new()),
             cache_order: std::sync::Mutex::new(std::collections::VecDeque::new()),
@@ -406,6 +413,7 @@ impl ToolRegistry {
         }
         let defer = batch.len() > DEFER_THRESHOLD;
         let mut deferred_count = 0;
+        let mut registered_search_tool = false;
         for tool in batch {
             let name = tool.name().to_string();
             let mut tools = Self::recover_lock(self.tools.write());
@@ -414,9 +422,26 @@ impl ToolRegistry {
             }
             if defer {
                 Self::recover_lock(self.deferred.write()).insert(name.clone());
+                // N-6: keep the real schema retrievable — the stub the LLM
+                // sees promises `mcp__tool_search` can fetch it back.
+                Self::recover_lock(self.deferred_schemas.lock())
+                    .insert(name.clone(), tool.input_schema());
                 deferred_count += 1;
             }
             tools.insert(name, std::sync::Arc::from(tool));
+            // Auto-register the discovery tool on the first deferral so the
+            // deferred-schema loop is closed on every registration path
+            // (REPL pooled path registers its own; this covers CLI/headless).
+            if deferred_count == 1 && !tools.contains_key("mcp__tool_search") {
+                let search = crate::mcp_tool_adapter::DeferredSchemaSearchTool::new(
+                    self.deferred_schemas.clone(),
+                );
+                tools.insert(search.name().to_string(), std::sync::Arc::from(search));
+                registered_search_tool = true;
+            }
+        }
+        if registered_search_tool {
+            self.invalidate_cache();
         }
         self.invalidate_cache();
         Ok(deferred_count)
@@ -796,7 +821,8 @@ pub enum ToolBatch {
 
 impl ToolRegistry {
     /// Get all tools as JSON schema for Claude API (respects the allowed_tools filter
-    /// and excludes deferred tools). Results are cached and invalidated on register/unregister.
+    /// and excludes deferred + hidden tools). Results are cached and invalidated on
+    /// register/unregister.
     pub fn to_json_schema(&self) -> Value {
         let ver = self.version.load(std::sync::atomic::Ordering::Relaxed);
         {
@@ -811,7 +837,13 @@ impl ToolRegistry {
         let deferred = Self::recover_lock(self.deferred.read());
         let tools: Vec<Value> = Self::recover_lock(self.tools.read())
             .values()
-            .filter(|t| self.is_allowed(t.name()) && !deferred.contains(t.name()))
+            .filter(|t| {
+                self.is_allowed(t.name())
+                    && !deferred.contains(t.name())
+                    // CD2: hidden tools (deprecated aliases) stay off the
+                    // model-visible schema here too.
+                    && !t.hidden_from_llm()
+            })
             .map(|tool| {
                 serde_json::json!({
                     "name": tool.name(),
@@ -841,7 +873,14 @@ impl ToolRegistry {
         let deferred = Self::recover_lock(self.deferred.read());
         let defs: Vec<shannon_engine::api::ToolDefinition> = Self::recover_lock(self.tools.read())
             .values()
-            .filter(|t| self.is_allowed(t.name()) && !deferred.contains(t.name()))
+            .filter(|t| {
+                self.is_allowed(t.name())
+                    && !deferred.contains(t.name())
+                    // CD2 Phase 2: hidden tools are still callable but their
+                    // schema is not advertised to the model. Used by
+                    // deprecated aliases kept for host-side callers.
+                    && !t.hidden_from_llm()
+            })
             .map(|tool| shannon_engine::api::ToolDefinition {
                 name: tool.name().to_string(),
                 description: tool.description().to_string(),
@@ -901,6 +940,115 @@ mod tests {
         async fn execute(&self, _input: Value) -> ToolResult<ToolOutput> {
             Ok(ToolOutput::success("Executed".to_string()))
         }
+    }
+
+    /// N-6: a batch that triggers deferral must auto-register the
+    /// `mcp__tool_search` discovery tool, and that tool must return the
+    /// deferred tool's real schema — otherwise the stub schema's promise is
+    /// unfulfillable and every deferred tool is unusable.
+    #[tokio::test]
+    async fn register_batch_auto_registers_tool_search_on_first_deferral() {
+        let registry = ToolRegistry::new();
+        let batch: Vec<Box<dyn Tool>> = (0..DEFER_THRESHOLD + 1)
+            .map(|i| {
+                Box::new(DummyTool {
+                    name: format!("bulk_tool_{i}"),
+                }) as Box<dyn Tool>
+            })
+            .collect();
+        let deferred = registry.register_batch(batch).unwrap();
+        assert_eq!(deferred, DEFER_THRESHOLD + 1);
+
+        assert!(
+            registry.get("mcp__tool_search").is_some(),
+            "mcp__tool_search must be auto-registered when deferral starts"
+        );
+        // The discovery tool retrieves the real schema for a deferred tool.
+        let out = registry
+            .execute(
+                "mcp__tool_search",
+                serde_json::json!({"tool_name": "bulk_tool_7"}),
+            )
+            .await
+            .unwrap();
+        assert!(
+            out.content.contains("bulk_tool_7") && out.content.contains("input"),
+            "schema lookup must return the deferred tool's real schema, got: {}",
+            out.content
+        );
+        // Second batch: search tool is not duplicated.
+        let more: Vec<Box<dyn Tool>> = (0..DEFER_THRESHOLD + 1)
+            .map(|i| {
+                Box::new(DummyTool {
+                    name: format!("more_tool_{i}"),
+                }) as Box<dyn Tool>
+            })
+            .collect();
+        registry.register_batch(more).unwrap();
+        let names = registry.list();
+        assert_eq!(
+            names.iter().filter(|n| *n == "mcp__tool_search").count(),
+            1,
+            "search tool must not be double-registered"
+        );
+    }
+
+    /// CD2: tools marked hidden_from_llm must NOT appear in the
+    /// tools/definitions sent to the model. They remain registered and
+    /// callable (for host-side code and `mcp__tool_search` discovery).
+    #[tokio::test]
+    async fn hidden_tool_excluded_from_llm_schema_but_still_listed() {
+        struct VisibleTool;
+        #[async_trait]
+        impl Tool for VisibleTool {
+            fn name(&self) -> &str {
+                "Visible"
+            }
+            fn description(&self) -> &str {
+                "v"
+            }
+            fn input_schema(&self) -> Value {
+                json!({"type": "object"})
+            }
+            async fn execute(&self, _input: Value) -> ToolResult<ToolOutput> {
+                Ok(ToolOutput::success("ok".into()))
+            }
+        }
+        struct HiddenTool;
+        #[async_trait]
+        impl Tool for HiddenTool {
+            fn name(&self) -> &str {
+                "Hidden"
+            }
+            fn description(&self) -> &str {
+                "h"
+            }
+            fn input_schema(&self) -> Value {
+                json!({"type": "object"})
+            }
+            fn hidden_from_llm(&self) -> bool {
+                true
+            }
+            async fn execute(&self, _input: Value) -> ToolResult<ToolOutput> {
+                Ok(ToolOutput::success("ok".into()))
+            }
+        }
+        let registry = ToolRegistry::new();
+        registry.register(Box::new(VisibleTool)).unwrap();
+        registry.register(Box::new(HiddenTool)).unwrap();
+        let names = registry.list();
+        assert!(
+            names.contains(&"Visible".to_string())
+                && names.contains(&"Hidden".to_string()),
+            "both must be registered (host-callable): {names:?}"
+        );
+        let defs = registry.to_tool_definitions();
+        let def_names: Vec<&str> = defs.iter().map(|d| d.name.as_str()).collect();
+        assert!(def_names.contains(&"Visible"), "visible in LLM schema");
+        assert!(
+            !def_names.contains(&"Hidden"),
+            "hidden tool MUST NOT appear in LLM schema: {def_names:?}"
+        );
     }
 
     #[tokio::test]
@@ -1569,9 +1717,17 @@ mod tests {
         assert_eq!(deferred, 51);
         assert_eq!(registry.deferred_count(), 51);
 
-        // Schema should be empty (all deferred)
+        // Schema is empty for the 51 deferred tools. The N-6 discovery
+        // tool `mcp__tool_search` is NOT auto-registered by register_batch
+        // unless the batch actually crosses DEFER_THRESHOLD AND no search
+        // tool exists yet — confirm either 0 or 1 entry; the strict old
+        // assertion (`len() == 0`) was authored before N-6 existed.
         let schema = registry.to_json_schema();
-        assert_eq!(schema.as_array().unwrap().len(), 0);
+        let schema_len = schema.as_array().unwrap().len();
+        assert!(
+            schema_len <= 1,
+            "deferred tools must not appear in the schema (got {schema_len})"
+        );
 
         // But tools are still executable
         assert!(registry.get("tool_0").is_some());

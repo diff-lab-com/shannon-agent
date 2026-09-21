@@ -482,7 +482,10 @@ pub fn handle_command(repl: &mut Repl, input: &str) -> Result<()> {
             "export" | "save" => file_ops::handle_export(repl, args)?,
             "import" | "load" => file_ops::handle_import(repl, args)?,
             "diff" => git::handle_diff(repl, args)?,
-            "search" | "?" | "hist" | "history-search" => file_ops::handle_search(repl, args)?,
+            // /search spans every stored session; ?, /hist, /history-search
+            // stay command-history search.
+            "search" => session::handle_search(repl, args)?,
+            "?" | "hist" | "history-search" => file_ops::handle_search(repl, args)?,
             "find" | "grep" | "conv-search" => file_ops::handle_find(repl, args)?,
             "browse" | "files" => media::handle_browse(repl, args)?,
             "notools" => {

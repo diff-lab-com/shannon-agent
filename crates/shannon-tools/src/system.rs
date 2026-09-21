@@ -17,8 +17,37 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 use tokio::io::{AsyncBufReadExt, BufReader};
 
-/// Shared captured-run helper: builds the request, applies the optional
-/// timeout, and projects the provider result onto [`CommandOutput`].
+/// Default command timeout applied when the caller passes no `timeout`.
+/// Previously `None` meant *unbounded*, so a single hung command could stall
+/// a turn forever.
+const DEFAULT_BASH_TIMEOUT_MS: u64 = 120_000;
+
+/// Hard cap on the resolved command timeout, even when the caller or the
+/// `SHANNON_BASH_TIMEOUT_MS` override asks for more (10 minutes).
+const MAX_BASH_TIMEOUT_MS: u64 = 600_000;
+
+/// Timeout-resolution core: an explicit `timeout` wins, then the
+/// `SHANNON_BASH_TIMEOUT_MS` env override, then the default — clamped to the
+/// hard cap. Split from [`resolve_timeout_ms`] so the env lookup can be
+/// unit-tested without mutating process-global state.
+fn resolve_timeout_ms_with_env(timeout_ms: Option<u64>, env_value: Option<&str>) -> u64 {
+    let requested = timeout_ms
+        .or_else(|| env_value.and_then(|v| v.trim().parse::<u64>().ok()))
+        .unwrap_or(DEFAULT_BASH_TIMEOUT_MS);
+    requested.min(MAX_BASH_TIMEOUT_MS)
+}
+
+/// Resolve the effective command timeout against the live environment.
+fn resolve_timeout_ms(timeout_ms: Option<u64>) -> u64 {
+    resolve_timeout_ms_with_env(
+        timeout_ms,
+        std::env::var("SHANNON_BASH_TIMEOUT_MS").ok().as_deref(),
+    )
+}
+
+/// Shared captured-run helper: builds the request, applies the resolved
+/// timeout (never unbounded — see [`resolve_timeout_ms`]), and projects the
+/// provider result onto [`CommandOutput`].
 async fn run_shell_captured(
     world: &dyn ProcessProvider,
     program: &str,
@@ -33,29 +62,22 @@ async fn run_shell_captured(
         request.cwd = Some(dir.into());
     }
     if let Some(env_vars) = env {
-        for (key, value) in env_vars {
-            request.env.push((key.clone(), value.clone()));
-        }
+for (key, value) in env_vars {
+        request.env.push((key.clone(), value.clone()));
     }
+}
 
-    // Execute with timeout if specified
-    let output = if let Some(timeout) = timeout_ms {
-        let duration = Duration::from_millis(timeout);
-        tokio::time::timeout(duration, world.run_async(&request))
-            .await
-            .map_err(|_| {
-                std::io::Error::new(
-                    std::io::ErrorKind::TimedOut,
-                    format!("Command timed out after {timeout}ms"),
-                )
-            })?
-            .map_err(|e| shell_spawn_error(program, &e))?
-    } else {
-        world
-            .run_async(&request)
-            .await
-            .map_err(|e| shell_spawn_error(program, &e))?
-    };
+    let timeout = resolve_timeout_ms(timeout_ms);
+    let duration = Duration::from_millis(timeout);
+    let output = tokio::time::timeout(duration, world.run_async(&request))
+        .await
+        .map_err(|_| {
+            std::io::Error::new(
+                std::io::ErrorKind::TimedOut,
+                format!("Command timed out after {timeout}ms"),
+            )
+        })?
+        .map_err(|e| shell_spawn_error(program, &e))?;
 
     let stdout = String::from_utf8_lossy(&output.stdout).to_string();
     let stderr = String::from_utf8_lossy(&output.stderr).to_string();
@@ -821,23 +843,19 @@ impl DockerSandbox {
         let request = ProcessRequest::new("docker", &args);
         let world = crate::defaults::process();
 
-        let output = if let Some(timeout) = timeout_ms {
-            let duration = std::time::Duration::from_millis(timeout);
-            tokio::time::timeout(duration, world.run_async(&request))
-                .await
-                .map_err(|_| {
-                    std::io::Error::new(
-                        std::io::ErrorKind::TimedOut,
-                        format!("Docker command timed out after {timeout}ms"),
-                    )
-                })?
-                .map_err(|e| std::io::Error::other(format!("Docker execution failed: {e}")))?
-        } else {
-            world
-                .run_async(&request)
-                .await
-                .map_err(|e| std::io::Error::other(format!("Docker execution failed: {e}")))?
-        };
+        // Same resolution as the direct path: `None` means the 120 s default,
+        // not unbounded.
+        let timeout = resolve_timeout_ms(timeout_ms);
+        let duration = std::time::Duration::from_millis(timeout);
+        let output = tokio::time::timeout(duration, world.run_async(&request))
+            .await
+            .map_err(|_| {
+                std::io::Error::new(
+                    std::io::ErrorKind::TimedOut,
+                    format!("Docker command timed out after {timeout}ms"),
+                )
+            })?
+            .map_err(|e| std::io::Error::other(format!("Docker execution failed: {e}")))?;
 
         let stdout = String::from_utf8_lossy(&output.stdout).to_string();
         let stderr = String::from_utf8_lossy(&output.stderr).to_string();
@@ -942,13 +960,17 @@ pub struct BashTool {
     direct_process: Arc<dyn ProcessProvider>,
     /// Execution world with argv-level platform sandbox wrapping installed
     /// through the §4.11 spawn hook (`SandboxExecutorRewrite` over bwrap /
-    /// Seatbelt / Docker). `None` when no backend was detected.
+    /// Seatbelt / Docker). `None` when no backend was detected or the user
+    /// disabled sandboxing via `SHANNON_SANDBOX=off`.
     process_sandbox: Option<Arc<dyn ProcessProvider>>,
     /// §4.12 sandbox denial classifier: inspects a failed captured run of an
     /// enforcing world and, when it looks kernel-denied, yields structured
     /// `sandbox_denied` metadata for the L0 record. `None` = no enforcing
     /// world (the historical shape).
     denial_classifier: Option<crate::sandbox::DenialClassifier>,
+    /// Enforcement posture behind the structured `sandbox` metadata on
+    /// every result.
+    sandbox_posture: SandboxPosture,
 }
 
 impl Default for BashTool {
@@ -990,6 +1012,72 @@ fn sandbox_failure_note(sandboxed: bool, output: &CommandOutput) -> Option<Strin
     )
 }
 
+/// Sandbox enforcement posture of a [`BashTool`] — drives the structured
+/// `sandbox` metadata stamped on every tool result.
+///
+/// The default posture is sandbox-on: when a platform backend is detected it
+/// is used without any opt-in. Unsandboxed execution is either a degraded
+/// host ([`SandboxPosture::Missing`], warned about loudly on every result)
+/// or an explicit [`SandboxPosture::OptedOut`] (`SHANNON_SANDBOX=off`).
+#[derive(Debug, Clone, PartialEq)]
+pub(crate) enum SandboxPosture {
+    /// A platform backend (bubblewrap/Seatbelt/Docker) wraps every command.
+    Active,
+    /// Detection ran but no backend exists: commands run unsandboxed and
+    /// every result carries the loud structured warning.
+    Missing,
+    /// Explicitly disabled via `SHANNON_SANDBOX=off`.
+    OptedOut,
+    /// No detection performed (plain constructor: sub-agent registries,
+    /// remote worlds). No sandbox metadata is emitted.
+    Undetected,
+}
+
+impl SandboxPosture {
+    /// Value of the structured `sandbox` metadata entry (`None` = emit
+    /// nothing).
+    fn metadata_label(&self) -> Option<&'static str> {
+        match self {
+            SandboxPosture::Active => Some("on"),
+            SandboxPosture::Missing | SandboxPosture::OptedOut => Some("off"),
+            SandboxPosture::Undetected => None,
+        }
+    }
+
+    /// One-line warning carried in the result metadata. `None` when the
+    /// posture needs no warning.
+    fn warning(&self) -> Option<&'static str> {
+        match self {
+            SandboxPosture::Missing => Some(
+                "Sandbox: OFF — no sandbox backend (bubblewrap/Seatbelt/Docker) was detected, \
+                 so commands run unsandboxed on the host. Shannon sandboxes by default when \
+                 a backend is available; set SHANNON_SANDBOX=off to disable sandboxing \
+                 explicitly.",
+            ),
+            SandboxPosture::OptedOut => Some(
+                "Sandbox: OFF — disabled via SHANNON_SANDBOX=off; commands run unsandboxed \
+                 on the host.",
+            ),
+            SandboxPosture::Active | SandboxPosture::Undetected => None,
+        }
+    }
+}
+
+/// Posture resolution from the detected backend type plus the
+/// `SHANNON_SANDBOX` env value (the explicit opt-out). Pure so tests can
+/// pin every combination without touching the host.
+pub(crate) fn resolve_sandbox_posture(
+    sandbox_type: SandboxType,
+    shannon_sandbox_env: Option<&str>,
+) -> SandboxPosture {
+    let backend_available = !matches!(sandbox_type, SandboxType::None);
+    match shannon_sandbox_env.map(str::trim).map(str::to_ascii_lowercase) {
+        Some(ref value) if value == "off" => SandboxPosture::OptedOut,
+        _ if backend_available => SandboxPosture::Active,
+        _ => SandboxPosture::Missing,
+    }
+}
+
 impl BashTool {
     /// Description advertised to the model. Shared by the plain and
     /// sandboxed constructors (runtime behavior differs; the contract is
@@ -1001,10 +1089,14 @@ impl BashTool {
          Each call runs in a fresh shell in the working directory (no state\n\
          carries over; use `&&` to combine steps). Output is capped by the\n\
          harness — avoid commands that dump large files; use head/tail/grep\n\
-         to scope output. A per-call `timeout` (ms) is supported. Long-running\n\
-         or server processes should use RunBackground and be polled with\n\
-         WaitForLog. When a sandbox is active the command runs with restricted\n\
-         filesystem/network access — the tool result reports denials."
+         to scope output. A per-call `timeout` (ms) is supported: it defaults\n\
+         to 120000 when omitted (override with SHANNON_BASH_TIMEOUT_MS) and\n\
+         is hard-capped at 600000. Long-running or server processes should\n\
+         use RunBackground and be polled with WaitForLog. When a sandbox is\n\
+         active the command runs with restricted filesystem/network access —\n\
+         the tool result reports denials. Sandboxing is applied by default\n\
+         when a platform sandbox backend is available; set SHANNON_SANDBOX=off\n\
+         to opt out."
     }
 
     pub fn new() -> Self {
@@ -1014,17 +1106,35 @@ impl BashTool {
             direct_process: crate::defaults::process(),
             process_sandbox: None,
             denial_classifier: None,
+            // No detection was performed on this constructor (used for
+            // sub-agent registries / remote worlds) — emit no sandbox
+            // metadata rather than a misleading on/off.
+            sandbox_posture: SandboxPosture::Undetected,
         }
     }
 
     /// Create a BashTool that routes commands through a Docker sandbox
     pub fn with_docker_sandbox(config: DockerSandboxConfig) -> Self {
         Self {
-            description: "Executes bash commands in Docker sandbox".to_string(),
+            // Keep the full default guidance (the contract is the same; only
+            // the execution environment differs) and append the sandbox
+            // specifics the model needs to plan around.
+            description: format!(
+                "{}\n\
+                 \n\
+                 All commands run inside a Docker sandbox: the project is\n\
+                 mounted at {}, the container network mode is '{}', and the\n\
+                 root filesystem is{} read-only.",
+                Self::default_description(),
+                config.workdir,
+                config.network,
+                if config.readonly_root { "" } else { " not" },
+            ),
             sandbox: Some(DockerSandbox::new(config)),
             direct_process: crate::defaults::process(),
             process_sandbox: None,
             denial_classifier: None,
+            sandbox_posture: SandboxPosture::Active,
         }
     }
 
@@ -1040,8 +1150,10 @@ impl BashTool {
 
     /// Create a BashTool with a platform process sandbox (bwrap/Seatbelt/Docker).
     ///
-    /// The `SandboxExecutor` is auto-detected from the current platform.
-    /// If no sandbox backend is available, commands run unsandboxed.
+    /// Default-on posture: the auto-detected backend is used **without any
+    /// opt-in**; when no backend is available commands run unsandboxed and
+    /// every tool result carries a loud, structured `"sandbox": "off"`
+    /// warning. `SHANNON_SANDBOX=off` disables sandboxing explicitly.
     ///
     /// `SHANNON_SANDBOX_EXTRA_RO_MOUNTS` (colon-separated host directories) is
     /// added as extra read-only mounts on the Docker backend — the escape
@@ -1054,35 +1166,69 @@ impl BashTool {
                 config = config.readonly_mount(dir);
             }
         }
-        let executor = SandboxExecutor::new(config);
+        let env_override = std::env::var("SHANNON_SANDBOX").ok();
+        Self::with_detected_sandbox(SandboxExecutor::new(config), env_override.as_deref())
+    }
+
+    /// Assemble the tool from an already-constructed executor plus the
+    /// `SHANNON_SANDBOX` env value — the seam tests use to pin behavior per
+    /// detected backend without depending on the host's installed tooling.
+    pub(crate) fn with_detected_sandbox(
+        executor: SandboxExecutor,
+        shannon_sandbox_env: Option<&str>,
+    ) -> Self {
         let sandbox_type = executor.sandbox_type();
-        let has_sandbox = !matches!(sandbox_type, SandboxType::None);
+        let posture = resolve_sandbox_posture(sandbox_type, shannon_sandbox_env);
         // The legacy argv-level sandbox becomes a §4.11 SpawnRewrite installed
         // on a LocalProcess — identical wrapping, one seam further down.
-        let sandboxed_process: Option<Arc<dyn ProcessProvider>> = if has_sandbox {
-            Some(Arc::new(LocalProcess::with_rewrite(Arc::new(
+        let sandboxed_process: Option<Arc<dyn ProcessProvider>> = match posture {
+            SandboxPosture::Active => Some(Arc::new(LocalProcess::with_rewrite(Arc::new(
                 SandboxExecutorRewrite::new(Arc::new(executor)),
-            ))))
-        } else {
-            None
+            )))),
+            _ => None,
         };
         Self {
-            description: if has_sandbox {
-                format!(
+            description: match posture {
+                SandboxPosture::Active => format!(
                     "Executes bash commands (sandboxed via {sandbox_type}). Inside the \
                      sandbox the project is available at its mounted path (Docker: \
                      /workspace) and only the project plus /tmp are writable; paths \
                      outside the project are not visible and host toolchains may be \
                      absent — probe availability with `command -v <tool>` and adapt \
-                     instead of installing packages."
-                )
-            } else {
-                Self::default_description().to_string()
+                     instead of installing packages. Sandboxing is applied by default \
+                     when a backend is available; set SHANNON_SANDBOX=off to opt out."
+                ),
+                _ => Self::default_description().to_string(),
             },
             sandbox: None,
             direct_process: crate::defaults::process(),
             process_sandbox: sandboxed_process,
             denial_classifier: None,
+            sandbox_posture: posture,
+        }
+    }
+
+    /// Structured sandbox metadata for every result: `"sandbox"`:
+    /// `"on"|"off"` plus a one-line `"sandbox_warning"` whenever commands
+    /// run unsandboxed — so a degraded host is visible on every tool result,
+    /// not just in startup logs.
+    fn apply_sandbox_metadata(&self, map: &mut HashMap<String, serde_json::Value>) {
+        if let Some(label) = self.sandbox_posture.metadata_label() {
+            map.insert("sandbox".to_string(), json!(label));
+        }
+        if let Some(warning) = self.sandbox_posture.warning() {
+            map.insert("sandbox_warning".to_string(), json!(warning));
+        }
+    }
+
+    /// Content-suffix warning for the degraded (no-backend) posture. An
+    /// explicit `SHANNON_SANDBOX=off` stays metadata-only — the user chose
+    /// it — while a missing backend is warned about loudly in the content
+    /// the model reads.
+    fn sandbox_content_warning(&self) -> Option<String> {
+        match self.sandbox_posture {
+            SandboxPosture::Missing => self.sandbox_posture.warning().map(|w| format!("\n{w}")),
+            _ => None,
         }
     }
 
@@ -1160,14 +1306,25 @@ impl Tool for BashTool {
                 },
                 "timeout": {
                     "type": "integer",
-                    "description": "Optional timeout in milliseconds"
+                    "description": "Optional timeout in milliseconds (default 120000, hard cap 600000)",
+                    "default": 120000
                 },
                 "env": {
                     "type": "object",
-                    "description": "Optional environment variables"
+                    "description": "Optional environment variables",
+                    "additionalProperties": { "type": "string" }
+                },
+                "use_pty": {
+                    "type": "boolean",
+                    "description": "Run in a pseudo-terminal for interactive command support (default: false)"
+                },
+                "stream_delay_ms": {
+                    "type": "integer",
+                    "description": "Delay in ms before streamed output begins (default: 500); faster commands skip streaming entirely"
                 }
             },
-            "required": ["command"]
+            "required": ["command"],
+            "additionalProperties": false
         })
     }
 
@@ -1298,12 +1455,18 @@ impl Tool for BashTool {
             }
         };
 
+        let sandbox_off_warning = self.sandbox_content_warning();
         let content = if output.success {
-            format!("{}{}", output.stdout, command_description)
+            format!(
+                "{}{}{}",
+                output.stdout,
+                command_description,
+                sandbox_off_warning.unwrap_or_default()
+            )
         } else {
             let sandbox_note = sandbox_failure_note(self.process_sandbox.is_some(), &output);
             format!(
-                "{}Command failed with exit code {}: {}{}{}",
+                "{}Command failed with exit code {}: {}{}{}{}",
                 command_description,
                 output.exit_code,
                 output.stderr,
@@ -1315,6 +1478,7 @@ impl Tool for BashTool {
                 sandbox_note
                     .map(|note| format!("\n{note}"))
                     .unwrap_or_default(),
+                sandbox_off_warning.unwrap_or_default(),
             )
         };
 
@@ -1333,6 +1497,10 @@ impl Tool for BashTool {
                 if !output.stderr.is_empty() {
                     map.insert("stderr".to_string(), json!(output.stderr));
                 }
+                // Structured sandbox posture: "sandbox": "on"|"off" (plus a
+                // one-line warning when off) on EVERY result — a degraded
+                // host is visible per-call, not just at startup.
+                self.apply_sandbox_metadata(&mut map);
                 // §4.12: kernel-denied operations of an enforcing world get
                 // the canonical classification so the L0 `tool/result.meta`
                 // records them.
@@ -1362,10 +1530,14 @@ impl Tool for BashTool {
 /// Strip non-renderable ANSI escape sequences, preserving SGR color/style codes.
 ///
 /// Keeps `\x1b[...m` sequences (colors, bold, underline, reset) but removes
-/// cursor movement, screen clearing, and other control sequences.
+/// cursor movement, screen clearing, and other control sequences. The regex
+/// is compiled once (this runs per streamed line) via `OnceLock`.
 fn strip_ansi(s: &str) -> String {
     // Strip all CSI sequences except SGR (which ends with 'm')
-    let re = regex::Regex::new(r"\x1b\[[0-9;]*[A-HJ-Za-ln-z]").unwrap();
+    static STRIP_ANSI_RE: std::sync::OnceLock<regex::Regex> = std::sync::OnceLock::new();
+    let re = STRIP_ANSI_RE.get_or_init(|| {
+        regex::Regex::new(r"\x1b\[[0-9;]*[A-HJ-Za-ln-z]").expect("strip_ansi regex is valid")
+    });
     re.replace_all(s, "").into_owned()
 }
 
@@ -1547,8 +1719,12 @@ impl BashTool {
         let exit_code = status.code.unwrap_or(-1);
         let success = status.success;
 
+        let sandbox_off_warning = self.sandbox_content_warning();
         let content = if success {
-            format!("{stdout_buf}{command_description}")
+            format!(
+                "{stdout_buf}{command_description}{}",
+                sandbox_off_warning.unwrap_or_default()
+            )
         } else {
             let sandbox_note = sandbox_failure_note(
                 self.process_sandbox.is_some(),
@@ -1560,7 +1736,7 @@ impl BashTool {
                 },
             );
             format!(
-                "{}Command failed with exit code {}: {}{}{}",
+                "{}Command failed with exit code {}: {}{}{}{}",
                 command_description,
                 exit_code,
                 stderr_buf,
@@ -1572,6 +1748,7 @@ impl BashTool {
                 sandbox_note
                     .map(|note| format!("\n{note}"))
                     .unwrap_or_default(),
+                sandbox_off_warning.unwrap_or_default(),
             )
         };
 
@@ -1590,6 +1767,8 @@ impl BashTool {
                 if !stderr_buf.is_empty() {
                     map.insert("stderr".to_string(), json!(stderr_buf));
                 }
+                // Same structured posture metadata as the captured path.
+                self.apply_sandbox_metadata(&mut map);
                 map
             },
         })
@@ -1671,10 +1850,12 @@ impl Tool for PowerShellTool {
                 },
                 "env": {
                     "type": "object",
-                    "description": "Optional environment variables"
+                    "description": "Optional environment variables",
+                    "additionalProperties": { "type": "string" }
                 }
             },
-            "required": ["command"]
+            "required": ["command"],
+            "additionalProperties": false
         })
     }
 
@@ -2001,6 +2182,144 @@ mod tests {
     }
 
     use super::*;
+
+    // ── Sandbox default-on posture (backend used without opt-in;
+    //    SHANNON_SANDBOX=off opts out; degraded hosts warn per result) ────
+
+    #[test]
+    fn sandbox_posture_is_active_by_default_when_backend_detected() {
+        assert_eq!(
+            resolve_sandbox_posture(SandboxType::Bubblewrap, None),
+            SandboxPosture::Active
+        );
+        assert_eq!(
+            resolve_sandbox_posture(SandboxType::Seatbelt, None),
+            SandboxPosture::Active
+        );
+        assert_eq!(
+            resolve_sandbox_posture(SandboxType::Docker, None),
+            SandboxPosture::Active
+        );
+        // Non-off env values keep the default-on posture.
+        assert_eq!(
+            resolve_sandbox_posture(SandboxType::Seatbelt, Some("local")),
+            SandboxPosture::Active
+        );
+    }
+
+    #[test]
+    fn sandbox_posture_is_missing_without_a_backend() {
+        assert_eq!(
+            resolve_sandbox_posture(SandboxType::None, None),
+            SandboxPosture::Missing
+        );
+    }
+
+    #[test]
+    fn sandbox_posture_env_off_overrides_an_available_backend() {
+        assert_eq!(
+            resolve_sandbox_posture(SandboxType::Bubblewrap, Some("off")),
+            SandboxPosture::OptedOut
+        );
+        // Case/whitespace tolerant, and off wins even with no backend.
+        assert_eq!(
+            resolve_sandbox_posture(SandboxType::None, Some(" OFF ")),
+            SandboxPosture::OptedOut
+        );
+    }
+
+    #[tokio::test]
+    async fn bash_without_backend_warns_in_metadata_and_content() {
+        let mut tool = BashTool::new();
+        tool.sandbox_posture = SandboxPosture::Missing; // degraded-host posture
+        let output = Tool::execute(&tool, json!({ "command": "echo hi" }))
+            .await
+            .unwrap();
+        assert_eq!(output.metadata["sandbox"], "off");
+        let warning = output.metadata["sandbox_warning"].as_str().unwrap();
+        assert!(warning.contains("no sandbox backend"), "{warning}");
+        assert!(
+            warning.contains("SHANNON_SANDBOX=off"),
+            "warning documents the opt-out: {warning}"
+        );
+        // Loud in the content too: the model reads the result, not the logs.
+        assert!(output.content.contains("Sandbox: OFF"), "{}", output.content);
+    }
+
+    #[tokio::test]
+    async fn bash_env_opt_out_reports_off_metadata_without_content_warning() {
+        let mut tool = BashTool::new();
+        tool.sandbox_posture = SandboxPosture::OptedOut; // explicit user choice
+        let output = Tool::execute(&tool, json!({ "command": "echo hi" }))
+            .await
+            .unwrap();
+        assert_eq!(output.metadata["sandbox"], "off");
+        assert!(
+            output.metadata["sandbox_warning"]
+                .as_str()
+                .unwrap()
+                .contains("SHANNON_SANDBOX=off")
+        );
+        assert!(
+            !output.content.contains("Sandbox: OFF"),
+            "an explicit opt-out must not spam every result: {}",
+            output.content
+        );
+    }
+
+    #[tokio::test]
+    async fn bash_active_posture_reports_on() {
+        let mut tool = BashTool::new();
+        tool.sandbox_posture = SandboxPosture::Active;
+        let output = Tool::execute(&tool, json!({ "command": "echo hi" }))
+            .await
+            .unwrap();
+        assert_eq!(output.metadata["sandbox"], "on");
+        assert!(output.metadata.get("sandbox_warning").is_none());
+        assert!(!output.content.contains("Sandbox: OFF"));
+    }
+
+    #[tokio::test]
+    async fn bash_undetected_posture_emits_no_sandbox_metadata() {
+        // Plain BashTool::new(): no detection ran, so no claim is made.
+        let tool = BashTool::new();
+        let output = Tool::execute(&tool, json!({ "command": "echo hi" }))
+            .await
+            .unwrap();
+        assert!(output.metadata.get("sandbox").is_none());
+    }
+
+    #[test]
+    fn with_detected_sandbox_honors_env_off_over_available_backend() {
+        let executor = SandboxExecutor::new(SandboxConfig::new("/tmp"));
+        let tool = BashTool::with_detected_sandbox(executor, Some("off"));
+        assert_eq!(tool.sandbox_posture, SandboxPosture::OptedOut);
+        assert!(
+            tool.process_sandbox.is_none(),
+            "SHANNON_SANDBOX=off must remove the argv-level sandbox"
+        );
+        assert_eq!(tool.description(), BashTool::default_description());
+    }
+
+    #[test]
+    fn with_detected_sandbox_installs_backend_by_default() {
+        // Host-shape-dependent like the other seam tests: on a backend-
+        // capable host the argv sandbox is installed with no opt-in; on a
+        // degraded host the posture degrades to Missing (never silently off).
+        let executor = SandboxExecutor::new(SandboxConfig::new("/tmp"));
+        let tool = BashTool::with_detected_sandbox(executor, None);
+        match tool.sandbox_posture {
+            SandboxPosture::Active => {
+                assert!(tool.process_sandbox.is_some());
+                assert!(tool.description.contains("sandboxed via"));
+                assert!(tool.description.contains("SHANNON_SANDBOX=off"));
+            }
+            SandboxPosture::Missing => {
+                assert!(tool.process_sandbox.is_none());
+            }
+            other => panic!("unexpected posture from detection: {other:?}"),
+        }
+    }
 
     // ── SandboxMode tests ──────────────────────────────────────────────
 
@@ -2873,5 +3192,60 @@ mod test_runner_detection_tests {
     fn default_test_command_returns_none_for_empty_dir() {
         let dir = tempfile::tempdir().unwrap();
         assert!(default_test_command(dir.path()).is_none());
+    }
+
+    // ── Bash timeout resolution (R0: no more unbounded runs) ──────────
+
+    #[test]
+    fn timeout_resolution_defaults_to_120s_when_none() {
+        assert_eq!(resolve_timeout_ms_with_env(None, None), 120_000);
+    }
+
+    #[test]
+    fn timeout_resolution_prefers_explicit_timeout() {
+        // Explicit per-call timeout beats both default and env override.
+        assert_eq!(resolve_timeout_ms_with_env(Some(5_000), Some("9_999")), 5_000);
+        assert_eq!(resolve_timeout_ms_with_env(Some(5_000), None), 5_000);
+    }
+
+    #[test]
+    fn timeout_resolution_honors_env_override() {
+        assert_eq!(resolve_timeout_ms_with_env(None, Some("30000")), 30_000);
+        assert_eq!(resolve_timeout_ms_with_env(None, Some(" 45000 ")), 45_000);
+    }
+
+    #[test]
+    fn timeout_resolution_ignores_invalid_env() {
+        // Unparseable or negative-looking env values fall back to default.
+        assert_eq!(resolve_timeout_ms_with_env(None, Some("not-a-number")), 120_000);
+        assert_eq!(resolve_timeout_ms_with_env(None, Some("")), 120_000);
+        assert_eq!(resolve_timeout_ms_with_env(None, Some("-5")), 120_000);
+    }
+
+    #[test]
+    fn timeout_resolution_caps_at_600s() {
+        // Hard cap applies to explicit timeouts…
+        assert_eq!(resolve_timeout_ms_with_env(Some(u64::MAX), None), 600_000);
+        // …and to env overrides.
+        assert_eq!(resolve_timeout_ms_with_env(None, Some("999999999")), 600_000);
+    }
+
+    #[tokio::test]
+    async fn bash_tool_explicit_timeout_aborts_hanging_command() {
+        // End-to-end: the resolved timeout actually reaches the execution
+        // world — a `sleep 5` under a 300ms timeout fails with the timeout
+        // message instead of hanging the call.
+        let tool = BashTool::new();
+        let input = serde_json::json!({
+            "command": "sleep 5",
+            "timeout": 300,
+        });
+        let output = Tool::execute(&tool, input).await.unwrap();
+        assert!(output.is_error, "timed-out command must be an error");
+        assert!(
+            output.content.contains("timed out after 300ms"),
+            "expected timeout message, got: {}",
+            output.content
+        );
     }
 }

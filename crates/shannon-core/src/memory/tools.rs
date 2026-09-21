@@ -5,16 +5,17 @@
 //! These tools let the agent save durable facts and forget stale ones, like
 //! Claude Code's curated memory write path / Letta's self-editing memory.
 //!
-//! The tools own a private [`MemoryStore`] handle on the SAME storage
-//! directory as the host's injection store. Multi-writer correctness is the
-//! store's core design (append-only writes + flock'd rewrite + tombstone
-//! reconcile), so a second in-process handle is safe and avoids refactoring
-//! [`QueryEngine`](crate::query_engine::QueryEngine) onto a shared-arc store.
+//! Prefer [`MemorySaveTool::with_shared_store`]: the tool then operates on
+//! the SAME in-memory [`MemoryStore`] instance the engine injects from, so a
+//! save (or forget) is visible to the next prompt without a process restart
+//! (N-1 coherence). A private-handle constructor ([`MemorySaveTool::new`])
+//! remains for standalone use; multi-writer correctness is the store's core
+//! design (append-only writes + flock'd rewrite + tombstone reconcile).
 
 use async_trait::async_trait;
 use serde_json::{Value, json};
 use std::path::PathBuf;
-use std::sync::Mutex;
+use std::sync::{Arc, RwLock};
 
 use shannon_tool_interface::{Tool, ToolError, ToolOutput, ToolResult};
 
@@ -31,7 +32,7 @@ fn current_project() -> String {
 
 /// Save a durable fact to the project's curated memory.
 pub struct MemorySaveTool {
-    store: Mutex<MemoryStore>,
+    store: Arc<RwLock<MemoryStore>>,
 }
 
 impl MemorySaveTool {
@@ -41,8 +42,14 @@ impl MemorySaveTool {
         let mut store = MemoryStore::new(storage_path);
         let _ = store.load();
         Self {
-            store: Mutex::new(store),
+            store: Arc::new(RwLock::new(store)),
         }
+    }
+
+    /// Operate on the host's injection store so saves are immediately
+    /// visible to prompt injection (N-1).
+    pub fn with_shared_store(shared: Arc<RwLock<MemoryStore>>) -> Self {
+        Self { store: shared }
     }
 }
 
@@ -122,7 +129,7 @@ impl Tool for MemorySaveTool {
 
         let mut store = self
             .store
-            .lock()
+            .write()
             .map_err(|_| ToolError::ExecutionFailed("memory store lock poisoned".into()))?;
         let (outcome, id) = store
             .add_or_update_with_id(entry)
@@ -155,7 +162,7 @@ impl Tool for MemorySaveTool {
 /// Delete a stale/incorrect memory by id prefix (as shown by `MemorySave` /
 /// the `/recall` listing).
 pub struct MemoryForgetTool {
-    store: Mutex<MemoryStore>,
+    store: Arc<RwLock<MemoryStore>>,
 }
 
 impl MemoryForgetTool {
@@ -163,8 +170,14 @@ impl MemoryForgetTool {
         let mut store = MemoryStore::new(storage_path);
         let _ = store.load();
         Self {
-            store: Mutex::new(store),
+            store: Arc::new(RwLock::new(store)),
         }
+    }
+
+    /// Operate on the host's injection store so deletes take effect on the
+    /// next prompt (N-1).
+    pub fn with_shared_store(shared: Arc<RwLock<MemoryStore>>) -> Self {
+        Self { store: shared }
     }
 }
 
@@ -206,7 +219,7 @@ impl Tool for MemoryForgetTool {
         let project = current_project();
         let mut store = self
             .store
-            .lock()
+            .write()
             .map_err(|_| ToolError::ExecutionFailed("memory store lock poisoned".into()))?;
         let candidates: Vec<String> = store
             .project_memories(&project)

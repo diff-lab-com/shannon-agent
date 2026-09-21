@@ -287,8 +287,16 @@ impl Tool for GrepTool {
     }
 
     fn description(&self) -> &str {
-        "A powerful search tool built on ripgrep. Searches file contents using regex patterns. \
-        Supports include/exclude globs, context lines, case-insensitive matching, and multiple output modes."
+        "Searches file contents with regex patterns across a directory tree.\n\
+\n\
+Returns matches grouped per file. Output modes: `content` (matching lines\n\
+with optional context_before/context_after lines and line numbers),\n\
+`files` (matching paths only — prefer this when you just need to locate\n\
+code), and `count` (matches per file). Results are capped at `max_results`\n\
+(default 1000); gitignored paths are skipped. Prefer Glob for finding files\n\
+by name and Read for reading a whole file — Grep is for locating patterns\n\
+inside file contents. Supports include/exclude globs and\n\
+case_insensitive matching."
     }
 
     fn input_schema(&self) -> Value {
@@ -337,7 +345,8 @@ impl Tool for GrepTool {
                     "description": "Output mode: content (matching lines), files (filenames only), count (match counts per file)"
                 }
             },
-            "required": ["pattern"]
+            "required": ["pattern"],
+            "additionalProperties": false
         })
     }
 

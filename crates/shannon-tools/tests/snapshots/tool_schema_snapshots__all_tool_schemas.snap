@@ -4,6 +4,7 @@ expression: output
 ---
 ## Agent
 {
+  "additionalProperties": false,
   "properties": {
     "agent_id": {
       "description": "Agent ID or name for operations",
@@ -62,6 +63,10 @@ expression: output
         "CreateTeam",
         "Shutdown"
       ],
+      "type": "string"
+    },
+    "priority": {
+      "description": "Optional priority level for the spawned agent (e.g. 'high')",
       "type": "string"
     },
     "reason": {
@@ -135,6 +140,7 @@ expression: output
 
 ## Bash
 {
+  "additionalProperties": false,
   "properties": {
     "command": {
       "description": "The bash command to execute",
@@ -145,12 +151,24 @@ expression: output
       "type": "string"
     },
     "env": {
+      "additionalProperties": {
+        "type": "string"
+      },
       "description": "Optional environment variables",
       "type": "object"
     },
-    "timeout": {
-      "description": "Optional timeout in milliseconds",
+    "stream_delay_ms": {
+      "description": "Delay in ms before streamed output begins (default: 500); faster commands skip streaming entirely",
       "type": "integer"
+    },
+    "timeout": {
+      "default": 120000,
+      "description": "Optional timeout in milliseconds (default 120000, hard cap 600000)",
+      "type": "integer"
+    },
+    "use_pty": {
+      "description": "Run in a pseudo-terminal for interactive command support (default: false)",
+      "type": "boolean"
     }
   },
   "required": [
@@ -390,6 +408,7 @@ expression: output
 
 ## Edit
 {
+  "additionalProperties": false,
   "properties": {
     "file_path": {
       "description": "Path to the file — absolute, or relative to the working directory",
@@ -402,6 +421,10 @@ expression: output
     "old_string": {
       "description": "Exact text to replace — must match the file content byte-for-byte (including whitespace/indentation) and be UNIQUE in the file unless replace_all is true; include surrounding lines for context when the snippet is short. Read the file first.",
       "type": "string"
+    },
+    "preview": {
+      "description": "Compute and return the diff without writing the file (default: false)",
+      "type": "boolean"
     },
     "replace_all": {
       "description": "Replace all occurrences (default: false)",
@@ -563,9 +586,21 @@ expression: output
 
 ## Glob
 {
+  "additionalProperties": false,
   "properties": {
+    "exclude_pattern": {
+      "description": "Optional glob patterns to exclude (e.g., [\"!target/**\"])",
+      "items": {
+        "type": "string"
+      },
+      "type": "array"
+    },
+    "path": {
+      "description": "Optional directory to search in (defaults to the working directory)",
+      "type": "string"
+    },
     "pattern": {
-      "description": "File pattern to match (e.g., *.rs, src/**/*.py)",
+      "description": "File pattern to match, relative to the search directory (e.g., *.rs for top-level, src/**/*.py to recurse)",
       "type": "string"
     }
   },
@@ -577,6 +612,7 @@ expression: output
 
 ## Grep
 {
+  "additionalProperties": false,
   "properties": {
     "case_insensitive": {
       "description": "Perform case-insensitive search",
@@ -742,6 +778,7 @@ expression: output
 
 ## MultiEdit
 {
+  "additionalProperties": false,
   "properties": {
     "edits": {
       "description": "List of edit operations to apply atomically",
@@ -808,6 +845,7 @@ expression: output
 
 ## PowerShell
 {
+  "additionalProperties": false,
   "properties": {
     "command": {
       "description": "The PowerShell command to execute",
@@ -818,6 +856,9 @@ expression: output
       "type": "string"
     },
     "env": {
+      "additionalProperties": {
+        "type": "string"
+      },
       "description": "Optional environment variables",
       "type": "object"
     },
@@ -859,6 +900,7 @@ expression: output
 
 ## Read
 {
+  "additionalProperties": false,
   "properties": {
     "file_path": {
       "description": "Path to the file — absolute, or relative to the working directory",
@@ -871,6 +913,10 @@ expression: output
     "offset": {
       "description": "Optional line offset for reading specific ranges",
       "type": "integer"
+    },
+    "truncate_large_files": {
+      "description": "Summarize files over 2000 lines to a head/tail preview (default: true); set false to return the full content",
+      "type": "boolean"
     }
   },
   "required": [
@@ -881,6 +927,7 @@ expression: output
 
 ## RunBackground
 {
+  "additionalProperties": false,
   "properties": {
     "command": {
       "description": "Shell command passed to `bash -c <command>`.",
@@ -1199,6 +1246,7 @@ expression: output
 
 ## TodoWrite
 {
+  "additionalProperties": false,
   "properties": {
     "todos": {
       "description": "List of todo items",
@@ -1279,6 +1327,7 @@ expression: output
 
 ## WebFetch
 {
+  "additionalProperties": false,
   "properties": {
     "max_length": {
       "default": 5000,
@@ -1306,6 +1355,7 @@ expression: output
 
 ## WebSearch
 {
+  "additionalProperties": false,
   "properties": {
     "include_images": {
       "description": "Include images in results",
@@ -1368,6 +1418,7 @@ expression: output
 
 ## Write
 {
+  "additionalProperties": false,
   "properties": {
     "content": {
       "description": "Full new content for the file (overwrites the existing file entirely; prefer Edit for targeted changes)",

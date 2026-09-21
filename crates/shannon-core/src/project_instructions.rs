@@ -26,8 +26,9 @@ const DEFAULT_MAX_IMPORT_SIZE: usize = 100 * 1024;
 /// Priority order (highest to lowest):
 /// 1. Managed - Remote/organization managed instructions
 /// 2. Project - Project root instructions
-/// 3. User - User-level instructions (~/.claude/)
-/// 4. Local - Local project (.claude/, gitignored)
+/// 3. Ancestor - Parent-directory instructions (still project context)
+/// 4. User - User-level instructions (~/.claude/)
+/// 5. Local - Local project (.claude/, gitignored)
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub enum InstructionScope {
     /// Managed/remote instructions (highest priority)
@@ -36,6 +37,10 @@ pub enum InstructionScope {
     Project = 75,
     /// Project root scope alias
     ProjectRoot = 74,
+    /// Instructions found in a parent directory above the starting
+    /// directory. Still project context (NOT user-level), but broader than
+    /// the project root itself.
+    Ancestor = 73,
     /// User instructions (~/.claude/CLAUDE.md)
     User = 50,
     /// Global scope alias (user-level)
@@ -52,6 +57,7 @@ impl InstructionScope {
         match self {
             Self::Managed => "managed",
             Self::Project | Self::ProjectRoot => "project",
+            Self::Ancestor => "ancestor",
             Self::User | Self::Global => "user",
             Self::Local => "local",
             Self::Directory => "directory",
@@ -63,6 +69,7 @@ impl InstructionScope {
         match self {
             Self::Managed => "Managed/remote instructions (highest priority)",
             Self::Project | Self::ProjectRoot => "Project root instructions (repository root)",
+            Self::Ancestor => "Ancestor directory instructions (parent of the project root)",
             Self::User | Self::Global => "User instructions (~/.claude/)",
             Self::Local => "Local project (.claude/, .shannon/, gitignored)",
             Self::Directory => "Directory-specific instructions (cwd-relative)",
@@ -123,10 +130,13 @@ fn load_from_directory_with_scope(
         let scope = if path == dir {
             base_scope
         } else {
-            // Parent directories get lower scope
+            // Parent directories keep their actual disposition: they are
+            // ancestor project context, NOT user-level instructions
+            // (R1-1). ~/.claude/CLAUDE.md is loaded separately as `User`
+            // and never passes through this walk. Ancestor ranks below the
+            // project root but above user-level.
             match base_scope {
-                InstructionScope::Project => InstructionScope::User,
-                InstructionScope::Local => InstructionScope::Project,
+                InstructionScope::Project | InstructionScope::Local => InstructionScope::Ancestor,
                 _ => base_scope,
             }
         };
@@ -178,11 +188,7 @@ fn load_from_directory_with_scope(
         all_imported_files.extend(imported);
 
         // Add scope header
-        content.push_str(&format!(
-            "## {} Scope: {} ---\n\n",
-            scope.name(),
-            display_name
-        ));
+        content.push_str(&format!("## {} scope: {}\n\n", scope.name(), display_name));
         content.push_str(&resolved);
         content.push_str("\n\n");
 
@@ -556,7 +562,7 @@ fn load_full_context_with_scopes(dir: &Path) -> Option<ProjectInstructions> {
     // Gracefully skipped when no managed instructions are configured.
     if let Ok(Some(managed_content)) = load_managed_instructions(dir) {
         all_content.push_str(&format!(
-            "## {} Scope: managed ---\n\n{}\n\n",
+            "## {} scope: managed\n\n{}\n\n",
             InstructionScope::Managed.name(),
             managed_content
         ));
@@ -589,7 +595,7 @@ fn load_full_context_with_scopes(dir: &Path) -> Option<ProjectInstructions> {
                         );
                         all_imported.extend(imported);
                         all_content.push_str(&format!(
-                            "## {} Scope: ~/.claude/{} ---\n\n{}\n\n",
+                            "## {} scope: ~/.claude/{}\n\n{}\n\n",
                             InstructionScope::User.name(),
                             filename,
                             resolved
@@ -639,7 +645,7 @@ fn load_full_context_with_scopes(dir: &Path) -> Option<ProjectInstructions> {
                         all_imported.extend(imported);
                         let rel_path = format!("{dir_name}/{filename}");
                         all_content.push_str(&format!(
-                            "## {} Scope: {} ---\n\n{}\n\n",
+                            "## {} scope: {}\n\n{}\n\n",
                             InstructionScope::Local.name(),
                             rel_path,
                             resolved
@@ -680,7 +686,7 @@ fn load_full_context_with_scopes(dir: &Path) -> Option<ProjectInstructions> {
                     );
                     all_imported.extend(imported);
                     all_content.push_str(&format!(
-                        "## {} Scope: {} ---\n\n{}\n\n",
+                        "## {} scope: {}\n\n{}\n\n",
                         InstructionScope::Local.name(),
                         local_filename,
                         resolved
@@ -1592,9 +1598,75 @@ mod tests {
     fn test_scope_priority_values() {
         // Verify the scope priority values match the expected ordering
         assert!(InstructionScope::Managed > InstructionScope::Project);
+        assert!(InstructionScope::Project > InstructionScope::Ancestor);
+        assert!(InstructionScope::Ancestor > InstructionScope::User);
         assert!(InstructionScope::Project > InstructionScope::User);
         assert!(InstructionScope::User > InstructionScope::Local);
         assert!(InstructionScope::Local > InstructionScope::Directory);
+    }
+
+    #[test]
+    fn test_scope_headings_are_clean_markdown() {
+        // R1-1: scope headers used to render as `## project Scope: x ---`
+        // with a stray trailing `---` artifact and inconsistent casing.
+        let tmp = std::env::temp_dir().join(format!("shannon-test-{}", uuid::Uuid::new_v4()));
+        fs::create_dir_all(&tmp).unwrap();
+        fs::write(tmp.join("CLAUDE.md"), "# Heading format probe").unwrap();
+
+        let result = load_from_directory(&tmp).unwrap();
+        assert!(
+            result.content.contains("## directory scope: CLAUDE.md\n"),
+            "heading should be clean markdown: {:?}",
+            result.content
+        );
+        assert!(
+            !result.content.contains(" ---"),
+            "scope headings must not carry the legacy trailing --- artifact: {:?}",
+            result.content
+        );
+
+        let _ = fs::remove_dir_all(&tmp);
+    }
+
+    #[test]
+    fn test_parent_directory_instructions_are_ancestor_not_user() {
+        // R1-1: parent-directory instruction files used to be relabeled
+        // `User` while walking above the project root, which mislabeled
+        // ancestor repo context as user-level (~/.claude) instructions.
+        let tmp = std::env::temp_dir().join(format!("shannon-test-{}", uuid::Uuid::new_v4()));
+        let child = tmp.join("subdir");
+        fs::create_dir_all(&child).unwrap();
+        fs::write(tmp.join("CLAUDE.md"), "# Ancestor project rules").unwrap();
+
+        let result = load_full_context(&child).expect("instructions from parent dir");
+        let parent_file = result
+            .instruction_files
+            .iter()
+            .find(|f| f.path == tmp.join("CLAUDE.md"))
+            .expect("parent CLAUDE.md should be loaded");
+        assert_eq!(
+            parent_file.scope,
+            InstructionScope::Ancestor,
+            "a parent-directory instruction file is ancestor project context, not user scope"
+        );
+        // The heading shows the path relative to the loaded directory; for a
+        // parent file that is the path outside `dir` (rendered absolute).
+        let heading = result
+            .content
+            .lines()
+            .find(|l| l.starts_with("## ancestor scope: "))
+            .expect("ancestor heading should be present");
+        assert!(
+            heading.ends_with("/CLAUDE.md"),
+            "heading should name the parent CLAUDE.md: {heading}"
+        );
+        assert!(
+            !result.content.contains("## user scope:"),
+            "ancestor file must not be mislabeled user scope: {:?}",
+            result.content
+        );
+
+        let _ = fs::remove_dir_all(&tmp);
     }
 
     #[test]

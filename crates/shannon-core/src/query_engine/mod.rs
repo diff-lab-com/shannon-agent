@@ -4,14 +4,19 @@
 
 mod browser_control_prompt;
 mod context_injector;
+mod context_policy;
 mod engine;
 mod env_config;
 pub mod guard_nodes;
 pub mod litellm;
 mod parsers;
+mod recovery;
 mod repo_map_injector;
 mod routing;
 mod streaming;
+mod stream_finalization;
+mod system_prompt;
+mod tool_dispatch;
 mod team_prompt;
 mod types;
 
@@ -23,9 +28,9 @@ pub use engine::{ProviderHealth, ProviderHealthStatus, QueryEngine};
 pub use repo_map_injector::RepoMapInjector;
 pub use team_prompt::teammate_instructions;
 pub use types::{
-    CompressionStrategy, ConversationStats, CostEstimate, CostTracker, GOAL_BLOCKED_MARKER,
-    GOAL_COMPLETE_MARKER, GoalSpec, PermissionRequest, QueryContext, QueryEngineConfig, QueryError,
-    QueryEvent, QueryMetadata, QueryStream, pricing_for_model_opt,
+    CompressionStrategy, ConversationStats, CostEstimate, CostTracker, EffortLevel,
+    GOAL_BLOCKED_MARKER, GOAL_COMPLETE_MARKER, GoalSpec, PermissionRequest, QueryContext,
+    QueryEngineConfig, QueryError, QueryEvent, QueryMetadata, QueryStream, pricing_for_model_opt,
 };
 
 #[cfg(test)]
@@ -132,88 +137,6 @@ mod tests {
         let tokens = conv.estimate_tokens();
         // "Hello world" (11) + "Hi there!" (10) = 21 chars / 4 ≈ 5 tokens
         assert!((4..=7).contains(&tokens));
-    }
-
-    #[test]
-    fn test_conversation_compression_needed() {
-        let config = QueryEngineConfig {
-            max_context_tokens: Some(100),
-            compression_threshold: 0.8,
-            keep_recent_messages: 2,
-            system_prompt: None,
-            ..Default::default()
-        };
-
-        let mut conv = ConversationState::default();
-        // Add small messages - under threshold
-        for _ in 0..5 {
-            conv.messages.push(shannon_engine::api::Message {
-                role: "user".to_string(),
-                content: shannon_engine::api::MessageContent::Text("Hi".to_string()),
-            });
-        }
-
-        assert!(!conv.needs_compression(&config));
-
-        // Add many messages - over threshold
-        for _ in 0..50 {
-            conv.messages.push(shannon_engine::api::Message {
-                role: "user".to_string(),
-                content: shannon_engine::api::MessageContent::Text(
-                    "This is a longer message to increase token count".to_string(),
-                ),
-            });
-        }
-
-        assert!(conv.needs_compression(&config));
-    }
-
-    #[test]
-    fn test_conversation_compress() {
-        let config = QueryEngineConfig {
-            keep_recent_messages: 2,
-            ..Default::default()
-        };
-
-        let mut conv = ConversationState::default();
-        for i in 0..8 {
-            conv.messages.push(shannon_engine::api::Message {
-                role: "user".to_string(),
-                content: shannon_engine::api::MessageContent::Text(format!("Message {i}")),
-            });
-        }
-
-        let original_count = conv.messages.len();
-        conv.compress(&config);
-
-        // Cache-aware: [m0, m1, summary, m6, m7] = 5 messages
-        assert_eq!(conv.messages.len(), 5);
-        assert!(original_count > conv.messages.len());
-
-        // First two messages are preserved cache prefix
-        match &conv.messages[0].content {
-            shannon_engine::api::MessageContent::Text(text) => {
-                assert_eq!(text, "Message 0");
-            }
-            _ => panic!("First message should be preserved cache prefix"),
-        }
-
-        // Summary inserted after cache prefix
-        match &conv.messages[2].content {
-            shannon_engine::api::MessageContent::Text(text) => {
-                assert!(text.contains("[Previous conversation summary]"));
-                assert!(text.contains("Summary of"));
-            }
-            _ => panic!("Expected summary message after cache prefix"),
-        }
-
-        // Last message is the most recent
-        match &conv.messages[4].content {
-            shannon_engine::api::MessageContent::Text(text) => {
-                assert_eq!(text, "Message 7");
-            }
-            _ => panic!("Last message should be the most recent"),
-        }
     }
 
     // CostTracker tests
@@ -768,105 +691,6 @@ mod tests {
         assert!(tokens > 0);
     }
 
-    #[test]
-    fn test_conversation_compress_empty_does_nothing() {
-        let config = QueryEngineConfig::default();
-        let mut conv = ConversationState::default();
-        conv.compress(&config);
-        assert!(conv.messages.is_empty());
-    }
-
-    #[test]
-    fn test_conversation_compress_few_messages_no_change() {
-        let config = QueryEngineConfig {
-            keep_recent_messages: 5,
-            ..Default::default()
-        };
-        let mut conv = ConversationState::default();
-        for i in 0..4 {
-            conv.messages.push(shannon_engine::api::Message {
-                role: "user".to_string(),
-                content: shannon_engine::api::MessageContent::Text(format!("Msg {i}")),
-            });
-        }
-        conv.compress(&config);
-        assert_eq!(conv.messages.len(), 4);
-    }
-
-    #[test]
-    fn test_conversation_compress_exactly_threshold() {
-        let config = QueryEngineConfig {
-            keep_recent_messages: 2,
-            ..Default::default()
-        };
-        let mut conv = ConversationState::default();
-        // Need enough messages that split_point > min_preserve (2)
-        for i in 0..6 {
-            conv.messages.push(shannon_engine::api::Message {
-                role: "user".to_string(),
-                content: shannon_engine::api::MessageContent::Text(format!("Message {i}")),
-            });
-        }
-        conv.compress(&config);
-        // drain(2..4) removes 2 messages, summary inserted at 2
-        // [m0, m1, summary, m4, m5] = 5 messages
-        assert_eq!(conv.messages.len(), 5);
-        // First 2 preserved for cache prefix
-        match &conv.messages[0].content {
-            shannon_engine::api::MessageContent::Text(text) => {
-                assert_eq!(text, "Message 0");
-            }
-            _ => panic!("Expected text content"),
-        }
-        // Summary inserted after cache prefix
-        match &conv.messages[2].content {
-            shannon_engine::api::MessageContent::Text(text) => {
-                assert!(text.contains("[Previous conversation summary]"));
-            }
-            _ => panic!("Expected text content"),
-        }
-        // Recent messages preserved at the tail
-        match &conv.messages[4].content {
-            shannon_engine::api::MessageContent::Text(text) => {
-                assert_eq!(text, "Message 5");
-            }
-            _ => panic!("Expected text content"),
-        }
-    }
-
-    #[test]
-    fn test_conversation_needs_compression_no_limit() {
-        let config = QueryEngineConfig {
-            max_context_tokens: None,
-            ..Default::default()
-        };
-        let mut conv = ConversationState::default();
-        for _ in 0..1000 {
-            conv.messages.push(shannon_engine::api::Message {
-                role: "user".to_string(),
-                content: shannon_engine::api::MessageContent::Text(
-                    "A very long message".repeat(100),
-                ),
-            });
-        }
-        assert!(!conv.needs_compression(&config));
-    }
-
-    #[test]
-    fn test_conversation_needs_compression_under_threshold() {
-        let config = QueryEngineConfig {
-            max_context_tokens: Some(10000),
-            compression_threshold: 0.8,
-            ..Default::default()
-        };
-        let mut conv = ConversationState::default();
-        conv.messages.push(shannon_engine::api::Message {
-            role: "user".to_string(),
-            content: shannon_engine::api::MessageContent::Text("Hi".to_string()),
-        });
-        assert!(!conv.needs_compression(&config));
-    }
-
     // CostTracker edge cases
 
     #[test]
@@ -929,7 +753,7 @@ mod tests {
             compression_strategy: CompressionStrategy::default(),
             system_prompt: None,
             auto_commit: false,
-            effort_level: None,
+            effort: EffortLevel::default(),
             focus_area: None,
             goal: None,
             fast_model: None,
@@ -1158,71 +982,6 @@ mod tests {
         assert_send::<QueryStream>();
     }
 
-    // ConversationState compress edge cases
-
-    #[test]
-    fn test_conversation_compress_minimum_messages() {
-        let mut state = ConversationState::default();
-        let config = QueryEngineConfig {
-            keep_recent_messages: 3,
-            ..QueryEngineConfig::default()
-        };
-
-        // Need enough messages that split_point > min_preserve (2)
-        for i in 0..8 {
-            state.messages.push(shannon_engine::api::Message {
-                role: "user".to_string(),
-                content: shannon_engine::api::MessageContent::Blocks(vec![
-                    shannon_engine::api::ContentBlock::Text {
-                        text: format!("Message number {i}"),
-                    },
-                ]),
-            });
-        }
-
-        let before = state.messages.len();
-        state.compress(&config);
-        assert!(state.messages.len() < before);
-    }
-
-    #[test]
-    fn test_conversation_compress_preserves_recent_order() {
-        let mut state = ConversationState::default();
-        let config = QueryEngineConfig {
-            keep_recent_messages: 2,
-            ..QueryEngineConfig::default()
-        };
-
-        for i in 0..4 {
-            state.messages.push(shannon_engine::api::Message {
-                role: "user".to_string(),
-                content: shannon_engine::api::MessageContent::Blocks(vec![
-                    shannon_engine::api::ContentBlock::Text {
-                        text: format!("Msg {i}"),
-                    },
-                ]),
-            });
-        }
-
-        state.compress(&config);
-
-        let len = state.messages.len();
-        if let shannon_engine::api::MessageContent::Blocks(blocks) =
-            &state.messages[len - 2].content
-        {
-            if let shannon_engine::api::ContentBlock::Text { text: t1 } = &blocks[0] {
-                assert!(t1.contains("Msg 2"));
-            }
-        }
-        if let shannon_engine::api::MessageContent::Blocks(blocks) =
-            &state.messages[len - 1].content
-        {
-            if let shannon_engine::api::ContentBlock::Text { text: t2 } = &blocks[0] {
-                assert!(t2.contains("Msg 3"));
-            }
-        }
-    }
-
     #[test]
     fn test_conversation_state_estimate_tokens_with_tool_use() {
         let mut state = ConversationState::default();
@@ -1350,7 +1109,7 @@ mod tests {
             compression_strategy: CompressionStrategy::default(),
             system_prompt: None,
             auto_commit: false,
-            effort_level: None,
+            effort: EffortLevel::default(),
             focus_area: None,
             goal: None,
             fast_model: None,

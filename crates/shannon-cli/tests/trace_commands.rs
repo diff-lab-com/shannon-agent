@@ -217,10 +217,16 @@ fn replay_rendering_matches_live_broadcast_content_and_snaps() {
         let state_dir = mgr.sessions_dir().to_path_buf();
 
         let session_id = Uuid::new_v4();
+        // N-1: unattended queries carry no approval channel, so interactive
+        // approval now fails closed. This test exercises trace/replay
+        // plumbing, not permissions — run FullAuto like headless mode so the
+        // low-risk `echo` tool executes.
+        let mut permissions = PermissionManager::new();
+        permissions.set_approval_mode(shannon_engine::permissions::ApprovalMode::FullAuto);
         let mut engine = shannon_core::query_engine::QueryEngine::with_session_id(
             shannon_engine::api::LlmClient::new(client_cfg),
             registry,
-            PermissionManager::new(),
+            permissions,
             mgr,
             QueryEngineConfig::default(),
             session_id,

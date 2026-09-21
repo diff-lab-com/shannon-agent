@@ -24,6 +24,49 @@ use shannon_engine::permissions::ApprovalMode;
 /// Type alias for backward compatibility.
 pub type AgentToolContext = TeamContext;
 
+/// Tools a read-only sub-agent may use: inspection only — no file mutation,
+/// no shell, no notebook edits. Same surface the builtin `oracle` /
+/// `explorer` style definitions restrict themselves to (Read/Grep/Glob +
+/// LSP read tools + WebFetch), enforced here so `read_only` applies even
+/// when the caller passes no allowlist of their own.
+pub const READ_ONLY_TOOLS: &[&str] = &[
+    "Read",
+    "Grep",
+    "Glob",
+    "GoToDefinition",
+    "FindReferences",
+    "Hover",
+    "DocumentSymbol",
+    "WorkspaceSymbol",
+    "WebFetch",
+];
+
+/// Restrict an effective allowlist to [`READ_ONLY_TOOLS`].
+///
+/// `None` (inherit-everything) becomes the full read-only surface; a
+/// caller-supplied allowlist is intersected with it by base tool name
+/// (the part before any `Bash(git log:*)`-style pattern suffix), preserving
+/// the caller's entries. `pub(crate)` so unit tests can pin the exact
+/// composition without spawning an engine.
+pub(crate) fn restrict_to_read_only(allowed: Option<&[String]>) -> Vec<String> {
+    fn base_name(entry: &str) -> &str {
+        entry.split('(').next().unwrap_or(entry).trim()
+    }
+    let is_read_only = |entry: &str| READ_ONLY_TOOLS.contains(&base_name(entry));
+    match allowed {
+        None => READ_ONLY_TOOLS.iter().map(|s| s.to_string()).collect(),
+        Some(entries) => {
+            let mut out: Vec<String> = Vec::new();
+            for entry in entries.iter().filter(|e| is_read_only(e)) {
+                if !out.iter().any(|e| e == entry) {
+                    out.push(entry.clone());
+                }
+            }
+            out
+        }
+    }
+}
+
 /// Merge the per-call `allowed_tools`, the per-call `disallowed_tools`, and
 /// the parent's process-level denylist into a single `ToolFilter` list.
 /// Allow entries pass through verbatim; deny entries are emitted as
@@ -94,6 +137,13 @@ pub struct AgentSpawnInput {
     /// the parent's tool registry not exposing them). If unset, the child
     /// inherits only the parent's process-level `--disallowed-tools`.
     pub disallowed_tools: Option<Vec<String>>,
+
+    /// Restrict the sub-agent to read-only tools (Read/Grep/Glob/LSP read
+    /// tools/WebFetch). Applied after `allowed_tools` resolution (including
+    /// an agent definition's allowlist), so a `read_only` spawn can never
+    /// write, edit, or run shell commands regardless of any allowlist.
+    #[serde(default)]
+    pub read_only: Option<bool>,
 }
 
 /// Output from agent spawn
@@ -218,7 +268,21 @@ impl Default for AgentTool {
 impl AgentTool {
     pub fn new() -> Self {
         Self {
-            description: "Spawn and manage AI agent teammates for collaborative problem-solving"
+            description: "Spawn and manage AI agent teammates for collaborative problem-solving.\n\
+\n\
+Delegate when a sub-task is self-contained and benefit from an isolated\n\
+context window: focused research, broad code exploration, or a specialist\n\
+review that would flood the lead's context. Sub-agents run in their own\n\
+session with their own tool registry (no recursive Agent tool) and return\n\
+only their final result — they never see this conversation. Restrict what\n\
+a sub-agent may do with `allowed_tools` (read-only exploration: Read/Grep/\n\
+Glob/Bash), `read_only: true` (read-only tools only), or `disallowed_tools`;\n\
+otherwise it inherits the parent's tool surface minus the parent's denylist.\n\
+`model` overrides the sub-agent's model id. Built-in agent types include\n\
+\"oracle\" (read-only senior staff reviewer — review/plan/analyze/advise),\n\
+\"explorer\", \"planner\", \"code-reviewer\". Operations: Spawn (run a task),\n\
+SendMessage (reply to a teammate), CreateTeam, Shutdown. Do NOT delegate\n\
+trivial single-tool lookups — just do them directly."
                 .to_string(),
             context: Arc::new(Mutex::new(None)),
             agent_defs: Arc::new(Mutex::new(None)),
@@ -332,6 +396,28 @@ impl AgentTool {
         // Look up persisted agent definition (if any)
         let agent_def = self.get_agent_defs().get(&agent_type).cloned();
 
+        // Effective tool allowlist: the per-call `allowed_tools` wins, else
+        // the agent definition's own allowlist (e.g. the builtin `oracle`).
+        // This is the real enforcement surface — `execute_subagent` builds a
+        // fresh registry and filters it with this list, so a definition's
+        // restrictions hold even when the caller passes none of their own.
+        let mut effective_allowed_tools = input
+            .allowed_tools
+            .clone()
+            .or_else(|| {
+                agent_def
+                    .as_ref()
+                    .filter(|d| !d.allowed_tools.is_empty())
+                    .map(|d| d.allowed_tools.clone())
+            });
+        // `read_only` (per-call, or implied by nothing else) always wins:
+        // intersect whatever allowlist resolved with the read-only surface.
+        let read_only = input.read_only.unwrap_or(false);
+        if read_only {
+            effective_allowed_tools =
+                Some(restrict_to_read_only(effective_allowed_tools.as_deref()));
+        }
+
         if let Some(ctx) = self.get_team_context() {
             // 1. Register in coordinator for team coordination
             let team = input.context.as_ref().and_then(|c| {
@@ -356,16 +442,7 @@ impl AgentTool {
                     )
                 });
 
-            let resolved_tools = input
-                .allowed_tools
-                .clone()
-                .or_else(|| {
-                    agent_def
-                        .as_ref()
-                        .filter(|d| !d.allowed_tools.is_empty())
-                        .map(|d| d.allowed_tools.clone())
-                })
-                .unwrap_or_default();
+            let resolved_tools = effective_allowed_tools.clone().unwrap_or_default();
 
             let config = AgentConfig {
                 name: format!("{}-{}", &agent_type, &agent_id[6..14]),
@@ -421,6 +498,8 @@ impl AgentTool {
                     // when sub-agents ran real LLM turns. See `execute_subagent`.
                     ctx.permission_mode.clone(),
                     ctx.parent_disallowed_tools.clone(),
+                    effective_allowed_tools.clone(),
+                    read_only,
                 )
                 .await?;
 
@@ -473,6 +552,8 @@ impl AgentTool {
                         prompt,
                         ApprovalMode::AutoEdit.to_string(),
                         Vec::new(),
+                        effective_allowed_tools,
+                        read_only,
                     )
                     .await
                 }
@@ -498,6 +579,11 @@ impl AgentTool {
     /// forwarded here from `spawn_agent`). The previous shape hard-coded
     /// `FullAuto` and dropped the denylist, which silently downgraded the
     /// lead's sandbox when sub-agents ran real LLM turns.
+    ///
+    /// `allowed_tools` is the already-resolved effective allowlist (per-call
+    /// input → agent definition → `read_only` intersection, see
+    /// `spawn_agent`); `read_only` additionally tightens the sub-agent's
+    /// system prompt so the model does not try to write.
     #[allow(clippy::too_many_arguments)]
     async fn execute_subagent(
         &self,
@@ -508,6 +594,8 @@ impl AgentTool {
         resolved_system_prompt: Option<String>,
         parent_permission_mode: String,
         parent_disallowed_tools: Vec<String>,
+        allowed_tools: Option<Vec<String>>,
+        read_only: bool,
     ) -> Result<AgentSpawnOutput, ToolError> {
         use shannon_core::query_engine::{QueryContext, QueryEvent, QueryMetadata};
         use uuid::Uuid;
@@ -523,7 +611,7 @@ impl AgentTool {
         // precedence beats allow — i.e. even if a tool name is in
         // `allowed_tools`, the parent denylist still rejects it.
         let merged = merge_tool_filter(
-            input.allowed_tools.as_deref(),
+            allowed_tools.as_deref(),
             input.disallowed_tools.as_deref(),
             &parent_disallowed_tools,
         );
@@ -557,6 +645,17 @@ impl AgentTool {
 
         let base_prompt = resolved_system_prompt
             .unwrap_or_else(|| format!("You are a sub-agent of type '{agent_type}'. Focus on completing the assigned task concisely."));
+        // `read_only` also reaches the model: the tool filter blocks writes,
+        // and this hint stops the sub-agent from wasting turns trying.
+        let base_prompt = if read_only {
+            format!(
+                "{base_prompt}\n\nREAD-ONLY MODE: your tool registry is restricted to read-only \
+                 tools (Read/Grep/Glob/LSP lookups/WebFetch). You cannot modify files or run \
+                 shell commands — report findings and proposed changes instead."
+            )
+        } else {
+            base_prompt
+        };
         let system_hint = format!(
             "{base_prompt}{working_dir_hint}\n\nTask: {task}",
             task = input.task,
@@ -766,7 +865,12 @@ impl AgentTool {
                             .map(|d| d.allowed_tools.clone())
                             .unwrap_or_default(),
                         working_directory: std::path::PathBuf::from("."),
-                        max_turns: def.map(|d| d.max_concurrent_tasks as u32).unwrap_or(50),
+                        // Same rule as the spawn path: use the definition's own
+                        // `max_turns` budget. `max_concurrent_tasks` is a
+                        // concurrency knob — repurposing it here gave e.g. the
+                        // builtin `explorer` (max_concurrent_tasks = 1) a
+                        // single-turn loop.
+                        max_turns: def.and_then(|d| d.max_turns).unwrap_or(50),
                         team: Some(team_name.clone()),
                         // Inherit the parent's --disallowed-tools denylist as the
                         // baseline. Each sub-agent runs as a fresh `shannon --team-agent`
@@ -1023,6 +1127,10 @@ impl Tool for AgentTool {
                     "type": "object",
                     "description": "Optional context (can include 'team' for team assignment)"
                 },
+                "priority": {
+                    "type": "string",
+                    "description": "Optional priority level for the spawned agent (e.g. 'high')"
+                },
                 "model": {
                     "type": "string",
                     "description": "Optional model override for the sub-agent (e.g. 'claude-sonnet-4-6', 'gpt-4o')"
@@ -1031,6 +1139,10 @@ impl Tool for AgentTool {
                     "type": "array",
                     "items": { "type": "string" },
                     "description": "Optional tool allowlist. Only these tools will be available to the sub-agent (e.g. ['Read', 'Bash', 'Grep'])"
+                },
+                "read_only": {
+                    "type": "boolean",
+                    "description": "Restrict the sub-agent to read-only tools (Read/Grep/Glob/LSP lookups/WebFetch) — no file writes, no shell. Overrides any allowlist widening."
                 },
                 "disallowed_tools": {
                     "type": "array",
@@ -1067,7 +1179,8 @@ impl Tool for AgentTool {
                     "description": "Reason for shutdown"
                 }
             },
-            "required": ["operation"]
+            "required": ["operation"],
+            "additionalProperties": false
         })
     }
 }
@@ -1089,6 +1202,7 @@ mod tests {
             model: None,
             allowed_tools: None,
             disallowed_tools: None,
+            read_only: None,
         };
         let ser = serde_json::to_string(&input).unwrap();
         let de: AgentSpawnInput = serde_json::from_str(&ser).unwrap();
@@ -1108,6 +1222,7 @@ mod tests {
             model: None,
             allowed_tools: None,
             disallowed_tools: None,
+            read_only: None,
         };
         let ser = serde_json::to_string(&input).unwrap();
         let de: AgentSpawnInput = serde_json::from_str(&ser).unwrap();
@@ -1125,6 +1240,7 @@ mod tests {
             model: Some("claude-sonnet-4-6".into()),
             allowed_tools: Some(vec!["Read".into(), "Edit".into(), "Bash".into()]),
             disallowed_tools: None,
+            read_only: None,
         };
         let ser = serde_json::to_string(&input).unwrap();
         let de: AgentSpawnInput = serde_json::from_str(&ser).unwrap();
@@ -1146,6 +1262,7 @@ mod tests {
             model: None,
             allowed_tools: None,
             disallowed_tools: None,
+            read_only: None,
         };
         let ser = serde_json::to_string(&input).unwrap();
         let de: AgentSpawnInput = serde_json::from_str(&ser).unwrap();
@@ -1167,6 +1284,7 @@ mod tests {
             model: None,
             allowed_tools: None,
             disallowed_tools: None,
+            read_only: None,
         };
         let wd = input
             .context
@@ -1183,6 +1301,7 @@ mod tests {
             model: None,
             allowed_tools: None,
             disallowed_tools: None,
+            read_only: None,
         };
         let wd2 = input2
             .context
@@ -1199,6 +1318,7 @@ mod tests {
             model: None,
             allowed_tools: None,
             disallowed_tools: None,
+            read_only: None,
         };
         let wd3 = input3
             .context
@@ -1570,6 +1690,83 @@ mod tests {
         // deny when the name happens to also live in the allowlist.
         let merged = merge_tool_filter(Some(&["Bash".to_string()]), None, &["Bash".to_string()]);
         assert_eq!(merged, vec!["Bash".to_string(), "!Bash".to_string()]);
+    }
+
+    // ── read_only spawns (oracle-style read-only sub-agents) ──────────────
+
+    #[test]
+    fn restrict_to_read_only_none_becomes_full_read_only_surface() {
+        let out = restrict_to_read_only(None);
+        let expected: Vec<String> = READ_ONLY_TOOLS.iter().map(|s| s.to_string()).collect();
+        assert_eq!(out, expected);
+        // The surface carries no mutation or shell escape hatch.
+        for write_tool in ["Write", "Edit", "MultiEdit", "Bash", "PowerShell", "NotebookEdit"] {
+            assert!(!out.iter().any(|t| t == write_tool), "{write_tool} leaked");
+        }
+    }
+
+    #[test]
+    fn restrict_to_read_only_intersects_caller_allowlist_by_base_name() {
+        // Pattern entries (`Bash(git log:*)`) are judged by base name and
+        // dropped here; duplicates are collapsed; order is preserved.
+        let allowed = vec![
+            "Read".to_string(),
+            "Bash(git log:*)".to_string(),
+            "Edit".to_string(),
+            "WebFetch".to_string(),
+            "Read".to_string(),
+        ];
+        let out = restrict_to_read_only(Some(&allowed));
+        assert_eq!(out, vec!["Read".to_string(), "WebFetch".to_string()]);
+    }
+
+    #[test]
+    fn test_agent_spawn_input_read_only_field_roundtrip() {
+        let de: AgentSpawnInput = serde_json::from_value(json!({
+            "agent_type": "oracle",
+            "task": "review this diff",
+            "read_only": true,
+        }))
+        .unwrap();
+        assert_eq!(de.read_only, Some(true));
+        // Omitted stays None (no behavior change for existing callers).
+        let de2: AgentSpawnInput =
+            serde_json::from_value(json!({ "agent_type": "x", "task": "t" })).unwrap();
+        assert_eq!(de2.read_only, None);
+    }
+
+    #[test]
+    fn test_agent_schema_advertises_read_only() {
+        let tool = AgentTool::new();
+        let schema = tool.input_schema();
+        assert!(schema["properties"]["read_only"].is_object());
+        assert!(schema["properties"]["model"].is_object());
+    }
+
+    #[test]
+    fn test_agent_defs_includes_read_only_oracle() {
+        let tool = AgentTool::new();
+        let defs = tool.get_agent_defs();
+        let oracle = defs.get("oracle").unwrap();
+        assert_eq!(oracle.max_turns, Some(30));
+        assert!(
+            !oracle
+                .allowed_tools
+                .iter()
+                .any(|t| t == "Write" || t == "Bash")
+        );
+        assert!(oracle.allowed_tools.iter().any(|t| t == "Read"));
+
+        // The def drives enforcement through the normal Spawn path: the
+        // effective allowlist falls back to the definition, and intersecting
+        // it with the read-only surface keeps it read-only.
+        let restricted = restrict_to_read_only(Some(&oracle.allowed_tools));
+        assert!(!restricted.iter().any(|t| t.contains("Write") || t.contains("Bash")));
+        assert_eq!(
+            restricted,
+            oracle.allowed_tools,
+            "the oracle def's surface is exactly a read-only surface"
+        );
     }
 
     // B2 follow-up — `extract_real_reply` filter (used by `send_message`

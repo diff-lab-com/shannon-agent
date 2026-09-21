@@ -217,6 +217,7 @@ mod hook_event_tests {
             tool_name: "Read".to_string(),
             input: json!({"path": "/tmp/file.txt"}),
             output: json!({"content": "hello"}),
+            is_error: false,
         };
         assert_eq!(event.event_type(), HookEventType::PostToolUse);
     }
@@ -270,6 +271,7 @@ mod hook_event_tests {
             tool_name: "Write".into(),
             input: json!(null),
             output: json!(null),
+            is_error: false,
         };
         assert_eq!(event.event_type(), HookEventType::PostToolUse);
     }
@@ -323,6 +325,7 @@ mod hook_event_tests {
             tool_name: "Read".to_string(),
             input: json!({}),
             output: json!({}),
+            is_error: false,
         };
         assert_eq!(event.match_subject(), "Read");
     }
@@ -382,6 +385,7 @@ mod hook_event_tests {
             tool_name: "Read".to_string(),
             input: json!({"path": "/etc/hosts"}),
             output: json!({"lines": 10}),
+            is_error: false,
         };
         let bytes = event.to_json_bytes();
         let parsed: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
@@ -455,6 +459,7 @@ mod hook_event_tests {
                 tool_name: "T".into(),
                 input: json!(1),
                 output: json!(2),
+                is_error: false,
             },
             HookEvent::SessionStart {
                 session_id: "s".into(),

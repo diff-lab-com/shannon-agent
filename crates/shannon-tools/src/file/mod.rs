@@ -129,14 +129,16 @@ impl Default for ReadTool {
 impl ReadTool {
     pub fn new() -> Self {
         Self {
-            description: "Read file contents from the local filesystem.\n\
+            description: "Read a file from the filesystem.\n\
 \n\
-Returns up to 2000 lines per call; large files are truncated with a notice —\n\
-use `offset`/`limit` to page through them. Output includes no line numbers:\n\
-cite locations as file_path plus nearby unique text. Images (png/jpg/gif/webp)\n\
-are returned as attachments the model can view. You MUST read a file before\n\
-editing it — Edit requires that old_string matches the file exactly, which\n\
-you can only know from a fresh Read."
+Output lines are numbered cat -n style (\"{line_number}\\t{content}\"); cite\n\
+locations as file_path:line. Returns up to 2000 lines per call; large files\n\
+are truncated with a notice — use `offset`/`limit` to page through them (the\n\
+line numbers stay absolute to the file). Images (png/jpg/gif/webp) are\n\
+returned as attachments the model can view. Binary files are reported as\n\
+such instead of being dumped as mojibake. You MUST read a file before editing\n\
+it — Edit requires that old_string matches the file exactly, which you can\n\
+only know from a fresh Read."
                 .to_string(),
             sandbox: PathSandbox::new(),
             fs: crate::defaults::fs(),
@@ -146,14 +148,16 @@ you can only know from a fresh Read."
     /// Create a ReadTool with a custom sandbox configuration.
     pub fn with_sandbox(sandbox: PathSandbox) -> Self {
         Self {
-            description: "Read file contents from the local filesystem.\n\
+            description: "Read a file from the filesystem.\n\
 \n\
-Returns up to 2000 lines per call; large files are truncated with a notice —\n\
-use `offset`/`limit` to page through them. Output includes no line numbers:\n\
-cite locations as file_path plus nearby unique text. Images (png/jpg/gif/webp)\n\
-are returned as attachments the model can view. You MUST read a file before\n\
-editing it — Edit requires that old_string matches the file exactly, which\n\
-you can only know from a fresh Read."
+Output lines are numbered cat -n style (\"{line_number}\\t{content}\"); cite\n\
+locations as file_path:line. Returns up to 2000 lines per call; large files\n\
+are truncated with a notice — use `offset`/`limit` to page through them (the\n\
+line numbers stay absolute to the file). Images (png/jpg/gif/webp) are\n\
+returned as attachments the model can view. Binary files are reported as\n\
+such instead of being dumped as mojibake. You MUST read a file before editing\n\
+it — Edit requires that old_string matches the file exactly, which you can\n\
+only know from a fresh Read."
                 .to_string(),
             sandbox,
             fs: crate::defaults::fs(),
@@ -192,9 +196,14 @@ impl Tool for ReadTool {
                 "limit": {
                     "type": "integer",
                     "description": "Optional line limit"
+                },
+                "truncate_large_files": {
+                    "type": "boolean",
+                    "description": "Summarize files over 2000 lines to a head/tail preview (default: true); set false to return the full content"
                 }
             },
-            "required": ["file_path"]
+            "required": ["file_path"],
+            "additionalProperties": false
         })
     }
 
@@ -247,7 +256,15 @@ impl Default for WriteTool {
 impl WriteTool {
     pub fn new() -> Self {
         Self {
-            description: "Write content to a file, overwriting if it exists".to_string(),
+            description: "Writes `content` to a file, overwriting it entirely if it exists and\n\
+creating it (with any missing parent directories) if it does not.\n\
+\n\
+Prefer Edit for targeted changes to an existing file — Write replaces the\n\
+whole content and silently discards anything not included, so re-read the\n\
+file first if you only saw part of it. The write is atomic (temp file +\n\
+rename): a failure never leaves a partial file. Results report the byte\n\
+count written; content over 10 MB is rejected."
+                .to_string(),
             sandbox: PathSandbox::new(),
             fs: crate::defaults::fs(),
             history: None,
@@ -257,7 +274,15 @@ impl WriteTool {
     /// Create a WriteTool with a custom sandbox configuration.
     pub fn with_sandbox(sandbox: PathSandbox) -> Self {
         Self {
-            description: "Write content to a file, overwriting if it exists".to_string(),
+            description: "Writes `content` to a file, overwriting it entirely if it exists and\n\
+creating it (with any missing parent directories) if it does not.\n\
+\n\
+Prefer Edit for targeted changes to an existing file — Write replaces the\n\
+whole content and silently discards anything not included, so re-read the\n\
+file first if you only saw part of it. The write is atomic (temp file +\n\
+rename): a failure never leaves a partial file. Results report the byte\n\
+count written; content over 10 MB is rejected."
+                .to_string(),
             sandbox,
             fs: crate::defaults::fs(),
             history: None,
@@ -311,7 +336,8 @@ impl Tool for WriteTool {
                     "description": "Full new content for the file (overwrites the existing file entirely; prefer Edit for targeted changes)"
                 }
             },
-            "required": ["file_path", "content"]
+            "required": ["file_path", "content"],
+            "additionalProperties": false
         })
     }
 
@@ -351,7 +377,19 @@ impl Default for EditTool {
 impl EditTool {
     pub fn new() -> Self {
         Self {
-            description: "Perform exact string replacements in files".to_string(),
+            description: "Performs exact string replacement in a file and returns the replacement\n\
+count, match locations and a unified diff.\n\
+\n\
+You MUST Read the file first: `old_string` must match the current content\n\
+byte-for-byte (including whitespace/indentation) and be UNIQUE in the file\n\
+unless `replace_all` is true — include enough surrounding lines to make a\n\
+short snippet unique. A missing or ambiguous match fails with the nearest\n\
+candidates shown. Fallback: when old_string is not in the current content\n\
+but IS in the file's git HEAD version (the file moved under you), the edit\n\
+is applied via a three-way merge; textual conflicts are returned in the\n\
+result instead of being silently overwritten. Use MultiEdit for batched\n\
+edits and Write only to replace a whole file."
+                .to_string(),
             sandbox: PathSandbox::new(),
             fs: crate::defaults::fs(),
             process: crate::defaults::process(),
@@ -362,7 +400,19 @@ impl EditTool {
     /// Create an EditTool with a custom sandbox configuration.
     pub fn with_sandbox(sandbox: PathSandbox) -> Self {
         Self {
-            description: "Perform exact string replacements in files".to_string(),
+            description: "Performs exact string replacement in a file and returns the replacement\n\
+count, match locations and a unified diff.\n\
+\n\
+You MUST Read the file first: `old_string` must match the current content\n\
+byte-for-byte (including whitespace/indentation) and be UNIQUE in the file\n\
+unless `replace_all` is true — include enough surrounding lines to make a\n\
+short snippet unique. A missing or ambiguous match fails with the nearest\n\
+candidates shown. Fallback: when old_string is not in the current content\n\
+but IS in the file's git HEAD version (the file moved under you), the edit\n\
+is applied via a three-way merge; textual conflicts are returned in the\n\
+result instead of being silently overwritten. Use MultiEdit for batched\n\
+edits and Write only to replace a whole file."
+                .to_string(),
             sandbox,
             fs: crate::defaults::fs(),
             process: crate::defaults::process(),
@@ -429,9 +479,14 @@ impl Tool for EditTool {
                 "replace_all": {
                     "type": "boolean",
                     "description": "Replace all occurrences (default: false)"
+                },
+                "preview": {
+                    "type": "boolean",
+                    "description": "Compute and return the diff without writing the file (default: false)"
                 }
             },
-            "required": ["file_path", "old_string", "new_string"]
+            "required": ["file_path", "old_string", "new_string"],
+            "additionalProperties": false
         })
     }
 
@@ -556,7 +611,8 @@ impl Tool for MultiEditTool {
                     }
                 }
             },
-            "required": ["edits"]
+            "required": ["edits"],
+            "additionalProperties": false
         })
     }
 
@@ -602,7 +658,15 @@ impl Default for GlobTool {
 impl GlobTool {
     pub fn new() -> Self {
         Self {
-            description: "Fast file pattern matching tool that works with any codebase size"
+            description: "Fast file-pattern matching tool that works with any codebase size.\n\
+\n\
+Patterns are matched against paths RELATIVE to the search directory (so\n\
+`*.rs` matches only top-level files; use `**/*.rs` to recurse) and\n\
+gitignore-aware traversal skips ignored paths like `target/`. Results are\n\
+sorted by modification time (most recent first) with size/mtime metadata,\n\
+and capped at 100 — when a broad pattern is truncated the result says so,\n\
+so prefer a narrower pattern or a subdirectory `path` over enumerating\n\
+everything. Escaping patterns (`..`, absolute) are rejected."
                 .to_string(),
             sandbox: PathSandbox::new(),
             fs: crate::defaults::fs(),
@@ -612,7 +676,15 @@ impl GlobTool {
     /// Create a GlobTool with a custom sandbox configuration.
     pub fn with_sandbox(sandbox: PathSandbox) -> Self {
         Self {
-            description: "Fast file pattern matching tool that works with any codebase size"
+            description: "Fast file-pattern matching tool that works with any codebase size.\n\
+\n\
+Patterns are matched against paths RELATIVE to the search directory (so\n\
+`*.rs` matches only top-level files; use `**/*.rs` to recurse) and\n\
+gitignore-aware traversal skips ignored paths like `target/`. Results are\n\
+sorted by modification time (most recent first) with size/mtime metadata,\n\
+and capped at 100 — when a broad pattern is truncated the result says so,\n\
+so prefer a narrower pattern or a subdirectory `path` over enumerating\n\
+everything. Escaping patterns (`..`, absolute) are rejected."
                 .to_string(),
             sandbox,
             fs: crate::defaults::fs(),
@@ -642,10 +714,20 @@ impl Tool for GlobTool {
             "properties": {
                 "pattern": {
                     "type": "string",
-                    "description": "File pattern to match (e.g., *.rs, src/**/*.py)"
+                    "description": "File pattern to match, relative to the search directory (e.g., *.rs for top-level, src/**/*.py to recurse)"
+                },
+                "path": {
+                    "type": "string",
+                    "description": "Optional directory to search in (defaults to the working directory)"
+                },
+                "exclude_pattern": {
+                    "type": "array",
+                    "items": { "type": "string" },
+                    "description": "Optional glob patterns to exclude (e.g., [\"!target/**\"])"
                 }
             },
-            "required": ["pattern"]
+            "required": ["pattern"],
+            "additionalProperties": false
         })
     }
 
@@ -1170,8 +1252,8 @@ mod tests {
 
         assert_eq!(output.metadata["file_path"], "/workspace/a.txt");
         assert_eq!(
-            output.content, "hello",
-            "file content itself must not be rewritten"
+            output.content, "1\thello",
+            "file content itself must not be rewritten (only line-numbered)"
         );
     }
 

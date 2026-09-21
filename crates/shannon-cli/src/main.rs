@@ -334,6 +334,8 @@ struct CliConfig {
     temperature: Option<f32>,
     /// Request timeout in seconds
     timeout: Option<u64>,
+    /// Effort dial (low|medium|standard|high|max, case-insensitive)
+    effort: Option<String>,
     /// Enable debug logging
     debug: bool,
     /// Additional environment variable overrides (KEY=VALUE pairs)
@@ -402,6 +404,15 @@ impl CliConfig {
                 .ok()
                 .and_then(|s| s.parse().ok())
         })
+    }
+
+    /// Get the parsed effort level, with fallback to environment variable.
+    fn effort(&self) -> Option<Result<shannon_core::query_engine::EffortLevel, String>> {
+        let raw = self
+            .effort
+            .clone()
+            .or_else(|| std::env::var("SHANNON_EFFORT").ok())?;
+        Some(raw.parse())
     }
 
     /// Get debug flag, with fallback to environment variable.
@@ -628,6 +639,13 @@ struct Cli {
     #[arg(long = "goal", value_name = "OBJECTIVE")]
     goal: Option<String>,
 
+    /// Effort dial for the model: low, medium/standard, high, or max
+    /// (case-insensitive). High/Max enable extended thinking (8k/16k token
+    /// budget); standard (the default) sends nothing.
+    /// Example: shannon -p "prove the fix" --effort max
+    #[arg(long = "effort", value_name = "LEVEL")]
+    effort: Option<String>,
+
     /// CI/CD headless mode: non-interactive prompt (pipe-friendly).
     /// Skips TUI entirely. Use with --output-format, --allowed-tools, --max-turns.
     /// Example: shannon -p "fix the bug" --allowed-tools Read,Edit,Bash --output-format json
@@ -824,6 +842,10 @@ enum Commands {
         /// Maximum tokens for response
         #[arg(long)]
         max_tokens: Option<usize>,
+
+        /// Effort dial: low, medium/standard, high, or max (case-insensitive)
+        #[arg(long = "effort", value_name = "LEVEL")]
+        effort: Option<String>,
 
         /// Disable streaming output (wait for complete response)
         #[arg(long)]
@@ -1153,6 +1175,7 @@ fn build_cli_config(
         max_tokens: max_tokens.or(toml_cfg.max_tokens),
         temperature: temperature.or(toml_cfg.temperature),
         timeout: timeout.or(toml_cfg.timeout),
+        effort: None,
         debug: debug || toml_cfg.debug.unwrap_or(false),
         env_overrides,
     }
@@ -1339,6 +1362,34 @@ fn headless_state_manager() -> Result<shannon_engine::state::StateManager> {
     }
 }
 
+/// N-1: one in-memory [`shannon_core::MemoryStore`] instance shared by prompt
+/// injection (engine) and the model-facing memory tools, so a MemorySave /
+/// MemoryForget takes effect on the very next prompt instead of after a
+/// process restart. Disk-level multi-writer safety is unchanged.
+fn shared_memory_store() -> std::sync::Arc<std::sync::RwLock<shannon_core::MemoryStore>> {
+    let memory_path = dirs::home_dir()
+        .map(|h| h.join(".shannon").join("memories"))
+        .unwrap_or_else(|| std::path::PathBuf::from(".shannon/memories"));
+    let mut store = shannon_core::MemoryStore::new(memory_path);
+    if let Err(e) = store.load() {
+        tracing::debug!("Failed to load memory store: {e}");
+    }
+    std::sync::Arc::new(std::sync::RwLock::new(store))
+}
+
+/// Register the model-facing memory tools against a shared store handle.
+fn register_memory_tools(
+    tools: &mut shannon_core::tools::ToolRegistry,
+    shared: std::sync::Arc<std::sync::RwLock<shannon_core::MemoryStore>>,
+) {
+    let _ = tools.register(Box::new(
+        shannon_core::memory::tools::MemorySaveTool::with_shared_store(shared.clone()),
+    ));
+    let _ = tools.register(Box::new(
+        shannon_core::memory::tools::MemoryForgetTool::with_shared_store(shared),
+    ));
+}
+
 /// Resolve the sessions container for headless flows: `SHANNON_SESSIONS_DIR`
 /// overrides; otherwise `SHANNON_HOME/sessions`, else `~/.shannon/sessions`.
 fn sessions_container_from_env() -> std::path::PathBuf {
@@ -1506,21 +1557,11 @@ fn run_noninteractive_query(
         // Load and register skills from shannon-skills as tools
         let _ = shannon_ui::skill_bridge::register_skills_as_tools(&mut tools);
 
-        // Model-facing memory tools (M-1): the agent curates the same
-        // `~/.shannon/memories` store it is injected from. Registered with the
-        // engine's registry; a second store handle on the same dir is safe
-        // (multi-writer by design).
-        {
-            let memory_tools_path = dirs::home_dir()
-                .map(|h| h.join(".shannon").join("memories"))
-                .unwrap_or_else(|| std::path::PathBuf::from(".shannon/memories"));
-            let _ = tools.register(Box::new(
-                shannon_core::memory::tools::MemorySaveTool::new(memory_tools_path.clone()),
-            ));
-            let _ = tools.register(Box::new(
-                shannon_core::memory::tools::MemoryForgetTool::new(memory_tools_path),
-            ));
-        }
+        // Model-facing memory tools (M-1/N-1): registered against the SAME
+        // in-memory store the engine injects from, so agent-curated memories
+        // are visible to the very next prompt (no restart).
+        let shared_memory = shared_memory_store();
+        register_memory_tools(&mut tools, shared_memory.clone());
 
         // Discover MCP server configurations and register their tools dynamically
         {
@@ -1729,17 +1770,9 @@ fn run_noninteractive_query(
         let base_engine = QueryEngine::with_defaults(client, tools, permissions, state)
             .with_plan_mode_active(plan_mode_flag);
 
-        // Initialize memory store at ~/.shannon/memories/
-        let mut engine = {
-            let memory_path = dirs::home_dir()
-                .map(|h| h.join(".shannon").join("memories"))
-                .unwrap_or_else(|| std::path::PathBuf::from(".shannon/memories"));
-            let mut mem_store = shannon_core::MemoryStore::new(memory_path.clone());
-            if let Err(e) = mem_store.load() {
-                tracing::debug!("Failed to load memory store: {e}");
-            }
-            base_engine.with_memory(mem_store)
-        };
+        // Initialize memory store at ~/.shannon/memories/ — the SAME instance
+        // the memory tools above curate (N-1).
+        let mut engine = base_engine.with_memory_arc(shared_memory);
 
         // Project instructions are auto-injected by the engine via
         // `load_full_context` in its stable cache zone (deduped).
@@ -1750,6 +1783,11 @@ fn run_noninteractive_query(
                 objective,
                 paused: false,
             }));
+        }
+
+        // Apply the effort dial (--effort / SHANNON_EFFORT)
+        if let Some(parsed) = config.effort() {
+            engine.set_effort(parsed.map_err(|e| anyhow::anyhow!(e))?);
         }
 
         // Restore prior conversation history if --resume was specified
@@ -2004,35 +2042,11 @@ fn run_headless_query(
         // Load and register skills
         let _ = shannon_ui::skill_bridge::register_skills_as_tools(&mut tools);
 
-        // Model-facing memory tools (M-1): the agent curates the same
-        // `~/.shannon/memories` store it is injected from.
-        {
-            let memory_tools_path = dirs::home_dir()
-                .map(|h| h.join(".shannon").join("memories"))
-                .unwrap_or_else(|| std::path::PathBuf::from(".shannon/memories"));
-            let _ = tools.register(Box::new(
-                shannon_core::memory::tools::MemorySaveTool::new(memory_tools_path.clone()),
-            ));
-            let _ = tools.register(Box::new(
-                shannon_core::memory::tools::MemoryForgetTool::new(memory_tools_path),
-            ));
-        }
-
-        // Model-facing memory tools (M-1): the agent curates the same
-        // `~/.shannon/memories` store it is injected from. Registered with the
-        // engine's registry; a second store handle on the same dir is safe
-        // (multi-writer by design).
-        {
-            let memory_tools_path = dirs::home_dir()
-                .map(|h| h.join(".shannon").join("memories"))
-                .unwrap_or_else(|| std::path::PathBuf::from(".shannon/memories"));
-            let _ = tools.register(Box::new(
-                shannon_core::memory::tools::MemorySaveTool::new(memory_tools_path.clone()),
-            ));
-            let _ = tools.register(Box::new(
-                shannon_core::memory::tools::MemoryForgetTool::new(memory_tools_path),
-            ));
-        }
+        // Model-facing memory tools (M-1/N-1): registered ONCE against the
+        // SAME in-memory store the engine injects from (the duplicate
+        // registration below previously double-registered both tools).
+        let shared_memory = shared_memory_store();
+        register_memory_tools(&mut tools, shared_memory.clone());
 
         // Discover MCP servers
         {
@@ -2153,17 +2167,8 @@ fn run_headless_query(
         let max_turns_limit = resolve_max_turns(max_turns, true);
         engine.set_max_turns(max_turns_limit);
 
-        // Memory store
-        {
-            let memory_path = dirs::home_dir()
-                .map(|h| h.join(".shannon").join("memories"))
-                .unwrap_or_else(|| std::path::PathBuf::from(".shannon/memories"));
-            let mut mem_store = shannon_core::MemoryStore::new(memory_path.clone());
-            if let Err(e) = mem_store.load() {
-                tracing::debug!("Failed to load memory store: {e}");
-            }
-            engine = engine.with_memory(mem_store);
-        }
+        // Memory store — the SAME instance the memory tools curate (N-1).
+        engine = engine.with_memory_arc(shared_memory);
 
         // Project instructions are auto-injected by the engine via
         // `load_full_context` in its stable cache zone (deduped).
@@ -2179,6 +2184,11 @@ fn run_headless_query(
                 objective,
                 paused: false,
             }));
+        }
+
+        // Apply the effort dial (--effort / SHANNON_EFFORT)
+        if let Some(parsed) = config.effort() {
+            engine.set_effort(parsed.map_err(|e| anyhow::anyhow!(e))?);
         }
 
         // Restore prior conversation history if --resume was specified
@@ -4753,7 +4763,7 @@ fn run_with_cli(cli: Cli) -> Result<()> {
     // When --prompt is specified, run in structured headless mode with
     // exit codes, tool restrictions, and JSON output support.
     if let Some(ref headless_prompt) = cli.headless_prompt {
-        let config = build_cli_config(
+        let mut config = build_cli_config(
             cli.model.as_deref(),
             cli.provider.as_deref(),
             None,
@@ -4762,6 +4772,7 @@ fn run_with_cli(cli: Cli) -> Result<()> {
             false,
             HashMap::new(),
         );
+        config.effort = cli.effort.clone();
         let resume_data = headless_resume_data(should_resume, resume_session_id)?;
         // Convert comma-separated team_allowed_tools into Vec<String>
         let allowed_vec: Option<Vec<String>> = cli
@@ -4800,7 +4811,7 @@ fn run_with_cli(cli: Cli) -> Result<()> {
                 std::process::exit(1);
             }
         };
-        let config = build_cli_config(
+        let mut config = build_cli_config(
             cli.model.as_deref(),
             cli.provider.as_deref(),
             None,
@@ -4809,6 +4820,7 @@ fn run_with_cli(cli: Cli) -> Result<()> {
             false,
             HashMap::new(),
         );
+        config.effort = cli.effort.clone();
         return run_noninteractive_query(
             &prompt,
             true,
@@ -4824,7 +4836,7 @@ fn run_with_cli(cli: Cli) -> Result<()> {
 
     // Bare prompt case: handle directly with explicit config
     if let Some(prompt) = cli.prompt {
-        let config = build_cli_config(
+        let mut config = build_cli_config(
             cli.model.as_deref(),
             cli.provider.as_deref(),
             None,
@@ -4833,6 +4845,7 @@ fn run_with_cli(cli: Cli) -> Result<()> {
             false,
             HashMap::new(),
         );
+        config.effort = cli.effort.clone();
         let resume_data = headless_resume_data(should_resume, resume_session_id)?;
         return run_noninteractive_query(
             &prompt,
@@ -4856,7 +4869,7 @@ fn run_with_cli(cli: Cli) -> Result<()> {
     let repl_pipe_slash_command =
         stdin_content.starts_with('/') && matches!(cli.command, Some(Commands::Repl { .. }));
     if !stdin_content.is_empty() && !repl_pipe_slash_command {
-        let config = build_cli_config(
+        let mut config = build_cli_config(
             cli.model.as_deref(),
             cli.provider.as_deref(),
             None,
@@ -4865,6 +4878,7 @@ fn run_with_cli(cli: Cli) -> Result<()> {
             false,
             HashMap::new(),
         );
+        config.effort = cli.effort.clone();
         let resume_data = headless_resume_data(should_resume, resume_session_id)?;
         return run_noninteractive_query(
             &stdin_content,
@@ -4918,16 +4932,21 @@ fn run_with_cli(cli: Cli) -> Result<()> {
             model,
             provider,
             max_tokens,
+            effort,
             ..
-        }) => build_cli_config(
-            model.as_deref(),
-            provider.as_deref(),
-            *max_tokens,
-            None,
-            None,
-            false,
-            HashMap::new(),
-        ),
+        }) => {
+            let mut cfg = build_cli_config(
+                model.as_deref(),
+                provider.as_deref(),
+                *max_tokens,
+                None,
+                None,
+                false,
+                HashMap::new(),
+            );
+            cfg.effort = effort.clone();
+            cfg
+        }
         // No subcommand, Version, Config, and Serve commands don't need config in the same way
         None
         | Some(Commands::Version { .. })
@@ -5107,7 +5126,8 @@ fn run_with_cli(cli: Cli) -> Result<()> {
             }
         }
         Some(Commands::Query {
-            query, no_stream, ..
+            query, effort: _,
+                no_stream, ..
         }) => {
             let resume_data = headless_resume_data(should_resume, resume_session_id)?;
             run_noninteractive_query(
@@ -5591,7 +5611,8 @@ def456  shannon-x86_64-unknown-linux-gnu.tar.gz
             max_tokens: Some(4096),
             temperature: Some(0.5),
             timeout: Some(60),
-            debug: true,
+            effort: None,
+        debug: true,
             env_overrides: HashMap::new(),
         };
         assert_eq!(config.model(), Some("gpt-4o".to_string()));
@@ -5612,7 +5633,8 @@ def456  shannon-x86_64-unknown-linux-gnu.tar.gz
             max_tokens: None,
             temperature: None,
             timeout: None,
-            debug: false,
+            effort: None,
+        debug: false,
             env_overrides: HashMap::new(),
         };
         assert_eq!(config.model().as_deref(), Some("claude-sonnet-4-20250514"));
@@ -5628,7 +5650,8 @@ def456  shannon-x86_64-unknown-linux-gnu.tar.gz
             max_tokens: None,
             temperature: None,
             timeout: None,
-            debug: false,
+            effort: None,
+        debug: false,
             env_overrides: HashMap::new(),
         };
         let model = config.model().expect("model resolved");
@@ -5646,7 +5669,8 @@ def456  shannon-x86_64-unknown-linux-gnu.tar.gz
             max_tokens: None,
             temperature: None,
             timeout: None,
-            debug: false,
+            effort: None,
+        debug: false,
             env_overrides: HashMap::new(),
         };
         assert_eq!(config.provider().as_deref(), Some("openai"));
@@ -5661,7 +5685,8 @@ def456  shannon-x86_64-unknown-linux-gnu.tar.gz
             max_tokens: None,
             temperature: None,
             timeout: None,
-            debug: false,
+            effort: None,
+        debug: false,
             env_overrides: HashMap::new(),
         };
         assert_eq!(config.model().as_deref(), Some("gpt-4o"));
@@ -5677,7 +5702,8 @@ def456  shannon-x86_64-unknown-linux-gnu.tar.gz
             max_tokens: None,
             temperature: None,
             timeout: None,
-            debug: false,
+            effort: None,
+        debug: false,
             env_overrides: HashMap::new(),
         };
         // These will be None unless SHANNON_MODEL is set in the test environment
@@ -5695,7 +5721,8 @@ def456  shannon-x86_64-unknown-linux-gnu.tar.gz
             max_tokens: None,
             temperature: None,
             timeout: None,
-            debug: false,
+            effort: None,
+        debug: false,
             env_overrides: overrides,
         };
         assert_eq!(
@@ -5719,7 +5746,8 @@ def456  shannon-x86_64-unknown-linux-gnu.tar.gz
             max_tokens: None,
             temperature: None,
             timeout: None,
-            debug: false,
+            effort: None,
+        debug: false,
             env_overrides: overrides,
         };
         // Explicit model should take precedence
@@ -6444,7 +6472,8 @@ def456  shannon-x86_64-unknown-linux-gnu.tar.gz
             Cli::try_parse_from(["shannon", "query", "--max-tokens", "8192", "test"]).unwrap();
         match cli.command {
             Some(Commands::Query {
-                query, max_tokens, ..
+                query, max_tokens,
+                effort: _, ..
             }) => {
                 assert_eq!(query, "test");
                 assert_eq!(max_tokens, Some(8192));
@@ -6458,7 +6487,8 @@ def456  shannon-x86_64-unknown-linux-gnu.tar.gz
         let cli = Cli::try_parse_from(["shannon", "query", "--no-stream", "test"]).unwrap();
         match cli.command {
             Some(Commands::Query {
-                query, no_stream, ..
+                query, effort: _,
+                no_stream, ..
             }) => {
                 assert_eq!(query, "test");
                 assert!(no_stream);
@@ -6476,6 +6506,7 @@ def456  shannon-x86_64-unknown-linux-gnu.tar.gz
                 model,
                 provider,
                 max_tokens,
+                effort: _,
                 no_stream,
             }) => {
                 assert_eq!(query, "test");
@@ -6515,6 +6546,7 @@ def456  shannon-x86_64-unknown-linux-gnu.tar.gz
                 model,
                 provider,
                 max_tokens,
+                effort: _,
                 no_stream,
             }) => {
                 assert_eq!(query, "你用的什么模型");
@@ -6590,7 +6622,8 @@ def456  shannon-x86_64-unknown-linux-gnu.tar.gz
             max_tokens: Some(4096),
             temperature: Some(0.5),
             timeout: Some(120),
-            debug: false,
+            effort: None,
+        debug: false,
             env_overrides: HashMap::new(),
         };
 
@@ -6611,7 +6644,8 @@ def456  shannon-x86_64-unknown-linux-gnu.tar.gz
             max_tokens: None,
             temperature: None,
             timeout: None,
-            debug: false,
+            effort: None,
+        debug: false,
             env_overrides: HashMap::new(),
         };
 

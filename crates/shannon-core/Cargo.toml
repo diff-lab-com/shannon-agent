@@ -110,16 +110,6 @@ zip = { workspace = true }
 # Landlock support (Linux-only, optional)
 landlock = { version = "0.4", optional = true }
 
-# Windows Job Object baseline sandbox (`sandbox::windows_job`). Compiled on
-# every Windows build — Job Objects are always available, no external binary.
-[target.'cfg(target_os = "windows")'.dependencies]
-windows = { version = "0.62", features = [
-    "Win32_Foundation",
-    "Win32_Security",
-    "Win32_System_JobObjects",
-    "Win32_System_Threading",
-] }
-
 # Cron expression parsing (5-field, Claude Code / Codex compatible)
 croner = "3.0"
 
@@ -130,6 +120,16 @@ notify = { version = "7", features = ["macos_kqueue"] }
 opentelemetry = "0.32"
 opentelemetry_sdk = { version = "0.32", features = ["rt-tokio", "testing"] }
 opentelemetry-otlp = { version = "0.32", features = ["grpc-tonic"] }
+
+# Windows Job Object baseline sandbox (`sandbox::windows_job`). Compiled on
+# every Windows build — Job Objects are always available, no external binary.
+[target.'cfg(target_os = "windows")'.dependencies]
+windows = { version = "0.62", features = [
+    "Win32_Foundation",
+    "Win32_Security",
+    "Win32_System_JobObjects",
+    "Win32_System_Threading",
+] }
 
 [features]
 default = []

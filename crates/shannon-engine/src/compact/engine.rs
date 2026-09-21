@@ -366,11 +366,16 @@ impl CompactEngine {
                         }
                         if let Some(ToolResultContent::Single(text)) = content {
                             if text.len() > preview_limit * 2 {
-                                *text = format!(
-                                    "{}...[truncated, {} chars]",
-                                    &text[..preview_limit],
-                                    text.len()
-                                );
+                                // Back up to the nearest UTF-8 char boundary: tool
+                                // output is frequently CJK/emoji, where the byte
+                                // offset `preview_limit` can land mid-character and
+                                // a bare `&text[..preview_limit]` would panic.
+                                let mut end = preview_limit.min(text.len());
+                                while !text.is_char_boundary(end) {
+                                    end -= 1;
+                                }
+                                *text =
+                                    format!("{}...[truncated, {} chars]", &text[..end], text.len());
                             }
                         }
                     }
@@ -1005,6 +1010,47 @@ mod tests {
             } = &blocks[0]
             {
                 assert_eq!(t.len(), 1000); // unchanged
+            }
+        }
+    }
+
+    #[test]
+    fn test_prune_truncates_multibyte_tool_result_on_char_boundary() {
+        // Regression: the preview used to slice at the raw byte offset
+        // `preview_limit` (200). CJK chars are 3 bytes and emoji 4, so byte
+        // 200 of this content lands mid-character and `&text[..200]` PANICKED
+        // ("byte index 200 is not a char boundary").
+        let original = format!("{}{}", "你好世界".repeat(60), "🦀🎉".repeat(30));
+        assert!(original.len() > 400, "must exceed the truncation threshold");
+        assert!(
+            !original.is_char_boundary(200),
+            "test precondition: byte 200 must land mid-character"
+        );
+        let mut msgs = vec![Message {
+            role: "user".into(),
+            content: MessageContent::Blocks(vec![ContentBlock::ToolResult {
+                tool_use_id: "t1".into(),
+                content: Some(ToolResultContent::Single(original.clone())),
+                is_error: Some(false),
+            }]),
+        }];
+        CompactEngine::prune_stale_tool_results(&mut msgs);
+        if let MessageContent::Blocks(blocks) = &msgs[0].content {
+            if let ContentBlock::ToolResult {
+                content: Some(ToolResultContent::Single(t)),
+                ..
+            } = &blocks[0]
+            {
+                assert!(t.contains("[truncated"), "should be truncated: {t}");
+                assert!(t.contains(&original.len().to_string()));
+                // The preview prefix must be a real prefix of the original
+                // string (no mojibake from a mid-character slice).
+                let prefix = t.split("...[truncated").next().unwrap();
+                assert!(
+                    original.starts_with(prefix),
+                    "truncated preview must be a char-boundary prefix of the original"
+                );
+                assert!(!prefix.is_empty());
             }
         }
     }
