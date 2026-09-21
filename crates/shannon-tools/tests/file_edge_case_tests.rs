@@ -1,4 +1,5 @@
 //! File operation edge case tests for shannon-tools
+#![cfg(unix)] // uses std::os::unix::fs::{PermissionsExt, symlink}.
 #![allow(clippy::uninlined_format_args)]
 //!
 //! Tests edge cases in file operations:

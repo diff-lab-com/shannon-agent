@@ -1,4 +1,5 @@
 //! Path sandbox integration tests
+#![cfg(unix)] // uses std::os::unix::fs::symlink for sandboxed-vs-host link tests.
 //!
 //! Tests SandboxConfig, PathSandbox, and SandboxError from file::sandbox
 //! through the public API, complementing the inline unit tests and

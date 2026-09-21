@@ -48,6 +48,8 @@ pub fn compose_command(req: &ProcessRequest, default_cwd: &Path) -> Vec<String> 
 /// Process world executing every request on the SSH target.
 pub struct SshProcess {
     rt: Arc<SshRuntime>,
+    #[allow(dead_code)]
+    // KEEP: reserved for the future compose_command branch (Windows SSH stub only consumes rt).
     default_cwd: std::path::PathBuf,
 }
 
@@ -63,6 +65,12 @@ impl SshProcess {
         &self.rt
     }
 
+    /// Compose the remote argv from a `ProcessRequest`. Used by every
+    /// `#[cfg(unix)]` spawn path below; on Windows it stays unused but
+    /// is part of the public-within-crate shape so we silence the lint
+    /// for the non-unix target instead of moving the field/method into
+    /// a gated module.
+    #[cfg_attr(not(unix), allow(dead_code))]
     fn compose(&self, request: &ProcessRequest) -> Vec<String> {
         compose_command(request, &self.default_cwd)
     }

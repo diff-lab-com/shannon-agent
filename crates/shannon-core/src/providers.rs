@@ -363,6 +363,10 @@ impl ProcessProvider for LocalProcess {
                 .stdout(Stdio::piped())
                 .stderr(Stdio::piped());
             let mut child = cmd.spawn()?;
+            // Windows baseline sandbox: confine to a kill-on-close job when
+            // the sandbox system armed the switch (no-op otherwise).
+            #[cfg(target_os = "windows")]
+            let _ = crate::sandbox::windows_job::confine_child(&child);
             // Feed stdin fully before waiting to avoid pipe-capacity deadlock.
             if let Some(mut stdin) = child.stdin.take() {
                 stdin.write_all(&stdin_bytes)?;
@@ -383,7 +387,18 @@ impl ProcessProvider for LocalProcess {
             let mut cmd = Self::build_blocking(&prepared);
             #[cfg(unix)]
             self.install_fork_init_std(&mut cmd);
-            cmd.output()?
+            // Spawn manually instead of `cmd.output()` so the Windows job
+            // confinement can attach to the child handle (same semantics:
+            // inherited stdin, piped stdout/stderr).
+            use std::process::Stdio;
+            let child = cmd
+                .stdin(Stdio::inherit())
+                .stdout(Stdio::piped())
+                .stderr(Stdio::piped())
+                .spawn()?;
+            #[cfg(target_os = "windows")]
+            let _ = crate::sandbox::windows_job::confine_child(&child);
+            child.wait_with_output()?
         };
         Ok(CapturedOutput {
             stdout: output.stdout,
@@ -431,6 +446,10 @@ impl ProcessProvider for LocalProcess {
         self.install_fork_init_tokio(&mut cmd);
 
         let mut child = cmd.spawn()?;
+        // Windows baseline sandbox: confine to a kill-on-close job when
+        // armed (no-op otherwise).
+        #[cfg(target_os = "windows")]
+        let _ = crate::sandbox::windows_job::confine_tokio_child(&child);
         if let Some(bytes) = stdin_bytes {
             if let Some(mut stdin) = child.stdin.take() {
                 // Feed then close so the child sees EOF promptly.
@@ -507,6 +526,8 @@ impl ProcessProvider for LocalProcess {
         self.install_fork_init_tokio(&mut cmd);
 
         let child = cmd.spawn()?;
+        #[cfg(target_os = "windows")]
+        let _ = crate::sandbox::windows_job::confine_tokio_child(&child);
         Ok(Box::new(LocalPipedChild { child }))
     }
 }

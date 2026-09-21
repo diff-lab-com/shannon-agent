@@ -63,7 +63,9 @@ const CONNECT_TIMEOUT: Duration = Duration::from_secs(10);
 
 #[allow(dead_code)] // KEEP: names the 0 state in the status mapping for readability
 const STATUS_LOCAL: u8 = 0;
+#[allow(dead_code)] // KEEP: names the 1-satate in the status mapping for readability
 const STATUS_CONNECTED: u8 = 1;
+#[allow(dead_code)] // KEEP: names the 2-state in the status mapping for readability
 const STATUS_DEGRADED: u8 = 2;
 
 #[cfg(unix)]

@@ -29,6 +29,13 @@ use enigo::{Axis, Direction, Keyboard, Mouse};
 pub const REFERENCE_WIDTH: u32 = 1024;
 pub const REFERENCE_HEIGHT: u32 = 768;
 
+/// Actionable hint appended to every "not enabled" stub, so users of
+/// release bundles land on a fix instead of a dead end (P1 error-copy).
+#[cfg(not(feature = "computer-use"))]
+const FEATURE_DISABLED_HINT: &str = "\n\nHow to fix: Windows and desktop release bundles ship with computer use \
+enabled — update your Shannon install. When building from source: `cargo build --release --features computer-use` \
+(Linux additionally needs libxdo/X11 dev packages).";
+
 // ── T10 Phase 1: Linux input backend selection ─────────────────────────
 // The backend is chosen at compile time via mutually exclusive cargo
 // features; guard against accidental combinations.
@@ -98,6 +105,13 @@ pub enum ComputerAction {
     Wait,
     MouseMove,
     LeftClickDrag,
+    /// Structured UIA (UI Automation) tree of a window — Windows only.
+    /// Semantic alternative to screenshot reading: roles, names, refs.
+    UiTree,
+    /// Click a UIA element by name substring (and optional match index) —
+    /// Windows only. Resolves the element's bounding-rect center and clicks
+    /// there; far more reliable than screenshot-guessed coordinates.
+    UiClick,
 }
 
 /// Scroll direction.
@@ -148,6 +162,25 @@ pub struct ComputerUseInput {
     /// Start coordinate for drag (for `left_click_drag`).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub start_coordinate: Option<[i32; 2]>,
+
+    /// 0-based display index for multi-monitor setups (default: primary
+    /// monitor). Applies to screenshot and every coordinate-taking action.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub monitor: Option<u32>,
+
+    /// Window title substring — targets `ui_tree`/`ui_click` at a specific
+    /// window instead of the foreground one.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub window: Option<String>,
+
+    /// Element name substring to click (for `ui_click`).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub element: Option<String>,
+
+    /// 0-based match index when several elements share the same name
+    /// (for `ui_click`).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub index: Option<usize>,
 }
 
 /// Configuration for the computer use tool.
@@ -294,8 +327,24 @@ impl ComputerUseTool {
             "properties": {
                 "action": {
                     "type": "string",
-                    "enum": ["screenshot", "click", "right_click", "middle_click", "double_click", "triple_click", "type", "scroll", "key_press", "wait", "mouse_move", "left_click_drag"],
+                    "enum": ["screenshot", "click", "right_click", "middle_click", "double_click", "triple_click", "type", "scroll", "key_press", "wait", "mouse_move", "left_click_drag", "ui_tree", "ui_click"],
                     "description": "The action to perform"
+                },
+                "monitor": {
+                    "type": "integer",
+                    "description": "0-based display index for multi-monitor setups (default: primary monitor). Applies to screenshot and coordinate actions."
+                },
+                "window": {
+                    "type": "string",
+                    "description": "Window title substring to target (for 'ui_tree'/'ui_click'; default: foreground window)"
+                },
+                "element": {
+                    "type": "string",
+                    "description": "Element name substring to click (for 'ui_click'; run 'ui_tree' first to inspect names)"
+                },
+                "index": {
+                    "type": "integer",
+                    "description": "0-based match index when several elements share the name (for 'ui_click')"
                 },
                 "coordinate": {
                     "type": "array",
@@ -386,7 +435,7 @@ impl Tool for ComputerUseTool {
         // the computer-use build instead — both halves of the gate matter).
         #[cfg_attr(not(feature = "computer-use"), allow(unused_mut))]
         let mut result = match computer_input.action {
-            ComputerAction::Screenshot => self.execute_screenshot().await,
+            ComputerAction::Screenshot => self.execute_screenshot(&computer_input).await,
             ComputerAction::Click
             | ComputerAction::RightClick
             | ComputerAction::MiddleClick
@@ -395,7 +444,7 @@ impl Tool for ComputerUseTool {
                 let coord = computer_input.coordinate.ok_or_else(|| {
                     ToolError::InvalidInput("click action requires 'coordinate'".to_string())
                 })?;
-                self.execute_click_variant(&computer_input.action, coord)
+                self.execute_click_variant(&computer_input.action, coord, computer_input.monitor)
                     .await
             }
             ComputerAction::Type => {
@@ -410,7 +459,8 @@ impl Tool for ComputerUseTool {
                     .unwrap_or(ScrollDirection::Down);
                 let amount = computer_input.scroll_amount.unwrap_or(3);
                 let coord = computer_input.coordinate;
-                self.execute_scroll(direction, amount, coord).await
+                self.execute_scroll(direction, amount, coord, computer_input.monitor)
+                    .await
             }
             ComputerAction::KeyPress => {
                 let key = computer_input.key.ok_or_else(|| {
@@ -426,7 +476,7 @@ impl Tool for ComputerUseTool {
                 let coord = computer_input.coordinate.ok_or_else(|| {
                     ToolError::InvalidInput("mouse_move action requires 'coordinate'".to_string())
                 })?;
-                self.execute_mouse_move(coord).await
+                self.execute_mouse_move(coord, computer_input.monitor).await
             }
             ComputerAction::LeftClickDrag => {
                 let start = computer_input.start_coordinate.ok_or_else(|| {
@@ -439,7 +489,21 @@ impl Tool for ComputerUseTool {
                         "left_click_drag action requires 'coordinate' (end position)".to_string(),
                     )
                 })?;
-                self.execute_drag(start, end).await
+                self.execute_drag(start, end, computer_input.monitor).await
+            }
+            ComputerAction::UiTree => self.execute_ui_tree(computer_input.window.as_deref()).await,
+            ComputerAction::UiClick => {
+                let element = computer_input.element.clone().ok_or_else(|| {
+                    ToolError::InvalidInput(
+                        "ui_click action requires 'element' (run 'ui_tree' first)".to_string(),
+                    )
+                })?;
+                self.execute_ui_click(
+                    computer_input.window.as_deref(),
+                    &element,
+                    computer_input.index.unwrap_or(0),
+                )
+                .await
             }
         };
         #[cfg(feature = "computer-use")]
@@ -461,7 +525,7 @@ impl Tool for ComputerUseTool {
 
 impl ComputerUseTool {
     #[cfg(feature = "computer-use")]
-    async fn execute_screenshot(&self) -> ToolResult<ToolOutput> {
+    async fn execute_screenshot(&self, input: &ComputerUseInput) -> ToolResult<ToolOutput> {
         if !self.config.screenshot_enabled {
             return Ok(ToolOutput {
                 content: "Screenshot capture is disabled.".to_string(),
@@ -470,8 +534,13 @@ impl ComputerUseTool {
             });
         }
 
+        // Windows: declare per-monitor-v2 DPI awareness before the first
+        // capture so xcap pixels and enigo's SetCursorPos share one
+        // physical-pixel space (no-op on other platforms).
+        crate::windows_platform::ensure_dpi_awareness();
+
         let image = self
-            .capture_screen()
+            .capture_screen(input.monitor)
             .await
             .map_err(ToolError::ExecutionFailed)?;
 
@@ -505,6 +574,12 @@ impl ComputerUseTool {
         metadata.insert("data".to_string(), json!(b64));
         metadata.insert("width".to_string(), json!(width));
         metadata.insert("height".to_string(), json!(height));
+        // Provenance: which window the (foreground) capture shows. Event
+        // logs gain an auditable "what was on screen when the agent acted".
+        crate::windows_platform::attach_window_context(&mut metadata);
+        if let Some(m) = input.monitor {
+            metadata.insert("monitor".to_string(), json!(m));
+        }
 
         Ok(ToolOutput {
             content: format!("Screenshot captured ({width}x{height})"),
@@ -519,7 +594,7 @@ impl ComputerUseTool {
     /// native attempt (logged) — falls back to xcap, which still works
     /// under XWayland.
     #[cfg(feature = "computer-use")]
-    async fn capture_screen(&self) -> Result<image::RgbaImage, String> {
+    async fn capture_screen(&self, monitor: Option<u32>) -> Result<image::RgbaImage, String> {
         #[cfg(all(target_os = "linux", feature = "computer-use-wayland-capture"))]
         if crate::screen_capture::wayland_session_active() {
             match crate::screen_capture::capture_screen_wayland().await {
@@ -531,19 +606,73 @@ impl ComputerUseTool {
         }
 
         let monitors = xcap::Monitor::all().map_err(|e| format!("Failed to get monitors: {e}"))?;
-        let monitor = monitors
+        let idx = monitor.unwrap_or(0) as usize;
+        if idx >= monitors.len() {
+            return Err(format!(
+                "monitor index {idx} out of range — {} display(s) available",
+                monitors.len()
+            ));
+        }
+        monitors
             .into_iter()
-            .next()
-            .ok_or_else(|| "No monitors found".to_string())?;
-        monitor
+            .nth(idx)
+            .unwrap()
             .capture_image()
             .map_err(|e| format!("Screenshot failed: {e}"))
     }
 
+    /// Geometry of the selected monitor: `(width, height, origin_x,
+    /// origin_y)`. Origins are virtual-desktop coordinates (the primary
+    /// monitor sits at 0,0; monitors left of/above it go negative) — enigo's
+    /// absolute moves and xcap captures both live in that space once
+    /// per-monitor DPI awareness is declared.
+    #[cfg(feature = "computer-use")]
+    fn monitor_geometry(monitor: Option<u32>) -> Result<(u32, u32, i32, i32), String> {
+        let monitors = xcap::Monitor::all().map_err(|e| {
+            tracing::warn!(error = %e, "monitor enumeration failed");
+            format!("monitor enumeration failed: {e}")
+        })?;
+        if monitors.is_empty() {
+            return Err("no active display found (display asleep or detached?)".to_string());
+        }
+        let idx = monitor.unwrap_or(0) as usize;
+        if idx >= monitors.len() {
+            return Err(format!(
+                "monitor index {idx} out of range — {} display(s) available",
+                monitors.len()
+            ));
+        }
+        let m = &monitors[idx];
+        let width = m
+            .width()
+            .map_err(|e| format!("monitor width unavailable: {e}"))?;
+        let height = m
+            .height()
+            .map_err(|e| format!("monitor height unavailable: {e}"))?;
+        let x = m
+            .x()
+            .map_err(|e| format!("monitor origin unavailable: {e}"))?;
+        let y = m
+            .y()
+            .map_err(|e| format!("monitor origin unavailable: {e}"))?;
+        Ok((width, height, x, y))
+    }
+
+    /// Scale a reference-space coordinate into physical pixels on the
+    /// selected monitor, including that monitor's virtual-desktop origin.
+    #[cfg(feature = "computer-use")]
+    fn resolve_point(coord: [i32; 2], monitor: Option<u32>) -> Result<[i32; 2], String> {
+        let (w, h, ox, oy) = Self::monitor_geometry(monitor)?;
+        let local = Self::scale_coordinate(coord, w, h);
+        Ok([local[0] + ox, local[1] + oy])
+    }
+
     #[cfg(not(feature = "computer-use"))]
-    async fn execute_screenshot(&self) -> ToolResult<ToolOutput> {
+    async fn execute_screenshot(&self, _input: &ComputerUseInput) -> ToolResult<ToolOutput> {
         Ok(ToolOutput {
-            content: "Computer use feature is not enabled. Rebuild with `--features computer-use` to enable screen capture and input simulation.".to_string(),
+            content: format!(
+                "Screenshot capture unavailable: the `computer-use` feature is not enabled in this build.{FEATURE_DISABLED_HINT}"
+            ),
             is_error: true,
             metadata: HashMap::new(),
         })
@@ -554,6 +683,7 @@ impl ComputerUseTool {
         &self,
         action: &ComputerAction,
         coord: [i32; 2],
+        monitor: Option<u32>,
     ) -> ToolResult<ToolOutput> {
         if !self.config.input_enabled {
             return Ok(ToolOutput {
@@ -563,11 +693,11 @@ impl ComputerUseTool {
             });
         }
         Self::ensure_input_permitted()?;
+        crate::windows_platform::ensure_dpi_awareness();
 
         let (button, clicks, label) = Self::click_spec(action);
 
-        let (actual_w, actual_h) = Self::screen_size().map_err(ToolError::ExecutionFailed)?;
-        let scaled = Self::scale_coordinate(coord, actual_w, actual_h);
+        let scaled = Self::resolve_point(coord, monitor).map_err(ToolError::ExecutionFailed)?;
 
         let mut enigo = enigo::Enigo::new(&enigo::Settings::default())
             .map_err(|e| ToolError::ExecutionFailed(format!("Input init failed: {e}")))?;
@@ -582,13 +712,16 @@ impl ComputerUseTool {
                 .map_err(|e| ToolError::ExecutionFailed(format!("Mouse click failed: {e}")))?;
         }
 
+        let mut metadata = HashMap::new();
+        crate::windows_platform::attach_window_context(&mut metadata);
+
         Ok(ToolOutput {
             content: format!(
                 "{label} at ({}, {}) [scaled from ({}, {})]",
                 scaled[0], scaled[1], coord[0], coord[1]
             ),
             is_error: false,
-            metadata: HashMap::new(),
+            metadata,
         })
     }
 
@@ -610,6 +743,7 @@ impl ComputerUseTool {
         &self,
         action: &ComputerAction,
         coord: [i32; 2],
+        _monitor: Option<u32>,
     ) -> ToolResult<ToolOutput> {
         let verb = match action {
             ComputerAction::RightClick => "right-click",
@@ -620,7 +754,7 @@ impl ComputerUseTool {
         };
         Ok(ToolOutput {
             content: format!(
-                "Computer use not enabled. Would {verb} at ({}, {}). Rebuild with --features computer-use.",
+                "Computer use is not enabled in this build. Would {verb} at ({}, {}).{FEATURE_DISABLED_HINT}",
                 coord[0], coord[1]
             ),
             is_error: true,
@@ -638,6 +772,7 @@ impl ComputerUseTool {
             });
         }
         Self::ensure_input_permitted()?;
+        crate::windows_platform::ensure_dpi_awareness();
 
         let mut enigo = enigo::Enigo::new(&enigo::Settings::default())
             .map_err(|e| ToolError::ExecutionFailed(format!("Input init failed: {e}")))?;
@@ -646,10 +781,12 @@ impl ComputerUseTool {
             .text(text)
             .map_err(|e| ToolError::ExecutionFailed(format!("Text input failed: {e}")))?;
 
+        let mut metadata = HashMap::new();
+        crate::windows_platform::attach_window_context(&mut metadata);
         Ok(ToolOutput {
             content: format!("Typed {} characters", text.len()),
             is_error: false,
-            metadata: HashMap::new(),
+            metadata,
         })
     }
 
@@ -657,7 +794,7 @@ impl ComputerUseTool {
     async fn execute_type(&self, text: &str) -> ToolResult<ToolOutput> {
         Ok(ToolOutput {
             content: format!(
-                "Computer use not enabled. Would type '{}' ({} chars). Rebuild with --features computer-use.",
+                "Computer use is not enabled in this build. Would type '{}' ({} chars).{FEATURE_DISABLED_HINT}",
                 text.chars().take(50).collect::<String>(),
                 text.len()
             ),
@@ -672,6 +809,7 @@ impl ComputerUseTool {
         direction: ScrollDirection,
         amount: i32,
         coord: Option<[i32; 2]>,
+        monitor: Option<u32>,
     ) -> ToolResult<ToolOutput> {
         if !self.config.input_enabled {
             return Ok(ToolOutput {
@@ -681,14 +819,14 @@ impl ComputerUseTool {
             });
         }
         Self::ensure_input_permitted()?;
+        crate::windows_platform::ensure_dpi_awareness();
 
         let mut enigo = enigo::Enigo::new(&enigo::Settings::default())
             .map_err(|e| ToolError::ExecutionFailed(format!("Input init failed: {e}")))?;
 
         // Move to coordinate if provided
         if let Some(c) = coord {
-            let (actual_w, actual_h) = Self::screen_size().map_err(ToolError::ExecutionFailed)?;
-            let scaled = Self::scale_coordinate(c, actual_w, actual_h);
+            let scaled = Self::resolve_point(c, monitor).map_err(ToolError::ExecutionFailed)?;
             enigo
                 .move_mouse(scaled[0], scaled[1], enigo::Coordinate::Abs)
                 .map_err(|e| ToolError::ExecutionFailed(format!("Mouse move failed: {e}")))?;
@@ -705,10 +843,12 @@ impl ComputerUseTool {
             .scroll(scroll_len, scroll_axis)
             .map_err(|e| ToolError::ExecutionFailed(format!("Scroll failed: {e}")))?;
 
+        let mut metadata = HashMap::new();
+        crate::windows_platform::attach_window_context(&mut metadata);
         Ok(ToolOutput {
             content: format!("Scrolled {direction:?} x{amount}"),
             is_error: false,
-            metadata: HashMap::new(),
+            metadata,
         })
     }
 
@@ -718,10 +858,11 @@ impl ComputerUseTool {
         direction: ScrollDirection,
         amount: i32,
         _coord: Option<[i32; 2]>,
+        _monitor: Option<u32>,
     ) -> ToolResult<ToolOutput> {
         Ok(ToolOutput {
             content: format!(
-                "Computer use not enabled. Would scroll {direction:?} x{amount}. Rebuild with --features computer-use.",
+                "Computer use is not enabled in this build. Would scroll {direction:?} x{amount}.{FEATURE_DISABLED_HINT}",
             ),
             is_error: true,
             metadata: HashMap::new(),
@@ -763,10 +904,12 @@ impl ComputerUseTool {
             }
         }
 
+        let mut metadata = HashMap::new();
+        crate::windows_platform::attach_window_context(&mut metadata);
         Ok(ToolOutput {
             content: format!("Pressed key: {key}"),
             is_error: false,
-            metadata: HashMap::new(),
+            metadata,
         })
     }
 
@@ -774,7 +917,7 @@ impl ComputerUseTool {
     async fn execute_key_press(&self, key: &str) -> ToolResult<ToolOutput> {
         Ok(ToolOutput {
             content: format!(
-                "Computer use not enabled. Would press '{key}'. Rebuild with --features computer-use.",
+                "Computer use is not enabled in this build. Would press '{key}'.{FEATURE_DISABLED_HINT}",
             ),
             is_error: true,
             metadata: HashMap::new(),
@@ -805,7 +948,11 @@ impl ComputerUseTool {
     }
 
     #[cfg(feature = "computer-use")]
-    async fn execute_mouse_move(&self, coord: [i32; 2]) -> ToolResult<ToolOutput> {
+    async fn execute_mouse_move(
+        &self,
+        coord: [i32; 2],
+        monitor: Option<u32>,
+    ) -> ToolResult<ToolOutput> {
         if !self.config.input_enabled {
             return Ok(ToolOutput {
                 content: "Input simulation is disabled.".to_string(),
@@ -814,9 +961,9 @@ impl ComputerUseTool {
             });
         }
         Self::ensure_input_permitted()?;
+        crate::windows_platform::ensure_dpi_awareness();
 
-        let (actual_w, actual_h) = Self::screen_size().map_err(ToolError::ExecutionFailed)?;
-        let scaled = Self::scale_coordinate(coord, actual_w, actual_h);
+        let scaled = Self::resolve_point(coord, monitor).map_err(ToolError::ExecutionFailed)?;
 
         let mut enigo = enigo::Enigo::new(&enigo::Settings::default())
             .map_err(|e| ToolError::ExecutionFailed(format!("Input init failed: {e}")))?;
@@ -825,21 +972,27 @@ impl ComputerUseTool {
             .move_mouse(scaled[0], scaled[1], enigo::Coordinate::Abs)
             .map_err(|e| ToolError::ExecutionFailed(format!("Mouse move failed: {e}")))?;
 
+        let mut metadata = HashMap::new();
+        crate::windows_platform::attach_window_context(&mut metadata);
         Ok(ToolOutput {
             content: format!(
                 "Moved mouse to ({}, {}) [scaled from ({}, {})]",
                 scaled[0], scaled[1], coord[0], coord[1]
             ),
             is_error: false,
-            metadata: HashMap::new(),
+            metadata,
         })
     }
 
     #[cfg(not(feature = "computer-use"))]
-    async fn execute_mouse_move(&self, coord: [i32; 2]) -> ToolResult<ToolOutput> {
+    async fn execute_mouse_move(
+        &self,
+        coord: [i32; 2],
+        _monitor: Option<u32>,
+    ) -> ToolResult<ToolOutput> {
         Ok(ToolOutput {
             content: format!(
-                "Computer use not enabled. Would move to ({}, {}). Rebuild with --features computer-use.",
+                "Computer use is not enabled in this build. Would move to ({}, {}).{FEATURE_DISABLED_HINT}",
                 coord[0], coord[1]
             ),
             is_error: true,
@@ -848,7 +1001,12 @@ impl ComputerUseTool {
     }
 
     #[cfg(feature = "computer-use")]
-    async fn execute_drag(&self, start: [i32; 2], end: [i32; 2]) -> ToolResult<ToolOutput> {
+    async fn execute_drag(
+        &self,
+        start: [i32; 2],
+        end: [i32; 2],
+        monitor: Option<u32>,
+    ) -> ToolResult<ToolOutput> {
         if !self.config.input_enabled {
             return Ok(ToolOutput {
                 content: "Input simulation is disabled.".to_string(),
@@ -857,10 +1015,11 @@ impl ComputerUseTool {
             });
         }
         Self::ensure_input_permitted()?;
+        crate::windows_platform::ensure_dpi_awareness();
 
-        let (actual_w, actual_h) = Self::screen_size().map_err(ToolError::ExecutionFailed)?;
-        let scaled_start = Self::scale_coordinate(start, actual_w, actual_h);
-        let scaled_end = Self::scale_coordinate(end, actual_w, actual_h);
+        let scaled_start =
+            Self::resolve_point(start, monitor).map_err(ToolError::ExecutionFailed)?;
+        let scaled_end = Self::resolve_point(end, monitor).map_err(ToolError::ExecutionFailed)?;
 
         let mut enigo = enigo::Enigo::new(&enigo::Settings::default())
             .map_err(|e| ToolError::ExecutionFailed(format!("Input init failed: {e}")))?;
@@ -882,22 +1041,126 @@ impl ComputerUseTool {
             .button(enigo::Button::Left, Direction::Release)
             .map_err(|e| ToolError::ExecutionFailed(format!("Mouse release failed: {e}")))?;
 
+        let mut metadata = HashMap::new();
+        crate::windows_platform::attach_window_context(&mut metadata);
         Ok(ToolOutput {
             content: format!(
                 "Dragged from ({}, {}) to ({}, {})",
                 scaled_start[0], scaled_start[1], scaled_end[0], scaled_end[1]
             ),
             is_error: false,
+            metadata,
+        })
+    }
+
+    #[cfg(not(feature = "computer-use"))]
+    async fn execute_drag(
+        &self,
+        start: [i32; 2],
+        end: [i32; 2],
+        _monitor: Option<u32>,
+    ) -> ToolResult<ToolOutput> {
+        Ok(ToolOutput {
+            content: format!(
+                "Computer use is not enabled in this build. Would drag ({}, {}) to ({}, {}).{FEATURE_DISABLED_HINT}",
+                start[0], start[1], end[0], end[1]
+            ),
+            is_error: true,
+            metadata: HashMap::new(),
+        })
+    }
+
+    // ── UIA structured actions (Windows + computer-use) ─────────────────
+
+    /// Render the UIA control tree of the foreground (or named) window.
+    #[cfg(feature = "computer-use")]
+    async fn execute_ui_tree(&self, window: Option<&str>) -> ToolResult<ToolOutput> {
+        match crate::windows_platform::ui_tree(window.unwrap_or("")) {
+            Ok(tree) => Ok(ToolOutput {
+                content: tree,
+                is_error: false,
+                metadata: HashMap::new(),
+            }),
+            Err(e) => Ok(ToolOutput {
+                content: e,
+                is_error: true,
+                metadata: HashMap::new(),
+            }),
+        }
+    }
+
+    /// Click a UIA element by name: resolve its bounding-rect center (the
+    /// element's own physical pixels — no reference-space scaling) and
+    /// click there.
+    #[cfg(feature = "computer-use")]
+    async fn execute_ui_click(
+        &self,
+        window: Option<&str>,
+        element: &str,
+        index: usize,
+    ) -> ToolResult<ToolOutput> {
+        if !self.config.input_enabled {
+            return Ok(ToolOutput {
+                content: "Input simulation is disabled.".to_string(),
+                is_error: true,
+                metadata: HashMap::new(),
+            });
+        }
+        Self::ensure_input_permitted()?;
+
+        let ((x, y), desc) =
+            match crate::windows_platform::ui_click_center(window.unwrap_or(""), element, index) {
+                Ok(v) => v,
+                Err(e) => {
+                    return Ok(ToolOutput {
+                        content: e,
+                        is_error: true,
+                        metadata: HashMap::new(),
+                    });
+                }
+            };
+
+        crate::windows_platform::ensure_dpi_awareness();
+        let mut enigo = enigo::Enigo::new(&enigo::Settings::default())
+            .map_err(|e| ToolError::ExecutionFailed(format!("Input init failed: {e}")))?;
+        enigo
+            .move_mouse(x, y, enigo::Coordinate::Abs)
+            .map_err(|e| ToolError::ExecutionFailed(format!("Mouse move failed: {e}")))?;
+        enigo
+            .button(enigo::Button::Left, Direction::Click)
+            .map_err(|e| ToolError::ExecutionFailed(format!("Mouse click failed: {e}")))?;
+
+        let mut metadata = HashMap::new();
+        metadata.insert("uia_element".to_string(), json!(desc));
+        crate::windows_platform::attach_window_context(&mut metadata);
+        Ok(ToolOutput {
+            content: format!("ui_click {element:?} → {desc} at ({x}, {y})"),
+            is_error: false,
+            metadata,
+        })
+    }
+
+    #[cfg(not(feature = "computer-use"))]
+    async fn execute_ui_tree(&self, _window: Option<&str>) -> ToolResult<ToolOutput> {
+        Ok(ToolOutput {
+            content: format!(
+                "ui_tree is unavailable: the `computer-use` feature is not enabled in this build.{FEATURE_DISABLED_HINT}"
+            ),
+            is_error: true,
             metadata: HashMap::new(),
         })
     }
 
     #[cfg(not(feature = "computer-use"))]
-    async fn execute_drag(&self, start: [i32; 2], end: [i32; 2]) -> ToolResult<ToolOutput> {
+    async fn execute_ui_click(
+        &self,
+        _window: Option<&str>,
+        element: &str,
+        _index: usize,
+    ) -> ToolResult<ToolOutput> {
         Ok(ToolOutput {
             content: format!(
-                "Computer use not enabled. Would drag ({}, {}) to ({}, {}). Rebuild with --features computer-use.",
-                start[0], start[1], end[0], end[1]
+                "ui_click is unavailable: the `computer-use` feature is not enabled in this build. Would click element {element:?}.{FEATURE_DISABLED_HINT}"
             ),
             is_error: true,
             metadata: HashMap::new(),
@@ -922,32 +1185,6 @@ impl ComputerUseTool {
                     .into(),
             ))
         }
-    }
-
-    /// Get the actual screen size.
-    #[cfg(feature = "computer-use")]
-    fn screen_size() -> Result<(u32, u32), String> {
-        // xcap reports CGDisplayBounds points (logical coords — the same
-        // space enigo's CGEvent absolute moves expect); captures come back
-        // in physical pixels on Retina, so screenshot↔input scales differ.
-        // Enumeration failures propagate: silently assuming the 1024x768
-        // reference frame would turn model coordinates into unscaled screen
-        // coordinates (misclicks once the Accessibility grant is held).
-        let monitors = xcap::Monitor::all().map_err(|e| {
-            tracing::warn!(error = %e, "monitor enumeration failed");
-            format!("monitor enumeration failed: {e}")
-        })?;
-        let monitor = monitors.into_iter().next().ok_or_else(|| {
-            tracing::warn!("no active display reported by the OS");
-            "no active display found (display asleep or detached?)".to_string()
-        })?;
-        let width = monitor
-            .width()
-            .map_err(|e| format!("monitor width unavailable: {e}"))?;
-        let height = monitor
-            .height()
-            .map_err(|e| format!("monitor height unavailable: {e}"))?;
-        Ok((width, height))
     }
 }
 

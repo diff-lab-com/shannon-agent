@@ -32,6 +32,9 @@ computer-use = ["shannon-tools/computer-use"]
 computer-use-libei = ["shannon-tools/computer-use-libei"]
 computer-use-wayland = ["shannon-tools/computer-use-wayland"]
 computer-use-x11rb = ["shannon-tools/computer-use-x11rb"]
+# T14 — built-in browser tools (chromiumoxide CDP). Enabled by the Windows
+# release bundle together with computer-use (release.yml nsis leg).
+local-browser = ["shannon-tools/local-browser"]
 
 [dependencies]
 # Shannon engine crates — provided by the unified workspace (no git, no SSH, no rev, no patch).

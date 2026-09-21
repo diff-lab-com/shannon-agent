@@ -121,6 +121,16 @@ opentelemetry = "0.32"
 opentelemetry_sdk = { version = "0.32", features = ["rt-tokio", "testing"] }
 opentelemetry-otlp = { version = "0.32", features = ["grpc-tonic"] }
 
+# Windows Job Object baseline sandbox (`sandbox::windows_job`). Compiled on
+# every Windows build — Job Objects are always available, no external binary.
+[target.'cfg(target_os = "windows")'.dependencies]
+windows = { version = "0.62", features = [
+    "Win32_Foundation",
+    "Win32_Security",
+    "Win32_System_JobObjects",
+    "Win32_System_Threading",
+] }
+
 [features]
 default = []
 landlock = ["dep:landlock"]

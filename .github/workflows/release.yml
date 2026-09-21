@@ -174,9 +174,19 @@ jobs:
         with:
           key: cli-${{ matrix.target }}
 
+      # Windows release builds ship with desktop automation (`computer`
+      # tool: enigo Win32 + xcap GDI) and the built-in CDP browser tools
+      # enabled — both compile clean on Windows (ci.yml check legs + local
+      # verification). Linux keeps plain defaults (libxdo system dep);
+      # macOS ships defaults until its QA matrix lands.
       - name: Build CLI
         shell: bash
-        run: cargo build --release -p shannon-cli --target ${{ matrix.target }}
+        run: |
+          FEATURES=""
+          if [ "${{ runner.os }}" = "Windows" ]; then
+            FEATURES="--features computer-use,local-browser"
+          fi
+          cargo build --release -p shannon-cli --target ${{ matrix.target }} $FEATURES
 
       - name: Package + upload CLI (unix)
         if: runner.os != 'Windows'
@@ -366,7 +376,12 @@ jobs:
           tagName: ${{ github.ref_name }}
           releaseDraft: true
           prerelease: ${{ contains(github.ref_name, '-') }}  # rc/beta/alpha (dash) -> prerelease
-          args: --target ${{ matrix.target }} --bundles ${{ matrix.ext }}
+          # Windows bundles ship with desktop automation + built-in browser
+          # tools compiled in (matches the bundled CLI's features); other
+          # platforms keep default features.
+          args: >-
+            --target ${{ matrix.target }} --bundles ${{ matrix.ext }}
+            ${{ matrix.ext == 'nsis' && '--features computer-use,local-browser' || '' }}
 
       # Release hardening (WP-15 follow-up): the deb hard-links pipewire/spa/
       # gbm/EGL/wayland since preview-capture shipped; a package that installs

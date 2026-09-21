@@ -1,4 +1,5 @@
 //! Security tests for Shannon tool system
+#![cfg(unix)] // uses std::os::unix::fs::symlink for symlink-traversal protection.
 //!
 //! Tests:
 //! - Command injection prevention in repl_tool (whitelist, character blocking)

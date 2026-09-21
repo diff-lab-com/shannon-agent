@@ -872,6 +872,133 @@ impl SandboxProvider for NoSandbox {
 }
 
 // ============================================================================
+// Windows Job Object baseline
+// ============================================================================
+
+/// Windows baseline sandbox: sandboxed command spawns are assigned to a Job
+/// Object with `JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE`, so no descendant process
+/// outlives the Shannon process. The historical Windows behavior was a
+/// warned no-op ("running unsandboxed"); this provides a lifecycle boundary
+/// while AppContainer / restricted-token isolation remains future work.
+///
+/// Lifecycle only — filesystem and network access are NOT restricted; the
+/// permission system (audit + confirmation) remains the primary boundary.
+#[cfg(target_os = "windows")]
+pub mod windows_job {
+    use std::sync::Mutex;
+    use std::sync::atomic::{AtomicBool, Ordering};
+
+    static ACTIVE: AtomicBool = AtomicBool::new(false);
+    /// `(pid, job handle)` pairs. The handles must stay open for
+    /// KILL_ON_JOB_CLOSE to fire when Shannon exits, so they live here for
+    /// the process lifetime; entries whose pid is gone get pruned once the
+    /// list grows past [`HANDLE_PRUNE_AT`] (pid reuse can at worst keep a
+    /// dead entry around — harmless).
+    static HANDLES: Mutex<Vec<(u32, isize)>> = Mutex::new(Vec::new());
+    const HANDLE_PRUNE_AT: usize = 128;
+
+    /// Arm the confinement switch (called by `SandboxExecutor::wrap_command`
+    /// when the detected backend is WindowsJob and sandboxing is enabled).
+    pub fn set_active(active: bool) {
+        ACTIVE.store(active, Ordering::Relaxed);
+    }
+
+    /// Whether spawned commands should be confined.
+    pub fn active() -> bool {
+        ACTIVE.load(Ordering::Relaxed)
+    }
+
+    /// Assign a freshly spawned child — and every process it spawns — to a
+    /// kill-on-close job. Best-effort by design: a failed assignment logs
+    /// and continues (never blocks command execution).
+    pub fn confine_child(child: &std::process::Child) -> bool {
+        if !active() {
+            return false;
+        }
+        use std::os::windows::io::AsRawHandle;
+        let pid = child.id();
+        match confine_raw(child.as_raw_handle(), pid) {
+            Ok(()) => true,
+            Err(e) => {
+                tracing::debug!(pid, error = %e, "job-object confinement unavailable for child");
+                false
+            }
+        }
+    }
+
+    /// tokio children expose the same raw handle (Windows only).
+    pub fn confine_tokio_child(child: &tokio::process::Child) -> bool {
+        if !active() {
+            return false;
+        }
+        match child.raw_handle() {
+            Some(raw) => {
+                let pid = child.id().unwrap_or(0);
+                match confine_raw(raw, pid) {
+                    Ok(()) => true,
+                    Err(e) => {
+                        tracing::debug!(pid, error = %e, "job-object confinement unavailable for child");
+                        false
+                    }
+                }
+            }
+            None => false,
+        }
+    }
+
+    fn confine_raw(raw: std::os::windows::io::RawHandle, pid: u32) -> Result<(), String> {
+        use windows::Win32::Foundation::HANDLE;
+        use windows::Win32::System::JobObjects::{
+            AssignProcessToJobObject, CreateJobObjectW, JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE,
+            JOBOBJECT_EXTENDED_LIMIT_INFORMATION, JobObjectExtendedLimitInformation,
+            SetInformationJobObject,
+        };
+        // SAFETY: standard Job Object setup — create, set kill-on-close,
+        // assign the child process handle obtained from the spawn call.
+        unsafe {
+            let job = CreateJobObjectW(None, None).map_err(|e| e.to_string())?;
+            let mut info = JOBOBJECT_EXTENDED_LIMIT_INFORMATION::default();
+            info.BasicLimitInformation.LimitFlags |= JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE;
+            SetInformationJobObject(
+                job,
+                JobObjectExtendedLimitInformation,
+                &info as *const _ as *const core::ffi::c_void,
+                std::mem::size_of::<JOBOBJECT_EXTENDED_LIMIT_INFORMATION>() as u32,
+            )
+            .map_err(|e| e.to_string())?;
+            AssignProcessToJobObject(job, HANDLE(raw as *mut _)).map_err(|e| e.to_string())?;
+            let mut guard = HANDLES.lock().unwrap_or_else(|e| e.into_inner());
+            if guard.len() >= HANDLE_PRUNE_AT {
+                guard.retain(|(p, _)| pid_alive(*p));
+            }
+            guard.push((pid, job.0 as isize));
+        }
+        Ok(())
+    }
+
+    fn pid_alive(pid: u32) -> bool {
+        use windows::Win32::System::Threading::{OpenProcess, PROCESS_QUERY_LIMITED_INFORMATION};
+        // SAFETY: query-limited open purely as a liveness probe.
+        unsafe { OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, false, pid).is_ok() }
+    }
+}
+
+#[cfg(not(target_os = "windows"))]
+pub mod windows_job {
+    /// No-op off Windows — every accessor reports inactive.
+    pub fn set_active(_active: bool) {}
+    pub fn active() -> bool {
+        false
+    }
+    pub fn confine_child(_child: &std::process::Child) -> bool {
+        false
+    }
+    pub fn confine_tokio_child(_child: &tokio::process::Child) -> bool {
+        false
+    }
+}
+
+// ============================================================================
 // Sandbox Type Enum
 // ============================================================================
 
@@ -885,6 +1012,10 @@ pub enum SandboxType {
     Bubblewrap,
     /// macOS Seatbelt (`sandbox-exec`) sandbox.
     Seatbelt,
+    /// Windows Job Object lifecycle confinement (kill-on-close). Baseline:
+    /// children cannot outlive the Shannon process; no fs/net restrictions.
+    #[serde(rename = "windows_job")]
+    WindowsJob,
     /// No sandbox available — commands run unsandboxed.
     None,
 }
@@ -895,6 +1026,7 @@ impl std::fmt::Display for SandboxType {
             SandboxType::Docker => write!(f, "docker"),
             SandboxType::Bubblewrap => write!(f, "bubblewrap"),
             SandboxType::Seatbelt => write!(f, "seatbelt"),
+            SandboxType::WindowsJob => write!(f, "windows-job"),
             SandboxType::None => write!(f, "none"),
         }
     }
@@ -938,6 +1070,15 @@ pub fn sandbox_self_description(project_dir: &std::path::Path) -> Option<String>
             "Command sandbox: macOS Seatbelt profile. Writes are restricted to the \
              project directory and /tmp — probe tool availability with \
              `command -v <tool>`."
+                .to_string(),
+        ),
+        SandboxType::WindowsJob => Some(
+            "Command sandbox: Windows Job Object (baseline). Every spawned command \
+             and its descendants are confined to a job that dies with the Shannon \
+             process — runaway or orphaned children cannot outlive the session. \
+             This is lifecycle confinement only: filesystem and network access are \
+             NOT restricted; the permission system (audit + confirmation) remains \
+             the primary boundary."
                 .to_string(),
         ),
     }
@@ -1058,6 +1199,15 @@ impl SandboxExecutor {
 
     /// Detect which sandbox backend is available on this system.
     pub fn detect_sandboxer() -> SandboxType {
+        // Windows: the Job Object baseline is always present (no external
+        // binary). Checked before Docker because the Docker command template
+        // is bash-based and cannot run on stock Windows anyway.
+        if cfg!(target_os = "windows") {
+            tracing::debug!(
+                "Detected sandbox backend: windows-job (kill-on-close lifecycle confinement)"
+            );
+            return SandboxType::WindowsJob;
+        }
         if DockerSandbox::docker_available() {
             tracing::debug!("Detected sandbox backend: docker");
             return SandboxType::Docker;
@@ -1112,6 +1262,15 @@ impl SandboxExecutor {
             SandboxType::Docker => self.wrap_command_docker(command),
             SandboxType::Bubblewrap => self.wrap_command_bwrap(command),
             SandboxType::Seatbelt => self.wrap_command_seatbelt(command),
+            SandboxType::WindowsJob => {
+                // Nothing to rewrite in the command line: Job Object
+                // confinement attaches at spawn time. Arming the global
+                // switch makes every LocalProcess spawn (providers.rs)
+                // assign its child to a kill-on-close job.
+                crate::sandbox::windows_job::set_active(true);
+                tracing::debug!("Windows job-object confinement armed (kill-on-close)");
+                Ok(())
+            }
             SandboxType::None => {
                 tracing::warn!("No sandbox backend available; command will run unsandboxed");
                 Ok(())
@@ -2032,6 +2191,7 @@ mod tests {
             SandboxType::Docker
                 | SandboxType::Bubblewrap
                 | SandboxType::Seatbelt
+                | SandboxType::WindowsJob
                 | SandboxType::None
         ));
     }
@@ -2264,6 +2424,7 @@ mod tests {
             SandboxType::Docker
                 | SandboxType::Bubblewrap
                 | SandboxType::Seatbelt
+                | SandboxType::WindowsJob
                 | SandboxType::None
         ));
         assert_eq!(executor.config().project_dir, PathBuf::from("/tmp/project"));

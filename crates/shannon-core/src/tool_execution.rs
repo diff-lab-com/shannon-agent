@@ -422,8 +422,15 @@ impl ToolExecutionResult {
             attachments.push(attachment);
         }
 
-        // Screenshot / image tools produce image attachments
-        let image_tools = ["Screenshot", "screenshot", "TakeScreenshot"];
+        // Screenshot / image tools produce image attachments. This list must
+        // track the real registered tool names — the historical
+        // ["Screenshot", "screenshot", "TakeScreenshot"] matched nothing.
+        let image_tools = [
+            "computer",
+            "browser_screenshot",
+            "preview_screenshot",
+            "screenshot",
+        ];
         if image_tools.contains(&tool_name) && !output.is_error {
             let mut attachment =
                 AttachmentMessage::new(tool_name, tool_id, &output.content, "image/png");
@@ -802,9 +809,11 @@ impl ToolExecutionService {
         // 6. Build metadata
         let metadata = ToolExecutionResult::build_metadata(tool_name, &effective_input, &output);
 
-        // 7. Extract attachments
+        // 7. Extract attachments — pass the tool NAME (the matcher matches
+        // on registered tool names); the previous call passed tool_id (a
+        // uuid) in both slots, so nothing ever matched.
         let attachments = if self.config.collect_attachments {
-            ToolExecutionResult::extract_attachments(&tool_id, &tool_id, &output)
+            ToolExecutionResult::extract_attachments(tool_name, &tool_id, &output)
         } else {
             Vec::new()
         };
@@ -2681,7 +2690,9 @@ mod tests {
         assert_eq!(attachments.len(), 1);
     }
 
-    // -- Attachment: Screenshot tool produces image attachment --
+    // -- Attachment: screenshot tools produce image attachments. The
+    //    registry's real names are `computer` / `browser_screenshot` /
+    //    `preview_screenshot` (plus legacy lowercase `screenshot`). --
 
     #[test]
     fn test_extract_attachments_screenshot_tool() {
@@ -2690,7 +2701,7 @@ mod tests {
             is_error: false,
             metadata: Default::default(),
         };
-        let attachments = ToolExecutionResult::extract_attachments("Screenshot", "id-1", &output);
+        let attachments = ToolExecutionResult::extract_attachments("computer", "id-1", &output);
         assert_eq!(attachments.len(), 1);
         assert_eq!(attachments[0].content_type, "image/png");
         assert_eq!(attachments[0].file_extension.as_deref(), Some("png"));
@@ -2710,10 +2721,36 @@ mod tests {
         assert_eq!(attachments[0].content_type, "image/png");
     }
 
-    // -- Attachment: TakeScreenshot tool produces image attachment --
+    // -- Attachment: TakeScreenshot was a legacy name that matched no
+    //    registered tool; real computer-use tool names must match instead --
 
     #[test]
-    fn test_extract_attachments_take_screenshot_tool() {
+    fn test_extract_attachments_computer_tool() {
+        let output = ToolOutput {
+            content: "imagedata".to_string(),
+            is_error: false,
+            metadata: Default::default(),
+        };
+        let attachments = ToolExecutionResult::extract_attachments("computer", "id-1", &output);
+        assert_eq!(attachments.len(), 1);
+        assert_eq!(attachments[0].content_type, "image/png");
+    }
+
+    #[test]
+    fn test_extract_attachments_browser_and_preview_screenshot_tools() {
+        let output = ToolOutput {
+            content: "imagedata".to_string(),
+            is_error: false,
+            metadata: Default::default(),
+        };
+        for name in ["browser_screenshot", "preview_screenshot"] {
+            let attachments = ToolExecutionResult::extract_attachments(name, "id-1", &output);
+            assert_eq!(attachments.len(), 1, "{name} should attach");
+        }
+    }
+
+    #[test]
+    fn test_extract_attachments_legacy_take_screenshot_no_longer_matches() {
         let output = ToolOutput {
             content: "imagedata".to_string(),
             is_error: false,
@@ -2721,7 +2758,10 @@ mod tests {
         };
         let attachments =
             ToolExecutionResult::extract_attachments("TakeScreenshot", "id-1", &output);
-        assert_eq!(attachments.len(), 1);
+        assert!(
+            attachments.is_empty(),
+            "TakeScreenshot matches no registered tool"
+        );
     }
 
     // -- Attachment: unknown tool produces no attachments --

@@ -8,6 +8,7 @@
 //! Landlock cells execute only when this host actually enforces Landlock;
 //! otherwise they print the probe reason and return early (an explicit,
 //! labeled skip per the master-plan constraint).
+#![cfg(unix)] // POSIX permissions + Landlock; the sandbox matrix is a unix contract.
 
 use shannon_core::tools::Tool;
 use shannon_tool_interface::{ProcessProvider, ProcessRequest, SandboxMode};

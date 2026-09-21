@@ -372,30 +372,84 @@ then point SHANNON_BROWSER_CDP at the forwarded port (current value: {endpoint})
         use chromiumoxide_cdp::cdp::browser_protocol::input::{
             DispatchKeyEventParams, DispatchKeyEventType,
         };
+        // Chromium only synthesizes real key events when the platform fields
+        // are populated — a zero virtual key code makes most sites (and
+        // every IME-dependent surface) ignore the press.
+        let (name, code, vk, text) = normalize_key(key);
         let dispatch = |t: DispatchKeyEventType| DispatchKeyEventParams {
             r#type: t,
-            key: Some(key.to_string()),
-            code: Some(key.to_string()),
-            text: None,
+            key: Some(name.clone()),
+            code: Some(code.clone()),
+            text: text.clone(),
             unmodified_text: None,
             auto_repeat: None,
             location: None,
             is_keypad: None,
             is_system_key: None,
-            windows_virtual_key_code: Some(0),
-            native_virtual_key_code: Some(0),
+            windows_virtual_key_code: Some(vk),
+            native_virtual_key_code: Some(vk),
             modifiers: None,
             timestamp: None,
             key_identifier: None,
             commands: None,
         };
-        page.execute(dispatch(DispatchKeyEventType::RawKeyDown))
+        // Keys that produce text use KeyDown with `text` set (Chromium
+        // inserts the character); the rest use RawKeyDown/KeyUp.
+        let (down, up) = if text.is_some() {
+            (DispatchKeyEventType::KeyDown, DispatchKeyEventType::KeyUp)
+        } else {
+            (
+                DispatchKeyEventType::RawKeyDown,
+                DispatchKeyEventType::KeyUp,
+            )
+        };
+        page.execute(dispatch(down))
             .await
             .map_err(|e| format!("key down: {e}"))?;
-        page.execute(dispatch(DispatchKeyEventType::KeyUp))
+        page.execute(dispatch(up))
             .await
             .map_err(|e| format!("key up: {e}"))?;
         Ok(())
+    }
+
+    /// Normalize a key name to `(key, code, virtual-key-code, text)`.
+    /// Accepts CDP-style names ("Enter", "ArrowDown", "a", "F5") plus the
+    /// friendly aliases "down"/"up"/"left"/"right"/"esc".
+    fn normalize_key(key: &str) -> (String, String, i64, Option<String>) {
+        let (name, code, vkey, printable) = match key {
+            "Enter" | "Return" | "enter" | "return" => ("Enter", "Enter", 0x0D, "\r"),
+            "Tab" | "tab" => ("Tab", "Tab", 0x09, "\t"),
+            "Escape" | "esc" | "Esc" | "escape" => ("Escape", "Escape", 0x1B, ""),
+            "Backspace" | "backspace" => ("Backspace", "Backspace", 0x08, ""),
+            "Delete" | "del" | "Del" | "delete" => ("Delete", "Delete", 0x2E, ""),
+            " " | "Space" | "space" => (" ", "Space", 0x20, " "),
+            "ArrowLeft" | "Left" | "left" => ("ArrowLeft", "ArrowLeft", 0x25, ""),
+            "ArrowUp" | "Up" | "up" => ("ArrowUp", "ArrowUp", 0x26, ""),
+            "ArrowRight" | "Right" | "right" => ("ArrowRight", "ArrowRight", 0x27, ""),
+            "ArrowDown" | "Down" | "down" => ("ArrowDown", "ArrowDown", 0x28, ""),
+            "Home" | "home" => ("Home", "Home", 0x24, ""),
+            "End" | "end" => ("End", "End", 0x23, ""),
+            "PageUp" | "pageup" => ("PageUp", "PageUp", 0x21, ""),
+            "PageDown" | "pagedown" => ("PageDown", "PageDown", 0x22, ""),
+            k @ ("F1" | "F2" | "F3" | "F4" | "F5" | "F6" | "F7" | "F8" | "F9" | "F10" | "F11"
+            | "F12") => {
+                let n: u32 = k[1..].parse().unwrap_or(1);
+                (k, k, (0x70 + n - 1) as i64, "")
+            }
+            _ => {
+                // Printable single character: VK == uppercase ASCII for
+                // letters/digits, else the best-effort char code.
+                let ch = key.chars().next().unwrap_or('\0');
+                let upper = ch.to_ascii_uppercase() as i64;
+                (key, key, upper, key)
+            }
+        };
+        let text = if printable.is_empty() {
+            None
+        } else {
+            Some(printable.to_string())
+        };
+        (name.to_string(), code.to_string(), vkey, text)
     }
 
     pub async fn scroll_at(page: &Page, delta_y: f64) -> Result<(), String> {
@@ -435,6 +489,220 @@ then point SHANNON_BROWSER_CDP at the forwarded port (current value: {endpoint})
             text
         };
         Ok(format!("{title}\n{url}\n\n{truncated}"))
+    }
+
+    /// JS that indexes visible interactive elements and returns a JSON
+    /// array of `{ref, tag, role, text, x, y, w, h}`. Refs (`e1`..`eN`) are
+    /// positional and stay valid until the DOM changes — call
+    /// [`element_snapshot`] again after navigation.
+    const ELEMENT_INDEX_JS: &str = r#"(function(){
+        const sel = 'a[href], button, input, select, textarea, summary, [role="button"], [role="link"], [role="checkbox"], [role="radio"], [role="tab"], [role="menuitem"], [role="option"], [onclick], [contenteditable="true"]';
+        const nodes = Array.from(document.querySelectorAll(sel)).filter(el => {
+            const r = el.getBoundingClientRect();
+            if (r.width <= 0 || r.height <= 0) return false;
+            const st = getComputedStyle(el);
+            return st.visibility !== 'hidden' && st.display !== 'none';
+        }).slice(0, 150);
+        return nodes.map((el, i) => {
+            const r = el.getBoundingClientRect();
+            const label = (el.innerText || el.value || el.placeholder ||
+                el.getAttribute('aria-label') || el.getAttribute('title') || '').trim();
+            return {
+                ref: 'e' + (i + 1),
+                tag: el.tagName.toLowerCase(),
+                role: el.getAttribute('role') || '',
+                text: label.slice(0, 80),
+                x: Math.round(r.x + window.scrollX),
+                y: Math.round(r.y + window.scrollY),
+                w: Math.round(r.width),
+                h: Math.round(r.height)
+            };
+        });
+    })()"#;
+
+    /// Interactive-element index of the page: refs usable with
+    /// `browser_click`'s `ref` and `browser_fill`. Far more reliable than
+    /// screenshot-guessed coordinates and cheaper than an 8KB innerText
+    /// dump when the task is "find and press the button".
+    pub async fn element_snapshot(page: &Page) -> Result<String, String> {
+        let title = page
+            .get_title()
+            .await
+            .map_err(|e| format!("get_title: {e}"))?
+            .unwrap_or_default();
+        let url = page
+            .url()
+            .await
+            .map_err(|e| format!("url: {e}"))?
+            .unwrap_or_default();
+        let result = page
+            .evaluate(ELEMENT_INDEX_JS)
+            .await
+            .map_err(|e| format!("element index: {e}"))?;
+        let items = result
+            .value()
+            .cloned()
+            .unwrap_or_else(|| serde_json::Value::Array(Vec::new()));
+        let mut out = format!("{title}\n{url}\n");
+        match items.as_array() {
+            Some(list) if !list.is_empty() => {
+                out.push_str(
+                    "\n[interactive elements — use ref with browser_click/browser_fill]\n",
+                );
+                for item in list {
+                    out.push_str(&format!(
+                        "- {} <{}>{} {:?} @ ({},{}) {}x{}\n",
+                        item["ref"].as_str().unwrap_or("?"),
+                        item["tag"].as_str().unwrap_or("?"),
+                        {
+                            let role = item["role"].as_str().unwrap_or("");
+                            if role.is_empty() {
+                                String::new()
+                            } else {
+                                format!(" role={role}")
+                            }
+                        },
+                        item["text"].as_str().unwrap_or(""),
+                        item["x"].as_i64().unwrap_or(0),
+                        item["y"].as_i64().unwrap_or(0),
+                        item["w"].as_i64().unwrap_or(0),
+                        item["h"].as_i64().unwrap_or(0),
+                    ));
+                }
+            }
+            _ => out.push_str("\n(no visible interactive elements found)\n"),
+        }
+        Ok(out)
+    }
+
+    /// Click the element with the given ref by dispatching real mouse
+    /// events at its viewport center (hover handlers, focus, form
+    /// semantics all fire — unlike a bare `el.click()`).
+    pub async fn click_element(page: &Page, reference: &str) -> Result<(), String> {
+        let js = format!(
+            r#"(function(){{
+                const sel = {sel};
+                const nodes = Array.from(document.querySelectorAll(sel)).filter(el => {{
+                    const r = el.getBoundingClientRect();
+                    return r.width > 0 && r.height > 0;
+                }});
+                const el = nodes[{idx}];
+                if (!el) return null;
+                el.scrollIntoView({{block: 'center'}});
+                const r = el.getBoundingClientRect();
+                return JSON.stringify({{x: r.x + r.width/2, y: r.y + r.height/2}});
+            }})()"#,
+            // Mirrors ELEMENT_INDEX_JS's selector so refs line up.
+            sel = element_selector_js(),
+            idx = ref_index(reference)?,
+        );
+        let result = page
+            .evaluate(js)
+            .await
+            .map_err(|e| format!("element lookup: {e}"))?;
+        let payload = result
+            .value()
+            .and_then(|v| v.as_str().map(String::from))
+            .ok_or_else(|| {
+                format!("no element for ref {reference} (DOM changed? re-run browser_snapshot)")
+            })?;
+        let parsed: serde_json::Value =
+            serde_json::from_str(&payload).map_err(|e| format!("element payload: {e}"))?;
+        let (x, y) = (
+            parsed["x"].as_f64().unwrap_or(0.0),
+            parsed["y"].as_f64().unwrap_or(0.0),
+        );
+        click_at(page, x, y).await
+    }
+
+    /// Fill the element at `reference` with `text` (inputs/textareas via
+    /// the native setter + input/change events so React/Vue see it;
+    /// contenteditable via text insertion). Falls back to focusing and
+    /// typing through CDP for exotic widgets.
+    pub async fn fill_element(page: &Page, reference: &str, text: &str) -> Result<(), String> {
+        let escaped = text
+            .replace('\\', "\\\\")
+            .replace('\'', "\\'")
+            .replace('\n', "\\n")
+            .replace('\r', "");
+        let js = format!(
+            r#"(function(){{
+                const sel = {sel};
+                const nodes = Array.from(document.querySelectorAll(sel)).filter(el => {{
+                    const r = el.getBoundingClientRect();
+                    return r.width > 0 && r.height > 0;
+                }});
+                const el = nodes[{idx}];
+                if (!el) return 'missing';
+                el.scrollIntoView({{block: 'center'}});
+                el.focus();
+                const value = '{value}';
+                if (el.tagName === 'INPUT' || el.tagName === 'TEXTAREA') {{
+                    const proto = el.tagName === 'INPUT' ? HTMLInputElement.prototype : HTMLTextAreaElement.prototype;
+                    const setter = Object.getOwnPropertyDescriptor(proto, 'value').set;
+                    setter.call(el, value);
+                    el.dispatchEvent(new Event('input', {{bubbles: true}}));
+                    el.dispatchEvent(new Event('change', {{bubbles: true}}));
+                    return 'filled';
+                }}
+                if (el.isContentEditable) {{
+                    el.textContent = value;
+                    el.dispatchEvent(new Event('input', {{bubbles: true}}));
+                    return 'filled';
+                }}
+                return 'unsupported';
+            }})()"#,
+            sel = element_selector_js(),
+            idx = ref_index(reference)?,
+            value = escaped,
+        );
+        let result = page.evaluate(js).await.map_err(|e| format!("fill: {e}"))?;
+        match result
+            .value()
+            .and_then(|v| v.as_str().map(String::from))
+            .as_deref()
+        {
+            Some("filled") => Ok(()),
+            Some("missing") => Err(format!(
+                "no element for ref {reference} (DOM changed? re-run browser_snapshot)"
+            )),
+            Some("unsupported") => Err(format!(
+                "element {reference} is not fillable; focus it with browser_click and use browser_type instead"
+            )),
+            _ => Err("fill failed with unexpected payload".into()),
+        }
+    }
+
+    /// Run a JavaScript expression in the page and return its value
+    /// serialized (strings verbatim; everything else as JSON).
+    pub async fn evaluate_js(page: &Page, expression: &str) -> Result<String, String> {
+        let result = page
+            .evaluate(expression)
+            .await
+            .map_err(|e| format!("evaluate: {e}"))?;
+        match result.value().cloned() {
+            Some(serde_json::Value::String(s)) => Ok(s),
+            Some(v) => serde_json::to_string(&v).map_err(|e| format!("serialize result: {e}")),
+            None => Ok("undefined".to_string()),
+        }
+    }
+
+    /// The element-index selector as a JS string literal, so the click/fill
+    /// helpers match refs against the exact same node list as
+    /// [`ELEMENT_INDEX_JS`].
+    fn element_selector_js() -> String {
+        const SEL: &str = "a[href], button, input, select, textarea, summary, [role=\"button\"], [role=\"link\"], [role=\"checkbox\"], [role=\"radio\"], [role=\"tab\"], [role=\"menuitem\"], [role=\"option\"], [onclick], [contenteditable=\"true\"]";
+        serde_json::to_string(SEL).unwrap_or_else(|_| "''".to_string())
+    }
+
+    /// `e12` → `11` (0-based positional index into the element list).
+    fn ref_index(reference: &str) -> Result<usize, String> {
+        reference
+            .strip_prefix('e')
+            .and_then(|n| n.parse::<usize>().ok())
+            .filter(|n| *n >= 1)
+            .map(|n| n - 1)
+            .ok_or_else(|| format!("invalid element ref {reference:?} — refs look like \"e3\" from browser_snapshot"))
     }
 
     pub async fn screenshot_png(page: &Page, full_page: bool) -> Result<Vec<u8>, String> {
@@ -530,6 +798,18 @@ Rebuild with `--features local-browser` to use the built-in browser tools."
     pub async fn page_text(_p: &Page) -> Result<String, String> {
         Err(BROWSER_DISABLED.to_string())
     }
+    pub async fn element_snapshot(_p: &Page) -> Result<String, String> {
+        Err(BROWSER_DISABLED.to_string())
+    }
+    pub async fn click_element(_p: &Page, _reference: &str) -> Result<(), String> {
+        Err(BROWSER_DISABLED.to_string())
+    }
+    pub async fn fill_element(_p: &Page, _reference: &str, _text: &str) -> Result<(), String> {
+        Err(BROWSER_DISABLED.to_string())
+    }
+    pub async fn evaluate_js(_p: &Page, _expression: &str) -> Result<String, String> {
+        Err(BROWSER_DISABLED.to_string())
+    }
     pub async fn screenshot_png(_p: &Page, _full_page: bool) -> Result<Vec<u8>, String> {
         Err(BROWSER_DISABLED.to_string())
     }
@@ -537,16 +817,16 @@ Rebuild with `--features local-browser` to use the built-in browser tools."
 
 #[cfg(feature = "local-browser")]
 pub use live::{
-    AttachMode, ChromeSession, Page, TabId, attach_summary, cdp_endpoint, click_at,
-    detect_system_browser, install_hint, navigate, page_text, press_key, screenshot_png, scroll_at,
-    type_text,
+    AttachMode, ChromeSession, Page, TabId, attach_summary, cdp_endpoint, click_at, click_element,
+    detect_system_browser, element_snapshot, evaluate_js, fill_element, install_hint, navigate,
+    page_text, press_key, screenshot_png, scroll_at, type_text,
 };
 
 #[cfg(not(feature = "local-browser"))]
 pub use stub::{
-    ChromeSession, Page, StubPage, TabId, attach_summary, cdp_endpoint, click_at,
-    detect_system_browser, install_hint, navigate, page_text, press_key, screenshot_png, scroll_at,
-    type_text,
+    ChromeSession, Page, StubPage, TabId, attach_summary, cdp_endpoint, click_at, click_element,
+    detect_system_browser, element_snapshot, evaluate_js, fill_element, install_hint, navigate,
+    page_text, press_key, screenshot_png, scroll_at, type_text,
 };
 
 #[cfg(test)]

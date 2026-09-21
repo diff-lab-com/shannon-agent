@@ -82,6 +82,7 @@ pub mod team_delete;
 pub mod todo;
 pub mod tool_search;
 pub mod web;
+pub mod windows_platform;
 pub mod worktree;
 
 /// Test-only helper for tests that must retarget the process-wide working
@@ -139,6 +140,20 @@ pub use computer_use::{
     ComputerAction, ComputerUseConfig, ComputerUseInput, ComputerUseTool, REFERENCE_HEIGHT,
     REFERENCE_WIDTH, ScrollDirection,
 };
+
+/// Whether this build has the desktop-control tool family compiled in
+/// (`computer-use` feature). Introspection lives here — inside the crate
+/// that owns the feature — so doctor/status UIs report the truth even when
+/// they don't forward the feature themselves.
+pub fn computer_use_enabled() -> bool {
+    cfg!(feature = "computer-use")
+}
+
+/// Whether the built-in CDP browser tools are live in this build
+/// (`local-browser` feature).
+pub fn local_browser_enabled() -> bool {
+    cfg!(feature = "local-browser")
+}
 pub use config::{ConfigAction, ConfigInput, ConfigManager, ConfigTool, SharedConfigManager};
 pub use cron::{
     CronCreateInput, CronCreateOutput, CronDeleteInput, CronDeleteOutput, CronListInput,
@@ -531,6 +546,16 @@ fn register_all_tools(
     // ── Computer Use (desktop automation) ────────────────────────────────
     registry.register(Box::new(ComputerUseTool::new()))?;
 
+    // ── Windows desktop surfaces (DPI/UIA/windows/clipboard) ─────────────
+    // Register unconditionally; execution is gated on
+    // Windows + `computer-use` and returns honest errors elsewhere
+    // (same pattern as the applescript tool).
+    registry.register(Box::new(windows_platform::WindowListTool))?;
+    registry.register(Box::new(windows_platform::WindowFocusTool))?;
+    registry.register(Box::new(windows_platform::ClipboardReadTool))?;
+    registry.register(Box::new(windows_platform::ClipboardWriteTool))?;
+    registry.register(Box::new(windows_platform::AppOpenTool))?;
+
     // ── AppleScript / Shortcuts (macOS app automation, T13 Tier 1) ───────
     registry.register(Box::new(applescript::AppleScriptTool::new()))?;
 
@@ -539,6 +564,11 @@ fn register_all_tools(
     registry.register(Box::new(browser_tools::BrowserClickTool))?;
     registry.register(Box::new(browser_tools::BrowserTypeTool))?;
     registry.register(Box::new(browser_tools::BrowserSnapshotTool))?;
+    registry.register(Box::new(browser_tools::BrowserTextTool))?;
+    registry.register(Box::new(browser_tools::BrowserFillTool))?;
+    registry.register(Box::new(browser_tools::BrowserPressKeyTool))?;
+    registry.register(Box::new(browser_tools::BrowserScrollTool))?;
+    registry.register(Box::new(browser_tools::BrowserEvaluateTool))?;
     registry.register(Box::new(browser_tools::BrowserScreenshotTool))?;
     registry.register(Box::new(browser_tools::BrowserTabsTool))?;
     registry.register(Box::new(browser_tools::BrowserCloseTool))?;
