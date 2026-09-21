@@ -3072,7 +3072,7 @@
   "extensions.installed.disabledCta": "Re-enable",
   "extensions.installed.disabledCtaHint": "Disabled items can be enabled from the {tab} tab",
   "extensions.installed.manage": "Manage",
-  "chat.input.placeholder.empty": "Try: \"Explain this repo\" or \"Plan a refactor for src/foo.rs\"",
+  "chat.input.placeholder.empty": "Ask Shannon anything... Try: \"Explain this repo\" or \"Plan a refactor for src/foo.rs\"",
   "chat.input.placeholder.project": "Working in",
   "chat.tool.input.expand": "Show full payload",
   "chat.tool.input.collapse": "Collapse",
@@ -3106,6 +3106,6 @@
   "settings.advanced.devSection.title": "Developer options",
   "settings.advanced.devSection.hint": "Off-peak, voice, CLI, updates, reset",
   "inbox.groupBySource": "Group by source",
-  "welcome.hero.tagline": "Your AI workspace, ready in 2 minutes",
+  "welcome.hero.tagline": "Welcome — your AI workspace, ready in 2 minutes",
   "welcome.hero.subtitle": "Pick a starting point and connect a model. Shannon learns your style and builds tools around your work — without sending your code anywhere unless you ask."
 }

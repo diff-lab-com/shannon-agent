@@ -219,6 +219,12 @@ export default function Tasks() {
   return (
     <div className="flex-1 overflow-y-auto w-full pb-16">
       <div className="max-w-[1200px] mx-auto px-lg py-xl">
+        {/* E2E (extensions.spec.ts) and screen readers look up the Tasks page
+            by its h1 — the visible h1/h2 was retired in P0-3 (the global app
+            Header carries the page name now), but a sr-only h1 keeps the page
+            self-identifying for AT, axe, and the smoke test without forcing
+            the design to re-adopt a visible page title. */}
+        <h1 className="sr-only">{t('tasks.tasksHeader.title')}</h1>
         <TasksHeader
           showFilters={showFilters}
           onToggleFilters={() => setShowFilters(!showFilters)}
