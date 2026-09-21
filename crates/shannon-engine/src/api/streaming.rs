@@ -571,8 +571,7 @@ impl Stream for ResumableSseStream {
             }
             Poll::Ready(None) => {
                 // Stream ended
-                if self.saw_message_stop || self.saw_error_event || self.reconnects_remaining == 0
-                {
+                if self.saw_message_stop || self.saw_error_event || self.reconnects_remaining == 0 {
                     Poll::Ready(None)
                 } else {
                     // Premature end — reconnect
@@ -1143,7 +1142,9 @@ mod tests {
     fn test_openai_mid_stream_error_chunk_yields_typed_error() {
         // OpenAI-compatible gateways stream errors as {"error":{...}} chunks
         // (no choices): previously silently dropped.
-        let lines = vec![r#"data: {"error":{"message":"rate limited upstream","type":"server_error","code":"429"}}"#];
+        let lines = vec![
+            r#"data: {"error":{"message":"rate limited upstream","type":"server_error","code":"429"}}"#,
+        ];
         let events = parse_sse_lines(&lines, LlmProvider::OpenAI);
         assert_eq!(events.len(), 1);
         match &events[0] {
@@ -1163,7 +1164,9 @@ mod tests {
         ];
         let events = parse_sse_lines(&lines, LlmProvider::Ollama);
         assert_eq!(events.len(), 2, "Error event + content delta");
-        assert!(matches!(&events[0], Ok(StreamEvent::Error { message }) if message.contains("malformed")));
+        assert!(
+            matches!(&events[0], Ok(StreamEvent::Error { message }) if message.contains("malformed"))
+        );
         assert!(matches!(
             &events[1],
             Ok(StreamEvent::ContentBlockDelta {
@@ -1175,7 +1178,9 @@ mod tests {
 
     #[test]
     fn test_gemini_mid_stream_error_yields_typed_error() {
-        let lines = vec![r#"data: {"error":{"code":429,"message":"Quota exceeded","status":"RESOURCE_EXHAUSTED"}}"#];
+        let lines = vec![
+            r#"data: {"error":{"code":429,"message":"Quota exceeded","status":"RESOURCE_EXHAUSTED"}}"#,
+        ];
         let events = parse_sse_lines(&lines, LlmProvider::Gemini);
         assert_eq!(events.len(), 1);
         match &events[0] {

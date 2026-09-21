@@ -105,9 +105,7 @@ pub struct ModelPricing {
 /// cache read = 0.1x input, cache write (creation) = 1.25x input. Deriving
 /// keeps every Anthropic entry data-driven from the input price already in
 /// the table — no invented numbers.
-fn anthropic_cache_rates(
-    input_price_per_mtok: f64,
-) -> (Option<f64>, Option<f64>) {
+fn anthropic_cache_rates(input_price_per_mtok: f64) -> (Option<f64>, Option<f64>) {
     (
         Some(input_price_per_mtok * 0.1),
         Some(input_price_per_mtok * 1.25),
@@ -1541,7 +1539,10 @@ mod tests {
             200_000,   // cache creation
         );
         let expected = 3.0 + 15.0 + 0.5 * 0.3 + 0.2 * 3.75;
-        assert!((cost - expected).abs() < 1e-9, "expected {expected}, got {cost}");
+        assert!(
+            (cost - expected).abs() < 1e-9,
+            "expected {expected}, got {cost}"
+        );
     }
 
     #[test]
@@ -1550,7 +1551,10 @@ mod tests {
         // cache tokens are priced at the plain input rate.
         let cost = CostTracker::calculate_cost_with_cache("gpt-4o", 0, 0, 1_000_000, 1_000_000);
         let expected = 2.5 + 2.5; // both at gpt-4o input price
-        assert!((cost - expected).abs() < 1e-9, "expected {expected}, got {cost}");
+        assert!(
+            (cost - expected).abs() < 1e-9,
+            "expected {expected}, got {cost}"
+        );
     }
 
     #[test]
@@ -1571,6 +1575,9 @@ mod tests {
         // Every resolved Anthropic price carries the published multipliers
         // (read = 0.1x input, write = 1.25x input); non-Anthropic entries
         // carry None (→ input-rate fallback).
+        let rate_matches = |rate: Option<f64>, input: f64, multiplier: f64| {
+            rate.is_some_and(|r| (r - input * multiplier).abs() < 1e-9)
+        };
         let anthropic_models = [
             "claude-sonnet-4-20250514",
             "claude-opus-4-20250514",
@@ -1578,15 +1585,15 @@ mod tests {
         ];
         for model in anthropic_models {
             let p = lookup_pricing(model);
-            assert_eq!(
-                p.cache_read_per_mtok,
-                Some(p.input_price_per_mtok * 0.1),
-                "{model}: cache read must be 0.1x input"
+            assert!(
+                rate_matches(p.cache_read_per_mtok, p.input_price_per_mtok, 0.1),
+                "{model}: cache read must be 0.1x input, got {:?}",
+                p.cache_read_per_mtok
             );
-            assert_eq!(
-                p.cache_write_per_mtok,
-                Some(p.input_price_per_mtok * 1.25),
-                "{model}: cache write must be 1.25x input"
+            assert!(
+                rate_matches(p.cache_write_per_mtok, p.input_price_per_mtok, 1.25),
+                "{model}: cache write must be 1.25x input, got {:?}",
+                p.cache_write_per_mtok
             );
         }
         let gpt = lookup_pricing("gpt-4o");

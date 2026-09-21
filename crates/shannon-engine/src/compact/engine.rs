@@ -374,11 +374,8 @@ impl CompactEngine {
                                 while !text.is_char_boundary(end) {
                                     end -= 1;
                                 }
-                                *text = format!(
-                                    "{}...[truncated, {} chars]",
-                                    &text[..end],
-                                    text.len()
-                                );
+                                *text =
+                                    format!("{}...[truncated, {} chars]", &text[..end], text.len());
                             }
                         }
                     }

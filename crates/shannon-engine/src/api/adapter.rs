@@ -694,7 +694,7 @@ fn normalize_anthropic_event(json_str: &str) -> Vec<Result<StreamEvent, ApiError
         Err(e) => {
             return vec![Ok(StreamEvent::Error {
                 message: format!("Unparseable Anthropic SSE event: {e} (data: {json_str})"),
-            })]
+            })];
         }
     };
 
@@ -1750,7 +1750,7 @@ fn normalize_gemini_event(
         Err(e) => {
             return vec![Ok(StreamEvent::Error {
                 message: format!("Failed to parse Gemini SSE event: {e} (data: {json_str})"),
-            })]
+            })];
         }
     };
 
@@ -2565,7 +2565,11 @@ mod tests {
             r#"{"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"so far"}}"#,
             r#"{"type":"error","error":{"type":"overloaded_error","message":"Overloaded"}}"#,
         ] {
-            events.extend(normalize_sse_event(line, &LlmProvider::Anthropic, &mut state));
+            events.extend(normalize_sse_event(
+                line,
+                &LlmProvider::Anthropic,
+                &mut state,
+            ));
         }
         assert_eq!(events.len(), 3);
         assert!(events.iter().take(2).all(|e| e.is_ok()));
