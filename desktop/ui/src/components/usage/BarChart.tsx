@@ -30,11 +30,13 @@ interface BarChartProps {
   height?: number
   /** Optional Y-axis formatter (defaults to compact tokens). */
   formatValue?: (n: number) => string
+  /** Optional a11y label for the chart svg (axe svg-img-alt). */
+  ariaLabel?: string
 }
 
 const FALLBACK_COLORS = ['bg-primary', 'bg-secondary', 'bg-tertiary', 'bg-warning']
 
-export function BarChart({ data, series, height = 220, formatValue }: BarChartProps) {
+export function BarChart({ data, series, height = 220, formatValue, ariaLabel }: BarChartProps) {
   const [hover, setHover] = useState<{ idx: number; x: number; y: number } | null>(null)
   const fmt = formatValue ?? ((n: number) => n.toLocaleString())
 
@@ -77,6 +79,7 @@ export function BarChart({ data, series, height = 220, formatValue }: BarChartPr
         className="w-full"
         style={{ height }}
         role="img"
+        aria-label={ariaLabel ?? 'Bar chart'}
       >
         {/* Y-axis grid lines + tick labels (0%, 25%, 50%, 75%, 100%) */}
         {[0, 0.25, 0.5, 0.75, 1].map(t => (
@@ -215,7 +218,7 @@ export function DonutChart({
   let offset = 0
   const defaultColors = ['bg-primary', 'bg-secondary', 'bg-tertiary', 'bg-warning', 'bg-error']
   return (
-    <svg viewBox={`0 0 ${size} ${size}`} width={size} height={size} role="img">
+    <svg viewBox={`0 0 ${size} ${size}`} width={size} height={size} role="img" aria-label={centerLabel ?? `Donut: ${segments.length} segments, total ${total}`}>
       <circle cx={cx} cy={cy} r={radius} fill="none" className="stroke-surface-container" strokeWidth={14} />
       {segments.map((s, i) => {
         const len = (s.value / safeTotal) * C

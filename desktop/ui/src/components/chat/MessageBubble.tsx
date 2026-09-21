@@ -694,7 +694,7 @@ function ToolInputPrimary({ label, body }: { label: string; body: string }) {
   if (isShort) {
     return (
       <div className="text-body-sm bg-surface-container px-sm py-xs rounded-lg max-h-[200px] overflow-x-auto">
-        <span className="font-mono text-on-surface-variant/70 mr-xs">{label}:</span>
+        <span className="font-mono text-on-surface-variant mr-xs">{label}:</span>
         <span className="font-mono text-on-surface">{body}</span>
       </div>
     )

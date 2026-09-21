@@ -46,18 +46,24 @@ export function transformCallback(): number {
 // dev-marker so reviewers don't mistake it for a finished production
 // element. Still serves its job: anyone running `pnpm demo` instantly knows
 // the binary isn't talking to a real Tauri backend.
+// axe-ci (Visual Audit): also pinned contrast to WCAG AA (≥4.5:1) on a
+// solid background, and tagged aria-hidden + role="presentation" so the
+// dev-only marker is excluded from a11y scans entirely — it isn't real
+// product chrome and shouldn't be measured as if it were.
 if (typeof window !== 'undefined' && typeof document !== 'undefined') {
   const ready = () => {
     if (document.querySelector('[data-mock-badge]')) return
     const badge = document.createElement('div')
     badge.setAttribute('data-mock-badge', '')
+    badge.setAttribute('aria-hidden', 'true')
+    badge.setAttribute('role', 'presentation')
     badge.textContent = 'DEMO MODE · mock backend'
     badge.style.cssText = [
       'position:fixed', 'bottom:10px', 'left:10px', 'z-index:9999',
-      'background:rgba(120,120,140,0.18)', 'color:rgba(180,180,200,0.85)',
+      'background:rgba(60,60,72,0.92)', 'color:#f1f1f4',
       'font:500 10px/1 ui-monospace, SFMono-Regular, Menlo, monospace',
       'padding:3px 8px', 'border-radius:6px', 'letter-spacing:0.04em',
-      'border:1px solid rgba(120,120,140,0.22)',
+      'border:1px solid rgba(60,60,72,0.92)',
       'pointer-events:none', 'user-select:none',
     ].join(';')
     document.body.appendChild(badge)
