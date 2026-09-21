@@ -138,10 +138,7 @@ mod tests {
             "Bad gateway",
             "internal server error",
         ] {
-            assert!(
-                provider_error_retryable(s),
-                "expected retryable: {s:?}"
-            );
+            assert!(provider_error_retryable(s), "expected retryable: {s:?}");
         }
     }
 

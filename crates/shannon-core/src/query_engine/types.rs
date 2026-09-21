@@ -1216,7 +1216,10 @@ mod tests {
             assert_eq!(back, level);
         }
         // Lowercase wire form keeps configs readable.
-        assert_eq!(serde_json::to_string(&EffortLevel::Standard).unwrap(), "\"standard\"");
+        assert_eq!(
+            serde_json::to_string(&EffortLevel::Standard).unwrap(),
+            "\"standard\""
+        );
     }
 
     #[test]

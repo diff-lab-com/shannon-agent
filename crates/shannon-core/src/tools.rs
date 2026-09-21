@@ -1038,8 +1038,7 @@ mod tests {
         registry.register(Box::new(HiddenTool)).unwrap();
         let names = registry.list();
         assert!(
-            names.contains(&"Visible".to_string())
-                && names.contains(&"Hidden".to_string()),
+            names.contains(&"Visible".to_string()) && names.contains(&"Hidden".to_string()),
             "both must be registered (host-callable): {names:?}"
         );
         let defs = registry.to_tool_definitions();

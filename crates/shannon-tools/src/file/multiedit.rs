@@ -176,9 +176,7 @@ pub async fn execute_with(
             // must not mask the original write failure.
             let mut rollback_failures: Vec<String> = Vec::new();
             for (path, original) in applied.iter().rev() {
-                if let Err(re) =
-                    atomic_write(fs, std::path::Path::new(path), original).await
-                {
+                if let Err(re) = atomic_write(fs, std::path::Path::new(path), original).await {
                     rollback_failures.push(format!("{path}: {re}"));
                 }
             }
@@ -503,7 +501,10 @@ mod tests {
         fn remove_file_blocking(&self, p: &std::path::Path) -> std::io::Result<()> {
             self.inner.remove_file_blocking(p)
         }
-        fn canonicalize_blocking(&self, p: &std::path::Path) -> std::io::Result<std::path::PathBuf> {
+        fn canonicalize_blocking(
+            &self,
+            p: &std::path::Path,
+        ) -> std::io::Result<std::path::PathBuf> {
             self.inner.canonicalize_blocking(p)
         }
         fn metadata_blocking(
@@ -512,11 +513,7 @@ mod tests {
         ) -> std::io::Result<shannon_tool_interface::FileMeta> {
             self.inner.metadata_blocking(p)
         }
-        fn read_prefix_blocking(
-            &self,
-            p: &std::path::Path,
-            m: usize,
-        ) -> std::io::Result<Vec<u8>> {
+        fn read_prefix_blocking(&self, p: &std::path::Path, m: usize) -> std::io::Result<Vec<u8>> {
             self.inner.read_prefix_blocking(p, m)
         }
         fn list_dir_blocking(

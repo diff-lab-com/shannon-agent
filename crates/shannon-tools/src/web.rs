@@ -233,8 +233,8 @@ fn validate_fetch_url_resolved(
         return Ok(());
     }
 
-    let ips = resolve(host)
-        .map_err(|e| format!("Blocked: DNS resolution failed for '{host}': {e}"))?;
+    let ips =
+        resolve(host).map_err(|e| format!("Blocked: DNS resolution failed for '{host}': {e}"))?;
     if ips.is_empty() {
         return Err(format!("Blocked: hostname '{host}' resolved to no addresses").into());
     }
@@ -318,11 +318,9 @@ impl WebFetchTool {
     ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         let resolver = self.resolver.clone();
         let url = url.to_string();
-        tokio::task::spawn_blocking(move || {
-            validate_fetch_url_resolved(&url, resolver.as_ref())
-        })
-        .await
-        .map_err(|e| format!("URL validation task failed: {e}"))?
+        tokio::task::spawn_blocking(move || validate_fetch_url_resolved(&url, resolver.as_ref()))
+            .await
+            .map_err(|e| format!("URL validation task failed: {e}"))?
     }
 
     async fn fetch_url(
@@ -723,7 +721,9 @@ impl WebSearchTool {
 
         let status = response.status();
         if !status.is_success() {
-            let body = read_body_capped(response, MAX_RESPONSE_BYTES).await.unwrap_or_default();
+            let body = read_body_capped(response, MAX_RESPONSE_BYTES)
+                .await
+                .unwrap_or_default();
             return Err(format!("Tavily API returned HTTP {status}: {body}").into());
         }
 
@@ -1127,10 +1127,7 @@ mod tests {
     fn test_validate_resolved_blocks_ipv6_ula_via_dns() {
         let resolve = static_resolver(&[("evil.example.com", &["fd12::1"])]);
         let err = validate_fetch_url_resolved("http://evil.example.com/", &resolve).unwrap_err();
-        assert!(
-            err.to_string().contains("unique-local"),
-            "got: {err}"
-        );
+        assert!(err.to_string().contains("unique-local"), "got: {err}");
     }
 
     #[test]

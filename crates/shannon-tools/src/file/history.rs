@@ -603,7 +603,8 @@ impl FileHistoryManager {
         let temp_path = self
             .history_dir
             .join(format!("_index.json.tmp-{}", Uuid::new_v4().as_simple()));
-        self.fs.write_bytes_blocking(&temp_path, content.as_bytes())?;
+        self.fs
+            .write_bytes_blocking(&temp_path, content.as_bytes())?;
         if let Err(e) = std::fs::rename(&temp_path, &index_path) {
             let _ = self.fs.remove_file_blocking(&temp_path);
             return Err(FileHistoryError::Io(e));
@@ -1046,16 +1047,22 @@ impl FileHistoryManager {
         let mut evicted = 0usize;
         loop {
             // Globally oldest snapshot across all files.
-            let oldest = self.cache.values().filter_map(|h| {
-                h.snapshots
-                    .first()
-                    .map(|s| (s.timestamp, h.file_path.clone(), s.id.clone()))
-            }).min_by_key(|(ts, _, _)| *ts);
+            let oldest = self
+                .cache
+                .values()
+                .filter_map(|h| {
+                    h.snapshots
+                        .first()
+                        .map(|s| (s.timestamp, h.file_path.clone(), s.id.clone()))
+                })
+                .min_by_key(|(ts, _, _)| *ts);
             let Some((_ts, file_path, snapshot_id)) = oldest else {
                 break; // nothing left to evict
             };
 
-            let snapshot_path = self.file_dir(&file_path).join(format!("{snapshot_id}.json"));
+            let snapshot_path = self
+                .file_dir(&file_path)
+                .join(format!("{snapshot_id}.json"));
             let snapshot_bytes = self
                 .fs
                 .metadata_blocking(&snapshot_path)
@@ -2121,7 +2128,11 @@ mod tests {
 
         let mut manager = FileHistoryManager::new(config.clone());
         manager
-            .record_snapshot(Path::new("/tmp/test_corrupt_index.rs"), "v1", FileOperation::Create)
+            .record_snapshot(
+                Path::new("/tmp/test_corrupt_index.rs"),
+                "v1",
+                FileOperation::Create,
+            )
             .expect("record must succeed despite a corrupt index");
 
         // The new snapshot was saved; a fresh manager (which loads the

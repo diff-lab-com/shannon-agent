@@ -377,7 +377,8 @@ impl Default for EditTool {
 impl EditTool {
     pub fn new() -> Self {
         Self {
-            description: "Performs exact string replacement in a file and returns the replacement\n\
+            description:
+                "Performs exact string replacement in a file and returns the replacement\n\
 count, match locations and a unified diff.\n\
 \n\
 You MUST Read the file first: `old_string` must match the current content\n\
@@ -389,7 +390,7 @@ but IS in the file's git HEAD version (the file moved under you), the edit\n\
 is applied via a three-way merge; textual conflicts are returned in the\n\
 result instead of being silently overwritten. Use MultiEdit for batched\n\
 edits and Write only to replace a whole file."
-                .to_string(),
+                    .to_string(),
             sandbox: PathSandbox::new(),
             fs: crate::defaults::fs(),
             process: crate::defaults::process(),
@@ -400,7 +401,8 @@ edits and Write only to replace a whole file."
     /// Create an EditTool with a custom sandbox configuration.
     pub fn with_sandbox(sandbox: PathSandbox) -> Self {
         Self {
-            description: "Performs exact string replacement in a file and returns the replacement\n\
+            description:
+                "Performs exact string replacement in a file and returns the replacement\n\
 count, match locations and a unified diff.\n\
 \n\
 You MUST Read the file first: `old_string` must match the current content\n\
@@ -412,7 +414,7 @@ but IS in the file's git HEAD version (the file moved under you), the edit\n\
 is applied via a three-way merge; textual conflicts are returned in the\n\
 result instead of being silently overwritten. Use MultiEdit for batched\n\
 edits and Write only to replace a whole file."
-                .to_string(),
+                    .to_string(),
             sandbox,
             fs: crate::defaults::fs(),
             process: crate::defaults::process(),

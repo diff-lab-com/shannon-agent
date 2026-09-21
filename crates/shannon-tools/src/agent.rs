@@ -401,15 +401,12 @@ trivial single-tool lookups — just do them directly."
         // This is the real enforcement surface — `execute_subagent` builds a
         // fresh registry and filters it with this list, so a definition's
         // restrictions hold even when the caller passes none of their own.
-        let mut effective_allowed_tools = input
-            .allowed_tools
-            .clone()
-            .or_else(|| {
-                agent_def
-                    .as_ref()
-                    .filter(|d| !d.allowed_tools.is_empty())
-                    .map(|d| d.allowed_tools.clone())
-            });
+        let mut effective_allowed_tools = input.allowed_tools.clone().or_else(|| {
+            agent_def
+                .as_ref()
+                .filter(|d| !d.allowed_tools.is_empty())
+                .map(|d| d.allowed_tools.clone())
+        });
         // `read_only` (per-call, or implied by nothing else) always wins:
         // intersect whatever allowlist resolved with the read-only surface.
         let read_only = input.read_only.unwrap_or(false);
@@ -1700,7 +1697,14 @@ mod tests {
         let expected: Vec<String> = READ_ONLY_TOOLS.iter().map(|s| s.to_string()).collect();
         assert_eq!(out, expected);
         // The surface carries no mutation or shell escape hatch.
-        for write_tool in ["Write", "Edit", "MultiEdit", "Bash", "PowerShell", "NotebookEdit"] {
+        for write_tool in [
+            "Write",
+            "Edit",
+            "MultiEdit",
+            "Bash",
+            "PowerShell",
+            "NotebookEdit",
+        ] {
             assert!(!out.iter().any(|t| t == write_tool), "{write_tool} leaked");
         }
     }
@@ -1761,10 +1765,13 @@ mod tests {
         // effective allowlist falls back to the definition, and intersecting
         // it with the read-only surface keeps it read-only.
         let restricted = restrict_to_read_only(Some(&oracle.allowed_tools));
-        assert!(!restricted.iter().any(|t| t.contains("Write") || t.contains("Bash")));
+        assert!(
+            !restricted
+                .iter()
+                .any(|t| t.contains("Write") || t.contains("Bash"))
+        );
         assert_eq!(
-            restricted,
-            oracle.allowed_tools,
+            restricted, oracle.allowed_tools,
             "the oracle def's surface is exactly a read-only surface"
         );
     }

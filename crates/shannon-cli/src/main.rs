@@ -5126,8 +5126,10 @@ fn run_with_cli(cli: Cli) -> Result<()> {
             }
         }
         Some(Commands::Query {
-            query, effort: _,
-                no_stream, ..
+            query,
+            effort: _,
+            no_stream,
+            ..
         }) => {
             let resume_data = headless_resume_data(should_resume, resume_session_id)?;
             run_noninteractive_query(
@@ -5612,7 +5614,7 @@ def456  shannon-x86_64-unknown-linux-gnu.tar.gz
             temperature: Some(0.5),
             timeout: Some(60),
             effort: None,
-        debug: true,
+            debug: true,
             env_overrides: HashMap::new(),
         };
         assert_eq!(config.model(), Some("gpt-4o".to_string()));
@@ -5634,7 +5636,7 @@ def456  shannon-x86_64-unknown-linux-gnu.tar.gz
             temperature: None,
             timeout: None,
             effort: None,
-        debug: false,
+            debug: false,
             env_overrides: HashMap::new(),
         };
         assert_eq!(config.model().as_deref(), Some("claude-sonnet-4-20250514"));
@@ -5651,7 +5653,7 @@ def456  shannon-x86_64-unknown-linux-gnu.tar.gz
             temperature: None,
             timeout: None,
             effort: None,
-        debug: false,
+            debug: false,
             env_overrides: HashMap::new(),
         };
         let model = config.model().expect("model resolved");
@@ -5670,7 +5672,7 @@ def456  shannon-x86_64-unknown-linux-gnu.tar.gz
             temperature: None,
             timeout: None,
             effort: None,
-        debug: false,
+            debug: false,
             env_overrides: HashMap::new(),
         };
         assert_eq!(config.provider().as_deref(), Some("openai"));
@@ -5686,7 +5688,7 @@ def456  shannon-x86_64-unknown-linux-gnu.tar.gz
             temperature: None,
             timeout: None,
             effort: None,
-        debug: false,
+            debug: false,
             env_overrides: HashMap::new(),
         };
         assert_eq!(config.model().as_deref(), Some("gpt-4o"));
@@ -5703,7 +5705,7 @@ def456  shannon-x86_64-unknown-linux-gnu.tar.gz
             temperature: None,
             timeout: None,
             effort: None,
-        debug: false,
+            debug: false,
             env_overrides: HashMap::new(),
         };
         // These will be None unless SHANNON_MODEL is set in the test environment
@@ -5722,7 +5724,7 @@ def456  shannon-x86_64-unknown-linux-gnu.tar.gz
             temperature: None,
             timeout: None,
             effort: None,
-        debug: false,
+            debug: false,
             env_overrides: overrides,
         };
         assert_eq!(
@@ -5747,7 +5749,7 @@ def456  shannon-x86_64-unknown-linux-gnu.tar.gz
             temperature: None,
             timeout: None,
             effort: None,
-        debug: false,
+            debug: false,
             env_overrides: overrides,
         };
         // Explicit model should take precedence
@@ -6472,8 +6474,10 @@ def456  shannon-x86_64-unknown-linux-gnu.tar.gz
             Cli::try_parse_from(["shannon", "query", "--max-tokens", "8192", "test"]).unwrap();
         match cli.command {
             Some(Commands::Query {
-                query, max_tokens,
-                effort: _, ..
+                query,
+                max_tokens,
+                effort: _,
+                ..
             }) => {
                 assert_eq!(query, "test");
                 assert_eq!(max_tokens, Some(8192));
@@ -6487,8 +6491,10 @@ def456  shannon-x86_64-unknown-linux-gnu.tar.gz
         let cli = Cli::try_parse_from(["shannon", "query", "--no-stream", "test"]).unwrap();
         match cli.command {
             Some(Commands::Query {
-                query, effort: _,
-                no_stream, ..
+                query,
+                effort: _,
+                no_stream,
+                ..
             }) => {
                 assert_eq!(query, "test");
                 assert!(no_stream);
@@ -6623,7 +6629,7 @@ def456  shannon-x86_64-unknown-linux-gnu.tar.gz
             temperature: Some(0.5),
             timeout: Some(120),
             effort: None,
-        debug: false,
+            debug: false,
             env_overrides: HashMap::new(),
         };
 
@@ -6645,7 +6651,7 @@ def456  shannon-x86_64-unknown-linux-gnu.tar.gz
             temperature: None,
             timeout: None,
             effort: None,
-        debug: false,
+            debug: false,
             env_overrides: HashMap::new(),
         };
 

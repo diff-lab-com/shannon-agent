@@ -1043,11 +1043,30 @@ capabilities = ["test"]
         registry.with_builtin_defaults();
 
         let oracle = registry.get("oracle").unwrap();
-        assert!(oracle.system_prompt.as_deref().unwrap_or("").contains("You are Oracle"));
-        assert!(oracle.system_prompt.as_deref().unwrap_or("").contains("You do not modify files"));
+        assert!(
+            oracle
+                .system_prompt
+                .as_deref()
+                .unwrap_or("")
+                .contains("You are Oracle")
+        );
+        assert!(
+            oracle
+                .system_prompt
+                .as_deref()
+                .unwrap_or("")
+                .contains("You do not modify files")
+        );
 
         // Read-only allowlist: no write/edit/shell escape hatches.
-        for write_tool in ["Write", "Edit", "MultiEdit", "Bash", "PowerShell", "NotebookEdit"] {
+        for write_tool in [
+            "Write",
+            "Edit",
+            "MultiEdit",
+            "Bash",
+            "PowerShell",
+            "NotebookEdit",
+        ] {
             assert!(
                 !oracle.allowed_tools.iter().any(|t| t == write_tool),
                 "oracle must not carry {write_tool}"

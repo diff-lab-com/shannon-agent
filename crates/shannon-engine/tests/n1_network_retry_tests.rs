@@ -60,7 +60,8 @@ async fn kind_request_failure_is_retryable() {
     );
 }
 
-#[cfg(unix)] // setsockopt + AsRawFd are unix-only; Windows SKIP note verified by sibling `kind_request_*_from_listener_drop` tests above.
+#[cfg(unix)]
+// setsockopt + AsRawFd are unix-only; Windows SKIP note verified by sibling `kind_request_*_from_listener_drop` tests above.
 #[tokio::test]
 async fn kind_request_retry_policy_survives_rst_variant_too() {
     // RST variant: is_connect() is ALSO true here, so this class was always

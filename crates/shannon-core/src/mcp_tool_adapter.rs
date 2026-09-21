@@ -26,7 +26,10 @@ use std::sync::OnceLock;
 fn spec_defaults_enabled() -> bool {
     static CACHED: OnceLock<bool> = OnceLock::new();
     *CACHED.get_or_init(|| match std::env::var("SHANNON_MCP_SPEC_DEFAULTS") {
-        Ok(v) => matches!(v.trim().to_ascii_lowercase().as_str(), "1" | "true" | "yes" | "on"),
+        Ok(v) => matches!(
+            v.trim().to_ascii_lowercase().as_str(),
+            "1" | "true" | "yes" | "on"
+        ),
         Err(_) => false,
     })
 }
@@ -1517,7 +1520,11 @@ mod tests {
             )
             .with_annotations(ann);
             assert_eq!(adapter.is_read_only(), expected_ro, "{name}: read_only");
-            assert_eq!(adapter.is_destructive(), expected_dest, "{name}: destructive");
+            assert_eq!(
+                adapter.is_destructive(),
+                expected_dest,
+                "{name}: destructive"
+            );
             assert_eq!(
                 adapter.is_concurrency_safe(),
                 expected_cs,

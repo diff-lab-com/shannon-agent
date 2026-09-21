@@ -12,16 +12,16 @@
 //! Extracted so the agent loop reads top-down as a pipeline rather than
 //! a 300-line inline ladder.
 
-use shannon_engine::api::types::SystemContentBlock;
 use shannon_engine::api::LlmProvider;
+use shannon_engine::api::types::SystemContentBlock;
 
 use super::browser_control_prompt::{browser_control_prompt, browser_setup_hint};
 use super::context_injector::ContextInjector;
 use super::team_prompt::team_coordination_prompt;
 use crate::query_engine::RepoMapInjector;
 use crate::query_engine::types::QueryEngineConfig;
-use crate::{project_instructions, sandbox, smart_context};
 use crate::tools::ToolRegistry;
+use crate::{project_instructions, sandbox, smart_context};
 
 /// Inputs to system-prompt assembly — the only `QueryEngine` fields the
 /// assembler reads. Carrying a plain struct lets `process_query` describe
@@ -84,8 +84,7 @@ pub fn build(inputs: &SystemPromptInputs<'_>) -> AssembledSystemPrompt {
 
     // Inject CLAUDE.md / AGENTS.md / GEMINI.md project instructions.
     if inputs.config.auto_context_enabled {
-        let working_dir =
-            std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."));
+        let working_dir = std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."));
         if let Some(ctx) = project_instructions::load_full_context(&working_dir) {
             stable_blocks.push(ctx.content);
         }
@@ -211,9 +210,7 @@ pub fn build(inputs: &SystemPromptInputs<'_>) -> AssembledSystemPrompt {
     } else {
         Some(system_blocks)
     };
-    let system_prompt = if inputs.config.system_prompt.is_some()
-        || system_blocks_opt.is_some()
-    {
+    let system_prompt = if inputs.config.system_prompt.is_some() || system_blocks_opt.is_some() {
         inputs.config.system_prompt.clone()
     } else if inputs.provider == LlmProvider::Ollama {
         // Ollama models use their own chat templates; a system prompt
@@ -281,11 +278,11 @@ pub(crate) fn build_env_block(cwd: &std::path::Path) -> String {
 #[allow(clippy::unwrap_used)]
 mod tests {
     use super::*;
-    use shannon_engine::api::types::SystemContentBlock;
-    use shannon_engine::api::LlmProvider;
     use crate::query_engine::RepoMapInjector;
     use crate::query_engine::types::QueryEngineConfig;
     use crate::tools::ToolRegistry;
+    use shannon_engine::api::LlmProvider;
+    use shannon_engine::api::types::SystemContentBlock;
 
     fn tools_empty() -> ToolRegistry {
         ToolRegistry::new()
@@ -327,12 +324,14 @@ mod tests {
         };
         let tools = tools_empty();
         let injector = RepoMapInjector::new(None, 0);
-        let out = build(&inputs_for_test(&cfg, LlmProvider::Anthropic, &tools, &injector));
+        let out = build(&inputs_for_test(
+            &cfg,
+            LlmProvider::Anthropic,
+            &tools,
+            &injector,
+        ));
         let blocks = out.blocks.expect("non-empty");
-        let cached_count = blocks
-            .iter()
-            .filter(|b| b.cache_control.is_some())
-            .count();
+        let cached_count = blocks.iter().filter(|b| b.cache_control.is_some()).count();
         assert!(
             cached_count >= 1 && cached_count <= 2,
             "expected 1-2 cache breakpoints depending on stable-zone length, got {cached_count}"
@@ -348,7 +347,12 @@ mod tests {
         };
         let tools = tools_empty();
         let injector = RepoMapInjector::new(None, 0);
-        let out = build(&inputs_for_test(&cfg, LlmProvider::OpenAI, &tools, &injector));
+        let out = build(&inputs_for_test(
+            &cfg,
+            LlmProvider::OpenAI,
+            &tools,
+            &injector,
+        ));
         let blocks = out.blocks.expect("non-empty");
         assert!(
             blocks.iter().all(|b| b.cache_control.is_none()),

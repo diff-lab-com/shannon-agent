@@ -649,7 +649,10 @@ mod tests {
             }),
         )
         .expect("PostToolUse must decode");
-        assert!(matches!(errored, HookEvent::PostToolUse { is_error: true, .. }));
+        assert!(matches!(
+            errored,
+            HookEvent::PostToolUse { is_error: true, .. }
+        ));
 
         // Legacy payload (pre-is_error producers) still decodes as success.
         let legacy = decode_trigger(
@@ -657,7 +660,13 @@ mod tests {
             &serde_json::json!({"tool_name": "Bash", "input": {}, "output": "ok"}),
         )
         .expect("legacy PostToolUse must decode");
-        assert!(matches!(legacy, HookEvent::PostToolUse { is_error: false, .. }));
+        assert!(matches!(
+            legacy,
+            HookEvent::PostToolUse {
+                is_error: false,
+                ..
+            }
+        ));
     }
 
     #[tokio::test]

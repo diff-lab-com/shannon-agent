@@ -953,10 +953,7 @@ mod tests {
             }))
             .await
             .expect_err("Critical-risk command must be rejected");
-        assert!(
-            err.to_string().contains("Security gate"),
-            "got: {err}"
-        );
+        assert!(err.to_string().contains("Security gate"), "got: {err}");
     }
 
     #[tokio::test]
@@ -975,7 +972,8 @@ mod tests {
     /// Spawn `sleep 5` and try to wait for a substring that never appears —
     /// should time out and report matched=false.
     #[tokio::test]
-    async fn wait_for_log_times_out_when_pattern_missing() {        let (rb, wf, _k) = make_tools();
+    async fn wait_for_log_times_out_when_pattern_missing() {
+        let (rb, wf, _k) = make_tools();
         let out = rb
             .execute(json!({
                 "name": "sleeper",

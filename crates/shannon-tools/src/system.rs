@@ -62,10 +62,10 @@ async fn run_shell_captured(
         request.cwd = Some(dir.into());
     }
     if let Some(env_vars) = env {
-for (key, value) in env_vars {
-        request.env.push((key.clone(), value.clone()));
+        for (key, value) in env_vars {
+            request.env.push((key.clone(), value.clone()));
+        }
     }
-}
 
     let timeout = resolve_timeout_ms(timeout_ms);
     let duration = Duration::from_millis(timeout);
@@ -1071,7 +1071,10 @@ pub(crate) fn resolve_sandbox_posture(
     shannon_sandbox_env: Option<&str>,
 ) -> SandboxPosture {
     let backend_available = !matches!(sandbox_type, SandboxType::None);
-    match shannon_sandbox_env.map(str::trim).map(str::to_ascii_lowercase) {
+    match shannon_sandbox_env
+        .map(str::trim)
+        .map(str::to_ascii_lowercase)
+    {
         Some(ref value) if value == "off" => SandboxPosture::OptedOut,
         _ if backend_available => SandboxPosture::Active,
         _ => SandboxPosture::Missing,
@@ -2243,7 +2246,11 @@ mod tests {
             "warning documents the opt-out: {warning}"
         );
         // Loud in the content too: the model reads the result, not the logs.
-        assert!(output.content.contains("Sandbox: OFF"), "{}", output.content);
+        assert!(
+            output.content.contains("Sandbox: OFF"),
+            "{}",
+            output.content
+        );
     }
 
     #[tokio::test]
@@ -3204,7 +3211,10 @@ mod test_runner_detection_tests {
     #[test]
     fn timeout_resolution_prefers_explicit_timeout() {
         // Explicit per-call timeout beats both default and env override.
-        assert_eq!(resolve_timeout_ms_with_env(Some(5_000), Some("9_999")), 5_000);
+        assert_eq!(
+            resolve_timeout_ms_with_env(Some(5_000), Some("9_999")),
+            5_000
+        );
         assert_eq!(resolve_timeout_ms_with_env(Some(5_000), None), 5_000);
     }
 
@@ -3217,7 +3227,10 @@ mod test_runner_detection_tests {
     #[test]
     fn timeout_resolution_ignores_invalid_env() {
         // Unparseable or negative-looking env values fall back to default.
-        assert_eq!(resolve_timeout_ms_with_env(None, Some("not-a-number")), 120_000);
+        assert_eq!(
+            resolve_timeout_ms_with_env(None, Some("not-a-number")),
+            120_000
+        );
         assert_eq!(resolve_timeout_ms_with_env(None, Some("")), 120_000);
         assert_eq!(resolve_timeout_ms_with_env(None, Some("-5")), 120_000);
     }
@@ -3227,7 +3240,10 @@ mod test_runner_detection_tests {
         // Hard cap applies to explicit timeouts…
         assert_eq!(resolve_timeout_ms_with_env(Some(u64::MAX), None), 600_000);
         // …and to env overrides.
-        assert_eq!(resolve_timeout_ms_with_env(None, Some("999999999")), 600_000);
+        assert_eq!(
+            resolve_timeout_ms_with_env(None, Some("999999999")),
+            600_000
+        );
     }
 
     #[tokio::test]
