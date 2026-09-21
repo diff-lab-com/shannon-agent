@@ -706,7 +706,13 @@ jobs:
       # in practice: every external caller can pass `None` and recover the
       # exact pre-PR behaviour. New TAG NAME so the baseline-rustdoc cache
       # invalidates.
-      SEMVER_BASELINE: semver-baseline-2026-09-6
+      # Seventh move (2026-09-22, harness-arch review waves merged to dev):
+      # cc2bacc4 (P0-7) added `max_turns: Option<u32>` to
+      # `shannon_agents::agent_defs::AgentDefinition` (P0-7 sub-agent
+      # max_turns override) — new pub field on an exhaustively-constructible
+      # struct, intentional minor-cycle break. New TAG NAME so the
+      # baseline-rustdoc cache invalidates.
+      SEMVER_BASELINE: semver-baseline-2026-09-7
     steps:
       - uses: actions/checkout@f548e57e544e1ff5a4c46bf1e1b8685f8e4a348a
         with:
