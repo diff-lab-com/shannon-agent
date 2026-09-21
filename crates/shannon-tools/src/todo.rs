@@ -363,9 +363,9 @@ fn fnv1a_64(bytes: &[u8]) -> u64 {
 /// Todo write tool
 pub struct TodoWriteTool {
     description: String,
-    /// C+D Phase 1: now backed by the global TaskStore (HashMap<String,
-    /// TodoItem>) — the same store TaskCreate/TaskUpdate/TaskList use.
-    /// Was a session-scoped HashMap<String, Vec<TodoItem>> with a
+    /// C+D Phase 1: now backed by the global TaskStore (`HashMap<String,
+    /// TodoItem>`) — the same store TaskCreate/TaskUpdate/TaskList use.
+    /// Was a session-scoped `HashMap<String, Vec<TodoItem>>` with a
     /// `session_id` field as key; both removed.
     store: TaskStore,
 }
