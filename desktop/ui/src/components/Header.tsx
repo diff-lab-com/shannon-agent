@@ -232,45 +232,49 @@ export function Header() {
           {/* P1-3: execution-mode switcher (严格/平衡/宽松/自定义) — chat
               header only, kept next to the model selector. */}
           {isChat && <ExecutionModeSwitcher />}
-          {/* Model selector */}
-          <div className="relative" ref={modelRef}>
-            <Button
-              variant="ghost"
-              aria-label={t('header.model.select')}
-              className="flex items-center gap-sm px-md py-sm rounded-lg hover:bg-surface-container-low text-on-surface-variant hover:text-primary transition-all"
-              onClick={() => { setModelOpen(!modelOpen); setModelFocus(-1) }}
-            >
-              <span className={cn('w-2 h-2 rounded-full shrink-0', status?.querying ? 'bg-secondary animate-pulse' : 'bg-tertiary')}></span>
-              <span className="font-mono font-label-sm text-[12px] whitespace-nowrap max-w-[120px] truncate">{status?.model || t('header.model.noModel')}</span>
-              <span className="material-symbols-outlined icon-sm">expand_more</span>
-            </Button>
-            {modelOpen && models.length > 0 && (
-              <div className="absolute right-0 top-full mt-sm w-[280px] bg-surface-container-lowest/95 backdrop-blur-lg rounded-xl border border-outline-variant/20 shadow-xl z-modal py-sm" role="listbox" onKeyDown={e => {
-                if (e.key === 'ArrowDown') { e.preventDefault(); setModelFocus(f => Math.min(f + 1, models.length - 1)) }
-                else if (e.key === 'ArrowUp') { e.preventDefault(); setModelFocus(f => Math.max(f - 1, 0)) }
-                else if (e.key === 'Enter' && modelFocus >= 0) { handleModelSwitch(models[modelFocus].id) }
-                else if (e.key === 'Escape') { setModelOpen(false) }
-              }}>
-                {models.map((m, i) => (
-                  <Button
-                    key={m.id}
-                    variant="ghost"
-                    role="option"
-                    aria-selected={m.id === status?.model}
-                    className={cn(
-                      'w-full justify-between px-md py-sm h-auto rounded-none',
-                      i === modelFocus ? 'bg-primary/10 text-primary' : m.id === status?.model ? 'text-primary font-bold' : 'text-on-surface hover:bg-primary/5'
-                    )}
-                    onClick={() => handleModelSwitch(m.id)}
-                    onMouseEnter={() => setModelFocus(i)}
-                  >
-                    <span className="font-mono font-label-md truncate">{m.name}</span>
-                    <span className="text-label-sm text-on-surface-variant">{m.context_window > 0 ? `${(m.context_window / 1000).toFixed(0)}k` : ''}</span>
-                  </Button>
-                ))}
-              </div>
-            )}
-          </div>
+          {/* Model selector — non-chat pages only: on /chat the composer
+              model chip is the single surface (issue: 三处模型名重复).
+              Both write the same config keys, so switching stays in sync. */}
+          {!isChat && (
+            <div className="relative" ref={modelRef}>
+              <Button
+                variant="ghost"
+                aria-label={t('header.model.select')}
+                className="flex items-center gap-sm px-md py-sm rounded-lg hover:bg-surface-container-low text-on-surface-variant hover:text-primary transition-all"
+                onClick={() => { setModelOpen(!modelOpen); setModelFocus(-1) }}
+              >
+                <span className={cn('w-2 h-2 rounded-full shrink-0', status?.querying ? 'bg-secondary animate-pulse' : 'bg-tertiary')}></span>
+                <span className="font-mono font-label-sm text-[12px] whitespace-nowrap max-w-[120px] truncate">{status?.model || t('header.model.noModel')}</span>
+                <span className="material-symbols-outlined icon-sm">expand_more</span>
+              </Button>
+              {modelOpen && models.length > 0 && (
+                <div className="absolute right-0 top-full mt-sm w-[280px] bg-surface-container-lowest/95 backdrop-blur-lg rounded-xl border border-outline-variant/20 shadow-xl z-modal py-sm" role="listbox" onKeyDown={e => {
+                  if (e.key === 'ArrowDown') { e.preventDefault(); setModelFocus(f => Math.min(f + 1, models.length - 1)) }
+                  else if (e.key === 'ArrowUp') { e.preventDefault(); setModelFocus(f => Math.max(f - 1, 0)) }
+                  else if (e.key === 'Enter' && modelFocus >= 0) { handleModelSwitch(models[modelFocus].id) }
+                  else if (e.key === 'Escape') { setModelOpen(false) }
+                }}>
+                  {models.map((m, i) => (
+                    <Button
+                      key={m.id}
+                      variant="ghost"
+                      role="option"
+                      aria-selected={m.id === status?.model}
+                      className={cn(
+                        'w-full justify-between px-md py-sm h-auto rounded-none',
+                        i === modelFocus ? 'bg-primary/10 text-primary' : m.id === status?.model ? 'text-primary font-bold' : 'text-on-surface hover:bg-primary/5'
+                      )}
+                      onClick={() => handleModelSwitch(m.id)}
+                      onMouseEnter={() => setModelFocus(i)}
+                    >
+                      <span className="font-mono font-label-md truncate">{m.name}</span>
+                      <span className="text-label-sm text-on-surface-variant">{m.context_window > 0 ? `${(m.context_window / 1000).toFixed(0)}k` : ''}</span>
+                    </Button>
+                  ))}
+                </div>
+              )}
+            </div>
+          )}
 
           {/* U6: the bell tooltip says where it leads — the skill-approval
               dialog when something is pending, Triage otherwise. */}

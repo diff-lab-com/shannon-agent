@@ -8,7 +8,6 @@ import EmptyState from './ui/empty-state';
 import { WELCOME_EXAMPLES } from './welcomeExamples';
 import { cn } from '../lib/utils';
 import { useSessions } from '@/context/SessionContext';
-import { useCatalog } from '@/context/CatalogContext';
 import { SessionsSection } from './SidebarSessions';
 import { useSidebar } from './Layout';
 import { useInboxStats } from '@/hooks/inbox';
@@ -89,7 +88,6 @@ export const Sidebar = memo(function Sidebar({ mobile, open = true }: { mobile?:
   // P2-⑩: split-"New" dropdown (goal / routine entry points).
   const [newMenuOpen, setNewMenuOpen] = useState(false);
   const { createSession, sessions, sessionActivity, goalRunsBySession, currentSessionId, switchSession, renameSession, deleteSession, createSessionInWorktree } = useSessions();
-  const { status } = useCatalog();
   const intl = useIntl();
   const newMenuItems: DropdownMenuItem[] = [
     { id: 'goal', label: intl.formatMessage({ id: 'nav.new.goal' }), icon: 'flag', onSelect: () => { setNewMenuOpen(false); navigate('/tasks') } },
@@ -338,14 +336,6 @@ export const Sidebar = memo(function Sidebar({ mobile, open = true }: { mobile?:
     lives on the Settings page rail (pages/Settings.tsx). The old
     disclosure duplicated it and drifted (dev-gated 高级 here only). */}
         <NavRow to="/settings" icon="settings" labelId="nav.settings" onNavigate={handleNavClick} />
-
-        {/* Status bar */}
-        {status && (
-          <div className="mt-sm px-2 py-sm flex items-center gap-sm text-label-sm text-on-surface-variant min-w-0">
-            <span className="w-2 h-2 rounded-full bg-tertiary shrink-0"></span>
-            <span className="truncate">{status.model}</span>
-          </div>
-        )}
       </div>
     </aside>
   );
