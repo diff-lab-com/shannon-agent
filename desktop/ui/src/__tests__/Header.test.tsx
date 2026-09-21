@@ -125,12 +125,12 @@ describe('Header component', () => {
   })
 
   it('renders model selector with current model name', () => {
-    render(wrap(<Header />, { route: '/chat' }))
+    render(wrap(<Header />, { route: '/tasks' }))
     expect(screen.getByText('claude-sonnet-4-6')).toBeInTheDocument()
   })
 
   it('opens model dropdown with model names on click', async () => {
-    render(wrap(<Header />, { route: '/chat' }))
+    render(wrap(<Header />, { route: '/tasks' }))
     fireEvent.click(screen.getByText('claude-sonnet-4-6'))
     await waitFor(() => {
       expect(screen.getByText('Claude Sonnet')).toBeInTheDocument()
@@ -142,7 +142,7 @@ describe('Header component', () => {
   // NAME plus the model's provider (not just the catalog id).
   it('switches model when option is clicked', async () => {
     const api = await import('@/lib/tauri-api')
-    render(wrap(<Header />, { route: '/chat' }))
+    render(wrap(<Header />, { route: '/tasks' }))
     fireEvent.click(screen.getByText('claude-sonnet-4-6'))
     await waitFor(() => {
       expect(screen.getByText('GPT-4o')).toBeInTheDocument()
@@ -152,6 +152,14 @@ describe('Header component', () => {
       expect(api.configure).toHaveBeenCalledWith({ key: 'model', value: 'GPT-4o' })
       expect(api.configure).toHaveBeenCalledWith({ key: 'provider', value: 'openai' })
     })
+  })
+
+  // 2026-09 dedup: on /chat the composer chip is the single model surface
+  // (issue: 三处模型名重复). Header must hide its selector on that page
+  // so there's exactly one entry point per view.
+  it('hides the model selector on /chat — the composer chip owns it there', () => {
+    render(wrap(<Header />, { route: '/chat' }))
+    expect(screen.queryByRole('button', { name: /select model/i })).not.toBeInTheDocument()
   })
 
   it('renders OPC title on /opc route', () => {

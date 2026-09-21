@@ -9,6 +9,7 @@ import { useVoice } from '@/hooks/useVoice'
 import { MicButton } from '@/components/voice/MicButton'
 import { VoiceOrb } from '@/components/voice/VoiceOrb'
 import AttachmentChip from '@/components/chat/AttachmentChip'
+import SessionUsageDialog from '@/components/chat/SessionUsageDialog'
 import { isSlashQuery, filterSlashCommands, type SlashCommand } from '@/lib/slash/commands'
 import * as api from '@/lib/tauri-api'
 import { toastError } from '@/lib/errorToast'
@@ -48,6 +49,8 @@ interface ChatInputProps {
   onOpenEditor: () => void
   /** Session working directory — picks a context-aware composer placeholder. */
   sessionWorkingDir?: string
+  /** 最近一次流式 Usage payload — composer 侧会话用量弹框跟随刷新。 */
+  usageTick?: unknown
 }
 
 // U2 removed the composer's model Select; the ZCode delta P0-③ brings a
@@ -68,6 +71,7 @@ export default function ChatInput({
   onOpenQuickFix,
   onOpenEditor,
   sessionWorkingDir,
+  usageTick,
 }: ChatInputProps) {
   const intl = useIntl()
   const t = (id: string) => intl.formatMessage({ id })
@@ -322,6 +326,11 @@ export default function ChatInput({
 
   /* "+" menu — attachments and the two inline tools, one click each. */
   const [plusOpen, setPlusOpen] = useState(false)
+
+  // SessionUsageDialog — composer 模型 chip 旁的会话用量入口(2026-09
+  // 三项 UX 修复 #3)。弹框点击后才挂载,首屏零开销;打开期间跟随父
+  // 组件透传的 streaming usageTick 实时刷新 breakdown。
+  const [usageOpen, setUsageOpen] = useState(false)
   const plusItems: DropdownMenuItem[] = [
     { id: 'attach', label: t('chat.input.attach.aria'), icon: 'attach_file', onSelect: () => { setPlusOpen(false); void handleAttachClick() } },
     { id: 'quickfix', label: t('nav.quickFix'), icon: 'build', onSelect: () => { setPlusOpen(false); onOpenQuickFix() } },
@@ -509,6 +518,20 @@ export default function ChatInput({
               </SelectContent>
             </Select>
 
+            {/* 会话用量入口 — 模型 chip 旁一次点击(2026-09 三项 UX 修复 #3)。
+                弹框点击后才挂载,composer 首屏零开销。 */}
+            <Button
+              variant="ghost"
+              aria-haspopup="dialog"
+              aria-expanded={usageOpen}
+              aria-label={t('chat.input.usage.aria')}
+              title={t('chat.input.usage.title')}
+              className="p-md text-on-surface-variant hover:text-primary shrink-0"
+              onClick={() => setUsageOpen(true)}
+            >
+              <span className="material-symbols-outlined icon-md" aria-hidden="true">data_usage</span>
+            </Button>
+
             <Select
               value={currentModel?.id ?? ''}
               onValueChange={value => {
@@ -609,6 +632,11 @@ export default function ChatInput({
           </div>
         </div>
       </div>
+      {/* SessionUsageDialog — 点击入口后才挂载(闭合成会话用量弹框);父组件
+          透传 streaming usageTick,弹框打开期间随 token 流刷新。 */}
+      {usageOpen && (
+        <SessionUsageDialog open onClose={() => setUsageOpen(false)} usageTick={usageTick} />
+      )}
     </div>
   )
 }
