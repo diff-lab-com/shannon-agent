@@ -1191,8 +1191,14 @@ impl PermissionManager {
             "browser_type",
             "browser_screenshot",
             "browser_snapshot",
+            "browser_text",
+            "browser_fill",
+            "browser_press_key",
+            "browser_scroll",
+            "browser_evaluate",
             "browser_tabs",
             "browser_close",
+            "browser_console",
         ] {
             self.tool_policies.insert(
                 name.to_string(),
@@ -1201,6 +1207,38 @@ impl PermissionManager {
                     RiskLevel::High,
                     "Drive the local system browser via CDP".to_string(),
                 ),
+            );
+        }
+
+        // Windows desktop surfaces — same posture as `computer` (they are
+        // its semantic shortcuts): focus manipulation, clipboard reads
+        // (may hold copied secrets), writes, and OS-level app launch are
+        // High risk; a read-only window inventory is Low.
+        let window_list_policy = ToolPermissionPolicy::new(
+            "window_list".to_string(),
+            RiskLevel::Low,
+            "List visible top-level windows (titles, owning processes)".to_string(),
+        );
+        self.tool_policies
+            .insert("window_list".to_string(), window_list_policy);
+        for (name, why) in [
+            (
+                "window_focus",
+                "Bring a window to the foreground / restore it",
+            ),
+            (
+                "clipboard_read",
+                "Read the system clipboard (may contain copied secrets)",
+            ),
+            ("clipboard_write", "Replace the system clipboard contents"),
+            (
+                "app_open",
+                "Launch applications / files / URLs with the OS default handler",
+            ),
+        ] {
+            self.tool_policies.insert(
+                name.to_string(),
+                ToolPermissionPolicy::new(name.to_string(), RiskLevel::High, why.to_string()),
             );
         }
     }

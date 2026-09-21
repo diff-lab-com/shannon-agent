@@ -49,12 +49,12 @@ async fn run_shell_captured(
                     format!("Command timed out after {timeout}ms"),
                 )
             })?
-            .map_err(|e| std::io::Error::other(format!("Failed to execute command: {e}")))?
+            .map_err(|e| shell_spawn_error(program, &e))?
     } else {
         world
             .run_async(&request)
             .await
-            .map_err(|e| std::io::Error::other(format!("Failed to execute command: {e}")))?
+            .map_err(|e| shell_spawn_error(program, &e))?
     };
 
     let stdout = String::from_utf8_lossy(&output.stdout).to_string();
@@ -65,6 +65,27 @@ async fn run_shell_captured(
         exit_code: output.exit.code.unwrap_or(-1),
         success: output.exit.success,
     })
+}
+
+/// Actionable spawn-failure message. The Bash tool hardcodes `bash -c`; on
+/// Windows that needs Git Bash (or WSL) on PATH, and without it every Bash
+/// call dies with a bare "program not found" — point the model at the
+/// PowerShell tool instead (always present on Windows).
+fn shell_spawn_error(program: &str, e: &std::io::Error) -> std::io::Error {
+    let text = e.to_string();
+    let not_found = matches!(e.kind(), std::io::ErrorKind::NotFound)
+        || text.contains("not found")
+        || text.contains("cannot find");
+    if cfg!(target_os = "windows") && program == "bash" && not_found {
+        std::io::Error::other(
+            "The Bash tool requires `bash` on PATH (from Git for Windows or WSL), \
+             which was not found. Use the PowerShell tool instead — it is always \
+             available on Windows — or install Git for Windows \
+             (https://git-scm.com/download/win) and restart Shannon.",
+        )
+    } else {
+        std::io::Error::other(format!("Failed to execute command: {e}"))
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -185,6 +206,25 @@ const READ_ONLY_PATTERNS: &[&str] = &[
     "git status",
     "git log",  // Git read ops
     "git diff", // Git diff
+    // PowerShell read-only cmdlets (the PowerShell tool runs the same
+    // security analyzer; without these every Windows command scored as
+    // risky). Unambiguous `Get-*`/probe cmdlets only — bare aliases like
+    // `dir`/`type` substring-match too much ordinary prose.
+    "get-childitem",
+    "get-content",
+    "get-item",
+    "get-location",
+    "get-command",
+    "get-help",
+    "get-process",
+    "get-service",
+    "get-member",
+    "get-date",
+    "get-psdrive",
+    "get-volume",
+    "select-string",
+    "test-path",
+    "measure-object",
 ];
 
 /// PowerShell-specific destructive patterns

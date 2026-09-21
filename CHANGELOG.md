@@ -4,6 +4,101 @@ All notable changes to Shannon Code are documented here. Entries are grouped by 
 
 ## [Unreleased] — §4.14 W1-P2 · OTLP bridge + full RedactionPolicy + desktop Turn Timeline
 
+### Windows desktop-control bring-up (2026-09-21)
+
+Phase 0/1/2 of the Windows computer-use/browser improvement plan (evaluation +
+competitive analysis in the 2026-09-21 review; roadmap item A3). Windows moves
+from "compiles, never verified, features off" to a supported desktop-control
+platform.
+
+**Fixed (Phase 0)**
+
+- `browser_screenshot` captured a PNG but returned only the byte count — the
+  pixels were dropped and the model could not see the page. It now returns
+  `type:"image"` + base64 `data` (same contract as `computer`/`preview_screenshot`).
+- Windows browser detection never looked for Microsoft Edge (Linux/macOS paths
+  did) — stock Windows 10/11 installs were told "no browser found". Edge is now
+  on the candidate list (all three install roots) and in the install hint.
+- `browser_navigate` derived the new tab id from `list_tabs().last()` (HashMap
+  iteration order) and could grab an unrelated tab; it now uses the id returned
+  by `open_page`.
+- `ToolExecutionResult::extract_attachments` matched legacy tool names
+  (`Screenshot`/`TakeScreenshot`) — and was even called with the tool *id* in
+  the name slot — so nothing ever matched. It now tracks real tool names
+  (`computer`, `browser_screenshot`, `preview_screenshot`) and receives the
+  tool name.
+- `browser_console` had no permission-policy entry (7/8 browser tools did).
+- CI: the Windows leg only compiled default features — `computer-use` /
+  `local-browser` had never been compiled on Windows. New Windows CI step
+  checks both shapes on shannon-tools and shannon-cli.
+
+**Enabled by default on Windows releases (Phase 1)**
+
+- Windows CLI archives and desktop NSIS bundles are now built with
+  `--features computer-use,local-browser` (both compile clean on Windows;
+  verified locally and now CI-gated). Linux keeps plain defaults (libxdo);
+  macOS unchanged until its QA matrix lands.
+- Feature-off stub errors rewritten from "Rebuild with --features …" to
+  actionable copy (release bundles ship enabled / source-build flag), and
+  `/browser doctor` reports build capability status first (built-in browser
+  tools, desktop control) before the per-browser diagnostics.
+- Multi-monitor + DPI: `computer` gained a 0-based `monitor` parameter
+  (screenshot + every coordinate action; out-of-range errors list the display
+  count) and Windows declares per-monitor-v2 DPI awareness before the first
+  capture/click so xcap pixels and enigo's `SetCursorPos` share one physical
+  coordinate space (no more scaled-display drift).
+- Tool-result images now reach non-Anthropic models: OpenAI-compatible wires
+  emit a follow-up user vision turn (`image_url` data parts; Ollama gets its
+  native `images` array), Gemini gets a follow-up `inline_data` turn. Pixel
+  computer-use previously only worked on Anthropic.
+- Browser tooling reaches parity with the Playwright-MCP core loop:
+  `browser_snapshot` now returns an interactive-element index with stable refs,
+  `browser_click` accepts a `ref` (real mouse events at the element center) or
+  coordinates, and new `browser_fill` (native setter + input/change events),
+  `browser_press_key` (real VK codes — the old session helper sent vk=0),
+  `browser_scroll`, `browser_evaluate`, `browser_text` tools. All registered
+  in the High-risk permission family.
+
+**New Windows surfaces (Phase 2)**
+
+- UIA (UI Automation): `computer` gained `ui_tree` (structured control tree of
+  the foreground or a named window — roles/names/refs/rects, depth- and
+  token-capped) and `ui_click` (click an element by name substring + match
+  index via its bounding-rect center). Semantic alternative to pixel clicking;
+  the `platform_adapter` Windows slot is no longer just a comment.
+- New tools: `window_list` (Low risk, read-only inventory of visible windows),
+  `window_focus` (restore + foreground via the synthetic-ALT preamble),
+  `clipboard_read` / `clipboard_write` (CF_UNICODETEXT, retry-on-busy),
+  `app_open` (ShellExecuteW / `open` / `xdg-open`). All register
+  unconditionally with honest errors off-Windows (applescript pattern); all
+  but `window_list` are High risk.
+- Foreground-window provenance: every `computer` action (and screenshots)
+  attaches `window_title` + `window_process` to tool-output metadata, so
+  event-sourced sessions record which application each action hit.
+- Windows sandbox baseline: `SandboxType::WindowsJob` — sandboxed spawns are
+  assigned to a Job Object with kill-on-close, so children and their
+  descendants cannot outlive the Shannon process (previously: warned no-op,
+  fully unsandboxed). Lifecycle confinement only; fs/net still governed by the
+  permission system. Wired into all `LocalProcess` spawn paths (std + tokio).
+- Terminal layer: the Bash tool's spawn failure on Windows now explains the
+  Git-Bash requirement and points at the PowerShell tool; the shared
+  command-security analyzer recognizes PowerShell read-only cmdlets
+  (`Get-*`, `Test-Path`, `Select-String`, …) instead of scoring every PS
+  command as risky.
+
+**QA / verification**
+
+- New real-machine harness `crates/shannon-tools/tests/windows_real_machine.rs`
+  (`#[ignore]`, mirrors `macos_real_machine.rs`): screenshots (PNG magic,
+  per-monitor, window-context metadata), UIA tree/click-error paths,
+  window/clipboard/app tools, Edge detection, and a full launch→snapshot→
+  click-by-ref→DOM-verify browser loop. Run:
+  `cargo test -p shannon-tools --features computer-use,local-browser --test windows_real_machine -- --ignored`.
+- Roadmap A3 updated: Windows compile verification closed (CI leg + local
+  `cargo check` of both features); QA checklist "known non-goal" for Windows
+  real-machine regression replaced by the harness + the remaining manual
+  input-simulation checklist.
+
 ### ZCode competitive delta (2026-09-18, PR #89)
 
 Comparison work vs ZCode v3.11.2 / ZCode 计划-dock screenshots (see
