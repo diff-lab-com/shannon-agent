@@ -79,7 +79,7 @@ use shannon_engine::permissions::PermissionManager;
 use shannon_engine::state::StateManager;
 
 /// Minimal system prompt for local/small models that cannot handle tool definitions.
-const LOCAL_MODEL_SYSTEM_PROMPT: &str =
+pub(crate) const LOCAL_MODEL_SYSTEM_PROMPT: &str =
     "You are Shannon, a helpful AI assistant. Respond concisely in the user's language.";
 
 /// Visible-answer headroom added on top of an extended-thinking budget:
@@ -1578,191 +1578,27 @@ impl QueryEngine {
 
         // Build structured system prompt with cache breakpoints.
         //
-        // Cache policy: Anthropic allows at most 4 `cache_control` breakpoints
-        // per request, and the adapter adds two more (last tool definition +
-        // last user message). Marking every block cached could emit up to 11
-        // system breakpoints and overflow that budget. Mark exactly two system
-        // breakpoints instead: the base prompt (never changes) and the LAST
-        // stable block (covers the whole stable prefix). Query-dependent and
-        // per-turn blocks (smart context, setup hints, focus, goal,
-        // environment) are emitted AFTER the last breakpoint so they never
-        // bust the cached prefix.
-        let use_cache = matches!(
-            client_provider,
-            shannon_engine::api::LlmProvider::Anthropic
-                | shannon_engine::api::LlmProvider::Bedrock
-                | shannon_engine::api::LlmProvider::Custom
-        );
-
-        // ── Stable zone (cacheable prefix; order matters) ──
-        let mut stable_blocks: Vec<String> = Vec::new();
-
-        // Base system prompt — the anchor breakpoint: identical across all
-        // turns and the largest cache savings come from here.
-        if let Some(ref base) = config.system_prompt {
-            stable_blocks.push(base.clone());
-        }
-
-        // N-7: memory entries used to sit here in the stable zone, but
-        // AutoDream persists extracted memories after every query — a
-        // stable-zone placement re-cached the entire prefix (instructions,
-        // repomap) on every turn. They are injected in the dynamic zone
-        // below instead.
-
-        // Inject CLAUDE.md / AGENTS.md / GEMINI.md project instructions —
-        // same working-directory ambient read, same opt-out.
-        if config.auto_context_enabled {
-            let working_dir =
-                std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."));
-            if let Some(ctx) = crate::project_instructions::load_full_context(&working_dir) {
-                stable_blocks.push(ctx.content);
-            }
-        }
-
-        // Inject context from ContextInjector (preference memory + hot-reloaded instructions)
-        if let Some(ref injector) = self.context_injector {
-            let extra_blocks = injector.build_system_blocks(false);
-            for block in extra_blocks {
-                stable_blocks.push(block.text);
-            }
-        }
-
-        // Inject the project repo map (P1-4) — a per-project, budget-trimmed
-        // symbol overview rendered as markdown. Best-effort: a None return
-        // (parse / walk failure) means we skip silently. Stable across turns
-        // within a session — changing only when source files change, which we
-        // invalidate via `notify_file_changed`.
-        if config.repo_map_enabled {
-            if let Some(repo_map_md) = self.repo_map_injector.build() {
-                stable_blocks.push(repo_map_md);
-            }
-        }
-
-        // Inject browser control instructions when browser MCP tools are present
-        {
-            let tool_names = tools.list();
-            if let Some(browser_text) = crate::query_engine::browser_control_prompt(&tool_names) {
-                stable_blocks.push(browser_text);
-            }
-        }
-
-        // Inject team coordination instructions when team tools are present
-        {
-            let tool_names = tools.list();
-            if let Some(team_text) =
-                crate::query_engine::team_prompt::team_coordination_prompt(&tool_names)
-            {
-                stable_blocks.push(team_text);
-            }
-        }
-
-        // ── Dynamic zone (after the last breakpoint — never cache-busting) ──
-        let mut dynamic_blocks: Vec<SystemContentBlock> = Vec::new();
-
-        // Memory entries — scoped injection, grouped by category (ADR-0010
-        // D2), dynamic-zone placement per N-7 (AutoDream persists new
-        // memories after every query, so a stable-zone placement busts the
-        // whole cached prefix each turn).
-        if let Some(mem_text) = memory_injection.clone() {
-            dynamic_blocks.push(SystemContentBlock::text(mem_text));
-        }
-
-        // Smart context: auto-include relevant files based on query.
-        // Query-dependent content must NOT sit inside the cached prefix —
-        // every new query would invalidate the breakpoints. Gated by
-        // `auto_context_enabled` — the scan reads ambient filesystem state,
-        // so hosts that need byte-deterministic requests (payload-verifying
-        // tests, context-injecting shells) turn it off.
-        if config.auto_context_enabled {
-            let smart_context = {
-                let working_dir =
-                    std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."));
-                crate::smart_context::find_relevant_context(&user_message, &working_dir)
-            };
-            if let Some(ctx) = crate::smart_context::format_context_for_prompt(&smart_context) {
-                dynamic_blocks.push(SystemContentBlock::text(ctx));
-            }
-        }
-
-        // Browser-related request but no browser tool: surface the
-        // `/browser setup` hint so the model can guide the user instead of
-        // failing the task silently.
-        {
-            let tool_names = tools.list();
-            if let Some(hint) = crate::query_engine::browser_setup_hint(&tool_names, &user_message)
-            {
-                dynamic_blocks.push(SystemContentBlock::text(hint));
-            }
-        }
-
-        // Inject focus area from /focus command into system prompt
-        if let Some(ref focus) = config.focus_area {
-            let focus_text = format!(
-                "## User Focus Area\n\
-                 The user wants you to focus on: **{focus}**.\n\
-                 Prioritize this area in your responses. Give extra attention to \
-                 aspects related to {focus} when analyzing, coding, or reviewing."
-            );
-            dynamic_blocks.push(SystemContentBlock::text(focus_text));
-        }
-
-        // Inject session goal from /goal command into system prompt.
-        // Non-cached block so goal edits don't bust the cached prompt prefix;
-        // rebuilt on every query so the goal survives compaction.
-        if let Some(ref goal) = config.goal {
-            dynamic_blocks.push(goal_system_block(goal));
-        }
-
-        // Effort dial steering (Low/High/Max): uncached dynamic block so
-        // toggling /effort never busts the cached prefix. Standard emits
-        // nothing (byte-identical default behavior).
-        if let Some(suffix) = effort_system_suffix(config.effort) {
-            dynamic_blocks.push(SystemContentBlock::text(suffix.to_string()));
-        }
-
-        // Plan-mode awareness: previously the only signal was the per-tool
-        // write-block error, so the model burned turns probing what was
-        // allowed instead of producing the requested plan.
-        if self.is_plan_mode_active() {
-            dynamic_blocks.push(SystemContentBlock::text(
-                "## Plan Mode Active\n\
-                 You are in plan mode: file writes and state-mutating tools are disabled.\n\
-                 Research the codebase (read-only tools are available), then present a\n\
-                 clear, step-by-step implementation plan for the user to review and\n\
-                 approve before any code is changed."
-                    .to_string(),
-            ));
-        }
-
-        // Assemble: stable zone with at most two cache breakpoints (first +
-        // last block), then the dynamic zone (never cached).
-        let mut system_blocks: Vec<SystemContentBlock> = Vec::new();
-        if use_cache {
-            let last_stable = stable_blocks.len().saturating_sub(1);
-            for (i, text) in stable_blocks.into_iter().enumerate() {
-                let block = if i == 0 || i == last_stable {
-                    SystemContentBlock::cached(text)
-                } else {
-                    SystemContentBlock::text(text)
-                };
-                system_blocks.push(block);
-            }
-        } else {
-            for text in stable_blocks {
-                system_blocks.push(SystemContentBlock::text(text));
-            }
-        }
-        system_blocks.extend(dynamic_blocks);
-
-        // Decide whether to use structured blocks or fallback to plain string.
-        // Use structured blocks only when we have content (avoids empty system arrays).
-        let mut system_blocks_opt = if system_blocks.is_empty() {
-            None
-        } else {
-            Some(system_blocks)
-        };
+        // Cache policy + assembly logic live in `system_prompt` (A PR-1
+        // extraction). This block is now 6 lines: pass the inputs in,
+        // read the assembled blocks + plain-string fallback back out.
+        let assembled = super::system_prompt::build(&super::system_prompt::SystemPromptInputs {
+            config: &config,
+            tools: &*tools,
+            memory_injection: memory_injection.clone(),
+            repo_map_injector: &self.repo_map_injector,
+            context_injector: self.context_injector.as_deref(),
+            provider: client_provider.clone(),
+            user_message: &user_message,
+            plan_mode_active: self.is_plan_mode_active(),
+        });
+        let mut system_blocks_opt = assembled.blocks;
         let mut system_prompt = if context.metadata.tools_allowed {
-            config.system_prompt.clone()
+            // Prefer the plain fallback assembled by the system_prompt
+            // module (it appends the env block already); fall back to
+            // the local minimal prompt for tool-less runs.
+            assembled
+                .plain
+                .or_else(|| config.system_prompt.clone())
         } else if client_provider == shannon_engine::api::LlmProvider::Ollama {
             // Ollama models use their own chat templates; a system prompt
             // confuses small/unstable models causing malformed output.
@@ -1770,58 +1606,6 @@ impl QueryEngine {
         } else {
             Some(LOCAL_MODEL_SYSTEM_PROMPT.to_string())
         };
-
-        // Inject the environment block (cwd, date/time, platform, git context,
-        // sandbox self-description). Deliberately LAST and non-cached: it is
-        // per-turn mutable state, and keeping it after all cache breakpoints
-        // means it never invalidates the cached prompt prefix. Git context
-        // previously lived inside the cached instructions payload, busting
-        // the cache on every edit the agent made.
-        if let Ok(cwd) = std::env::current_dir() {
-            let mut env_text =
-                format!("\n\n## Environment\n\nWorking directory: {}", cwd.display());
-            // Date/time + platform: ground "today"-relative reasoning and
-            // platform-specific commands without any cache cost (this block
-            // sits after every breakpoint).
-            {
-                let now = chrono::Local::now();
-                env_text.push_str(&format!(
-                    "\nToday's date: {} ({})",
-                    now.format("%Y-%m-%d"),
-                    now.format("%A")
-                ));
-                env_text.push_str(&format!(
-                    "\nPlatform: {} ({})",
-                    std::env::consts::OS,
-                    std::env::consts::ARCH
-                ));
-            }
-            // Git context (branch, recent commits, dirty state) — per-turn
-            // mutable, so it lives here with the rest of the env block.
-            if let Some(git_ctx) = crate::project_instructions::git_context(&cwd) {
-                let trimmed = git_ctx.trim_start();
-                if !trimmed.is_empty() {
-                    env_text.push_str("\n\n");
-                    env_text.push_str(trimmed);
-                }
-            }
-            // Sandbox self-description (§ sandbox self-description): the
-            // model cannot otherwise know the sandbox's path remapping or
-            // that host toolchains may be absent — eval runs showed it
-            // burning turns probing the filesystem / running apt-get.
-            if let Some(sandbox_text) = crate::sandbox::sandbox_self_description(&cwd) {
-                env_text.push_str("\n\n");
-                env_text.push_str(&sandbox_text);
-            }
-            if let Some(ref mut prompt) = system_prompt {
-                prompt.push_str(&env_text);
-            }
-            if let Some(ref mut blocks) = system_blocks_opt {
-                blocks.push(shannon_engine::api::types::SystemContentBlock::text(
-                    env_text,
-                ));
-            }
-        }
 
         // Clone existing conversation to preserve multi-turn context
         let mut conversation = self.conversation.clone();

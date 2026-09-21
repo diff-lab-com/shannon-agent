@@ -13,6 +13,7 @@ mod recovery;
 mod repo_map_injector;
 mod routing;
 mod streaming;
+mod system_prompt;
 mod team_prompt;
 mod types;
 
