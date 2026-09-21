@@ -48,8 +48,7 @@ pub fn compose_command(req: &ProcessRequest, default_cwd: &Path) -> Vec<String> 
 /// Process world executing every request on the SSH target.
 pub struct SshProcess {
     rt: Arc<SshRuntime>,
-    #[allow(dead_code)]
-    // KEEP: reserved for the future compose_command branch (Windows SSH stub only consumes rt).
+    #[allow(dead_code)] // KEEP: reserved for the future compose_command branch (Windows SSH stub only consumes rt).
     default_cwd: std::path::PathBuf,
 }
 

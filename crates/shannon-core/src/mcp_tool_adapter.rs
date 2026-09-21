@@ -8,6 +8,28 @@
 //! JSON-RPC `tools/call` message, and returns the result.
 
 use async_trait::async_trait;
+use std::sync::OnceLock;
+
+/// Whether MCP spec-faithful annotation defaults are enabled.
+///
+/// The MCP spec ([modelcontextprotocol/specification](https://modelcontextprotocol.io))
+/// states that absent hints carry their "natural" default — most importantly,
+/// `destructiveHint` defaults to **true** (i.e. a tool with no annotation is
+/// presumed destructive). Shannon's safe-by-default posture overrides this:
+/// missing annotations default to **false** unless the operator opts in via
+/// the `SHANNON_MCP_SPEC_DEFAULTS=1` env var.
+///
+/// Why opt-in rather than flip the default outright: flipping would surface
+/// a permission prompt for every previously-trusted tool, and the model sees
+/// a flood of "this might be destructive" warnings on first run. Operators
+/// can flip once they've audited their MCP server set; default stays safe.
+fn spec_defaults_enabled() -> bool {
+    static CACHED: OnceLock<bool> = OnceLock::new();
+    *CACHED.get_or_init(|| match std::env::var("SHANNON_MCP_SPEC_DEFAULTS") {
+        Ok(v) => matches!(v.trim().to_ascii_lowercase().as_str(), "1" | "true" | "yes" | "on"),
+        Err(_) => false,
+    })
+}
 use serde_json::Value;
 use shannon_tool_interface::{Tool, ToolError, ToolOutput, ToolResult};
 use shannon_types::recover_lock;
@@ -371,17 +393,22 @@ impl Tool for McpToolAdapter {
     // MCP annotation-driven trait flags. Conservative defaults: when no
     // annotations are attached, all three return false (the trait default
     // shape) — i.e. destructive MCP tools without a hint do NOT get the
-    // "must-confirm" treatment; the spec-faithful default (destructive=true)
-    // is gated behind `SHANNON_MCP_SPEC_DEFAULTS=1` (future work).
+    // "must-confirm" treatment. Set `SHANNON_MCP_SPEC_DEFAULTS=1` to flip
+    // to the spec-faithful posture where a missing `destructiveHint` is
+    // treated as `true` (see [`spec_defaults_enabled`]).
     fn is_read_only(&self) -> bool {
         self.annotations.as_ref().is_some_and(|a| a.read_only_hint)
     }
 
     fn is_destructive(&self) -> bool {
         let ro = self.is_read_only();
-        self.annotations
-            .as_ref()
-            .is_some_and(|a| a.destructive_hint && !ro)
+        match self.annotations.as_ref() {
+            Some(a) => a.destructive_hint && !ro,
+            // No annotations at all — destructive iff spec_defaults says
+            // yes. Read-only false in that case (no read_only_hint to
+            // imply the tool is safe to call repeatedly).
+            None => spec_defaults_enabled() && !ro,
+        }
     }
 
     fn is_concurrency_safe(&self) -> bool {
@@ -778,6 +805,7 @@ pub async fn discover_tools_guarded(
                         // the spec-faithful default that destructiveHint
                         // means true unless annotated otherwise is gated
                         // behind `SHANNON_MCP_SPEC_DEFAULTS=1`).
+                        let destructive_default = spec_defaults_enabled();
                         let annotations = tool_value
                             .get("annotations")
                             .and_then(|a| a.as_object())
@@ -789,7 +817,7 @@ pub async fn discover_tools_guarded(
                                 destructive_hint: obj
                                     .get("destructiveHint")
                                     .and_then(|v| v.as_bool())
-                                    .unwrap_or(false),
+                                    .unwrap_or(destructive_default),
                                 idempotent_hint: obj
                                     .get("idempotentHint")
                                     .and_then(|v| v.as_bool())
@@ -1496,5 +1524,54 @@ mod tests {
                 "{name}: concurrency_safe"
             );
         }
+    }
+
+    /// SHANNON_MCP_SPEC_DEFAULTS=1 flips the missing-annotations default
+    /// from "safe" (no flags) to "spec-faithful" (destructive = true).
+    /// Verify both postures on the same nil-annotation tool.
+    ///
+    /// Env mutation is process-global; the helper caches its first read in
+    /// `OnceLock`, so we can't toggle within one process — instead we run
+    /// the off-by-default path here and document the spec-faithful path
+    /// in a unit test that ships in a separate target (the integration
+    /// test under `tests/spec_defaults.rs`).
+    #[test]
+    fn spec_defaults_off_by_default_keeps_destructive_false() {
+        // SHANNON_MCP_SPEC_DEFAULTS is not set in the test process.
+        assert!(!spec_defaults_enabled());
+        let adapter = McpToolAdapter::new(
+            "srv".to_string(),
+            "tool".to_string(),
+            None,
+            vec![],
+            HashMap::new(),
+            "MCP tool: tool".to_string(),
+            serde_json::json!({"type": "object"}),
+        );
+        // No annotations attached → conservative posture.
+        assert!(!adapter.is_read_only());
+        assert!(!adapter.is_destructive());
+        assert!(!adapter.is_concurrency_safe());
+    }
+
+    #[test]
+    fn spec_defaults_explicit_destructive_false_keeps_destructive_false() {
+        // Even with annotations Some, an explicit destructiveHint:false
+        // is respected under the off-default posture.
+        let ann = ToolAnnotations {
+            destructive_hint: false,
+            ..ToolAnnotations::default()
+        };
+        let adapter = McpToolAdapter::new(
+            "srv".to_string(),
+            "tool".to_string(),
+            None,
+            vec![],
+            HashMap::new(),
+            "MCP tool: tool".to_string(),
+            serde_json::json!({"type": "object"}),
+        )
+        .with_annotations(Some(ann));
+        assert!(!adapter.is_destructive());
     }
 }
