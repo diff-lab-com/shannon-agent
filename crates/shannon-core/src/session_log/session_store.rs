@@ -12,7 +12,14 @@
 //! ```text
 //! <container>/<uuid>/events.jsonl   # authoritative log (L0)
 //! <container>/<uuid>/meta.json      # optional sidecar: title / lineage
+//! <container>/<uuid>/index.json     # optional cache: projection stats (E-9)
 //! ```
+//!
+//! `list()` consults the E-9 index sidecar first: when it validates against
+//! the log's current length/mtime, the listing is O(sessions) instead of
+//! O(total log bytes). A missing/stale index falls back to the full
+//! projection and opportunistically rebuilds the cache — see
+//! [`super::session_index`].
 //!
 //! Breaking change (DP4): legacy `sessions/<uuid>.json` snapshots are not
 //! read or migrated. Delete them once upgraded.
@@ -29,6 +36,7 @@ use shannon_types::session_event::{
     SessionEventBody, TurnEndPayload, TurnStartPayload, UserMessagePayload,
 };
 
+use super::session_index::{SessionIndex, SessionIndexAccumulator, index_path_for, stat_len_mtime};
 use super::{
     SessionLogReader, SessionLogWriter, projections, scan_session_summaries, search_events,
     session_log_container_path, session_meta_container_path,
@@ -390,20 +398,76 @@ impl SessionStore {
     }
 
     /// List all sessions in the container, most recently active first.
+    ///
+    /// Served from the per-session `index.json` sidecars when they validate
+    /// against the logs (the common case — the writer refreshes them on
+    /// close), which keeps this O(number of sessions) instead of
+    /// O(total bytes of all logs) (audit E-9: pickers on large containers
+    /// used to re-decode and re-project every log per open). Any session
+    /// whose index is missing or stale takes the full-projection path and
+    /// rebuilds its cache opportunistically, so the two paths can never
+    /// disagree: both are answers to the same projection.
     pub fn list(&self) -> Result<Vec<StoredSessionInfo>, SessionStoreError> {
         let mut infos = Vec::new();
         for entry in scan_session_summaries(&self.container) {
             let Ok(id) = Uuid::parse_str(&entry.session_id) else {
                 continue; // foreign directories sharing the container
             };
+            if let Some(info) = Self::info_from_index(&entry, &id) {
+                infos.push(info);
+                continue;
+            }
+            // Slow path: project the whole log, then refresh the cache.
+            // Stat BEFORE reading — if the log grows underneath us the
+            // recorded (pre-read) length mismatches at the next validation
+            // and the fresh cache is discarded rather than trusted.
+            let pre_stat = stat_len_mtime(&entry.events_path);
             let Some(events) = self.read_events(&id)? else {
                 continue;
             };
             let stored = self.assemble(id, &events);
+            Self::rebuild_index(&entry.events_path, pre_stat, &events);
             infos.push(Self::to_info(stored));
         }
         infos.sort_by(|a, b| b.updated_at.cmp(&a.updated_at));
         Ok(infos)
+    }
+
+    /// Fast-path listing for one session from its `index.json`, or `None`
+    /// when the cache is absent, unparsable, or stale (log length/mtime
+    /// drift). Curation fields still come from `meta.json` — the index only
+    /// caches the projection-derived numbers.
+    fn info_from_index(entry: &super::SessionScanEntry, id: &Uuid) -> Option<StoredSessionInfo> {
+        let index_path = index_path_for(&entry.events_path);
+        let index = SessionIndex::load_if_valid(&entry.events_path, &index_path)?;
+        let sidecar = SessionSidecar::load(&entry.meta_path);
+        Some(StoredSessionInfo {
+            session_id: *id,
+            preview: index.first_preview_text().map(|t| truncate_preview(t, 80)),
+            last_user_preview: index.last_preview_text().map(|t| truncate_preview(t, 80)),
+            title: sidecar.title,
+            model: index.model,
+            created_at: ns_to_datetime(index.created_at_ns),
+            updated_at: ns_to_datetime(index.updated_at_ns),
+            turn_count: index.turn_count,
+            total_input_tokens: index.total_input_tokens,
+            total_output_tokens: index.total_output_tokens,
+            parent_session_id: sidecar.parent_session_id,
+            branch_point_message_index: sidecar.branch_point_message_index,
+            project_path: index.project_path,
+        })
+    }
+
+    /// Rebuild a session's index sidecar from a fully-read event slice.
+    /// Best-effort: a failed write costs one rebuild on the next `list`.
+    fn rebuild_index(events_path: &Path, pre_stat: Option<(u64, u64)>, events: &[SessionEvent]) {
+        let mut acc = SessionIndexAccumulator::fresh();
+        for event in events {
+            acc.observe(event);
+        }
+        if let Some(index) = acc.finish(pre_stat) {
+            let _ = index.store(&index_path_for(events_path));
+        }
     }
 
     /// The most recently active session id, WITHOUT parsing any event logs.
@@ -635,6 +699,9 @@ impl SessionStore {
         let dropped = total_lines - kept_lines.lines().count();
         std::fs::write(&tmp, &kept_lines)?;
         std::fs::rename(&tmp, &path)?;
+        // The raw rewrite bypasses the writer's index accumulator: drop the
+        // cache so the next list() rebuilds it from the surviving log.
+        let _ = std::fs::remove_file(index_path_for(&path));
         Ok(Some(dropped))
     }
 
@@ -717,6 +784,9 @@ impl SessionStore {
         let tmp = path.with_extension("jsonl.compact-tmp");
         std::fs::write(&tmp, &out)?;
         std::fs::rename(&tmp, &path)?;
+        // The raw rewrite bypasses the writer's index accumulator: drop the
+        // cache so the next list() rebuilds it from the rewritten log.
+        let _ = std::fs::remove_file(index_path_for(&path));
         Ok(seq as usize)
     }
 }
@@ -1350,5 +1420,303 @@ mod tests {
             .unwrap();
         assert_eq!(written, 5);
         assert!(store.load(&id).unwrap().is_some());
+    }
+
+    // =========================================================================
+    // E-9: index.json sidecar
+    // =========================================================================
+
+    fn strip_index_files(store: &SessionStore) {
+        for entry in scan_session_summaries(store.container()) {
+            let _ = std::fs::remove_file(index_path_for(&entry.events_path));
+        }
+    }
+
+    fn index_files(store: &SessionStore) -> Vec<PathBuf> {
+        scan_session_summaries(store.container())
+            .iter()
+            .map(|e| index_path_for(&e.events_path))
+            .filter(|p| p.exists())
+            .collect()
+    }
+
+    /// Seed a tool-calling turn: the projected LAST user-role message is the
+    /// tool result, so `last_user_preview` must be `None` on both paths.
+    fn seed_tool_turn_session(store: &SessionStore, id: &Uuid) {
+        let mut w = SessionLogWriter::open_layout(store.container(), &id.to_string()).unwrap();
+        w.record(SessionEventBody::SessionStart(
+            shannon_types::session_event::SessionStartPayload {
+                model: "tool-model".into(),
+                provider: None,
+                cwd: Some("/tool/proj".into()),
+                app_version: None,
+                ..Default::default()
+            },
+        ));
+        w.record(SessionEventBody::TurnStart(TurnStartPayload {
+            query_id: None,
+        }));
+        w.record(SessionEventBody::UserMessage(UserMessagePayload {
+            source: UserMessagePayload::SOURCE_USER.into(),
+            content: "run something".into(),
+            attachment_count: 0,
+        }));
+        w.record(SessionEventBody::AssistantChunk(AssistantChunkPayload {
+            delta: "running".into(),
+            thinking: false,
+        }));
+        w.record(SessionEventBody::ToolCall(ToolCallPayload {
+            tool_use_id: "u9".into(),
+            tool_name: "Bash".into(),
+            arguments: r#"{"command":"ls"}"#.into(),
+        }));
+        w.record(SessionEventBody::ToolResult(ToolResultPayload {
+            tool_use_id: "u9".into(),
+            tool_name: "Bash".into(),
+            output: "out".into(),
+            is_error: false,
+            duration_ms: None,
+            meta: serde_json::Value::Null,
+        }));
+        w.record(SessionEventBody::TurnEnd(TurnEndPayload {
+            reason: TurnEndPayload::REASON_COMPLETED.into(),
+            usage: Some(shannon_types::session_event::TokenUsage {
+                input_tokens: 100,
+                output_tokens: 20,
+                cache_creation_tokens: 0,
+                cache_read_tokens: 0,
+                cost_usd: None,
+            }),
+            error: None,
+        }));
+        w.close().unwrap();
+    }
+
+    /// The E-9 core contract: listing through the index sidecars answers
+    /// exactly what the full projection answers — for every session shape,
+    /// on both the writer-maintained caches and the rebuilt ones.
+    #[test]
+    fn indexed_list_equals_full_projection_list() {
+        let tmp = tempfile::tempdir().unwrap();
+        let store = store(&tmp);
+
+        // Shape 1: tool session (last projected user-role message is a
+        // tool_result → last_user_preview None).
+        seed_tool_turn_session(&store, &Uuid::new_v4());
+        // Shape 2: plain three-turn session.
+        std::thread::sleep(std::time::Duration::from_millis(20));
+        seed_three_turn_session(&store, &Uuid::new_v4());
+        // Shape 3: metadata-only session (SessionStart, no conversation).
+        std::thread::sleep(std::time::Duration::from_millis(20));
+        let bare = Uuid::new_v4();
+        {
+            let mut w =
+                SessionLogWriter::open_layout(store.container(), &bare.to_string()).unwrap();
+            w.record(SessionEventBody::SessionStart(
+                shannon_types::session_event::SessionStartPayload {
+                    model: "bare-model".into(),
+                    provider: None,
+                    cwd: Some("/bare".into()),
+                    app_version: None,
+                    ..Default::default()
+                },
+            ));
+            w.close().unwrap();
+        }
+
+        // 1) writer-maintained caches.
+        let via_writer_index = store.list().unwrap();
+        assert_eq!(via_writer_index.len(), 3);
+
+        // 2) caches stripped → full projection (and in-contention rebuild).
+        strip_index_files(&store);
+        let via_full_projection = store.list().unwrap();
+        assert_eq!(via_writer_index, via_full_projection);
+
+        // The slow path rebuilt the caches; the next listing rides them to
+        // the same answer.
+        assert_eq!(index_files(&store).len(), 3, "rebuild republished caches");
+        assert_eq!(store.list().unwrap(), via_full_projection);
+
+        // Spot-check the tool session's quirks survived the fast path: its
+        // preview is the prompt and last_user_preview is the tool result.
+        let tool = via_full_projection
+            .iter()
+            .find(|i| i.model == "tool-model")
+            .unwrap();
+        assert_eq!(tool.preview.as_deref(), Some("run something"));
+        assert_eq!(tool.last_user_preview, None);
+        assert_eq!(tool.total_input_tokens, 100);
+        assert_eq!(tool.total_output_tokens, 20);
+        assert_eq!(tool.project_path.as_deref(), Some("/tool/proj"));
+    }
+
+    /// A writer episode that resumes without a valid prior index has a
+    /// partial base: it must stay silent (no index file) rather than publish
+    /// stats covering only its own episode. The next list() rebuilds.
+    #[test]
+    fn writer_with_partial_base_does_not_publish_index() {
+        let tmp = tempfile::tempdir().unwrap();
+        let store = store(&tmp);
+        let id = Uuid::new_v4();
+        seed_session(&store, &id);
+        let index_path = index_path_for(&store.log_path(&id));
+        assert!(index_path.exists(), "writer close published an index");
+
+        // Force the partial-base path: cache gone, log non-empty.
+        std::fs::remove_file(&index_path).unwrap();
+        {
+            let mut w = SessionLogWriter::open_layout(store.container(), &id.to_string()).unwrap();
+            w.set_turn(2);
+            w.record(SessionEventBody::TurnStart(TurnStartPayload {
+                query_id: None,
+            }));
+            w.record(SessionEventBody::UserMessage(UserMessagePayload {
+                source: UserMessagePayload::SOURCE_USER.into(),
+                content: "episode two".into(),
+                attachment_count: 0,
+            }));
+            w.close().unwrap();
+        }
+        assert!(
+            !index_path.exists(),
+            "partial-base close must not publish an index"
+        );
+
+        // list() still answers correctly and rebuilds the cache.
+        let infos = store.list().unwrap();
+        assert_eq!(infos.len(), 1);
+        assert_eq!(infos[0].preview.as_deref(), Some("hi"));
+        assert_eq!(
+            infos[0].last_user_preview.as_deref(),
+            Some("episode two"),
+            "last user message is a plain prompt (no trailing tool result)"
+        );
+        assert_eq!(infos[0].turn_count, 2);
+        assert!(index_path.exists(), "list() rebuilt the cache");
+
+        // And the rebuilt cache agrees with the full projection.
+        let via_index = infos;
+        strip_index_files(&store);
+        assert_eq!(store.list().unwrap(), via_index);
+    }
+
+    /// A tampered/stale index (e.g. hand-edited, or a same-name rewrite that
+    /// slipped past mtime) is discarded, the full projection answers, and
+    /// the cache is refreshed.
+    #[test]
+    fn stale_index_is_discarded_and_rebuilt() {
+        let tmp = tempfile::tempdir().unwrap();
+        let store = store(&tmp);
+        let id = Uuid::new_v4();
+        seed_session(&store, &id);
+        let index_path = index_path_for(&store.log_path(&id));
+
+        let mut stale = store.list().unwrap().into_iter().next().unwrap();
+        // Tamper: claim stats over a different log length + a fake token sum.
+        let mut raw: SessionIndex =
+            serde_json::from_str(&std::fs::read_to_string(&index_path).unwrap()).unwrap();
+        raw.log_len += 999;
+        raw.total_input_tokens += 4242;
+        raw.store(&index_path).unwrap();
+
+        let infos = store.list().unwrap();
+        assert_eq!(infos.len(), 1);
+        assert_ne!(
+            infos[0].total_input_tokens,
+            stale.total_input_tokens + 4242,
+            "tampered stats must not leak through"
+        );
+        stale = infos.into_iter().next().unwrap();
+
+        // The rebuild replaced the tampered file with a valid one; the next
+        // listing takes the fast path to the same answer.
+        let again = store.list().unwrap();
+        assert_eq!(again, vec![stale]);
+        let healed: SessionIndex =
+            serde_json::from_str(&std::fs::read_to_string(&index_path).unwrap()).unwrap();
+        assert_ne!(healed.log_len, raw.log_len, "cache was rewritten");
+    }
+
+    /// Raw rewrites (desktop rewind/compact) bypass the writer's accumulator:
+    /// they must drop the cache, and the next list() must reflect the
+    /// rewritten log, not the pre-rewrite stats.
+    #[test]
+    fn raw_rewrites_invalidate_index_and_list_follows() {
+        let tmp = tempfile::tempdir().unwrap();
+        let store = store(&tmp);
+        let id = Uuid::new_v4();
+        seed_three_turn_session(&store, &id);
+        let index_path = index_path_for(&store.log_path(&id));
+        assert!(store.list().unwrap().iter().all(|i| i.turn_count == 3));
+        assert!(index_path.exists());
+
+        store.truncate_to_turn(&id, 1).unwrap();
+        assert!(
+            !index_path.exists(),
+            "truncate_to_turn must drop the stale cache"
+        );
+        let infos = store.list().unwrap();
+        assert_eq!(infos[0].turn_count, 1);
+        assert_eq!(infos[0].preview.as_deref(), Some("question 0"));
+
+        store
+            .rewrite_with_conversation(&id, &[("sum q".into(), "sum a".into())])
+            .unwrap();
+        assert!(!index_path.exists(), "compact must drop the cache");
+        let infos = store.list().unwrap();
+        assert_eq!(infos[0].turn_count, 1);
+        assert_eq!(infos[0].preview.as_deref(), Some("sum q"));
+        assert_eq!(infos[0].last_user_preview.as_deref(), Some("sum q"));
+
+        // Index-backed listing agrees with the projection after rewrites.
+        let via_index = infos;
+        strip_index_files(&store);
+        assert_eq!(store.list().unwrap(), via_index);
+    }
+
+    /// A second writer episode seeds from the published index: the refreshed
+    /// sidecar covers the whole log, not just the episode.
+    #[test]
+    fn writer_episode_seeds_from_index_and_covers_whole_log() {
+        let tmp = tempfile::tempdir().unwrap();
+        let store = store(&tmp);
+        let id = Uuid::new_v4();
+        seed_session(&store, &id);
+
+        {
+            let mut w = SessionLogWriter::open_layout(store.container(), &id.to_string()).unwrap();
+            w.set_turn(2);
+            w.record(SessionEventBody::TurnStart(TurnStartPayload {
+                query_id: None,
+            }));
+            w.record(SessionEventBody::UserMessage(UserMessagePayload {
+                source: UserMessagePayload::SOURCE_USER.into(),
+                content: "follow-up".into(),
+                attachment_count: 0,
+            }));
+            w.record(SessionEventBody::TurnEnd(TurnEndPayload {
+                reason: TurnEndPayload::REASON_COMPLETED.into(),
+                usage: Some(shannon_types::session_event::TokenUsage {
+                    input_tokens: 5,
+                    output_tokens: 6,
+                    cache_creation_tokens: 0,
+                    cache_read_tokens: 0,
+                    cost_usd: None,
+                }),
+                error: None,
+            }));
+            w.close().unwrap();
+        }
+
+        let via_index = store.list().unwrap();
+        assert_eq!(via_index[0].turn_count, 2);
+        assert_eq!(via_index[0].total_input_tokens, 11 + 5);
+        assert_eq!(via_index[0].total_output_tokens, 7 + 6);
+        assert_eq!(via_index[0].preview.as_deref(), Some("hi"));
+        assert_eq!(via_index[0].last_user_preview.as_deref(), Some("follow-up"));
+
+        strip_index_files(&store);
+        assert_eq!(store.list().unwrap(), via_index);
     }
 }

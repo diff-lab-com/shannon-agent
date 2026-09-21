@@ -20,6 +20,7 @@ pub mod l0_subscriber;
 pub mod projections;
 pub mod reader;
 pub mod redaction;
+pub mod session_index;
 pub mod session_store;
 pub mod tee;
 pub mod writer;
@@ -33,6 +34,7 @@ pub use projections::{
 };
 pub use reader::{SessionEventIter, SessionLogReader};
 pub use redaction::{REDACTED, RedactionPolicy};
+pub use session_index::{SessionIndex, SessionIndexAccumulator};
 pub use session_store::{
     SessionSidecar, SessionStore, SessionStoreError, StoredGoal, StoredLoop, StoredRalph,
     StoredSession, StoredSessionInfo, StoredSessionMeta, default_store,
@@ -133,6 +135,14 @@ pub fn session_log_container_path(dir: &Path, session_id: &str) -> PathBuf {
 /// value is projected from the event log).
 pub fn session_meta_container_path(dir: &Path, session_id: &str) -> PathBuf {
     dir.join(session_id).join("meta.json")
+}
+
+/// Resolve the derived-stats index sidecar for one session in a container:
+/// `<dir>/<session_id>/index.json` (audit E-9: a pure cache over
+/// `events.jsonl` that keeps `SessionStore::list` O(sessions); see
+/// [`session_index`]).
+pub fn session_index_container_path(dir: &Path, session_id: &str) -> PathBuf {
+    dir.join(session_id).join("index.json")
 }
 
 /// Effective log container for an active engine: `SHANNON_HOME` relocates
