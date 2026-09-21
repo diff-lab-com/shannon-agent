@@ -62,6 +62,7 @@ use super::parsers::{
     ThinkStreamSplitter, is_think_only_response, is_truncation_stop, markdown_bash_command,
     parse_text_tool_calls, split_think_content,
 };
+use super::context_policy::{self, ContextAction};
 use super::recovery;
 use super::routing::{QueryComplexity, classify_query_complexity};
 use crate::compact as p2_compact;
@@ -493,28 +494,17 @@ enum StreamingPhase {
 // aligned with the run-level `SHANNON_RUN_RETRIES`); on exhaustion the
 // existing failure path runs unchanged so A7 remains the last line.
 
-/// Re-prompt appended when a turn's LLM call is retried after a
-/// timeout-class stream death. Verbatim from the A8 plan; pinned by test.
-const TURN_CONTINUATION_NUDGE_PROMPT: &str = "Your previous response stream was \
-     interrupted by a network fault. Continue from where you stopped. Keep this \
-     response focused and moderately sized.";
-
-/// Default per-turn retry budget for A8 continuation
-/// (`SHANNON_TURN_RETRIES`; "0" legitimately disables).
-const DEFAULT_TURN_RETRIES: u32 = 2;
+// P3 cleanup: the A8/A14 constants live in `query_engine::recovery` (single
+// source) — `recovery::TURN_CONTINUATION_NUDGE_PROMPT`, `DEFAULT_TURN_RETRIES`,
+// `STREAM_IDLE_ESCALATION_CAP_SECS`, `STREAM_IDLE_ESCALATION_FACTOR_BASE`.
+// engine.rs references them via `recovery::…`.
 
 /// A14: cap for the stream-idle watchdog budget when the engine escalates
-/// it across timeout-class turn continuations. The base budget is read
-/// from `SHANNON_STREAM_IDLE_SECS` (default 420s); each escalation step
-/// scales it by the current retry index but never above this ceiling.
-/// Beyond this, an actively-silent stream is genuinely stalled and should
-/// not be rescued.
-const STREAM_IDLE_ESCALATION_CAP_SECS: u64 = 1200;
-
-/// A14: how much each successive timeout-class continuation within the
-/// same turn multiplies the stream-idle watchdog budget. Index 1 (first
-/// escalation) → ×2 = 840s, index 2 → ×3 = 1260s, then capped.
-const STREAM_IDLE_ESCALATION_FACTOR_BASE: u64 = 1;
+/// it across timeout-class turn continuations. Mirrored from
+/// [`super::recovery::STREAM_IDLE_ESCALATION_CAP_SECS`]; kept as a local
+/// alias because the idle-budget backstop arithmetic below composes with
+/// it directly.
+use super::recovery::STREAM_IDLE_ESCALATION_CAP_SECS;
 
 // ── Wrap-up protocol before the final turn (A10) ──────────────────────────
 //
@@ -1604,7 +1594,16 @@ impl QueryEngine {
             // confuses small/unstable models causing malformed output.
             None
         } else {
-            Some(LOCAL_MODEL_SYSTEM_PROMPT.to_string())
+            // P1-1 review fix: the tool-less LOCAL fallback must still
+            // carry the environment block (cwd/date/platform/git/sandbox)
+            // — pre-extraction behavior. build_env_block is what the
+            // structured path uses; reuse it so every prompt shape stays
+            // in sync.
+            let mut local = LOCAL_MODEL_SYSTEM_PROMPT.to_string();
+            if let Ok(cwd) = std::env::current_dir() {
+                local.push_str(&super::system_prompt::build_env_block(&cwd));
+            }
+            Some(local)
         };
 
         // Clone existing conversation to preserve multi-turn context
@@ -2265,7 +2264,8 @@ impl QueryEngine {
                     // entirely. Pruning edits content in place — no messages
                     // are removed, so tool_use/tool_result pairing is safe;
                     // the unconditional sync below persists it.
-                    if !micro_pruned_fired && usage_ratio > MICRO_PRUNE_THRESHOLD {
+                    // A PR-2 wiring: gate via context_policy (single source).
+                    if context_policy::should_micro_prune(usage_ratio, micro_pruned_fired) {
                         micro_pruned_fired = true;
                         let keep = config.keep_recent_messages.min(messages.len());
                         let head = messages.len() - keep;
@@ -2273,15 +2273,12 @@ impl QueryEngine {
                         shannon_engine::compact::CompactEngine::prune_stale_tool_results(
                             &mut messages[..head],
                         );
-                        estimated_tokens =
-                            shannon_engine::compact::helpers::estimate_tokens(&messages)
-                                + config
-                                    .system_prompt
-                                    .as_ref()
-                                    .map(|sp| {
-                                        shannon_engine::compact::helpers::estimate_text_tokens(sp)
-                                    })
-                                    .unwrap_or(0);
+                        // A PR-2 wiring: re-estimation via context_policy
+                        // (single source for the tokens+system-prompt sum).
+                        estimated_tokens = context_policy::reestimate(
+                            &messages,
+                            config.system_prompt.as_deref(),
+                        );
                         usage_ratio = estimated_tokens as f32 / max_context as f32;
                         send_event!(
                             tx,
@@ -2295,9 +2292,24 @@ impl QueryEngine {
                         );
                     }
 
-                    if usage_ratio > config.compression_threshold {
+                    // A PR-2 wiring: the compact-vs-truncate decision comes
+                    // from `context_policy::evaluate` (single source for the
+                    // threshold ladder). Semantics identical to the original
+                    // inline ladder: below the threshold nothing happens even
+                    // when the breaker is saturated; above it the breaker
+                    // picks truncate-vs-compact.
+                    let action = context_policy::evaluate(
+                        usage_ratio,
+                        compaction_failures,
+                        MAX_COMPACTION_FAILURES,
+                        config.compression_threshold,
+                    );
+                    if matches!(
+                        action,
+                        ContextAction::Compact | ContextAction::TruncateFallback
+                    ) {
                         // Circuit breaker: if compaction has failed repeatedly, skip it and just truncate
-                        if compaction_failures >= MAX_COMPACTION_FAILURES {
+                        if action == ContextAction::TruncateFallback {
                             let keep = config.keep_recent_messages;
                             if messages.len() > keep {
                                 // Pair-aware: never split a tool_use/tool_result pair
@@ -5917,6 +5929,7 @@ async fn maybe_run_auto_test(
 #[allow(clippy::unwrap_used)]
 mod tests {
     use super::*;
+    use crate::query_engine::recovery;
     use crate::query_engine::QueryMetadata;
     use crate::tools::ToolRegistry;
     use shannon_engine::api::ImageSource;
@@ -8976,7 +8989,7 @@ mod tests {
 
         // Nudge only on retry requests (attempts 2+), exactly once each;
         // the first attempt must be nudge-free.
-        let nudge = TURN_CONTINUATION_NUDGE_PROMPT;
+        let nudge = recovery::TURN_CONTINUATION_NUDGE_PROMPT;
         assert!(
             !bodies[0].contains(nudge),
             "the first attempt must not carry the continuation nudge"
@@ -9070,7 +9083,7 @@ mod tests {
             "initial attempt + 2 retries, then fail; got {}",
             bodies.len()
         );
-        let nudge = TURN_CONTINUATION_NUDGE_PROMPT;
+        let nudge = recovery::TURN_CONTINUATION_NUDGE_PROMPT;
         assert!(!bodies[0].contains(nudge), "first attempt is nudge-free");
         assert_eq!(
             bodies[1].matches(nudge).count(),
@@ -9146,7 +9159,7 @@ mod tests {
         );
         let bodies = server.bodies();
         assert_eq!(bodies.len(), 2, "dead attempt + one continuation");
-        let nudge = TURN_CONTINUATION_NUDGE_PROMPT;
+        let nudge = recovery::TURN_CONTINUATION_NUDGE_PROMPT;
         assert!(!bodies[0].contains(nudge), "first attempt is nudge-free");
         assert_eq!(bodies[1].matches(nudge).count(), 1);
         assert!(
@@ -9238,7 +9251,7 @@ mod tests {
             "dead attempt + 1 A8 continuation; got {}",
             bodies.len()
         );
-        let nudge = TURN_CONTINUATION_NUDGE_PROMPT;
+        let nudge = recovery::TURN_CONTINUATION_NUDGE_PROMPT;
         assert!(
             !bodies[0].contains(nudge),
             "the first attempt must be nudge-free"
@@ -9817,7 +9830,7 @@ mod tests {
             bodies.len()
         );
         let wrap = WRAP_UP_NUDGE_PROMPT;
-        let a8nudge = TURN_CONTINUATION_NUDGE_PROMPT;
+        let a8nudge = recovery::TURN_CONTINUATION_NUDGE_PROMPT;
         assert!(!bodies[0].contains(wrap) && !bodies[0].contains(a8nudge));
         assert!(
             !bodies[1].contains(wrap) && bodies[1].matches(a8nudge).count() == 1,

@@ -211,7 +211,7 @@ pub fn build(inputs: &SystemPromptInputs<'_>) -> AssembledSystemPrompt {
     } else {
         Some(system_blocks)
     };
-    let mut system_prompt = if inputs.config.system_prompt.is_some()
+    let system_prompt = if inputs.config.system_prompt.is_some()
         || system_blocks_opt.is_some()
     {
         inputs.config.system_prompt.clone()
@@ -245,8 +245,10 @@ pub fn build(inputs: &SystemPromptInputs<'_>) -> AssembledSystemPrompt {
 /// Build the trailing environment block (cwd, date/time, platform, git
 /// context, sandbox self-description). Deliberately LAST in both the
 /// structured blocks and the plain-string fallback so per-turn mutable
-/// state never invalidates the cached prompt prefix.
-fn build_env_block(cwd: &std::path::Path) -> String {
+/// state never invalidates the cached prompt prefix. Also used by the
+/// engine's tool-less LOCAL fallback path (P1-1 review fix) so every
+/// prompt shape carries the environment block.
+pub(crate) fn build_env_block(cwd: &std::path::Path) -> String {
     let mut env_text = format!("\n\n## Environment\n\nWorking directory: {}", cwd.display());
     {
         let now = chrono::Local::now();
@@ -351,6 +353,22 @@ mod tests {
         assert!(
             blocks.iter().all(|b| b.cache_control.is_none()),
             "OpenAI must not receive cache_control markers"
+        );
+    }
+
+    /// P1-1 review fix: `build_env_block` produces a self-contained env
+    /// block independent of the cache structure. The engine reuses it
+    /// for the tool-less LOCAL fallback so every prompt shape carries
+    /// cwd/date/platform/git/sandbox context.
+    #[test]
+    fn env_block_includes_working_directory_and_platform() {
+        let cwd = std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."));
+        let block = build_env_block(&cwd);
+        assert!(block.contains("## Environment"), "header missing: {block}");
+        assert!(block.contains("Working directory"), "cwd missing: {block}");
+        assert!(
+            block.contains("Today's date") && block.contains("Platform"),
+            "date/platform anchors missing: {block}"
         );
     }
 }

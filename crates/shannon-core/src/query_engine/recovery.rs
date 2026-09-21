@@ -82,7 +82,9 @@ pub fn provider_error_retryable(message: &str) -> bool {
 /// Per-turn retry budget from `SHANNON_TURN_RETRIES` (default 2; "0"
 /// disables the A8 ladder).
 pub fn turn_retries_max() -> u32 {
-    env_num_override("SHANNON_TURN_RETRIES", DEFAULT_TURN_RETRIES)
+    // P3 cleanup: use env_config's reader (single source) instead of a
+    // local copy that could drift.
+    super::env_config::env_num_override("SHANNON_TURN_RETRIES", DEFAULT_TURN_RETRIES)
 }
 
 /// A14: compute the escalated stream-idle watchdog budget for the next
@@ -117,15 +119,6 @@ pub fn escalate_stream_idle_override(
 /// budget.
 pub fn clear_stream_idle_override(client: &LlmClient) {
     client.set_stream_idle_override(None);
-}
-
-/// Local copy of the env-reader to avoid importing the full engine crate
-/// from a leaf module. Mirrors `crate::query_engine::env_config::env_num_override`.
-fn env_num_override(name: &str, default: u32) -> u32 {
-    std::env::var(name)
-        .ok()
-        .and_then(|s| s.trim().parse::<u32>().ok())
-        .unwrap_or(default)
 }
 
 #[cfg(test)]

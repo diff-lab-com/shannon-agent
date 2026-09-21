@@ -12,8 +12,7 @@
 //! conversation state and config, what should happen next? The answer
 //! drives the engine's branching.
 
-use shannon_engine::api::{Message, MessageContent};
-use shannon_engine::compact::CompactEngine;
+use shannon_engine::api::Message;
 use shannon_engine::compact::helpers::{estimate_text_tokens, estimate_tokens};
 
 use super::env_config::MICRO_PRUNE_THRESHOLD;
@@ -37,29 +36,39 @@ pub enum ContextAction {
 }
 
 /// Decide the action from the conversation's current usage ratio and
-/// the failure counter. The returned `Action` does NOT mutate
-/// `messages` — the caller is responsible for executing it and
-/// re-measuring usage.
+/// the failure counter. The returned action does NOT mutate `messages`
+/// — the caller is responsible for executing it and re-measuring usage.
 ///
-/// `before_tokens` is the pre-action token estimate (used by the
-/// "compaction must reduce tokens" regression below); pass the
-/// engine's own estimate.
+/// Semantics mirror the engine's original inline ladder exactly
+/// (P2 wiring): below the full-compaction threshold nothing happens —
+/// even when the failure circuit-breaker is saturated (the breaker only
+/// chooses HOW to compact, never compacts on its own); above the
+/// threshold the breaker picks truncate-vs-compact.
 pub fn evaluate(
     usage_ratio: f32,
     compact_failure_count: u32,
     max_compaction_failures: u32,
     full_compaction_threshold: f32,
 ) -> ContextAction {
-    if compact_failure_count >= max_compaction_failures {
-        return ContextAction::TruncateFallback;
-    }
     if usage_ratio > full_compaction_threshold {
+        if compact_failure_count >= max_compaction_failures {
+            return ContextAction::TruncateFallback;
+        }
         return ContextAction::Compact;
     }
     if usage_ratio > MICRO_PRUNE_THRESHOLD {
         return ContextAction::MicroPrune;
     }
     ContextAction::Continue
+}
+
+/// Micro-prune gate (once per query above [`MICRO_PRUNE_THRESHOLD`]).
+/// Fires at ANY ratio above the threshold — including above the full
+/// compaction threshold — matching the engine's original inline order
+/// (micro-prune runs first, then the compaction ladder re-evaluates the
+/// recomputed ratio).
+pub fn should_micro_prune(usage_ratio: f32, already_fired: bool) -> bool {
+    !already_fired && usage_ratio > MICRO_PRUNE_THRESHOLD
 }
 
 /// Re-estimate the conversation's token usage after a change. Helpers
@@ -75,12 +84,16 @@ pub fn reestimate(messages: &[Message], system_prompt: Option<&str>) -> usize {
 #[allow(clippy::unwrap_used)]
 mod tests {
     use super::*;
+    use shannon_engine::api::MessageContent;
+    use shannon_engine::compact::CompactEngine;
 
     /// The full ladder maps onto the engine's existing wiring:
     /// - below micro threshold -> Continue
     /// - above micro threshold, below full compaction -> MicroPrune
     /// - above full threshold -> Compact
     /// - above full threshold after too many failures -> TruncateFallback
+    /// - saturated breaker BELOW threshold still does nothing (the
+    ///   breaker only chooses HOW to compact — P2 wiring semantics)
     #[test]
     fn ladder_matches_thresholds() {
         let full = 0.8_f32;
@@ -101,14 +114,24 @@ mod tests {
         );
         assert_eq!(
             evaluate(0.50, 2, 2, full),
-            ContextAction::TruncateFallback,
-            "failure count saturates -> TruncateFallback even below threshold"
+            ContextAction::Continue,
+            "saturated breaker below threshold must NOT act (original semantics)"
         );
         assert_eq!(
             evaluate(0.95, 3, 2, full),
             ContextAction::TruncateFallback,
-            "failure count saturates -> TruncateFallback"
+            "failure count saturates -> TruncateFallback above threshold"
         );
+    }
+
+    #[test]
+    fn micro_prune_gate_fires_once() {
+        assert!(should_micro_prune(0.75, false));
+        assert!(!should_micro_prune(0.75, true), "once per query");
+        assert!(!should_micro_prune(0.50, false), "below threshold");
+        // Fires above the full threshold too (original inline order:
+        // micro-prune first, then the compaction ladder re-evaluates).
+        assert!(should_micro_prune(0.95, false));
     }
 
     /// A PR-2 regression (left over from the first audit): after a

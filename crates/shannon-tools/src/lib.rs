@@ -467,6 +467,10 @@ fn register_all_tools(
     // operations are fully covered by TodoWrite + TaskCreate/List/Update/Get
     // above. Removed from the default registry; re-introducible via
     // `SHANNON_LEGACY_TASK_TOOLS=1` (R1 Phase 2) if any host needs it.
+    // NOTE (P3 review): the legacy tool keeps its own private `Task` type
+    // and store — items created through it do NOT appear in the shared
+    // TaskStore that TodoWrite/Task* (and the post-compact todo
+    // reinjection) read. Prefer the unified surfaces.
     if legacy_visible {
         registry.register(Box::new(TaskTool::new()))?;
     }

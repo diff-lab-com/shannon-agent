@@ -812,11 +812,11 @@ pub async fn discover_tools_guarded(
                             env.clone(),
                             description,
                             input_schema,
-                        );
+                        )
+                        .with_annotations(annotations);
                         if let Some(guard) = &spawn_guard {
                             adapter.set_spawn_guard(Some(Arc::clone(guard)));
                         }
-                        adapter.annotations = annotations;
                         discovered_tools.push(adapter);
                     }
                 }

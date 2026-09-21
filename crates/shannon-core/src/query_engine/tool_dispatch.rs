@@ -2,24 +2,21 @@
 //!
 //! The full tool dispatch loop (permission waterfall -> PreToolUse hook
 //! -> parallel/serial partitioning -> result capture) is still inlined
-//! in `engine.rs::process_query`; that work is the A PR-3 next step
-//! (migration tracked separately). This module ships the **primitives**
-//! the loop relies on so the loop body shrinks while the migration is
-//! in flight:
+//! in `engine.rs::process_query`; migrating it into
+//! `ToolDispatchPlan::execute` is the follow-up step (tracked
+//! separately). Until that lands the primitives are unused by the
+//! loop — hence the module-level `allow(dead_code)`.
 //!
-//! - `ToolUseRequest`: the typed wire-shape for `QueryEvent::ToolUseRequest`
+//! - `ToolCall`: id/name/input triplet (what the dispatch loop needs).
 //! - `StrandedInputGuard`: per-turn input tracking for the P3-8 partial-
-//!   stream salvage rules
+//!   stream salvage rules.
 //! - `ToolDispatchPlan`: the per-turn snapshot needed to execute tool calls
-//!   after the LLM stream lands (and after the type-safety checks)
-//!
-//! Together these let the next A PR-3 sub-step collapse ~600 lines of
-//! inline tool-loop into a single `dispatch_plan().execute()` call
-//! while preserving byte-for-byte event semantics (the existing
-//! mocked-SSE integration tests in `engine.rs` will catch regressions).
+//!   after the LLM stream lands (and after the type-safety checks).
 
-use shannon_engine::api::Message;
+#![allow(dead_code)]
+
 use serde_json::Value;
+use shannon_engine::api::Message;
 
 /// A single normalized tool call the LLM emitted this turn. The full
 /// `ContentBlock::ToolUse { id, name, input }` is richer (carries

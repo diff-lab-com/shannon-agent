@@ -59,6 +59,14 @@ pub struct TodoItem {
     /// Tasks that block this task (dependency tracking)
     #[serde(default)]
     pub blocked_by: Vec<String>,
+
+    /// Which surface manages this item: [`ORIGIN_TODO`] (TodoWrite plan
+    /// list), [`ORIGIN_TASK`] (TaskCreate backlog), or `""` (legacy items
+    /// written before the field existed — treated as todo-managed).
+    /// TodoWrite's replace-semantics rewrites only the todo partition, so
+    /// backlog items survive plan rewrites (P1-3).
+    #[serde(default)]
+    pub origin: String,
 }
 
 impl TodoItem {
@@ -74,6 +82,7 @@ impl TodoItem {
             metadata: None,
             created_at: chrono::Utc::now().to_rfc3339(),
             blocked_by: Vec::new(),
+            origin: ORIGIN_TODO.to_string(),
         }
     }
 
@@ -95,6 +104,10 @@ impl TodoItem {
             metadata,
             created_at: chrono::Utc::now().to_rfc3339(),
             blocked_by,
+            // Neutral by default: the creating surface stamps its own
+            // partition (TaskCreate → "task"; TodoWrite normalizes to
+            // "todo" on write).
+            origin: String::new(),
         }
     }
 }
@@ -213,7 +226,14 @@ pub struct TodoWriteOutput {
 /// `session_id` field on TodoWriteTool were removed in favour of this
 /// flat-by-task_id store. Both TodoWrite and Task* now share the same
 /// map — items inserted via either surface are visible to both.
+/// P1-3: each item carries an `origin` partition so TodoWrite's
+/// replace-semantics never deletes Task-backlog items (and vice versa).
 pub type TaskStore = Arc<RwLock<HashMap<String, TodoItem>>>;
+
+/// Origin partition managed by `TodoWrite` (the model-facing plan list).
+pub const ORIGIN_TODO: &str = "todo";
+/// Origin partition managed by `TaskCreate` (the backlog surface).
+pub const ORIGIN_TASK: &str = "task";
 
 /// R1-3: one process-wide task store. TaskCreate/TaskUpdate/TaskGet/TaskList
 /// all default to this global, so an item created via one tool is visible to
@@ -266,12 +286,16 @@ fn todo_persist_path() -> Option<std::path::PathBuf> {
 /// engine's reinjection path (memory/CLAUDE.md analog for tasks). Returns
 /// `None` when there's nothing to show.
 pub fn todo_reinjection_block() -> Option<String> {
+    let store = global_task_store();
+    todo_reinjection_block_for_store(&store)
+}
+
+/// Store-parameterized variant of [`todo_reinjection_block`] (tests,
+/// embedders with their own store).
+pub(crate) fn todo_reinjection_block_for_store(store: &TaskStore) -> Option<String> {
     let mut items: Vec<TodoItem> = Vec::new();
-    {
-        let store = global_task_store();
-        if let Ok(guard) = store.read() {
-            items.extend(guard.values().cloned());
-        }
+    if let Ok(guard) = store.read() {
+        items.extend(guard.values().cloned());
     }
     if items.is_empty() {
         return None;
@@ -386,6 +410,12 @@ impl Default for TodoWriteTool {
 
 impl TodoWriteTool {
     pub fn new() -> Self {
+        Self::with_store(global_task_store())
+    }
+
+    /// Inject a store (tests / embedders). Production path uses the
+    /// process-global store via [`TodoWriteTool::new`].
+    pub fn with_store(task_store: TaskStore) -> Self {
         Self {
             description: "Create and manage a structured task checklist for the current session.\n\
 \n\
@@ -396,10 +426,7 @@ as soon as they finish. Each call REPLACES the whole list, so always send\n\
 the full updated set; when every item is completed the list clears. Skip \
 it for single trivial actions that need no tracking."
                 .to_string(),
-            // C+D Phase 1: TodoWriteTool now writes through the SAME global
-            // task store TaskCreate/TaskUpdate/TaskList use (was a separate
-            // session-scoped HashMap).
-            store: global_task_store(),
+            store: task_store,
         }
     }
 
@@ -410,73 +437,81 @@ it for single trivial actions that need no tracking."
     /// Merge semantics (preserves the model-visible contract: "each call
     /// REPLACES the whole list"):
     ///   1. Input `todos` are upserted by `task_id`.
-    ///   2. Items already in the store whose `task_id` is NOT in the input
-    ///      AND whose status is not `Completed` are removed (the model
-    ///      dropped them from the plan — they were never finished).
-    ///   3. Already-Completed items the input also drops are KEPT as
-    ///      history (the next TodoWrite that omits them removes them only
-    ///      if a follow-up call doesn't re-add them).
+    ///   2. Same-partition items whose `task_id` is NOT in the input are
+    ///      removed — the model dropped them from the plan (this is the
+    ///      "REPLACES the whole list" contract; dropped completed items
+    ///      are removed too, so the list never accumulates stale `[x]`
+    ///      rows across plan rewrites).
+    ///   3. Items from the OTHER partition (`origin = "task"`, created
+    ///      via TaskCreate) are never touched — TodoWrite manages only
+    ///      the todo partition (P1-3 review fix for cross-surface
+    ///      deletion).
     ///   4. "All done" rule: when every input item is Completed, the
-    ///      non-completed set is also cleared — completing the plan wipes
-    ///      in-flight work.
+    ///      todo partition is cleared entirely — "when every item is
+    ///      completed the list clears" (restored pre-Phase-1 contract).
+    ///
+    /// Known limitation (documented, accepted for a single-user terminal
+    /// agent): two concurrent sessions in the SAME process share the
+    /// todo partition and their writes replace each other.
     async fn write_todos(&self, input: TodoWriteInput) -> Result<TodoWriteOutput, ToolError> {
-        let all_done = input
-            .todos
-            .iter()
-            .all(|t| t.status == TodoStatus::Completed);
+        // Normalize the origin: everything arriving through TodoWrite
+        // belongs to the todo partition (legacy/empty origin included).
+        let mut todos = input.todos.clone();
+        for t in &mut todos {
+            if t.origin.is_empty() {
+                t.origin = ORIGIN_TODO.to_string();
+            }
+        }
+        let all_done = todos.iter().all(|t| t.status == TodoStatus::Completed);
         let input_ids: std::collections::HashSet<String> =
-            input.todos.iter().map(|t| t.task_id.clone()).collect();
+            todos.iter().map(|t| t.task_id.clone()).collect();
 
-        // Snapshot what was in the store before the merge (for the
+        // Snapshot the managed partition before the merge (for the
         // `old_todos` output + verification nudge).
         let old_todos: Vec<TodoItem> = {
             let store = self.store.read().map_err(|e| {
                 ToolError::ExecutionFailed(format!("Failed to acquire store lock: {e}"))
             })?;
-            store.values().cloned().collect::<Vec<_>>()
+            store
+                .values()
+                .filter(|t| t.origin != ORIGIN_TASK)
+                .cloned()
+                .collect::<Vec<_>>()
         };
 
-        // Apply the merge.
-        {
+        // Apply the merge. Persistence happens AFTER the write guard is
+        // dropped — persist_todo_store takes its own read lock, and
+        // std::sync::RwLock is not reentrant (a write→read recursion
+        // deadlocks; found by the P1-3 reproduction tests).
+        if all_done {
             let mut store = self.store.write().map_err(|e| {
                 ToolError::ExecutionFailed(format!("Failed to acquire store lock: {e}"))
             })?;
-            // Upsert the supplied items.
-            for item in &input.todos {
-                store.insert(item.task_id.clone(), item.clone());
-            }
-            // Determine the surviving ids after merge.
-            let surviving: std::collections::HashSet<String> = if all_done {
-                // Plan complete: keep only Completed items the input
-                // reasserted (history); drop any in-flight work the input
-                // dropped.
-                input_ids
-            } else {
-                let mut s = input_ids.clone();
-                // Keep completed items the input dropped so they remain
-                // visible in `todo_reinjection_block` until the next call
-                // explicitly removes them (next call's all_done==true will
-                // drop them).
-                for existing in old_todos.iter() {
-                    if existing.status == TodoStatus::Completed
-                        && !s.contains(&existing.task_id)
-                    {
-                        s.insert(existing.task_id.clone());
-                    }
-                }
-                s
-            };
-            // Remove anything not in the surviving set.
             let to_remove: Vec<String> = store
-                .keys()
-                .filter(|k| !surviving.contains(*k))
-                .cloned()
+                .iter()
+                .filter(|(_, v)| v.origin != ORIGIN_TASK)
+                .map(|(k, _)| k.clone())
                 .collect();
             for k in to_remove {
                 store.remove(&k);
             }
-            persist_todo_store(&self.store);
+        } else {
+            let mut store = self.store.write().map_err(|e| {
+                ToolError::ExecutionFailed(format!("Failed to acquire store lock: {e}"))
+            })?;
+            for item in &todos {
+                store.insert(item.task_id.clone(), item.clone());
+            }
+            let to_remove: Vec<String> = store
+                .iter()
+                .filter(|(k, v)| v.origin != ORIGIN_TASK && !input_ids.contains(*k))
+                .map(|(k, _)| k.clone())
+                .collect();
+            for k in to_remove {
+                store.remove(&k);
+            }
         }
+        persist_todo_store(&self.store);
 
         let new_todos = input.todos.clone();
 
@@ -598,13 +633,14 @@ impl TaskCreateTool {
     }
 
     async fn create_task(&self, input: TaskCreateInput) -> Result<TaskCreateOutput, ToolError> {
-        let task = TodoItem::with_details(
+        let mut task = TodoItem::with_details(
             input.subject,
             input.description,
             input.active_form,
             input.metadata,
             Vec::new(), // blocked_by starts empty
         );
+        task.origin = ORIGIN_TASK.to_string();
 
         let task_id = task.task_id.clone();
 
@@ -613,8 +649,11 @@ impl TaskCreateTool {
                 ToolError::ExecutionFailed(format!("Failed to acquire task store lock: {e}"))
             })?;
             store.insert(task_id.clone(), task);
-            persist_todo_store(&self.task_store);
         }
+        // Persist OUTSIDE the write guard — persist_todo_store takes its
+        // own read lock and std::sync::RwLock is not reentrant (P1-3
+        // reproduction run deadlocked here).
+        persist_todo_store(&self.task_store);
 
         Ok(TaskCreateOutput {
             task_id,
@@ -850,6 +889,10 @@ impl TaskUpdateTool {
         }
 
         let updated_task = task.clone();
+        // Drop the write guard BEFORE persisting — persist_todo_store
+        // takes its own read lock (std::sync::RwLock is not reentrant;
+        // P1-3 reproduction run deadlocked here).
+        drop(store);
         persist_todo_store(&self.task_store);
 
         Ok(TaskUpdateOutput {
@@ -1029,6 +1072,7 @@ mod tests {
             metadata: None,
             created_at: chrono::Utc::now().to_rfc3339(),
             blocked_by: Vec::new(),
+            origin: ORIGIN_TODO.to_string(),
         }
     }
 
@@ -1075,6 +1119,128 @@ mod tests {
             vec!["task-1".to_string(), "task-2".to_string()]
         );
         assert!(Uuid::parse_str(&item.task_id).is_ok());
+    }
+
+    // ── P1-3 review fixes: TodoWrite merge semantics ────────────────────
+
+    /// Build a TodoWriteTool against an injected store (isolated from the
+    /// process global).
+    fn todowrite_on(store: TaskStore) -> TodoWriteTool {
+        TodoWriteTool::with_store(store)
+    }
+
+    fn mk_item(content: &str, status: TodoStatus) -> TodoItem {
+        let mut t = TodoItem::new(content.to_string());
+        t.status = status;
+        t
+    }
+
+    fn store_ids(store: &TaskStore) -> Vec<String> {
+        store
+            .read()
+            .expect("store lock")
+            .keys()
+            .cloned()
+            .collect()
+    }
+
+    /// Contract: "Each call REPLACES the whole list." A new plan whose
+    /// input drops previously-completed items must remove them — the
+    /// list must not accumulate stale `[x]` rows across plan rewrites.
+    #[tokio::test]
+    async fn todowrite_replaces_dropped_completed_items() {
+        let store: TaskStore = Arc::new(RwLock::new(HashMap::new()));
+        let tool = todowrite_on(store.clone());
+
+        let a = mk_item("A", TodoStatus::Completed);
+        let b = mk_item("B", TodoStatus::Completed);
+        tool.write_todos(TodoWriteInput { todos: vec![a.clone(), b.clone()] })
+            .await
+            .expect("first write");
+
+        // New plan: one fresh pending item; A and B are dropped.
+        let c = mk_item("C", TodoStatus::Pending);
+        tool.write_todos(TodoWriteInput { todos: vec![c.clone()] })
+            .await
+            .expect("second write");
+
+        let ids = store_ids(&store);
+        assert_eq!(
+            ids,
+            vec![c.task_id.clone()],
+            "new plan must replace the list — stale completed items must not survive"
+        );
+    }
+
+    /// Contract: "when every item is completed the list clears."
+    #[tokio::test]
+    async fn todowrite_all_done_clears_the_list() {
+        let store: TaskStore = Arc::new(RwLock::new(HashMap::new()));
+        let tool = todowrite_on(store.clone());
+
+        let a = mk_item("A", TodoStatus::Pending);
+        let b = mk_item("B", TodoStatus::Pending);
+        tool.write_todos(TodoWriteInput { todos: vec![a, b] })
+            .await
+            .expect("seed");
+
+        let a_done = mk_item("A", TodoStatus::Completed);
+        let b_done = mk_item("B", TodoStatus::Completed);
+        // Re-assert the SAME ids so the write reads as "these are done".
+        let mut done = vec![a_done, b_done];
+        // (ids are regenerated by mk_item; align them to the seeded ids.)
+        let seeded: Vec<String> = {
+            let guard = store.read().expect("store lock");
+            guard.keys().cloned().collect()
+        };
+        done[0].task_id = seeded[0].clone();
+        done[1].task_id = seeded[1].clone();
+        tool.write_todos(TodoWriteInput { todos: done })
+            .await
+            .expect("complete");
+
+        assert!(
+            store_ids(&store).is_empty(),
+            "all_done must clear the todo list"
+        );
+    }
+
+    /// Cross-surface safety: items created via TaskCreate (origin "task")
+    /// must survive a TodoWrite plan rewrite — TodoWrite manages only the
+    /// todo partition. The reinjection block still shows both.
+    #[tokio::test]
+    async fn todowrite_does_not_delete_task_origin_items() {
+        let store: TaskStore = Arc::new(RwLock::new(HashMap::new()));
+
+        // Seed a task-backlog item (origin "task") via TaskCreateTool.
+        let create = TaskCreateTool::with_store(store.clone());
+        create
+            .execute(json!({
+                "subject": "Backlog item",
+                "description": "Backlog item"
+            }))
+            .await
+            .expect("task create");
+        let task_ids = store_ids(&store);
+        assert_eq!(task_ids.len(), 1, "seed failed");
+
+        // TodoWrite with a fresh plan must not touch it.
+        let tool = todowrite_on(store.clone());
+        let x = mk_item("Plan step", TodoStatus::Pending);
+        tool.write_todos(TodoWriteInput { todos: vec![x] })
+            .await
+            .expect("write");
+
+        let ids = store_ids(&store);
+        assert_eq!(ids.len(), 2, "todo + task items must coexist");
+        assert!(
+            ids.contains(&task_ids[0]),
+            "TaskCreate item must survive TodoWrite rewrite"
+        );
+        // Reinjection still surfaces both surfaces' items.
+        let block = todo_reinjection_block_for_store(&store)
+            .expect("populated store yields block");
+        assert!(block.contains("Plan step") && block.contains("Backlog item"));
     }
 
     #[tokio::test]
@@ -1381,18 +1547,21 @@ mod tests {
         assert!(!required.contains(&serde_json::json!("metadata")));
     }
 
-    /// R1-3: an item inserted into the global task store is visible via the
-    /// reinjection helper (so a compacted session re-receives its checklist)
-    /// and the store respects a `None` reinjection when empty.
+    /// R1-3: an item inserted into the task store is visible via the
+    /// reinjection helper (so a compacted session re-receives its
+    /// checklist) and an empty store yields `None`. Uses an injected
+    /// store — the process-global singleton is shared by parallel tests
+    /// (P1-3 review fix: the old version raced on the global store and
+    /// flaked when TaskCreate tests ran concurrently).
     #[test]
     fn reinjection_block_renders_tasks_and_returns_none_when_empty() {
+        let store: TaskStore = Arc::new(RwLock::new(HashMap::new()));
         // Empty store => None.
         assert!(
-            todo_reinjection_block().is_none(),
+            todo_reinjection_block_for_store(&store).is_none(),
             "empty store must not produce a reinjection block"
         );
-        // Seed two items into the global store and re-render.
-        let store = global_task_store();
+        // Seed two items and re-render.
         {
             let mut guard = store.write().expect("store lock");
             guard.insert(
@@ -1416,14 +1585,10 @@ mod tests {
                 ),
             );
         }
-        let block = todo_reinjection_block().expect("populated store yields a block");
+        let block = todo_reinjection_block_for_store(&store)
+            .expect("populated store yields a block");
         assert!(block.contains("## Current Task List"));
         assert!(block.contains("First task"));
         assert!(block.contains("Second task"));
-        // Clean up so other tests don't observe seeded state.
-        {
-            let mut guard = store.write().expect("store lock");
-            guard.clear();
-        }
     }
 }

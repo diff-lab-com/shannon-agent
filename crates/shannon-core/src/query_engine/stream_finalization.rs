@@ -2,26 +2,12 @@
 //!
 //! The full stream-handling loop (`StreamingPhase` state machine,
 //! A13 partial-stream salvage, A1 think-only nudge, N-3 typed error
-//! arm) is still inlined in `engine.rs::process_query`; that work is
-//! the A PR-4 next step (migration tracked separately). This module
-//! ships the **primitives** the loop relies on so the loop body
-//! shrinks while the migration is in flight:
-//!
-//! - `StreamingPhase`: a 2-state enum replacing the previous
-//!   `stream_finalized: bool` flag.
-//! - `LoopDirective`: the post-stream directive emitted by the
-//!   finalization function — replaces the scattering of
-//!   `continue 'agent_loop` / `break` / `return` at every stream-end
-//!   site in engine.rs.
-//! - `finalize_stream`: pure function that classifies the stream end
-//!   + accumulated state into a `LoopDirective` (and optional nudge
-//!   text). Engine calls it once per stream end and dispatches.
-//!
-//! Together these let a follow-up PR collapse the stream-event handling
-//! half of `process_query` (lines ~2995-5050) into a single
-//! `finalize_stream(...).apply()` without breaking byte-for-byte
-//! semantics (the existing mocked-SSE integration tests in
-//! `engine.rs` will catch regressions).
+//! arm) is still inlined in `engine.rs::process_query`; migrating it to
+//! dispatch on `LoopDirective` is the follow-up step (tracked
+//! separately). Until that lands `finalize_stream` is unused by the
+//! loop — hence the module-level `allow(dead_code)`.
+
+#![allow(dead_code)]
 
 /// The active/passive phases of the streaming event loop. Replaces the
 /// previous `stream_finalized: bool` flag with explicit states that
@@ -83,9 +69,17 @@ pub struct StreamEnd<'a> {
 /// Pure: no side effects, no I/O. The engine still does the work of
 /// emitting the right events and re-entering the loop, but the decision
 /// tree is now isolated, testable, and one read away.
+///
+/// Turn-limit semantics (P3 review fix): the engine's hard stop is
+/// `turn >= config.max_turns` checked at the TOP of `'agent_loop`
+/// (engine.rs ~1927), and the A10 wrap-up nudge fires one turn EARLIER
+/// (entering the final turn). This classifier mirrors the hard stop
+/// exactly; the A10 nudge is emitted by the loop before it gets here,
+/// so this function only sees the boundary itself.
 pub fn finalize_stream(end: &StreamEnd<'_>) -> LoopDirective {
-    // Hard stop on the turn limit.
-    if end.current_turn + 1 >= end.max_turns {
+    // Hard stop on the turn limit — same boundary as the engine's
+    // top-of-loop `turn >= config.max_turns` check.
+    if end.current_turn >= end.max_turns {
         return LoopDirective::Finalize;
     }
 
@@ -160,7 +154,12 @@ mod tests {
 
     #[test]
     fn turn_limit_finalizes() {
-        let d = finalize_stream(&end_with(StreamingPhase::Finalized, 0, 0, 19));
+        // Boundary mirrors the engine's top-of-loop check:
+        // turn >= max_turns (20) finalizes; turn 19 is still the final
+        // working turn (the A10 wrap-up nudge was already injected).
+        let d = finalize_stream(&end_with(StreamingPhase::Finalized, 0, 0, 20));
         assert_eq!(d, LoopDirective::Finalize);
+        let still_working = finalize_stream(&end_with(StreamingPhase::Finalized, 2, 0, 19));
+        assert_eq!(still_working, LoopDirective::Continue);
     }
 }
