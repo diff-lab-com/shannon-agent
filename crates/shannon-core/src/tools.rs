@@ -866,7 +866,14 @@ impl ToolRegistry {
         let deferred = Self::recover_lock(self.deferred.read());
         let defs: Vec<shannon_engine::api::ToolDefinition> = Self::recover_lock(self.tools.read())
             .values()
-            .filter(|t| self.is_allowed(t.name()) && !deferred.contains(t.name()))
+            .filter(|t| {
+                self.is_allowed(t.name())
+                    && !deferred.contains(t.name())
+                    // CD2 Phase 2: hidden tools are still callable but their
+                    // schema is not advertised to the model. Used by
+                    // deprecated aliases kept for host-side callers.
+                    && !t.hidden_from_llm()
+            })
             .map(|tool| shannon_engine::api::ToolDefinition {
                 name: tool.name().to_string(),
                 description: tool.description().to_string(),
@@ -976,6 +983,64 @@ mod tests {
             names.iter().filter(|n| *n == "mcp__tool_search").count(),
             1,
             "search tool must not be double-registered"
+        );
+    }
+
+    /// CD2: tools marked hidden_from_llm must NOT appear in the
+    /// tools/definitions sent to the model. They remain registered and
+    /// callable (for host-side code and `mcp__tool_search` discovery).
+    #[tokio::test]
+    async fn hidden_tool_excluded_from_llm_schema_but_still_listed() {
+        struct VisibleTool;
+        #[async_trait]
+        impl Tool for VisibleTool {
+            fn name(&self) -> &str {
+                "Visible"
+            }
+            fn description(&self) -> &str {
+                "v"
+            }
+            fn input_schema(&self) -> Value {
+                json!({"type": "object"})
+            }
+            async fn execute(&self, _input: Value) -> ToolResult<ToolOutput> {
+                Ok(ToolOutput::success("ok".into()))
+            }
+        }
+        struct HiddenTool;
+        #[async_trait]
+        impl Tool for HiddenTool {
+            fn name(&self) -> &str {
+                "Hidden"
+            }
+            fn description(&self) -> &str {
+                "h"
+            }
+            fn input_schema(&self) -> Value {
+                json!({"type": "object"})
+            }
+            fn hidden_from_llm(&self) -> bool {
+                true
+            }
+            async fn execute(&self, _input: Value) -> ToolResult<ToolOutput> {
+                Ok(ToolOutput::success("ok".into()))
+            }
+        }
+        let registry = ToolRegistry::new();
+        registry.register(Box::new(VisibleTool)).unwrap();
+        registry.register(Box::new(HiddenTool)).unwrap();
+        let names = registry.list();
+        assert!(
+            names.contains(&"Visible".to_string())
+                && names.contains(&"Hidden".to_string()),
+            "both must be registered (host-callable): {names:?}"
+        );
+        let defs = registry.to_tool_definitions();
+        let def_names: Vec<&str> = defs.iter().map(|d| d.name.as_str()).collect();
+        assert!(def_names.contains(&"Visible"), "visible in LLM schema");
+        assert!(
+            !def_names.contains(&"Hidden"),
+            "hidden tool MUST NOT appear in LLM schema: {def_names:?}"
         );
     }
 

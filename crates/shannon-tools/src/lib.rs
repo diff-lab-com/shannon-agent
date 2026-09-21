@@ -441,20 +441,33 @@ fn register_all_tools(
 
     // ── Task management ────────────────────────────────────────────────
     registry.register(Box::new(TodoWriteTool::new()))?;
-    registry.register(Box::new(TaskCreateTool::new()))?;
-    registry.register(Box::new(TaskListTool::new()))?;
-    registry.register(Box::new(TaskUpdateTool::new()))?;
-    registry.register(Box::new(TaskGetTool::new()))?;
+    // C+D Phase 2: by default, the legacy TaskCreate/List/Update/Get
+    // surface is hidden from the LLM's tool schema (kept callable for
+    // host-side users + desktop through the `hidden` constructor that
+    // flips `hidden_from_llm`). Their operations are fully covered by
+    // TodoWrite. SHANNON_LEGACY_TASK_TOOLS=1 re-advertises them to the
+    // model for one release cycle as a deprecation runway.
+    let legacy_visible = std::env::var("SHANNON_LEGACY_TASK_TOOLS")
+        .ok()
+        .map(|s| s == "1")
+        .unwrap_or(false);
+    if legacy_visible {
+        registry.register(Box::new(TaskCreateTool::new()))?;
+        registry.register(Box::new(TaskListTool::new()))?;
+        registry.register(Box::new(TaskUpdateTool::new()))?;
+        registry.register(Box::new(TaskGetTool::new()))?;
+    } else {
+        registry.register(Box::new(TaskCreateTool::new().hidden()))?;
+        registry.register(Box::new(TaskListTool::new().hidden()))?;
+        registry.register(Box::new(TaskUpdateTool::new().hidden()))?;
+        registry.register(Box::new(TaskGetTool::new().hidden()))?;
+    }
     // C+D Phase 3: the op-enum `Task` tool (crates/shannon-tools/src/task.rs)
     // collided with Claude Code's "Task" = subagent-spawn convention. Its
     // operations are fully covered by TodoWrite + TaskCreate/List/Update/Get
     // above. Removed from the default registry; re-introducible via
     // `SHANNON_LEGACY_TASK_TOOLS=1` (R1 Phase 2) if any host needs it.
-    if std::env::var("SHANNON_LEGACY_TASK_TOOLS")
-        .ok()
-        .map(|s| s == "1")
-        .unwrap_or(false)
-    {
+    if legacy_visible {
         registry.register(Box::new(TaskTool::new()))?;
     }
     registry.register(Box::new(TaskOutputTool::new()))?;

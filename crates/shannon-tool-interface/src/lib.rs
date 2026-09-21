@@ -177,6 +177,19 @@ pub trait Tool: Send + Sync {
     fn is_destructive(&self) -> bool {
         false
     }
+
+    /// Hidden tools still execute when called directly by the model (e.g.
+    /// via name lookup or programmatic dispatch), but their JSON schema
+    /// is excluded from the tools/definition sent to the LLM. Used to
+    /// keep deprecated / internal-only tools callable without inflating
+    /// the prompt's schema surface.
+    ///
+    /// Default: `false` (visible). Override and return `true` for
+    /// deprecated aliases or compile-time helpers that should not
+    /// appear in the model's context window.
+    fn hidden_from_llm(&self) -> bool {
+        false
+    }
 }
 
 /// Metadata about a registered tool, used for tool discovery.

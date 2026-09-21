@@ -350,24 +350,32 @@ pub struct TodoWriteTool {
 pub struct TaskCreateTool {
     description: String,
     task_store: TaskStore,
+    /// C+D Phase 2: when true, the tool's schema is excluded from the
+    /// tools/definitions sent to the model. The tool is still callable
+    /// directly (host-side code / `mcp__tool_search`-style discovery)
+    /// and the description still says what it does for human readers.
+    hidden_from_llm: bool,
 }
 
 /// Task list tool
 pub struct TaskListTool {
     description: String,
     task_store: TaskStore,
+    hidden_from_llm: bool,
 }
 
 /// Task update tool
 pub struct TaskUpdateTool {
     description: String,
     task_store: TaskStore,
+    hidden_from_llm: bool,
 }
 
 /// Task get tool
 pub struct TaskGetTool {
     description: String,
     task_store: TaskStore,
+    hidden_from_llm: bool,
 }
 
 impl Default for TodoWriteTool {
@@ -569,6 +577,7 @@ impl TaskCreateTool {
             description: "Create a new task with subject, description, and optional metadata"
                 .to_string(),
             task_store: global_task_store(),
+            hidden_from_llm: false,
         }
     }
 
@@ -577,7 +586,15 @@ impl TaskCreateTool {
             description: "Create a new task with subject, description, and optional metadata"
                 .to_string(),
             task_store,
+            hidden_from_llm: false,
         }
+    }
+
+    /// C+D Phase 2: hide from the LLM-facing tool schema (still callable
+    /// by host code / `mcp__tool_search`-style discovery).
+    pub fn hidden(mut self) -> Self {
+        self.hidden_from_llm = true;
+        self
     }
 
     async fn create_task(&self, input: TaskCreateInput) -> Result<TaskCreateOutput, ToolError> {
@@ -656,6 +673,10 @@ impl Tool for TaskCreateTool {
             "required": ["subject", "description"]
         })
     }
+
+    fn hidden_from_llm(&self) -> bool {
+        self.hidden_from_llm
+    }
 }
 
 impl Default for TaskListTool {
@@ -669,6 +690,7 @@ impl TaskListTool {
         Self {
             description: "List all tasks with optional status filter".to_string(),
             task_store: Arc::new(RwLock::new(HashMap::new())),
+            hidden_from_llm: false,
         }
     }
 
@@ -676,7 +698,15 @@ impl TaskListTool {
         Self {
             description: "List all tasks with optional status filter".to_string(),
             task_store,
+            hidden_from_llm: false,
         }
+    }
+
+    /// C+D Phase 2: hide from the LLM-facing tool schema (still callable
+    /// by host code / `mcp__tool_search`-style discovery).
+    pub fn hidden(mut self) -> Self {
+        self.hidden_from_llm = true;
+        self
     }
 
     async fn list_tasks(&self, input: TaskListInput) -> Result<TaskListOutput, ToolError> {
@@ -752,6 +782,10 @@ impl Tool for TaskListTool {
     fn is_read_only(&self) -> bool {
         true
     }
+
+    fn hidden_from_llm(&self) -> bool {
+        self.hidden_from_llm
+    }
 }
 
 impl Default for TaskUpdateTool {
@@ -765,6 +799,7 @@ impl TaskUpdateTool {
         Self {
             description: "Update an existing task's status, subject, or description".to_string(),
             task_store: Arc::new(RwLock::new(HashMap::new())),
+            hidden_from_llm: false,
         }
     }
 
@@ -772,7 +807,14 @@ impl TaskUpdateTool {
         Self {
             description: "Update an existing task's status, subject, or description".to_string(),
             task_store,
+            hidden_from_llm: false,
         }
+    }
+
+    /// C+D Phase 2: hide from the LLM-facing tool schema.
+    pub fn hidden(mut self) -> Self {
+        self.hidden_from_llm = true;
+        self
     }
 
     async fn update_task(&self, input: TaskUpdateInput) -> Result<TaskUpdateOutput, ToolError> {
@@ -868,6 +910,10 @@ impl Tool for TaskUpdateTool {
             "required": ["task_id"]
         })
     }
+
+    fn hidden_from_llm(&self) -> bool {
+        self.hidden_from_llm
+    }
 }
 
 impl Default for TaskGetTool {
@@ -881,6 +927,7 @@ impl TaskGetTool {
         Self {
             description: "Get details of a specific task by ID".to_string(),
             task_store: Arc::new(RwLock::new(HashMap::new())),
+            hidden_from_llm: false,
         }
     }
 
@@ -888,7 +935,14 @@ impl TaskGetTool {
         Self {
             description: "Get details of a specific task by ID".to_string(),
             task_store,
+            hidden_from_llm: false,
         }
+    }
+
+    /// C+D Phase 2: hide from the LLM-facing tool schema.
+    pub fn hidden(mut self) -> Self {
+        self.hidden_from_llm = true;
+        self
     }
 
     async fn get_task(&self, input: TaskGetInput) -> Result<TaskGetOutput, ToolError> {
@@ -952,6 +1006,10 @@ impl Tool for TaskGetTool {
     }
     fn is_read_only(&self) -> bool {
         true
+    }
+
+    fn hidden_from_llm(&self) -> bool {
+        self.hidden_from_llm
     }
 }
 
