@@ -21,7 +21,10 @@ test.describe('Shannon Desktop UI', () => {
     // first render. Wait explicitly for the welcome *or* chat input to
     // appear instead of relying on networkidle.
     await page.waitForLoadState('domcontentloaded')
-    const input = page.getByPlaceholder(/Ask Shannon anything\.\.\./i)
+    // The composer placeholder is context-aware ("Working in — <project>"
+    // when the session has a working dir), so match the textbox by its
+    // stable aria-label instead of placeholder text.
+    const input = page.getByRole('textbox', { name: 'Message' })
     const welcome = page.getByText(/Welcome/i)
     await expect(input.or(welcome).first()).toBeVisible({ timeout: 15000 })
   })

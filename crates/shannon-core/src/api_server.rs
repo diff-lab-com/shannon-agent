@@ -775,6 +775,34 @@ async fn handle_ws_socket(socket: WebSocket, state: AppState) {
                 session_id: query_session_hint,
                 attachments,
             } => {
+                // review §P3-3: parse session_id eagerly. The previous
+                // `Uuid::parse_str(...).unwrap_or_default()` silently
+                // collapsed every malformed id to the nil UUID, so every
+                // broken caller shared one disk-side session log and
+                // events history. A malformed id now yields one Error
+                // frame and continues the outer loop (socket stays up),
+                // matching the attachment-validation pattern below.
+                let parsed_session_id = match query_session_hint.as_deref() {
+                    None => Uuid::new_v4(),
+                    Some(s) => match uuid::Uuid::parse_str(s) {
+                        Ok(id) => id,
+                        Err(e) => {
+                            tracing::warn!(
+                                session_id = %s,
+                                error = %e,
+                                "rejecting WS Query: malformed session_id",
+                            );
+                            let _ = send_msg(
+                                &mut sender,
+                                WsServerMessage::Error {
+                                    message: format!("invalid session_id: {e}"),
+                                },
+                            )
+                            .await;
+                            continue;
+                        }
+                    },
+                };
                 // Validate B4 attachments before touching the engine; a
                 // violation is one Error frame, then the socket stays up.
                 let attachment_blocks = match attachments.as_deref() {
@@ -826,10 +854,8 @@ async fn handle_ws_socket(socket: WebSocket, state: AppState) {
                     engine.restore_messages(s.messages.clone());
                 }
 
-                let effective_session_id = resolve_session_id(
-                    query_session_hint.as_deref(),
-                    uuid::Uuid::parse_str(&session_id).unwrap_or_default(),
-                );
+                let effective_session_id =
+                    resolve_session_id(query_session_hint.as_deref(), parsed_session_id);
 
                 let context = QueryContext {
                     query_id: uuid::Uuid::new_v4(),
@@ -904,6 +930,16 @@ async fn handle_ws_socket(socket: WebSocket, state: AppState) {
                                 }),
                                 Ok(QueryEvent::Failed { error, .. }) => {
                                     Some(WsServerMessage::Failed { error })
+                                }
+                                Ok(QueryEvent::ConversationUpdate { messages, .. }) => {
+                                    // review §P1-6: the WS host was previously
+                                    // dropping ConversationUpdate, so each new
+                                    // Query on the same connection started with
+                                    // the stale `self.conversation` (often the
+                                    // empty default). Restore on receipt so the
+                                    // next Query carries the prior context.
+                                    engine.restore_messages(messages);
+                                    None
                                 }
                                 Ok(_) => None,
                                 Err(e) => Some(WsServerMessage::Failed {

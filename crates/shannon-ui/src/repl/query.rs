@@ -1088,6 +1088,18 @@ pub fn handle_query(repl: &mut Repl, input: &str, terminal: &mut Option<&mut Ter
                 break;
             }
 
+            // Drain any pending permission request raised by the engine. The
+            // main loop only checks permission_req_rx when streaming_active
+            // is false; while we are streaming here that check is skipped, so
+            // approval dialogs would never appear and the engine would block
+            // forever on response_rx.recv() in ASK mode (review §P0-4).
+            if repl.state.permission_dialog.is_none() {
+                if let Ok(req) = repl.permission_req_rx.try_recv() {
+                    repl.state.permission_dialog = Some(req.prompt);
+                    repl.state.permission_response_tx = Some(req.response_tx);
+                }
+            }
+
             // Handle key events during streaming: cancel, scroll, and input
             if crossterm::event::poll(std::time::Duration::ZERO).unwrap_or(false) {
                 if let Ok(crossterm::event::Event::Key(key)) = crossterm::event::read() {
@@ -1646,6 +1658,51 @@ pub fn handle_query(repl: &mut Repl, input: &str, terminal: &mut Option<&mut Ter
     repl.state.progress_bar_visible = false;
     repl.state.multi_progress_visible = false;
     repl.state.multi_progress.clear();
+
+    // review §P0-5 safety net: if the spawned query task was aborted before
+    // it could hand the engine back (cancel / panic / early drop), the
+    // `repl.query_engine` slot is now None and the REPL would otherwise
+    // refuse every subsequent query. Construct a fresh engine so the user
+    // can keep going. Conversation state from the dropped engine is lost —
+    // this is preferable to bricking the REPL.
+    if repl.query_engine.is_none() {
+        let config = shannon_engine::api::LlmClientConfig {
+            api_key: String::new(),
+            base_url: String::new(),
+            model: repl.state.model.clone().unwrap_or_default(),
+            max_tokens: 8192,
+            timeout_seconds: 600,
+            api_version: String::new(),
+            provider: repl
+                .state
+                .selected_provider
+                .clone()
+                .unwrap_or(shannon_engine::api::LlmProvider::Ollama),
+            extra_headers: std::collections::HashMap::new(),
+            retry_config: shannon_engine::api::RetryConfig::default(),
+            fallback_provider: None,
+            fallback_base_url: None,
+            max_stream_reconnects: 0,
+            budget_tokens: None,
+            reasoning_effort: None,
+            enable_anthropic_toolsets: shannon_engine::api::toolsets::anthropic_toolsets_from_env(),
+        };
+        let client = shannon_engine::api::LlmClient::new(config);
+        let tools = shannon_core::ToolRegistry::new();
+        let permissions = shannon_engine::permissions::PermissionManager::new();
+        let state = shannon_engine::state::StateManager::new();
+        let engine = shannon_core::query_engine::QueryEngine::with_defaults(
+            client,
+            tools,
+            permissions,
+            state,
+        );
+        repl.query_engine = Some(engine);
+        tracing::warn!(
+            "handle_query: query engine was lost mid-turn (cancel/abort/panic); \
+             replaced with a fresh engine so subsequent queries still work"
+        );
+    }
 
     Ok(())
 }

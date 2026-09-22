@@ -151,6 +151,47 @@ mod shannon_desktop_build {
         m
     }
 
+    /// Minimal manifest for the `dialog` plugin (review §P1-11): exposes
+    /// only the two verbs the desktop frontend actually uses —
+    /// `allow-open` (file / directory pickers) and `allow-save` (artifact /
+    /// session / persona-pack exports). Without this manifest the
+    /// `file-dialogs.json` capability we ship would fail resolution and
+    /// the @tauri-apps/plugin-dialog calls would 403 at runtime, leaving
+    /// the user with a toast instead of the picker UI.
+    fn dialog_manifest() -> Manifest {
+        let mut m = Manifest {
+            default_permission: None,
+            permissions: BTreeMap::new(),
+            permission_sets: BTreeMap::new(),
+            global_scope_schema: None,
+        };
+        let allow_open = Permission {
+            version: None,
+            identifier: "allow-open".to_string(),
+            description: Some("Allows opening a file/directory picker dialog.".to_string()),
+            commands: Commands {
+                allow: vec!["open".to_string()],
+                deny: vec![],
+            },
+            scope: Default::default(),
+            platforms: None,
+        };
+        let allow_save = Permission {
+            version: None,
+            identifier: "allow-save".to_string(),
+            description: Some("Allows opening a save file dialog.".to_string()),
+            commands: Commands {
+                allow: vec!["save".to_string()],
+                deny: vec![],
+            },
+            scope: Default::default(),
+            platforms: None,
+        };
+        m.permissions.insert("allow-open".to_string(), allow_open);
+        m.permissions.insert("allow-save".to_string(), allow_save);
+        m
+    }
+
     fn load_capabilities(dir: &Path) -> Result<Vec<Capability>, String> {
         let mut entries = Vec::new();
         let mut files: Vec<PathBuf> = std::fs::read_dir(dir)
@@ -189,6 +230,7 @@ mod shannon_desktop_build {
         let mut manifests: BTreeMap<String, Manifest> = BTreeMap::new();
         manifests.insert("core:event".into(), core_event_manifest());
         manifests.insert("core:window".into(), core_window_manifest());
+        manifests.insert("dialog".into(), dialog_manifest());
 
         // Fail fast with upstream-identical semantics: resolve the ACL the
         // same way tauri-codegen will at macro expansion. An unknown

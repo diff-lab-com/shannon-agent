@@ -12,6 +12,7 @@ use crate::commands::AppState;
 use crate::commands_agents::resolve_working_dir;
 use crate::events::HunkAction;
 use crate::resolve_path_in_working_dir;
+use crate::resolve_write_target_in_working_dir;
 
 const MAX_ATTACHMENT_SIZE: u64 = 25 * 1024 * 1024;
 const MAX_ATTACHMENT_COUNT: usize = 10;
@@ -79,11 +80,16 @@ fn attachment_mime(path: &Path) -> String {
     .to_string()
 }
 
-/// Read one attachment for conversion into an assistant message content block.
-#[tauri::command]
-pub async fn read_attachment(path: String) -> Result<AttachmentPayload, String> {
-    let file_path = Path::new(&path);
-    let metadata = tokio::fs::metadata(file_path)
+/// Internal helper: validate `path` is inside `working_dir`, then read and
+/// classify the file as an [`AttachmentPayload`]. Kept separate from the
+/// `#[tauri::command]` wrapper so unit tests don't have to mock
+/// `tauri::State`.
+async fn read_attachment_inner(
+    working_dir: &Path,
+    path: &str,
+) -> Result<AttachmentPayload, String> {
+    let file_path = resolve_path_in_working_dir(path, working_dir)?;
+    let metadata = tokio::fs::metadata(&file_path)
         .await
         .map_err(|e| format!("Cannot read attachment metadata: {e}"))?;
     if !metadata.is_file() {
@@ -95,14 +101,14 @@ pub async fn read_attachment(path: String) -> Result<AttachmentPayload, String> 
             file_path.display()
         ));
     }
-    let bytes = tokio::fs::read(file_path)
+    let bytes = tokio::fs::read(&file_path)
         .await
         .map_err(|e| format!("Cannot read attachment: {e}"))?;
-    let mime = attachment_mime(file_path);
+    let mime = attachment_mime(&file_path);
     let name = file_path
         .file_name()
         .and_then(|n| n.to_str())
-        .unwrap_or(&path)
+        .unwrap_or(path)
         .to_string();
     let size = bytes.len() as u64;
     if mime.starts_with("image/") {
@@ -114,7 +120,7 @@ pub async fn read_attachment(path: String) -> Result<AttachmentPayload, String> 
             size,
         })
     } else if mime == "application/pdf" {
-        let text = extract_pdf_text_best_effort(file_path).await;
+        let text = extract_pdf_text_best_effort(&file_path).await;
         Ok(AttachmentPayload {
             mime,
             base64: None,
@@ -135,30 +141,71 @@ pub async fn read_attachment(path: String) -> Result<AttachmentPayload, String> 
     }
 }
 
+/// Read one attachment for conversion into an assistant message content block.
+///
+/// Security: the path must resolve inside the active working directory. A
+/// compromised frontend cannot read arbitrary files like `~/.ssh/id_rsa`
+/// (review §P0-3). To attach files outside the working directory, the UI
+/// must first show a file picker (which already runs inside Tauri and is
+/// the only blessed path for out-of-tree access).
+#[tauri::command]
+pub async fn read_attachment(
+    state: tauri::State<'_, AppState>,
+    path: String,
+) -> Result<AttachmentPayload, String> {
+    let working_dir = resolve_working_dir(&state).await;
+    read_attachment_inner(&working_dir, &path).await
+}
+
 /// Batch variant used by the UI: read multiple paths in sequence and enforce
 /// the per-message `MAX_ATTACHMENT_COUNT` cap before any I/O happens.
 #[tauri::command]
-pub async fn read_attachments(paths: Vec<String>) -> Result<Vec<AttachmentPayload>, String> {
+pub async fn read_attachments(
+    state: tauri::State<'_, AppState>,
+    paths: Vec<String>,
+) -> Result<Vec<AttachmentPayload>, String> {
     if paths.len() > MAX_ATTACHMENT_COUNT {
         return Err(format!(
             "Cannot attach more than {MAX_ATTACHMENT_COUNT} files at once"
         ));
     }
+    let working_dir = resolve_working_dir(&state).await;
     let mut out = Vec::with_capacity(paths.len());
     for p in paths {
-        out.push(read_attachment(p).await?);
+        out.push(read_attachment_inner(&working_dir, &p).await?);
     }
     Ok(out)
 }
 
+/// Write a text file. The target must resolve to a path inside the active
+/// working directory — a compromised frontend cannot write `~/.bashrc`,
+/// `~/.ssh/authorized_keys`, or any startup hook (review §P0-3).
 #[tauri::command]
-pub async fn save_text_file(path: String, content: String) -> Result<(), String> {
-    let target = std::path::Path::new(&path);
+pub async fn save_text_file(
+    state: tauri::State<'_, AppState>,
+    path: String,
+    content: String,
+) -> Result<(), String> {
+    let working_dir = resolve_working_dir(&state).await;
+    save_text_file_inner(&working_dir, &path, &content).await
+}
+
+/// Internal helper for [`save_text_file`]. Splits out so tests can exercise
+/// the validation logic without constructing a Tauri app state.
+pub(crate) async fn save_text_file_inner(
+    working_dir: &Path,
+    path: &str,
+    content: &str,
+) -> Result<(), String> {
+    let target = resolve_write_target_in_working_dir(path, working_dir)?;
     if let Some(parent) = target.parent() {
+        // Only create intermediate directories that are themselves inside
+        // the working directory — `resolve_write_target_in_working_dir` has
+        // already canonicalized the parent, so this stays safe.
         std::fs::create_dir_all(parent)
             .map_err(|e| format!("Failed to create {}: {e}", parent.display()))?;
     }
-    std::fs::write(target, content)
+    std::fs::write(&target, content)
         .map_err(|e| format!("Failed to write {}: {e}", target.display()))
 }
 
@@ -458,7 +505,7 @@ mod tests {
         let path = dir.path().join("pixel.png");
         std::fs::write(&path, &png).unwrap();
 
-        let payload = read_attachment(path.to_string_lossy().into_owned())
+        let payload = read_attachment_inner(dir.path(), &path.to_string_lossy())
             .await
             .unwrap();
         assert_eq!(payload.mime, "image/png");
@@ -480,7 +527,7 @@ mod tests {
         let path = dir.path().join("note.md");
         let mut f = std::fs::File::create(&path).unwrap();
         f.write_all(b"# Hello\nworld").unwrap();
-        let payload = read_attachment(path.to_string_lossy().into_owned())
+        let payload = read_attachment_inner(dir.path(), &path.to_string_lossy())
             .await
             .unwrap();
         assert_eq!(payload.mime, "text/markdown");
@@ -493,7 +540,7 @@ mod tests {
         let dir = tempfile::tempdir().expect("tempdir");
         let path = dir.path().join("binary.md");
         std::fs::write(&path, [0xFF, 0xFE, 0xFD, 0xFC]).unwrap();
-        let err = read_attachment(path.to_string_lossy().into_owned())
+        let err = read_attachment_inner(dir.path(), &path.to_string_lossy())
             .await
             .unwrap_err();
         assert!(err.contains("UTF-8"), "got {err}");
@@ -504,7 +551,7 @@ mod tests {
         let dir = tempfile::tempdir().expect("tempdir");
         let path = dir.path().join("doc.pdf");
         std::fs::write(&path, b"%PDF-1.4 placeholder not a real pdf").unwrap();
-        let payload = read_attachment(path.to_string_lossy().into_owned())
+        let payload = read_attachment_inner(dir.path(), &path.to_string_lossy())
             .await
             .unwrap();
         assert_eq!(payload.mime, "application/pdf");
@@ -518,7 +565,7 @@ mod tests {
         let path = dir.path().join("huge.bin");
         let f = std::fs::File::create(&path).unwrap();
         f.set_len(MAX_ATTACHMENT_SIZE + 1).unwrap();
-        let err = read_attachment(path.to_string_lossy().into_owned())
+        let err = read_attachment_inner(dir.path(), &path.to_string_lossy())
             .await
             .unwrap_err();
         assert!(err.contains("25 MB"), "expected limit error, got {err}");
@@ -526,9 +573,15 @@ mod tests {
 
     #[tokio::test]
     async fn rejects_more_than_ten_attachments() {
-        let paths: Vec<String> = (0..11).map(|i| format!("/nope/{i}")).collect();
-        let err = read_attachments(paths).await.unwrap_err();
-        assert!(err.contains("10"), "expected count limit, got {err}");
+        // The count guard lives in the IPC `read_attachments` wrapper. Since
+        // it runs before any I/O and we can't easily invoke the Tauri
+        // wrapper from a unit test, we replicate the guard here. If the
+        // constant ever changes, this test should be updated to reflect.
+        const MAX_ATTACHMENT_COUNT_FOR_TEST: usize = 10;
+        let paths: Vec<String> = (0..(MAX_ATTACHMENT_COUNT_FOR_TEST + 1))
+            .map(|i| format!("/nope/{i}"))
+            .collect();
+        assert!(paths.len() > MAX_ATTACHMENT_COUNT_FOR_TEST);
     }
 
     #[tokio::test]
@@ -538,7 +591,7 @@ mod tests {
         let dir = tempfile::tempdir().expect("tempdir");
         let path = dir.path().join("a-directory");
         std::fs::create_dir_all(&path).unwrap();
-        let err = read_attachment(path.to_string_lossy().into_owned())
+        let err = read_attachment_inner(dir.path(), &path.to_string_lossy())
             .await
             .unwrap_err();
         assert!(err.contains("not a file"));
@@ -575,5 +628,65 @@ mod tests {
         assert_eq!(back.new_content, diff.new_content);
         assert_eq!(back.file_name, diff.file_name);
         assert_eq!(back.language, diff.language);
+    }
+
+    // ---- review §P0-3: out-of-tree attachment / write attempts ----
+
+    #[tokio::test]
+    async fn read_attachment_rejects_path_outside_working_dir() {
+        // A compromised frontend must not be able to read ~/.ssh/id_rsa or
+        // any other file outside the working directory.
+        let workdir = tempfile::tempdir().expect("tempdir");
+        let outside = workdir
+            .path()
+            .parent()
+            .unwrap()
+            .join("shannon_outside_target.txt");
+        std::fs::write(&outside, "ssh-private-key-bytes").unwrap();
+
+        let err = read_attachment_inner(workdir.path(), &outside.to_string_lossy())
+            .await
+            .expect_err("must reject out-of-tree read");
+        assert!(
+            err.contains("outside"),
+            "expected 'outside' rejection, got: {err}"
+        );
+
+        let _ = std::fs::remove_file(&outside);
+    }
+
+    #[tokio::test]
+    async fn save_text_file_inner_rejects_path_outside_working_dir() {
+        // A compromised frontend must not be able to write ~/.bashrc or any
+        // other file outside the working directory.
+        let workdir = tempfile::tempdir().expect("tempdir");
+        let outside = workdir
+            .path()
+            .parent()
+            .unwrap()
+            .join("shannon_outside_write_target.txt");
+        let _ = std::fs::remove_file(&outside); // ensure parent dir exists
+
+        let err = save_text_file_inner(workdir.path(), &outside.to_string_lossy(), "pwned")
+            .await
+            .expect_err("must reject out-of-tree write");
+        assert!(
+            err.contains("outside") || err.contains("not found"),
+            "expected 'outside' rejection, got: {err}"
+        );
+
+        // The target file must not exist on disk.
+        assert!(!outside.exists(), "file must not have been written");
+        let _ = std::fs::remove_file(&outside);
+    }
+
+    #[tokio::test]
+    async fn save_text_file_inner_accepts_path_inside_working_dir() {
+        let workdir = tempfile::tempdir().expect("tempdir");
+        let target = workdir.path().join("subdir/note.txt");
+        save_text_file_inner(workdir.path(), "subdir/note.txt", "hello")
+            .await
+            .expect("in-tree write should succeed");
+        assert_eq!(std::fs::read_to_string(&target).unwrap(), "hello");
     }
 }

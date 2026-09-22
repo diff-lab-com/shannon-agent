@@ -83,9 +83,19 @@ fn now_ms() -> u64 {
 /// The default `mobile` block the desktop writes into the gateway config so the
 /// inbound `shannon/*` server starts on the next gateway launch. Paths are the
 /// canonical `~/.shannon/mobile-*` files these commands also use, so both sides
-/// agree by construction. Binds `0.0.0.0`: LAN direct-connect pairing is
-/// reachable only from a non-loopback bind (the gateway skips its mDNS
-/// advertisement on loopback binds), and access is gated by one-time tokens.
+/// agree by construction.
+///
+/// review §P1-4: the previous default bound `0.0.0.0` in cleartext, so the
+/// QR-carried pair token and all subsequent command traffic were sniffable
+/// by anyone on the same WiFi. We now default to TLS-on (the gateway ships
+/// a self-signed cert at `~/.shannon/mobile-tls/` and the QR encodes its
+/// SHA-256 fingerprint for the phone to pin). The bind stays
+/// non-loopback because LAN pairing requires the phone to reach the
+/// desktop; iOS ATS rejects raw-IP endpoints so the desktop advertises
+/// a `.local` hostname over mDNS. Pair tokens are still single-use, so a
+/// sniff-then-relay attacker gains nothing even if they break the cert
+/// pin. Returning users on old mobile builds can flip `tls.enabled = false`
+/// in the gateway config file to restore plaintext for that pairing.
 pub fn default_mobile_config() -> GatewayMobileConfig {
     GatewayMobileConfig {
         enabled: true,
@@ -97,9 +107,10 @@ pub fn default_mobile_config() -> GatewayMobileConfig {
         devices_file: devices_path()
             .ok()
             .and_then(|p| p.to_str().map(str::to_string)),
-        // v0.12 rollout: TLS ships OFF. Flip the default only after the
-        // pinning-capable mobile build is widespread (release checklist).
-        tls: None,
+        // review §P1-4: TLS-on by default. The gateway emits a self-signed
+        // cert in `~/.shannon/mobile-tls/` on first start; the desktop
+        // reads the cert fingerprint into the QR payload so phones pin it.
+        tls: Some(GatewayMobileTlsConfig { enabled: true }),
     }
 }
 
@@ -239,9 +250,32 @@ pub async fn mobile_generate_pair_token() -> Result<PairTokenResponse, String> {
         serde_json::to_string(&record).map_err(|e| format!("pair token: serialize failed: {e}"))?;
     let path = tokens_path()?;
     if let Some(parent) = path.parent() {
+        // review §P1-4: directory also needs 0700 so the file mode 0600
+        // we set below actually restricts access (a world-readable
+        // directory still allows name enumeration).
         fs::create_dir_all(parent)
             .map_err(|e| format!("pair token: cannot create {parent:?}: {e}"))?;
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let _ = fs::set_permissions(parent, fs::Permissions::from_mode(0o700));
+        }
     }
+    // review §P1-4: pair tokens grant mobile access — they must not be
+    // world-readable. Use OpenOptions::mode(0o600) on unix to atomically
+    // create with restricted permissions in one step (no brief world-
+    // readable window between fs::write and chmod).
+    #[cfg(unix)]
+    let mut file = {
+        use std::os::unix::fs::OpenOptionsExt;
+        OpenOptions::new()
+            .create(true)
+            .append(true)
+            .mode(0o600)
+            .open(&path)
+            .map_err(|e| format!("pair token: cannot open {path:?}: {e}"))?
+    };
+    #[cfg(not(unix))]
     let mut file = OpenOptions::new()
         .create(true)
         .append(true)

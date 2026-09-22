@@ -8,10 +8,13 @@ test.describe('Settings pages', () => {
   // waits for the main content area to render before asserting on the
   // heading.
   const ROUTES: Array<{ path: string; heading: RegExp | string }> = [
-    { path: '/settings/general', heading: /System Settings|General/i },
-    { path: '/settings/theme', heading: 'Theme Settings' },
-    { path: '/settings/models', heading: 'Model Configuration' },
-    { path: '/settings/advanced', heading: 'Advanced Settings' },
+    // Panes no longer render page-level headings ("System Settings" etc.) —
+    // the banner carries the shared "Settings" h2 and each pane opens with a
+    // stable section h3, which is what we assert on.
+    { path: '/settings/general', heading: /Approval Mode/i },
+    { path: '/settings/theme', heading: /^Theme$/ },
+    { path: '/settings/models', heading: /Performance Strategy/i },
+    { path: '/settings/advanced', heading: /Skill Extraction/i },
   ]
 
   for (const { path, heading } of ROUTES) {

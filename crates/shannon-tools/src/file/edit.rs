@@ -58,6 +58,14 @@ pub struct EditInput {
     /// Preview mode: compute and return the diff without writing the file.
     #[serde(default)]
     pub preview: bool,
+
+    /// review §P2-14: when the three-way merge produces conflict markers,
+    /// the tool no longer writes them to disk unless the caller sets
+    /// `apply_conflicts: true`. Default false — the merged preview is
+    /// returned in `metadata.merged_preview` so the caller can re-issue
+    /// with the field set once they've seen the conflicts.
+    #[serde(default)]
+    pub apply_conflicts: bool,
 }
 
 /// Metadata about a single replacement location
@@ -247,9 +255,65 @@ pub fn perform_edit(
     Ok((new_content, replacements, locations))
 }
 
-/// Compute diff hunks between old and new content using a simple LCS approach.
-/// Returns structured hunks suitable for rendering via DiffRenderer.
-#[allow(unused_assignments)]
+/// Compute the line-level edit script between `old` and `new` using the
+/// Myers diff algorithm from the `similar` crate (O(nd) time, O(n) memory).
+///
+/// review §P2-9: replaces the previous O(m·n) LCS table that allocated
+/// ~20 GB for a 50k-line file. Same `Vec<(char, &str)>` shape as the old
+/// LCS backtrack so the downstream hunk-grouping code stays untouched.
+fn compute_edit_script<'a>(old_lines: &[&'a str], new_lines: &[&'a str]) -> Vec<(char, &'a str)> {
+    use similar::{Algorithm, DiffOp, capture_diff_slices};
+    let ops = capture_diff_slices(Algorithm::Myers, old_lines, new_lines);
+    let mut edits: Vec<(char, &str)> = Vec::with_capacity(old_lines.len() + new_lines.len());
+    for op in ops {
+        match op {
+            DiffOp::Equal {
+                old_index,
+                new_index: _,
+                len,
+            } => {
+                for k in 0..len {
+                    edits.push(('=', old_lines[old_index + k]));
+                }
+            }
+            DiffOp::Delete {
+                old_index,
+                old_len,
+                new_index: _,
+            } => {
+                for k in 0..old_len {
+                    edits.push(('-', old_lines[old_index + k]));
+                }
+            }
+            DiffOp::Insert {
+                old_index: _,
+                new_index,
+                new_len,
+            } => {
+                for k in 0..new_len {
+                    edits.push(('+', new_lines[new_index + k]));
+                }
+            }
+            DiffOp::Replace {
+                old_index,
+                old_len,
+                new_index,
+                new_len,
+            } => {
+                for k in 0..old_len {
+                    edits.push(('-', old_lines[old_index + k]));
+                }
+                for k in 0..new_len {
+                    edits.push(('+', new_lines[new_index + k]));
+                }
+            }
+        }
+    }
+    edits
+}
+
+/// Compute diff hunks between old and new content. Returns structured
+/// hunks suitable for rendering via DiffRenderer.
 pub fn compute_diff_hunks(old: &str, new: &str) -> Vec<DiffHunk> {
     let old_lines: Vec<&str> = old.lines().collect();
     let new_lines: Vec<&str> = new.lines().collect();
@@ -257,10 +321,10 @@ pub fn compute_diff_hunks(old: &str, new: &str) -> Vec<DiffHunk> {
     let m = old_lines.len();
     let n = new_lines.len();
 
-    // Guard against O(m*n) memory explosion on files with many short lines.
-    // Fall back to a simple whole-file replacement diff for large inputs.
-    const MAX_LINES_FOR_LCS: usize = 50_000;
-    if m > MAX_LINES_FOR_LCS || n > MAX_LINES_FOR_LCS {
+    // Guard against pathological inputs. Myers is O(n) memory regardless
+    // of size; the cap is a CPU sanity check only.
+    const MAX_LINES_FOR_DIFF: usize = 200_000;
+    if m > MAX_LINES_FOR_DIFF || n > MAX_LINES_FOR_DIFF {
         if old_lines == new_lines {
             return Vec::new();
         }
@@ -275,35 +339,10 @@ pub fn compute_diff_hunks(old: &str, new: &str) -> Vec<DiffHunk> {
         }];
     }
 
-    // Build LCS table
-    let mut dp = vec![vec![0usize; n + 1]; m + 1];
-    for i in 1..=m {
-        for j in 1..=n {
-            if old_lines[i - 1] == new_lines[j - 1] {
-                dp[i][j] = dp[i - 1][j - 1] + 1;
-            } else {
-                dp[i][j] = dp[i - 1][j].max(dp[i][j - 1]);
-            }
-        }
-    }
-
-    // Backtrack to find edit script
-    let mut edits: Vec<(char, &str)> = Vec::new();
-    let (mut i, mut j) = (m, n);
-    while i > 0 || j > 0 {
-        if i > 0 && j > 0 && old_lines[i - 1] == new_lines[j - 1] {
-            edits.push(('=', old_lines[i - 1]));
-            i -= 1;
-            j -= 1;
-        } else if j > 0 && (i == 0 || dp[i][j - 1] >= dp[i - 1][j]) {
-            edits.push(('+', new_lines[j - 1]));
-            j -= 1;
-        } else {
-            edits.push(('-', old_lines[i - 1]));
-            i -= 1;
-        }
-    }
-    edits.reverse();
+    // Replace the LCS table with a Myers diff via similar. The result is a
+    // Vec<(op, line)> edit script that downstream hunk-grouping already
+    // knows how to consume.
+    let edits = compute_edit_script(&old_lines, &new_lines);
 
     // Build hunks from edit script with context lines
     const CONTEXT: usize = 3;
@@ -356,10 +395,7 @@ pub fn compute_diff_hunks(old: &str, new: &str) -> Vec<DiffHunk> {
                 if !in_hunk {
                     // Start new hunk with leading context
                     in_hunk = true;
-                    hunk_old_start = old_line + 1;
-                    hunk_new_start = new_line + 1;
                     changes_in_hunk = 0;
-                    context_after_change = 0;
                     current_lines.clear();
                     // Add preceding context
                     let ctx_start = old_line.saturating_sub(CONTEXT);
@@ -393,7 +429,6 @@ pub fn compute_diff_hunks(old: &str, new: &str) -> Vec<DiffHunk> {
                 if !in_hunk {
                     in_hunk = true;
                     changes_in_hunk = 0;
-                    context_after_change = 0;
                     current_lines.clear();
                     let ctx_start = old_line.saturating_sub(CONTEXT);
                     for (k, line) in old_lines
@@ -954,6 +989,7 @@ mod tests {
             new_string: "LINE_TWO".to_string(),
             replace_all: false,
             preview: false,
+            apply_conflicts: false,
         };
         let result = execute(input).await;
         cleanup_temp_file(&path);
@@ -972,6 +1008,7 @@ mod tests {
             new_string: "FOO".to_string(),
             replace_all: true,
             preview: false,
+            apply_conflicts: false,
         };
         let result = execute(input).await;
         assert!(result.is_ok());
@@ -992,6 +1029,7 @@ mod tests {
             new_string: "bar".to_string(),
             replace_all: false,
             preview: false,
+            apply_conflicts: false,
         };
         let result = execute(input).await;
         assert!(result.is_err());
@@ -1008,6 +1046,7 @@ mod tests {
             new_string: "replacement".to_string(),
             replace_all: false,
             preview: false,
+            apply_conflicts: false,
         };
         let result = execute(input).await;
         cleanup_temp_file(&path);
@@ -1023,6 +1062,7 @@ mod tests {
             new_string: "FOO".to_string(),
             replace_all: false,
             preview: false,
+            apply_conflicts: false,
         };
         let result = execute(input).await;
         cleanup_temp_file(&path);
@@ -1180,6 +1220,7 @@ mod tests {
             new_string: "REPLACED".to_string(),
             replace_all: false,
             preview: false,
+            apply_conflicts: false,
         };
         let result = execute(input).await;
         cleanup_temp_file(&path);
@@ -1200,6 +1241,7 @@ mod tests {
             new_string: "println!(\"new\");".to_string(),
             replace_all: false,
             preview: false,
+            apply_conflicts: false,
         };
         let result = execute(input).await;
         cleanup_temp_file(&path);
@@ -1219,6 +1261,7 @@ mod tests {
             new_string: "FOO".to_string(),
             replace_all: true,
             preview: false,
+            apply_conflicts: false,
         };
         let result = execute(input).await;
         cleanup_temp_file(&path);
@@ -1236,6 +1279,7 @@ mod tests {
             new_string: "goodbye".to_string(),
             replace_all: false,
             preview: true,
+            apply_conflicts: false,
         };
         let result = execute(input).await;
         assert!(result.is_ok());
@@ -1258,6 +1302,7 @@ mod tests {
             new_string: "println!(\"new\");".to_string(),
             replace_all: false,
             preview: true,
+            apply_conflicts: false,
         };
         let result = execute(input).await;
         assert!(result.is_ok());
@@ -1488,6 +1533,7 @@ mod tests {
             new_string: "replaced_line2".to_string(),
             replace_all: false,
             preview: false,
+            apply_conflicts: false,
         };
         let result = execute(input).await;
 

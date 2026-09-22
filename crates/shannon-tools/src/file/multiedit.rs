@@ -498,6 +498,13 @@ mod tests {
         fn create_dir_all_blocking(&self, p: &std::path::Path) -> std::io::Result<()> {
             self.inner.create_dir_all_blocking(p)
         }
+        fn rename_blocking(
+            &self,
+            from: &std::path::Path,
+            to: &std::path::Path,
+        ) -> std::io::Result<()> {
+            self.inner.rename_blocking(from, to)
+        }
         fn remove_file_blocking(&self, p: &std::path::Path) -> std::io::Result<()> {
             self.inner.remove_file_blocking(p)
         }

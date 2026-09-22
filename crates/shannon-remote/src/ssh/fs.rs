@@ -327,6 +327,16 @@ impl FileSystemProvider for SshFs {
         })
     }
 
+    fn rename_blocking(&self, _from: &Path, _to: &Path) -> io::Result<()> {
+        // SFTP transport: no native atomic rename in the v3 protocol and
+        // copy+delete is not safe enough to silently offer as "atomic".
+        // Callers should fall back to writing the new path directly.
+        Err(io::Error::new(
+            io::ErrorKind::Unsupported,
+            "rename not supported over SFTP",
+        ))
+    }
+
     fn remove_file_blocking(&self, path: &Path) -> io::Result<()> {
         let sftp = self.sftp.clone();
         let path = path.to_path_buf();
@@ -595,6 +605,10 @@ impl FileSystemProvider for SshFs {
     }
 
     fn create_dir_all_blocking(&self, _path: &Path) -> io::Result<()> {
+        Err(super::unsupported_transport())
+    }
+
+    fn rename_blocking(&self, _from: &Path, _to: &Path) -> io::Result<()> {
         Err(super::unsupported_transport())
     }
 

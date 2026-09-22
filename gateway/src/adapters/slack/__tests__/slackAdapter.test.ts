@@ -65,7 +65,9 @@ describe("normalizeSlackEvent", () => {
     if (r.kind !== "message") throw new Error("expected message");
     const msg = r.message;
     expect(msg.chatId).toBe("C1");
-    expect(msg.threadId).toBe("1700000000.001"); // top-level → own ts
+    // review §P2-24: top-level channel message attaches to the channel base
+    // session (threadId undefined), not its own per-message session.
+    expect(msg.threadId).toBeUndefined();
     expect(msg.isDirect).toBe(false);
     expect(msg.senderId).toBe("U1");
   });

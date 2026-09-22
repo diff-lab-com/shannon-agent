@@ -152,6 +152,16 @@ impl FileSystemProvider for SandboxedFs {
         self.inner.create_dir_all_blocking(path)
     }
 
+    fn rename_blocking(&self, from: &Path, to: &Path) -> io::Result<()> {
+        // Atomic temp-file commit: enforce the write policy on the
+        // destination path (not the source — it's the *target* the rename
+        // writes into).
+        if !self.policy.allows_write(to) {
+            return Err(self.deny("rename", to));
+        }
+        self.inner.rename_blocking(from, to)
+    }
+
     fn remove_file_blocking(&self, path: &Path) -> io::Result<()> {
         if !self.policy.allows_write(path) {
             return Err(self.deny("remove", path));

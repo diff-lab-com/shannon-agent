@@ -891,7 +891,15 @@ impl PermissionMemory {
         false
     }
 
-    /// Remember a user's permission choice
+    /// Remember a user's permission choice.
+    ///
+    /// review §P1-1: AlwaysAllow no longer inserts the bare tool name into the
+    /// process-wide `always_allowed` set — that made any Bash command auto-
+    /// approve in any session once the user had approved one (ls, etc.). Now
+    /// `AlwaysAllow` is recorded as a per-session choice, and the underlying
+    /// rule-checker receives a `(tool, command_prefix)` rule from the caller
+    /// (`process_permission_choice`), so the global scope comes from explicit
+    /// `PermissionRules` settings — not from session-level UX clicks.
     pub fn remember_choice(
         &mut self,
         session_id: uuid::Uuid,
@@ -900,7 +908,6 @@ impl PermissionMemory {
     ) {
         match choice {
             PermissionChoice::AlwaysAllow => {
-                self.always_allowed.insert(tool_name.clone());
                 self.session_choices
                     .entry(session_id)
                     .or_default()
@@ -1656,6 +1663,14 @@ impl PermissionManager {
     /// `.shannon/settings.local.json` (`permissions.allow` array), matching
     /// the rule-checker's `Tool(pattern)` syntax. Best-effort: failures are
     /// logged, never surfaced — the in-memory grant still applies.
+    ///
+    /// review §P1-1: the previous format `Bash(<head>:*)` was a literal
+    /// regex match — `:` is a literal character and `*` only matched if the
+    /// command contained a real colon character, so every persisted rule
+    /// silently failed to match. We now emit `Bash(<head> *)` with a single
+    /// space separator so the rule-checker's glob (which uses
+    /// `command.contains(pattern)` for non-glob strings) recognises the
+    /// `<head> <args...>` shape correctly.
     fn persist_allow_rule(tool_name: &str, tool_input: &serde_json::Value) {
         let pattern = if tool_name.eq_ignore_ascii_case("bash") {
             // Scope Bash grants to the exact approved command prefix rather
@@ -1668,7 +1683,7 @@ impl PermissionManager {
                 tool_name.to_string()
             } else {
                 let head: String = cmd.split_whitespace().take(3).collect::<Vec<_>>().join(" ");
-                format!("{tool_name}({head}:*)")
+                format!("{tool_name}({head} *)")
             }
         } else {
             tool_name.to_string()
@@ -2467,8 +2482,13 @@ mod tests {
         mem.remember_choice(sid, "Bash".to_string(), PermissionChoice::AlwaysAllow);
         assert!(mem.is_always_allowed(sid, "Bash"));
         mem.clear_session(sid);
-        // always_allowed is global, not session-scoped, so still true
-        assert!(mem.is_always_allowed(sid, "Bash"));
+        // review §P1-1: AlwaysAllow is now session-scoped, so clearing the
+        // session drops the grant. The previous behaviour (always_allowed
+        // was a process-wide HashSet) was the bug being fixed.
+        assert!(
+            !mem.is_always_allowed(sid, "Bash"),
+            "after clear_session, the per-session AlwaysAllow must be gone"
+        );
     }
 
     #[test]
@@ -3850,5 +3870,61 @@ mod tests {
             RuleCheckDecision::Denied,
             "Deny should win over identical allow pattern"
         );
+    }
+
+    // ---- review §P1-1: persist_allow_rule round-trip + session-scoped choice ----
+
+    #[test]
+    fn persist_allow_rule_bash_format_is_matcher_compatible() {
+        // Before review §P1-1: format was "Bash(<head>:*)" — literal colon
+        // meant the matcher never matched real commands. After: "Bash(<head> *)".
+        // Build a checker the way the runtime does (allow rules from
+        // .shannon/settings.local.json), and verify it matches the same
+        // command prefix the user approved.
+        let head = "git push origin";
+        let allow = vec![format!("Bash({head} *)")];
+        let checker = PermissionRuleChecker::from_rule_strings(&[], &[], &allow);
+
+        // The exact approved form must match.
+        assert_eq!(
+            checker.check("Bash", "git push origin main"),
+            RuleCheckDecision::Allowed,
+            "Bash rule 'Bash(git push origin *)' must allow 'git push origin main'"
+        );
+        // A different prefix must NOT match.
+        assert_eq!(
+            checker.check("Bash", "rm -rf /"),
+            RuleCheckDecision::NoMatch,
+            "Bash rule must not auto-allow unrelated commands"
+        );
+        // A subset prefix must not match either (we approved `git push`, not `git`).
+        assert_eq!(
+            checker.check("Bash", "git checkout -- ."),
+            RuleCheckDecision::NoMatch,
+            "Bash rule must not allow commands under the same tool"
+        );
+    }
+
+    #[test]
+    fn remember_choice_always_allow_is_session_scoped() {
+        // After §P1-1: AlwaysAllow no longer pollutes the process-wide
+        // always_allowed set. Approving Bash in session A must NOT
+        // auto-approve unrelated commands in session B.
+        let mut mem = PermissionMemory::new();
+        let sid_a = uuid::Uuid::new_v4();
+        let sid_b = uuid::Uuid::new_v4();
+
+        mem.remember_choice(sid_a, "Bash".to_string(), PermissionChoice::AlwaysAllow);
+
+        // Session A: yes (per-session choice).
+        assert!(mem.is_always_allowed(sid_a, "Bash"));
+        // Session B: must NOT auto-approve, because the user clicked Always
+        // for a specific Bash call in session A, not globally for all Bash.
+        assert!(
+            !mem.is_always_allowed(sid_b, "Bash"),
+            "AlwaysAllow in session A must not propagate to session B"
+        );
+        // And the process-wide always_allowed set is empty.
+        assert!(mem.always_allowed_tools().is_empty());
     }
 }

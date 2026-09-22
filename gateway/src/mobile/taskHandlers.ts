@@ -24,6 +24,13 @@ import type { MethodHandlers } from "./server.js";
 
 export interface TaskHandlersOptions {
   hub: MobileDispatchHub;
+  /**
+   * review §P1-13: trust registry for revoking compromised devices.
+   * Without this, a device whose entry is removed from `devices.json` keeps
+   * its long-lived session and can still dispatch tasks until the WS
+   * reconnects. Injected by bootstrap alongside the engineBridge check.
+   */
+  isDeviceTrusted?: (sessionId: string) => boolean;
 }
 
 const PAIRING_REQUIRED = {
@@ -37,6 +44,16 @@ export function createTaskHandlers(opts: TaskHandlersOptions): MethodHandlers {
   return {
     "shannon/task.dispatch": async (raw, ctx) => {
       if (ctx.sessionId == null) return PAIRING_REQUIRED;
+      // review §P1-13: revoked devices must not be able to dispatch tasks
+      // through their still-open WS connection. The trust check matches
+      // the one engineBridge already runs on shannon/* RPC methods.
+      if (opts.isDeviceTrusted && !opts.isDeviceTrusted(ctx.sessionId)) {
+        return {
+          kind: "error",
+          code: ShannonError.PAIRING_REQUIRED,
+          message: "device trust revoked — pair again before dispatching",
+        };
+      }
       const params = (raw ?? {}) as Partial<TaskDispatchParams>;
       if (typeof params.text !== "string" || params.text.trim().length === 0) {
         return {

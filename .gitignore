@@ -57,6 +57,8 @@ temp/
 config/local.toml
 config/production.toml
 .env
+.env.*
+!.env.example
 .env.local
 .env.*.local
 
@@ -159,3 +161,22 @@ test-results/
 
 # ZCode 会话级计划文件（不属仓库内容）
 .zcode/
+
+# review §P3: AI session artefacts that must not enter the repo. Several
+# ZCode / Claude-Code sessions have previously committed hello.txt,
+# findings.md, screenshot-test tools, and similar — these are not repo
+# content and pollute the diff. Block future adds here; existing tracked
+# copies are left in place to avoid rewriting history.
+hello.txt
+notes.txt
+findings.md
+.playwright-mcp/
+.serena/
+.reference/
+.claudedocs/
+
+# review §P3: gateway package manager is pnpm. The npm package-lock.json
+# was previously committed by mistake and now produces a second, unverified
+# resolution tree (CI uses pnpm install --frozen-lockfile). Block future
+# npm lockfile commits.
+gateway/package-lock.json

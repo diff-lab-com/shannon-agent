@@ -14,10 +14,10 @@
 
 | metric | value |
 |---|---:|
-| Tests (nextest, runnable) | 12565 |
-| Tests (source `#[test]`/`#[tokio::test]` attrs) | 12474 |
+| Tests (nextest, runnable) | 12591 |
+| Tests (source `#[test]`/`#[tokio::test]` attrs) | 12500 |
 | Rust source files | 752 |
-| Rust LOC (code) | 523085 |
+| Rust LOC (code) | 524389 |
 | Workspace members | 22 |
 | `cargo clippy --workspace -- -D warnings` | pass |
 | `cargo deny check` | pass |
@@ -30,12 +30,12 @@ Counts below come from `cargo nextest list --workspace --message-format=json`
 | crate | tests | binaries |
 |---|---:|---:|
 | shannon-core | 3997 | 46 |
-| shannon-tools | 1765 | 17 |
+| shannon-tools | 1773 | 17 |
 | shannon-ui | 1525 | 8 |
-| shannon-engine | 1179 | 4 |
+| shannon-engine | 1183 | 4 |
 | shannon-agents | 902 | 10 |
-| shannon-desktop | 859 | 5 |
-| shannon-mcp | 580 | 9 |
+| shannon-desktop | 867 | 5 |
+| shannon-mcp | 581 | 9 |
 | shannon-cli | 502 | 9 |
 | shannon-commands | 422 | 5 |
 | shannon-skills | 189 | 6 |
@@ -46,8 +46,8 @@ Counts below come from `cargo nextest list --workspace --message-format=json`
 | shannon-remote | 59 | 1 |
 | shannon-tool-interface | 42 | 1 |
 | shannon-api-protocol | 37 | 3 |
-| shannon-repomap | 30 | 3 |
-| shannon-server | 28 | 1 |
+| shannon-repomap | 32 | 3 |
+| shannon-server | 31 | 1 |
 | shannon-browser | 6 | 1 |
 | shannon-plugin-api | 5 | 1 |
 | shannon-stability-attr | 0 | 1 |
@@ -59,8 +59,8 @@ Legacy archives and vendored directories are excluded.
 
 | language | files | code |
 |---|---:|---:|
-| Rust (.rs) | 752 | 523085 |
-| TypeScript/TSX | 625 | 103398 |
+| Rust (.rs) | 752 | 524389 |
+| TypeScript/TSX | 625 | 103756 |
 
 ## Lint / audit status
 

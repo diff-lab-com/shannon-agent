@@ -2955,10 +2955,21 @@ fn run_serve_command(
             anyhow::bail!("non-loopback serve requires --auth-token");
         }
         let bind_host = host.as_deref().unwrap_or("127.0.0.1");
+        // Defense in depth: refuse non-loopback binds unless the user both
+        // opted in AND supplied a non-empty auth token. Closes the
+        // `shannon serve --host 0.0.0.0` LAN-RCE hole (review §P0-2).
+        shannon_server::validate_serve_bind(bind_host, allow_nonloopback, auth_token.as_deref())
+            .map_err(|e| anyhow::anyhow!(e))?;
         println!("Shannon API server starting on {bind_host}:{port}");
-        return shannon_server::run(bind_host, port, client_config, auth_token)
-            .await
-            .map_err(|e| anyhow::anyhow!(e));
+        return shannon_server::run_with_allow_nonloopback(
+            bind_host,
+            port,
+            client_config,
+            auth_token,
+            allow_nonloopback,
+        )
+        .await
+        .map_err(|e| anyhow::anyhow!(e));
     })
 }
 

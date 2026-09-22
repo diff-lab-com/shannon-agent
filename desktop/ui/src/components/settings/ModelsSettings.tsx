@@ -78,7 +78,7 @@ export default function ModelsSettings() {
                 className={cn(
                   'flex-1 py-sm font-label-md rounded-lg transition-all cursor-pointer',
                   strategy === s
-                    ? 'bg-surface-container-lowest text-primary shadow-sm ring-1 ring-black/5 font-bold'
+                    ? 'bg-primary text-on-primary shadow-sm ring-1 ring-black/5 font-bold'
                     : 'text-on-surface-variant hover:bg-surface-container-high',
                 )}
               >

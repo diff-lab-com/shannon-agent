@@ -38,7 +38,7 @@ describe("protocol schema contract", () => {
   });
 
   it("schema error codes === ShannonError", () => {
-    const codeProps = schema.definitions.errorCodes.properties as Record<string, number>;
+    const codeProps = schema.definitions.errorCodes.properties as unknown as Record<string, number>;
     for (const [name, code] of Object.entries(codeProps)) {
       expect(ShannonError[name as keyof typeof ShannonError]).toBe(code);
     }

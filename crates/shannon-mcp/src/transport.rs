@@ -224,6 +224,10 @@ pub struct SseTransport {
     endpoint: String,
     stream: Option<ByteStream>,
     buffer: String,
+    /// review §P1-10: trailing partial line carried over from the
+    /// previous read. When TCP/HTTP chunk boundaries split a single SSE
+    /// line we must reassemble before parsing.
+    partial: String,
     /// Maximum reconnection attempts before giving up.
     max_reconnects: usize,
     /// Whether a reconnect is currently in progress (prevents nested reconnects).
@@ -253,6 +257,7 @@ impl SseTransport {
             endpoint,
             stream: None,
             buffer: String::new(),
+            partial: String::new(),
             max_reconnects: 3,
             reconnecting: false,
             last_event_id: None,
@@ -410,9 +415,22 @@ impl Transport for SseTransport {
             loop {
                 match stream.next().await {
                     Some(Ok(bytes)) => {
+                        // review §P1-10: each HTTP/TCP chunk is parsed in
+                        // isolation by `chunk.lines()`. If `data: <json>` is
+                        // split across two reads (large tool results do this
+                        // routinely), the half-line fails to match the
+                        // `data:` prefix and the payload is silently dropped.
+                        // Maintain `partial` and carry over any trailing
+                        // un-terminated line to the next read so we always
+                        // parse on a complete line boundary.
                         let chunk = String::from_utf8_lossy(&bytes);
-                        // Process lines and update buffer
-                        for line in chunk.lines() {
+                        // Take the partial buffer out before splitting so we
+                        // don't fight the borrow checker on re-assignment.
+                        let combined = std::mem::take(&mut self.partial) + chunk.as_ref();
+                        let mut split = combined.split('\n');
+                        let last_partial = split.next_back().unwrap_or("").to_string();
+                        self.partial = last_partial;
+                        for line in split {
                             let line = line.trim();
                             if line.is_empty() {
                                 // End of event, return accumulated data

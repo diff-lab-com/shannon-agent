@@ -505,12 +505,30 @@ impl CredentialManager {
 /// the rename itself on success (a crash before rename may leave a stale
 /// `<service>.json.tmp`, which is harmless and ignored by readers).
 fn atomic_write_secure(path: &Path, content: &str) -> Result<(), CredentialError> {
+    // review §P2-25: the previous version did `fs::write` (which creates
+    // the file with the process umask, typically 0644) and only THEN
+    // chmod'd it to 0600. There is a brief window during which the
+    // plaintext credentials sit in a world-readable file on disk, which
+    // violates the doc comment above ("never observable in a world-
+    // readable state"). Open with O_CREAT | mode 0o600 on unix so the
+    // file is created with the right permissions in one syscall.
     let tmp = path.with_extension("json.tmp");
-    fs::write(&tmp, content)?;
     #[cfg(unix)]
     {
-        use std::os::unix::fs::PermissionsExt;
-        fs::set_permissions(&tmp, fs::Permissions::from_mode(0o600))?;
+        use std::io::Write;
+        use std::os::unix::fs::OpenOptionsExt;
+        let mut f = std::fs::OpenOptions::new()
+            .write(true)
+            .create(true)
+            .truncate(true)
+            .mode(0o600)
+            .open(&tmp)?;
+        f.write_all(content.as_bytes())?;
+        f.sync_all()?;
+    }
+    #[cfg(not(unix))]
+    {
+        fs::write(&tmp, content)?;
     }
     fs::rename(&tmp, path)?;
     Ok(())

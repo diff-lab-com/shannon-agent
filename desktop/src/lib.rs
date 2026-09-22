@@ -55,11 +55,11 @@ pub(crate) fn resolve_path_in_working_dir(
     Ok(canonical)
 }
 
-/// Validate that `path`'s *parent* directory is inside `working_dir`, without
-/// requiring `path` to exist yet. Use this for write targets (e.g. file
-/// creation) where the file itself does not exist on entry. Returns the
-/// canonicalized parent directory plus the joined file path on success.
-#[allow(dead_code)]
+/// Validate that `path` would write inside `working_dir`, allowing
+/// intermediate directories that don't yet exist (they will be created by
+/// the caller). Walks up to the first ancestor that exists, canonicalizes
+/// that ancestor, and verifies it lives inside `working_dir`. Returns the
+/// joined absolute target path with the original file name preserved.
 pub(crate) fn resolve_write_target_in_working_dir(
     path: &str,
     working_dir: &Path,
@@ -69,30 +69,34 @@ pub(crate) fn resolve_write_target_in_working_dir(
     } else {
         working_dir.join(path)
     };
-    let parent = resolved
-        .parent()
-        .ok_or_else(|| format!("path has no parent: {path}"))?;
-    if parent.as_os_str().is_empty() {
-        return Err(format!("path '{path}' has no parent directory"));
-    }
-    let canonical_parent = parent
-        .canonicalize()
-        .map_err(|e| format!("parent dir not found: {e}"))?;
     let canonical_cwd = working_dir
         .canonicalize()
         .map_err(|e| format!("invalid working directory: {e}"))?;
-    if !canonical_parent.starts_with(&canonical_cwd) {
+    // Walk up to the first ancestor that exists, canonicalize it, and verify
+    // it is inside the working directory. This allows intermediate dirs to
+    // not yet exist (caller will `create_dir_all`) while still guaranteeing
+    // no escape via `..` or absolute paths.
+    let mut probe = resolved.clone();
+    let canonical_anchor = loop {
+        match probe.canonicalize() {
+            Ok(p) => break p,
+            Err(_) => {
+                if !probe.pop() {
+                    return Err(format!(
+                        "path '{}' has no existing ancestor inside the working directory",
+                        resolved.display()
+                    ));
+                }
+            }
+        }
+    };
+    if !canonical_anchor.starts_with(&canonical_cwd) {
         return Err(format!(
             "path '{}' is outside the working directory",
             resolved.display()
         ));
     }
-    // Re-join the file name onto the canonicalized parent so the caller gets a
-    // usable absolute path (with the original file name, uncanonicalized).
-    let file_name = resolved
-        .file_name()
-        .ok_or_else(|| format!("path has no file name: {path}"))?;
-    Ok(canonical_parent.join(file_name))
+    Ok(resolved)
 }
 
 #[cfg(feature = "tauri")]

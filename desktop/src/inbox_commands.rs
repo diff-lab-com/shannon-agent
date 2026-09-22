@@ -27,7 +27,7 @@ use shannon_core::query_engine::{QueryContext, QueryEngine, QueryEvent, QueryMet
 use shannon_core::scheduled_routines::ScheduledRoutine;
 use shannon_core::scheduled_runs::{RunStatus, ScheduledRun};
 use shannon_engine::api::client::LlmClient;
-use shannon_engine::permissions::{ApprovalMode, PermissionManager, PermissionRuleChecker};
+use shannon_engine::permissions::{PermissionManager, PermissionRuleChecker};
 use shannon_engine::state::StateManager;
 use tauri::Emitter;
 use tokio::sync::RwLock;
@@ -371,18 +371,14 @@ pub(crate) async fn spawn_routine_run<R: tauri::Runtime>(
         let client = LlmClient::new(client_config);
 
         // Same policy as background tasks: run unattended under the
-        // configured approval mode plus persisted rules.
+        // configured approval mode plus persisted rules. review §P1-2:
+        // the previous default of FullAuto silently bypassed the user's
+        // global approval mode for every unattended path. SECURITY.md
+        // promises that unattended paths honour the user's mode; FullAuto
+        // must require an explicit opt-in via the routine's approval_mode
+        // field, and we default to Suggest otherwise.
         let mut permissions = PermissionManager::new();
-        let mode = approval_mode_str
-            .as_deref()
-            .and_then(|s| match s {
-                "full_auto" => Some(ApprovalMode::FullAuto),
-                "auto_edit" => Some(ApprovalMode::AutoEdit),
-                "auto" => Some(ApprovalMode::Auto),
-                "plan" => Some(ApprovalMode::Plan),
-                _ => None,
-            })
-            .unwrap_or(ApprovalMode::FullAuto);
+        let mode = crate::commands::unattended_approval_mode(approval_mode_str.as_deref());
         permissions.set_approval_mode(mode);
         let mut settings = shannon_core::settings::SettingsManager::new();
         if settings.load_from_files().is_ok() {

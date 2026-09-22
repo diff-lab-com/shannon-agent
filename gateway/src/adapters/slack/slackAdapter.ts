@@ -192,8 +192,14 @@ export function normalizeSlackEvent(payload: unknown): SlackInboundResult {
       message: {
         platform: "slack",
         chatId: ev.channel,
-        // A thread message carries thread_ts; a top-level message does not.
-        threadId: typeof ev.thread_ts === "string" ? ev.thread_ts : ev.ts,
+        // review §P2-24: a thread message carries thread_ts; a top-level
+        // message does NOT. Using ev.ts as the fallback threadId made
+        // every top-level channel message its own session — the engine
+        // never carried context forward between messages in the same
+        // channel. Top-level messages should sit on the channel base
+        // session (threadId undefined); thread replies attach to the
+        // parent's ts.
+        threadId: typeof ev.thread_ts === "string" ? ev.thread_ts : undefined,
         senderId: ev.user,
         senderName: ev.user,
         text: typeof ev.text === "string" ? ev.text : "",

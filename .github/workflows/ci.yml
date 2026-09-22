@@ -45,6 +45,9 @@ jobs:
   test:
     name: Test
     runs-on: ubuntu-latest
+    # review §P3-E2: hang-on-build job would burn 6 hours of runner quota
+    # without a hard cap. 60 min is generous for our 11.7k-test suite.
+    timeout-minutes: 60
     steps:
       - uses: actions/checkout@f548e57e544e1ff5a4c46bf1e1b8685f8e4a348a
       - uses: dtolnay/rust-toolchain@2c7215f132e9ebf062739d9130488b56d53c060c
@@ -303,6 +306,7 @@ jobs:
   clippy:
     name: Clippy
     runs-on: ubuntu-latest
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@f548e57e544e1ff5a4c46bf1e1b8685f8e4a348a
       - uses: dtolnay/rust-toolchain@2c7215f132e9ebf062739d9130488b56d53c060c
@@ -329,6 +333,33 @@ jobs:
           -A clippy::manual_checked_div
           -A clippy::unwrap_used
           -A clippy::unnecessary_sort_by
+
+  # review §P1-E1: ci.yml previously claimed in a header comment that it
+  # typechecked/tested the gateway but had no such job. Without this, a
+  # red `tsc --noEmit` on dev (we observed TS2352 in protocolSchema.test.ts
+  # when we started) could ship to main. Now runs pnpm typecheck + vitest
+  # on every PR touching gateway/.
+  gateway:
+    name: Gateway (TS typecheck + vitest)
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@f548e57e544e1ff5a4c46bf1e1b8685f8e4a348a
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 24
+      - uses: pnpm/action-setup@v6
+        with:
+          version: 10
+      - name: Install gateway deps
+        working-directory: gateway
+        run: pnpm install --frozen-lockfile
+      - name: Typecheck
+        working-directory: gateway
+        run: pnpm typecheck
+      - name: Test
+        working-directory: gateway
+        run: pnpm test
 
   fmt:
     name: Format
@@ -712,7 +743,15 @@ jobs:
       # max_turns override) — new pub field on an exhaustively-constructible
       # struct, intentional minor-cycle break. New TAG NAME so the
       # baseline-rustdoc cache invalidates.
-      SEMVER_BASELINE: semver-baseline-2026-09-7
+      # Eighth move (2026-09-22, PR #97 comprehensive review): review §P1-6
+      # restores ConversationUpdate payload into the engine on WS (additive
+      # public event consumption), §P2-14 adds `apply_conflicts: bool` to
+      # `shannon_tools::file::edit::EditInput` (new pub field on an
+      # exhaustively-constructible struct), §P2-15 adds
+      # `FileSystemProvider::rename_blocking` (new trait method,
+      # additive). All three are intentional minor-cycle breaks pre-1.0.
+      # New TAG NAME so the baseline-rustdoc cache invalidates.
+      SEMVER_BASELINE: semver-baseline-2026-09-8
     steps:
       - uses: actions/checkout@f548e57e544e1ff5a4c46bf1e1b8685f8e4a348a
         with:

@@ -185,18 +185,35 @@ pub async fn post_message(
             top_p: None,
         },
     };
-    let stream = engine
-        .lock()
-        .await
-        .process_query(context, None)
-        .await
-        .map(|item| {
-            Ok(item.map(sse::event).unwrap_or_else(|e| {
-                axum::response::sse::Event::default()
-                    .event("error")
-                    .data(e.to_string())
-            }))
-        });
+    // review §P1-6: drop the lock before consuming the stream so the
+    // per-event ConversationUpdate handler below can re-acquire it briefly
+    // to call restore_messages. Holding the lock across the SSE stream would
+    // serialise every concurrent REST message on this session — but more
+    // importantly, it would deadlock the per-event restore below which also
+    // needs the same lock.
+    let query_stream = {
+        let guard = engine.lock().await;
+        guard.process_query(context, None).await
+    };
+    let engine_for_events = engine.clone();
+    let stream = query_stream.map(move |item| {
+        // review §P1-6: tap ConversationUpdate so subsequent REST messages
+        // on this session see the prior context. We must NOT hold the SSE
+        // stream's exclusive access to the engine when re-locking here, hence
+        // the explicit clone + per-event try-lock acquisition.
+        if let Ok(shannon_core::query_engine::QueryEvent::ConversationUpdate { messages, .. }) =
+            item.as_ref()
+        {
+            if let Ok(mut guard) = engine_for_events.try_lock() {
+                guard.restore_messages(messages.clone());
+            }
+        }
+        Ok(item.map(sse::event).unwrap_or_else(|e| {
+            axum::response::sse::Event::default()
+                .event("error")
+                .data(e.to_string())
+        }))
+    });
     Ok(Sse::new(stream).keep_alive(KeepAlive::default()))
 }
 
