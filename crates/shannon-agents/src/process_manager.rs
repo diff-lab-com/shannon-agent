@@ -806,6 +806,17 @@ impl AgentProcessManager {
                                         cmd.arg("--allowed-tools").arg(tool);
                                     }
                                 }
+                                // review §P1-15: the previous health-monitor
+                                // respawn path dropped `--disallowed-tools`,
+                                // so a crashed-and-restarted sub-agent
+                                // silently reacquired every tool the parent
+                                // had explicitly forbidden. Forward the
+                                // denylist alongside the allowlist.
+                                if let Some(ref denied) = config.disallowed_tools {
+                                    for tool in denied {
+                                        cmd.arg("--disallowed-tools").arg(tool);
+                                    }
+                                }
                                 cmd.args(&config.args);
                                 // Apply same env filtering as spawn path
                                 for (key, value) in &config.env {
