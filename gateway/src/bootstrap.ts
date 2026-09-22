@@ -159,7 +159,13 @@ export async function bootstrap(
   // adapter-routed turn (opt-out via config.im.taskLifecycle = false). The
   // mobile shannon/* path keeps its own engine bridge and is unaffected.
   const baseTurnHandler: TurnHandler =
-    opts.turnHandler ?? createApprovalTurnHandler({ engineBaseUrl: config.engine.httpBaseUrl });
+    opts.turnHandler ??
+    createApprovalTurnHandler({
+      engineBaseUrl: config.engine.httpBaseUrl,
+      // review §P1-13: forward the engine bearer to the approval POST so IM
+      // approvals reach a non-loopback-bound engine without 401ing.
+      authToken: engineAuthToken,
+    });
   const turnHandler: TurnHandler =
     config.im?.taskLifecycle === false ? baseTurnHandler : withTaskLifecycle(baseTurnHandler);
 
@@ -303,7 +309,14 @@ async function startMobileServer(
     tokens,
     registry,
     logger,
-    tasks: createTaskHandlers({ hub: dispatchHub }),
+    tasks: createTaskHandlers({
+      hub: dispatchHub,
+      // review §P1-13: revoked devices must not be able to dispatch tasks
+      // through their still-open WS connection. Bootstrap closes the loop
+      // so a device removed from devices.json loses all gateways —
+      // shannon/* RPC (engineBridge) and shannon/task.* alike.
+      isDeviceTrusted: (deviceId: string) => registry.has(deviceId),
+    }),
   });
 
   const server = new MobileServer({

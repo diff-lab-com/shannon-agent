@@ -27,6 +27,11 @@ export interface ApprovalTurnHandlerOptions {
   streamThrottleMs?: number;
   /** Override for tests; defaults to the global fetch. */
   fetchImpl?: typeof fetch;
+  /** review §P1-13: engine bearer token. Forwarded to the approval POST so
+   *  IM-driven approvals succeed when the engine enforces auth on its
+   *  non-loopback bind. Without this, every "allow" click from a chat
+   *  adapter would 401 and the engine would deny the tool at 300s. */
+  authToken?: string | null;
 }
 
 export function createApprovalTurnHandler(
@@ -74,6 +79,7 @@ export function createApprovalTurnHandler(
                 engineBaseUrl: opts.engineBaseUrl,
                 requestId: decision.requestId,
                 choice: decision.choice,
+                authToken: opts.authToken,
                 fetchImpl: opts.fetchImpl,
               });
             } catch (err) {
