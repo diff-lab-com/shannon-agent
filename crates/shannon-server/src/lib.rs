@@ -154,12 +154,70 @@ fn read_webhook_secret() -> Option<String> {
         .and_then(|w| w.secret)
 }
 
+/// Validate bind parameters before opening a listener.
+///
+/// This is the single guard for `shannon serve` / `shannon_server::run` /
+/// any future server entry point (refs review §P0-2). Loopback binds are
+/// always permitted (desktop, local TUI). Non-loopback binds require
+/// explicit `allow_nonloopback = true` AND an auth token; without either,
+/// the call refuses — this closes the LAN-RCE hole where
+/// `shannon serve --host 0.0.0.0` exposed an unauthenticated agent API.
+pub fn validate_serve_bind(
+    host: &str,
+    allow_nonloopback: bool,
+    token: Option<&str>,
+) -> Result<(), String> {
+    if is_loopback_host(host) {
+        return Ok(());
+    }
+    if !allow_nonloopback {
+        return Err(format!(
+            "refusing to bind non-loopback host '{host}': pass --allow-nonloopback to opt in"
+        ));
+    }
+    if token.map(str::is_empty).unwrap_or(true) {
+        return Err(format!(
+            "non-loopback host '{host}' requires --auth-token to be set"
+        ));
+    }
+    Ok(())
+}
+
+/// Return true for loopback bind hosts (`127.0.0.0/8`, `::1`, `localhost`).
+///
+/// Note: `0.0.0.0` is deliberately NOT treated as loopback. It binds all
+/// interfaces on Linux/macOS and exposes the service to the LAN; callers
+/// must either pass an explicit loopback address (`127.0.0.1`) or set
+/// `allow_nonloopback = true` with an auth token (review §P0-2).
+pub fn is_loopback_host(host: &str) -> bool {
+    matches!(host, "localhost" | "::1") || host.starts_with("127.")
+}
+
 pub async fn run(
     host: &str,
     port: u16,
     client_config: LlmClientConfig,
     token: Option<String>,
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+    // Default to NOT allowing non-loopback binds; the CLI passes through its
+    // --allow-nonloopback flag explicitly. This means the library entry point
+    // is safe-by-default even if a future caller forgets to thread the flag.
+    validate_serve_bind(host, false, token.as_deref())?;
+    let listener = tokio::net::TcpListener::bind((host, port)).await?;
+    axum::serve(listener, router(client_config, token)).await?;
+    Ok(())
+}
+
+/// Run the server with explicit control over the non-loopback opt-in flag.
+/// This is the variant the CLI should call after validating user intent.
+pub async fn run_with_allow_nonloopback(
+    host: &str,
+    port: u16,
+    client_config: LlmClientConfig,
+    token: Option<String>,
+    allow_nonloopback: bool,
+) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+    validate_serve_bind(host, allow_nonloopback, token.as_deref())?;
     let listener = tokio::net::TcpListener::bind((host, port)).await?;
     axum::serve(listener, router(client_config, token)).await?;
     Ok(())
@@ -292,5 +350,55 @@ mod tests {
                 .as_str()
                 .unwrap_or_default();
         assert!(desc.contains("desktop"), "501 must document the limitation");
+    }
+
+    // -------------------------------------------------------------------
+    // review §P0-2: serve bind guard
+    // -------------------------------------------------------------------
+
+    #[test]
+    fn validate_serve_bind_loopback_always_ok() {
+        for host in ["127.0.0.1", "127.0.0.42", "localhost", "::1"] {
+            assert!(
+                validate_serve_bind(host, false, None).is_ok(),
+                "loopback host {host} must be allowed without opt-in or token"
+            );
+            assert!(
+                validate_serve_bind(host, true, Some("secret")).is_ok(),
+                "loopback host {host} must be allowed even with extra opts"
+            );
+        }
+    }
+
+    #[test]
+    fn validate_serve_bind_nonloopback_refused_without_opt_in() {
+        for host in ["0.0.0.0", "192.168.1.5", "10.0.0.1", "::", "example.com"] {
+            assert!(
+                validate_serve_bind(host, false, None).is_err(),
+                "non-loopback host {host} without --allow-nonloopback must be refused"
+            );
+            assert!(
+                validate_serve_bind(host, false, Some("secret")).is_err(),
+                "non-loopback host {host} without --allow-nonloopback must be refused even with token"
+            );
+        }
+    }
+
+    #[test]
+    fn validate_serve_bind_nonloopback_requires_token() {
+        for host in ["0.0.0.0", "192.168.1.5"] {
+            assert!(
+                validate_serve_bind(host, true, None).is_err(),
+                "non-loopback host {host} with opt-in but no token must be refused"
+            );
+            assert!(
+                validate_serve_bind(host, true, Some("")).is_err(),
+                "empty token must be rejected"
+            );
+            assert!(
+                validate_serve_bind(host, true, Some("secret")).is_ok(),
+                "non-loopback host {host} with opt-in AND token must be allowed"
+            );
+        }
     }
 }
