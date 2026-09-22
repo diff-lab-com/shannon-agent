@@ -529,6 +529,36 @@ pub fn analyze_command_security(command: &str) -> SecurityAnalysis {
         }
     }
 
+    // review §P2-12: a head token in READ_ONLY_PATTERNS is necessary but
+    // not sufficient for the whole command to be read-only. `find` was
+    // the worst offender: \`find . -name '*.tmp' -delete\` was tagged
+    // read-only + Low risk, so it slipped past RunBackground's
+    // High-risk gate and could bulk-delete under the table. Do a second
+    // pass looking for destructive predicates on read-only-tagged
+    // commands; any hit escalates back to High so the existing
+    // background-task gate (review §P1-2) blocks it.
+    if is_read_only {
+        const WRITE_PREDICATES: &[&str] = &[
+            " -delete",
+            " -exec ",
+            " -execdir ",
+            " -fdelete",
+            " -print -delete", // belt-and-braces
+        ];
+        for p in WRITE_PREDICATES {
+            if lower_command.contains(p) {
+                if risk_level < SecurityLevel::High {
+                    risk_level = SecurityLevel::High;
+                }
+                warnings.push(format!(
+                    "read-only head token paired with destructive predicate '{p}'"
+                ));
+                is_read_only = false;
+                break;
+            }
+        }
+    }
+
     // Check for pipe-based command chaining that could bypass filters
     if command.contains('|') {
         // Always check what's being piped to, even for read-only commands
@@ -798,24 +828,52 @@ impl DockerSandbox {
         }
     }
 
-    /// Build the docker run argument list
+    /// Build the docker run argument list.
+    ///
+    /// review §P2-11: refuses to mount a workspace that canonicalises to "/"
+    /// (model-controlled `cwd=/` would expose the host root filesystem to
+    /// the container despite --read-only on rootfs / --network=none) and
+    /// binds the mount :ro by default.
     fn build_args(
         &self,
         command: &str,
         cwd: Option<&str>,
         env: Option<&std::collections::HashMap<String, String>>,
-    ) -> Vec<String> {
+    ) -> Result<Vec<String>, String> {
         let mut args = vec!["run".to_string(), "--rm".to_string()];
 
-        // Mount workspace: resolve cwd or use current directory
-        let workspace = cwd.unwrap_or(".");
-        let abs_workspace = std::path::Path::new(workspace)
+        // review §P2-11: the workspace mount is the most exposed surface
+        // here. A model-controlled `cwd` of `/` would mount the entire
+        // host root filesystem into the container; even a sandboxed
+        // container (--read-only on rootfs, --network=none) can still
+        // *read* every host file through this bind mount. Reject any
+        // workspace that resolves outside the project's known safe root,
+        // and pin the bind to read-only by default. Callers that really
+        // need write access must explicitly opt out via the runtime env.
+        let workspace_raw = cwd.unwrap_or(".");
+        let abs_workspace = std::path::Path::new(workspace_raw)
             .canonicalize()
             .map(|p| p.to_string_lossy().to_string())
-            .unwrap_or_else(|_| workspace.to_string());
+            .unwrap_or_else(|_| workspace_raw.to_string());
 
+        // Hard-coded safe root: refuse "/" and any path that canonicalizes
+        // to it (e.g. "/.", "/usr/../"). This is intentionally simple
+        // — the docker sandbox is for off-host execution, not for binding
+        // arbitrary host roots.
+        if abs_workspace == "/" {
+            return Err(format!(
+                "refusing to mount workspace '{}' as container root: \
+                 use a project directory, not '/'",
+                workspace_raw
+            ));
+        }
+
+        // Bind mount with explicit :ro. The container's writable surface
+        // is the small overlay that docker creates on top of rootfs; the
+        // bind is read-only so the model can't tamper with the host even
+        // when it has shell inside the container.
         args.push("-v".to_string());
-        args.push(format!("{}:{}", abs_workspace, self.config.workdir));
+        args.push(format!("{}:{}:ro", abs_workspace, self.config.workdir));
         args.push("-w".to_string());
         args.push(self.config.workdir.clone());
 
@@ -861,7 +919,7 @@ impl DockerSandbox {
         args.push("-c".to_string());
         args.push(command.to_string());
 
-        args
+        Ok(args)
     }
 
     /// Execute a command inside a Docker container
@@ -872,7 +930,9 @@ impl DockerSandbox {
         env: Option<&std::collections::HashMap<String, String>>,
         timeout_ms: Option<u64>,
     ) -> Result<CommandOutput, std::io::Error> {
-        let docker_args = self.build_args(command, cwd, env);
+        let docker_args = self
+            .build_args(command, cwd, env)
+            .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidInput, e))?;
 
         let args: Vec<&str> = docker_args.iter().map(String::as_str).collect();
         let request = ProcessRequest::new("docker", &args);
@@ -2447,7 +2507,9 @@ mod tests {
     fn test_docker_build_args_basic() {
         let config = DockerSandboxConfig::default();
         let sandbox = DockerSandbox::new(config);
-        let args = sandbox.build_args("echo hello", None, None);
+        let args = sandbox
+            .build_args("echo hello", None, None)
+            .expect("build_args must succeed for default config");
 
         // Should start with run --rm
         assert!(args.contains(&"run".to_string()));
@@ -2472,7 +2534,9 @@ mod tests {
         let sandbox = DockerSandbox::new(config);
         let mut env = HashMap::new();
         env.insert("FOO".to_string(), "bar".to_string());
-        let args = sandbox.build_args("env", None, Some(&env));
+        let args = sandbox
+            .build_args("env", None, Some(&env))
+            .expect("build_args must succeed");
 
         let env_idx = args.iter().position(|a| a == "FOO=bar").unwrap();
         assert!(args[env_idx - 1] == "-e");
@@ -2485,7 +2549,9 @@ mod tests {
             ..DockerSandboxConfig::default()
         };
         let sandbox = DockerSandbox::new(config);
-        let args = sandbox.build_args("ls", None, None);
+        let args = sandbox
+            .build_args("ls", None, None)
+            .expect("build_args must succeed");
 
         assert!(!args.contains(&"--read-only".to_string()));
         assert!(!args.iter().any(|a| a.starts_with("/tmp:")));
@@ -2498,9 +2564,48 @@ mod tests {
             ..DockerSandboxConfig::default()
         };
         let sandbox = DockerSandbox::new(config);
-        let args = sandbox.build_args("ls", None, None);
+        let args = sandbox
+            .build_args("ls", None, None)
+            .expect("build_args must succeed");
 
         assert!(args.contains(&"/host/path:/container/path".to_string()));
+    }
+
+    // ---- review §P2-11: workspace mount hardening ----
+
+    #[test]
+    fn test_docker_build_args_rejects_root_workspace() {
+        // review §P2-11: a model-controlled `cwd` of "/" would expose the
+        // entire host root filesystem to the container. build_args must
+        // refuse this with an explicit Err.
+        let sandbox = DockerSandbox::new(DockerSandboxConfig::default());
+        let err = sandbox
+            .build_args("ls", Some("/"), None)
+            .expect_err("must refuse '/'");
+        assert!(
+            err.contains("refusing to mount workspace"),
+            "unexpected error: {err}"
+        );
+    }
+
+    #[test]
+    fn test_docker_build_args_bind_is_read_only() {
+        // review §P2-11: workspace bind mount must be :ro by default so a
+        // model shell inside the container cannot tamper with the host
+        // filesystem even when --read-only on rootfs is in effect (the
+        // bind mount is independent of the overlay on top of rootfs).
+        let sandbox = DockerSandbox::new(DockerSandboxConfig::default());
+        let args = sandbox
+            .build_args("ls", Some("/tmp"), None)
+            .expect("build_args must succeed");
+        let mount = args
+            .iter()
+            .find(|a| a.starts_with("/tmp:"))
+            .expect("workspace mount must be present");
+        assert!(
+            mount.ends_with(":ro"),
+            "workspace mount must be :ro by default, got: {mount}"
+        );
     }
 
     // ── BashTool sandbox integration tests ─────────────────────────────
@@ -3079,6 +3184,59 @@ fn test_shell_redirect_to_etc_detected() {
     );
 }
 
+// ---- review §P2-12: read-only + destructive predicate ----
+
+#[test]
+fn test_find_delete_promotes_to_high_risk() {
+    // review §P2-12: `find` matches READ_ONLY_PATTERNS as the head
+    // token, but `-delete` post-fix turns the command into a bulk-delete.
+    // Previously this slipped through as Low risk, which RunBackground's
+    // High-risk gate (review §P1-2) would not block — bulk delete could
+    // be backgrounded silently.
+    let analysis = analyze_command_security("find . -name '*.tmp' -delete");
+    assert!(
+        analysis.risk_level >= SecurityLevel::High,
+        "find -delete must be at least High, got: {:?}",
+        analysis.risk_level
+    );
+    assert!(
+        !analysis.is_read_only,
+        "find -delete must not be flagged read-only"
+    );
+    assert!(
+        analysis
+            .warnings
+            .iter()
+            .any(|w| w.contains("destructive predicate")),
+        "warning should call out the destructive predicate, got: {:?}",
+        analysis.warnings
+    );
+}
+
+#[test]
+fn test_find_exec_promotes_to_high_risk() {
+    let analysis = analyze_command_security("find /tmp -name 'core.*' -exec rm {} \\;");
+    assert!(
+        analysis.risk_level >= SecurityLevel::High,
+        "find -exec rm must be at least High, got: {:?}",
+        analysis.risk_level
+    );
+    assert!(!analysis.is_read_only);
+}
+
+#[test]
+fn test_find_without_destructive_predicate_remains_read_only() {
+    // Sanity: the new predicate gate must not over-trigger on plain
+    // read-only find invocations.
+    let analysis = analyze_command_security("find . -name '*.rs' -type f");
+    assert!(analysis.is_read_only, "plain find must stay read-only");
+    assert!(
+        analysis.risk_level <= SecurityLevel::Low,
+        "plain find must stay Low/lower, got: {:?}",
+        analysis.risk_level
+    );
+}
+
 // ─── Test runner detection (P1-5) ────────────────────────────────────────────
 //
 // The auto-test loop in `shannon-core::auto_test` runs a test command after
@@ -3310,7 +3468,7 @@ mod test_runner_detection_tests {
 
     #[test]
     fn truncate_bytes_clips_to_cap_and_marks_dropped() {
-        let mut out = vec![b'x'; 4096];
+        let out = vec![b'x'; 4096];
         let clipped = truncate_bytes(&out, 1024);
         // Marker appended, total length may slightly exceed 1024.
         assert!(clipped.starts_with(b"xxx"), "still the prefix");

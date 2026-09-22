@@ -97,6 +97,7 @@ async fn test_edit_crlf_preservation() {
         new_string: "LINE TWO".to_string(),
         replace_all: false,
         preview: false,
+        apply_conflicts: false,
     };
     let result = edit::execute(input).await;
     assert!(result.is_ok(), "Edit should succeed: {:?}", result);
@@ -152,6 +153,7 @@ async fn test_edit_bom_handling() {
         new_string: "FOO BAR".to_string(),
         replace_all: false,
         preview: false,
+        apply_conflicts: false,
     };
     let result = edit::execute(input).await;
     assert!(
@@ -435,6 +437,7 @@ async fn test_concurrent_edit_same_file() {
             new_string: new.to_string(),
             replace_all: false,
             preview: false,
+            apply_conflicts: false,
         };
         let result = edit::execute(input).await;
         assert!(
@@ -497,6 +500,7 @@ async fn test_edit_read_only_file() {
         new_string: "modified content".to_string(),
         replace_all: false,
         preview: false,
+        apply_conflicts: false,
     };
 
     let result = edit::execute(input).await;
@@ -704,6 +708,7 @@ async fn test_empty_file_operations() {
         new_string: "else".to_string(),
         replace_all: false,
         preview: false,
+        apply_conflicts: false,
     };
     let result = edit::execute(edit_input).await;
     assert!(
