@@ -905,6 +905,16 @@ async fn handle_ws_socket(socket: WebSocket, state: AppState) {
                                 Ok(QueryEvent::Failed { error, .. }) => {
                                     Some(WsServerMessage::Failed { error })
                                 }
+                                Ok(QueryEvent::ConversationUpdate { messages, .. }) => {
+                                    // review §P1-6: the WS host was previously
+                                    // dropping ConversationUpdate, so each new
+                                    // Query on the same connection started with
+                                    // the stale `self.conversation` (often the
+                                    // empty default). Restore on receipt so the
+                                    // next Query carries the prior context.
+                                    engine.restore_messages(messages);
+                                    None
+                                }
                                 Ok(_) => None,
                                 Err(e) => Some(WsServerMessage::Failed {
                                     error: e.to_string(),
