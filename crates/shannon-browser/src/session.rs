@@ -480,10 +480,18 @@ then point SHANNON_BROWSER_CDP at the forwarded port (current value: {endpoint})
             .and_then(|v| v.as_str().map(String::from))
             .unwrap_or_default();
         let truncated = if text.len() > 8000 {
+            // review §P2-8: walk back to the nearest char boundary so a
+            // multi-byte character straddling byte 8000 doesn't panic
+            // with "byte index 8000 is not a char boundary". Pages with
+            // CJK / emoji content hit this routinely.
+            let mut cut = 8000;
+            while cut > 0 && !text.is_char_boundary(cut) {
+                cut -= 1;
+            }
             format!(
                 "{}\n\n[truncated — {} more bytes]",
-                &text[..8000],
-                text.len() - 8000
+                &text[..cut],
+                text.len() - cut
             )
         } else {
             text
