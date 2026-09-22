@@ -45,6 +45,9 @@ jobs:
   test:
     name: Test
     runs-on: ubuntu-latest
+    # review §P3-E2: hang-on-build job would burn 6 hours of runner quota
+    # without a hard cap. 60 min is generous for our 11.7k-test suite.
+    timeout-minutes: 60
     steps:
       - uses: actions/checkout@f548e57e544e1ff5a4c46bf1e1b8685f8e4a348a
       - uses: dtolnay/rust-toolchain@2c7215f132e9ebf062739d9130488b56d53c060c
@@ -303,6 +306,7 @@ jobs:
   clippy:
     name: Clippy
     runs-on: ubuntu-latest
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@f548e57e544e1ff5a4c46bf1e1b8685f8e4a348a
       - uses: dtolnay/rust-toolchain@2c7215f132e9ebf062739d9130488b56d53c060c
