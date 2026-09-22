@@ -823,8 +823,8 @@ mod tests {
         use shannon_tool_interface::{DirEntryInfo, FileMeta, FileSystemProvider};
         use std::io;
         use std::path::{Path, PathBuf};
-        use std::sync::atomic::{AtomicUsize, Ordering};
         use std::sync::Arc;
+        use std::sync::atomic::{AtomicUsize, Ordering};
 
         struct CountingFs {
             visited: Arc<AtomicUsize>,

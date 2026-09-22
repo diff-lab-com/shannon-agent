@@ -1693,7 +1693,8 @@ mod tests {
         for name in ["read_loop", "kill_watcher", "startup_timeout"] {
             let tx = tx.clone();
             let exited = exited.clone();
-            AgentProcessManager::emit_process_exited_once(&exited, &tx, name.to_string(), None).await;
+            AgentProcessManager::emit_process_exited_once(&exited, &tx, name.to_string(), None)
+                .await;
         }
         drop(tx);
 
@@ -1716,10 +1717,12 @@ mod tests {
         // even though the previous process's exit was already emitted.
         let exited = Arc::new(AtomicBool::new(false));
         let (tx, mut rx) = mpsc::channel::<AgentEvent>(16);
-        AgentProcessManager::emit_process_exited_once(&exited, &tx, "worker".to_string(), None).await;
+        AgentProcessManager::emit_process_exited_once(&exited, &tx, "worker".to_string(), None)
+            .await;
 
         let fresh = Arc::new(AtomicBool::new(false));
-        AgentProcessManager::emit_process_exited_once(&fresh, &tx, "worker".to_string(), None).await;
+        AgentProcessManager::emit_process_exited_once(&fresh, &tx, "worker".to_string(), None)
+            .await;
         drop(tx);
 
         let mut count = 0;

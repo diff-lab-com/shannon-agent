@@ -2786,10 +2786,7 @@ mod tests {
         // wire event carrying the *expected* event name.
         struct AlwaysFails;
         impl serde::Serialize for AlwaysFails {
-            fn serialize<S: serde::Serializer>(
-                &self,
-                _: S,
-            ) -> Result<S::Ok, S::Error> {
+            fn serialize<S: serde::Serializer>(&self, _: S) -> Result<S::Ok, S::Error> {
                 Err(serde::ser::Error::custom("unserializable payload"))
             }
         }
@@ -2798,7 +2795,10 @@ mod tests {
         assert!(serde_json::to_string(&event).is_err());
 
         let (event_type, data) = sse_parts("cost", &event);
-        assert_eq!(event_type, "error", "unserializable event must emit an error event");
+        assert_eq!(
+            event_type, "error",
+            "unserializable event must emit an error event"
+        );
         assert!(!data.is_empty(), "error event must carry a description");
         let parsed: serde_json::Value = serde_json::from_str(&data).unwrap();
         let error = parsed["error"].as_str().unwrap();

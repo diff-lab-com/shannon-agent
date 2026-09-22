@@ -244,9 +244,9 @@ fn looks_like_flag(token: &str) -> bool {
         return !long.is_empty();
     }
     // A bare `-` is not a flag; a single letter (`-v`) or cluster (`-abc`) is.
-    token.strip_prefix('-').is_some_and(|short| {
-        short.chars().next().is_some_and(|c| c.is_alphabetic())
-    })
+    token
+        .strip_prefix('-')
+        .is_some_and(|short| short.chars().next().is_some_and(|c| c.is_alphabetic()))
 }
 
 /// Parse flags from the **leading** flag section of the args.
@@ -648,7 +648,11 @@ mod tests {
         let result = parser
             .parse(r#"/cmd a -b "c -d" --flag x rest -here"#)
             .unwrap();
-        assert!(result.flags.is_empty(), "body flags must not be parsed, got {:?}", result.flags);
+        assert!(
+            result.flags.is_empty(),
+            "body flags must not be parsed, got {:?}",
+            result.flags
+        );
         // Body is untouched.
         assert!(result.args.contains("-b"));
         assert!(result.args.contains("c -d"));
@@ -691,6 +695,9 @@ mod tests {
     fn test_parse_flags_quoted_equals_value() {
         let parser = CommandParser::new();
         let result = parser.parse(r#"/commit --message="fix the; bug""#).unwrap();
-        assert_eq!(result.flag_value("message"), Some(&"fix the; bug".to_string()));
+        assert_eq!(
+            result.flag_value("message"),
+            Some(&"fix the; bug".to_string())
+        );
     }
 }

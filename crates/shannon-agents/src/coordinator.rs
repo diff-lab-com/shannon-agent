@@ -3529,7 +3529,11 @@ mod tests {
             running.contains(&"bg-team:worker".to_string()),
             "replacement task stays tracked, got: {running:?}"
         );
-        assert!(coordinator.cancel_background_task("bg-team", "worker").await);
+        assert!(
+            coordinator
+                .cancel_background_task("bg-team", "worker")
+                .await
+        );
         let _ = tokio::time::timeout(std::time::Duration::from_secs(2), second).await;
         assert!(coordinator.running_background_tasks().await.is_empty());
     }

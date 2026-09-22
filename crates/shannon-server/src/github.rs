@@ -250,17 +250,13 @@ pub async fn github_hook(
     // GitHub then sees a 2xx and stops redelivering.
     let mut reserved = false;
     if !delivery.is_empty() {
-        let replay = state
-            .github_deliveries
-            .lock()
-            .ok()
-            .and_then(|mut cache| {
-                let replay = cache.reserve(delivery);
-                if replay.is_none() {
-                    reserved = true;
-                }
-                replay
-            });
+        let replay = state.github_deliveries.lock().ok().and_then(|mut cache| {
+            let replay = cache.reserve(delivery);
+            if replay.is_none() {
+                reserved = true;
+            }
+            replay
+        });
         if let Some(run_ids) = replay {
             tracing::info!(delivery, "replaying cached GitHub delivery acceptance");
             return (StatusCode::ACCEPTED, Json(GitHubHookAccepted { run_ids })).into_response();
@@ -1325,5 +1321,4 @@ mod tests {
             "exactly one concurrent caller may win the reservation"
         );
     }
-
 }

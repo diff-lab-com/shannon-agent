@@ -2024,7 +2024,10 @@ mod tests {
 
         // Unreachable endpoint (localhost:1) → the query fails.
         let result = handle_query(&mut repl, "hello", &mut None);
-        assert!(result.is_ok(), "handle_query surfaces engine errors in-chat, not as Err");
+        assert!(
+            result.is_ok(),
+            "handle_query surfaces engine errors in-chat, not as Err"
+        );
 
         assert_eq!(
             repl.state.queued_messages,
