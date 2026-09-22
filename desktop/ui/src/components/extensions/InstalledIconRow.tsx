@@ -46,7 +46,7 @@ export default function InstalledIconRow() {
 
   return (
     <div className="flex items-center gap-sm min-w-0" data-testid="installed-icon-row">
-      <span className="font-label-xs uppercase tracking-wider text-on-surface-variant/70 shrink-0">
+      <span className="font-label-xs uppercase tracking-wider text-on-surface-variant shrink-0">
         {intl.formatMessage({ id: 'extensions.market.installedRow' })}
       </span>
       <div className="flex items-center gap-xs flex-wrap min-w-0">
@@ -61,7 +61,7 @@ export default function InstalledIconRow() {
               'w-9 h-9 rounded-lg flex items-center justify-center shrink-0 border transition-colors cursor-pointer',
               a.enabled
                 ? 'bg-primary/10 border-primary/20 text-primary hover:bg-primary/20'
-                : 'bg-surface-container-low border-outline-variant/30 text-on-surface-variant/60 hover:bg-surface-container',
+                : 'bg-surface-container-low border-outline-variant/30 text-on-surface-variant hover:bg-surface-container',
             )}
           >
             <span className="material-symbols-outlined text-[18px]" aria-hidden="true">{KIND_ICONS[a.kind]}</span>
