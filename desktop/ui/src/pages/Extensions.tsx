@@ -61,6 +61,9 @@ export default function Extensions() {
           shared search input is owned here and piped to the active tab via
           outlet context. */}
       <div className="flex flex-col gap-sm w-full px-lg py-sm border-b border-outline-variant/20 bg-surface/80 backdrop-blur-md sticky top-0 z-subheader">
+        {/* Batch E1 (ZCode 市场大页形态): the hub carries its own H1 — the
+            marketplace is a destination, not a settings subpage. */}
+        <h1 className="font-headline-lg text-[24px] font-bold text-on-surface leading-tight">{t('extensions.hub.title')}</h1>
         <div className="flex items-center justify-between gap-md flex-wrap min-w-0">
           <p className="font-body-sm text-on-surface-variant truncate">{t('extensions.hub.subtitle')}</p>
           <div className="flex items-center bg-surface-container-lowest/50 rounded-full px-md py-xs border border-outline-variant/30 w-full max-w-[360px] focus-within:border-primary/40 focus-within:ring-2 focus-within:ring-primary/20 transition-colors shrink-0">

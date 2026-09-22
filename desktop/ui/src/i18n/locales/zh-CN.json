@@ -3131,5 +3131,11 @@
   "chat.dock.fullscreenExit.aria": "退出全屏",
   "chat.plan.stepToggled.aria": "步骤 {n} 已标记{state}",
   "settings.general.artifactAutoOpen.title": "自动打开产物",
-  "settings.general.artifactAutoOpen.description": "检测到产物（文档、网页、图示）时自动在右侧 dock 打开。"
+  "settings.general.artifactAutoOpen.description": "检测到产物（文档、网页、图示）时自动在右侧 dock 打开。",
+  "extensions.market.tabs.aria": "市场来源",
+  "extensions.market.public": "公开",
+  "extensions.market.personal": "个人",
+  "extensions.market.personalEmpty": "还没有个人扩展",
+  "extensions.market.personalEmptyHint": "本地自建的技能、智能体与插件会出现在这里。",
+  "extensions.market.installedRow": "已安装"
 }

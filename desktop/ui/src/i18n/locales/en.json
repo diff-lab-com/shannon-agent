@@ -3131,5 +3131,11 @@
   "chat.dock.fullscreenExit.aria": "Exit fullscreen",
   "chat.plan.stepToggled.aria": "Step {n} marked {state}",
   "settings.general.artifactAutoOpen.title": "Auto-open artifacts",
-  "settings.general.artifactAutoOpen.description": "Automatically open detected artifacts (documents, pages, diagrams) in the right dock."
+  "settings.general.artifactAutoOpen.description": "Automatically open detected artifacts (documents, pages, diagrams) in the right dock.",
+  "extensions.market.tabs.aria": "Market source",
+  "extensions.market.public": "Public",
+  "extensions.market.personal": "Personal",
+  "extensions.market.personalEmpty": "No personal extensions yet",
+  "extensions.market.personalEmptyHint": "Locally built skills, agents and plugins appear here once created.",
+  "extensions.market.installedRow": "Installed"
 }
