@@ -206,7 +206,30 @@ async function main(): Promise<void> {
   process.exit(2);
 }
 
-if (import.meta.url === `file://${process.argv[1]}`) {
+// Entry-point guard. The previous string-compare against
+// `file://${process.argv[1]}` silently failed when the binary was compiled
+// by Bun: on POSIX `argv[1]` matches `file://…`, but on Windows the path is
+// `B:\~BUN\root\…` (backslashes + drive letter) which the file:// URL
+// scheme never produces, so `main()` was never invoked and the compiled
+// Windows binary just exited 0. We prefer `pathToFileURL` (Node) or
+// `Bun.main` (Bun) for the comparison, falling back to the legacy string
+// check for older runtimes.
+import { pathToFileURL } from "node:url";
+declare const Bun: { main: string } | undefined;
+const isMainModule = (() => {
+  if (typeof Bun !== "undefined") {
+    // Bun: Bun.main is the absolute path of the entry script.
+    return Bun.main === process.argv[1];
+  }
+  // Node: compare against a properly-formed file URL of argv[1].
+  if (typeof process.argv[1] !== "string") return false;
+  try {
+    return pathToFileURL(process.argv[1]).href === import.meta.url;
+  } catch {
+    return import.meta.url === `file://${process.argv[1]}`;
+  }
+})();
+if (isMainModule) {
   main().catch((err: unknown) => {
     console.error("shannon-gateway failed to start:", err);
     process.exit(1);

@@ -66,14 +66,39 @@ export function createApprovalTurnHandler(
           case "approval_request": {
             // Engine event fields are snake_case (wire); map to the gateway's
             // camelCase ApprovalReq that the adapter understands.
-            const decision = await adapter.requestApproval(replyTarget, {
-              requestId: ev.request_id,
-              toolName: ev.tool_name,
-              toolInput: ev.tool_input,
-              description: ev.description,
-              isDestructive: ev.is_destructive,
-              diffPreview: ev.diff_preview ?? null,
-            });
+            //
+            // review §P1-13: race the adapter's requestApproval against a
+            // hard timeout that mirrors the engine's 300s approval window.
+            // Without the timeout the lane would block forever if the user
+            // never clicked — the engine would have already given up and
+            // denied the tool at 300s, but the lane would still wait for a
+            // button click, leaving the session permanently queued and
+            // starving every subsequent message on the same lane.
+            const APPROVAL_TIMEOUT_MS = 300_000;
+            const decision = await Promise.race([
+              adapter.requestApproval(replyTarget, {
+                requestId: ev.request_id,
+                toolName: ev.tool_name,
+                toolInput: ev.tool_input,
+                description: ev.description,
+                isDestructive: ev.is_destructive,
+                diffPreview: ev.diff_preview ?? null,
+              }),
+              new Promise<{ requestId: string; choice: "deny"; timedOut: true }>(
+                (resolve) => {
+                  setTimeout(() => {
+                    logger.warn(
+                      `approval timed out after ${APPROVAL_TIMEOUT_MS}ms (review §P1-13); auto-denying ${ev.request_id}`,
+                    );
+                    resolve({
+                      requestId: ev.request_id,
+                      choice: "deny",
+                      timedOut: true,
+                    });
+                  }, APPROVAL_TIMEOUT_MS).unref?.();
+                },
+              ),
+            ]);
             try {
               await respondToApproval({
                 engineBaseUrl: opts.engineBaseUrl,
