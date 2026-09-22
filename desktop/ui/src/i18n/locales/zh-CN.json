@@ -3119,5 +3119,9 @@
   "sidebar.sessions.error.badge": "上次运行失败",
   "nav.search": "搜索",
   "nav.automation": "自动化",
-  "sidebar.model.badge.aria": "当前模型 {model}（{provider}），点击管理"
+  "sidebar.model.badge.aria": "当前模型 {model}（{provider}），点击管理",
+  "chat.status.worked": "已工作 {time}",
+  "chat.status.tool": " · 正在 {tool}",
+  "chat.message.diffStats.aria": "新增 {additions} 行，删除 {deletions} 行",
+  "chat.artifact.open": "打开"
 }

@@ -3119,5 +3119,9 @@
   "sidebar.sessions.error.badge": "Last run failed",
   "nav.search": "Search",
   "nav.automation": "Automations",
-  "sidebar.model.badge.aria": "Current model {model} ({provider}) — click to manage"
+  "sidebar.model.badge.aria": "Current model {model} ({provider}) — click to manage",
+  "chat.status.worked": "Worked {time}",
+  "chat.status.tool": " · Running {tool}",
+  "chat.message.diffStats.aria": "{additions} lines added, {deletions} lines removed",
+  "chat.artifact.open": "Open"
 }

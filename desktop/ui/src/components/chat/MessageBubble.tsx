@@ -1,4 +1,4 @@
-import { useState, memo } from 'react'
+import { useState, memo, useEffect } from 'react'
 import { useIntl } from 'react-intl'
 import { useNavigate } from 'react-router-dom'
 import { toast } from 'sonner'
@@ -14,6 +14,7 @@ import { useCatalog } from '@/context/CatalogContext'
 import * as api from '@/lib/tauri-api'
 import { Markdown } from '@/components/chat/Markdown'
 import { FootnoteMarkdown } from '@/components/chat/FootnoteMarkdown'
+import { summarizeDiffLineStats, type DiffLineStats } from '@/components/chat/diffStats'
 import {
   Message,
   MessageAvatar,
@@ -342,31 +343,13 @@ export const MessageBubble = memo(function MessageBubble({ message, messageIndex
                   .filter((p): p is string => p != null)
                 const uniquePaths = Array.from(new Set(changedPaths))
                 return uniquePaths.length > 0 ? (
-                  <div className="flex items-center justify-between gap-sm px-md py-xs rounded-lg bg-tertiary/5 border border-tertiary/20">
-                    <div className="flex items-center gap-sm min-w-0">
-                      <span className="material-symbols-outlined icon-sm text-tertiary shrink-0">difference</span>
-                      <span className="font-label-sm text-on-surface truncate">
-                        {intl.formatMessage(
-                          { id: 'chat.message.filesChanged' },
-                          { count: uniquePaths.length }
-                        )}
-                      </span>
-                      <span className="font-label-xs text-on-surface-variant truncate font-mono">
-                        {uniquePaths.join(', ')}
-                      </span>
-                    </div>
-                    {uniquePaths.length > 1 && (
-                      <Button
-                        variant="ghost"
-                        size="sm"
-                        className="shrink-0 gap-xs px-sm py-xs text-tertiary hover:bg-tertiary/10"
-                        onClick={() => onViewDiffMulti?.(uniquePaths)}
-                      >
-                        <span className="material-symbols-outlined icon-sm">open_in_new</span>
-                        {t('chat.message.reviewAll')}
-                      </Button>
-                    )}
-                  </div>
+                  <FileChangesCard
+                    paths={uniquePaths}
+                    rewindable={rewindTurnIndex != null && onRewind != null}
+                    onReview={() => onViewDiff(uniquePaths[0])}
+                    onReviewAll={uniquePaths.length > 1 ? () => onViewDiffMulti?.(uniquePaths) : undefined}
+                    onUndo={() => setPendingRewind(true)}
+                  />
                 ) : null
               })()}
               {/* P2-⑨ (ZCode delta): a run of consecutive same-tool failures is
@@ -478,6 +461,79 @@ export const MessageBubble = memo(function MessageBubble({ message, messageIndex
 })
 
 const FILE_MUTATING_TOOLS = new Set(['write_file', 'edit_file', 'apply_patch', 'str_replace_editor', 'replace'])
+
+/**
+ * Batch C2 (2026-09-20 delta analysis): the in-chat change summary grew
+ * "+x −y" line counts and an in-place 撤销 (rewind to this turn's checkpoint,
+ * reusing the user-message confirm flow) — the ZCode diff-card grammar.
+ */
+function FileChangesCard({ paths, rewindable, onReview, onReviewAll, onUndo }: {
+  paths: string[]
+  rewindable: boolean
+  onReview: () => void
+  onReviewAll?: () => void
+  onUndo: () => void
+}) {
+  const intl = useIntl()
+  const t = (id: string, values?: Record<string, number>) => intl.formatMessage({ id }, values)
+  const [stats, setStats] = useState<DiffLineStats | null>(null)
+
+  useEffect(() => {
+    let cancelled = false
+    summarizeDiffLineStats(paths).then(s => { if (!cancelled) setStats(s) })
+    return () => { cancelled = true }
+    // paths identity is stable per message (derived from tool_calls)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [paths.join('\n')])
+
+  const hasCounts = stats != null && (stats.additions > 0 || stats.deletions > 0)
+  return (
+    <div className="flex items-center justify-between gap-sm px-md py-xs rounded-lg bg-tertiary/5 border border-tertiary/20" data-testid="file-changes-card">
+      <div className="flex items-center gap-sm min-w-0">
+        <span className="material-symbols-outlined icon-sm text-tertiary shrink-0" aria-hidden="true">difference</span>
+        <span className="font-label-sm text-on-surface truncate">
+          {t('chat.message.filesChanged', { count: paths.length })}
+        </span>
+        <span className="font-label-xs text-on-surface-variant truncate font-mono" title={paths.join('\n')}>
+          {paths.join(', ')}
+        </span>
+        {hasCounts && (
+          <span
+            className="font-mono text-label-xs tabular-nums shrink-0"
+            aria-label={t('chat.message.diffStats.aria', { additions: stats!.additions, deletions: stats!.deletions })}
+          >
+            <span className="text-tertiary">+{stats!.additions}</span>{' '}
+            <span className="text-error">−{stats!.deletions}</span>
+          </span>
+        )}
+      </div>
+      <div className="flex items-center gap-xs shrink-0">
+        <Button
+          variant="ghost"
+          size="sm"
+          className="gap-xs px-sm py-xs text-tertiary hover:bg-tertiary/10"
+          onClick={() => (paths.length > 1 && onReviewAll ? onReviewAll() : onReview())}
+        >
+          <span className="material-symbols-outlined icon-sm" aria-hidden="true">difference</span>
+          {paths.length > 1 ? t('chat.message.reviewAll') : t('chat.message.diff')}
+        </Button>
+        {rewindable && (
+          <Button
+            variant="ghost"
+            size="sm"
+            aria-label={t('chat.message.rewind.aria')}
+            title={t('chat.message.rewind.button')}
+            className="gap-xs px-sm py-xs text-on-surface-variant hover:text-error hover:bg-error/10"
+            onClick={onUndo}
+          >
+            <span className="material-symbols-outlined icon-sm" aria-hidden="true">undo</span>
+            {t('chat.message.rewind.button')}
+          </Button>
+        )}
+      </div>
+    </div>
+  )
+}
 
 function extractFilePath(toolName: string, input: unknown): string | null {
   if (!input || typeof input !== 'object') return null

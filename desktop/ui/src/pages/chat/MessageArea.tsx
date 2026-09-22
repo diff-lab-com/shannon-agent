@@ -12,7 +12,6 @@ import { useCatalog } from '@/context/CatalogContext'
 import { useSessions } from '@/context/SessionContext'
 import { useComposer } from './ComposerContext'
 import * as api from '@/lib/tauri-api'
-
 // Virtualization only kicks in past the threshold. Below it, the overhead
 // of measuring/positioning outweighs the win from fewer DOM nodes — and
 // jsdom can't provide real dimensions, so tests would render zero items.
@@ -86,8 +85,8 @@ export default function MessageArea({
   setDiffPath,
   setDiffPaths,
 }: MessageAreaProps) {
-  const { messages, streamingText, thinkingText, activeToolCalls, checkpoints, rewindSession } = useChat()
-  const { currentSessionId } = useSessions()
+  const { messages, streamingText, thinkingText, activeToolCalls, checkpoints, rewindSession, isQuerying } = useChat()
+  const { currentSessionId, sessionActivity } = useSessions()
   const durationLookup = useToolDurationLookup(currentSessionId)
   const checkpointTurns = useMemo(() => checkpoints.map(c => c.turn_index), [checkpoints])
   const rewind = useMemo(() => {
@@ -168,6 +167,11 @@ export default function MessageArea({
         />
       )}
 
+      {/* Batch C3 (ZCode「已工作 3 分 34 秒」): wall-clock status pill pinned
+          to the flow bottom while a run is live — time awareness without
+          expanding tool cards. */}
+      {isQuerying && <RunStatusLine startedAt={currentSessionId ? sessionActivity[currentSessionId]?.startedAt ?? null : null} activeTool={currentSessionId ? sessionActivity[currentSessionId]?.activeTool ?? null : null} />}
+
       {error && (
         <Banner
           variant="card"
@@ -203,6 +207,45 @@ export default function MessageArea({
 function ComposerWelcome() {
   const { setInput } = useComposer()
   return <WelcomeState onSelectPrompt={setInput} />
+}
+
+/**
+ * Batch C3: sticky status pill for a live run —「已工作 3分34秒 · 正在 bash」.
+ * The startedAt/activeTool pair comes from the same SessionActivity the
+ * sidebar rail consumes; a 1s tick drives the elapsed label while mounted.
+ */
+export function RunStatusLine({ startedAt, activeTool }: { startedAt: number | null; activeTool: string | null }) {
+  const t = useT()
+  const [now, setNow] = useState(() => Date.now())
+  useEffect(() => {
+    const id = window.setInterval(() => setNow(Date.now()), 1000)
+    return () => window.clearInterval(id)
+  }, [])
+  const elapsed = startedAt != null ? formatWorked(Math.max(0, now - startedAt)) : null
+  return (
+    <div
+      role="status"
+      aria-live="polite"
+      data-testid="run-status-line"
+      className="sticky bottom-0 mt-md mx-auto w-fit flex items-center gap-xs px-md py-xs rounded-full bg-surface-container-lowest/95 backdrop-blur-md border border-outline-variant/30 shadow-sm"
+    >
+      <span className="size-1.5 rounded-full bg-secondary animate-pulse shrink-0" aria-hidden="true" />
+      <span className="font-label-sm text-on-surface-variant whitespace-nowrap">
+        {elapsed != null && t('chat.status.worked', { time: elapsed })}
+        {activeTool && t('chat.status.tool', { tool: activeTool })}
+      </span>
+    </div>
+  )
+}
+
+/** Compact running-clock label: 42s · 3m34s · 1h12m — keeps seconds so the
+ *  pill visibly ticks (unlike the sidebar's coarser elapsed badge). */
+function formatWorked(ms: number): string {
+  const sec = Math.max(0, Math.floor(ms / 1000))
+  if (sec < 60) return `${sec}s`
+  const min = Math.floor(sec / 60)
+  if (min < 60) return `${min}m${String(sec % 60).padStart(2, '0')}s`
+  return `${Math.floor(min / 60)}h${min % 60}m`
 }
 
 function ComposerRetryButton() {
