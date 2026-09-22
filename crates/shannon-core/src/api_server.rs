@@ -99,6 +99,41 @@ pub struct AppState {
     /// Wall-clock budget for the aggregate `POST /api/query` handler
     /// (review §P2-2). See [`ShannonApiServer::DEFAULT_QUERY_BUDGET`].
     pub query_budget: std::time::Duration,
+    /// Review §P2-3: per-session locks serialising the session-state
+    /// critical section (attach → query → session-log settle) so two
+    /// concurrent requests for the same session cannot project a
+    /// half-written `events.jsonl` into their restored history (dangling
+    /// `tool_use` without its `tool_result` → provider 400). Entries are
+    /// created on demand and opportunistically reclaimed (see
+    /// [`session_lock`]); different sessions never contend.
+    pub session_locks:
+        std::sync::Arc<dashmap::DashMap<Uuid, std::sync::Arc<tokio::sync::Mutex<()>>>>,
+}
+
+/// Upper bound on retained per-session lock entries (review §P2-3). Once the
+/// map exceeds this, entries no longer referenced by an in-flight request
+/// (strong count 1 = the map alone) are reclaimed. Holders clone their
+/// `Arc` before awaiting, so a reclaimed entry can never split a session's
+/// mutual exclusion while a request is running.
+const MAX_SESSION_LOCKS: usize = 4096;
+
+/// Review §P2-3: acquire the per-session lock for `session_id`.
+///
+/// The guard serialises the caller's session-state critical section against
+/// other requests for the SAME session: attach (project `events.jsonl` into
+/// the engine) plus the query that appends to it. Cross-session concurrency
+/// is untouched — a different `session_id` gets a different lock. The
+/// `OwnedMutexGuard` is deliberately movable so the SSE handler can hold it
+/// for as long as the response body is alive (a client disconnect releases
+/// it together with the stream).
+async fn session_lock(state: &AppState, session_id: Uuid) -> tokio::sync::OwnedMutexGuard<()> {
+    if state.session_locks.len() > MAX_SESSION_LOCKS {
+        state
+            .session_locks
+            .retain(|_, v| std::sync::Arc::strong_count(v) > 1);
+    }
+    let lock = state.session_locks.entry(session_id).or_default().clone();
+    lock.lock_owned().await
 }
 
 /// A single WebSocket session holding conversation history.
@@ -259,6 +294,7 @@ impl ShannonApiServer {
                 ws_sessions: Arc::new(RwLock::new(HashMap::new())),
                 approval_registry: Arc::new(Mutex::new(HashMap::new())),
                 query_budget: self.query_budget,
+                session_locks: Arc::new(dashmap::DashMap::new()),
             })
     }
 
@@ -545,6 +581,12 @@ async fn query_handler(
         QueryEngine::with_defaults_arc(client, state.tools.clone(), permissions, state_mgr);
 
     let session_id = resolve_session_id(req.session_id.as_deref(), Uuid::new_v4());
+    // Review §P2-3: serialise this session's state critical section — the
+    // attach below projects `events.jsonl`, and the query driven by this
+    // handler appends to it. Holding the guard across the (budget-bounded)
+    // drain keeps a concurrent same-session request from restoring a
+    // half-written turn. Held to the end of the handler scope.
+    let _session_guard = session_lock(&state, session_id).await;
     attach_session(&mut engine, session_id);
 
     let context = QueryContext {
@@ -661,6 +703,12 @@ async fn query_stream_handler(
 
     let session_id =
         resolve_session_id(params.get("session_id").map(String::as_str), Uuid::new_v4());
+    // Review §P2-3: same per-session serialisation as the aggregate
+    // endpoint. The guard is folded into the response stream (see
+    // [`WithSessionGuard`]) so it is held while the SSE body is alive and
+    // released when the client disconnects or the stream ends — never
+    // across a request we are not serving.
+    let session_guard = session_lock(&state, session_id).await;
     attach_session(&mut engine, session_id);
 
     let context = QueryContext {
@@ -713,7 +761,33 @@ async fn query_stream_handler(
         }
     });
 
-    Ok(Sse::new(sse_stream).keep_alive(KeepAlive::default()))
+    Ok(Sse::new(WithSessionGuard {
+        inner: Box::pin(sse_stream),
+        _guard: session_guard,
+    })
+    .keep_alive(KeepAlive::default()))
+}
+
+/// Stream wrapper holding the §P2-3 per-session lock for as long as the SSE
+/// response body exists. axum drops the body — and therefore this wrapper,
+/// whose `Drop` releases the guard — when the client disconnects or the
+/// stream completes, so a cancelled stream never wedges the session's lock.
+/// Fields drop in declaration order: the inner stream (and the engine's
+/// `QueryStream` inside it) is torn down before the lock is released.
+struct WithSessionGuard<S> {
+    inner: std::pin::Pin<Box<S>>,
+    _guard: tokio::sync::OwnedMutexGuard<()>,
+}
+
+impl<S: futures::Stream> futures::Stream for WithSessionGuard<S> {
+    type Item = S::Item;
+
+    fn poll_next(
+        self: std::pin::Pin<&mut Self>,
+        cx: &mut std::task::Context<'_>,
+    ) -> std::task::Poll<Option<Self::Item>> {
+        self.get_mut().inner.as_mut().poll_next(cx)
+    }
 }
 
 async fn tools_list_handler(State(state): State<AppState>) -> Json<ToolsListResponse> {
@@ -1849,6 +1923,220 @@ mod tests {
     }
 
     // ══════════════════════════════════════════════════════════════════════
+    // review §P2-3: same-session concurrency
+    // ══════════════════════════════════════════════════════════════════════
+
+    /// Minimal Anthropic end-turn SSE response for the scripted mock.
+    fn p2_3_end_turn_sse(text: &str) -> String {
+        let payload = format!(r#"{{"type":"text_delta","text":"{text}"}}"#);
+        let sse = [
+            r#"event: message_start"#,
+            r#"data: {"type":"message_start","message":{"id":"msg_p2_3","role":"assistant","content":[],"model":"test-model","stop_reason":null,"usage":{"input_tokens":10,"output_tokens":1}}}"#,
+            r#"event: content_block_start"#,
+            r#"data: {"type":"content_block_start","index":0,"content_block":{"type":"text","text":""}}"#,
+            "event: content_block_delta",
+            format!(
+                "data: {{\"type\":\"content_block_delta\",\"index\":0,\"delta\":{payload}}}"
+            )
+            .as_str(),
+            r#"event: content_block_stop"#,
+            r#"data: {"type":"content_block_stop","index":0}"#,
+            r#"event: message_delta"#,
+            r#"data: {"type":"message_delta","delta":{"stop_reason":"end_turn"},"usage":{"input_tokens":10,"output_tokens":7}}"#,
+            r#"event: message_stop"#,
+            r#"data: {"type":"message_stop"}"#,
+        ]
+        .join("\n\n");
+        format!(
+            "HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{sse}",
+            sse.len()
+        )
+    }
+
+    /// Review §P2-3: two concurrent requests for the SAME session must not
+    /// interleave their session-log access. While request A is parked
+    /// mid-turn at the provider, request B must wait on the per-session
+    /// lock instead of attaching immediately; when B finally attaches, it
+    /// restores A's completed turn — its provider request carries A's
+    /// assistant reply as history (a partial restore would send a dangling
+    /// `tool_use`/half turn and trip provider 400s).
+    #[tokio::test]
+    async fn p2_3_concurrent_same_session_queries_do_not_interleave_history() {
+        use std::io::Read as _;
+        use std::io::Write as _;
+        use tokio::io::AsyncReadExt as _;
+        use tokio::io::AsyncWriteExt as _;
+
+        // Isolate the session log: the handlers build `StateManager::new()`
+        // whose sessions dir derives from $HOME, and the L0 tee honours
+        // $SHANNON_HOME. Point both at one temp container (nextest runs each
+        // test in its own process, so the env mutation stays local).
+        let home = std::env::temp_dir()
+            .join("shannon-p2-3")
+            .join(Uuid::new_v4().to_string());
+        std::fs::create_dir_all(home.join(".shannon")).unwrap();
+        // SAFETY: test-only env mutation, isolated per nextest process.
+        unsafe { std::env::set_var("HOME", &home) };
+        unsafe { std::env::set_var("SHANNON_HOME", home.join(".shannon")) };
+
+        // Scripted mock: request 0 (request A) signals arrival and parks
+        // until the test releases it; any later request is answered at once.
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let captured: Arc<std::sync::Mutex<Vec<String>>> =
+            Arc::new(std::sync::Mutex::new(Vec::new()));
+        let (first_arrived_tx, first_arrived_rx) = tokio::sync::oneshot::channel::<()>();
+        let (release_tx, release_rx) = std::sync::mpsc::channel::<()>();
+        {
+            let captured = captured.clone();
+            std::thread::spawn(move || {
+                let mut first_arrived_tx = Some(first_arrived_tx);
+                for mut stream in listener.incoming().flatten() {
+                    // 1 MiB: the engine's system prompt embeds the workspace
+                    // environment, so provider requests can far exceed the
+                    // 64 KiB other mocks use.
+                    let mut buf = vec![0u8; 1 << 20];
+                    let mut read = 0usize;
+                    loop {
+                        match stream.read(&mut buf[read..]) {
+                            Ok(0) | Err(_) => break,
+                            Ok(n) => read += n,
+                        }
+                        let s = String::from_utf8_lossy(&buf[..read]).to_string();
+                        if let Some(header_end) = s.find("\r\n\r\n") {
+                            let cl: usize = s[..header_end]
+                                .to_ascii_lowercase()
+                                .split("\r\n")
+                                .find_map(|l| l.strip_prefix("content-length:"))
+                                .and_then(|v| v.trim().parse().ok())
+                                .unwrap_or(0);
+                            if read >= header_end + 4 + cl {
+                                break;
+                            }
+                        }
+                        if read == buf.len() {
+                            break;
+                        }
+                    }
+                    let body = String::from_utf8_lossy(&buf[..read]).to_string();
+                    let index = {
+                        let mut guard = captured.lock().unwrap();
+                        guard.push(body);
+                        guard.len() - 1
+                    };
+                    let http = if index == 0 {
+                        if let Some(tx) = first_arrived_tx.take() {
+                            let _ = tx.send(());
+                        }
+                        // Park mid-turn, like a slow/stalled provider.
+                        let _ = release_rx.recv();
+                        p2_3_end_turn_sse("A_REPLY")
+                    } else {
+                        p2_3_end_turn_sse("B_REPLY")
+                    };
+                    stream.write_all(http.as_bytes()).ok();
+                    stream.flush().ok();
+                }
+            });
+        }
+
+        let app = ShannonApiServer::new(disconnect_test_config(format!(
+            "http://127.0.0.1:{port}"
+        )))
+        .query_budget(std::time::Duration::from_secs(60))
+        .build_router();
+        let addr = spawn_real_server(app).await;
+        let session_id = Uuid::new_v4();
+
+        // Raw-TCP POST /api/query; returns the JSON response body.
+        let post_query = |prompt: &'static str| {
+            let addr = addr;
+            let session_id = session_id;
+            async move {
+                let mut sock = tokio::net::TcpStream::connect(addr).await.unwrap();
+                let body = format!(
+                    r#"{{"prompt":"{prompt}","session_id":"{session_id}"}}"#
+                );
+                let req = format!(
+                    "POST /api/query HTTP/1.1\r\nHost: {addr}\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+                    body.len()
+                );
+                sock.write_all(req.as_bytes()).await.unwrap();
+                sock.flush().await.unwrap();
+                let mut raw = Vec::new();
+                sock.read_to_end(&mut raw).await.unwrap();
+                String::from_utf8_lossy(&raw).to_string()
+            }
+        };
+
+        // A goes first and parks inside the provider call.
+        let a_task = tokio::spawn(post_query("A question"));
+        tokio::time::timeout(std::time::Duration::from_secs(10), first_arrived_rx)
+            .await
+            .expect("A's provider request must arrive")
+            .expect("arrival channel");
+
+        // B starts while A is mid-flight; give it time to reach the handler.
+        let b_task = tokio::spawn(post_query("B question"));
+        tokio::time::sleep(std::time::Duration::from_millis(300)).await;
+
+        // The discriminator: while A's query is in flight, B must NOT have
+        // attached + reached the provider. Without the §P2-3 per-session
+        // lock, B attaches immediately (projecting A's half-written turn)
+        // and the mock would already see 2 requests.
+        assert_eq!(
+            captured.lock().unwrap().len(),
+            1,
+            "B must wait for A's query to settle before attaching the same session"
+        );
+
+        // Let A finish; both queries must then complete successfully.
+        let _ = release_tx.send(());
+        let a_resp = tokio::time::timeout(std::time::Duration::from_secs(30), a_task)
+            .await
+            .expect("A must finish")
+            .expect("A task");
+        let b_resp = tokio::time::timeout(std::time::Duration::from_secs(30), b_task)
+            .await
+            .expect("B must finish")
+            .expect("B task");
+        assert!(a_resp.starts_with("HTTP/1.1 200"), "A response: {a_resp}");
+        assert!(b_resp.starts_with("HTTP/1.1 200"), "B response: {b_resp}");
+
+        // B's provider request must carry A's completed turn as history.
+        let bodies = captured.lock().unwrap().clone();
+        assert_eq!(bodies.len(), 2, "mock must have served exactly 2 requests");
+        // The mock captures the raw HTTP request; take the JSON body after
+        // the header block.
+        let json_part = bodies[1]
+            .split("\r\n\r\n")
+            .nth(1)
+            .unwrap_or_default()
+            .trim();
+        let second: serde_json::Value = serde_json::from_str(json_part)
+            .unwrap_or_else(|e| panic!("B provider request must parse as JSON: {e}"));
+        let messages = second["messages"].as_array().cloned().unwrap_or_default();
+        assert!(
+            messages.iter().any(|m| {
+                m["role"] == "assistant"
+                    && m["content"]
+                        .as_array()
+                        .map(|blocks| {
+                            blocks.iter().any(|b| {
+                                b["type"] == "text"
+                                    && b["text"]
+                                        .as_str()
+                                        .unwrap_or_default()
+                                        .contains("A_REPLY")
+                            })
+                        })
+                        .unwrap_or(false)
+            }),
+            "B must restore A's completed turn from the session log; provider saw: {second}"
+        );
+    }
+
+    // ══════════════════════════════════════════════════════════════════════
     // session_id pass-through (P0-d)
     // ══════════════════════════════════════════════════════════════════════
 
@@ -2609,6 +2897,7 @@ mod tests {
             ws_sessions: Arc::new(RwLock::new(HashMap::new())),
             approval_registry: Arc::new(Mutex::new(HashMap::new())),
             query_budget: ShannonApiServer::DEFAULT_QUERY_BUDGET,
+            session_locks: std::sync::Arc::new(dashmap::DashMap::new()),
         };
         let cloned = state.clone();
         assert!(Arc::ptr_eq(&state.tools, &cloned.tools));
@@ -2623,6 +2912,7 @@ mod tests {
             ws_sessions: Arc::new(RwLock::new(HashMap::new())),
             approval_registry: Arc::new(Mutex::new(HashMap::new())),
             query_budget: ShannonApiServer::DEFAULT_QUERY_BUDGET,
+            session_locks: std::sync::Arc::new(dashmap::DashMap::new()),
         };
         let sessions = state.ws_sessions.read().await;
         assert!(sessions.is_empty());
@@ -2636,6 +2926,7 @@ mod tests {
             ws_sessions: Arc::new(RwLock::new(HashMap::new())),
             approval_registry: Arc::new(Mutex::new(HashMap::new())),
             query_budget: ShannonApiServer::DEFAULT_QUERY_BUDGET,
+            session_locks: std::sync::Arc::new(dashmap::DashMap::new()),
         };
 
         let session = Arc::new(Mutex::new(WsSession {
@@ -2730,6 +3021,7 @@ mod tests {
             ws_sessions: Arc::new(RwLock::new(HashMap::new())),
             approval_registry: Arc::new(Mutex::new(HashMap::new())),
             query_budget: ShannonApiServer::DEFAULT_QUERY_BUDGET,
+            session_locks: std::sync::Arc::new(dashmap::DashMap::new()),
         };
         let request_id = "test-approval-1".to_string();
         let (tx, rx) = oneshot::channel::<PermissionChoice>();
@@ -2770,6 +3062,7 @@ mod tests {
             ws_sessions: Arc::new(RwLock::new(HashMap::new())),
             approval_registry: Arc::new(Mutex::new(HashMap::new())),
             query_budget: ShannonApiServer::DEFAULT_QUERY_BUDGET,
+            session_locks: std::sync::Arc::new(dashmap::DashMap::new()),
         };
         let body = ApprovalRespondRequest {
             request_id: "does-not-exist".to_string(),
