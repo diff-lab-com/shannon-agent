@@ -369,7 +369,7 @@ export const Sidebar = memo(function Sidebar({ mobile, open = true }: { mobile?:
               <span className="material-symbols-outlined text-[16px] text-secondary shrink-0" aria-hidden="true">deployed_code</span>
               <span className="truncate">{status.model}</span>
             </span>
-            <span className="text-[10px] uppercase tracking-wider text-on-surface-variant/80 shrink-0">
+            <span className="text-[10px] uppercase tracking-wider text-on-surface-variant shrink-0">
               {status.provider}
             </span>
           </Button>
