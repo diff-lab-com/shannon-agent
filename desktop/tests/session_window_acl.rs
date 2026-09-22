@@ -64,9 +64,14 @@ fn window_title_sync_allowed_on_main_and_session_windows() {
 #[test]
 fn capability_stays_minimal_no_other_plugin_commands_allowed() {
     for window in [MAIN, SESSION] {
-        // File dialogs (plugin-dialog) are still denied — the current app
-        // never had them allowed and P1-1 does not change that.
-        assert!(!allowed("plugin:dialog|open", window), "dialog on {window}");
+        // review §P1-11: dialog open/save are now granted via the
+        // dedicated `file-dialogs` capability, so the seven frontend
+        // call sites (ChatInput attachments, session export, artifact
+        // save, welcome/editor dir picker, persona-pack import/export)
+        // actually work. The session-windows capability still does NOT
+        // include dialog — those verbs are gated by file-dialogs.json.
+        assert!(allowed("plugin:dialog|open", window), "dialog on {window}");
+        assert!(allowed("plugin:dialog|save", window), "dialog save on {window}");
         // Window close is done through the `close_session_window` app
         // command (not ACL-gated), so the raw window API stays closed.
         assert!(
