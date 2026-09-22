@@ -306,7 +306,7 @@ impl ToolRegistry {
 
     /// Set a per-tool execution timeout.
     ///
-    /// Overrides the [`DEFAULT_EXECUTION_TIMEOUT`] installed by
+    /// Overrides the [`Self::DEFAULT_EXECUTION_TIMEOUT`] installed by
     /// [`ToolRegistry::new`] (review §P2-2). Every call to
     /// [`execute`](Self::execute) and [`execute_streaming`](Self::execute_streaming)
     /// is wrapped with `tokio::time::timeout`. If the tool does not finish

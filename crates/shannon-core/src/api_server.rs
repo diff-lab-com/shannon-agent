@@ -104,8 +104,8 @@ pub struct AppState {
     /// concurrent requests for the same session cannot project a
     /// half-written `events.jsonl` into their restored history (dangling
     /// `tool_use` without its `tool_result` → provider 400). Entries are
-    /// created on demand and opportunistically reclaimed (see
-    /// [`session_lock`]); different sessions never contend.
+    /// created on demand and opportunistically reclaimed; different
+    /// sessions never contend.
     pub session_locks:
         std::sync::Arc<dashmap::DashMap<Uuid, std::sync::Arc<tokio::sync::Mutex<()>>>>,
 }
