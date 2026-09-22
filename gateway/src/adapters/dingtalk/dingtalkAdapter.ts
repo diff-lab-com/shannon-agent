@@ -13,6 +13,8 @@ import {
 } from "../types.js";
 import { parseApprovalChoice } from "../approvalChoice.js";
 import { type AdapterConfig } from "../../config/types.js";
+import { readWebhookBodyOr413 } from "../../lib/webhookBody.js";
+import { PLATFORM_HTTP_TIMEOUT_MS } from "../../lib/netTimeouts.js";
 
 /**
  * DingTalk (钉钉) adapter — **custom-robot outgoing webhook** model.
@@ -213,7 +215,9 @@ export function createDingTalkAdapter(cfg: AdapterConfig, ctx: AdapterContext): 
   }
 
   async function handlePost(req: IncomingMessage, res: ServerResponse): Promise<void> {
-    const raw = await readBody(req);
+    // review §P2-23: bound the raw body before signature verification.
+    const raw = await readWebhookBodyOr413(req, res);
+    if (raw === null) return;
     let parsed: unknown;
     try {
       parsed = JSON.parse(raw);
@@ -247,7 +251,13 @@ export function createDingTalkAdapter(cfg: AdapterConfig, ctx: AdapterContext): 
       );
     }
     const req = buildSessionSendRequest(sessionWebhook, content);
-    const res = await fetchImpl(req.url, { method: req.method, headers: req.headers, body: req.body });
+    const res = await fetchImpl(req.url, {
+      method: req.method,
+      headers: req.headers,
+      body: req.body,
+      // review §P2-23: platform API calls must not hang the session lane.
+      signal: AbortSignal.timeout(PLATFORM_HTTP_TIMEOUT_MS),
+    });
     if (!res.ok) {
       const detail = await res.text().catch(() => "");
       throw new Error(`dingtalk send failed: HTTP ${res.status} ${detail}`);
@@ -319,14 +329,3 @@ export function createDingTalkAdapter(cfg: AdapterConfig, ctx: AdapterContext): 
   };
 }
 
-function readBody(req: IncomingMessage): Promise<string> {
-  return new Promise((resolve, reject) => {
-    let data = "";
-    req.setEncoding("utf8");
-    req.on("data", (chunk: string) => {
-      data += chunk;
-    });
-    req.on("end", () => resolve(data));
-    req.on("error", reject);
-  });
-}

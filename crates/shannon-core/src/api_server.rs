@@ -630,25 +630,7 @@ async fn query_stream_handler(
     let sse_stream = query_stream.filter_map(|result| async move {
         match result {
             Ok(event) => {
-                let event_type = match &event {
-                    QueryEvent::Text { .. } => "text",
-                    QueryEvent::ToolUseRequest { .. } => "tool_use_request",
-                    QueryEvent::ToolUseResult { .. } => "tool_use_result",
-                    QueryEvent::Usage { .. } => "usage",
-                    QueryEvent::Completed { .. } => "completed",
-                    QueryEvent::Failed { .. } => "failed",
-                    QueryEvent::Progress { .. } => "progress",
-                    QueryEvent::Cost { .. } => "cost",
-                    QueryEvent::TurnCompleted { .. } => "turn_completed",
-                    QueryEvent::Started { .. } => "started",
-                    QueryEvent::ToolProgress { .. } => "tool_progress",
-                    QueryEvent::Thinking { .. } => "thinking",
-                    QueryEvent::Info { .. } => "info",
-                    QueryEvent::RateLimit { .. } => "rate_limit",
-                    QueryEvent::ConversationUpdate { .. } => "conversation_update",
-                    QueryEvent::Warning { .. } => "warning",
-                };
-                let data = serde_json::to_string(&event).unwrap_or_default();
+                let (event_type, data) = sse_parts_from_query_event(&event);
                 Some(Ok(Event::default().event(event_type).data(data)))
             }
             Err(e) => {
@@ -660,6 +642,60 @@ async fn query_stream_handler(
     });
 
     Ok(Sse::new(sse_stream).keep_alive(KeepAlive::default()))
+}
+
+/// Map a [`QueryEvent`] to its SSE `(event name, JSON payload)` pair.
+///
+/// §P3-4: a serialization failure (e.g. a NaN cost value, which
+/// `serde_json` refuses to emit) must not degrade into an empty payload —
+/// the client would receive a semantically empty event of the *expected*
+/// type. Instead the event is logged and an explicit `error` event with a
+/// description goes out on the wire.
+fn sse_parts_from_query_event(event: &QueryEvent) -> (&'static str, String) {
+    let event_type = match event {
+        QueryEvent::Text { .. } => "text",
+        QueryEvent::ToolUseRequest { .. } => "tool_use_request",
+        QueryEvent::ToolUseResult { .. } => "tool_use_result",
+        QueryEvent::Usage { .. } => "usage",
+        QueryEvent::Completed { .. } => "completed",
+        QueryEvent::Failed { .. } => "failed",
+        QueryEvent::Progress { .. } => "progress",
+        QueryEvent::Cost { .. } => "cost",
+        QueryEvent::TurnCompleted { .. } => "turn_completed",
+        QueryEvent::Started { .. } => "started",
+        QueryEvent::ToolProgress { .. } => "tool_progress",
+        QueryEvent::Thinking { .. } => "thinking",
+        QueryEvent::Info { .. } => "info",
+        QueryEvent::RateLimit { .. } => "rate_limit",
+        QueryEvent::ConversationUpdate { .. } => "conversation_update",
+        QueryEvent::Warning { .. } => "warning",
+    };
+    sse_parts(event_type, event)
+}
+
+/// Serialize `value` into an SSE `(event name, JSON payload)` pair.
+///
+/// §P3-4: on serialization failure the payload must not be empty — the
+/// client would receive a semantically empty event of the *expected* type.
+/// Instead the failure is logged and an explicit `error` event with a
+/// description goes out on the wire.
+fn sse_parts<T: serde::Serialize>(event_type: &'static str, value: &T) -> (&'static str, String) {
+    match serde_json::to_string(value) {
+        Ok(data) => (event_type, data),
+        Err(e) => {
+            tracing::error!(
+                error = %e,
+                event_type,
+                "SSE event serialization failed; emitting explicit error event"
+            );
+            let data = serde_json::json!({
+                "error": format!("event serialization failed: {e}"),
+                "event_type": event_type,
+            })
+            .to_string();
+            ("error", data)
+        }
+    }
 }
 
 async fn tools_list_handler(State(state): State<AppState>) -> Json<ToolsListResponse> {
@@ -2725,5 +2761,52 @@ mod tests {
         let server = ShannonApiServer::new(config);
         // Ensure build_router is deterministic and doesn't panic
         let _router = server.build_router();
+    }
+
+    // ── §P3-4: serialization failure emits an explicit error event ─────
+
+    #[test]
+    fn sse_serializable_event_keeps_its_event_name() {
+        let event = QueryEvent::Progress {
+            query_id: Uuid::new_v4(),
+            message: "step 1".to_string(),
+        };
+        let (event_type, data) = sse_parts_from_query_event(&event);
+        assert_eq!(event_type, "progress");
+        let parsed: serde_json::Value = serde_json::from_str(&data).unwrap();
+        // QueryEvent serializes externally tagged: {"Progress": {...}}.
+        assert_eq!(parsed["Progress"]["message"], "step 1");
+    }
+
+    #[test]
+    fn sse_unserializable_event_becomes_error_event_not_empty_payload() {
+        // A payload whose serialization always fails — standing in for
+        // corrupted payloads (e.g. a NaN-bearing value that serde_json
+        // rejects in some positions) that previously degraded to an empty
+        // wire event carrying the *expected* event name.
+        struct AlwaysFails;
+        impl serde::Serialize for AlwaysFails {
+            fn serialize<S: serde::Serializer>(&self, _: S) -> Result<S::Ok, S::Error> {
+                Err(serde::ser::Error::custom("unserializable payload"))
+            }
+        }
+        let event = AlwaysFails;
+        // Sanity: the raw serialization really does fail.
+        assert!(serde_json::to_string(&event).is_err());
+
+        let (event_type, data) = sse_parts("cost", &event);
+        assert_eq!(
+            event_type, "error",
+            "unserializable event must emit an error event"
+        );
+        assert!(!data.is_empty(), "error event must carry a description");
+        let parsed: serde_json::Value = serde_json::from_str(&data).unwrap();
+        let error = parsed["error"].as_str().unwrap();
+        assert!(
+            error.contains("serialization failed"),
+            "error event must explain the failure, got: {error}"
+        );
+        // The failed event type is surfaced so clients know what was lost.
+        assert_eq!(parsed["event_type"], "cost");
     }
 }
