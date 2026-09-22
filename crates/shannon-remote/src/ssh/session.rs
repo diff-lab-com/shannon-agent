@@ -451,6 +451,13 @@ where
 /// `block_on` from any thread, including threads already inside another
 /// tokio runtime (spawn_blocking workers): hop to a plain OS thread when
 /// necessary. Blocking ssh helpers call this.
+///
+/// Review §P2-14 guidance: inside a runtime this hop costs one OS thread per
+/// call (an async worker must not block, and there is no public probe that
+/// separates worker threads from blocking-pool threads). Callers of the SFTP
+/// `FileSystemProvider::*_blocking` fns should therefore invoke them from
+/// `tokio::task::spawn_blocking` — the helper-thread hop then happens on the
+/// blocking pool instead of stalling an async worker.
 #[cfg(unix)]
 pub(crate) fn block_on_anywhere<T, F>(handle: &Handle, fut: F) -> T
 where

@@ -128,55 +128,25 @@ fn sort_results(results: &mut [GlobResult]) {
 /// Execute a glob search using the `ignore` crate for .gitignore-aware traversal
 /// and the `glob` crate for pattern matching.
 pub async fn execute(input: GlobInput) -> Result<ToolOutput, ToolError> {
-    execute_with(input, crate::defaults::fs().as_ref()).await
+    execute_with(input, crate::defaults::fs()).await
 }
 
 /// Provider-injected entry point (§4.11): metadata and canonicalization flow
 /// through the injected filesystem world.
+///
+/// §P2-14: takes the provider as an owned `Arc` so the blocking walk can run
+/// on tokio's blocking pool (`spawn_blocking` requires `'static`).
 pub async fn execute_with(
     input: GlobInput,
-    fs: &dyn FileSystemProvider,
+    fs: std::sync::Arc<dyn FileSystemProvider>,
 ) -> Result<ToolOutput, ToolError> {
-    let base_path = input.path.as_deref().unwrap_or(".");
-    let base = PathBuf::from(base_path);
-
-    // Prevent path traversal (e.g. "../../etc") by checking components.
-    // Confinement compares against the *world's* canonical root: on a remote
-    // target both the path and its resolution live on the other machine, and
-    // the local cwd is meaningless there.
-    for component in base.components() {
-        if matches!(component, std::path::Component::ParentDir) {
-            // Allow if path resolves within the world's canonical base after
-            // canonicalization (symlinks resolved remotely via SFTP).
-            if let Ok(canonical) = fs.canonicalize_blocking(&base) {
-                if let Ok(base_canonical) = fs.canonicalize_blocking(Path::new(".")) {
-                    if !canonical.starts_with(&base_canonical) {
-                        return Ok(ToolOutput {
-                            content: format!(
-                                "Path traversal blocked: '{base_path}' resolves outside project"
-                            ),
-                            is_error: true,
-                            metadata: HashMap::new(),
-                        });
-                    }
-                }
-            }
-            break;
-        }
-    }
-
-    // If the base directory does not exist, return early with empty results.
-    // (Provider-checked so the probe hits the active world's disk.)
-    if !fs.exists_blocking(&base) {
-        return Ok(ToolOutput {
-            content: format!("Directory not found: {base_path}"),
-            is_error: true,
-            metadata: HashMap::new(),
-        });
-    }
-
-    let excludes = input.exclude_pattern.as_deref().unwrap_or(&[]);
-    let pattern = &input.pattern;
+    let base_path = input
+        .path
+        .clone()
+        .unwrap_or_else(|| ".".to_string());
+    let base = PathBuf::from(&base_path);
+    let excludes = input.exclude_pattern.clone().unwrap_or_default();
+    let pattern = input.pattern.clone();
 
     // A pattern that addresses outside its base directory can never match:
     // matching runs against paths RELATIVE to the base, so absolute or
@@ -185,7 +155,8 @@ pub async fn execute_with(
     // depths (dogfood l2 2026-08-23: ../../../../../../ tried at two wrong
     // depths, then the task gave up without producing its answer). Report
     // the confinement so the model can switch to a relative pattern.
-    if pattern_is_escaping(pattern) {
+    // (Pure string logic — stays on the async side.)
+    if pattern_is_escaping(&pattern) {
         return Ok(ToolOutput {
             content: format!(
                 "Glob pattern '{pattern}' cannot match here: patterns are \
@@ -199,41 +170,104 @@ pub async fn execute_with(
         });
     }
 
-    // Compile the glob pattern once.
-    let glob_pattern = glob::Pattern::new(pattern)
+    // Compile the glob pattern once (pure).
+    let glob_pattern = glob::Pattern::new(&pattern)
         .map_err(|e| ToolError::InvalidInput(format!("Invalid glob pattern '{pattern}': {e}")))?;
 
-    // .gitignore-aware traversal through the injected filesystem world, so
-    // matching runs against the same machine the files live on.
-    let mut results: Vec<GlobResult> = Vec::new();
-
-    fs.walk_blocking(&base, &mut |entry| {
-        if !entry.is_dir {
-            let path = entry.path.as_path();
-
-            // Match the path *relative* to the base directory. This ensures
-            // `*.rs` only matches files in the root, not `src/mod.rs`.
-            let rel = match path.strip_prefix(&base) {
-                Ok(r) => r,
-                Err(_) => return true,
-            };
-
-            if !glob_pattern.matches_path_with(rel, MATCH_OPTS) {
-                return true;
-            }
-
-            // Apply user-supplied exclude patterns.
-            if matches_any_exclude(rel, excludes) {
-                return true;
-            }
-
-            if let Some(result) = build_result(fs, path) {
-                results.push(result);
+    // Review §P2-14: canonicalization, existence probes, the .gitignore-aware
+    // walk and the per-file metadata reads are all synchronous IO — on a
+    // remote world (SSH/Docker) every one of those calls even spins a helper
+    // thread. Run the whole blocking section on tokio's blocking pool instead
+    // of parking the async worker; the join re-raises both the JoinError and
+    // the inner ToolError.
+    //
+    // `Some(output)` is an advisory early-return (path traversal blocked /
+    // directory not found); `None` means the walk produced `results`.
+    let job = move || -> Result<(Option<ToolOutput>, Vec<GlobResult>), ToolError> {
+        // Prevent path traversal (e.g. "../../etc") by checking components.
+        // Confinement compares against the *world's* canonical root: on a
+        // remote target both the path and its resolution live on the other
+        // machine, and the local cwd is meaningless there.
+        for component in base.components() {
+            if matches!(component, std::path::Component::ParentDir) {
+                // Allow if path resolves within the world's canonical base
+                // after canonicalization (symlinks resolved remotely via
+                // SFTP).
+                if let Ok(canonical) = fs.canonicalize_blocking(&base) {
+                    if let Ok(base_canonical) = fs.canonicalize_blocking(Path::new(".")) {
+                        if !canonical.starts_with(&base_canonical) {
+                            return Ok((
+                                Some(ToolOutput {
+                                    content: format!(
+                                        "Path traversal blocked: '{base_path}' resolves outside project"
+                                    ),
+                                    is_error: true,
+                                    metadata: HashMap::new(),
+                                }),
+                                Vec::new(),
+                            ));
+                        }
+                    }
+                }
+                break;
             }
         }
-        true
-    })
-    .map_err(|e| ToolError::ExecutionFailed(format!("glob walk failed: {e}")))?;
+
+        // If the base directory does not exist, return early with empty
+        // results. (Provider-checked so the probe hits the active world's
+        // disk.)
+        if !fs.exists_blocking(&base) {
+            return Ok((
+                Some(ToolOutput {
+                    content: format!("Directory not found: {base_path}"),
+                    is_error: true,
+                    metadata: HashMap::new(),
+                }),
+                Vec::new(),
+            ));
+        }
+
+        // .gitignore-aware traversal through the injected filesystem world,
+        // so matching runs against the same machine the files live on.
+        let mut results: Vec<GlobResult> = Vec::new();
+
+        fs.walk_blocking(&base, &mut |entry| {
+            if !entry.is_dir {
+                let path = entry.path.as_path();
+
+                // Match the path *relative* to the base directory. This
+                // ensures `*.rs` only matches files in the root, not
+                // `src/mod.rs`.
+                let rel = match path.strip_prefix(&base) {
+                    Ok(r) => r,
+                    Err(_) => return true,
+                };
+
+                if !glob_pattern.matches_path_with(rel, MATCH_OPTS) {
+                    return true;
+                }
+
+                // Apply user-supplied exclude patterns.
+                if matches_any_exclude(rel, &excludes) {
+                    return true;
+                }
+
+                if let Some(result) = build_result(fs.as_ref(), path) {
+                    results.push(result);
+                }
+            }
+            true
+        })
+        .map_err(|e| ToolError::ExecutionFailed(format!("glob walk failed: {e}")))?;
+        Ok((None, results))
+    };
+
+    let (early, mut results) = tokio::task::spawn_blocking(job)
+        .await
+        .map_err(|e| ToolError::ExecutionFailed(format!("glob blocking worker failed: {e}")))??;
+    if let Some(output) = early {
+        return Ok(output);
+    }
 
     sort_results(&mut results);
     let total_matches = results.len();
@@ -399,7 +433,7 @@ mod tests {
                 path: Some("/remote-host/proj".into()),
                 exclude_pattern: None,
             },
-            &RemoteFakeFs,
+            std::sync::Arc::new(RemoteFakeFs) as std::sync::Arc<dyn FileSystemProvider>,
         )
         .await
         .unwrap();

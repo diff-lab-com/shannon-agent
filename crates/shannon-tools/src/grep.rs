@@ -133,23 +133,30 @@ impl GrepTool {
 
     /// Check if a file appears to be binary by looking for null bytes.
     /// Reads the sniff buffer through the injected filesystem world.
-    fn is_binary(&self, path: &Path) -> bool {
-        match self.fs.read_prefix_blocking(path, BINARY_CHECK_BYTES) {
+    ///
+    /// §P2-14: takes the provider explicitly (not `&self`) so the blocking
+    /// search section can run inside `spawn_blocking` without borrowing the
+    /// tool.
+    fn is_binary(fs: &std::sync::Arc<dyn shannon_tool_interface::FileSystemProvider>, path: &Path) -> bool {
+        match fs.read_prefix_blocking(path, BINARY_CHECK_BYTES) {
             Ok(buf) => buf.contains(&0),
             Err(_) => true, // Treat unreadable files as binary
         }
     }
 
     /// Read lines from a file, returning a vector of (line_number, line_content)
-    fn read_file_lines(&self, path: &Path) -> std::io::Result<Vec<(usize, String)>> {
+    fn read_file_lines(
+        fs: &std::sync::Arc<dyn shannon_tool_interface::FileSystemProvider>,
+        path: &Path,
+    ) -> std::io::Result<Vec<(usize, String)>> {
         // Skip files that are too large to avoid OOM on huge log/data files
         const MAX_FILE_SIZE: u64 = 50 * 1024 * 1024; // 50 MB
-        if let Ok(meta) = self.fs.metadata_blocking(path) {
+        if let Ok(meta) = fs.metadata_blocking(path) {
             if meta.len > MAX_FILE_SIZE {
                 return Ok(Vec::new());
             }
         }
-        let content = self.fs.read_text_blocking(path)?;
+        let content = fs.read_text_blocking(path)?;
         Ok(content
             .lines()
             .enumerate()
@@ -157,20 +164,24 @@ impl GrepTool {
             .collect())
     }
 
-    /// Search a single file for pattern matches
+    /// Search a single file for pattern matches.
+    ///
+    /// §P2-14: takes the provider and sandbox explicitly so it can run
+    /// inside `spawn_blocking` without borrowing the tool.
     fn search_file(
-        &self,
+        fs: &std::sync::Arc<dyn shannon_tool_interface::FileSystemProvider>,
+        sandbox: &crate::file::sandbox::PathSandbox,
         path: &Path,
         regex: &regex::Regex,
         _show_line_numbers: bool,
         context_before: usize,
         context_after: usize,
     ) -> Option<GrepFileMatch> {
-        if self.is_binary(path) {
+        if Self::is_binary(fs, path) {
             return None;
         }
 
-        let lines = match self.read_file_lines(path) {
+        let lines = match Self::read_file_lines(fs, path) {
             Ok(lines) => lines,
             Err(_) => return None,
         };
@@ -210,7 +221,7 @@ impl GrepTool {
             // A3: echo the path in the command sandbox's view (e.g.
             // `/workspace/src/x.rs`) so the model can feed it straight into
             // a sandboxed Bash command. Identity when output aliasing is off.
-            let display_path = self.sandbox.alias_display_path(path);
+            let display_path = sandbox.alias_display_path(path);
             Some(GrepFileMatch {
                 file: display_path,
                 matches,
@@ -373,9 +384,13 @@ case_insensitive matching."
                 ))
             })?;
 
-        // Determine search path
-        let search_path = grep_input.path.as_deref().unwrap_or(".");
-        let search_root = PathBuf::from(search_path);
+        // Determine search path (owned spelling so it can move into the
+        // §P2-14 blocking job below).
+        let search_root = grep_input
+            .path
+            .as_deref()
+            .map_or_else(|| PathBuf::from("."), PathBuf::from);
+        let search_path = search_root.display().to_string();
 
         // Validate search path through sandbox
         let canonical_root = self
@@ -384,27 +399,14 @@ case_insensitive matching."
             .await
             .map_err(|e| ToolError::InvalidInput(format!("Path sandbox: {e}")))?;
 
-        // Existence is provider-checked: on a remote world the search root
-        // lives on the target, so `Path::exists` would probe the wrong disk.
-        // When the raw spelling is missing but the sandbox resolved it (bind
-        // alias addressing like `/workspace/src`), walk the canonical host
-        // root — the companion of the output aliasing in `search_file`.
-        let search_root = if self.fs.exists_blocking(&search_root) {
-            search_root
-        } else if self.fs.exists_blocking(&canonical_root) {
-            canonical_root
-        } else {
-            return Err(ToolError::ExecutionFailed(format!(
-                "Path does not exist: {search_path}"
-            )));
-        };
-
-        // Traversal, gitignore handling and content reads all follow the
-        // injected filesystem world (local by default, SSH/Docker under a
-        // remote target). Include/exclude filtering stays in the callback.
-        let mut all_matches: Vec<GrepFileMatch> = Vec::new();
-        let mut total_matches: usize = 0;
-        let mut quota_reached = false;
+        // Review §P2-14: traversal, existence probes and per-file content
+        // reads are synchronous IO — on a remote world (SSH/Docker) every
+        // one of those calls even spins a helper thread. Running them inline
+        // here parked a tokio worker for the whole walk; execute the entire
+        // blocking section on the blocking pool instead. The join re-raises
+        // both layers: JoinError (worker cancelled) and the inner ToolError.
+        let fs = self.fs.clone();
+        let sandbox = self.sandbox.clone();
 
         let show_line_numbers = grep_input.line_number.unwrap_or(true);
         let context_before = grep_input
@@ -417,9 +419,31 @@ case_insensitive matching."
             .unwrap_or(DEFAULT_MAX_RESULTS)
             .min(MAX_ALLOWED_RESULTS);
         let output_mode = grep_input.output_mode.unwrap_or_default();
+        let (all_matches, total_matches) = tokio::task::spawn_blocking(move || {
+            // Existence is provider-checked: on a remote world the search
+            // root lives on the target, so `Path::exists` would probe the
+            // wrong disk. When the raw spelling is missing but the sandbox
+            // resolved it (bind alias addressing like `/workspace/src`), walk
+            // the canonical host root — the companion of the output aliasing
+            // in `search_file`.
+            let search_root = if fs.exists_blocking(&search_root) {
+                search_root
+            } else if fs.exists_blocking(&canonical_root) {
+                canonical_root
+            } else {
+                return Err(ToolError::ExecutionFailed(format!(
+                    "Path does not exist: {search_path}"
+                )));
+            };
 
-        self.fs
-            .walk_blocking(&search_root, &mut |entry| {
+            // Traversal, gitignore handling and content reads all follow the
+            // injected filesystem world (local by default, SSH/Docker under a
+            // remote target). Include/exclude filtering stays in the callback.
+            let mut all_matches: Vec<GrepFileMatch> = Vec::new();
+            let mut total_matches: usize = 0;
+            let mut quota_reached = false;
+
+            fs.walk_blocking(&search_root, &mut |entry| {
                 if quota_reached {
                     return false;
                 }
@@ -444,7 +468,9 @@ case_insensitive matching."
                     }
                 }
 
-                if let Some(mut file_match) = self.search_file(
+                if let Some(mut file_match) = Self::search_file(
+                    &fs,
+                    &sandbox,
                     path,
                     &regex,
                     show_line_numbers,
@@ -467,6 +493,10 @@ case_insensitive matching."
                 true
             })
             .map_err(|e| ToolError::ExecutionFailed(format!("walk failed: {e}")))?;
+            Ok((all_matches, total_matches))
+        })
+        .await
+        .map_err(|e| ToolError::ExecutionFailed(format!("grep blocking worker failed: {e}")))??;
 
         // Format output based on mode
         let content = match output_mode {
