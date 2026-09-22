@@ -103,6 +103,16 @@ export function validateConfig(parsed: unknown, path = "<inline>"): GatewayConfi
 
   const result: GatewayConfig = { engine: { wsUrl: e.wsUrl, httpBaseUrl: e.httpBaseUrl }, adapters };
   if (typeof e.model === "string" && e.model.length > 0) result.engine.model = e.model;
+  // review §P0-6: authTokenKey must round-trip; without it, every call to a
+  // non-loopback-bound engine returns 401 even when configured.
+  if (e.authTokenKey !== undefined) {
+    if (typeof e.authTokenKey !== "string" || e.authTokenKey.length === 0) {
+      throw new Error(
+        `gateway config ${path}: engine.authTokenKey must be a non-empty string if present`,
+      );
+    }
+    result.engine.authTokenKey = e.authTokenKey;
+  }
   if (typeof logLevel === "string") result.logLevel = logLevel as LogLevel;
 
   // Optional P1-4 IM-channel block. Validates shape only; defaults (lifecycle
@@ -162,7 +172,56 @@ export function validateConfig(parsed: unknown, path = "<inline>"): GatewayConfi
       }
       parsedMobile.devicesFile = m.devicesFile;
     }
+    // review §P0-6: relay/tls/qrPayloadFile were silently dropped by the old
+    // loader. Round-trip them so v0.12 TLS pinning + relay mode actually work.
+    if (m.relay !== undefined) {
+      if (typeof m.relay !== "object" || m.relay === null) {
+        throw new Error(`gateway config ${path}: mobile.relay must be an object`);
+      }
+      const r = m.relay as Record<string, unknown>;
+      if (typeof r.url !== "string" || r.url.length === 0) {
+        throw new Error(`gateway config ${path}: mobile.relay.url must be a non-empty string`);
+      }
+      if (typeof r.enabled !== "boolean") {
+        throw new Error(`gateway config ${path}: mobile.relay.enabled must be boolean`);
+      }
+      parsedMobile.relay = { url: r.url, enabled: r.enabled };
+    }
+    if (m.tls !== undefined) {
+      if (typeof m.tls !== "object" || m.tls === null) {
+        throw new Error(`gateway config ${path}: mobile.tls must be an object`);
+      }
+      const t = m.tls as Record<string, unknown>;
+      const tls: { enabled?: boolean } = {};
+      if (t.enabled !== undefined) {
+        if (typeof t.enabled !== "boolean") {
+          throw new Error(`gateway config ${path}: mobile.tls.enabled must be boolean`);
+        }
+        tls.enabled = t.enabled;
+      }
+      parsedMobile.tls = tls;
+    }
+    if (m.qrPayloadFile !== undefined) {
+      if (typeof m.qrPayloadFile !== "string" || m.qrPayloadFile.length === 0) {
+        throw new Error(
+          `gateway config ${path}: mobile.qrPayloadFile must be a non-empty string`,
+        );
+      }
+      parsedMobile.qrPayloadFile = m.qrPayloadFile;
+    }
     result.mobile = parsedMobile;
+  }
+
+  // review §P0-6: surface unknown top-level keys as errors instead of silently
+  // ignoring them — this prevents the next bug where a new field is added to
+  // GatewayConfig but not yet plumbed through the loader.
+  const knownTopLevel = new Set(["engine", "adapters", "logLevel", "im", "mobile"]);
+  for (const k of Object.keys(obj)) {
+    if (!knownTopLevel.has(k)) {
+      throw new Error(
+        `gateway config ${path}: unknown top-level field '${k}' (expected one of: ${[...knownTopLevel].join(", ")})`,
+      );
+    }
   }
 
   return result;
