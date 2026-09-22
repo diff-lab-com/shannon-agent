@@ -64,6 +64,12 @@ sha2 = "0.10"
 # Shell command parsing for security
 shell-words = "1.1"
 
+# review §P2-9: replaces the O(m*n) LCS table in compute_diff_hunks with a
+# linear-space Myers diff (already present transitively in the lockfile
+# via a tracing dep). O(n) memory + O(nd) time, so a 20k-line edit no
+# longer needs ~3 GB of working memory.
+similar = "2"
+
 # PTY support for interactive commands
 portable-pty = "0.8"
 

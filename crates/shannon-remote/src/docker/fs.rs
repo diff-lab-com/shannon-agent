@@ -238,6 +238,21 @@ impl FileSystemProvider for DockerExecFs {
         run_blocking(&self.proc, "mkdir", &["-p".into(), path_arg("mkdir", path)])?.ok("mkdir -p")
     }
 
+    fn rename_blocking(&self, from: &Path, to: &Path) -> io::Result<()> {
+        // POSIX `mv` is atomic when both paths are on the same filesystem,
+        // which is true inside a single docker container.
+        run_blocking(
+            &self.proc,
+            "mv",
+            &[
+                "-f".into(),
+                path_arg("mv-from", from),
+                path_arg("mv-to", to),
+            ],
+        )?
+        .ok("mv")
+    }
+
     fn remove_file_blocking(&self, path: &Path) -> io::Result<()> {
         run_blocking(&self.proc, "rm", &["-f".into(), path_arg("rm", path)])?.ok("rm")
     }

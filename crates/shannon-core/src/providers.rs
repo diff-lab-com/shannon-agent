@@ -98,6 +98,10 @@ impl FileSystemProvider for LocalFs {
         std::fs::create_dir_all(path)
     }
 
+    fn rename_blocking(&self, from: &Path, to: &Path) -> io::Result<()> {
+        std::fs::rename(from, to)
+    }
+
     fn remove_file_blocking(&self, path: &Path) -> io::Result<()> {
         std::fs::remove_file(path)
     }

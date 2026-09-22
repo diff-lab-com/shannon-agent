@@ -352,6 +352,9 @@ mod tests {
             fn create_dir_all_blocking(&self, _p: &Path) -> io::Result<()> {
                 unimplemented!()
             }
+            fn rename_blocking(&self, _from: &Path, _to: &Path) -> io::Result<()> {
+                unimplemented!()
+            }
             fn remove_file_blocking(&self, _p: &Path) -> io::Result<()> {
                 unimplemented!()
             }

@@ -129,6 +129,21 @@ impl FileSystemProvider for MemoryFs {
         Ok(())
     }
 
+    fn rename_blocking(&self, from: &Path, to: &Path) -> io::Result<()> {
+        // Move the recorded file bytes from `from` to `to`.
+        let bytes = self
+            .files
+            .lock()
+            .expect("memfs lock")
+            .remove(from)
+            .ok_or_else(|| io::Error::new(io::ErrorKind::NotFound, "rename source missing"))?;
+        self.files
+            .lock()
+            .expect("memfs lock")
+            .insert(to.to_path_buf(), bytes);
+        Ok(())
+    }
+
     fn remove_file_blocking(&self, path: &Path) -> io::Result<()> {
         self.files.lock().expect("memfs lock").remove(path);
         Ok(())

@@ -7509,6 +7509,7 @@ dependencies = [
  "shannon-tool-interface",
  "shannon-types",
  "shell-words",
+ "similar",
  "tempfile",
  "thiserror 2.0.18",
  "tokio",

@@ -173,6 +173,13 @@ impl ConfigManager {
     }
 
     /// Save the current config to disk.
+    ///
+    /// review §P2-15: previous version called `write_bytes_blocking` directly,
+    /// which would leave a half-written JSON file if the process was killed
+    /// mid-write or the disk filled up; the next `load()` would then fail and
+    /// the user would lose their config. Now writes to a sibling temp file
+    /// and atomically renames it into place — the same pattern as
+    /// `RemoteTarget::save` in shannon-remote.
     pub fn save(&self) -> Result<(), String> {
         if let Some(parent) = self.config_path.parent() {
             self.fs
@@ -188,9 +195,15 @@ impl ConfigManager {
         let serialized = serde_json::to_string_pretty(&data)
             .map_err(|e| format!("Failed to serialize config: {e}"))?;
 
+        let tmp = self.config_path.with_extension("json.tmp");
         self.fs
-            .write_bytes_blocking(&self.config_path, serialized.as_bytes())
-            .map_err(|e| format!("Failed to write config file: {e}"))?;
+            .write_bytes_blocking(&tmp, serialized.as_bytes())
+            .map_err(|e| format!("Failed to write config temp file: {e}"))?;
+        if let Err(e) = self.fs.rename_blocking(&tmp, &self.config_path) {
+            // Best-effort cleanup of the orphan temp file.
+            let _ = self.fs.remove_file_blocking(&tmp);
+            return Err(format!("Failed to atomically replace config file: {e}"));
+        }
 
         Ok(())
     }
