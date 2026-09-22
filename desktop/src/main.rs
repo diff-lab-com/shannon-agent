@@ -664,7 +664,42 @@ fn main() {
                 },
             );
 
-            // Auto-update check on startup
+            // Auto-update check on startup (review §P1-12). The tauri.conf.json
+            // `updater.pubkey` is a placeholder until the release pipeline
+            // injects the real `tauri signer generate` output; while it is a
+            // placeholder every signed-update check fails verification. We
+            // detect the placeholder at startup and surface it loudly so the
+            // tray "Check for updates" action and the auto-update check both
+            // report the configuration gap rather than silently no-op.
+            const PLACEHOLDER_PUBKEY: &str =
+                "UPDATER_PUBKEY_PLACEHOLDER_REPLACE_WITH_TAURI_SIGNER_GENERATE_OUTPUT";
+            let configured_pubkey = app
+                .config()
+                .plugins
+                .0
+                .get("updater")
+                .and_then(|p| p.get("pubkey"))
+                .and_then(|v| v.as_str())
+                .unwrap_or_default();
+            let pubkey_is_placeholder =
+                configured_pubkey == PLACEHOLDER_PUBKEY || configured_pubkey.is_empty();
+            if pubkey_is_placeholder {
+                tracing::error!(
+                    "updater.pubkey is unconfigured (placeholder string or empty); \
+                     auto-update will not work. Generate one with `tauri signer \
+                     generate` and inject it into the release pipeline before \
+                     shipping to users."
+                );
+                let payload = serde_json::json!({
+                    "version": "0.0.0-unconfigured",
+                    "date": None::<String>,
+                    "body": "Auto-update is not configured for this build. \
+                             Run `tauri signer generate` and inject the public \
+                             key into the release pipeline.",
+                });
+                let _ = app.handle().emit("update-available", payload);
+                return Ok(());
+            }
             let handle = app.handle().clone();
             tauri::async_runtime::spawn(async move {
                 if let Ok(Some(update_info)) = handle.updater()?.check().await {
