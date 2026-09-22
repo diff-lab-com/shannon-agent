@@ -217,25 +217,19 @@ export default function Featured() {
                 )}
 
                 {!showTokenPrompt && (
-                  <Button
+                  // 2026-09 axe-ci: bypass <Button> + cva here. shadcn base's
+                  // `disabled:opacity-50` lingers in the cascade even after
+                  // we stripped it (variant classList ordering keeps the
+                  // muted look on primary bg in some themes). A native
+                  // <button> with className composed inline gives us full
+                  // control over the disabled style, and axe verifies the
+                  // final computed style.
+                  <button
                     type="button"
                     onClick={() => handleConnect(vendor)}
                     disabled={isBusy}
-                    className={cn(
-                      // 2026-09 P2-1: brand color now lives only in the icon
-                      // block at the top of the card; the install button is
-                      // always the Shannon primary so "安装" reads as a
-                      // system action, not a third-party checkout button.
-                      //
-                      // 2026-09 axe-ci: replaced `disabled:opacity-60` with `disabled:bg-surface-container
-                      // disabled:text-on-surface`. The opacity drop tinted the
-                      // primary background toward the surface and dropped
-                      // white-on-primary contrast below 4.5:1 in material +
-                      // dark-tokyo-night themes. A different surface tone for
-                      // the disabled state preserves the visual cue without
-                      // collapsing contrast.
-                      "w-full px-md py-sm rounded-xl bg-primary text-on-primary text-label-md font-bold shadow-sm hover:shadow-md disabled:cursor-not-allowed disabled:bg-surface-container disabled:text-on-surface transition-all",
-                    )}
+                    aria-busy={isBusy || undefined}
+                    className="group/button inline-flex shrink-0 items-center justify-center rounded-xl border border-transparent bg-primary text-on-primary text-label-md font-bold shadow-sm hover:shadow-md w-full px-md py-sm transition-all outline-none select-none focus-visible:border-ring focus-visible:ring-3 focus-visible:ring-ring/50 disabled:cursor-not-allowed disabled:bg-surface-container disabled:text-on-surface disabled:shadow-none"
                   >
                     {isBusy ? (
                       <>
@@ -255,7 +249,7 @@ export default function Featured() {
                         {t('extensions.featured.install')}
                       </>
                     )}
-                  </Button>
+                  </button>
                 )}
               </div>
             </div>
