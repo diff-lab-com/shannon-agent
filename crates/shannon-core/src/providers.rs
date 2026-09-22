@@ -162,11 +162,18 @@ impl FileSystemProvider for LocalFs {
             let Ok(meta) = entry.metadata() else {
                 continue;
             };
-            cb(&DirEntryInfo {
+            // Honor the trait contract: `false` from the consumer stops the
+            // walk. (The flat `ignore` iterator can't prune a single subtree,
+            // so `false` is a full stop — which is how every consumer — glob
+            // and grep quotas — uses it. Skipping this check silently made
+            // those quotas walk the entire tree.)
+            if !cb(&DirEntryInfo {
                 path,
                 len: meta.len(),
                 is_dir: meta.is_dir(),
-            });
+            }) {
+                break;
+            }
         }
         Ok(())
     }

@@ -2,16 +2,17 @@
 //! schema.
 //!
 //! Route (b) agreed in §4.9 makes plugin-gate refusals ride the bus instead
-//! of stopping at a tracing event. This test installs the process-wide sink,
-//! fires one decision from *each* source (the plugin gate API and the query
-//! layer's guard-node emitter), and requires both to appear as durable
+//! of stopping at a tracing event. This test scopes the query's decision
+//! sink (review §P2-4: task-local, no longer process-wide), fires one
+//! decision from *each* source (the plugin gate API and the query layer's
+//! guard-node emitter), and requires both to appear as durable
 //! `permission/decision` rows in `events.jsonl`.
 
 #![allow(clippy::unwrap_used)]
 
 use shannon_core::bus::{
-    DispatchMode, EventBus, PluginDecisionFrame, TopicFilter, install_decision_sink,
-    permission_decision_event,
+    DispatchMode, EventBus, PluginDecisionFrame, TopicFilter, permission_decision_event,
+    scope_decision_sink,
 };
 use shannon_core::plugin::manifest::PluginPermission;
 use shannon_core::plugin::permissions::{PermissionDecision, emit_decision};
@@ -20,8 +21,8 @@ use shannon_core::session_log::{L0TeeSubscriber, TeeHandle, session_events_path}
 use std::path::Path;
 use std::sync::Arc;
 
-#[test]
-fn permission_decisions_from_both_sources_persist_into_l0() {
+#[tokio::test]
+async fn permission_decisions_from_both_sources_persist_into_l0() {
     let dir = tempfile::TempDir::new().unwrap();
     let tee = TeeHandle::open_in_dir(dir.path(), "sess-decisions", "m", Some("anthropic"));
     let bus = EventBus::new();
@@ -31,8 +32,9 @@ fn permission_decisions_from_both_sources_persist_into_l0() {
     );
 
     // Source 1 — the plugin gate emits through its public API; the §4.8 sink
-    // forwards it onto this session's bus as a vocabulary row.
-    install_decision_sink({
+    // (scoped to this query's task, review §P2-4) forwards it onto this
+    // session's bus as a vocabulary row.
+    let sink = {
         let bus = bus.shared();
         Arc::new(move |frame: &PluginDecisionFrame| {
             use shannon_types::session_event::PermissionDecisionPayload;
@@ -53,14 +55,17 @@ fn permission_decisions_from_both_sources_persist_into_l0() {
                 DispatchMode::Emit,
             );
         })
-    });
-    emit_decision(
-        "unix-probe",
-        PluginPermission::Network,
-        PermissionDecision::Denied,
-        "transport",
-        &[PluginPermission::McpTools],
-    );
+    };
+    scope_decision_sink(sink, async {
+        emit_decision(
+            "unix-probe",
+            PluginPermission::Network,
+            PermissionDecision::Denied,
+            "transport",
+            &[PluginPermission::McpTools],
+        );
+    })
+    .await;
 
     // Source 2 — the permission gate node's emitter.
     guard_nodes::emit_decision(&bus, "Bash", "allow", Some("rule allow-safe-ls"), "AUTO", 3);
