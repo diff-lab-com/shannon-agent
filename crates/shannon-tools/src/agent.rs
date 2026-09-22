@@ -330,8 +330,13 @@ trivial single-tool lookups — just do them directly."
     }
 
     /// Register all tools EXCEPT the Agent tool (prevents infinite recursion).
+    ///
+    /// `project_dir` is the sub-agent's working directory when the caller
+    /// knows it (the `working_directory` context hint); it keys the Bash
+    /// sandbox the same way the main session's `create_tool_registry` does.
     pub fn register_subagent_tools(
         registry: &mut shannon_core::ToolRegistry,
+        project_dir: Option<&std::path::Path>,
     ) -> Result<(), Box<dyn std::error::Error>> {
         // File operations
         registry.register(Box::new(crate::ReadTool::new()))?;
@@ -339,8 +344,23 @@ trivial single-tool lookups — just do them directly."
         registry.register(Box::new(crate::EditTool::new()))?;
         registry.register(Box::new(crate::GlobTool::new()))?;
 
-        // System operations
-        registry.register(Box::new(crate::BashTool::new()))?;
+        // System operations.
+        // Review §P2-13: a bare `BashTool::new()` leaves the sandbox posture
+        // Undetected — no platform sandbox backend, no SpawnRewrite — so a
+        // spawned agent's shell had a strictly wider execution surface than
+        // the lead agent's. Register Bash through the SAME sandboxed
+        // constructor the main session uses (`with_process_sandbox`), keyed
+        // on the sub-agent's working directory; when no directory hint is
+        // available default to the strict end (sandbox the process CWD)
+        // rather than the old unsandboxed constructor. `SHANNON_SANDBOX=off`
+        // keeps the explicit opt-out, and a missing backend degrades
+        // exactly like the main session (detected "off" posture + loud
+        // per-result warning).
+        let bash = match project_dir {
+            Some(dir) => crate::BashTool::with_process_sandbox(dir),
+            None => crate::BashTool::with_process_sandbox("."),
+        };
+        registry.register(Box::new(bash))?;
         registry.register(Box::new(crate::SleepTool::new()))?;
         registry.register(Box::new(crate::PowerShellTool::new()))?;
         registry.register(Box::new(crate::ReplTool::new()))?;
@@ -599,7 +619,15 @@ trivial single-tool lookups — just do them directly."
 
         // Build a sub-agent tool registry (without Agent tool to prevent recursion)
         let mut sub_tools = shannon_core::ToolRegistry::new();
-        Self::register_subagent_tools(&mut sub_tools)
+        // Review §P2-13: resolve the sub-agent's working directory (the same
+        // hint `AgentConfig` consumes) so its Bash sandbox matches the main
+        // session's registration path.
+        let sub_working_dir = input
+            .context
+            .as_ref()
+            .and_then(|c| c.get("working_directory").and_then(|v| v.as_str()))
+            .map(std::path::PathBuf::from);
+        Self::register_subagent_tools(&mut sub_tools, sub_working_dir.as_deref())
             .map_err(|e| ToolError::ExecutionFailed(format!("sub-agent tool setup failed: {e}")))?;
 
         // Merge allowlist + denylist into the sub-agent's `ToolFilter`. The
@@ -1186,6 +1214,70 @@ impl Tool for AgentTool {
 #[allow(clippy::unwrap_used)]
 mod tests {
     use super::*;
+
+    // ── review §P2-13: sub-agent Bash shares the main session's sandbox ──
+
+    /// Extract the structured `"sandbox"` posture marker a BashTool stamps
+    /// onto its results. Present whenever the tool detected a posture
+    /// (Active / Missing / OptedOut); absent only for the legacy bare
+    /// `BashTool::new()` (posture Undetected).
+    async fn bash_sandbox_marker(tool: &dyn Tool) -> Option<serde_json::Value> {
+        let output = tool
+            .execute(json!({"command": "echo sandbox-probe"}))
+            .await
+            .expect("echo probe must execute");
+        output.metadata.get("sandbox").cloned()
+    }
+
+    #[tokio::test]
+    async fn subagent_bash_defaults_to_sandboxed_registration() {
+        let mut registry = shannon_core::ToolRegistry::new();
+        let dir = std::env::temp_dir().join("shannon-p2-13").join(
+            uuid::Uuid::new_v4().to_string(),
+        );
+        std::fs::create_dir_all(&dir).unwrap();
+
+        AgentTool::register_subagent_tools(&mut registry, Some(&dir))
+            .expect("sub-agent registration must succeed");
+
+        let bash = registry
+            .get("Bash")
+            .expect("sub-agent registry must expose Bash");
+        let marker = bash_sandbox_marker(bash.as_ref()).await;
+        assert!(
+            marker.is_some(),
+            "sub-agent Bash must carry a detected sandbox posture (main-session parity), got none"
+        );
+    }
+
+    #[tokio::test]
+    async fn subagent_bash_without_dir_hint_still_sandboxes() {
+        let mut registry = shannon_core::ToolRegistry::new();
+        AgentTool::register_subagent_tools(&mut registry, None)
+            .expect("sub-agent registration must succeed");
+
+        let bash = registry
+            .get("Bash")
+            .expect("sub-agent registry must expose Bash");
+        let marker = bash_sandbox_marker(bash.as_ref()).await;
+        assert!(
+            marker.is_some(),
+            "no-dir sub-agent Bash must still be sandboxed (strict default), got no posture marker"
+        );
+    }
+
+    #[tokio::test]
+    async fn bare_bash_tool_has_no_sandbox_posture_marker() {
+        // The pre-§P2-13 behaviour: posture Undetected → the structured
+        // sandbox marker is absent. Locks the discriminator the tests above
+        // rely on.
+        let bare = crate::BashTool::new();
+        let marker = bash_sandbox_marker(&bare).await;
+        assert!(
+            marker.is_none(),
+            "bare BashTool::new() must remain the unsandboxed/undetected baseline"
+        );
+    }
 
     // ── Input serialization ────────────────────────────────────────────────
 
