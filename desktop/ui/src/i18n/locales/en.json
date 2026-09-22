@@ -3109,5 +3109,15 @@
   "artifact.fallback.html": "HTML document",
   "artifact.fallback.svg": "SVG graphic",
   "artifact.fallback.mermaid": "Mermaid diagram",
-  "artifact.fallback.document": "Document"
+  "artifact.fallback.document": "Document",
+  "sidebar.sessions.lastActivity.now": "just now",
+  "sidebar.sessions.lastActivity.minutes": "{n}m",
+  "sidebar.sessions.lastActivity.hours": "{n}h",
+  "sidebar.sessions.lastActivity.days": "{n}d",
+  "sidebar.sessions.lastActivity.aria": "Last active {time}",
+  "sidebar.sessions.awaitingApproval.badge": "Waiting for approval",
+  "sidebar.sessions.error.badge": "Last run failed",
+  "nav.search": "Search",
+  "nav.automation": "Automations",
+  "sidebar.model.badge.aria": "Current model {model} ({provider}) — click to manage"
 }

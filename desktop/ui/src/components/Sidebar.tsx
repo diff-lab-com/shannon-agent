@@ -8,6 +8,7 @@ import EmptyState from './ui/empty-state';
 import { WELCOME_EXAMPLES } from './welcomeExamples';
 import { cn } from '../lib/utils';
 import { useSessions } from '@/context/SessionContext';
+import { useCatalog } from '@/context/CatalogContext';
 import { SessionsSection } from './SidebarSessions';
 import { useSidebar } from './Layout';
 import { useInboxStats } from '@/hooks/inbox';
@@ -18,6 +19,12 @@ const DEFAULT_W = 280
 const STORAGE_KEY = 'shannon-sidebar-width'
 export const SIDEBAR_MODE_KEY = 'shannon-sidebar-mode'
 export type SidebarMode = 'simple' | 'dev'
+
+/** Batch B3/B4: platform-correct modifier for kbd hints (⌘ on macOS). */
+function modKey(): string {
+  if (typeof navigator === 'undefined') return 'Ctrl'
+  return /Mac|iPhone|iPad/.test(navigator.platform || navigator.userAgent) ? '⌘' : 'Ctrl'
+}
 
 export function useSidebarMode(): [SidebarMode, () => void] {
   const [mode, setMode] = useState<SidebarMode>(() => {
@@ -52,19 +59,23 @@ const getNavClass = ({ isActive }: { isActive: boolean }) =>
       : "text-on-surface-variant hover:bg-surface-container-low hover:text-primary"
   );
 
-/** One flat nav row: fixed icon + truncating label + optional trailing slot. */
-function NavRow({ to, icon, labelId, titleId, trail, onNavigate }: {
+/** One flat nav row: fixed icon + truncating label + optional trailing slot.
+ *  Batch B3: `kbd` surfaces the row's shortcut in the tooltip/aria label
+ *  (ZCode 顶部动作区 pattern — shortcuts discoverable in place). */
+function NavRow({ to, icon, labelId, titleId, kbd, trail, onNavigate }: {
   to: string
   icon: string
   labelId: string
   titleId?: string
+  kbd?: string
   trail?: React.ReactNode
   onNavigate?: () => void
 }) {
   const intl = useIntl()
   const label = intl.formatMessage({ id: labelId })
+  const hint = kbd ? `${label} · ${kbd}` : label
   return (
-    <NavLink to={to} className={getNavClass} title={intl.formatMessage({ id: titleId ?? labelId })} aria-label={intl.formatMessage({ id: titleId ?? labelId })} onClick={onNavigate}>
+    <NavLink to={to} className={getNavClass} title={titleId ? `${intl.formatMessage({ id: titleId })}${kbd ? ` · ${kbd}` : ''}` : hint} aria-label={titleId ? `${intl.formatMessage({ id: titleId })}${kbd ? ` · ${kbd}` : ''}` : hint} onClick={onNavigate}>
       {({ isActive }) => (
         <>
           <span className="material-symbols-outlined text-[20px] shrink-0" style={{ fontVariationSettings: isActive ? "'FILL' 1" : undefined }} aria-hidden="true">{icon}</span>
@@ -88,7 +99,9 @@ export const Sidebar = memo(function Sidebar({ mobile, open = true }: { mobile?:
   // P2-⑩: split-"New" dropdown (goal / routine entry points).
   const [newMenuOpen, setNewMenuOpen] = useState(false);
   const { createSession, sessions, sessionActivity, goalRunsBySession, currentSessionId, switchSession, renameSession, deleteSession, createSessionInWorktree } = useSessions();
+  const { status } = useCatalog();
   const intl = useIntl();
+  const mod = modKey();
   const newMenuItems: DropdownMenuItem[] = [
     { id: 'goal', label: intl.formatMessage({ id: 'nav.new.goal' }), icon: 'flag', onSelect: () => { setNewMenuOpen(false); navigate('/tasks') } },
     { id: 'routine', label: intl.formatMessage({ id: 'nav.new.routine' }), icon: 'event_repeat', onSelect: () => { setNewMenuOpen(false); navigate('/tasks') } },
@@ -213,6 +226,7 @@ export const Sidebar = memo(function Sidebar({ mobile, open = true }: { mobile?:
       <div className="mb-xs w-full flex gap-1">
         <Button
           aria-label={intl.formatMessage({ id: 'nav.newChat.aria' })}
+          title={`${intl.formatMessage({ id: 'nav.newChat' })} · ${mod}N`}
           className="flex-1 min-w-0 py-2.5 px-3 bg-primary text-on-primary rounded-xl font-bold flex items-center justify-center gap-2 hover:shadow-lg hover:shadow-primary/30 active:scale-95 transition-all"
           onClick={createSession}
         >
@@ -255,6 +269,32 @@ export const Sidebar = memo(function Sidebar({ mobile, open = true }: { mobile?:
       </Button>
       )}
 
+      {/* Batch B4 (ZCode 顶部动作区): 搜索 opens the command palette and
+          自动化 shortcuts to the tasks page — the two highest-frequency
+          detours, one click each, with their shortcuts in the tooltip. */}
+      <div className="mb-xs w-full flex gap-1">
+        <Button
+          variant="ghost"
+          aria-label={`${intl.formatMessage({ id: 'nav.search' })} · ${mod}K`}
+          title={`${intl.formatMessage({ id: 'nav.search' })} · ${mod}K`}
+          className="flex-1 min-w-0 py-2 px-2 text-on-surface-variant hover:text-primary rounded-lg font-label-md text-[13px] flex items-center justify-center gap-1.5 hover:bg-surface-container-low transition-all"
+          onClick={() => window.dispatchEvent(new Event('shannon:toggle-palette'))}
+        >
+          <span className="material-symbols-outlined icon-sm shrink-0">search</span>
+          <span className="truncate">{intl.formatMessage({ id: 'nav.search' })}</span>
+        </Button>
+        <Button
+          variant="ghost"
+          aria-label={`${intl.formatMessage({ id: 'nav.automation' })} · ${mod}2`}
+          title={`${intl.formatMessage({ id: 'nav.automation' })} · ${mod}2`}
+          className="flex-1 min-w-0 py-2 px-2 text-on-surface-variant hover:text-primary rounded-lg font-label-md text-[13px] flex items-center justify-center gap-1.5 hover:bg-surface-container-low transition-all"
+          onClick={() => { navigate('/tasks'); handleNavClick() }}
+        >
+          <span className="material-symbols-outlined icon-sm shrink-0">event_repeat</span>
+          <span className="truncate">{intl.formatMessage({ id: 'nav.automation' })}</span>
+        </Button>
+      </div>
+
       {/* U1: the session rail is the app's only session list — organized by
           project folder or by time (the toggle lives inside the rail, ZCode
           分组/项目 style). Takes the remaining vertical space. */}
@@ -287,8 +327,8 @@ export const Sidebar = memo(function Sidebar({ mobile, open = true }: { mobile?:
       <nav aria-label={intl.formatMessage({ id: 'nav.mainNav.aria' })} className="shrink-0 min-h-0 max-h-[60%]">
         <ScrollArea className="h-full">
           <div className="space-y-0.5">
-            <NavRow to="/chat" icon="chat_bubble" labelId="nav.chat" titleId="nav.chat" onNavigate={handleNavClick} />
-            <NavRow to="/tasks" icon="task_alt" labelId="nav.scheduled" titleId="nav.scheduled" onNavigate={handleNavClick} />
+            <NavRow to="/chat" icon="chat_bubble" labelId="nav.chat" titleId="nav.chat" kbd={`${mod}1`} onNavigate={handleNavClick} />
+            <NavRow to="/tasks" icon="task_alt" labelId="nav.scheduled" titleId="nav.scheduled" kbd={`${mod}2`} onNavigate={handleNavClick} />
             <NavRow
               to="/triage"
               icon="inbox"
@@ -301,8 +341,8 @@ export const Sidebar = memo(function Sidebar({ mobile, open = true }: { mobile?:
                 </span>
               ) : undefined}
             />
-            <NavRow to="/extensions/featured" icon="extension" labelId="nav.extensions" titleId="nav.extensions" onNavigate={handleNavClick} />
-            <NavRow to="/memory" icon="psychology" labelId="nav.memory" titleId="nav.memory" onNavigate={handleNavClick} />
+            <NavRow to="/extensions/featured" icon="extension" labelId="nav.extensions" titleId="nav.extensions" kbd={`${mod}3`} onNavigate={handleNavClick} />
+            <NavRow to="/memory" icon="psychology" labelId="nav.memory" titleId="nav.memory" kbd={`${mod}4`} onNavigate={handleNavClick} />
             {mode === 'dev' && (
               <>
                 <NavRow to="/usage" icon="monitoring" labelId="nav.usage" titleId="nav.usage" onNavigate={handleNavClick} />
@@ -314,6 +354,26 @@ export const Sidebar = memo(function Sidebar({ mobile, open = true }: { mobile?:
       </nav>
 
       <div className="mt-auto pt-lg border-t border-outline-variant/20 space-y-0.5">
+        {/* Batch B5 (ZCode 底部账号区的 BYOK 表达): the active provider·model
+            badge replaces the subscription-plan badge — clicking it opens the
+            models settings where BYOK users manage keys/providers. */}
+        {status?.model && (
+          <Button
+            variant="ghost"
+            aria-label={intl.formatMessage({ id: 'sidebar.model.badge.aria' }, { model: status.model, provider: status.provider })}
+            title={intl.formatMessage({ id: 'sidebar.model.badge.aria' }, { model: status.model, provider: status.provider })}
+            className="w-full justify-between gap-3 px-3 py-2 rounded-lg font-label-md text-[12px] text-on-surface-variant hover:bg-surface-container-low hover:text-primary cursor-pointer transition-all h-auto min-w-0 whitespace-nowrap"
+            onClick={() => { navigate('/settings/models'); handleNavClick() }}
+          >
+            <span className="flex items-center gap-2 min-w-0">
+              <span className="material-symbols-outlined text-[16px] text-secondary shrink-0" aria-hidden="true">deployed_code</span>
+              <span className="truncate">{status.model}</span>
+            </span>
+            <span className="text-[10px] uppercase tracking-wider text-on-surface-variant/80 shrink-0">
+              {status.provider}
+            </span>
+          </Button>
+        )}
         <Button
           variant="ghost"
           onClick={toggleMode}

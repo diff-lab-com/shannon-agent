@@ -134,7 +134,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
   // sees running/tool transitions immediately.
   const noteSessionActivity = useCallback((
     sessionId: string | null | undefined,
-    kind: 'event' | 'tool-start' | 'tool-end' | 'end',
+    kind: 'event' | 'tool-start' | 'tool-end' | 'end' | 'fail',
     toolName?: string,
   ) => {
     if (!sessionId) return
@@ -145,10 +145,12 @@ export function AppProvider({ children }: { children: ReactNode }) {
     let next = base
     switch (kind) {
       case 'event':
-        next = { ...base, running: true, lastActivity: now }
+        // A live run supersedes both stale signals (B2): a failure is being
+        // retried and an approval prompt belongs to the previous turn.
+        next = { ...base, running: true, lastActivity: now, failed: false, awaitingApproval: false }
         break
       case 'tool-start':
-        next = { ...base, running: true, lastActivity: now, activeTool: toolName ?? null }
+        next = { ...base, running: true, lastActivity: now, activeTool: toolName ?? null, failed: false, awaitingApproval: false }
         break
       case 'tool-end':
         next = { ...base, lastActivity: now, activeTool: null }
@@ -156,9 +158,28 @@ export function AppProvider({ children }: { children: ReactNode }) {
       case 'end':
         next = { ...base, running: false, lastActivity: now, activeTool: null }
         break
+      case 'fail':
+        // Batch B2: surface the failure on the rail until a new run starts
+        // or the user opens the session (switchToSession clears the flag).
+        next = { ...base, running: false, lastActivity: now, activeTool: null, failed: true }
+        break
     }
     map.set(sessionId, next)
     if (kind !== 'event') setSessionActivity(Object.fromEntries(map))
+  }, [])
+
+  // Batch B2: permission prompts surface as an amber dot on the owning
+  // session's rail row (cleared on resolve, or when the session runs again).
+  const noteSessionApproval = useCallback((sessionId: string | null | undefined, pending: boolean) => {
+    if (!sessionId) return
+    const map = sessionActivityRef.current
+    const prev = map.get(sessionId)
+    if (!prev && !pending) return
+    const next: SessionActivity = prev
+      ? { ...prev, awaitingApproval: pending }
+      : { running: false, startedAt: null, lastActivity: Date.now(), activeTool: null, awaitingApproval: true }
+    map.set(sessionId, next)
+    setSessionActivity(Object.fromEntries(map))
   }, [])
 
   const refreshSessions = useCallback(async () => {
@@ -325,6 +346,12 @@ export function AppProvider({ children }: { children: ReactNode }) {
       setStreamingText('')
       setThinkingText('')
       setActiveToolCalls([])
+      // Batch B2: opening the session marks a prior failure as seen.
+      const prev = sessionActivityRef.current.get(id)
+      if (prev?.failed) {
+        sessionActivityRef.current.set(id, { ...prev, failed: false })
+        setSessionActivity(Object.fromEntries(sessionActivityRef.current))
+      }
     } catch (e) { setError(String(e)) }
   }, [])
 
@@ -354,8 +381,10 @@ export function AppProvider({ children }: { children: ReactNode }) {
     try {
       await api.respondPermission(requestId, allow, options)
       setPermissionRequest(null)
+      // Batch B2: resolve the rail's amber dot for the prompt's session.
+      if (permissionRequest?.session_id) noteSessionApproval(permissionRequest.session_id, false)
     } catch (e) { setError(String(e)) }
-  }, [])
+  }, [permissionRequest, noteSessionApproval])
 
   const refreshCheckpoints = useCallback(async () => {
     if (!currentSessionId) {
@@ -528,7 +557,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
         listen(EVENT_NAMES.QUERY_FAILED, (e) => {
           const p = e.payload as { error: string; session_id?: string }
           if (!isEventForCurrentWindow(p.session_id, windowSessionId)) return
-          noteSessionActivity(p.session_id, 'end')
+          noteSessionActivity(p.session_id, 'fail')
           setError(p.error)
           setIsQuerying(false)
           setCurrentQueryId(null)
@@ -544,6 +573,8 @@ export function AppProvider({ children }: { children: ReactNode }) {
           // Window mode: only prompt for this window's own session — a
           // foreign session's approval dialog must not pop up here.
           if (!isEventForCurrentWindow(p.session_id, windowSessionId)) return
+          // Batch B2: amber dot on the owning session's rail row.
+          noteSessionApproval(p.session_id, true)
           setPermissionRequest(p)
         }),
         listen(EVENT_NAMES.SESSIONS_UPDATED, () => { refreshSessions() }),
