@@ -61,7 +61,7 @@ export function DocumentToc({ source }: { source: string }) {
       {/* Sticky within the scrolling tabpanel — stays visible while the
           document body scrolls, like the reference reader's TOC rail. */}
       <div className="sticky top-0 max-h-full overflow-y-auto py-sm pl-sm border-l border-outline-variant/15">
-        <p className="font-label-xs uppercase tracking-wider text-on-surface-variant/70 mb-xs px-sm">
+        <p className="font-label-xs uppercase tracking-wider text-on-surface-variant mb-xs px-sm">
           {t('chat.artifact.toc.title')}
         </p>
         <ol className="space-y-0.5">
@@ -79,7 +79,7 @@ export function DocumentToc({ source }: { source: string }) {
                     : 'text-on-surface-variant hover:bg-surface-container-low hover:text-on-surface',
                 )}
               >
-                <span className="font-mono text-[10px] tabular-nums mt-[2px] shrink-0 opacity-70" aria-hidden="true">
+                <span className="font-mono text-[10px] tabular-nums mt-[2px] shrink-0" aria-hidden="true">
                   {i + 1}
                 </span>
                 <span className="truncate flex-1 min-w-0">{h.text}</span>

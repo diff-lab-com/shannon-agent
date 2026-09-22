@@ -438,18 +438,18 @@ function ArtifactDocBody({ artifact, workingDir }: { artifact: ArtifactItem; wor
     <div className="flex flex-col min-h-0 flex-1">
       {/* D2 breadcrumb: project › document, with the metadata badges beside. */}
       <div className="flex items-center gap-xs pb-sm shrink-0 min-w-0" data-testid="artifact-doc-header">
-        <span className="material-symbols-outlined icon-sm text-on-surface-variant/70 shrink-0" aria-hidden="true">folder_open</span>
+        <span className="material-symbols-outlined icon-sm text-on-surface-variant shrink-0" aria-hidden="true">folder_open</span>
         <span className="font-label-sm text-on-surface-variant truncate" title={project ?? undefined}>
           {project ?? t('sidebar.sessions.project.untitled')}
         </span>
-        <span className="material-symbols-outlined text-[13px] text-on-surface-variant/50 shrink-0" aria-hidden="true">chevron_right</span>
+        <span className="material-symbols-outlined text-[13px] text-on-surface-variant shrink-0" aria-hidden="true">chevron_right</span>
         <span className="font-label-sm font-bold text-on-surface truncate flex-1 min-w-0" title={displayTitle}>
           {displayTitle}
         </span>
         <span className="font-label-xs text-on-surface-variant px-xs py-[1px] rounded bg-surface-container-high shrink-0">
           {artifactKindLabel(artifact.kind, t)}
         </span>
-        <span className="font-mono text-[10px] tabular-nums text-on-surface-variant/70 shrink-0" title={t('chat.artifact.lines.aria', { n: lineCount })}>
+        <span className="font-mono text-[10px] tabular-nums text-on-surface-variant shrink-0" title={t('chat.artifact.lines.aria', { n: lineCount })}>
           {lineCount}L
         </span>
       </div>
