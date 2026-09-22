@@ -817,7 +817,7 @@ export function SessionsSection({ sessions, sessionActivity, goalRunsBySession =
             <button
               type="button"
               onClick={() => navigate('/tasks')}
-              className="w-full px-3 py-1 text-left font-label-xs text-primary hover:underline cursor-pointer"
+              className="w-full px-3 py-1 text-left font-label-xs text-on-surface-variant hover:text-primary hover:underline cursor-pointer"
             >
               {t('sidebar.automations.more', { n: routines.length - 3 })}
             </button>
