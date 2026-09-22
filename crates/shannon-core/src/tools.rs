@@ -187,9 +187,11 @@ pub struct ToolRegistry {
     /// Concurrent TTL-based cache for streaming tool results.
     /// Used by `execute_streaming` to avoid re-executing identical read-only calls.
     streaming_cache: Option<std::sync::Arc<crate::tool_cache::ToolResultCache>>,
-    /// Optional per-tool execution timeout. When set, `execute()` wraps the
-    /// tool call with `tokio::time::timeout` and returns `ToolError::Timeout`
-    /// on expiry.
+    /// Optional per-tool execution timeout. When set, `execute()` and
+    /// `execute_streaming()` wrap the tool call with `tokio::time::timeout`
+    /// and return `ToolError::Timeout` on expiry. Defaults to
+    /// [`DEFAULT_EXECUTION_TIMEOUT`] (review §P2-2) so a hung tool can never
+    /// stall a query forever; `set_execution_timeout` overrides it.
     execution_timeout: Option<std::time::Duration>,
     /// Manifest-derived permission policies for plugin-owned MCP namespaces
     /// (`mcp__<plugin>__*`). Empty by default — plain `.mcp.json` servers are
@@ -198,6 +200,16 @@ pub struct ToolRegistry {
 }
 
 impl ToolRegistry {
+    /// Review §P2-2: default per-tool execution timeout installed by
+    /// [`ToolRegistry::new`]. Previously the default was `None` (unbounded),
+    /// so a hung tool stalled the whole query forever. 300s is deliberately
+    /// conservative: it sits above the Bash tool's own default (120s) and
+    /// normal LLM/tool latencies, so it only fires on genuinely stuck tools.
+    /// Hosts that legitimately run longer tools override it via
+    /// [`ToolRegistry::set_execution_timeout`].
+    pub const DEFAULT_EXECUTION_TIMEOUT: std::time::Duration =
+        std::time::Duration::from_secs(300);
+
     /// Helper to recover from a poisoned lock by extracting the inner value.
     /// This prevents panics when another thread panicked while holding the lock.
     fn recover_lock<T>(lock_result: std::sync::LockResult<T>) -> T {
@@ -219,7 +231,7 @@ impl ToolRegistry {
             defs_cache: std::sync::RwLock::new(None),
             version: std::sync::atomic::AtomicU64::new(0),
             streaming_cache: None,
-            execution_timeout: None,
+            execution_timeout: Some(Self::DEFAULT_EXECUTION_TIMEOUT),
             plugin_policies: std::sync::RwLock::new(
                 crate::plugin::permissions::PluginToolPolicies::new(),
             ),
@@ -295,9 +307,11 @@ impl ToolRegistry {
 
     /// Set a per-tool execution timeout.
     ///
-    /// When set, every call to [`execute`](Self::execute) is wrapped with
-    /// `tokio::time::timeout`. If the tool does not finish within the
-    /// specified duration, `ToolError::Timeout` is returned.
+    /// Overrides the [`DEFAULT_EXECUTION_TIMEOUT`] installed by
+    /// [`ToolRegistry::new`] (review §P2-2). Every call to
+    /// [`execute`](Self::execute) and [`execute_streaming`](Self::execute_streaming)
+    /// is wrapped with `tokio::time::timeout`. If the tool does not finish
+    /// within the specified duration, `ToolError::Timeout` is returned.
     pub fn set_execution_timeout(&mut self, timeout: std::time::Duration) {
         self.execution_timeout = Some(timeout);
     }
@@ -695,7 +709,22 @@ impl ToolRegistry {
             }
         }
 
-        let result = tool.execute_streaming(input.clone(), progress).await;
+        let result = if let Some(timeout) = self.execution_timeout {
+            // Review §P2-2: the engine's agent loop goes through
+            // `execute_streaming`, so the default timeout must be enforced on
+            // this path too — a hung tool otherwise stalls the query forever.
+            match tokio::time::timeout(timeout, tool.execute_streaming(input.clone(), progress))
+                .await
+            {
+                Ok(output) => output,
+                Err(_) => Err(ToolError::Timeout {
+                    name: name.to_string(),
+                    duration: timeout,
+                }),
+            }
+        } else {
+            tool.execute_streaming(input.clone(), progress).await
+        };
 
         // Cache successful results from read-only tools
         if let Some(ref cache) = self.streaming_cache {
@@ -1890,7 +1919,8 @@ mod tests {
     #[tokio::test]
     async fn test_tool_no_timeout_when_not_configured() {
         let registry = ToolRegistry::new();
-        // Use a fast tool — no timeout configured, so it should succeed
+        // Use a fast tool — the §P2-2 default timeout (300s) never fires for
+        // tools that complete, so this should succeed.
         registry
             .register(Box::new(DummyTool {
                 name: "fast_tool".to_string(),
@@ -1903,10 +1933,68 @@ mod tests {
         assert!(result.is_ok());
     }
 
+    // Review §P2-2: the default execution timeout is now a conservative
+    // 300s instead of unbounded — a hung tool must never stall a query
+    // forever.
+    #[test]
+    fn test_default_execution_timeout_is_conservative_300s() {
+        let registry = ToolRegistry::new();
+        assert_eq!(
+            registry.execution_timeout(),
+            Some(ToolRegistry::DEFAULT_EXECUTION_TIMEOUT)
+        );
+        assert_eq!(
+            ToolRegistry::DEFAULT_EXECUTION_TIMEOUT,
+            std::time::Duration::from_secs(300)
+        );
+    }
+
+    // Review §P2-2: `execute_streaming` — the path the engine's agent loop
+    // actually uses — must enforce the configured timeout too.
+    #[tokio::test]
+    async fn test_execute_streaming_enforces_timeout() {
+        struct NopSender;
+        impl shannon_tool_interface::ProgressSender for NopSender {
+            fn send(&self, _: &str) {}
+        }
+
+        let mut registry = ToolRegistry::new();
+        registry.register(Box::new(SlowTool)).unwrap();
+        registry.set_execution_timeout(std::time::Duration::from_millis(50));
+
+        let result = registry
+            .execute_streaming(
+                "slow_tool",
+                json!({}),
+                std::sync::Arc::new(NopSender),
+            )
+            .await;
+
+        assert!(result.is_err(), "streaming execution should have timed out");
+        match result.unwrap_err() {
+            ToolError::Timeout { name, duration } => {
+                assert_eq!(name, "slow_tool");
+                assert_eq!(duration, std::time::Duration::from_millis(50));
+                // The wire-facing message promised by §P2-2 ("timed out
+                // after Ns") comes from the ToolError Display impl.
+                assert!(format!(
+                    "Tool '{name}' timed out after {duration:?}"
+                )
+                .contains("timed out after"));
+            }
+            other => panic!("Expected Timeout error, got {other:?}"),
+        }
+    }
+
     #[test]
     fn test_set_execution_timeout() {
         let mut registry = ToolRegistry::new();
-        assert!(registry.execution_timeout().is_none());
+        // Review §P2-2: registry construction installs the conservative
+        // default; the setter overrides it.
+        assert_eq!(
+            registry.execution_timeout(),
+            Some(ToolRegistry::DEFAULT_EXECUTION_TIMEOUT)
+        );
 
         registry.set_execution_timeout(std::time::Duration::from_secs(30));
         assert_eq!(

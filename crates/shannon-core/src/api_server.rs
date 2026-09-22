@@ -96,6 +96,9 @@ pub struct AppState {
     /// the WS handler; a per-request resolver task awaits the client's choice
     /// (300s timeout → `Deny`) and forwards it back to the engine.
     pub approval_registry: Arc<Mutex<HashMap<String, oneshot::Sender<PermissionChoice>>>>,
+    /// Wall-clock budget for the aggregate `POST /api/query` handler
+    /// (review §P2-2). See [`ShannonApiServer::DEFAULT_QUERY_BUDGET`].
+    pub query_budget: std::time::Duration,
 }
 
 /// A single WebSocket session holding conversation history.
@@ -129,9 +132,28 @@ pub struct ShannonApiServer {
     /// `POST /api/routines/:id/trigger` handler with its own state.
     /// They sit under the same auth/CORS middleware as the core routes.
     extra_routes: Vec<axum::Router<()>>,
+    /// Wall-clock budget for the aggregate `POST /api/query` handler
+    /// (review §P2-2).
+    query_budget: std::time::Duration,
 }
 
 impl ShannonApiServer {
+    /// Default wall-clock budget for the aggregate `POST /api/query`
+    /// endpoint (review §P2-2). That handler used to drain the engine's
+    /// event stream with no cancellation channel: a client disconnect does
+    /// NOT drop the handler (hyper keeps serving the in-flight request until
+    /// it finishes — proven by the `p2_2_client_disconnect_*` tests), so a
+    /// wedged query pinned the handler forever. The budget bounds that: on
+    /// expiry the `QueryStream` is dropped mid-await, whose
+    /// `AbortOnDropStream` contract aborts the engine producer task.
+    /// 600s = 2× the engine's per-event stall budget
+    /// (`QueryEngineConfig::timeout_seconds`, default 300s), so a healthy
+    /// query with flowing events is never cut off while a stalled one is
+    /// still reaped in bounded time. The SSE endpoints don't need this:
+    /// there, a client disconnect drops the SSE body → the `QueryStream` →
+    /// aborts the producer directly.
+    pub const DEFAULT_QUERY_BUDGET: std::time::Duration = std::time::Duration::from_secs(600);
+
     /// Create a new server using the given LLM client configuration for every
     /// incoming query.
     pub fn new(client_config: LlmClientConfig) -> Self {
@@ -144,7 +166,16 @@ impl ShannonApiServer {
             allowed_origins: Vec::new(),
             allow_nonloopback: false,
             extra_routes: Vec::new(),
+            query_budget: Self::DEFAULT_QUERY_BUDGET,
         }
+    }
+
+    /// Override the aggregate `POST /api/query` wall-clock budget
+    /// (review §P2-2). See [`Self::DEFAULT_QUERY_BUDGET`] for the default's
+    /// rationale.
+    pub fn query_budget(mut self, budget: std::time::Duration) -> Self {
+        self.query_budget = budget;
+        self
     }
 
     /// Provide a pre-populated [`ToolRegistry`] so that the `/api/tools/list`
@@ -227,6 +258,7 @@ impl ShannonApiServer {
                 tools: self.tools.clone(),
                 ws_sessions: Arc::new(RwLock::new(HashMap::new())),
                 approval_registry: Arc::new(Mutex::new(HashMap::new())),
+                query_budget: self.query_budget,
             })
     }
 
@@ -536,31 +568,53 @@ async fn query_handler(
     let mut usage: Option<UsageInfo> = None;
     let mut errors: Vec<String> = Vec::new();
 
-    while let Some(event_result) = stream.next().await {
-        match event_result {
-            Ok(QueryEvent::Text { content, .. }) => {
-                text.push_str(&content);
-            }
-            Ok(QueryEvent::Usage {
-                input_tokens,
-                output_tokens,
-                cost_usd,
-                ..
-            }) => {
-                usage = Some(UsageInfo {
+    // Review §P2-2: this handler used to drain the engine's event stream
+    // unconditionally — no cancellation channel at all (a client disconnect
+    // does NOT drop the handler; hyper keeps serving the in-flight request —
+    // see the p2_2_client_disconnect tests). Bound the aggregate with the
+    // configured wall-clock budget: on expiry the `QueryStream` is dropped
+    // mid-await, whose `AbortOnDropStream` contract aborts the engine
+    // producer task, and the partial result is returned with a cancellation
+    // error entry.
+    let budget = state.query_budget;
+    let drain = async {
+        while let Some(event_result) = stream.next().await {
+            match event_result {
+                Ok(QueryEvent::Text { content, .. }) => {
+                    text.push_str(&content);
+                }
+                Ok(QueryEvent::Usage {
                     input_tokens,
                     output_tokens,
                     cost_usd,
-                });
-            }
-            Ok(QueryEvent::Failed { error, .. }) => {
-                errors.push(error);
-            }
-            Ok(_) => {}
-            Err(e) => {
-                errors.push(e.to_string());
+                    ..
+                }) => {
+                    usage = Some(UsageInfo {
+                        input_tokens,
+                        output_tokens,
+                        cost_usd,
+                    });
+                }
+                Ok(QueryEvent::Failed { error, .. }) => {
+                    errors.push(error);
+                }
+                Ok(_) => {}
+                Err(e) => {
+                    errors.push(e.to_string());
+                }
             }
         }
+    };
+    if tokio::time::timeout(budget, drain).await.is_err() {
+        tracing::warn!(
+            session = %session_id,
+            budget_secs = budget.as_secs(),
+            "aggregate query exceeded its budget; cancelling the producer"
+        );
+        errors.push(format!(
+            "query cancelled: exceeded the {}s aggregate budget",
+            budget.as_secs()
+        ));
     }
 
     Ok(Json(QueryResponse {
@@ -1642,6 +1696,159 @@ mod tests {
     }
 
     // ══════════════════════════════════════════════════════════════════════
+    // review §P2-2: query cancellation
+    //
+    // The SSE endpoint cancels on client disconnect: dropping the response
+    // body drops the `QueryStream`, whose `AbortOnDropStream` contract
+    // aborts the producer task at its next `.await`. The aggregate POST
+    // endpoint has no such signal (hyper keeps the handler alive across a
+    // client FIN), so it gets a wall-clock budget instead — see
+    // [`ShannonApiServer::DEFAULT_QUERY_BUDGET`]. Both tests use a mock
+    // "LLM" that never answers, so the producer stays parked mid-request
+    // until it is cancelled, and the mock observes the teardown as EOF on
+    // its socket. A real axum server is used for the SSE case (`oneshot`
+    // cannot simulate disconnects).
+    // ══════════════════════════════════════════════════════════════════════
+
+    /// A mock LLM that accepts one connection, never responds, and fires
+    /// `gone_tx` once the engine's outbound request socket sees EOF/reset —
+    /// i.e. the query producer task was cancelled.
+    fn start_hanging_llm() -> (String, tokio::sync::oneshot::Receiver<()>) {
+        use std::io::Read as _;
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("bind");
+        let port = listener.local_addr().expect("addr").port();
+        let (gone_tx, gone_rx) = tokio::sync::oneshot::channel();
+        std::thread::spawn(move || {
+            let accepted = listener.incoming().flatten().next();
+            let mut gone_tx = Some(gone_tx);
+            if let Some(mut stream) = accepted {
+                let mut buf = [0u8; 1024];
+                loop {
+                    match stream.read(&mut buf) {
+                        Ok(0) | Err(_) => break, // client went away
+                        Ok(_) => continue,       // more request bytes; keep waiting
+                    }
+                }
+                // EOF/reset observed — the engine's producer socket closed.
+                if let Some(tx) = gone_tx.take() {
+                    let _ = tx.send(());
+                }
+            }
+            // If accept failed, dropping `gone_tx` fails the test fast.
+        });
+        (format!("http://127.0.0.1:{port}"), gone_rx)
+    }
+
+    /// Spawn the real router on an ephemeral port and return its address.
+    async fn spawn_real_server(app: Router) -> std::net::SocketAddr {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+        addr
+    }
+
+    fn disconnect_test_config(base_url: String) -> LlmClientConfig {
+        LlmClientConfig {
+            api_key: "test-key".to_string(),
+            base_url,
+            model: "test-model".to_string(),
+            provider: LlmProvider::Anthropic,
+            ..Default::default()
+        }
+    }
+
+    #[tokio::test]
+    async fn p2_2_aggregate_query_budget_cancels_stalled_query() {
+        // The aggregate POST endpoint has no client-disconnect signal
+        // (hyper keeps the handler alive across a FIN — proven by the SSE
+        // sibling test being the only one that can rely on body-drop), so
+        // its cancellation channel is the wall-clock budget. A 1s budget
+        // against the never-answering mock must (a) return a JSON response
+        // with a cancellation error quickly and (b) abort the engine
+        // producer — observable as EOF on the mock's socket.
+        let (base_url, gone_rx) = start_hanging_llm();
+        let app = ShannonApiServer::new(disconnect_test_config(base_url))
+            .query_budget(std::time::Duration::from_secs(1))
+            .build_router();
+
+        let req = Request::builder()
+            .method("POST")
+            .uri("/api/query")
+            .header("content-type", "application/json")
+            .body(Body::from(r#"{"prompt":"hello"}"#))
+            .unwrap();
+        let response = tokio::time::timeout(std::time::Duration::from_secs(5), app.oneshot(req))
+            .await
+            .expect("aggregate endpoint must honour the query budget instead of hanging")
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+
+        let body = read_body(response.into_body()).await;
+        let parsed: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        let errors = parsed["errors"].as_array().cloned().unwrap_or_default();
+        assert!(
+            errors
+                .iter()
+                .any(|v| v.as_str().unwrap_or_default().contains("cancelled")),
+            "the budget expiry must surface as a cancellation error, got: {errors:?}"
+        );
+
+        // Dropping the QueryStream at budget expiry aborts the producer,
+        // closing its outbound request — the hanging mock observes EOF.
+        match tokio::time::timeout(std::time::Duration::from_secs(5), gone_rx).await {
+            Ok(Ok(())) => {}
+            _ => panic!("engine producer must be aborted when the budget fires"),
+        }
+    }
+
+    #[tokio::test]
+    async fn p2_2_client_disconnect_cancels_sse_query() {
+        use tokio::io::AsyncReadExt as _;
+        use tokio::io::AsyncWriteExt as _;
+
+        let (base_url, gone_rx) = start_hanging_llm();
+        let app = ShannonApiServer::new(disconnect_test_config(base_url)).build_router();
+        let addr = spawn_real_server(app).await;
+
+        // Raw TCP client: open the SSE stream, read the response head, then
+        // disconnect mid-stream.
+        {
+            let mut sock = tokio::net::TcpStream::connect(addr).await.unwrap();
+            let req = format!(
+                "GET /api/query/stream?prompt=hello HTTP/1.1\r\nHost: {addr}\r\nConnection: close\r\n\r\n"
+            );
+            sock.write_all(req.as_bytes()).await.unwrap();
+            sock.flush().await.unwrap();
+            // Wait until the SSE response head (and at least the first body
+            // bytes) came back, so the server has fully committed to the
+            // streaming response before the client vanishes.
+            let mut head = vec![0u8; 2048];
+            let n = tokio::time::timeout(
+                std::time::Duration::from_secs(10),
+                sock.read(&mut head),
+            )
+            .await
+            .expect("SSE response head must arrive")
+            .expect("read head");
+            let head_text = String::from_utf8_lossy(&head[..n]).to_string();
+            assert!(
+                head_text.contains("text/event-stream"),
+                "expected an SSE response, got: {head_text}"
+            );
+            drop(sock);
+        }
+
+        // Dropping the SSE body must drop the underlying QueryStream, whose
+        // AbortOnDropStream contract aborts the producer — observable as EOF
+        // on the mock's socket.
+        match tokio::time::timeout(std::time::Duration::from_secs(10), gone_rx).await {
+            Ok(Ok(())) => {}
+            Ok(Err(_)) => panic!("mock LLM died before observing the disconnect"),
+            Err(_) => panic!("SSE query loop kept running after the client disconnected"),
+        }
+    }
+
+    // ══════════════════════════════════════════════════════════════════════
     // session_id pass-through (P0-d)
     // ══════════════════════════════════════════════════════════════════════
 
@@ -2401,6 +2608,7 @@ mod tests {
             tools: Arc::new(ToolRegistry::new()),
             ws_sessions: Arc::new(RwLock::new(HashMap::new())),
             approval_registry: Arc::new(Mutex::new(HashMap::new())),
+            query_budget: ShannonApiServer::DEFAULT_QUERY_BUDGET,
         };
         let cloned = state.clone();
         assert!(Arc::ptr_eq(&state.tools, &cloned.tools));
@@ -2414,6 +2622,7 @@ mod tests {
             tools: Arc::new(ToolRegistry::new()),
             ws_sessions: Arc::new(RwLock::new(HashMap::new())),
             approval_registry: Arc::new(Mutex::new(HashMap::new())),
+            query_budget: ShannonApiServer::DEFAULT_QUERY_BUDGET,
         };
         let sessions = state.ws_sessions.read().await;
         assert!(sessions.is_empty());
@@ -2426,6 +2635,7 @@ mod tests {
             tools: Arc::new(ToolRegistry::new()),
             ws_sessions: Arc::new(RwLock::new(HashMap::new())),
             approval_registry: Arc::new(Mutex::new(HashMap::new())),
+            query_budget: ShannonApiServer::DEFAULT_QUERY_BUDGET,
         };
 
         let session = Arc::new(Mutex::new(WsSession {
@@ -2519,6 +2729,7 @@ mod tests {
             tools: Arc::new(ToolRegistry::new()),
             ws_sessions: Arc::new(RwLock::new(HashMap::new())),
             approval_registry: Arc::new(Mutex::new(HashMap::new())),
+            query_budget: ShannonApiServer::DEFAULT_QUERY_BUDGET,
         };
         let request_id = "test-approval-1".to_string();
         let (tx, rx) = oneshot::channel::<PermissionChoice>();
@@ -2558,6 +2769,7 @@ mod tests {
             tools: Arc::new(ToolRegistry::new()),
             ws_sessions: Arc::new(RwLock::new(HashMap::new())),
             approval_registry: Arc::new(Mutex::new(HashMap::new())),
+            query_budget: ShannonApiServer::DEFAULT_QUERY_BUDGET,
         };
         let body = ApprovalRespondRequest {
             request_id: "does-not-exist".to_string(),

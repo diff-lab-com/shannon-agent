@@ -8935,6 +8935,154 @@ mod tests {
         }
     }
 
+    // ---- review §P2-2: hung tools are interrupted by the registry's
+    // execution timeout and surface as an error tool_result to the model ----
+
+    /// A registered tool that never finishes (60s sleep). The registry's
+    /// execution timeout (shortened for the test) must interrupt it and the
+    /// engine must record an error `ToolUseResult` instead of hanging.
+    struct HangingTool;
+
+    #[async_trait::async_trait]
+    impl crate::tools::Tool for HangingTool {
+        fn name(&self) -> &str {
+            "hanging_tool"
+        }
+        fn description(&self) -> &str {
+            "A tool that never finishes (test double)"
+        }
+        fn input_schema(&self) -> serde_json::Value {
+            serde_json::json!({"type": "object"})
+        }
+        async fn execute(
+            &self,
+            _input: serde_json::Value,
+        ) -> crate::tools::ToolResult<crate::tools::ToolOutput> {
+            tokio::time::sleep(std::time::Duration::from_secs(60)).await;
+            Ok(crate::tools::ToolOutput::success("done".to_string()))
+        }
+    }
+
+    #[tokio::test]
+    async fn p2_2_hanging_tool_interrupted_into_error_tool_result() {
+        use futures::StreamExt as _;
+
+        // Turn 1: a tool_use block for the hanging tool; turn 2: final text
+        // so the query completes after the timed-out tool_result round-trips.
+        let tool_call_sse = {
+            let sse = [
+                r#"event: message_start"#,
+                r#"data: {"type":"message_start","message":{"id":"msg_p2_2_tool","role":"assistant","content":[],"model":"test-model","stop_reason":null,"usage":{"input_tokens":10,"output_tokens":1}}}"#,
+                r#"event: content_block_start"#,
+                r#"data: {"type":"content_block_start","index":0,"content_block":{"type":"tool_use","id":"toolu_p2_2","name":"hanging_tool","input":{}}}"#,
+                r#"event: content_block_delta"#,
+                r#"data: {"type":"content_block_delta","index":0,"delta":{"type":"input_json_delta","partial_json":"{}"}}"#,
+                r#"event: content_block_stop"#,
+                r#"data: {"type":"content_block_stop","index":0}"#,
+                r#"event: message_delta"#,
+                r#"data: {"type":"message_delta","delta":{"stop_reason":"tool_use"},"usage":{"input_tokens":10,"output_tokens":5}}"#,
+                r#"event: message_stop"#,
+                r#"data: {"type":"message_stop"}"#,
+            ]
+            .join("\n\n");
+            a8_http_response("200 OK", "text/event-stream", &sse)
+        };
+        let responder: std::sync::Arc<dyn Fn(usize) -> String + Send + Sync> =
+            std::sync::Arc::new(move |i| match i {
+                0 => tool_call_sse.clone(),
+                _ => a8_text_sse("recovered after tool timeout"),
+            });
+        let server = TurnRetryMockServer::start(responder);
+
+        let config = LlmClientConfig {
+            api_key: "test-key".to_string(),
+            base_url: server.base_url.clone(),
+            model: "test-model".to_string(),
+            provider: shannon_engine::api::LlmProvider::Anthropic,
+            ..Default::default()
+        };
+        let client = LlmClient::new(config);
+
+        // The short execution timeout stands in for the §P2-2 300s default
+        // (structural default asserted in tools.rs); the wiring under test —
+        // timeout fires → error tool_result → turn continues — is the same.
+        let mut tools = ToolRegistry::new();
+        tools.register(Box::new(HangingTool)).unwrap();
+        tools.set_execution_timeout(std::time::Duration::from_millis(100));
+
+        let mut permissions = PermissionManager::new();
+        // Always-allow so the unattended test never stalls on an approval
+        // prompt.
+        permissions.allow_tool("hanging_tool");
+
+        let engine = QueryEngine::new(
+            client,
+            tools,
+            permissions,
+            StateManager::new(),
+            QueryEngineConfig {
+                max_turns: 5,
+                ..Default::default()
+            },
+        );
+        let context = QueryContext {
+            query_id: Uuid::new_v4(),
+            session_id: Uuid::new_v4(),
+            user_message: "call the hanging tool".to_string(),
+            attachments: Vec::new(),
+            metadata: QueryMetadata {
+                timestamp: chrono::Utc::now(),
+                tools_allowed: true,
+                max_tokens: None,
+                model: "test-model".to_string(),
+                temperature: None,
+                top_p: None,
+            },
+        };
+
+        let mut stream = engine.process_query(context, None).await;
+        let mut timeout_error_seen: Option<(bool, String)> = None;
+        let mut completed = false;
+        let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(30);
+        while let Some(ev) = tokio::time::timeout_at(deadline, stream.next()).await.unwrap_or(None)
+        {
+            match ev {
+                Ok(QueryEvent::ToolUseResult {
+                    tool_name,
+                    result,
+                    is_error,
+                    ..
+                }) if tool_name == "hanging_tool" => {
+                    timeout_error_seen = Some((is_error, result));
+                }
+                Ok(QueryEvent::Completed { .. }) => {
+                    completed = true;
+                    break;
+                }
+                Ok(QueryEvent::Failed { error, .. }) => {
+                    panic!("query must survive the tool timeout, got Failed: {error}");
+                }
+                Err(e) => panic!("query must survive the tool timeout, got error: {e}"),
+                _ => {}
+            }
+        }
+
+        let (is_error, result) =
+            timeout_error_seen.expect("hanging_tool must produce a ToolUseResult event");
+        assert!(
+            is_error,
+            "the timed-out tool result must be flagged as an error"
+        );
+        assert!(
+            result.contains("timed out after"),
+            "result must carry the timeout message, got: {result}"
+        );
+        assert!(
+            completed,
+            "the turn must continue after the interrupted tool and complete"
+        );
+    }
+
     /// A14: the helper computes the right Duration for every escalation
     /// step. Index 0 (the original attempt before any continuation) yields
     /// `None` — pre-A14 semantics. Index 1 = ×2, index 2 = ×3, both capped
