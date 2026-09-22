@@ -743,7 +743,15 @@ jobs:
       # max_turns override) — new pub field on an exhaustively-constructible
       # struct, intentional minor-cycle break. New TAG NAME so the
       # baseline-rustdoc cache invalidates.
-      SEMVER_BASELINE: semver-baseline-2026-09-7
+      # Eighth move (2026-09-22, PR #97 comprehensive review): review §P1-6
+      # restores ConversationUpdate payload into the engine on WS (additive
+      # public event consumption), §P2-14 adds `apply_conflicts: bool` to
+      # `shannon_tools::file::edit::EditInput` (new pub field on an
+      # exhaustively-constructible struct), §P2-15 adds
+      # `FileSystemProvider::rename_blocking` (new trait method,
+      # additive). All three are intentional minor-cycle breaks pre-1.0.
+      # New TAG NAME so the baseline-rustdoc cache invalidates.
+      SEMVER_BASELINE: semver-baseline-2026-09-8
     steps:
       - uses: actions/checkout@f548e57e544e1ff5a4c46bf1e1b8685f8e4a348a
         with:
