@@ -50,6 +50,27 @@ pub(crate) fn parse_approval_mode(mode_str: &str) -> ApprovalMode {
     }
 }
 
+/// Resolve the approval mode for an unattended path (background task,
+/// inbox routine, goal run, best-of-N batch — review §P1-2).
+///
+/// Security contract: FullAuto must require an explicit opt-in. When the
+/// caller does not pass an approval_mode string (or passes something we
+/// don't recognise), we default to the most conservative mode (Suggest),
+/// matching SECURITY.md's promise that unattended paths honour the user's
+/// chosen mode.
+pub(crate) fn unattended_approval_mode(approval_mode_str: Option<&str>) -> ApprovalMode {
+    match approval_mode_str {
+        Some(s) => match s {
+            "full_auto" => ApprovalMode::FullAuto,
+            "auto_edit" => ApprovalMode::AutoEdit,
+            "auto" => ApprovalMode::Auto,
+            "plan" => ApprovalMode::Plan,
+            _ => ApprovalMode::Suggest,
+        },
+        None => ApprovalMode::Suggest,
+    }
+}
+
 /// Resolve the plugins directory (`~/.shannon/plugins/`).
 ///
 /// Falls back to `<config_dir>/shannon/plugins` if `$HOME` is unset. The
@@ -1508,18 +1529,17 @@ pub async fn start_background_task(
         // Build query engine for this task
         let client = LlmClient::new(client_config);
 
-        // Create PermissionManager — use configured approval mode for background tasks
+        // Create PermissionManager — use the configured approval mode for
+        // background tasks. review §P1-2: the previous default of FullAuto
+        // silently bypassed the user's global approval mode (typically
+        // Suggest/confirm) for every unattended path (background tasks,
+        // routines, goal runs, best-of-N batches). SECURITY.md promises
+        // that unattended paths honour the user's mode; FullAuto must
+        // require an explicit opt-in (the caller passes approval_mode_str =
+        // Some("full_auto") when that's intended). We default to Suggest
+        // when the caller didn't say anything.
         let mut permissions = PermissionManager::new();
-        let mode = approval_mode_str
-            .as_deref()
-            .and_then(|s| match s {
-                "full_auto" => Some(ApprovalMode::FullAuto),
-                "auto_edit" => Some(ApprovalMode::AutoEdit),
-                "auto" => Some(ApprovalMode::Auto),
-                "plan" => Some(ApprovalMode::Plan),
-                _ => None,
-            })
-            .unwrap_or(ApprovalMode::FullAuto);
+        let mode = crate::commands::unattended_approval_mode(approval_mode_str.as_deref());
         permissions.set_approval_mode(mode);
         // Honour persisted deny/allow rules (no interactive channel here —
         // background tasks run unattended, so prompts would auto-allow anyway).
@@ -2240,6 +2260,45 @@ mod pure_function_tests {
         assert_eq!(parse_approval_mode("dont_ask"), ApprovalMode::DontAsk);
         assert_eq!(parse_approval_mode("dontask"), ApprovalMode::DontAsk);
         assert_eq!(parse_approval_mode("confirm"), ApprovalMode::Suggest);
+    }
+
+    // ---- review §P1-2: unattended approval mode requires explicit opt-in ----
+
+    #[test]
+    fn unattended_approval_mode_defaults_to_suggest_not_fullauto() {
+        // SECURITY.md promises unattended paths honour the user's chosen
+        // mode. FullAuto must require explicit opt-in.
+        assert_eq!(
+            unattended_approval_mode(None),
+            ApprovalMode::Suggest,
+            "no approval_mode_str must not silently promote to FullAuto"
+        );
+        assert_eq!(
+            unattended_approval_mode(Some("")),
+            ApprovalMode::Suggest,
+            "empty approval_mode_str must not silently promote to FullAuto"
+        );
+        assert_eq!(
+            unattended_approval_mode(Some("garbage")),
+            ApprovalMode::Suggest,
+            "unknown approval_mode_str must not silently promote to FullAuto"
+        );
+    }
+
+    #[test]
+    fn unattended_approval_mode_respects_explicit_opt_in() {
+        // Only an explicit "full_auto" string gets FullAuto.
+        assert_eq!(
+            unattended_approval_mode(Some("full_auto")),
+            ApprovalMode::FullAuto,
+        );
+        // Other explicit strings map to their mode.
+        assert_eq!(
+            unattended_approval_mode(Some("auto_edit")),
+            ApprovalMode::AutoEdit
+        );
+        assert_eq!(unattended_approval_mode(Some("auto")), ApprovalMode::Auto);
+        assert_eq!(unattended_approval_mode(Some("plan")), ApprovalMode::Plan);
     }
 
     #[test]

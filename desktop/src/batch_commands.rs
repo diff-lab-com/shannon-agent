@@ -46,7 +46,7 @@ use serde::{Deserialize, Serialize};
 use shannon_core::inbox_store::{InboxItemNew, SOURCE_BATCH};
 use shannon_core::query_engine::{QueryContext, QueryEngine, QueryEvent, QueryMetadata};
 use shannon_engine::api::client::LlmClient;
-use shannon_engine::permissions::{ApprovalMode, PermissionManager, PermissionRuleChecker};
+use shannon_engine::permissions::{PermissionManager, PermissionRuleChecker};
 use shannon_engine::state::StateManager;
 use tauri::Emitter;
 use tokio::sync::RwLock;
@@ -575,16 +575,8 @@ impl<R: tauri::Runtime> EngineBatchBranchRunner<R> {
         let memory_store = self.deps.memory_store.clone();
 
         let mut permissions = PermissionManager::new();
-        let mode = approval_mode_str
-            .as_deref()
-            .and_then(|s| match s {
-                "full_auto" => Some(ApprovalMode::FullAuto),
-                "auto_edit" => Some(ApprovalMode::AutoEdit),
-                "auto" => Some(ApprovalMode::Auto),
-                "plan" => Some(ApprovalMode::Plan),
-                _ => None,
-            })
-            .unwrap_or(ApprovalMode::FullAuto);
+        // review §P1-2: default to Suggest (require explicit opt-in for FullAuto)
+        let mode = crate::commands::unattended_approval_mode(approval_mode_str.as_deref());
         permissions.set_approval_mode(mode);
         let mut settings = shannon_core::settings::SettingsManager::new();
         if settings.load_from_files().is_ok() {
