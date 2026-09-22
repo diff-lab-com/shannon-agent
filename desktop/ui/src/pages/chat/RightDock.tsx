@@ -25,6 +25,7 @@ import { cn } from '@/lib/utils'
 import { useT } from '@/i18n'
 import { useArtifact } from '@/components/artifact/ArtifactContext'
 import { artifactIcon } from '@/components/artifact/detectArtifact'
+import { artifactDisplayTitle } from '@/components/artifact/labels'
 import { DocumentRenderer } from '@/components/artifact/DocumentRenderer'
 import { HtmlRenderer } from '@/components/artifact/HtmlRenderer'
 import { MermaidRenderer } from '@/components/artifact/MermaidRenderer'
@@ -279,15 +280,15 @@ export default function RightDock({
                 id={`dock-tab-a-${a.id}`}
                 aria-selected={tab === `a:${a.id}`}
                 onClick={() => { setActive(a.id); handleTabPick(`a:${a.id}`) }}
-                title={a.title}
+                title={artifactDisplayTitle(a, t)}
                 className={tabClass(tab === `a:${a.id}`)}
               >
                 <span className="material-symbols-outlined icon-sm align-middle" aria-hidden="true">{artifactIcon(a.kind)}</span>
-                <span className="align-middle ml-xs max-w-24 truncate">{a.title}</span>
+                <span className="align-middle ml-xs max-w-24 truncate">{artifactDisplayTitle(a, t)}</span>
                 <span
                   role="button"
                   tabIndex={0}
-                  aria-label={t('chat.dock.tab.close.aria', { title: a.title })}
+                  aria-label={t('chat.dock.tab.close.aria', { title: artifactDisplayTitle(a, t) })}
                   className="material-symbols-outlined icon-sm align-middle ml-xs rounded-full hover:bg-surface-container-high shrink-0"
                   onClick={e => { e.stopPropagation(); closeArtifact(a.id) }}
                   onKeyDown={e => {
