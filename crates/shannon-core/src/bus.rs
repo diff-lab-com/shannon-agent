@@ -51,6 +51,7 @@
 
 use std::any::{Any, TypeId};
 use std::collections::HashMap;
+use std::future::Future;
 use std::sync::{Arc, Mutex, RwLock, Weak};
 
 use async_trait::async_trait;
@@ -717,38 +718,58 @@ pub struct PluginDecisionFrame {
     pub allowed: bool,
 }
 
-type DecisionSink = Arc<dyn Fn(&PluginDecisionFrame) + Send + Sync>;
+/// Receiver for plugin-gate decisions. The query layer installs a closure
+/// that republishes frames onto its session bus so both decision sources
+/// land in L0 with one schema.
+pub type DecisionSink = Arc<dyn Fn(&PluginDecisionFrame) + Send + Sync>;
 
-static DECISION_SINK: std::sync::OnceLock<Mutex<Option<DecisionSink>>> = std::sync::OnceLock::new();
-
-/// Install the process-wide receiver for plugin-gate decisions. The query
-/// layer installs a closure that republishes frames onto the current session
-/// bus so both decision sources land in L0 with one schema.
-///
-/// Limitation: a process hosts many sessions concurrently in principle; the
-/// sink targets the most recently installing session (single-active-session
-/// desktop flows). Gate denial tracing remains the authoritative feed.
-pub fn install_decision_sink(sink: DecisionSink) {
-    let cell = DECISION_SINK.get_or_init(|| Mutex::new(None));
-    *cell.lock().expect("decision sink lock") = Some(sink);
+tokio::task_local! {
+    /// Review §P2-4: the installing query's decision sink, scoped to that
+    /// query's producer task (see [`scope_decision_sink`]). This replaces the
+    /// former process-wide `Option` that every query overwrote — with
+    /// concurrent queries, session A's plugin-gate decisions landed in
+    /// session B's bus ("most recently installing session" wins). The sink
+    /// is now task state: it can only be observed inside the producer task
+    /// (and subtasks that explicitly inherit it via
+    /// [`inherit_decision_sink`]), so concurrent queries cannot cross-route.
+    static CURRENT_DECISION_SINK: Option<DecisionSink>;
 }
 
-/// Test helper: remove a previously installed sink.
-#[cfg(test)]
-pub(crate) fn clear_decision_sink_for_test() {
-    if let Some(cell) = DECISION_SINK.get() {
-        *cell.lock().expect("decision sink lock") = None;
-    }
+/// Wrap a query-producer future so plugin-gate decisions emitted anywhere in
+/// its task route to THIS query's sink (review §P2-4). The producer installs
+/// its session-bus republishing closure here; when the producer ends or is
+/// aborted the scope simply ends with it — no explicit cleanup needed.
+pub fn scope_decision_sink<F>(sink: DecisionSink, fut: F) -> impl Future<Output = F::Output>
+where
+    F: Future,
+{
+    CURRENT_DECISION_SINK.scope(Some(sink), fut)
 }
 
-/// Forward one plugin-gate decision to the installed sink, if any.
+/// Re-scope a spawned subtask with the CURRENT task's sink, if any (review
+/// §P2-4). The engine's parallel read-only tool batches run in
+/// [`tokio::spawn`]ed tasks, which do not inherit tokio task-locals
+/// automatically; the spawn site calls this so plugin gates firing inside a
+/// batched tool still route to the owning query's session bus. Outside any
+/// scope this degrades to "no sink" (decisions stay trace-only), matching
+/// the pre-query behaviour.
+pub fn inherit_decision_sink<F>(fut: F) -> std::pin::Pin<Box<dyn Future<Output = F::Output> + Send>>
+where
+    F: Future + Send + 'static,
+{
+    let sink = CURRENT_DECISION_SINK.try_with(|slot| slot.clone()).ok().flatten();
+    Box::pin(CURRENT_DECISION_SINK.scope(sink, fut))
+}
+
+/// Forward one plugin-gate decision to the owning query's sink, if this task
+/// runs inside a [`scope_decision_sink`]; a no-op otherwise (gate denial
+/// tracing remains the authoritative feed).
 pub(crate) fn broadcast_plugin_decision(frame: PluginDecisionFrame) {
-    if let Some(cell) = DECISION_SINK.get() {
-        let guard = cell.lock().expect("decision sink lock");
-        if let Some(sink) = guard.as_ref() {
+    let _ = CURRENT_DECISION_SINK.try_with(|slot| {
+        if let Some(sink) = slot.as_ref() {
             sink(&frame);
         }
-    }
+    });
 }
 
 // ============================================================================
@@ -979,38 +1000,101 @@ mod tests {
         assert_eq!(event.body.kind(), SessionEventKind::PermissionDecision);
     }
 
-    #[test]
-    fn decision_sink_broadcast_reaches_installed_receiver_only_when_set() {
-        clear_decision_sink_for_test();
-        // No sink installed: broadcast is a silent no-op.
-        broadcast_plugin_decision(PluginDecisionFrame {
-            plugin: "p".into(),
-            required: "network".into(),
-            declared: vec![],
-            point: "transport".to_string(),
-            allowed: false,
-        });
-
-        let got = Arc::new(Mutex::new(Vec::new()));
-        let g = got.clone();
-        install_decision_sink(Arc::new(move |frame: &PluginDecisionFrame| {
-            g.lock()
-                .unwrap()
-                .push((frame.plugin.clone(), frame.allowed));
-        }));
-        broadcast_plugin_decision(PluginDecisionFrame {
-            plugin: "acme".into(),
+    fn frame(plugin: &str, allowed: bool) -> PluginDecisionFrame {
+        PluginDecisionFrame {
+            plugin: plugin.to_string(),
             required: "mcp_tools".into(),
             declared: vec!["mcp_tools".into()],
             point: "mcp_tools".to_string(),
-            allowed: true,
-        });
+            allowed,
+        }
+    }
+
+    #[test]
+    fn decision_sink_broadcast_outside_any_scope_is_silent_no_op() {
+        // No scope on this task: the broadcast must be a no-op, not a panic
+        // (plugin gates also fire outside any query, e.g. at registration).
+        broadcast_plugin_decision(frame("p", false));
+    }
+
+    #[tokio::test]
+    async fn decision_sink_scoped_producer_receives_broadcasts() {
+        let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel::<(String, bool)>();
+        let sink: DecisionSink =
+            Arc::new(move |frame: &PluginDecisionFrame| {
+                let _ = tx.send((frame.plugin.clone(), frame.allowed));
+            });
+        scope_decision_sink(sink, async {
+            broadcast_plugin_decision(frame("acme", true));
+        })
+        .await;
         assert_eq!(
-            *got.lock().unwrap(),
-            vec![("acme".to_string(), true)],
-            "installed sink receives gate decisions"
+            rx.recv().await,
+            Some(("acme".to_string(), true)),
+            "the scoped producer's sink receives gate decisions"
         );
-        clear_decision_sink_for_test();
+    }
+
+    // Review §P2-4: the former process-wide sink was overwritten by every
+    // query, so with concurrent producers session A's plugin-gate decisions
+    // landed in session B's channel. Each producer now scopes its own sink;
+    // overlapping installations must not cross-route.
+    #[tokio::test]
+    async fn p2_4_concurrent_producers_route_decisions_to_their_own_sink() {
+        let (tx_a, mut rx_a) = tokio::sync::mpsc::unbounded_channel::<String>();
+        let (tx_b, mut rx_b) = tokio::sync::mpsc::unbounded_channel::<String>();
+        let sink_a: DecisionSink =
+            Arc::new(move |frame: &PluginDecisionFrame| {
+                let _ = tx_a.send(frame.plugin.clone());
+            });
+        let sink_b: DecisionSink =
+            Arc::new(move |frame: &PluginDecisionFrame| {
+                let _ = tx_b.send(frame.plugin.clone());
+            });
+
+        // Producer A installs its sink and parks; producer B then installs
+        // its own — which under the old global `Option` would have captured
+        // every subsequent decision for itself.
+        let a = tokio::spawn(scope_decision_sink(sink_a, async {
+            tokio::time::sleep(std::time::Duration::from_millis(80)).await;
+            broadcast_plugin_decision(frame("plugin-a", true));
+        }));
+        let b = tokio::spawn(scope_decision_sink(sink_b, async {
+            broadcast_plugin_decision(frame("plugin-b", true));
+        }));
+        b.await.unwrap();
+        a.await.unwrap();
+
+        assert_eq!(rx_a.recv().await.as_deref(), Some("plugin-a"));
+        assert_eq!(rx_b.recv().await.as_deref(), Some("plugin-b"));
+        assert!(rx_a.try_recv().is_err(), "A's channel must not receive B's decisions");
+        assert!(rx_b.try_recv().is_err(), "B's channel must not receive A's decisions");
+    }
+
+    // Review §P2-4: the engine's parallel read-only tool batches run in
+    // spawned tasks, which do not inherit tokio task-locals by themselves;
+    // the producer's spawn sites use `inherit_decision_sink` so gates inside
+    // batched tools still reach the owning query's channel.
+    #[tokio::test]
+    async fn decision_sink_is_inherited_by_spawned_subtasks() {
+        let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel::<String>();
+        let sink: DecisionSink =
+            Arc::new(move |frame: &PluginDecisionFrame| {
+                let _ = tx.send(frame.plugin.clone());
+            });
+        scope_decision_sink(sink, async {
+            tokio::spawn(inherit_decision_sink(async {
+                broadcast_plugin_decision(frame("batched-tool", true));
+            }))
+            .await
+            .unwrap();
+        })
+        .await;
+        assert_eq!(
+            rx.recv().await.as_deref(),
+            Some("batched-tool"),
+            "spawned subtask must inherit the owning producer's sink"
+        );
     }
 
     #[test]

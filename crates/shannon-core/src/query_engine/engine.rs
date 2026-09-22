@@ -1670,7 +1670,38 @@ impl QueryEngine {
         // producer task can read host-registered providers across the
         // `'static` move boundary.
         let reinjection_providers = self.reinjection_providers.clone();
-        let producer = tokio::spawn(async move {
+        // Review §P2-4: plugin-gate decisions (§4.9 route (b)) republish onto
+        // THIS query's session bus through a task-scoped sink. The former
+        // process-wide sink was overwritten by every query, so with
+        // concurrent queries one session's decisions landed in another
+        // session's channel. `scope_decision_sink` pins the closure to this
+        // producer task only; ending/aborting the query ends the scope, so
+        // no cleanup is needed.
+        let decision_sink: crate::bus::DecisionSink = {
+            let sink_bus = session_bus.shared();
+            std::sync::Arc::new(move |frame: &crate::bus::PluginDecisionFrame| {
+                use shannon_types::session_event::PermissionDecisionPayload;
+                let decision = if frame.allowed { "allow" } else { "deny" };
+                let reason = format!(
+                    "plugin gate '{}' requires '{}' declared [{}]",
+                    frame.point,
+                    frame.required,
+                    frame.declared.join(", ")
+                );
+                sink_bus.dispatch(
+                    crate::bus::permission_decision_event(PermissionDecisionPayload {
+                        tool_name: None,
+                        request: Some(format!("plugin '{}'", frame.plugin)),
+                        decision: decision.to_string(),
+                        reason: Some(reason),
+                        mode: Some("PLUGIN".to_string()),
+                    })
+                    .into(),
+                    crate::bus::DispatchMode::Emit,
+                );
+            })
+        };
+        let producer = tokio::spawn(crate::bus::scope_decision_sink(decision_sink, async move {
             // Prevent OS sleep during long-running queries (drops on exit)
             let _sleep_guard = crate::prevent_sleep::PreventSleepGuard::new();
 
@@ -1713,35 +1744,6 @@ impl QueryEngine {
                     "SessionStart",
                     serde_json::json!({ "session_id": self_session_id }),
                 );
-            }
-            // Plugin-gate decisions (§4.9 route (b)) republish onto the bus
-            // as permission/decision rows via the process-wide sink; the
-            // most recent query installs it (single-active-session flows).
-            {
-                use shannon_types::session_event::PermissionDecisionPayload;
-                crate::bus::install_decision_sink({
-                    let sink_bus = session_bus.shared();
-                    std::sync::Arc::new(move |frame: &crate::bus::PluginDecisionFrame| {
-                        let decision = if frame.allowed { "allow" } else { "deny" };
-                        let reason = format!(
-                            "plugin gate '{}' requires '{}' declared [{}]",
-                            frame.point,
-                            frame.required,
-                            frame.declared.join(", ")
-                        );
-                        sink_bus.dispatch(
-                            crate::bus::permission_decision_event(PermissionDecisionPayload {
-                                tool_name: None,
-                                request: Some(format!("plugin '{}'", frame.plugin)),
-                                decision: decision.to_string(),
-                                reason: Some(reason),
-                                mode: Some("PLUGIN".to_string()),
-                            })
-                            .into(),
-                            crate::bus::DispatchMode::Emit,
-                        );
-                    })
-                });
             }
             let tee = l0_tee;
 
@@ -3887,10 +3889,19 @@ impl QueryEngine {
                                                                                         .clone(),
                                                                             },
                                                                         );
+                                                                    // Review §P2-4: batched
+                                                                    // tools run in spawned
+                                                                    // tasks that would not
+                                                                    // inherit the producer's
+                                                                    // decision-sink scope;
+                                                                    // re-scope explicitly so
+                                                                    // plugin gates inside
+                                                                    // them route to this
+                                                                    // query's bus.
                                                                     let handle = tokio::spawn(
-                                                                        async move {
+                                                                        crate::bus::inherit_decision_sink(async move {
                                                                             (tool_id, tool_name, effective_input, tools_exec.execute_streaming(&exec_name, exec_input, progress_sender).await)
-                                                                        },
+                                                                        }),
                                                                     );
                                                                     exec_handles.push((
                                                                         id_for_error,
@@ -5817,7 +5828,7 @@ impl QueryEngine {
                 });
                 memory_extract_cursor_cell.store(total, std::sync::atomic::Ordering::Relaxed);
             }
-        });
+        }));
 
         // Convert the channel receiver into a stream that aborts the producer
         // task when dropped, so a consumer can cancel an in-progress query by
