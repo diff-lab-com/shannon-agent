@@ -11,7 +11,7 @@ use crate::protocol::{
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::path::PathBuf;
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 
 use std::sync::Arc;
 use std::time::{Duration, Instant};
@@ -20,13 +20,38 @@ use tokio::process::{Child, ChildStdin, ChildStdout, Command};
 use tokio::sync::{RwLock, mpsc, oneshot};
 
 /// Environment variables blocked from being passed to agent processes.
+/// Each is a direct code-execution injection vector at process/shell startup
+/// (§P3-15): dynamic loaders (`LD_*`/`DYLD_*`/`__KMP_*`), shell startup
+/// scripts (`BASH_ENV`, `ENV`), and interpreter boot hooks (`NODE_OPTIONS`,
+/// `PYTHONSTARTUP`, `PYTHONPATH`, `PERL5OPT`, `PERL5LIB`, `RUBYOPT`,
+/// `RUBYLIB`).
 const BLOCKED_ENV: &[&str] = &[
     "LD_PRELOAD",
     "LD_LIBRARY_PATH",
     "DYLD_INSERT_LIBRARIES",
     "DYLD_LIBRARY_PATH",
     "__KMP_REGISTERED_LIBRARIES",
+    "BASH_ENV",
+    "ENV",
+    "NODE_OPTIONS",
+    "NODE_PATH",
+    "PYTHONSTARTUP",
+    "PYTHONPATH",
+    "PERL5OPT",
+    "PERL5LIB",
+    "RUBYOPT",
+    "RUBYLIB",
 ];
+
+/// Env key prefixes blocked from agent processes. `BASH_FUNC_name%%=…`
+/// entries are how bash exports functions — an arbitrary code-injection
+/// vector no fixed-name list can enumerate (§P3-15).
+const BLOCKED_ENV_PREFIXES: &[&str] = &["BASH_FUNC_"];
+
+/// Whether an env var key is blocked from agent processes (§P3-15).
+fn is_blocked_env(key: &str) -> bool {
+    BLOCKED_ENV.contains(&key) || BLOCKED_ENV_PREFIXES.iter().any(|p| key.starts_with(p))
+}
 
 /// Status of an agent process.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -391,7 +416,7 @@ impl AgentProcessManager {
         cmd.args(&config.args);
         // Filter dangerous env vars that could enable code injection
         for (key, value) in &config.env {
-            if !BLOCKED_ENV.contains(&key.as_str()) {
+            if !is_blocked_env(key) {
                 cmd.env(key, value);
             }
         }
@@ -427,9 +452,23 @@ impl AgentProcessManager {
         let pending_rpcs = Arc::new(std::sync::Mutex::new(HashMap::new()));
         let rpc_map_for_reader = pending_rpcs.clone();
 
+        // §P3-11: one exit-flag per spawned process, shared by every
+        // observer (read loop, kill watcher, startup timeout) so the
+        // ProcessExited event is emitted exactly once per process.
+        let exited = Arc::new(AtomicBool::new(false));
+        let exited_for_reader = exited.clone();
+        let exited_for_watcher = exited.clone();
+        let exited_for_timeout = exited;
         // Spawn a reader task that reads lines from stdout and dispatches
         let read_handle = tokio::spawn(async move {
-            Self::read_loop(stdout, event_tx, agent_name_for_reader, rpc_map_for_reader).await;
+            Self::read_loop(
+                stdout,
+                event_tx,
+                agent_name_for_reader,
+                rpc_map_for_reader,
+                exited_for_reader,
+            )
+            .await;
         });
         self.track_task(read_handle);
 
@@ -440,11 +479,7 @@ impl AgentProcessManager {
             // Wait for kill signal or just let it drop
             let _ = kill_rx.await;
             // The child will be killed when AgentHandle is dropped
-            let _ = event_tx_exit
-                .send(AgentEvent::ProcessExited {
-                    agent_name: name_exit.clone(),
-                    exit_code: None,
-                })
+            Self::emit_process_exited_once(&exited_for_watcher, &event_tx_exit, name_exit, None)
                 .await;
         });
         self.track_task(watcher_handle);
@@ -479,15 +514,13 @@ impl AgentProcessManager {
                         tracing::debug!(agent = %timeout_name, error = %e, "Failed to kill agent process during startup timeout");
                     }
                     handle.status = AgentProcessStatus::Crashed;
-                    if let Err(e) = timeout_event_tx
-                        .send(AgentEvent::ProcessExited {
-                            agent_name: timeout_name.clone(),
-                            exit_code: None,
-                        })
-                        .await
-                    {
-                        tracing::debug!(agent = %timeout_name, error = %e, "Failed to send startup timeout event");
-                    }
+                    Self::emit_process_exited_once(
+                        &exited_for_timeout,
+                        &timeout_event_tx,
+                        timeout_name.clone(),
+                        None,
+                    )
+                    .await;
                 }
             }
         });
@@ -820,7 +853,7 @@ impl AgentProcessManager {
                                 cmd.args(&config.args);
                                 // Apply same env filtering as spawn path
                                 for (key, value) in &config.env {
-                                    if !BLOCKED_ENV.contains(&key.as_str()) {
+                                    if !is_blocked_env(key) {
                                         cmd.env(key, value);
                                     }
                                 }
@@ -842,12 +875,17 @@ impl AgentProcessManager {
                                                 let rpc_map =
                                                     Arc::new(std::sync::Mutex::new(HashMap::new()));
                                                 let rpc_map_reader = rpc_map.clone();
+                                                // Fresh process → fresh exit flag (§P3-11).
+                                                let exited = Arc::new(AtomicBool::new(false));
+                                                let exited_for_reader = exited.clone();
+                                                let exited_for_watcher = exited;
                                                 tokio::spawn(async move {
                                                     Self::read_loop(
                                                         stdout,
                                                         evt_clone,
                                                         name_reader,
                                                         rpc_map_reader,
+                                                        exited_for_reader,
                                                     )
                                                     .await;
                                                 });
@@ -856,12 +894,13 @@ impl AgentProcessManager {
                                                 let name_exit = name.clone();
                                                 tokio::spawn(async move {
                                                     let _ = kill_rx.await;
-                                                    let _ = evt_exit
-                                                        .send(AgentEvent::ProcessExited {
-                                                            agent_name: name_exit,
-                                                            exit_code: None,
-                                                        })
-                                                        .await;
+                                                    Self::emit_process_exited_once(
+                                                        &exited_for_watcher,
+                                                        &evt_exit,
+                                                        name_exit,
+                                                        None,
+                                                    )
+                                                    .await;
                                                 });
 
                                                 let handle = AgentHandle {
@@ -976,6 +1015,7 @@ impl AgentProcessManager {
         event_tx: mpsc::Sender<AgentEvent>,
         agent_name: String,
         pending_rpcs: Arc<std::sync::Mutex<HashMap<i64, PendingRpc>>>,
+        exited: Arc<AtomicBool>,
     ) {
         let reader = BufReader::new(stdout);
         let mut lines = reader.lines();
@@ -1110,10 +1150,34 @@ impl AgentProcessManager {
         drop(orphaned);
 
         tracing::info!(agent = %agent_name, "Agent stdout closed");
+        Self::emit_process_exited_once(&exited, &event_tx, agent_name, None).await;
+    }
+
+    /// Emit a [`AgentEvent::ProcessExited`] at most once per agent process
+    /// (§P3-11).
+    ///
+    /// Several observers can see the same exit — stdout EOF in the read
+    /// loop, the kill-signal watcher, the startup-timeout guard — and each
+    /// used to send its own event, double-counting exits downstream (the
+    /// coordinator flips status per event). `exited` is swapped before
+    /// sending so only the first observer wins.
+    async fn emit_process_exited_once(
+        exited: &AtomicBool,
+        event_tx: &mpsc::Sender<AgentEvent>,
+        agent_name: String,
+        exit_code: Option<i32>,
+    ) {
+        if exited.swap(true, Ordering::SeqCst) {
+            tracing::debug!(
+                agent = %agent_name,
+                "ProcessExited already emitted for this process; suppressing duplicate"
+            );
+            return;
+        }
         let _ = event_tx
             .send(AgentEvent::ProcessExited {
                 agent_name,
-                exit_code: None,
+                exit_code,
             })
             .await;
     }
@@ -1586,6 +1650,84 @@ mod tests {
         assert!(BLOCKED_ENV.contains(&"DYLD_INSERT_LIBRARIES"));
         assert!(BLOCKED_ENV.contains(&"DYLD_LIBRARY_PATH"));
         assert!(BLOCKED_ENV.contains(&"__KMP_REGISTERED_LIBRARIES"));
+        // §P3-15: shell + interpreter startup injection vectors.
+        assert!(BLOCKED_ENV.contains(&"BASH_ENV"));
+        assert!(BLOCKED_ENV.contains(&"ENV"));
+        assert!(BLOCKED_ENV.contains(&"NODE_OPTIONS"));
+        assert!(BLOCKED_ENV.contains(&"PYTHONSTARTUP"));
+        assert!(BLOCKED_ENV.contains(&"PYTHONPATH"));
+        assert!(BLOCKED_ENV.contains(&"PERL5OPT"));
+        assert!(BLOCKED_ENV.contains(&"RUBYOPT"));
+    }
+
+    #[test]
+    fn test_blocked_env_prefixes_and_filter() {
+        // BASH_FUNC_* is a prefix vector, not a fixed name.
+        assert!(is_blocked_env("BASH_FUNC_foo%%"));
+        assert!(is_blocked_env("BASH_FUNC_bar%%=() { echo; }"));
+        // Exact matches flow through the same predicate.
+        assert!(is_blocked_env("LD_PRELOAD"));
+        assert!(is_blocked_env("BASH_ENV"));
+        assert!(is_blocked_env("NODE_OPTIONS"));
+        assert!(is_blocked_env("PYTHONSTARTUP"));
+        assert!(is_blocked_env("PERL5OPT"));
+        assert!(is_blocked_env("RUBYOPT"));
+        assert!(is_blocked_env("ENV"));
+        // Safe vars stay passable — including anything containing but not
+        // starting with the blocked prefixes.
+        assert!(!is_blocked_env("PATH"));
+        assert!(!is_blocked_env("HOME"));
+        assert!(!is_blocked_env("RUST_LOG"));
+        assert!(!is_blocked_env("MY_BASH_ENV")); // prefix, not substring
+    }
+
+    // ── §P3-11: ProcessExited emitted at most once per process ─────────
+
+    #[tokio::test]
+    async fn process_exited_dedup_emits_only_once_across_paths() {
+        // Simulates the read-loop / kill-watcher / startup-timeout trio all
+        // observing the same process exit: exactly one event may arrive.
+        let exited = Arc::new(AtomicBool::new(false));
+        let (tx, mut rx) = mpsc::channel::<AgentEvent>(16);
+
+        for name in ["read_loop", "kill_watcher", "startup_timeout"] {
+            let tx = tx.clone();
+            let exited = exited.clone();
+            AgentProcessManager::emit_process_exited_once(&exited, &tx, name.to_string(), None).await;
+        }
+        drop(tx);
+
+        let mut agents = Vec::new();
+        while let Some(event) = rx.recv().await {
+            if let AgentEvent::ProcessExited { agent_name, .. } = event {
+                agents.push(agent_name);
+            }
+        }
+        assert_eq!(
+            agents,
+            vec!["read_loop".to_string()],
+            "only the first observer's exit event is delivered"
+        );
+    }
+
+    #[tokio::test]
+    async fn process_exited_dedup_fresh_flag_after_restart() {
+        // A restarted process gets a fresh flag: its exit must be reported
+        // even though the previous process's exit was already emitted.
+        let exited = Arc::new(AtomicBool::new(false));
+        let (tx, mut rx) = mpsc::channel::<AgentEvent>(16);
+        AgentProcessManager::emit_process_exited_once(&exited, &tx, "worker".to_string(), None).await;
+
+        let fresh = Arc::new(AtomicBool::new(false));
+        AgentProcessManager::emit_process_exited_once(&fresh, &tx, "worker".to_string(), None).await;
+        drop(tx);
+
+        let mut count = 0;
+        while let Some(event) = rx.recv().await {
+            assert!(matches!(event, AgentEvent::ProcessExited { .. }));
+            count += 1;
+        }
+        assert_eq!(count, 2, "each process lifetime reports exactly one exit");
     }
 
     #[test]
