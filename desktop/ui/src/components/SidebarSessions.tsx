@@ -766,7 +766,7 @@ export function SessionsSection({ sessions, sessionActivity, goalRunsBySession =
                 'flex items-center gap-0.5 px-1.5 py-0.5 rounded font-label-xs transition-colors cursor-pointer whitespace-nowrap',
                 grouping === opt.mode
                   ? 'bg-primary text-on-primary shadow-sm'
-                  : 'text-on-surface-variant/70 hover:text-primary',
+                  : 'text-on-surface-variant hover:text-primary',
               )}
             >
               <span className="material-symbols-outlined text-[12px]" aria-hidden="true">{opt.icon}</span>
@@ -791,7 +791,7 @@ export function SessionsSection({ sessions, sessionActivity, goalRunsBySession =
           <div className="flex items-center gap-1.5 px-3 pt-1 pb-1 font-label-sm text-[11px] font-bold text-on-surface-variant/90 min-w-0">
             <span className="material-symbols-outlined text-[13px] shrink-0" aria-hidden="true">event_repeat</span>
             <span className="truncate flex-1 min-w-0">{t('sidebar.automations.title')}</span>
-            <span className="font-mono text-[10px] tabular-nums text-on-surface-variant/70 shrink-0">{routines.length}</span>
+            <span className="font-mono text-[10px] tabular-nums text-on-surface-variant shrink-0">{routines.length}</span>
           </div>
           {routines.slice(0, 3).map(r => {
             const soon = r.next_fire_at != null && r.next_fire_at - nowTick < 3600_000
@@ -803,7 +803,7 @@ export function SessionsSection({ sessions, sessionActivity, goalRunsBySession =
                 className="w-full flex items-center gap-2 px-3 py-1.5 rounded-lg font-label-md text-label-md text-on-surface-variant hover:bg-surface-container-low hover:text-primary transition-colors cursor-pointer min-w-0"
                 title={r.name}
               >
-                <span className={cn('material-symbols-outlined text-[13px] shrink-0', soon ? 'text-warning' : 'text-on-surface-variant/70')} aria-hidden="true">schedule</span>
+                <span className={cn('material-symbols-outlined text-[13px] shrink-0', soon ? 'text-warning' : 'text-on-surface-variant')} aria-hidden="true">schedule</span>
                 <span className="truncate flex-1 min-w-0 text-left">{r.name}</span>
                 {soon && (
                   <span className="font-label-xs px-1 py-[1px] rounded bg-warning/15 text-warning shrink-0" role="img" aria-label={t('sidebar.automations.soon')}>
