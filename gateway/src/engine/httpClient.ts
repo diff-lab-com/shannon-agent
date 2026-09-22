@@ -13,6 +13,11 @@
  * (the safe one-shot). "always_allow" is a future platform-UX option.
  */
 
+import { ENGINE_HTTP_TIMEOUT_MS } from "../lib/netTimeouts.js";
+
+// Re-exported for callers/tests that pin the approval POST budget.
+export { ENGINE_HTTP_TIMEOUT_MS };
+
 export type GatewayApprovalChoice = "allow" | "deny";
 
 export interface RespondToApprovalOptions {
@@ -24,6 +29,11 @@ export interface RespondToApprovalOptions {
   authToken?: string | null;
   /** Override for tests; defaults to the global fetch. */
   fetchImpl?: typeof fetch;
+  /**
+   * review §P2-23: abort the POST after this many ms instead of hanging on a
+   * wedged engine. Defaults to {@link ENGINE_HTTP_TIMEOUT_MS}.
+   */
+  timeoutMs?: number;
 }
 
 export async function respondToApproval(
@@ -38,6 +48,7 @@ export async function respondToApproval(
     method: "POST",
     headers,
     body: JSON.stringify({ request_id: opts.requestId, choice: wireChoice }),
+    signal: AbortSignal.timeout(opts.timeoutMs ?? ENGINE_HTTP_TIMEOUT_MS),
   });
   if (!res.ok) {
     const body = await res.text().catch(() => "<no body>");

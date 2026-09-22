@@ -1,4 +1,5 @@
 import { afterEach, describe, expect, it } from "vitest";
+import net from "node:net";
 import { type AddressInfo, WebSocketServer, type WebSocket } from "ws";
 
 import { EngineWsClient } from "../wsClient.js";
@@ -156,6 +157,37 @@ describe("EngineWsClient", () => {
     await client.connect();
     await client.connect();
     expect(client.isConnected).toBe(true);
+    await client.close();
+  });
+
+  // review §P2-23: a wedged engine accept (TCP connects, upgrade never
+  // completes) must surface as a normal error so reconnect logic takes over,
+  // not a forever-pending connect().
+  it("connect() rejects after the handshake timeout against a silent server", async () => {
+    // Raw TCP server: accepts connections but never speaks WebSocket.
+    const server = net.createServer((socket) => {
+      // Swallow everything; never respond.
+      socket.on("data", () => {});
+    });
+    await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+    const addr = server.address() as AddressInfo;
+
+    const client = new EngineWsClient({
+      url: `ws://127.0.0.1:${addr.port}`,
+      handshakeTimeoutMs: 100,
+    });
+    await expect(client.connect()).rejects.toThrow(/handshake timed out/);
+    expect(client.isConnected).toBe(false);
+
+    await new Promise<void>((resolve) => server.close(() => resolve()));
+  });
+
+  it("connect() succeeds well within the default handshake budget", async () => {
+    const server = await startMockServer(() => {
+      /* unused */
+    });
+    const client = new EngineWsClient({ url: server.url });
+    await expect(client.connect()).resolves.toBeUndefined();
     await client.close();
   });
 });

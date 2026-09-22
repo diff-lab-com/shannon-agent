@@ -12,6 +12,8 @@ import {
   type SendOpts,
 } from "../types.js";
 import { type AdapterConfig } from "../../config/types.js";
+import { readWebhookBodyOr413 } from "../../lib/webhookBody.js";
+import { PLATFORM_HTTP_TIMEOUT_MS } from "../../lib/netTimeouts.js";
 
 /**
  * Feishu / Lark (飞书) adapter (Open Platform IM API).
@@ -310,6 +312,8 @@ export function createFeishuAdapter(cfg: AdapterConfig, ctx: AdapterContext): Ch
       method: "POST",
       headers: { "content-type": "application/json" },
       body: JSON.stringify({ app_id: appId, app_secret: appSecret ?? "" }),
+      // review §P2-23: token refresh must not hang the send path.
+      signal: AbortSignal.timeout(PLATFORM_HTTP_TIMEOUT_MS),
     });
     if (!res.ok) throw new Error(`feishu tenant_token HTTP ${res.status}`);
     const data = (await res.json()) as { code?: number; tenant_access_token?: string; expire?: number };
@@ -333,7 +337,9 @@ export function createFeishuAdapter(cfg: AdapterConfig, ctx: AdapterContext): Ch
   }
 
   async function handlePost(req: IncomingMessage, res: ServerResponse): Promise<void> {
-    const raw = await readBody(req);
+    // review §P2-23: bound the raw body before decryption/verification.
+    const raw = await readWebhookBodyOr413(req, res);
+    if (raw === null) return;
     let parsed: unknown;
     try {
       parsed = JSON.parse(raw);
@@ -392,7 +398,13 @@ export function createFeishuAdapter(cfg: AdapterConfig, ctx: AdapterContext): Ch
       msgType,
       contentJson,
     });
-    const res = await fetchImpl(req.url, { method: req.method, headers: req.headers, body: req.body });
+    const res = await fetchImpl(req.url, {
+      method: req.method,
+      headers: req.headers,
+      body: req.body,
+      // review §P2-23: platform API calls must not hang the session lane.
+      signal: AbortSignal.timeout(PLATFORM_HTTP_TIMEOUT_MS),
+    });
     if (!res.ok) {
       const detail = await res.text().catch(() => "");
       throw new Error(`feishu send failed: HTTP ${res.status} ${detail}`);
@@ -417,7 +429,12 @@ export function createFeishuAdapter(cfg: AdapterConfig, ctx: AdapterContext): Ch
       msgType: "text",
       contentJson: textContent(text),
     });
-    const res = await fetchImpl(req.url, { method: req.method, headers: req.headers, body: req.body });
+    const res = await fetchImpl(req.url, {
+      method: req.method,
+      headers: req.headers,
+      body: req.body,
+      signal: AbortSignal.timeout(PLATFORM_HTTP_TIMEOUT_MS),
+    });
     if (!res.ok) {
       const detail = await res.text().catch(() => "");
       throw new Error(`feishu edit failed: HTTP ${res.status} ${detail}`);
@@ -490,14 +507,3 @@ export function createFeishuAdapter(cfg: AdapterConfig, ctx: AdapterContext): Ch
   };
 }
 
-function readBody(req: IncomingMessage): Promise<string> {
-  return new Promise((resolve, reject) => {
-    let data = "";
-    req.setEncoding("utf8");
-    req.on("data", (chunk: string) => {
-      data += chunk;
-    });
-    req.on("end", () => resolve(data));
-    req.on("error", reject);
-  });
-}

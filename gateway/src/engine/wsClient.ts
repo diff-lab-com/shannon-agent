@@ -32,7 +32,17 @@ export interface EngineWsClientOptions {
   sessionId?: string | null;
   /** Extra handshake headers (e.g. `authorization` for the engine bearer). */
   headers?: Record<string, string>;
+  /**
+   * review §P2-23: how long to wait for the WS handshake (TCP+upgrade)
+   * before giving up, in ms. A hung engine accept must not wedge `connect()`
+   * forever — the rejection surfaces as a normal error so the caller's
+   * reconnect/backoff logic takes over. Default 10s.
+   */
+  handshakeTimeoutMs?: number;
 }
+
+/** Default WS handshake budget (review §P2-23). */
+const DEFAULT_HANDSHAKE_TIMEOUT_MS = 10_000;
 
 const KNOWN_EVENT_TYPES: ReadonlySet<EngineEventType> = new Set([
   "text",
@@ -93,12 +103,15 @@ export class EngineWsClient {
   private readonly defaultModel: string | null;
   private readonly defaultSessionId: string | null;
   private readonly headers: Record<string, string>;
+  private readonly handshakeTimeoutMs: number;
 
   constructor(options: EngineWsClientOptions) {
     this.url = options.url;
     this.defaultModel = options.model ?? null;
     this.defaultSessionId = options.sessionId ?? null;
     this.headers = options.headers ?? {};
+    this.handshakeTimeoutMs =
+      options.handshakeTimeoutMs ?? DEFAULT_HANDSHAKE_TIMEOUT_MS;
   }
 
   get isConnected(): boolean {
@@ -112,7 +125,16 @@ export class EngineWsClient {
       Object.keys(this.headers).length > 0
         ? new WebSocket(this.url, { headers: this.headers })
         : new WebSocket(this.url);
-    await waitForOpen(socket);
+    try {
+      await waitForOpen(socket, this.handshakeTimeoutMs);
+    } catch (err) {
+      // Don't leak a half-open socket; the caller's reconnect path retries
+      // with a fresh one. ws emits "error" if the socket is torn down while
+      // CONNECTING — swallow it (the original failure is what propagates).
+      socket.on("error", () => {});
+      socket.terminate();
+      throw err;
+    }
     socket.on("message", (data) => this.onMessage(data));
     socket.on("close", () => this.onSocketClosed());
     socket.on("error", (err) => this.onSocketError(err));
@@ -217,18 +239,31 @@ export class EngineWsClient {
   }
 }
 
-function waitForOpen(socket: WebSocket): Promise<void> {
+function waitForOpen(socket: WebSocket, timeoutMs: number): Promise<void> {
   if (socket.readyState === WebSocket.OPEN) return Promise.resolve();
   return new Promise<void>((resolve, reject) => {
+    // review §P2-23: bound the handshake so a wedged engine accept can't
+    // hang `connect()` forever. On timeout the socket is terminated (by the
+    // caller) and the rejection flows into the normal reconnect path.
+    const timer = setTimeout(() => {
+      cleanup();
+      reject(
+        new Error(`engine WS handshake timed out after ${timeoutMs}ms`),
+      );
+    }, timeoutMs);
+    timer.unref?.();
     const onOpen = (): void => {
-      socket.off("open", onOpen);
-      socket.off("error", onError);
+      cleanup();
       resolve();
     };
     const onError = (err: Error): void => {
+      cleanup();
+      reject(err);
+    };
+    const cleanup = (): void => {
+      clearTimeout(timer);
       socket.off("open", onOpen);
       socket.off("error", onError);
-      reject(err);
     };
     socket.on("open", onOpen);
     socket.on("error", onError);
