@@ -26,6 +26,36 @@ const DEFAULT_BASH_TIMEOUT_MS: u64 = 120_000;
 /// `SHANNON_BASH_TIMEOUT_MS` override asks for more (10 minutes).
 const MAX_BASH_TIMEOUT_MS: u64 = 600_000;
 
+/// review §P2-10: maximum bytes of captured stdout/stderr the harness
+/// keeps per command. Anything beyond this is dropped — the rest of the
+/// output is unrecoverable from inside the process, so the model sees a
+/// truncated string and a clear marker. Set to 2 MiB which is comfortably
+/// large for normal command output but small enough that one bad `cat
+/// huge.log` cannot blow the conversation context.
+const MAX_CAPTURED_BYTES: usize = 2 * 1024 * 1024;
+
+/// review §P2-10: clip `output` to at most `cap` bytes while preserving a
+/// valid UTF-8 char boundary at the cut, and append a truncation marker
+/// so the consumer knows data was dropped.
+pub(crate) fn truncate_bytes(output: &[u8], cap: usize) -> Vec<u8> {
+    if output.len() <= cap {
+        return output.to_vec();
+    }
+    let mut cut = cap;
+    while cut > 0 && !std::str::from_utf8(&output[..cut]).is_ok() {
+        cut -= 1;
+    }
+    let mut out = output[..cut].to_vec();
+    out.extend_from_slice(
+        format!(
+            "\n\n[truncated by harness — {} bytes dropped]",
+            output.len() - cut
+        )
+        .as_bytes(),
+    );
+    out
+}
+
 /// Timeout-resolution core: an explicit `timeout` wins, then the
 /// `SHANNON_BASH_TIMEOUT_MS` env override, then the default — clamped to the
 /// hard cap. Split from [`resolve_timeout_ms`] so the env lookup can be
@@ -79,8 +109,13 @@ async fn run_shell_captured(
         })?
         .map_err(|e| shell_spawn_error(program, &e))?;
 
-    let stdout = String::from_utf8_lossy(&output.stdout).to_string();
-    let stderr = String::from_utf8_lossy(&output.stderr).to_string();
+    // review §P2-10: bound the captured stdout/stderr bytes before
+    // constructing the String the model will see. `cat huge.log` or
+    // `find /` could otherwise ship gigabytes into the conversation.
+    let stdout_bytes = truncate_bytes(&output.stdout, MAX_CAPTURED_BYTES);
+    let stderr_bytes = truncate_bytes(&output.stderr, MAX_CAPTURED_BYTES);
+    let stdout = String::from_utf8_lossy(&stdout_bytes).to_string();
+    let stderr = String::from_utf8_lossy(&stderr_bytes).to_string();
     Ok(CommandOutput {
         stdout,
         stderr,
@@ -3263,5 +3298,40 @@ mod test_runner_detection_tests {
             "expected timeout message, got: {}",
             output.content
         );
+    }
+
+    // ---- review §P2-10: command output byte cap ----
+
+    #[test]
+    fn truncate_bytes_passes_through_short_output() {
+        let out = b"hello world";
+        assert_eq!(truncate_bytes(out, 100), out.to_vec());
+    }
+
+    #[test]
+    fn truncate_bytes_clips_to_cap_and_marks_dropped() {
+        let mut out = vec![b'x'; 4096];
+        let clipped = truncate_bytes(&out, 1024);
+        // Marker appended, total length may slightly exceed 1024.
+        assert!(clipped.starts_with(b"xxx"), "still the prefix");
+        assert!(clipped.ends_with(b"]"), "marker suffix present");
+        let marker = String::from_utf8_lossy(&clipped);
+        assert!(
+            marker.contains("[truncated by harness"),
+            "missing truncation marker: {marker}"
+        );
+    }
+
+    #[test]
+    fn truncate_bytes_respects_utf8_boundary() {
+        // Three 3-byte CJK chars at the cap so the cut would land inside
+        // a multi-byte sequence without the boundary walk.
+        let mut out = vec![b'a'; 1000];
+        out.extend_from_slice("中国人".as_bytes());
+        let clipped = truncate_bytes(&out, 1001);
+        // Result must be valid UTF-8.
+        let s = std::str::from_utf8(&clipped).expect("clipped is valid UTF-8");
+        assert!(s.starts_with('a'), "prefix preserved");
+        assert!(s.contains("[truncated by harness"));
     }
 }
