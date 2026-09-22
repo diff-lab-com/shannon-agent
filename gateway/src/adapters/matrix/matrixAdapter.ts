@@ -9,6 +9,7 @@ import {
   type SendOpts,
 } from "../types.js";
 import { type AdapterConfig } from "../../config/types.js";
+import { PLATFORM_HTTP_TIMEOUT_MS } from "../../lib/netTimeouts.js";
 
 /**
  * Matrix adapter (Client-Server API v3).
@@ -237,6 +238,8 @@ export function createMatrixAdapter(
   async function whoami(): Promise<string> {
     const res = await fetchImpl(`${baseUrl}/_matrix/client/v3/account/whoami`, {
       headers: { authorization: `Bearer ${token}` },
+      // review §P2-23: bound startup probes instead of hanging start().
+      signal: AbortSignal.timeout(PLATFORM_HTTP_TIMEOUT_MS),
     });
     if (!res.ok) throw new Error(`matrix whoami failed: HTTP ${res.status}`);
     const data = (await res.json()) as { user_id?: string };
@@ -250,7 +253,12 @@ export function createMatrixAdapter(
       const url =
         `${baseUrl}/_matrix/client/v3/sync?timeout=${syncTimeout}` +
         (since ? `&since=${encodeURIComponent(since)}` : "");
-      const res = await fetchImpl(url, { headers: { authorization: `Bearer ${token}` } });
+      const res = await fetchImpl(url, {
+        headers: { authorization: `Bearer ${token}` },
+        // review §P2-23: the server long-polls for `syncTimeout`; the abort
+        // budget must exceed it so a healthy poll isn't cut off.
+        signal: AbortSignal.timeout(syncTimeout + 15_000),
+      });
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
       const data = await res.json();
       const { messages, nextBatch } = extractMessagesFromSync(data, ownUserId);
@@ -293,6 +301,8 @@ export function createMatrixAdapter(
       method: req.method,
       headers: req.headers,
       body: req.body,
+      // review §P2-23: platform API calls must not hang the session lane.
+      signal: AbortSignal.timeout(PLATFORM_HTTP_TIMEOUT_MS),
     });
     if (!res.ok) {
       const detail = await res.text().catch(() => "");
@@ -314,7 +324,12 @@ export function createMatrixAdapter(
       txnId,
       content,
     });
-    const res = await fetchImpl(req.url, { method: req.method, headers: req.headers, body: req.body });
+    const res = await fetchImpl(req.url, {
+      method: req.method,
+      headers: req.headers,
+      body: req.body,
+      signal: AbortSignal.timeout(PLATFORM_HTTP_TIMEOUT_MS),
+    });
     if (!res.ok) {
       const detail = await res.text().catch(() => "");
       throw new Error(`matrix edit failed: HTTP ${res.status} ${detail}`);

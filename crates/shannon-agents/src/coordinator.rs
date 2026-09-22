@@ -2960,11 +2960,23 @@ impl AgentCoordinator {
             background_tasks.write().await.remove(&task_key_for_cleanup);
         });
 
-        // Track the abort handle for cancellation
+        // Track the abort handle for cancellation. §P3-16: a duplicate spawn
+        // for the same team:agent key aborts the previous handle first — the
+        // old behavior overwrote the map entry and left the previous task
+        // running as an orphan that cancel/shutdown could no longer reach.
         let abort_handle = handle.abort_handle();
         // Use blocking lock since we're in a sync context (try_read above already succeeded)
         if let Ok(mut tasks) = self.background_tasks.try_write() {
-            tasks.insert(task_key.clone(), abort_handle);
+            if let Some(previous) = tasks.insert(task_key.clone(), abort_handle) {
+                if !previous.is_finished() {
+                    tracing::warn!(
+                        team = %team_name,
+                        agent = %agent_name,
+                        "Duplicate background task spawn; aborting the previous task"
+                    );
+                    previous.abort();
+                }
+            }
         }
 
         tracing::info!(
@@ -3425,5 +3437,104 @@ mod tests {
                 .is_none(),
             "Teammate built without executor must expose None"
         );
+    }
+
+    // ── §P3-16: duplicate background-task spawn aborts the old task ────
+
+    /// An executor that takes long enough for the first spawned task to
+    /// still be in flight when the duplicate spawn happens.
+    struct SlowExecutor {
+        delay: std::time::Duration,
+    }
+
+    #[async_trait::async_trait]
+    impl crate::executor::AgentExecutor for SlowExecutor {
+        async fn execute(
+            &self,
+            _system_prompt: &str,
+            _task: &str,
+            _model: Option<&str>,
+            _tools: Option<&[String]>,
+        ) -> Result<shannon_core::tools::ToolOutput, String> {
+            tokio::time::sleep(self.delay).await;
+            Ok(shannon_core::tools::ToolOutput {
+                content: "slow done".to_string(),
+                is_error: false,
+                metadata: HashMap::new(),
+            })
+        }
+
+        async fn execute_with_history(
+            &self,
+            _system_prompt: &str,
+            _history: &[crate::executor::ChatTurn],
+            _task: &str,
+            _model: Option<&str>,
+            _tools: Option<&[String]>,
+        ) -> Result<shannon_core::tools::ToolOutput, String> {
+            self.execute("", "", None, None).await
+        }
+    }
+
+    #[tokio::test]
+    async fn duplicate_background_task_spawn_aborts_previous() {
+        let coordinator = AgentCoordinator::new(CoordinatorConfig::default())
+            .await
+            .unwrap();
+        coordinator
+            .create_team("bg-team".into(), "bg".into())
+            .await
+            .unwrap();
+        coordinator
+            .add_teammate(
+                "bg-team",
+                "worker".into(),
+                TeammateConfig::default(),
+                Some(Arc::new(SlowExecutor {
+                    delay: std::time::Duration::from_secs(30),
+                })),
+            )
+            .await
+            .unwrap();
+
+        // First task for the key: running and tracked.
+        let first = coordinator
+            .spawn_background_task("bg-team", "worker", "lead", "task one".to_string())
+            .unwrap();
+        tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+        let running = coordinator.running_background_tasks().await;
+        assert!(
+            running.contains(&"bg-team:worker".to_string()),
+            "first spawn must be tracked, got: {running:?}"
+        );
+
+        // Second spawn for the SAME key must abort the previous task instead
+        // of silently orphaning it (§P3-16).
+        let second = coordinator
+            .spawn_background_task("bg-team", "worker", "lead", "task two".to_string())
+            .unwrap();
+
+        let aborted = tokio::time::timeout(std::time::Duration::from_secs(2), first).await;
+        match aborted {
+            Err(_) => panic!("previous task must be aborted promptly on duplicate spawn"),
+            Ok(joined) => {
+                let err = joined.expect_err("aborted task must not complete normally");
+                assert!(err.is_cancelled(), "previous task must be cancelled");
+            }
+        }
+
+        // The replacement task is still tracked and can be cancelled cleanly.
+        let running = coordinator.running_background_tasks().await;
+        assert!(
+            running.contains(&"bg-team:worker".to_string()),
+            "replacement task stays tracked, got: {running:?}"
+        );
+        assert!(
+            coordinator
+                .cancel_background_task("bg-team", "worker")
+                .await
+        );
+        let _ = tokio::time::timeout(std::time::Duration::from_secs(2), second).await;
+        assert!(coordinator.running_background_tasks().await.is_empty());
     }
 }

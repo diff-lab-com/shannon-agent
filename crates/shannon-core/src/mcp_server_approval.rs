@@ -517,7 +517,13 @@ impl McpApprovalManager {
     /// Persist the current approval state to a file.
     ///
     /// The file is written as JSON containing the approved and denied server
-    /// name sets. Typically stored at `.shannon/mcp_approvals.json`.
+    /// name sets. The path is caller-provided. Current callers (the REPL's
+    /// MCP extension command and plugin load) pass `.shannon/mcp_approvals.json`
+    /// resolved **against the process working directory** — so the state file
+    /// moves if Shannon is launched from another directory — unless the
+    /// `SHANNON_MCP_APPROVALS` env var overrides it (honored by
+    /// `repl/commands/extensions.rs`; see that file for the single source of
+    /// the default path).
     pub fn save_to_file(&self, path: &std::path::Path) -> Result<(), std::io::Error> {
         if let Some(parent) = path.parent() {
             std::fs::create_dir_all(parent)?;

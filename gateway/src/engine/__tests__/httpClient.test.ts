@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 
-import { respondToApproval } from "../httpClient.js";
+import { ENGINE_HTTP_TIMEOUT_MS, respondToApproval } from "../httpClient.js";
 
 function ok(): Response {
   return new Response("{}", { status: 200 });
@@ -63,5 +63,44 @@ describe("respondToApproval", () => {
         fetchImpl,
       }),
     ).rejects.toThrow(/HTTP 404/);
+  });
+
+  // review §P2-23: the approval POST must carry an abort signal so a wedged
+  // engine can't hang the adapter's approval path forever.
+  it("sends an engine-budget abort signal with the request", async () => {
+    const fetchImpl = vi.fn<typeof fetch>(async () => ok());
+    await respondToApproval({
+      engineBaseUrl: "http://e",
+      requestId: "r",
+      choice: "allow",
+      fetchImpl,
+    });
+    const init = fetchImpl.mock.calls[0]![1]!;
+    const signal = init.signal as AbortSignal;
+    expect(signal).toBeInstanceOf(AbortSignal);
+    expect(signal.aborted).toBe(false);
+  });
+
+  it("aborts with a TimeoutError when the engine never responds", async () => {
+    // A fetchImpl that mirrors the platform's behavior: rejects only when the
+    // caller-supplied signal aborts, never resolves.
+    const fetchImpl = vi.fn<typeof fetch>((_url, init) => {
+      return new Promise<Response>((_, reject) => {
+        init?.signal?.addEventListener("abort", () => {
+          reject(new DOMException("The operation was aborted due to timeout", "TimeoutError"));
+        });
+      });
+    });
+    await expect(
+      respondToApproval({
+        engineBaseUrl: "http://e",
+        requestId: "r",
+        choice: "allow",
+        fetchImpl,
+        timeoutMs: 30,
+      }),
+    ).rejects.toThrow(/timeout/i);
+    // default budget constant is sane
+    expect(ENGINE_HTTP_TIMEOUT_MS).toBe(60_000);
   });
 });

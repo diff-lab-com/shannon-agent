@@ -303,11 +303,35 @@ pub async fn check_app_update() -> Result<AppUpdateInfo, String> {
     Ok(info)
 }
 
+/// The only URL this command may open: an https URL on the official repo
+/// domain (repo root, releases tree — covers `/releases`, `/releases/tag/…`,
+/// `/blob/…` etc.).
+fn is_official_release_url(url: &str) -> bool {
+    let parsed = url::Url::parse(url);
+    match parsed {
+        Ok(u) => {
+            u.scheme() == "https"
+                && u.host_str() == Some("github.com")
+                && u.path().starts_with("/diff-lab-com/shannon-agent")
+        }
+        Err(_) => false,
+    }
+}
+
 /// C1①: open the release page in the system browser — same shell-open
 /// precedent as the OAuth flow in extensions_commands.rs.
+///
+/// Review §P3 (桌面): the URL comes back from the webview, i.e. from a
+/// potentially compromised renderer — it must not be opened unless it
+/// points at the official repository domain, otherwise the command is an
+/// arbitrary-URL opener (phishing / command-prompt abuse via `shell::open`).
 #[tauri::command]
 pub async fn open_release_page(app: tauri::AppHandle, url: String) -> Result<(), String> {
     use tauri_plugin_shell::ShellExt;
+    if !is_official_release_url(&url) {
+        tracing::warn!(url = %url, "open_release_page rejected non-official URL");
+        return Err(format!("refusing to open non-official URL: {url}"));
+    }
     #[allow(deprecated)]
     app.shell()
         .open(url, None)
@@ -316,7 +340,7 @@ pub async fn open_release_page(app: tauri::AppHandle, url: String) -> Result<(),
 
 #[cfg(test)]
 mod tests {
-    use super::version_is_newer;
+    use super::{is_official_release_url, version_is_newer};
 
     #[test]
     fn detects_newer_patch_minor_major() {
@@ -342,5 +366,37 @@ mod tests {
         assert!(version_is_newer("0.11", "v0.12"));
         assert!(version_is_newer("0.11.0", "0.12")); // missing parts are 0
         assert!(!version_is_newer("0.11.0", "0.11.0.0"));
+    }
+
+    #[test]
+    fn rejects_non_official_urls() {
+        // Wrong scheme / host / path / parse garbage — all refused.
+        assert!(!is_official_release_url(
+            "http://github.com/diff-lab-com/shannon-agent/releases"
+        ));
+        assert!(!is_official_release_url(
+            "https://evil.com/diff-lab-com/shannon-agent/releases"
+        ));
+        assert!(!is_official_release_url(
+            "https://github.com.evil.com/diff-lab-com/shannon-agent/releases"
+        ));
+        assert!(!is_official_release_url(
+            "https://github.com/other-org/shannon-agent/releases"
+        ));
+        assert!(!is_official_release_url("file:///etc/passwd"));
+        assert!(!is_official_release_url("not a url"));
+    }
+
+    #[test]
+    fn accepts_official_repo_urls() {
+        assert!(is_official_release_url(
+            "https://github.com/diff-lab-com/shannon-agent/releases"
+        ));
+        assert!(is_official_release_url(
+            "https://github.com/diff-lab-com/shannon-agent/releases/tag/v0.12.0"
+        ));
+        assert!(is_official_release_url(
+            "https://github.com/diff-lab-com/shannon-agent"
+        ));
     }
 }

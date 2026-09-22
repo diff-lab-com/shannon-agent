@@ -106,18 +106,22 @@ impl CommandParser {
         }
     }
 
-    /// Parse multiple commands from input (handles chaining)
+    /// Parse multiple commands from input (handles chaining).
+    ///
+    /// Commands are separated by a newline, `;`, or `&&` — shell-style.
+    /// Separators inside single- or double-quoted spans are literal text
+    /// (e.g. `/commit -m "fix; refactor" ; /test` yields two commands). Each
+    /// segment is parsed independently; the first segment failing to parse is
+    /// a hard error, while a later non-command segment stops the chain with
+    /// the commands parsed so far.
     pub fn parse_multiple(&self, input: &str) -> Result<Vec<ParsedCommand>, CommandError> {
         let mut results = vec![];
-        let mut remaining = input.trim();
 
-        while !remaining.is_empty() {
-            match self.parse(remaining) {
-                Ok(cmd) => {
-                    let consumed_len = cmd.raw.len();
-                    results.push(cmd);
-                    remaining = remaining[consumed_len..].trim();
-                }
+        for segment in split_command_chain(input) {
+            match self.parse(&segment) {
+                Ok(cmd) => results.push(cmd),
+                // A trailing fragment that isn't a command (e.g. text after
+                // the last separator) ends the chain without an error.
                 Err(_) if results.is_empty() => {
                     return Err(CommandError::ParseError(
                         "No valid commands found".to_string(),
@@ -159,78 +163,153 @@ fn parse_command(input: &str) -> IResult<&str, (&str, &str)> {
     map(tuple((name, args)), |(n, a)| (n, a.unwrap_or("")))(input)
 }
 
-/// Parse flags from arguments (e.g., --flag, -f, --key=value)
-fn parse_flags(input: &str) -> HashMap<String, Option<String>> {
-    let mut flags = HashMap::new();
+/// Split chained input into command segments on newlines, `;`, and `&&`.
+///
+/// Separators inside single- or double-quoted spans are literal text, so
+/// quoted argument values (`-m "fix; refactor"`) never split a command.
+fn split_command_chain(input: &str) -> Vec<String> {
+    let mut segments: Vec<String> = Vec::new();
+    let mut current = String::new();
     let mut chars = input.chars().peekable();
+    let mut quote: Option<char> = None;
 
     while let Some(c) = chars.next() {
-        if c == '-' {
-            // Check for --flag or -f
-            if let Some(&next) = chars.peek() {
-                if next == '-' {
-                    // Long flag: --flag or --key=value
-                    chars.next(); // consume second dash
-                    let flag_name = take_flag_name(&mut chars);
-                    let value = if let Some(&'=') = chars.peek() {
-                        chars.next(); // consume =
-                        Some(take_flag_value(&mut chars))
-                    } else {
-                        None
-                    };
-                    flags.insert(flag_name, value);
-                } else {
-                    // Short flag: -f or -abc (multiple flags)
-                    let short_flags = take_short_flags(&mut chars);
-                    for f in short_flags.chars() {
-                        flags.insert(f.to_string(), None);
-                    }
+        if let Some(q) = quote {
+            current.push(c);
+            if c == q {
+                quote = None;
+            }
+            continue;
+        }
+        match c {
+            '"' | '\'' => {
+                quote = Some(c);
+                current.push(c);
+            }
+            '\n' | ';' => {
+                segments.push(std::mem::take(&mut current));
+            }
+            '&' if chars.peek() == Some(&'&') => {
+                chars.next(); // consume the second '&'
+                segments.push(std::mem::take(&mut current));
+            }
+            _ => current.push(c),
+        }
+    }
+    segments.push(current);
+
+    segments
+        .into_iter()
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty())
+        .collect()
+}
+
+/// Tokenize an args string on whitespace, keeping quoted spans as single
+/// tokens with their quotes stripped (`--text "hello -world"` → two tokens:
+/// `--text`, `hello -world`).
+fn split_args_tokens(input: &str) -> Vec<String> {
+    let mut tokens: Vec<String> = Vec::new();
+    let mut current = String::new();
+    let mut quote: Option<char> = None;
+
+    for c in input.chars() {
+        if let Some(q) = quote {
+            if c == q {
+                quote = None;
+            } else {
+                current.push(c);
+            }
+            continue;
+        }
+        match c {
+            '"' | '\'' => quote = Some(c),
+            c if c.is_whitespace() => {
+                if !current.is_empty() {
+                    tokens.push(std::mem::take(&mut current));
                 }
             }
+            _ => current.push(c),
         }
+    }
+    if !current.is_empty() {
+        tokens.push(current);
+    }
+    tokens
+}
+
+/// Whether a token itself looks like a flag (`--flag`, `-f`, `-abc`).
+fn looks_like_flag(token: &str) -> bool {
+    if let Some(long) = token.strip_prefix("--") {
+        return !long.is_empty();
+    }
+    // A bare `-` is not a flag; a single letter (`-v`) or cluster (`-abc`) is.
+    token
+        .strip_prefix('-')
+        .is_some_and(|short| short.chars().next().is_some_and(|c| c.is_alphabetic()))
+}
+
+/// Parse flags from the **leading** flag section of the args.
+///
+/// Recognized forms: `--flag`, `--key=value`, `--flag value`, and short
+/// clusters (`-abc` → a, b, c). Parsing stops at the first token that is not
+/// a flag — everything after it is body text. This keeps hyphenated words in
+/// the message body (`/cmd a -b "c -d" --flag x rest -here`) from being
+/// swallowed as flags: only tokens *before* the first positional word count.
+fn parse_flags(input: &str) -> HashMap<String, Option<String>> {
+    let mut flags = HashMap::new();
+    let tokens = split_args_tokens(input);
+
+    let mut i = 0;
+    while i < tokens.len() {
+        let token = &tokens[i];
+
+        // Convention: a bare `--` explicitly ends the flag section.
+        if token == "--" {
+            break;
+        }
+
+        if let Some(long) = token.strip_prefix("--") {
+            if long.is_empty() {
+                break;
+            }
+            match long.split_once('=') {
+                Some((name, value)) => {
+                    flags.insert(name.to_string(), Some(value.to_string()));
+                    i += 1;
+                }
+                None if i + 1 < tokens.len() && !looks_like_flag(&tokens[i + 1]) => {
+                    // `--flag value` — the next token is this flag's value.
+                    flags.insert(long.to_string(), Some(tokens[i + 1].clone()));
+                    i += 2;
+                }
+                None => {
+                    flags.insert(long.to_string(), None);
+                    i += 1;
+                }
+            }
+            continue;
+        }
+
+        if token.len() > 1 && token.starts_with('-') {
+            let cluster = &token[1..];
+            if !cluster.chars().all(|c| c.is_alphabetic()) {
+                // `-1`, `->`, `--`-adjacent junk, … — not a flag cluster; the
+                // flag section ends here and the token is body text.
+                break;
+            }
+            for c in cluster.chars() {
+                flags.insert(c.to_string(), None);
+            }
+            i += 1;
+            continue;
+        }
+
+        // First non-flag token: everything from here on is body text.
+        break;
     }
 
     flags
-}
-
-/// Take flag name until space or equals
-fn take_flag_name(chars: &mut std::iter::Peekable<std::str::Chars>) -> String {
-    let mut result = String::new();
-    while let Some(&c) = chars.peek() {
-        if c == ' ' || c == '=' {
-            break;
-        }
-        result.push(c);
-        chars.next();
-    }
-    result
-}
-
-/// Take short flags (e.g., -abc becomes a, b, c)
-fn take_short_flags(chars: &mut std::iter::Peekable<std::str::Chars>) -> String {
-    let mut result = String::new();
-    while let Some(&c) = chars.peek() {
-        if c.is_alphabetic() {
-            result.push(c);
-            chars.next();
-        } else {
-            break;
-        }
-    }
-    result
-}
-
-/// Take flag value until space or end
-fn take_flag_value(chars: &mut std::iter::Peekable<std::str::Chars>) -> String {
-    let mut result = String::new();
-    while let Some(&c) = chars.peek() {
-        if c == ' ' {
-            break;
-        }
-        result.push(c);
-        chars.next();
-    }
-    result
 }
 
 #[cfg(test)]
@@ -513,5 +592,112 @@ mod tests {
     fn test_parse_multiple_non_command_input() {
         let parser = CommandParser::new();
         assert!(parser.parse_multiple("not a command").is_err());
+    }
+
+    // ── parse_multiple chaining (§P3-17) ──────────────────────────────
+
+    #[test]
+    fn test_parse_multiple_chains_on_semicolon() {
+        let parser = CommandParser::new();
+        let result = parser.parse_multiple("/help; /test").unwrap();
+        assert_eq!(result.len(), 2);
+        assert_eq!(result[0].name, "help");
+        assert_eq!(result[1].name, "test");
+    }
+
+    #[test]
+    fn test_parse_multiple_chains_on_newline_and_double_ampersand() {
+        let parser = CommandParser::new();
+        let result = parser.parse_multiple("/help\n/test").unwrap();
+        assert_eq!(result.len(), 2);
+
+        let result = parser.parse_multiple("/a one && /b two").unwrap();
+        assert_eq!(result.len(), 2);
+        assert_eq!(result[0].args_trimmed(), "one");
+        assert_eq!(result[1].args_trimmed(), "two");
+    }
+
+    #[test]
+    fn test_parse_multiple_chain_keeps_quoted_separator_literal() {
+        let parser = CommandParser::new();
+        // A `;` inside a quoted value is literal text, not a separator.
+        let result = parser
+            .parse_multiple(r#"/commit -m "fix; refactor" ; /test"#)
+            .unwrap();
+        assert_eq!(result.len(), 2);
+        assert!(result[0].args.contains("fix; refactor"));
+        assert_eq!(result[1].name, "test");
+    }
+
+    #[test]
+    fn test_parse_multiple_stops_at_non_command_segment() {
+        let parser = CommandParser::new();
+        // Text after the last separator isn't a command: keep what parsed.
+        let result = parser.parse_multiple("/help; plain text here").unwrap();
+        assert_eq!(result.len(), 1);
+        assert_eq!(result[0].name, "help");
+    }
+
+    // ── parse_flags leading-only semantics (§P3-18) ───────────────────
+
+    /// Adversarial case from the review: hyphenated words in the *body*
+    /// must not be swallowed as flags.
+    #[test]
+    fn test_parse_flags_body_hyphen_words_are_not_flags() {
+        let parser = CommandParser::new();
+        let result = parser
+            .parse(r#"/cmd a -b "c -d" --flag x rest -here"#)
+            .unwrap();
+        assert!(
+            result.flags.is_empty(),
+            "body flags must not be parsed, got {:?}",
+            result.flags
+        );
+        // Body is untouched.
+        assert!(result.args.contains("-b"));
+        assert!(result.args.contains("c -d"));
+        assert!(result.args.contains("--flag x"));
+        assert!(result.args.contains("-here"));
+    }
+
+    #[test]
+    fn test_parse_flags_leading_flags_then_body_stops() {
+        let parser = CommandParser::new();
+        let result = parser.parse("/cmd --verbose hello -world").unwrap();
+        assert!(result.has_flag("verbose"));
+        assert!(!result.has_flag("world"), "-world is body text, not a flag");
+    }
+
+    #[test]
+    fn test_parse_flags_leading_space_separated_value() {
+        let parser = CommandParser::new();
+        let result = parser.parse(r#"/msg --text "hello -world" tail"#).unwrap();
+        assert_eq!(result.flag_value("text"), Some(&"hello -world".to_string()));
+    }
+
+    #[test]
+    fn test_parse_flags_negative_number_is_value_not_flag() {
+        let parser = CommandParser::new();
+        let result = parser.parse("/run --limit -5").unwrap();
+        assert_eq!(result.flag_value("limit"), Some(&"-5".to_string()));
+        assert!(!result.has_flag("5"));
+    }
+
+    #[test]
+    fn test_parse_flags_bare_double_dash_ends_flag_section() {
+        let parser = CommandParser::new();
+        let result = parser.parse("/run -- --not-a-flag").unwrap();
+        assert!(result.flags.is_empty());
+        assert!(result.args.contains("--not-a-flag"));
+    }
+
+    #[test]
+    fn test_parse_flags_quoted_equals_value() {
+        let parser = CommandParser::new();
+        let result = parser.parse(r#"/commit --message="fix the; bug""#).unwrap();
+        assert_eq!(
+            result.flag_value("message"),
+            Some(&"fix the; bug".to_string())
+        );
     }
 }

@@ -264,6 +264,16 @@ impl Default for StreamingState {
     }
 }
 
+/// Drain the pending text delta and current status in one lock acquisition.
+///
+/// §P2-25: reading and clearing the delta must happen under the same lock —
+/// the previous pattern acquired the lock to read, released, then re-acquired
+/// to clear, dropping anything the query task appended in between.
+fn drain_streaming_delta(state: &std::sync::Mutex<StreamingState>) -> (String, String) {
+    let mut s = recover_lock(state.lock());
+    (std::mem::take(&mut s.delta), s.status.clone())
+}
+
 /// Handle a query (send to AI)
 /// Type alias for the TUI terminal used by the REPL.
 pub(crate) type Term = Terminal<CrosstermBackend<io::Stdout>>;
@@ -830,18 +840,11 @@ pub fn handle_query(repl: &mut Repl, input: &str, terminal: &mut Option<&mut Ter
             let is_done = streaming.lock().map(|s| s.done).unwrap_or(false);
             let query_finished = is_done || query_handle.is_finished();
 
-            let current_status;
-            {
-                let s = recover_lock(streaming.lock());
-                current_status = s.status.clone();
-
-                if !s.delta.is_empty() {
-                    buffer.push_chunk(&s.delta);
-                }
-            }
-            {
-                let mut s = recover_lock(streaming.lock());
-                s.delta.clear();
+            // §P2-25: status read + delta drain under a single lock
+            // acquisition so nothing appended between them is lost.
+            let (delta, current_status) = drain_streaming_delta(&streaming);
+            if !delta.is_empty() {
+                buffer.push_chunk(&delta);
             }
 
             if buffer.needs_render() {
@@ -1575,8 +1578,18 @@ pub fn handle_query(repl: &mut Repl, input: &str, terminal: &mut Option<&mut Ter
             // drain loop — NOT here — to avoid recursive handle_query calls.
         }
         Err((engine_opt, e)) => {
-            // Clear queued messages on error/cancel — user chose to stop.
-            repl.state.queued_messages.clear();
+            // §P2-25: on error/cancel do NOT drop queued messages — the user
+            // typed them for future turns, and silently clearing them is
+            // input loss. They stay visible in the queue panel and drain on
+            // the next successful turn (the user can also clear the queue
+            // explicitly).
+            if !repl.state.queued_messages.is_empty() {
+                tracing::warn!(
+                    count = repl.state.queued_messages.len(),
+                    error = %e,
+                    "query failed; retaining queued messages for the next turn"
+                );
+            }
             // Restore the query engine if it was recovered from the task.
             // Preserve the user message so conversation state stays consistent
             // (the background task only added it to its clone, not the engine).
@@ -1738,6 +1751,8 @@ mod tests {
     use shannon_engine::permissions::PermissionManager;
     use shannon_engine::state::StateManager;
     use std::collections::HashMap;
+
+    use super::{Repl, StreamingState, drain_streaming_delta, handle_query};
 
     fn create_test_engine() -> QueryEngine {
         let config = LlmClientConfig {
@@ -1947,6 +1962,77 @@ mod tests {
         assert!(
             backtab_section.is_some_and(|s| s.contains("cycle_approval_mode")),
             "BackTab handler must call cycle_approval_mode()"
+        );
+    }
+
+    // ── §P2-25: delta drain under a single lock + queue retention ──────
+
+    /// The drain must return the pending delta and leave the state clean —
+    /// one lock acquisition, read + clear together (the old two-lock pattern
+    /// dropped tokens appended between the acquisitions).
+    #[test]
+    fn delta_drain_returns_pending_delta_and_empties_state() {
+        let state = std::sync::Mutex::new(StreamingState::default());
+        {
+            let mut s = state.lock().unwrap();
+            s.delta.push_str("partial ");
+            s.delta.push_str("token");
+        }
+
+        let (delta, _status) = drain_streaming_delta(&state);
+        assert_eq!(delta, "partial token");
+
+        // Nothing left: a second drain observes an empty delta.
+        let (again, _status) = drain_streaming_delta(&state);
+        assert_eq!(again, "");
+    }
+
+    /// A token appended *before* the drain must never be lost by the clear —
+    /// this is the race the old read-lock/clear-lock pair could hit.
+    #[test]
+    fn delta_drain_does_not_lose_tokens_appended_before_it() {
+        let state = std::sync::Mutex::new(StreamingState::default());
+        {
+            let mut s = state.lock().unwrap();
+            s.delta.push_str("abc");
+        }
+
+        let (first, _) = drain_streaming_delta(&state);
+
+        // Writer appends after the first drain (between poll iterations).
+        {
+            let mut s = state.lock().unwrap();
+            s.delta.push_str("def");
+        }
+        let (second, _) = drain_streaming_delta(&state);
+
+        assert_eq!(first, "abc");
+        assert_eq!(second, "def", "tokens appended between drains must survive");
+    }
+
+    /// §P2-25: the Err path of handle_query must NOT clear queued messages —
+    /// the user typed them for future turns; silently dropping them is input
+    /// loss. A failed query against an unreachable endpoint exercises the
+    /// Err path; the queued messages must still be there afterwards.
+    #[test]
+    fn failed_query_keeps_queued_messages() {
+        let _home = crate::test_env::HomeGuard::new();
+        let mut repl = Repl::new().expect("minimal repl");
+        repl.query_engine = Some(create_test_engine());
+        repl.state.queued_messages.push("first queued".to_string());
+        repl.state.queued_messages.push("second queued".to_string());
+
+        // Unreachable endpoint (localhost:1) → the query fails.
+        let result = handle_query(&mut repl, "hello", &mut None);
+        assert!(
+            result.is_ok(),
+            "handle_query surfaces engine errors in-chat, not as Err"
+        );
+
+        assert_eq!(
+            repl.state.queued_messages,
+            vec!["first queued".to_string(), "second queued".to_string()],
+            "failed query must retain queued messages"
         );
     }
 }

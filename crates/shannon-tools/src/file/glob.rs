@@ -128,55 +128,22 @@ fn sort_results(results: &mut [GlobResult]) {
 /// Execute a glob search using the `ignore` crate for .gitignore-aware traversal
 /// and the `glob` crate for pattern matching.
 pub async fn execute(input: GlobInput) -> Result<ToolOutput, ToolError> {
-    execute_with(input, crate::defaults::fs().as_ref()).await
+    execute_with(input, crate::defaults::fs()).await
 }
 
 /// Provider-injected entry point (§4.11): metadata and canonicalization flow
 /// through the injected filesystem world.
+///
+/// §P2-14: takes the provider as an owned `Arc` so the blocking walk can run
+/// on tokio's blocking pool (`spawn_blocking` requires `'static`).
 pub async fn execute_with(
     input: GlobInput,
-    fs: &dyn FileSystemProvider,
+    fs: std::sync::Arc<dyn FileSystemProvider>,
 ) -> Result<ToolOutput, ToolError> {
-    let base_path = input.path.as_deref().unwrap_or(".");
-    let base = PathBuf::from(base_path);
-
-    // Prevent path traversal (e.g. "../../etc") by checking components.
-    // Confinement compares against the *world's* canonical root: on a remote
-    // target both the path and its resolution live on the other machine, and
-    // the local cwd is meaningless there.
-    for component in base.components() {
-        if matches!(component, std::path::Component::ParentDir) {
-            // Allow if path resolves within the world's canonical base after
-            // canonicalization (symlinks resolved remotely via SFTP).
-            if let Ok(canonical) = fs.canonicalize_blocking(&base) {
-                if let Ok(base_canonical) = fs.canonicalize_blocking(Path::new(".")) {
-                    if !canonical.starts_with(&base_canonical) {
-                        return Ok(ToolOutput {
-                            content: format!(
-                                "Path traversal blocked: '{base_path}' resolves outside project"
-                            ),
-                            is_error: true,
-                            metadata: HashMap::new(),
-                        });
-                    }
-                }
-            }
-            break;
-        }
-    }
-
-    // If the base directory does not exist, return early with empty results.
-    // (Provider-checked so the probe hits the active world's disk.)
-    if !fs.exists_blocking(&base) {
-        return Ok(ToolOutput {
-            content: format!("Directory not found: {base_path}"),
-            is_error: true,
-            metadata: HashMap::new(),
-        });
-    }
-
-    let excludes = input.exclude_pattern.as_deref().unwrap_or(&[]);
-    let pattern = &input.pattern;
+    let base_path = input.path.clone().unwrap_or_else(|| ".".to_string());
+    let base = PathBuf::from(&base_path);
+    let excludes = input.exclude_pattern.clone().unwrap_or_default();
+    let pattern = input.pattern.clone();
 
     // A pattern that addresses outside its base directory can never match:
     // matching runs against paths RELATIVE to the base, so absolute or
@@ -185,7 +152,8 @@ pub async fn execute_with(
     // depths (dogfood l2 2026-08-23: ../../../../../../ tried at two wrong
     // depths, then the task gave up without producing its answer). Report
     // the confinement so the model can switch to a relative pattern.
-    if pattern_is_escaping(pattern) {
+    // (Pure string logic — stays on the async side.)
+    if pattern_is_escaping(&pattern) {
         return Ok(ToolOutput {
             content: format!(
                 "Glob pattern '{pattern}' cannot match here: patterns are \
@@ -199,48 +167,143 @@ pub async fn execute_with(
         });
     }
 
-    // Compile the glob pattern once.
-    let glob_pattern = glob::Pattern::new(pattern)
+    // Compile the glob pattern once (pure).
+    let glob_pattern = glob::Pattern::new(&pattern)
         .map_err(|e| ToolError::InvalidInput(format!("Invalid glob pattern '{pattern}': {e}")))?;
 
-    // .gitignore-aware traversal through the injected filesystem world, so
-    // matching runs against the same machine the files live on.
-    let mut results: Vec<GlobResult> = Vec::new();
-
-    fs.walk_blocking(&base, &mut |entry| {
-        if !entry.is_dir {
-            let path = entry.path.as_path();
-
-            // Match the path *relative* to the base directory. This ensures
-            // `*.rs` only matches files in the root, not `src/mod.rs`.
-            let rel = match path.strip_prefix(&base) {
-                Ok(r) => r,
-                Err(_) => return true,
-            };
-
-            if !glob_pattern.matches_path_with(rel, MATCH_OPTS) {
-                return true;
-            }
-
-            // Apply user-supplied exclude patterns.
-            if matches_any_exclude(rel, excludes) {
-                return true;
-            }
-
-            if let Some(result) = build_result(fs, path) {
-                results.push(result);
+    // Review §P2-14: canonicalization, existence probes, the .gitignore-aware
+    // walk and the per-file metadata reads are all synchronous IO — on a
+    // remote world (SSH/Docker) every one of those calls even spins a helper
+    // thread. Run the whole blocking section on tokio's blocking pool instead
+    // of parking the async worker; the join re-raises both the JoinError and
+    // the inner ToolError.
+    //
+    // `Some(output)` is an advisory early-return (path traversal blocked /
+    // directory not found); `None` means the walk produced `results`.
+    let job = move || -> Result<(Option<ToolOutput>, Vec<GlobResult>), ToolError> {
+        // Prevent path traversal (e.g. "../../etc") by checking components.
+        // Confinement compares against the *world's* canonical root: on a
+        // remote target both the path and its resolution live on the other
+        // machine, and the local cwd is meaningless there.
+        for component in base.components() {
+            if matches!(component, std::path::Component::ParentDir) {
+                // Allow if path resolves within the world's canonical base
+                // after canonicalization (symlinks resolved remotely via
+                // SFTP).
+                if let Ok(canonical) = fs.canonicalize_blocking(&base) {
+                    if let Ok(base_canonical) = fs.canonicalize_blocking(Path::new(".")) {
+                        if !canonical.starts_with(&base_canonical) {
+                            return Ok((
+                                Some(ToolOutput {
+                                    content: format!(
+                                        "Path traversal blocked: '{base_path}' resolves outside project"
+                                    ),
+                                    is_error: true,
+                                    metadata: HashMap::new(),
+                                }),
+                                Vec::new(),
+                            ));
+                        }
+                    }
+                }
+                break;
             }
         }
-        true
-    })
-    .map_err(|e| ToolError::ExecutionFailed(format!("glob walk failed: {e}")))?;
+
+        // If the base directory does not exist, return early with empty
+        // results. (Provider-checked so the probe hits the active world's
+        // disk.)
+        if !fs.exists_blocking(&base) {
+            return Ok((
+                Some(ToolOutput {
+                    content: format!("Directory not found: {base_path}"),
+                    is_error: true,
+                    metadata: HashMap::new(),
+                }),
+                Vec::new(),
+            ));
+        }
+
+        // .gitignore-aware traversal through the injected filesystem world,
+        // so matching runs against the same machine the files live on.
+        //
+        // §P3-13: two hardenings over the previous implementation —
+        //   1. results are canonicalized and must stay inside the (canonicalized)
+        //      search base, so entries reached through symlinks pointing outside
+        //      the workspace are dropped rather than reported;
+        //   2. the walk stops as soon as MAX_RESULTS matches are collected
+        //      instead of collecting the entire tree first (a giant directory no
+        //      longer means a giant traversal).
+        let mut results: Vec<GlobResult> = Vec::new();
+        let base_canonical = fs.canonicalize_blocking(&base).ok();
+
+        fs.walk_blocking(&base, &mut |entry| {
+            // §P3-13 quota guard: once capped, stop the walk. Local worlds
+            // honor `false` as a full stop; provider_walk treats it as
+            // "don't descend" — the guard keeps the cap on both semantics.
+            if results.len() >= MAX_RESULTS {
+                return false;
+            }
+            if !entry.is_dir {
+                let path = entry.path.as_path();
+
+                // Match the path *relative* to the base directory. This
+                // ensures `*.rs` only matches files in the root, not
+                // `src/mod.rs`.
+                let rel = match path.strip_prefix(&base) {
+                    Ok(r) => r,
+                    Err(_) => return true,
+                };
+
+                if !glob_pattern.matches_path_with(rel, MATCH_OPTS) {
+                    return true;
+                }
+
+                // Apply user-supplied exclude patterns.
+                if matches_any_exclude(rel, &excludes) {
+                    return true;
+                }
+
+                // Sandbox check: a path that canonicalizes outside the search
+                // base (symlink escape) is dropped, never reported.
+                if let Some(base_canonical) = &base_canonical {
+                    match fs.canonicalize_blocking(path) {
+                        Ok(canonical) if !canonical.starts_with(base_canonical) => {
+                            return true;
+                        }
+                        // Canonicalization failure is provider-specific (e.g.
+                        // unsupported on a remote world) — walk-level
+                        // containment is the best we have, so keep the entry.
+                        Ok(_) | Err(_) => {}
+                    }
+                }
+
+                if let Some(result) = build_result(fs.as_ref(), path) {
+                    results.push(result);
+                }
+                if results.len() >= MAX_RESULTS {
+                    return false; // prune the rest of the walk
+                }
+            }
+            true
+        })
+        .map_err(|e| ToolError::ExecutionFailed(format!("glob walk failed: {e}")))?;
+        Ok((None, results))
+    };
+
+    let (early, mut results) = tokio::task::spawn_blocking(job)
+        .await
+        .map_err(|e| ToolError::ExecutionFailed(format!("glob blocking worker failed: {e}")))??;
+    if let Some(output) = early {
+        return Ok(output);
+    }
 
     sort_results(&mut results);
+    // §P3-13: the walk stops at the cap, so the total is unknown past it —
+    // `total_matches` mirrors the grep tool's semantics (the collected count,
+    // with `truncated: true` flagging that the tree may hold more).
     let total_matches = results.len();
-    let truncated = total_matches > MAX_RESULTS;
-    if truncated {
-        results.truncate(MAX_RESULTS);
-    }
+    let truncated = total_matches >= MAX_RESULTS;
     let count = results.len();
 
     // Build the output content summary.
@@ -256,8 +319,8 @@ pub async fn execute_with(
         );
         if truncated {
             content.push_str(&format!(
-                "\n\n(showing first {count} of {total_matches} matches — narrow the \
-                 pattern or set `path` to a subdirectory to see the rest)"
+                "\n\n(result cap of {MAX_RESULTS} reached — the tree may hold more matches; \
+                 narrow the pattern or set `path` to a subdirectory to see the rest)"
             ));
         }
         content
@@ -399,7 +462,7 @@ mod tests {
                 path: Some("/remote-host/proj".into()),
                 exclude_pattern: None,
             },
-            &RemoteFakeFs,
+            std::sync::Arc::new(RemoteFakeFs) as std::sync::Arc<dyn FileSystemProvider>,
         )
         .await
         .unwrap();
@@ -628,7 +691,7 @@ mod tests {
         let tmp = TempDir::new().unwrap();
         let root = tmp.path();
         fs::create_dir_all(root.join(".git")).unwrap();
-        // One file past the cap.
+        // Well past the cap.
         for i in 0..130 {
             fs::write(root.join(format!("gen_{i:03}.rs")), "").unwrap();
         }
@@ -646,16 +709,267 @@ mod tests {
         let files = output.metadata["files"].as_array().unwrap();
         assert_eq!(files.len(), 100);
         assert_eq!(output.metadata["count"], 100);
-        // …with truncation surfaced in metadata…
+        // …truncation surfaced in metadata (§P3-13: the walk stops at the
+        // cap, so the exact total is unknown — grep-style collected count)…
         assert_eq!(output.metadata["truncated"], true);
-        assert_eq!(output.metadata["total_matches"], 130);
+        assert_eq!(output.metadata["total_matches"], 100);
         // …and in the model-facing content.
         assert!(
-            output.content.contains("first 100 of 130"),
+            output.content.contains("result cap of 100"),
             "content must say the list was truncated, got: {}",
             output.content
         );
         assert!(output.content.contains("narrow the pattern"));
+    }
+
+    /// §P3-13: an entry that canonicalizes outside the search base (symlink
+    /// escape) must be dropped, never reported.
+    #[tokio::test]
+    async fn glob_drops_entries_canonicalizing_outside_base() {
+        use shannon_tool_interface::{DirEntryInfo, FileMeta, FileSystemProvider};
+        use std::io;
+        use std::path::{Path, PathBuf};
+
+        struct EscapeFs;
+
+        /// /remote/proj/evil.rs is a symlink to /etc/outside.rs — its
+        /// canonical form lives outside the search base.
+        fn canonical_of(p: &Path) -> PathBuf {
+            if p.ends_with("evil.rs") {
+                PathBuf::from("/etc/outside.rs")
+            } else {
+                p.to_path_buf()
+            }
+        }
+
+        fn entry(root: &Path, name: &str, is_dir: bool) -> DirEntryInfo {
+            DirEntryInfo {
+                path: root.join(name),
+                len: 16,
+                is_dir,
+            }
+        }
+
+        #[async_trait::async_trait]
+        impl FileSystemProvider for EscapeFs {
+            async fn read_text(&self, _p: &Path) -> io::Result<String> {
+                unimplemented!()
+            }
+            async fn read_bytes(&self, _p: &Path) -> io::Result<Vec<u8>> {
+                unimplemented!()
+            }
+            async fn metadata(&self, p: &Path) -> io::Result<FileMeta> {
+                Ok(self.metadata_blocking(p).unwrap())
+            }
+            async fn create_dir_all(&self, _p: &Path) -> io::Result<()> {
+                unimplemented!()
+            }
+            async fn write_bytes(&self, _p: &Path, _c: &[u8]) -> io::Result<()> {
+                unimplemented!()
+            }
+            async fn rename(&self, _f: &Path, _t: &Path) -> io::Result<()> {
+                unimplemented!()
+            }
+            async fn canonicalize(&self, p: &Path) -> io::Result<PathBuf> {
+                Ok(canonical_of(p))
+            }
+            fn read_text_blocking(&self, _p: &Path) -> io::Result<String> {
+                unimplemented!()
+            }
+            fn write_bytes_blocking(&self, _p: &Path, _c: &[u8]) -> io::Result<()> {
+                unimplemented!()
+            }
+            fn create_dir_all_blocking(&self, _p: &Path) -> io::Result<()> {
+                unimplemented!()
+            }
+            fn rename_blocking(&self, _from: &Path, _to: &Path) -> io::Result<()> {
+                unimplemented!()
+            }
+            fn remove_file_blocking(&self, _p: &Path) -> io::Result<()> {
+                unimplemented!()
+            }
+            fn canonicalize_blocking(&self, p: &Path) -> io::Result<PathBuf> {
+                Ok(canonical_of(p))
+            }
+            fn metadata_blocking(&self, _p: &Path) -> io::Result<FileMeta> {
+                Ok(FileMeta {
+                    len: 16,
+                    is_dir: false,
+                    modified: None,
+                })
+            }
+            fn read_prefix_blocking(&self, _p: &Path, _m: usize) -> io::Result<Vec<u8>> {
+                unimplemented!()
+            }
+            fn list_dir_blocking(&self, _p: &Path) -> io::Result<Vec<DirEntryInfo>> {
+                Ok(Vec::new())
+            }
+            fn exists_blocking(&self, _p: &Path) -> bool {
+                true
+            }
+            fn walk_blocking(
+                &self,
+                root: &Path,
+                cb: &mut dyn FnMut(&DirEntryInfo) -> bool,
+            ) -> io::Result<()> {
+                for e in [
+                    entry(root, "", true),
+                    entry(root, "lib.rs", false),
+                    // The symlink escape: walked (walkers may not resolve
+                    // symlinks), but canonicalizes outside the base.
+                    entry(root, "evil.rs", false),
+                ] {
+                    cb(&e);
+                }
+                Ok(())
+            }
+        }
+
+        let output = execute_with(
+            GlobInput {
+                pattern: "*.rs".into(),
+                path: Some("/remote/proj".into()),
+                exclude_pattern: None,
+            },
+            std::sync::Arc::new(EscapeFs) as std::sync::Arc<dyn FileSystemProvider>,
+        )
+        .await
+        .unwrap();
+
+        assert!(!output.is_error);
+        let paths = extract_paths(&output);
+        assert!(
+            paths.iter().any(|p| p.ends_with("lib.rs")),
+            "in-base entry kept: {paths:?}"
+        );
+        assert!(
+            !paths.iter().any(|p| p.ends_with("evil.rs")),
+            "symlink-escaped entry must be dropped: {paths:?}"
+        );
+    }
+
+    /// §P3-13: the walk must stop once the result cap is reached instead of
+    /// traversing the entire tree (the old collect-all-then-truncate).
+    #[tokio::test]
+    async fn glob_stops_walking_once_cap_reached() {
+        use shannon_tool_interface::{DirEntryInfo, FileMeta, FileSystemProvider};
+        use std::io;
+        use std::path::{Path, PathBuf};
+        use std::sync::Arc;
+        use std::sync::atomic::{AtomicUsize, Ordering};
+
+        struct CountingFs {
+            visited: Arc<AtomicUsize>,
+        }
+
+        impl CountingFs {
+            fn entries(root: &Path) -> Vec<DirEntryInfo> {
+                (0..130)
+                    .map(|i| DirEntryInfo {
+                        path: root.join(format!("gen_{i:03}.rs")),
+                        len: 1,
+                        is_dir: false,
+                    })
+                    .collect()
+            }
+        }
+
+        #[async_trait::async_trait]
+        impl FileSystemProvider for CountingFs {
+            async fn read_text(&self, _p: &Path) -> io::Result<String> {
+                unimplemented!()
+            }
+            async fn read_bytes(&self, _p: &Path) -> io::Result<Vec<u8>> {
+                unimplemented!()
+            }
+            async fn metadata(&self, p: &Path) -> io::Result<FileMeta> {
+                Ok(self.metadata_blocking(p).unwrap())
+            }
+            async fn create_dir_all(&self, _p: &Path) -> io::Result<()> {
+                unimplemented!()
+            }
+            async fn write_bytes(&self, _p: &Path, _c: &[u8]) -> io::Result<()> {
+                unimplemented!()
+            }
+            async fn rename(&self, _f: &Path, _t: &Path) -> io::Result<()> {
+                unimplemented!()
+            }
+            async fn canonicalize(&self, p: &Path) -> io::Result<PathBuf> {
+                Ok(p.to_path_buf())
+            }
+            fn read_text_blocking(&self, _p: &Path) -> io::Result<String> {
+                unimplemented!()
+            }
+            fn write_bytes_blocking(&self, _p: &Path, _c: &[u8]) -> io::Result<()> {
+                unimplemented!()
+            }
+            fn create_dir_all_blocking(&self, _p: &Path) -> io::Result<()> {
+                unimplemented!()
+            }
+            fn rename_blocking(&self, _from: &Path, _to: &Path) -> io::Result<()> {
+                unimplemented!()
+            }
+            fn remove_file_blocking(&self, _p: &Path) -> io::Result<()> {
+                unimplemented!()
+            }
+            fn canonicalize_blocking(&self, p: &Path) -> io::Result<PathBuf> {
+                Ok(p.to_path_buf())
+            }
+            fn metadata_blocking(&self, _p: &Path) -> io::Result<FileMeta> {
+                Ok(FileMeta {
+                    len: 1,
+                    is_dir: false,
+                    modified: None,
+                })
+            }
+            fn read_prefix_blocking(&self, _p: &Path, _m: usize) -> io::Result<Vec<u8>> {
+                unimplemented!()
+            }
+            fn list_dir_blocking(&self, _p: &Path) -> io::Result<Vec<DirEntryInfo>> {
+                Ok(Vec::new())
+            }
+            fn exists_blocking(&self, _p: &Path) -> bool {
+                true
+            }
+            fn walk_blocking(
+                &self,
+                root: &Path,
+                cb: &mut dyn FnMut(&DirEntryInfo) -> bool,
+            ) -> io::Result<()> {
+                // Honor the callback's false like a real walker prunes.
+                for e in Self::entries(root) {
+                    self.visited.fetch_add(1, Ordering::SeqCst);
+                    if !cb(&e) {
+                        break;
+                    }
+                }
+                Ok(())
+            }
+        }
+
+        let tmp = TempDir::new().unwrap();
+        let visited = Arc::new(AtomicUsize::new(0));
+        let output = execute_with(
+            GlobInput {
+                pattern: "*.rs".into(),
+                path: Some(tmp.path().display().to_string()),
+                exclude_pattern: None,
+            },
+            std::sync::Arc::new(CountingFs {
+                visited: visited.clone(),
+            }) as std::sync::Arc<dyn FileSystemProvider>,
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(output.metadata["count"], 100);
+        assert_eq!(output.metadata["truncated"], true);
+        let visited_count = visited.load(Ordering::SeqCst);
+        assert!(
+            visited_count < 130,
+            "walk must stop at the cap instead of visiting all 130 entries (visited {visited_count})"
+        );
+        assert_eq!(visited_count, 100, "stop exactly at the cap");
     }
 
     #[tokio::test]

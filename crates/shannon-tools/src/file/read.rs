@@ -122,14 +122,17 @@ pub struct ReadOutput {
 }
 
 pub async fn execute(input: ReadInput) -> Result<ToolOutput, ToolError> {
-    execute_with(input, crate::defaults::fs().as_ref()).await
+    execute_with(input, crate::defaults::fs()).await
 }
 
 /// Provider-injected entry point (§4.11): reads flow through the injected
 /// filesystem world instead of direct async filesystem APIs calls.
+///
+/// §P2-14: takes the provider as an owned `Arc` so the blocking binary-sniff
+/// read can run on tokio's blocking pool (`spawn_blocking` needs `'static`).
 pub async fn execute_with(
     input: ReadInput,
-    fs: &dyn FileSystemProvider,
+    fs: std::sync::Arc<dyn FileSystemProvider>,
 ) -> Result<ToolOutput, ToolError> {
     // Check file size before reading to prevent memory exhaustion
     const MAX_FILE_SIZE: u64 = 10 * 1024 * 1024; // 10 MB
@@ -194,24 +197,38 @@ pub async fn execute_with(
     // Binary sniff: a NUL byte in the first 8 KB marks a binary file almost
     // certainly — return a friendly pointer instead of dumping utf8_lossy
     // mojibake. Image extensions are handled above (svg stays text).
+    //
+    // §P2-14: the prefix read is synchronous — over SFTP it is a full
+    // network round-trip that would park the async worker (and spin a helper
+    // thread per call via `block_on_anywhere`). Run it on the blocking pool;
+    // a failed sniff (join or read error) degrades to the old "not binary"
+    // continuation.
     const BINARY_SNIFF_BYTES: usize = 8 * 1024;
-    if let Ok(prefix) = fs.read_prefix_blocking(Path::new(&input.file_path), BINARY_SNIFF_BYTES) {
-        if prefix.contains(&0u8) {
-            return Ok(ToolOutput {
-                content: format!(
-                    "Binary file, {} bytes — not displayed. Use Bash (e.g. `file {}`, `xxd {} | head -20`) to inspect it.",
-                    metadata.len, input.file_path, input.file_path
-                ),
-                is_error: false,
-                metadata: {
-                    let mut map = HashMap::new();
-                    map.insert("type".to_string(), json!("binary"));
-                    map.insert("file_path".to_string(), json!(input.file_path));
-                    map.insert("size".to_string(), json!(metadata.len));
-                    map
-                },
-            });
-        }
+    let sniff_path = input.file_path.clone();
+    let sniff_fs = fs.clone();
+    let is_binary = tokio::task::spawn_blocking(move || {
+        sniff_fs
+            .read_prefix_blocking(Path::new(&sniff_path), BINARY_SNIFF_BYTES)
+            .map(|prefix| prefix.contains(&0u8))
+            .unwrap_or(false)
+    })
+    .await
+    .unwrap_or(false);
+    if is_binary {
+        return Ok(ToolOutput {
+            content: format!(
+                "Binary file, {} bytes — not displayed. Use Bash (e.g. `file {}`, `xxd {} | head -20`) to inspect it.",
+                metadata.len, input.file_path, input.file_path
+            ),
+            is_error: false,
+            metadata: {
+                let mut map = HashMap::new();
+                map.insert("type".to_string(), json!("binary"));
+                map.insert("file_path".to_string(), json!(input.file_path));
+                map.insert("size".to_string(), json!(metadata.len));
+                map
+            },
+        });
     }
 
     // Original text file handling

@@ -477,8 +477,14 @@ impl Repl {
             if mcp_count > 0 {
                 tracing::info!("Discovered {} MCP server configuration(s)", mcp_count);
 
-                // Load approval state for MCP server gating
-                let approval_path = std::path::PathBuf::from(".shannon/mcp_approvals.json");
+                // Load approval state for MCP server gating. §P3-21: honor
+                // SHANNON_MCP_APPROVALS exactly like the `/mcp` extension
+                // command does, so both call sites read the same state file;
+                // the default path is relative to the process working
+                // directory (documented in McpApprovalManager::save_to_file).
+                let approval_path = std::env::var("SHANNON_MCP_APPROVALS")
+                    .map(std::path::PathBuf::from)
+                    .unwrap_or_else(|_| std::path::PathBuf::from(".shannon/mcp_approvals.json"));
                 let mut approval_manager = shannon_core::McpApprovalManager::with_defaults();
                 if let Err(e) = approval_manager.load_from_file(&approval_path) {
                     tracing::debug!("Could not load MCP approval state: {}", e);

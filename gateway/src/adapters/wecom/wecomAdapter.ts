@@ -17,6 +17,8 @@ import {
   type SendOpts,
 } from "../types.js";
 import { type AdapterConfig } from "../../config/types.js";
+import { readWebhookBodyOr413 } from "../../lib/webhookBody.js";
+import { PLATFORM_HTTP_TIMEOUT_MS } from "../../lib/netTimeouts.js";
 
 /**
  * WeCom (企业微信 / WeChat Work) adapter.
@@ -277,7 +279,10 @@ export function createWeComAdapter(cfg: AdapterConfig, ctx: AdapterContext): Cha
     const url =
       `${apiBase}/cgi-bin/gettoken?corpid=${encodeURIComponent(corpId)}` +
       `&corpsecret=${encodeURIComponent(corpSecret ?? "")}`;
-    const res = await fetchImpl(url);
+    const res = await fetchImpl(url, {
+      // review §P2-23: token refresh must not hang the send path.
+      signal: AbortSignal.timeout(PLATFORM_HTTP_TIMEOUT_MS),
+    });
     if (!res.ok) throw new Error(`wecom gettoken HTTP ${res.status}`);
     const data = (await res.json()) as { errcode?: number; access_token?: string; expires_in?: number };
     if (data.errcode || typeof data.access_token !== "string") {
@@ -337,7 +342,9 @@ export function createWeComAdapter(cfg: AdapterConfig, ctx: AdapterContext): Cha
   }
 
   async function handlePost(req: IncomingMessage, res: ServerResponse): Promise<void> {
-    const raw = await readBody(req);
+    // review §P2-23: bound the raw body before signature verification.
+    const raw = await readWebhookBodyOr413(req, res);
+    if (raw === null) return;
     const url = new URL(req.url ?? "/", "http://localhost");
     const q = url.searchParams;
     const signature = q.get("msg_signature") ?? "";
@@ -369,7 +376,13 @@ export function createWeComAdapter(cfg: AdapterConfig, ctx: AdapterContext): Cha
   async function doSend(target: ReplyTarget, content: string): Promise<MessageReceipt> {
     const accessToken = await ensureAccessToken();
     const req = buildSendRequest({ apiBase, accessToken, touser: target.chatId, agentId, content });
-    const res = await fetchImpl(req.url, { method: req.method, headers: req.headers, body: req.body });
+    const res = await fetchImpl(req.url, {
+      method: req.method,
+      headers: req.headers,
+      body: req.body,
+      // review §P2-23: platform API calls must not hang the session lane.
+      signal: AbortSignal.timeout(PLATFORM_HTTP_TIMEOUT_MS),
+    });
     if (!res.ok) {
       const detail = await res.text().catch(() => "");
       throw new Error(`wecom send failed: HTTP ${res.status} ${detail}`);
@@ -451,14 +464,3 @@ export function createWeComAdapter(cfg: AdapterConfig, ctx: AdapterContext): Cha
   };
 }
 
-function readBody(req: IncomingMessage): Promise<string> {
-  return new Promise((resolve, reject) => {
-    let data = "";
-    req.setEncoding("utf8");
-    req.on("data", (chunk: string) => {
-      data += chunk;
-    });
-    req.on("end", () => resolve(data));
-    req.on("error", reject);
-  });
-}

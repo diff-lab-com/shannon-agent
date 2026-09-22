@@ -96,6 +96,44 @@ pub struct AppState {
     /// the WS handler; a per-request resolver task awaits the client's choice
     /// (300s timeout → `Deny`) and forwards it back to the engine.
     pub approval_registry: Arc<Mutex<HashMap<String, oneshot::Sender<PermissionChoice>>>>,
+    /// Wall-clock budget for the aggregate `POST /api/query` handler
+    /// (review §P2-2). See [`ShannonApiServer::DEFAULT_QUERY_BUDGET`].
+    pub query_budget: std::time::Duration,
+    /// Review §P2-3: per-session locks serialising the session-state
+    /// critical section (attach → query → session-log settle) so two
+    /// concurrent requests for the same session cannot project a
+    /// half-written `events.jsonl` into their restored history (dangling
+    /// `tool_use` without its `tool_result` → provider 400). Entries are
+    /// created on demand and opportunistically reclaimed; different
+    /// sessions never contend.
+    pub session_locks:
+        std::sync::Arc<dashmap::DashMap<Uuid, std::sync::Arc<tokio::sync::Mutex<()>>>>,
+}
+
+/// Upper bound on retained per-session lock entries (review §P2-3). Once the
+/// map exceeds this, entries no longer referenced by an in-flight request
+/// (strong count 1 = the map alone) are reclaimed. Holders clone their
+/// `Arc` before awaiting, so a reclaimed entry can never split a session's
+/// mutual exclusion while a request is running.
+const MAX_SESSION_LOCKS: usize = 4096;
+
+/// Review §P2-3: acquire the per-session lock for `session_id`.
+///
+/// The guard serialises the caller's session-state critical section against
+/// other requests for the SAME session: attach (project `events.jsonl` into
+/// the engine) plus the query that appends to it. Cross-session concurrency
+/// is untouched — a different `session_id` gets a different lock. The
+/// `OwnedMutexGuard` is deliberately movable so the SSE handler can hold it
+/// for as long as the response body is alive (a client disconnect releases
+/// it together with the stream).
+async fn session_lock(state: &AppState, session_id: Uuid) -> tokio::sync::OwnedMutexGuard<()> {
+    if state.session_locks.len() > MAX_SESSION_LOCKS {
+        state
+            .session_locks
+            .retain(|_, v| std::sync::Arc::strong_count(v) > 1);
+    }
+    let lock = state.session_locks.entry(session_id).or_default().clone();
+    lock.lock_owned().await
 }
 
 /// A single WebSocket session holding conversation history.
@@ -129,9 +167,28 @@ pub struct ShannonApiServer {
     /// `POST /api/routines/:id/trigger` handler with its own state.
     /// They sit under the same auth/CORS middleware as the core routes.
     extra_routes: Vec<axum::Router<()>>,
+    /// Wall-clock budget for the aggregate `POST /api/query` handler
+    /// (review §P2-2).
+    query_budget: std::time::Duration,
 }
 
 impl ShannonApiServer {
+    /// Default wall-clock budget for the aggregate `POST /api/query`
+    /// endpoint (review §P2-2). That handler used to drain the engine's
+    /// event stream with no cancellation channel: a client disconnect does
+    /// NOT drop the handler (hyper keeps serving the in-flight request until
+    /// it finishes — proven by the `p2_2_client_disconnect_*` tests), so a
+    /// wedged query pinned the handler forever. The budget bounds that: on
+    /// expiry the `QueryStream` is dropped mid-await, whose
+    /// `AbortOnDropStream` contract aborts the engine producer task.
+    /// 600s = 2× the engine's per-event stall budget
+    /// (`QueryEngineConfig::timeout_seconds`, default 300s), so a healthy
+    /// query with flowing events is never cut off while a stalled one is
+    /// still reaped in bounded time. The SSE endpoints don't need this:
+    /// there, a client disconnect drops the SSE body → the `QueryStream` →
+    /// aborts the producer directly.
+    pub const DEFAULT_QUERY_BUDGET: std::time::Duration = std::time::Duration::from_secs(600);
+
     /// Create a new server using the given LLM client configuration for every
     /// incoming query.
     pub fn new(client_config: LlmClientConfig) -> Self {
@@ -144,7 +201,16 @@ impl ShannonApiServer {
             allowed_origins: Vec::new(),
             allow_nonloopback: false,
             extra_routes: Vec::new(),
+            query_budget: Self::DEFAULT_QUERY_BUDGET,
         }
+    }
+
+    /// Override the aggregate `POST /api/query` wall-clock budget
+    /// (review §P2-2). See [`Self::DEFAULT_QUERY_BUDGET`] for the default's
+    /// rationale.
+    pub fn query_budget(mut self, budget: std::time::Duration) -> Self {
+        self.query_budget = budget;
+        self
     }
 
     /// Provide a pre-populated [`ToolRegistry`] so that the `/api/tools/list`
@@ -227,6 +293,8 @@ impl ShannonApiServer {
                 tools: self.tools.clone(),
                 ws_sessions: Arc::new(RwLock::new(HashMap::new())),
                 approval_registry: Arc::new(Mutex::new(HashMap::new())),
+                query_budget: self.query_budget,
+                session_locks: Arc::new(dashmap::DashMap::new()),
             })
     }
 
@@ -513,6 +581,12 @@ async fn query_handler(
         QueryEngine::with_defaults_arc(client, state.tools.clone(), permissions, state_mgr);
 
     let session_id = resolve_session_id(req.session_id.as_deref(), Uuid::new_v4());
+    // Review §P2-3: serialise this session's state critical section — the
+    // attach below projects `events.jsonl`, and the query driven by this
+    // handler appends to it. Holding the guard across the (budget-bounded)
+    // drain keeps a concurrent same-session request from restoring a
+    // half-written turn. Held to the end of the handler scope.
+    let _session_guard = session_lock(&state, session_id).await;
     attach_session(&mut engine, session_id);
 
     let context = QueryContext {
@@ -536,31 +610,53 @@ async fn query_handler(
     let mut usage: Option<UsageInfo> = None;
     let mut errors: Vec<String> = Vec::new();
 
-    while let Some(event_result) = stream.next().await {
-        match event_result {
-            Ok(QueryEvent::Text { content, .. }) => {
-                text.push_str(&content);
-            }
-            Ok(QueryEvent::Usage {
-                input_tokens,
-                output_tokens,
-                cost_usd,
-                ..
-            }) => {
-                usage = Some(UsageInfo {
+    // Review §P2-2: this handler used to drain the engine's event stream
+    // unconditionally — no cancellation channel at all (a client disconnect
+    // does NOT drop the handler; hyper keeps serving the in-flight request —
+    // see the p2_2_client_disconnect tests). Bound the aggregate with the
+    // configured wall-clock budget: on expiry the `QueryStream` is dropped
+    // mid-await, whose `AbortOnDropStream` contract aborts the engine
+    // producer task, and the partial result is returned with a cancellation
+    // error entry.
+    let budget = state.query_budget;
+    let drain = async {
+        while let Some(event_result) = stream.next().await {
+            match event_result {
+                Ok(QueryEvent::Text { content, .. }) => {
+                    text.push_str(&content);
+                }
+                Ok(QueryEvent::Usage {
                     input_tokens,
                     output_tokens,
                     cost_usd,
-                });
-            }
-            Ok(QueryEvent::Failed { error, .. }) => {
-                errors.push(error);
-            }
-            Ok(_) => {}
-            Err(e) => {
-                errors.push(e.to_string());
+                    ..
+                }) => {
+                    usage = Some(UsageInfo {
+                        input_tokens,
+                        output_tokens,
+                        cost_usd,
+                    });
+                }
+                Ok(QueryEvent::Failed { error, .. }) => {
+                    errors.push(error);
+                }
+                Ok(_) => {}
+                Err(e) => {
+                    errors.push(e.to_string());
+                }
             }
         }
+    };
+    if tokio::time::timeout(budget, drain).await.is_err() {
+        tracing::warn!(
+            session = %session_id,
+            budget_secs = budget.as_secs(),
+            "aggregate query exceeded its budget; cancelling the producer"
+        );
+        errors.push(format!(
+            "query cancelled: exceeded the {}s aggregate budget",
+            budget.as_secs()
+        ));
     }
 
     Ok(Json(QueryResponse {
@@ -607,6 +703,12 @@ async fn query_stream_handler(
 
     let session_id =
         resolve_session_id(params.get("session_id").map(String::as_str), Uuid::new_v4());
+    // Review §P2-3: same per-session serialisation as the aggregate
+    // endpoint. The guard is folded into the response stream (see
+    // [`WithSessionGuard`]) so it is held while the SSE body is alive and
+    // released when the client disconnects or the stream ends — never
+    // across a request we are not serving.
+    let session_guard = session_lock(&state, session_id).await;
     attach_session(&mut engine, session_id);
 
     let context = QueryContext {
@@ -630,25 +732,7 @@ async fn query_stream_handler(
     let sse_stream = query_stream.filter_map(|result| async move {
         match result {
             Ok(event) => {
-                let event_type = match &event {
-                    QueryEvent::Text { .. } => "text",
-                    QueryEvent::ToolUseRequest { .. } => "tool_use_request",
-                    QueryEvent::ToolUseResult { .. } => "tool_use_result",
-                    QueryEvent::Usage { .. } => "usage",
-                    QueryEvent::Completed { .. } => "completed",
-                    QueryEvent::Failed { .. } => "failed",
-                    QueryEvent::Progress { .. } => "progress",
-                    QueryEvent::Cost { .. } => "cost",
-                    QueryEvent::TurnCompleted { .. } => "turn_completed",
-                    QueryEvent::Started { .. } => "started",
-                    QueryEvent::ToolProgress { .. } => "tool_progress",
-                    QueryEvent::Thinking { .. } => "thinking",
-                    QueryEvent::Info { .. } => "info",
-                    QueryEvent::RateLimit { .. } => "rate_limit",
-                    QueryEvent::ConversationUpdate { .. } => "conversation_update",
-                    QueryEvent::Warning { .. } => "warning",
-                };
-                let data = serde_json::to_string(&event).unwrap_or_default();
+                let (event_type, data) = sse_parts_from_query_event(&event);
                 Some(Ok(Event::default().event(event_type).data(data)))
             }
             Err(e) => {
@@ -659,7 +743,87 @@ async fn query_stream_handler(
         }
     });
 
-    Ok(Sse::new(sse_stream).keep_alive(KeepAlive::default()))
+    Ok(Sse::new(WithSessionGuard {
+        inner: Box::pin(sse_stream),
+        _guard: session_guard,
+    })
+    .keep_alive(KeepAlive::default()))
+}
+
+/// Stream wrapper holding the §P2-3 per-session lock for as long as the SSE
+/// response body exists. axum drops the body — and therefore this wrapper,
+/// whose `Drop` releases the guard — when the client disconnects or the
+/// stream completes, so a cancelled stream never wedges the session's lock.
+/// Fields drop in declaration order: the inner stream (and the engine's
+/// `QueryStream` inside it) is torn down before the lock is released.
+struct WithSessionGuard<S> {
+    inner: std::pin::Pin<Box<S>>,
+    _guard: tokio::sync::OwnedMutexGuard<()>,
+}
+
+impl<S: futures::Stream> futures::Stream for WithSessionGuard<S> {
+    type Item = S::Item;
+
+    fn poll_next(
+        self: std::pin::Pin<&mut Self>,
+        cx: &mut std::task::Context<'_>,
+    ) -> std::task::Poll<Option<Self::Item>> {
+        self.get_mut().inner.as_mut().poll_next(cx)
+    }
+}
+
+/// Map a [`QueryEvent`] to its SSE `(event name, JSON payload)` pair.
+///
+/// §P3-4: a serialization failure (e.g. a NaN cost value, which
+/// `serde_json` refuses to emit) must not degrade into an empty payload —
+/// the client would receive a semantically empty event of the *expected*
+/// type. Instead the event is logged and an explicit `error` event with a
+/// description goes out on the wire.
+fn sse_parts_from_query_event(event: &QueryEvent) -> (&'static str, String) {
+    let event_type = match event {
+        QueryEvent::Text { .. } => "text",
+        QueryEvent::ToolUseRequest { .. } => "tool_use_request",
+        QueryEvent::ToolUseResult { .. } => "tool_use_result",
+        QueryEvent::Usage { .. } => "usage",
+        QueryEvent::Completed { .. } => "completed",
+        QueryEvent::Failed { .. } => "failed",
+        QueryEvent::Progress { .. } => "progress",
+        QueryEvent::Cost { .. } => "cost",
+        QueryEvent::TurnCompleted { .. } => "turn_completed",
+        QueryEvent::Started { .. } => "started",
+        QueryEvent::ToolProgress { .. } => "tool_progress",
+        QueryEvent::Thinking { .. } => "thinking",
+        QueryEvent::Info { .. } => "info",
+        QueryEvent::RateLimit { .. } => "rate_limit",
+        QueryEvent::ConversationUpdate { .. } => "conversation_update",
+        QueryEvent::Warning { .. } => "warning",
+    };
+    sse_parts(event_type, event)
+}
+
+/// Serialize `value` into an SSE `(event name, JSON payload)` pair.
+///
+/// §P3-4: on serialization failure the payload must not be empty — the
+/// client would receive a semantically empty event of the *expected* type.
+/// Instead the failure is logged and an explicit `error` event with a
+/// description goes out on the wire.
+fn sse_parts<T: serde::Serialize>(event_type: &'static str, value: &T) -> (&'static str, String) {
+    match serde_json::to_string(value) {
+        Ok(data) => (event_type, data),
+        Err(e) => {
+            tracing::error!(
+                error = %e,
+                event_type,
+                "SSE event serialization failed; emitting explicit error event"
+            );
+            let data = serde_json::json!({
+                "error": format!("event serialization failed: {e}"),
+                "event_type": event_type,
+            })
+            .to_string();
+            ("error", data)
+        }
+    }
 }
 
 async fn tools_list_handler(State(state): State<AppState>) -> Json<ToolsListResponse> {
@@ -1642,6 +1806,363 @@ mod tests {
     }
 
     // ══════════════════════════════════════════════════════════════════════
+    // review §P2-2: query cancellation
+    //
+    // The SSE endpoint cancels on client disconnect: dropping the response
+    // body drops the `QueryStream`, whose `AbortOnDropStream` contract
+    // aborts the producer task at its next `.await`. The aggregate POST
+    // endpoint has no such signal (hyper keeps the handler alive across a
+    // client FIN), so it gets a wall-clock budget instead — see
+    // [`ShannonApiServer::DEFAULT_QUERY_BUDGET`]. Both tests use a mock
+    // "LLM" that never answers, so the producer stays parked mid-request
+    // until it is cancelled, and the mock observes the teardown as EOF on
+    // its socket. A real axum server is used for the SSE case (`oneshot`
+    // cannot simulate disconnects).
+    // ══════════════════════════════════════════════════════════════════════
+
+    /// A mock LLM that accepts one connection, never responds, and fires
+    /// `gone_tx` once the engine's outbound request socket sees EOF/reset —
+    /// i.e. the query producer task was cancelled.
+    fn start_hanging_llm() -> (String, tokio::sync::oneshot::Receiver<()>) {
+        use std::io::Read as _;
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("bind");
+        let port = listener.local_addr().expect("addr").port();
+        let (gone_tx, gone_rx) = tokio::sync::oneshot::channel();
+        std::thread::spawn(move || {
+            let accepted = listener.incoming().flatten().next();
+            let mut gone_tx = Some(gone_tx);
+            if let Some(mut stream) = accepted {
+                let mut buf = [0u8; 1024];
+                loop {
+                    match stream.read(&mut buf) {
+                        Ok(0) | Err(_) => break, // client went away
+                        Ok(_) => continue,       // more request bytes; keep waiting
+                    }
+                }
+                // EOF/reset observed — the engine's producer socket closed.
+                if let Some(tx) = gone_tx.take() {
+                    let _ = tx.send(());
+                }
+            }
+            // If accept failed, dropping `gone_tx` fails the test fast.
+        });
+        (format!("http://127.0.0.1:{port}"), gone_rx)
+    }
+
+    /// Spawn the real router on an ephemeral port and return its address.
+    async fn spawn_real_server(app: Router) -> std::net::SocketAddr {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+        addr
+    }
+
+    fn disconnect_test_config(base_url: String) -> LlmClientConfig {
+        LlmClientConfig {
+            api_key: "test-key".to_string(),
+            base_url,
+            model: "test-model".to_string(),
+            provider: LlmProvider::Anthropic,
+            ..Default::default()
+        }
+    }
+
+    #[tokio::test]
+    async fn p2_2_aggregate_query_budget_cancels_stalled_query() {
+        // The aggregate POST endpoint has no client-disconnect signal
+        // (hyper keeps the handler alive across a FIN — proven by the SSE
+        // sibling test being the only one that can rely on body-drop), so
+        // its cancellation channel is the wall-clock budget. A 1s budget
+        // against the never-answering mock must (a) return a JSON response
+        // with a cancellation error quickly and (b) abort the engine
+        // producer — observable as EOF on the mock's socket.
+        let (base_url, gone_rx) = start_hanging_llm();
+        let app = ShannonApiServer::new(disconnect_test_config(base_url))
+            .query_budget(std::time::Duration::from_secs(1))
+            .build_router();
+
+        let req = Request::builder()
+            .method("POST")
+            .uri("/api/query")
+            .header("content-type", "application/json")
+            .body(Body::from(r#"{"prompt":"hello"}"#))
+            .unwrap();
+        let response = tokio::time::timeout(std::time::Duration::from_secs(5), app.oneshot(req))
+            .await
+            .expect("aggregate endpoint must honour the query budget instead of hanging")
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+
+        let body = read_body(response.into_body()).await;
+        let parsed: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        let errors = parsed["errors"].as_array().cloned().unwrap_or_default();
+        assert!(
+            errors
+                .iter()
+                .any(|v| v.as_str().unwrap_or_default().contains("cancelled")),
+            "the budget expiry must surface as a cancellation error, got: {errors:?}"
+        );
+
+        // Dropping the QueryStream at budget expiry aborts the producer,
+        // closing its outbound request — the hanging mock observes EOF.
+        match tokio::time::timeout(std::time::Duration::from_secs(5), gone_rx).await {
+            Ok(Ok(())) => {}
+            _ => panic!("engine producer must be aborted when the budget fires"),
+        }
+    }
+
+    #[tokio::test]
+    async fn p2_2_client_disconnect_cancels_sse_query() {
+        use tokio::io::AsyncReadExt as _;
+        use tokio::io::AsyncWriteExt as _;
+
+        let (base_url, gone_rx) = start_hanging_llm();
+        let app = ShannonApiServer::new(disconnect_test_config(base_url)).build_router();
+        let addr = spawn_real_server(app).await;
+
+        // Raw TCP client: open the SSE stream, read the response head, then
+        // disconnect mid-stream.
+        {
+            let mut sock = tokio::net::TcpStream::connect(addr).await.unwrap();
+            let req = format!(
+                "GET /api/query/stream?prompt=hello HTTP/1.1\r\nHost: {addr}\r\nConnection: close\r\n\r\n"
+            );
+            sock.write_all(req.as_bytes()).await.unwrap();
+            sock.flush().await.unwrap();
+            // Wait until the SSE response head (and at least the first body
+            // bytes) came back, so the server has fully committed to the
+            // streaming response before the client vanishes.
+            let mut head = vec![0u8; 2048];
+            let n = tokio::time::timeout(std::time::Duration::from_secs(10), sock.read(&mut head))
+                .await
+                .expect("SSE response head must arrive")
+                .expect("read head");
+            let head_text = String::from_utf8_lossy(&head[..n]).to_string();
+            assert!(
+                head_text.contains("text/event-stream"),
+                "expected an SSE response, got: {head_text}"
+            );
+            drop(sock);
+        }
+
+        // Dropping the SSE body must drop the underlying QueryStream, whose
+        // AbortOnDropStream contract aborts the producer — observable as EOF
+        // on the mock's socket.
+        match tokio::time::timeout(std::time::Duration::from_secs(10), gone_rx).await {
+            Ok(Ok(())) => {}
+            Ok(Err(_)) => panic!("mock LLM died before observing the disconnect"),
+            Err(_) => panic!("SSE query loop kept running after the client disconnected"),
+        }
+    }
+
+    // ══════════════════════════════════════════════════════════════════════
+    // review §P2-3: same-session concurrency
+    // ══════════════════════════════════════════════════════════════════════
+
+    /// Minimal Anthropic end-turn SSE response for the scripted mock.
+    fn p2_3_end_turn_sse(text: &str) -> String {
+        let payload = format!(r#"{{"type":"text_delta","text":"{text}"}}"#);
+        let sse = [
+            r#"event: message_start"#,
+            r#"data: {"type":"message_start","message":{"id":"msg_p2_3","role":"assistant","content":[],"model":"test-model","stop_reason":null,"usage":{"input_tokens":10,"output_tokens":1}}}"#,
+            r#"event: content_block_start"#,
+            r#"data: {"type":"content_block_start","index":0,"content_block":{"type":"text","text":""}}"#,
+            "event: content_block_delta",
+            format!(
+                "data: {{\"type\":\"content_block_delta\",\"index\":0,\"delta\":{payload}}}"
+            )
+            .as_str(),
+            r#"event: content_block_stop"#,
+            r#"data: {"type":"content_block_stop","index":0}"#,
+            r#"event: message_delta"#,
+            r#"data: {"type":"message_delta","delta":{"stop_reason":"end_turn"},"usage":{"input_tokens":10,"output_tokens":7}}"#,
+            r#"event: message_stop"#,
+            r#"data: {"type":"message_stop"}"#,
+        ]
+        .join("\n\n");
+        format!(
+            "HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{sse}",
+            sse.len()
+        )
+    }
+
+    /// Review §P2-3: two concurrent requests for the SAME session must not
+    /// interleave their session-log access. While request A is parked
+    /// mid-turn at the provider, request B must wait on the per-session
+    /// lock instead of attaching immediately; when B finally attaches, it
+    /// restores A's completed turn — its provider request carries A's
+    /// assistant reply as history (a partial restore would send a dangling
+    /// `tool_use`/half turn and trip provider 400s).
+    #[tokio::test]
+    async fn p2_3_concurrent_same_session_queries_do_not_interleave_history() {
+        use std::io::Read as _;
+        use std::io::Write as _;
+        use tokio::io::AsyncReadExt as _;
+        use tokio::io::AsyncWriteExt as _;
+
+        // Isolate the session log: the handlers build `StateManager::new()`
+        // whose sessions dir derives from $HOME, and the L0 tee honours
+        // $SHANNON_HOME. Point both at one temp container (nextest runs each
+        // test in its own process, so the env mutation stays local).
+        let home = std::env::temp_dir()
+            .join("shannon-p2-3")
+            .join(Uuid::new_v4().to_string());
+        std::fs::create_dir_all(home.join(".shannon")).unwrap();
+        // SAFETY: test-only env mutation, isolated per nextest process.
+        unsafe { std::env::set_var("HOME", &home) };
+        unsafe { std::env::set_var("SHANNON_HOME", home.join(".shannon")) };
+
+        // Scripted mock: request 0 (request A) signals arrival and parks
+        // until the test releases it; any later request is answered at once.
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let captured: Arc<std::sync::Mutex<Vec<String>>> =
+            Arc::new(std::sync::Mutex::new(Vec::new()));
+        let (first_arrived_tx, first_arrived_rx) = tokio::sync::oneshot::channel::<()>();
+        let (release_tx, release_rx) = std::sync::mpsc::channel::<()>();
+        {
+            let captured = captured.clone();
+            std::thread::spawn(move || {
+                let mut first_arrived_tx = Some(first_arrived_tx);
+                for mut stream in listener.incoming().flatten() {
+                    // 1 MiB: the engine's system prompt embeds the workspace
+                    // environment, so provider requests can far exceed the
+                    // 64 KiB other mocks use.
+                    let mut buf = vec![0u8; 1 << 20];
+                    let mut read = 0usize;
+                    loop {
+                        match stream.read(&mut buf[read..]) {
+                            Ok(0) | Err(_) => break,
+                            Ok(n) => read += n,
+                        }
+                        let s = String::from_utf8_lossy(&buf[..read]).to_string();
+                        if let Some(header_end) = s.find("\r\n\r\n") {
+                            let cl: usize = s[..header_end]
+                                .to_ascii_lowercase()
+                                .split("\r\n")
+                                .find_map(|l| l.strip_prefix("content-length:"))
+                                .and_then(|v| v.trim().parse().ok())
+                                .unwrap_or(0);
+                            if read >= header_end + 4 + cl {
+                                break;
+                            }
+                        }
+                        if read == buf.len() {
+                            break;
+                        }
+                    }
+                    let body = String::from_utf8_lossy(&buf[..read]).to_string();
+                    let index = {
+                        let mut guard = captured.lock().unwrap();
+                        guard.push(body);
+                        guard.len() - 1
+                    };
+                    let http = if index == 0 {
+                        if let Some(tx) = first_arrived_tx.take() {
+                            let _ = tx.send(());
+                        }
+                        // Park mid-turn, like a slow/stalled provider.
+                        let _ = release_rx.recv();
+                        p2_3_end_turn_sse("A_REPLY")
+                    } else {
+                        p2_3_end_turn_sse("B_REPLY")
+                    };
+                    stream.write_all(http.as_bytes()).ok();
+                    stream.flush().ok();
+                }
+            });
+        }
+
+        let app = ShannonApiServer::new(disconnect_test_config(format!("http://127.0.0.1:{port}")))
+            .query_budget(std::time::Duration::from_secs(60))
+            .build_router();
+        let addr = spawn_real_server(app).await;
+        let session_id = Uuid::new_v4();
+
+        // Raw-TCP POST /api/query; returns the JSON response body.
+        let post_query = |prompt: &'static str| {
+            let addr = addr;
+            let session_id = session_id;
+            async move {
+                let mut sock = tokio::net::TcpStream::connect(addr).await.unwrap();
+                let body = format!(r#"{{"prompt":"{prompt}","session_id":"{session_id}"}}"#);
+                let req = format!(
+                    "POST /api/query HTTP/1.1\r\nHost: {addr}\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+                    body.len()
+                );
+                sock.write_all(req.as_bytes()).await.unwrap();
+                sock.flush().await.unwrap();
+                let mut raw = Vec::new();
+                sock.read_to_end(&mut raw).await.unwrap();
+                String::from_utf8_lossy(&raw).to_string()
+            }
+        };
+
+        // A goes first and parks inside the provider call.
+        let a_task = tokio::spawn(post_query("A question"));
+        tokio::time::timeout(std::time::Duration::from_secs(10), first_arrived_rx)
+            .await
+            .expect("A's provider request must arrive")
+            .expect("arrival channel");
+
+        // B starts while A is mid-flight; give it time to reach the handler.
+        let b_task = tokio::spawn(post_query("B question"));
+        tokio::time::sleep(std::time::Duration::from_millis(300)).await;
+
+        // The discriminator: while A's query is in flight, B must NOT have
+        // attached + reached the provider. Without the §P2-3 per-session
+        // lock, B attaches immediately (projecting A's half-written turn)
+        // and the mock would already see 2 requests.
+        assert_eq!(
+            captured.lock().unwrap().len(),
+            1,
+            "B must wait for A's query to settle before attaching the same session"
+        );
+
+        // Let A finish; both queries must then complete successfully.
+        let _ = release_tx.send(());
+        let a_resp = tokio::time::timeout(std::time::Duration::from_secs(30), a_task)
+            .await
+            .expect("A must finish")
+            .expect("A task");
+        let b_resp = tokio::time::timeout(std::time::Duration::from_secs(30), b_task)
+            .await
+            .expect("B must finish")
+            .expect("B task");
+        assert!(a_resp.starts_with("HTTP/1.1 200"), "A response: {a_resp}");
+        assert!(b_resp.starts_with("HTTP/1.1 200"), "B response: {b_resp}");
+
+        // B's provider request must carry A's completed turn as history.
+        let bodies = captured.lock().unwrap().clone();
+        assert_eq!(bodies.len(), 2, "mock must have served exactly 2 requests");
+        // The mock captures the raw HTTP request; take the JSON body after
+        // the header block.
+        let json_part = bodies[1]
+            .split("\r\n\r\n")
+            .nth(1)
+            .unwrap_or_default()
+            .trim();
+        let second: serde_json::Value = serde_json::from_str(json_part)
+            .unwrap_or_else(|e| panic!("B provider request must parse as JSON: {e}"));
+        let messages = second["messages"].as_array().cloned().unwrap_or_default();
+        assert!(
+            messages.iter().any(|m| {
+                m["role"] == "assistant"
+                    && m["content"]
+                        .as_array()
+                        .map(|blocks| {
+                            blocks.iter().any(|b| {
+                                b["type"] == "text"
+                                    && b["text"].as_str().unwrap_or_default().contains("A_REPLY")
+                            })
+                        })
+                        .unwrap_or(false)
+            }),
+            "B must restore A's completed turn from the session log; provider saw: {second}"
+        );
+    }
+
+    // ══════════════════════════════════════════════════════════════════════
     // session_id pass-through (P0-d)
     // ══════════════════════════════════════════════════════════════════════
 
@@ -2401,6 +2922,8 @@ mod tests {
             tools: Arc::new(ToolRegistry::new()),
             ws_sessions: Arc::new(RwLock::new(HashMap::new())),
             approval_registry: Arc::new(Mutex::new(HashMap::new())),
+            query_budget: ShannonApiServer::DEFAULT_QUERY_BUDGET,
+            session_locks: std::sync::Arc::new(dashmap::DashMap::new()),
         };
         let cloned = state.clone();
         assert!(Arc::ptr_eq(&state.tools, &cloned.tools));
@@ -2414,6 +2937,8 @@ mod tests {
             tools: Arc::new(ToolRegistry::new()),
             ws_sessions: Arc::new(RwLock::new(HashMap::new())),
             approval_registry: Arc::new(Mutex::new(HashMap::new())),
+            query_budget: ShannonApiServer::DEFAULT_QUERY_BUDGET,
+            session_locks: std::sync::Arc::new(dashmap::DashMap::new()),
         };
         let sessions = state.ws_sessions.read().await;
         assert!(sessions.is_empty());
@@ -2426,6 +2951,8 @@ mod tests {
             tools: Arc::new(ToolRegistry::new()),
             ws_sessions: Arc::new(RwLock::new(HashMap::new())),
             approval_registry: Arc::new(Mutex::new(HashMap::new())),
+            query_budget: ShannonApiServer::DEFAULT_QUERY_BUDGET,
+            session_locks: std::sync::Arc::new(dashmap::DashMap::new()),
         };
 
         let session = Arc::new(Mutex::new(WsSession {
@@ -2519,6 +3046,8 @@ mod tests {
             tools: Arc::new(ToolRegistry::new()),
             ws_sessions: Arc::new(RwLock::new(HashMap::new())),
             approval_registry: Arc::new(Mutex::new(HashMap::new())),
+            query_budget: ShannonApiServer::DEFAULT_QUERY_BUDGET,
+            session_locks: std::sync::Arc::new(dashmap::DashMap::new()),
         };
         let request_id = "test-approval-1".to_string();
         let (tx, rx) = oneshot::channel::<PermissionChoice>();
@@ -2558,6 +3087,8 @@ mod tests {
             tools: Arc::new(ToolRegistry::new()),
             ws_sessions: Arc::new(RwLock::new(HashMap::new())),
             approval_registry: Arc::new(Mutex::new(HashMap::new())),
+            query_budget: ShannonApiServer::DEFAULT_QUERY_BUDGET,
+            session_locks: std::sync::Arc::new(dashmap::DashMap::new()),
         };
         let body = ApprovalRespondRequest {
             request_id: "does-not-exist".to_string(),
@@ -2725,5 +3256,52 @@ mod tests {
         let server = ShannonApiServer::new(config);
         // Ensure build_router is deterministic and doesn't panic
         let _router = server.build_router();
+    }
+
+    // ── §P3-4: serialization failure emits an explicit error event ─────
+
+    #[test]
+    fn sse_serializable_event_keeps_its_event_name() {
+        let event = QueryEvent::Progress {
+            query_id: Uuid::new_v4(),
+            message: "step 1".to_string(),
+        };
+        let (event_type, data) = sse_parts_from_query_event(&event);
+        assert_eq!(event_type, "progress");
+        let parsed: serde_json::Value = serde_json::from_str(&data).unwrap();
+        // QueryEvent serializes externally tagged: {"Progress": {...}}.
+        assert_eq!(parsed["Progress"]["message"], "step 1");
+    }
+
+    #[test]
+    fn sse_unserializable_event_becomes_error_event_not_empty_payload() {
+        // A payload whose serialization always fails — standing in for
+        // corrupted payloads (e.g. a NaN-bearing value that serde_json
+        // rejects in some positions) that previously degraded to an empty
+        // wire event carrying the *expected* event name.
+        struct AlwaysFails;
+        impl serde::Serialize for AlwaysFails {
+            fn serialize<S: serde::Serializer>(&self, _: S) -> Result<S::Ok, S::Error> {
+                Err(serde::ser::Error::custom("unserializable payload"))
+            }
+        }
+        let event = AlwaysFails;
+        // Sanity: the raw serialization really does fail.
+        assert!(serde_json::to_string(&event).is_err());
+
+        let (event_type, data) = sse_parts("cost", &event);
+        assert_eq!(
+            event_type, "error",
+            "unserializable event must emit an error event"
+        );
+        assert!(!data.is_empty(), "error event must carry a description");
+        let parsed: serde_json::Value = serde_json::from_str(&data).unwrap();
+        let error = parsed["error"].as_str().unwrap();
+        assert!(
+            error.contains("serialization failed"),
+            "error event must explain the failure, got: {error}"
+        );
+        // The failed event type is surfaced so clients know what was lost.
+        assert_eq!(parsed["event_type"], "cost");
     }
 }

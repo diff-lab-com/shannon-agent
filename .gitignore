@@ -173,6 +173,7 @@ findings.md
 .playwright-mcp/
 .serena/
 .reference/
+reference/
 .claudedocs/
 
 # review §P3: gateway package manager is pnpm. The npm package-lock.json

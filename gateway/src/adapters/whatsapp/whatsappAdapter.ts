@@ -12,6 +12,8 @@ import {
   type SendOpts,
 } from "../types.js";
 import { type AdapterConfig } from "../../config/types.js";
+import { readWebhookBodyOr413 } from "../../lib/webhookBody.js";
+import { PLATFORM_HTTP_TIMEOUT_MS } from "../../lib/netTimeouts.js";
 
 /**
  * WhatsApp adapter (Meta Cloud API, a.k.a. WhatsApp Business Platform).
@@ -292,7 +294,9 @@ export function createWhatsAppAdapter(
   }
 
   async function handlePost(req: IncomingMessage, res: ServerResponse): Promise<void> {
-    const raw = await readBody(req);
+    // review §P2-23: bound the raw body before signature verification.
+    const raw = await readWebhookBodyOr413(req, res);
+    if (raw === null) return;
     if (appSecret) {
       const sig = header(req, "x-hub-signature-256");
       if (!sig || !verifyHubSignature(raw, sig, appSecret)) {
@@ -348,7 +352,13 @@ export function createWhatsAppAdapter(
       body: bodyText,
       interactive,
     });
-    const res = await fetchImpl(req.url, { method: req.method, headers: req.headers, body: req.body });
+    const res = await fetchImpl(req.url, {
+      method: req.method,
+      headers: req.headers,
+      body: req.body,
+      // review §P2-23: platform API calls must not hang the session lane.
+      signal: AbortSignal.timeout(PLATFORM_HTTP_TIMEOUT_MS),
+    });
     if (!res.ok) {
       const detail = await res.text().catch(() => "");
       throw new Error(`whatsapp send failed: HTTP ${res.status} ${detail}`);
@@ -428,18 +438,6 @@ export function createWhatsAppAdapter(
 }
 
 // ── small helpers ──────────────────────────────────────────────────────
-
-function readBody(req: IncomingMessage): Promise<string> {
-  return new Promise((resolve, reject) => {
-    let data = "";
-    req.setEncoding("utf8");
-    req.on("data", (chunk: string) => {
-      data += chunk;
-    });
-    req.on("end", () => resolve(data));
-    req.on("error", reject);
-  });
-}
 
 function header(req: IncomingMessage, name: string): string | undefined {
   const v = req.headers[name.toLowerCase()];

@@ -7,6 +7,13 @@ import {
   type SendOpts,
 } from "../types.js";
 import { type AdapterConfig } from "../../config/types.js";
+import { PLATFORM_HTTP_TIMEOUT_MS } from "../../lib/netTimeouts.js";
+
+/**
+ * getUpdates long-polls with `timeout=30` server-side; the client-side abort
+ * must exceed that so a healthy poll isn't cut off (review §P2-23).
+ */
+const LONG_POLL_TIMEOUT_MS = 45_000;
 
 /**
  * Telegram Bot API adapter.
@@ -284,6 +291,9 @@ export function createTelegramAdapter(
     try {
       const res = await fetchImpl(
         `${apiBaseUrl}/bot${token}/getUpdates?offset=${offset}&timeout=30`,
+        // review §P2-23: bound the long-poll so a stalled connection can't
+        // wedge the poll loop (server-side long-poll is 30s → abort at 45s).
+        { signal: AbortSignal.timeout(LONG_POLL_TIMEOUT_MS) },
       );
       const data = (await res.json()) as { result?: TgUpdate[] };
       for (const upd of data.result ?? []) {
@@ -327,14 +337,21 @@ export function createTelegramAdapter(
     for (const ref of refs) {
       try {
         const fileReq = buildGetFileRequest({ token, apiBaseUrl, fileId: ref.fileId });
-        const res = await fetchImpl(fileReq.url, { method: fileReq.method, body: fileReq.body });
+        const res = await fetchImpl(fileReq.url, {
+          method: fileReq.method,
+          body: fileReq.body,
+          signal: AbortSignal.timeout(PLATFORM_HTTP_TIMEOUT_MS),
+        });
         if (!res.ok) throw new Error(`getFile failed: HTTP ${res.status}`);
         const data = (await res.json()) as { result?: { file_path?: string } };
         const filePath = data.result?.file_path;
         if (typeof filePath !== "string" || filePath.length === 0) {
           throw new Error("getFile returned no file_path");
         }
-        const bin = await fetchImpl(buildTelegramFileDownloadUrl({ token, apiBaseUrl, filePath }));
+        const bin = await fetchImpl(
+          buildTelegramFileDownloadUrl({ token, apiBaseUrl, filePath }),
+          { signal: AbortSignal.timeout(PLATFORM_HTTP_TIMEOUT_MS) },
+        );
         if (!bin.ok) throw new Error(`file download failed: HTTP ${bin.status}`);
         const bytes = new Uint8Array(await bin.arrayBuffer());
         out.push({ kind: "image", mimeType: ref.mimeType, data: bytes, caption: ref.name ?? undefined });
@@ -356,6 +373,8 @@ export function createTelegramAdapter(
       method: req.method,
       body: req.body,
       headers: { "content-type": "application/json" },
+      // review §P2-23: platform API calls must not hang the session lane.
+      signal: AbortSignal.timeout(PLATFORM_HTTP_TIMEOUT_MS),
     });
     if (!res.ok) throw new Error(`telegram send failed: HTTP ${res.status}`);
     const data = (await res.json()) as { result?: { message_id?: number } };
@@ -369,6 +388,7 @@ export function createTelegramAdapter(
       method: req.method,
       body: req.body,
       headers: { "content-type": "application/json" },
+      signal: AbortSignal.timeout(PLATFORM_HTTP_TIMEOUT_MS),
     });
     if (!res.ok) throw new Error(`telegram edit failed: HTTP ${res.status}`);
   }
