@@ -2168,6 +2168,38 @@ fn resolve_path_in_working_dir_rejects_missing_path() {
     assert!(err.contains("not found"));
 }
 
+// --- Review §P0-3: harden the write-target helper the same way ---
+
+#[test]
+fn resolve_write_target_accepts_inside_path() {
+    let tmp = tempfile::tempdir().unwrap();
+    let target = tmp.path().join("new_file.txt");
+    let resolved = crate::resolve_write_target_in_working_dir("new_file.txt", tmp.path())
+        .expect("relative write target inside working dir should resolve");
+    assert_eq!(resolved, target);
+}
+
+#[test]
+fn resolve_write_target_rejects_absolute_outside_path() {
+    let tmp = tempfile::tempdir().unwrap();
+    let err = crate::resolve_write_target_in_working_dir("/etc/evil_cron", tmp.path())
+        .expect_err("absolute write target outside working dir must be rejected");
+    assert!(
+        err.contains("outside") || err.contains("not found"),
+        "unexpected error: {err}"
+    );
+}
+
+#[test]
+fn resolve_write_target_rejects_dotdot_traversal() {
+    let tmp = tempfile::tempdir().unwrap();
+    // A `../foo` write target escapes the working dir because the
+    // canonicalized parent (the parent of tmp.path()) is outside tmp.path().
+    let err = crate::resolve_write_target_in_working_dir("../escape.txt", tmp.path())
+        .expect_err("dotdot traversal must be rejected");
+    assert!(err.contains("outside"), "unexpected error: {err}");
+}
+
 // ── Top-level unit tests for high-value pure functions ───────────────
 // These complement `mod tests` above. Kept at module scope so they can
 // invoke private helpers directly without going through `super::*`.
