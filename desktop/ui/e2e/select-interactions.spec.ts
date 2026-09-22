@@ -10,7 +10,7 @@ import { test, expect } from '@playwright/test'
 test.describe('Select interactions', () => {
   test('permission mode commits from the composer dropdown', async ({ page }) => {
     await page.goto('/chat')
-    await page.getByPlaceholder('Ask Shannon anything...').waitFor({ timeout: 15000 })
+    await page.getByPlaceholder(/Ask Shannon anything.../i).waitFor({ timeout: 15000 })
     await page.waitForTimeout(800)
 
     const trigger = page.getByRole('combobox', { name: 'Permission mode' })
@@ -22,7 +22,7 @@ test.describe('Select interactions', () => {
 
   test('reasoning effort commits from the composer dropdown', async ({ page }) => {
     await page.goto('/chat')
-    await page.getByPlaceholder('Ask Shannon anything...').waitFor({ timeout: 15000 })
+    await page.getByPlaceholder(/Ask Shannon anything.../i).waitFor({ timeout: 15000 })
     await page.waitForTimeout(800)
 
     const trigger = page.getByRole('combobox', { name: 'Reasoning' })
@@ -35,7 +35,7 @@ test.describe('Select interactions', () => {
 
   test('model chip and header selector commit and stay in sync', async ({ page }) => {
     await page.goto('/chat')
-    await page.getByPlaceholder('Ask Shannon anything...').waitFor({ timeout: 15000 })
+    await page.getByPlaceholder(/Ask Shannon anything.../i).waitFor({ timeout: 15000 })
     await page.waitForTimeout(800)
 
     const chip = page.getByRole('combobox', { name: 'Model' })
