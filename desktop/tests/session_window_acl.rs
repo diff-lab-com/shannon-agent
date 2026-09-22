@@ -71,7 +71,10 @@ fn capability_stays_minimal_no_other_plugin_commands_allowed() {
         // actually work. The session-windows capability still does NOT
         // include dialog — those verbs are gated by file-dialogs.json.
         assert!(allowed("plugin:dialog|open", window), "dialog on {window}");
-        assert!(allowed("plugin:dialog|save", window), "dialog save on {window}");
+        assert!(
+            allowed("plugin:dialog|save", window),
+            "dialog save on {window}"
+        );
         // Window close is done through the `close_session_window` app
         // command (not ACL-gated), so the raw window API stays closed.
         assert!(
