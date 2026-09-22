@@ -67,6 +67,12 @@ pub struct BackgroundEntry {
     pub stderr: Arc<Mutex<VecDeque<String>>>,
     /// Optional shared exit code (filled in when `wait()` completes).
     pub exit_code: Arc<Mutex<Option<i32>>>,
+    /// review §P1-8: oneshot kill signal sender. The wait task holds the
+    /// receiver and calls `child.kill().await` on fire. KillBackground
+    /// sends on this to actually terminate the running process (previously
+    /// the entry had no handle at all and the tool returned success without
+    /// sending any signal, leaving the child orphaned).
+    pub kill_tx: Arc<Mutex<Option<tokio::sync::oneshot::Sender<()>>>>,
 }
 
 /// Lifecycle state of a background entry.
@@ -216,16 +222,18 @@ impl Tool for RunBackgroundTool {
         }
 
         // If a previous entry exists under this name, kill it before
-        // re-spawning. We do NOT remove it from the registry yet — the
-        // replacement write below will overwrite the slot atomically.
+        // re-spawning (review §P1-8). We do NOT remove it from the registry
+        // yet — the replacement write below will overwrite the slot
+        // atomically. The previous wait task forwards the kill to the OS
+        // child and records the exit code.
         if let Some(prev) = REGISTRY.lock().unwrap().get(&parsed.name).cloned() {
-            // Mark the previous entry as exited and best-effort kill any
-            // outstanding child handle. We don't have a handle in the entry
-            // (only the buffer is shared); killing happens via the OS: a
-            // sibling `KillBackground` call would re-acquire the child. Here
-            // we just leave the entry in place and overwrite below — the new
-            // child starts fresh, the old reader task will see EOF.
-            let _ = prev; // suppress unused warning; presence-checked above
+            if let Some(tx) = prev.kill_tx.lock().unwrap().take() {
+                let _ = tx.send(());
+                tracing::info!(
+                    name = %prev.name,
+                    "killing previous background process before re-spawn",
+                );
+            }
         }
 
         let mut request = ProcessRequest::new("bash", &["-c", &parsed.command]);
@@ -272,6 +280,11 @@ impl Tool for RunBackgroundTool {
         let stderr_buf: Arc<Mutex<VecDeque<String>>> =
             Arc::new(Mutex::new(VecDeque::with_capacity(RING_CAPACITY)));
         let exit_code: Arc<Mutex<Option<i32>>> = Arc::new(Mutex::new(None));
+        // review §P1-8: kill signal channel. The wait task holds `kill_rx`
+        // and forwards the kill to `child.kill().await` when fired; the
+        // entry stores the sender so KillBackground can drive it.
+        let (kill_tx, kill_rx) = tokio::sync::oneshot::channel::<()>();
+        let kill_tx = Arc::new(Mutex::new(Some(kill_tx)));
         let entry = Arc::new(BackgroundEntry {
             name: parsed.name.clone(),
             started_at_unix_ms,
@@ -279,6 +292,7 @@ impl Tool for RunBackgroundTool {
             stdout: stdout_buf.clone(),
             stderr: stderr_buf.clone(),
             exit_code: exit_code.clone(),
+            kill_tx: kill_tx.clone(),
         });
 
         // Reader task: drain stdout into the ring buffer line by line.
@@ -308,18 +322,42 @@ impl Tool for RunBackgroundTool {
         // Wait task: reap the child and surface exit code. The wait task is
         // the single source of truth for the exit code — readers observe it
         // by polling `exit_code` on every WaitForLog tick.
+        //
+        // review §P1-8: race child.wait() against the kill_rx oneshot. If
+        // KillBackground fires (or RunBackground sees the same name reused
+        // and fires its own kill before the new spawn), the wait task must
+        // forward that signal to child.kill().await so the process actually
+        // terminates. Previously the entry had no handle and the tool
+        // reported success without sending any signal.
         {
             let entry_name = parsed.name.clone();
             let exit_code = exit_code.clone();
             tokio::spawn(async move {
-                if let Ok(status) = child.wait().await {
-                    let code = status.code.unwrap_or(-1);
-                    *exit_code.lock().unwrap() = Some(code);
-                    tracing::debug!(
-                        name = %entry_name,
-                        code,
-                        "background child exited",
-                    );
+                tokio::select! {
+                    status = child.wait() => {
+                        if let Ok(s) = status {
+                            let code = s.code.unwrap_or(-1);
+                            *exit_code.lock().unwrap() = Some(code);
+                            tracing::debug!(
+                                name = %entry_name,
+                                code,
+                                "background child exited",
+                            );
+                        }
+                    }
+                    _ = kill_rx => {
+                        tracing::warn!(
+                            name = %entry_name,
+                            "background child received kill signal (KillBackground or re-spawn)"
+                        );
+                        child.kill().await;
+                        // Wait for the actual exit so we record the exit code
+                        // driven by the kill rather than leaving it as None.
+                        if let Ok(status) = child.wait().await {
+                            let code = status.code.unwrap_or(-1);
+                            *exit_code.lock().unwrap() = Some(code);
+                        }
+                    }
                 }
             });
         }
@@ -684,21 +722,12 @@ impl Tool for KillBackgroundTool {
         let parsed: KillBackgroundInput = serde_json::from_value(input)
             .map_err(|e| ToolError::InvalidInput(format!("Invalid KillBackground input: {e}")))?;
 
-        // We don't store the child handle in the registry (only the buffers);
-        // therefore the actual kill signal is sent via the process provider
-        // finding it. To keep the seam self-contained, we spawn a SIGTERM
-        // through `bash -c "kill -TERM <pid>"` if available — but the
-        // portable path is: rely on the OS to reap when the child finishes,
-        // which happens when the reader tasks see EOF. The "Kill" semantics
-        // here amount to: stop polling (the entry is removed from the
-        // registry, the wait task will simply complete naturally and the
-        // reader tasks will see EOF when stdout/stderr close).
-        //
-        // NOTE: a future revision may store the `Box<dyn PipedChild>` in the
-        // registry to enable direct `child.kill()`. For now, removing the
-        // registry slot plus best-effort process-group termination via the
-        // provider is the supported path.
-
+        // review §P1-8: KillBackground now actually fires a kill signal to
+        // the running child via the oneshot sender stored in the entry,
+        // instead of merely removing the registry slot and reporting
+        // success. The wait task observes the signal in its select! branch
+        // and forwards it to `child.kill().await`, after which it waits
+        // for the actual exit so the exit_code is recorded.
         let entry = REGISTRY.lock().unwrap().remove(&parsed.name);
         let Some(entry) = entry else {
             return Err(ToolError::InvalidInput(format!(
@@ -707,25 +736,19 @@ impl Tool for KillBackgroundTool {
             )));
         };
 
-        // Best-effort kill via the OS process world: spawn `kill -TERM <pid>`
-        // when we can identify the child. Without a stored handle we use a
-        // fallback `pkill -P $$` against the bash shell that ran the child;
-        // in practice, the consumer's intent ("Kill") is honored by dropping
-        // the registry slot and letting reader tasks finish as the child
-        // exits (most background tasks run until completion; if the consumer
-        // wants the OS to deliver a signal, they should pass `command` to
-        // their child that reacts to it). The slot removal unblocks
-        // `WaitForLog` callers immediately.
-        let _ = &self.process; // intentionally unused — see note above
+        // Fire the kill signal. If the sender was already taken (e.g. a
+        // concurrent Kill or a re-spawn already fired it), this is a no-op.
+        if let Some(tx) = entry.kill_tx.lock().unwrap().take() {
+            let _ = tx.send(());
+        }
 
         let timeout = Duration::from_millis(parsed.timeout_ms.unwrap_or(5_000));
         let started = Instant::now();
         let mut exit_code = *entry.exit_code.lock().unwrap();
 
         if exit_code.is_none() {
-            // Spin briefly to let the wait task observe any natural exit
-            // before reporting. The wait task may not see the OS-side kill
-            // immediately because we did not store the handle.
+            // Wait for the wait task to observe the kill and record the
+            // exit code (or for the child to exit on its own).
             let poll = Duration::from_millis(50);
             while Instant::now() < started + timeout && exit_code.is_none() {
                 tokio::time::sleep(poll).await;
