@@ -9055,7 +9055,9 @@ mod tests {
         let mut timeout_error_seen: Option<(bool, String)> = None;
         let mut completed = false;
         let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(30);
-        while let Some(ev) = tokio::time::timeout_at(deadline, stream.next()).await.unwrap_or(None)
+        while let Some(ev) = tokio::time::timeout_at(deadline, stream.next())
+            .await
+            .unwrap_or(None)
         {
             match ev {
                 Ok(QueryEvent::ToolUseResult {

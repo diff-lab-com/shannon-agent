@@ -1232,9 +1232,9 @@ mod tests {
     #[tokio::test]
     async fn subagent_bash_defaults_to_sandboxed_registration() {
         let mut registry = shannon_core::ToolRegistry::new();
-        let dir = std::env::temp_dir().join("shannon-p2-13").join(
-            uuid::Uuid::new_v4().to_string(),
-        );
+        let dir = std::env::temp_dir()
+            .join("shannon-p2-13")
+            .join(uuid::Uuid::new_v4().to_string());
         std::fs::create_dir_all(&dir).unwrap();
 
         AgentTool::register_subagent_tools(&mut registry, Some(&dir))

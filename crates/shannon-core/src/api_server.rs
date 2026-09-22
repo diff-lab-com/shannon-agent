@@ -1897,13 +1897,10 @@ mod tests {
             // bytes) came back, so the server has fully committed to the
             // streaming response before the client vanishes.
             let mut head = vec![0u8; 2048];
-            let n = tokio::time::timeout(
-                std::time::Duration::from_secs(10),
-                sock.read(&mut head),
-            )
-            .await
-            .expect("SSE response head must arrive")
-            .expect("read head");
+            let n = tokio::time::timeout(std::time::Duration::from_secs(10), sock.read(&mut head))
+                .await
+                .expect("SSE response head must arrive")
+                .expect("read head");
             let head_text = String::from_utf8_lossy(&head[..n]).to_string();
             assert!(
                 head_text.contains("text/event-stream"),
@@ -2040,11 +2037,9 @@ mod tests {
             });
         }
 
-        let app = ShannonApiServer::new(disconnect_test_config(format!(
-            "http://127.0.0.1:{port}"
-        )))
-        .query_budget(std::time::Duration::from_secs(60))
-        .build_router();
+        let app = ShannonApiServer::new(disconnect_test_config(format!("http://127.0.0.1:{port}")))
+            .query_budget(std::time::Duration::from_secs(60))
+            .build_router();
         let addr = spawn_real_server(app).await;
         let session_id = Uuid::new_v4();
 
@@ -2054,9 +2049,7 @@ mod tests {
             let session_id = session_id;
             async move {
                 let mut sock = tokio::net::TcpStream::connect(addr).await.unwrap();
-                let body = format!(
-                    r#"{{"prompt":"{prompt}","session_id":"{session_id}"}}"#
-                );
+                let body = format!(r#"{{"prompt":"{prompt}","session_id":"{session_id}"}}"#);
                 let req = format!(
                     "POST /api/query HTTP/1.1\r\nHost: {addr}\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
                     body.len()
@@ -2124,10 +2117,7 @@ mod tests {
                         .map(|blocks| {
                             blocks.iter().any(|b| {
                                 b["type"] == "text"
-                                    && b["text"]
-                                        .as_str()
-                                        .unwrap_or_default()
-                                        .contains("A_REPLY")
+                                    && b["text"].as_str().unwrap_or_default().contains("A_REPLY")
                             })
                         })
                         .unwrap_or(false)

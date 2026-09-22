@@ -18,8 +18,8 @@ use shannon_tool_interface::{DirEntryInfo, FileMeta, FileSystemProvider, Tool};
 use shannon_tools::{GrepTool, ReadTool};
 use std::io;
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicUsize, Ordering};
 
 /// How long each probe blocking call pretends to take.
 const BLOCKING_CALL_MS: u64 = 250;
@@ -155,8 +155,7 @@ async fn grep_blocking_io_runs_off_the_async_worker() {
     let sandbox = shannon_tools::file::sandbox::PathSandbox::with_config(
         shannon_tools::file::sandbox::SandboxConfig {
             allowed_roots: vec![PathBuf::from("/remote/proj")],
-            denied_patterns:
-                shannon_tools::file::sandbox::SandboxConfig::default_denied_patterns(),
+            denied_patterns: shannon_tools::file::sandbox::SandboxConfig::default_denied_patterns(),
             strict_mode: true,
         },
     )
@@ -198,8 +197,7 @@ async fn read_binary_sniff_runs_off_the_async_worker() {
     let sandbox = shannon_tools::file::sandbox::PathSandbox::with_config(
         shannon_tools::file::sandbox::SandboxConfig {
             allowed_roots: vec![std::env::temp_dir()],
-            denied_patterns:
-                shannon_tools::file::sandbox::SandboxConfig::default_denied_patterns(),
+            denied_patterns: shannon_tools::file::sandbox::SandboxConfig::default_denied_patterns(),
             strict_mode: false,
         },
     );

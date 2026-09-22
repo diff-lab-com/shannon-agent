@@ -137,7 +137,10 @@ impl GrepTool {
     /// §P2-14: takes the provider explicitly (not `&self`) so the blocking
     /// search section can run inside `spawn_blocking` without borrowing the
     /// tool.
-    fn is_binary(fs: &std::sync::Arc<dyn shannon_tool_interface::FileSystemProvider>, path: &Path) -> bool {
+    fn is_binary(
+        fs: &std::sync::Arc<dyn shannon_tool_interface::FileSystemProvider>,
+        path: &Path,
+    ) -> bool {
         match fs.read_prefix_blocking(path, BINARY_CHECK_BYTES) {
             Ok(buf) => buf.contains(&0),
             Err(_) => true, // Treat unreadable files as binary

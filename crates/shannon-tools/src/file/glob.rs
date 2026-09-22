@@ -140,10 +140,7 @@ pub async fn execute_with(
     input: GlobInput,
     fs: std::sync::Arc<dyn FileSystemProvider>,
 ) -> Result<ToolOutput, ToolError> {
-    let base_path = input
-        .path
-        .clone()
-        .unwrap_or_else(|| ".".to_string());
+    let base_path = input.path.clone().unwrap_or_else(|| ".".to_string());
     let base = PathBuf::from(&base_path);
     let excludes = input.exclude_pattern.clone().unwrap_or_default();
     let pattern = input.pattern.clone();

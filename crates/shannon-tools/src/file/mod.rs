@@ -359,7 +359,12 @@ impl Tool for WriteTool {
         let mut input = write_input;
         input.file_path = canonical.to_string_lossy().to_string();
 
-        snapshot_for_undo(self.fs.clone(), self.history.clone(), input.file_path.clone()).await;
+        snapshot_for_undo(
+            self.fs.clone(),
+            self.history.clone(),
+            input.file_path.clone(),
+        )
+        .await;
         let mut output = write::execute_with(input, self.fs.as_ref()).await?;
         self.sandbox.remap_tool_output(&mut output);
         Ok(output)
@@ -510,7 +515,12 @@ impl Tool for EditTool {
         let mut input = edit_input;
         input.file_path = canonical.to_string_lossy().to_string();
 
-        snapshot_for_undo(self.fs.clone(), self.history.clone(), input.file_path.clone()).await;
+        snapshot_for_undo(
+            self.fs.clone(),
+            self.history.clone(),
+            input.file_path.clone(),
+        )
+        .await;
         let mut output = edit::execute_with(input, self.fs.as_ref(), self.process.as_ref()).await?;
         // A3: the success message and diff header embed the file path —
         // re-render them into the sandbox-visible spelling.
@@ -643,12 +653,8 @@ impl Tool for MultiEditTool {
         for op in &multi_input.edits {
             if !snapshotted.contains(&op.file_path) {
                 snapshotted.push(op.file_path.clone());
-                snapshot_for_undo(
-                    self.fs.clone(),
-                    self.history.clone(),
-                    op.file_path.clone(),
-                )
-                .await;
+                snapshot_for_undo(self.fs.clone(), self.history.clone(), op.file_path.clone())
+                    .await;
             }
         }
 

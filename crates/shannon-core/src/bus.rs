@@ -757,7 +757,10 @@ pub fn inherit_decision_sink<F>(fut: F) -> std::pin::Pin<Box<dyn Future<Output =
 where
     F: Future + Send + 'static,
 {
-    let sink = CURRENT_DECISION_SINK.try_with(|slot| slot.clone()).ok().flatten();
+    let sink = CURRENT_DECISION_SINK
+        .try_with(|slot| slot.clone())
+        .ok()
+        .flatten();
     Box::pin(CURRENT_DECISION_SINK.scope(sink, fut))
 }
 
@@ -1020,10 +1023,9 @@ mod tests {
     #[tokio::test]
     async fn decision_sink_scoped_producer_receives_broadcasts() {
         let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel::<(String, bool)>();
-        let sink: DecisionSink =
-            Arc::new(move |frame: &PluginDecisionFrame| {
-                let _ = tx.send((frame.plugin.clone(), frame.allowed));
-            });
+        let sink: DecisionSink = Arc::new(move |frame: &PluginDecisionFrame| {
+            let _ = tx.send((frame.plugin.clone(), frame.allowed));
+        });
         scope_decision_sink(sink, async {
             broadcast_plugin_decision(frame("acme", true));
         })
@@ -1043,14 +1045,12 @@ mod tests {
     async fn p2_4_concurrent_producers_route_decisions_to_their_own_sink() {
         let (tx_a, mut rx_a) = tokio::sync::mpsc::unbounded_channel::<String>();
         let (tx_b, mut rx_b) = tokio::sync::mpsc::unbounded_channel::<String>();
-        let sink_a: DecisionSink =
-            Arc::new(move |frame: &PluginDecisionFrame| {
-                let _ = tx_a.send(frame.plugin.clone());
-            });
-        let sink_b: DecisionSink =
-            Arc::new(move |frame: &PluginDecisionFrame| {
-                let _ = tx_b.send(frame.plugin.clone());
-            });
+        let sink_a: DecisionSink = Arc::new(move |frame: &PluginDecisionFrame| {
+            let _ = tx_a.send(frame.plugin.clone());
+        });
+        let sink_b: DecisionSink = Arc::new(move |frame: &PluginDecisionFrame| {
+            let _ = tx_b.send(frame.plugin.clone());
+        });
 
         // Producer A installs its sink and parks; producer B then installs
         // its own — which under the old global `Option` would have captured
@@ -1067,8 +1067,14 @@ mod tests {
 
         assert_eq!(rx_a.recv().await.as_deref(), Some("plugin-a"));
         assert_eq!(rx_b.recv().await.as_deref(), Some("plugin-b"));
-        assert!(rx_a.try_recv().is_err(), "A's channel must not receive B's decisions");
-        assert!(rx_b.try_recv().is_err(), "B's channel must not receive A's decisions");
+        assert!(
+            rx_a.try_recv().is_err(),
+            "A's channel must not receive B's decisions"
+        );
+        assert!(
+            rx_b.try_recv().is_err(),
+            "B's channel must not receive A's decisions"
+        );
     }
 
     // Review §P2-4: the engine's parallel read-only tool batches run in
@@ -1078,10 +1084,9 @@ mod tests {
     #[tokio::test]
     async fn decision_sink_is_inherited_by_spawned_subtasks() {
         let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel::<String>();
-        let sink: DecisionSink =
-            Arc::new(move |frame: &PluginDecisionFrame| {
-                let _ = tx.send(frame.plugin.clone());
-            });
+        let sink: DecisionSink = Arc::new(move |frame: &PluginDecisionFrame| {
+            let _ = tx.send(frame.plugin.clone());
+        });
         scope_decision_sink(sink, async {
             tokio::spawn(inherit_decision_sink(async {
                 broadcast_plugin_decision(frame("batched-tool", true));

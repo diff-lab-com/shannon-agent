@@ -207,8 +207,7 @@ impl ToolRegistry {
     /// normal LLM/tool latencies, so it only fires on genuinely stuck tools.
     /// Hosts that legitimately run longer tools override it via
     /// [`ToolRegistry::set_execution_timeout`].
-    pub const DEFAULT_EXECUTION_TIMEOUT: std::time::Duration =
-        std::time::Duration::from_secs(300);
+    pub const DEFAULT_EXECUTION_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(300);
 
     /// Helper to recover from a poisoned lock by extracting the inner value.
     /// This prevents panics when another thread panicked while holding the lock.
@@ -1963,11 +1962,7 @@ mod tests {
         registry.set_execution_timeout(std::time::Duration::from_millis(50));
 
         let result = registry
-            .execute_streaming(
-                "slow_tool",
-                json!({}),
-                std::sync::Arc::new(NopSender),
-            )
+            .execute_streaming("slow_tool", json!({}), std::sync::Arc::new(NopSender))
             .await;
 
         assert!(result.is_err(), "streaming execution should have timed out");
@@ -1977,10 +1972,10 @@ mod tests {
                 assert_eq!(duration, std::time::Duration::from_millis(50));
                 // The wire-facing message promised by §P2-2 ("timed out
                 // after Ns") comes from the ToolError Display impl.
-                assert!(format!(
-                    "Tool '{name}' timed out after {duration:?}"
-                )
-                .contains("timed out after"));
+                assert!(
+                    format!("Tool '{name}' timed out after {duration:?}")
+                        .contains("timed out after")
+                );
             }
             other => panic!("Expected Timeout error, got {other:?}"),
         }

@@ -207,7 +207,8 @@ pub async fn execute_with(
     let sniff_path = input.file_path.clone();
     let sniff_fs = fs.clone();
     let is_binary = tokio::task::spawn_blocking(move || {
-        sniff_fs.read_prefix_blocking(Path::new(&sniff_path), BINARY_SNIFF_BYTES)
+        sniff_fs
+            .read_prefix_blocking(Path::new(&sniff_path), BINARY_SNIFF_BYTES)
             .map(|prefix| prefix.contains(&0u8))
             .unwrap_or(false)
     })
