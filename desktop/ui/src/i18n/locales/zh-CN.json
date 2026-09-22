@@ -3137,5 +3137,16 @@
   "extensions.market.personal": "个人",
   "extensions.market.personalEmpty": "还没有个人扩展",
   "extensions.market.personalEmptyHint": "本地自建的技能、智能体与插件会出现在这里。",
-  "extensions.market.installedRow": "已安装"
+  "extensions.market.installedRow": "已安装",
+  "sidebar.sessions.grouping.smart": "智能",
+  "sidebar.groups.running": "进行中",
+  "sidebar.groups.attention": "需要关注",
+  "sidebar.groups.recent": "最近",
+  "sidebar.automations.title": "自动化",
+  "sidebar.automations.soon": "即将",
+  "sidebar.automations.more": "查看 {n} 个更多…",
+  "chat.dock.openFile.aria": "打开文件为文档标签页",
+  "chat.dock.openFile.failed": "打开文件失败",
+  "chat.artifact.table.copy": "复制",
+  "chat.artifact.table.download": "下载"
 }

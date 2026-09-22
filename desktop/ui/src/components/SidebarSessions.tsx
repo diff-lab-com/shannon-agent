@@ -27,7 +27,7 @@ import { useT } from '@/i18n'
 import * as api from '@/lib/tauri-api'
 import { exportSessionAsMarkdown, printSession } from '@/lib/sessionActions'
 import { toastError } from '@/lib/errorToast'
-import type { GoalRunDto, SessionActivity, SessionInfo } from '@/types'
+import type { GoalRunDto, ScheduledRoutine, SessionActivity, SessionInfo } from '@/types'
 import DeleteSessionModal from '@/pages/chat/DeleteSessionModal'
 import HighlightText from './HighlightText'
 
@@ -35,13 +35,30 @@ const SESSIONS_ORDER_KEY = 'shannon-sessions-order'
 const SESSIONS_PINNED_KEY = 'shannon-sessions-pinned'
 const SESSIONS_GROUPING_KEY = 'shannon-sessions-grouping'
 const SESSIONS_FOLDED_KEY = 'shannon-sessions-folded'
+// Batch F2: project registry — display names for derived project folders
+// (the first slice of "projects as entities"; deeper registries need engine
+// support). dirname → display name.
+const PROJECTS_KEY = 'shannon-projects'
+
+type ProjectRegistry = Record<string, string>
+
+function readProjectRegistry(): ProjectRegistry {
+  if (typeof window === 'undefined') return {}
+  try {
+    const raw = window.localStorage.getItem(PROJECTS_KEY)
+    return raw ? JSON.parse(raw) : {}
+  } catch { return {} }
+}
 
 // IA (2026-09 review): two grouping modes — by project (folders nest
 // their conversations, the ZCode mental model) and by session (one flat
 // list sorted by recency). The session mode is what users want when
 // they're hunting for "the chat I had an hour ago"; project mode wins
 // once they have more than ~10 conversations.
-type GroupingMode = 'project' | 'session'
+// Batch F6: a third 智能 mode pins the actionable sessions first —
+// 运行中 → 需要关注（审批/失败）→ 全部 — a deterministic stand-in for the
+// reference's AI grouping that still answers "what needs me right now".
+type GroupingMode = 'project' | 'session' | 'smart'
 
 function readOrderOverride(): Record<string, number> {
   if (typeof window === 'undefined') return {}
@@ -62,7 +79,8 @@ function readPinned(): ReadonlySet<string> {
 function readGrouping(): GroupingMode {
   if (typeof window === 'undefined') return 'project'
   try {
-    return window.localStorage.getItem(SESSIONS_GROUPING_KEY) === 'session' ? 'session' : 'project'
+    const raw = window.localStorage.getItem(SESSIONS_GROUPING_KEY)
+    return raw === 'session' || raw === 'smart' ? raw : 'project'
   } catch { return 'project' }
 }
 
@@ -163,6 +181,15 @@ export function SessionsSection({ sessions, sessionActivity, goalRunsBySession =
   // ZCode 项目 tree: folded project folders persist; the active session's
   // project always auto-expands so the current conversation stays visible.
   const [foldedProjects, setFoldedProjects] = useState<ReadonlySet<string>>(readFolded)
+  // Batch F2: project display-name registry (localStorage) + inline rename.
+  const [projectNames, setProjectNames] = useState<ProjectRegistry>(readProjectRegistry)
+  const [editingProject, setEditingProject] = useState<string | null>(null)
+  const [projectNameDraft, setProjectNameDraft] = useState('')
+  // Batch F1-v1: enabled scheduled routines surface as an 自动化 section on
+  // the rail (clock icon + next fire). Nesting them under projects needs the
+  // engine to expose working_dir on routines — deferred until that contract
+  // exists.
+  const [routines, setRoutines] = useState<ScheduledRoutine[]>([])
   // Wall-clock tick that drives the elapsed badges while anything runs.
   const [nowTick, setNowTick] = useState(() => Date.now())
   // U5: touch long-press (500ms) opens the ⋯ menu; the click that follows a
@@ -237,6 +264,28 @@ export function SessionsSection({ sessions, sessionActivity, goalRunsBySession =
 
   const untitled = t('chat.session.untitled')
 
+  // Batch F1-v1: enabled scheduled routines for the rail's 自动化 section.
+  // Fully defensive: engines without the command, partial test mocks, or
+  // undefined payloads all just hide the section.
+  useEffect(() => {
+    let cancelled = false
+    const load = () => {
+      try {
+        api.listScheduledTasks()
+          .then(tasks => {
+            if (!cancelled) setRoutines(Array.isArray(tasks) ? tasks.filter(r => r.enabled) : [])
+          })
+          .catch(() => { /* section stays hidden */ })
+      } catch { /* section stays hidden */ }
+    }
+    load()
+    const id = window.setInterval(load, 60_000)
+    return () => {
+      cancelled = true
+      window.clearInterval(id)
+    }
+  }, [])
+
   // Sort: pinned sessions first (U4 priority rule), then explicit drag-order
   // override (ascending), then created_at desc.
   const sorted = useMemo(() => {
@@ -297,6 +346,25 @@ export function SessionsSection({ sessions, sessionActivity, goalRunsBySession =
   // is the ZCode-style mental model.
   const groups = useMemo<SessionGroup[] | null>(() => {
     if (query.trim()) return null
+    if (grouping === 'smart') {
+      // Batch F6: deterministic smart rail — actionable first. Each session
+      // lands in exactly one section; the remainder stays a flat "最近" list
+      // (the session-mode mental model, preserved underneath).
+      const running = filtered.filter(s => sessionActivity[s.id]?.running === true || s.running === true)
+      const attention = filtered.filter(s => {
+        const a = sessionActivity[s.id]
+        if (!a || a.running) return false
+        if (s.running === true) return false
+        return a.awaitingApproval === true || a.failed === true
+      })
+      const attended = new Set([...running, ...attention].map(s => s.id))
+      const rest = filtered.filter(s => !attended.has(s.id))
+      const out: SessionGroup[] = []
+      if (running.length > 0) out.push({ key: 'smart-running', icon: 'play_circle', label: t('sidebar.groups.running'), sessions: running })
+      if (attention.length > 0) out.push({ key: 'smart-attention', icon: 'priority', label: t('sidebar.groups.attention'), sessions: attention })
+      if (rest.length > 0) out.push({ key: 'smart-rest', icon: 'history', label: t('sidebar.groups.recent'), sessions: rest })
+      return out.length > 0 ? out : null
+    }
     if (grouping === 'project') {
       const distinct = new Set(filtered.map(projectOf))
       if (distinct.size <= 1) return null
@@ -309,14 +377,14 @@ export function SessionsSection({ sessions, sessionActivity, goalRunsBySession =
       return [...buckets.entries()].map(([key, list]) => ({
         key,
         icon: 'folder',
-        label: key === '' ? t('sidebar.sessions.project.untitled') : key,
+        label: key === '' ? t('sidebar.sessions.project.untitled') : (projectNames[key] ?? key),
         sessions: list,
         isProject: true,
       }))
     }
     // Session mode — flat, no headers. The list itself is the order.
     return null
-  }, [filtered, grouping, query, t])
+  }, [filtered, grouping, query, t, sessionActivity, projectNames])
 
   const persistOrder = useCallback((next: Record<string, number>) => {
     setOrderOverride(next)
@@ -373,6 +441,18 @@ export function SessionsSection({ sessions, sessionActivity, goalRunsBySession =
     })
   }, [])
 
+  // Batch F2: persist a project display name (rename via double-click).
+  const commitProjectRename = useCallback((dirKey: string) => {
+    const next = projectNameDraft.trim()
+    setEditingProject(null)
+    if (!next || !dirKey) return
+    setProjectNames(prev => {
+      const reg = { ...prev, [dirKey]: next }
+      persist(PROJECTS_KEY, reg)
+      return reg
+    })
+  }, [projectNameDraft])
+
   const startRename = useCallback((session: SessionInfo) => {
     setEditingId(session.id)
     setEditTitle(session.title)
@@ -411,8 +491,25 @@ export function SessionsSection({ sessions, sessionActivity, goalRunsBySession =
     if (group.isProject) {
       // ZCode 项目 tree row: a folder button (chevron + name + count) that
       // folds/unfolds its conversations. The active session's project is
-      // force-expanded by the effect above.
+      // force-expanded by the effect above. Batch F2: double-click renames
+      // the project in place (localStorage registry).
       const isFolded = foldedProjects.has(group.key)
+      if (editingProject === group.key) {
+        return (
+          <Input
+            className="w-full text-label-sm py-1 px-2 rounded-lg bg-surface-container-lowest border-primary/40"
+            value={projectNameDraft}
+            onChange={e => setProjectNameDraft(e.target.value)}
+            onBlur={() => commitProjectRename(group.key)}
+            onKeyDown={e => {
+              if (e.key === 'Enter') commitProjectRename(group.key)
+              else if (e.key === 'Escape') setEditingProject(null)
+            }}
+            aria-label={t('chat.session.rename')}
+            autoFocus
+          />
+        )
+      }
       return (
         <button
           type="button"
@@ -420,6 +517,11 @@ export function SessionsSection({ sessions, sessionActivity, goalRunsBySession =
           aria-expanded={!isFolded}
           title={group.label}
           onClick={() => toggleFold(group.key)}
+          onDoubleClick={() => {
+            if (!group.key) return
+            setEditingProject(group.key)
+            setProjectNameDraft(group.label)
+          }}
           className="w-full flex items-center gap-1.5 px-3 pt-2 pb-1 font-label-sm text-[11px] font-bold text-on-surface-variant/90 hover:text-primary transition-colors min-w-0 cursor-pointer"
         >
           <span
@@ -650,6 +752,7 @@ export function SessionsSection({ sessions, sessionActivity, goalRunsBySession =
         <div role="group" aria-label={t('sidebar.sessions.grouping.aria')} className="flex items-center rounded-md bg-surface-container-low p-0.5 shrink-0">
           {([
             { mode: 'project' as const, icon: 'folder', label: t('sidebar.sessions.grouping.project') },
+            { mode: 'smart' as const, icon: 'auto_awesome', label: t('sidebar.sessions.grouping.smart') },
             { mode: 'session' as const, icon: 'view_list', label: t('sidebar.sessions.grouping.session') },
           ]).map(opt => (
             <button
@@ -680,6 +783,47 @@ export function SessionsSection({ sessions, sessionActivity, goalRunsBySession =
         aria-label={t('sidebar.sessions.search.aria')}
         className="w-full mb-xs px-2 py-1 rounded-md bg-surface-container-lowest border border-outline-variant/30 font-label-md text-label-md text-on-surface placeholder:text-on-surface-variant/70 focus-visible:border-primary focus-visible:ring-2 focus-visible:ring-primary/30 shrink-0 min-w-0"
       />
+      {/* Batch F1-v1: the rail's 自动化 section — enabled scheduled routines
+          with their next fire. Project-nesting needs engine working_dir on
+          routines (see plan batch F). */}
+      {!query.trim() && routines.length > 0 && (
+        <div className="mb-xs" data-testid="sidebar-automations">
+          <div className="flex items-center gap-1.5 px-3 pt-1 pb-1 font-label-sm text-[11px] font-bold text-on-surface-variant/90 min-w-0">
+            <span className="material-symbols-outlined text-[13px] shrink-0" aria-hidden="true">event_repeat</span>
+            <span className="truncate flex-1 min-w-0">{t('sidebar.automations.title')}</span>
+            <span className="font-mono text-[10px] tabular-nums text-on-surface-variant/70 shrink-0">{routines.length}</span>
+          </div>
+          {routines.slice(0, 3).map(r => {
+            const soon = r.next_fire_at != null && r.next_fire_at - nowTick < 3600_000
+            return (
+              <button
+                key={r.id}
+                type="button"
+                onClick={() => navigate('/tasks')}
+                className="w-full flex items-center gap-2 px-3 py-1.5 rounded-lg font-label-md text-label-md text-on-surface-variant hover:bg-surface-container-low hover:text-primary transition-colors cursor-pointer min-w-0"
+                title={r.name}
+              >
+                <span className={cn('material-symbols-outlined text-[13px] shrink-0', soon ? 'text-warning' : 'text-on-surface-variant/70')} aria-hidden="true">schedule</span>
+                <span className="truncate flex-1 min-w-0 text-left">{r.name}</span>
+                {soon && (
+                  <span className="font-label-xs px-1 py-[1px] rounded bg-warning/15 text-warning shrink-0" role="img" aria-label={t('sidebar.automations.soon')}>
+                    {t('sidebar.automations.soon')}
+                  </span>
+                )}
+              </button>
+            )
+          })}
+          {routines.length > 3 && (
+            <button
+              type="button"
+              onClick={() => navigate('/tasks')}
+              className="w-full px-3 py-1 text-left font-label-xs text-primary hover:underline cursor-pointer"
+            >
+              {t('sidebar.automations.more', { n: routines.length - 3 })}
+            </button>
+          )}
+        </div>
+      )}
       <ScrollArea className="flex-1 min-h-0">
         {filtered.length === 0 ? (
           <div className="px-2 py-3 text-center font-label-sm text-label-sm text-on-surface-variant">

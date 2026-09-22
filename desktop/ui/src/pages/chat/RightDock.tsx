@@ -20,7 +20,7 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { toast } from 'sonner'
-import { save } from '@tauri-apps/plugin-dialog'
+import { open as openFile, save } from '@tauri-apps/plugin-dialog'
 import { Button } from '@/components/ui/button'
 import { cn } from '@/lib/utils'
 import { toastError } from '@/lib/errorToast'
@@ -101,7 +101,7 @@ export default function RightDock({
   onCloseDiff,
 }: RightDockProps) {
   const t = useT()
-  const { artifacts, setActive, close: closeArtifact } = useArtifact()
+  const { artifacts, setActive, open: openArtifact, close: closeArtifact } = useArtifact()
   const [tab, setTab] = useState<DockTab>(readTab)
   const [width, setWidth] = useState<number>(readWidth)
   const [fullscreen, setFullscreen] = useState<boolean>(readFullscreen)
@@ -202,6 +202,21 @@ export default function RightDock({
     }
     prevDiffPath.current = diffPath
   }, [diffPath, onOpen])
+
+  // Batch F3: the dock's 「+」— open any local text file as a document tab
+  // (ZCode manual-tab affordance). The auto-dock effect above picks the new
+  // artifact up and activates it, so this only needs to open it.
+  const handleOpenFile = useCallback(async () => {
+    try {
+      const path = await openFile({ multiple: false })
+      if (!path || typeof path !== 'string') return
+      const diff = await api.getFileDiff(path)
+      const base = path.split('/').pop() ?? path
+      openArtifact({ kind: 'document', source: diff.old_content, title: base, confidence: 'high' })
+    } catch (e) {
+      toastError(t('chat.dock.openFile.failed'), e)
+    }
+  }, [openArtifact, t])
 
   // A closed artifact tab must not stay active — fall back to context.
   useEffect(() => {
@@ -335,6 +350,18 @@ export default function RightDock({
               </Button>
             ))}
             <div className="flex-1" />
+            {/* Batch F3: manual tab — open a local file as a document tab. */}
+            <Button
+              type="button"
+              variant="ghost"
+              size="icon-sm"
+              onClick={() => void handleOpenFile()}
+              aria-label={t('chat.dock.openFile.aria')}
+              title={t('chat.dock.openFile.aria')}
+              className="text-on-surface-variant hover:text-on-surface hover:bg-surface-container shrink-0"
+            >
+              <span className="material-symbols-outlined icon-sm">note_add</span>
+            </Button>
             <Button
               type="button"
               variant="ghost"

@@ -63,9 +63,9 @@ describe('LivePreview (idle states)', () => {
     })
     const frame = await screen.findByTitle('Live preview content')
     expect(frame.getAttribute('src')).toBe('http://127.0.0.1:3000')
-    // Address bar is read-only and shows the url.
+    // Batch F5: the address bar is editable and shows the dev-server url.
     const address = screen.getByLabelText(/preview url/i) as HTMLInputElement
-    expect(address.readOnly).toBe(true)
+    expect(address.readOnly).toBe(false)
     expect(address.value).toBe('http://127.0.0.1:3000')
   })
 
