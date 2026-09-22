@@ -36,6 +36,9 @@ import { startRelayHost, type RelayHostHandle } from "./mobile/relay/relayHost.j
 import { generateQrV2Payload, generateRelaySessionId } from "./mobile/relay/qrV2.js";
 import { evaluateTrigger, resolveTriggerConfig } from "./router/trigger.js";
 import { withTaskLifecycle } from "./router/lifecycle.js";
+import { AllowlistGuard, type InboundGuard } from "./access/guard.js";
+import { Allowlist } from "./access/allowlist.js";
+import { PairingStore } from "./access/pairing.js";
 
 /**
  * Turns an `AdapterConfig` + secret-backed `AdapterContext` into a live
@@ -66,6 +69,13 @@ export interface BootstrapOptions {
    */
   mobileEngineClientFactory?: MobileEngineClientFactory;
   mobileFetchImpl?: typeof fetch;
+  /**
+   * Access-control seam (review §P0-7). Production defaults to an
+   * `AllowlistGuard` with empty in-memory state — meaning any IM sender
+   * that has not been paired/allowlisted receives a pairing challenge on
+   * DM and is denied in group chats. Tests inject a mock guard.
+   */
+  accessGuard?: InboundGuard;
 }
 
 export interface BootstrapHandle {
@@ -159,26 +169,50 @@ export async function bootstrap(
   // lane-serialized, lifecycle-wrapped pipeline the IM adapters feed.
   dispatchHub?.setSubmit((inbound) => router.handleInbound(inbound));
 
-  // Inbound → trigger gate (P1-4) → router. The lane serializes per session;
-  // turn errors are logged in the router. onMessage is sync-void by contract,
-  // so handleInbound is fire-and-forget here. The trigger gate implements the
-  // v1 policy — DMs answer directly, group chats need @mention or /shannon —
-  // and rewrites the text so trigger syntax never reaches the engine prompt.
+  // Inbound → access guard (review §P0-7) → trigger gate (P1-4) → router.
+  // The guard ensures only paired/allowlisted senders can drive the engine;
+  // unpaired DMs receive a pairing challenge, group mentions by strangers
+  // are denied with a hint. Access control was previously implemented but
+  // never wired in — fix closes that gap so strangers cannot drive tools.
+  const accessGuard = opts.accessGuard ?? new AllowlistGuard(new Allowlist(), new PairingStore());
   const triggerByPlatform = new Map(
     config.adapters.map((cfg) => [cfg.platform, resolveTriggerConfig(cfg.options)]),
   );
   for (const adapter of registry.all()) {
     const triggerCfg = triggerByPlatform.get(adapter.platform) ?? {};
     adapter.onMessage((m) => {
-      const verdict = evaluateTrigger(m, triggerCfg);
-      if (!verdict.triggered) {
-        logger.debug(
-          `inbound on ${m.platform}:${m.chatId} ignored by trigger policy (${verdict.via})`,
-        );
-        return;
-      }
-      const routed = verdict.text === m.text ? m : { ...m, text: verdict.text };
-      void router.handleInbound(routed);
+      void (async () => {
+        // 1) access guard: deny/challenge before any further work.
+        const decision = await accessGuard.check(m);
+        if (decision.decision !== "allow") {
+          const replyTarget = {
+            platform: m.platform,
+            chatId: m.chatId,
+            threadId: m.threadId,
+          };
+          if (decision.decision === "challenge") {
+            logger.info(`pairing challenge issued for ${m.platform}:${m.senderId}`);
+            void adapter.send(
+              replyTarget,
+              `Pairing required — approve code ${decision.code} in the Shannon desktop app. (expires in 5 min)`,
+            );
+          } else {
+            logger.info(`denied inbound from ${m.platform}:${m.senderId} (not paired)`);
+            void adapter.send(replyTarget, decision.reason);
+          }
+          return;
+        }
+        // 2) trigger gate: DMs reply directly; group chats need @mention or /shannon.
+        const verdict = evaluateTrigger(m, triggerCfg);
+        if (!verdict.triggered) {
+          logger.debug(
+            `inbound on ${m.platform}:${m.chatId} ignored by trigger policy (${verdict.via})`,
+          );
+          return;
+        }
+        const routed = verdict.text === m.text ? m : { ...m, text: verdict.text };
+        void router.handleInbound(routed);
+      })();
     });
   }
 

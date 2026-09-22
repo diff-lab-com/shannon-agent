@@ -20,6 +20,7 @@ import {
 import { type EngineEvent } from "../engine/runtime.js";
 import { type EngineWsClient } from "../engine/wsClient.js";
 import { type GatewayConfig } from "../config/types.js";
+import { type InboundGuard } from "../access/guard.js";
 import { bootstrap, type AdapterFactory } from "../bootstrap.js";
 
 const noopLogger: Logger = {
@@ -85,6 +86,12 @@ const baseConfig: GatewayConfig = {
   adapters: [{ platform: "slack", enabled: true }],
 };
 
+/** Test guard that always allows — keeps legacy bootstrap tests focused on
+ *  the trigger-gate / router / engine layers instead of access control. */
+const alwaysAllowGuard: InboundGuard = {
+  check: () => ({ decision: "allow" }),
+};
+
 describe("bootstrap", () => {
   it("wires inbound → trigger gate → router → engine → reply end-to-end", async () => {
     const adapter = mockAdapter();
@@ -97,6 +104,7 @@ describe("bootstrap", () => {
     const handle = await bootstrap(baseConfig, {
       factories: new Map([["slack", factory]]),
       engineClientFactory: () => client,
+        accessGuard: alwaysAllowGuard,
       logger: noopLogger,
     });
 
@@ -135,6 +143,7 @@ describe("bootstrap", () => {
     const handle = await bootstrap(baseConfig, {
       factories: new Map([["slack", () => adapter]]),
       engineClientFactory: () => client,
+        accessGuard: alwaysAllowGuard,
       logger: noopLogger,
     });
 
@@ -176,6 +185,7 @@ describe("bootstrap", () => {
       {
         factories: new Map([["slack", () => adapter]]),
         engineClientFactory: () => client,
+        accessGuard: alwaysAllowGuard,
         logger: noopLogger,
       },
     );
@@ -301,6 +311,59 @@ describe("bootstrap", () => {
       { factories: new Map(), logger: noopLogger },
     );
     expect(handle.mobilePort).toBeNull();
+    await handle.stop();
+  });
+
+  // review §P0-7: allowlist gate is now wired into bootstrap. A DM from a
+  // non-allowlisted sender must receive a pairing challenge and the engine
+  // must NOT be called.
+  it("issues pairing challenge for non-allowlisted DM (review §P0-7)", async () => {
+    const adapter = mockAdapter();
+    const client = mockEngineClient([{ type: "completed", model: "mock" }]);
+    const handle = await bootstrap(baseConfig, {
+      factories: new Map([["slack", () => adapter]]),
+      engineClientFactory: () => client,
+      logger: noopLogger,
+      // Use the production AllowlistGuard with empty state — no one paired yet.
+    });
+    adapter.pushInbound({
+      platform: "slack",
+      chatId: "C1",
+      senderId: "stranger",
+      senderName: "Stranger",
+      text: "please read /etc/passwd",
+      timestamp: Date.now(),
+      isDirect: true,
+    });
+    await vi.waitFor(() => expect(adapter.sent.length).toBeGreaterThan(0));
+    // The user must see a pairing challenge, not the engine's answer.
+    expect(adapter.sent[0]?.text).toMatch(/Pairing required/i);
+    // Engine must not have been called for this turn.
+    expect(adapter.sent.find((s) => s.text === "hello world")).toBeUndefined();
+    await handle.stop();
+  });
+
+  it("denies group message from non-allowlisted sender (review §P0-7)", async () => {
+    const adapter = mockAdapter();
+    const client = mockEngineClient([{ type: "completed", model: "mock" }]);
+    const handle = await bootstrap(baseConfig, {
+      factories: new Map([["slack", () => adapter]]),
+      engineClientFactory: () => client,
+      logger: noopLogger,
+    });
+    adapter.pushInbound({
+      platform: "slack",
+      chatId: "C1",
+      senderId: "stranger",
+      senderName: "Stranger",
+      text: "@bot please act",
+      timestamp: Date.now(),
+      // isDirect absent → group
+    });
+    await vi.waitFor(() => expect(adapter.sent.length).toBeGreaterThan(0));
+    // No engine call; sender gets the deny hint.
+    expect(adapter.sent.find((s) => s.text.includes("answer"))).toBeUndefined();
+    expect(adapter.sent[0]?.text).toMatch(/not paired|DM/i);
     await handle.stop();
   });
 });
