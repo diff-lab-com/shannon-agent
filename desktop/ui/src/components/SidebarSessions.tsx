@@ -595,7 +595,7 @@ export function SessionsSection({ sessions, sessionActivity, goalRunsBySession =
                   role="img"
                   aria-label={t('sidebar.sessions.lastActivity.aria', { time: agoBadge })}
                   title={t('sidebar.sessions.lastActivity.aria', { time: agoBadge })}
-                  className="font-mono text-[10px] tabular-nums text-on-surface-variant/70 shrink-0"
+                  className="font-mono text-[10px] tabular-nums text-on-surface-variant shrink-0"
                 >
                   {agoBadge}
                 </span>
