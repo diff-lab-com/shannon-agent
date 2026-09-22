@@ -67,16 +67,22 @@ test.describe('ZCode delta features (P0/P1)', () => {
     const chip = page.getByRole('combobox', { name: 'Model' })
     await expect(chip).toBeVisible({ timeout: 15000 })
     // Demo mock status.model is "claude-sonnet-4-6"; the chip resolves the
-    // id to its display name; the header selector mirrors demoConfig.model.
+    // id to its display name.
     await expect(chip).toContainText('Claude Sonnet 4.6', { timeout: 15000 })
-    await expect(page.getByRole('button', { name: 'Select model' })).toContainText('claude-sonnet-4-6')
 
     await chip.click()
     const opt = page.getByRole('option', { name: 'GPT-5', exact: true })
     await opt.waitFor({ timeout: 15000 })
     await opt.click()
     await expect(chip).toContainText('GPT-5', { timeout: 15000 })
-    await expect(page.getByRole('button', { name: 'Select model' })).toContainText('GPT-5')
+    // The Header selector is hidden on /chat by design (模型名去重: the
+    // composer chip is the single surface there); the commit still lands in
+    // the shared config, so the Header shows it on a non-chat page. Navigate
+    // via the SPA link — a full reload resets the mock's in-memory config.
+    await page.getByRole('link', { name: 'Settings' }).click()
+    await expect(page.getByRole('button', { name: 'Select model' })).toContainText('GPT-5', {
+      timeout: 15000,
+    })
   })
 
   test('⑥ agent_spawn renders as a first-class subagent block', async ({ page }) => {

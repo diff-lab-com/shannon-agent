@@ -555,12 +555,17 @@ export default function ChatInput({
                     the Header displays), not the catalog id. */}
                 <SelectValue placeholder={status?.model || t('chat.input.model.label')}>
                   {(value: unknown) => {
-                    if (typeof value === 'string' && value.startsWith('effort:')) {
-                      const eff = effortOptions.find(e => e.value === value.slice('effort:'.length))
-                      return eff ? `${currentModel?.name ?? status?.model} · ${eff.label}` : (status?.model || t('chat.input.model.label'))
-                    }
+                    // Reflect a non-default reasoning effort on the chip —
+                    // the Select's value is always a model id (effort picks
+                    // commit via `effort:` in onValueChange but never become
+                    // the Select value), so read it from config directly.
+                    const eff = effortOptions.find(e => e.value === currentEffort)
                     const m = modelList.find(x => x.id === value)
-                    return m ? m.name : (status?.model || t('chat.input.model.label'))
+                    const name = m?.name ?? status?.model ?? t('chat.input.model.label')
+                    if (eff && eff.value !== 'medium') {
+                      return `${name} · ${eff.label}`
+                    }
+                    return name
                   }}
                 </SelectValue>
               </SelectTrigger>

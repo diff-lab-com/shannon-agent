@@ -596,7 +596,7 @@ export function SessionsSection({ sessions, sessionActivity, goalRunsBySession =
               className={cn(
                 'flex items-center gap-0.5 px-1.5 py-0.5 rounded font-label-xs transition-colors cursor-pointer whitespace-nowrap',
                 grouping === opt.mode
-                  ? 'bg-surface-container-lowest text-primary shadow-sm'
+                  ? 'bg-primary text-on-primary shadow-sm'
                   : 'text-on-surface-variant/70 hover:text-primary',
               )}
             >
