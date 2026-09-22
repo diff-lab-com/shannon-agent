@@ -33,9 +33,13 @@ const sanitizeSchema = {
 interface MarkdownProps {
   children: string
   className?: string
+  /** Batch D5: when set, GFM task-list checkboxes render enabled and the
+   *  callback fires with the DOM input (the caller resolves which checklist
+   *  item it is — e.g. by DOM order inside its own container). */
+  onCheckboxToggle?: (input: HTMLInputElement) => void
 }
 
-export const Markdown = memo(function Markdown({ children, className }: MarkdownProps) {
+export const Markdown = memo(function Markdown({ children, className, onCheckboxToggle }: MarkdownProps) {
   return (
     <div className={className}>
       <ReactMarkdown
@@ -53,6 +57,17 @@ export const Markdown = memo(function Markdown({ children, className }: Markdown
           blockquote: BlockQuote,
           a: ExternalLink,
           code: InlineCode,
+          ...(onCheckboxToggle
+            ? {
+                input: (props: React.InputHTMLAttributes<HTMLInputElement>) => (
+                  <input
+                    {...props}
+                    disabled={false}
+                    onChange={e => onCheckboxToggle(e.currentTarget)}
+                  />
+                ),
+              }
+            : {}),
         }}
       >
         {children}

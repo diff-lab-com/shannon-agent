@@ -4,6 +4,7 @@ import { Toaster } from 'sonner';
 import { AppProvider } from './context/AppContext';
 import { ThemeProvider } from './context/ThemeContext';
 import { I18nProvider } from './i18n';
+import { ArtifactProvider } from './components/artifact/ArtifactContext';
 import { ErrorBoundary } from './components/ErrorBoundary';
 import { Layout } from './components/Layout';
 
@@ -50,6 +51,9 @@ export default function App() {
     <I18nProvider>
     <ThemeProvider>
       <AppProvider>
+        {/* Batch D4: app-scoped artifact context — Settings toggles autoOpen
+            while Chat's dock consumes it, so the provider wraps both. */}
+        <ArtifactProvider>
         <ErrorBoundary>
         <BrowserRouter>
           <Suspense fallback={<PageLoader />}>
@@ -116,6 +120,7 @@ export default function App() {
         </Suspense>
         </BrowserRouter>
         </ErrorBoundary>
+        </ArtifactProvider>
       </AppProvider>
     </ThemeProvider>
     </I18nProvider>

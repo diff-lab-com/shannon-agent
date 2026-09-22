@@ -2,7 +2,6 @@ import { useState, useRef, useEffect, useCallback, lazy } from 'react'
 import { useNavigate, useLocation } from 'react-router-dom'
 import { useIntl } from 'react-intl'
 import { useVirtualizer } from '@tanstack/react-virtual'
-import { ArtifactProvider } from '@/components/artifact/ArtifactContext'
 import DiffDialogMulti from '@/components/diff/DiffDialogMulti'
 import { useChat } from '@/context/ChatContext'
 import { useCatalog } from '@/context/CatalogContext'
@@ -196,8 +195,7 @@ export default function Chat() {
     ?? null
 
   return (
-    <ArtifactProvider>
-      <ComposerContext.Provider value={composerValue}>
+    <ComposerContext.Provider value={composerValue}>
         <div className="flex-1 flex w-full h-full relative">
           {/* Main Chat Canvas — the session list lives in the app sidebar (U1)
               and the session title + RightDock toggle live in the global
@@ -265,7 +263,6 @@ export default function Chat() {
           />
           <DiffDialogMulti open={diffPaths !== null} filePaths={diffPaths ?? []} onClose={() => setDiffPaths(null)} />
         </div>
-      </ComposerContext.Provider>
-    </ArtifactProvider>
+    </ComposerContext.Provider>
   )
 }

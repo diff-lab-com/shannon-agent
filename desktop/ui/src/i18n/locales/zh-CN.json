@@ -3123,5 +3123,13 @@
   "chat.status.worked": "已工作 {time}",
   "chat.status.tool": " · 正在 {tool}",
   "chat.message.diffStats.aria": "新增 {additions} 行，删除 {deletions} 行",
-  "chat.artifact.open": "打开"
+  "chat.artifact.open": "打开",
+  "chat.artifact.toc.title": "目录",
+  "chat.artifact.toc.aria": "文档目录",
+  "chat.artifact.lines.aria": "{n} 行",
+  "chat.dock.fullscreen.aria": "全屏阅读",
+  "chat.dock.fullscreenExit.aria": "退出全屏",
+  "chat.plan.stepToggled.aria": "步骤 {n} 已标记{state}",
+  "settings.general.artifactAutoOpen.title": "自动打开产物",
+  "settings.general.artifactAutoOpen.description": "检测到产物（文档、网页、图示）时自动在右侧 dock 打开。"
 }

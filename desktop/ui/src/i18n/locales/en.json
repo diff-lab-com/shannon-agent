@@ -3123,5 +3123,13 @@
   "chat.status.worked": "Worked {time}",
   "chat.status.tool": " · Running {tool}",
   "chat.message.diffStats.aria": "{additions} lines added, {deletions} lines removed",
-  "chat.artifact.open": "Open"
+  "chat.artifact.open": "Open",
+  "chat.artifact.toc.title": "Contents",
+  "chat.artifact.toc.aria": "Document contents",
+  "chat.artifact.lines.aria": "{n} lines",
+  "chat.dock.fullscreen.aria": "Fullscreen reading",
+  "chat.dock.fullscreenExit.aria": "Exit fullscreen",
+  "chat.plan.stepToggled.aria": "Step {n} marked {state}",
+  "settings.general.artifactAutoOpen.title": "Auto-open artifacts",
+  "settings.general.artifactAutoOpen.description": "Automatically open detected artifacts (documents, pages, diagrams) in the right dock."
 }

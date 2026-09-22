@@ -3,6 +3,7 @@ import { render, screen, fireEvent } from '@testing-library/react'
 import { AppProvider } from '@/context/AppContext'
 import { I18nProvider } from '@/i18n'
 import { MemoryRouter } from 'react-router-dom'
+import { ArtifactProvider } from '@/components/artifact/ArtifactContext'
 import GeneralSettings from '@/components/settings/GeneralSettings'
 import { WELCOME_SEEN_KEY } from '@/pages/Welcome'
 
@@ -11,7 +12,11 @@ function wrap(ui: React.ReactElement) {
     <I18nProvider>
       <AppProvider>
         <MemoryRouter>
-          {ui}
+          {/* Batch D4: GeneralSettings consumes the app-level artifact
+              context (auto-open toggle). */}
+          <ArtifactProvider>
+            {ui}
+          </ArtifactProvider>
         </MemoryRouter>
       </AppProvider>
     </I18nProvider>
