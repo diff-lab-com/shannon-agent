@@ -395,10 +395,7 @@ pub fn compute_diff_hunks(old: &str, new: &str) -> Vec<DiffHunk> {
                 if !in_hunk {
                     // Start new hunk with leading context
                     in_hunk = true;
-                    hunk_old_start = old_line + 1;
-                    hunk_new_start = new_line + 1;
                     changes_in_hunk = 0;
-                    context_after_change = 0;
                     current_lines.clear();
                     // Add preceding context
                     let ctx_start = old_line.saturating_sub(CONTEXT);
@@ -432,7 +429,6 @@ pub fn compute_diff_hunks(old: &str, new: &str) -> Vec<DiffHunk> {
                 if !in_hunk {
                     in_hunk = true;
                     changes_in_hunk = 0;
-                    context_after_change = 0;
                     current_lines.clear();
                     let ctx_start = old_line.saturating_sub(CONTEXT);
                     for (k, line) in old_lines

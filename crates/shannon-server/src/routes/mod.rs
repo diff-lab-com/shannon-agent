@@ -201,12 +201,11 @@ pub async fn post_message(
         // on this session see the prior context. We must NOT hold the SSE
         // stream's exclusive access to the engine when re-locking here, hence
         // the explicit clone + per-event try-lock acquisition.
-        if let Ok(ref evt) = item {
-            if let shannon_core::query_engine::QueryEvent::ConversationUpdate { messages, .. } = evt
-            {
-                if let Ok(mut guard) = engine_for_events.try_lock() {
-                    guard.restore_messages(messages.clone());
-                }
+        if let Ok(shannon_core::query_engine::QueryEvent::ConversationUpdate { messages, .. }) =
+            item.as_ref()
+        {
+            if let Ok(mut guard) = engine_for_events.try_lock() {
+                guard.restore_messages(messages.clone());
             }
         }
         Ok(item.map(sse::event).unwrap_or_else(|e| {

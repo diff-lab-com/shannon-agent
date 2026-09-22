@@ -42,7 +42,7 @@ pub(crate) fn truncate_bytes(output: &[u8], cap: usize) -> Vec<u8> {
         return output.to_vec();
     }
     let mut cut = cap;
-    while cut > 0 && !std::str::from_utf8(&output[..cut]).is_ok() {
+    while cut > 0 && std::str::from_utf8(&output[..cut]).is_err() {
         cut -= 1;
     }
     let mut out = output[..cut].to_vec();
@@ -862,9 +862,8 @@ impl DockerSandbox {
         // arbitrary host roots.
         if abs_workspace == "/" {
             return Err(format!(
-                "refusing to mount workspace '{}' as container root: \
-                 use a project directory, not '/'",
-                workspace_raw
+                "refusing to mount workspace '{workspace_raw}' as container root: \
+                 use a project directory, not '/'"
             ));
         }
 
