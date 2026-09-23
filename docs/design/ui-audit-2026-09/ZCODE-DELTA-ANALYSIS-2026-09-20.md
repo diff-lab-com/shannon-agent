@@ -1,5 +1,9 @@
 # ZCode 新截图对比分析 · 第二轮（2026-09-20 三图）
 
+> **实施状态（2026-09-23）**：批次 A–F 已全部实施并通过全量回归（vitest 1627 passed / 0 failed，tsc + eslint + design-token 门禁通过），以 stacked PR 交付：
+> **#98**（批次 A + 本方案文档）→ **#99**（批次 B）→ **#100**（批次 C）→ **#101**（批次 D）→ **#102**（批次 E）→ **#104**（批次 F），基准分支 `dev`。
+> 范围说明：F1 以「自动化分区」v1 落地（routine 按项目嵌套待引擎暴露 working_dir）；F7（Artifact 独立窗口）按 §批F 与多窗口方案合并评估、暂缓；E2 语义级分类分区待内容运营（E5）数据到位后升级。
+
 > **证据**（原件留存 `reference/zcode/`，归档于 [screenshots/competitors/](./screenshots/competitors/)）：
 > - [zcode-desktop-sidebar-groups.png](./screenshots/competitors/zcode-desktop-sidebar-groups.png)（2026-09-20 23:58，左栏项目分组特写）
 > - [zcode-desktop-marketplace.png](./screenshots/competitors/zcode-desktop-marketplace.png)（2026-09-20 06:37，插件市场页）

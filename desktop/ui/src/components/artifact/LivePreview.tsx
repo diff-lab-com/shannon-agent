@@ -31,6 +31,9 @@ export function LivePreview() {
   const [loadState, setLoadState] = useState<'loading' | 'loaded' | 'error'>('loading')
   const [frameKey, setFrameKey] = useState(0)
   const [error, setError] = useState<string | null>(null)
+  // Batch F5: manual address-bar override (http/https only) + input draft.
+  const [overrideUrl, setOverrideUrl] = useState<string | null>(null)
+  const [addressDraft, setAddressDraft] = useState<string | null>(null)
   const [logs, setLogs] = useState<PreviewLogLine[]>([])
   const [showLogs, setShowLogs] = useState(false)
   const mounted = useRef(true)
@@ -103,9 +106,29 @@ export function LivePreview() {
   }
 
   const handleReload = () => {
+    // Batch F5: reload returns to the dev-server URL — an edited address is
+    // a manual override, and the refresh affordance stays "back to truth".
+    setOverrideUrl(null)
+    setAddressDraft(null)
     setLoadState('loading')
     setFrameKey(k => k + 1)
     void refreshLogs()
+  }
+
+  // Batch F5: manual address navigation — the reference browser's URL bar.
+  // http(s) only: the sandboxed iframe must not become a javascript:/data:
+  // gadget. Reload above snaps back to the dev-server origin.
+  const commitAddress = () => {
+    const draft = addressDraft?.trim()
+    if (!draft || !url) return
+    try {
+      const parsed = new URL(draft)
+      if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') return
+      setOverrideUrl(parsed.toString())
+      setAddressDraft(null)
+      setLoadState('loading')
+      setFrameKey(k => k + 1)
+    } catch { /* not a URL — ignore */ }
   }
 
   // Load watchdog: a dev server that died between start and frame load
@@ -134,10 +157,13 @@ export function LivePreview() {
             <span className="w-2 h-2 rounded-full bg-primary shrink-0" aria-hidden="true" />
             <input
               type="text"
-              readOnly
-              value={url}
+              // Batch F5: editable address bar (dev-server origin by default).
+              value={addressDraft ?? url ?? ''}
+              readOnly={false}
+              onChange={e => setAddressDraft(e.target.value)}
+              onKeyDown={e => { if (e.key === 'Enter') commitAddress() }}
               aria-label={t('chat.artifact.live.address.aria')}
-              className="flex-1 min-w-0 font-body-sm font-mono text-on-surface-variant bg-surface-container-high rounded px-sm py-1 outline-none"
+              className="flex-1 min-w-0 font-body-sm font-mono text-on-surface bg-surface-container-high rounded px-sm py-1 outline-none focus-visible:ring-2 focus-visible:ring-primary/30"
             />
             <Button
               type="button"
@@ -168,7 +194,7 @@ export function LivePreview() {
             <iframe
               key={frameKey}
               title={t('chat.artifact.live.frame.title')}
-              src={url}
+              src={overrideUrl ?? url}
               sandbox={LIVE_SANDBOX}
               onLoad={() => setLoadState('loaded')}
               className="w-full h-full bg-white border-0"

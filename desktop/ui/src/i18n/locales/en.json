@@ -3137,5 +3137,16 @@
   "extensions.market.personal": "Personal",
   "extensions.market.personalEmpty": "No personal extensions yet",
   "extensions.market.personalEmptyHint": "Locally built skills, agents and plugins appear here once created.",
-  "extensions.market.installedRow": "Installed"
+  "extensions.market.installedRow": "Installed",
+  "sidebar.sessions.grouping.smart": "Smart",
+  "sidebar.groups.running": "Running",
+  "sidebar.groups.attention": "Needs attention",
+  "sidebar.groups.recent": "Recent",
+  "sidebar.automations.title": "Automations",
+  "sidebar.automations.soon": "Soon",
+  "sidebar.automations.more": "Show {n} more…",
+  "chat.dock.openFile.aria": "Open file as document tab",
+  "chat.dock.openFile.failed": "Failed to open file",
+  "chat.artifact.table.copy": "Copy",
+  "chat.artifact.table.download": "Download"
 }

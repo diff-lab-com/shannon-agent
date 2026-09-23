@@ -1,8 +1,10 @@
-import { memo, useMemo } from 'react'
+import { memo, useMemo, useRef, useState } from 'react'
+import { useIntl } from 'react-intl'
 import ReactMarkdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
 import rehypeSanitize from 'rehype-sanitize'
 import rehypeHighlight from 'rehype-highlight'
+import { save } from '@tauri-apps/plugin-dialog'
 import { CodeBlock as SharedCodeBlock } from '@/components/code/CodeBlock'
 import { cn } from '@/lib/utils'
 import { reactNodeText, slugifyHeading } from './docToc'
@@ -36,6 +38,78 @@ function extractText(node: React.ReactNode): string {
     if (props) return extractText(props.children)
   }
   return ''
+}
+
+/**
+ * Batch F4 (2026-09-20 delta analysis): the reader's table toolbar — hover
+ * affordance with 复制 (TSV, paste-ready for spreadsheets) and 下载 (CSV via
+ * the save dialog). Text is read from the rendered DOM at click time, so it
+ * works for any GFM table without touching the markdown pipeline.
+ */
+function TableShell({ children }: { children?: React.ReactNode }) {
+  const intl = useIntl()
+  const t = (id: string) => intl.formatMessage({ id })
+  const wrapRef = useRef<HTMLDivElement>(null)
+  const [copied, setCopied] = useState(false)
+
+  const rowsToMatrix = (): string[][] => {
+    const trs = Array.from(wrapRef.current?.querySelectorAll('tr') ?? [])
+    return trs.map(tr =>
+      Array.from(tr.querySelectorAll('th,td')).map(cell => (cell.textContent ?? '').trim()),
+    )
+  }
+
+  const toTsv = (rows: string[][]) => rows.map(r => r.join('\t')).join('\n')
+
+  const csvCell = (v: string) => (/[",\n]/.test(v) ? `"${v.replace(/"/g, '""')}"` : v)
+
+  const handleCopy = async () => {
+    try {
+      await navigator.clipboard.writeText(toTsv(rowsToMatrix()))
+      setCopied(true)
+      setTimeout(() => setCopied(false), 1500)
+    } catch { /* clipboard unavailable */ }
+  }
+
+  const handleDownload = async () => {
+    try {
+      const rows = rowsToMatrix()
+      const csv = rows.map(r => r.map(csvCell).join(',')).join('\n')
+      const path = await save({
+        defaultPath: 'table.csv',
+        filters: [{ name: 'CSV', extensions: ['csv'] }],
+      })
+      if (!path) return
+      const { saveTextFile } = await import('@/lib/tauri-api')
+      await saveTextFile(path, csv)
+    } catch { /* dialog unavailable (demo mode) — copy still works */ }
+  }
+
+  return (
+    <div ref={wrapRef} className="relative group/table my-sm min-w-0">
+      <div className="absolute right-0 -top-6 z-subheader flex items-center gap-xs opacity-0 group-hover/table:opacity-100 focus-within:opacity-100 transition-opacity">
+        <button
+          type="button"
+          onClick={() => void handleCopy()}
+          aria-label={t('chat.artifact.table.copy')}
+          className="flex items-center gap-[2px] px-xs py-[2px] rounded bg-surface-container-high text-on-surface-variant hover:text-primary font-label-xs cursor-pointer"
+        >
+          <span className="material-symbols-outlined text-[13px]" aria-hidden="true">{copied ? 'check' : 'content_copy'}</span>
+          {copied ? t('code.copy.copied') : t('chat.artifact.table.copy')}
+        </button>
+        <button
+          type="button"
+          onClick={() => void handleDownload()}
+          aria-label={t('chat.artifact.table.download')}
+          className="flex items-center gap-[2px] px-xs py-[2px] rounded bg-surface-container-high text-on-surface-variant hover:text-primary font-label-xs cursor-pointer"
+        >
+          <span className="material-symbols-outlined text-[13px]" aria-hidden="true">download</span>
+          {t('chat.artifact.table.download')}
+        </button>
+      </div>
+      <table className="w-full border-collapse text-label-sm text-on-surface">{children}</table>
+    </div>
+  )
 }
 
 export const DocumentRenderer = memo(function DocumentRenderer({ source }: DocumentRendererProps) {
@@ -82,7 +156,7 @@ export const DocumentRenderer = memo(function DocumentRenderer({ source }: Docum
         <blockquote className="border-l-2 border-outline-variant pl-md italic text-on-surface-variant my-sm">{children}</blockquote>
       ),
       table: ({ children }: { children?: React.ReactNode }) => (
-        <table className="w-full border-collapse text-label-sm text-on-surface my-sm">{children}</table>
+        <TableShell>{children}</TableShell>
       ),
       th: ({ children }: { children?: React.ReactNode }) => (
         <th className="border border-outline-variant/30 px-sm py-xs bg-surface-container-high text-left font-bold">{children}</th>
