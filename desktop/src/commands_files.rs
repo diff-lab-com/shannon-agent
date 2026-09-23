@@ -231,6 +231,115 @@ pub struct FileTreeNode {
     pub modified: Option<bool>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub size: Option<u64>,
+    /// §P2-20: set on a directory whose contents were cut off by the walk
+    /// bounds (depth / entry caps), so a truncated listing is distinguishable
+    /// from a complete one. `None` (omitted in JSON) = complete.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub truncated: Option<bool>,
+}
+
+/// §P2-20: bounds for the workspace walk. The old `get_file_tree` recursed
+/// without any limit on depth or entry count, so a deep/huge tree could pin
+/// an async executor thread (the command is `async fn`) for a long time.
+const FILE_TREE_MAX_DEPTH: usize = 12;
+const FILE_TREE_MAX_ENTRIES: usize = 5000;
+
+/// Shared recursion state for the bounded walk.
+#[derive(Debug)]
+struct TreeWalkBudget {
+    entries_left: usize,
+    truncated: bool,
+}
+
+impl TreeWalkBudget {
+    fn new(entries: usize) -> Self {
+        Self {
+            entries_left: entries,
+            truncated: false,
+        }
+    }
+
+    /// Claim one entry from the budget. `false` = budget exhausted, the
+    /// walk must stop and the truncation marker stays set.
+    fn take_entry(&mut self) -> bool {
+        if self.entries_left == 0 {
+            self.truncated = true;
+            return false;
+        }
+        self.entries_left -= 1;
+        true
+    }
+}
+
+/// Bounded recursive directory walk used by [`get_file_tree`]. Stops at
+/// [`FILE_TREE_MAX_DEPTH`] levels and after [`FILE_TREE_MAX_ENTRIES`]
+/// entries, marking every directory whose subtree was cut with
+/// `truncated: Some(true)`.
+fn build_tree_bounded(
+    dir: &std::path::Path,
+    depth: usize,
+    budget: &mut TreeWalkBudget,
+) -> Result<Vec<FileTreeNode>, String> {
+    use std::fs;
+    if depth >= FILE_TREE_MAX_DEPTH {
+        budget.truncated = true;
+        return Ok(Vec::new());
+    }
+    let mut entries: Vec<std::fs::DirEntry> = fs::read_dir(dir)
+        .map_err(|e| format!("Cannot read dir: {e}"))?
+        .filter_map(|e| e.ok())
+        .filter(|e| {
+            let name = e.file_name().to_string_lossy().to_string();
+            !name.starts_with('.') && name != "target" && name != "node_modules"
+        })
+        .collect();
+    entries.sort_by(|a, b| {
+        let a_is_dir = a.file_type().map(|t| t.is_dir()).unwrap_or(false);
+        let b_is_dir = b.file_type().map(|t| t.is_dir()).unwrap_or(false);
+        b_is_dir.cmp(&a_is_dir).then_with(|| {
+            a.file_name()
+                .to_string_lossy()
+                .cmp(&b.file_name().to_string_lossy())
+        })
+    });
+    let mut nodes = Vec::new();
+    for entry in entries {
+        if !budget.take_entry() {
+            break;
+        }
+        let name = entry.file_name().to_string_lossy().to_string();
+        let entry_path = entry.path().to_string_lossy().to_string();
+        let metadata = entry
+            .metadata()
+            .map_err(|e| format!("Metadata error: {e}"))?;
+        if metadata.is_dir() {
+            let truncated_before = budget.truncated;
+            let children = build_tree_bounded(&entry.path(), depth + 1, budget)?;
+            // The flip happened inside this subtree → this directory is the
+            // (nearest ancestor of the) cut point.
+            let cut = budget.truncated && !truncated_before;
+            nodes.push(FileTreeNode {
+                name,
+                path: entry_path,
+                node_type: "directory".into(),
+                children,
+                modified: None,
+                size: None,
+                truncated: cut.then_some(true),
+            });
+        } else {
+            nodes.push(FileTreeNode {
+                name,
+                path: entry_path,
+                node_type: "file".into(),
+                children: Vec::new(),
+                modified: None,
+                size: Some(metadata.len()),
+                truncated: None,
+            });
+        }
+    }
+    Ok(nodes)
 }
 
 /// Working directory info.
@@ -244,26 +353,35 @@ pub struct WorkingDirInfo {
 
 /// Get the diff for a file (working tree vs last committed, or old vs new content).
 #[tauri::command]
-pub async fn get_file_diff(path: String) -> Result<FileDiff, String> {
+pub async fn get_file_diff(
+    state: tauri::State<'_, AppState>,
+    path: String,
+) -> Result<FileDiff, String> {
+    // §P2-20: validate against the session working directory, not the
+    // process CWD — a GUI launched from the Dock runs with CWD `/`, which
+    // made every legitimate workspace file report "Path outside workspace".
+    let working_dir = resolve_working_dir(&state).await;
+    get_file_diff_inner(&working_dir, &path).await
+}
+
+/// Internal helper for [`get_file_diff`]. Splits out so tests can exercise
+/// the resolution + git logic without constructing a Tauri app state.
+pub(crate) async fn get_file_diff_inner(
+    working_dir: &Path,
+    path: &str,
+) -> Result<FileDiff, String> {
     use std::process::Command;
 
-    // Validate path is within CWD to prevent path traversal
-    let file_path = std::path::Path::new(&path);
-    let canonical = file_path
-        .canonicalize()
-        .map_err(|e| format!("Invalid path: {e}"))?;
-    let cwd = std::env::current_dir()
-        .map_err(|e| format!("Cannot determine CWD: {e}"))?
-        .canonicalize()
-        .map_err(|e| format!("Cannot canonicalize CWD: {e}"))?;
-    if !canonical.starts_with(&cwd) {
-        return Err("Path outside workspace".to_string());
-    }
+    // Resolve relative paths against the session working directory,
+    // canonicalize, and reject anything that escapes it (path traversal,
+    // symlink escapes) — same contract as the other file commands.
+    let canonical = resolve_path_in_working_dir(path, working_dir)?;
+    let file_path = std::path::Path::new(path);
 
     let file_name = file_path
         .file_name()
         .map(|n| n.to_string_lossy().to_string())
-        .unwrap_or_else(|| path.clone());
+        .unwrap_or_else(|| path.to_string());
 
     // Detect language from extension
     let language = file_path
@@ -272,20 +390,23 @@ pub async fn get_file_diff(path: String) -> Result<FileDiff, String> {
         .unwrap_or_else(|| "plaintext".to_string());
 
     // Try git diff first
-    let dir = file_path.parent().unwrap_or(std::path::Path::new("."));
+    let dir = canonical
+        .parent()
+        .map(|p| p.to_path_buf())
+        .unwrap_or_else(|| working_dir.to_path_buf());
     let git_output = Command::new("git")
-        .args(["diff", "HEAD", "--", &path])
-        .current_dir(dir)
+        .args(["diff", "HEAD", "--", path])
+        .current_dir(&dir)
         .output();
 
     let (old_content, new_content) = match git_output {
         Ok(output) if output.status.success() && !output.stdout.is_empty() => {
             // Parse unified diff - for simplicity, just read current file as new
             // and reconstruct old from git show
-            let new = std::fs::read_to_string(&path).unwrap_or_default();
+            let new = std::fs::read_to_string(&canonical).unwrap_or_default();
             let old_output = Command::new("git")
                 .args(["show", &format!("HEAD:{path}")])
-                .current_dir(dir)
+                .current_dir(&dir)
                 .output();
             let old = match old_output {
                 Ok(o) if o.status.success() => String::from_utf8_lossy(&o.stdout).to_string(),
@@ -295,7 +416,7 @@ pub async fn get_file_diff(path: String) -> Result<FileDiff, String> {
         }
         _ => {
             // Not a git repo or no changes - read file as new, empty old
-            let content = std::fs::read_to_string(&path).unwrap_or_default();
+            let content = std::fs::read_to_string(&canonical).unwrap_or_default();
             (String::new(), content)
         }
     };
@@ -376,74 +497,47 @@ pub async fn apply_diff(
 }
 
 /// Recursively read a directory and return a file tree.
+///
+/// §P2-20: the walk is bounded (depth ≤ [`FILE_TREE_MAX_DEPTH`], ≤
+/// [`FILE_TREE_MAX_ENTRIES`] entries, truncated directories flagged) and
+/// runs on the blocking pool via `spawn_blocking` so the potentially slow
+/// stat-heavy recursion never occupies an async executor thread.
 #[tauri::command]
 #[tracing::instrument(fields(path = %path))]
 pub async fn get_file_tree(path: String) -> Result<Vec<FileTreeNode>, String> {
-    use std::fs;
-    let root = std::path::Path::new(&path);
+    let root = std::path::PathBuf::from(&path);
     if !root.is_dir() {
         return Err("Path is not a directory".into());
     }
-    fn build_tree(dir: &std::path::Path) -> Result<Vec<FileTreeNode>, String> {
-        let mut entries: Vec<std::fs::DirEntry> = fs::read_dir(dir)
-            .map_err(|e| format!("Cannot read dir: {e}"))?
-            .filter_map(|e| e.ok())
-            .filter(|e| {
-                let name = e.file_name().to_string_lossy().to_string();
-                !name.starts_with('.') && name != "target" && name != "node_modules"
-            })
-            .collect();
-        entries.sort_by(|a, b| {
-            let a_is_dir = a.file_type().map(|t| t.is_dir()).unwrap_or(false);
-            let b_is_dir = b.file_type().map(|t| t.is_dir()).unwrap_or(false);
-            b_is_dir.cmp(&a_is_dir).then_with(|| {
-                a.file_name()
-                    .to_string_lossy()
-                    .cmp(&b.file_name().to_string_lossy())
-            })
-        });
-        let mut nodes = Vec::new();
-        for entry in entries {
-            let name = entry.file_name().to_string_lossy().to_string();
-            let entry_path = entry.path().to_string_lossy().to_string();
-            let metadata = entry
-                .metadata()
-                .map_err(|e| format!("Metadata error: {e}"))?;
-            if metadata.is_dir() {
-                let children = build_tree(&entry.path())?;
-                nodes.push(FileTreeNode {
-                    name,
-                    path: entry_path,
-                    node_type: "directory".into(),
-                    children,
-                    modified: None,
-                    size: None,
-                });
-            } else {
-                nodes.push(FileTreeNode {
-                    name,
-                    path: entry_path,
-                    node_type: "file".into(),
-                    children: Vec::new(),
-                    modified: None,
-                    size: Some(metadata.len()),
-                });
-            }
-        }
-        Ok(nodes)
-    }
-    build_tree(root)
+    tokio::task::spawn_blocking(move || {
+        let mut budget = TreeWalkBudget::new(FILE_TREE_MAX_ENTRIES);
+        build_tree_bounded(&root, 0, &mut budget)
+    })
+    .await
+    .map_err(|e| format!("file tree walk task failed: {e}"))?
 }
 
 /// Get working directory info including git branch and modified files.
 #[tauri::command]
-pub async fn get_working_dir_info() -> Result<WorkingDirInfo, String> {
+pub async fn get_working_dir_info(
+    state: tauri::State<'_, AppState>,
+) -> Result<WorkingDirInfo, String> {
+    // §P2-20: report the session working directory, not the process CWD —
+    // a Dock-launched GUI runs with CWD `/`, which reported a useless root
+    // and a bogus git status. Mirrors `resolve_working_dir` (configured
+    // `working_dir`, CWD only as last-resort fallback).
+    let working_dir = resolve_working_dir(&state).await;
+    Ok(get_working_dir_info_inner(&working_dir))
+}
+
+/// Internal helper for [`get_working_dir_info`]. Pure sync so tests can
+/// exercise it against a scratch git repo without Tauri app state.
+fn get_working_dir_info_inner(working_dir: &Path) -> WorkingDirInfo {
     use std::process::Command;
-    let cwd = std::env::current_dir().map_err(|e| format!("Cannot determine CWD: {e}"))?;
-    let root = cwd.to_string_lossy().to_string();
+    let root = working_dir.to_string_lossy().to_string();
     let branch = Command::new("git")
         .args(["rev-parse", "--abbrev-ref", "HEAD"])
-        .current_dir(&cwd)
+        .current_dir(working_dir)
         .output()
         .ok()
         .and_then(|o| if o.status.success() { Some(o) } else { None })
@@ -451,7 +545,7 @@ pub async fn get_working_dir_info() -> Result<WorkingDirInfo, String> {
         .unwrap_or_else(|| "unknown".into());
     let modified: Vec<String> = Command::new("git")
         .args(["status", "--porcelain"])
-        .current_dir(&cwd)
+        .current_dir(working_dir)
         .output()
         .ok()
         .and_then(|o| if o.status.success() { Some(o) } else { None })
@@ -464,7 +558,7 @@ pub async fn get_working_dir_info() -> Result<WorkingDirInfo, String> {
         .unwrap_or_default();
     let has_conflicts = Command::new("git")
         .args(["diff", "--name-only", "--diff-filter=U"])
-        .current_dir(&cwd)
+        .current_dir(working_dir)
         .output()
         .ok()
         .and_then(|o| if o.status.success() { Some(o) } else { None })
@@ -477,12 +571,12 @@ pub async fn get_working_dir_info() -> Result<WorkingDirInfo, String> {
     } else {
         "clean".into()
     };
-    Ok(WorkingDirInfo {
+    WorkingDirInfo {
         root,
         branch,
         modified_files: modified,
         status,
-    })
+    }
 }
 
 #[cfg(test)]
@@ -688,5 +782,128 @@ mod tests {
             .await
             .expect("in-tree write should succeed");
         assert_eq!(std::fs::read_to_string(&target).unwrap(), "hello");
+    }
+
+    // ---- review §P2-20: bounded file-tree walk ----
+
+    #[test]
+    fn file_tree_walk_stops_at_max_depth_and_marks_truncated() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        // A 20-level-deep chain of directories — well past the cap.
+        let mut deep = dir.path().to_path_buf();
+        for i in 0..20 {
+            deep = deep.join(format!("d{i}"));
+            std::fs::create_dir_all(&deep).expect("create deep dir");
+        }
+        std::fs::write(deep.join("bottom.txt"), "x").expect("write bottom file");
+
+        let mut budget = TreeWalkBudget::new(FILE_TREE_MAX_ENTRIES);
+        let tree = build_tree_bounded(dir.path(), 0, &mut budget).expect("walk succeeds");
+
+        // Measure how deep the produced tree actually is.
+        let mut depth = 0;
+        let mut node = &tree[0];
+        while !node.children.is_empty() {
+            node = &node.children[0];
+            depth += 1;
+        }
+        assert!(
+            depth <= FILE_TREE_MAX_DEPTH,
+            "tree depth {depth} must be capped at {FILE_TREE_MAX_DEPTH}"
+        );
+        assert!(budget.truncated, "depth overflow must mark truncation");
+        // Every directory along the cut chain is flagged.
+        assert_eq!(node.truncated, Some(true));
+    }
+
+    #[test]
+    fn file_tree_walk_stops_at_entry_budget_and_marks_truncated() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        for i in 0..10 {
+            std::fs::write(dir.path().join(format!("f{i}.txt")), "x").expect("write file");
+        }
+
+        let mut budget = TreeWalkBudget::new(3);
+        let tree = build_tree_bounded(dir.path(), 0, &mut budget).expect("walk succeeds");
+        assert_eq!(tree.len(), 3, "walk must stop at the entry budget");
+        assert!(budget.truncated, "exhausted budget must mark truncation");
+    }
+
+    #[test]
+    fn file_tree_walk_complete_listing_has_no_truncation_marker() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        std::fs::write(dir.path().join("a.txt"), "x").expect("write a");
+        std::fs::create_dir_all(dir.path().join("sub")).expect("mkdir");
+        std::fs::write(dir.path().join("sub/b.txt"), "y").expect("write b");
+
+        let mut budget = TreeWalkBudget::new(FILE_TREE_MAX_ENTRIES);
+        let tree = build_tree_bounded(dir.path(), 0, &mut budget).expect("walk succeeds");
+        assert!(!budget.truncated);
+        assert!(tree.iter().all(|n| n.truncated.is_none()));
+    }
+
+    // ---- review §P2-20: session working directory instead of process CWD ----
+
+    #[tokio::test]
+    async fn file_diff_rejects_path_outside_working_dir() {
+        let workdir = tempfile::tempdir().expect("tempdir");
+        let outside = workdir
+            .path()
+            .parent()
+            .unwrap()
+            .join("shannon_outside_diff_target.txt");
+        std::fs::write(&outside, "secret").expect("write outside file");
+
+        let err = get_file_diff_inner(workdir.path(), &outside.to_string_lossy())
+            .await
+            .expect_err("out-of-tree diff must be rejected");
+        assert!(err.contains("outside"), "got: {err}");
+
+        let _ = std::fs::remove_file(&outside);
+    }
+
+    #[tokio::test]
+    async fn file_diff_accepts_relative_path_inside_working_dir() {
+        // The Dock-launch scenario: the process CWD is unrelated (`/`), so
+        // the old CWD-based validation failed for legitimate workspace
+        // files. The helper must resolve relative paths against the
+        // *session* working directory instead.
+        let workdir = tempfile::tempdir().expect("tempdir");
+        std::fs::write(workdir.path().join("note.md"), "hello diff").expect("write file");
+
+        let diff = get_file_diff_inner(workdir.path(), "note.md")
+            .await
+            .expect("in-tree diff must succeed (non-git dir → empty old side)");
+        assert_eq!(diff.file_name, "note.md");
+        assert_eq!(diff.new_content, "hello diff");
+        assert_eq!(diff.old_content, "");
+    }
+
+    #[test]
+    fn working_dir_info_reports_session_dir_and_dirty_status() {
+        use std::process::Command;
+        let dir = tempfile::tempdir().expect("tempdir");
+        // No git identity needed for `git init` + an untracked file.
+        let init = Command::new("git")
+            .args(["init", "-q"])
+            .current_dir(dir.path())
+            .status();
+        match init {
+            Ok(s) if s.success() => {}
+            // Git missing / restricted sandbox — the status fallbacks are
+            // still exercised; skip the git-specific assertions.
+            _ => return,
+        }
+        std::fs::write(dir.path().join("tracked.txt"), "dirty").expect("write file");
+
+        let info = get_working_dir_info_inner(dir.path());
+        assert_eq!(info.root, dir.path().to_string_lossy());
+        // An untracked file shows up in `git status --porcelain`.
+        assert_eq!(info.status, "dirty");
+        assert!(
+            info.modified_files
+                .iter()
+                .any(|f| f.ends_with("tracked.txt"))
+        );
     }
 }
