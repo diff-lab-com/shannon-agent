@@ -397,8 +397,7 @@ pub fn owner_of_tool(tool_name: &str) -> Option<&str> {
 /// Attached onto the [`crate::tools::ToolRegistry`] during plugin loading;
 /// `ToolRegistry::execute` consults it so any invocation of an
 /// `mcp__<owner>__*` tool is checked against that owner's `mcp_tools` grant.
-/// The production query engine, the streaming scheduler, and the
-/// `ToolExecutionService` facade all funnel through those methods, so one
+/// The production query engine funnels through those methods, so one
 /// lookup covers every consumer without touching the permission core.
 #[derive(Debug, Clone, Default)]
 pub struct PluginToolPolicies {

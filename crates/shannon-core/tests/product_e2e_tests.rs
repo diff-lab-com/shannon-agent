@@ -24,7 +24,6 @@ use shannon_core::tools::{Tool, ToolOutput, ToolRegistry, ToolResult};
 use shannon_engine::api::{ContentBlock, LlmClient, LlmClientConfig, LlmProvider, RetryConfig};
 use shannon_engine::permissions::{ApprovalMode, PermissionManager};
 use shannon_engine::state::StateManager;
-use shannon_engine::streaming_tool_executor::{StreamingToolExecutor, ToolStatus};
 use uuid::Uuid;
 
 // ============================================================================
@@ -507,115 +506,6 @@ async fn test_e2e_openai_provider_text_response() {
 
     assert_eq!(text, "GPT says hello");
     assert!(has_completed);
-}
-
-// ============================================================================
-// E2E Test: Streaming tool executor lifecycle
-// ============================================================================
-
-#[tokio::test]
-async fn test_streaming_tool_executor_lifecycle() {
-    let executor = StreamingToolExecutor::new(16);
-
-    // Submit a tool
-    let tool_id = executor
-        .submit_tool("bash", json!({"command": "ls -la"}), true)
-        .await
-        .expect("submit should succeed");
-    assert!(!tool_id.is_empty(), "Tool ID should be assigned");
-
-    // Start the tool (transition to Executing)
-    executor
-        .start_tool(&tool_id)
-        .await
-        .expect("start should succeed");
-
-    // Check status is Executing via tools()
-    let tools = executor.tools().await;
-    let tool = tools
-        .iter()
-        .find(|t| t.id == tool_id)
-        .expect("tool should exist");
-    assert_eq!(tool.status, ToolStatus::Executing);
-
-    // Add progress
-    executor.add_progress(&tool_id, "Listing files...");
-
-    // Complete the tool
-    executor
-        .complete_tool(
-            &tool_id,
-            ToolOutput::success("file1.txt\nfile2.txt".to_string()),
-        )
-        .await
-        .expect("complete should succeed");
-
-    // Check status is Completed
-    let tools = executor.tools().await;
-    let tool = tools
-        .iter()
-        .find(|t| t.id == tool_id)
-        .expect("tool should exist");
-    assert_eq!(tool.status, ToolStatus::Completed);
-
-    // Abort should not panic on completed tool
-    executor.abort();
-    assert!(executor.is_aborted());
-}
-
-#[tokio::test]
-async fn test_streaming_tool_executor_multiple_concurrent_tools() {
-    let executor = StreamingToolExecutor::new(16);
-
-    let id1 = executor
-        .submit_tool("bash", json!({}), true)
-        .await
-        .expect("submit 1");
-    let id2 = executor
-        .submit_tool("read", json!({}), true)
-        .await
-        .expect("submit 2");
-
-    assert_ne!(id1, id2, "Each tool should get a unique ID");
-
-    // Start and complete both
-    executor.start_tool(&id1).await.expect("start 1");
-    executor.start_tool(&id2).await.expect("start 2");
-    executor
-        .complete_tool(&id1, ToolOutput::success("output1".to_string()))
-        .await
-        .expect("complete 1");
-    executor
-        .complete_tool(&id2, ToolOutput::success("output2".to_string()))
-        .await
-        .expect("complete 2");
-
-    let tools = executor.tools().await;
-    let t1 = tools.iter().find(|t| t.id == id1).expect("tool 1");
-    let t2 = tools.iter().find(|t| t.id == id2).expect("tool 2");
-    assert_eq!(t1.status, ToolStatus::Completed);
-    assert_eq!(t2.status, ToolStatus::Completed);
-}
-
-#[tokio::test]
-async fn test_streaming_tool_executor_fail() {
-    let executor = StreamingToolExecutor::new(16);
-
-    let tool_id = executor
-        .submit_tool("bash", json!({}), true)
-        .await
-        .expect("submit");
-    executor.start_tool(&tool_id).await.expect("start");
-    executor
-        .fail_tool(&tool_id, "Command not found")
-        .await
-        .expect("fail");
-
-    // Failed tools also land in Completed status with error output
-    let tools = executor.tools().await;
-    let tool = tools.iter().find(|t| t.id == tool_id).expect("tool");
-    assert_eq!(tool.status, ToolStatus::Completed);
-    assert!(tool.output.as_ref().unwrap().is_error);
 }
 
 // ============================================================================

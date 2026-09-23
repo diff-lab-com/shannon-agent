@@ -84,16 +84,13 @@ mod unix_probe {
         admit_prompt_based_extension, gated_discover_tools_http, gated_discover_tools_stdio,
         owner_of_tool,
     };
-    use shannon_core::tool_execution::{ToolExecutionError, ToolExecutionService};
-    use shannon_core::tools::ToolRegistry;
-    use shannon_engine::permissions::PermissionManager;
+    use shannon_core::tools::{ToolError, ToolRegistry};
     use shannon_tool_interface::{Tool, ToolOutput, ToolResult};
     use std::collections::HashMap;
     use std::fs;
     use std::path::PathBuf;
     use std::sync::Arc;
     use tempfile::TempDir;
-    use uuid::Uuid;
 
     struct EchoTool(String);
 
@@ -281,10 +278,6 @@ done
             .count()
     }
 
-    fn service_for(registry: &Arc<ToolRegistry>) -> ToolExecutionService {
-        ToolExecutionService::new(Arc::clone(registry), Arc::new(PermissionManager::new()))
-    }
-
     // ── Compatibility group: UNDECLARED manifests behave exactly as before ──
 
     /// Omitted `permissions`: registry load succeeds normally, the gated
@@ -326,12 +319,11 @@ done
             .register(Box::new(write_adapter))
             .expect("registers");
 
-        let service = service_for(&registry);
-        let out = service
-            .run_tool_use(Uuid::new_v4(), TOOL_WRITE, json!({}))
+        let out = registry
+            .execute(TOOL_WRITE, json!({}))
             .await
             .expect("undeclared manifest keeps every gate open");
-        assert!(!out.output.is_error);
+        assert!(!out.is_error);
         assert!(
             probe.write_target.exists(),
             "write side effect happened exactly like before §4.9"
@@ -404,16 +396,14 @@ done
             .register(Box::new(EchoTool("mcp__other-owner__fancy".to_string())))
             .expect("registers");
 
-        let service = service_for(&registry);
-
-        let err = service
-            .run_tool_use(Uuid::new_v4(), TOOL_WRITE, json!({}))
+        let err = registry
+            .execute(TOOL_WRITE, json!({}))
             .await
             .expect_err("routing refused when mcp_tools undeclared");
         match err {
-            ToolExecutionError::ExecutionFailed(msg) => {
-                // The service wraps channel wording in front; the unified
-                // denial text must appear verbatim after it.
+            ToolError::ExecutionFailed(msg) => {
+                // The unified denial text must appear verbatim in the
+                // registry's routing refusal.
                 assert!(msg.contains(DENY_PREFIX), "{msg}");
                 assert!(msg.contains("mcp_tools"), "{msg}");
                 assert!(msg.contains(PLUGIN_NAME), "{msg}");
@@ -428,11 +418,11 @@ done
         assert!(!probe.write_target.exists());
 
         // Scope isolation: other-owner tools run as usual.
-        let out = service
-            .run_tool_use(Uuid::new_v4(), "mcp__other-owner__fancy", json!({}))
+        let out = registry
+            .execute("mcp__other-owner__fancy", json!({}))
             .await
             .expect("ungoverned namespace unaffected");
-        assert!(!out.output.is_error);
+        assert!(!out.is_error);
 
         // Positive control: same name WITH the grant routes through the real
         // subprocess and completes the round trip.
@@ -478,25 +468,23 @@ done
 
         let registry = Arc::new(ToolRegistry::new());
         registry.attach_plugin_policy(PLUGIN_NAME, Arc::clone(&policy));
-        let service = service_for(&registry);
-
         for wanted in [TOOL_READ, TOOL_WRITE, TOOL_EXEC] {
             let tool = take_tool(&mut discovery, wanted);
             registry.register(Box::new(tool)).expect("registers");
         }
 
-        let out = service
-            .run_tool_use(Uuid::new_v4(), TOOL_WRITE, json!({}))
+        let out = registry
+            .execute(TOOL_WRITE, json!({}))
             .await
             .expect("write-face call allowed");
-        assert!(!out.output.is_error);
+        assert!(!out.is_error);
         assert!(probe.write_target.exists());
 
-        let out = service
-            .run_tool_use(Uuid::new_v4(), TOOL_EXEC, json!({}))
+        let out = registry
+            .execute(TOOL_EXEC, json!({}))
             .await
             .expect("exec-face call allowed");
-        assert!(!out.output.is_error);
+        assert!(!out.is_error);
         assert!(probe.exec_target.exists());
 
         assert!(spawn_count(&probe) >= 1);

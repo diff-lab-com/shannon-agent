@@ -5,19 +5,19 @@
 
 ## Snapshot
 
-- **Generated (UTC)**: `2026-09-23T18:01:11Z`
+- **Generated (UTC)**: `2026-09-23T20:46:13Z`
 - **Branch**: `HEAD`
-- **Commit**: `5ba6aa7`
-- **Describe**: `5ba6aa7-dirty`
+- **Commit**: `68feb10`
+- **Describe**: `68feb10-dirty`
 
 ## Summary
 
 | metric | value |
 |---|---:|
-| Tests (nextest, runnable) | 12663 |
-| Tests (source `#[test]`/`#[tokio::test]` attrs) | 12568 |
+| Tests (nextest, runnable) | 12515 |
+| Tests (source `#[test]`/`#[tokio::test]` attrs) | 12420 |
 | Rust source files | 754 |
-| Rust LOC (code) | 528152 |
+| Rust LOC (code) | 523606 |
 | Workspace members | 22 |
 | `cargo clippy --workspace -- -D warnings` | pass |
 | `cargo deny check` | pass |
@@ -29,10 +29,10 @@ Counts below come from `cargo nextest list --workspace --message-format=json`
 
 | crate | tests | binaries |
 |---|---:|---:|
-| shannon-core | 4012 | 46 |
+| shannon-core | 3884 | 46 |
 | shannon-tools | 1780 | 18 |
 | shannon-ui | 1529 | 8 |
-| shannon-engine | 1183 | 4 |
+| shannon-engine | 1162 | 4 |
 | shannon-agents | 907 | 10 |
 | shannon-desktop | 885 | 5 |
 | shannon-mcp | 581 | 9 |
@@ -45,8 +45,8 @@ Counts below come from `cargo nextest list --workspace --message-format=json`
 | shannon-agent | 65 | 2 |
 | shannon-remote | 59 | 1 |
 | shannon-tool-interface | 42 | 1 |
+| shannon-api-protocol | 38 | 4 |
 | shannon-server | 38 | 1 |
-| shannon-api-protocol | 37 | 3 |
 | shannon-repomap | 32 | 3 |
 | shannon-browser | 9 | 1 |
 | shannon-plugin-api | 5 | 1 |
@@ -59,7 +59,7 @@ Legacy archives and vendored directories are excluded.
 
 | language | files | code |
 |---|---:|---:|
-| Rust (.rs) | 754 | 528152 |
+| Rust (.rs) | 754 | 523606 |
 | TypeScript/TSX | 640 | 106231 |
 
 ## Lint / audit status
@@ -71,7 +71,7 @@ Legacy archives and vendored directories are excluded.
 ```text
 [1m[33mwarning[0m[1m:[0m shannon-types@0.11.0: Generated ProviderModelConfig JSON Schema at: /home/runner/work/shannon-agent/shannon-agent/crates/shannon-types/schema/provider-model-config.schema.json
 [1m[32m   Compiling[0m shannon-desktop v0.11.0 (/home/runner/work/shannon-agent/shannon-agent/desktop)
-[1m[32m    Finished[0m \`dev\` profile [unoptimized + debuginfo] target(s) in 18.18s
+[1m[32m    Finished[0m \`dev\` profile [unoptimized + debuginfo] target(s) in 14.55s
 ```
 
 ### `cargo deny check`

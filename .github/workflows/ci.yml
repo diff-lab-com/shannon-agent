@@ -774,7 +774,11 @@ jobs:
       # accessors from shannon-commands (unreachable placeholder API). Same
       # intentional minor-cycle class; new TAG NAME so the baseline-rustdoc
       # cache invalidates.
-      SEMVER_BASELINE: semver-baseline-2026-09-10
+      # Eleventh move (2026-09-24, structural task 0): removed the never-called
+      # ToolExecutionService/StreamingToolExecutor dead infrastructure
+      # (pub types in shannon-core/shannon-engine). Intentional minor-cycle
+      # break; new TAG NAME so the baseline-rustdoc cache invalidates.
+      SEMVER_BASELINE: semver-baseline-2026-09-11
     steps:
       - uses: actions/checkout@f548e57e544e1ff5a4c46bf1e1b8685f8e4a348a
         with:

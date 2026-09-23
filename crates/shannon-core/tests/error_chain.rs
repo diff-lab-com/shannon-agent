@@ -2,12 +2,9 @@
 //!
 //! Tests verify that errors propagate correctly across layers:
 //! - ApiError variants carry correct information
-//! - ToolError → ToolExecutionError conversion
-//! - PermissionError → ToolExecutionError conversion
 //! - QueryError variants have correct string representations
 //! - Provider-specific error parsing (Anthropic, OpenAI, Ollama)
 
-use shannon_core::error::{PermissionError, ToolError, ToolExecutionError};
 use shannon_core::query_engine::QueryError;
 use shannon_engine::api::error::ApiError;
 use shannon_engine::api::types::LlmProvider;
@@ -203,86 +200,6 @@ fn test_unknown_provider_fallback() {
     }
 }
 
-// ── ToolError → ToolExecutionError ──────────────────────────────────────
-
-#[test]
-fn test_tool_error_not_found_conversion() {
-    let tool_err = ToolError::NotFound("my_tool".to_string());
-    let exec_err: ToolExecutionError = tool_err.into();
-
-    match exec_err {
-        ToolExecutionError::ToolNotFound(name) => assert_eq!(name, "my_tool"),
-        _ => panic!("Expected ToolNotFound, got {exec_err:?}"),
-    }
-}
-
-#[test]
-fn test_tool_error_invalid_input_conversion() {
-    let tool_err = ToolError::InvalidInput("missing field".to_string());
-    let exec_err: ToolExecutionError = tool_err.into();
-
-    match exec_err {
-        ToolExecutionError::InvalidInput { reason, .. } => {
-            assert!(reason.contains("missing field"));
-        }
-        _ => panic!("Expected InvalidInput, got {exec_err:?}"),
-    }
-}
-
-#[test]
-fn test_tool_error_execution_failed_conversion() {
-    let tool_err = ToolError::ExecutionFailed("exit code 1".to_string());
-    let exec_err: ToolExecutionError = tool_err.into();
-
-    match exec_err {
-        ToolExecutionError::ExecutionFailed(msg) => {
-            assert!(msg.contains("exit code 1"));
-        }
-        _ => panic!("Expected ExecutionFailed, got {exec_err:?}"),
-    }
-}
-
-#[test]
-fn test_tool_error_registry_error_conversion() {
-    let tool_err = ToolError::RegistryError("duplicate name".to_string());
-    let exec_err: ToolExecutionError = tool_err.into();
-
-    match exec_err {
-        ToolExecutionError::Internal(msg) => {
-            assert!(msg.contains("duplicate name"));
-        }
-        _ => panic!("Expected Internal, got {exec_err:?}"),
-    }
-}
-
-// ── PermissionError → ToolExecutionError ────────────────────────────────
-
-#[test]
-fn test_permission_error_denied_conversion() {
-    let perm_err = PermissionError::Denied("bash: dangerous command".to_string());
-    let exec_err: ToolExecutionError = perm_err.into();
-
-    match exec_err {
-        ToolExecutionError::PermissionDenied { reason, .. } => {
-            assert!(reason.contains("dangerous command"));
-        }
-        _ => panic!("Expected PermissionDenied, got {exec_err:?}"),
-    }
-}
-
-#[test]
-fn test_permission_error_invalid_conversion() {
-    let perm_err = PermissionError::InvalidPermission("bad format".to_string());
-    let exec_err: ToolExecutionError = perm_err.into();
-
-    match exec_err {
-        ToolExecutionError::PermissionDenied { reason, .. } => {
-            assert!(reason.contains("bad format"));
-        }
-        _ => panic!("Expected PermissionDenied, got {exec_err:?}"),
-    }
-}
-
 // ── QueryError Variants ────────────────────────────────────────────────
 
 #[test]
@@ -340,26 +257,4 @@ fn test_api_error_message_preserved_in_query_error() {
     let original_msg = "HTTP 429: Too many requests";
     let query_err = QueryError::ApiError(original_msg.to_string());
     assert!(query_err.to_string().contains("429"));
-}
-
-#[test]
-fn test_tool_error_chain_preserves_context() {
-    // Simulate: ToolError → ToolExecutionError
-    let original = ToolError::ExecutionFailed("script.sh failed with exit code 127".to_string());
-    let exec_err: ToolExecutionError = original.into();
-
-    // The error message should carry the original context
-    let msg = exec_err.to_string();
-    assert!(msg.contains("script.sh"));
-    assert!(msg.contains("127"));
-}
-
-#[test]
-fn test_permission_error_chain_preserves_context() {
-    let original = PermissionError::Denied("write to /etc/passwd blocked by policy".to_string());
-    let exec_err: ToolExecutionError = original.into();
-
-    let msg = exec_err.to_string();
-    assert!(msg.contains("/etc/passwd"));
-    assert!(msg.contains("policy"));
 }
