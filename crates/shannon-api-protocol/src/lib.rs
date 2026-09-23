@@ -161,7 +161,7 @@ pub struct ApprovalRespondRequest {
 // ── SSE event-name contract ─────────────────────────────────────────────
 
 /// Canonical SSE `event:` names for every streaming endpoint that carries
-/// [`QueryEvent`]-shaped traffic (`POST /api/query/stream`, the deprecated
+/// `QueryEvent`-shaped traffic (`POST /api/query/stream`, the deprecated
 /// `GET /api/query/stream`, and the headless server's
 /// `POST /v1/sessions/:id/messages`).
 ///
@@ -209,7 +209,7 @@ pub enum SseEventName {
     ConversationUpdate,
     /// Rate-limit info from provider response headers.
     RateLimit,
-    /// Transport-level error channel — not a [`QueryEvent`] payload. Used
+    /// Transport-level error channel — not a `QueryEvent` payload. Used
     /// when the query stream itself errors (`{"error": …}`) and, per §P3-4,
     /// when an event's serialization fails (the payload then carries
     /// `{"error": …, "event_type": …}` naming the event that was lost).
