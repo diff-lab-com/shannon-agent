@@ -10,7 +10,6 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { renderHook, act, waitFor } from '@testing-library/react'
 import { AppProvider, useApp } from '@/context/AppContext'
-import { listen } from '@tauri-apps/api/event'
 import { EVENT_NAMES } from '@/types'
 import * as api from '@/lib/tauri-api'
 
