@@ -1001,6 +1001,14 @@ pub async fn send_message(
         }
     });
     tokio::spawn(async move {
+        use futures::FutureExt;
+        // P3 (streaming-panic hardening): a panic anywhere in the loop below
+        // used to unwind straight out of this task and skip the per-session
+        // flag reset at the bottom — the session stayed latched `querying`
+        // until restart. Catch the unwind (dev/test profiles; release runs
+        // panic=abort where the process dies anyway), emit a terminal
+        // `query:failed`, and ALWAYS run the reset afterwards.
+        let streamed = std::panic::AssertUnwindSafe(async {
         let stream = engine.process_query(context, Some(perm_tx)).await;
         let mut final_content = String::new();
 
@@ -1395,7 +1403,48 @@ pub async fn send_message(
             }
         }
 
-        // Clear per-session querying flag and cancellation token.
+        })
+        .catch_unwind()
+        .await;
+
+        // A panic must not look like success or vanish: surface it as a
+        // terminal `query:failed` (same shape as the engine Failed arm).
+        if let Err(panic_payload) = streamed {
+            let panic_msg = if let Some(s) = panic_payload.downcast_ref::<&str>() {
+                (*s).to_string()
+            } else if let Some(s) = panic_payload.downcast_ref::<String>() {
+                s.clone()
+            } else {
+                "unknown panic".to_string()
+            };
+            tracing::error!(
+                query_id = %qid_str,
+                session_id = %session_id_str,
+                error = %panic_msg,
+                "streaming task panicked — emitting query:failed and resetting session state"
+            );
+            let _ = app.emit(
+                event_names::QUERY_FAILED,
+                events::QueryFailedPayload {
+                    query_id: qid_str.clone(),
+                    error: panic_msg.clone(),
+                    session_id: Some(session_id_str.clone()),
+                },
+            );
+            route_event(crate::session_registry::SessionEvent::Status(
+                crate::session_registry::SessionEventStatus::Failed(panic_msg.clone()),
+            ));
+            crate::commands_notifications::fire_query_notification_logged(
+                &notifier_arc,
+                crate::commands_notifications::NotificationKind::Failed(panic_msg),
+                "query_failed",
+            );
+        }
+
+        // Clear per-session querying flag and cancellation token. P3: this
+        // now runs on EVERY exit path — ok, engine error, cancel, and the
+        // caught panic above — instead of only falling off the end of the
+        // happy-path body.
         {
             let mut q = session_for_task.querying.lock().await;
             *q = false;
