@@ -120,13 +120,16 @@ export function AppProvider({ children }: { children: ReactNode }) {
   const [initError, setInitError] = useState<string | null>(null)
   const [_currentQueryId, setCurrentQueryId] = useState<string | null>(null)
 
-  // Mirror streamingText into a ref so the QUERY_COMPLETED handler can read
-  // the final streamed text synchronously. This replaces the prior pattern of
-  // calling setMessages from inside the setStreamingText updater, which
-  // double-fires under React StrictMode and could append the assistant
-  // message twice.
-  const streamingTextRef = useRef('')
-  streamingTextRef.current = streamingText
+  // Review §P2-18: the main window receives every session's query:* events
+  // (isEventForCurrentWindow passes all through), so streaming text must be
+  // bucketed per session id — a single buffer would interleave tokens from
+  // concurrent runs and commit the mixture as one assistant message.
+  // `streamingText` / `thinkingText` are projections of the *visible*
+  // session's bucket (windowSessionId ?? currentSessionId).
+  const streamingBucketsRef = useRef<Map<string, string>>(new Map())
+  const thinkingBucketsRef = useRef<Map<string, string>>(new Map())
+  const visibleSessionIdRef = useRef<string | null>(windowSessionId)
+  visibleSessionIdRef.current = windowSessionId ?? currentSessionId
 
   // P0 sidebar telemetry: record one query-stream observation for a session.
   // `kind === 'event'` (text/thinking/usage) only refreshes the ref's
@@ -253,6 +256,12 @@ export function AppProvider({ children }: { children: ReactNode }) {
       return
     }
     setError(null)
+    // §P2-18: a new turn resets its session's stream buckets, not just the
+    // visible projection (a previous turn may have failed mid-stream).
+    const targetSessionId = windowSessionId ?? currentSessionId
+    const targetKey = targetSessionId ?? ''
+    streamingBucketsRef.current.set(targetKey, '')
+    thinkingBucketsRef.current.set(targetKey, '')
     setStreamingText('')
     setThinkingText('')
     setActiveToolCalls([])
@@ -263,7 +272,6 @@ export function AppProvider({ children }: { children: ReactNode }) {
       // session, the main window its current one; the backend never routes
       // via the shared active pointer for these calls. `null` (no session
       // yet) keeps the backend's legacy active fallback.
-      const targetSessionId = windowSessionId ?? currentSessionId
       const resp = await api.sendMessage(
         message,
         filePaths,
@@ -343,8 +351,11 @@ export function AppProvider({ children }: { children: ReactNode }) {
       const msgs = await api.switchSession(id)
       setCurrentSessionId(id)
       setMessages(msgs)
-      setStreamingText('')
-      setThinkingText('')
+      // §P2-18: project the switched-to session's own stream buckets — a
+      // background run keeps streaming into them while another session is
+      // on screen, so a single shared buffer would show foreign tokens.
+      setStreamingText(streamingBucketsRef.current.get(id) ?? '')
+      setThinkingText(thinkingBucketsRef.current.get(id) ?? '')
       setActiveToolCalls([])
       // Batch B2: opening the session marks a prior failure as seen.
       const prev = sessionActivityRef.current.get(id)
@@ -358,6 +369,9 @@ export function AppProvider({ children }: { children: ReactNode }) {
   const deleteSessionAction = useCallback(async (id: string) => {
     try {
       await api.deleteSession(id)
+      // §P2-18: drop the deleted session's stream buckets.
+      streamingBucketsRef.current.delete(id)
+      thinkingBucketsRef.current.delete(id)
       if (currentSessionId === id) {
         setMessages([])
         setCurrentSessionId(null)
@@ -437,6 +451,8 @@ export function AppProvider({ children }: { children: ReactNode }) {
     try {
       const msgs = await api.rewindSession(currentSessionId, turnIndex)
       setMessages(msgs)
+      streamingBucketsRef.current.set(currentSessionId, '')
+      thinkingBucketsRef.current.set(currentSessionId, '')
       setStreamingText('')
       setThinkingText('')
       setActiveToolCalls([])
@@ -452,6 +468,8 @@ export function AppProvider({ children }: { children: ReactNode }) {
     try {
       const result = await api.compactSession(currentSessionId)
       setMessages(result.messages)
+      streamingBucketsRef.current.set(currentSessionId, '')
+      thinkingBucketsRef.current.set(currentSessionId, '')
       setStreamingText('')
       setThinkingText('')
       setActiveToolCalls([])
@@ -482,7 +500,14 @@ export function AppProvider({ children }: { children: ReactNode }) {
           const p = e.payload as { content: string; session_id?: string }
           if (!isEventForCurrentWindow(p.session_id, windowSessionId)) return
           noteSessionActivity(p.session_id, 'event')
-          setStreamingText(prev => prev + p.content)
+          // §P2-18: append to this session's own bucket; only the visible
+          // session's bucket is projected into state, so tokens from a
+          // background session never land in the on-screen stream.
+          const visibleKey = visibleSessionIdRef.current ?? ''
+          const key = p.session_id ?? visibleKey
+          const next = (streamingBucketsRef.current.get(key) ?? '') + p.content
+          streamingBucketsRef.current.set(key, next)
+          if (key === visibleKey) setStreamingText(next)
         }),
         listen(EVENT_NAMES.QUERY_TOOL_START, (e) => {
           const p = e.payload as { tool_use_id: string; tool_name: string; tool_input: unknown; session_id?: string }
@@ -529,7 +554,12 @@ export function AppProvider({ children }: { children: ReactNode }) {
           const p = e.payload as { content: string; session_id?: string }
           if (!isEventForCurrentWindow(p.session_id, windowSessionId)) return
           noteSessionActivity(p.session_id, 'event')
-          setThinkingText(prev => prev + p.content)
+          // §P2-18: same per-session bucketing as QUERY_TEXT.
+          const visibleKey = visibleSessionIdRef.current ?? ''
+          const key = p.session_id ?? visibleKey
+          const next = (thinkingBucketsRef.current.get(key) ?? '') + p.content
+          thinkingBucketsRef.current.set(key, next)
+          if (key === visibleKey) setThinkingText(next)
         }),
         listen(EVENT_NAMES.QUERY_USAGE, (e) => {
           const p = e.payload as UsagePayload
@@ -538,35 +568,56 @@ export function AppProvider({ children }: { children: ReactNode }) {
           setUsage(p)
         }),
         listen(EVENT_NAMES.QUERY_COMPLETED, (e) => {
-          if (!isEventForCurrentWindow((e.payload as { session_id?: string }).session_id, windowSessionId)) return
-          noteSessionActivity((e.payload as { session_id?: string }).session_id, 'end')
-          setIsQuerying(false)
-          setSubagentLive(null)
-          // Commit the streamed text as a finished assistant message. Read
-          // via the ref (kept in sync on every render) instead of nesting
-          // setMessages inside the setStreamingText updater.
-          const finalText = streamingTextRef.current
-          if (finalText) {
-            setMessages(msgs => [...msgs, { role: 'assistant', content: finalText, timestamp: Date.now() }])
+          const sid = (e.payload as { session_id?: string }).session_id
+          if (!isEventForCurrentWindow(sid, windowSessionId)) return
+          noteSessionActivity(sid, 'end')
+          // §P2-18: the completed session commits ITS OWN bucket, and UI
+          // mutations only fire when it is the one on screen — a background
+          // session finishing must not append to (or clear) another
+          // session's visible stream. The committed text is read from the
+          // bucket (not a streamingText mirror), so StrictMode can't
+          // double-append and concurrent sessions can't cross-commit.
+          const visibleKey = visibleSessionIdRef.current ?? ''
+          const key = sid ?? visibleKey
+          const finalText = streamingBucketsRef.current.get(key) ?? ''
+          streamingBucketsRef.current.set(key, '')
+          thinkingBucketsRef.current.set(key, '')
+          if (key === visibleKey) {
+            setIsQuerying(false)
+            setSubagentLive(null)
+            if (finalText) {
+              setMessages(msgs => [...msgs, { role: 'assistant', content: finalText, timestamp: Date.now() }])
+            }
+            setStreamingText('')
+            setThinkingText('')
+            setCurrentQueryId(null)
+            refreshStatus()
           }
-          setStreamingText('')
-          setThinkingText('')
-          setCurrentQueryId(null)
-          refreshStatus()
         }),
         listen(EVENT_NAMES.QUERY_FAILED, (e) => {
           const p = e.payload as { error: string; session_id?: string }
           if (!isEventForCurrentWindow(p.session_id, windowSessionId)) return
           noteSessionActivity(p.session_id, 'fail')
-          setError(p.error)
-          setIsQuerying(false)
-          setCurrentQueryId(null)
+          // §P2-18: like QUERY_COMPLETED, failure state is scoped to the
+          // visible session — a background run failing must not overwrite
+          // the on-screen session's composer/error state (its failure is
+          // still surfaced by the rail's red dot via noteSessionActivity).
+          const visibleKey = visibleSessionIdRef.current ?? ''
+          if ((p.session_id ?? visibleKey) === visibleKey) {
+            setError(p.error)
+            setIsQuerying(false)
+            setCurrentQueryId(null)
+          }
         }),
         listen(EVENT_NAMES.QUERY_CANCELLED, (e) => {
-          if (!isEventForCurrentWindow((e.payload as { session_id?: string }).session_id, windowSessionId)) return
-          noteSessionActivity((e.payload as { session_id?: string }).session_id, 'end')
-          setIsQuerying(false)
-          setCurrentQueryId(null)
+          const sid = (e.payload as { session_id?: string }).session_id
+          if (!isEventForCurrentWindow(sid, windowSessionId)) return
+          noteSessionActivity(sid, 'end')
+          const visibleKey = visibleSessionIdRef.current ?? ''
+          if ((sid ?? visibleKey) === visibleKey) {
+            setIsQuerying(false)
+            setCurrentQueryId(null)
+          }
         }),
         listen(EVENT_NAMES.PERMISSION_REQUEST, (e) => {
           const p = e.payload as PermissionRequest

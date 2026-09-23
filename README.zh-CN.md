@@ -162,6 +162,22 @@ Shannon 是完全开源（Apache-2.0）、基于 Rust 的 **AI agent 工作台**
 - **检查点/撤销** —— 基于 Git 的文件检查点，回退前显示 Diff 预览（`/rewind`）
 - **计划模式** —— 结构化规划与审批工作流
 
+### 权限模式
+
+代理无需确认即可执行的操作范围由审批模式（approval mode）控制。每个名称各有一个明确含义 —— 特别注意 `auto`、`full-auto` 与 Auto 分类器是三个不同的模式：
+
+| 模式 | 行为 |
+|---|---|
+| `default`（suggest） | 每次工具执行都需确认。 |
+| `plan` | 代理先给出计划；计划获批后，计划内的工具调用不再逐个确认。 |
+| `auto`（auto-edit） | 仅自动批准文件编辑/写入 —— shell 等高风险工具仍会询问。这是引擎默认值。 |
+| `full-auto` | 自动批准除关键风险操作外的一切。 |
+| `auto-classifier` | 由后台安全分类器逐操作判定：低风险静默执行，中/高风险询问，关键风险直接拒绝。 |
+| `readonly` / `plan-readonly` | 仅允许只读操作；`plan-readonly` 进一步禁止所有工具执行（仅分析）。 |
+| `bypass-permissions` / `dont-ask` | 从不询问 —— 包括关键风险操作。请务必谨慎。 |
+
+终端中 BackTab 依次切换常用模式（default → auto → plan → full-auto）；桌面端在「设置 → 通用」与聊天顶栏的模式切换器中提供。
+
 ### 插件与技能系统
 
 - **`shannon-plugin-api`** —— 引擎与插件之间的内容变换中间件契约，四条不变量：字节稳定确定性（保 prompt 缓存）、单向流、幂等、显式失败语义。内置 `secret-guard` 插件是首个实现。
