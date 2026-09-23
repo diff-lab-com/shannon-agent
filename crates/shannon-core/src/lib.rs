@@ -228,15 +228,11 @@ pub use shannon_engine::permissions::{
     ApprovalMode, Permission, PermissionLevel, PermissionManager,
 };
 pub use shannon_engine::state::{SessionState, StateManager};
-pub use shannon_engine::streaming_tool_executor::{StreamingToolExecutor, ToolStatus, TrackedTool};
 pub use suggestions::{
     Suggestion, SuggestionCategory, SuggestionContext, SuggestionEngine, SuggestionRule,
 };
 pub use tips::{Tip, TipCategory, TipCondition, TipContext, TipError, TipManager};
 pub use tool_cache::{ToolCacheConfig, ToolResultCache};
-pub use tool_execution::{
-    ToolExecutionResult, ToolExecutionService, ToolProgress, ToolProgressStatus,
-};
 pub use tools::{Tool, ToolInfo, ToolOutput, ToolRegistry, ToolResult};
 pub use unified_config::{ConfigBuilder, ShannonConfig};
 pub use updater::{AutoUpdater, ReleaseInfo, UpdateError, UpdateStatus, UpdaterConfig};
@@ -330,7 +326,6 @@ pub mod error {
     pub use crate::settings_sync::SyncError;
     pub use crate::team_memory_sync::TeamMemorySyncError;
     pub use crate::tips::TipError;
-    pub use crate::tool_execution::ToolExecutionError;
     pub use crate::tools::ToolError;
     pub use crate::ui_adapter::UiError;
     pub use crate::updater::UpdateError;
@@ -341,7 +336,6 @@ pub mod error {
     pub use shannon_engine::permission_classifier::PermissionClassifierError;
     pub use shannon_engine::permissions::PermissionError;
     pub use shannon_engine::state::StateError;
-    pub use shannon_engine::streaming_tool_executor::ExecutorError;
 }
 
 /// Version information
