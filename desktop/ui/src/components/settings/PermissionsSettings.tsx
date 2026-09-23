@@ -48,6 +48,21 @@ export function validateRuleInput(raw: string): string | null {
 
 type RuleGroup = 'auto_approve' | 'confirm' | 'deny'
 
+/// Single source of truth for rule-group → i18n title/hint keys. NB: the key
+/// segment for auto_approve is `auto`, not the group name —拼接 group 名会
+/// 渲染出原始键字符串（react-intl missing-message 回退）。
+const RULE_GROUP_TITLE_KEYS: Record<RuleGroup, string> = {
+  auto_approve: 'settings.permissions.editor.auto.title',
+  confirm: 'settings.permissions.editor.confirm.title',
+  deny: 'settings.permissions.editor.deny.title',
+}
+
+const RULE_GROUP_HINT_KEYS: Record<RuleGroup, string> = {
+  auto_approve: 'settings.permissions.editor.auto.hint',
+  confirm: 'settings.permissions.editor.confirm.hint',
+  deny: 'settings.permissions.editor.deny.hint',
+}
+
 interface EditorState {
   /** Original name when editing (rename = save under the new name). */
   originalName: string | null
@@ -318,7 +333,7 @@ export default function PermissionsSettings() {
                         {hit.rule}
                       </code>
                       <span className="text-label-sm text-on-surface-variant">
-                        {hit.profile} · {t(`settings.permissions.editor.${hit.group}.title`)}
+                        {hit.profile} · {t(RULE_GROUP_TITLE_KEYS[hit.group])}
                       </span>
                     </li>
                   ))}
@@ -593,11 +608,13 @@ function ProfileEditorModal({
 }) {
   const intl = useIntl()
   const t = (id: string) => intl.formatMessage({ id })
-  const groups: Array<{ key: RuleGroup; titleKey: string; hintKey: string }> = [
-    { key: 'auto_approve', titleKey: 'settings.permissions.editor.auto.title', hintKey: 'settings.permissions.editor.auto.hint' },
-    { key: 'confirm', titleKey: 'settings.permissions.editor.confirm.title', hintKey: 'settings.permissions.editor.confirm.hint' },
-    { key: 'deny', titleKey: 'settings.permissions.editor.deny.title', hintKey: 'settings.permissions.editor.deny.hint' },
-  ]
+  const groups: Array<{ key: RuleGroup; titleKey: string; hintKey: string }> = (
+    ['auto_approve', 'confirm', 'deny'] as RuleGroup[]
+  ).map((key) => ({
+    key,
+    titleKey: RULE_GROUP_TITLE_KEYS[key],
+    hintKey: RULE_GROUP_HINT_KEYS[key],
+  }))
 
   const addRule = (group: RuleGroup, value: string) => {
     if (value.trim() === '') return

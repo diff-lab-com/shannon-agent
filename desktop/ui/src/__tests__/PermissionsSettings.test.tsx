@@ -304,6 +304,15 @@ describe('X3 scope filter — deep link panel', () => {
     expect(within(panel).getByText('mcp__github__*')).toBeInTheDocument()
     expect(within(panel).getByText('mcp__github__create_issue')).toBeInTheDocument()
     expect(within(panel).queryByText('mcp__slack__*')).not.toBeInTheDocument()
+    // Group labels must resolve to localized titles (auto_approve → "Auto-
+    // approve", NOT the raw `…editor.auto_approve.title` key — regression
+    // guard for the group-name/key-segment mismatch). The label shares a
+    // span with the profile name, hence the regex match.
+    expect(within(panel).getAllByText(/Auto-approve/).length).toBeGreaterThan(0)
+    expect(within(panel).getAllByText(/Deny/).length).toBeGreaterThan(0)
+    expect(
+      within(panel).queryByText(/settings\.permissions\.editor\./),
+    ).not.toBeInTheDocument()
     // Clearing the chip removes the panel (back to the unfiltered page).
     fireEvent.click(within(panel).getByRole('button', { name: 'Clear scope filter' }))
     await waitFor(() => {
