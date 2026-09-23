@@ -23,22 +23,26 @@ function extractFences(markdown: string): CodeFenceBlock[] {
   return out
 }
 
+// Title fallbacks resolve at display time via artifactDisplayTitle() in
+// labels.ts — detection stays locale-free and returns '' when the source
+// carries no explicit title.
+
 function titleFromHtml(src: string): string {
   const m = src.match(/<title>([^<]+)<\/title>/i)
-  return m ? m[1].trim().slice(0, 80) : 'HTML document'
+  return m ? m[1].trim().slice(0, 80) : ''
 }
 
 function titleFromSvg(_src: string): string {
-  return 'SVG diagram'
+  return ''
 }
 
 function titleFromMermaid(_src: string): string {
-  return 'Mermaid diagram'
+  return ''
 }
 
 function titleFromDocument(markdown: string): string {
   const heading = markdown.match(/^#{1,3}\s+(.+)$/m)
-  return heading ? heading[1].trim().slice(0, 80) : 'Document'
+  return heading ? heading[1].trim().slice(0, 80) : ''
 }
 
 const MIN_HTML_LINES = 5
@@ -84,11 +88,3 @@ export function artifactIcon(kind: ArtifactKind): string {
   }
 }
 
-export function artifactKindLabel(kind: ArtifactKind): string {
-  switch (kind) {
-    case 'html': return 'HTML'
-    case 'svg': return 'SVG'
-    case 'mermaid': return 'Diagram'
-    case 'document': return 'Document'
-  }
-}

@@ -8,7 +8,8 @@ import { cn } from '@/lib/utils'
 import 'highlight.js/styles/github.css'
 import * as api from '@/lib/tauri-api'
 import { useArtifact } from './ArtifactContext'
-import { artifactIcon, artifactKindLabel } from './detectArtifact'
+import { artifactIcon } from './detectArtifact'
+import { artifactKindLabel } from './labels'
 import { HtmlRenderer } from './HtmlRenderer'
 import { SvgRenderer } from './SvgRenderer'
 import { MermaidRenderer } from './MermaidRenderer'
@@ -127,9 +128,9 @@ export function ArtifactPanel({ embedded = false }: { embedded?: boolean }) {
     <header className="flex items-center gap-sm px-md py-sm border-b border-outline-variant/20">
       <span className="material-symbols-outlined icon-sm text-primary shrink-0">{artifactIcon(active.kind)}</span>
       <span className="font-label-md text-on-surface truncate flex-1">{active.title}</span>
-      <span className="font-label-xs text-on-surface-variant px-xs py-[2px] rounded bg-surface-container-high shrink-0">
-        {artifactKindLabel(active.kind)}
-      </span>
+        <span className="font-label-xs text-on-surface-variant px-xs py-[2px] rounded bg-surface-container-high shrink-0">
+          {artifactKindLabel(active.kind, t)}
+        </span>
       <Button
         type="button"
         variant="ghost"

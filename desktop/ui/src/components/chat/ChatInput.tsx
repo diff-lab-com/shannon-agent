@@ -444,7 +444,7 @@ export default function ChatInput({
               isQuerying
                 ? t('chat.input.processing')
                 : sessionWorkingDir
-                  ? `${t('chat.input.placeholder.project')} — ${basename(sessionWorkingDir)}`
+                  ? intl.formatMessage({ id: 'chat.input.placeholder.project' }, { dir: basename(sessionWorkingDir) })
                   : t('chat.input.placeholder.empty')
             }
             aria-label={t('chat.input.ariaLabel')}
