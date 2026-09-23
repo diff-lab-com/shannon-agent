@@ -162,6 +162,22 @@ Full MCP implementation compatible with Claude Code's MCP ecosystem:
 - **Checkpoint/Undo** — Git-based file checkpointing with diff preview before revert (`/rewind`)
 - **Plan mode** — Structured planning with approval workflows
 
+### Permission Modes
+
+What the agent may do without asking is governed by an approval mode. The names are each single-valued — `auto`, `full-auto`, and the Auto classifier are three different modes:
+
+| Mode | Behavior |
+|---|---|
+| `default` (suggest) | Confirm every tool execution. |
+| `plan` | The agent proposes a plan first; once you approve it, tool calls within that plan run without per-call prompts. |
+| `auto` (auto-edit) | Auto-approve file edits/writes only — shell and other risky tools still ask. This is the engine default. |
+| `full-auto` | Auto-approve everything except critical-risk operations. |
+| `auto-classifier` | A background safety classifier decides per operation: low risk runs silently, medium+ asks, critical is denied. |
+| `readonly` / `plan-readonly` | Read-only operations only; `plan-readonly` additionally denies tool execution entirely (analysis only). |
+| `bypass-permissions` / `dont-ask` | Never prompt — including critical operations. Use with extreme caution. |
+
+In the terminal, BackTab cycles the common modes (default → auto → plan → full-auto); the desktop app exposes them in Settings → General and in the chat header's mode switcher.
+
 ### Plugin & Skill System
 
 - **`shannon-plugin-api`** — a content-transform middleware contract between engine and plugins, with four invariants: byte-stable determinism (prompt-cache safe), one-way flow, idempotence, and explicit failure semantics. The built-in `secret-guard` plugin is the first implementation.
