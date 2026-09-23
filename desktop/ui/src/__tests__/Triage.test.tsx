@@ -45,6 +45,9 @@ const testMessages: Record<string, string> = {
   'inbox.rerun.aria': 'Rerun the routine behind this item',
   'inbox.rerun.title': 'Rerun',
   'inbox.rerun.disabled.title': 'Rerun is available for routine and scheduled-task items',
+  'inbox.openSource.label': 'View source automation',
+  'inbox.openSource.aria': 'Open the automation that produced this item',
+  'inbox.groupBySource': 'Group by source',
   'inbox.select.aria': 'Select item {id}',
   'inbox.select.selectAll': 'Select all visible items',
   'inbox.select.deselectAll': 'Deselect all',
@@ -128,12 +131,17 @@ function setItems(items: InboxItem[], stats: { pending: number; today: number } 
 
 function LocationCapture() {
   const location = useLocation()
-  return <div data-testid="location">{location.pathname}</div>
+  return (
+    <div
+      data-testid="location"
+      data-state={JSON.stringify(location.state ?? null)}
+    >{location.pathname}</div>
+  )
 }
 
-function renderPage() {
+function renderPage(initialEntry: string | { pathname: string; state?: unknown } = '/triage') {
   return render(
-    <MemoryRouter initialEntries={['/triage']}>
+    <MemoryRouter initialEntries={[initialEntry]}>
       <IntlProvider locale="en" messages={testMessages} defaultLocale="en">
         <div>
           <Triage />
@@ -407,5 +415,57 @@ describe('Triage page (inbox)', () => {
   it('filter type stays assignable to the wire shape', () => {
     const f: InboxListFilter = { status: 'read', source: 'routine' }
     expect(f.status).toBe('read')
+  })
+})
+
+// IA T2 (互链闭环): routine/scheduled_task cards link back to the automation
+// that produced them, and a HistoryView hand-over highlights the target card.
+describe('Triage — cross links (IA T2)', () => {
+  it('shows「View source automation」on a routine item and navigates to /tasks with openRoutineId', () => {
+    setItems([makeItem({ id: 1, source: 'routine', sourceId: 'sched-001' })])
+    renderPage()
+    const btn = screen.getByRole('button', { name: 'Open the automation that produced this item' })
+    expect(btn).toHaveTextContent('View source automation')
+    fireEvent.click(btn)
+    const probe = screen.getByTestId('location')
+    expect(probe).toHaveTextContent('/tasks')
+    expect(JSON.parse(probe.getAttribute('data-state')!)).toEqual({ openRoutineId: 'sched-001' })
+  })
+
+  it('shows the source link for scheduled_task items too', () => {
+    setItems([makeItem({ id: 2, source: 'scheduled_task', sourceId: 'st-9' })])
+    renderPage()
+    expect(screen.getByRole('button', { name: 'Open the automation that produced this item' })).toBeInTheDocument()
+  })
+
+  it('hides the source link for goal/trigger items and items without sourceId', () => {
+    setItems([
+      makeItem({ id: 1, source: 'goal', sourceId: null }),
+      makeItem({ id: 2, source: 'trigger', sourceId: 'tr-1' }),
+    ])
+    renderPage()
+    expect(screen.queryByRole('button', { name: 'Open the automation that produced this item' })).not.toBeInTheDocument()
+  })
+
+  it('rings the card handed over via highlightInboxId state and drains the router state', () => {
+    setItems([
+      makeItem({ id: 7, source: 'routine', sourceId: 'sched-001' }),
+      makeItem({ id: 8, source: 'routine', sourceId: 'sched-002' }),
+    ])
+    renderPage({ pathname: '/triage', state: { highlightInboxId: 7 } })
+    const highlighted = screen.getByText('Item 7').closest('[role="listitem"]')
+    expect(highlighted).not.toBeNull()
+    expect(highlighted!).toHaveAttribute('data-highlight', 'true')
+    expect(highlighted!.className).toContain('ring-2')
+    // The other card is not highlighted.
+    expect(screen.getByText('Item 8').closest('[data-highlight]')).toBeNull()
+    // One-shot: the router state was consumed (highlight lives in local state).
+    expect(JSON.parse(screen.getByTestId('location').getAttribute('data-state')!)).toBeNull()
+  })
+
+  it('does not ring any card without highlight state', () => {
+    setItems([makeItem({ id: 1 })])
+    renderPage()
+    expect(document.querySelector('[data-highlight="true"]')).toBeNull()
   })
 })

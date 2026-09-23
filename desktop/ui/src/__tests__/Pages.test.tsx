@@ -27,9 +27,11 @@ describe('Tasks page', () => {
     await waitFor(() => expect(screen.getByText(/Create and monitor automations/)).toBeInTheDocument())
   })
 
-  it('renders new task button', async () => {
+  // IA T4: primary CTA is「新建自动化」; the background-task entry lives in
+  // the split-button dropdown.
+  it('renders the New Automation primary CTA', async () => {
     render(wrap(<Tasks />))
-    await waitFor(() => expect(screen.getByText('New Background Task')).toBeInTheDocument())
+    await waitFor(() => expect(screen.getByRole('button', { name: 'New Automation' })).toBeInTheDocument())
   })
 
   it('renders empty state when no tasks', async () => {

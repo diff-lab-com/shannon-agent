@@ -14,7 +14,7 @@
 // cards, chip filters, keyboard j/k navigation, bulk selection bar).
 
 import { useState, useMemo, useCallback, useEffect, useRef, type KeyboardEvent as ReactKeyboardEvent } from 'react'
-import { useNavigate } from 'react-router-dom'
+import { useLocation, useNavigate } from 'react-router-dom'
 import { useIntl, type PrimitiveType } from 'react-intl'
 import { toast } from 'sonner'
 import EmptyState from '@/components/ui/empty-state'
@@ -40,6 +40,13 @@ function canRerun(item: InboxItem): boolean {
   return RERUNNABLE_SOURCES.includes(item.source) && item.status !== 'archived'
 }
 
+// IA 2026-09 (T2 互链闭环): routine/scheduled_task items carry the id of the
+// automation that produced them, so the card can link back to /tasks and
+// open its RoutineDetailDrawer.
+function canOpenSource(item: InboxItem): boolean {
+  return RERUNNABLE_SOURCES.includes(item.source) && item.sourceId != null
+}
+
 function sourceMeta(source: InboxSource): { icon: string; color: string; labelKey: string } {
   switch (source) {
     case 'routine':
@@ -62,25 +69,29 @@ function sourceMeta(source: InboxSource): { icon: string; color: string; labelKe
 const STATUS_OPTIONS: readonly (InboxItemStatus | 'all')[] = ['all', 'pending', 'read', 'archived']
 const SOURCE_OPTIONS: readonly (InboxSource | 'all')[] = ['all', 'routine', 'scheduled_task', 'goal', 'trigger', 'batch']
 
-function InboxCard({ item, selected, focused, onToggleSelected, onMarkRead, onArchive, onContinue, onRerun }: {
+function InboxCard({ item, selected, focused, highlighted, onToggleSelected, onMarkRead, onArchive, onContinue, onRerun, onOpenSource }: {
   item: InboxItem
   selected: boolean
   focused?: boolean
+  /** IA T2: one-shot ring when the user arrived from HistoryView. */
+  highlighted?: boolean
   onToggleSelected: (id: number) => void
   onMarkRead: (id: number) => void
   onArchive: (id: number) => void
   onContinue: (item: InboxItem) => void
   onRerun: (item: InboxItem) => void
+  onOpenSource: (item: InboxItem) => void
 }) {
   const intl = useIntl()
   const t = (id: string, values?: Record<string, PrimitiveType>) => intl.formatMessage({ id }, values)
   const [showError, setShowError] = useState(false)
   const meta = sourceMeta(item.source)
   const rerunnable = canRerun(item)
+  const openSource = canOpenSource(item)
   const isPending = item.status === 'pending'
 
   return (
-    <div role="listitem" data-focused={focused ? 'true' : undefined} className={cn('glass-panel border rounded-xl p-md shadow-sm hover:shadow-md transition-all group bg-surface-container-lowest/80', isPending ? 'border-primary/20' : 'border-outline-variant/10', focused ? 'ring-2 ring-primary' : selected ? 'ring-2 ring-primary/40' : '')}>
+    <div role="listitem" data-focused={focused ? 'true' : undefined} data-highlight={highlighted ? 'true' : undefined} className={cn('glass-panel border rounded-xl p-md shadow-sm hover:shadow-md transition-all group bg-surface-container-lowest/80', isPending ? 'border-primary/20' : 'border-outline-variant/10', focused ? 'ring-2 ring-primary' : highlighted ? 'ring-2 ring-tertiary' : selected ? 'ring-2 ring-primary/40' : '')}>
       <div className="flex items-start gap-sm">
         <label className="flex items-center pt-xs cursor-pointer shrink-0" aria-label={t('inbox.select.aria', { id: item.id })}>
           <input
@@ -131,6 +142,22 @@ function InboxCard({ item, selected, focused, onToggleSelected, onMarkRead, onAr
           </div>
         </div>
         <div className="flex items-center gap-sm shrink-0">
+          {/* IA T2: routine/scheduled_task results link back to the
+              automation that produced them (opens RoutineDetailDrawer on
+              /tasks). 「继续会话」 stays the primary action. */}
+          {openSource && (
+            <Button
+              size="sm"
+              variant="ghost"
+              aria-label={t('inbox.openSource.aria')}
+              title={t('inbox.openSource.aria')}
+              className="cursor-pointer inline-flex items-center gap-xs text-on-surface-variant hover:text-primary"
+              onClick={() => onOpenSource(item)}
+            >
+              <span className="material-symbols-outlined text-[16px]">event_repeat</span>
+              {t('inbox.openSource.label')}
+            </Button>
+          )}
           {item.sessionId && (
             /* Primary action (audit §3.4): the Codex review-queue loop is
                "result → resume the original thread", so resume gets a
@@ -187,6 +214,7 @@ export default function Triage() {
   const intl = useIntl()
   const t = (id: string, values?: Record<string, PrimitiveType>) => intl.formatMessage({ id }, values)
   const navigate = useNavigate()
+  const location = useLocation()
   const { switchSession } = useSessions()
 
   const [statusFilter, setStatusFilter] = useState<StatusFilter>(undefined)
@@ -201,6 +229,20 @@ export default function Triage() {
   const [focusedIndex, setFocusedIndex] = useState<number | null>(null)
   const listRef = useRef<HTMLDivElement>(null)
 
+  // IA T2: HistoryView hands over `highlightInboxId` via router state. The
+  // highlight is one-shot — snapshotted once (so the ring survives the
+  // state-clearing replace below but dies with the page) and never turned
+  // into a filter.
+  const [highlightId] = useState<number | null>(
+    () => (location.state as { highlightInboxId?: number } | null)?.highlightInboxId ?? null,
+  )
+  useEffect(() => {
+    if (highlightId == null) return
+    navigate(location.pathname, { replace: true })
+    // Run once per mount — the point is to drain the router state.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [])
+
   const { stats } = useInboxStats()
   const { items, loading, markRead, archive, rerun, getSessionId, setFilter, refresh } = useInboxItems()
 
@@ -211,6 +253,12 @@ export default function Triage() {
   useEffect(() => {
     setFilter({ status: statusFilter, source: sourceFilter })
   }, [statusFilter, sourceFilter, setFilter])
+
+  // Scroll the highlighted card into view once the list has rendered.
+  useEffect(() => {
+    if (highlightId == null || loading) return
+    listRef.current?.querySelector('[data-highlight="true"]')?.scrollIntoView({ block: 'center' })
+  }, [highlightId, loading])
 
   const visibleItems = useMemo(() => {
     const sorted = [...items].sort((a, b) => {
@@ -279,6 +327,12 @@ export default function Triage() {
   const handleRerun = useCallback(async (item: InboxItem) => {
     await rerun(item.id)
   }, [rerun])
+
+  // IA T2: back-link to the automation that produced the item — /tasks
+  // consumes `openRoutineId` from router state to open RoutineDetailDrawer.
+  const handleOpenSource = useCallback((item: InboxItem) => {
+    navigate('/tasks', { state: { openRoutineId: item.sourceId } })
+  }, [navigate])
 
   // Keyboard navigation over the inbox list (list must be focused first).
   // j/ArrowDown = next, k/ArrowUp = previous, Enter = mark read, a = archive.
@@ -497,11 +551,13 @@ export default function Triage() {
                             item={item}
                             selected={effectiveSelected.has(item.id)}
                             focused={focusedIndex === j}
+                            highlighted={highlightId === item.id}
                             onToggleSelected={toggleSelected}
                             onMarkRead={markRead}
                             onArchive={archive}
                             onContinue={item => void handleContinue(item)}
                             onRerun={item => void handleRerun(item)}
+                            onOpenSource={handleOpenSource}
                           />
                         ))}
                       </div>
@@ -513,11 +569,13 @@ export default function Triage() {
                     item={item}
                     selected={effectiveSelected.has(item.id)}
                     focused={focusedIndex === i}
+                    highlighted={highlightId === item.id}
                     onToggleSelected={toggleSelected}
                     onMarkRead={markRead}
                     onArchive={archive}
                     onContinue={item => void handleContinue(item)}
                     onRerun={item => void handleRerun(item)}
+                    onOpenSource={handleOpenSource}
                   />
                 ))}
             </div>

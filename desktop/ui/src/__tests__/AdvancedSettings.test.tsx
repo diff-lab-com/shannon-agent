@@ -1,7 +1,7 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { render, screen, fireEvent, waitFor } from '@testing-library/react'
 import { AppProvider } from '@/context/AppContext'
-import { MemoryRouter } from 'react-router-dom'
+import { MemoryRouter, useLocation } from 'react-router-dom'
 import AdvancedSettings from '@/components/settings/AdvancedSettings'
 import * as api from '@/lib/tauri-api'
 
@@ -192,7 +192,9 @@ describe('AdvancedSettings — Self-improvement approval', () => {
     expect(screen.getByText('1 pending')).toBeInTheDocument()
   })
 
-  it('opens SkillApprovalModal on Review click', async () => {
+  // IA T3 (审批面收敛): no second SkillApprovalModal lives here anymore —
+  // the「Review pending」entry links to /triage, the single review surface.
+  it('navigates to /triage on Review click (no modal)', async () => {
     vi.mocked(api.listSkillCandidates).mockResolvedValue([
       {
         id: 'cand-1',
@@ -204,10 +206,21 @@ describe('AdvancedSettings — Self-improvement approval', () => {
         originating_sessions: [],
       },
     ])
-    render(wrap(<AdvancedSettings />))
+    function LocationProbe() {
+      const location = useLocation()
+      return <div data-testid="adv-location">{location.pathname}</div>
+    }
+    render(
+      <AppProvider>
+        <MemoryRouter>
+          <AdvancedSettings />
+          <LocationProbe />
+        </MemoryRouter>
+      </AppProvider>
+    )
     await waitFor(() => { expect(screen.getByText('Review pending')).toBeInTheDocument() })
     fireEvent.click(screen.getByText('Review pending'))
-    await waitFor(() => { expect(screen.getByText('Save as skill?')).toBeInTheDocument() })
-    expect(screen.getByDisplayValue('Wrap commits')).toBeInTheDocument()
+    await waitFor(() => { expect(screen.getByTestId('adv-location')).toHaveTextContent('/triage') })
+    expect(screen.queryByText('Save as skill?')).not.toBeInTheDocument()
   })
 })

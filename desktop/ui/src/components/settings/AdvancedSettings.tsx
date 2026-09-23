@@ -1,4 +1,5 @@
 import { useState, useEffect } from 'react'
+import { useNavigate } from 'react-router-dom'
 import { Spinner } from '@/components/ui/loading-state'
 import { useIntl } from 'react-intl'
 import { toast } from 'sonner'
@@ -7,7 +8,6 @@ import { Switch } from '@/components/ui/switch'
 import { Modal } from '@/components/ui/modal'
 import { ConfirmDialog } from '@/components/ui/confirm-dialog'
 import { useCatalog } from '@/context/CatalogContext'
-import { SkillApprovalModal } from '@/components/self-improve/SkillApprovalModal'
 import { VoiceSttSettings } from '@/components/settings/VoiceSttSettings'
 import { VoiceLocalSettings } from '@/components/settings/VoiceLocalSettings'
 import * as api from '@/lib/tauri-api'
@@ -18,6 +18,7 @@ import { cn } from '@/lib/utils'
 export default function AdvancedSettings() {
   const intl = useIntl()
   const t = (id: string) => intl.formatMessage({ id })
+  const navigate = useNavigate()
   const { refreshConfig, config } = useCatalog()
   const [memoryEnabled, setMemoryEnabled] = useState(config?.memory_enabled ?? true)
   const [telemetryEnabled, setTelemetryEnabled] = useState(config?.telemetry_enabled ?? false)
@@ -39,9 +40,11 @@ export default function AdvancedSettings() {
   const [showResetConfirm, setShowResetConfirm] = useState(false)
   const [showClearConfirm, setShowClearConfirm] = useState(false)
 
+  // IA T3 (审批面收敛): this page no longer mounts a second SkillApprovalModal.
+  // We keep the toggle + pending count, and the「查看待审」entry links to
+  // /triage — the transitional review surface until 任务 3 ships the
+  // extended pending area.
   const [candidates, setCandidates] = useState<SkillCandidate[]>([])
-  const [candidateIndex, setCandidateIndex] = useState(0)
-  const [approvalOpen, setApprovalOpen] = useState(false)
 
   // ADR-0011 B3 — bundled `shannon` CLI exposure (non-shadowing install).
   const [cliStatus, setCliStatus] = useState<CliInstallStatus | null>(null)
@@ -150,14 +153,6 @@ export default function AdvancedSettings() {
     setSavingOffpeak(false)
   }
 
-  function advanceCandidate() {
-    setCandidates((prev) => {
-      const next = prev.slice(1)
-      if (next.length === 0) setApprovalOpen(false)
-      return next
-    })
-  }
-
   return (
     <div className="pb-xl">
       <p className="text-on-surface-variant font-body-md mb-xl">{t('settings.advanced.subtitle')}</p>
@@ -195,7 +190,7 @@ export default function AdvancedSettings() {
             <Button
               variant="ghost"
               className="w-full mt-md py-sm border border-tertiary/30 rounded-lg text-tertiary font-label-md font-bold text-[14px] hover:bg-tertiary-container/30 transition-colors cursor-pointer"
-              onClick={() => { setCandidateIndex(0); setApprovalOpen(true) }}
+              onClick={() => navigate('/triage')}
             >
               <span className="material-symbols-outlined icon-sm mr-xs">rate_review</span>
               {t('settings.skillLoop.review')}
@@ -513,14 +508,6 @@ export default function AdvancedSettings() {
         busy={resetting}
         onConfirm={handleFactoryReset}
         onCancel={() => setShowResetConfirm(false)}
-      />
-
-      <SkillApprovalModal
-        open={approvalOpen}
-        candidate={candidates[candidateIndex] ?? null}
-        onClose={() => setApprovalOpen(false)}
-        onApproved={() => advanceCandidate()}
-        onRejected={() => advanceCandidate()}
       />
     </div>
   )

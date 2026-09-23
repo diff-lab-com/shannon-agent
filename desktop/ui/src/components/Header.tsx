@@ -9,7 +9,6 @@ import { useCatalog } from '@/context/CatalogContext';
 import { useChat } from '@/context/ChatContext';
 import { useSessions } from '@/context/SessionContext';
 import { usePendingSkillCandidates } from '@/hooks/usePendingSkillCandidates';
-import { SkillApprovalModal } from '@/components/self-improve/SkillApprovalModal';
 import { useSidebar } from './Layout';
 import * as api from '@/lib/tauri-api';
 import { getCurrentWindow } from '@tauri-apps/api/window';
@@ -54,23 +53,15 @@ export function Header() {
   const modelRef = useRef<HTMLDivElement>(null);
   const [modelFocus, setModelFocus] = useState(-1);
 
-  const { candidates, refetch } = usePendingSkillCandidates();
-  const [approvalOpen, setApprovalOpen] = useState(false);
+  // IA T3 (审批面收敛): the bell keeps surfacing the pending skill-candidate
+  // count, but it no longer hijacks the click into an approval dialog —
+  // notifications of every kind land on /triage, the single review surface
+  // until 任务 3 ships the extended pending area.
+  const { candidates } = usePendingSkillCandidates();
   const pendingCount = candidates.length;
 
   const handleBellClick = () => {
-    if (pendingCount > 0) setApprovalOpen(true)
-    else navigate('/triage')
-  }
-
-  const onApprovalClose = () => {
-    setApprovalOpen(false)
-    refetch()
-  }
-
-  const advanceCandidate = () => {
-    if (candidates.length <= 1) setApprovalOpen(false)
-    refetch()
+    navigate('/triage')
   }
 
   // U2: on /chat the header carries the current session title instead of the
@@ -276,9 +267,10 @@ export function Header() {
             </div>
           )}
 
-          {/* U6: the bell tooltip says where it leads — the skill-approval
-              dialog when something is pending, Triage otherwise. */}
-          <Button variant="ghost" aria-label={t('header.notifications')} title={pendingCount > 0 ? t('header.notifications.pending', { count: pendingCount }) : t('header.notifications.aria')} aria-haspopup={pendingCount > 0 ? 'dialog' : undefined} className="p-2 rounded-lg hover:bg-surface-container-low text-on-surface-variant hover:text-primary transition-colors relative" onClick={handleBellClick}>
+          {/* U6/IA T3: the bell tooltip says where it leads — /triage, with
+              the pending skill count when one exists. The click is never
+              hijacked into a modal. */}
+          <Button variant="ghost" aria-label={t('header.notifications')} title={pendingCount > 0 ? t('header.notifications.pending', { count: pendingCount }) : t('header.notifications.aria')} className="p-2 rounded-lg hover:bg-surface-container-low text-on-surface-variant hover:text-primary transition-colors relative" onClick={handleBellClick}>
             <span className="material-symbols-outlined icon-md" aria-hidden="true">notifications</span>
             {pendingCount > 0 && (
               <span
@@ -384,14 +376,6 @@ export function Header() {
           </div>
       </Modal>
       )}
-
-      <SkillApprovalModal
-        open={approvalOpen}
-        candidate={candidates[0] ?? null}
-        onClose={onApprovalClose}
-        onApproved={advanceCandidate}
-        onRejected={advanceCandidate}
-      />
     </>
   );
 }
