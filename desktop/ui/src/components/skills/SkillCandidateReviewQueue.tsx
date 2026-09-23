@@ -112,7 +112,13 @@ export default function SkillCandidateReviewQueue({ focusCandidateId }: {
                     )}
                   </div>
                   <p className="text-body-sm text-on-surface-variant mb-xs break-words">{candidate.proposed_trigger}</p>
-                  <ol className="list-decimal list-inside space-y-0.5 text-body-sm text-on-surface-variant bg-surface-container-low rounded-lg px-md py-sm mb-xs max-h-40 overflow-y-auto">
+                  <ol
+                    // tabIndex: keyboard-scrollable region (axe
+                    // scrollable-region-focusable) — the capped-height step
+                    // list must be reachable by keyboard users.
+                    tabIndex={0}
+                    className="list-decimal list-inside space-y-0.5 text-body-sm text-on-surface-variant bg-surface-container-low rounded-lg px-md py-sm mb-xs max-h-40 overflow-y-auto"
+                  >
                     {candidate.procedure.map((step, i) => (
                       <li key={i} className="break-words">{step}</li>
                     ))}

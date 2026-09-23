@@ -164,7 +164,10 @@ export default function Extensions() {
       </div>
 
       {/* Content Area */}
-      <div className="flex-1 overflow-y-auto">
+      {/* tabIndex: keyboard-scrollable region (axe scrollable-region-
+          focusable) — the Pending tab's content overflows this container,
+          and without focus keyboard users can never reach the overflow. */}
+      <div tabIndex={0} className="flex-1 overflow-y-auto">
          <Outlet context={{ search }} />
       </div>
     </div>
