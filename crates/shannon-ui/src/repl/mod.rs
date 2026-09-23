@@ -12,6 +12,7 @@ mod helpers;
 mod input;
 pub mod loop_guard;
 mod mcp_completion;
+pub(crate) mod plugins;
 pub(crate) mod preferences;
 mod query;
 pub(crate) mod render;
@@ -713,8 +714,14 @@ impl Repl {
             }
         }
 
-        // Load plugins from ~/.shannon/plugins/
-        if !cfg!(test) {
+        // Load plugins from ~/.shannon/plugins/ — exactly once (review
+        // §P2-22: the previous code ran this full load a second time inside
+        // the command-registry build below, spawning every stdio plugin
+        // process twice per startup). `enabled_plugins` is the shared
+        // snapshot both registration halves consume: tool plugins are
+        // registered right here (`register_plugin_tools`), Command / Skill
+        // plugins become prompt commands at the command-registry build.
+        let plugin_registry = if !cfg!(test) {
             let plugins_dir = dirs::home_dir()
                 .unwrap_or_default()
                 .join(".shannon")
@@ -725,102 +732,20 @@ impl Repl {
             if let Err(e) = runtime.block_on(plugin_registry.load_all()) {
                 tracing::warn!("some plugins failed to load and were skipped:\n{e}");
             }
-            {
-                let enabled = plugin_registry.list_enabled();
-                if !enabled.is_empty() {
-                    tracing::info!("Loaded {} plugin(s)", enabled.len());
-                    for plugin in &enabled {
-                        // §4.9: gate every Shannon-side execution point on
-                        // the manifest allow-set; empty declarations keep the
-                        // pre-enforcement lenient default.
-                        let policy = std::sync::Arc::new(
-                            shannon_core::plugin::PluginPermissionPolicy::from_manifest(
-                                &plugin.manifest,
-                            ),
-                        );
-                        // write_files enforcement ("declaration IS sandbox"):
-                        // a declared write_files face installs a manifest-
-                        // derived execution world around every stdio spawn
-                        // (discovery + per-call); anything else stays a
-                        // zero-overhead passthrough.
-                        let spawn_guard = shannon_tools::sandbox::plugin_spawn_guard_for_manifest(
-                            &policy,
-                            &plugin.manifest.name,
-                            &plugin.path,
-                        );
-                        match plugin.manifest.kind() {
-                            Ok(shannon_core::plugin::PluginKind::Tool { transport }) => {
-                                if let Some(command) = transport.command() {
-                                    let args = transport.args().to_vec();
-                                    match runtime.block_on(
-                                        shannon_core::plugin::gated_discover_tools_stdio_guarded(
-                                            &policy,
-                                            &plugin.manifest.name,
-                                            command,
-                                            &args,
-                                            &std::collections::HashMap::new(),
-                                            None,
-                                            spawn_guard,
-                                        ),
-                                    ) {
-                                        Ok(result) => {
-                                            tool_registry.attach_plugin_policy(
-                                                &plugin.manifest.name,
-                                                std::sync::Arc::clone(&policy),
-                                            );
-                                            let tool_count = result.tools.len();
-                                            for tool in result.tools {
-                                                if let Err(e) =
-                                                    tool_registry.register(Box::new(tool))
-                                                {
-                                                    tracing::debug!(
-                                                        "Plugin tool registration skipped: {}",
-                                                        e
-                                                    );
-                                                }
-                                            }
-                                            tracing::info!(
-                                                "Registered {} tool(s) from plugin '{}'",
-                                                tool_count,
-                                                plugin.manifest.name
-                                            );
-                                        }
-                                        Err(e) => {
-                                            tracing::warn!(
-                                                "Plugin '{}' tool discovery failed: {e}",
-                                                plugin.manifest.name
-                                            );
-                                        }
-                                    }
-                                }
-                            }
-                            Ok(shannon_core::plugin::PluginKind::Command { name, description }) => {
-                                tracing::info!(
-                                    "Command plugin '{}' ({}) loaded",
-                                    name,
-                                    description
-                                );
-                            }
-                            Ok(shannon_core::plugin::PluginKind::Skill {
-                                trigger,
-                                template: _,
-                            }) => {
-                                tracing::info!(
-                                    "Skill plugin '{}' (trigger: '{}') loaded",
-                                    plugin.manifest.name,
-                                    trigger
-                                );
-                            }
-                            Err(e) => {
-                                tracing::warn!(
-                                    "Plugin '{}' has invalid config: {e}",
-                                    plugin.manifest.name
-                                );
-                            }
-                        }
-                    }
-                }
-            }
+            Some(plugin_registry)
+        } else {
+            None
+        };
+        let enabled_plugins: Vec<&shannon_core::plugin::InstalledPlugin> = plugin_registry
+            .as_ref()
+            .map(|registry| registry.list_enabled())
+            .unwrap_or_default();
+        if !enabled_plugins.is_empty() {
+            tracing::info!("Loaded {} plugin(s)", enabled_plugins.len());
+            runtime.block_on(plugins::register_plugin_tools(
+                &tool_registry,
+                &enabled_plugins,
+            ));
         }
 
         // Create LLM client
@@ -1208,192 +1133,141 @@ impl Repl {
             }
 
             // Load plugins from ~/.shannon/plugins/
-            {
-                let plugins_dir = dirs::home_dir()
-                    .unwrap_or_default()
-                    .join(".shannon")
-                    .join("plugins");
-                let mut plugin_registry = shannon_core::plugin::PluginRegistry::new(plugins_dir);
-                // §4.10: report broken manifests instead of silently
-                // skipping; valid siblings still load and proceed.
-                if let Err(e) = plugin_registry.load_all().await {
-                    tracing::warn!("some plugins failed to load and were skipped:\n{e}");
-                }
-                {
-                    let enabled = plugin_registry.list_enabled();
-                    if !enabled.is_empty() {
-                        tracing::info!("Loaded {} plugin(s)", enabled.len());
-                        for plugin in &enabled {
-                            // §4.9: gate every Shannon-side execution point on
-                            // the manifest allow-set; empty declarations keep
-                            // the pre-enforcement lenient default.
-                            let policy = std::sync::Arc::new(
-                                shannon_core::plugin::PluginPermissionPolicy::from_manifest(
-                                    &plugin.manifest,
-                                ),
+            //
+            // §P2-22: this site used to build a SECOND `PluginRegistry` and
+            // re-run the full load (`load_all()` + stdio tool discovery),
+            // spawning every plugin process twice per startup. It now
+            // consumes the single load snapshot (`enabled_plugins`, taken at
+            // the load site above) and only registers the prompt-based
+            // plugins as slash commands; tool plugins were already
+            // discovered and registered there exactly once.
+            for plugin in &enabled_plugins {
+                // §4.9: gate every Shannon-side execution point on the
+                // manifest allow-set; empty declarations keep the
+                // pre-enforcement lenient default.
+                let policy = std::sync::Arc::new(
+                    shannon_core::plugin::PluginPermissionPolicy::from_manifest(&plugin.manifest),
+                );
+                match plugin.manifest.kind() {
+                    // Tool plugins were handled by `register_plugin_tools` at
+                    // the single load site above — never re-spawn the stdio
+                    // plugin process here.
+                    Ok(shannon_core::plugin::PluginKind::Tool { .. }) => {}
+                    Ok(shannon_core::plugin::PluginKind::Command { name, description }) => {
+                        // Prompt-driven extension: the host reads
+                        // the entry file and the prompt drives
+                        // model turns — both faces must be granted.
+                        if let Err(e) = shannon_core::plugin::admit_prompt_based_extension(
+                            &policy,
+                            &plugin.manifest.name,
+                        ) {
+                            tracing::warn!(
+                                "Command plugin '{}' not registered: {e}",
+                                plugin.manifest.name
                             );
-                            // write_files enforcement: declared write_files ⇒
-                            // stdio spawns run inside the manifest-derived
-                            // execution world; otherwise passthrough.
-                            let spawn_guard = shannon_tools::sandbox::plugin_spawn_guard_for_manifest(
-                                &policy,
-                                &plugin.manifest.name,
-                                &plugin.path,
-                            );
-                            match plugin.manifest.kind() {
-                                Ok(shannon_core::plugin::PluginKind::Tool { transport }) => {
-                                    if let Some(command) = transport.command() {
-                                        let args = transport.args().to_vec();
-                                        match shannon_core::plugin::gated_discover_tools_stdio_guarded(
-                                            &policy,
-                                            &plugin.manifest.name,
-                                            command,
-                                            &args,
-                                            &std::collections::HashMap::new(),
-                                            None,
-                                            spawn_guard,
-                                        ).await {
-                                            Ok(result) => {
-                                                tool_registry.attach_plugin_policy(
-                                                    &plugin.manifest.name,
-                                                    std::sync::Arc::clone(&policy),
-                                                );
-                                                let tool_count = result.tools.len();
-                                                for tool in result.tools {
-                                                    if let Err(e) = tool_registry.register(Box::new(tool)) {
-                                                        tracing::debug!("Plugin tool registration skipped: {}", e);
-                                                    }
-                                                }
-                                                tracing::info!(
-                                                    "Registered {} tool(s) from plugin '{}'",
-                                                    tool_count,
-                                                    plugin.manifest.name
-                                                );
-                                            }
-                                            Err(e) => {
-                                                tracing::warn!("Plugin '{}' tool discovery failed: {e}", plugin.manifest.name);
-                                            }
-                                        }
-                                    }
-                                }
-                                Ok(shannon_core::plugin::PluginKind::Command { name, description }) => {
-                                    // Prompt-driven extension: the host reads
-                                    // the entry file and the prompt drives
-                                    // model turns — both faces must be granted.
-                                    if let Err(e) = shannon_core::plugin::admit_prompt_based_extension(
-                                        &policy,
-                                        &plugin.manifest.name,
-                                    ) {
-                                        tracing::warn!(
-                                            "Command plugin '{}' not registered: {e}",
-                                            plugin.manifest.name
-                                        );
-                                        continue;
-                                    }
-                                    let plugin_dir = plugin.path.parent()
-                                        .map(|p| p.to_path_buf())
-                                        .unwrap_or_default();
-                                    let entry_path = plugin_dir.join(&plugin.manifest.entry);
-                                    let template = std::fs::read_to_string(&entry_path)
-                                        .unwrap_or_else(|_| plugin.manifest.entry.clone());
-                                    let cmd = Command::Prompt(Box::new(PromptCommand {
-                                        base: CommandBase {
-                                            name: format!("plugin:{name}"),
-                                            aliases: Vec::new(),
-                                            description: description.clone(),
-                                            has_user_specified_description: !description.is_empty(),
-                                            availability: vec![shannon_commands::CommandAvailability::All],
-                                            source: shannon_commands::CommandSource::Plugin,
-                                            is_enabled: true,
-                                            is_hidden: false,
-                                            argument_hint: Some("$ARGUMENTS".to_string()),
-                                            when_to_use: None,
-                                            version: Some(plugin.manifest.version.clone()),
-                                            disable_model_invocation: false,
-                                            user_invocable: true,
-                                            is_workflow: false,
-                                            immediate: false,
-                                            is_sensitive: false,
-                                            user_facing_name: None,
-                                        },
-                                        progress_message: format!("Running /{name}..."),
-                                        content_length: template.len(),
-                                        arg_names: vec!["$ARGUMENTS".to_string()],
-                                        allowed_tools: Vec::new(),
-                                        model: None,
-                                        hooks: HashMap::new(),
-                                        context: ExecutionContext::Inline,
-                                        agent: None,
-                                        paths: Vec::new(),
-                                        prompt_template: Some(template),
-                                    }));
-                                    registry.register_sync(cmd);
-                                    tracing::info!("Registered command '/plugin:{}' from plugin '{}'", name, plugin.manifest.name);
-                                }
-                                Ok(shannon_core::plugin::PluginKind::Skill { trigger, template }) => {
-                                    // Same prompt-extension faces as commands:
-                                    // entry read + model turns must be granted.
-                                    if let Err(e) = shannon_core::plugin::admit_prompt_based_extension(
-                                        &policy,
-                                        &plugin.manifest.name,
-                                    ) {
-                                        tracing::warn!(
-                                            "Skill plugin '{}' not registered: {e}",
-                                            plugin.manifest.name
-                                        );
-                                        continue;
-                                    }
-                                    let plugin_dir = plugin.path.parent()
-                                        .map(|p| p.to_path_buf())
-                                        .unwrap_or_default();
-                                    let entry_path = plugin_dir.join(&plugin.manifest.entry);
-                                    // Use entry file content if it exists, otherwise use inline template
-                                    let prompt_template = if entry_path.exists() {
-                                        std::fs::read_to_string(&entry_path).unwrap_or(template.clone())
-                                    } else {
-                                        template.clone()
-                                    };
-                                    // Strip leading slash from trigger for command name
-                                    let cmd_name = trigger.trim_start_matches('/');
-                                    let cmd = Command::Prompt(Box::new(PromptCommand {
-                                        base: CommandBase {
-                                            name: format!("plugin:{cmd_name}"),
-                                            aliases: vec![trigger.clone()],
-                                            description: plugin.manifest.description.clone(),
-                                            has_user_specified_description: true,
-                                            availability: vec![shannon_commands::CommandAvailability::All],
-                                            source: shannon_commands::CommandSource::Plugin,
-                                            is_enabled: true,
-                                            is_hidden: false,
-                                            argument_hint: Some("$ARGUMENTS".to_string()),
-                                            when_to_use: None,
-                                            version: Some(plugin.manifest.version.clone()),
-                                            disable_model_invocation: false,
-                                            user_invocable: true,
-                                            is_workflow: false,
-                                            immediate: false,
-                                            is_sensitive: false,
-                                            user_facing_name: Some(trigger.clone()),
-                                        },
-                                        progress_message: format!("Running skill /{trigger}…"),
-                                        content_length: prompt_template.len(),
-                                        arg_names: vec!["$ARGUMENTS".to_string()],
-                                        allowed_tools: Vec::new(),
-                                        model: None,
-                                        hooks: HashMap::new(),
-                                        context: ExecutionContext::Inline,
-                                        agent: None,
-                                        paths: Vec::new(),
-                                        prompt_template: Some(prompt_template),
-                                    }));
-                                    registry.register_sync(cmd);
-                                    tracing::info!("Registered skill '/{}' from plugin '{}'", trigger, plugin.manifest.name);
-                                }
-                                Err(e) => {
-                                    tracing::warn!("Plugin '{}' has invalid config: {e}", plugin.manifest.name);
-                                }
-                            }
+                            continue;
                         }
+                        let plugin_dir = plugin.path.parent()
+                            .map(|p| p.to_path_buf())
+                            .unwrap_or_default();
+                        let entry_path = plugin_dir.join(&plugin.manifest.entry);
+                        let template = std::fs::read_to_string(&entry_path)
+                            .unwrap_or_else(|_| plugin.manifest.entry.clone());
+                        let cmd = Command::Prompt(Box::new(PromptCommand {
+                            base: CommandBase {
+                                name: format!("plugin:{name}"),
+                                aliases: Vec::new(),
+                                description: description.clone(),
+                                has_user_specified_description: !description.is_empty(),
+                                availability: vec![shannon_commands::CommandAvailability::All],
+                                source: shannon_commands::CommandSource::Plugin,
+                                is_enabled: true,
+                                is_hidden: false,
+                                argument_hint: Some("$ARGUMENTS".to_string()),
+                                when_to_use: None,
+                                version: Some(plugin.manifest.version.clone()),
+                                disable_model_invocation: false,
+                                user_invocable: true,
+                                is_workflow: false,
+                                immediate: false,
+                                is_sensitive: false,
+                                user_facing_name: None,
+                            },
+                            progress_message: format!("Running /{name}..."),
+                            content_length: template.len(),
+                            arg_names: vec!["$ARGUMENTS".to_string()],
+                            allowed_tools: Vec::new(),
+                            model: None,
+                            hooks: HashMap::new(),
+                            context: ExecutionContext::Inline,
+                            agent: None,
+                            paths: Vec::new(),
+                            prompt_template: Some(template),
+                        }));
+                        registry.register_sync(cmd);
+                        tracing::info!("Registered command '/plugin:{}' from plugin '{}'", name, plugin.manifest.name);
+                    }
+                    Ok(shannon_core::plugin::PluginKind::Skill { trigger, template }) => {
+                        // Same prompt-extension faces as commands:
+                        // entry read + model turns must be granted.
+                        if let Err(e) = shannon_core::plugin::admit_prompt_based_extension(
+                            &policy,
+                            &plugin.manifest.name,
+                        ) {
+                            tracing::warn!(
+                                "Skill plugin '{}' not registered: {e}",
+                                plugin.manifest.name
+                            );
+                            continue;
+                        }
+                        let plugin_dir = plugin.path.parent()
+                            .map(|p| p.to_path_buf())
+                            .unwrap_or_default();
+                        let entry_path = plugin_dir.join(&plugin.manifest.entry);
+                        // Use entry file content if it exists, otherwise use inline template
+                        let prompt_template = if entry_path.exists() {
+                            std::fs::read_to_string(&entry_path).unwrap_or(template.clone())
+                        } else {
+                            template.clone()
+                        };
+                        // Strip leading slash from trigger for command name
+                        let cmd_name = trigger.trim_start_matches('/');
+                        let cmd = Command::Prompt(Box::new(PromptCommand {
+                            base: CommandBase {
+                                name: format!("plugin:{cmd_name}"),
+                                aliases: vec![trigger.clone()],
+                                description: plugin.manifest.description.clone(),
+                                has_user_specified_description: true,
+                                availability: vec![shannon_commands::CommandAvailability::All],
+                                source: shannon_commands::CommandSource::Plugin,
+                                is_enabled: true,
+                                is_hidden: false,
+                                argument_hint: Some("$ARGUMENTS".to_string()),
+                                when_to_use: None,
+                                version: Some(plugin.manifest.version.clone()),
+                                disable_model_invocation: false,
+                                user_invocable: true,
+                                is_workflow: false,
+                                immediate: false,
+                                is_sensitive: false,
+                                user_facing_name: Some(trigger.clone()),
+                            },
+                            progress_message: format!("Running skill /{trigger}…"),
+                            content_length: prompt_template.len(),
+                            arg_names: vec!["$ARGUMENTS".to_string()],
+                            allowed_tools: Vec::new(),
+                            model: None,
+                            hooks: HashMap::new(),
+                            context: ExecutionContext::Inline,
+                            agent: None,
+                            paths: Vec::new(),
+                            prompt_template: Some(prompt_template),
+                        }));
+                        registry.register_sync(cmd);
+                        tracing::info!("Registered skill '/{}' from plugin '{}'", trigger, plugin.manifest.name);
+                    }
+                    Err(e) => {
+                        tracing::warn!("Plugin '{}' has invalid config: {e}", plugin.manifest.name);
                     }
                 }
             }
