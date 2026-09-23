@@ -28,7 +28,7 @@ Two commitments shape every design decision:
 
 ### 1. Open source, total control
 
-- **Every line auditable** — Apache-2.0, no black boxes. <!-- metrics:start:intro -->Every line of code is auditable, and every behavior is verified by **12,635 automated tests**.<!-- metrics:end:intro -->
+- **Every line auditable** — Apache-2.0, no black boxes. <!-- metrics:start:intro -->Every line of code is auditable, and every behavior is verified by **12,663 automated tests**.<!-- metrics:end:intro -->
 - **Every agent action replayable** — sessions are event-sourced: each turn lands in an append-only `events.jsonl`, and `shannon trace show / replay / diff / export` lets you reconstruct exactly what happened, like a dashcam for your agents.
 - **Every cost visible** — BYOK pay-per-use with session budget caps, context breakdown by category, cache hit-rate visibility, and no subscription quotas.
 - **No vendor lock-in** — switch providers anytime; upstream price hikes and model retirements don't strand you. Claude Code ecosystem compatible: `CLAUDE.md`, `.claude/` agents, skills, hooks, and `.mcp.json` work out of the box.
@@ -51,7 +51,7 @@ Two commitments shape every design decision:
 | LLM providers | Any (BYOK) | Single vendor | Multi / any |
 | Cost model | Pay-per-use + budget caps + visible breakdown | Subscription quotas / credits | BYOK |
 | Auditability | Event-sourced sessions, `trace` replay/diff | Varies, often black box | Varies |
-<!-- metrics:start:diffrow -->| Test coverage | **12,635** tests across 22 workspace members | n/a (closed source) | Varies |<!-- metrics:end:diffrow -->
+<!-- metrics:start:diffrow -->| Test coverage | **12,663** tests across 22 workspace members | n/a (closed source) | Varies |<!-- metrics:end:diffrow -->
 | Surfaces | Terminal + headless + server + desktop, one engine | Vary | Vary |
 
 ---
@@ -161,6 +161,22 @@ Full MCP implementation compatible with Claude Code's MCP ecosystem:
 - **Memory system** — persistent memory with provenance, desktop memory page, auto-extraction and consolidation
 - **Checkpoint/Undo** — Git-based file checkpointing with diff preview before revert (`/rewind`)
 - **Plan mode** — Structured planning with approval workflows
+
+### Permission Modes
+
+What the agent may do without asking is governed by an approval mode. The names are each single-valued — `auto`, `full-auto`, and the Auto classifier are three different modes:
+
+| Mode | Behavior |
+|---|---|
+| `default` (suggest) | Confirm every tool execution. |
+| `plan` | The agent proposes a plan first; once you approve it, tool calls within that plan run without per-call prompts. |
+| `auto` (auto-edit) | Auto-approve file edits/writes only — shell and other risky tools still ask. This is the engine default. |
+| `full-auto` | Auto-approve everything except critical-risk operations. |
+| `auto-classifier` | A background safety classifier decides per operation: low risk runs silently, medium+ asks, critical is denied. |
+| `readonly` / `plan-readonly` | Read-only operations only; `plan-readonly` additionally denies tool execution entirely (analysis only). |
+| `bypass-permissions` / `dont-ask` | Never prompt — including critical operations. Use with extreme caution. |
+
+In the terminal, BackTab cycles the common modes (default → auto → plan → full-auto); the desktop app exposes them in Settings → General and in the chat header's mode switcher.
 
 ### Plugin & Skill System
 
@@ -496,7 +512,7 @@ Artifacts go to `target/dist/` as `.tar.gz` (Linux/macOS) or `.zip` (Windows).
 |--------|-------|
 | Total Rust code | 523,085 lines |
 | Source files | 752 |
-| Total tests (nextest, runnable) | **12,635** |
+| Total tests (nextest, runnable) | **12,663** |
 | Crates (workspace members) | 22 (21 crates + desktop) |
 | Crates with zero tests | 1 (`shannon-stability-attr`) |
 | CI lint | `cargo clippy --workspace -- -D warnings` (zero warnings) |

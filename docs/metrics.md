@@ -5,23 +5,22 @@
 
 ## Snapshot
 
-- **Generated (UTC)**: `2026-09-21T16:08:52Z`
-- **Branch**: `dev`
-- **Commit**: `72208ae`
-- **Describe**: `72208ae-dirty`
+- **Generated (UTC)**: `2026-09-23T18:01:11Z`
+- **Branch**: `HEAD`
+- **Commit**: `5ba6aa7`
+- **Describe**: `5ba6aa7-dirty`
 
 ## Summary
 
 | metric | value |
 |---|---:|
-| Tests (nextest, runnable) | 12635 |
-| Tests (source `#[test]`/`#[tokio::test]` attrs) | 12545 |
-| Rust source files | 753 |
-| Rust LOC (code) | 526970 |
+| Tests (nextest, runnable) | 12663 |
+| Tests (source `#[test]`/`#[tokio::test]` attrs) | 12568 |
+| Rust source files | 754 |
+| Rust LOC (code) | 528152 |
 | Workspace members | 22 |
 | `cargo clippy --workspace -- -D warnings` | pass |
 | `cargo deny check` | pass |
-
 
 ## Test counts
 
@@ -30,15 +29,15 @@ Counts below come from `cargo nextest list --workspace --message-format=json`
 
 | crate | tests | binaries |
 |---|---:|---:|
-| shannon-core | 4008 | 46 |
+| shannon-core | 4012 | 46 |
 | shannon-tools | 1780 | 18 |
-| shannon-ui | 1528 | 8 |
+| shannon-ui | 1529 | 8 |
 | shannon-engine | 1183 | 4 |
-| shannon-agents | 906 | 10 |
-| shannon-desktop | 869 | 5 |
+| shannon-agents | 907 | 10 |
+| shannon-desktop | 885 | 5 |
 | shannon-mcp | 581 | 9 |
 | shannon-cli | 502 | 9 |
-| shannon-commands | 432 | 5 |
+| shannon-commands | 435 | 5 |
 | shannon-skills | 189 | 6 |
 | shannon-mcp-saas | 185 | 2 |
 | shannon-codegen | 100 | 4 |
@@ -49,10 +48,9 @@ Counts below come from `cargo nextest list --workspace --message-format=json`
 | shannon-server | 38 | 1 |
 | shannon-api-protocol | 37 | 3 |
 | shannon-repomap | 32 | 3 |
-| shannon-browser | 6 | 1 |
+| shannon-browser | 9 | 1 |
 | shannon-plugin-api | 5 | 1 |
 | shannon-stability-attr | 0 | 1 |
-
 
 ## Line counts
 
@@ -61,9 +59,8 @@ Legacy archives and vendored directories are excluded.
 
 | language | files | code |
 |---|---:|---:|
-| Rust (.rs) | 753 | 526970 |
-| TypeScript/TSX | 629 | 104305 |
-
+| Rust (.rs) | 754 | 528152 |
+| TypeScript/TSX | 640 | 106231 |
 
 ## Lint / audit status
 
@@ -74,7 +71,7 @@ Legacy archives and vendored directories are excluded.
 ```text
 [1m[33mwarning[0m[1m:[0m shannon-types@0.11.0: Generated ProviderModelConfig JSON Schema at: /home/runner/work/shannon-agent/shannon-agent/crates/shannon-types/schema/provider-model-config.schema.json
 [1m[32m   Compiling[0m shannon-desktop v0.11.0 (/home/runner/work/shannon-agent/shannon-agent/desktop)
-[1m[32m    Finished[0m \`dev\` profile [unoptimized + debuginfo] target(s) in 25.00s
+[1m[32m    Finished[0m \`dev\` profile [unoptimized + debuginfo] target(s) in 18.18s
 ```
 
 ### `cargo deny check`

@@ -34,8 +34,9 @@ just ci
 
 ## Releases
 
-- Maintainer-driven only. Tag pattern: `vX.Y.Z` triggers release.yml + release-desktop.yml.
-- Pre-release tags `vX.Y.Z-rc.N` are NOT supported by cargo-dist in this monorepo (workspace version must match tag). For dry-runs, manually verify locally first.
+- Maintainer-driven only. Pushing a `vX.Y.Z` tag triggers the single `.github/workflows/release.yml` orchestrator, which produces exactly one GitHub Release containing all three products: the `shannon` CLI (per-target `cargo build` archives + sha256), the desktop app (Tauri, via tauri-action), and `shannon-gateway` (Bun compile). A version-guard job fails fast if the tag doesn't match the manifests' versions.
+- Pre-release tags (`vX.Y.Z-rc.N`, `vX.Y.Z-beta.N`) are supported: the guard compares the core version (tag minus the pre-release suffix) against the manifests. There is no dry-run workflow — verify a release build locally before tagging.
+- Homebrew formula/cask (`packaging/homebrew`) are hand-maintained, not generated; other packaging channels (AUR, Scoop, Winget) live under `packaging/`. cargo-dist is no longer used anywhere in the release path.
 
 ## Code of conduct
 

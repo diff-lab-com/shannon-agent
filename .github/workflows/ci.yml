@@ -36,6 +36,7 @@ jobs:
   facade-facts:
     name: Facade facts & hygiene
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@f548e57e544e1ff5a4c46bf1e1b8685f8e4a348a
       - name: Generated facade facts are fresh
@@ -364,6 +365,7 @@ jobs:
   fmt:
     name: Format
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@f548e57e544e1ff5a4c46bf1e1b8685f8e4a348a
       - uses: dtolnay/rust-toolchain@2c7215f132e9ebf062739d9130488b56d53c060c
@@ -379,6 +381,7 @@ jobs:
   guard-headless:
     name: Headless purity (ADR-0011)
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@f548e57e544e1ff5a4c46bf1e1b8685f8e4a348a
       - uses: dtolnay/rust-toolchain@2c7215f132e9ebf062739d9130488b56d53c060c
@@ -393,6 +396,7 @@ jobs:
     # license allowlist + curated advisory ignores for transitive crates
     # whose upstream fix is blocked on Tauri / plist / syntax ecosystem.
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@f548e57e544e1ff5a4c46bf1e1b8685f8e4a348a
       - uses: dtolnay/rust-toolchain@2c7215f132e9ebf062739d9130488b56d53c060c
@@ -415,6 +419,7 @@ jobs:
     # gated the merge — no surprise upgrades mid-run.
     name: RustSec Advisory Audit
     runs-on: ubuntu-latest
+    timeout-minutes: 20
     steps:
       - uses: actions/checkout@f548e57e544e1ff5a4c46bf1e1b8685f8e4a348a
       - uses: dtolnay/rust-toolchain@2c7215f132e9ebf062739d9130488b56d53c060c
@@ -442,6 +447,7 @@ jobs:
     # ship to docs.rs.
     name: Doc Build
     runs-on: ubuntu-latest
+    timeout-minutes: 20
     steps:
       - uses: actions/checkout@f548e57e544e1ff5a4c46bf1e1b8685f8e4a348a
       - uses: dtolnay/rust-toolchain@2c7215f132e9ebf062739d9130488b56d53c060c
@@ -466,6 +472,7 @@ jobs:
   metrics:
     name: Generate Metrics
     runs-on: ubuntu-latest
+    timeout-minutes: 30
     needs: [test, clippy, audit, rustsec-audit]
     steps:
       - uses: actions/checkout@f548e57e544e1ff5a4c46bf1e1b8685f8e4a348a
@@ -523,6 +530,7 @@ jobs:
     # already run in release.yml — so the cost stays bounded.
     name: Cross-platform Check
     runs-on: ${{ matrix.os }}
+    timeout-minutes: 40
     strategy:
       fail-fast: false
       matrix:
@@ -661,6 +669,7 @@ jobs:
     # are blocked upstream — see shannon-desktop exclude below.
     name: Linux musl Check
     runs-on: ubuntu-latest
+    timeout-minutes: 40
     continue-on-error: true
     steps:
       - uses: actions/checkout@f548e57e544e1ff5a4c46bf1e1b8685f8e4a348a
@@ -690,6 +699,7 @@ jobs:
   semver-check:
     name: Semver Check
     runs-on: ubuntu-latest
+    timeout-minutes: 20
     # Semver is a required gate (flipped from advisory in the v0.8.0 cycle).
     # Previously advisory because breaking changes are routine before 1.0 — they
     # remain allowed as long as the minor version bumps (0.8.x -> 0.9.0);
@@ -759,7 +769,12 @@ jobs:
       # §P2-13 gave register_subagent_tools a sandbox param. Same
       # intentional minor-cycle class; new TAG NAME so the baseline-rustdoc
       # cache invalidates.
-      SEMVER_BASELINE: semver-baseline-2026-09-9
+      # Tenth move (2026-09-23, review wave-3): §P3-22 removed the dead
+      # CommandExecutor::execute/execute_string stubs and ExecutorOptions
+      # accessors from shannon-commands (unreachable placeholder API). Same
+      # intentional minor-cycle class; new TAG NAME so the baseline-rustdoc
+      # cache invalidates.
+      SEMVER_BASELINE: semver-baseline-2026-09-10
     steps:
       - uses: actions/checkout@f548e57e544e1ff5a4c46bf1e1b8685f8e4a348a
         with:
@@ -809,6 +824,7 @@ jobs:
     # same way the underlying test would.
     name: Insta Snapshots
     runs-on: ubuntu-latest
+    timeout-minutes: 60
     steps:
       - uses: actions/checkout@f548e57e544e1ff5a4c46bf1e1b8685f8e4a348a
       - uses: dtolnay/rust-toolchain@2c7215f132e9ebf062739d9130488b56d53c060c

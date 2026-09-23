@@ -7027,6 +7027,7 @@ version = "0.11.0"
 dependencies = [
  "chromiumoxide",
  "chromiumoxide_cdp",
+ "filetime",
  "futures",
  "reqwest 0.12.28",
  "serde",

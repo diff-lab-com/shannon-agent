@@ -54,3 +54,6 @@ local-browser = ["dep:chromiumoxide", "dep:chromiumoxide_cdp"]
 
 [dev-dependencies]
 tempfile = "3"
+# Backdating profile mtimes in the §P3-7 stale-sweep tests (already in the
+# dependency graph via notify).
+filetime = "0.2"
