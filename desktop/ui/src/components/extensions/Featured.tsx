@@ -4,14 +4,17 @@ import { useOutletContext } from "react-router-dom";
 import { useIntl } from 'react-intl'
 import {
   listFeaturedVendors,
+  listInstalledAddons,
   installMcpOAuthLoopback,
   installMcpOAuthComplete,
   installMcpStdio,
   type FeaturedVendor,
 } from "@/lib/tauri-api";
+import type { InstalledAddonSummary } from "@/types";
 import { Button } from "@/components/ui/button";
 import { CardSkeleton } from '@/components/SkeletonLoader'
 import { cn } from "@/lib/utils";
+import InstalledIconRow from '@/components/extensions/InstalledIconRow'
 
 /**
  * Featured tab — curated list of verified MCP vendors Shannon ships with.
@@ -39,6 +42,32 @@ export default function Featured() {
   const [busy, setBusy] = useState<string | null>(null);
   const [feedback, setFeedback] = useState<{ slug: string; msg: string; ok: boolean } | null>(null);
   const [tokenPrompt, setTokenPrompt] = useState<string | null>(null);
+  // Batch E4: 公开（精选目录）/ 个人（本机已装资产） market dichotomy.
+  const [marketTab, setMarketTab] = useState<'public' | 'personal'>('public');
+  const [installed, setInstalled] = useState<InstalledAddonSummary[]>([]);
+
+  useEffect(() => {
+    let cancelled = false;
+    const load = () => {
+      listInstalledAddons()
+        .then(rows => { if (!cancelled) setInstalled(rows) })
+        .catch(() => { /* personal tab is opportunistic */ });
+    };
+    load();
+    window.addEventListener('shannon:extension-installed', load);
+    return () => {
+      cancelled = true;
+      window.removeEventListener('shannon:extension-installed', load);
+    };
+  }, []);
+
+  const personalFiltered = search
+    ? installed.filter(
+        (a) =>
+          a.name.toLowerCase().includes(search.toLowerCase()) ||
+          a.id.toLowerCase().includes(search.toLowerCase())
+      )
+    : installed;
 
   useEffect(() => {
     let cancelled = false;
@@ -145,13 +174,79 @@ export default function Featured() {
 
   return (
     <div className="p-lg max-w-7xl mx-auto">
-      <div className="mb-xl">
+      <div className="mb-md">
         <h2 className="text-headline-md font-headline-md text-on-surface mb-xs">{t('extensions.featured.title')}</h2>
         <p className="text-body-md text-on-surface-variant">
           {t('extensions.featured.subtitle')}
         </p>
       </div>
 
+      {/* Batch E3: 已安装 icon row — installed assets surface on the hub's
+          first screen, one click from the full inventory. */}
+      <div className="mb-md">
+        <InstalledIconRow />
+      </div>
+
+      {/* Batch E4: 公开 / 个人 market tabs (ZCode 插件市场 pattern). */}
+      <div className="mb-lg">
+        <div role="group" aria-label={t('extensions.market.tabs.aria')} className="inline-flex items-center rounded-lg bg-surface-container-low p-0.5">
+          {([
+            { id: 'public' as const, label: t('extensions.market.public') },
+            { id: 'personal' as const, label: t('extensions.market.personal') },
+          ]).map(opt => (
+            <button
+              key={opt.id}
+              type="button"
+              aria-pressed={marketTab === opt.id}
+              onClick={() => setMarketTab(opt.id)}
+              className={cn(
+                'px-md py-xs rounded-md font-label-md text-label-md transition-colors cursor-pointer whitespace-nowrap',
+                marketTab === opt.id
+                  ? 'bg-primary text-on-primary shadow-sm font-bold'
+                  : 'text-on-surface-variant hover:text-primary',
+              )}
+            >
+              {opt.label}
+            </button>
+          ))}
+        </div>
+      </div>
+
+      {marketTab === 'personal' ? (
+        personalFiltered.length === 0 ? (
+          <div className="border border-dashed border-outline-variant/40 rounded-2xl p-xl text-center">
+            <span className="material-symbols-outlined icon-md text-on-surface-variant/60" aria-hidden="true">folder_off</span>
+            <p className="font-label-md text-on-surface-variant mt-xs">{t('extensions.market.personalEmpty')}</p>
+            <p className="font-label-sm text-on-surface-variant/70 mt-xs">{t('extensions.market.personalEmptyHint')}</p>
+          </div>
+        ) : (
+          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-lg">
+            {personalFiltered.map(a => (
+              <div
+                key={a.id}
+                className="rounded-2xl border border-outline-variant/30 bg-surface-container-lowest p-lg flex items-start gap-md hover:border-primary/40 transition-colors"
+              >
+                <div className={cn(
+                  'w-11 h-11 rounded-xl flex items-center justify-center shrink-0',
+                  a.enabled ? 'bg-primary/10 text-primary' : 'bg-surface-container-low text-on-surface-variant/60',
+                )}>
+                  <span className="material-symbols-outlined text-[22px]" aria-hidden="true">extension</span>
+                </div>
+                <div className="flex-1 min-w-0">
+                  <div className="flex items-center gap-sm">
+                    <h3 className="font-bold text-label-md text-on-surface truncate">{a.name}</h3>
+                    <span className="font-label-xs px-xs py-[1px] rounded bg-surface-container-low text-on-surface-variant shrink-0">{a.kind}</span>
+                  </div>
+                  <p className="text-label-xs text-on-surface-variant font-mono truncate mt-[2px]">{a.id}</p>
+                  {!a.enabled && (
+                    <p className="text-label-xs text-warning mt-xs">{t('extensions.installed.disabled')}</p>
+                  )}
+                </div>
+              </div>
+            ))}
+          </div>
+        )
+      ) : (
       <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-lg">
         {filtered.map((vendor) => {
           const isBusy = busy === vendor.slug;
@@ -256,8 +351,9 @@ export default function Featured() {
           );
         })}
       </div>
+      )}
 
-      {filtered.length === 0 && (
+      {marketTab === 'public' && filtered.length === 0 && (
         <div className="text-center py-3xl text-on-surface-variant">
           {search ? intl.formatMessage({ id: 'extensions.featured.noMatches' }, { search }) : t('extensions.featured.noVendors')}
         </div>
