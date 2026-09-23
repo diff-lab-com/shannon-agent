@@ -982,8 +982,20 @@ export interface TriageStats {
 /// Where an inbox item came from. `routine`/`scheduled_task` are produced by
 /// scheduled-task runs (and are the only rerunnable sources); `goal` and
 /// `trigger` come from goal events / the external trigger endpoint; `batch`
-/// is the aggregate completion record of a parallel batch run (T3).
-export type InboxSource = 'routine' | 'scheduled_task' | 'goal' | 'trigger' | 'batch'
+/// is the aggregate completion record of a parallel batch run (T3). The T5
+/// unified "needs attention" stream adds the session/agent events:
+/// `session_approval` (a permission prompt is waiting on the user),
+/// `session_failed` (the session's last turn failed), and `skill_candidate`
+/// (a detected skill pattern awaits review).
+export type InboxSource =
+  | 'routine'
+  | 'scheduled_task'
+  | 'goal'
+  | 'trigger'
+  | 'batch'
+  | 'session_approval'
+  | 'session_failed'
+  | 'skill_candidate'
 
 /// Lifecycle status of an inbox item (`pending` → `read` → `archived`).
 export type InboxItemStatus = 'pending' | 'read' | 'archived'

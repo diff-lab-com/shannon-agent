@@ -61,13 +61,24 @@ function sourceMeta(source: InboxSource): { icon: string; color: string; labelKe
       // Parallel batch run's aggregate completion record (T3) — same visual
       // language as the batch runner panel (call_split icon, tertiary color).
       return { icon: 'call_split', color: 'text-tertiary', labelKey: 'inbox.source.batch' }
+    case 'session_approval':
+      // T5: a session permission prompt is waiting on the user (lock_open =
+      // an action is gated); secondary color reads "needs your action".
+      return { icon: 'lock_open', color: 'text-secondary', labelKey: 'inbox.source.session_approval' }
+    case 'session_failed':
+      // T5: the session's last turn failed — same error color as `trigger`.
+      return { icon: 'error', color: 'text-error', labelKey: 'inbox.source.session_failed' }
+    case 'skill_candidate':
+      // T5: a detected skill pattern awaits review (auto_awesome = the same
+      // sparkles language the skill catalog uses).
+      return { icon: 'auto_awesome', color: 'text-tertiary', labelKey: 'inbox.source.skill_candidate' }
     default:
       return { icon: 'notifications', color: 'text-on-surface-variant', labelKey: 'inbox.source.trigger' }
   }
 }
 
 const STATUS_OPTIONS: readonly (InboxItemStatus | 'all')[] = ['all', 'pending', 'read', 'archived']
-const SOURCE_OPTIONS: readonly (InboxSource | 'all')[] = ['all', 'routine', 'scheduled_task', 'goal', 'trigger', 'batch']
+const SOURCE_OPTIONS: readonly (InboxSource | 'all')[] = ['all', 'routine', 'scheduled_task', 'goal', 'trigger', 'batch', 'session_approval', 'session_failed', 'skill_candidate']
 
 function InboxCard({ item, selected, focused, highlighted, onToggleSelected, onMarkRead, onArchive, onContinue, onRerun, onOpenSource }: {
   item: InboxItem
