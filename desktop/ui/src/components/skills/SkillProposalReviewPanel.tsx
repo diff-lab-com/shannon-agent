@@ -6,6 +6,9 @@
 // IA X1: `variant="inline"` renders the same review UI embedded in the
 // Extensions → Pending queue (no modal chrome, no auto-close) — the global
 // toast no longer opens this panel (评审裁决 #2: 待处理页是唯一审查面).
+// The backend's `skill-proposal-available` event (fired when a draft is
+// created, and with the updated count after approve/reject) refreshes the
+// queue in place, so drafts created mid-session show up without re-navigating.
 
 import { useCallback, useEffect, useState } from 'react'
 import LoadingState from '@/components/ui/loading-state'
@@ -15,7 +18,8 @@ import { toastError } from '@/lib/errorToast'
 import { skillLoop } from '@/lib/tauri-api'
 import { Modal } from '@/components/ui/modal'
 import { Button } from '@/components/ui/button'
-import type { SkillProposal } from '@/types'
+import { useTauriEventValidated } from '@/hooks/useTauriEventValidated'
+import type { SkillProposal, SkillProposalCountPayload } from '@/types'
 
 interface SkillProposalReviewPanelProps {
   open: boolean
@@ -37,13 +41,7 @@ export default function SkillProposalReviewPanel({
   const [loading, setLoading] = useState(false)
   const [actionLoading, setActionLoading] = useState(false)
 
-  useEffect(() => {
-    if (!open) {
-      setProposals([])
-      setCurrentIndex(0)
-      return
-    }
-
+  const fetchProposals = useCallback(() => {
     let cancelled = false
     setLoading(true)
     skillLoop
@@ -62,11 +60,26 @@ export default function SkillProposalReviewPanel({
       .finally(() => {
         if (!cancelled) setLoading(false)
       })
-
     return () => {
       cancelled = true
     }
-  }, [open, t])
+  }, [t])
+
+  useEffect(() => {
+    if (!open) {
+      setProposals([])
+      setCurrentIndex(0)
+      return
+    }
+    return fetchProposals()
+  }, [open, fetchProposals])
+
+  // Draft arrival channel (IA X1 fix): keep the queue live while the user
+  // sits on /extensions/pending — the backend emits this event with the
+  // updated pending count on create AND after approve/reject elsewhere.
+  useTauriEventValidated<SkillProposalCountPayload>('skill-proposal-available', () => {
+    if (open) fetchProposals()
+  })
 
   const current = proposals[currentIndex]
 

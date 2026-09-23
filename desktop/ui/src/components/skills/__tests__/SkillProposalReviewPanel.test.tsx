@@ -1,5 +1,5 @@
-import { describe, it, expect, vi } from 'vitest'
-import { render, screen, fireEvent, waitFor } from '@testing-library/react'
+import { describe, it, expect, vi, beforeEach } from 'vitest'
+import { render, screen, fireEvent, waitFor, act } from '@testing-library/react'
 import { I18nProvider } from '@/i18n'
 import SkillProposalReviewPanel from '../SkillProposalReviewPanel'
 import * as api from '@/lib/tauri-api'
@@ -16,6 +16,22 @@ vi.mock('sonner', () => ({
   toast: { success: vi.fn(), error: vi.fn() },
 }))
 
+// X1 fix: the panel refreshes its draft list on `skill-proposal-available`;
+// capture the handler so tests can fire the backend event.
+const eventSpy = vi.hoisted(() => vi.fn())
+
+vi.mock('@/hooks/useTauriEventValidated', () => ({
+  useTauriEventValidated: (...args: unknown[]) => eventSpy(...args),
+}))
+
+let proposalEventHandler: ((event: { payload: { pending_count: number } }) => void) | null = null
+
+function emitProposalEvent(pendingCount: number) {
+  act(() => {
+    proposalEventHandler?.({ payload: { pending_count: pendingCount } })
+  })
+}
+
 const mockProposal = {
   id: 'test-id-1',
   name: 'Test Skill',
@@ -31,6 +47,11 @@ const mockProposal = {
 describe('SkillProposalReviewPanel', () => {
   beforeEach(() => {
     vi.clearAllMocks()
+    eventSpy.mockReset()
+    proposalEventHandler = null
+    eventSpy.mockImplementation((_event: string, handler: (e: { payload: { pending_count: number } }) => void) => {
+      proposalEventHandler = handler
+    })
   })
 
   it('renders nothing when closed', () => {
@@ -215,5 +236,41 @@ describe('SkillProposalReviewPanel (inline variant)', () => {
     await waitFor(() => {
       expect(container.querySelector('[data-testid="skill-proposal-review-inline"]')).toBeNull()
     })
+  })
+
+  // X1 fix: a draft created mid-session must show up while the user sits on
+  // /extensions/pending — the backend event triggers an in-place refetch.
+  it('refreshes the draft list when skill-proposal-available fires', async () => {
+    vi.mocked(api.skillLoop.listProposals).mockResolvedValue([mockProposal])
+    const { container } = render(
+      <I18nProvider>
+        <SkillProposalReviewPanel open={true} onClose={vi.fn()} variant="inline" />
+      </I18nProvider>
+    )
+    await waitFor(() => expect(screen.getByText('Test Skill')).toBeInTheDocument())
+    expect(api.skillLoop.listProposals).toHaveBeenCalledTimes(1)
+
+    const arrival = { ...mockProposal, id: 'test-id-2', name: 'Test Skill 2' }
+    vi.mocked(api.skillLoop.listProposals).mockResolvedValue([mockProposal, arrival])
+    emitProposalEvent(2)
+
+    // The panel re-fetched and the queue now reports two drafts (the cycler
+    // shows one at a time — the navigation counter reflects the refresh).
+    await waitFor(() => expect(api.skillLoop.listProposals).toHaveBeenCalledTimes(2))
+    await waitFor(() => expect(screen.getByText(/1 \/ 2/)).toBeInTheDocument())
+    await waitFor(() => expect(container.querySelector('[data-testid="skill-proposal-review-inline"]')).not.toBeNull())
+  })
+
+  it('does not refetch on the event while closed', async () => {
+    vi.mocked(api.skillLoop.listProposals).mockResolvedValue([])
+    render(
+      <I18nProvider>
+        <SkillProposalReviewPanel open={false} onClose={vi.fn()} />
+      </I18nProvider>
+    )
+    await waitFor(() => expect(proposalEventHandler).not.toBeNull())
+    expect(api.skillLoop.listProposals).not.toHaveBeenCalled()
+    emitProposalEvent(4)
+    expect(api.skillLoop.listProposals).not.toHaveBeenCalled()
   })
 })
