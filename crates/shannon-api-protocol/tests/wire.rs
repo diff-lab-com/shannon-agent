@@ -8,8 +8,8 @@
 use serde_json::json;
 use shannon_api_protocol::{
     ApprovalDecision, ApprovalRespondRequest, HealthResponse, ModelInfo, ModelsResponse,
-    PROTOCOL_VERSION, QueryRequest, QueryResponse, ToolEntry, ToolsListResponse, UsageInfo,
-    WsClientMessage, WsServerMessage,
+    PROTOCOL_VERSION, QueryRequest, QueryResponse, SseEventName, ToolEntry, ToolsListResponse,
+    UsageInfo, WsClientMessage, WsServerMessage,
 };
 use uuid::Uuid;
 
@@ -506,6 +506,129 @@ fn ws_server_message_roundtrip_all_variants() {
 fn ws_server_message_invalid_type_rejected() {
     let res: Result<WsServerMessage, _> = serde_json::from_str(r#"{"type":"not_a_real_type"}"#);
     assert!(res.is_err());
+}
+
+// ── SseEventName (SSE event-name contract) ──────────────────────────────
+
+/// The full expected set of SSE `event:` names, pinned here so an accidental
+/// rename (or a new variant with a malformed name) cannot ship silently.
+/// Keep in lockstep with `SseEventName`; the `query_engine::sse` mapping is
+/// compile-checked against this enum, so a variant addition fails the build
+/// until both sides agree.
+const EXPECTED_SSE_EVENT_NAMES: [&str; 17] = [
+    "started",
+    "text",
+    "tool_use_request",
+    "tool_use_result",
+    "turn_completed",
+    "completed",
+    "failed",
+    "warning",
+    "progress",
+    "tool_progress",
+    "thinking",
+    "usage",
+    "cost",
+    "info",
+    "conversation_update",
+    "rate_limit",
+    "error",
+];
+
+#[test]
+fn sse_event_names_are_non_empty_lowercase_snake_case() {
+    let all = [
+        SseEventName::Started,
+        SseEventName::Text,
+        SseEventName::ToolUseRequest,
+        SseEventName::ToolUseResult,
+        SseEventName::TurnCompleted,
+        SseEventName::Completed,
+        SseEventName::Failed,
+        SseEventName::Warning,
+        SseEventName::Progress,
+        SseEventName::ToolProgress,
+        SseEventName::Thinking,
+        SseEventName::Usage,
+        SseEventName::Cost,
+        SseEventName::Info,
+        SseEventName::ConversationUpdate,
+        SseEventName::RateLimit,
+        SseEventName::Error,
+    ];
+    assert_eq!(
+        all.len(),
+        EXPECTED_SSE_EVENT_NAMES.len(),
+        "SseEventName grew a variant: update EXPECTED_SSE_EVENT_NAMES and the \
+         query_engine::sse mapping together"
+    );
+    for name in all {
+        let wire = name.as_str();
+        assert!(!wire.is_empty(), "{name:?} must have a non-empty name");
+        assert!(
+            wire.chars().all(|c| c.is_ascii_lowercase() || c == '_'),
+            "{name:?} name {wire:?} must be lowercase ASCII"
+        );
+        assert!(
+            !wire.starts_with('_') && !wire.ends_with('_') && !wire.contains("__"),
+            "{name:?} name {wire:?} must be clean snake_case"
+        );
+    }
+}
+
+#[test]
+fn sse_event_name_set_is_pinned_to_the_contract() {
+    // Every declared name is produced, and nothing outside the pinned set is.
+    let mut produced: Vec<&str> = [
+        SseEventName::Started,
+        SseEventName::Text,
+        SseEventName::ToolUseRequest,
+        SseEventName::ToolUseResult,
+        SseEventName::TurnCompleted,
+        SseEventName::Completed,
+        SseEventName::Failed,
+        SseEventName::Warning,
+        SseEventName::Progress,
+        SseEventName::ToolProgress,
+        SseEventName::Thinking,
+        SseEventName::Usage,
+        SseEventName::Cost,
+        SseEventName::Info,
+        SseEventName::ConversationUpdate,
+        SseEventName::RateLimit,
+        SseEventName::Error,
+    ]
+    .iter()
+    .map(|n| n.as_str())
+    .collect();
+    produced.sort_unstable();
+
+    let mut expected = EXPECTED_SSE_EVENT_NAMES.to_vec();
+    expected.sort_unstable();
+
+    assert_eq!(produced, expected, "SSE event-name contract drifted");
+}
+
+#[test]
+fn sse_event_name_serde_round_trip() {
+    for (name, wire) in [
+        (SseEventName::ToolUseRequest, "tool_use_request"),
+        (SseEventName::ConversationUpdate, "conversation_update"),
+        (SseEventName::RateLimit, "rate_limit"),
+        (SseEventName::Error, "error"),
+    ] {
+        let json = serde_json::to_string(&name).unwrap();
+        assert_eq!(json, format!("\"{wire}\""));
+        let back: SseEventName = serde_json::from_str(&json).unwrap();
+        assert_eq!(back, name);
+        assert_eq!(back.as_str(), wire);
+    }
+}
+
+#[test]
+fn sse_event_name_unknown_wire_value_rejected() {
+    let res: Result<SseEventName, _> = serde_json::from_str("\"event\"");
+    assert!(res.is_err(), "the legacy bucket name must not parse back");
 }
 
 // ── Greeting helper ─────────────────────────────────────────────────────

@@ -3,7 +3,7 @@
  *
  * Source of truth: `shannon-api-protocol` (Rust).
  * Generator:     `cargo run -p shannon-api-protocol --bin gen-ts`.
- * Protocol:      v0.7.0
+ * Protocol:      v0.8.0
  *
  * Field names, casing, and discriminated unions match the serde-derived
  * Rust types 1:1. Anything that mutates must mutate there first and be
@@ -71,6 +71,25 @@ export type ApprovalDecision =
   | "allow_once"
   | "always_allow"
   | "deny";
+
+export type SseEventName =
+  | "completed"
+  | "conversation_update"
+  | "cost"
+  | "error"
+  | "failed"
+  | "info"
+  | "progress"
+  | "rate_limit"
+  | "started"
+  | "text"
+  | "thinking"
+  | "tool_progress"
+  | "tool_use_request"
+  | "tool_use_result"
+  | "turn_completed"
+  | "usage"
+  | "warning";
 
 export interface WsClientMessageQuery {
   type: "query";
@@ -163,4 +182,4 @@ export type WsServerMessage =
   | WsServerMessageSessionInfo
   | WsServerMessageError;
 
-export const PROTOCOL_VERSION = "0.7.0" as const;
+export const PROTOCOL_VERSION = "0.8.0" as const;

@@ -45,7 +45,7 @@ use uuid::Uuid;
 /// change to the published types alters the on-the-wire bytes in a
 /// non-backward-compatible way. Read it from
 /// `WsServerMessage::SessionInfo::protocol_version`.
-pub const PROTOCOL_VERSION: &str = "0.7.0";
+pub const PROTOCOL_VERSION: &str = "0.8.0";
 
 // ── HTTP request / response types ───────────────────────────────────────
 
@@ -156,6 +156,89 @@ pub enum ApprovalDecision {
 pub struct ApprovalRespondRequest {
     pub request_id: String,
     pub choice: ApprovalDecision,
+}
+
+// ── SSE event-name contract ─────────────────────────────────────────────
+
+/// Canonical SSE `event:` names for every streaming endpoint that carries
+/// [`QueryEvent`]-shaped traffic (`POST /api/query/stream`, the deprecated
+/// `GET /api/query/stream`, and the headless server's
+/// `POST /v1/sessions/:id/messages`).
+///
+/// This enum is the wire contract (review §P2-6): every SSE producer must
+/// emit exactly these names. The exhaustive `QueryEvent → SseEventName`
+/// mapping lives in `shannon-core::query_engine::sse` — next to the event
+/// enum itself, because `QueryEvent` references engine types and this crate
+/// must stay a leaf — so adding a variant there breaks compilation until the
+/// mapping (and therefore this contract) is extended deliberately. The
+/// `gen-ts` binary publishes the names to gateway clients as the
+/// `SseEventName` string-literal union.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, schemars::JsonSchema)]
+#[serde(rename_all = "snake_case")]
+#[schemars(rename_all = "snake_case")]
+pub enum SseEventName {
+    /// Query started processing.
+    Started,
+    /// Text chunk from the model.
+    Text,
+    /// Tool use requested by the model.
+    ToolUseRequest,
+    /// Tool execution completed.
+    ToolUseResult,
+    /// Turn completed (multi-turn query).
+    TurnCompleted,
+    /// Query completed successfully.
+    Completed,
+    /// Query failed with an error.
+    Failed,
+    /// Non-fatal warning; the query continues.
+    Warning,
+    /// Progress update.
+    Progress,
+    /// Tool execution progress update.
+    ToolProgress,
+    /// Thinking content from extended thinking mode.
+    Thinking,
+    /// Token usage statistics.
+    Usage,
+    /// Cost summary.
+    Cost,
+    /// Informational event (compaction metrics, context pressure, …).
+    Info,
+    /// Updated conversation state.
+    ConversationUpdate,
+    /// Rate-limit info from provider response headers.
+    RateLimit,
+    /// Transport-level error channel — not a [`QueryEvent`] payload. Used
+    /// when the query stream itself errors (`{"error": …}`) and, per §P3-4,
+    /// when an event's serialization fails (the payload then carries
+    /// `{"error": …, "event_type": …}` naming the event that was lost).
+    Error,
+}
+
+impl SseEventName {
+    /// The exact string emitted in the SSE `event:` field.
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Started => "started",
+            Self::Text => "text",
+            Self::ToolUseRequest => "tool_use_request",
+            Self::ToolUseResult => "tool_use_result",
+            Self::TurnCompleted => "turn_completed",
+            Self::Completed => "completed",
+            Self::Failed => "failed",
+            Self::Warning => "warning",
+            Self::Progress => "progress",
+            Self::ToolProgress => "tool_progress",
+            Self::Thinking => "thinking",
+            Self::Usage => "usage",
+            Self::Cost => "cost",
+            Self::Info => "info",
+            Self::ConversationUpdate => "conversation_update",
+            Self::RateLimit => "rate_limit",
+            Self::Error => "error",
+        }
+    }
 }
 
 // ── WebSocket protocol messages ─────────────────────────────────────────
