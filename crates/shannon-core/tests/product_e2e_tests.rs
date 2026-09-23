@@ -22,7 +22,7 @@ use shannon_core::query_engine::CostTracker;
 use shannon_core::query_engine::{QueryContext, QueryEngine, QueryEvent, QueryMetadata};
 use shannon_core::tools::{Tool, ToolOutput, ToolRegistry, ToolResult};
 use shannon_engine::api::{ContentBlock, LlmClient, LlmClientConfig, LlmProvider, RetryConfig};
-use shannon_engine::permissions::PermissionManager;
+use shannon_engine::permissions::{ApprovalMode, PermissionManager};
 use shannon_engine::state::StateManager;
 use shannon_engine::streaming_tool_executor::{StreamingToolExecutor, ToolStatus};
 use uuid::Uuid;
@@ -300,12 +300,14 @@ async fn test_e2e_tool_execution_pipeline() {
         )))
         .unwrap();
 
-    let engine = QueryEngine::with_defaults(
-        client,
-        registry,
-        PermissionManager::new(),
-        StateManager::new(),
-    );
+    // Headless pipeline test: no permission channel is attached, so the
+    // engine's fail-closed gate (R2/N-1) would deny the non-read-only bash
+    // tool before execution. Use the production headless approval posture
+    // (shannon-cli headless default: FullAuto) — this test exercises the
+    // tool-execution pipeline, not the permission gate.
+    let mut permissions = PermissionManager::new();
+    permissions.set_approval_mode(ApprovalMode::FullAuto);
+    let engine = QueryEngine::with_defaults(client, registry, permissions, StateManager::new());
 
     let ctx = make_context("List files in current directory");
     let mut stream = engine.process_query(ctx, None).await;

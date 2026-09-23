@@ -27,7 +27,7 @@ mod session_log_tee {
     use shannon_core::session_log::{SessionLogReader, session_events_path};
     use shannon_core::tools::{Tool, ToolOutput, ToolRegistry, ToolResult};
     use shannon_engine::api::{LlmClientConfig, LlmProvider};
-    use shannon_engine::permissions::PermissionManager;
+    use shannon_engine::permissions::{ApprovalMode, PermissionManager};
     use shannon_engine::state::StateManager;
     use std::collections::HashMap;
     use tempfile::TempDir;
@@ -489,10 +489,18 @@ mod session_log_tee {
         };
         let registry = ToolRegistry::new();
         registry.register(Box::new(LeakyTool)).unwrap();
+        // The leak tool is not read-only, so the engine's fail-closed gate
+        // (R2/N-1) would deny it before execution with no approval channel
+        // attached — the secret would then never reach the log and the
+        // redaction path would go untested. Run under the production
+        // headless approval posture (FullAuto) so the tool executes and its
+        // output is teed through the redaction policy.
+        let mut permissions = PermissionManager::new();
+        permissions.set_approval_mode(ApprovalMode::FullAuto);
         let engine = QueryEngine::with_session_id(
             shannon_engine::api::LlmClient::new(config),
             registry,
-            PermissionManager::new(),
+            permissions,
             StateManager::new(),
             QueryEngineConfig::default(),
             session_id,

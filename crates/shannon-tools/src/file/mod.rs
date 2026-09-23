@@ -80,36 +80,46 @@ async fn validate_write_path(sandbox: &PathSandbox, path: &str) -> ToolResult<Pa
 /// cap is a best-effort guard, not a hard guarantee.
 pub const MAX_SNAPSHOT_BYTES: u64 = 10 * 1024 * 1024;
 
-fn snapshot_for_undo(
-    fs: &dyn FileSystemProvider,
-    history: &Option<Arc<Mutex<history::FileHistoryManager>>>,
-    file_path: &str,
+/// Snapshot the pre-modify content of `file_path` so `/undo` can restore it.
+///
+/// §P2-14: the stat + read are synchronous (over SFTP: a network round-trip
+/// plus a helper thread per call), so the whole snapshot runs on tokio's
+/// blocking pool instead of parking the calling tool's async worker. Best
+/// effort by design — every failure path simply skips the snapshot.
+async fn snapshot_for_undo(
+    fs: std::sync::Arc<dyn FileSystemProvider>,
+    history: Option<Arc<Mutex<history::FileHistoryManager>>>,
+    file_path: String,
 ) {
     let Some(history) = history else {
         return;
     };
-    // Bound memory before reading: the history manager's storage-quota check
-    // only runs *after* content is in memory, so pre-filter oversized files
-    // here. 10 MB covers typical source files; large data/minified files are
-    // poor undo targets anyway. A benign TOCTOU exists between this stat and
-    // the read — the cap is a best-effort guard, not a hard guarantee.
-    let Ok(meta) = fs.metadata_blocking(Path::new(file_path)) else {
-        return;
-    };
-    if meta.len > MAX_SNAPSHOT_BYTES {
-        return;
-    }
-    // Only existing, readable text files carry restorable pre-modify state.
-    let Ok(old_content) = fs.read_text_blocking(Path::new(file_path)) else {
-        return;
-    };
-    if let Ok(mut mgr) = history.lock() {
-        let _ = mgr.record_snapshot(
-            Path::new(file_path),
-            &old_content,
-            history::FileOperation::Edit,
-        );
-    }
+    let _ = tokio::task::spawn_blocking(move || {
+        // Bound memory before reading: the history manager's storage-quota
+        // check only runs *after* content is in memory, so pre-filter
+        // oversized files here. 10 MB covers typical source files; large
+        // data/minified files are poor undo targets anyway. A benign TOCTOU
+        // exists between this stat and the read — the cap is a best-effort
+        // guard, not a hard guarantee.
+        let Ok(meta) = fs.metadata_blocking(Path::new(&file_path)) else {
+            return;
+        };
+        if meta.len > MAX_SNAPSHOT_BYTES {
+            return;
+        }
+        // Only existing, readable text files carry restorable pre-modify state.
+        let Ok(old_content) = fs.read_text_blocking(Path::new(&file_path)) else {
+            return;
+        };
+        if let Ok(mut mgr) = history.lock() {
+            let _ = mgr.record_snapshot(
+                Path::new(&file_path),
+                &old_content,
+                history::FileOperation::Edit,
+            );
+        }
+    })
+    .await;
 }
 
 /// Read tool implementation
@@ -220,7 +230,7 @@ impl Tool for ReadTool {
         let mut input = read_input;
         input.file_path = canonical.to_string_lossy().to_string();
 
-        let mut output = read::execute_with(input, self.fs.as_ref()).await?;
+        let mut output = read::execute_with(input, self.fs.clone()).await?;
         output
             .metadata
             .insert("file_path".to_string(), json!(display_path));
@@ -349,7 +359,12 @@ impl Tool for WriteTool {
         let mut input = write_input;
         input.file_path = canonical.to_string_lossy().to_string();
 
-        snapshot_for_undo(self.fs.as_ref(), &self.history, &input.file_path);
+        snapshot_for_undo(
+            self.fs.clone(),
+            self.history.clone(),
+            input.file_path.clone(),
+        )
+        .await;
         let mut output = write::execute_with(input, self.fs.as_ref()).await?;
         self.sandbox.remap_tool_output(&mut output);
         Ok(output)
@@ -500,7 +515,12 @@ impl Tool for EditTool {
         let mut input = edit_input;
         input.file_path = canonical.to_string_lossy().to_string();
 
-        snapshot_for_undo(self.fs.as_ref(), &self.history, &input.file_path);
+        snapshot_for_undo(
+            self.fs.clone(),
+            self.history.clone(),
+            input.file_path.clone(),
+        )
+        .await;
         let mut output = edit::execute_with(input, self.fs.as_ref(), self.process.as_ref()).await?;
         // A3: the success message and diff header embed the file path —
         // re-render them into the sandbox-visible spelling.
@@ -633,7 +653,8 @@ impl Tool for MultiEditTool {
         for op in &multi_input.edits {
             if !snapshotted.contains(&op.file_path) {
                 snapshotted.push(op.file_path.clone());
-                snapshot_for_undo(self.fs.as_ref(), &self.history, &op.file_path);
+                snapshot_for_undo(self.fs.clone(), self.history.clone(), op.file_path.clone())
+                    .await;
             }
         }
 
@@ -753,7 +774,7 @@ impl Tool for GlobTool {
             }
         }
 
-        let mut output = glob::execute_with(glob_input, self.fs.as_ref()).await?;
+        let mut output = glob::execute_with(glob_input, self.fs.clone()).await?;
         self.sandbox.remap_tool_output(&mut output);
         Ok(output)
     }

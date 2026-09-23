@@ -16,7 +16,7 @@ mod tool_use_tests {
     };
     use shannon_core::tools::{Tool, ToolOutput, ToolRegistry, ToolResult};
     use shannon_engine::api::{LlmClientConfig, LlmProvider};
-    use shannon_engine::permissions::PermissionManager;
+    use shannon_engine::permissions::{ApprovalMode, PermissionManager};
     use shannon_engine::state::StateManager;
     use std::collections::HashMap;
     use uuid::Uuid;
@@ -137,10 +137,17 @@ mod tool_use_tests {
             enable_anthropic_toolsets: shannon_engine::api::toolsets::anthropic_toolsets_from_env(),
         };
         let client = shannon_engine::api::LlmClient::new(config);
+        // Pipeline tests drive tools headlessly with no permission channel;
+        // the engine's fail-closed gate (R2/N-1) would deny every
+        // non-read-only tool before execution. Use the production headless
+        // approval posture (shannon-cli headless default: FullAuto) — the
+        // permission gate itself has dedicated tests elsewhere.
+        let mut permissions = PermissionManager::new();
+        permissions.set_approval_mode(ApprovalMode::FullAuto);
         QueryEngine::new(
             client,
             registry,
-            PermissionManager::new(),
+            permissions,
             StateManager::new(),
             QueryEngineConfig::default(),
         )
@@ -1089,7 +1096,7 @@ mod zhipu_tool_use_broadcast_tests {
     };
     use shannon_core::tools::{Tool, ToolOutput, ToolRegistry, ToolResult};
     use shannon_engine::api::{LlmClientConfig, LlmProvider};
-    use shannon_engine::permissions::PermissionManager;
+    use shannon_engine::permissions::{ApprovalMode, PermissionManager};
     use shannon_engine::state::StateManager;
     use std::collections::HashMap;
     use uuid::Uuid;
@@ -1178,10 +1185,15 @@ mod zhipu_tool_use_broadcast_tests {
         };
         let registry = ToolRegistry::new();
         registry.register(Box::new(EchoTool)).unwrap();
+        // Headless regression test: run the tool turn under the production
+        // headless approval posture (FullAuto) so the echo tool actually
+        // executes instead of being denied by the fail-closed gate (R2/N-1).
+        let mut permissions = PermissionManager::new();
+        permissions.set_approval_mode(ApprovalMode::FullAuto);
         let engine = QueryEngine::new(
             shannon_engine::api::LlmClient::new(config),
             registry,
-            PermissionManager::new(),
+            permissions,
             StateManager::new(),
             QueryEngineConfig::default(),
         );

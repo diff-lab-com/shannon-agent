@@ -751,7 +751,15 @@ jobs:
       # `FileSystemProvider::rename_blocking` (new trait method,
       # additive). All three are intentional minor-cycle breaks pre-1.0.
       # New TAG NAME so the baseline-rustdoc cache invalidates.
-      SEMVER_BASELINE: semver-baseline-2026-09-8
+      # Ninth move (2026-09-22, review wave-2): §P2-2/3 added pub
+      # `query_budget`/`session_locks` to AppState, §P2-4 replaced the
+      # global install_decision_sink with task-local scope_decision_sink,
+      # §P2-1 gave SessionState a private last_access (LRU/TTL), §P3-2
+      # replaced DeliveryCache::get/insert with reserve/complete, and
+      # §P2-13 gave register_subagent_tools a sandbox param. Same
+      # intentional minor-cycle class; new TAG NAME so the baseline-rustdoc
+      # cache invalidates.
+      SEMVER_BASELINE: semver-baseline-2026-09-9
     steps:
       - uses: actions/checkout@f548e57e544e1ff5a4c46bf1e1b8685f8e4a348a
         with:

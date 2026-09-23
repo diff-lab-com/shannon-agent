@@ -1670,7 +1670,38 @@ impl QueryEngine {
         // producer task can read host-registered providers across the
         // `'static` move boundary.
         let reinjection_providers = self.reinjection_providers.clone();
-        let producer = tokio::spawn(async move {
+        // Review §P2-4: plugin-gate decisions (§4.9 route (b)) republish onto
+        // THIS query's session bus through a task-scoped sink. The former
+        // process-wide sink was overwritten by every query, so with
+        // concurrent queries one session's decisions landed in another
+        // session's channel. `scope_decision_sink` pins the closure to this
+        // producer task only; ending/aborting the query ends the scope, so
+        // no cleanup is needed.
+        let decision_sink: crate::bus::DecisionSink = {
+            let sink_bus = session_bus.shared();
+            std::sync::Arc::new(move |frame: &crate::bus::PluginDecisionFrame| {
+                use shannon_types::session_event::PermissionDecisionPayload;
+                let decision = if frame.allowed { "allow" } else { "deny" };
+                let reason = format!(
+                    "plugin gate '{}' requires '{}' declared [{}]",
+                    frame.point,
+                    frame.required,
+                    frame.declared.join(", ")
+                );
+                sink_bus.dispatch(
+                    crate::bus::permission_decision_event(PermissionDecisionPayload {
+                        tool_name: None,
+                        request: Some(format!("plugin '{}'", frame.plugin)),
+                        decision: decision.to_string(),
+                        reason: Some(reason),
+                        mode: Some("PLUGIN".to_string()),
+                    })
+                    .into(),
+                    crate::bus::DispatchMode::Emit,
+                );
+            })
+        };
+        let producer = tokio::spawn(crate::bus::scope_decision_sink(decision_sink, async move {
             // Prevent OS sleep during long-running queries (drops on exit)
             let _sleep_guard = crate::prevent_sleep::PreventSleepGuard::new();
 
@@ -1713,35 +1744,6 @@ impl QueryEngine {
                     "SessionStart",
                     serde_json::json!({ "session_id": self_session_id }),
                 );
-            }
-            // Plugin-gate decisions (§4.9 route (b)) republish onto the bus
-            // as permission/decision rows via the process-wide sink; the
-            // most recent query installs it (single-active-session flows).
-            {
-                use shannon_types::session_event::PermissionDecisionPayload;
-                crate::bus::install_decision_sink({
-                    let sink_bus = session_bus.shared();
-                    std::sync::Arc::new(move |frame: &crate::bus::PluginDecisionFrame| {
-                        let decision = if frame.allowed { "allow" } else { "deny" };
-                        let reason = format!(
-                            "plugin gate '{}' requires '{}' declared [{}]",
-                            frame.point,
-                            frame.required,
-                            frame.declared.join(", ")
-                        );
-                        sink_bus.dispatch(
-                            crate::bus::permission_decision_event(PermissionDecisionPayload {
-                                tool_name: None,
-                                request: Some(format!("plugin '{}'", frame.plugin)),
-                                decision: decision.to_string(),
-                                reason: Some(reason),
-                                mode: Some("PLUGIN".to_string()),
-                            })
-                            .into(),
-                            crate::bus::DispatchMode::Emit,
-                        );
-                    })
-                });
             }
             let tee = l0_tee;
 
@@ -3887,10 +3889,19 @@ impl QueryEngine {
                                                                                         .clone(),
                                                                             },
                                                                         );
+                                                                    // Review §P2-4: batched
+                                                                    // tools run in spawned
+                                                                    // tasks that would not
+                                                                    // inherit the producer's
+                                                                    // decision-sink scope;
+                                                                    // re-scope explicitly so
+                                                                    // plugin gates inside
+                                                                    // them route to this
+                                                                    // query's bus.
                                                                     let handle = tokio::spawn(
-                                                                        async move {
+                                                                        crate::bus::inherit_decision_sink(async move {
                                                                             (tool_id, tool_name, effective_input, tools_exec.execute_streaming(&exec_name, exec_input, progress_sender).await)
-                                                                        },
+                                                                        }),
                                                                     );
                                                                     exec_handles.push((
                                                                         id_for_error,
@@ -5817,7 +5828,7 @@ impl QueryEngine {
                 });
                 memory_extract_cursor_cell.store(total, std::sync::atomic::Ordering::Relaxed);
             }
-        });
+        }));
 
         // Convert the channel receiver into a stream that aborts the producer
         // task when dropped, so a consumer can cancel an in-progress query by
@@ -8933,6 +8944,156 @@ mod tests {
             Some(v) => unsafe { env::set_var("SHANNON_TURN_RETRIES", v) },
             None => unsafe { env::remove_var("SHANNON_TURN_RETRIES") },
         }
+    }
+
+    // ---- review §P2-2: hung tools are interrupted by the registry's
+    // execution timeout and surface as an error tool_result to the model ----
+
+    /// A registered tool that never finishes (60s sleep). The registry's
+    /// execution timeout (shortened for the test) must interrupt it and the
+    /// engine must record an error `ToolUseResult` instead of hanging.
+    struct HangingTool;
+
+    #[async_trait::async_trait]
+    impl crate::tools::Tool for HangingTool {
+        fn name(&self) -> &str {
+            "hanging_tool"
+        }
+        fn description(&self) -> &str {
+            "A tool that never finishes (test double)"
+        }
+        fn input_schema(&self) -> serde_json::Value {
+            serde_json::json!({"type": "object"})
+        }
+        async fn execute(
+            &self,
+            _input: serde_json::Value,
+        ) -> crate::tools::ToolResult<crate::tools::ToolOutput> {
+            tokio::time::sleep(std::time::Duration::from_secs(60)).await;
+            Ok(crate::tools::ToolOutput::success("done".to_string()))
+        }
+    }
+
+    #[tokio::test]
+    async fn p2_2_hanging_tool_interrupted_into_error_tool_result() {
+        use futures::StreamExt as _;
+
+        // Turn 1: a tool_use block for the hanging tool; turn 2: final text
+        // so the query completes after the timed-out tool_result round-trips.
+        let tool_call_sse = {
+            let sse = [
+                r#"event: message_start"#,
+                r#"data: {"type":"message_start","message":{"id":"msg_p2_2_tool","role":"assistant","content":[],"model":"test-model","stop_reason":null,"usage":{"input_tokens":10,"output_tokens":1}}}"#,
+                r#"event: content_block_start"#,
+                r#"data: {"type":"content_block_start","index":0,"content_block":{"type":"tool_use","id":"toolu_p2_2","name":"hanging_tool","input":{}}}"#,
+                r#"event: content_block_delta"#,
+                r#"data: {"type":"content_block_delta","index":0,"delta":{"type":"input_json_delta","partial_json":"{}"}}"#,
+                r#"event: content_block_stop"#,
+                r#"data: {"type":"content_block_stop","index":0}"#,
+                r#"event: message_delta"#,
+                r#"data: {"type":"message_delta","delta":{"stop_reason":"tool_use"},"usage":{"input_tokens":10,"output_tokens":5}}"#,
+                r#"event: message_stop"#,
+                r#"data: {"type":"message_stop"}"#,
+            ]
+            .join("\n\n");
+            a8_http_response("200 OK", "text/event-stream", &sse)
+        };
+        let responder: std::sync::Arc<dyn Fn(usize) -> String + Send + Sync> =
+            std::sync::Arc::new(move |i| match i {
+                0 => tool_call_sse.clone(),
+                _ => a8_text_sse("recovered after tool timeout"),
+            });
+        let server = TurnRetryMockServer::start(responder);
+
+        let config = LlmClientConfig {
+            api_key: "test-key".to_string(),
+            base_url: server.base_url.clone(),
+            model: "test-model".to_string(),
+            provider: shannon_engine::api::LlmProvider::Anthropic,
+            ..Default::default()
+        };
+        let client = LlmClient::new(config);
+
+        // The short execution timeout stands in for the §P2-2 300s default
+        // (structural default asserted in tools.rs); the wiring under test —
+        // timeout fires → error tool_result → turn continues — is the same.
+        let mut tools = ToolRegistry::new();
+        tools.register(Box::new(HangingTool)).unwrap();
+        tools.set_execution_timeout(std::time::Duration::from_millis(100));
+
+        let mut permissions = PermissionManager::new();
+        // Always-allow so the unattended test never stalls on an approval
+        // prompt.
+        permissions.allow_tool("hanging_tool");
+
+        let engine = QueryEngine::new(
+            client,
+            tools,
+            permissions,
+            StateManager::new(),
+            QueryEngineConfig {
+                max_turns: 5,
+                ..Default::default()
+            },
+        );
+        let context = QueryContext {
+            query_id: Uuid::new_v4(),
+            session_id: Uuid::new_v4(),
+            user_message: "call the hanging tool".to_string(),
+            attachments: Vec::new(),
+            metadata: QueryMetadata {
+                timestamp: chrono::Utc::now(),
+                tools_allowed: true,
+                max_tokens: None,
+                model: "test-model".to_string(),
+                temperature: None,
+                top_p: None,
+            },
+        };
+
+        let mut stream = engine.process_query(context, None).await;
+        let mut timeout_error_seen: Option<(bool, String)> = None;
+        let mut completed = false;
+        let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(30);
+        while let Some(ev) = tokio::time::timeout_at(deadline, stream.next())
+            .await
+            .unwrap_or(None)
+        {
+            match ev {
+                Ok(QueryEvent::ToolUseResult {
+                    tool_name,
+                    result,
+                    is_error,
+                    ..
+                }) if tool_name == "hanging_tool" => {
+                    timeout_error_seen = Some((is_error, result));
+                }
+                Ok(QueryEvent::Completed { .. }) => {
+                    completed = true;
+                    break;
+                }
+                Ok(QueryEvent::Failed { error, .. }) => {
+                    panic!("query must survive the tool timeout, got Failed: {error}");
+                }
+                Err(e) => panic!("query must survive the tool timeout, got error: {e}"),
+                _ => {}
+            }
+        }
+
+        let (is_error, result) =
+            timeout_error_seen.expect("hanging_tool must produce a ToolUseResult event");
+        assert!(
+            is_error,
+            "the timed-out tool result must be flagged as an error"
+        );
+        assert!(
+            result.contains("timed out after"),
+            "result must carry the timeout message, got: {result}"
+        );
+        assert!(
+            completed,
+            "the turn must continue after the interrupted tool and complete"
+        );
     }
 
     /// A14: the helper computes the right Duration for every escalation

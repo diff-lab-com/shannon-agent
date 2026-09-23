@@ -14,8 +14,16 @@ const CSP = `default-src 'none'; script-src 'unsafe-inline' ${MERMAID_CDN}; styl
 // The srcDoc is a separate document — it cannot read the app's CSS custom
 // properties, so the theme mode is injected explicitly: mermaid gets a
 // matching built-in theme and the error box gets scheme-aware colors.
-function buildSrcDoc(source: string, loadingLabel: string, failedLabel: string, mode: 'light' | 'dark'): string {
+export function buildSrcDoc(source: string, loadingLabel: string, failedLabel: string, mode: 'light' | 'dark'): string {
+  // Review §P3 (桌面): the payload is inlined into a <script> block. A raw
+  // "</script>" inside the diagram source would close the script element
+  // early (srcdoc injection), so escape every "<" as the JS-identical
+  // "\u003c" escape sequence; also neutralize U+2028/U+2029 which are valid
+  // JSON but terminate pre-ES2019 string literals.
   const payload = JSON.stringify(source)
+    .replace(/</g, '\\u003c')
+    .replace(/\u2028/g, '\\u2028')
+    .replace(/\u2029/g, '\\u2029')
   return [
     '<!DOCTYPE html>',
     `<html data-mode="${mode}">`,
