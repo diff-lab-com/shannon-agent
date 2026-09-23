@@ -79,7 +79,7 @@ export default function Installed() {
 
   if (loading) {
     return (
-      <div className="p-lg max-w-4xl mx-auto">
+      <div className="p-lg max-w-7xl mx-auto">
         <LoadingState size="lg" label={t('extensions.installed.scanning')} />
       </div>
     );
@@ -87,7 +87,7 @@ export default function Installed() {
 
   if (error) {
     return (
-      <div className="p-lg max-w-4xl mx-auto">
+      <div className="p-lg max-w-7xl mx-auto">
         <div className="border border-error/30 rounded-2xl p-lg bg-error-container/20">
           <div className="flex items-start gap-md">
             <span className="material-symbols-outlined text-error text-[24px]">error</span>
@@ -103,7 +103,7 @@ export default function Installed() {
 
   if (filtered.length === 0) {
     return (
-      <div className="p-lg max-w-4xl mx-auto">
+      <div className="p-lg max-w-7xl mx-auto">
         <EmptyState
           icon="download"
           title={t('extensions.installed.nothingInstalled')}
@@ -117,7 +117,7 @@ export default function Installed() {
   const populatedKinds = KIND_ORDER.filter((k) => grouped[k].length > 0);
 
   return (
-    <div className="p-lg max-w-4xl mx-auto">
+    <div className="p-lg max-w-7xl mx-auto">
       <p className="text-label-sm text-on-surface-variant mb-lg">
         {intl.formatMessage({ id: 'extensions.installed.count' }, {
           entries: filtered.length,

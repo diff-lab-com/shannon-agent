@@ -12,6 +12,9 @@ const installMcpOAuthLoopback = vi.hoisted(() => vi.fn())
 const installMcpOAuthAuthorizeUrl = vi.hoisted(() => vi.fn())
 const installMcpOAuthComplete = vi.hoisted(() => vi.fn())
 const installMcpStdio = vi.hoisted(() => vi.fn())
+// Batch E4: the featured page now also reads the installed list (personal
+// tab + icon row) — default to an empty machine.
+const listInstalledAddons = vi.hoisted(() => vi.fn(async () => []))
 
 vi.mock('@/lib/tauri-api', () => ({
   default: {},
@@ -20,6 +23,7 @@ vi.mock('@/lib/tauri-api', () => ({
   installMcpOAuthAuthorizeUrl: (...a: unknown[]) => installMcpOAuthAuthorizeUrl(...a),
   installMcpOAuthComplete: (...a: unknown[]) => installMcpOAuthComplete(...a),
   installMcpStdio: (...a: unknown[]) => installMcpStdio(...a),
+  listInstalledAddons: (...a: unknown[]) => listInstalledAddons(...a),
 }))
 
 function renderWithRouter() {

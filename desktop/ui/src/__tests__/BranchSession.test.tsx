@@ -3,6 +3,7 @@ import { render, screen, fireEvent, within, waitFor } from '@testing-library/rea
 import { MemoryRouter } from 'react-router-dom'
 import * as api from '@/lib/tauri-api'
 import { I18nProvider } from '@/i18n'
+import { ArtifactProvider } from '@/components/artifact/ArtifactContext'
 import Chat from '@/pages/Chat'
 
 const ctx = vi.hoisted(() => ({
@@ -47,7 +48,9 @@ function renderChat() {
   return render(
     <I18nProvider>
       <MemoryRouter>
-        <Chat />
+        <ArtifactProvider>
+          <Chat />
+        </ArtifactProvider>
       </MemoryRouter>
     </I18nProvider>
   )

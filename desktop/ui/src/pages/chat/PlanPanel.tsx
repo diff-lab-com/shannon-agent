@@ -4,9 +4,13 @@
 // to the conversation: `<workingDir>/.shannon/plans/*.md` via the
 // `get_session_plan` command, refreshed on session/working-dir change, on
 // any plan-tool result (enter/exit/get_plan_status), and on query
-// completion. The lifecycle stays engine-owned — this panel is read-only.
+// completion. The lifecycle stays engine-owned — batch D5 adds one narrow
+// human override: ticking a checklist step writes the plan file back through
+// `save_text_file` (same `# Plan:` header format the engine's
+// PlanManager::save_plan_to_file writes), so progress reflects human
+// verification without waiting for the engine to rewrite the doc.
 
-import { useCallback, useEffect, useMemo, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { listen, type UnlistenFn } from '@tauri-apps/api/event'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
@@ -78,18 +82,68 @@ export function useSessionPlan(workingDir: string | null) {
 export default function PlanPanel({ workingDir, planModeActive }: PlanPanelProps) {
   const t = useT()
   const { plan, refresh } = useSessionPlan(workingDir)
+  const [optimistic, setOptimistic] = useState<SessionPlan | null>(null)
+  const [saving, setSaving] = useState(false)
+  const articleRef = useRef<HTMLDivElement>(null)
+  const shown = optimistic ?? plan
 
-  const approved = plan?.status === 'approved'
+  // Engine truth wins once a fresh fetch lands — clear any optimistic tick
+  // so a plan the engine rewrote is never masked by stale local state.
+  useEffect(() => { setOptimistic(null) }, [plan])
+
+  const approved = shown?.status === 'approved'
   // P0-③ progress sync: the plan's markdown checklist IS the step list —
   // count `- [x]` vs `- [ ]` items to render a live "M/N steps" bar (ZCode's
   // 计划-N-步 signal, derived from the same doc the engine persists).
   const steps = useMemo(() => {
-    if (!plan) return { done: 0, total: 0 }
-    const items = plan.content.match(/^\s*[-*+]\s+\[([ xX])\]/gm) ?? []
+    if (!shown) return { done: 0, total: 0 }
+    const items = shown.content.match(/^\s*[-*+]\s+\[([ xX])\]/gm) ?? []
     const done = items.filter(item => /\[[xX]\]/.test(item)).length
     return { done, total: items.length }
-  }, [plan])
+  }, [shown])
   const stepPct = steps.total > 0 ? Math.round((steps.done / steps.total) * 100) : 0
+
+  // Batch D5: human step verification. Toggling the nth checkbox flips the
+  // nth `- [ ]` / `- [x]` marker in the plan body and writes the file back
+  // with the exact header layout PlanManager::save_plan_to_file emits.
+  // Optimistic update first; engine rewrites win afterwards (last-write-wins
+  // with a refresh on every plan-tool round-trip).
+  const handleCheckboxToggle = useCallback((input: HTMLInputElement) => {
+    const doc = optimistic ?? plan
+    if (!doc || !workingDir || saving) return
+    const boxes = Array.from(
+      articleRef.current?.querySelectorAll<HTMLInputElement>('input[type="checkbox"]') ?? [],
+    )
+    const idx = boxes.indexOf(input)
+    if (idx < 0) return
+
+    let seen = -1
+    let flipped = false
+    const content = doc.content.replace(/^(\s*[-*+]\s+\[)([ xX])(\])/gm, (full, open, mark, close) => {
+      seen += 1
+      if (seen !== idx) return full
+      flipped = true
+      const next = mark === ' ' ? 'x' : ' '
+      return `${open}${next}${close}`
+    })
+    if (!flipped) return
+
+    const next: SessionPlan = {
+      ...doc,
+      content,
+      status: doc.status, // ticking a step never forges engine approval
+    }
+    setOptimistic(next)
+    setSaving(true)
+    const header = `# Plan: ${next.title}\nCreated: ${next.created_at}\nStatus: ${next.status}\n\n${next.content}`
+    api.saveTextFile(`${workingDir}/.shannon/plans/${next.id}.md`, header)
+      .then(() => { void refresh() })
+      .catch(() => {
+        // Roll back to engine truth on write failure — the plan stays honest.
+        setOptimistic(null)
+      })
+      .finally(() => setSaving(false))
+  }, [optimistic, plan, workingDir, saving, refresh])
 
   return (
     <div className="space-y-md" data-testid="plan-panel">
@@ -98,7 +152,7 @@ export default function PlanPanel({ workingDir, planModeActive }: PlanPanelProps
         <h3 className="font-label-md text-on-surface uppercase tracking-wider opacity-60 flex-1 truncate">
           {t('chat.plan.title')}
         </h3>
-        {plan && (
+        {shown && (
           <Badge size="sm" variant={approved ? 'primary' : 'neutral'} className={approved ? 'bg-primary/10 text-primary' : 'bg-surface-container-high text-on-surface-variant'}>
             <span className="material-symbols-outlined text-[12px] mr-[2px]" aria-hidden="true">{approved ? 'check_circle' : 'pending'}</span>
             {t(approved ? 'chat.plan.status.approved' : 'chat.plan.status.pending')}
@@ -144,13 +198,13 @@ export default function PlanPanel({ workingDir, planModeActive }: PlanPanelProps
         </p>
       )}
 
-      {plan && plan.content.trim() ? (
+      {shown && shown.content.trim() ? (
         <article className="p-md bg-surface-container rounded-xl border border-outline-variant/10">
-          <div className="font-label-xs text-on-surface-variant mb-sm font-mono truncate" title={plan.created_at}>
-            {plan.title}
+          <div className="font-label-xs text-on-surface-variant mb-sm font-mono truncate" title={shown.created_at}>
+            {shown.title}
           </div>
-          <div className="font-body-sm text-on-surface prose prose-sm max-w-none prose-p:my-1 prose-pre:bg-surface-container-lowest prose-pre:p-sm prose-pre:rounded-lg prose-code:text-primary prose-code:before:content-[''] prose-code:after:content-['']">
-            <Markdown>{plan.content}</Markdown>
+          <div ref={articleRef} className="font-body-sm text-on-surface prose prose-sm max-w-none prose-p:my-1 prose-pre:bg-surface-container-lowest prose-pre:p-sm prose-pre:rounded-lg prose-code:text-primary prose-code:before:content-[''] prose-code:after:content-['']">
+            <Markdown onCheckboxToggle={handleCheckboxToggle}>{shown.content}</Markdown>
           </div>
         </article>
       ) : (

@@ -3,6 +3,7 @@ import { render, screen, fireEvent, waitFor } from '@testing-library/react'
 import { MemoryRouter } from 'react-router-dom'
 import * as dialog from '@tauri-apps/plugin-dialog'
 import { I18nProvider } from '@/i18n'
+import { ArtifactProvider } from '@/components/artifact/ArtifactContext'
 import Chat from '@/pages/Chat'
 
 const ctx = vi.hoisted(() => ({
@@ -63,7 +64,11 @@ function renderChat() {
   return render(
     <I18nProvider>
       <MemoryRouter>
-        <Chat />
+        {/* Batch D4: the artifact context moved to the app level — mirror
+            that nesting here (Chat no longer mounts its own provider). */}
+        <ArtifactProvider>
+          <Chat />
+        </ArtifactProvider>
       </MemoryRouter>
     </I18nProvider>
   )

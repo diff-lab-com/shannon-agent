@@ -5,7 +5,13 @@ import { ThemeProvider } from '@/context/ThemeContext'
 import { detectArtifacts } from '@/components/artifact/detectArtifact'
 import { ArtifactProvider, useArtifact } from '@/components/artifact/ArtifactContext'
 import { ArtifactChip } from '@/components/artifact/ArtifactChip'
-import { ArtifactPanel } from '@/components/artifact/ArtifactPanel'
+
+/** Batch D4: ArtifactPanel was retired — the dock (RightDock) hosts open
+ *  artifacts, so these tests observe the context through a probe. */
+function ArtifactProbe() {
+  const { artifacts, activeId } = useArtifact()
+  return <div data-testid="artifact-probe" data-count={artifacts.length} data-active={activeId ?? ''} />
+}
 
 const HTML_FIXTURE = `<!DOCTYPE html>
 <html>
@@ -172,88 +178,22 @@ describe('ArtifactChip', () => {
     expect(screen.getByText('Test artifact')).toBeInTheDocument()
   })
 
-  it('clicking the chip opens the panel context', async () => {
+  it('clicking the chip opens it in the artifact context', async () => {
     const { container } = render(
       <I18nProvider>
         <ArtifactProvider>
           <ArtifactChip artifact={{ kind: 'html', source: '<p>hi</p>', title: 'Test artifact', confidence: 'high' }} />
-          <ArtifactPanel />
+          <ArtifactProbe />
         </ArtifactProvider>
       </I18nProvider>,
     )
-    expect(container.querySelector('[role="complementary"]')).toBeNull()
+    expect(screen.getByTestId('artifact-probe')).toHaveAttribute('data-count', '0')
     const button = screen.getByRole('button', { name: /Open HTML artifact: Test artifact/ })
     fireEvent.click(button)
     await waitFor(() => {
-      expect(container.querySelector('[role="complementary"]')).toBeTruthy()
+      expect(screen.getByTestId('artifact-probe')).toHaveAttribute('data-count', '1')
     })
-  })
-})
-
-describe('ArtifactPanel F2 polish', () => {
-  beforeEach(() => {
-    localStorage.clear()
-  })
-
-  function renderWithArtifact() {
-    return render(
-      <I18nProvider>
-        <ArtifactProvider>
-          <ArtifactChip artifact={{ kind: 'html', source: '<p>hi</p>', title: 'Test artifact', confidence: 'high' }} />
-          <ArtifactPanel />
-        </ArtifactProvider>
-      </I18nProvider>,
-    )
-  }
-
-  it('shows fullscreen toggle button after panel opens', async () => {
-    const { container } = renderWithArtifact()
-    fireEvent.click(screen.getByRole('button', { name: /Open HTML artifact: Test artifact/ }))
-    await waitFor(() => {
-      expect(container.querySelector('[role="complementary"]')).toBeTruthy()
-    })
-    expect(screen.getByRole('button', { name: 'Enter fullscreen' })).toBeInTheDocument()
-  })
-
-  it('toggles fullscreen mode on button click', async () => {
-    const { container } = renderWithArtifact()
-    fireEvent.click(screen.getByRole('button', { name: /Open HTML artifact: Test artifact/ }))
-    await waitFor(() => {
-      expect(container.querySelector('[role="complementary"]')).toBeTruthy()
-    })
-    const fsBtn = screen.getByRole('button', { name: 'Enter fullscreen' })
-    fireEvent.click(fsBtn)
-    expect(screen.getByRole('button', { name: 'Exit fullscreen' })).toBeInTheDocument()
-    const panel = container.querySelector('[role="complementary"]') as HTMLElement
-    expect(panel.className).toContain('fixed')
-    expect(localStorage.getItem('shannon.artifact.fullscreen')).toBe('1')
-  })
-
-  it('shows auto-open toggle button', async () => {
-    const { container } = renderWithArtifact()
-    fireEvent.click(screen.getByRole('button', { name: /Open HTML artifact: Test artifact/ }))
-    await waitFor(() => {
-      expect(container.querySelector('[role="complementary"]')).toBeTruthy()
-    })
-    const toggle = screen.getByRole('button', { name: 'Toggle auto-open on detection' })
-    expect(toggle.getAttribute('aria-pressed')).toBe('false')
-    fireEvent.click(toggle)
-    expect(toggle.getAttribute('aria-pressed')).toBe('true')
-    expect(localStorage.getItem('shannon.artifact.autoOpen')).toBe('1')
-  })
-
-  it('persists width to localStorage after resize', async () => {
-    const { container } = renderWithArtifact()
-    fireEvent.click(screen.getByRole('button', { name: /Open HTML artifact: Test artifact/ }))
-    await waitFor(() => {
-      expect(container.querySelector('[role="complementary"]')).toBeTruthy()
-    })
-    const handle = container.querySelector('[aria-label="Drag to resize panel"]') as HTMLElement
-    expect(handle).toBeTruthy()
-    fireEvent.pointerDown(handle)
-    fireEvent.pointerMove(window, { clientX: 200 })
-    fireEvent.pointerUp(window)
-    expect(localStorage.getItem('shannon.artifact.panelWidth')).toBeTruthy()
+    expect(container).toBeTruthy()
   })
 })
 
@@ -266,39 +206,41 @@ describe('ArtifactContext keyboard shortcut', () => {
     render(
       <I18nProvider>
         <ArtifactProvider>
-          <ArtifactPanel />
+          <ArtifactProbe />
         </ArtifactProvider>
       </I18nProvider>,
     )
     const evt = new KeyboardEvent('keydown', { key: 'A', shiftKey: true, ctrlKey: true, bubbles: true })
     window.dispatchEvent(evt)
+    expect(screen.getByTestId('artifact-probe')).toHaveAttribute('data-count', '0')
   })
 
-  it('Ctrl+Shift+A cycles active artifact when panel has items', async () => {
-    const { container } = render(
+  it('Ctrl+Shift+A cycles active artifact when artifacts are open', async () => {
+    render(
       <I18nProvider>
         <ArtifactProvider>
           <ArtifactChip artifact={{ kind: 'html', source: '<p>a</p>', title: 'A', confidence: 'high' }} />
           <ArtifactChip artifact={{ kind: 'svg', source: '<svg/>', title: 'B', confidence: 'high' }} />
-          <ArtifactPanel />
+          <ArtifactProbe />
         </ArtifactProvider>
       </I18nProvider>,
     )
     const buttons = screen.getAllByRole('button', { name: /Open .+ artifact:/ })
     fireEvent.click(buttons[0])
     await waitFor(() => {
-      expect(container.querySelector('[role="complementary"]')).toBeTruthy()
+      expect(screen.getByTestId('artifact-probe')).toHaveAttribute('data-count', '1')
     })
-    const panel = container.querySelector('[role="complementary"]') as HTMLElement
     fireEvent.click(buttons[1])
     await waitFor(() => {
-      expect(panel.querySelector('.truncate')?.textContent).toBe('B')
+      expect(screen.getByTestId('artifact-probe')).toHaveAttribute('data-count', '2')
     })
+    const before = screen.getByTestId('artifact-probe').getAttribute('data-active')
     const evt = new KeyboardEvent('keydown', { key: 'A', shiftKey: true, ctrlKey: true, bubbles: true })
     window.dispatchEvent(evt)
     await waitFor(() => {
-      const afterTitle = panel.querySelector('.truncate')?.textContent
-      expect(['A', 'B']).toContain(afterTitle)
+      const after = screen.getByTestId('artifact-probe').getAttribute('data-active')
+      expect(after).toBeTruthy()
+      expect(after).not.toBe(before)
     })
   })
 })
@@ -387,27 +329,29 @@ describe('DocumentRenderer', () => {
   })
 })
 
-describe('CodeBlock', () => {
-  it('renders source inside pre/code', async () => {
-    const { CodeBlock } = await import('@/components/artifact/CodeBlock')
-    const { container } = render(<CodeBlock source="const x = 1" kind="document" />)
+describe('CodeBlock (shared primitive — batch D3)', () => {
+  it('renders source inside pre/code with the language chrome', async () => {
+    const { CodeBlock } = await import('@/components/code/CodeBlock')
+    const { container } = render(
+      <I18nProvider>
+        <CodeBlock code="const x = 1" language="javascript" />
+      </I18nProvider>
+    )
     expect(container.querySelector('pre')).toBeTruthy()
-    expect(container.querySelector('code.hljs')).toBeTruthy()
+    expect(container.querySelector('code')).toBeTruthy()
+    // copy affordance lives in the header chrome
+    expect(container.querySelector('button')).toBeTruthy()
   })
 
-  it('escapes HTML characters in output', async () => {
-    const { CodeBlock } = await import('@/components/artifact/CodeBlock')
-    const { container } = render(<CodeBlock source={'<script>alert(1)</script>'} />)
-    const html = container.querySelector('code')?.innerHTML ?? ''
-    expect(html).not.toContain('<script>')
+  it('escapes HTML characters in highlighted output', async () => {
+    const { CodeBlock } = await import('@/components/code/CodeBlock')
+    const { container } = render(
+      <I18nProvider>
+        <CodeBlock code={'<script>alert(1)</script>'} />
+      </I18nProvider>
+    )
+    const html = container.querySelector('pre')?.innerHTML ?? ''
+    expect(html).not.toContain('<script>alert')
     expect(html).toContain('&lt;')
-    expect(html).toContain('script')
-  })
-
-  it('highlights known language tokens', async () => {
-    const { CodeBlock } = await import('@/components/artifact/CodeBlock')
-    const { container } = render(<CodeBlock source={'const x = 1'} />)
-    const html = container.querySelector('code')?.innerHTML ?? ''
-    expect(html).toContain('hljs-')
   })
 })

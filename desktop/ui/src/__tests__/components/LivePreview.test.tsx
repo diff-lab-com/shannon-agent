@@ -1,13 +1,12 @@
-// Tests for the P1-5 C-1 Live preview: ArtifactPanel Live tab entry, the
+// Tests for the P1-5 C-1 Live preview (the dock's 预览 tab). The retired
+// ArtifactPanel "Live tab" section is gone with the panel — batch D4 keeps
+// live preview only inside RightDock.
 // start/stop/reload dispatch, detected/not-detected/error states, the iframe
 // sandbox baseline, and i18n key parity (en + zh-CN).
 
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { render, screen, fireEvent, waitFor } from '@testing-library/react'
 import { I18nProvider } from '@/i18n'
-import { ArtifactProvider } from '@/components/artifact/ArtifactContext'
-import { ArtifactChip } from '@/components/artifact/ArtifactChip'
-import { ArtifactPanel } from '@/components/artifact/ArtifactPanel'
 import { LivePreview } from '@/components/artifact/LivePreview'
 import * as api from '@/lib/tauri-api'
 import en from '@/i18n/locales/en.json'
@@ -64,9 +63,9 @@ describe('LivePreview (idle states)', () => {
     })
     const frame = await screen.findByTitle('Live preview content')
     expect(frame.getAttribute('src')).toBe('http://127.0.0.1:3000')
-    // Address bar is read-only and shows the url.
+    // Batch F5: the address bar is editable and shows the dev-server url.
     const address = screen.getByLabelText(/preview url/i) as HTMLInputElement
-    expect(address.readOnly).toBe(true)
+    expect(address.readOnly).toBe(false)
     expect(address.value).toBe('http://127.0.0.1:3000')
   })
 
@@ -126,45 +125,6 @@ describe('LivePreview (running state)', () => {
       expect(api.previewLogs).toHaveBeenCalledTimes(2)
     })
     expect(screen.getByTitle('Live preview content')).toBeTruthy()
-  })
-})
-
-describe('ArtifactPanel Live tab', () => {
-  function renderPanel() {
-    return render(
-      <I18nProvider>
-        <ArtifactProvider>
-          <ArtifactChip
-            artifact={{ kind: 'html', source: '<p>hi</p>', title: 'Test artifact', confidence: 'high' }}
-          />
-          <ArtifactPanel />
-        </ArtifactProvider>
-      </I18nProvider>,
-    )
-  }
-
-  it('exposes a Live tab alongside preview and code, without touching static modes', async () => {
-    mockStopped({ command: 'npm run dev', url: 'http://localhost:5173' })
-    const { container } = renderPanel()
-    fireEvent.click(screen.getByRole('button', { name: /Open HTML artifact: Test artifact/ }))
-    await waitFor(() => {
-      expect(container.querySelector('[role="complementary"]')).toBeTruthy()
-    })
-    // All three tabs exist.
-    expect(screen.getByRole('tab', { name: 'Preview' })).toBeTruthy()
-    expect(screen.getByRole('tab', { name: 'Code' })).toBeTruthy()
-    const liveTab = screen.getByRole('tab', { name: 'Live' })
-    // Static mode stays the default (existing behavior untouched).
-    expect(liveTab.getAttribute('aria-selected')).toBe('false')
-    fireEvent.click(liveTab)
-    expect(liveTab.getAttribute('aria-selected')).toBe('true')
-    // Live view mounts inside the panel.
-    await waitFor(() => {
-      expect(screen.getByLabelText('Live preview')).toBeTruthy()
-    })
-    // Preview tab still renders the static HTML iframe.
-    fireEvent.click(screen.getByRole('tab', { name: 'Preview' }))
-    expect(container.querySelector('iframe[title="Test artifact"]') ?? container.querySelector('iframe')).toBeTruthy()
   })
 })
 
