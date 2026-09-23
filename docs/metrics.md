@@ -5,19 +5,19 @@
 
 ## Snapshot
 
-- **Generated (UTC)**: `2026-09-23T18:01:11Z`
+- **Generated (UTC)**: `2026-09-23T21:09:02Z`
 - **Branch**: `HEAD`
-- **Commit**: `5ba6aa7`
-- **Describe**: `5ba6aa7-dirty`
+- **Commit**: `95415a5`
+- **Describe**: `95415a5-dirty`
 
 ## Summary
 
 | metric | value |
 |---|---:|
-| Tests (nextest, runnable) | 12663 |
-| Tests (source `#[test]`/`#[tokio::test]` attrs) | 12568 |
-| Rust source files | 754 |
-| Rust LOC (code) | 528152 |
+| Tests (nextest, runnable) | 12688 |
+| Tests (source `#[test]`/`#[tokio::test]` attrs) | 12593 |
+| Rust source files | 755 |
+| Rust LOC (code) | 529747 |
 | Workspace members | 22 |
 | `cargo clippy --workspace -- -D warnings` | pass |
 | `cargo deny check` | pass |
@@ -29,12 +29,12 @@ Counts below come from `cargo nextest list --workspace --message-format=json`
 
 | crate | tests | binaries |
 |---|---:|---:|
-| shannon-core | 4012 | 46 |
+| shannon-core | 4019 | 46 |
 | shannon-tools | 1780 | 18 |
 | shannon-ui | 1529 | 8 |
 | shannon-engine | 1183 | 4 |
 | shannon-agents | 907 | 10 |
-| shannon-desktop | 885 | 5 |
+| shannon-desktop | 903 | 5 |
 | shannon-mcp | 581 | 9 |
 | shannon-cli | 502 | 9 |
 | shannon-commands | 435 | 5 |
@@ -59,8 +59,8 @@ Legacy archives and vendored directories are excluded.
 
 | language | files | code |
 |---|---:|---:|
-| Rust (.rs) | 754 | 528152 |
-| TypeScript/TSX | 640 | 106231 |
+| Rust (.rs) | 755 | 529747 |
+| TypeScript/TSX | 643 | 107995 |
 
 ## Lint / audit status
 
@@ -71,7 +71,7 @@ Legacy archives and vendored directories are excluded.
 ```text
 [1m[33mwarning[0m[1m:[0m shannon-types@0.11.0: Generated ProviderModelConfig JSON Schema at: /home/runner/work/shannon-agent/shannon-agent/crates/shannon-types/schema/provider-model-config.schema.json
 [1m[32m   Compiling[0m shannon-desktop v0.11.0 (/home/runner/work/shannon-agent/shannon-agent/desktop)
-[1m[32m    Finished[0m \`dev\` profile [unoptimized + debuginfo] target(s) in 18.18s
+[1m[32m    Finished[0m \`dev\` profile [unoptimized + debuginfo] target(s) in 22.79s
 ```
 
 ### `cargo deny check`

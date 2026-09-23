@@ -28,7 +28,7 @@ Two commitments shape every design decision:
 
 ### 1. Open source, total control
 
-- **Every line auditable** — Apache-2.0, no black boxes. <!-- metrics:start:intro -->Every line of code is auditable, and every behavior is verified by **12,663 automated tests**.<!-- metrics:end:intro -->
+- **Every line auditable** — Apache-2.0, no black boxes. <!-- metrics:start:intro -->Every line of code is auditable, and every behavior is verified by **12,688 automated tests**.<!-- metrics:end:intro -->
 - **Every agent action replayable** — sessions are event-sourced: each turn lands in an append-only `events.jsonl`, and `shannon trace show / replay / diff / export` lets you reconstruct exactly what happened, like a dashcam for your agents.
 - **Every cost visible** — BYOK pay-per-use with session budget caps, context breakdown by category, cache hit-rate visibility, and no subscription quotas.
 - **No vendor lock-in** — switch providers anytime; upstream price hikes and model retirements don't strand you. Claude Code ecosystem compatible: `CLAUDE.md`, `.claude/` agents, skills, hooks, and `.mcp.json` work out of the box.
@@ -51,7 +51,7 @@ Two commitments shape every design decision:
 | LLM providers | Any (BYOK) | Single vendor | Multi / any |
 | Cost model | Pay-per-use + budget caps + visible breakdown | Subscription quotas / credits | BYOK |
 | Auditability | Event-sourced sessions, `trace` replay/diff | Varies, often black box | Varies |
-<!-- metrics:start:diffrow -->| Test coverage | **12,663** tests across 22 workspace members | n/a (closed source) | Varies |<!-- metrics:end:diffrow -->
+<!-- metrics:start:diffrow -->| Test coverage | **12,688** tests across 22 workspace members | n/a (closed source) | Varies |<!-- metrics:end:diffrow -->
 | Surfaces | Terminal + headless + server + desktop, one engine | Vary | Vary |
 
 ---
@@ -510,9 +510,9 @@ Artifacts go to `target/dist/` as `.tar.gz` (Linux/macOS) or `.zip` (Windows).
 <!-- metrics:start:table -->
 | Metric | Value |
 |--------|-------|
-| Total Rust code | 523,085 lines |
-| Source files | 752 |
-| Total tests (nextest, runnable) | **12,663** |
+| Total Rust code | 529,747 lines |
+| Source files | 755 |
+| Total tests (nextest, runnable) | **12,688** |
 | Crates (workspace members) | 22 (21 crates + desktop) |
 | Crates with zero tests | 1 (`shannon-stability-attr`) |
 | CI lint | `cargo clippy --workspace -- -D warnings` (zero warnings) |
@@ -523,15 +523,15 @@ Per-crate test counts:
 <!-- metrics:start:crates -->
 | Crate | Tests | Responsibility |
 |-------|-------|----------------|
-| `shannon-core` | 3,997 | API client, query engine, permissions, tools, state |
-| `shannon-tools` | 1,765 | Tool implementations: file ops, git, search, notebook |
-| `shannon-ui` | 1,525 | Terminal UI, REPL, widgets, rendering |
-| `shannon-engine` | 1,179 | LLM API client, streaming, compaction/context budget, permissions |
-| `shannon-agents` | 902 | Multi-agent coordination: teams, worktree isolation |
-| `shannon-desktop` | 859 | Tauri desktop app shell and commands |
-| `shannon-mcp` | 580 | MCP protocol: transport, server, client, process pool |
+| `shannon-core` | 4,019 | API client, query engine, permissions, tools, state |
+| `shannon-tools` | 1,780 | Tool implementations: file ops, git, search, notebook |
+| `shannon-ui` | 1,529 | Terminal UI, REPL, widgets, rendering |
+| `shannon-engine` | 1,183 | LLM API client, streaming, compaction/context budget, permissions |
+| `shannon-agents` | 907 | Multi-agent coordination: teams, worktree isolation |
+| `shannon-desktop` | 903 | Tauri desktop app shell and commands |
+| `shannon-mcp` | 581 | MCP protocol: transport, server, client, process pool |
 | `shannon-cli` | 502 | CLI entry point (`shannon` binary) |
-| `shannon-commands` | 422 | Built-in slash commands |
+| `shannon-commands` | 435 | Built-in slash commands |
 | `shannon-skills` | 189 | Skills framework: discovery, loading, execution |
 | `shannon-mcp-saas` | 185 | SaaS MCP servers (GitHub, Slack, Jira, Notion, Linear) |
 | `shannon-codegen` | 100 | Code generation utilities |
@@ -539,10 +539,10 @@ Per-crate test counts:
 | `shannon-agent` | 65 | Out-of-process agent (JSON-RPC over stdin/stdout) |
 | `shannon-remote` | 59 | Remote execution worlds (SSH hosts, Docker) |
 | `shannon-tool-interface` | 42 | Tool trait definitions |
+| `shannon-server` | 38 | HTTP API server (`shannon serve`) |
 | `shannon-api-protocol` | 37 | Wire protocol (serde types + TS codegen) |
-| `shannon-repomap` | 30 | Repository symbol map for LLM context (tree-sitter) |
-| `shannon-server` | 28 | HTTP API server (`shannon serve`) |
-| `shannon-browser` | 6 | — |
+| `shannon-repomap` | 32 | Repository symbol map for LLM context (tree-sitter) |
+| `shannon-browser` | 9 | — |
 | `shannon-plugin-api` | 5 | — |
 | `shannon-stability-attr` | 0 | Stability attribute macros |
 <!-- metrics:end:crates -->
