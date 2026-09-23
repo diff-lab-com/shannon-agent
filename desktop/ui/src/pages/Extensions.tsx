@@ -130,6 +130,9 @@ export default function Extensions() {
             })}
           </nav>
           <span className="relative">
+            {/* X4 管理瘦身: the five type-specific managers are labelled
+                「高级管理」 (advanced) — novices work from the three primary
+                tabs + Installed jump chips; power users keep every route. */}
             <Button
               variant="ghost"
               size="sm"

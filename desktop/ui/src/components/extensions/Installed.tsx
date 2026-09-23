@@ -125,11 +125,47 @@ export default function Installed() {
         })}
       </p>
 
+      {/* X4 锚点分区导航 — the five type surfaces live behind the 管理
+          (advanced) menu, so the Installed tab carries its own jump chips.
+          Click = scroll to the group; no extra page chrome. */}
+      {populatedKinds.length > 1 && (
+        <nav
+          aria-label={t('extensions.installed.jumpNav.aria')}
+          data-testid="installed-jump-nav"
+          className="flex flex-wrap gap-xs mb-lg"
+        >
+          {populatedKinds.map((kind) => (
+            <button
+              key={kind}
+              type="button"
+              data-testid={`installed-jump-${kind}`}
+              onClick={() =>
+                document
+                  .getElementById(`installed-section-${kind}`)
+                  ?.scrollIntoView({ behavior: 'smooth', block: 'start' })
+              }
+              className="inline-flex items-center gap-xs px-sm py-xs rounded-full border border-outline-variant/30 bg-surface-container-low text-label-sm text-on-surface-variant hover:border-primary/40 hover:text-primary transition-colors cursor-pointer focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/40"
+            >
+              <span className="material-symbols-outlined text-[14px]" aria-hidden="true">
+                {KIND_ICONS[kind]}
+              </span>
+              {kindLabel(intl, kind)}
+              <span className="font-bold">{grouped[kind].length}</span>
+            </button>
+          ))}
+        </nav>
+      )}
+
       <div className="space-y-xl">
         {populatedKinds.map((kind) => {
           const rows = grouped[kind];
           return (
-            <section key={kind}>
+            <section
+              key={kind}
+              id={`installed-section-${kind}`}
+              data-testid={`installed-section-${kind}`}
+              className="scroll-mt-24"
+            >
               <h2 className="text-label-lg font-bold text-on-surface-variant uppercase tracking-wide mb-sm">
                 {kindLabel(intl, kind)}{' · '}{rows.length}
               </h2>

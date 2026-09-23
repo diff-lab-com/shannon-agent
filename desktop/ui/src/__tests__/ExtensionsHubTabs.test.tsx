@@ -45,9 +45,12 @@ describe('Extensions hub tabs (2026-09 marketplace simplification)', () => {
     expect(screen.queryByText('Plugins')).not.toBeInTheDocument()
   })
 
-  it('lists the five type-specific managers inside the Manage menu', () => {
+  // X4 管理瘦身: the dropdown is labelled 「高级管理」 (advanced management) —
+  // the five type-specific managers stay available but stop competing with
+  // the three primary tabs.
+  it('lists the five type-specific managers inside the Advanced-management menu', () => {
     renderWithRoute('/extensions/featured')
-    fireEvent.click(screen.getByRole('button', { name: /Manage/ }))
+    fireEvent.click(screen.getByRole('button', { name: /Advanced management/ }))
     expect(screen.getByRole('menuitem', { name: 'MCP Servers' })).toBeInTheDocument()
     expect(screen.getByRole('menuitem', { name: 'Skills' })).toBeInTheDocument()
     expect(screen.getByRole('menuitem', { name: 'Agents' })).toBeInTheDocument()
