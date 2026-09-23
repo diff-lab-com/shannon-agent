@@ -272,7 +272,7 @@ impl TreeWalkBudget {
 }
 
 /// Bounded recursive directory walk used by [`get_file_tree`]. Stops at
-/// [`FILE_TREE_MAX_DEPTH`] levels and after [`FILE_TREE_MAX_ENTRIES`]
+/// `FILE_TREE_MAX_DEPTH` levels and after `FILE_TREE_MAX_ENTRIES`
 /// entries, marking every directory whose subtree was cut with
 /// `truncated: Some(true)`.
 fn build_tree_bounded(
@@ -498,8 +498,8 @@ pub async fn apply_diff(
 
 /// Recursively read a directory and return a file tree.
 ///
-/// §P2-20: the walk is bounded (depth ≤ [`FILE_TREE_MAX_DEPTH`], ≤
-/// [`FILE_TREE_MAX_ENTRIES`] entries, truncated directories flagged) and
+/// §P2-20: the walk is bounded (depth ≤ `FILE_TREE_MAX_DEPTH`, ≤
+/// `FILE_TREE_MAX_ENTRIES` entries, truncated directories flagged) and
 /// runs on the blocking pool via `spawn_blocking` so the potentially slow
 /// stat-heavy recursion never occupies an async executor thread.
 #[tauri::command]

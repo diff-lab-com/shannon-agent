@@ -769,7 +769,12 @@ jobs:
       # §P2-13 gave register_subagent_tools a sandbox param. Same
       # intentional minor-cycle class; new TAG NAME so the baseline-rustdoc
       # cache invalidates.
-      SEMVER_BASELINE: semver-baseline-2026-09-9
+      # Tenth move (2026-09-23, review wave-3): §P3-22 removed the dead
+      # CommandExecutor::execute/execute_string stubs and ExecutorOptions
+      # accessors from shannon-commands (unreachable placeholder API). Same
+      # intentional minor-cycle class; new TAG NAME so the baseline-rustdoc
+      # cache invalidates.
+      SEMVER_BASELINE: semver-baseline-2026-09-10
     steps:
       - uses: actions/checkout@f548e57e544e1ff5a4c46bf1e1b8685f8e4a348a
         with:
