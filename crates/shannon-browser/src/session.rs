@@ -57,12 +57,14 @@ fn normalize_endpoint(raw: Option<String>) -> Option<String> {
 
 /// Directory-name prefix of the Shannon-managed temporary browser profiles
 /// created by the local-launch path.
+#[cfg_attr(not(feature = "local-browser"), allow(dead_code))]
 pub(crate) const TEMP_PROFILE_PREFIX: &str = "shannon-browser-";
 
 /// Startup sweep horizon (review §P3-7): managed profiles under the OS temp
 /// root whose mtime is older than this are removed when a new session
 /// launches. Long enough that a concurrently running Shannon session's live
 /// profile is never swept in practice.
+#[cfg_attr(not(feature = "local-browser"), allow(dead_code))]
 pub(crate) const STALE_PROFILE_MAX_AGE: std::time::Duration =
     std::time::Duration::from_secs(24 * 60 * 60);
 
@@ -72,6 +74,7 @@ pub(crate) const STALE_PROFILE_MAX_AGE: std::time::Duration =
 /// defense: the primary guard for a user-configured
 /// `SHANNON_BROWSER_USER_DATA_DIR` is the session's `temp_profile` flag,
 /// which is only set for the throwaway path this process generated itself.
+#[cfg_attr(not(feature = "local-browser"), allow(dead_code))]
 pub(crate) fn is_managed_temp_profile(path: &std::path::Path) -> bool {
     path.file_name()
         .and_then(|n| n.to_str())
@@ -83,6 +86,7 @@ pub(crate) fn is_managed_temp_profile(path: &std::path::Path) -> bool {
 /// name (user-configured `SHANNON_BROWSER_USER_DATA_DIR` must never be
 /// touched), logs instead of panicking, and returns whether it removed
 /// anything.
+#[cfg_attr(not(feature = "local-browser"), allow(dead_code))]
 pub(crate) fn remove_temp_profile(dir: &std::path::Path) -> bool {
     if !is_managed_temp_profile(dir) {
         tracing::debug!(
@@ -111,6 +115,7 @@ pub(crate) fn remove_temp_profile(dir: &std::path::Path) -> bool {
 /// leftovers from crashed or killed runs. Unrelated temp entries (wrong
 /// name, not a directory, younger than the horizon) are left untouched.
 /// Returns the number of directories removed.
+#[cfg_attr(not(feature = "local-browser"), allow(dead_code))]
 pub(crate) fn sweep_stale_temp_profiles(
     root: &std::path::Path,
     max_age: std::time::Duration,
