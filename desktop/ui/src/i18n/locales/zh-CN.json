@@ -3109,5 +3109,15 @@
   "artifact.fallback.html": "HTML 文档",
   "artifact.fallback.svg": "SVG 图形",
   "artifact.fallback.mermaid": "Mermaid 图",
-  "artifact.fallback.document": "文档"
+  "artifact.fallback.document": "文档",
+  "sidebar.sessions.lastActivity.now": "刚刚",
+  "sidebar.sessions.lastActivity.minutes": "{n}分",
+  "sidebar.sessions.lastActivity.hours": "{n}小时",
+  "sidebar.sessions.lastActivity.days": "{n}天",
+  "sidebar.sessions.lastActivity.aria": "最后活跃 {time}",
+  "sidebar.sessions.awaitingApproval.badge": "等待审批",
+  "sidebar.sessions.error.badge": "上次运行失败",
+  "nav.search": "搜索",
+  "nav.automation": "自动化",
+  "sidebar.model.badge.aria": "当前模型 {model}（{provider}），点击管理"
 }

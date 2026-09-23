@@ -92,6 +92,30 @@ function formatElapsed(ms: number): string {
   return `${Math.floor(min / 60)}h${min % 60}m`
 }
 
+/**
+ * Batch B1: compact relative-time label for an idle session's last activity
+ * (刚刚 / 17小时 / 12天 — the ZCode rail pattern). Beyond a week it degrades
+ * to a short numeric date. `t` is the useT translator. Exported for tests.
+ */
+export function formatRelativeTime(
+  ts: number | undefined,
+  now: number,
+  t: (id: string, values?: Record<string, number>) => string,
+): string {
+  if (!ts || ts <= 0) return ''
+  const sec = Math.max(0, Math.floor((now - ts) / 1000))
+  if (sec < 60) return t('sidebar.sessions.lastActivity.now')
+  const min = Math.floor(sec / 60)
+  if (min < 60) return t('sidebar.sessions.lastActivity.minutes', { n: min })
+  const hr = Math.floor(min / 60)
+  if (hr < 24) return t('sidebar.sessions.lastActivity.hours', { n: hr })
+  const day = Math.floor(hr / 24)
+  if (day < 7) return t('sidebar.sessions.lastActivity.days', { n: day })
+  try {
+    return new Intl.DateTimeFormat(undefined, { month: 'numeric', day: 'numeric' }).format(ts)
+  } catch { return '' }
+}
+
 function projectOf(s: { working_dir?: string | null }): string | null {
   const dir = s.working_dir?.trim()
   if (!dir) return null
@@ -150,15 +174,20 @@ export function SessionsSection({ sessions, sessionActivity, goalRunsBySession =
   )
 
   // Refresh "now" immediately when activity changes, then keep the elapsed
-  // badges ticking (cheap: only while a run is live).
+  // badges ticking while a run is live. Batch B1: when nothing runs, a slow
+  // 30s tick keeps the idle rows' time-ago badges (刚刚/17小时/12天) fresh.
   useEffect(() => {
     setNowTick(Date.now())
   }, [sessionActivity])
   useEffect(() => {
-    if (!anyRunning) return
-    const id = window.setInterval(() => setNowTick(Date.now()), 5000)
+    if (anyRunning) {
+      const id = window.setInterval(() => setNowTick(Date.now()), 5000)
+      return () => window.clearInterval(id)
+    }
+    if (sessions.length === 0) return
+    const id = window.setInterval(() => setNowTick(Date.now()), 30000)
     return () => window.clearInterval(id)
-  }, [anyRunning])
+  }, [anyRunning, sessions.length])
 
   const setGroupingPersisted = useCallback((mode: GroupingMode) => {
     setGrouping(mode)
@@ -426,6 +455,15 @@ export function SessionsSection({ sessions, sessionActivity, goalRunsBySession =
     const elapsed = isRunning && activity?.startedAt != null
       ? formatElapsed(nowTick - activity.startedAt)
       : null
+    // Batch B1/B2 rail semantics: a live green pulse while running; otherwise
+    // amber while a permission prompt pends, red while the last run failed,
+    // and finally a relative time-ago badge (ZCode 刚刚/17小时/12天 pattern).
+    const idleState = !isRunning && activity?.awaitingApproval
+      ? 'approval'
+      : !isRunning && activity?.failed ? 'failed' : null
+    const agoBadge = !isRunning
+      ? formatRelativeTime(session.updated_at ?? session.created_at, nowTick, t)
+      : ''
     return (
       <div
         key={session.id}
@@ -487,6 +525,22 @@ export function SessionsSection({ sessions, sessionActivity, goalRunsBySession =
                   className="w-2 h-2 rounded-full bg-secondary animate-pulse shrink-0"
                 />
               )}
+              {!isRunning && idleState === 'approval' && (
+                <span
+                  role="img"
+                  aria-label={t('sidebar.sessions.awaitingApproval.badge')}
+                  title={t('sidebar.sessions.awaitingApproval.badge')}
+                  className="w-2 h-2 rounded-full bg-warning shrink-0"
+                />
+              )}
+              {!isRunning && idleState === 'failed' && (
+                <span
+                  role="img"
+                  aria-label={t('sidebar.sessions.error.badge')}
+                  title={t('sidebar.sessions.error.badge')}
+                  className="w-2 h-2 rounded-full bg-error shrink-0"
+                />
+              )}
               {pinnedIds.has(session.id) && (
                 // U8: filled pin marks the active state; the menu
                 // action stays outlined.
@@ -529,13 +583,23 @@ export function SessionsSection({ sessions, sessionActivity, goalRunsBySession =
               <span className="flex-1 truncate">
                 <HighlightText text={session.title || untitled} query={query.trim()} />
               </span>
-              {/* P0-②: live elapsed badge — the ZCode-style "run monitor"
-                  signal on the rail itself. */}
-              {elapsed && (
+              {/* P0-②: live elapsed badge while running; Batch B1: relative
+                  time-ago on idle rows — the rail answers "which session is
+                  live, how long, and when was the rest last active". */}
+              {elapsed ? (
                 <span className="font-mono text-[10px] tabular-nums text-secondary shrink-0" aria-hidden="true">
                   {elapsed}
                 </span>
-              )}
+              ) : agoBadge ? (
+                <span
+                  role="img"
+                  aria-label={t('sidebar.sessions.lastActivity.aria', { time: agoBadge })}
+                  title={t('sidebar.sessions.lastActivity.aria', { time: agoBadge })}
+                  className="font-mono text-[10px] tabular-nums text-on-surface-variant shrink-0"
+                >
+                  {agoBadge}
+                </span>
+              ) : null}
             </button>
             <div className="relative shrink-0">
               <Button

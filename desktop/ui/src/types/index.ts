@@ -225,6 +225,11 @@ export interface SessionActivity {
   startedAt: number | null
   lastActivity: number
   activeTool: string | null
+  /** Batch B2: last run ended with QUERY_FAILED — red dot on the rail until
+   *  a new run starts or the session is opened (seen). */
+  failed?: boolean
+  /** Batch B2: a permission prompt is pending for this session — amber dot. */
+  awaitingApproval?: boolean
 }
 
 export interface StatusResponse {

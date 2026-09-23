@@ -64,6 +64,14 @@ export function Layout() {
     return () => window.removeEventListener('shannon:toggle-help', handler)
   }, [])
 
+  // Batch B4: the sidebar's 搜索 action opens the palette through the same
+  // shannon:* window-event convention as toggle-help / open-editor.
+  useEffect(() => {
+    const handler = () => setPaletteOpen(p => !p)
+    window.addEventListener('shannon:toggle-palette', handler)
+    return () => window.removeEventListener('shannon:toggle-palette', handler)
+  }, [])
+
   useEffect(() => {
     if (shouldShowWelcome(loading, !!config?.provider)) {
       navigate('/welcome', { replace: true })
