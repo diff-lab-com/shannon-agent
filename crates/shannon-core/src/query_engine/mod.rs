@@ -13,6 +13,9 @@ mod parsers;
 mod recovery;
 mod repo_map_injector;
 mod routing;
+/// SSE wire contract mapping (`QueryEvent` → canonical event names). `pub`
+/// because the headless `shannon-server` shares it (review §P2-6).
+pub mod sse;
 mod streaming;
 mod system_prompt;
 mod team_prompt;

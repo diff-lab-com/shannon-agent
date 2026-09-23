@@ -7415,6 +7415,7 @@ dependencies = [
  "futures",
  "serde",
  "serde_json",
+ "shannon-api-protocol",
  "shannon-core",
  "shannon-engine",
  "subtle",
