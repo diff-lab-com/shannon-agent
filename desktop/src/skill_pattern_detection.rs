@@ -410,7 +410,11 @@ mod tests {
         let candidates_dir = tempdir().unwrap();
         let result = run_detection_in(candidates_dir.path(), dir.path(), 7, 2, 3);
         let appended = result.expect("detection ran");
-        assert_eq!(appended.len(), 0, "single-session pattern should not promote");
+        assert_eq!(
+            appended.len(),
+            0,
+            "single-session pattern should not promote"
+        );
     }
 
     #[test]

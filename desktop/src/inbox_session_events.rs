@@ -27,7 +27,7 @@
 //! `tauri::test::mock_app()`.
 
 use shannon_core::inbox_store::{
-    InboxItem, InboxItemNew, InboxStore, InboxStatus, SOURCE_SESSION_APPROVAL,
+    InboxItem, InboxItemNew, InboxStatus, InboxStore, SOURCE_SESSION_APPROVAL,
     SOURCE_SESSION_FAILED, SOURCE_SKILL_CANDIDATE,
 };
 use tauri::Emitter;
@@ -124,7 +124,13 @@ pub(crate) fn resolve_session_approval<R: tauri::Runtime>(
     app: &tauri::AppHandle<R>,
     session_id: &str,
 ) -> Option<InboxItem> {
-    resolve(inbox, app, SOURCE_SESSION_APPROVAL, session_id, InboxStatus::Read)
+    resolve(
+        inbox,
+        app,
+        SOURCE_SESSION_APPROVAL,
+        session_id,
+        InboxStatus::Read,
+    )
 }
 
 // ── session_failed ──────────────────────────────────────────────────────
@@ -173,7 +179,13 @@ pub(crate) fn resolve_session_failure<R: tauri::Runtime>(
     app: &tauri::AppHandle<R>,
     session_id: &str,
 ) -> Option<InboxItem> {
-    resolve(inbox, app, SOURCE_SESSION_FAILED, session_id, InboxStatus::Read)
+    resolve(
+        inbox,
+        app,
+        SOURCE_SESSION_FAILED,
+        session_id,
+        InboxStatus::Read,
+    )
 }
 
 // ── skill_candidate ─────────────────────────────────────────────────────
@@ -219,7 +231,13 @@ pub(crate) fn resolve_skill_candidate<R: tauri::Runtime>(
     app: &tauri::AppHandle<R>,
     candidate_id: &str,
 ) -> Option<InboxItem> {
-    resolve(inbox, app, SOURCE_SKILL_CANDIDATE, candidate_id, InboxStatus::Archived)
+    resolve(
+        inbox,
+        app,
+        SOURCE_SKILL_CANDIDATE,
+        candidate_id,
+        InboxStatus::Archived,
+    )
 }
 
 // ── shared resolve ──────────────────────────────────────────────────────
@@ -349,11 +367,22 @@ mod tests {
     fn repeated_failures_for_one_session_collapse_to_one_entry() {
         let app = tauri::test::mock_app();
         let inbox = store();
-        record_session_failure(&inbox, app.handle(), "sess-dup", "Session dup", "first boom")
-            .unwrap();
-        let second =
-            record_session_failure(&inbox, app.handle(), "sess-dup", "Session dup", "second boom")
-                .unwrap();
+        record_session_failure(
+            &inbox,
+            app.handle(),
+            "sess-dup",
+            "Session dup",
+            "first boom",
+        )
+        .unwrap();
+        let second = record_session_failure(
+            &inbox,
+            app.handle(),
+            "sess-dup",
+            "Session dup",
+            "second boom",
+        )
+        .unwrap();
         let all = inbox.list(None, None, 10).unwrap();
         assert_eq!(all.len(), 1, "no duplicate rows per (session, kind)");
         assert_eq!(all[0].id, second.id);
@@ -365,8 +394,15 @@ mod tests {
         let app = tauri::test::mock_app();
         let inbox = store();
         record_session_failure(&inbox, app.handle(), "sess-both", "Session both", "boom").unwrap();
-        record_session_approval(&inbox, app.handle(), "sess-both", "Session both", "bash", "high")
-            .unwrap();
+        record_session_approval(
+            &inbox,
+            app.handle(),
+            "sess-both",
+            "Session both",
+            "bash",
+            "high",
+        )
+        .unwrap();
         assert_eq!(inbox.list(None, None, 10).unwrap().len(), 2);
     }
 
@@ -376,8 +412,15 @@ mod tests {
     fn approval_resolve_marks_entry_read() {
         let app = tauri::test::mock_app();
         let inbox = store();
-        record_session_approval(&inbox, app.handle(), "sess-res", "Session res", "bash", "low")
-            .unwrap();
+        record_session_approval(
+            &inbox,
+            app.handle(),
+            "sess-res",
+            "Session res",
+            "bash",
+            "low",
+        )
+        .unwrap();
         let resolved = resolve_session_approval(&inbox, app.handle(), "sess-res").unwrap();
         assert_eq!(resolved.status, "read");
         // Settling again (e.g. duplicate resolve) is a no-op, not an error.
@@ -389,16 +432,26 @@ mod tests {
     fn failure_resolves_read_on_success_and_reopens_on_new_failure() {
         let app = tauri::test::mock_app();
         let inbox = store();
-        record_session_failure(&inbox, app.handle(), "sess-cycle", "Session cycle", "boom #1")
-            .unwrap();
+        record_session_failure(
+            &inbox,
+            app.handle(),
+            "sess-cycle",
+            "Session cycle",
+            "boom #1",
+        )
+        .unwrap();
         // New turn succeeds → mark read.
-        let resolved =
-            resolve_session_failure(&inbox, app.handle(), "sess-cycle").unwrap();
+        let resolved = resolve_session_failure(&inbox, app.handle(), "sess-cycle").unwrap();
         assert_eq!(resolved.status, "read");
         // Another turn fails → the same entry re-opens (needs attention).
-        let reopened =
-            record_session_failure(&inbox, app.handle(), "sess-cycle", "Session cycle", "boom #2")
-                .unwrap();
+        let reopened = record_session_failure(
+            &inbox,
+            app.handle(),
+            "sess-cycle",
+            "Session cycle",
+            "boom #2",
+        )
+        .unwrap();
         assert_eq!(reopened.id, resolved.id);
         assert_eq!(reopened.status, "pending");
         assert_eq!(reopened.summary, "boom #2");
@@ -420,9 +473,7 @@ mod tests {
         let app = tauri::test::mock_app();
         let inbox = store();
         // Resolving an unknown candidate must be a silent no-op.
-        assert!(
-            resolve_skill_candidate(&inbox, app.handle(), "sig-nope").is_none()
-        );
+        assert!(resolve_skill_candidate(&inbox, app.handle(), "sig-nope").is_none());
         let candidate = crate::commands_skill_candidates::SkillCandidate {
             id: "sig-gone".into(),
             detected_at: "2026-09-23T00:00:00Z".into(),

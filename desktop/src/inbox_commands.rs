@@ -1145,10 +1145,7 @@ mod tests {
         let mut run = ScheduledRun::start("task-9", "Nightly Scan");
         run.run_id = "abc12345".into();
         let started = run.started_at;
-        run.finish(
-            RunStatus::Failed,
-            Some("provider unreachable".into()),
-        );
+        run.finish(RunStatus::Failed, Some("provider unreachable".into()));
 
         let record = scheduled_run_to_record(&run);
         assert_eq!(record.id, "abc12345");
@@ -1225,8 +1222,7 @@ mod tests {
         jsonl.start_run("task-a", "Alpha").unwrap();
 
         let limit = 50usize;
-        let rows =
-            read_run_history(|| inbox.list_runs(50), &jsonl, None, limit).unwrap();
+        let rows = read_run_history(|| inbox.list_runs(50), &jsonl, None, limit).unwrap();
         assert_eq!(rows.len(), 1);
         assert_eq!(rows[0].run_id, run_id, "SQLite row projected");
         assert_eq!(rows[0].status, "succeeded");
@@ -1259,13 +1255,7 @@ mod tests {
 
         // Simulated inbox outage: the read closure errors → the JSONL data
         // is returned (with only a warning) instead of failing the command.
-        let rows = read_run_history(
-            || Err(InboxStoreError::Poisoned),
-            &jsonl,
-            None,
-            50,
-        )
-        .unwrap();
+        let rows = read_run_history(|| Err(InboxStoreError::Poisoned), &jsonl, None, 50).unwrap();
         assert_eq!(rows.len(), 2, "JSONL fallback serves every run");
         assert!(
             rows.iter().all(|r| r.run_id == a || r.run_id == b),
@@ -1306,9 +1296,7 @@ mod tests {
             expected.push(id);
             let id = jsonl.start_run(task, name).unwrap();
             jsonl
-                .update(&id, |r| {
-                    r.finish(RunStatus::Failed, Some("boom".into()))
-                })
+                .update(&id, |r| r.finish(RunStatus::Failed, Some("boom".into())))
                 .unwrap();
             expected.push(id);
         }

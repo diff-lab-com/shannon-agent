@@ -180,11 +180,7 @@ pub async fn approve_skill_candidate(
     // T5: the candidate has been handled — its unified-inbox entry leaves the
     // pending stream (archived). Runs on every path past the removal, even
     // when the promote below fails, because the candidate itself is gone.
-    crate::inbox_session_events::resolve_skill_candidate(
-        state.inbox_store().as_ref(),
-        &app,
-        &id,
-    );
+    crate::inbox_session_events::resolve_skill_candidate(state.inbox_store().as_ref(), &app, &id);
 
     let name = edits
         .as_ref()
@@ -254,11 +250,7 @@ pub async fn reject_skill_candidate(
     }
     save_candidates(&candidates)?;
     // T5: rejected — the candidate's inbox entry is resolved (archived).
-    crate::inbox_session_events::resolve_skill_candidate(
-        state.inbox_store().as_ref(),
-        &app,
-        &id,
-    );
+    crate::inbox_session_events::resolve_skill_candidate(state.inbox_store().as_ref(), &app, &id);
     let _ = app.emit(
         "skill-catalog-changed",
         serde_json::json!({ "action": "rejected" }),

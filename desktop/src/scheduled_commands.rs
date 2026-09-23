@@ -2601,7 +2601,11 @@ mod tests {
         // queued tombstone + mirrored retired placeholder + the executor's
         // running row.
         let runs_rows = inbox.list_runs(10).unwrap();
-        assert_eq!(runs_rows.len(), 3, "queued + retired placeholder + real run");
+        assert_eq!(
+            runs_rows.len(),
+            3,
+            "queued + retired placeholder + real run"
+        );
         let running_row = runs_rows
             .iter()
             .find(|r| r.status == "running")
@@ -2814,10 +2818,8 @@ mod tests {
             "only the pre-existing run is running"
         );
         assert!(
-            mirrored
-                .iter()
-                .any(|r| r.status == "cancelled"
-                    && r.error.as_deref().unwrap_or_default().contains("in flight")),
+            mirrored.iter().any(|r| r.status == "cancelled"
+                && r.error.as_deref().unwrap_or_default().contains("in flight")),
             "retire reason mirrored into the history"
         );
         // The drained placeholder was retired with the skip reason.

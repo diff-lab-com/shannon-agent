@@ -1048,7 +1048,11 @@ mod tests {
         // A different entity (or a different source) is a separate entry —
         // "same turn fails then asks approval" style combinations never merge.
         store
-            .upsert_pending(attention_item(SOURCE_SESSION_FAILED, "sess-2", "other session"))
+            .upsert_pending(attention_item(
+                SOURCE_SESSION_FAILED,
+                "sess-2",
+                "other session",
+            ))
             .unwrap();
         store
             .upsert_pending(attention_item(SOURCE_SESSION_APPROVAL, "sess-1", "bash"))
@@ -1233,8 +1237,12 @@ mod tests {
         let a1 = store.record_run_start("a", "A").unwrap();
         let b1 = store.record_run_start("b", "B").unwrap();
         let a2 = store.record_run_start("a", "A").unwrap();
-        store.record_run_finish(&a1, "succeeded", None, None).unwrap();
-        store.record_run_finish(&b1, "failed", Some("x"), None).unwrap();
+        store
+            .record_run_finish(&a1, "succeeded", None, None)
+            .unwrap();
+        store
+            .record_run_finish(&b1, "failed", Some("x"), None)
+            .unwrap();
 
         let a_runs = store.list_runs_by_task("a", 10).unwrap();
         assert_eq!(a_runs.len(), 2);
