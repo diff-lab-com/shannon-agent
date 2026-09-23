@@ -28,7 +28,7 @@ Two commitments shape every design decision:
 
 ### 1. Open source, total control
 
-- **Every line auditable** — Apache-2.0, no black boxes. <!-- metrics:start:intro -->Every line of code is auditable, and every behavior is verified by **12,663 automated tests**.<!-- metrics:end:intro -->
+- **Every line auditable** — Apache-2.0, no black boxes. <!-- metrics:start:intro -->Every line of code is auditable, and every behavior is verified by **12,515 automated tests**.<!-- metrics:end:intro -->
 - **Every agent action replayable** — sessions are event-sourced: each turn lands in an append-only `events.jsonl`, and `shannon trace show / replay / diff / export` lets you reconstruct exactly what happened, like a dashcam for your agents.
 - **Every cost visible** — BYOK pay-per-use with session budget caps, context breakdown by category, cache hit-rate visibility, and no subscription quotas.
 - **No vendor lock-in** — switch providers anytime; upstream price hikes and model retirements don't strand you. Claude Code ecosystem compatible: `CLAUDE.md`, `.claude/` agents, skills, hooks, and `.mcp.json` work out of the box.
@@ -51,7 +51,7 @@ Two commitments shape every design decision:
 | LLM providers | Any (BYOK) | Single vendor | Multi / any |
 | Cost model | Pay-per-use + budget caps + visible breakdown | Subscription quotas / credits | BYOK |
 | Auditability | Event-sourced sessions, `trace` replay/diff | Varies, often black box | Varies |
-<!-- metrics:start:diffrow -->| Test coverage | **12,663** tests across 22 workspace members | n/a (closed source) | Varies |<!-- metrics:end:diffrow -->
+<!-- metrics:start:diffrow -->| Test coverage | **12,515** tests across 22 workspace members | n/a (closed source) | Varies |<!-- metrics:end:diffrow -->
 | Surfaces | Terminal + headless + server + desktop, one engine | Vary | Vary |
 
 ---
@@ -512,7 +512,7 @@ Artifacts go to `target/dist/` as `.tar.gz` (Linux/macOS) or `.zip` (Windows).
 |--------|-------|
 | Total Rust code | 523,085 lines |
 | Source files | 752 |
-| Total tests (nextest, runnable) | **12,663** |
+| Total tests (nextest, runnable) | **12,515** |
 | Crates (workspace members) | 22 (21 crates + desktop) |
 | Crates with zero tests | 1 (`shannon-stability-attr`) |
 | CI lint | `cargo clippy --workspace -- -D warnings` (zero warnings) |
