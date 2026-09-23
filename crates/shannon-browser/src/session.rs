@@ -47,6 +47,109 @@ fn normalize_endpoint(raw: Option<String>) -> Option<String> {
     raw.map(|s| s.trim().to_string()).filter(|s| !s.is_empty())
 }
 
+// ── Temp-profile lifecycle (review §P3-7) ──────────────────────────────
+//
+// The local-launch path creates a throwaway
+// `<temp>/shannon-browser-<uuid>` profile per process. Live sessions are
+// process-global (`static OnceCell`), so a plain `Drop` rarely fires — the
+// explicit drop cleanup plus the startup sweep below together make sure the
+// directories do not accumulate forever.
+
+/// Directory-name prefix of the Shannon-managed temporary browser profiles
+/// created by the local-launch path.
+pub(crate) const TEMP_PROFILE_PREFIX: &str = "shannon-browser-";
+
+/// Startup sweep horizon (review §P3-7): managed profiles under the OS temp
+/// root whose mtime is older than this are removed when a new session
+/// launches. Long enough that a concurrently running Shannon session's live
+/// profile is never swept in practice.
+pub(crate) const STALE_PROFILE_MAX_AGE: std::time::Duration =
+    std::time::Duration::from_secs(24 * 60 * 60);
+
+/// True when `path`'s file name marks it as a Shannon-created temporary
+/// browser profile ([`TEMP_PROFILE_PREFIX`]). Name-based only — callers
+/// additionally check `is_dir` where it matters. This is the second line of
+/// defense: the primary guard for a user-configured
+/// `SHANNON_BROWSER_USER_DATA_DIR` is the session's `temp_profile` flag,
+/// which is only set for the throwaway path this process generated itself.
+pub(crate) fn is_managed_temp_profile(path: &std::path::Path) -> bool {
+    path.file_name()
+        .and_then(|n| n.to_str())
+        .is_some_and(|name| name.starts_with(TEMP_PROFILE_PREFIX))
+}
+
+/// Best-effort recursive removal of one Shannon-managed temporary profile
+/// directory. Refuses paths that do not carry the [`TEMP_PROFILE_PREFIX`]
+/// name (user-configured `SHANNON_BROWSER_USER_DATA_DIR` must never be
+/// touched), logs instead of panicking, and returns whether it removed
+/// anything.
+pub(crate) fn remove_temp_profile(dir: &std::path::Path) -> bool {
+    if !is_managed_temp_profile(dir) {
+        tracing::debug!(
+            profile = %dir.display(),
+            "refusing to remove non-Shannon browser profile directory"
+        );
+        return false;
+    }
+    match std::fs::remove_dir_all(dir) {
+        Ok(()) => {
+            tracing::debug!(profile = %dir.display(), "removed temporary browser profile");
+            true
+        }
+        Err(e) => {
+            tracing::warn!(
+                profile = %dir.display(),
+                "failed to remove temporary browser profile: {e}"
+            );
+            false
+        }
+    }
+}
+
+/// Best-effort startup sweep (review §P3-7): delete Shannon-managed temp
+/// browser profiles under `root` whose mtime is older than `max_age` —
+/// leftovers from crashed or killed runs. Unrelated temp entries (wrong
+/// name, not a directory, younger than the horizon) are left untouched.
+/// Returns the number of directories removed.
+pub(crate) fn sweep_stale_temp_profiles(
+    root: &std::path::Path,
+    max_age: std::time::Duration,
+) -> usize {
+    let Ok(entries) = std::fs::read_dir(root) else {
+        return 0;
+    };
+    let now = std::time::SystemTime::now();
+    let mut removed = 0;
+    for entry in entries.flatten() {
+        let path = entry.path();
+        if !is_managed_temp_profile(&path) {
+            continue;
+        }
+        let Ok(meta) = entry.metadata() else {
+            continue;
+        };
+        if !meta.is_dir() {
+            continue;
+        }
+        let stale = meta
+            .modified()
+            .ok()
+            .and_then(|m| now.duration_since(m).ok())
+            .is_some_and(|age| age >= max_age);
+        if stale && remove_temp_profile(&path) {
+            removed += 1;
+        }
+    }
+    if removed > 0 {
+        tracing::info!(
+            root = %root.display(),
+            removed,
+            "swept stale temporary browser profiles"
+        );
+    }
+    removed
+}
+
 #[cfg(feature = "local-browser")]
 mod live {
     use chromiumoxide::browser::{Browser, BrowserConfig};
@@ -89,6 +192,10 @@ mod live {
         /// spawned with each tab.
         console_logs: Arc<Mutex<HashMap<TabId, Vec<String>>>>,
         user_data_dir: PathBuf,
+        /// Review §P3-7: true only when `user_data_dir` is the throwaway
+        /// `<temp>/shannon-browser-<uuid>` profile this process generated
+        /// itself — the only kind [`Drop`] may ever delete.
+        temp_profile: bool,
         attach: AttachMode,
     }
 
@@ -124,6 +231,22 @@ ssh -L 9222:127.0.0.1:9222 user@host   # local forward\n  \
 chromium --headless --remote-debugging-port=9222 --user-data-dir=/tmp/shannon-cdp   # remote\n\
 then point SHANNON_BROWSER_CDP at the forwarded port (current value: {endpoint})."
         )
+    }
+
+    impl Drop for ChromeSession {
+        fn drop(&mut self) {
+            // Review §P3-7: delete the throwaway profile when the session is
+            // torn down. Only a self-created `<temp>/shannon-browser-<uuid>`
+            // dir is ever removed — a user-configured
+            // `SHANNON_BROWSER_USER_DATA_DIR` and the empty CDP-attach path
+            // are never touched. Best-effort: the process-global session in
+            // its `static OnceCell` may never drop (statics are not dropped
+            // at exit), so the startup sweep in [`launch_local`] is the
+            // backstop that keeps stale profiles from accumulating forever.
+            if self.temp_profile {
+                super::remove_temp_profile(&self.user_data_dir);
+            }
+        }
     }
 
     impl ChromeSession {
@@ -169,6 +292,7 @@ then point SHANNON_BROWSER_CDP at the forwarded port (current value: {endpoint})
                 // Remote attach has no local profile dir; the accessor is
                 // only informational.
                 user_data_dir: PathBuf::new(),
+                temp_profile: false,
                 attach: AttachMode::Cdp(endpoint),
             }))
         }
@@ -180,10 +304,18 @@ then point SHANNON_BROWSER_CDP at the forwarded port (current value: {endpoint})
             // the same user-data-dir (SingletonLock), and two Shannon
             // windows sharing a profile would fight over it. Cross-session
             // persistence is opt-in via SHANNON_BROWSER_USER_DATA_DIR.
+            // Review §P3-7: sweep profiles orphaned by previous crashed or
+            // killed runs before adding our own.
+            super::sweep_stale_temp_profiles(&std::env::temp_dir(), super::STALE_PROFILE_MAX_AGE);
+            let temp_profile = std::env::var_os("SHANNON_BROWSER_USER_DATA_DIR").is_none();
             let user_data_dir = std::env::var_os("SHANNON_BROWSER_USER_DATA_DIR")
                 .map(PathBuf::from)
                 .unwrap_or_else(|| {
-                    std::env::temp_dir().join(format!("shannon-browser-{}", uuid::Uuid::new_v4()))
+                    std::env::temp_dir().join(format!(
+                        "{}{}",
+                        super::TEMP_PROFILE_PREFIX,
+                        uuid::Uuid::new_v4()
+                    ))
                 });
             std::fs::create_dir_all(&user_data_dir)
                 .map_err(|e| format!("create user-data-dir {user_data_dir:?}: {e}"))?;
@@ -230,6 +362,7 @@ then point SHANNON_BROWSER_CDP at the forwarded port (current value: {endpoint})
                 pages: Arc::new(Mutex::new(HashMap::new())),
                 console_logs: Arc::new(Mutex::new(HashMap::new())),
                 user_data_dir,
+                temp_profile,
                 attach: AttachMode::LocalLaunch,
             }))
         }
@@ -841,6 +974,7 @@ pub use stub::{
 #[allow(clippy::unwrap_used)]
 mod tests {
     use super::normalize_endpoint;
+    use std::time::Duration;
 
     #[test]
     fn normalize_endpoint_trims_and_drops_empty() {
@@ -862,5 +996,97 @@ mod tests {
             format!("{mode:?}"),
             r#"Cdp("http://127.0.0.1:9222")"#.to_string()
         );
+    }
+
+    // ── Temp-profile cleanup (review §P3-7) ─────────────────────────────
+
+    fn backdate(path: &std::path::Path, age: Duration) {
+        let t = filetime::FileTime::from_system_time(
+            std::time::SystemTime::now()
+                .checked_sub(age)
+                .expect("clock before test horizon"),
+        );
+        filetime::set_file_mtime(path, t).expect("set mtime");
+    }
+
+    #[test]
+    fn managed_profile_recognized_by_prefix_name() {
+        assert!(super::is_managed_temp_profile(std::path::Path::new(
+            "/tmp/shannon-browser-1234-abcd"
+        )));
+        // The name check matches the file name only; a directory NOT carrying
+        // the managed name is never a managed profile (this is the
+        // `remove_temp_profile` guard; a user dir that would happen to carry
+        // the name is protected by the session's `temp_profile` flag).
+        assert!(!super::is_managed_temp_profile(std::path::Path::new(
+            "/tmp/.tmpXYZUserData"
+        )));
+        assert!(!super::is_managed_temp_profile(std::path::Path::new(
+            "/home/u/browser-profile"
+        )));
+    }
+
+    #[test]
+    fn remove_temp_profile_deletes_managed_dir_and_content_but_refuses_others() {
+        let root = tempfile::tempdir().unwrap();
+
+        // A managed profile with nested content is removed recursively.
+        let managed = root
+            .path()
+            .join("shannon-browser-11111111-2222-3333-4444-555555555555");
+        std::fs::create_dir_all(managed.join("Default")).unwrap();
+        std::fs::write(managed.join("Default").join("Cookies"), b"x").unwrap();
+        assert!(super::remove_temp_profile(&managed));
+        assert!(!managed.exists());
+
+        // A directory WITHOUT the managed prefix is never touched — this is
+        // what protects a user-configured SHANNON_BROWSER_USER_DATA_DIR.
+        let user_dir = root.path().join("my-precious-profile");
+        std::fs::create_dir_all(&user_dir).unwrap();
+        std::fs::write(user_dir.join("Cookies"), b"x").unwrap();
+        assert!(!super::remove_temp_profile(&user_dir));
+        assert!(user_dir.exists());
+    }
+
+    #[test]
+    fn sweep_removes_only_stale_managed_profile_dirs() {
+        let root = tempfile::tempdir().unwrap();
+        let stale_age = Duration::from_secs(25 * 60 * 60);
+
+        // Old managed profile (with content) — must go.
+        let old = root.path().join("shannon-browser-aaaa-old");
+        std::fs::create_dir_all(old.join("Default")).unwrap();
+        std::fs::write(old.join("Default").join("Cookies"), b"x").unwrap();
+        backdate(&old, stale_age);
+
+        // Fresh managed profile (live session) — must stay.
+        let fresh = root.path().join("shannon-browser-bbbb-new");
+        std::fs::create_dir_all(&fresh).unwrap();
+
+        // Old file (not a directory) carrying the prefix — must stay.
+        let old_file = root.path().join("shannon-browser-cccc-file");
+        std::fs::write(&old_file, b"x").unwrap();
+        backdate(&old_file, stale_age);
+
+        // Old dir without the prefix — must stay.
+        let unrelated = root.path().join("unrelated-old");
+        std::fs::create_dir_all(&unrelated).unwrap();
+        backdate(&unrelated, stale_age);
+
+        let removed = super::sweep_stale_temp_profiles(root.path(), super::STALE_PROFILE_MAX_AGE);
+        assert_eq!(removed, 1, "exactly the stale managed profile is removed");
+        assert!(!old.exists());
+        assert!(fresh.exists());
+        assert!(old_file.exists());
+        assert!(unrelated.exists());
+
+        // A horizon at/below the backdated age catches the fresh dir too —
+        // sweep honours the caller's max_age rather than a hard-coded value.
+        let removed_all = super::sweep_stale_temp_profiles(root.path(), Duration::ZERO);
+        assert_eq!(
+            removed_all, 1,
+            "fresh profile removed only under a zero horizon"
+        );
+        assert!(!fresh.exists());
     }
 }
