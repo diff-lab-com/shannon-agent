@@ -12,10 +12,13 @@
 //!    [`InboxStore::upsert_pending`] and settled via
 //!    [`InboxStore::resolve_by_source`]. Status flow:
 //!    `pending` → `read` → `archived`.
-//! 2. **Automation run history** (`routine_runs`) — *new* run records are
-//!    written here going forward. The legacy JSONL store
-//!    (`crates/shannon_core::scheduled_runs`) keeps receiving the same runs
-//!    (mirrored by the desktop) until the UI switches over.
+//! 2. **Automation run history** (`routine_runs`) — the **authoritative**
+//!    read source for run history since T7 (`list_task_executions` reads it;
+//!    [`InboxStore::import_run`] is the idempotent backfill primitive for
+//!    legacy rows). The legacy JSONL store
+//!    (`crates/shannon_core::scheduled_runs`) still receives the same runs
+//!    (mirrored by the desktop, best-effort) and serves as the read
+//!    fallback when this store cannot be opened or queried.
 //!
 //! Session storage (`events.jsonl` / `meta.json`) is intentionally **not**
 //! touched — this module never reads or writes session logs.
@@ -597,19 +600,63 @@ impl InboxStore {
         let mut q = stmt.query(params![limit])?;
         let mut out = Vec::new();
         while let Some(row) = q.next()? {
-            out.push(RunRecord {
-                id: row.get(0)?,
-                task_id: row.get(1)?,
-                task_name: row.get(2)?,
-                status: row.get(3)?,
-                error: row.get(4)?,
-                started_at_ms: row.get(5)?,
-                finished_at_ms: row.get(6)?,
-                duration_ms: row.get(7)?,
-                inbox_item_id: row.get(8)?,
-            });
+            out.push(row_to_run(row)?);
         }
         Ok(out)
+    }
+
+    /// List runs of one task, newest first (T7 history read path:
+    /// `list_task_executions` filters by task through this instead of the
+    /// legacy JSONL `list_by_task`).
+    pub fn list_runs_by_task(
+        &self,
+        task_id: &str,
+        limit: u32,
+    ) -> Result<Vec<RunRecord>, InboxStoreError> {
+        let conn = self.lock_conn()?;
+        let mut stmt = conn.prepare(&format!(
+            "SELECT {RUN_COLUMNS} FROM routine_runs WHERE task_id = ?1 \
+             ORDER BY started_at_ms DESC, rowid DESC LIMIT ?2"
+        ))?;
+        let limit = i64::from(limit.max(1));
+        let mut q = stmt.query(params![task_id, limit])?;
+        let mut out = Vec::new();
+        while let Some(row) = q.next()? {
+            out.push(row_to_run(row)?);
+        }
+        Ok(out)
+    }
+
+    /// Idempotent history-backfill primitive (T7): insert a run record
+    /// **iff** its id is not present yet. Returns `true` when a new row was
+    /// written, `false` when a row with that id already existed — so
+    /// repeated backfill passes (every startup) never duplicate history.
+    ///
+    /// `status` is stored verbatim: besides `running`/`succeeded`/`failed`
+    /// the scheduler mirrors `queued`/`cancelled` tombstones (T7), and the
+    /// table is a history log, not a status state machine.
+    pub fn import_run(&self, run: &RunRecord) -> Result<bool, InboxStoreError> {
+        let conn = self.lock_conn()?;
+        let inserted = self.with_busy_retry(|| {
+            let changed = conn.execute(
+                "INSERT OR IGNORE INTO routine_runs
+                    (id, task_id, task_name, status, error, started_at_ms, finished_at_ms, duration_ms, inbox_item_id)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
+                params![
+                    run.id,
+                    run.task_id,
+                    run.task_name,
+                    run.status,
+                    run.error,
+                    run.started_at_ms,
+                    run.finished_at_ms,
+                    run.duration_ms,
+                    run.inbox_item_id,
+                ],
+            )?;
+            Ok(changed > 0)
+        })?;
+        Ok(inserted)
     }
 
     // ── meta / legacy migration ─────────────────────────────────────────
@@ -753,6 +800,20 @@ fn row_to_item(row: &rusqlite::Row<'_>) -> rusqlite::Result<InboxItem> {
         status: row.get(7)?,
         created_at_ms: row.get(8)?,
         updated_at_ms: row.get(9)?,
+    })
+}
+
+fn row_to_run(row: &rusqlite::Row<'_>) -> rusqlite::Result<RunRecord> {
+    Ok(RunRecord {
+        id: row.get(0)?,
+        task_id: row.get(1)?,
+        task_name: row.get(2)?,
+        status: row.get(3)?,
+        error: row.get(4)?,
+        started_at_ms: row.get(5)?,
+        finished_at_ms: row.get(6)?,
+        duration_ms: row.get(7)?,
+        inbox_item_id: row.get(8)?,
     })
 }
 
@@ -1162,6 +1223,82 @@ mod tests {
         assert_eq!(runs.len(), 2);
         assert_eq!(runs[0].id, second, "newest run first");
         assert_eq!(store.list_runs(1).unwrap().len(), 1);
+    }
+
+    // ── list_runs_by_task / import_run (T7 history read + backfill) ─────
+
+    #[test]
+    fn list_runs_by_task_filters_orders_and_limits() {
+        let store = InboxStore::open_in_memory().unwrap();
+        let a1 = store.record_run_start("a", "A").unwrap();
+        let b1 = store.record_run_start("b", "B").unwrap();
+        let a2 = store.record_run_start("a", "A").unwrap();
+        store.record_run_finish(&a1, "succeeded", None, None).unwrap();
+        store.record_run_finish(&b1, "failed", Some("x"), None).unwrap();
+
+        let a_runs = store.list_runs_by_task("a", 10).unwrap();
+        assert_eq!(a_runs.len(), 2);
+        assert_eq!(a_runs[0].id, a2, "newest first");
+        assert_eq!(a_runs[1].id, a1);
+        assert!(a_runs.iter().all(|r| r.task_id == "a"));
+
+        assert_eq!(store.list_runs_by_task("a", 1).unwrap().len(), 1);
+        assert!(store.list_runs_by_task("missing", 10).unwrap().is_empty());
+    }
+
+    /// A full record (including tombstone statuses carried by the T7
+    /// scheduler mirror) round-trips through import_run + list_runs.
+    #[test]
+    fn import_run_roundtrips_all_fields() {
+        let store = InboxStore::open_in_memory().unwrap();
+        let record = RunRecord {
+            id: "run-1".into(),
+            task_id: "task-1".into(),
+            task_name: Some("Task One".into()),
+            status: "queued".into(),
+            error: Some("outside execution window".into()),
+            started_at_ms: Some(1_700_000_000_000),
+            finished_at_ms: None,
+            duration_ms: None,
+            inbox_item_id: None,
+        };
+        assert!(store.import_run(&record).unwrap(), "first import inserts");
+
+        let runs = store.list_runs(10).unwrap();
+        assert_eq!(runs.len(), 1);
+        assert_eq!(runs[0], record);
+    }
+
+    #[test]
+    fn import_run_is_idempotent_on_the_same_id() {
+        let store = InboxStore::open_in_memory().unwrap();
+        let record = RunRecord {
+            id: "run-1".into(),
+            task_id: "task-1".into(),
+            task_name: Some("Task One".into()),
+            status: "succeeded".into(),
+            error: None,
+            started_at_ms: Some(1_700_000_000_000),
+            finished_at_ms: Some(1_700_000_005_000),
+            duration_ms: Some(5_000),
+            inbox_item_id: None,
+        };
+        assert!(store.import_run(&record).unwrap());
+        // A second pass (e.g. the next startup's backfill) must neither
+        // duplicate the row nor overwrite the existing one.
+        assert!(!store.import_run(&record).unwrap(), "re-import is a no-op");
+        let mutated = RunRecord {
+            status: "failed".into(),
+            ..record.clone()
+        };
+        assert!(!store.import_run(&mutated).unwrap(), "existing id wins");
+        let runs = store.list_runs(10).unwrap();
+        assert_eq!(runs.len(), 1);
+        assert_eq!(runs[0].status, "succeeded", "original row preserved");
+
+        // record_run_start and import_run coexist on the same table.
+        store.record_run_start("task-2", "Two").unwrap();
+        assert_eq!(store.list_runs(10).unwrap().len(), 2);
     }
 
     // ── legacy triage migration ─────────────────────────────────────────

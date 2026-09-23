@@ -12,20 +12,27 @@
 //!   endpoint. It mirrors the unattended execution path of
 //!   `commands::start_background_task` (fresh `QueryEngine`, configured
 //!   approval mode, usage ledger writes) and, on completion, writes:
-//!     1. the run finish into the legacy JSONL history (same run id, so the
-//!        existing History view keeps working until the UI switches over),
+//!     1. the run finish into the legacy JSONL history (same run id — the
+//!        mirror is retained for read-fallback and export; T7 made the
+//!        SQLite `routine_runs` table the authoritative read source),
 //!     2. the inbox item (`source=routine|scheduled_task|trigger`), summary
 //!        truncated to ≤500 chars,
 //!     3. the `inbox_item_id` back-link on the `routine_runs` row,
 //!     4. an `inbox-updated` event so the UI refreshes without polling.
+//! - the T7 history read path (`read_run_history`, used by
+//!   `list_task_executions`): SQLite first, JSONL fallback + warning, plus
+//!   the idempotent startup backfill (`spawn_run_history_backfill`) that
+//!   imports JSONL-only runs into `routine_runs`.
 //!
 //! The legacy triage commands in `scheduled_commands.rs` are untouched (the
 //! UI migration to this store happens in the frontend task).
 
-use shannon_core::inbox_store::{InboxItem, InboxItemNew, InboxStats, InboxStatus};
+use shannon_core::inbox_store::{
+    InboxItem, InboxItemNew, InboxStats, InboxStatus, InboxStore, InboxStoreError, RunRecord,
+};
 use shannon_core::query_engine::{QueryContext, QueryEngine, QueryEvent, QueryMetadata};
 use shannon_core::scheduled_routines::ScheduledRoutine;
-use shannon_core::scheduled_runs::{RunStatus, ScheduledRun};
+use shannon_core::scheduled_runs::{RunStatus, ScheduledRun, ScheduledRunsStore};
 use shannon_engine::api::client::LlmClient;
 use shannon_engine::permissions::{PermissionManager, PermissionRuleChecker};
 use shannon_engine::state::StateManager;
@@ -35,9 +42,15 @@ use tokio::sync::RwLock;
 use crate::commands::AppState;
 use crate::config::DesktopConfig;
 use crate::events::event_names;
+use crate::scheduled_commands::TaskExecution;
 
 /// Max length of the generated inbox item summary (brief: ≤500 chars).
 const SUMMARY_MAX_CHARS: usize = 500;
+
+/// Scan cap for the one-shot history backfill. The JSONL store prunes to a
+/// 90-day rolling window, so this bounds the scan far above any real store
+/// while keeping a runaway directory from wedging startup.
+const BACKFILL_SCAN_LIMIT: usize = 10_000;
 
 /// Sources that can be rerun through the scheduled-task execution path.
 const RERUNNABLE_SOURCES: [&str; 3] = [
@@ -142,6 +155,176 @@ pub async fn continue_inbox_item_session(
     item.session_id
         .filter(|s| !s.trim().is_empty())
         .ok_or_else(|| format!("inbox item {id} has no linked session"))
+}
+
+// ── T7: authoritative run-history read path ──────────────────────────────
+//
+// Since T7 the SQLite `routine_runs` table (same inbox.db, owned by
+// `InboxStore`) is the authoritative read source for the History view;
+// the legacy JSONL store (`~/.shannon/scheduled-runs/`) is demoted to
+// (a) a best-effort write mirror — retained for one release so a downgrade
+// or fallback keeps working, and (b) the read fallback below, so the UI
+// always has data even when the inbox store cannot be opened or queried.
+
+/// Milliseconds → whole seconds for the legacy second-resolution timestamps.
+fn ms_to_secs(ms: Option<i64>) -> Option<i64> {
+    ms.map(|v| v.div_euclid(1000))
+}
+
+/// Project a `routine_runs` row onto the legacy `TaskExecution` contract.
+///
+/// Mapping rules (JSONL field ↔ `routine_runs` column) — the run ids are
+/// the same string by construction (`spawn_routine_run` mints the JSONL
+/// mirror with the SQLite run id), so `get_execution_detail` keeps
+/// resolving projected rows:
+/// - `run_id` ↔ `id`
+/// - `started_at`/`finished_at` ↔ `started_at_ms`/`finished_at_ms` (ms → s)
+/// - `status` ↔ `status` (both stores share the lowercase vocabulary:
+///   running/succeeded/failed plus the scheduler-mirrored queued/cancelled)
+/// - `error_message` ↔ `error`
+/// - `task_name` ↔ `task_name`, falling back to the task id (JSONL always
+///   carried a name; the column is nullable)
+/// - `cost_usd`/`token_usage` ↔ `None` — never tracked in `routine_runs`;
+///   the JSONL fields existed but no write path ever populated them either.
+pub(crate) fn run_record_to_execution(run: &RunRecord) -> TaskExecution {
+    TaskExecution {
+        run_id: run.id.clone(),
+        task_id: run.task_id.clone(),
+        task_name: run
+            .task_name
+            .clone()
+            .filter(|n| !n.trim().is_empty())
+            .unwrap_or_else(|| run.task_id.clone()),
+        started_at: ms_to_secs(run.started_at_ms).unwrap_or(0),
+        finished_at: ms_to_secs(run.finished_at_ms),
+        status: run.status.clone(),
+        error_message: run.error.clone(),
+        cost_usd: None,
+        token_usage: None,
+    }
+}
+
+/// Map a legacy JSONL run onto the `routine_runs` schema (backfill
+/// direction). Status uses the same `Debug`-lowercase rendering as the
+/// JSONL → `TaskExecution` projection, so the two projections of one run
+/// agree field for field (asserted by the sampling test below).
+pub(crate) fn scheduled_run_to_record(run: &ScheduledRun) -> RunRecord {
+    let started_ms = run.started_at.timestamp_millis();
+    let finished_ms = run.finished_at.map(|t| t.timestamp_millis());
+    RunRecord {
+        id: run.run_id.clone(),
+        task_id: run.task_id.clone(),
+        task_name: Some(run.task_name.clone()),
+        status: format!("{:?}", run.status).to_lowercase(),
+        error: run.error_message.clone(),
+        started_at_ms: Some(started_ms),
+        finished_at_ms: finished_ms,
+        duration_ms: finished_ms.map(|f| (f - started_ms).max(0)),
+        inbox_item_id: None,
+    }
+}
+
+/// Read the run history backing `list_task_executions`: the inbox store
+/// (`routine_runs`) first, falling back to the legacy JSONL store with a
+/// warning when the inbox read fails — the UI must always get data.
+///
+/// `read_inbox` is injected so tests can drive both branches (a healthy
+/// `InboxStore` cannot fail on demand).
+pub(crate) fn read_run_history<F>(
+    read_inbox: F,
+    jsonl: &ScheduledRunsStore,
+    task_id: Option<&str>,
+    limit: usize,
+) -> Result<Vec<TaskExecution>, String>
+where
+    F: FnOnce() -> Result<Vec<RunRecord>, InboxStoreError>,
+{
+    match read_inbox() {
+        Ok(rows) => Ok(rows.iter().map(run_record_to_execution).collect()),
+        Err(e) => {
+            tracing::warn!(
+                error = %e,
+                task_id = ?task_id,
+                "history: inbox store read failed — falling back to the legacy JSONL runs store"
+            );
+            let runs = match task_id {
+                Some(id) => jsonl.list_by_task(id, limit),
+                None => jsonl.list_recent(limit),
+            }
+            .map_err(|e| e.to_string())?;
+            Ok(runs
+                .iter()
+                .map(crate::scheduled_commands::run_to_execution)
+                .collect())
+        }
+    }
+}
+
+/// One-shot best-effort backfill: import every JSONL run that has no
+/// `routine_runs` row yet, so the authoritative read path keeps showing
+/// history that predates the switch. Idempotent — [`InboxStore::import_run`]
+/// keys on the run id, so re-running (every startup) never duplicates.
+///
+/// JSONL rows still in `running` are **skipped**: they are ghosts (a
+/// `trigger_task_now` placeholder or a drained placeholder whose process
+/// died between drain and retire). A run that truly started already owns
+/// its SQLite row (`record_run_start` at spawn time), so nothing genuine is
+/// lost — and importing ghosts would both show fake `running` history and
+/// trip the scheduler's 24h in-flight guard for the task.
+///
+/// Backfilled rows land in `routine_runs` only; `inbox_items` is not
+/// touched, so unread inbox counts stay clean (the "archived, 不打扰"
+/// intent of the T7 ruling) while the full history stays queryable.
+/// Returns `(imported, already_present)`.
+pub(crate) fn backfill_runs_from_jsonl(
+    inbox: &InboxStore,
+    jsonl: &ScheduledRunsStore,
+) -> Result<(usize, usize), String> {
+    let runs = jsonl
+        .list_recent(BACKFILL_SCAN_LIMIT)
+        .map_err(|e| e.to_string())?;
+    let mut imported = 0usize;
+    let mut present = 0usize;
+    for run in &runs {
+        if run.status == RunStatus::Running {
+            continue;
+        }
+        match inbox.import_run(&scheduled_run_to_record(run)) {
+            Ok(true) => imported += 1,
+            Ok(false) => present += 1,
+            Err(e) => {
+                // Per-row failure is tolerated: the JSONL fallback keeps the
+                // run visible and the next startup retries the import.
+                tracing::warn!(
+                    run_id = %run.run_id,
+                    error = %e,
+                    "history backfill: failed to import run; keeping JSONL copy"
+                );
+            }
+        }
+    }
+    Ok((imported, present))
+}
+
+/// Startup hook: run the history backfill off the UI path. Best-effort —
+/// failures warn only and never block app start.
+pub fn spawn_run_history_backfill(state: &AppState) {
+    let inbox = state.inbox_store();
+    let jsonl = state.scheduled_runs_store.clone();
+    tauri::async_runtime::spawn(async move {
+        match backfill_runs_from_jsonl(&inbox, &jsonl) {
+            Ok((imported, present)) if imported > 0 => tracing::info!(
+                imported,
+                present,
+                "history backfill: legacy JSONL runs imported into the inbox store"
+            ),
+            Ok((_, _)) => {}
+            Err(e) => tracing::warn!(
+                error = %e,
+                "history backfill: legacy JSONL scan failed; JSONL stays available via the read fallback"
+            ),
+        }
+    });
 }
 
 // ── Shared execution path ────────────────────────────────────────────────
@@ -949,5 +1132,249 @@ mod tests {
             "error should mention the panic"
         );
         assert!(outcome.session_id.is_none(), "no session was opened");
+    }
+
+    // ── T7: authoritative history read path ─────────────────────────────
+
+    fn jsonl_store(tmp: &std::path::Path) -> ScheduledRunsStore {
+        ScheduledRunsStore::with_base(tmp.join("runs").to_path_buf())
+    }
+
+    #[test]
+    fn scheduled_run_to_record_maps_all_fields() {
+        let mut run = ScheduledRun::start("task-9", "Nightly Scan");
+        run.run_id = "abc12345".into();
+        let started = run.started_at;
+        run.finish(
+            RunStatus::Failed,
+            Some("provider unreachable".into()),
+        );
+
+        let record = scheduled_run_to_record(&run);
+        assert_eq!(record.id, "abc12345");
+        assert_eq!(record.task_id, "task-9");
+        assert_eq!(record.task_name.as_deref(), Some("Nightly Scan"));
+        assert_eq!(record.status, "failed");
+        assert_eq!(record.error.as_deref(), Some("provider unreachable"));
+        assert_eq!(record.started_at_ms, Some(started.timestamp_millis()));
+        let finished = record.finished_at_ms.expect("finished");
+        assert_eq!(
+            record.duration_ms,
+            Some((finished - started.timestamp_millis()).max(0))
+        );
+        assert_eq!(record.inbox_item_id, None);
+
+        // Tombstone statuses render exactly like the JSONL projection.
+        let mut queued = ScheduledRun::start("t", "T");
+        queued.status = RunStatus::Queued;
+        assert_eq!(scheduled_run_to_record(&queued).status, "queued");
+        let mut cancelled = ScheduledRun::start("t", "T");
+        cancelled.finish(RunStatus::Cancelled, None);
+        assert_eq!(scheduled_run_to_record(&cancelled).status, "cancelled");
+    }
+
+    #[test]
+    fn run_record_to_execution_preserves_run_id_and_converts_ms() {
+        let record = RunRecord {
+            id: "0195abcd-run".into(),
+            task_id: "task-1".into(),
+            task_name: Some("Task One".into()),
+            status: "succeeded".into(),
+            error: None,
+            started_at_ms: Some(1_700_000_000_123),
+            finished_at_ms: Some(1_700_000_005_000),
+            duration_ms: Some(4_877),
+            inbox_item_id: Some(7),
+        };
+        let exec = run_record_to_execution(&record);
+        // The run id is the real SQLite/JSONL id — get_execution_detail
+        // keeps resolving projected rows.
+        assert_eq!(exec.run_id, "0195abcd-run");
+        assert_eq!(exec.task_id, "task-1");
+        assert_eq!(exec.started_at, 1_700_000_000, "ms → whole seconds");
+        assert_eq!(exec.finished_at, Some(1_700_000_005));
+        assert_eq!(exec.status, "succeeded");
+        assert!(exec.error_message.is_none());
+        assert_eq!(exec.cost_usd, None, "never tracked in routine_runs");
+        assert_eq!(exec.token_usage, None);
+
+        // A missing/blank task_name falls back to the task id.
+        let anon = RunRecord {
+            task_name: None,
+            ..record.clone()
+        };
+        assert_eq!(run_record_to_execution(&anon).task_name, "task-1");
+        let blank = RunRecord {
+            task_name: Some("   ".into()),
+            ..record
+        };
+        assert_eq!(run_record_to_execution(&blank).task_name, "task-1");
+    }
+
+    #[test]
+    fn read_run_history_prefers_the_inbox_store() {
+        let tmp = tempfile::tempdir().unwrap();
+        let inbox = InboxStore::open_in_memory().unwrap();
+        let jsonl = jsonl_store(tmp.path());
+
+        let run_id = inbox.record_run_start("task-a", "Alpha").unwrap();
+        inbox
+            .record_run_finish(&run_id, "succeeded", None, None)
+            .unwrap();
+        // Decoy: JSONL rows must be ignored while the inbox reads fine.
+        jsonl.start_run("task-a", "Alpha").unwrap();
+
+        let limit = 50usize;
+        let rows =
+            read_run_history(|| inbox.list_runs(50), &jsonl, None, limit).unwrap();
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].run_id, run_id, "SQLite row projected");
+        assert_eq!(rows[0].status, "succeeded");
+
+        // Task-filtered read goes through list_runs_by_task.
+        inbox.record_run_start("task-b", "Beta").unwrap();
+        let filtered = read_run_history(
+            || inbox.list_runs_by_task("task-a", 50),
+            &jsonl,
+            Some("task-a"),
+            limit,
+        )
+        .unwrap();
+        assert_eq!(filtered.len(), 1);
+        assert_eq!(filtered[0].run_id, run_id);
+    }
+
+    #[test]
+    fn read_run_history_falls_back_to_jsonl_when_inbox_read_fails() {
+        let tmp = tempfile::tempdir().unwrap();
+        let jsonl = jsonl_store(tmp.path());
+        let a = jsonl.start_run("task-a", "Alpha").unwrap();
+        jsonl
+            .update(&a, |r| r.finish(RunStatus::Succeeded, None))
+            .unwrap();
+        let b = jsonl.start_run("task-b", "Beta").unwrap();
+        jsonl
+            .update(&b, |r| r.finish(RunStatus::Failed, Some("boom".into())))
+            .unwrap();
+
+        // Simulated inbox outage: the read closure errors → the JSONL data
+        // is returned (with only a warning) instead of failing the command.
+        let rows = read_run_history(
+            || Err(InboxStoreError::Poisoned),
+            &jsonl,
+            None,
+            50,
+        )
+        .unwrap();
+        assert_eq!(rows.len(), 2, "JSONL fallback serves every run");
+        assert!(
+            rows.iter().all(|r| r.run_id == a || r.run_id == b),
+            "fallback rows come from the JSONL store"
+        );
+        assert!(rows.iter().any(|r| r.status == "failed"));
+
+        // The fallback honours the task filter too.
+        let filtered = read_run_history(
+            || Err(InboxStoreError::Poisoned),
+            &jsonl,
+            Some("task-a"),
+            50,
+        )
+        .unwrap();
+        assert_eq!(filtered.len(), 1);
+        assert_eq!(filtered[0].run_id, a);
+        assert_eq!(filtered[0].task_name, "Alpha");
+    }
+
+    /// 抽样一致性：the same batch of runs, once read through the JSONL
+    /// store and once backfilled into the inbox store, must project to
+    /// identical `TaskExecution`s (count + every field), and the backfill
+    /// must be idempotent across repeated passes.
+    #[test]
+    fn backfill_is_idempotent_and_projections_agree_with_jsonl() {
+        let tmp = tempfile::tempdir().unwrap();
+        let jsonl = jsonl_store(tmp.path());
+        let inbox = InboxStore::open_in_memory().unwrap();
+
+        // Batch: two tasks × terminal states, plus tombstones.
+        let mut expected = Vec::new();
+        for (task, name) in [("task-1", "Alpha"), ("task-2", "Beta")] {
+            let id = jsonl.start_run(task, name).unwrap();
+            jsonl
+                .update(&id, |r| r.finish(RunStatus::Succeeded, None))
+                .unwrap();
+            expected.push(id);
+            let id = jsonl.start_run(task, name).unwrap();
+            jsonl
+                .update(&id, |r| {
+                    r.finish(RunStatus::Failed, Some("boom".into()))
+                })
+                .unwrap();
+            expected.push(id);
+        }
+        let mut queued = ScheduledRun::start("task-1", "Alpha");
+        queued.status = RunStatus::Queued;
+        let queued_id = queued.run_id.clone();
+        jsonl.record(&queued).unwrap();
+        expected.push(queued_id);
+        let mut cancelled = ScheduledRun::start("task-2", "Beta");
+        cancelled.finish(RunStatus::Cancelled, Some("superseded".into()));
+        let cancelled_id = cancelled.run_id.clone();
+        jsonl.record(&cancelled).unwrap();
+        expected.push(cancelled_id);
+        // A `running` ghost (trigger_task_now placeholder / crashed drain)
+        // must be skipped — see backfill_runs_from_jsonl docs. The JSONL
+        // store thus holds `expected.len() + 1` distinct runs.
+        jsonl.start_run("task-1", "Alpha").unwrap();
+
+        // First pass imports every terminal/tombstone run; the second pass
+        // is a no-op.
+        assert_eq!(
+            backfill_runs_from_jsonl(&inbox, &jsonl).unwrap(),
+            (expected.len(), 0)
+        );
+        assert_eq!(
+            backfill_runs_from_jsonl(&inbox, &jsonl).unwrap(),
+            (0, expected.len()),
+            "repeat backfill must not duplicate"
+        );
+        assert_eq!(inbox.list_runs(100).unwrap().len(), expected.len());
+        assert!(
+            !inbox
+                .list_runs(100)
+                .unwrap()
+                .iter()
+                .any(|r| r.status == "running"),
+            "running ghosts are not imported"
+        );
+
+        // Sampling consistency: per JSONL run, the inbox row projects to
+        // the exact same TaskExecution as the JSONL projection (the
+        // running ghost is excluded on both sides).
+        let jsonl_runs: Vec<_> = jsonl
+            .list_recent(100)
+            .unwrap()
+            .into_iter()
+            .filter(|r| r.status != RunStatus::Running)
+            .collect();
+        assert_eq!(jsonl_runs.len(), expected.len());
+        assert_eq!(jsonl.list_recent(100).unwrap().len(), expected.len() + 1);
+        let inbox_runs = inbox.list_runs(100).unwrap();
+        for run in &jsonl_runs {
+            let record = inbox_runs
+                .iter()
+                .find(|r| r.id == run.run_id)
+                .unwrap_or_else(|| panic!("run {} not backfilled", run.run_id));
+            assert_eq!(
+                &run_record_to_execution(record),
+                &crate::scheduled_commands::run_to_execution(run),
+                "projection mismatch for run {}",
+                run.run_id
+            );
+        }
+
+        // The task-filtered authoritative read sees the same rows.
+        let for_task = inbox.list_runs_by_task("task-1", 100).unwrap();
+        assert_eq!(for_task.len(), 3, "2 terminal runs + queued tombstone");
     }
 }
