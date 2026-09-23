@@ -192,9 +192,10 @@ describe('AdvancedSettings — Self-improvement approval', () => {
     expect(screen.getByText('1 pending')).toBeInTheDocument()
   })
 
-  // IA T3 (审批面收敛): no second SkillApprovalModal lives here anymore —
-  // the「Review pending」entry links to /triage, the single review surface.
-  it('navigates to /triage on Review click (no modal)', async () => {
+  // IA T3 + X1: no second SkillApprovalModal lives here anymore —
+  // the「Review pending」entry links to /extensions/pending, the single
+  // skill-review surface (评审裁决 #2).
+  it('navigates to /extensions/pending on Review click (no modal)', async () => {
     vi.mocked(api.listSkillCandidates).mockResolvedValue([
       {
         id: 'cand-1',
@@ -220,7 +221,7 @@ describe('AdvancedSettings — Self-improvement approval', () => {
     )
     await waitFor(() => { expect(screen.getByText('Review pending')).toBeInTheDocument() })
     fireEvent.click(screen.getByText('Review pending'))
-    await waitFor(() => { expect(screen.getByTestId('adv-location')).toHaveTextContent('/triage') })
+    await waitFor(() => { expect(screen.getByTestId('adv-location')).toHaveTextContent('/extensions/pending') })
     expect(screen.queryByText('Save as skill?')).not.toBeInTheDocument()
   })
 })

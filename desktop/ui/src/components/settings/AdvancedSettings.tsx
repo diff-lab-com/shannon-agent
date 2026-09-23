@@ -40,10 +40,10 @@ export default function AdvancedSettings() {
   const [showResetConfirm, setShowResetConfirm] = useState(false)
   const [showClearConfirm, setShowClearConfirm] = useState(false)
 
-  // IA T3 (审批面收敛): this page no longer mounts a second SkillApprovalModal.
-  // We keep the toggle + pending count, and the「查看待审」entry links to
-  // /triage — the transitional review surface until 任务 3 ships the
-  // extended pending area.
+  // IA T3 (审批面收敛) + X1: this page no longer mounts a second
+  // SkillApprovalModal. We keep the toggle + pending count, and the
+  // 「查看待审」entry links to /extensions/pending — the single skill-review
+  // surface shipped by 任务 3 (评审裁决 #2).
   const [candidates, setCandidates] = useState<SkillCandidate[]>([])
 
   // ADR-0011 B3 — bundled `shannon` CLI exposure (non-shadowing install).
@@ -190,7 +190,7 @@ export default function AdvancedSettings() {
             <Button
               variant="ghost"
               className="w-full mt-md py-sm border border-tertiary/30 rounded-lg text-tertiary font-label-md font-bold text-[14px] hover:bg-tertiary-container/30 transition-colors cursor-pointer"
-              onClick={() => navigate('/triage')}
+              onClick={() => navigate('/extensions/pending')}
             >
               <span className="material-symbols-outlined icon-sm mr-xs">rate_review</span>
               {t('settings.skillLoop.review')}

@@ -1,67 +1,50 @@
-// Toast notification for pending skill proposals.
+// Light "pending review" notice for skill proposals (IA X1).
 //
-// Fixed position bottom-right. Listens to skill-proposal-available events
-// (the primary channel — backend emits this when a new candidate arrives
-// or when one is approved/rejected from Advanced Settings). The
-// skill-catalog-changed listener is the fallback path used when another
-// surface saves a candidate without going through the toast flow.
+// Degraded from the old toast + big review panel: the toast no longer opens
+// the review UI — it is a single lightweight nudge ("N 条技能提案待审") that
+// navigates to /extensions/pending, the single skill-review surface
+// (评审裁决 #2). The count comes from the same source as the Extensions
+// tab badge and the header bell (usePendingSkillCandidates), and the
+// `skill-catalog-changed` window event stays as the fallback refresh path
+// for actions taken outside the queue.
 
 import { useEffect, useState } from 'react'
 import { useIntl } from 'react-intl'
+import { useNavigate } from 'react-router-dom'
 import { Button } from '@/components/ui/button'
-import { useTauriEventValidated } from '@/hooks/useTauriEventValidated'
-import { skillLoop } from '@/lib/tauri-api'
-import type { SkillProposalCountPayload } from '@/types'
+import { usePendingSkillCandidates } from '@/hooks/usePendingSkillCandidates'
 
-interface SkillProposalsToastProps {
-  onOpenReview: () => void
-}
-
-export default function SkillProposalsToast({ onOpenReview }: SkillProposalsToastProps) {
+export default function SkillProposalsToast() {
   const intl = useIntl()
   const t = (id: string) => intl.formatMessage({ id })
-  const [pendingCount, setPendingCount] = useState(0)
-  const [visible, setVisible] = useState(false)
+  const navigate = useNavigate()
+  const { candidates, refetch } = usePendingSkillCandidates()
+  const pendingCount = candidates.length
+  const [dismissed, setDismissed] = useState(false)
 
-  useTauriEventValidated<SkillProposalCountPayload>('skill-proposal-available', (event) => {
-    setPendingCount(event.payload.pending_count)
-    if (event.payload.pending_count > 0) {
-      setVisible(true)
-    }
-  })
-
-  // 2026-09 P0-5: keep the badge in sync after actions taken from the
-  // Advanced Settings "Save as skill" modal — the backend may not emit
-  // `skill-proposal-available` for that path. Cheap re-fetch (mock only);
-  // real backend already maintains the source of truth.
+  // A new count re-arms the nudge; dismissing only hides the current one.
   useEffect(() => {
-    const handler = () => {
-      skillLoop.listProposals().then((list) => {
-        const next = list.length
-        setPendingCount(next)
-        setVisible(next > 0)
-      }).catch(() => { /* best-effort */ })
-    }
+    setDismissed(false)
+  }, [pendingCount])
+
+  // Fallback refresh (mock/demo + exotic paths): keep the badge in sync
+  // after actions taken from surfaces that don't emit the backend event.
+  useEffect(() => {
+    const handler = () => refetch()
     window.addEventListener('skill-catalog-changed', handler)
     return () => window.removeEventListener('skill-catalog-changed', handler)
-  }, [])
+  }, [refetch])
 
-  if (!visible || pendingCount === 0) return null
-
-  const handleView = () => {
-    onOpenReview()
-    setVisible(false)
-  }
-
-  const handleDismiss = () => {
-    setVisible(false)
-  }
+  if (pendingCount === 0 || dismissed) return null
 
   return (
     <div className="fixed bottom-4 right-4 z-modal animate-slide-in-from-bottom">
-      <div className="bg-surface-container-lowest rounded-lg shadow-lg border border-outline-variant p-4 max-w-md">
+      <div
+        role="status"
+        className="bg-surface-container-lowest rounded-lg shadow-lg border border-outline-variant p-4 max-w-md"
+      >
         <div className="flex items-start gap-3">
-          <span className="material-symbols-outlined icon-lg text-primary">lightbulb</span>
+          <span className="material-symbols-outlined icon-lg text-primary" aria-hidden="true">lightbulb</span>
           <div className="flex-1">
             <h4 className="font-medium text-on-surface text-sm">
               {intl.formatMessage(
@@ -74,15 +57,16 @@ export default function SkillProposalsToast({ onOpenReview }: SkillProposalsToas
             </p>
             <div className="flex gap-2 mt-3">
               <Button
-                onClick={handleView}
+                onClick={() => navigate('/extensions/pending')}
                 size="sm"
               >
                 {t('skillProposals.toast.viewButton')}
               </Button>
               <Button
-                onClick={handleDismiss}
+                onClick={() => setDismissed(true)}
                 variant="ghost"
                 size="sm"
+                aria-label={t('skillProposals.toast.closeButton')}
               >
                 {t('skillProposals.toast.closeButton')}
               </Button>

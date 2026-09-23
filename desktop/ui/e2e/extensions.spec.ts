@@ -31,6 +31,15 @@ test.describe('Extensions pages', () => {
       await expect(page.getByRole('heading', { name: 'My Agents' })).toBeVisible()
     }
   })
+
+  // IA X1: 待处理 — third primary tab; the page hosts the skill review
+  // queue plus the errors empty-state placeholder.
+  test('navigates to the pending review page', async ({ page }) => {
+    await page.goto('/extensions/pending')
+    await expect(page.getByRole('heading', { name: 'Skill review' })).toBeVisible()
+    // exact: the errors empty state ("No errors") is also a heading.
+    await expect(page.getByRole('heading', { name: 'Errors', exact: true })).toBeVisible()
+  })
 })
 
 test.describe('OPC pages', () => {

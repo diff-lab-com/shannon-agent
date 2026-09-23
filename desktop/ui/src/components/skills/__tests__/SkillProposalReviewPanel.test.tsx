@@ -168,3 +168,52 @@ describe('SkillProposalReviewPanel', () => {
     })
   })
 })
+
+// IA X1: the panel embeds into the Extensions → Pending queue in inline
+// mode — same review UI, no modal chrome, no auto-close.
+describe('SkillProposalReviewPanel (inline variant)', () => {
+  beforeEach(() => {
+    vi.clearAllMocks()
+  })
+
+  it('renders nothing when there are no proposals', async () => {
+    vi.mocked(api.skillLoop.listProposals).mockResolvedValue([])
+
+    const { container } = render(
+      <I18nProvider>
+        <SkillProposalReviewPanel open={true} onClose={vi.fn()} variant="inline" />
+      </I18nProvider>
+    )
+
+    await waitFor(() => {
+      expect(container.querySelector('[data-testid="skill-proposal-review-inline"]')).toBeNull()
+    })
+  })
+
+  it('renders the proposal without a modal and approves without closing', async () => {
+    vi.mocked(api.skillLoop.listProposals).mockResolvedValue([mockProposal])
+    vi.mocked(api.skillLoop.approve).mockResolvedValue('/path/to/skill.toml')
+
+    const onClose = vi.fn()
+    const { container } = render(
+      <I18nProvider>
+        <SkillProposalReviewPanel open={true} onClose={onClose} variant="inline" />
+      </I18nProvider>
+    )
+
+    await waitFor(() => {
+      expect(container.querySelector('[data-testid="skill-proposal-review-inline"]')).not.toBeNull()
+    })
+    expect(screen.getByText('Test Skill')).toBeInTheDocument()
+    expect(screen.queryByRole('dialog')).not.toBeInTheDocument()
+
+    fireEvent.click(screen.getByText('Approve'))
+    await waitFor(() => expect(api.skillLoop.approve).toHaveBeenCalledWith('test-id-1'))
+    // Inline mode stays mounted — after the last proposal is gone the
+    // block simply unmounts; onClose is never called.
+    expect(onClose).not.toHaveBeenCalled()
+    await waitFor(() => {
+      expect(container.querySelector('[data-testid="skill-proposal-review-inline"]')).toBeNull()
+    })
+  })
+})

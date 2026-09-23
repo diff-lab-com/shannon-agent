@@ -1,27 +1,12 @@
-// Manages skill proposals toast and review panel.
+// Global skill-proposals surface (IA X1).
 //
-// Wrapper component that maintains the review panel open state and
-// passes it down to both toast (to open) and panel (to render).
+// Reduced to the lightweight discovery toast: it listens for pending
+// candidates everywhere and nudges the user to /extensions/pending. The
+// full review UI (candidates queue + proposal drafts) lives on the
+// Extensions → Pending page (评审裁决 #2: 技能提案主审查面 = 扩展-待处理).
 
-import { useState } from 'react'
 import SkillProposalsToast from './SkillProposalsToast'
-import SkillProposalReviewPanel from './SkillProposalReviewPanel'
 
 export default function SkillProposalsManager() {
-  const [reviewOpen, setReviewOpen] = useState(false)
-
-  const handleOpenReview = () => {
-    setReviewOpen(true)
-  }
-
-  const handleCloseReview = () => {
-    setReviewOpen(false)
-  }
-
-  return (
-    <>
-      <SkillProposalsToast onOpenReview={handleOpenReview} />
-      <SkillProposalReviewPanel open={reviewOpen} onClose={handleCloseReview} />
-    </>
-  )
+  return <SkillProposalsToast />
 }

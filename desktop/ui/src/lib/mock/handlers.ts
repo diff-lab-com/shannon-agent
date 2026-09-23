@@ -1486,6 +1486,13 @@ export const handlers: Record<string, MockHandler> = {
     await delay();
     return [];
   },
+  // IA X1: the Extensions → Pending page embeds the proposal-draft review
+  // panel, which fetches on every mount — without this handler demo mode
+  // error-toasts on each visit.
+  async skill_loop_list_proposals() {
+    await delay();
+    return [];
+  },
   async detect_provider_from_env() {
     await delay();
     return null;
