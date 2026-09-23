@@ -1,138 +1,46 @@
-//! Command executor - executes commands with context
+//! Command executor — the REPL's shared handle on the [`CommandRegistry`].
+//!
+//! Review §P3-22: this type used to also expose an `execute()` path that was
+//! a stub — it returned placeholder strings ("Local command: x") and reduced
+//! sensitive-command confirmation to a log line. Nothing in the workspace
+//! called it:
+//!
+//! - Real slash-command dispatch lives in the REPL command handlers
+//!   (`shannon-ui::repl::commands::handle_other_command`), which read the
+//!   same [`CommandRegistry`](crate::registry::CommandRegistry) directly.
+//! - Real shell execution lives in `shannon-tools::system::BashTool`, gated
+//!   by the engine's permission/approval flow (`is_destructive` tools go
+//!   through the approval-request sink); re-implementing it here would have
+//!   duplicated that machinery and bypassed the approval channel.
+//! - Real prompt-template expansion already exists as
+//!   [`CommandExecutor::get_prompt`].
+//!
+//! The misleading stub was therefore removed instead of half-implemented.
+//! What remains is the live half: a concurrent, shareable wrapper around the
+//! registry ([`SharedExecutor`]) plus the prompt-expansion helper.
 
-use crate::command::{Command, CommandContext, CommandError, CommandResult, ExecutionResult};
-use crate::parser::ParsedCommand;
+use crate::command::{Command, CommandContext, CommandError, CommandResult};
 use crate::registry::CommandRegistry;
 use std::sync::Arc;
 use tokio::sync::RwLock;
 
-/// Command executor - handles command execution with context
+/// Command executor — shared access to the command registry plus prompt
+/// expansion for prompt-type commands.
 #[derive(Debug)]
 pub struct CommandExecutor {
     /// Command registry
     registry: CommandRegistry,
-
-    /// Execution options
-    options: ExecutorOptions,
-}
-
-/// Options for command execution
-#[derive(Debug, Clone)]
-pub struct ExecutorOptions {
-    /// Allow model invocation
-    pub allow_model_invocation: bool,
-
-    /// Require confirmation for sensitive commands
-    pub require_confirmation: bool,
-
-    /// Timeout in seconds
-    pub timeout_seconds: Option<u64>,
-
-    /// Whether to stream output
-    pub stream_output: bool,
-}
-
-impl Default for ExecutorOptions {
-    fn default() -> Self {
-        Self {
-            allow_model_invocation: true,
-            require_confirmation: true,
-            timeout_seconds: Some(300),
-            stream_output: false,
-        }
-    }
 }
 
 impl CommandExecutor {
-    /// Create a new command executor
+    /// Create a new command executor over the given registry.
     pub fn new(registry: CommandRegistry) -> Self {
-        Self {
-            registry,
-            options: Default::default(),
-        }
-    }
-
-    /// Create with custom options
-    pub fn with_options(registry: CommandRegistry, options: ExecutorOptions) -> Self {
-        Self { registry, options }
+        Self { registry }
     }
 
     /// Get the command registry
     pub fn registry(&self) -> &CommandRegistry {
         &self.registry
-    }
-
-    /// Execute a parsed command
-    pub async fn execute(
-        &self,
-        parsed: &ParsedCommand,
-        _context: &CommandContext,
-    ) -> CommandResult<ExecutionResult> {
-        // Get command from registry
-        let command = self.registry.get(&parsed.name).await?;
-
-        // Check if enabled
-        if !command.is_enabled() {
-            return Err(CommandError::NotFound(format!(
-                "Command '{}' is disabled",
-                parsed.name
-            )));
-        }
-
-        // Check model invocation permission
-        if command.base().disable_model_invocation && !self.options.allow_model_invocation {
-            return Err(CommandError::PermissionDenied(
-                "Model invocation is disabled for this command".to_string(),
-            ));
-        }
-
-        // Check for sensitive command confirmation
-        if command.base().is_sensitive && self.options.require_confirmation {
-            // In a real implementation, this would prompt for confirmation
-            // For now, we'll just note it
-            tracing::warn!("Executing sensitive command: {}", parsed.name);
-        }
-
-        // Execute based on command type
-        match &*command {
-            Command::Prompt(_) => {
-                // For prompt commands, we need to generate the prompt
-                // This is handled by the QueryEngine in the main system
-                Ok(ExecutionResult::Text {
-                    value: format!("Prompt command: {}", parsed.name),
-                })
-            }
-            Command::Local(_) => {
-                // Local command execution
-                Ok(ExecutionResult::Text {
-                    value: format!("Local command: {}", parsed.name),
-                })
-            }
-            Command::LocalJSX(_) => {
-                // Local JSX command with UI
-                Ok(ExecutionResult::Text {
-                    value: format!("UI command: {}", parsed.name),
-                })
-            }
-        }
-    }
-
-    /// Execute a command string
-    pub async fn execute_string(
-        &self,
-        input: &str,
-        context: &CommandContext,
-    ) -> CommandResult<Vec<ExecutionResult>> {
-        let parser = crate::parser::CommandParser::new();
-        let parsed_commands = parser.parse_multiple(input)?;
-
-        let mut results = vec![];
-        for parsed in parsed_commands {
-            let result = self.execute(&parsed, context).await?;
-            results.push(result);
-        }
-
-        Ok(results)
     }
 
     /// Get prompt for a prompt command
@@ -159,11 +67,6 @@ impl CommandExecutor {
             )),
         }
     }
-
-    /// Set execution options
-    pub fn set_options(&mut self, options: ExecutorOptions) {
-        self.options = options;
-    }
 }
 
 /// Shared executor state for concurrent access
@@ -183,26 +86,6 @@ impl SharedExecutor {
         }
     }
 
-    /// Execute a command
-    pub async fn execute(
-        &self,
-        parsed: &ParsedCommand,
-        context: &CommandContext,
-    ) -> CommandResult<ExecutionResult> {
-        let executor = self.inner.read().await;
-        executor.execute(parsed, context).await
-    }
-
-    /// Execute a command string
-    pub async fn execute_string(
-        &self,
-        input: &str,
-        context: &CommandContext,
-    ) -> CommandResult<Vec<ExecutionResult>> {
-        let executor = self.inner.read().await;
-        executor.execute_string(input, context).await
-    }
-
     /// Get the registry
     pub async fn registry(&self) -> CommandRegistry {
         let executor = self.inner.read().await;
@@ -211,35 +94,119 @@ impl SharedExecutor {
 }
 
 #[cfg(test)]
+#[allow(clippy::unwrap_used)]
 mod tests {
     use super::*;
+    use crate::command::{CommandBase, CommandSource, PromptCommand};
+    use std::collections::HashMap;
 
-    fn create_test_registry() -> CommandRegistry {
-        // Commands would be registered here
-        CommandRegistry::new()
+    fn base_command(name: &str) -> CommandBase {
+        CommandBase {
+            name: name.to_string(),
+            aliases: vec![],
+            description: format!("{name} test command"),
+            has_user_specified_description: false,
+            availability: vec![],
+            source: CommandSource::Builtin,
+            is_enabled: true,
+            is_hidden: false,
+            argument_hint: None,
+            when_to_use: None,
+            version: None,
+            disable_model_invocation: false,
+            user_invocable: true,
+            is_workflow: false,
+            immediate: false,
+            is_sensitive: false,
+            user_facing_name: None,
+        }
+    }
+
+    fn prompt_command(name: &str, template: Option<&str>) -> Command {
+        Command::Prompt(Box::new(PromptCommand {
+            base: base_command(name),
+            progress_message: String::new(),
+            content_length: 0,
+            arg_names: vec![],
+            allowed_tools: vec![],
+            model: None,
+            hooks: HashMap::new(),
+            context: crate::command::ExecutionContext::Inline,
+            agent: None,
+            paths: vec![],
+            prompt_template: template.map(str::to_string),
+        }))
     }
 
     #[tokio::test]
-    async fn test_execute_nonexistent() {
-        let executor = CommandExecutor::new(create_test_registry());
-        let parsed = ParsedCommand::new(
-            "nonexistent".to_string(),
-            "".to_string(),
-            "/nonexistent".to_string(),
-        );
-        let context = CommandContext::default();
-
-        let result = executor.execute(&parsed, &context).await;
+    async fn registry_lookup_nonexistent_is_not_found() {
+        let executor = CommandExecutor::new(CommandRegistry::new());
+        let result = executor.registry().get("nonexistent").await;
         assert!(matches!(result, Err(CommandError::NotFound(_))));
     }
 
     #[tokio::test]
-    async fn test_execute_string() {
-        let executor = CommandExecutor::new(create_test_registry());
+    async fn get_prompt_expands_args_placeholder() {
+        let registry = CommandRegistry::new();
+        registry
+            .register(prompt_command("greet", Some("Say hello to {args}!")))
+            .await
+            .unwrap();
+        let executor = CommandExecutor::new(registry);
         let context = CommandContext::default();
 
-        // Empty input should error
-        let result = executor.execute_string("", &context).await;
-        assert!(result.is_err());
+        let prompt = executor
+            .get_prompt("greet", "world", &context)
+            .await
+            .unwrap();
+        assert_eq!(prompt, "Say hello to world!");
+    }
+
+    #[tokio::test]
+    async fn get_prompt_falls_back_without_template() {
+        let registry = CommandRegistry::new();
+        registry
+            .register(prompt_command("plain", None))
+            .await
+            .unwrap();
+        let executor = CommandExecutor::new(registry);
+        let context = CommandContext::default();
+
+        let prompt = executor
+            .get_prompt("plain", "some args", &context)
+            .await
+            .unwrap();
+        assert!(prompt.contains("/plain"), "got: {prompt}");
+        assert!(prompt.contains("some args"), "got: {prompt}");
+    }
+
+    #[tokio::test]
+    async fn get_prompt_rejects_non_prompt_command() {
+        let registry = CommandRegistry::new();
+        registry
+            .register(Command::Local(crate::command::LocalCommand {
+                base: base_command("localcmd"),
+                supports_non_interactive: false,
+            }))
+            .await
+            .unwrap();
+        let executor = CommandExecutor::new(registry);
+        let context = CommandContext::default();
+
+        let result = executor.get_prompt("localcmd", "", &context).await;
+        assert!(matches!(result, Err(CommandError::ExecutionError(_))));
+    }
+
+    // `register_sync` takes a blocking write lock — needs the multi-thread
+    // flavor.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn shared_executor_exposes_the_registry() {
+        let mut registry = CommandRegistry::new();
+        registry.register_sync(prompt_command("shared", Some("v: {args}")));
+        let shared = SharedExecutor::new(CommandExecutor::new(registry));
+
+        let handle = shared.registry().await;
+        let command = handle.get("shared").await.unwrap();
+        assert_eq!(command.name(), "shared");
     }
 }

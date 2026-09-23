@@ -273,7 +273,10 @@ impl ShannonApiServer {
             .route("/api/health", get(health_handler))
             .route("/api/models", get(models_handler))
             .route("/api/query", post(query_handler))
-            .route("/api/query/stream", get(query_stream_handler))
+            .route(
+                "/api/query/stream",
+                get(query_stream_handler).post(query_stream_post_handler),
+            )
             .route("/api/tools/list", post(tools_list_handler))
             .route("/api/ws", get(ws_handler))
             .route("/api/approval/respond", post(approval_respond_handler));
@@ -668,8 +671,56 @@ async fn query_handler(
     }))
 }
 
-/// SSE streaming endpoint. The caller supplies `prompt` and optional `model`
-/// as query parameters, e.g. `GET /api/query/stream?prompt=hello&model=llama3`.
+/// SSE streaming endpoint (review §P3-3). The caller supplies the prompt and
+/// optional `model` / `session_id` / `attachments` in the JSON body — the same
+/// [`QueryRequest`] shape as `POST /api/query` — instead of URL query
+/// parameters, which leak into access logs, intermediary proxies, and browser
+/// history. Prefer this route over the deprecated `GET` variant.
+async fn query_stream_post_handler(
+    State(state): State<AppState>,
+    Json(req): Json<QueryRequest>,
+) -> Result<Sse<impl futures::Stream<Item = Result<Event, Infallible>>>, ApiError> {
+    if req.prompt.trim().is_empty() {
+        return Err(ApiError {
+            status: StatusCode::BAD_REQUEST,
+            message: "prompt must not be empty".to_string(),
+        });
+    }
+
+    // Attachments follow the exact same validation rules as `POST /api/query`
+    // (shared `attachments_to_blocks`), so every entry path faces one set of
+    // MIME/size limits.
+    let attachment_blocks = match req.attachments.as_deref() {
+        None => Vec::new(),
+        Some(atts) => match attachments_to_blocks(atts) {
+            Ok(blocks) => blocks,
+            Err(message) => {
+                return Err(ApiError {
+                    status: StatusCode::BAD_REQUEST,
+                    message,
+                });
+            }
+        },
+    };
+
+    stream_query_sse(
+        state,
+        req.prompt,
+        req.model,
+        req.session_id,
+        attachment_blocks,
+    )
+    .await
+}
+
+/// SSE streaming endpoint.
+///
+/// **Deprecated (review §P3-3).** This variant takes the prompt as a URL query
+/// parameter (`GET /api/query/stream?prompt=hello&model=llama3`), which leaks
+/// the prompt into access logs, intermediary proxies, and browser history.
+/// Use `POST /api/query/stream` with a JSON [`QueryRequest`] body instead.
+/// Kept temporarily for backward compatibility with existing callers; it will
+/// be removed in a future release.
 async fn query_stream_handler(
     State(state): State<AppState>,
     axum::extract::Query(params): axum::extract::Query<std::collections::HashMap<String, String>>,
@@ -682,9 +733,25 @@ async fn query_stream_handler(
         });
     }
 
+    let model = params.get("model").cloned();
+    let session_hint = params.get("session_id").cloned();
+    stream_query_sse(state, prompt, model, session_hint, Vec::new()).await
+}
+
+/// Shared implementation behind both SSE streaming endpoints (`POST` body and
+/// the deprecated `GET` query-parameter route): build a stateless engine,
+/// serialise the session's state critical section, run the query, and convert
+/// the [`QueryEvent`] stream into SSE events.
+async fn stream_query_sse(
+    state: AppState,
+    prompt: String,
+    model: Option<String>,
+    session_id_hint: Option<String>,
+    attachments: Vec<shannon_engine::api::ContentBlock>,
+) -> Result<Sse<impl futures::Stream<Item = Result<Event, Infallible>>>, ApiError> {
     let mut config = state.client_config.clone();
-    if let Some(model) = params.get("model") {
-        config.model = model.to_string();
+    if let Some(model) = model {
+        config.model = model;
     }
 
     let client = if config.provider.requires_auth() {
@@ -701,8 +768,7 @@ async fn query_stream_handler(
     let mut engine =
         QueryEngine::with_defaults_arc(client, state.tools.clone(), permissions, state_mgr);
 
-    let session_id =
-        resolve_session_id(params.get("session_id").map(String::as_str), Uuid::new_v4());
+    let session_id = resolve_session_id(session_id_hint.as_deref(), Uuid::new_v4());
     // Review §P2-3: same per-session serialisation as the aggregate
     // endpoint. The guard is folded into the response stream (see
     // [`WithSessionGuard`]) so it is held while the SSE body is alive and
@@ -715,7 +781,7 @@ async fn query_stream_handler(
         query_id: Uuid::new_v4(),
         session_id,
         user_message: prompt,
-        attachments: Vec::new(),
+        attachments,
         metadata: QueryMetadata {
             timestamp: chrono::Utc::now(),
             tools_allowed: true,
@@ -2337,9 +2403,119 @@ mod tests {
         assert_eq!(response.status(), StatusCode::BAD_REQUEST);
     }
 
+    // ══════════════════════════════════════════════════════════════════════
+    // POST /api/query/stream (review §P3-3): prompt in the JSON body
+    // ══════════════════════════════════════════════════════════════════════
+
     #[tokio::test]
-    async fn test_query_stream_endpoint_post_method_rejected() {
+    async fn test_query_stream_post_returns_sse_stream() {
+        // Hanging mock: the handler must return the SSE response head
+        // immediately (the query streams lazily in the background), proving
+        // the POST path is wired to the streaming handler.
+        let (base_url, _gone_rx) = start_hanging_llm();
+        let app = ShannonApiServer::new(disconnect_test_config(base_url)).build_router();
+        let req = Request::builder()
+            .method("POST")
+            .uri("/api/query/stream")
+            .header("content-type", "application/json")
+            .body(Body::from(
+                serde_json::to_string(&QueryRequest {
+                    prompt: "hello".to_string(),
+                    model: Some("llama3".to_string()),
+                    session_id: None,
+                    attachments: None,
+                })
+                .unwrap(),
+            ))
+            .unwrap();
+
+        let response = tokio::time::timeout(std::time::Duration::from_secs(5), app.oneshot(req))
+            .await
+            .expect("POST stream must return the SSE response head promptly")
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        // The POST path streams SSE exactly like the GET path did.
+        assert_eq!(
+            response
+                .headers()
+                .get(axum::http::header::CONTENT_TYPE)
+                .and_then(|v| v.to_str().ok()),
+            Some("text/event-stream"),
+        );
+    }
+
+    #[tokio::test]
+    async fn test_query_stream_post_empty_prompt_returns_bad_request() {
         let app = test_app();
+        let req = Request::builder()
+            .method("POST")
+            .uri("/api/query/stream")
+            .header("content-type", "application/json")
+            .body(Body::from(
+                serde_json::to_string(&QueryRequest {
+                    prompt: String::new(),
+                    model: None,
+                    session_id: None,
+                    attachments: None,
+                })
+                .unwrap(),
+            ))
+            .unwrap();
+
+        let response = app.oneshot(req).await.unwrap();
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+        let body = read_body(response.into_body()).await;
+        let parsed: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        assert!(parsed.get("error").is_some());
+    }
+
+    #[tokio::test]
+    async fn test_query_stream_post_whitespace_prompt_returns_bad_request() {
+        let app = test_app();
+        let req = Request::builder()
+            .method("POST")
+            .uri("/api/query/stream")
+            .header("content-type", "application/json")
+            .body(Body::from(r#"{"prompt": "   "}"#))
+            .unwrap();
+
+        let response = app.oneshot(req).await.unwrap();
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+    }
+
+    #[tokio::test]
+    async fn test_query_stream_post_invalid_attachment_returns_bad_request() {
+        let app = test_app();
+        let req = Request::builder()
+            .method("POST")
+            .uri("/api/query/stream")
+            .header("content-type", "application/json")
+            .body(Body::from(
+                serde_json::json!({
+                    "prompt": "hello",
+                    "attachments": [{
+                        "media_type": "application/pdf",
+                        "data": "aGk="
+                    }]
+                })
+                .to_string(),
+            ))
+            .unwrap();
+
+        let response = app.oneshot(req).await.unwrap();
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+        let body = read_body(response.into_body()).await;
+        let parsed: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        let err = parsed.get("error").and_then(|v| v.as_str()).unwrap_or("");
+        assert!(err.contains("unsupported media_type"), "got: {err}");
+    }
+
+    #[tokio::test]
+    async fn test_query_stream_post_missing_body_returns_rejection() {
+        let app = test_app();
+        // §P3-3: the prompt must no longer be read from the query string; a
+        // POST without a JSON body cannot carry a prompt at all and must not
+        // fall back to `?prompt=...`.
         let req = Request::builder()
             .method("POST")
             .uri("/api/query/stream?prompt=hello")
@@ -2347,7 +2523,9 @@ mod tests {
             .unwrap();
 
         let response = app.oneshot(req).await.unwrap();
-        assert_eq!(response.status(), StatusCode::METHOD_NOT_ALLOWED);
+        // The Json extractor rejects the bodyless request (415 without a
+        // content type) — anything except a successful GET-style query.
+        assert_ne!(response.status(), StatusCode::OK);
     }
 
     #[tokio::test]

@@ -178,6 +178,12 @@ pub enum CoordinatorEvent {
     },
 }
 
+/// Grace period given to each tracked process-mode agent child to exit on
+/// its own during coordinator shutdown (review §P3-10) before the manager
+/// force-kills it. Matches the per-agent timeout the `disband_team` path
+/// uses.
+const PROCESS_SHUTDOWN_GRACE: std::time::Duration = std::time::Duration::from_secs(5);
+
 /// Main coordinator for managing multi-agent teams
 pub struct AgentCoordinator {
     config: CoordinatorConfig,
@@ -2709,48 +2715,76 @@ impl AgentCoordinator {
             }
         }
 
-        let teams = self.teams.write().await;
-
         // Send shutdown requests to all teammates
-        for (team_name, team) in teams.iter() {
-            tracing::debug!("Shutting down team '{}'", team_name);
+        {
+            let teams = self.teams.write().await;
+            for (team_name, team) in teams.iter() {
+                tracing::debug!("Shutting down team '{}'", team_name);
 
-            for (agent_name, teammate) in team.members.iter() {
-                tracing::debug!(
-                    "Shutting down agent '{}' in team '{}'",
-                    agent_name,
-                    team_name
-                );
-
-                // Send shutdown protocol message
-                let shutdown_msg = AgentMessage::protocol(
-                    "coordinator".to_string(),
-                    agent_name.clone(),
-                    ProtocolMessage::ShutdownRequest {
-                        reason: "Coordinator shutting down".to_string(),
-                    },
-                );
-
-                if let Err(e) = teammate.handle_message(shutdown_msg).await {
-                    tracing::warn!(
-                        team = %team_name,
-                        agent = %agent_name,
-                        error = %e,
-                        "Failed to send shutdown message during coordinator shutdown"
+                for (agent_name, teammate) in team.members.iter() {
+                    tracing::debug!(
+                        "Shutting down agent '{}' in team '{}'",
+                        agent_name,
+                        team_name
                     );
+
+                    // Send shutdown protocol message
+                    let shutdown_msg = AgentMessage::protocol(
+                        "coordinator".to_string(),
+                        agent_name.clone(),
+                        ProtocolMessage::ShutdownRequest {
+                            reason: "Coordinator shutting down".to_string(),
+                        },
+                    );
+
+                    if let Err(e) = teammate.handle_message(shutdown_msg).await {
+                        tracing::warn!(
+                            team = %team_name,
+                            agent = %agent_name,
+                            error = %e,
+                            "Failed to send shutdown message during coordinator shutdown"
+                        );
+                    }
+                    if let Err(e) = self.event_sender.send(CoordinatorEvent::AgentLeft {
+                        team: team_name.clone(),
+                        agent: agent_name.clone(),
+                    }) {
+                        tracing::warn!(
+                            team = %team_name,
+                            agent = %agent_name,
+                            error = %e,
+                            "Failed to send AgentLeft event during shutdown - no active receivers"
+                        );
+                    }
                 }
-                if let Err(e) = self.event_sender.send(CoordinatorEvent::AgentLeft {
-                    team: team_name.clone(),
-                    agent: agent_name.clone(),
-                }) {
+            }
+        }
+
+        // Review §P3-10: the protocol shutdown above only reaches in-process
+        // teammates. Process-mode agents are OS child processes tracked by
+        // the process manager — without an explicit teardown they outlive
+        // the coordinator as orphans. Reuse the same kill path as
+        // `disband_team`: graceful shutdown notification with a bounded
+        // wait, then force-kill. `kill_agent` removes the handle under the
+        // write lock before killing, so a handle is killed exactly once even
+        // if the graceful wait races an exit.
+        if let Some(ref pm) = self.process_manager {
+            for name in pm.running_agents().await {
+                if let Err(e) = pm
+                    .graceful_shutdown_agent(&name, PROCESS_SHUTDOWN_GRACE)
+                    .await
+                {
                     tracing::warn!(
-                        team = %team_name,
-                        agent = %agent_name,
+                        agent = %name,
                         error = %e,
-                        "Failed to send AgentLeft event during shutdown - no active receivers"
+                        "Failed to terminate process agent during coordinator shutdown"
                     );
                 }
             }
+            // Backstop: drain any handles the graceful pass left behind
+            // (agents that exited on their own are removed here too, so the
+            // health monitor cannot "restart" a coordinator that is gone).
+            pm.shutdown_all().await;
         }
 
         // Cleanup worktrees if enabled
@@ -3536,5 +3570,128 @@ mod tests {
         );
         let _ = tokio::time::timeout(std::time::Duration::from_secs(2), second).await;
         assert!(coordinator.running_background_tasks().await.is_empty());
+    }
+
+    // ── §P3-10: coordinator shutdown terminates process-agent children ──
+
+    /// Write a dummy process-mode agent script: records its own PID, then
+    /// stays alive (ignoring stdin and the JSON-RPC flags `spawn_agent`
+    /// prepends) until it is killed. This is the orphan case — a child that
+    /// can only be stopped by an explicit kill.
+    #[cfg(unix)]
+    fn write_dummy_agent_script(dir: &std::path::Path) -> std::path::PathBuf {
+        use std::os::unix::fs::PermissionsExt;
+
+        let pid_file = dir.join("child.pid");
+        let script = dir.join("dummy-agent.sh");
+        std::fs::write(
+            &script,
+            format!(
+                "#!/bin/sh\n# dummy process-mode agent (§P3-10 test): ignore all arguments,\n# record the PID, and sleep until killed.\necho $$ > {}\nexec sleep 30\n",
+                pid_file.display()
+            ),
+        )
+        .unwrap();
+        std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o755)).unwrap();
+        script
+    }
+
+    /// True while the process `pid` still exists (`kill -0`).
+    #[cfg(unix)]
+    fn process_alive(pid: i32) -> bool {
+        std::process::Command::new("kill")
+            .args(["-0", &pid.to_string()])
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .status()
+            .map(|s| s.success())
+            .unwrap_or(false)
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn coordinator_shutdown_terminates_process_agent_children() {
+        use crate::process_manager::AgentProcessConfig;
+        use std::collections::HashMap;
+
+        let config = CoordinatorConfig {
+            agent_mode: AgentMode::Process,
+            ..Default::default()
+        };
+        let coordinator = AgentCoordinator::new(config).await.unwrap();
+        assert!(
+            coordinator.process_manager.is_some(),
+            "process mode must wire the process manager"
+        );
+
+        let tmp = tempfile::tempdir().unwrap();
+        let script = write_dummy_agent_script(tmp.path());
+
+        // Spawn through the coordinator's OWN process manager (the one
+        // `shutdown()` tears down), not a detached instance.
+        let pm = coordinator.process_manager.as_ref().unwrap();
+        pm.spawn_agent(AgentProcessConfig {
+            binary_path: script,
+            args: vec![],
+            env: HashMap::new(),
+            worktree_path: None,
+            model: None,
+            system_prompt: None,
+            agent_name: "dummy-worker".to_string(),
+            permission_mode: None,
+            allowed_tools: None,
+            disallowed_tools: None,
+            // Generous startup headroom: the dummy never speaks the
+            // protocol, so the Starting-state guard must not fire mid-test.
+            startup_timeout_secs: 300,
+        })
+        .await
+        .expect("dummy agent process must spawn");
+
+        // The tracked child is alive before shutdown.
+        let pid_file = tmp.path().join("child.pid");
+        let pid: i32 = loop {
+            if let Ok(s) = std::fs::read_to_string(&pid_file) {
+                if let Ok(p) = s.trim().parse() {
+                    break p;
+                }
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+        };
+        let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(5);
+        while !process_alive(pid) {
+            assert!(
+                tokio::time::Instant::now() < deadline,
+                "dummy child (pid {pid}) never came up"
+            );
+            tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+        }
+        assert!(
+            pm.running_agents()
+                .await
+                .contains(&"dummy-worker".to_string()),
+            "the manager must track the spawned child"
+        );
+
+        // Act: coordinator shutdown must terminate the tracked child.
+        coordinator.shutdown().await.unwrap();
+
+        // The OS process is gone (SIGKILL + reap) within the graceful-wait
+        // budget plus margin, and the manager no longer tracks it.
+        let deadline = tokio::time::Instant::now()
+            + PROCESS_SHUTDOWN_GRACE
+            + std::time::Duration::from_secs(10);
+        while process_alive(pid) {
+            assert!(
+                tokio::time::Instant::now() < deadline,
+                "dummy child (pid {pid}) was orphaned by coordinator shutdown"
+            );
+            tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+        }
+        let tracked = pm.running_agents().await;
+        assert!(
+            !tracked.contains(&"dummy-worker".to_string()),
+            "terminated child must no longer be tracked, got: {tracked:?}"
+        );
     }
 }
