@@ -138,7 +138,7 @@ struct SignatureAgg {
     sample_session_ids: Vec<String>,
 }
 
-/// Run pattern detection. Returns the number of new candidates appended.
+/// Run pattern detection. Returns the candidates appended by this run.
 ///
 /// `sessions_dir` is normally `~/.shannon/sessions/` but injected for
 /// testability. Candidates are appended under the real `~/.shannon/desktop/`
@@ -149,7 +149,7 @@ pub fn run_detection(
     days_back: u32,
     min_sessions: usize,
     min_occurrences: u32,
-) -> Result<usize, String> {
+) -> Result<Vec<SkillCandidate>, String> {
     let candidates_dir = crate::commands_skill_candidates::desktop_dir()?;
     run_detection_in(
         &candidates_dir,
@@ -162,14 +162,15 @@ pub fn run_detection(
 
 /// Implementation of [`run_detection`] against an explicit `candidates_dir`
 /// (the `desktop` dir the candidates JSONL lives in). Production resolves it
-/// from `~/.shannon/desktop`; tests pass a tempdir.
+/// from `~/.shannon/desktop`; tests pass a tempdir. Returns the appended
+/// candidates (T5: the caller mirrors them into the unified inbox).
 fn run_detection_in(
     candidates_dir: &Path,
     sessions_dir: &Path,
     days_back: u32,
     min_sessions: usize,
     min_occurrences: u32,
-) -> Result<usize, String> {
+) -> Result<Vec<SkillCandidate>, String> {
     let paths = list_recent_sessions(sessions_dir, days_back)?;
     let mut aggregates: HashMap<String, SignatureAgg> = HashMap::new();
 
@@ -224,7 +225,7 @@ fn run_detection_in(
         }
     }
 
-    let mut appended = 0usize;
+    let mut appended: Vec<SkillCandidate> = Vec::new();
     let now = chrono::Utc::now().to_rfc3339();
     for (_sig, agg) in aggregates.iter() {
         if agg.sessions.len() < min_sessions || agg.total < min_occurrences {
@@ -259,8 +260,8 @@ fn run_detection_in(
             }],
             refined: false,
         };
-        append_candidate_in(candidates_dir, candidate)?;
-        appended += 1;
+        append_candidate_in(candidates_dir, candidate.clone())?;
+        appended.push(candidate);
     }
     Ok(appended)
 }
@@ -284,6 +285,7 @@ pub fn default_sessions_dir() -> Result<PathBuf, String> {
 #[tauri::command]
 pub async fn trigger_skill_pattern_detection(
     app: tauri::AppHandle,
+    state: tauri::State<'_, crate::commands::AppState>,
     days_back: Option<u32>,
 ) -> Result<usize, String> {
     // Privacy opt-out: when the user has disabled skill detection in
@@ -294,7 +296,16 @@ pub async fn trigger_skill_pattern_detection(
     }
     let dir = default_sessions_dir()?;
     let days = days_back.unwrap_or(7);
-    let detected = run_detection(&dir, days, DEFAULT_MIN_SESSIONS, DEFAULT_MIN_OCCURRENCES)?;
+    let appended = run_detection(&dir, days, DEFAULT_MIN_SESSIONS, DEFAULT_MIN_OCCURRENCES)?;
+    // T5 unified needs-attention stream: each newly appended candidate gets
+    // (or refreshes — dedup keys on the candidate id) a `skill_candidate`
+    // inbox entry, written at the same place the `skill-candidates-changed`
+    // event fires. Best-effort per candidate.
+    let inbox = state.inbox_store();
+    for candidate in &appended {
+        crate::inbox_session_events::record_skill_candidate(&inbox, &app, candidate);
+    }
+    let detected = appended.len();
     if detected > 0 {
         // Push instead of poll: the Header badge refreshes on the event
         // instead of sweeping the store every 30s.
@@ -384,7 +395,11 @@ mod tests {
         let candidates_dir = tempdir().unwrap();
         let result = run_detection_in(candidates_dir.path(), dir.path(), 7, 2, 3);
         let appended = result.expect("detection ran");
-        assert_eq!(appended, 1, "expected exactly one new candidate");
+        assert_eq!(appended.len(), 1, "expected exactly one new candidate");
+        // T5: the returned candidates carry the fields the inbox mirror uses.
+        let candidate = &appended[0];
+        assert!(candidate.id.starts_with("sig-"));
+        assert_eq!(candidate.proposed_name, "bash");
     }
 
     #[test]
@@ -395,7 +410,7 @@ mod tests {
         let candidates_dir = tempdir().unwrap();
         let result = run_detection_in(candidates_dir.path(), dir.path(), 7, 2, 3);
         let appended = result.expect("detection ran");
-        assert_eq!(appended, 0, "single-session pattern should not promote");
+        assert_eq!(appended.len(), 0, "single-session pattern should not promote");
     }
 
     #[test]
@@ -404,7 +419,7 @@ mod tests {
         let bogus = PathBuf::from("/tmp/shannon-nope-does-not-exist-12345");
         let result = run_detection_in(candidates_dir.path(), &bogus, 7, 2, 3);
         assert!(result.is_ok());
-        assert_eq!(result.unwrap(), 0);
+        assert_eq!(result.unwrap().len(), 0);
     }
 
     #[test]

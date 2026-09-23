@@ -5,7 +5,12 @@
 //! 1. **Inbox items** — entries the user should look at (finished routine
 //!    runs, external triggers, …). Sources: `routine` (scheduled task runs),
 //!    `scheduled_task` (alias kept for UI clarity), `goal`, `trigger`
-//!    (executions fired through the HMAC trigger endpoint). Status flow:
+//!    (executions fired through the HMAC trigger endpoint), `batch`
+//!    (best-of-N batch runs), plus the T5 unified needs-attention sources
+//!    `session_approval` / `session_failed` / `skill_candidate` — those are
+//!    deduplicated on `(source, source_id)` via
+//!    [`InboxStore::upsert_pending`] and settled via
+//!    [`InboxStore::resolve_by_source`]. Status flow:
 //!    `pending` → `read` → `archived`.
 //! 2. **Automation run history** (`routine_runs`) — *new* run records are
 //!    written here going forward. The legacy JSONL store
@@ -51,6 +56,15 @@ pub const SOURCE_GOAL: &str = "goal";
 pub const SOURCE_TRIGGER: &str = "trigger";
 /// Inbox source: desktop best-of-N batch run lifecycle (P1-2).
 pub const SOURCE_BATCH: &str = "batch";
+/// Inbox source: a session permission-approval request is awaiting the user
+/// (T5 unified needs-attention stream). Dedup entity: the session.
+pub const SOURCE_SESSION_APPROVAL: &str = "session_approval";
+/// Inbox source: the session's most recent turn failed (T5). Dedup entity:
+/// the session.
+pub const SOURCE_SESSION_FAILED: &str = "session_failed";
+/// Inbox source: a detected skill candidate awaits review (T5). Dedup
+/// entity: the candidate id.
+pub const SOURCE_SKILL_CANDIDATE: &str = "skill_candidate";
 
 /// Status vocabulary for inbox items (validated at the write boundary).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -91,6 +105,10 @@ pub enum InboxStoreError {
     Io(#[from] std::io::Error),
     #[error("invalid status: {0}")]
     BadStatus(String),
+    /// [`InboxStore::upsert_pending`] was called without a `source_id`, so
+    /// there is no dedup entity to key on.
+    #[error("upsert_pending requires a source_id (dedup entity)")]
+    MissingSourceId,
     #[error("invalid legacy triage line: {0}")]
     LegacyLine(String),
     #[error("inbox store lock poisoned")]
@@ -415,6 +433,89 @@ impl InboxStore {
         }
         self.get_item(id)?
             .ok_or(InboxStoreError::Sql(rusqlite::Error::QueryReturnedNoRows))
+    }
+
+    /// Deduplicating append for the recurring "needs attention" sources
+    /// (T5 unified stream: `session_approval` / `session_failed` /
+    /// `skill_candidate`).
+    ///
+    /// Keyed on `(source, source_id)` — the dedup entity:
+    /// - no matching row → a fresh `pending` item is appended;
+    /// - matching row → its title/summary/error and `updated_at_ms` are
+    ///   refreshed in place (no second row is ever created) **and** the item
+    ///   is reset to `pending`: a new occurrence of a needs-attention event
+    ///   needs attention again even when a previous one was already read or
+    ///   archived. The `id`/`created_at_ms` of the original entry survive.
+    ///
+    /// Errors with [`InboxStoreError::MissingSourceId`] when `item.source_id`
+    /// is empty/absent — without a dedup entity the call is a caller bug.
+    pub fn upsert_pending(&self, item: InboxItemNew) -> Result<InboxItem, InboxStoreError> {
+        let dedup_id = item
+            .source_id
+            .as_deref()
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+            .ok_or(InboxStoreError::MissingSourceId)?
+            .to_string();
+        let existing = self.find_by_source(&item.source, &dedup_id)?;
+        match existing {
+            Some(prev) => {
+                {
+                    let conn = self.lock_conn()?;
+                    self.with_busy_retry(|| {
+                        conn.execute(
+                            "UPDATE inbox_items
+                             SET title = ?1, summary = ?2, error = ?3,
+                                 status = 'pending', updated_at_ms = ?4
+                             WHERE id = ?5",
+                            params![item.title, item.summary, item.error, now_ms(), prev.id],
+                        )?;
+                        Ok(())
+                    })?;
+                }
+                self.get_item(prev.id)?
+                    .ok_or(InboxStoreError::Sql(rusqlite::Error::QueryReturnedNoRows))
+            }
+            None => self.append_item(item),
+        }
+    }
+
+    /// Find the deduplicated entry for `(source, source_id)`, if any.
+    pub fn find_by_source(
+        &self,
+        source: &str,
+        source_id: &str,
+    ) -> Result<Option<InboxItem>, InboxStoreError> {
+        let conn = self.lock_conn()?;
+        conn.query_row(
+            "SELECT id, source, source_id, session_id, title, summary, error, status, created_at_ms, updated_at_ms
+             FROM inbox_items WHERE source = ?1 AND source_id = ?2
+             ORDER BY id DESC LIMIT 1",
+            params![source, source_id],
+            row_to_item,
+        )
+        .optional()
+        .map_err(InboxStoreError::from)
+    }
+
+    /// Resolve the deduplicated entry for `(source, source_id)` — mark it
+    /// read / archive it once the underlying event has been handled (T5
+    /// "resolve-as-read"). Best-effort by design: `Ok(None)` when no matching
+    /// item exists or it is already in the requested status, so callers can
+    /// fire this on every command path without polling or error noise.
+    pub fn resolve_by_source(
+        &self,
+        source: &str,
+        source_id: &str,
+        status: InboxStatus,
+    ) -> Result<Option<InboxItem>, InboxStoreError> {
+        let Some(item) = self.find_by_source(source, source_id)? else {
+            return Ok(None);
+        };
+        if item.status == status.as_str() {
+            return Ok(Some(item));
+        }
+        self.update_status(item.id, status).map(Some)
     }
 
     /// Badge counts: pending items and items created today (local time).
@@ -832,6 +933,148 @@ mod tests {
 
         // Exactly one item remains — the refresh is in place, not append.
         assert_eq!(store.list(None, None, 10).unwrap().len(), 1);
+    }
+
+    // ── upsert_pending / resolve_by_source (T5 unified stream) ─────────
+
+    fn attention_item(source: &str, source_id: &str, title: &str) -> InboxItemNew {
+        InboxItemNew {
+            source: source.to_string(),
+            source_id: Some(source_id.to_string()),
+            session_id: Some("0195abcd-0000-7000-8000-000000000009".into()),
+            title: title.into(),
+            summary: "first occurrence".into(),
+            error: None,
+        }
+    }
+
+    #[test]
+    fn upsert_pending_dedups_one_row_per_entity_and_refreshes_content() {
+        let store = InboxStore::open_in_memory().unwrap();
+        let first = store
+            .upsert_pending(attention_item(
+                SOURCE_SESSION_FAILED,
+                "sess-1",
+                "Session abc12345",
+            ))
+            .unwrap();
+        // Force a distinguishable creation timestamp so we can assert the
+        // original entry's id/created_at survive the refresh.
+        {
+            let conn = store.lock_conn().unwrap();
+            conn.execute(
+                "UPDATE inbox_items SET created_at_ms = 1_000 WHERE id = ?1",
+                params![first.id],
+            )
+            .unwrap();
+        }
+
+        // Same entity again: no second row, content refreshed in place.
+        let second = store
+            .upsert_pending(InboxItemNew {
+                summary: "second occurrence".into(),
+                error: Some("boom again".into()),
+                ..attention_item(SOURCE_SESSION_FAILED, "sess-1", "Session abc12345 renamed")
+            })
+            .unwrap();
+        assert_eq!(second.id, first.id, "dedup must update, never append");
+        assert_eq!(second.created_at_ms, 1_000, "original entry is kept");
+        assert_eq!(second.title, "Session abc12345 renamed");
+        assert_eq!(second.summary, "second occurrence");
+        assert_eq!(second.error.as_deref(), Some("boom again"));
+        assert_eq!(store.list(None, None, 10).unwrap().len(), 1);
+
+        // A different entity (or a different source) is a separate entry —
+        // "same turn fails then asks approval" style combinations never merge.
+        store
+            .upsert_pending(attention_item(SOURCE_SESSION_FAILED, "sess-2", "other session"))
+            .unwrap();
+        store
+            .upsert_pending(attention_item(SOURCE_SESSION_APPROVAL, "sess-1", "bash"))
+            .unwrap();
+        let all = store.list(None, None, 10).unwrap();
+        assert_eq!(all.len(), 3);
+        assert_eq!(
+            store
+                .list(None, Some(SOURCE_SESSION_FAILED), 10)
+                .unwrap()
+                .len(),
+            2
+        );
+    }
+
+    #[test]
+    fn upsert_pending_reopens_a_handled_entry() {
+        let store = InboxStore::open_in_memory().unwrap();
+        let item = store
+            .upsert_pending(attention_item(SOURCE_SESSION_APPROVAL, "sess-1", "bash"))
+            .unwrap();
+        assert_eq!(item.status, "pending");
+        store.update_status(item.id, InboxStatus::Read).unwrap();
+        store.update_status(item.id, InboxStatus::Archived).unwrap();
+
+        // A new occurrence after the user dismissed the entry must surface
+        // again — the stream is "needs attention", not a log.
+        let again = store
+            .upsert_pending(attention_item(SOURCE_SESSION_APPROVAL, "sess-1", "python"))
+            .unwrap();
+        assert_eq!(again.id, item.id);
+        assert_eq!(again.status, "pending", "re-opens after read/archived");
+    }
+
+    #[test]
+    fn upsert_pending_without_source_id_is_an_error() {
+        let store = InboxStore::open_in_memory().unwrap();
+        let err = store
+            .upsert_pending(InboxItemNew {
+                source_id: None,
+                ..attention_item(SOURCE_SESSION_FAILED, "sess-1", "x")
+            })
+            .unwrap_err();
+        assert!(err.to_string().contains("source_id"));
+        let err = store
+            .upsert_pending(InboxItemNew {
+                source_id: Some("   ".into()),
+                ..attention_item(SOURCE_SESSION_FAILED, "sess-1", "x")
+            })
+            .unwrap_err();
+        assert!(err.to_string().contains("source_id"));
+        assert!(store.list(None, None, 10).unwrap().is_empty());
+    }
+
+    #[test]
+    fn resolve_by_source_marks_read_is_idempotent_and_tolerates_missing() {
+        let store = InboxStore::open_in_memory().unwrap();
+        // Nothing written yet: resolving is a silent no-op.
+        assert!(
+            store
+                .resolve_by_source(SOURCE_SESSION_FAILED, "sess-1", InboxStatus::Read)
+                .unwrap()
+                .is_none()
+        );
+
+        let item = store
+            .upsert_pending(attention_item(SOURCE_SESSION_FAILED, "sess-1", "Session x"))
+            .unwrap();
+        let resolved = store
+            .resolve_by_source(SOURCE_SESSION_FAILED, "sess-1", InboxStatus::Read)
+            .unwrap()
+            .unwrap();
+        assert_eq!(resolved.id, item.id);
+        assert_eq!(resolved.status, "read");
+
+        // Already read → no-op, still Ok(Some) so callers need no special case.
+        let again = store
+            .resolve_by_source(SOURCE_SESSION_FAILED, "sess-1", InboxStatus::Read)
+            .unwrap()
+            .unwrap();
+        assert_eq!(again.status, "read");
+
+        // A different entity stays untouched.
+        let other = store
+            .upsert_pending(attention_item(SOURCE_SESSION_FAILED, "sess-2", "Session y"))
+            .unwrap();
+        assert_eq!(other.status, "pending");
     }
 
     // ── stats ───────────────────────────────────────────────────────────
