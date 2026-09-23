@@ -31,6 +31,13 @@ const testMessages: Record<string, string> = {
   'inbox.source.goal': 'Goal',
   'inbox.source.trigger': 'Trigger',
   'inbox.source.batch': 'Batch',
+  'inbox.source.session_approval': 'Approval',
+  'inbox.source.session_failed': 'Session failed',
+  'inbox.source.skill_candidate': 'Skill candidate',
+  'inbox.action.viewSession': 'View session',
+  'inbox.action.viewSession.aria': 'Open the session this item came from',
+  'inbox.review.label': 'Review',
+  'inbox.review.aria': 'Review this skill candidate in Extensions → Pending',
   'inbox.sort.aria': 'Toggle sort order',
   'inbox.sort.newest': 'Newest first',
   'inbox.sort.oldest': 'Oldest first',
@@ -467,5 +474,89 @@ describe('Triage — cross links (IA T2)', () => {
     setItems([makeItem({ id: 1 })])
     renderPage()
     expect(document.querySelector('[data-highlight="true"]')).toBeNull()
+  })
+})
+
+// IA T6 (收件箱升级): session sources read "View session", skill candidates
+// link to the Extensions → Pending review queue (互通), pending items pin to
+// the top of the default view, and the three new sources are filterable.
+describe('Triage — session sources, skill candidates and pending pinning (IA T6/X1)', () => {
+  it('shows「View session」as the primary action for a session_approval item and switches to it', async () => {
+    const { getSessionId } = setItems([
+      makeItem({ id: 11, source: 'session_approval', sessionId: 'sess-77', title: 'Permission requested' }),
+    ])
+    renderPage()
+    const btn = screen.getByRole('button', { name: 'Open the session this item came from' })
+    expect(btn).toHaveTextContent('View session')
+    // The automation-facing「Resume session」wording stays off approval cards.
+    expect(screen.queryByRole('button', { name: 'Continue this item session' })).not.toBeInTheDocument()
+    fireEvent.click(btn)
+    await waitFor(() => expect(getSessionId).toHaveBeenCalledWith(11))
+    await waitFor(() => expect(switchSessionSpy).toHaveBeenCalledWith('sess-006'))
+    await waitFor(() => expect(screen.getByTestId('location')).toHaveTextContent('/chat'))
+  })
+
+  it('shows「View session」for a session_failed item too', () => {
+    setItems([makeItem({ id: 12, source: 'session_failed', sessionId: 'sess-88', title: 'Turn failed' })])
+    renderPage()
+    expect(screen.getByRole('button', { name: 'Open the session this item came from' })).toBeInTheDocument()
+  })
+
+  it('keeps「Resume session」as the primary action for automation sources', () => {
+    setItems([makeItem({ id: 13, source: 'routine', sessionId: 'sess-99' })])
+    renderPage()
+    expect(screen.getByRole('button', { name: 'Continue this item session' })).toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: 'Open the session this item came from' })).not.toBeInTheDocument()
+  })
+
+  it('shows「Review」on a skill_candidate card and jumps to /extensions/pending with the candidate id', () => {
+    setItems([makeItem({ id: 21, source: 'skill_candidate', sourceId: 'cand-42', title: 'Recurring deploy pattern' })])
+    renderPage()
+    const btn = screen.getByRole('button', { name: 'Review this skill candidate in Extensions → Pending' })
+    expect(btn).toHaveTextContent('Review')
+    fireEvent.click(btn)
+    const probe = screen.getByTestId('location')
+    expect(probe).toHaveTextContent('/extensions/pending')
+    expect(JSON.parse(probe.getAttribute('data-state')!)).toEqual({ skillCandidateId: 'cand-42' })
+  })
+
+  it('hides「Review」on items that are not skill candidates', () => {
+    setItems([makeItem({ id: 22, source: 'routine', sourceId: 'sched-001' })])
+    renderPage()
+    expect(screen.queryByRole('button', { name: /Review this skill candidate/ })).not.toBeInTheDocument()
+  })
+
+  it('pins pending items above read items in the default (newest) sort', () => {
+    setItems([
+      makeItem({ id: 1, status: 'read', title: 'Newer read', createdAtMs: 9_000 }),
+      makeItem({ id: 2, status: 'pending', title: 'Older pending', createdAtMs: 1_000 }),
+    ])
+    const { container } = renderPage()
+    const cards = container.querySelectorAll('.glass-panel')
+    expect(cards[0]).toHaveTextContent('Older pending')
+    expect(cards[1]).toHaveTextContent('Newer read')
+    // Pinning survives the sort toggle; time order stays stable inside a band.
+    fireEvent.click(screen.getByRole('button', { name: 'Toggle sort order' }))
+    const cardsAfter = container.querySelectorAll('.glass-panel')
+    expect(cardsAfter[0]).toHaveTextContent('Older pending')
+    expect(cardsAfter[1]).toHaveTextContent('Newer read')
+  })
+
+  it('filters the three new sources through the source dropdown', () => {
+    const { setFilter } = setItems([makeItem({ id: 1 })])
+    renderPage()
+    const cases: Array<[RegExp, string]> = [
+      [/approval/i, 'session_approval'],
+      [/session failed/i, 'session_failed'],
+      [/skill candidate/i, 'skill_candidate'],
+    ]
+    for (const [label, source] of cases) {
+      fireEvent.click(screen.getByRole('button', { name: 'Source' }))
+      const items = screen.getAllByRole('menuitem')
+      const target = items.find(el => label.test(el.textContent || ''))
+      expect(target, `menu item for ${source}`).toBeTruthy()
+      fireEvent.click(target!)
+      expect(setFilter).toHaveBeenCalledWith({ status: undefined, source })
+    }
   })
 })
