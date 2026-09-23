@@ -9,12 +9,14 @@
 //!    (best-of-N batch runs), plus the T5 unified needs-attention sources
 //!    `session_approval` / `session_failed` / `skill_candidate` — those are
 //!    deduplicated on `(source, source_id)` via
-//!    [`InboxStore::upsert_pending`] and settled via
-//!    [`InboxStore::resolve_by_source`]. Status flow:
+//!    [`InboxStore::upsert_pending`](inbox_store::InboxStore::upsert_pending)
+//!    and settled via
+//!    [`InboxStore::resolve_by_source`](inbox_store::InboxStore::resolve_by_source).
+//!    Status flow:
 //!    `pending` → `read` → `archived`.
 //! 2. **Automation run history** (`routine_runs`) — the **authoritative**
 //!    read source for run history since T7 (`list_task_executions` reads it;
-//!    [`InboxStore::import_run`] is the idempotent backfill primitive for
+//!    [`InboxStore::import_run`](inbox_store::InboxStore::import_run) is the idempotent backfill primitive for
 //!    legacy rows). The legacy JSONL store
 //!    (`crates/shannon_core::scheduled_runs`) still receives the same runs
 //!    (mirrored by the desktop, best-effort) and serves as the read
