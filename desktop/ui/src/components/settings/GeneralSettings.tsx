@@ -11,6 +11,8 @@ import { useNotification } from '@/hooks/useNotification'
 import * as api from '@/lib/tauri-api'
 import { toastError } from '@/lib/errorToast'
 import { readDensityPref, setDensityPref, type DensityPref } from '@/lib/density'
+import { Switch } from '@/components/ui/switch'
+import { useArtifact } from '@/components/artifact/ArtifactContext'
 import type { ApprovalMode } from '@/types'
 import { WELCOME_SEEN_KEY } from '@/pages/Welcome'
 import MigrationWizard from '@/components/migration/MigrationWizard'
@@ -41,6 +43,9 @@ export default function GeneralSettings() {
   const intl = useIntl()
   const navigate = useNavigate()
   const t = (id: string) => intl.formatMessage({ id })
+  // Batch D4: artifact auto-open — app-scoped ArtifactContext (Settings and
+  // the Chat dock share the same live preference).
+  const { autoOpen, setAutoOpen: setArtifactAutoOpen } = useArtifact()
   const { locale, setLocale } = useI18n()
   const notify = useNotification()
   const [approvalMode, setApprovalMode] = useState<number>(2) // default to "plan"
@@ -205,6 +210,19 @@ export default function GeneralSettings() {
         <section className="bg-surface-container-lowest rounded-xl border border-outline-variant/30 p-xl shadow-sm">
           <h3 className="font-headline-md text-headline-md mb-md">{t('settings.general.sessionInfo.title')}</h3>
           <div className="space-y-sm">
+            {/* Batch D4: artifact auto-open preference (recovered from the
+                retired ArtifactPanel — now the only surface for the toggle). */}
+            <div className="flex justify-between items-center py-sm gap-md">
+              <span className="min-w-0">
+                <span className="font-label-md text-on-surface block">{t('settings.general.artifactAutoOpen.title')}</span>
+                <span className="font-label-sm text-on-surface-variant block">{t('settings.general.artifactAutoOpen.description')}</span>
+              </span>
+              <Switch
+                checked={autoOpen}
+                onCheckedChange={setArtifactAutoOpen}
+                aria-label={t('settings.general.artifactAutoOpen.title')}
+              />
+            </div>
             <div className="flex justify-between items-center py-sm">
               <span className="font-label-md text-on-surface-variant">{t('settings.general.sessionInfo.activeProvider')}</span>
               <span className="font-label-md text-on-surface font-bold">{config?.provider ?? t('settings.general.sessionInfo.notConfigured')}</span>

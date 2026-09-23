@@ -307,11 +307,15 @@ describe('MigrationWizard entry points', () => {
 
   it('opens from Settings → General ("Import from other tools")', async () => {
     const { AppProvider } = await import('@/context/AppContext')
+    const { ArtifactProvider } = await import('@/components/artifact/ArtifactContext')
     const { default: GeneralSettings } = await import('@/components/settings/GeneralSettings')
     render(
       <AppProvider>
         <MemoryRouter>
-          <GeneralSettings />
+          {/* Batch D4: GeneralSettings consumes the app-level artifact context. */}
+          <ArtifactProvider>
+            <GeneralSettings />
+          </ArtifactProvider>
         </MemoryRouter>
       </AppProvider>,
     )

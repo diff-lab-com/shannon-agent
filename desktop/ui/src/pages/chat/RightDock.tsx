@@ -18,18 +18,23 @@
 //   shannon.dock.tab   — last active tab
 //   shannon.dock.width — dock width in px (280–720, clamped to viewport)
 
-import { useCallback, useEffect, useRef, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { toast } from 'sonner'
+import { save } from '@tauri-apps/plugin-dialog'
 import { Button } from '@/components/ui/button'
 import { cn } from '@/lib/utils'
+import { toastError } from '@/lib/errorToast'
 import { useT } from '@/i18n'
-import { useArtifact } from '@/components/artifact/ArtifactContext'
+import * as api from '@/lib/tauri-api'
+import { useArtifact, type ArtifactItem } from '@/components/artifact/ArtifactContext'
 import { artifactIcon } from '@/components/artifact/detectArtifact'
-import { artifactDisplayTitle } from '@/components/artifact/labels'
+import { artifactDisplayTitle, artifactKindLabel } from '@/components/artifact/labels'
+import { DocumentToc } from '@/components/artifact/DocumentToc'
 import { DocumentRenderer } from '@/components/artifact/DocumentRenderer'
 import { HtmlRenderer } from '@/components/artifact/HtmlRenderer'
 import { MermaidRenderer } from '@/components/artifact/MermaidRenderer'
 import { SvgRenderer } from '@/components/artifact/SvgRenderer'
+import { projectOf } from '@/components/SidebarSessions'
 import DiffReviewBody from '@/components/diff/DiffReviewBody'
 import type { ToolCall, UsagePayload } from '@/types'
 import { ContextPanelContent } from './ContextPanel'
@@ -42,10 +47,17 @@ type DockTab = UtilityTab | `a:${string}`
 
 const TAB_KEY = 'shannon.dock.tab'
 const WIDTH_KEY = 'shannon.dock.width'
+const FULLSCREEN_KEY = 'shannon.dock.fullscreen'
 const MIN_WIDTH = 280
 const MAX_WIDTH = 720
 const DEFAULT_WIDTH = 340
 const UTILITY_TABS: readonly UtilityTab[] = ['context', 'plan', 'live', 'diff']
+
+/** Batch D4: dock fullscreen — the reading position from the dead-code
+ *  ArtifactPanel, revived inside the unified dock. */
+function readFullscreen(): boolean {
+  try { return localStorage.getItem(FULLSCREEN_KEY) === '1' } catch { return false }
+}
 
 function readTab(): DockTab {
   try {
@@ -92,6 +104,7 @@ export default function RightDock({
   const { artifacts, setActive, close: closeArtifact } = useArtifact()
   const [tab, setTab] = useState<DockTab>(readTab)
   const [width, setWidth] = useState<number>(readWidth)
+  const [fullscreen, setFullscreen] = useState<boolean>(readFullscreen)
   // Q11: a one-time hint the first time the user opens the dock — they
   // learn Ctrl+\ can toggle it. Dismissed by interaction; never shown twice.
   const [hintDismissed, setHintDismissed] = useState<boolean>(
@@ -110,6 +123,16 @@ export default function RightDock({
   useEffect(() => {
     try { localStorage.setItem(WIDTH_KEY, String(width)) } catch { /* ignore */ }
   }, [width])
+
+  useEffect(() => {
+    try { localStorage.setItem(FULLSCREEN_KEY, fullscreen ? '1' : '0') } catch { /* ignore */ }
+  }, [fullscreen])
+
+  // Closing the dock (Header Ctrl+\, collapse button) also exits fullscreen —
+  // an empty fullscreen overlay must never outlive its content.
+  useEffect(() => {
+    if (!open && fullscreen) setFullscreen(false)
+  }, [open, fullscreen])
 
   const onPointerMove = useCallback((e: PointerEvent) => {
     if (!draggingRef.current) return
@@ -211,13 +234,23 @@ export default function RightDock({
       aria-label={t('chat.dock.aria')}
       // Keyboard-scrollable region (axe scrollable-region-focusable).
       tabIndex={0}
-      className="glass-panel shrink-0 relative flex flex-col overflow-hidden border-l border-outline-variant/10 bg-surface-container-lowest/50 transition-all duration-300 ease-in-out"
-      style={{
-        width: open ? width : 0,
-        borderWidth: open ? undefined : 0,
-        opacity: open ? 1 : 0,
-      }}
-      inert={!open}
+      className={cn(
+        fullscreen
+          ? // Batch D4: fullscreen reading position — the dock covers the
+            // window (above the chat, below toasts) instead of hugging it.
+            'glass-panel fixed inset-0 z-modal flex flex-col overflow-hidden bg-surface-container-lowest'
+          : 'glass-panel shrink-0 relative flex flex-col overflow-hidden border-l border-outline-variant/10 bg-surface-container-lowest/50 transition-all duration-300 ease-in-out',
+      )}
+      style={
+        fullscreen
+          ? undefined
+          : {
+              width: open ? width : 0,
+              borderWidth: open ? undefined : 0,
+              opacity: open ? 1 : 0,
+            }
+      }
+      inert={!open && !fullscreen}
     >
       {open && (
         <>
@@ -306,6 +339,18 @@ export default function RightDock({
               type="button"
               variant="ghost"
               size="icon-sm"
+              onClick={() => setFullscreen(v => !v)}
+              aria-label={t(fullscreen ? 'chat.dock.fullscreenExit.aria' : 'chat.dock.fullscreen.aria')}
+              title={t(fullscreen ? 'chat.dock.fullscreenExit.aria' : 'chat.dock.fullscreen.aria')}
+              aria-pressed={fullscreen}
+              className="text-on-surface-variant hover:text-on-surface hover:bg-surface-container shrink-0"
+            >
+              <span className="material-symbols-outlined icon-sm">{fullscreen ? 'fullscreen_exit' : 'fullscreen'}</span>
+            </Button>
+            <Button
+              type="button"
+              variant="ghost"
+              size="icon-sm"
               onClick={onClose}
               aria-label={t('chat.dock.close.aria')}
               title={t('chat.dock.close.aria')}
@@ -334,7 +379,7 @@ export default function RightDock({
             )}
             {activeArtifact && (
               <div className="-m-lg flex flex-col min-h-0 h-full">
-                <ArtifactDocBody artifact={activeArtifact} />
+                <ArtifactDocBody artifact={activeArtifact} workingDir={workingDir} />
               </div>
             )}
             {!activeArtifact && tab.startsWith('a:') && (
@@ -347,10 +392,22 @@ export default function RightDock({
   )
 }
 
-/** Per-document body: rendered artifact + a slim copy/export/code row. */
-function ArtifactDocBody({ artifact }: { artifact: { id: string; kind: string; source: string; title: string } }) {
+/** Per-document body — the batch D reader: breadcrumb (项目 › 文档) +
+ *  metadata row, render/code/copy/export actions, and the D1 TOC rail for
+ *  multi-section documents (the ZCode 阅读器 grammar). */
+const DOC_FILE_EXT: Record<string, string> = {
+  html: 'html',
+  svg: 'svg',
+  mermaid: 'mmd',
+  document: 'md',
+}
+
+function ArtifactDocBody({ artifact, workingDir }: { artifact: ArtifactItem; workingDir: string | null }) {
   const t = useT()
   const [showCode, setShowCode] = useState(false)
+  const displayTitle = artifactDisplayTitle(artifact, t)
+  const project = workingDir ? projectOf({ working_dir: workingDir }) : null
+  const lineCount = useMemo(() => artifact.source.split('\n').length, [artifact.source])
 
   const handleCopy = async () => {
     try {
@@ -359,8 +416,43 @@ function ArtifactDocBody({ artifact }: { artifact: { id: string; kind: string; s
     } catch { /* clipboard unavailable — ignore */ }
   }
 
+  // Batch D4: export to disk — ported from the dead-code ArtifactPanel
+  // (save dialog + saveTextFile), now living where the document actually
+  // renders.
+  const handleExport = async () => {
+    const ext = DOC_FILE_EXT[artifact.kind] ?? 'txt'
+    try {
+      const path = await save({
+        defaultPath: `${displayTitle.replace(/[^a-zA-Z0-9-_]+/g, '_').slice(0, 60) || 'artifact'}.${ext}`,
+        filters: [{ name: ext.toUpperCase(), extensions: [ext] }],
+      })
+      if (!path) return
+      await api.saveTextFile(path, artifact.source)
+      toast.success(t('chat.artifact.exported'))
+    } catch (err) {
+      toastError(t('chat.artifact.exportFailed'), err)
+    }
+  }
+
   return (
     <div className="flex flex-col min-h-0 flex-1">
+      {/* D2 breadcrumb: project › document, with the metadata badges beside. */}
+      <div className="flex items-center gap-xs pb-sm shrink-0 min-w-0" data-testid="artifact-doc-header">
+        <span className="material-symbols-outlined icon-sm text-on-surface-variant shrink-0" aria-hidden="true">folder_open</span>
+        <span className="font-label-sm text-on-surface-variant truncate" title={project ?? undefined}>
+          {project ?? t('sidebar.sessions.project.untitled')}
+        </span>
+        <span className="material-symbols-outlined text-[13px] text-on-surface-variant shrink-0" aria-hidden="true">chevron_right</span>
+        <span className="font-label-sm font-bold text-on-surface truncate flex-1 min-w-0" title={displayTitle}>
+          {displayTitle}
+        </span>
+        <span className="font-label-xs text-on-surface-variant px-xs py-[1px] rounded bg-surface-container-high shrink-0">
+          {artifactKindLabel(artifact.kind, t)}
+        </span>
+        <span className="font-mono text-[10px] tabular-nums text-on-surface-variant shrink-0" title={t('chat.artifact.lines.aria', { n: lineCount })}>
+          {lineCount}L
+        </span>
+      </div>
       <div className="flex items-center gap-xs pb-sm shrink-0">
         <Button
           type="button"
@@ -386,16 +478,30 @@ function ArtifactDocBody({ artifact }: { artifact: { id: string; kind: string; s
           <span className="material-symbols-outlined icon-sm align-middle" aria-hidden="true">content_copy</span>
           <span className="align-middle ml-xs hidden md:inline">{t('chat.artifact.copy')}</span>
         </Button>
+        <Button
+          type="button"
+          variant="ghost"
+          size="sm"
+          onClick={() => void handleExport()}
+          className="gap-0 px-sm h-auto py-xs rounded-lg text-on-surface-variant hover:bg-surface-container hover:text-on-surface"
+        >
+          <span className="material-symbols-outlined icon-sm align-middle" aria-hidden="true">download</span>
+          <span className="align-middle ml-xs hidden md:inline">{t('chat.artifact.export')}</span>
+        </Button>
       </div>
-      <div className="flex-1 min-h-0 overflow-hidden">
-        {showCode ? (
-          <pre className="h-full overflow-auto font-mono text-[12px] whitespace-pre-wrap break-words text-on-surface p-sm bg-surface-container-low/50 rounded-lg">
-            {artifact.source}
-          </pre>
-        ) : artifact.kind === 'html' ? <HtmlRenderer source={artifact.source} title={artifact.title} />
-          : artifact.kind === 'svg' ? <SvgRenderer source={artifact.source} title={artifact.title} />
-            : artifact.kind === 'mermaid' ? <MermaidRenderer source={artifact.source} title={artifact.title} />
-              : <DocumentRenderer source={artifact.source} />}
+      <div className="flex-1 min-h-0 overflow-hidden flex gap-sm min-w-0">
+        <div className="flex-1 min-w-0 min-h-0">
+          {showCode ? (
+            <pre className="h-full overflow-auto font-mono text-[12px] whitespace-pre-wrap break-words text-on-surface p-sm bg-surface-container-low/50 rounded-lg">
+              {artifact.source}
+            </pre>
+          ) : artifact.kind === 'html' ? <HtmlRenderer source={artifact.source} title={artifact.title} />
+            : artifact.kind === 'svg' ? <SvgRenderer source={artifact.source} title={artifact.title} />
+              : artifact.kind === 'mermaid' ? <MermaidRenderer source={artifact.source} title={artifact.title} />
+                : <DocumentRenderer source={artifact.source} />}
+        </div>
+        {/* D1: the reader's TOC rail — multi-section documents only. */}
+        {artifact.kind === 'document' && !showCode && <DocumentToc source={artifact.source} />}
       </div>
     </div>
   )

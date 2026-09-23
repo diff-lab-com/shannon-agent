@@ -116,7 +116,9 @@ export function formatRelativeTime(
   } catch { return '' }
 }
 
-function projectOf(s: { working_dir?: string | null }): string | null {
+/** Project name from a session/working dir — the last path segment.
+ *  Exported for the dock's document breadcrumb (batch D2). */
+export function projectOf(s: { working_dir?: string | null }): string | null {
   const dir = s.working_dir?.trim()
   if (!dir) return null
   const parts = dir.split('/').filter(Boolean)
