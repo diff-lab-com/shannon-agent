@@ -28,7 +28,7 @@ Shannon 是完全开源（Apache-2.0）、基于 Rust 的 **AI agent 工作台**
 
 ### 1. 开源可控
 
-- **每一行代码可审计** —— Apache-2.0，无黑盒。<!-- metrics:start:intro -->每一行代码都可审计，每一个行为都经过 **12,635** 个自动化测试验证。<!-- metrics:end:intro -->
+- **每一行代码可审计** —— Apache-2.0，无黑盒。<!-- metrics:start:intro -->每一行代码都可审计，每一个行为都经过 **12,663** 个自动化测试验证。<!-- metrics:end:intro -->
 - **每一步 agent 行为可回放** —— 会话采用事件溯源：每轮追加写入 `events.jsonl`，`shannon trace show / replay / diff / export` 让你完整还原 agent 到底做了什么——agent 的行车记录仪。
 - **每一分成本可见** —— BYOK 按量付费，会话预算上限、上下文分类拆解、缓存命中率可见，没有订阅额度黑盒。
 - **零供应商锁定** —— 随时切换提供商；上游涨价、型号退役都困不住你。兼容 Claude Code 生态：`CLAUDE.md`、`.claude/` agents、skills、hooks、`.mcp.json` 开箱即用。
@@ -51,7 +51,7 @@ Shannon 是完全开源（Apache-2.0）、基于 Rust 的 **AI agent 工作台**
 | LLM 提供商 | 任意（BYOK） | 单一供应商 | 多家 / 任意 |
 | 成本模型 | 按量付费 + 预算上限 + 拆解可见 | 订阅额度 / credits | BYOK |
 | 可审计性 | 事件溯源会话，`trace` 回放/diff | 各不相同，多为黑盒 | 各不相同 |
-<!-- metrics:start:diffrow -->| 测试覆盖 | **12,635** 个测试，覆盖 22 个 workspace 成员 | 不适用（闭源） | 各不相同 |<!-- metrics:end:diffrow -->
+<!-- metrics:start:diffrow -->| 测试覆盖 | **12,663** 个测试，覆盖 22 个 workspace 成员 | 不适用（闭源） | 各不相同 |<!-- metrics:end:diffrow -->
 | 产品形态 | 终端 + 无头 + 服务 + 桌面，一个引擎 | 各不相同 | 各不相同 |
 
 ---
@@ -161,6 +161,22 @@ Shannon 是完全开源（Apache-2.0）、基于 Rust 的 **AI agent 工作台**
 - **记忆系统** —— 持久化记忆（带溯源）、桌面记忆页、自动提取和整合
 - **检查点/撤销** —— 基于 Git 的文件检查点，回退前显示 Diff 预览（`/rewind`）
 - **计划模式** —— 结构化规划与审批工作流
+
+### 权限模式
+
+代理无需确认即可执行的操作范围由审批模式（approval mode）控制。每个名称各有一个明确含义 —— 特别注意 `auto`、`full-auto` 与 Auto 分类器是三个不同的模式：
+
+| 模式 | 行为 |
+|---|---|
+| `default`（suggest） | 每次工具执行都需确认。 |
+| `plan` | 代理先给出计划；计划获批后，计划内的工具调用不再逐个确认。 |
+| `auto`（auto-edit） | 仅自动批准文件编辑/写入 —— shell 等高风险工具仍会询问。这是引擎默认值。 |
+| `full-auto` | 自动批准除关键风险操作外的一切。 |
+| `auto-classifier` | 由后台安全分类器逐操作判定：低风险静默执行，中/高风险询问，关键风险直接拒绝。 |
+| `readonly` / `plan-readonly` | 仅允许只读操作；`plan-readonly` 进一步禁止所有工具执行（仅分析）。 |
+| `bypass-permissions` / `dont-ask` | 从不询问 —— 包括关键风险操作。请务必谨慎。 |
+
+终端中 BackTab 依次切换常用模式（default → auto → plan → full-auto）；桌面端在「设置 → 通用」与聊天顶栏的模式切换器中提供。
 
 ### 插件与技能系统
 
@@ -459,7 +475,7 @@ WIP 推送旁路：`git push --no-verify` 或 `PRE_PUSH_QUICK=1 git push`（仅 
 |------|------|
 | Rust 代码总量 | 523,085 行 |
 | 源文件数 | 752 |
-| 总测试数（nextest 可运行） | **12,635** |
+| 总测试数（nextest 可运行） | **12,663** |
 | Crate 数（workspace 成员） | 22（21 个 crate + desktop） |
 | 零测试 Crate 数 | 1（`shannon-stability-attr`） |
 | CI 代码检查 | `cargo clippy --workspace -- -D warnings`（零警告） |

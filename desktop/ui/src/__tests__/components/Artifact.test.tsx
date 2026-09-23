@@ -6,6 +6,14 @@ import { detectArtifacts } from '@/components/artifact/detectArtifact'
 import { ArtifactProvider, useArtifact } from '@/components/artifact/ArtifactContext'
 import { ArtifactChip } from '@/components/artifact/ArtifactChip'
 
+// Review §P2-17: mock the lazily-imported bundled mermaid so these tests
+// don't pull the real (heavy) mermaid bundle into jsdom. `vi.hoisted` is
+// required because vi.mock factories are hoisted above file-level consts.
+const { mermaidMock } = vi.hoisted(() => ({
+  mermaidMock: { initialize: vi.fn(), render: vi.fn() },
+}))
+vi.mock('mermaid', () => ({ default: mermaidMock }))
+
 /** Batch D4: ArtifactPanel was retired — the dock (RightDock) hosts open
  *  artifacts, so these tests observe the context through a probe. */
 function ArtifactProbe() {
@@ -265,32 +273,51 @@ describe('HtmlRenderer security', () => {
   })
 })
 
+// Review §P2-17: mermaid is a bundled npm dependency (lazy chunk), and the
+// iframe only receives the rendered SVG under a script-less CSP — no CDN.
 describe('MermaidRenderer', () => {
-  it('renders iframe with sandbox attribute', async () => {
-    const { MermaidRenderer } = await import('@/components/artifact/MermaidRenderer')
-    const { container } = render(<ThemeProvider><MermaidRenderer source="graph TD\nA-->B" /></ThemeProvider>)
-    const iframe = container.querySelector('iframe')
-    expect(iframe).toBeTruthy()
-    expect(iframe?.getAttribute('sandbox')).toBe('allow-scripts')
-    expect(iframe?.getAttribute('sandbox')?.includes('allow-same-origin')).toBe(false)
+  beforeEach(() => {
+    mermaidMock.initialize.mockReset()
+    mermaidMock.render.mockReset()
+    mermaidMock.render.mockResolvedValue({ svg: '<svg id="mmd-fixture"></svg>' })
   })
 
-  it('injects CSP allowing only the mermaid CDN', async () => {
+  it('renders a fully-sandboxed iframe (no scripts allowed)', async () => {
     const { MermaidRenderer } = await import('@/components/artifact/MermaidRenderer')
     const { container } = render(<ThemeProvider><MermaidRenderer source="graph TD\nA-->B" /></ThemeProvider>)
+    const iframe = await waitFor(() => {
+      const el = container.querySelector('iframe')
+      expect(el).toBeTruthy()
+      return el
+    })
+    // The srcdoc is static SVG — the sandbox must not allow scripts.
+    expect(iframe?.getAttribute('sandbox')).toBe('')
+  })
+
+  it('injects a strict CSP with no script-src and no CDN', async () => {
+    const { MermaidRenderer } = await import('@/components/artifact/MermaidRenderer')
+    const { container } = render(<ThemeProvider><MermaidRenderer source="graph TD\nA-->B" /></ThemeProvider>)
+    await waitFor(() => {
+      expect(container.querySelector('iframe')).toBeTruthy()
+    })
     const srcDoc = container.querySelector('iframe')?.getAttribute('srcdoc') ?? ''
     expect(srcDoc).toContain('Content-Security-Policy')
-    expect(srcDoc).toContain('cdn.jsdelivr.net/npm/mermaid@11')
     expect(srcDoc).toContain("default-src 'none'")
+    expect(srcDoc).not.toContain('script-src')
+    expect(srcDoc).not.toContain('cdn.jsdelivr.net')
   })
 
-  it('embeds source as JSON-encoded string', async () => {
+  it('renders the mermaid output (strict security level) into the iframe', async () => {
     const { MermaidRenderer } = await import('@/components/artifact/MermaidRenderer')
     const { container } = render(<ThemeProvider><MermaidRenderer source="graph TD\nA-->B" /></ThemeProvider>)
+    await waitFor(() => {
+      expect(mermaidMock.initialize).toHaveBeenCalledWith(
+        expect.objectContaining({ securityLevel: 'strict' }),
+      )
+    })
+    expect(mermaidMock.render).toHaveBeenCalledWith(expect.any(String), 'graph TD\\nA-->B')
     const srcDoc = container.querySelector('iframe')?.getAttribute('srcdoc') ?? ''
-    expect(srcDoc).toContain('graph TD')
-    expect(srcDoc).toContain('securityLevel')
-    expect(srcDoc).toContain('strict')
+    expect(srcDoc).toContain('<svg id="mmd-fixture"></svg>')
   })
 })
 

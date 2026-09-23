@@ -224,10 +224,58 @@ pub(crate) struct SessionMeta {
 pub(crate) struct BackgroundTaskMeta {
     pub(crate) id: String,
     pub(crate) prompt: String,
-    pub(crate) status: String, // "running", "completed", "failed"
+    pub(crate) status: String, // "running", "completed", "failed", "cancelled"
     pub(crate) started_at: i64,
     pub(crate) completed_at: Option<i64>,
     pub(crate) output: String,
+    /// §P2-19: real cancellation for the task's query stream. The cancel
+    /// command triggers it; the spawned runner observes it (via
+    /// `tokio::select!`) and stops — the old code only flipped the status
+    /// string while the underlying query kept running to completion.
+    pub(crate) cancel: CancellationToken,
+}
+
+/// Terminal states for [`BackgroundTaskMeta::status`]. A task in any of
+/// these must never be re-transitioned (§P2-19 status guard).
+fn is_terminal_task_status(status: &str) -> bool {
+    matches!(status, "completed" | "failed" | "cancelled")
+}
+
+/// §P2-19 status guard: transition a background task into a terminal state
+/// (`completed` / `failed` / `cancelled`) — but only from `running`. A task
+/// already cancelled by the user must not be overwritten back to
+/// `completed` (the old finalize path did exactly that, so a cancelled task
+/// reported success), and a finished task must not be re-cancelled.
+///
+/// Returns `true` when the transition happened, which is also the signal to
+/// emit the terminal `background_task_update` event.
+pub(crate) fn finalize_background_task(
+    tasks: &mut [BackgroundTaskMeta],
+    id: &str,
+    status: &str,
+    output: String,
+) -> bool {
+    debug_assert!(
+        is_terminal_task_status(status),
+        "finalize_background_task requires a terminal status, got '{status}'"
+    );
+    if let Some(task) = tasks.iter_mut().find(|t| t.id == id) {
+        if is_terminal_task_status(&task.status) {
+            tracing::debug!(
+                task_id = id,
+                current = %task.status,
+                requested = %status,
+                "background task already terminal — finalize skipped"
+            );
+            return false;
+        }
+        task.status = status.to_string();
+        task.completed_at = Some(chrono_timestamp());
+        task.output = output;
+        true
+    } else {
+        false
+    }
 }
 
 /// A chat message displayed in the UI.
@@ -960,6 +1008,14 @@ pub async fn send_message(
         }
     });
     tokio::spawn(async move {
+        use futures::FutureExt;
+        // P3 (streaming-panic hardening): a panic anywhere in the loop below
+        // used to unwind straight out of this task and skip the per-session
+        // flag reset at the bottom — the session stayed latched `querying`
+        // until restart. Catch the unwind (dev/test profiles; release runs
+        // panic=abort where the process dies anyway), emit a terminal
+        // `query:failed`, and ALWAYS run the reset afterwards.
+        let streamed = std::panic::AssertUnwindSafe(async {
         let stream = engine.process_query(context, Some(perm_tx)).await;
         let mut final_content = String::new();
 
@@ -1380,7 +1436,48 @@ pub async fn send_message(
             }
         }
 
-        // Clear per-session querying flag and cancellation token.
+        })
+        .catch_unwind()
+        .await;
+
+        // A panic must not look like success or vanish: surface it as a
+        // terminal `query:failed` (same shape as the engine Failed arm).
+        if let Err(panic_payload) = streamed {
+            let panic_msg = if let Some(s) = panic_payload.downcast_ref::<&str>() {
+                (*s).to_string()
+            } else if let Some(s) = panic_payload.downcast_ref::<String>() {
+                s.clone()
+            } else {
+                "unknown panic".to_string()
+            };
+            tracing::error!(
+                query_id = %qid_str,
+                session_id = %session_id_str,
+                error = %panic_msg,
+                "streaming task panicked — emitting query:failed and resetting session state"
+            );
+            let _ = app.emit(
+                event_names::QUERY_FAILED,
+                events::QueryFailedPayload {
+                    query_id: qid_str.clone(),
+                    error: panic_msg.clone(),
+                    session_id: Some(session_id_str.clone()),
+                },
+            );
+            route_event(crate::session_registry::SessionEvent::Status(
+                crate::session_registry::SessionEventStatus::Failed(panic_msg.clone()),
+            ));
+            crate::commands_notifications::fire_query_notification_logged(
+                &notifier_arc,
+                crate::commands_notifications::NotificationKind::Failed(panic_msg),
+                "query_failed",
+            );
+        }
+
+        // Clear per-session querying flag and cancellation token. P3: this
+        // now runs on EVERY exit path — ok, engine error, cancel, and the
+        // caught panic above — instead of only falling off the end of the
+        // happy-path body.
         {
             let mut q = session_for_task.querying.lock().await;
             *q = false;
@@ -1524,6 +1621,7 @@ pub async fn start_background_task(
 ) -> Result<String, String> {
     let task_id = uuid::Uuid::new_v4().to_string();
     let now = chrono_timestamp();
+    let cancel_token = CancellationToken::new();
 
     let task = BackgroundTaskMeta {
         id: task_id.clone(),
@@ -1532,6 +1630,7 @@ pub async fn start_background_task(
         started_at: now,
         completed_at: None,
         output: String::new(),
+        cancel: cancel_token.clone(),
     };
 
     // Add task to state
@@ -1547,6 +1646,9 @@ pub async fn start_background_task(
     let tasks_arc = state.background_tasks.clone();
     let app_handle_clone = app_handle.clone();
     let task_id_clone = task_id.clone();
+    // §P2-19: the runner observes this token so a user cancel actually
+    // breaks the query stream instead of only relabelling the status.
+    let task_cancel = cancel_token.clone();
     let client_config = state.client_config.read().await.clone();
     let tools = state.tools.clone();
     let _qe_config = state.qe_config.read().await.clone();
@@ -1614,80 +1716,113 @@ pub async fn start_background_task(
         };
 
         let mut final_output = String::new();
+        // §P2-19: keep the engine-side failure distinct from the terminal
+        // status — a Failed event used to fall through to "completed".
+        let mut task_error: Option<String> = None;
 
-        // Process the query and collect output
-        let stream = engine.process_query(context, None).await;
+        // Process the query and collect output. `tokio::select!` against the
+        // cancellation token means a user cancel breaks out of a pending
+        // `next()` immediately (§P2-19 fake-cancel fix).
         use futures::StreamExt;
+        let stream = engine.process_query(context, None).await;
         let mut pin_stream = std::pin::pin!(stream);
-
-        while let Some(event_result) = pin_stream.next().await {
-            match event_result {
-                Ok(event) => match event {
-                    QueryEvent::Text { content, .. } => {
-                        final_output.push_str(&content);
-                    }
-                    QueryEvent::Usage {
-                        input_tokens,
-                        output_tokens,
-                        cost_usd,
-                        cache_creation_tokens,
-                        cache_read_tokens,
-                        ..
-                    } => {
-                        // Persist to the local usage ledger. Best-effort: a log
-                        // write failure must never break the task. No QUERY_USAGE
-                        // emit here — background tasks aren't tied to a visible
-                        // chat, so a live-usage signal has no consumer and could
-                        // surface as a phantom UI update.
-                        let _ = usage_store.append(&crate::commands_usage::record_event(
-                            &model_for_usage,
-                            &provider,
-                            crate::commands_usage::UsageTotals {
+        loop {
+            tokio::select! {
+                _ = task_cancel.cancelled() => {
+                    tracing::info!(task_id = %task_id_clone, "background task cancelled");
+                    break;
+                }
+                event_result = pin_stream.next() => {
+                    let Some(event_result) = event_result else {
+                        break;
+                    };
+                    match event_result {
+                        Ok(event) => match event {
+                            QueryEvent::Text { content, .. } => {
+                                final_output.push_str(&content);
+                            }
+                            QueryEvent::Usage {
                                 input_tokens,
                                 output_tokens,
+                                cost_usd,
                                 cache_creation_tokens,
                                 cache_read_tokens,
-                                cost_usd,
-                            },
-                            None,
-                        ));
+                                ..
+                            } => {
+                                // Persist to the local usage ledger. Best-effort: a log
+                                // write failure must never break the task. No QUERY_USAGE
+                                // emit here — background tasks aren't tied to a visible
+                                // chat, so a live-usage signal has no consumer and could
+                                // surface as a phantom UI update.
+                                let _ = usage_store.append(&crate::commands_usage::record_event(
+                                    &model_for_usage,
+                                    &provider,
+                                    crate::commands_usage::UsageTotals {
+                                        input_tokens,
+                                        output_tokens,
+                                        cache_creation_tokens,
+                                        cache_read_tokens,
+                                        cost_usd,
+                                    },
+                                    None,
+                                ));
+                            }
+                            QueryEvent::Completed { .. } => break,
+                            QueryEvent::Failed { error, .. } => {
+                                final_output = format!("Task failed: {error}");
+                                task_error = Some(error);
+                                break;
+                            }
+                            _ => {}
+                        },
+                        Err(e) => {
+                            final_output = format!("Task error: {e}");
+                            task_error = Some(e.to_string());
+                            break;
+                        }
                     }
-                    QueryEvent::Completed { .. } => break,
-                    QueryEvent::Failed { error, .. } => {
-                        final_output = format!("Task failed: {error}");
-                        break;
-                    }
-                    _ => {}
-                },
-                Err(e) => {
-                    final_output = format!("Task error: {e}");
-                    break;
                 }
             }
         }
 
-        // Update task with results
-        let mut tasks = tasks_arc.lock().await;
-        if let Some(task) = tasks.iter_mut().find(|t| t.id == task_id_clone) {
-            task.status = "completed".into();
-            task.completed_at = Some(chrono_timestamp());
-            task.output = final_output.clone();
+        // §P2-19: compute the terminal state, then apply it through the
+        // status guard. `cancelled` stays `cancelled` — when the user's
+        // cancel command already flipped the status (and emitted), the guard
+        // refuses the transition and no duplicate/misleading "completed"
+        // event is emitted. Engine failures now land as "failed" instead of
+        // reporting success.
+        let (terminal_status, terminal_output) = if task_cancel.is_cancelled() {
+            ("cancelled", final_output)
+        } else if task_error.is_some() {
+            ("failed", final_output)
+        } else {
+            ("completed", final_output)
+        };
+        let transitioned = {
+            let mut tasks = tasks_arc.lock().await;
+            finalize_background_task(
+                &mut tasks,
+                &task_id_clone,
+                terminal_status,
+                terminal_output.clone(),
+            )
+        };
+        if transitioned {
+            // Emit update event
+            let _ = app_handle_clone.emit(
+                event_names::BACKGROUND_TASK_UPDATE,
+                events::BackgroundTaskUpdate {
+                    task_id: task_id_clone.clone(),
+                    status: terminal_status.into(),
+                    prompt,
+                    output: terminal_output,
+                    started_at: now,
+                    completed_at: Some(chrono_timestamp()),
+                },
+            );
+
+            let _ = app_handle_clone.emit(event_names::BACKGROUND_TASKS_UPDATED, ());
         }
-
-        // Emit update event
-        let _ = app_handle_clone.emit(
-            event_names::BACKGROUND_TASK_UPDATE,
-            events::BackgroundTaskUpdate {
-                task_id: task_id_clone.clone(),
-                status: "completed".into(),
-                prompt,
-                output: final_output,
-                started_at: now,
-                completed_at: Some(chrono_timestamp()),
-            },
-        );
-
-        let _ = app_handle_clone.emit(event_names::BACKGROUND_TASKS_UPDATED, ());
     });
 
     Ok(task_id)
@@ -1722,6 +1857,11 @@ pub async fn cancel_background_task(
     let mut tasks = state.background_tasks.lock().await;
     if let Some(task) = tasks.iter_mut().find(|t| t.id == id) {
         if task.status == "running" {
+            // §P2-19: trigger real cancellation first — the spawned runner's
+            // `tokio::select!` observes this and stops the query stream.
+            // Flipping the status alone (the old behavior) left the query
+            // running to completion.
+            task.cancel.cancel();
             task.status = "cancelled".into();
             task.completed_at = Some(chrono_timestamp());
             task.output = "Task cancelled by user".into();
@@ -2934,5 +3074,96 @@ mod budget_enforcement_tests {
         assert_eq!(counters.warned(), 0);
         assert!(!cancel.is_cancelled());
         unlisten_all(&app, &counters);
+    }
+
+    // ── §P2-19 background-task status guard ─────────────────────────────
+
+    fn bg_task(id: &str) -> BackgroundTaskMeta {
+        BackgroundTaskMeta {
+            id: id.to_string(),
+            prompt: "p".into(),
+            status: "running".into(),
+            started_at: 0,
+            completed_at: None,
+            output: String::new(),
+            cancel: CancellationToken::new(),
+        }
+    }
+
+    #[test]
+    fn finalize_transitions_running_task_to_terminal() {
+        let mut tasks = vec![bg_task("t1")];
+        assert!(finalize_background_task(
+            &mut tasks,
+            "t1",
+            "completed",
+            "done".into()
+        ));
+        assert_eq!(tasks[0].status, "completed");
+        assert_eq!(tasks[0].output, "done");
+        assert!(tasks[0].completed_at.is_some());
+    }
+
+    #[test]
+    fn finalize_never_overwrites_a_cancelled_task() {
+        // §P2-19 core regression: the old finalize path unconditionally
+        // overwrote the status back to "completed" after a user cancel.
+        let mut tasks = vec![bg_task("t1")];
+        tasks[0].status = "cancelled".into();
+        tasks[0].output = "Task cancelled by user".into();
+
+        assert!(!finalize_background_task(
+            &mut tasks,
+            "t1",
+            "completed",
+            "done".into()
+        ));
+        assert_eq!(
+            tasks[0].status, "cancelled",
+            "cancelled must stay cancelled"
+        );
+        assert_eq!(tasks[0].output, "Task cancelled by user");
+    }
+
+    #[test]
+    fn finalize_never_overwrites_a_failed_or_completed_task() {
+        let mut tasks = vec![bg_task("t1"), bg_task("t2")];
+        tasks[0].status = "failed".into();
+        tasks[1].status = "completed".into();
+
+        assert!(!finalize_background_task(
+            &mut tasks,
+            "t1",
+            "cancelled",
+            "x".into()
+        ));
+        assert_eq!(tasks[0].status, "failed");
+        assert!(!finalize_background_task(
+            &mut tasks,
+            "t2",
+            "cancelled",
+            "x".into()
+        ));
+        assert_eq!(tasks[1].status, "completed");
+    }
+
+    #[test]
+    fn finalize_unknown_id_is_a_noop() {
+        let mut tasks = vec![bg_task("t1")];
+        assert!(!finalize_background_task(
+            &mut tasks,
+            "missing",
+            "completed",
+            "x".into()
+        ));
+        assert_eq!(tasks[0].status, "running");
+    }
+
+    #[test]
+    fn terminal_status_classification() {
+        assert!(!is_terminal_task_status("running"));
+        assert!(is_terminal_task_status("completed"));
+        assert!(is_terminal_task_status("failed"));
+        assert!(is_terminal_task_status("cancelled"));
     }
 }
