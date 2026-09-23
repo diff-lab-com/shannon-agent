@@ -1,6 +1,6 @@
-# Shannon Desktop 导航与信息架构综合改进方案（提案 v1.1，待评审）
+# Shannon Desktop 导航与信息架构综合改进方案（提案 v1.2，待审核）
 
-> **状态**：提案（分析 + 方案，不含代码改动），供 ericdong 评审后排期。v1.1：§5 五条开放问题补齐**建议裁决**，并同步进 T8 / 新增 T9 / §3.4；最终裁决权在评审人。
+> **状态**：提案（分析 + 方案，不含代码改动），供 ericdong 审核。v1.2：五条开放问题经评审裁定（§5）——#1–#4 采纳建议并锁定；**#5 裁决为「/opc 维持现状，本轮不动」**（撤销 v1.1 的 T9，本方案任何批次不得改动 /opc）。T8 / §3.4 / §4 已同步。
 > **日期**：2026-09-23 · **分支**：`ui/nav-redesign-proposal`（基于 `dev` @ 0557f8fe）
 > **定位**：第三轮 ZCode 对标研究。前两轮见 [ZCODE-DELTA-ANALYSIS-2026-09.md](../../design/ui-audit-2026-09/ZCODE-DELTA-ANALYSIS-2026-09.md)（→ PR #89）与 [ZCODE-DELTA-ANALYSIS-2026-09-20.md](../../design/ui-audit-2026-09/ZCODE-DELTA-ANALYSIS-2026-09-20.md)（→ 批次 A–F，PR #98–#104 已合并）。本轮回答前两轮**未覆盖**的三个问题：① 分组/项目导航的深化；② 「任务」与「收件箱」的职责重叠；③ 扩展（skills/MCP/plugins）入口收敛。
 > **证据**：ZCode 参考截图 `reference/zcode/截图 2026-09-20 23-58-44.png`；竞品调研（Codex / Claude Code / ZCode / Cursor / Devin / Copilot / VS Code / Linear，2026-09 当日官方文档抓取，来源见 §2.4）；代码现状锚点由子代理逐文件核实（`dev@0557f8fe`）。
@@ -269,7 +269,6 @@ Codex：developers.openai.com/codex（app / automations / review / cloud）；Cl
 | T6 | **收件箱页升级**：来源筛选加入新三源；默认视图=未读(pending) 置顶 + 全部；保留 归档/继续会话/重跑；新增「查看会话」（session_approval/failed 的主操作） | Codex Triage 的 all/unread 过滤 + Linear「行是投影」心智落地 |
 | T7 | **数据双写收敛**（架构清理）：SQLite inbox 成为运行记录权威源；`HistoryView` 改读 inbox store（`list_task_executions` 保留为兼容 API，内部转读）；JSONL 镜像写保留一个版本期后退役（`inbox_commands.rs:303-315` 注释同步更新） | 「一个运行一个投影」；历史数据迁移脚本 + 抽样校验 |
 | T8 | GoalRunPanel/BatchRunPanel **保留**在「自动化-运行」tab，语义重定位为「操作员视图」（跨会话的 goal/批量/子代理，机器视角）；rail 保持个人会话视角（goal badge，`SidebarSessions.tsx:653-686`）。裁决理由见 §5-1；阶段三 goal 嵌项目树后复查是否降级 | /tasks 不再是监控必经之路；rail 与运行卡是同一实体的两个镜头，不算重复投影 |
-| T9 | **（可选收尾，dev-gated，约 0.5 天）/opc 并入自动化页并退役**：OPC 的看板 DnD 分配变「运行」tab 的看板视图切换（dev 档），Agent Swarm 归 SubagentPanel/AgentAllocation，仪表盘部分直接砍（观测需求归「运行观测」专项，§5-4）；`/opc` → redirect（沿用 MissionControl 先例，`App.tsx:78`） | dev 导航只剩「用量」；grep 零 `/opc` 直链（CommandPalette 同步移除） |
 
 **评审取舍**：收件箱**不**做 snooze（Linear 有，但 Shannon 待办量级远小于 issue tracker，先不做）；收件箱**不**吸收普通会话完成通知（竞品公约：普通完成靠 OS 通知 + rail 绿点，只有「需要你」的才进收件箱——这正是 Codex Triage 的边界，也是它被诟病不够用的地方，我们用 `session_approval/failed` 补上，但**不**补「全部完成通知」，避免收件箱退化为通知中心）。
 
@@ -304,7 +303,7 @@ Codex：developers.openai.com/codex（app / automations / review / cloud）；Cl
 | 收件箱 /triage | 自动化产出（5 源） | **统一「需要关注」流**：+审批/失败/技能提案（8 源） | Codex Triage + Linear 投影心智 |
 | 扩展 /extensions | 市场/已安装 + 管理下拉 5 类型 | 市场/已安装/**待处理** 三区 + 信任安装 + 权限直达；长期插件包 | Devin Customize / Claude Code /plugin |
 | 记忆 /memory | 独立页 | 不变（+`?project=` 深链） | — |
-| 用量 / 指挥台（dev） | — | 用量：本轮不变，「运行观测」专项处理（§5-4）；指挥台：阶段二 T9 并入「运行」看板视图后 redirect 退役（§5-5） | — |
+| 用量 / 指挥台（dev） | — | **均不动**（评审裁决 §5-5：/opc 维持现状，本轮任何批次不触及）。用量页的收敛由「运行观测」专项处理，且该专项范围明确排除 /opc（§5-4） | — |
 
 ---
 
@@ -313,7 +312,7 @@ Codex：developers.openai.com/codex（app / automations / review / cloud）；Cl
 | 阶段 | 内容 | 依赖 | 估算 | 交付判据 |
 |---|---|---|---|---|
 | **一 · 止血** | T1 术语一轨+导航去重；T2 互链；T3 审批面收敛；T4 Tasks tab 归位 | 无（纯前端） | 1–2 天 | 「任务」术语退役；技能审批单一入口；全量 vitest+tsc+axe 绿 |
-| **二 · 收件箱统一** | T5 扩源；T6 收件箱升级；X1 待处理区；X2 信任卡；X3 权限直达；X4 管理瘦身；T7 数据收敛；T9（可选收尾）/opc 并入退役 | T5 需后端写入点（desktop crate 内，非 shannon-core） | 2–4 天（T9 另加约 0.5 天） | 收件箱一页回答「有什么需要我」；SQLite 成权威源 |
+| **二 · 收件箱统一** | T5 扩源；T6 收件箱升级；X1 待处理区；X2 信任卡；X3 权限直达；X4 管理瘦身；T7 数据收敛 | T5 需后端写入点（desktop crate 内，非 shannon-core） | 2–4 天 | 收件箱一页回答「有什么需要我」；SQLite 成权威源 |
 | **三 · 项目实体化** | P-E1/E2/E3 引擎；P-U1..U4 UI | 引擎排期（working_dir + projects 表） | 引擎 2–3 天 + UI 2–3 天 | 自动化嵌项目树；空项目；localStorage 注册表退役 |
 | **四 · 插件打包** | X5 格式兼容；X6 来源管理；X7 Stats | 产品决策（格式兼容策略） | 另立项 | 与 Claude Code 市场互通 |
 
@@ -327,15 +326,15 @@ Codex：developers.openai.com/codex（app / automations / review / cloud）；Cl
 3. **主导航删「任务」行**对老用户是习惯迁移——缓解：顶部「自动化 ⌘2」位置显眼 + CommandPalette 双词命中（搜「任务」「自动化」都到 /tasks）。
 4. **引擎字段（routine.working_dir）跨 crate 改动**——SCHEDULED-FIX-PLAN 已有设计稿，风险可控但需引擎侧评审。
 
-**开放问题 → 建议裁决**（v1.1；每条均给出建议与理由，结论已同步进上文对应条目，最终裁决权在评审人——反对任何一条只需指出，方案相应反转，工作量不变）：
+**开放问题 → 评审裁决**（2026-09-23 全部裁定；#1–#4 采纳建议并锁定，#5 由评审人改判。结论已同步进上文对应条目）：
 
-| # | 问题 | 建议裁决 | 关键理由 |
+| # | 问题 | 裁决 | 说明 |
 |---|---|---|---|
-| 1 | GoalRun/BatchRun 运行卡去留（T8） | **保留**在「自动化-运行」，重定位为操作员视图；阶段三后复查降级 | rail=个人会话镜头，运行卡=机器视角：best-of-N 的 N 分支对比、跨会话 goal 聚合本就无法压进单行会话；同一实体的两个镜头≠重复投影（要消灭的是「同一切片出现在两个页面」，见病灶 A）。参照 Devin Desktop 的 Agent Command Center：看板/操作员视图是真实需求，但应长在自动化页 |
-| 2 | 技能提案主审查面 | **「扩展-待处理」为主面**，收件箱只放发现条目（「N 条待审」+ 跳转），不做卡内审批 | 技能提案是「资产审批」而非「运行结果」，心智归扩展域；审查需要 manifest 上下文（触发条件、内容、来源会话），收件箱卡太薄，塞进去只会催生第二个 Modal；竞品映射：Claude Code 的安装信任在 /plugin 流内、组织审核在技能管理域，没有一家把 rich review 塞进通知流。X1 方向维持，若评审倾向反转则收件箱为主面，工作量相同 |
-| 3 | 「智能」镜头是否升为默认 | **不改**：维持「项目」出厂默认 + 记住上次选择，可挂起 | ZCode 截图里用户实际停在「项目」档（分组 ✨ 只是排在第一位的备选，非默认）；≤1 个项目时项目视图自动退化为平铺（现有 `groups===null` 分支），新用户体验无损；智能分组的「运行中/需关注」空区不渲染，对轻用户本就不可见。升默认收益不可见、有迁移成本，待有使用数据再说 |
-| 4 | 观测碎片化是否另立专项 | **另立「运行观测」专项，排阶段三之后**，本文档不含 | 时序依赖：T7 之后才有权威运行数据源，阶段三之后才有项目维度，per-project/per-run 成本聚合到那时才可做；且五个观测面（/usage、/timeline、OPC 仪表盘、SessionUsageDialog、ContextBreakdownCard）多为 dev 档，优先级低于 Simple 模式 IA。范围建议：/usage 为唯一用量页（吸收 SessionUsageDialog 成会话下钻、timeline 成会话详情 tab）；ContextBreakdownCard 保留（职责是「当前上下文构成」不是账本）；OPC 仪表盘随 #5 砍 |
-| 5 | /opc 长期定位 | **并入自动化页、路由退役**（新增 T9，阶段二可选收尾，dev-gated） | OPC 与 Tasks 共用 catalog 数据，是一整页重复看板（OPC-SCHEDULED-GAP-ANALYSIS 原话「有但假」）；差异化价值只有两块——看板 DnD 写操作（→「运行」tab 看板视图）与 Agent Swarm（→ SubagentPanel/AgentAllocation 已有地盘）；redirect 模式仓库已有先例（MissionControl→/tasks，`App.tsx:78`）。「退役」选项放弃操作员看板这一真实需求（见 #1），「原样保留」则违背本轮减目的地主线，故取并入 |
+| 1 | GoalRun/BatchRun 运行卡去留（T8） | ✅ **采纳：保留**在「自动化-运行」，重定位为操作员视图；阶段三后复查降级 | rail=个人会话镜头，运行卡=机器视角：best-of-N 的 N 分支对比、跨会话 goal 聚合本就无法压进单行会话；同一实体的两个镜头≠重复投影（要消灭的是「同一切片出现在两个页面」，见病灶 A）。参照 Devin Desktop 的 Agent Command Center：看板/操作员视图是真实需求，但应长在自动化页 |
+| 2 | 技能提案主审查面 | ✅ **采纳：「扩展-待处理」为主面**，收件箱只放发现条目（「N 条待审」+ 跳转），不做卡内审批 | 技能提案是「资产审批」而非「运行结果」，心智归扩展域；审查需要 manifest 上下文（触发条件、内容、来源会话），收件箱卡太薄，塞进去只会催生第二个 Modal；竞品映射：Claude Code 的安装信任在 /plugin 流内、组织审核在技能管理域，没有一家把 rich review 塞进通知流 |
+| 3 | 「智能」镜头是否升为默认 | ✅ **采纳：不改**——维持「项目」出厂默认 + 记住上次选择，可挂起 | ZCode 截图里用户实际停在「项目」档（分组 ✨ 只是排在第一位的备选，非默认）；≤1 个项目时项目视图自动退化为平铺（现有 `groups===null` 分支），新用户体验无损；智能分组的「运行中/需关注」空区不渲染，对轻用户本就不可见。升默认收益不可见、有迁移成本，待有使用数据再说 |
+| 4 | 观测碎片化是否另立专项 | ✅ **采纳：另立「运行观测」专项，排阶段三之后**，本文档不含 | 时序依赖：T7 之后才有权威运行数据源，阶段三之后才有项目维度，per-project/per-run 成本聚合到那时才可做；且观测面多为 dev 档，优先级低于 Simple 模式 IA。范围建议：/usage 为唯一用量页（吸收 SessionUsageDialog 成会话下钻、timeline 成会话详情 tab）；ContextBreakdownCard 保留（职责是「当前上下文构成」不是账本）。**范围明确排除 /opc 页面及其仪表盘**（见 #5 裁决；未来如需整合 OPC 仪表盘，须单独提案） |
+| 5 | /opc 长期定位 | ⛔ **评审人改判：维持现状，本轮不动**（不同意并入自动化页，不同意退役；v1.1 的 T9 撤销） | 评审人裁量（2026-09-23）：操作员看板作为独立工作台的价值优先于目的地数量收敛；/opc 仅 dev 档可见，不影响 Simple 模式 IA，本轮不动它没有代价。备注留档（不影响本轮实施）：OPC 与 Tasks 共用 catalog 数据的重复看板问题依然存在（OPC-SCHEDULED-GAP-ANALYSIS 原话「有但假」），待自动化页「运行/历史」新形态稳定后如需再议，须单独提案；在本方案全部批次（一~四）及「运行观测」专项中，/opc 页面均为免改区 |
 
 ## 6. 附录
 
