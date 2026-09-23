@@ -774,6 +774,10 @@ jobs:
       # accessors from shannon-commands (unreachable placeholder API). Same
       # intentional minor-cycle class; new TAG NAME so the baseline-rustdoc
       # cache invalidates.
+      # Eleventh move (2026-09-24, structural task 0): removed the never-called
+      # ToolExecutionService/StreamingToolExecutor dead infrastructure
+      # (pub types in shannon-core/shannon-engine). Intentional minor-cycle
+      # break; new TAG NAME so the baseline-rustdoc cache invalidates.
       # Twelfth move (2026-09-23, PR #107): added a `MissingSourceId`
       # variant to `shannon_core::inbox_store::InboxStoreError` plus new
       # pub store/seam APIs for the T5 unified needs-attention sources
@@ -781,7 +785,8 @@ jobs:
       # run-history backfill — intentional minor-cycle breaks. New TAG NAME
       # (tag names -10/-11 were already claimed by parallel branches) so the
       # baseline-rustdoc cache invalidates. Re-pointed at the dev-integration
-      # merge so the accepted-breaks frontier also contains the Tenth move.
+      # merge so the accepted-breaks frontier also contains the Tenth and
+      # Eleventh moves.
       SEMVER_BASELINE: semver-baseline-2026-09-12
     steps:
       - uses: actions/checkout@f548e57e544e1ff5a4c46bf1e1b8685f8e4a348a

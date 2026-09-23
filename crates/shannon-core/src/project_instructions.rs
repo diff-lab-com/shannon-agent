@@ -729,13 +729,11 @@ fn load_full_context_with_scopes(dir: &Path) -> Option<ProjectInstructions> {
 
 /// Emit a `HookEvent::InstructionsLoaded` event when the engine is wired up.
 ///
-/// This is the no-op default implementation: the hook manager sits in
-/// `tool_execution.rs` (a sibling module). To avoid a circular dependency
-/// between `project_instructions` and `tool_execution`, the actual emit is
-/// performed via the `INSTRUCTION_HOOK_EMITTER` global set at startup by
-/// `ToolExecutionContext::install_instructions_emitter`. The default (when
-/// not installed) is a no-op so the loader keeps working in tests / CLI
-/// headless mode without any hook setup.
+/// This is the no-op default implementation: the actual emit is performed
+/// via the `INSTRUCTION_HOOK_EMITTER` global set at startup by
+/// [`install_instructions_emitter`]. The default (when not installed) is a
+/// no-op so the loader keeps working in tests / CLI headless mode without
+/// any hook setup.
 fn emit_instructions_loaded(files_count: usize, total_bytes: usize, files: &[String]) {
     if let Some(emitter) = INSTRUCTION_HOOK_EMITTER.get() {
         let event = shannon_engine::hooks::HookEvent::InstructionsLoaded {
@@ -755,7 +753,7 @@ fn emit_instructions_loaded(files_count: usize, total_bytes: usize, files: &[Str
 type InstructionsHookEmitter = Box<dyn Fn(shannon_engine::hooks::HookEvent) + Send + Sync>;
 
 /// Global slot for the instructions hook emitter. Populated by
-/// [`install_instructions_emitter`] from `tool_execution.rs` after the
+/// [`install_instructions_emitter`] during engine wiring, after the
 /// `HookManager` is constructed; read by [`emit_instructions_loaded`] every
 /// time the instruction loader finishes a merge.
 static INSTRUCTION_HOOK_EMITTER: std::sync::OnceLock<InstructionsHookEmitter> =
