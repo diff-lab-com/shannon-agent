@@ -28,7 +28,7 @@ Shannon 是完全开源（Apache-2.0）、基于 Rust 的 **AI agent 工作台**
 
 ### 1. 开源可控
 
-- **每一行代码可审计** —— Apache-2.0，无黑盒。<!-- metrics:start:intro -->每一行代码都可审计，每一个行为都经过 **12,540** 个自动化测试验证。<!-- metrics:end:intro -->
+- **每一行代码可审计** —— Apache-2.0，无黑盒。<!-- metrics:start:intro -->每一行代码都可审计，每一个行为都经过 **12,547** 个自动化测试验证。<!-- metrics:end:intro -->
 - **每一步 agent 行为可回放** —— 会话采用事件溯源：每轮追加写入 `events.jsonl`，`shannon trace show / replay / diff / export` 让你完整还原 agent 到底做了什么——agent 的行车记录仪。
 - **每一分成本可见** —— BYOK 按量付费，会话预算上限、上下文分类拆解、缓存命中率可见，没有订阅额度黑盒。
 - **零供应商锁定** —— 随时切换提供商；上游涨价、型号退役都困不住你。兼容 Claude Code 生态：`CLAUDE.md`、`.claude/` agents、skills、hooks、`.mcp.json` 开箱即用。
@@ -51,7 +51,7 @@ Shannon 是完全开源（Apache-2.0）、基于 Rust 的 **AI agent 工作台**
 | LLM 提供商 | 任意（BYOK） | 单一供应商 | 多家 / 任意 |
 | 成本模型 | 按量付费 + 预算上限 + 拆解可见 | 订阅额度 / credits | BYOK |
 | 可审计性 | 事件溯源会话，`trace` 回放/diff | 各不相同，多为黑盒 | 各不相同 |
-<!-- metrics:start:diffrow -->| 测试覆盖 | **12,540** 个测试，覆盖 22 个 workspace 成员 | 不适用（闭源） | 各不相同 |<!-- metrics:end:diffrow -->
+<!-- metrics:start:diffrow -->| 测试覆盖 | **12,547** 个测试，覆盖 22 个 workspace 成员 | 不适用（闭源） | 各不相同 |<!-- metrics:end:diffrow -->
 | 产品形态 | 终端 + 无头 + 服务 + 桌面，一个引擎 | 各不相同 | 各不相同 |
 
 ---
@@ -473,9 +473,9 @@ WIP 推送旁路：`git push --no-verify` 或 `PRE_PUSH_QUICK=1 git push`（仅 
 <!-- metrics:start:table -->
 | 指标 | 数值 |
 |------|------|
-| Rust 代码总量 | 525,201 行 |
-| 源文件数 | 755 |
-| 总测试数（nextest 可运行） | **12,540** |
+| Rust 代码总量 | 525,754 行 |
+| 源文件数 | 756 |
+| 总测试数（nextest 可运行） | **12,547** |
 | Crate 数（workspace 成员） | 22（21 个 crate + desktop） |
 | 零测试 Crate 数 | 1（`shannon-stability-attr`） |
 | CI 代码检查 | `cargo clippy --workspace -- -D warnings`（零警告） |
@@ -486,7 +486,7 @@ WIP 推送旁路：`git push --no-verify` 或 `PRE_PUSH_QUICK=1 git push`（仅 
 <!-- metrics:start:crates -->
 | Crate | 测试数 | 职责 |
 |-------|--------|------|
-| `shannon-core` | 3,891 | API 客户端、查询引擎、权限、工具、状态 |
+| `shannon-core` | 3,892 | API 客户端、查询引擎、权限、工具、状态 |
 | `shannon-tools` | 1,780 | 工具实现：文件操作、Git、搜索、Notebook |
 | `shannon-ui` | 1,529 | 终端 UI、REPL、组件、渲染 |
 | `shannon-engine` | 1,162 | LLM API 客户端、流式适配、压缩/上下文预算、权限 |
@@ -501,9 +501,9 @@ WIP 推送旁路：`git push --no-verify` 或 `PRE_PUSH_QUICK=1 git push`（仅 
 | `shannon-types` | 88 | 共享类型定义 |
 | `shannon-agent` | 65 | 独立 Agent（JSON-RPC over stdin/stdout） |
 | `shannon-remote` | 59 | 远程执行环境（SSH 主机、Docker） |
+| `shannon-api-protocol` | 43 | 线协议（serde 类型 + TS 代码生成） |
 | `shannon-tool-interface` | 42 | 工具 trait 定义 |
-| `shannon-api-protocol` | 38 | 线协议（serde 类型 + TS 代码生成） |
-| `shannon-server` | 38 | HTTP API 服务器（`shannon serve`） |
+| `shannon-server` | 39 | HTTP API 服务器（`shannon serve`） |
 | `shannon-repomap` | 32 | 仓库符号地图（tree-sitter） |
 | `shannon-browser` | 9 | — |
 | `shannon-plugin-api` | 5 | — |
