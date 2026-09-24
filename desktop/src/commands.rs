@@ -854,7 +854,12 @@ pub async fn send_message(
     // verdicts here; a forwarder task surfaces each as a Tauri
     // PERMISSION_REQUEST and maps the user's scoped answer back to a
     // PermissionChoice.
-    let (perm_tx, mut perm_rx) = tokio::sync::mpsc::unbounded_channel::<EnginePermissionRequest>();
+    // Bounded permission-request channel (review §P3-6): prompts are
+    // strictly sequential (the engine awaits each response), so the small
+    // bound only guards against a stopped consumer.
+    let (perm_tx, mut perm_rx) = tokio::sync::mpsc::channel::<EnginePermissionRequest>(
+        shannon_core::query_engine::PERMISSION_REQUEST_CHANNEL_CAPACITY,
+    );
 
     let _state_mgr = state.state_manager.clone();
     let _qe_config = state.qe_config.read().await.clone();

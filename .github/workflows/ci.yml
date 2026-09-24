@@ -782,12 +782,18 @@ jobs:
       # variant to `shannon_core::inbox_store::InboxStoreError` plus new
       # pub store/seam APIs for the T5 unified needs-attention sources
       # (`session_approval`/`session_failed`/`skill_candidate`) and the T7
-      # run-history backfill — intentional minor-cycle breaks. New TAG NAME
-      # (tag names -10/-11 were already claimed by parallel branches) so the
-      # baseline-rustdoc cache invalidates. Re-pointed at the dev-integration
-      # merge so the accepted-breaks frontier also contains the Tenth and
-      # Eleventh moves.
-      SEMVER_BASELINE: semver-baseline-2026-09-12
+      # run-history backfill — intentional minor-cycle breaks. Tag names
+      # -10/-11 were already claimed by parallel branches; -09-12 was
+      # re-pointed at the PR #107 dev-integration merge.
+      # Thirteenth move (2026-09-24, structural task 2 / PR #110):
+      # backpressure made EventTx::send/ProgressSender::send async
+      # (tool-interface trait method return value added) and removed Clone
+      # from PermissionRequest (core auto/derive trait impl changes).
+      # Fourteenth move (2026-09-24, PR #110 integration): -09-12 and
+      # -09-13 each contained only one side of the parallel PR #107 /
+      # PR #110 merges, so the combined baseline is re-established at the
+      # integration merge itself. Intentional minor-cycle breaks.
+      SEMVER_BASELINE: semver-baseline-2026-09-14
     steps:
       - uses: actions/checkout@f548e57e544e1ff5a4c46bf1e1b8685f8e4a348a
         with:

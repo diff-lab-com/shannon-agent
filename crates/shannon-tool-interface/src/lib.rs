@@ -40,9 +40,15 @@ pub use sandbox::{
 pub use walk::{BUILTIN_EXCLUDES, GitignoreMatcher};
 
 /// Sender for streaming tool progress updates.
-/// Tools call `send(line)` to emit partial output during execution.
+/// Tools call `send(line).await` to emit partial output during execution.
+///
+/// The send is `async` (review §P3-6): progress lines are forwarded onto the
+/// engine's bounded query-event channel, so a stalled consumer applies
+/// backpressure to the tool that is producing the output instead of letting
+/// events accumulate without bound. No event is ever dropped or coalesced.
+#[async_trait]
 pub trait ProgressSender: Send + Sync {
-    fn send(&self, line: &str);
+    async fn send(&self, line: &str);
 }
 
 /// Type-erased boxed progress sender.
@@ -263,8 +269,9 @@ mod tests {
         }
     }
 
+    #[async_trait]
     impl ProgressSender for CollectingSender {
-        fn send(&self, line: &str) {
+        async fn send(&self, line: &str) {
             self.lines.lock().unwrap().push(line.to_string());
         }
     }
@@ -302,12 +309,12 @@ mod tests {
         assert!(sender.collected().is_empty());
     }
 
-    #[test]
-    fn test_collecting_sender_captures_lines() {
+    #[tokio::test]
+    async fn test_collecting_sender_captures_lines() {
         let sender = CollectingSender::new();
-        sender.send("line 1");
-        sender.send("line 2");
-        sender.send("line 3");
+        sender.send("line 1").await;
+        sender.send("line 2").await;
+        sender.send("line 3").await;
         assert_eq!(sender.collected(), vec!["line 1", "line 2", "line 3"]);
     }
 
@@ -564,8 +571,8 @@ mod tests {
             _input: Value,
             progress: BoxedProgressSender,
         ) -> ToolResult<ToolOutput> {
-            progress.send("line 1");
-            progress.send("line 2");
+            progress.send("line 1").await;
+            progress.send("line 2").await;
             Ok(ToolOutput::success("streamed".into()))
         }
     }
@@ -582,19 +589,18 @@ mod tests {
         assert_eq!(sender.collected(), vec!["line 1", "line 2"]);
     }
 
-    #[test]
-    fn test_progress_sender_thread_safety() {
-        use std::thread;
+    #[tokio::test]
+    async fn test_progress_sender_thread_safety() {
         let sender = Arc::new(CollectingSender::new());
         let mut handles = vec![];
         for i in 0..4 {
             let s = sender.clone();
-            handles.push(thread::spawn(move || {
-                s.send(&format!("thread-{i}"));
+            handles.push(tokio::spawn(async move {
+                s.send(&format!("thread-{i}")).await;
             }));
         }
         for h in handles {
-            h.join().unwrap();
+            h.await.unwrap();
         }
         let lines = sender.collected();
         assert_eq!(lines.len(), 4);
