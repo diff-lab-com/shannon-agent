@@ -307,11 +307,16 @@ export default function Triage() {
     // IA T6: pending (unread) items float to the top — the inbox answers
     // "what needs me" first. Within each band the time sort stays stable,
     // so the toggle below only reorders inside a band.
+    // 卡 3a: `upsert_pending` refreshes an existing row's `updatedAtMs` in
+    // place instead of appending, so the band sort keys on it (falling back
+    // to `createdAtMs` for rows without one) — a same-session failure that
+    // re-fails floats back to the top of its band instead of staying buried
+    // under newer entries.
     const sorted = [...items].sort((a, b) => {
       const aPending = a.status === 'pending' ? 0 : 1
       const bPending = b.status === 'pending' ? 0 : 1
       if (aPending !== bPending) return aPending - bPending
-      const diff = a.createdAtMs - b.createdAtMs
+      const diff = (a.updatedAtMs ?? a.createdAtMs) - (b.updatedAtMs ?? b.createdAtMs)
       return sortOrder === 'newest' ? -diff : diff
     })
     return sorted

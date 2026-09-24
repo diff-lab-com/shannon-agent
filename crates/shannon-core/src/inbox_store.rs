@@ -508,6 +508,11 @@ impl InboxStore {
     /// "resolve-as-read"). Best-effort by design: `Ok(None)` when no matching
     /// item exists or it is already in the requested status, so callers can
     /// fire this on every command path without polling or error noise.
+    ///
+    /// One-way `archived` (卡 3b): an archived entry is never demoted back to
+    /// `read` (or re-touched at all) by a later resolve — archiving means
+    /// "not looking at this again". Only a fresh occurrence through
+    /// [`Self::upsert_pending`] re-opens it (reopen semantics unchanged).
     pub fn resolve_by_source(
         &self,
         source: &str,
@@ -517,6 +522,11 @@ impl InboxStore {
         let Some(item) = self.find_by_source(source, source_id)? else {
             return Ok(None);
         };
+        // One-way archived: resolve never demotes an archived entry back to
+        // read — "archived = 不再看". (`upsert_pending` still re-opens it.)
+        if item.status == InboxStatus::Archived.as_str() {
+            return Ok(Some(item));
+        }
         if item.status == status.as_str() {
             return Ok(Some(item));
         }
@@ -1142,6 +1152,53 @@ mod tests {
             .upsert_pending(attention_item(SOURCE_SESSION_FAILED, "sess-2", "Session y"))
             .unwrap();
         assert_eq!(other.status, "pending");
+    }
+
+    /// 卡 3b: `archived` is one-way across resolves — a later resolve
+    /// (session open / approval convergence) must not pull an archived
+    /// entry back into the stream as `read`.
+    #[test]
+    fn resolve_by_source_never_demotes_an_archived_entry() {
+        let store = InboxStore::open_in_memory().unwrap();
+        let item = store
+            .upsert_pending(attention_item(SOURCE_SESSION_APPROVAL, "sess-1", "bash"))
+            .unwrap();
+
+        // Baseline (unchanged semantics): a pending entry resolves to read.
+        let read = store
+            .resolve_by_source(SOURCE_SESSION_APPROVAL, "sess-1", InboxStatus::Read)
+            .unwrap()
+            .unwrap();
+        assert_eq!(read.status, "read");
+
+        // Archive it — the forward transition still goes through resolve.
+        let archived = store
+            .resolve_by_source(SOURCE_SESSION_APPROVAL, "sess-1", InboxStatus::Archived)
+            .unwrap()
+            .unwrap();
+        assert_eq!(archived.status, "archived");
+
+        // A later resolve must not demote the archived entry…
+        let demote = store
+            .resolve_by_source(SOURCE_SESSION_APPROVAL, "sess-1", InboxStatus::Read)
+            .unwrap()
+            .unwrap();
+        assert_eq!(demote.status, "archived", "archived is one-way");
+        // …and resolving to Archived again stays an idempotent no-op.
+        let again = store
+            .resolve_by_source(SOURCE_SESSION_APPROVAL, "sess-1", InboxStatus::Archived)
+            .unwrap()
+            .unwrap();
+        assert_eq!(again.status, "archived");
+        assert_eq!(store.get_item(item.id).unwrap().unwrap().status, "archived");
+
+        // The reopen path is untouched: a fresh occurrence through
+        // upsert_pending still surfaces the entry as pending.
+        let reopened = store
+            .upsert_pending(attention_item(SOURCE_SESSION_APPROVAL, "sess-1", "bash"))
+            .unwrap();
+        assert_eq!(reopened.id, item.id);
+        assert_eq!(reopened.status, "pending");
     }
 
     // ── stats ───────────────────────────────────────────────────────────

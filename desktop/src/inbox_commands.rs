@@ -47,9 +47,11 @@ use crate::scheduled_commands::TaskExecution;
 /// Max length of the generated inbox item summary (brief: ≤500 chars).
 const SUMMARY_MAX_CHARS: usize = 500;
 
-/// Scan cap for the one-shot history backfill. The JSONL store prunes to a
-/// 90-day rolling window, so this bounds the scan far above any real store
-/// while keeping a runaway directory from wedging startup.
+/// Scan cap for the one-shot history backfill. The JSONL store's
+/// `prune_old` currently has **no production caller**, so the store is not
+/// pruned in practice — this cap is purely defensive: it keeps a runaway
+/// (oversized) runs directory from wedging startup, at the cost of leaving
+/// runs beyond the newest 10 000 unbackfilled until the store shrinks.
 const BACKFILL_SCAN_LIMIT: usize = 10_000;
 
 /// Sources that can be rerun through the scheduled-task execution path.
@@ -256,6 +258,50 @@ where
                 .iter()
                 .map(crate::scheduled_commands::run_to_execution)
                 .collect())
+        }
+    }
+}
+
+/// Read one run's detail row backing `get_execution_detail`, fully
+/// symmetric to [`read_run_history`]: the inbox store (`routine_runs`)
+/// first — projected with the same [`run_record_to_execution`] mapping the
+/// list path uses — falling back to the legacy JSONL `find_by_id`
+/// (behaviour fully preserved) when the run is not in `routine_runs` yet
+/// (e.g. a JSONL-only `running` placeholder the startup backfill
+/// deliberately skips) or when the inbox read fails (warn only, never
+/// surfaces). Without the fallback a JSONL mirror write that failed while
+/// its SQLite write succeeded would list the run in History but 404 here.
+///
+/// `read_inbox` is injected so tests can drive all three branches (a
+/// healthy `InboxStore` can neither miss nor fail on demand).
+pub(crate) fn read_run_detail<F>(
+    read_inbox: F,
+    jsonl: &ScheduledRunsStore,
+    run_id: &str,
+) -> Result<TaskExecution, String>
+where
+    F: FnOnce() -> Result<Option<RunRecord>, InboxStoreError>,
+{
+    let from_jsonl = || -> Result<TaskExecution, String> {
+        let run = jsonl
+            .find_by_id(run_id)
+            .map_err(|e| e.to_string())?
+            .ok_or_else(|| format!("run not found: {run_id}"))?;
+        Ok(crate::scheduled_commands::run_to_execution(&run))
+    };
+    match read_inbox() {
+        Ok(Some(record)) => Ok(run_record_to_execution(&record)),
+        // Not in `routine_runs` (pre-backfill legacy run / JSONL-only
+        // placeholder) — a normal miss, so no warning: the JSONL store is
+        // the read fallback, same as the T7 list path.
+        Ok(None) => from_jsonl(),
+        Err(e) => {
+            tracing::warn!(
+                error = %e,
+                run_id = %run_id,
+                "execution detail: inbox store read failed — falling back to the legacy JSONL runs store"
+            );
+            from_jsonl()
         }
     }
 }
@@ -1274,6 +1320,106 @@ mod tests {
         assert_eq!(filtered.len(), 1);
         assert_eq!(filtered[0].run_id, a);
         assert_eq!(filtered[0].task_name, "Alpha");
+    }
+
+    // ── get_execution_detail read source (卡 2 follow-up) ───────────────
+
+    #[test]
+    fn read_run_detail_prefers_the_inbox_store() {
+        let tmp = tempfile::tempdir().unwrap();
+        let inbox = InboxStore::open_in_memory().unwrap();
+        let jsonl = jsonl_store(tmp.path());
+
+        let run_id = inbox.record_run_start("task-a", "Alpha").unwrap();
+        inbox
+            .record_run_finish(&run_id, "failed", Some("boom"), None)
+            .unwrap();
+        // Decoy: a same-id JSONL row must be ignored while the inbox row
+        // resolves (the SQLite row is authoritative).
+        let mut ghost = ScheduledRun::start("task-a", "JSONL Alpha");
+        ghost.run_id = run_id.clone();
+        jsonl.record(&ghost).unwrap();
+
+        let exec = read_run_detail(
+            || {
+                Ok(inbox
+                    .list_runs(10)
+                    .unwrap()
+                    .into_iter()
+                    .find(|r| r.id == run_id))
+            },
+            &jsonl,
+            &run_id,
+        )
+        .unwrap();
+        // Same projection contract as the T7 list path (run_record_to_execution).
+        assert_eq!(exec.run_id, run_id);
+        assert_eq!(exec.task_id, "task-a");
+        assert_eq!(exec.task_name, "Alpha");
+        assert_eq!(exec.status, "failed");
+        assert_eq!(exec.error_message.as_deref(), Some("boom"));
+        assert_eq!(exec.cost_usd, None);
+        assert_eq!(exec.token_usage, None);
+    }
+
+    #[test]
+    fn read_run_detail_falls_back_to_jsonl_on_inbox_miss() {
+        let tmp = tempfile::tempdir().unwrap();
+        let jsonl = jsonl_store(tmp.path());
+
+        let a = jsonl.start_run("task-a", "Alpha").unwrap();
+        jsonl
+            .update(&a, |r| r.finish(RunStatus::Failed, Some("boom".into())))
+            .unwrap();
+
+        // The run is not in `routine_runs` (e.g. a JSONL-only placeholder
+        // the backfill skips) — the JSONL projection answers instead.
+        let exec = read_run_detail(|| Ok(None), &jsonl, &a).unwrap();
+        assert_eq!(exec.run_id, a);
+        assert_eq!(exec.task_name, "Alpha");
+        assert_eq!(exec.status, "failed");
+        assert_eq!(exec.error_message.as_deref(), Some("boom"));
+
+        // Neither store has it → the exact legacy "run not found" error.
+        let err = read_run_detail(|| Ok(None), &jsonl, "missing").unwrap_err();
+        assert_eq!(err, "run not found: missing");
+    }
+
+    #[test]
+    fn read_run_detail_falls_back_to_jsonl_when_inbox_read_fails() {
+        let tmp = tempfile::tempdir().unwrap();
+        let jsonl = jsonl_store(tmp.path());
+        let a = jsonl.start_run("task-a", "Alpha").unwrap();
+        jsonl
+            .update(&a, |r| r.finish(RunStatus::Succeeded, None))
+            .unwrap();
+        // The row even exists in `routine_runs` (backfilled) — but the
+        // store read is unavailable.
+        let inbox = InboxStore::open_in_memory().unwrap();
+        assert!(
+            inbox
+                .import_run(&scheduled_run_to_record(
+                    &jsonl.find_by_id(&a).unwrap().expect("jsonl row")
+                ))
+                .unwrap()
+        );
+
+        // Simulated inbox outage: the read closure errors → the JSONL row
+        // is returned (with only a warning) instead of failing the command.
+        let exec = read_run_detail(|| Err(InboxStoreError::Poisoned), &jsonl, &a).unwrap();
+        assert_eq!(exec.run_id, a);
+        assert_eq!(exec.task_name, "Alpha");
+        assert_eq!(exec.status, "succeeded");
+
+        // Sanity: without the outage the backfilled inbox row wins.
+        let hit = read_run_detail(
+            || Ok(inbox.list_runs(10).unwrap().into_iter().next()),
+            &jsonl,
+            &a,
+        )
+        .unwrap();
+        assert_eq!(hit.run_id, a);
+        assert_eq!(hit.started_at, exec.started_at, "same run, same projection");
     }
 
     /// 抽样一致性：the same batch of runs, once read through the JSONL
