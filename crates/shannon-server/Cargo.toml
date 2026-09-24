@@ -30,4 +30,5 @@ default = []
 swagger-ui = ["dep:utoipa-swagger-ui"]
 
 [dev-dependencies]
+shannon-api-protocol = { path = "../shannon-api-protocol" }
 tower = { version = "0.5", features = ["util"] }
