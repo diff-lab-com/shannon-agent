@@ -5,19 +5,19 @@
 
 ## Snapshot
 
-- **Generated (UTC)**: `2026-09-23T23:13:26Z`
+- **Generated (UTC)**: `2026-09-24T02:14:05Z`
 - **Branch**: `HEAD`
-- **Commit**: `17eb9e9`
-- **Describe**: `17eb9e9-dirty`
+- **Commit**: `5d87684`
+- **Describe**: `5d87684-dirty`
 
 ## Summary
 
 | metric | value |
 |---|---:|
-| Tests (nextest, runnable) | 12522 |
-| Tests (source `#[test]`/`#[tokio::test]` attrs) | 12427 |
+| Tests (nextest, runnable) | 12526 |
+| Tests (source `#[test]`/`#[tokio::test]` attrs) | 12431 |
 | Rust source files | 755 |
-| Rust LOC (code) | 524159 |
+| Rust LOC (code) | 524620 |
 | Workspace members | 22 |
 | `cargo clippy --workspace -- -D warnings` | pass |
 | `cargo deny check` | pass |
@@ -29,7 +29,7 @@ Counts below come from `cargo nextest list --workspace --message-format=json`
 
 | crate | tests | binaries |
 |---|---:|---:|
-| shannon-core | 3885 | 46 |
+| shannon-core | 3889 | 46 |
 | shannon-tools | 1780 | 18 |
 | shannon-ui | 1529 | 8 |
 | shannon-engine | 1162 | 4 |
@@ -59,7 +59,7 @@ Legacy archives and vendored directories are excluded.
 
 | language | files | code |
 |---|---:|---:|
-| Rust (.rs) | 755 | 524159 |
+| Rust (.rs) | 755 | 524620 |
 | TypeScript/TSX | 640 | 106447 |
 
 ## Lint / audit status
@@ -71,7 +71,7 @@ Legacy archives and vendored directories are excluded.
 ```text
 [1m[33mwarning[0m[1m:[0m shannon-types@0.11.0: Generated ProviderModelConfig JSON Schema at: /home/runner/work/shannon-agent/shannon-agent/crates/shannon-types/schema/provider-model-config.schema.json
 [1m[32m   Compiling[0m shannon-desktop v0.11.0 (/home/runner/work/shannon-agent/shannon-agent/desktop)
-[1m[32m    Finished[0m \`dev\` profile [unoptimized + debuginfo] target(s) in 23.72s
+[1m[32m    Finished[0m \`dev\` profile [unoptimized + debuginfo] target(s) in 23.73s
 ```
 
 ### `cargo deny check`
