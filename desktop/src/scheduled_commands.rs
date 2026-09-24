@@ -1216,24 +1216,45 @@ pub async fn list_task_executions(
     )
 }
 
+/// Bounded scan cap for the `routine_runs` by-id lookup in
+/// [`get_execution_detail`]. The inbox store gained no by-id run getter
+/// this cycle (pub-API freeze), so the detail view resolves its single row
+/// through a newest-first `list_runs` scan — the same full-scan shape as
+/// the JSONL `find_by_id` it front-runs. The cap mirrors
+/// `BACKFILL_SCAN_LIMIT`'s defensive role (an oversized table cannot make
+/// the detail view unbounded); a run older than the cap simply falls back
+/// to the JSONL path.
+const DETAIL_SCAN_LIMIT: u32 = 10_000;
+
 /// Full execution detail view (lightweight run + task metadata).
+///
+/// T7-symmetric read source: the SQLite `routine_runs` table first (the
+/// JSONL mirror is best-effort, so a run whose JSONL write failed while its
+/// SQLite write succeeded must still resolve here — the old JSONL-only
+/// lookup listed it in History but reported not found), falling back to the
+/// legacy JSONL store on a miss or inbox read failure. See
+/// `inbox_commands::read_run_detail`.
 #[tauri::command]
 pub async fn get_execution_detail(
     state: tauri::State<'_, AppState>,
     run_id: String,
 ) -> Result<TaskExecutionDetail, String> {
-    let run = state
-        .scheduled_runs_store()
-        .find_by_id(&run_id)
-        .map_err(|e| e.to_string())?
-        .ok_or_else(|| format!("run not found: {run_id}"))?;
-
-    let execution = run_to_execution(&run);
+    let inbox = state.inbox_store();
+    let scanned = run_id.clone();
+    let execution = crate::inbox_commands::read_run_detail(
+        move || {
+            inbox
+                .list_runs(DETAIL_SCAN_LIMIT)
+                .map(|rows| rows.into_iter().find(|r| r.id == scanned))
+        },
+        state.scheduled_runs_store(),
+        &run_id,
+    )?;
 
     // Best-effort task enrichment — runs may outlive their tasks.
     let (prompt, cron_expr, next_fire_at) = state
         .scheduled_task_store()
-        .load(&run.task_id)
+        .load(&execution.task_id)
         .ok()
         .flatten()
         .map(|r| {
