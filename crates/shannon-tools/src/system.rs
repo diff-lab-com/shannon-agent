@@ -1760,12 +1760,12 @@ impl BashTool {
                                 if start.elapsed() >= stream_delay {
                                     streaming_active = true;
                                     for bl in &buffered_lines {
-                                        progress.send(bl);
+                                        progress.send(bl).await;
                                     }
                                     buffered_lines.clear();
                                 }
                             } else {
-                                progress.send(&cleaned);
+                                progress.send(&cleaned).await;
                             }
                         }
                         Ok(None) => break,
@@ -1787,12 +1787,12 @@ impl BashTool {
                                 if start.elapsed() >= stream_delay {
                                     streaming_active = true;
                                     for bl in &buffered_lines {
-                                        progress.send(bl);
+                                        progress.send(bl).await;
                                     }
                                     buffered_lines.clear();
                                 }
                             } else {
-                                progress.send(&tagged);
+                                progress.send(&tagged).await;
                             }
                         }
                         Ok(None) => {}
@@ -2873,8 +2873,9 @@ struct CollectSender {
     lines: std::sync::Mutex<Vec<String>>,
 }
 
+#[async_trait]
 impl crate::ProgressSender for CollectSender {
-    fn send(&self, line: &str) {
+    async fn send(&self, line: &str) {
         self.lines.lock().unwrap().push(line.to_string());
     }
 }

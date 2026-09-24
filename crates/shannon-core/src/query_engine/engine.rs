@@ -171,13 +171,40 @@ fn publish_stop_trigger(bus: &crate::bus::EventBus, tool_calls_count: usize) {
 /// Note: this only *logs* a closed receiver — it does not stop the producer
 /// loop. Cancellation is handled separately by [`AbortOnDropStream`], which
 /// aborts the spawned task when the consumer drops the [`QueryStream`].
+///
+/// The send is `await`ed (review §P3-6): the query-event channel is bounded,
+/// so when the consumer stops draining, the producer task suspends here
+/// (true backpressure) instead of accumulating events without bound. Events
+/// are never dropped or coalesced.
 macro_rules! send_event {
     ($tx:expr, $event:expr) => {
-        if let Err(e) = $tx.send(Ok($event)) {
+        if let Err(e) = $tx.send(Ok($event)).await {
             tracing::warn!("query event dropped (receiver closed): {e}");
         }
     };
 }
+
+/// Capacity of the bounded query-event channel created by
+/// [`QueryEngine::process_query`] (review §P3-6).
+///
+/// Backpressure contract: the producer task sends events with
+/// [`mpsc::Sender::send`] (`.await`). While a consumer keeps draining — the
+/// REPL pump, the SSE handlers, the WS handler, the CLI — the 256-slot buffer
+/// is plenty to absorb scheduling jitter. If a consumer stalls, the producer
+/// (and every tool streaming progress through it) suspends at its next send
+/// instead of letting memory grow without bound. This is flow control, not
+/// loss prevention: no event is ever dropped or coalesced, so the number only
+/// trades worst-case queued memory (~256 events) against tolerance for a
+/// briefly busy consumer; it must not be raised to mask a genuinely stalled
+/// consumer.
+///
+/// 256 is also far above the largest burst a single engine step produces
+/// (one turn streams at most a few hundred tokens' worth of events while the
+/// consumer is typically draining continuously), and it is large enough that
+/// producer-side batching (e.g. multi-input bus batches) never deadlocks:
+/// the producer never waits on the consumer for anything except channel
+/// space.
+pub(crate) const QUERY_EVENT_CHANNEL_CAPACITY: usize = 256;
 
 /// The engine's event sender: the legacy mpsc facade (§4.2 compatibility —
 /// TUI/SSE/desktop consumers unchanged) plus the session [`EventBus`] (§4.8).
@@ -187,21 +214,27 @@ macro_rules! send_event {
 /// ([`L0TeeSubscriber`](crate::session_log::L0TeeSubscriber)) mirrors durable
 /// rows into the session log; publishing happens before the channel send, so
 /// log order equals broadcast order exactly like the pre-bus direct bypass.
+///
+/// The wrapped channel is **bounded**
+/// ([`QUERY_EVENT_CHANNEL_CAPACITY`]) and [`EventTx::send`] is `async`:
+/// a slow consumer suspends the producer at the send (§P3-6 backpressure)
+/// while bus dispatch (in-process, synchronous) still happens eagerly.
 #[derive(Clone)]
 pub(crate) struct EventTx {
-    tx: mpsc::UnboundedSender<Result<QueryEvent, QueryError>>,
+    tx: mpsc::Sender<Result<QueryEvent, QueryError>>,
     bus: crate::bus::EventBus,
 }
 
 impl EventTx {
-    fn new(
-        tx: mpsc::UnboundedSender<Result<QueryEvent, QueryError>>,
-        bus: crate::bus::EventBus,
-    ) -> Self {
+    fn new(tx: mpsc::Sender<Result<QueryEvent, QueryError>>, bus: crate::bus::EventBus) -> Self {
         Self { tx, bus }
     }
 
-    fn send(
+    /// Send one event to the consumer, suspending while the bounded buffer is
+    /// full (backpressure). Fails iff the consumer dropped the
+    /// [`QueryStream`]; the error carries the event back, matching the
+    /// previous unbounded-channel `SendError` semantics.
+    async fn send(
         &self,
         item: Result<QueryEvent, QueryError>,
     ) -> Result<(), mpsc::error::SendError<Result<QueryEvent, QueryError>>> {
@@ -211,7 +244,7 @@ impl EventTx {
             self.bus
                 .dispatch_serial_batch(crate::session_log::query_event_to_bus_inputs(event));
         }
-        self.tx.send(item)
+        self.tx.send(item).await
     }
 }
 
@@ -269,8 +302,9 @@ struct ChannelProgressSender {
     tool_name: String,
 }
 
+#[async_trait::async_trait]
 impl crate::tools::ProgressSender for ChannelProgressSender {
-    fn send(&self, line: &str) {
+    async fn send(&self, line: &str) {
         send_event!(
             self.tx,
             QueryEvent::ToolProgress {
@@ -1487,17 +1521,21 @@ impl QueryEngine {
         let config = self.config.clone();
         let session_id_for_permissions = context.session_id;
 
-        // Create receiver for events. The legacy mpsc channel stays as the
-        // compatibility facade for TUI/SSE/desktop consumers (§4.8); every
-        // broadcast QueryEvent additionally flows through this session's
-        // [`EventBus`], whose built-in L0 subscriber mirrors durable rows to
+        // Create receiver for events. The channel is **bounded** at
+        // [`QUERY_EVENT_CHANNEL_CAPACITY`] (review §P3-6): the producer task
+        // below awaits every send, so a stalled consumer applies backpressure
+        // to the LLM/tool loop instead of letting the queue grow without
+        // bound. The legacy mpsc channel stays as the compatibility facade
+        // for TUI/SSE/desktop consumers (§4.8); every broadcast QueryEvent
+        // additionally flows through this session's [`EventBus`], whose
+        // built-in L0 subscriber mirrors durable rows to
         // `~/.shannon/sessions/<session_id>/events.jsonl` — one dispatch
         // path for distribution and persistence.
         // `SHANNON_SESSION_LOG=off` still disables recording (the tee's own
         // switch). Subscriptions and the L0 writer are mounted at the top of
         // the producer task below so their guards live exactly as long as
         // the query.
-        let (tx_raw, rx) = mpsc::unbounded_channel();
+        let (tx_raw, rx) = mpsc::channel(QUERY_EVENT_CHANNEL_CAPACITY);
         let session_bus = std::sync::Arc::new(crate::bus::EventBus::new());
         let tx = EventTx::new(tx_raw, session_bus.shared());
 
@@ -2725,7 +2763,14 @@ impl QueryEngine {
                 // multi-second stall.
                 client.set_retry_observer(Some(std::sync::Arc::new({
                     let tx = tx.clone();
-                    move |notice: &shannon_engine::api::retry::RetryNotice| {
+                    // Returns a future the retry loop awaits (§P3-6): the
+                    // notice is forwarded through the bounded event channel,
+                    // so backpressure reaches the retry sleep itself while
+                    // FIFO order with the surrounding events is preserved.
+                    move |notice: shannon_engine::api::retry::RetryNotice| {
+                        // `Fn` closure: clone the handle per invocation so the
+                        // returned future owns its own sender.
+                        let tx = tx.clone();
                         let message = format!(
                             "API retry {}/{} (next try in {:.0}s): {}",
                             notice.attempt,
@@ -2733,7 +2778,9 @@ impl QueryEngine {
                             notice.wait.as_secs_f32(),
                             notice.reason
                         );
-                        send_event!(tx, QueryEvent::Progress { query_id, message });
+                        Box::pin(async move {
+                            send_event!(tx, QueryEvent::Progress { query_id, message });
+                        }) as futures::future::BoxFuture<'static, ()>
                     }
                 })));
                 let stream_result = if let Some(ref blocks) = system_blocks_opt {
@@ -3138,8 +3185,23 @@ impl QueryEngine {
                                             request_input_tokens += input_tokens;
                                             request_output_tokens += output_tokens;
 
-                                            // Update shared cost tracker
-                                            {
+                                            // Update shared cost tracker, then
+                                            // send any budget event AFTER the
+                                            // guard is dropped (§P3-6 lock-
+                                            // across-send audit): the channel
+                                            // is bounded, so a stalled
+                                            // consumer suspends the producer
+                                            // at the send — it must not do so
+                                            // while holding the engine-wide
+                                            // cost lock that `conversation_stats`,
+                                            // `set_model`, and other queries
+                                            // share.
+                                            //
+                                            // `budget_exceeded` keeps the
+                                            // original precedence (limit beats
+                                            // 80% warning; the warning flag is
+                                            // only marked when not exceeded).
+                                            let budget_outcome = {
                                                 let mut tracker = cost_tracker
                                                     .write()
                                                     .unwrap_or_else(|e| e.into_inner());
@@ -3154,22 +3216,15 @@ impl QueryEngine {
                                                     let limit =
                                                         tracker.budget_limit_usd.unwrap_or(0.0);
                                                     let total = tracker.total_cost();
-                                                    send_event!(
-                                                        tx,
-                                                        QueryEvent::Progress {
-                                                            query_id,
-                                                            message: format!(
-                                                                "Budget limit reached (${limit:.2}). Stopping. (spent: ${total:.4})"
-                                                            ),
-                                                        }
-                                                    );
-                                                    // Break out of the loop by setting turn to max
-                                                    turn = config.max_turns;
-                                                    break;
+                                                    Some((
+                                                        true,
+                                                        format!(
+                                                            "Budget limit reached (${limit:.2}). Stopping. (spent: ${total:.4})"
+                                                        ),
+                                                    ))
                                                 }
-
                                                 // Budget warning at 80% usage (fires once)
-                                                if tracker.check_and_mark_budget_warning() {
+                                                else if tracker.check_and_mark_budget_warning() {
                                                     let limit =
                                                         tracker.budget_limit_usd.unwrap_or(0.0);
                                                     let total = tracker.total_cost();
@@ -3178,15 +3233,25 @@ impl QueryEngine {
                                                     } else {
                                                         0
                                                     };
-                                                    send_event!(
-                                                        tx,
-                                                        QueryEvent::Progress {
-                                                            query_id,
-                                                            message: format!(
-                                                                "Budget warning: ${total:.4} / ${limit:.2} ({pct}%)"
-                                                            ),
-                                                        }
-                                                    );
+                                                    Some((
+                                                        false,
+                                                        format!(
+                                                            "Budget warning: ${total:.4} / ${limit:.2} ({pct}%)"
+                                                        ),
+                                                    ))
+                                                } else {
+                                                    None
+                                                }
+                                            };
+                                            if let Some((exceeded, message)) = budget_outcome {
+                                                send_event!(
+                                                    tx,
+                                                    QueryEvent::Progress { query_id, message }
+                                                );
+                                                if exceeded {
+                                                    // Break out of the loop by setting turn to max
+                                                    turn = config.max_turns;
+                                                    break;
                                                 }
                                             }
 
@@ -4736,18 +4801,20 @@ impl QueryEngine {
                                                         output_tokens: total_output_tokens,
                                                     }
                                                 );
-                                                let _ =
-                                                    tx.send(Ok(QueryEvent::ConversationUpdate {
+                                                let _ = tx
+                                                    .send(Ok(QueryEvent::ConversationUpdate {
                                                         query_id,
                                                         messages: conversation.messages.clone(),
-                                                    }));
+                                                    }))
+                                                    .await;
 
                                                 publish_stop_trigger(
                                                     &session_bus,
                                                     tool_results.len(),
                                                 );
-                                                let _ =
-                                                    tx.send(Ok(QueryEvent::Completed { query_id }));
+                                                let _ = tx
+                                                    .send(Ok(QueryEvent::Completed { query_id }))
+                                                    .await;
 
                                                 return;
                                             }
@@ -6525,6 +6592,184 @@ mod tests {
         assert!(
             after <= baseline + 1,
             "producer kept running after stream drop: baseline={baseline} after={after}"
+        );
+    }
+
+    // ── Bounded query-event channel backpressure (review §P3-6) ─────────
+
+    /// A stalled consumer must suspend the producer (true backpressure), and
+    /// resuming the consumer must deliver every event, in order, none lost.
+    #[tokio::test]
+    async fn bounded_event_channel_producer_suspends_when_consumer_stalls() {
+        use std::sync::Arc;
+        use std::sync::atomic::{AtomicUsize, Ordering};
+        use std::time::Duration;
+
+        const CAP: usize = 4;
+        const TOTAL: usize = 20;
+        let query_id = Uuid::new_v4();
+        let (tx_raw, mut rx) = mpsc::channel::<Result<QueryEvent, QueryError>>(CAP);
+        let tx = EventTx::new(tx_raw, crate::bus::EventBus::new());
+
+        let sent = Arc::new(AtomicUsize::new(0));
+        let producer = {
+            let sent = sent.clone();
+            tokio::spawn(async move {
+                for i in 0..TOTAL {
+                    tx.send(Ok(QueryEvent::Text {
+                        query_id,
+                        content: format!("e{i}"),
+                    }))
+                    .await
+                    .expect("consumer stays alive");
+                    sent.fetch_add(1, Ordering::SeqCst);
+                }
+            })
+        };
+
+        // The consumer deliberately does NOT drain. With no recv, at most
+        // `CAP` sends can complete — the (CAP+1)-th send must stay pending.
+        tokio::time::sleep(Duration::from_millis(50)).await;
+        let stalled_sent = sent.load(Ordering::SeqCst);
+        assert!(
+            stalled_sent <= CAP,
+            "producer completed {stalled_sent} sends into a capacity-{CAP} \
+             channel that was never drained — backpressure is broken"
+        );
+        assert!(
+            stalled_sent < TOTAL,
+            "producer finished all {TOTAL} sends while the consumer was stalled"
+        );
+
+        // Resume the consumer (slowly): every event arrives, in order.
+        let mut received: Vec<QueryEvent> = Vec::with_capacity(TOTAL);
+        for _ in 0..TOTAL {
+            let item = rx
+                .recv()
+                .await
+                .expect("channel stays open while the producer is alive");
+            received.push(item.expect("no error events sent"));
+            tokio::time::sleep(Duration::from_millis(5)).await;
+        }
+        producer.await.expect("producer task finishes");
+
+        assert_eq!(received.len(), TOTAL, "no event may be lost");
+        for (i, event) in received.iter().enumerate() {
+            match event {
+                QueryEvent::Text { content, .. } => {
+                    assert_eq!(content, &format!("e{i}"), "FIFO order must hold")
+                }
+                other => panic!("unexpected event in stream: {other:?}"),
+            }
+        }
+    }
+
+    /// A consumer dropped mid-stream must surface a send error to the
+    /// producer (bounded channel keeps the unbounded channel's SendError
+    /// semantics), instead of hanging or silently succeeding.
+    #[tokio::test]
+    async fn bounded_event_channel_send_fails_when_consumer_dropped_mid_stream() {
+        use std::time::Duration;
+
+        let query_id = Uuid::new_v4();
+        let (tx_raw, mut rx) = mpsc::channel::<Result<QueryEvent, QueryError>>(2);
+        let tx = EventTx::new(tx_raw, crate::bus::EventBus::new());
+
+        let handle = tokio::spawn(async move {
+            for i in 0..64 {
+                if tx
+                    .send(Ok(QueryEvent::Text {
+                        query_id,
+                        content: format!("e{i}"),
+                    }))
+                    .await
+                    .is_err()
+                {
+                    return Some(i);
+                }
+            }
+            None
+        });
+
+        // Consume one event like a real stream consumer, then drop the
+        // receiver while the producer is still producing.
+        let first = rx.recv().await.expect("at least one event is available");
+        assert!(matches!(first, Ok(QueryEvent::Text { .. })));
+        drop(rx);
+
+        let failed_at = tokio::time::timeout(Duration::from_secs(5), handle)
+            .await
+            .expect("producer must terminate once the consumer is dropped")
+            .expect("producer task does not panic");
+        assert!(
+            failed_at.is_some(),
+            "producer never observed the closed channel"
+        );
+        // At most `capacity + 1` sends can succeed without a drain, so the
+        // failure must surface almost immediately (index ≤ 3 here).
+        assert!(
+            failed_at.unwrap() <= 3,
+            "send error surfaced late — the producer buffered past capacity"
+        );
+    }
+
+    /// Regression for the AbortOnDrop contract over a **bounded** channel:
+    /// dropping the stream still aborts the producer, and the producer cannot
+    /// keep producing after the drop.
+    #[tokio::test]
+    async fn bounded_channel_abort_on_drop_stops_producer() {
+        use std::sync::Arc;
+        use std::sync::atomic::{AtomicU64, Ordering};
+        use std::time::Duration;
+
+        let counter = Arc::new(AtomicU64::new(0));
+        let query_id = Uuid::new_v4();
+        let (tx_raw, rx) = mpsc::channel::<Result<QueryEvent, QueryError>>(2);
+        let tx = EventTx::new(tx_raw, crate::bus::EventBus::new());
+
+        let producer_counter = counter.clone();
+        let handle = tokio::spawn(async move {
+            let mut n = 0u64;
+            loop {
+                n += 1;
+                producer_counter.fetch_add(1, Ordering::SeqCst);
+                // Deliberately ignore send errors — without abort, the loop
+                // would only end by itself after the receiver drops.
+                let _ = tx
+                    .send(Ok(QueryEvent::Text {
+                        query_id,
+                        content: format!("e{n}"),
+                    }))
+                    .await;
+                tokio::time::sleep(Duration::from_millis(5)).await;
+            }
+        });
+
+        // Same stream shape process_query returns: unfold + AbortOnDropStream.
+        use futures::StreamExt as _;
+        use futures::stream::unfold;
+        let inner = unfold(rx, |mut receiver| async move {
+            receiver.recv().await.map(|event| (event, receiver))
+        });
+        let mut stream = AbortOnDropStream::new(inner, handle);
+
+        assert!(
+            stream.next().await.is_some(),
+            "wrapper must forward inner stream items"
+        );
+
+        let baseline = counter.load(Ordering::SeqCst);
+        drop(stream);
+
+        // An alive producer would tick ~every 5ms; after 50ms that is ~10
+        // more iterations. Abortion (or the send error) stops it within one
+        // iteration of the drop.
+        tokio::time::sleep(Duration::from_millis(50)).await;
+        let after = counter.load(Ordering::SeqCst);
+        assert!(
+            after <= baseline + 1,
+            "producer kept running after bounded-channel stream drop: \
+             baseline={baseline} after={after}"
         );
     }
 
