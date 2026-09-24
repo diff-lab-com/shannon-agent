@@ -1,0 +1,23 @@
+{
+  "$schema": "https://schema.tauri.app/capability/2",
+  "identifier": "app-commands",
+  "description": "review §P2-21: application-level ACL. Unprefixed permission references resolve against the __app-acl__ manifest built from acl/app-permissions.json (one allow-<command> permission per generate_handler! command, grouped into app-* sets). The exact same SPA bundle (desktop/ui) runs in the main window and in every session-* window (session windows boot /?windowSession=<uuid> and render the full UI), so both window groups need the same command surface today; window/origin scoping is the point of this capability — any other window label, nested frame, or remote origin resolves to no capability and is denied. Maintained together with desktop/tests/app_command_acl_coverage.rs, which fails when a command is added to generate_handler! without an ACL entry.",
+  "windows": ["main", "session-*"],
+  "permissions": [
+    "app-agents",
+    "app-automation",
+    "app-chat",
+    "app-config",
+    "app-connections",
+    "app-devtools",
+    "app-extensions",
+    "app-files",
+    "app-memory",
+    "app-notifications",
+    "app-platform",
+    "app-sessions",
+    "app-usage",
+    "app-voice",
+    "app-window-management"
+  ]
+}
