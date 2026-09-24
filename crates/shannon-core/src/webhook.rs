@@ -141,9 +141,19 @@ pub struct GenericWebhookPayload {
 
 // ── Shared state ────────────────────────────────────────────────────────
 
+/// Capacity of the bounded webhook event channel (review §P3-6).
+///
+/// Raw upstream HTTP posts are the producer, the local polling consumer
+/// ([`WebhookReceiver::recv`]) is the drain. 1024 absorbs a burst of
+/// deliveries (e.g. a repo-wide CI storm) while a slow consumer catches up;
+/// beyond that the producer is suspended at `send().await`, applying TCP
+/// backpressure to the sender instead of growing memory without bound. No
+/// event is dropped or coalesced.
+const WEBHOOK_EVENT_CHANNEL_CAPACITY: usize = 1024;
+
 #[derive(Clone)]
 struct WebhookState {
-    tx: mpsc::UnboundedSender<WebhookEvent>,
+    tx: mpsc::Sender<WebhookEvent>,
     secret: Option<String>,
 }
 
@@ -175,15 +185,19 @@ impl Default for WebhookConfig {
 /// Call `WebhookReceiver::events()` to get a stream of incoming events.
 pub struct WebhookReceiver {
     config: WebhookConfig,
-    tx: mpsc::UnboundedSender<WebhookEvent>,
-    rx: mpsc::UnboundedReceiver<WebhookEvent>,
+    tx: mpsc::Sender<WebhookEvent>,
+    rx: mpsc::Receiver<WebhookEvent>,
     shutdown_tx: Option<tokio::sync::oneshot::Sender<()>>,
 }
 
 impl WebhookReceiver {
     /// Create a new receiver with the given configuration.
+    ///
+    /// The event channel is bounded at `WEBHOOK_EVENT_CHANNEL_CAPACITY`
+    /// (review §P3-6): handler threads suspend when the consumer falls
+    /// `capacity` deliveries behind, instead of queueing without bound.
     pub fn new(config: WebhookConfig) -> Self {
-        let (tx, rx) = mpsc::unbounded_channel();
+        let (tx, rx) = mpsc::channel(WEBHOOK_EVENT_CHANNEL_CAPACITY);
         Self {
             config,
             tx,
@@ -388,7 +402,9 @@ async fn github_handler(
     };
 
     if let Some(event) = webhook_event {
-        if state.tx.send(event).is_err() {
+        // Awaited send: suspends this handler while the bounded buffer is
+        // full (backpressure to the HTTP peer), never drops the event.
+        if state.tx.send(event).await.is_err() {
             warn!("Webhook event channel closed, dropping event");
         }
     }
@@ -432,7 +448,9 @@ async fn generic_handler(
         raw_payload: payload.payload,
     };
 
-    if state.tx.send(event).is_err() {
+    // Awaited send: suspends this handler while the bounded buffer is full
+    // (backpressure to the HTTP peer), never drops the event.
+    if state.tx.send(event).await.is_err() {
         warn!("Webhook event channel closed, dropping event");
         return Ok(StatusCode::SERVICE_UNAVAILABLE);
     }

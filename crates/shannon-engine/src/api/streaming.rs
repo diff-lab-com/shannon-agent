@@ -610,12 +610,18 @@ impl ResumableSseStream {
 
         // Surface the reconnect pause through the client's retry observer so
         // consumers see why the stream went quiet (§ retry observability).
-        self.client.notify_retry(&super::retry::RetryNotice {
+        // Fired inside the reconnect task — the observer forwards onto the
+        // engine's bounded event channel and is awaited there (review §P3-6),
+        // and `start_reconnect` itself is sync (called from `poll_next`).
+        // FIFO order holds: the engine is parked awaiting THIS stream while
+        // it reconnects, so no other event can precede the notice.
+        let notify_client = self.client.clone();
+        let notice = super::retry::RetryNotice {
             attempt: attempts_used,
             total_attempts: self.initial_reconnects + 1,
             wait: std::time::Duration::from_secs(backoff_secs),
             reason: "stream dropped mid-response; reconnecting".to_string(),
-        });
+        };
 
         let (tx, rx) = tokio::sync::oneshot::channel();
         let config = self.client.config().clone();
@@ -624,6 +630,7 @@ impl ResumableSseStream {
         let system = self.system.clone();
 
         tokio::spawn(async move {
+            notify_client.notify_retry(notice).await;
             tokio::time::sleep(std::time::Duration::from_secs(backoff_secs)).await;
             let reconnect_client = super::client::LlmClient::new(config);
             let result = reconnect_client

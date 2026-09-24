@@ -1824,7 +1824,7 @@ mod tests {
         ) -> ToolResult<ToolOutput> {
             let msg = input.get("msg").and_then(|v| v.as_str()).unwrap_or("");
             for line in msg.lines() {
-                progress.send(line);
+                progress.send(line).await;
             }
             Ok(ToolOutput::success(msg.to_string()))
         }
@@ -1838,8 +1838,9 @@ mod tests {
         struct Collector {
             lines: std::sync::Mutex<Vec<String>>,
         }
+        #[async_trait]
         impl shannon_tool_interface::ProgressSender for Collector {
-            fn send(&self, line: &str) {
+            async fn send(&self, line: &str) {
                 self.lines.lock().unwrap().push(line.to_string());
             }
         }
@@ -1865,8 +1866,9 @@ mod tests {
     async fn test_registry_execute_streaming_unknown_tool() {
         let registry = ToolRegistry::new();
         struct NopSender;
+        #[async_trait]
         impl shannon_tool_interface::ProgressSender for NopSender {
-            fn send(&self, _: &str) {}
+            async fn send(&self, _: &str) {}
         }
 
         let result = registry
@@ -1953,8 +1955,9 @@ mod tests {
     #[tokio::test]
     async fn test_execute_streaming_enforces_timeout() {
         struct NopSender;
+        #[async_trait]
         impl shannon_tool_interface::ProgressSender for NopSender {
-            fn send(&self, _: &str) {}
+            async fn send(&self, _: &str) {}
         }
 
         let mut registry = ToolRegistry::new();

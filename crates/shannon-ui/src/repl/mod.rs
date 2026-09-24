@@ -109,12 +109,14 @@ pub struct Repl {
     pub(crate) shared_executor: SharedExecutor,
     /// Tokio runtime for async operations
     pub(crate) runtime: Runtime,
-    /// Permission request receiver (from QueryEngine to REPL UI)
+    /// Permission request receiver (from QueryEngine to REPL UI). Bounded
+    /// (review §P3-6): prompts are strictly sequential, so the small capacity
+    /// only guards against a UI that stopped draining.
     pub(crate) permission_req_rx:
-        tokio::sync::mpsc::UnboundedReceiver<shannon_core::query_engine::PermissionRequest>,
+        tokio::sync::mpsc::Receiver<shannon_core::query_engine::PermissionRequest>,
     /// Permission request sender (from REPL to QueryEngine)
     pub(crate) permission_req_tx:
-        tokio::sync::mpsc::UnboundedSender<shannon_core::query_engine::PermissionRequest>,
+        tokio::sync::mpsc::Sender<shannon_core::query_engine::PermissionRequest>,
     /// Last session listing cache (for /resume by number)
     pub(crate) last_session_list: Vec<shannon_core::session_log::StoredSessionInfo>,
     /// Command history with cursor navigation
@@ -320,7 +322,9 @@ impl Repl {
 
         let tool_registry = Arc::new(ToolRegistry::new());
         let mcp_pool = Arc::new(McpProcessPool::new());
-        let (permission_req_tx, permission_req_rx) = tokio::sync::mpsc::unbounded_channel();
+        let (permission_req_tx, permission_req_rx) = tokio::sync::mpsc::channel(
+            shannon_core::query_engine::PERMISSION_REQUEST_CHANNEL_CAPACITY,
+        );
 
         let command_registry = {
             let registry = CommandRegistry::new();
@@ -1001,7 +1005,9 @@ impl Repl {
         }
 
         // Create permission request channel
-        let (permission_req_tx, permission_req_rx) = tokio::sync::mpsc::unbounded_channel();
+        let (permission_req_tx, permission_req_rx) = tokio::sync::mpsc::channel(
+            shannon_core::query_engine::PERMISSION_REQUEST_CHANNEL_CAPACITY,
+        );
 
         // Create command registry inside the runtime context so register_sync
         // can access the tokio runtime handle.

@@ -22,7 +22,8 @@ use crate::VERSION;
 // producer (review §P2-6).
 use crate::query_engine::sse::sse_parts_from_query_event;
 use crate::query_engine::{
-    PermissionRequest, QueryContext, QueryEngine, QueryEvent, QueryMetadata,
+    PERMISSION_REQUEST_CHANNEL_CAPACITY, PermissionRequest, QueryContext, QueryEngine, QueryEvent,
+    QueryMetadata,
 };
 use crate::tools::ToolRegistry;
 use axum::Json;
@@ -1059,7 +1060,13 @@ async fn handle_ws_socket(socket: WebSocket, state: AppState) {
                 // client responds via `POST /api/approval/respond`; a resolver
                 // task (300s timeout → Deny) forwards the choice back to the
                 // engine. See `claudedocs/social-connection-architecture.md` P0-b.
-                let (perm_tx, mut perm_rx) = mpsc::unbounded_channel::<PermissionRequest>();
+                // Bounded permission-request channel (review §P3-6): prompts
+                // are strictly sequential (the engine awaits each response),
+                // so this small bound only guards against a handler that
+                // stopped draining; `perm_rx.recv()` in the select loop below
+                // keeps it drained while the query is live.
+                let (perm_tx, mut perm_rx) =
+                    mpsc::channel::<PermissionRequest>(PERMISSION_REQUEST_CHANNEL_CAPACITY);
                 // `process_query` returns a stream whose drop aborts the engine's
                 // producer task — so dropping `stream` (on cancel, or when the
                 // socket closes mid-query) actually interrupts the LLM/tool loop

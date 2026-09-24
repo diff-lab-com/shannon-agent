@@ -255,14 +255,23 @@ impl LlmClient {
     }
 
     /// Fire the retry observer (if attached).
-    pub(crate) fn notify_retry(&self, notice: &RetryNotice) {
-        if let Some(observer) = self
+    ///
+    /// Async + by-value notice (review §P3-6): the observer may forward the
+    /// notice onto the engine's bounded event channel, so the caller awaits
+    /// it and backpressure reaches the retry/reconnect loop.
+    pub(crate) async fn notify_retry(&self, notice: RetryNotice) {
+        // Clone the observer out of the lock and drop the guard BEFORE the
+        // await: the guard is a std RwLock guard (not Send), and holding it
+        // across the observer's send would both poison the future's Send-ness
+        // and block a concurrent `set_retry_observer(None)` for the whole
+        // suspension (§P3-6 lock-across-send audit).
+        let observer = self
             .retry_observer
             .read()
             .unwrap_or_else(|e| e.into_inner())
-            .as_ref()
-        {
-            observer(notice);
+            .clone();
+        if let Some(observer) = observer {
+            observer(notice).await;
         }
     }
 

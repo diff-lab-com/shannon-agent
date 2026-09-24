@@ -8,6 +8,7 @@
 //! / `retry_operation()` async wrappers.
 
 use crate::api::error::ApiError;
+use futures::future::BoxFuture;
 use std::sync::Arc;
 use std::time::Duration;
 use tokio::time::sleep;
@@ -30,7 +31,13 @@ pub struct RetryNotice {
 }
 
 /// Observer invoked before each retry sleep.
-pub type RetryObserver = Arc<dyn Fn(&RetryNotice) + Send + Sync>;
+///
+/// Returns a future the retry loop awaits before sleeping (review §P3-6): the
+/// engine's observer forwards the notice onto the **bounded** query-event
+/// channel, so a stalled consumer suspends the retry loop instead of letting
+/// events queue without bound — and the notice keeps its exact FIFO position
+/// relative to the events around it.
+pub type RetryObserver = Arc<dyn Fn(RetryNotice) -> BoxFuture<'static, ()> + Send + Sync>;
 
 /// Configuration for API retry behavior.
 #[derive(Debug, Clone)]
@@ -327,12 +334,13 @@ where
                     wait
                 );
                 if let Some(observer) = observer {
-                    observer(&RetryNotice {
+                    observer(RetryNotice {
                         attempt: attempt + 1,
                         total_attempts: config.max_retries + 1,
                         wait,
                         reason: e.to_string(),
-                    });
+                    })
+                    .await;
                 }
                 sleep(wait).await;
                 last_error = Some(e);
@@ -494,8 +502,11 @@ mod tests {
         let config = RetryConfig::new(2, 1, 10);
         let notices: Arc<Mutex<Vec<RetryNotice>>> = Arc::new(Mutex::new(Vec::new()));
         let sink = notices.clone();
-        let observer: RetryObserver = Arc::new(move |notice: &RetryNotice| {
-            sink.lock().unwrap().push(notice.clone());
+        let observer: RetryObserver = Arc::new(move |notice: RetryNotice| {
+            let sink = sink.clone();
+            Box::pin(async move {
+                sink.lock().unwrap().push(notice);
+            }) as futures::future::BoxFuture<'static, ()>
         });
 
         let mut calls = 0;
