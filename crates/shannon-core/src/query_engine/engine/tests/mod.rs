@@ -2,6 +2,8 @@
 //! `engine.rs` `#[cfg(test)] mod tests` and grouped thematically; shared
 //! helpers live here.
 
+use super::agent_loop::{ToolResultEntry, WRAP_UP_NUDGE_PROMPT};
+use super::events::{AbortOnDropStream, EventTx};
 use super::*;
 use crate::query_engine::QueryMetadata;
 use crate::query_engine::recovery;
