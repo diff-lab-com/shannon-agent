@@ -2549,6 +2549,7 @@
   "skillProposals.toast.description": "Review pending proposals in Extensions → Pending.",
   "skillProposals.toast.viewButton": "Review",
   "skillProposals.toast.closeButton": "Close",
+  "skillProposals.toast.draftHint": "New skill proposal drafts are awaiting review",
   "skillProposals.review.closeAria": "Close",
   "skillProposals.review.title": "Skill Proposals",
   "skillProposals.review.empty": "No suggestions yet",

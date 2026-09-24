@@ -10,6 +10,12 @@
 //  - skill-loop proposal drafts via the backend's `skill-proposal-available`
 //    event (X1 fix: fired on draft creation and with the updated count after
 //    approve/reject elsewhere).
+//
+// 卡 3c count semantics (controller ruling): the toast's number is the
+// candidate count — identical to the badge. Drafts are never folded into
+// any number; they surface as a count-less hint line that appears when the
+// backend reports drafts > 0 and disappears when it reports 0.
+//
 // Suppressed on /extensions/pending itself — the queue updates in place
 // there, so nudging the user to the page they're on is noise.
 
@@ -36,12 +42,15 @@ export default function SkillProposalsToast() {
     setDraftCount(event.payload.pending_count)
   })
 
-  const pendingCount = candidates.length + draftCount
+  // The number matches the badge (candidates only); drafts are a hint, not
+  // a count.
+  const candidateCount = candidates.length
+  const hasDrafts = draftCount > 0
 
   // A new count re-arms the nudge; dismissing only hides the current one.
   useEffect(() => {
     setDismissed(false)
-  }, [pendingCount])
+  }, [candidateCount, draftCount])
 
   // Fallback refresh (mock/demo + exotic paths): keep the badge in sync
   // after actions taken from surfaces that don't emit the backend event.
@@ -52,7 +61,8 @@ export default function SkillProposalsToast() {
   }, [refetch])
 
   if (location.pathname.startsWith('/extensions/pending')) return null
-  if (pendingCount === 0 || dismissed) return null
+  if (candidateCount === 0 && !hasDrafts) return null
+  if (dismissed) return null
 
   return (
     <div className="fixed bottom-4 right-4 z-modal animate-slide-in-from-bottom">
@@ -63,15 +73,22 @@ export default function SkillProposalsToast() {
         <div className="flex items-start gap-3">
           <span className="material-symbols-outlined icon-lg text-primary" aria-hidden="true">lightbulb</span>
           <div className="flex-1">
-            <h4 className="font-medium text-on-surface text-sm">
-              {intl.formatMessage(
-              { id: 'skillProposals.toast.title' },
-              { count: pendingCount }
+            {candidateCount > 0 && (
+              <h4 className="font-medium text-on-surface text-sm">
+                {intl.formatMessage(
+                { id: 'skillProposals.toast.title' },
+                { count: candidateCount }
+              )}
+              </h4>
             )}
-            </h4>
             <p className="text-xs text-on-surface-variant mt-1">
               {t('skillProposals.toast.description')}
             </p>
+            {hasDrafts && (
+              <p className="text-xs text-on-surface-variant mt-1" data-testid="skill-proposals-draft-hint">
+                {t('skillProposals.toast.draftHint')}
+              </p>
+            )}
             <div className="flex gap-2 mt-3">
               <Button
                 onClick={() => navigate('/extensions/pending')}

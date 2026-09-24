@@ -2549,6 +2549,7 @@
   "skillProposals.toast.description": "到扩展「待处理」页审查待定提案。",
   "skillProposals.toast.viewButton": "去审查",
   "skillProposals.toast.closeButton": "关闭",
+  "skillProposals.toast.draftHint": "有新的技能提案草稿待审",
   "skillProposals.review.closeAria": "关闭",
   "skillProposals.review.title": "技能提案",
   "skillProposals.review.empty": "暂无建议",
