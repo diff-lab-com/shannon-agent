@@ -38,6 +38,20 @@
 //! # Ok(())
 //! # }
 //! ```
+//!
+//! # Module layout (structural split — move-only, no behavior change)
+//!
+//! The former single 10.4k-line `engine.rs` became this directory:
+//!
+//! - `mod.rs` (this file): struct definition, constructors/accessors, prompt
+//!   helpers, `ProviderHealth*`, and the small core `impl` blocks. All items
+//!   publicly reachable as `query_engine::engine::*` stay here — path
+//!   stability is preserved with zero re-export shims.
+//! - [`agent_loop`]: the `process_query` agent loop (one deeply nested
+//!   function, moved wholesale) plus its private machinery.
+//! - [`events`]: bounded query-event channel plumbing (`EventTx`,
+//!   `QUERY_EVENT_CHANNEL_CAPACITY`, `AbortOnDropStream`).
+//! - `tests/`: the former `#[cfg(test)] mod tests`, grouped thematically.
 
 use crate::memory::MemoryStore;
 use crate::memory::{AutoDreamService, SessionMemoryConfig};
