@@ -2,19 +2,21 @@
 // Tauri commands (`list_inbox_items` / `update_inbox_item_status` /
 // `get_inbox_stats` / `rerun_inbox_item` / `continue_inbox_item_session`).
 // Items are produced by scheduled routine runs (`routine`/`scheduled_task`),
-// goal events, the external trigger endpoint, and parallel batch-run
-// completions (`batch`) — see `inbox_commands.rs` / `batch_commands.rs`.
+// goal events, the external trigger endpoint, parallel batch-run
+// completions (`batch`), session permission prompts / failed turns
+// (`session_approval`/`session_failed`) and detected skill candidates
+// (`skill_candidate`) — see `inbox_commands.rs` / `inbox_session_events.rs`.
 //
 // Layout: header with stats summary → filter bar (status chips + source
 // chips + sort) → bulk-action bar when items selected → list of InboxCard
-// cards with checkbox + Mark Read / Archive / Continue-in-session / Rerun
-// actions, expandable error details, empty states.
+// cards with checkbox + Mark Read / Archive / View-or-Continue session /
+// Rerun / Review-candidate actions, expandable error details, empty states.
 //
 // The page keeps the previous triage page's visual language (glass-panel
 // cards, chip filters, keyboard j/k navigation, bulk selection bar).
 
 import { useState, useMemo, useCallback, useEffect, useRef, type KeyboardEvent as ReactKeyboardEvent } from 'react'
-import { useNavigate } from 'react-router-dom'
+import { useLocation, useNavigate } from 'react-router-dom'
 import { useIntl, type PrimitiveType } from 'react-intl'
 import { toast } from 'sonner'
 import EmptyState from '@/components/ui/empty-state'
@@ -36,8 +38,20 @@ type SortOrder = 'newest' | 'oldest'
 /// rejects reruns for them), so the UI disables the action instead.
 const RERUNNABLE_SOURCES: readonly InboxSource[] = ['routine', 'scheduled_task']
 
+/// IA T6: session-scoped sources (permission prompt / failed turn). Their
+/// card's primary action is "View session" — the session *is* the thing to
+/// resolve — instead of the automation-facing "Continue session" wording.
+const SESSION_SOURCES: readonly InboxSource[] = ['session_approval', 'session_failed']
+
 function canRerun(item: InboxItem): boolean {
   return RERUNNABLE_SOURCES.includes(item.source) && item.status !== 'archived'
+}
+
+// IA 2026-09 (T2 互链闭环): routine/scheduled_task items carry the id of the
+// automation that produced them, so the card can link back to /tasks and
+// open its RoutineDetailDrawer.
+function canOpenSource(item: InboxItem): boolean {
+  return RERUNNABLE_SOURCES.includes(item.source) && item.sourceId != null
 }
 
 function sourceMeta(source: InboxSource): { icon: string; color: string; labelKey: string } {
@@ -54,33 +68,57 @@ function sourceMeta(source: InboxSource): { icon: string; color: string; labelKe
       // Parallel batch run's aggregate completion record (T3) — same visual
       // language as the batch runner panel (call_split icon, tertiary color).
       return { icon: 'call_split', color: 'text-tertiary', labelKey: 'inbox.source.batch' }
+    case 'session_approval':
+      // T5: a session permission prompt is waiting on the user (lock_open =
+      // an action is gated); secondary color reads "needs your action".
+      return { icon: 'lock_open', color: 'text-secondary', labelKey: 'inbox.source.session_approval' }
+    case 'session_failed':
+      // T5: the session's last turn failed — same error color as `trigger`.
+      return { icon: 'error', color: 'text-error', labelKey: 'inbox.source.session_failed' }
+    case 'skill_candidate':
+      // T5: a detected skill pattern awaits review (auto_awesome = the same
+      // sparkles language the skill catalog uses).
+      return { icon: 'auto_awesome', color: 'text-tertiary', labelKey: 'inbox.source.skill_candidate' }
     default:
       return { icon: 'notifications', color: 'text-on-surface-variant', labelKey: 'inbox.source.trigger' }
   }
 }
 
 const STATUS_OPTIONS: readonly (InboxItemStatus | 'all')[] = ['all', 'pending', 'read', 'archived']
-const SOURCE_OPTIONS: readonly (InboxSource | 'all')[] = ['all', 'routine', 'scheduled_task', 'goal', 'trigger', 'batch']
+const SOURCE_OPTIONS: readonly (InboxSource | 'all')[] = ['all', 'routine', 'scheduled_task', 'goal', 'trigger', 'batch', 'session_approval', 'session_failed', 'skill_candidate']
 
-function InboxCard({ item, selected, focused, onToggleSelected, onMarkRead, onArchive, onContinue, onRerun }: {
+function InboxCard({ item, selected, focused, highlighted, onToggleSelected, onMarkRead, onArchive, onContinue, onRerun, onOpenSource, onReview }: {
   item: InboxItem
   selected: boolean
   focused?: boolean
+  /** IA T2: one-shot ring when the user arrived from HistoryView. */
+  highlighted?: boolean
   onToggleSelected: (id: number) => void
   onMarkRead: (id: number) => void
   onArchive: (id: number) => void
   onContinue: (item: InboxItem) => void
   onRerun: (item: InboxItem) => void
+  onOpenSource: (item: InboxItem) => void
+  /** IA T6/X1: jump to the Extensions → Pending review queue for this candidate. */
+  onReview: (item: InboxItem) => void
 }) {
   const intl = useIntl()
   const t = (id: string, values?: Record<string, PrimitiveType>) => intl.formatMessage({ id }, values)
   const [showError, setShowError] = useState(false)
   const meta = sourceMeta(item.source)
   const rerunnable = canRerun(item)
+  const openSource = canOpenSource(item)
   const isPending = item.status === 'pending'
+  // IA T6: approval/failed items reframe "resume" as "view" — the user is
+  // going to the session to answer a permission prompt or read the failure.
+  const isSessionSource = SESSION_SOURCES.includes(item.source)
+  // IA X1: skill candidates are assets, not run results — the card links to
+  // the rich review queue (Extensions → Pending) instead of approving inline
+  // (评审裁决 #2: 收件箱只放发现条目，不做卡内审批).
+  const reviewable = item.source === 'skill_candidate' && item.sourceId != null
 
   return (
-    <div role="listitem" data-focused={focused ? 'true' : undefined} className={cn('glass-panel border rounded-xl p-md shadow-sm hover:shadow-md transition-all group bg-surface-container-lowest/80', isPending ? 'border-primary/20' : 'border-outline-variant/10', focused ? 'ring-2 ring-primary' : selected ? 'ring-2 ring-primary/40' : '')}>
+    <div role="listitem" data-focused={focused ? 'true' : undefined} data-highlight={highlighted ? 'true' : undefined} className={cn('glass-panel border rounded-xl p-md shadow-sm hover:shadow-md transition-all group bg-surface-container-lowest/80', isPending ? 'border-primary/20' : 'border-outline-variant/10', focused ? 'ring-2 ring-primary' : highlighted ? 'ring-2 ring-tertiary' : selected ? 'ring-2 ring-primary/40' : '')}>
       <div className="flex items-start gap-sm">
         <label className="flex items-center pt-xs cursor-pointer shrink-0" aria-label={t('inbox.select.aria', { id: item.id })}>
           <input
@@ -131,18 +169,50 @@ function InboxCard({ item, selected, focused, onToggleSelected, onMarkRead, onAr
           </div>
         </div>
         <div className="flex items-center gap-sm shrink-0">
-          {item.sessionId && (
-            /* Primary action (audit §3.4): the Codex review-queue loop is
-               "result → resume the original thread", so resume gets a
-               labelled primary button instead of a ghost icon. */
+          {/* IA T2: routine/scheduled_task results link back to the
+              automation that produced them (opens RoutineDetailDrawer on
+              /tasks). 「继续会话」 stays the primary action. */}
+          {openSource && (
             <Button
               size="sm"
-              aria-label={t('inbox.continue.aria')}
+              variant="ghost"
+              aria-label={t('inbox.openSource.aria')}
+              title={t('inbox.openSource.aria')}
+              className="cursor-pointer inline-flex items-center gap-xs text-on-surface-variant hover:text-primary"
+              onClick={() => onOpenSource(item)}
+            >
+              <span className="material-symbols-outlined text-[16px]">event_repeat</span>
+              {t('inbox.openSource.label')}
+            </Button>
+          )}
+          {/* IA X1: skill candidates link to the Extensions → Pending review
+              queue, carrying the candidate id so the queue can focus it. */}
+          {reviewable && (
+            <Button
+              size="sm"
+              variant="ghost"
+              aria-label={t('inbox.review.aria')}
+              title={t('inbox.review.aria')}
+              className="cursor-pointer inline-flex items-center gap-xs text-tertiary hover:text-primary"
+              onClick={() => onReview(item)}
+            >
+              <span className="material-symbols-outlined text-[16px]">rate_review</span>
+              {t('inbox.review.label')}
+            </Button>
+          )}
+          {item.sessionId && (
+            /* Primary action (audit §3.4): the Codex review-queue loop is
+               "result → resume the original thread". IA T6: for approval /
+               failed sources the same jump reads "View session" — the target
+               is a permission prompt or a failure to inspect. */
+            <Button
+              size="sm"
+              aria-label={t(isSessionSource ? 'inbox.action.viewSession.aria' : 'inbox.continue.aria')}
               className="cursor-pointer inline-flex items-center gap-xs"
               onClick={() => onContinue(item)}
             >
-              <span className="material-symbols-outlined text-[16px]">forum</span>
-              {t('inbox.action.resume')}
+              <span className="material-symbols-outlined text-[16px]">{isSessionSource ? 'visibility' : 'forum'}</span>
+              {t(isSessionSource ? 'inbox.action.viewSession' : 'inbox.action.resume')}
             </Button>
           )}
           <Button
@@ -187,6 +257,7 @@ export default function Triage() {
   const intl = useIntl()
   const t = (id: string, values?: Record<string, PrimitiveType>) => intl.formatMessage({ id }, values)
   const navigate = useNavigate()
+  const location = useLocation()
   const { switchSession } = useSessions()
 
   const [statusFilter, setStatusFilter] = useState<StatusFilter>(undefined)
@@ -201,6 +272,20 @@ export default function Triage() {
   const [focusedIndex, setFocusedIndex] = useState<number | null>(null)
   const listRef = useRef<HTMLDivElement>(null)
 
+  // IA T2: HistoryView hands over `highlightInboxId` via router state. The
+  // highlight is one-shot — snapshotted once (so the ring survives the
+  // state-clearing replace below but dies with the page) and never turned
+  // into a filter.
+  const [highlightId] = useState<number | null>(
+    () => (location.state as { highlightInboxId?: number } | null)?.highlightInboxId ?? null,
+  )
+  useEffect(() => {
+    if (highlightId == null) return
+    navigate(location.pathname, { replace: true })
+    // Run once per mount — the point is to drain the router state.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [])
+
   const { stats } = useInboxStats()
   const { items, loading, markRead, archive, rerun, getSessionId, setFilter, refresh } = useInboxItems()
 
@@ -212,8 +297,20 @@ export default function Triage() {
     setFilter({ status: statusFilter, source: sourceFilter })
   }, [statusFilter, sourceFilter, setFilter])
 
+  // Scroll the highlighted card into view once the list has rendered.
+  useEffect(() => {
+    if (highlightId == null || loading) return
+    listRef.current?.querySelector('[data-highlight="true"]')?.scrollIntoView({ block: 'center' })
+  }, [highlightId, loading])
+
   const visibleItems = useMemo(() => {
+    // IA T6: pending (unread) items float to the top — the inbox answers
+    // "what needs me" first. Within each band the time sort stays stable,
+    // so the toggle below only reorders inside a band.
     const sorted = [...items].sort((a, b) => {
+      const aPending = a.status === 'pending' ? 0 : 1
+      const bPending = b.status === 'pending' ? 0 : 1
+      if (aPending !== bPending) return aPending - bPending
       const diff = a.createdAtMs - b.createdAtMs
       return sortOrder === 'newest' ? -diff : diff
     })
@@ -279,6 +376,19 @@ export default function Triage() {
   const handleRerun = useCallback(async (item: InboxItem) => {
     await rerun(item.id)
   }, [rerun])
+
+  // IA T2: back-link to the automation that produced the item — /tasks
+  // consumes `openRoutineId` from router state to open RoutineDetailDrawer.
+  const handleOpenSource = useCallback((item: InboxItem) => {
+    navigate('/tasks', { state: { openRoutineId: item.sourceId } })
+  }, [navigate])
+
+  // IA T6/X1: hand the candidate over to the Extensions → Pending review
+  // queue (the single skill-review surface, 评审裁决 #2). The queue consumes
+  // `skillCandidateId` for a one-shot focus, mirroring the T2 pattern.
+  const handleReview = useCallback((item: InboxItem) => {
+    navigate('/extensions/pending', { state: { skillCandidateId: item.sourceId } })
+  }, [navigate])
 
   // Keyboard navigation over the inbox list (list must be focused first).
   // j/ArrowDown = next, k/ArrowUp = previous, Enter = mark read, a = archive.
@@ -497,11 +607,14 @@ export default function Triage() {
                             item={item}
                             selected={effectiveSelected.has(item.id)}
                             focused={focusedIndex === j}
+                            highlighted={highlightId === item.id}
                             onToggleSelected={toggleSelected}
                             onMarkRead={markRead}
                             onArchive={archive}
                             onContinue={item => void handleContinue(item)}
                             onRerun={item => void handleRerun(item)}
+                            onOpenSource={handleOpenSource}
+                            onReview={handleReview}
                           />
                         ))}
                       </div>
@@ -513,11 +626,14 @@ export default function Triage() {
                     item={item}
                     selected={effectiveSelected.has(item.id)}
                     focused={focusedIndex === i}
+                    highlighted={highlightId === item.id}
                     onToggleSelected={toggleSelected}
                     onMarkRead={markRead}
                     onArchive={archive}
                     onContinue={item => void handleContinue(item)}
                     onRerun={item => void handleRerun(item)}
+                    onOpenSource={handleOpenSource}
+                    onReview={handleReview}
                   />
                 ))}
             </div>

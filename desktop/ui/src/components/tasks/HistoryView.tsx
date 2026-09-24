@@ -8,6 +8,7 @@
 
 import { useEffect, useState } from 'react'
 import { useIntl } from 'react-intl'
+import { useNavigate } from 'react-router-dom'
 import { useT } from '@/i18n'
 import EmptyState from '@/components/ui/empty-state'
 import ErrorState from '@/components/ui/error-state'
@@ -15,7 +16,7 @@ import { RowSkeleton } from '@/components/SkeletonLoader'
 import { Button } from '@/components/ui/button'
 import { cn } from '@/lib/utils'
 import * as api from '@/lib/tauri-api'
-import type { TaskExecution, TaskExecutionDetail } from '@/types'
+import type { InboxItem, TaskExecution, TaskExecutionDetail } from '@/types'
 import { statusBadge, formatUnixDateTime } from './shared'
 
 function durationLabel(start: number, end?: number): string {
@@ -41,12 +42,25 @@ function StatusPill({ status }: { status: string }) {
 export default function HistoryView({ taskId, limit = 50, onGoToActive }: { taskId?: string; limit?: number; onGoToActive?: () => void }) {
   const intl = useIntl()
   const t = useT()
+  const navigate = useNavigate()
   const [rows, setRows] = useState<TaskExecution[]>([])
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
   const [expandedId, setExpandedId] = useState<string | null>(null)
   const [detail, setDetail] = useState<TaskExecutionDetail | null>(null)
   const [detailLoading, setDetailLoading] = useState(false)
+  // IA T2 (互链闭环): inbox items let a history run link back to its result
+  // card on /triage. Best-effort read — matching failures degrade to a plain
+  // /triage jump, never to an error state.
+  const [inboxItems, setInboxItems] = useState<InboxItem[]>([])
+
+  useEffect(() => {
+    let cancelled = false
+    api.listInboxItems()
+      .then(items => { if (!cancelled) setInboxItems(items ?? []) })
+      .catch(() => { if (!cancelled) setInboxItems([]) })
+    return () => { cancelled = true }
+  }, [])
 
   useEffect(() => {
     let cancelled = false
@@ -80,6 +94,13 @@ export default function HistoryView({ taskId, limit = 50, onGoToActive }: { task
 
   // Normalize: TaskExecution uses run_id; we expose `id` for keys/lookups
   const rowId = (r: TaskExecution) => r.run_id
+
+  // IA T2: jump to the run's inbox card on /triage (highlighted via router
+  // state); with no matching item, fall back to the plain inbox list.
+  const openInInbox = (row: TaskExecution) => {
+    const match = inboxItems.find(item => item.sourceId === row.task_id)
+    navigate('/triage', match ? { state: { highlightInboxId: match.id } } : undefined)
+  }
 
   if (loading) {
     return (
@@ -124,26 +145,42 @@ export default function HistoryView({ taskId, limit = 50, onGoToActive }: { task
           const isExpanded = expandedId === id
           return (
             <div key={id} className="bg-surface-container-lowest/80 border border-outline-variant/20 rounded-xl overflow-hidden">
-              <Button
-                type="button"
-                variant="ghost"
-                size="sm"
-                className="w-full justify-start px-md hover:bg-surface-container-low/40"
-                onClick={() => openDetail(id)}
-                aria-expanded={isExpanded}
-              >
-                <StatusPill status={row.status} />
-                <span className="font-label-md text-[13px] font-bold truncate flex-1">{row.task_name}</span>
-                <span className="font-label-sm text-[11px] text-on-surface-variant whitespace-nowrap">{formatUnixDateTime(row.started_at)}</span>
-                <span className="font-label-sm text-[11px] text-on-surface-variant whitespace-nowrap">{durationLabel(row.started_at, row.finished_at)}</span>
-                {row.cost_usd != null ? (
-                  <span className="font-label-sm text-[11px] text-on-surface-variant whitespace-nowrap">${row.cost_usd.toFixed(4)}</span>
-                ) : <span className="font-label-sm text-[11px] text-on-surface-variant/60">—</span>}
-                {row.token_usage != null ? (
-                  <span className="font-label-sm text-[11px] text-on-surface-variant whitespace-nowrap">{row.token_usage.toLocaleString()} tok</span>
-                ) : <span className="font-label-sm text-[11px] text-on-surface-variant/60">—</span>}
-                <span className={cn('material-symbols-outlined icon-sm text-on-surface-variant transition-transform', isExpanded ? 'rotate-180' : '')}>expand_more</span>
-              </Button>
+              <div className="flex items-stretch">
+                <Button
+                  type="button"
+                  variant="ghost"
+                  size="sm"
+                  className="flex-1 min-w-0 justify-start px-md hover:bg-surface-container-low/40"
+                  onClick={() => openDetail(id)}
+                  aria-expanded={isExpanded}
+                >
+                  <StatusPill status={row.status} />
+                  <span className="font-label-md text-[13px] font-bold truncate flex-1">{row.task_name}</span>
+                  <span className="font-label-sm text-[11px] text-on-surface-variant whitespace-nowrap">{formatUnixDateTime(row.started_at)}</span>
+                  <span className="font-label-sm text-[11px] text-on-surface-variant whitespace-nowrap">{durationLabel(row.started_at, row.finished_at)}</span>
+                  {row.cost_usd != null ? (
+                    <span className="font-label-sm text-[11px] text-on-surface-variant whitespace-nowrap">${row.cost_usd.toFixed(4)}</span>
+                  ) : <span className="font-label-sm text-[11px] text-on-surface-variant/60">—</span>}
+                  {row.token_usage != null ? (
+                    <span className="font-label-sm text-[11px] text-on-surface-variant whitespace-nowrap">{row.token_usage.toLocaleString()} tok</span>
+                  ) : <span className="font-label-sm text-[11px] text-on-surface-variant/60">—</span>}
+                  <span className={cn('material-symbols-outlined icon-sm text-on-surface-variant transition-transform', isExpanded ? 'rotate-180' : '')}>expand_more</span>
+                </Button>
+                {/* IA T2: secondary action — the run's result card lives on
+                    /triage (highlighted when source_id matches an item). */}
+                <Button
+                  type="button"
+                  variant="ghost"
+                  size="sm"
+                  aria-label={t('tasks.historyView.viewInInbox.aria')}
+                  title={t('tasks.historyView.viewInInbox.aria')}
+                  className="px-sm rounded-none border-l border-outline-variant/10 hover:bg-surface-container-low/40 text-on-surface-variant hover:text-primary whitespace-nowrap"
+                  onClick={() => openInInbox(row)}
+                >
+                  <span className="material-symbols-outlined text-[16px]" aria-hidden="true">inbox</span>
+                  <span className="hidden md:inline font-label-sm text-[11px]">{t('tasks.historyView.viewInInbox')}</span>
+                </Button>
+              </div>
               {isExpanded ? (
                 <div className="px-md pb-md border-t border-outline-variant/10">
                   {detailLoading ? (

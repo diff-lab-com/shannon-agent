@@ -778,13 +778,22 @@ jobs:
       # ToolExecutionService/StreamingToolExecutor dead infrastructure
       # (pub types in shannon-core/shannon-engine). Intentional minor-cycle
       # break; new TAG NAME so the baseline-rustdoc cache invalidates.
-      # Thirteenth move (2026-09-24, structural task 2): backpressure made
-      # EventTx::send/ProgressSender::send async (tool-interface trait method
-      # return value added) and removed Clone from PermissionRequest
-      # (core auto/derive trait impl changes). -09-12 was taken by the
-      # parallel ui/nav-redesign-proposal line (PR #107), so this move
-      # skips to the next unused name. Intentional minor-cycle break.
-      SEMVER_BASELINE: semver-baseline-2026-09-13
+      # Twelfth move (2026-09-23, PR #107): added a `MissingSourceId`
+      # variant to `shannon_core::inbox_store::InboxStoreError` plus new
+      # pub store/seam APIs for the T5 unified needs-attention sources
+      # (`session_approval`/`session_failed`/`skill_candidate`) and the T7
+      # run-history backfill — intentional minor-cycle breaks. Tag names
+      # -10/-11 were already claimed by parallel branches; -09-12 was
+      # re-pointed at the PR #107 dev-integration merge.
+      # Thirteenth move (2026-09-24, structural task 2 / PR #110):
+      # backpressure made EventTx::send/ProgressSender::send async
+      # (tool-interface trait method return value added) and removed Clone
+      # from PermissionRequest (core auto/derive trait impl changes).
+      # Fourteenth move (2026-09-24, PR #110 integration): -09-12 and
+      # -09-13 each contained only one side of the parallel PR #107 /
+      # PR #110 merges, so the combined baseline is re-established at the
+      # integration merge itself. Intentional minor-cycle breaks.
+      SEMVER_BASELINE: semver-baseline-2026-09-14
     steps:
       - uses: actions/checkout@f548e57e544e1ff5a4c46bf1e1b8685f8e4a348a
         with:

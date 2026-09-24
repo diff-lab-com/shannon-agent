@@ -165,6 +165,7 @@ pub async fn list_skill_candidates() -> Result<Vec<SkillCandidate>, String> {
 #[tauri::command]
 pub async fn approve_skill_candidate(
     app: tauri::AppHandle,
+    state: tauri::State<'_, crate::commands::AppState>,
     id: String,
     edits: Option<AgentAuthoredSkillEdits>,
 ) -> Result<AgentAuthoredSkill, String> {
@@ -175,6 +176,11 @@ pub async fn approve_skill_candidate(
         .ok_or_else(|| format!("Candidate {id} not found"))?;
     let candidate = candidates.remove(idx);
     save_candidates(&candidates)?;
+
+    // T5: the candidate has been handled — its unified-inbox entry leaves the
+    // pending stream (archived). Runs on every path past the removal, even
+    // when the promote below fails, because the candidate itself is gone.
+    crate::inbox_session_events::resolve_skill_candidate(state.inbox_store().as_ref(), &app, &id);
 
     let name = edits
         .as_ref()
@@ -231,7 +237,11 @@ pub async fn approve_skill_candidate(
 }
 
 #[tauri::command]
-pub async fn reject_skill_candidate(app: tauri::AppHandle, id: String) -> Result<(), String> {
+pub async fn reject_skill_candidate(
+    app: tauri::AppHandle,
+    state: tauri::State<'_, crate::commands::AppState>,
+    id: String,
+) -> Result<(), String> {
     let mut candidates = load_candidates()?;
     let before = candidates.len();
     candidates.retain(|c| c.id != id);
@@ -239,6 +249,8 @@ pub async fn reject_skill_candidate(app: tauri::AppHandle, id: String) -> Result
         return Err(format!("Candidate {id} not found"));
     }
     save_candidates(&candidates)?;
+    // T5: rejected — the candidate's inbox entry is resolved (archived).
+    crate::inbox_session_events::resolve_skill_candidate(state.inbox_store().as_ref(), &app, &id);
     let _ = app.emit(
         "skill-catalog-changed",
         serde_json::json!({ "action": "rejected" }),

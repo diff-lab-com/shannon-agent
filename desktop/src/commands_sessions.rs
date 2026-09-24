@@ -598,6 +598,14 @@ pub async fn switch_session(
         },
     );
 
+    // T5: the user just opened this session — an outstanding `session_failed`
+    // entry has now been seen, so it is resolved (mark read). Best-effort.
+    crate::inbox_session_events::resolve_session_failure(
+        state.inbox_store().as_ref(),
+        &app_handle,
+        &id,
+    );
+
     Ok(messages)
 }
 

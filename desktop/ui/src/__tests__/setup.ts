@@ -400,6 +400,9 @@ vi.mock('@/lib/tauri-api', () => ({
   // OffpeakWindowEditor renders without a queued status and without
   // per-test mocking.
   listTaskExecutions: vi.fn().mockResolvedValue([]),
+  // Tasks page (useScheduledTasks) — default empty so the page and the
+  // sidebar automations section render without per-test mocking.
+  listScheduledTasks: vi.fn().mockResolvedValue([]),
   updateScheduledTask: vi.fn().mockResolvedValue(null),
   stopGoalRun: vi.fn().mockResolvedValue(undefined),
   pauseGoalRun: vi.fn().mockResolvedValue(undefined),

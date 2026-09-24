@@ -55,7 +55,8 @@ describe('Sidebar', () => {
   it('renders primary nav links', () => {
     render(wrap(<Sidebar />))
     expect(screen.getByText('Chat')).toBeInTheDocument()
-    expect(screen.getByText('Tasks')).toBeInTheDocument()
+    // IA T1: /tasks 没有「任务」导航行 — 顶部「自动化」按钮是唯一侧栏入口。
+    expect(screen.getByText('Automations')).toBeInTheDocument()
   })
 
   it('renders Settings section', () => {
@@ -110,7 +111,7 @@ describe('Sidebar — Simple mode (default)', () => {
   it('still shows core nav in Simple mode', () => {
     render(wrap(<Sidebar />))
     expect(screen.getByText('Chat')).toBeInTheDocument()
-    expect(screen.getByText('Tasks')).toBeInTheDocument()
+    expect(screen.getByText('Automations')).toBeInTheDocument()
   })
 
   it('toggles to Advanced mode on mode button click', () => {
@@ -209,7 +210,9 @@ describe('Sidebar — Navigation', () => {
     window.localStorage.clear()
   })
 
-  it('navigates to /tasks when clicking Tasks', async () => {
+  // IA T1: the top 自动化 button is /tasks's single sidebar entry (the
+  // duplicate「任务」nav row was removed).
+  it('navigates to /tasks from the Automations button', async () => {
     render(
       wrap(
         <>
@@ -219,13 +222,19 @@ describe('Sidebar — Navigation', () => {
       )
     )
 
-    const tasksLink = screen.getByText('Tasks')
-    fireEvent.click(tasksLink)
+    fireEvent.click(screen.getByRole('button', { name: 'Automations · Ctrl2' }))
 
     await waitFor(() => {
       const location = screen.getByTestId('current-location')
       expect(location.textContent).toBe('/tasks')
     })
+  })
+
+  // IA T1: no「任务」nav row may reappear — the button is the only entry.
+  it('has no Tasks nav row in the main nav', () => {
+    render(wrap(<Sidebar />))
+    expect(screen.queryByRole('link', { name: /^Tasks/ })).not.toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'Automations · Ctrl2' })).toBeInTheDocument()
   })
 
   it('renders Inbox button with badge when there are unread items', () => {
@@ -617,11 +626,12 @@ describe('Sidebar — flat nav (2026-09 ZCode-style simplification)', () => {
     window.localStorage.clear()
   })
 
-  it('shows the five simple-mode nav rows with NO group disclosures', () => {
+  it('shows the four simple-mode nav rows + Automations button, NO group disclosures', () => {
     render(wrap(<Sidebar />))
-    // Flat rows: Chat / Tasks / Inbox / Connectors / Memory.
+    // Flat rows: Chat / Inbox / Extensions / Memory, plus the top
+    // 自动化 button (IA T1 — /tasks has no nav row of its own).
     expect(screen.getByText('Chat')).toBeInTheDocument()
-    expect(screen.getByText('Tasks')).toBeInTheDocument()
+    expect(screen.getByText('Automations')).toBeInTheDocument()
     expect(screen.getByText('Inbox')).toBeInTheDocument()
     expect(screen.getByText('Extensions')).toBeInTheDocument()
     expect(screen.getByText('Memory')).toBeInTheDocument()

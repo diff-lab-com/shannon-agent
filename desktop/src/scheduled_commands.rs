@@ -150,7 +150,9 @@ pub struct TriageStats {
 }
 
 /// Lightweight execution record for the history list.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+/// Derives `PartialEq` so the T7 JSONL↔SQLite projection-consistency test
+/// can assert field-for-field equality of the two read paths.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct TaskExecution {
     pub run_id: String,
     pub task_id: String,
@@ -517,7 +519,7 @@ fn ts_to_dt(ts: i64) -> DateTime<Utc> {
 }
 
 /// Convert a [`ScheduledRun`] to a frontend-friendly [`TaskExecution`].
-fn run_to_execution(run: &ScheduledRun) -> TaskExecution {
+pub(crate) fn run_to_execution(run: &ScheduledRun) -> TaskExecution {
     TaskExecution {
         run_id: run.run_id.clone(),
         task_id: run.task_id.clone(),
@@ -850,7 +852,19 @@ impl RoutinePersistence for ScheduledTaskStore {
 /// record still counts as "pending" for `routine_last_run_succeeded`, so
 /// dependents unblock only when the REAL run (the id we repoint
 /// `last_run_id` to) finishes `Succeeded`.
-fn retire_drained_run(runs: &ScheduledRunsStore, run_id: &str, reason: &str) {
+///
+/// T7: the retire state is also mirrored into the authoritative
+/// `routine_runs` history (`mirror_drained_run`) so the History view — now
+/// reading SQLite — keeps showing why this firing produced no executable
+/// run. Best-effort: the JSONL record remains the fallback.
+fn retire_drained_run(
+    runs: &ScheduledRunsStore,
+    inbox: &shannon_core::inbox_store::InboxStore,
+    task_id: &str,
+    task_name: &str,
+    run_id: &str,
+    reason: &str,
+) {
     if let Err(e) = runs.update(run_id, |r| {
         r.finish(
             shannon_core::scheduled_runs::RunStatus::Cancelled,
@@ -861,6 +875,60 @@ fn retire_drained_run(runs: &ScheduledRunsStore, run_id: &str, reason: &str) {
             run_id = %run_id,
             error = %e,
             "scheduler: failed to retire drained run record (history may show a stale running row)"
+        );
+    }
+    mirror_drained_run(
+        inbox,
+        runs,
+        task_id,
+        task_name,
+        run_id,
+        "cancelled",
+        Some(reason),
+    );
+}
+
+/// Mirror a drained JSONL placeholder — a retired `Cancelled` placeholder
+/// or a `Queued` off-peak tombstone — into the authoritative `routine_runs`
+/// history (T7). Core writes these records to the JSONL store only, so
+/// without the mirror they would vanish from the History view (and from the
+/// off-peak editor's `lastRun.status === 'queued'` check) after the
+/// read-source switch. Idempotent (`import_run` skips existing ids) and
+/// best-effort: the JSONL record remains the read-fallback source of truth.
+fn mirror_drained_run(
+    inbox: &shannon_core::inbox_store::InboxStore,
+    runs: &ScheduledRunsStore,
+    task_id: &str,
+    task_name: &str,
+    run_id: &str,
+    status: &str,
+    error: Option<&str>,
+) {
+    // Faithful timestamps when the drained record is still readable; the
+    // tombstone then sorts exactly where the JSONL one always did.
+    let now_ms = chrono::Utc::now().timestamp_millis();
+    let started_ms = runs
+        .find_by_id(run_id)
+        .ok()
+        .flatten()
+        .map(|r| r.started_at.timestamp_millis())
+        .unwrap_or(now_ms);
+    let record = shannon_core::inbox_store::RunRecord {
+        id: run_id.to_string(),
+        task_id: task_id.to_string(),
+        task_name: Some(task_name.to_string()),
+        status: status.to_string(),
+        error: error.map(str::to_string),
+        started_at_ms: Some(started_ms),
+        finished_at_ms: (status == "cancelled").then_some(now_ms),
+        duration_ms: None,
+        inbox_item_id: None,
+    };
+    if let Err(e) = inbox.import_run(&record) {
+        tracing::warn!(
+            run_id = %run_id,
+            error = %e,
+            "scheduler: failed to mirror drained run into the inbox history"
         );
     }
 }
@@ -929,6 +997,7 @@ pub(crate) async fn run_due_check_at<R: tauri::Runtime, T: RoutinePersistence>(
         let Some(updated) = mgr.get(&d.task_id) else {
             continue;
         };
+        let task_name = updated.name.clone();
         // 1. Persist BEFORE acting. On failure the drained record (queued
         // tombstone or running placeholder) never becomes the routine's
         // durable state — retire it so no ghost rows accumulate and the
@@ -941,6 +1010,9 @@ pub(crate) async fn run_due_check_at<R: tauri::Runtime, T: RoutinePersistence>(
             );
             retire_drained_run(
                 runs,
+                &deps.inbox,
+                &d.task_id,
+                &task_name,
                 &d.run_id,
                 "scheduler: routine state not persisted this tick; record retired",
             );
@@ -951,6 +1023,20 @@ pub(crate) async fn run_due_check_at<R: tauri::Runtime, T: RoutinePersistence>(
                 task_id = %d.task_id,
                 run_id = %d.run_id,
                 "routine due outside its execution window — queued until the window opens"
+            );
+            // T7: core writes the queued tombstone to the JSONL store only;
+            // mirror it into the authoritative `routine_runs` history so the
+            // History view and the off-peak editor (`lastRun.status ===
+            // 'queued'`) keep seeing it after the read-source switch. The
+            // inbox item table stays untouched (P2-5 contract).
+            mirror_drained_run(
+                &deps.inbox,
+                runs,
+                &d.task_id,
+                &task_name,
+                &d.run_id,
+                "queued",
+                None,
             );
             continue;
         }
@@ -963,6 +1049,9 @@ pub(crate) async fn run_due_check_at<R: tauri::Runtime, T: RoutinePersistence>(
             );
             retire_drained_run(
                 runs,
+                &deps.inbox,
+                &d.task_id,
+                &task_name,
                 &d.run_id,
                 "scheduler: skipped, previous run still in flight",
             );
@@ -985,7 +1074,14 @@ pub(crate) async fn run_due_check_at<R: tauri::Runtime, T: RoutinePersistence>(
                 // The executor finalized... nothing yet — it owns `new_run_id`
                 // and will finish it (succeeded/failed) in its own finalize
                 // path. Close the drained placeholder and follow the real run.
-                retire_drained_run(runs, &d.run_id, &format!("superseded by run {new_run_id}"));
+                retire_drained_run(
+                    runs,
+                    &deps.inbox,
+                    &d.task_id,
+                    &task_name,
+                    &d.run_id,
+                    &format!("superseded by run {new_run_id}"),
+                );
                 if let Some(r) = mgr.get_mut(&d.task_id) {
                     r.last_run_id = Some(new_run_id.clone());
                 }
@@ -1018,6 +1114,9 @@ pub(crate) async fn run_due_check_at<R: tauri::Runtime, T: RoutinePersistence>(
                 // again after its interval elapses.
                 retire_drained_run(
                     runs,
+                    &deps.inbox,
+                    &d.task_id,
+                    &task_name,
                     &d.run_id,
                     &format!("scheduler: failed to start run: {e}"),
                 );
@@ -1090,6 +1189,12 @@ pub async fn get_triage_stats(state: tauri::State<'_, AppState>) -> Result<Triag
 
 /// List execution records for a task, newest first.
 /// When `task_id` is None, returns recent runs across all tasks.
+///
+/// T7: the authoritative read source is the SQLite `routine_runs` table in
+/// the inbox store; the legacy JSONL store is only the fallback for an
+/// inbox read failure (and stays written as a best-effort mirror). The
+/// command signature and the `TaskExecution` shape are unchanged — the
+/// frontend History view needs no switch-over change.
 #[tauri::command]
 pub async fn list_task_executions(
     state: tauri::State<'_, AppState>,
@@ -1097,17 +1202,18 @@ pub async fn list_task_executions(
     limit: Option<usize>,
 ) -> Result<Vec<TaskExecution>, String> {
     let cap = limit.unwrap_or(50);
-    let runs = match task_id.as_deref() {
-        Some(id) if !id.is_empty() => state
-            .scheduled_runs_store()
-            .list_by_task(id, cap)
-            .map_err(|e| e.to_string())?,
-        _ => state
-            .scheduled_runs_store()
-            .list_recent(cap)
-            .map_err(|e| e.to_string())?,
-    };
-    Ok(runs.iter().map(run_to_execution).collect())
+    let task_id = task_id.as_deref().map(str::trim).filter(|s| !s.is_empty());
+    let cap_u32 = u32::try_from(cap).unwrap_or(u32::MAX);
+    let inbox = state.inbox_store();
+    crate::inbox_commands::read_run_history(
+        move || match task_id {
+            Some(id) => inbox.list_runs_by_task(id, cap_u32),
+            None => inbox.list_runs(cap_u32),
+        },
+        state.scheduled_runs_store(),
+        task_id,
+        cap,
+    )
 }
 
 /// Full execution detail view (lightweight run + task metadata).
@@ -2447,10 +2553,16 @@ mod tests {
         assert!(stored.last_fired.is_none());
         assert_eq!(stored.fire_count, 0);
 
-        // No inbox item, no SQLite routine_runs row (queueing never writes
-        // the inbox, brief contract).
+        // No inbox item (P2-5 contract — queueing never writes inbox_items).
+        // T7: the tombstone IS mirrored into the authoritative routine_runs
+        // history so the History view / off-peak editor keep seeing "queued"
+        // after the read-source switch.
         assert!(inbox.list(None, None, 10).unwrap().is_empty());
-        assert!(inbox.list_runs(10).unwrap().is_empty());
+        let mirrored = inbox.list_runs(10).unwrap();
+        assert_eq!(mirrored.len(), 1, "queued tombstone mirrored (T7)");
+        assert_eq!(mirrored[0].id, history[0].run_id);
+        assert_eq!(mirrored[0].status, "queued");
+        assert_eq!(mirrored[0].task_id, id);
     }
 
     #[tokio::test]
@@ -2484,11 +2596,37 @@ mod tests {
         assert_eq!(executed, 1);
 
         // A real run row was created synchronously by spawn_routine_run.
+        // T7: routine_runs mirrors the drained JSONL placeholders too, so
+        // the authoritative history is exactly the JSONL history: mirrored
+        // queued tombstone + mirrored retired placeholder + the executor's
+        // running row.
         let runs_rows = inbox.list_runs(10).unwrap();
-        assert_eq!(runs_rows.len(), 1);
-        assert_eq!(runs_rows[0].task_id, id);
-        assert_eq!(runs_rows[0].status, "running");
-        let new_run_id = runs_rows[0].id.clone();
+        assert_eq!(
+            runs_rows.len(),
+            3,
+            "queued + retired placeholder + real run"
+        );
+        let running_row = runs_rows
+            .iter()
+            .find(|r| r.status == "running")
+            .expect("executor's run row");
+        assert_eq!(running_row.task_id, id);
+        assert!(running_row.finished_at_ms.is_none());
+        let new_run_id = running_row.id.clone();
+        assert!(
+            runs_rows
+                .iter()
+                .any(|r| r.id == queued_run_id && r.status == "queued"),
+            "12:00 queued tombstone mirrored (T7)"
+        );
+        assert!(
+            runs_rows.iter().any(|r| r.status == "cancelled"
+                && r.error
+                    .as_deref()
+                    .unwrap_or_default()
+                    .contains(&format!("superseded by run {new_run_id}"))),
+            "retired placeholder mirrored with its reason (T7)"
+        );
 
         // Routine state advanced with the injected clock…
         let stored = tasks.load(&id).unwrap().unwrap();
@@ -2610,7 +2748,11 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(executed, 0, "save failure must skip the spawn");
-        assert!(inbox.list_runs(10).unwrap().is_empty(), "no run row");
+        // T7: the only routine_runs row is the retired placeholder mirrored
+        // by retire_drained_run (cancelled, with the skip reason).
+        let mirrored = inbox.list_runs(10).unwrap();
+        assert_eq!(mirrored.len(), 1, "only the retired placeholder mirror");
+        assert_eq!(mirrored[0].status, "cancelled");
         assert!(
             inbox.list(None, None, 10).unwrap().is_empty(),
             "no inbox item"
@@ -2633,7 +2775,16 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(executed, 1, "recovered tick spawns");
-        assert_eq!(inbox.list_runs(10).unwrap().len(), 1);
+        // T7: 1 retire mirror from the failed tick + 1 retire mirror +
+        // 1 running executor row from the recovered tick — no second
+        // spawn was stacked.
+        let mirrored = inbox.list_runs(10).unwrap();
+        assert_eq!(mirrored.len(), 3);
+        assert_eq!(
+            mirrored.iter().filter(|r| r.status == "running").count(),
+            1,
+            "only the recovered tick's run is running"
+        );
         let stored = tasks.load(&id).unwrap().unwrap();
         assert_eq!(stored.fire_count, 1);
     }
@@ -2657,8 +2808,20 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(executed, 0, "in-flight guard must skip the spawn");
-        // Only the pre-existing row — no second run was stacked.
-        assert_eq!(inbox.list_runs(10).unwrap().len(), 1);
+        // T7: the pre-existing run row plus the retire mirror (cancelled
+        // placeholder) — no second *running* run was stacked.
+        let mirrored = inbox.list_runs(10).unwrap();
+        assert_eq!(mirrored.len(), 2);
+        assert_eq!(
+            mirrored.iter().filter(|r| r.status == "running").count(),
+            1,
+            "only the pre-existing run is running"
+        );
+        assert!(
+            mirrored.iter().any(|r| r.status == "cancelled"
+                && r.error.as_deref().unwrap_or_default().contains("in flight")),
+            "retire reason mirrored into the history"
+        );
         // The drained placeholder was retired with the skip reason.
         let history = runs.list_by_task(&id, 10).unwrap();
         assert_eq!(history.len(), 1);

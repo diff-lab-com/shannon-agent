@@ -190,6 +190,11 @@ pub mod scheduled_commands;
 #[cfg(feature = "tauri")]
 pub mod inbox_commands;
 
+/// T5 — inbox write/resolve seam for the unified "needs attention" stream
+/// (session approvals / session failures / skill candidates).
+#[cfg(feature = "tauri")]
+pub mod inbox_session_events;
+
 /// P0-2 — desktop goal runner + Tasks-page run-card commands.
 #[cfg(feature = "tauri")]
 pub mod goal_commands;

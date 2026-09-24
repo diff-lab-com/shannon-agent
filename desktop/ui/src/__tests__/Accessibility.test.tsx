@@ -34,7 +34,8 @@ describe('Accessibility', () => {
     it('nav links have visible text labels', () => {
       render(wrap(<Sidebar />))
       expect(screen.getByText('Chat')).toBeInTheDocument()
-      expect(screen.getByText('Tasks')).toBeInTheDocument()
+      // IA T1: the sidebar entry for /tasks is the「自动化」button.
+      expect(screen.getByText('Automations')).toBeInTheDocument()
     })
 
     it('settings section nav is visible on the Settings page rail', () => {

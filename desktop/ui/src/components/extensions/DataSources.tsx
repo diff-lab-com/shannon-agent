@@ -174,6 +174,25 @@ export default function DataSources() {
         <p className="text-body-md text-on-surface-variant">
           {t('extensions.datasources.subtitle')}
         </p>
+        {/* X3 互链: data sources = external data connections; gateway =
+            model/platform access. Reciprocal of the gateway page's note. */}
+        <p className="text-body-sm text-on-surface-variant/80 mt-xs flex flex-wrap items-center gap-xs">
+          <span className="material-symbols-outlined icon-sm" aria-hidden="true">
+            swap_horiz
+          </span>
+          {t('extensions.datasources.crossLink.text')}{' '}
+          <button
+            type="button"
+            onClick={() => navigate('/settings/connections')}
+            data-testid="datasources-to-gateway-link"
+            className="text-primary hover:underline cursor-pointer inline-flex items-center gap-0.5"
+          >
+            {t('extensions.datasources.crossLink.link')}
+            <span className="material-symbols-outlined text-[14px]" aria-hidden="true">
+              arrow_forward
+            </span>
+          </button>
+        </p>
       </header>
 
       <div className="flex gap-md border-b border-outline-variant/30">

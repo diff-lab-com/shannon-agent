@@ -28,6 +28,8 @@ const Skills = lazy(() => import('./components/extensions/Skills'));
 const Agents = lazy(() => import('./components/extensions/Agents'));
 const Plugins = lazy(() => import('./components/extensions/Plugins'));
 const Installed = lazy(() => import('./components/extensions/Installed'));
+// IA X1: Extensions → Pending — the single skill-review surface (评审裁决 #2).
+const Pending = lazy(() => import('./components/extensions/Pending'));
 const GeneralSettings = lazy(() => import('./components/settings/GeneralSettings'));
 const ThemeSettings = lazy(() => import('./components/settings/ThemeSettings'));
 const ModelsSettings = lazy(() => import('./components/settings/ModelsSettings'));
@@ -89,6 +91,8 @@ export default function App() {
                   <Route path="datasources" element={<DataSources />} />
                   <Route path="plugins" element={<Plugins />} />
                   <Route path="installed" element={<Installed />} />
+                  {/* IA X1: 待处理 — skill proposals awaiting review + errors. */}
+                  <Route path="pending" element={<Pending />} />
                 </Route>
                 <Route path="/opc" element={<OPC />} />
                 <Route path="/opc/task" element={<OPCTask />} />

@@ -29,6 +29,7 @@ import { GitHubBody } from './install-dialog/GitHubBody'
 import { MetadataTable } from './install-dialog/MetadataTable'
 import { OAuthBody } from './install-dialog/OAuthBody'
 import { StdioBody } from './install-dialog/StdioBody'
+import { TrustCard } from './install-dialog/TrustCard'
 import { KIND_ROUTE, buildStdioSpec, readMeta } from './install-dialog/types'
 
 export interface InstallDialogProps {
@@ -221,6 +222,12 @@ export default function InstallDialog({
             {entry.description}
           </p>
         ) : null}
+
+        {/* X2 安装时信任卡: what this install will enable, derived only from
+            data the catalog entry actually carries. The confirm buttons in
+            the bodies below carry authorization wording ("Install &
+            authorize") to match. */}
+        <TrustCard entry={entry} />
 
         {renderBody()}
 

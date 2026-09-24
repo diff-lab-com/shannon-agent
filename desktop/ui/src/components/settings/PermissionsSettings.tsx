@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useState } from 'react'
 import { useIntl, type PrimitiveType } from 'react-intl'
+import { useSearchParams } from 'react-router-dom'
 import { toast } from 'sonner'
 import { Button } from '@/components/ui/button'
 import { Modal } from '@/components/ui/modal'
@@ -47,6 +48,21 @@ export function validateRuleInput(raw: string): string | null {
 
 type RuleGroup = 'auto_approve' | 'confirm' | 'deny'
 
+/// Single source of truth for rule-group → i18n title/hint keys. NB: the key
+/// segment for auto_approve is `auto`, not the group name —拼接 group 名会
+/// 渲染出原始键字符串（react-intl missing-message 回退）。
+const RULE_GROUP_TITLE_KEYS: Record<RuleGroup, string> = {
+  auto_approve: 'settings.permissions.editor.auto.title',
+  confirm: 'settings.permissions.editor.confirm.title',
+  deny: 'settings.permissions.editor.deny.title',
+}
+
+const RULE_GROUP_HINT_KEYS: Record<RuleGroup, string> = {
+  auto_approve: 'settings.permissions.editor.auto.hint',
+  confirm: 'settings.permissions.editor.confirm.hint',
+  deny: 'settings.permissions.editor.deny.hint',
+}
+
 interface EditorState {
   /** Original name when editing (rename = save under the new name). */
   originalName: string | null
@@ -66,12 +82,58 @@ const EMPTY_EDITOR: EditorState = {
   deny: [],
 }
 
+/**
+ * X3 权限就近直达 — deep-link scope filter.
+ *
+ * `/settings/permissions?scope=mcp%3A<server>` narrows the rule view to the
+ * rules targeting that MCP server. Rule syntax uses `mcp__<server>__*` while
+ * the scope query uses the friendlier `mcp:<server>` form (URL-encoded in
+ * transit), so the server segment maps to a `mcp__<server>__` rule prefix.
+ */
+interface ScopedRuleHit {
+  profile: string
+  group: RuleGroup
+  rule: string
+}
+
+function scopeToPrefix(scope: string): string | null {
+  if (!scope.startsWith('mcp:')) return null
+  const server = scope.slice('mcp:'.length).trim()
+  if (server === '') return null
+  return `mcp__${server}__`
+}
+
+export function collectScopedRules(
+  profiles: ProfilesList | null,
+  prefix: string | null,
+): ScopedRuleHit[] {
+  if (!prefix || !profiles) return []
+  const hits: ScopedRuleHit[] = []
+  const lower = prefix.toLowerCase()
+  for (const p of profiles.custom) {
+    for (const group of ['auto_approve', 'confirm', 'deny'] as RuleGroup[]) {
+      for (const rule of p[group]) {
+        if (rule.toLowerCase().startsWith(lower)) {
+          hits.push({ profile: p.name, group, rule })
+        }
+      }
+    }
+  }
+  return hits
+}
+
 /** P1-3 Settings → 权限配置 (permission profiles + command sandbox). */
 export default function PermissionsSettings() {
   const intl = useIntl()
   const t = (id: string, values?: Record<string, PrimitiveType>) =>
     intl.formatMessage({ id }, values)
   const { config, refreshConfig } = useCatalog()
+  const [searchParams, setSearchParams] = useSearchParams()
+
+  // X3: `?scope=mcp%3A<server>` — server-scoped rule filter (cleared via the
+  // chip in the scoped panel below).
+  const rawScope = searchParams.get('scope')
+  const scopePrefix = rawScope ? scopeToPrefix(rawScope) : null
 
   const [profiles, setProfiles] = useState<ProfilesList | null>(null)
   const [loading, setLoading] = useState(true)
@@ -109,6 +171,17 @@ export default function PermissionsSettings() {
     () => config?.sandbox?.mode ?? 'off',
     [config?.sandbox?.mode],
   )
+
+  const scopedHits = useMemo(
+    () => collectScopedRules(profiles, scopePrefix),
+    [profiles, scopePrefix],
+  )
+
+  const clearScope = () => {
+    const next = new URLSearchParams(searchParams)
+    next.delete('scope')
+    setSearchParams(next, { replace: true })
+  }
 
   const handleActivate = async (name: string | null) => {
     setActivating(name ?? '__clear__')
@@ -205,6 +278,70 @@ export default function PermissionsSettings() {
         </div>
       ) : (
         <>
+          {/* X3: server-scoped rule view, opened from an MCP server row's
+              「工具权限」 deep link. Clearable chip + matched rules, or an
+              add-rule nudge when the server has none. */}
+          {rawScope && scopePrefix && (
+            <section
+              aria-label={t('settings.permissions.scope.filterLabel')}
+              data-testid="permissions-scope-panel"
+              className="space-y-sm p-md rounded-xl border border-primary/30 bg-primary/5"
+            >
+              <div className="flex items-center gap-sm flex-wrap">
+                <h3 className="font-title-sm text-on-surface font-semibold">
+                  {t('settings.permissions.scope.resultsTitle', { scope: rawScope })}
+                </h3>
+                <span className="inline-flex items-center gap-xs px-sm py-xs rounded-full bg-primary/10 text-primary font-label-sm text-[11px] font-bold">
+                  <span className="material-symbols-outlined text-[14px]" aria-hidden="true">
+                    filter_alt
+                  </span>
+                  {rawScope}
+                  <button
+                    type="button"
+                    aria-label={t('settings.permissions.scope.clear')}
+                    title={t('settings.permissions.scope.clear')}
+                    className="ml-xs inline-flex items-center justify-center rounded-full hover:bg-primary/20 cursor-pointer"
+                    onClick={clearScope}
+                  >
+                    <span className="material-symbols-outlined text-[14px]" aria-hidden="true">
+                      close
+                    </span>
+                  </button>
+                </span>
+              </div>
+              {scopedHits.length === 0 ? (
+                <div className="flex flex-col gap-sm">
+                  <p className="text-body-sm text-on-surface-variant">
+                    {t('settings.permissions.scope.empty')}
+                  </p>
+                  <Button
+                    className="flex items-center gap-xs px-md py-sm rounded-lg bg-primary text-on-primary font-label-md self-start"
+                    onClick={() => setEditor({ ...EMPTY_EDITOR })}
+                  >
+                    <span className="material-symbols-outlined icon-md" aria-hidden="true">add</span>
+                    {t('settings.permissions.scope.addCta')}
+                  </Button>
+                </div>
+              ) : (
+                <ul className="space-y-xs">
+                  {scopedHits.map((hit) => (
+                    <li
+                      key={`${hit.profile}-${hit.group}-${hit.rule}`}
+                      className="flex items-center gap-sm flex-wrap"
+                    >
+                      <code className="font-mono text-body-sm text-on-surface bg-surface-container px-sm py-xs rounded">
+                        {hit.rule}
+                      </code>
+                      <span className="text-label-sm text-on-surface-variant">
+                        {hit.profile} · {t(RULE_GROUP_TITLE_KEYS[hit.group])}
+                      </span>
+                    </li>
+                  ))}
+                </ul>
+              )}
+            </section>
+          )}
+
           {/* Built-in tiers */}
           <section aria-label={t('settings.permissions.builtin.aria')} className="space-y-sm">
             <h3 className="font-title-md text-on-surface font-semibold">{t('settings.permissions.builtin.title')}</h3>
@@ -471,11 +608,13 @@ function ProfileEditorModal({
 }) {
   const intl = useIntl()
   const t = (id: string) => intl.formatMessage({ id })
-  const groups: Array<{ key: RuleGroup; titleKey: string; hintKey: string }> = [
-    { key: 'auto_approve', titleKey: 'settings.permissions.editor.auto.title', hintKey: 'settings.permissions.editor.auto.hint' },
-    { key: 'confirm', titleKey: 'settings.permissions.editor.confirm.title', hintKey: 'settings.permissions.editor.confirm.hint' },
-    { key: 'deny', titleKey: 'settings.permissions.editor.deny.title', hintKey: 'settings.permissions.editor.deny.hint' },
-  ]
+  const groups: Array<{ key: RuleGroup; titleKey: string; hintKey: string }> = (
+    ['auto_approve', 'confirm', 'deny'] as RuleGroup[]
+  ).map((key) => ({
+    key,
+    titleKey: RULE_GROUP_TITLE_KEYS[key],
+    hintKey: RULE_GROUP_HINT_KEYS[key],
+  }))
 
   const addRule = (group: RuleGroup, value: string) => {
     if (value.trim() === '') return
