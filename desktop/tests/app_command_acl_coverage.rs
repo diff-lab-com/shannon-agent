@@ -155,6 +155,7 @@ fn load_capabilities() -> Vec<CapabilityJson> {
         .unwrap_or_else(|e| panic!("failed to read {}: {e}", dir.display()))
         .collect::<Result<Vec<_>, _>>()
         .expect("capability directory entries")
+        .into_iter()
         .map(|e| e.path())
         .filter(|p| p.extension().is_some_and(|e| e == "json"))
         .collect();
