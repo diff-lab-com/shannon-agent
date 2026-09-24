@@ -2,6 +2,13 @@
 //
 // Displays proposal details (name, description, triggers, workflow) with
 // Approve/Reject buttons. Fetches proposals on mount and refreshes after actions.
+//
+// IA X1: `variant="inline"` renders the same review UI embedded in the
+// Extensions → Pending queue (no modal chrome, no auto-close) — the global
+// toast no longer opens this panel (评审裁决 #2: 待处理页是唯一审查面).
+// The backend's `skill-proposal-available` event (fired when a draft is
+// created, and with the updated count after approve/reject) refreshes the
+// queue in place, so drafts created mid-session show up without re-navigating.
 
 import { useCallback, useEffect, useState } from 'react'
 import LoadingState from '@/components/ui/loading-state'
@@ -11,16 +18,21 @@ import { toastError } from '@/lib/errorToast'
 import { skillLoop } from '@/lib/tauri-api'
 import { Modal } from '@/components/ui/modal'
 import { Button } from '@/components/ui/button'
-import type { SkillProposal } from '@/types'
+import { useTauriEventValidated } from '@/hooks/useTauriEventValidated'
+import type { SkillProposal, SkillProposalCountPayload } from '@/types'
 
 interface SkillProposalReviewPanelProps {
   open: boolean
   onClose: () => void
+  /** 'modal' (default) keeps the dialog rendering; 'inline' embeds the
+   *  review UI in the Extensions → Pending page. */
+  variant?: 'modal' | 'inline'
 }
 
 export default function SkillProposalReviewPanel({
   open,
   onClose,
+  variant = 'modal',
 }: SkillProposalReviewPanelProps) {
   const intl = useIntl()
   const t = useCallback((id: string) => intl.formatMessage({ id }), [intl])
@@ -29,13 +41,7 @@ export default function SkillProposalReviewPanel({
   const [loading, setLoading] = useState(false)
   const [actionLoading, setActionLoading] = useState(false)
 
-  useEffect(() => {
-    if (!open) {
-      setProposals([])
-      setCurrentIndex(0)
-      return
-    }
-
+  const fetchProposals = useCallback(() => {
     let cancelled = false
     setLoading(true)
     skillLoop
@@ -54,11 +60,26 @@ export default function SkillProposalReviewPanel({
       .finally(() => {
         if (!cancelled) setLoading(false)
       })
-
     return () => {
       cancelled = true
     }
-  }, [open, t])
+  }, [t])
+
+  useEffect(() => {
+    if (!open) {
+      setProposals([])
+      setCurrentIndex(0)
+      return
+    }
+    return fetchProposals()
+  }, [open, fetchProposals])
+
+  // Draft arrival channel (IA X1 fix): keep the queue live while the user
+  // sits on /extensions/pending — the backend emits this event with the
+  // updated pending count on create AND after approve/reject elsewhere.
+  useTauriEventValidated<SkillProposalCountPayload>('skill-proposal-available', () => {
+    if (open) fetchProposals()
+  })
 
   const current = proposals[currentIndex]
 
@@ -73,7 +94,8 @@ export default function SkillProposalReviewPanel({
       if (currentIndex >= proposals.length - 1) {
         setCurrentIndex(0)
       }
-      if (proposals.length === 1) {
+      // Inline mode stays mounted — the queue page just shows fewer items.
+      if (proposals.length === 1 && variant === 'modal') {
         onClose()
       }
     } catch (err) {
@@ -100,7 +122,7 @@ export default function SkillProposalReviewPanel({
       if (currentIndex >= proposals.length - 1) {
         setCurrentIndex(0)
       }
-      if (proposals.length === 1) {
+      if (proposals.length === 1 && variant === 'modal') {
         onClose()
       }
     } catch (err) {
@@ -120,6 +142,152 @@ export default function SkillProposalReviewPanel({
   }
 
   if (!open) return null
+
+  // Shared review content — rendered inside the Modal (default) or the
+  // inline block (Extensions → Pending queue). Lazy: only called when a
+  // proposal exists, so the empty state never touches `current`.
+  const renderContent = () => (
+    <div className="space-y-6">
+      {/* Name */}
+      <div>
+        <h3 className="text-sm font-medium text-on-surface-variant mb-1">
+          {t('skillProposals.review.card.name')}
+        </h3>
+        <p className="text-lg font-semibold text-on-surface">
+          {current.name}
+        </p>
+      </div>
+
+      {/* Description */}
+      <div>
+        <h3 className="text-sm font-medium text-on-surface-variant mb-1">
+          {t('skillProposals.review.card.description')}
+        </h3>
+        <p className="text-on-surface">
+          {current.description}
+        </p>
+      </div>
+
+      {/* Trigger Patterns */}
+      <div>
+        <h3 className="text-sm font-medium text-on-surface-variant mb-2">
+          {t('skillProposals.review.card.triggers')}
+        </h3>
+        <div className="flex flex-wrap gap-2">
+          {current.trigger_patterns.map((pattern, i) => (
+            <span
+              key={i}
+              className="px-2 py-1 bg-primary/10 text-primary text-xs rounded-md"
+            >
+              {pattern}
+            </span>
+          ))}
+        </div>
+      </div>
+
+      {/* Example Workflow */}
+      <div>
+        <h3 className="text-sm font-medium text-on-surface-variant mb-1">
+          {t('skillProposals.review.card.example')}
+        </h3>
+        <pre className="mt-1 p-3 bg-surface-container-low rounded text-sm text-on-surface whitespace-pre-wrap overflow-x-auto">
+          {current.example_workflow}
+        </pre>
+      </div>
+
+      {/* Created At */}
+      <div className="text-xs text-on-surface-variant">
+        {intl.formatMessage(
+          { id: 'skillProposals.review.card.created' },
+          {
+            date: new Date(current.created_at).toLocaleString(
+              intl.locale
+            ),
+          }
+        )}
+      </div>
+    </div>
+  )
+
+  const renderFooter = () => current ? (
+    <>
+      {/* Navigation */}
+      {proposals.length > 1 && (
+        <div className="flex items-center justify-center gap-2 px-6 py-3 border-t border-outline-variant">
+          <Button
+            variant="ghost"
+            size="sm"
+            onClick={handlePrevious}
+            disabled={actionLoading}
+          >
+            {t('skillProposals.review.previous')}
+          </Button>
+          <span className="text-sm text-on-surface-variant">
+            {currentIndex + 1} / {proposals.length}
+          </span>
+          <Button
+            variant="ghost"
+            size="sm"
+            onClick={handleNext}
+            disabled={actionLoading}
+          >
+            {t('skillProposals.review.next')}
+          </Button>
+        </div>
+      )}
+
+      {/* Actions */}
+      <div className="flex justify-end gap-3 p-6 border-t border-outline-variant">
+        <Button
+          variant="ghost"
+          onClick={handleReject}
+          disabled={actionLoading}
+        >
+          {t('skillProposals.review.rejectButton')}
+        </Button>
+        <Button
+          onClick={handleApprove}
+          disabled={actionLoading}
+        >
+          {actionLoading
+            ? t('skillProposals.review.approving')
+            : t('skillProposals.review.approveButton')}
+        </Button>
+      </div>
+    </>
+  ) : null
+
+  // IA X1: inline rendering for the Extensions → Pending queue — same
+  // review UI, no modal chrome, no close button; renders nothing once the
+  // queue is empty (the candidates queue's empty state covers the section).
+  if (variant === 'inline') {
+    if (loading) {
+      return (
+        <div
+          data-testid="skill-proposal-review-inline"
+          className="rounded-xl border border-outline-variant/30 bg-surface-container-lowest/80 p-md"
+        >
+          <LoadingState size="md" />
+        </div>
+      )
+    }
+    if (proposals.length === 0) return null
+    return (
+      <div
+        data-testid="skill-proposal-review-inline"
+        className="rounded-xl border border-outline-variant/30 bg-surface-container-lowest/80 overflow-hidden"
+      >
+        <div className="flex items-center gap-sm px-md py-sm border-b border-outline-variant/30">
+          <span className="material-symbols-outlined text-[18px] text-primary" aria-hidden="true">lightbulb</span>
+          <h3 className="font-body-md font-semibold text-on-surface">
+            {t('skillProposals.review.title')}
+          </h3>
+        </div>
+        <div className="p-md overflow-y-auto max-h-[480px]">{renderContent()}</div>
+        {renderFooter()}
+      </div>
+    )
+  }
 
   return (
     <Modal
@@ -156,117 +324,11 @@ export default function SkillProposalReviewPanel({
               </p>
             </div>
           ) : (
-            <div className="space-y-6">
-              {/* Name */}
-              <div>
-                <h3 className="text-sm font-medium text-on-surface-variant mb-1">
-                  {t('skillProposals.review.card.name')}
-                </h3>
-                <p className="text-lg font-semibold text-on-surface">
-                  {current.name}
-                </p>
-              </div>
-
-              {/* Description */}
-              <div>
-                <h3 className="text-sm font-medium text-on-surface-variant mb-1">
-                  {t('skillProposals.review.card.description')}
-                </h3>
-                <p className="text-on-surface">
-                  {current.description}
-                </p>
-              </div>
-
-              {/* Trigger Patterns */}
-              <div>
-                <h3 className="text-sm font-medium text-on-surface-variant mb-2">
-                  {t('skillProposals.review.card.triggers')}
-                </h3>
-                <div className="flex flex-wrap gap-2">
-                  {current.trigger_patterns.map((pattern, i) => (
-                    <span
-                      key={i}
-                      className="px-2 py-1 bg-primary/10 text-primary text-xs rounded-md"
-                    >
-                      {pattern}
-                    </span>
-                  ))}
-                </div>
-              </div>
-
-              {/* Example Workflow */}
-              <div>
-                <h3 className="text-sm font-medium text-on-surface-variant mb-1">
-                  {t('skillProposals.review.card.example')}
-                </h3>
-                <pre className="mt-1 p-3 bg-surface-container-low rounded text-sm text-on-surface whitespace-pre-wrap overflow-x-auto">
-                  {current.example_workflow}
-                </pre>
-              </div>
-
-              {/* Created At */}
-              <div className="text-xs text-on-surface-variant">
-                {intl.formatMessage(
-                  { id: 'skillProposals.review.card.created' },
-                  {
-                    date: new Date(current.created_at).toLocaleString(
-                      intl.locale
-                    ),
-                  }
-                )}
-              </div>
-            </div>
+            renderContent()
           )}
         </div>
 
-        {/* Footer */}
-        {current && (
-          <>
-            {/* Navigation */}
-            {proposals.length > 1 && (
-              <div className="flex items-center justify-center gap-2 px-6 py-3 border-t border-outline-variant">
-                <Button
-                  variant="ghost"
-                  size="sm"
-                  onClick={handlePrevious}
-                  disabled={actionLoading}
-                >
-                  {t('skillProposals.review.previous')}
-                </Button>
-                <span className="text-sm text-on-surface-variant">
-                  {currentIndex + 1} / {proposals.length}
-                </span>
-                <Button
-                  variant="ghost"
-                  size="sm"
-                  onClick={handleNext}
-                  disabled={actionLoading}
-                >
-                  {t('skillProposals.review.next')}
-                </Button>
-              </div>
-            )}
-
-            {/* Actions */}
-            <div className="flex justify-end gap-3 p-6 border-t border-outline-variant">
-              <Button
-                variant="ghost"
-                onClick={handleReject}
-                disabled={actionLoading}
-              >
-                {t('skillProposals.review.rejectButton')}
-              </Button>
-              <Button
-                onClick={handleApprove}
-                disabled={actionLoading}
-              >
-                {actionLoading
-                  ? t('skillProposals.review.approving')
-                  : t('skillProposals.review.approveButton')}
-              </Button>
-            </div>
-          </>
-        )}
+        {renderFooter()}
     </Modal>
   )
 }

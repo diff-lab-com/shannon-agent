@@ -101,7 +101,8 @@ describe('Header component', () => {
     ]
     mockSessionCtx.currentSessionId = 's1'
     render(wrap(<Header />, { route: '/tasks' }))
-    expect(screen.getByText('Tasks')).toBeInTheDocument()
+    // IA T1: /tasks is titled「自动化」(Automations), never「任务」.
+    expect(screen.getByText('Automations')).toBeInTheDocument()
   })
 
   // U2 — ContextPanel toggle moved here from the retired ChatHeader.
@@ -231,9 +232,9 @@ describe('Header component', () => {
     expect(screen.getByText('Chat')).toBeInTheDocument()
   })
 
-  it('renders Tasks title on /tasks route', () => {
+  it('renders Automations title on /tasks route (IA T1)', () => {
     render(wrap(<Header />, { route: '/tasks' }))
-    expect(screen.getByText('Tasks')).toBeInTheDocument()
+    expect(screen.getByText('Automations')).toBeInTheDocument()
   })
 
   it('renders Settings title on /settings route', () => {
@@ -252,8 +253,8 @@ describe('Header component', () => {
     expect(screen.getByLabelText('Help')).toBeInTheDocument()
   })
 
-  // U6: the bell tooltip says where it leads — the approval dialog when
-  // pending, Triage otherwise.
+  // U6/IA T3: the bell always leads to /triage — the pending skill count
+  // is announced in the tooltip, but the click is never hijacked into a modal.
   it('bell title names the Triage inbox when nothing is pending', () => {
     render(wrap(<Header />, { route: '/chat' }))
     expect(screen.getByLabelText('Notifications')).toHaveAttribute(
@@ -261,7 +262,7 @@ describe('Header component', () => {
     )
   })
 
-  it('bell title names the approval dialog when skills are pending', async () => {
+  it('bell title names the Triage inbox when skills are pending', async () => {
     const api = await import('@/lib/tauri-api')
     vi.mocked(api.listSkillCandidates).mockResolvedValue([
       { id: 'c1', proposed_name: 'X', proposed_trigger: 'Y', occurrence_count: 1, procedure: [], last_seen_at: '', originating_sessions: [] },
@@ -269,7 +270,7 @@ describe('Header component', () => {
     render(wrap(<Header />, { route: '/chat' }))
     const bell = await screen.findByLabelText('Notifications')
     await waitFor(() => {
-      expect(bell).toHaveAttribute('title', expect.stringContaining('opens the approval dialog'))
+      expect(bell).toHaveAttribute('title', expect.stringContaining('Triage inbox'))
     })
   })
 
@@ -313,14 +314,25 @@ describe('Header — skill candidate badge', () => {
     })
   })
 
-  it('opens SkillApprovalModal on bell click when pending', async () => {
+  // IA T3: the badge stays, but the click lands on /triage — no approval
+  // dialog is mounted anywhere in the Header anymore.
+  it('keeps the badge but routes the click to /triage (no modal hijack)', async () => {
     vi.mocked(api.listSkillCandidates).mockResolvedValue([
       { id: 'c1', proposed_name: 'Wrap commits', proposed_trigger: 'when committing', occurrence_count: 2, procedure: ['s1'], last_seen_at: '', originating_sessions: [] },
     ])
-    render(wrap(<Header />, { route: '/chat' }))
+    render(
+      wrap(
+        <>
+          <Header />
+          <LocationProbe />
+        </>,
+        { route: '/chat' }
+      )
+    )
     await waitFor(() => { expect(screen.getByLabelText('Notifications').querySelector('.bg-error')).toBeTruthy() })
     fireEvent.click(screen.getByLabelText('Notifications'))
-    await waitFor(() => { expect(screen.getByText('Save as skill?')).toBeInTheDocument() })
+    await waitFor(() => { expect(screen.getByTestId('header-location')).toHaveTextContent('/triage') })
+    expect(screen.queryByText('Save as skill?')).not.toBeInTheDocument()
   })
 
 })

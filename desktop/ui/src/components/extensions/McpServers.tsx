@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import EmptyState from '@/components/ui/empty-state'
-import { useOutletContext } from "react-router-dom";
+import { useNavigate, useOutletContext } from "react-router-dom";
 import { useIntl } from "react-intl";
 import { toast } from "sonner";
 import {
@@ -71,6 +71,7 @@ export default function McpServers() {
   const intl = useIntl();
   const t = (id: string, values?: Record<string, string | number>) =>
     intl.formatMessage({ id }, values);
+  const navigate = useNavigate();
 
   // The Extensions shell pipes a shared search box down via outlet context.
   // We no longer render the registry inline, so the value is only consulted
@@ -132,6 +133,12 @@ export default function McpServers() {
         loading={installedLoading}
         busyId={busyId}
         onUninstall={(name) => setRemoveTarget(name)}
+        onOpenPermissions={(name) =>
+          // X3 权限就近直达 — deep link into the permissions page pre-filtered
+          // to this server. The page matches rules against `mcp__<name>__*`;
+          // the scope query carries the `mcp:<name>` form (URL-encoded).
+          navigate(`/settings/permissions?scope=${encodeURIComponent(`mcp:${name}`)}`)
+        }
       />
 
       <ConfirmDialog
@@ -179,11 +186,13 @@ function InstalledSection({
   loading,
   busyId,
   onUninstall,
+  onOpenPermissions,
 }: {
   servers: McpServerInfo[];
   loading: boolean;
   busyId: string | null;
   onUninstall: (name: string) => void;
+  onOpenPermissions: (name: string) => void;
 }) {
   const intl = useIntl();
   const t = (id: string, values?: Record<string, string | number>) =>
@@ -248,6 +257,22 @@ function InstalledSection({
                     </div>
                   )}
                 </div>
+                {/* X3: per-server jump to the permissions page, pre-filtered
+                    to this server's `mcp__<name>__*` rules. */}
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  type="button"
+                  aria-label={t("extensions.mcp.toolPermissionsAria", { name: srv.name })}
+                  title={t("extensions.mcp.toolPermissionsAria", { name: srv.name })}
+                  onClick={() => onOpenPermissions(srv.name)}
+                  className="text-on-surface-variant hover:text-primary shrink-0"
+                >
+                  <span className="material-symbols-outlined icon-sm" aria-hidden="true">
+                    key
+                  </span>
+                  {t("extensions.mcp.toolPermissions")}
+                </Button>
                 <Button
                   variant="ghost"
                   size="sm"

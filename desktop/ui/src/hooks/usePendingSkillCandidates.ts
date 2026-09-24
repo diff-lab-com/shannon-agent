@@ -16,7 +16,7 @@ export function usePendingSkillCandidates(): { candidates: SkillCandidate[]; loa
 
   const refetch = useCallback(() => {
     listSkillCandidates()
-      .then((rows) => { if (!cancelledRef.current) setCandidates(rows) })
+      .then((rows) => { if (!cancelledRef.current) setCandidates(Array.isArray(rows) ? rows : []) })
       .catch(() => { if (!cancelledRef.current) setCandidates([]) })
       .finally(() => { if (!cancelledRef.current) setLoading(false) })
   }, [])

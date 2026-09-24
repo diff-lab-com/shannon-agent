@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
-import { render, screen, waitFor } from '@testing-library/react'
+import { render, screen, waitFor, fireEvent } from '@testing-library/react'
 import { MemoryRouter, Routes, Route, Outlet } from 'react-router-dom'
 import * as api from '@/lib/tauri-api'
 import Installed from '@/components/extensions/Installed'
@@ -124,6 +124,52 @@ describe('Installed extensions tab', () => {
     renderInstalled()
     await waitFor(() => {
       expect(screen.getByText(/1 entry across 1 category/)).toBeInTheDocument()
+    })
+  })
+
+  // X4 锚点分区: jump chips per populated kind, clicking one scrolls the
+  // matching section into view.
+  describe('X4 anchor jump chips', () => {
+    it('renders one chip per populated kind with its count', async () => {
+      vi.mocked(api.listInstalledAddons).mockResolvedValueOnce(sampleRows)
+      renderInstalled()
+      await waitFor(() => {
+        expect(screen.getByTestId('installed-jump-nav')).toBeInTheDocument()
+      })
+      expect(screen.getByTestId('installed-jump-mcp')).toHaveTextContent('MCP Servers')
+      expect(screen.getByTestId('installed-jump-mcp')).toHaveTextContent('2')
+      expect(screen.getByTestId('installed-jump-skill')).toHaveTextContent('Skills')
+      expect(screen.getByTestId('installed-jump-agent')).toHaveTextContent('Agents')
+      // Empty kinds get no chip.
+      expect(screen.queryByTestId('installed-jump-plugin')).not.toBeInTheDocument()
+      expect(screen.queryByTestId('installed-jump-data_source')).not.toBeInTheDocument()
+    })
+
+    it('scrolls the matching section into view on click', async () => {
+      vi.mocked(api.listInstalledAddons).mockResolvedValueOnce(sampleRows)
+      let scrolledTo: string | null = null
+      const spy = vi
+        .spyOn(Element.prototype, 'scrollIntoView')
+        .mockImplementation(function (this: Element) {
+          scrolledTo = (this as HTMLElement).id
+        })
+      renderInstalled()
+      await waitFor(() => {
+        expect(screen.getByTestId('installed-jump-skill')).toBeInTheDocument()
+      })
+      fireEvent.click(screen.getByTestId('installed-jump-skill'))
+      expect(scrolledTo).toBe('installed-section-skill')
+      expect(document.getElementById('installed-section-skill')).not.toBeNull()
+      spy.mockRestore()
+    })
+
+    it('hides the jump nav when only one kind is populated', async () => {
+      vi.mocked(api.listInstalledAddons).mockResolvedValueOnce([sampleRows[0]])
+      renderInstalled()
+      await waitFor(() => {
+        expect(screen.getByText('notion')).toBeInTheDocument()
+      })
+      expect(screen.queryByTestId('installed-jump-nav')).not.toBeInTheDocument()
     })
   })
 })

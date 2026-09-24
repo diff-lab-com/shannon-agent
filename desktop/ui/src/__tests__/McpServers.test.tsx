@@ -1,6 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { render, screen, waitFor, fireEvent, within } from '@testing-library/react'
-import { MemoryRouter, Routes, Route, Outlet } from 'react-router-dom'
+import { MemoryRouter, Routes, Route, Outlet, useLocation } from 'react-router-dom'
 import McpServers from '@/components/extensions/McpServers'
 
 function Shell() {
@@ -278,6 +278,38 @@ describe('McpServers (Cursor-style UX)', () => {
     await waitFor(() => {
       expect(uninstallMcpServer).toHaveBeenCalledWith('filesystem')
     })
+  })
+
+  // X3 权限就近直达: the row's 工具权限 button deep links into the
+  // permissions page with the server scope pre-selected (URL-encoded
+  // `mcp:<name>`).
+  it('deep links the tool-permissions button to the scoped permissions page', async () => {
+    listMcpServers.mockResolvedValue([sampleInstalled])
+    function LocationProbe() {
+      const { search } = useLocation()
+      return <div data-testid="probe" data-search={search} />
+    }
+    render(
+      <MemoryRouter initialEntries={['/extensions/mcp-servers']}>
+        <Routes>
+          <Route path="/*" element={<Shell />}>
+            <Route path="*" element={<McpServers />} />
+          </Route>
+          <Route path="/settings/permissions" element={<LocationProbe />} />
+        </Routes>
+      </MemoryRouter>,
+    )
+    await waitFor(() => {
+      expect(
+        screen.getByRole('button', { name: 'Tool permissions for filesystem' }),
+      ).toBeInTheDocument()
+    })
+    fireEvent.click(screen.getByRole('button', { name: 'Tool permissions for filesystem' }))
+    await waitFor(() => {
+      expect(screen.getByTestId('probe')).toBeInTheDocument()
+    })
+    // The scope param must survive URL encoding of the `mcp:` prefix.
+    expect(screen.getByTestId('probe').dataset.search).toBe('?scope=mcp%3Afilesystem')
   })
 
   it('closes modal on Escape key', async () => {

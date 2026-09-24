@@ -17,8 +17,8 @@
 // useScheduledTasks() and rendered into the calendar (next_fire_at). The
 // legacy background-task / agent data still comes from useCatalog().
 
-import { useMemo, useState } from 'react'
-import { useNavigate } from 'react-router-dom'
+import { useMemo, useState, useEffect } from 'react'
+import { useLocation, useNavigate } from 'react-router-dom'
 import { toast } from 'sonner'
 import { Button } from '@/components/ui/button'
 import { cn } from '@/lib/utils'
@@ -73,6 +73,7 @@ export default function Tasks() {
   const { tasks, backgroundTasks, agents, refreshTasks, loading } = useCatalog()
   const { switchSession, currentSessionId } = useSessions()
   const navigate = useNavigate()
+  const location = useLocation()
   const [mode] = useSidebarMode()
   const { tasks: scheduledTasks, create: createScheduled, refresh: refreshScheduled } = useScheduledTasks()
   // P2-5: recent executions across all routines — drives the "queued for
@@ -112,6 +113,17 @@ export default function Tasks() {
   const selectedRoutine = selectedRoutineId
     ? scheduledTasks.find(r => r.id === selectedRoutineId) ?? null
     : null
+
+  // IA T2 (互链闭环): Triage cards link here with { openRoutineId } in the
+  // router state — open that routine's drawer, then drain the state so a
+  // refresh doesn't re-open it.
+  useEffect(() => {
+    const openRoutineId = (location.state as { openRoutineId?: string } | null)?.openRoutineId
+    if (openRoutineId) {
+      setSelectedRoutineId(openRoutineId)
+      navigate(location.pathname, { replace: true })
+    }
+  }, [location.state, location.pathname, navigate])
 
   // P2-5: ids of routines whose latest run is queued for their off-peak
   // execution window (list_task_executions returns newest first).
@@ -283,6 +295,9 @@ export default function Tasks() {
           </div>
         ) : (
           <>
+        {/* 操作员视图（§5-1 裁决）— the panels below (batch cards, goal runs,
+            subagent inventory) are the operator surfaces; stay out of scope
+            for the nav/IA redesign unless the proposal says otherwise. */}
         {/* P1-2: best-of-N batch cards (live per-branch chips) + form. */}
         <BatchRunPanel />
 

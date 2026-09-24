@@ -918,6 +918,13 @@ pub async fn send_message(
     // P1-1: owner session stamped onto every `query:*` payload so
     // multi-window shells can filter streams per window.
     let session_id_str = session_for_task.session_id.to_string();
+    // T5 unified needs-attention stream: the `session_failed` inbox entry is
+    // written/resolved from inside the stream loop below (the same events
+    // the rail's red dot derives from). Capture the store + display title up
+    // front; every write is best-effort and never blocks the turn.
+    let inbox_for_events = state.inbox_store();
+    let session_title_for_inbox =
+        crate::inbox_session_events::session_display_title(&state, &session_id_str).await;
     // P0-4 mid-turn budget guard basis: spend already on the ledger before
     // this turn started. The streaming Usage handler folds each event's
     // cost into the guard, which enforces the cap (>=100% cancel +
@@ -1251,6 +1258,13 @@ pub async fn send_message(
                         route_event(crate::session_registry::SessionEvent::Status(
                             crate::session_registry::SessionEventStatus::Completed,
                         ));
+                        // T5: the turn succeeded — a previous failure entry
+                        // for this session is resolved (mark read).
+                        crate::inbox_session_events::resolve_session_failure(
+                            &inbox_for_events,
+                            &app,
+                            &session_id_str,
+                        );
                         crate::commands_notifications::fire_query_notification_logged(
                             &notifier_arc,
                             crate::commands_notifications::NotificationKind::Completed,
@@ -1372,6 +1386,16 @@ pub async fn send_message(
                         route_event(crate::session_registry::SessionEvent::Status(
                             crate::session_registry::SessionEventStatus::Failed(error.clone()),
                         ));
+                        // T5: the turn failed — surface it in the unified
+                        // needs-attention inbox (same source as the rail's
+                        // red dot; dedup: one entry per session).
+                        crate::inbox_session_events::record_session_failure(
+                            &inbox_for_events,
+                            &app,
+                            &session_id_str,
+                            &session_title_for_inbox,
+                            &error,
+                        );
                         crate::commands_notifications::fire_query_notification_logged(
                             &notifier_arc,
                             crate::commands_notifications::NotificationKind::Failed(error),
@@ -1394,6 +1418,15 @@ pub async fn send_message(
                     route_event(crate::session_registry::SessionEvent::Status(
                         crate::session_registry::SessionEventStatus::Failed(err_string.clone()),
                     ));
+                    // T5: stream error — same needs-attention write as the
+                    // engine `Failed` event above.
+                    crate::inbox_session_events::record_session_failure(
+                        &inbox_for_events,
+                        &app,
+                        &session_id_str,
+                        &session_title_for_inbox,
+                        &err_string,
+                    );
                     crate::commands_notifications::fire_query_notification_logged(
                         &notifier_arc,
                         crate::commands_notifications::NotificationKind::Failed(err_string),

@@ -502,6 +502,15 @@ fn main() {
                 );
             }
 
+            // T7 — run history: import the legacy JSONL runs into the
+            // authoritative SQLite `routine_runs` table (best-effort,
+            // idempotent) so the History view keeps showing pre-existing
+            // history after the read-source switch. Runs off the UI path.
+            {
+                let backfill_state: tauri::State<'_, commands::AppState> = app.state();
+                shannon_desktop::inbox_commands::spawn_run_history_backfill(backfill_state.inner());
+            }
+
             // Bundle A — Click-to-foreground: when a Shannon notification is
             // clicked, bring the main window to the foreground. On macOS and
             // Windows the OS already focuses the app automatically (native

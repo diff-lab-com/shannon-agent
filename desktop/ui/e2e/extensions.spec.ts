@@ -31,6 +31,15 @@ test.describe('Extensions pages', () => {
       await expect(page.getByRole('heading', { name: 'My Agents' })).toBeVisible()
     }
   })
+
+  // IA X1: 待处理 — third primary tab; the page hosts the skill review
+  // queue plus the errors empty-state placeholder.
+  test('navigates to the pending review page', async ({ page }) => {
+    await page.goto('/extensions/pending')
+    await expect(page.getByRole('heading', { name: 'Skill review' })).toBeVisible()
+    // exact: the errors empty state ("No errors") is also a heading.
+    await expect(page.getByRole('heading', { name: 'Errors', exact: true })).toBeVisible()
+  })
 })
 
 test.describe('OPC pages', () => {
@@ -69,24 +78,31 @@ test.describe('OPC pages', () => {
 
 test.describe('Goals and Scheduled pages', () => {
   // /goals is a legacy route that redirects to /tasks (see App.tsx).
+  // IA T1: the page is titled「自动化」(Automations) — never「任务」.
   test('goals page redirects to the tasks page', async ({ page }) => {
     await page.goto('/goals')
     await expect(page).toHaveURL(/\/tasks$/)
-    await expect(page.getByRole('main').getByRole('heading', { name: 'Tasks', exact: true })).toBeVisible()
+    await expect(page.getByRole('main').getByRole('heading', { name: 'Automations', exact: true })).toBeVisible()
   })
 
-  test('redirected goals page shows the new task button', async ({ page }) => {
+  // IA T4: one primary CTA「新建自动化」; the one-off background-task entry
+  // lives in its split-button dropdown.
+  test('redirected goals page shows the New Automation CTA with the background-task entry in its menu', async ({ page }) => {
     await page.goto('/goals')
-    await expect(page.getByRole('button', { name: /New Background Task/i })).toBeVisible()
+    await expect(page.getByRole('button', { name: 'New Automation' })).toBeVisible()
+    await page.getByRole('button', { name: /More ways to create/i }).click()
+    await expect(page.getByRole('menuitem', { name: /New Background Task/i })).toBeVisible()
   })
 
   test('tasks page shows scheduled tasks heading', async ({ page }) => {
     await page.goto('/tasks')
-    await expect(page.getByRole('main').getByRole('heading', { name: 'Tasks', exact: true })).toBeVisible()
+    await expect(page.getByRole('main').getByRole('heading', { name: 'Automations', exact: true })).toBeVisible()
   })
 
   test('tasks page shows new task button', async ({ page }) => {
     await page.goto('/tasks')
-    await expect(page.getByRole('button', { name: /New Background Task/i })).toBeVisible()
+    await expect(page.getByRole('button', { name: 'New Automation' })).toBeVisible()
+    await page.getByRole('button', { name: /More ways to create/i }).click()
+    await expect(page.getByRole('menuitem', { name: /New Background Task/i })).toBeVisible()
   })
 })

@@ -4,13 +4,16 @@ import { useIntl } from "react-intl";
 import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
 import { DropdownMenu, type DropdownMenuItem } from "@/components/ui/dropdown-menu";
+import { usePendingSkillCandidates } from "@/hooks/usePendingSkillCandidates";
 
 /* 2026-09 review — the Extensions hub is rebuilt on the Codex/ZCode
  * marketplace pattern. The old seven-tab bar (精选 / MCP 服务器 / 技能 /
  * 我的 Agent / 数据源 / 插件 / 已安装) forced novices to learn the extension
  * taxonomy before they could install anything. Now:
- *   - two primary destinations: 扩展市场 (browse + install, the default)
- *     and 已安装 (everything installed, grouped by type);
+ *   - three primary destinations: 扩展市场 (browse + install, the default),
+ *     已安装 (everything installed, grouped by type), and 待处理 (IA X1:
+ *     skill proposals awaiting review — the single skill-review surface,
+ *     评审裁决 #2 — badge = pending count; later MCP/install errors);
  *   - the per-type management surfaces (MCP/Skills/Agents/DataSources/
  *     Plugins) collapse into one 管理 dropdown for power users — the routes
  *     are unchanged, only the chrome is simplified. */
@@ -18,6 +21,7 @@ import { DropdownMenu, type DropdownMenuItem } from "@/components/ui/dropdown-me
 const primaryTabs = [
   { to: '/extensions/featured', icon: 'auto_awesome', labelKey: 'extensions.featured' },
   { to: '/extensions/installed', icon: 'download', labelKey: 'extensions.installed' },
+  { to: '/extensions/pending', icon: 'pending_actions', labelKey: 'extensions.pending', badge: true },
 ] as const
 
 const manageEntries = [
@@ -36,6 +40,10 @@ export default function Extensions() {
   const path = location.pathname;
   const [search, setSearch] = useState("");
   const [manageOpen, setManageOpen] = useState(false);
+  // IA X1: 待处理 badge — same source of truth as the header bell and the
+  // degraded toast (pending skill candidates; MCP errors join later).
+  const { candidates } = usePendingSkillCandidates();
+  const pendingCount = candidates.length;
 
   let searchPlaceholderKey = "extensions.search.placeholder";
 
@@ -79,10 +87,15 @@ export default function Extensions() {
         </div>
         <div className="flex items-center gap-xs flex-wrap min-w-0">
           <nav aria-label={t('extensions.tabs.aria')} className="flex items-center gap-xs flex-wrap min-w-0">
-            {primaryTabs.map(tab => (
+            {primaryTabs.map(tab => {
+              // IA X1: the 待处理 tab's accessible name carries the badge
+              // count (a bare chip number would read as "Pending 3").
+              const badged = 'badge' in tab && tab.badge && pendingCount > 0
+              return (
               <NavLink
                 key={tab.to}
                 to={tab.to}
+                aria-label={badged ? intl.formatMessage({ id: 'extensions.pending.tabBadge.aria' }, { count: pendingCount }) : undefined}
                 className={({ isActive }) =>
                   `flex items-center gap-xs px-md py-xs rounded-xl font-label-md text-label-md transition-all whitespace-nowrap focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/40 focus-visible:ring-offset-1 focus-visible:ring-offset-surface ${
                     isActive
@@ -101,12 +114,25 @@ export default function Extensions() {
                       {tab.icon}
                     </span>
                     <span>{t(tab.labelKey)}</span>
+                    {badged && (
+                      <span
+                        aria-hidden="true"
+                        title={intl.formatMessage({ id: 'extensions.pending.tabBadge.aria' }, { count: pendingCount })}
+                        className="ml-1 px-[7px] min-w-[18px] h-[18px] inline-flex items-center justify-center rounded-full bg-primary text-on-primary font-label-sm text-[11px] font-bold leading-none"
+                      >
+                        {pendingCount}
+                      </span>
+                    )}
                   </>
                 )}
               </NavLink>
-            ))}
+              )
+            })}
           </nav>
           <span className="relative">
+            {/* X4 管理瘦身: the five type-specific managers are labelled
+                「高级管理」 (advanced) — novices work from the three primary
+                tabs + Installed jump chips; power users keep every route. */}
             <Button
               variant="ghost"
               size="sm"
@@ -138,7 +164,10 @@ export default function Extensions() {
       </div>
 
       {/* Content Area */}
-      <div className="flex-1 overflow-y-auto">
+      {/* tabIndex: keyboard-scrollable region (axe scrollable-region-
+          focusable) — the Pending tab's content overflows this container,
+          and without focus keyboard users can never reach the overflow. */}
+      <div tabIndex={0} className="flex-1 overflow-y-auto">
          <Outlet context={{ search }} />
       </div>
     </div>

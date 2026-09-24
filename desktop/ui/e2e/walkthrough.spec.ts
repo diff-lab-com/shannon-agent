@@ -31,6 +31,7 @@ const ROUTES: { path: string; name: string }[] = [
   { path: '/timeline/demo-session', name: 'timeline' },
   { path: '/extensions/featured', name: 'extensions-featured' },
   { path: '/extensions/mcp-servers', name: 'extensions-mcp' },
+  { path: '/extensions/pending', name: 'extensions-pending' },
   { path: '/memory', name: 'memory' },
   { path: '/settings/general', name: 'settings-general' },
   { path: '/settings/models', name: 'settings-models' },

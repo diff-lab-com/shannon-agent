@@ -71,10 +71,26 @@ pub(crate) async fn prompt_user(
             input: input.clone(),
             risk: risk.clone(),
             request_id: request_id.clone(),
-            session_id,
+            session_id: session_id.clone(),
             reason,
         },
     );
+
+    // T5 unified needs-attention stream: a session-scoped approval prompt is
+    // exactly what the rail's amber dot signals, so the same event writes the
+    // `session_approval` inbox entry (dedup: one per session). Best-effort.
+    let session_id_for_inbox = session_id.clone();
+    if let Some(sid) = session_id_for_inbox.as_deref() {
+        let title = crate::inbox_session_events::session_display_title(state, sid).await;
+        crate::inbox_session_events::record_session_approval(
+            state.inbox_store().as_ref(),
+            app_handle,
+            sid,
+            &title,
+            &tool,
+            &risk,
+        );
+    }
 
     // Wait for the user's response (interactive prompts get a generous
     // timeout; the user may be reading a diff).
@@ -85,6 +101,16 @@ pub(crate) async fn prompt_user(
     {
         let mut pending = state.pending_permissions.lock().await;
         pending.remove(&request_id);
+    }
+
+    // T5: whatever way the prompt settles (answer, timeout auto-deny, dropped
+    // channel), it is handled — the inbox entry is resolved as read.
+    if let Some(sid) = session_id_for_inbox.as_deref() {
+        crate::inbox_session_events::resolve_session_approval(
+            state.inbox_store().as_ref(),
+            app_handle,
+            sid,
+        );
     }
 
     match result {

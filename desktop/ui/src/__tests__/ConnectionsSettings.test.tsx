@@ -1,5 +1,7 @@
 import { describe, it, expect, vi } from 'vitest'
-import { render, screen, fireEvent, waitFor, within } from '@testing-library/react'
+import { render as rtlRender, screen, fireEvent, waitFor, within } from '@testing-library/react'
+import type { ReactElement } from 'react'
+import { MemoryRouter, Routes, Route } from 'react-router-dom'
 
 import ConnectionsSettings from '@/components/settings/ConnectionsSettings'
 import * as api from '@/lib/tauri-api'
@@ -8,6 +10,12 @@ import * as api from '@/lib/tauri-api'
 // and the @/lib/tauri-api factory mock seeds gatewayReadConfig/HasSecret with
 // sensible defaults — matching the BillingSettings/AdvancedSettings convention
 // (no beforeEach restore: that would wipe the factory mocks' mockResolvedValue).
+
+// X3 互链: the page carries a cross-link to Data Sources (useNavigate), so
+// every render must sit inside a router.
+function render(ui: ReactElement, options?: Parameters<typeof rtlRender>[1]) {
+  return rtlRender(<MemoryRouter>{ui}</MemoryRouter>, options)
+}
 
 describe('ConnectionsSettings', () => {
   it('renders the gateway subtitle and all eight platforms, none configured by default', async () => {
@@ -575,6 +583,24 @@ describe('ConnectionsSettings', () => {
     const row = await screen.findByTestId('connection-telegram')
     const btn = within(row).getByRole('button', { name: 'Test connection' })
     expect(btn).toBeDisabled()
+  })
+
+  // X3 互链: gateway page explains the gateway vs data-sources split and
+  // deep links to /extensions/datasources.
+  it('cross-links to the Data Sources page', async () => {
+    rtlRender(
+      <MemoryRouter initialEntries={['/settings/connections']}>
+        <Routes>
+          <Route path="/settings/connections" element={<ConnectionsSettings />} />
+          <Route path="/extensions/datasources" element={<div data-testid="probe" />} />
+        </Routes>
+      </MemoryRouter>,
+    )
+    await waitFor(() =>
+      expect(screen.getByText(/External data connections \(notes, mail, databases\) live in Data Sources/)).toBeInTheDocument(),
+    )
+    fireEvent.click(screen.getByTestId('gateway-to-datasources-link'))
+    await waitFor(() => expect(screen.getByTestId('probe')).toBeInTheDocument())
   })
 
 })
