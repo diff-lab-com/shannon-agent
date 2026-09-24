@@ -1,0 +1,2647 @@
+{
+  "default": null,
+  "permission": [
+    {
+      "identifier": "allow-activate-permission-profile",
+      "description": "Enables the activate_permission_profile command without any pre-configured scope.",
+      "commands": {
+        "allow": [
+          "activate_permission_profile"
+        ]
+      }
+    },
+    {
+      "identifier": "allow-add-mcp-server",
+      "description": "Enables the add_mcp_server command without any pre-configured scope.",
+      "commands": {
+        "allow": [
+          "add_mcp_server"
+        ]
+      }
+    },
+    {
+      "identifier": "allow-adopt-batch-branch",
+      "description": "Enables the adopt_batch_branch command without any pre-configured scope.",
+      "commands": {
+        "allow": [
+          "adopt_batch_branch"
+        ]
+      }
+    },
+    {
+      "identifier": "allow-apply-code-action",
+      "description": "Enables the apply_code_action command without any pre-configured scope.",
+      "commands": {
+        "allow": [
+          "apply_code_action"
+        ]
+      }
+    },
+    {
+      "identifier": "allow-apply-diff",
+      "description": "Enables the apply_diff command without any pre-configured scope.",
+      "commands": {
+        "allow": [
+          "apply_diff"
+        ]
+      }
+    },
+    {
+      "identifier": "allow-approve-skill-candidate",
+      "description": "Enables the approve_skill_candidate command without any pre-configured scope.",
+      "commands": {
+        "allow": [
+          "approve_skill_candidate"
+        ]
+      }
+    },
+    {
+      "identifier": "allow-archive-triage-item",
+      "description": "Enables the archive_triage_item command without any pre-configured scope.",
+      "commands": {
+        "allow": [
+          "archive_triage_item"
+        ]
+      }
+    },
+    {
+      "identifier": "allow-branch-session",
+      "description": "Enables the branch_session command without any pre-configured scope.",
+      "commands": {
+        "allow": [
+          "branch_session"
+        ]
+      }
+    },
+    {
+      "identifier": "allow-cancel-background-task",
+      "description": "Enables the cancel_background_task command without any pre-configured scope.",
+      "commands": {
+        "allow": [
+          "cancel_background_task"
+        ]
+      }
+    },
+    {
+      "identifier": "allow-cancel-query",
+      "description": "Enables the cancel_query command without any pre-configured scope.",
+      "commands": {
+        "allow": [
+          "cancel_query"
+        ]
+      }
+    },
+    {
+      "identifier": "allow-check-app-update",
+      "description": "Enables the check_app_update command without any pre-configured scope.",
+      "commands": {
+        "allow": [
+          "check_app_update"
+        ]
+      }
+    },
+    {
+      "identifier": "allow-clear-catalog-report",
+      "description": "Enables the clear_catalog_report command without any pre-configured scope.",
+      "commands": {
+        "allow": [
+          "clear_catalog_report"
+        ]
+      }
+    },
+    {
+      "identifier": "allow-clear-webhook-config",
+      "description": "Enables the clear_webhook_config command without any pre-configured scope.",
+      "commands": {
+        "allow": [
+          "clear_webhook_config"
+        ]
+      }
+    },
+    {
+      "identifier": "allow-close-session-window",
+      "description": "Enables the close_session_window command without any pre-configured scope.",
+      "commands": {
+        "allow": [
+          "close_session_window"
+        ]
+      }
+    },
+    {
+      "identifier": "allow-compact-session",
+      "description": "Enables the compact_session command without any pre-configured scope.",
+      "commands": {
+        "allow": [
+          "compact_session"
+        ]
+      }
+    },
+    {
+      "identifier": "allow-configure",
+      "description": "Enables the configure command without any pre-configured scope.",
+      "commands": {
+        "allow": [
+          "configure"
+        ]
+      }
+    },
+    {
+      "identifier": "allow-continue-inbox-item-session",
+      "description": "Enables the continue_inbox_item_session command without any pre-configured scope.",
+      "commands": {
+        "allow": [
+          "continue_inbox_item_session"
+        ]
+      }
+    },
+    {
+      "identifier": "allow-create-agent-definition",
+      "description": "Enables the create_agent_definition command without any pre-configured scope.",
+      "commands": {
+        "allow": [
+          "create_agent_definition"
+        ]
+      }
+    },
+    {
+      "identifier": "allow-create-memory",
+      "description": "Enables the create_memory command without any pre-configured scope.",
+      "commands": {
+        "allow": [
+          "create_memory"
+        ]
+      }
+    },
+    {
+      "identifier": "allow-create-scheduled-task",
+      "description": "Enables the create_scheduled_task command without any pre-configured scope.",
+      "commands": {
+        "allow": [
+          "create_scheduled_task"
+        ]
+      }
+    },
+    {
+      "identifier": "allow-create-session-worktree",
+      "description": "Enables the create_session_worktree command without any pre-configured scope.",
+      "commands": {
+        "allow": [
+          "create_session_worktree"
+        ]
+      }
+    },
+    {
+      "identifier": "allow-create-task-worktree",
+      "description": "Enables the create_task_worktree command without any pre-configured scope.",
+      "commands": {
+        "allow": [
+          "create_task_worktree"
+        ]
+      }
+    },
+    {
+      "identifier": "allow-create-triggered-routine",
+      "description": "Enables the create_triggered_routine command without any pre-configured scope.",
+      "commands": {
+        "allow": [
+          "create_triggered_routine"
+        ]
+      }
+    },
+    {
+      "identifier": "allow-delete-agent-definition",
+      "description": "Enables the delete_agent_definition command without any pre-configured scope.",
+      "commands": {
+        "allow": [
+          "delete_agent_definition"
+        ]
+      }
+    },
+    {
+      "identifier": "allow-delete-custom-profile",
+      "description": "Enables the delete_custom_profile command without any pre-configured scope.",
+      "commands": {
+        "allow": [
+          "delete_custom_profile"
+        ]
+      }
+    },
+    {
+      "identifier": "allow-delete-memory",
+      "description": "Enables the delete_memory command without any pre-configured scope.",
+      "commands": {
+        "allow": [
+          "delete_memory"
+        ]
+      }
+    },
+    {
+      "identifier": "allow-delete-provider",
+      "description": "Enables the delete_provider command without any pre-configured scope.",
+      "commands": {
+        "allow": [
+          "delete_provider"
+        ]
+      }
+    },
+    {
+      "identifier": "allow-delete-scheduled-task",
+      "description": "Enables the delete_scheduled_task command without any pre-configured scope.",
+      "commands": {
+        "allow": [
+          "delete_scheduled_task"
+        ]
+      }
+    },
+    {
+      "identifier": "allow-delete-session",
+      "description": "Enables the delete_session command without any pre-configured scope.",
+      "commands": {
+        "allow": [
+          "delete_session"
+        ]
+      }
+    },
+    {
+      "identifier": "allow-delete-whisper-model",
+      "description": "Enables the delete_whisper_model command without any pre-configured scope.",
+      "commands": {
+        "allow": [
+          "delete_whisper_model"
+        ]
+      }
+    },
+    {
+      "identifier": "allow-detect-provider-from-env",
+      "description": "Enables the detect_provider_from_env command without any pre-configured scope.",
+      "commands": {
+        "allow": [
+          "detect_provider_from_env"
+        ]
+      }
+    },
+    {
+      "identifier": "allow-disable-plugin",
+      "description": "Enables the disable_plugin command without any pre-configured scope.",
+      "commands": {
+        "allow": [
+          "disable_plugin"
+        ]
+      }
+    },
+    {
+      "identifier": "allow-discard-batch-run",
+      "description": "Enables the discard_batch_run command without any pre-configured scope.",
+      "commands": {
+        "allow": [
+          "discard_batch_run"
+        ]
+      }
+    },
+    {
+      "identifier": "allow-download-whisper-model",
+      "description": "Enables the download_whisper_model command without any pre-configured scope.",
+      "commands": {
+        "allow": [
+          "download_whisper_model"
+        ]
+      }
+    },
+    {
+      "identifier": "allow-duplicate-session",
+      "description": "Enables the duplicate_session command without any pre-configured scope.",
+      "commands": {
+        "allow": [
+          "duplicate_session"
+        ]
+      }
+    },
+    {
+      "identifier": "allow-enable-plugin",
+      "description": "Enables the enable_plugin command without any pre-configured scope.",
+      "commands": {
+        "allow": [
+          "enable_plugin"
+        ]
+      }
+    },
+    {
+      "identifier": "allow-engine-discovery-get-mode",
+      "description": "Enables the engine_discovery_get_mode command without any pre-configured scope.",
+      "commands": {
+        "allow": [
+          "engine_discovery_get_mode"
+        ]
+      }
+    },
+    {
+      "identifier": "allow-export-session",
+      "description": "Enables the export_session command without any pre-configured scope.",
+      "commands": {
+        "allow": [
+          "export_session"
+        ]
+      }
+    },
+    {
+      "identifier": "allow-featured-vendor-to-entry",
+      "description": "Enables the featured_vendor_to_entry command without any pre-configured scope.",
+      "commands": {
+        "allow": [
+          "featured_vendor_to_entry"
+        ]
+      }
+    },
+    {
+      "identifier": "allow-gateway-delete-secret",
+      "description": "Enables the gateway_delete_secret command without any pre-configured scope.",
+      "commands": {
+        "allow": [
+          "gateway_delete_secret"
+        ]
+      }
+    },
+    {
+      "identifier": "allow-gateway-get-secret",
+      "description": "Enables the gateway_get_secret command without any pre-configured scope.",
+      "commands": {
+        "allow": [
+          "gateway_get_secret"
+        ]
+      }
+    },
+    {
+      "identifier": "allow-gateway-has-secret",
+      "description": "Enables the gateway_has_secret command without any pre-configured scope.",
+      "commands": {
+        "allow": [
+          "gateway_has_secret"
+        ]
+      }
+    },
+    {
+      "identifier": "allow-gateway-read-config",
+      "description": "Enables the gateway_read_config command without any pre-configured scope.",
+      "commands": {
+        "allow": [
+          "gateway_read_config"
+        ]
+      }
+    },
+    {
+      "identifier": "allow-gateway-set-managed",
+      "description": "Enables the gateway_set_managed command without any pre-configured scope.",
+      "commands": {
+        "allow": [
+          "gateway_set_managed"
+        ]
+      }
+    },
+    {
+      "identifier": "allow-gateway-set-secret",
+      "description": "Enables the gateway_set_secret command without any pre-configured scope.",
+      "commands": {
+        "allow": [
+          "gateway_set_secret"
+        ]
+      }
+    },
+    {
+      "identifier": "allow-gateway-supervisor-start",
+      "description": "Enables the gateway_supervisor_start command without any pre-configured scope.",
+      "commands": {
+        "allow": [
+          "gateway_supervisor_start"
+        ]
+      }
+    },
+    {
+      "identifier": "allow-gateway-supervisor-status",
+      "description": "Enables the gateway_supervisor_status command without any pre-configured scope.",
+      "commands": {
+        "allow": [
+          "gateway_supervisor_status"
+        ]
+      }
+    },
+    {
+      "identifier": "allow-gateway-supervisor-stop",
+      "description": "Enables the gateway_supervisor_stop command without any pre-configured scope.",
+      "commands": {
+        "allow": [
+          "gateway_supervisor_stop"
+        ]
+      }
+    },
+    {
+      "identifier": "allow-gateway-write-config",
+      "description": "Enables the gateway_write_config command without any pre-configured scope.",
+      "commands": {
+        "allow": [
+          "gateway_write_config"
+        ]
+      }
+    },
+    {
+      "identifier": "allow-get-background-tasks",
+      "description": "Enables the get_background_tasks command without any pre-configured scope.",
+      "commands": {
+        "allow": [
+          "get_background_tasks"
+        ]
+      }
+    },
+    {
+      "identifier": "allow-get-batch-branch-diff",
+      "description": "Enables the get_batch_branch_diff command without any pre-configured scope.",
+      "commands": {
+        "allow": [
+          "get_batch_branch_diff"
+        ]
+      }
+    },
+    {
+      "identifier": "allow-get-billing-history",
+      "description": "Enables the get_billing_history command without any pre-configured scope.",
+      "commands": {
+        "allow": [
+          "get_billing_history"
+        ]
+      }
+    },
+    {
+      "identifier": "allow-get-billing-plan",
+      "description": "Enables the get_billing_plan command without any pre-configured scope.",
+      "commands": {
+        "allow": [
+          "get_billing_plan"
+        ]
+      }
+    },
+    {
+      "identifier": "allow-get-cli-install-status",
+      "description": "Enables the get_cli_install_status command without any pre-configured scope.",
+      "commands": {
+        "allow": [
+          "get_cli_install_status"
+        ]
+      }
+    },
+    {
+      "identifier": "allow-get-config",
+      "description": "Enables the get_config command without any pre-configured scope.",
+      "commands": {
+        "allow": [
+          "get_config"
+        ]
+      }
+    },
+    {
+      "identifier": "allow-get-conversation",
+      "description": "Enables the get_conversation command without any pre-configured scope.",
+      "commands": {
+        "allow": [
+          "get_conversation"
+        ]
+      }
+    },
+    {
+      "identifier": "allow-get-cost-history",
+      "description": "Enables the get_cost_history command without any pre-configured scope.",
+      "commands": {
+        "allow": [
+          "get_cost_history"
+        ]
+      }
+    },
+    {
+      "identifier": "allow-get-execution-detail",
+      "description": "Enables the get_execution_detail command without any pre-configured scope.",
+      "commands": {
+        "allow": [
+          "get_execution_detail"
+        ]
+      }
+    },
+    {
+      "identifier": "allow-get-file-diff",
+      "description": "Enables the get_file_diff command without any pre-configured scope.",
+      "commands": {
+        "allow": [
+          "get_file_diff"
+        ]
+      }
+    },
+    {
+      "identifier": "allow-get-file-tree",
+      "description": "Enables the get_file_tree command without any pre-configured scope.",
+      "commands": {
+        "allow": [
+          "get_file_tree"
+        ]
+      }
+    },
+    {
+      "identifier": "allow-get-goal-run",
+      "description": "Enables the get_goal_run command without any pre-configured scope.",
+      "commands": {
+        "allow": [
+          "get_goal_run"
+        ]
+      }
+    },
+    {
+      "identifier": "allow-get-inbox-stats",
+      "description": "Enables the get_inbox_stats command without any pre-configured scope.",
+      "commands": {
+        "allow": [
+          "get_inbox_stats"
+        ]
+      }
+    },
+    {
+      "identifier": "allow-get-mcp-server-config",
+      "description": "Enables the get_mcp_server_config command without any pre-configured scope.",
+      "commands": {
+        "allow": [
+          "get_mcp_server_config"
+        ]
+      }
+    },
+    {
+      "identifier": "allow-get-memory-graph",
+      "description": "Enables the get_memory_graph command without any pre-configured scope.",
+      "commands": {
+        "allow": [
+          "get_memory_graph"
+        ]
+      }
+    },
+    {
+      "identifier": "allow-get-memory-source",
+      "description": "Enables the get_memory_source command without any pre-configured scope.",
+      "commands": {
+        "allow": [
+          "get_memory_source"
+        ]
+      }
+    },
+    {
+      "identifier": "allow-get-memory-stats",
+      "description": "Enables the get_memory_stats command without any pre-configured scope.",
+      "commands": {
+        "allow": [
+          "get_memory_stats"
+        ]
+      }
+    },
+    {
+      "identifier": "allow-get-notification-prefs",
+      "description": "Enables the get_notification_prefs command without any pre-configured scope.",
+      "commands": {
+        "allow": [
+          "get_notification_prefs"
+        ]
+      }
+    },
+    {
+      "identifier": "allow-get-opc-metrics",
+      "description": "Enables the get_opc_metrics command without any pre-configured scope.",
+      "commands": {
+        "allow": [
+          "get_opc_metrics"
+        ]
+      }
+    },
+    {
+      "identifier": "allow-get-provider-allowlist",
+      "description": "Enables the get_provider_allowlist command without any pre-configured scope.",
+      "commands": {
+        "allow": [
+          "get_provider_allowlist"
+        ]
+      }
+    },
+    {
+      "identifier": "allow-get-session-budget",
+      "description": "Enables the get_session_budget command without any pre-configured scope.",
+      "commands": {
+        "allow": [
+          "get_session_budget"
+        ]
+      }
+    },
+    {
+      "identifier": "allow-get-session-context-breakdown",
+      "description": "Enables the get_session_context_breakdown command without any pre-configured scope.",
+      "commands": {
+        "allow": [
+          "get_session_context_breakdown"
+        ]
+      }
+    },
+    {
+      "identifier": "allow-get-session-context-stats",
+      "description": "Enables the get_session_context_stats command without any pre-configured scope.",
+      "commands": {
+        "allow": [
+          "get_session_context_stats"
+        ]
+      }
+    },
+    {
+      "identifier": "allow-get-session-git-diff",
+      "description": "Enables the get_session_git_diff command without any pre-configured scope.",
+      "commands": {
+        "allow": [
+          "get_session_git_diff"
+        ]
+      }
+    },
+    {
+      "identifier": "allow-get-session-plan",
+      "description": "Enables the get_session_plan command without any pre-configured scope.",
+      "commands": {
+        "allow": [
+          "get_session_plan"
+        ]
+      }
+    },
+    {
+      "identifier": "allow-get-session-usage",
+      "description": "Enables the get_session_usage command without any pre-configured scope.",
+      "commands": {
+        "allow": [
+          "get_session_usage"
+        ]
+      }
+    },
+    {
+      "identifier": "allow-get-skill-detail",
+      "description": "Enables the get_skill_detail command without any pre-configured scope.",
+      "commands": {
+        "allow": [
+          "get_skill_detail"
+        ]
+      }
+    },
+    {
+      "identifier": "allow-get-status",
+      "description": "Enables the get_status command without any pre-configured scope.",
+      "commands": {
+        "allow": [
+          "get_status"
+        ]
+      }
+    },
+    {
+      "identifier": "allow-get-stt-config",
+      "description": "Enables the get_stt_config command without any pre-configured scope.",
+      "commands": {
+        "allow": [
+          "get_stt_config"
+        ]
+      }
+    },
+    {
+      "identifier": "allow-get-surface-info",
+      "description": "Enables the get_surface_info command without any pre-configured scope.",
+      "commands": {
+        "allow": [
+          "get_surface_info"
+        ]
+      }
+    },
+    {
+      "identifier": "allow-get-triage-stats",
+      "description": "Enables the get_triage_stats command without any pre-configured scope.",
+      "commands": {
+        "allow": [
+          "get_triage_stats"
+        ]
+      }
+    },
+    {
+      "identifier": "allow-get-usage-by-session",
+      "description": "Enables the get_usage_by_session command without any pre-configured scope.",
+      "commands": {
+        "allow": [
+          "get_usage_by_session"
+        ]
+      }
+    },
+    {
+      "identifier": "allow-get-usage-stats",
+      "description": "Enables the get_usage_stats command without any pre-configured scope.",
+      "commands": {
+        "allow": [
+          "get_usage_stats"
+        ]
+      }
+    },
+    {
+      "identifier": "allow-get-voice-local-config",
+      "description": "Enables the get_voice_local_config command without any pre-configured scope.",
+      "commands": {
+        "allow": [
+          "get_voice_local_config"
+        ]
+      }
+    },
+    {
+      "identifier": "allow-get-webhook-config",
+      "description": "Enables the get_webhook_config command without any pre-configured scope.",
+      "commands": {
+        "allow": [
+          "get_webhook_config"
+        ]
+      }
+    },
+    {
+      "identifier": "allow-get-working-dir-info",
+      "description": "Enables the get_working_dir_info command without any pre-configured scope.",
+      "commands": {
+        "allow": [
+          "get_working_dir_info"
+        ]
+      }
+    },
+    {
+      "identifier": "allow-install-agent-from-repo",
+      "description": "Enables the install_agent_from_repo command without any pre-configured scope.",
+      "commands": {
+        "allow": [
+          "install_agent_from_repo"
+        ]
+      }
+    },
+    {
+      "identifier": "allow-install-cli-to-path",
+      "description": "Enables the install_cli_to_path command without any pre-configured scope.",
+      "commands": {
+        "allow": [
+          "install_cli_to_path"
+        ]
+      }
+    },
+    {
+      "identifier": "allow-install-data-source",
+      "description": "Enables the install_data_source command without any pre-configured scope.",
+      "commands": {
+        "allow": [
+          "install_data_source"
+        ]
+      }
+    },
+    {
+      "identifier": "allow-install-mcp-mcpb",
+      "description": "Enables the install_mcp_mcpb command without any pre-configured scope.",
+      "commands": {
+        "allow": [
+          "install_mcp_mcpb"
+        ]
+      }
+    },
+    {
+      "identifier": "allow-install-mcp-oauth-authorize-url",
+      "description": "Enables the install_mcp_oauth_authorize_url command without any pre-configured scope.",
+      "commands": {
+        "allow": [
+          "install_mcp_oauth_authorize_url"
+        ]
+      }
+    },
+    {
+      "identifier": "allow-install-mcp-oauth-complete",
+      "description": "Enables the install_mcp_oauth_complete command without any pre-configured scope.",
+      "commands": {
+        "allow": [
+          "install_mcp_oauth_complete"
+        ]
+      }
+    },
+    {
+      "identifier": "allow-install-mcp-oauth-loopback",
+      "description": "Enables the install_mcp_oauth_loopback command without any pre-configured scope.",
+      "commands": {
+        "allow": [
+          "install_mcp_oauth_loopback"
+        ]
+      }
+    },
+    {
+      "identifier": "allow-install-mcp-stdio",
+      "description": "Enables the install_mcp_stdio command without any pre-configured scope.",
+      "commands": {
+        "allow": [
+          "install_mcp_stdio"
+        ]
+      }
+    },
+    {
+      "identifier": "allow-install-native-agent",
+      "description": "Enables the install_native_agent command without any pre-configured scope.",
+      "commands": {
+        "allow": [
+          "install_native_agent"
+        ]
+      }
+    },
+    {
+      "identifier": "allow-install-native-skill",
+      "description": "Enables the install_native_skill command without any pre-configured scope.",
+      "commands": {
+        "allow": [
+          "install_native_skill"
+        ]
+      }
+    },
+    {
+      "identifier": "allow-install-plugin",
+      "description": "Enables the install_plugin command without any pre-configured scope.",
+      "commands": {
+        "allow": [
+          "install_plugin"
+        ]
+      }
+    },
+    {
+      "identifier": "allow-install-plugin-from-git",
+      "description": "Enables the install_plugin_from_git command without any pre-configured scope.",
+      "commands": {
+        "allow": [
+          "install_plugin_from_git"
+        ]
+      }
+    },
+    {
+      "identifier": "allow-install-skill-from-repo",
+      "description": "Enables the install_skill_from_repo command without any pre-configured scope.",
+      "commands": {
+        "allow": [
+          "install_skill_from_repo"
+        ]
+      }
+    },
+    {
+      "identifier": "allow-instantiate-routine-template",
+      "description": "Enables the instantiate_routine_template command without any pre-configured scope.",
+      "commands": {
+        "allow": [
+          "instantiate_routine_template"
+        ]
+      }
+    },
+    {
+      "identifier": "allow-list-agent-authored-skills",
+      "description": "Enables the list_agent_authored_skills command without any pre-configured scope.",
+      "commands": {
+        "allow": [
+          "list_agent_authored_skills"
+        ]
+      }
+    },
+    {
+      "identifier": "allow-list-agent-catalog",
+      "description": "Enables the list_agent_catalog command without any pre-configured scope.",
+      "commands": {
+        "allow": [
+          "list_agent_catalog"
+        ]
+      }
+    },
+    {
+      "identifier": "allow-list-agent-definitions",
+      "description": "Enables the list_agent_definitions command without any pre-configured scope.",
+      "commands": {
+        "allow": [
+          "list_agent_definitions"
+        ]
+      }
+    },
+    {
+      "identifier": "allow-list-agent-message-teams",
+      "description": "Enables the list_agent_message_teams command without any pre-configured scope.",
+      "commands": {
+        "allow": [
+          "list_agent_message_teams"
+        ]
+      }
+    },
+    {
+      "identifier": "allow-list-agent-messages",
+      "description": "Enables the list_agent_messages command without any pre-configured scope.",
+      "commands": {
+        "allow": [
+          "list_agent_messages"
+        ]
+      }
+    },
+    {
+      "identifier": "allow-list-agents",
+      "description": "Enables the list_agents command without any pre-configured scope.",
+      "commands": {
+        "allow": [
+          "list_agents"
+        ]
+      }
+    },
+    {
+      "identifier": "allow-list-batch-runs",
+      "description": "Enables the list_batch_runs command without any pre-configured scope.",
+      "commands": {
+        "allow": [
+          "list_batch_runs"
+        ]
+      }
+    },
+    {
+      "identifier": "allow-list-catalog-reports",
+      "description": "Enables the list_catalog_reports command without any pre-configured scope.",
+      "commands": {
+        "allow": [
+          "list_catalog_reports"
+        ]
+      }
+    },
+    {
+      "identifier": "allow-list-catalog-upstreams",
+      "description": "Enables the list_catalog_upstreams command without any pre-configured scope.",
+      "commands": {
+        "allow": [
+          "list_catalog_upstreams"
+        ]
+      }
+    },
+    {
+      "identifier": "allow-list-checkpoints",
+      "description": "Enables the list_checkpoints command without any pre-configured scope.",
+      "commands": {
+        "allow": [
+          "list_checkpoints"
+        ]
+      }
+    },
+    {
+      "identifier": "allow-list-data-source-adapters",
+      "description": "Enables the list_data_source_adapters command without any pre-configured scope.",
+      "commands": {
+        "allow": [
+          "list_data_source_adapters"
+        ]
+      }
+    },
+    {
+      "identifier": "allow-list-data-source-catalog",
+      "description": "Enables the list_data_source_catalog command without any pre-configured scope.",
+      "commands": {
+        "allow": [
+          "list_data_source_catalog"
+        ]
+      }
+    },
+    {
+      "identifier": "allow-list-featured-vendors",
+      "description": "Enables the list_featured_vendors command without any pre-configured scope.",
+      "commands": {
+        "allow": [
+          "list_featured_vendors"
+        ]
+      }
+    },
+    {
+      "identifier": "allow-list-feedback-sessions",
+      "description": "Enables the list_feedback_sessions command without any pre-configured scope.",
+      "commands": {
+        "allow": [
+          "list_feedback_sessions"
+        ]
+      }
+    },
+    {
+      "identifier": "allow-list-goal-runs",
+      "description": "Enables the list_goal_runs command without any pre-configured scope.",
+      "commands": {
+        "allow": [
+          "list_goal_runs"
+        ]
+      }
+    },
+    {
+      "identifier": "allow-list-hook-events",
+      "description": "Enables the list_hook_events command without any pre-configured scope.",
+      "commands": {
+        "allow": [
+          "list_hook_events"
+        ]
+      }
+    },
+    {
+      "identifier": "allow-list-inbox-items",
+      "description": "Enables the list_inbox_items command without any pre-configured scope.",
+      "commands": {
+        "allow": [
+          "list_inbox_items"
+        ]
+      }
+    },
+    {
+      "identifier": "allow-list-installed-addons",
+      "description": "Enables the list_installed_addons command without any pre-configured scope.",
+      "commands": {
+        "allow": [
+          "list_installed_addons"
+        ]
+      }
+    },
+    {
+      "identifier": "allow-list-installed-agent-plugins",
+      "description": "Enables the list_installed_agent_plugins command without any pre-configured scope.",
+      "commands": {
+        "allow": [
+          "list_installed_agent_plugins"
+        ]
+      }
+    },
+    {
+      "identifier": "allow-list-installed-data-sources",
+      "description": "Enables the list_installed_data_sources command without any pre-configured scope.",
+      "commands": {
+        "allow": [
+          "list_installed_data_sources"
+        ]
+      }
+    },
+    {
+      "identifier": "allow-list-installed-skill-plugins",
+      "description": "Enables the list_installed_skill_plugins command without any pre-configured scope.",
+      "commands": {
+        "allow": [
+          "list_installed_skill_plugins"
+        ]
+      }
+    },
+    {
+      "identifier": "allow-list-mcp-registry-servers",
+      "description": "Enables the list_mcp_registry_servers command without any pre-configured scope.",
+      "commands": {
+        "allow": [
+          "list_mcp_registry_servers"
+        ]
+      }
+    },
+    {
+      "identifier": "allow-list-mcp-servers",
+      "description": "Enables the list_mcp_servers command without any pre-configured scope.",
+      "commands": {
+        "allow": [
+          "list_mcp_servers"
+        ]
+      }
+    },
+    {
+      "identifier": "allow-list-memories",
+      "description": "Enables the list_memories command without any pre-configured scope.",
+      "commands": {
+        "allow": [
+          "list_memories"
+        ]
+      }
+    },
+    {
+      "identifier": "allow-list-memory-projects",
+      "description": "Enables the list_memory_projects command without any pre-configured scope.",
+      "commands": {
+        "allow": [
+          "list_memory_projects"
+        ]
+      }
+    },
+    {
+      "identifier": "allow-list-message-feedback",
+      "description": "Enables the list_message_feedback command without any pre-configured scope.",
+      "commands": {
+        "allow": [
+          "list_message_feedback"
+        ]
+      }
+    },
+    {
+      "identifier": "allow-list-models",
+      "description": "Enables the list_models command without any pre-configured scope.",
+      "commands": {
+        "allow": [
+          "list_models"
+        ]
+      }
+    },
+    {
+      "identifier": "allow-list-permission-profiles",
+      "description": "Enables the list_permission_profiles command without any pre-configured scope.",
+      "commands": {
+        "allow": [
+          "list_permission_profiles"
+        ]
+      }
+    },
+    {
+      "identifier": "allow-list-plugin-marketplace",
+      "description": "Enables the list_plugin_marketplace command without any pre-configured scope.",
+      "commands": {
+        "allow": [
+          "list_plugin_marketplace"
+        ]
+      }
+    },
+    {
+      "identifier": "allow-list-plugins",
+      "description": "Enables the list_plugins command without any pre-configured scope.",
+      "commands": {
+        "allow": [
+          "list_plugins"
+        ]
+      }
+    },
+    {
+      "identifier": "allow-list-providers",
+      "description": "Enables the list_providers command without any pre-configured scope.",
+      "commands": {
+        "allow": [
+          "list_providers"
+        ]
+      }
+    },
+    {
+      "identifier": "allow-list-routine-templates",
+      "description": "Enables the list_routine_templates command without any pre-configured scope.",
+      "commands": {
+        "allow": [
+          "list_routine_templates"
+        ]
+      }
+    },
+    {
+      "identifier": "allow-list-scheduled-tasks",
+      "description": "Enables the list_scheduled_tasks command without any pre-configured scope.",
+      "commands": {
+        "allow": [
+          "list_scheduled_tasks"
+        ]
+      }
+    },
+    {
+      "identifier": "allow-list-session-windows",
+      "description": "Enables the list_session_windows command without any pre-configured scope.",
+      "commands": {
+        "allow": [
+          "list_session_windows"
+        ]
+      }
+    },
+    {
+      "identifier": "allow-list-sessions",
+      "description": "Enables the list_sessions command without any pre-configured scope.",
+      "commands": {
+        "allow": [
+          "list_sessions"
+        ]
+      }
+    },
+    {
+      "identifier": "allow-list-skill-candidates",
+      "description": "Enables the list_skill_candidates command without any pre-configured scope.",
+      "commands": {
+        "allow": [
+          "list_skill_candidates"
+        ]
+      }
+    },
+    {
+      "identifier": "allow-list-skill-catalog",
+      "description": "Enables the list_skill_catalog command without any pre-configured scope.",
+      "commands": {
+        "allow": [
+          "list_skill_catalog"
+        ]
+      }
+    },
+    {
+      "identifier": "allow-list-skills",
+      "description": "Enables the list_skills command without any pre-configured scope.",
+      "commands": {
+        "allow": [
+          "list_skills"
+        ]
+      }
+    },
+    {
+      "identifier": "allow-list-subagents",
+      "description": "Enables the list_subagents command without any pre-configured scope.",
+      "commands": {
+        "allow": [
+          "list_subagents"
+        ]
+      }
+    },
+    {
+      "identifier": "allow-list-task-executions",
+      "description": "Enables the list_task_executions command without any pre-configured scope.",
+      "commands": {
+        "allow": [
+          "list_task_executions"
+        ]
+      }
+    },
+    {
+      "identifier": "allow-list-task-worktrees",
+      "description": "Enables the list_task_worktrees command without any pre-configured scope.",
+      "commands": {
+        "allow": [
+          "list_task_worktrees"
+        ]
+      }
+    },
+    {
+      "identifier": "allow-list-tasks",
+      "description": "Enables the list_tasks command without any pre-configured scope.",
+      "commands": {
+        "allow": [
+          "list_tasks"
+        ]
+      }
+    },
+    {
+      "identifier": "allow-list-tools",
+      "description": "Enables the list_tools command without any pre-configured scope.",
+      "commands": {
+        "allow": [
+          "list_tools"
+        ]
+      }
+    },
+    {
+      "identifier": "allow-list-triage-items",
+      "description": "Enables the list_triage_items command without any pre-configured scope.",
+      "commands": {
+        "allow": [
+          "list_triage_items"
+        ]
+      }
+    },
+    {
+      "identifier": "allow-list-triggered-routines",
+      "description": "Enables the list_triggered_routines command without any pre-configured scope.",
+      "commands": {
+        "allow": [
+          "list_triggered_routines"
+        ]
+      }
+    },
+    {
+      "identifier": "allow-list-whisper-models",
+      "description": "Enables the list_whisper_models command without any pre-configured scope.",
+      "commands": {
+        "allow": [
+          "list_whisper_models"
+        ]
+      }
+    },
+    {
+      "identifier": "allow-load-session",
+      "description": "Enables the load_session command without any pre-configured scope.",
+      "commands": {
+        "allow": [
+          "load_session"
+        ]
+      }
+    },
+    {
+      "identifier": "allow-lsp-code-actions",
+      "description": "Enables the lsp_code_actions command without any pre-configured scope.",
+      "commands": {
+        "allow": [
+          "lsp_code_actions"
+        ]
+      }
+    },
+    {
+      "identifier": "allow-mark-triage-read",
+      "description": "Enables the mark_triage_read command without any pre-configured scope.",
+      "commands": {
+        "allow": [
+          "mark_triage_read"
+        ]
+      }
+    },
+    {
+      "identifier": "allow-migration-apply",
+      "description": "Enables the migration_apply command without any pre-configured scope.",
+      "commands": {
+        "allow": [
+          "migration_apply"
+        ]
+      }
+    },
+    {
+      "identifier": "allow-migration-preview",
+      "description": "Enables the migration_preview command without any pre-configured scope.",
+      "commands": {
+        "allow": [
+          "migration_preview"
+        ]
+      }
+    },
+    {
+      "identifier": "allow-migration-scan",
+      "description": "Enables the migration_scan command without any pre-configured scope.",
+      "commands": {
+        "allow": [
+          "migration_scan"
+        ]
+      }
+    },
+    {
+      "identifier": "allow-mobile-generate-pair-token",
+      "description": "Enables the mobile_generate_pair_token command without any pre-configured scope.",
+      "commands": {
+        "allow": [
+          "mobile_generate_pair_token"
+        ]
+      }
+    },
+    {
+      "identifier": "allow-mobile-list-paired-devices",
+      "description": "Enables the mobile_list_paired_devices command without any pre-configured scope.",
+      "commands": {
+        "allow": [
+          "mobile_list_paired_devices"
+        ]
+      }
+    },
+    {
+      "identifier": "allow-mobile-revoke-device",
+      "description": "Enables the mobile_revoke_device command without any pre-configured scope.",
+      "commands": {
+        "allow": [
+          "mobile_revoke_device"
+        ]
+      }
+    },
+    {
+      "identifier": "allow-mobile-set-tls",
+      "description": "Enables the mobile_set_tls command without any pre-configured scope.",
+      "commands": {
+        "allow": [
+          "mobile_set_tls"
+        ]
+      }
+    },
+    {
+      "identifier": "allow-mobile-tls-status",
+      "description": "Enables the mobile_tls_status command without any pre-configured scope.",
+      "commands": {
+        "allow": [
+          "mobile_tls_status"
+        ]
+      }
+    },
+    {
+      "identifier": "allow-new-session",
+      "description": "Enables the new_session command without any pre-configured scope.",
+      "commands": {
+        "allow": [
+          "new_session"
+        ]
+      }
+    },
+    {
+      "identifier": "allow-open-release-page",
+      "description": "Enables the open_release_page command without any pre-configured scope.",
+      "commands": {
+        "allow": [
+          "open_release_page"
+        ]
+      }
+    },
+    {
+      "identifier": "allow-open-session-window",
+      "description": "Enables the open_session_window command without any pre-configured scope.",
+      "commands": {
+        "allow": [
+          "open_session_window"
+        ]
+      }
+    },
+    {
+      "identifier": "allow-pause-goal-run",
+      "description": "Enables the pause_goal_run command without any pre-configured scope.",
+      "commands": {
+        "allow": [
+          "pause_goal_run"
+        ]
+      }
+    },
+    {
+      "identifier": "allow-persona-pack-export",
+      "description": "Enables the persona_pack_export command without any pre-configured scope.",
+      "commands": {
+        "allow": [
+          "persona_pack_export"
+        ]
+      }
+    },
+    {
+      "identifier": "allow-persona-pack-import",
+      "description": "Enables the persona_pack_import command without any pre-configured scope.",
+      "commands": {
+        "allow": [
+          "persona_pack_import"
+        ]
+      }
+    },
+    {
+      "identifier": "allow-persona-pack-inspect",
+      "description": "Enables the persona_pack_inspect command without any pre-configured scope.",
+      "commands": {
+        "allow": [
+          "persona_pack_inspect"
+        ]
+      }
+    },
+    {
+      "identifier": "allow-preview-capture",
+      "description": "Enables the preview_capture command without any pre-configured scope.",
+      "commands": {
+        "allow": [
+          "preview_capture"
+        ]
+      }
+    },
+    {
+      "identifier": "allow-preview-cron",
+      "description": "Enables the preview_cron command without any pre-configured scope.",
+      "commands": {
+        "allow": [
+          "preview_cron"
+        ]
+      }
+    },
+    {
+      "identifier": "allow-preview-detect",
+      "description": "Enables the preview_detect command without any pre-configured scope.",
+      "commands": {
+        "allow": [
+          "preview_detect"
+        ]
+      }
+    },
+    {
+      "identifier": "allow-preview-logs",
+      "description": "Enables the preview_logs command without any pre-configured scope.",
+      "commands": {
+        "allow": [
+          "preview_logs"
+        ]
+      }
+    },
+    {
+      "identifier": "allow-preview-start",
+      "description": "Enables the preview_start command without any pre-configured scope.",
+      "commands": {
+        "allow": [
+          "preview_start"
+        ]
+      }
+    },
+    {
+      "identifier": "allow-preview-status",
+      "description": "Enables the preview_status command without any pre-configured scope.",
+      "commands": {
+        "allow": [
+          "preview_status"
+        ]
+      }
+    },
+    {
+      "identifier": "allow-preview-stop",
+      "description": "Enables the preview_stop command without any pre-configured scope.",
+      "commands": {
+        "allow": [
+          "preview_stop"
+        ]
+      }
+    },
+    {
+      "identifier": "allow-prune-task-worktrees",
+      "description": "Enables the prune_task_worktrees command without any pre-configured scope.",
+      "commands": {
+        "allow": [
+          "prune_task_worktrees"
+        ]
+      }
+    },
+    {
+      "identifier": "allow-query-data-source",
+      "description": "Enables the query_data_source command without any pre-configured scope.",
+      "commands": {
+        "allow": [
+          "query_data_source"
+        ]
+      }
+    },
+    {
+      "identifier": "allow-read-attachment",
+      "description": "Enables the read_attachment command without any pre-configured scope.",
+      "commands": {
+        "allow": [
+          "read_attachment"
+        ]
+      }
+    },
+    {
+      "identifier": "allow-read-attachments",
+      "description": "Enables the read_attachments command without any pre-configured scope.",
+      "commands": {
+        "allow": [
+          "read_attachments"
+        ]
+      }
+    },
+    {
+      "identifier": "allow-read-data-source-config",
+      "description": "Enables the read_data_source_config command without any pre-configured scope.",
+      "commands": {
+        "allow": [
+          "read_data_source_config"
+        ]
+      }
+    },
+    {
+      "identifier": "allow-read-source-file",
+      "description": "Enables the read_source_file command without any pre-configured scope.",
+      "commands": {
+        "allow": [
+          "read_source_file"
+        ]
+      }
+    },
+    {
+      "identifier": "allow-record-agent-message",
+      "description": "Enables the record_agent_message command without any pre-configured scope.",
+      "commands": {
+        "allow": [
+          "record_agent_message"
+        ]
+      }
+    },
+    {
+      "identifier": "allow-record-message-feedback",
+      "description": "Enables the record_message_feedback command without any pre-configured scope.",
+      "commands": {
+        "allow": [
+          "record_message_feedback"
+        ]
+      }
+    },
+    {
+      "identifier": "allow-refine-skill-candidate",
+      "description": "Enables the refine_skill_candidate command without any pre-configured scope.",
+      "commands": {
+        "allow": [
+          "refine_skill_candidate"
+        ]
+      }
+    },
+    {
+      "identifier": "allow-reject-skill-candidate",
+      "description": "Enables the reject_skill_candidate command without any pre-configured scope.",
+      "commands": {
+        "allow": [
+          "reject_skill_candidate"
+        ]
+      }
+    },
+    {
+      "identifier": "allow-remote-add-target",
+      "description": "Enables the remote_add_target command without any pre-configured scope.",
+      "commands": {
+        "allow": [
+          "remote_add_target"
+        ]
+      }
+    },
+    {
+      "identifier": "allow-remote-discover-ssh-hosts",
+      "description": "Enables the remote_discover_ssh_hosts command without any pre-configured scope.",
+      "commands": {
+        "allow": [
+          "remote_discover_ssh_hosts"
+        ]
+      }
+    },
+    {
+      "identifier": "allow-remote-list-docker-containers",
+      "description": "Enables the remote_list_docker_containers command without any pre-configured scope.",
+      "commands": {
+        "allow": [
+          "remote_list_docker_containers"
+        ]
+      }
+    },
+    {
+      "identifier": "allow-remote-list-targets",
+      "description": "Enables the remote_list_targets command without any pre-configured scope.",
+      "commands": {
+        "allow": [
+          "remote_list_targets"
+        ]
+      }
+    },
+    {
+      "identifier": "allow-remote-remove-target",
+      "description": "Enables the remote_remove_target command without any pre-configured scope.",
+      "commands": {
+        "allow": [
+          "remote_remove_target"
+        ]
+      }
+    },
+    {
+      "identifier": "allow-remote-set-default-target",
+      "description": "Enables the remote_set_default_target command without any pre-configured scope.",
+      "commands": {
+        "allow": [
+          "remote_set_default_target"
+        ]
+      }
+    },
+    {
+      "identifier": "allow-remote-test-target",
+      "description": "Enables the remote_test_target command without any pre-configured scope.",
+      "commands": {
+        "allow": [
+          "remote_test_target"
+        ]
+      }
+    },
+    {
+      "identifier": "allow-remove-mcp-server",
+      "description": "Enables the remove_mcp_server command without any pre-configured scope.",
+      "commands": {
+        "allow": [
+          "remove_mcp_server"
+        ]
+      }
+    },
+    {
+      "identifier": "allow-remove-task-worktree",
+      "description": "Enables the remove_task_worktree command without any pre-configured scope.",
+      "commands": {
+        "allow": [
+          "remove_task_worktree"
+        ]
+      }
+    },
+    {
+      "identifier": "allow-rename-session",
+      "description": "Enables the rename_session command without any pre-configured scope.",
+      "commands": {
+        "allow": [
+          "rename_session"
+        ]
+      }
+    },
+    {
+      "identifier": "allow-report-catalog-entry",
+      "description": "Enables the report_catalog_entry command without any pre-configured scope.",
+      "commands": {
+        "allow": [
+          "report_catalog_entry"
+        ]
+      }
+    },
+    {
+      "identifier": "allow-request-permission",
+      "description": "Enables the request_permission command without any pre-configured scope.",
+      "commands": {
+        "allow": [
+          "request_permission"
+        ]
+      }
+    },
+    {
+      "identifier": "allow-rerun-inbox-item",
+      "description": "Enables the rerun_inbox_item command without any pre-configured scope.",
+      "commands": {
+        "allow": [
+          "rerun_inbox_item"
+        ]
+      }
+    },
+    {
+      "identifier": "allow-respond-permission",
+      "description": "Enables the respond_permission command without any pre-configured scope.",
+      "commands": {
+        "allow": [
+          "respond_permission"
+        ]
+      }
+    },
+    {
+      "identifier": "allow-restart-mcp-server",
+      "description": "Enables the restart_mcp_server command without any pre-configured scope.",
+      "commands": {
+        "allow": [
+          "restart_mcp_server"
+        ]
+      }
+    },
+    {
+      "identifier": "allow-resume-goal-run",
+      "description": "Enables the resume_goal_run command without any pre-configured scope.",
+      "commands": {
+        "allow": [
+          "resume_goal_run"
+        ]
+      }
+    },
+    {
+      "identifier": "allow-reveal-session-in-main",
+      "description": "Enables the reveal_session_in_main command without any pre-configured scope.",
+      "commands": {
+        "allow": [
+          "reveal_session_in_main"
+        ]
+      }
+    },
+    {
+      "identifier": "allow-rewind-session",
+      "description": "Enables the rewind_session command without any pre-configured scope.",
+      "commands": {
+        "allow": [
+          "rewind_session"
+        ]
+      }
+    },
+    {
+      "identifier": "allow-run-file-diagnostics",
+      "description": "Enables the run_file_diagnostics command without any pre-configured scope.",
+      "commands": {
+        "allow": [
+          "run_file_diagnostics"
+        ]
+      }
+    },
+    {
+      "identifier": "allow-save-custom-profile",
+      "description": "Enables the save_custom_profile command without any pre-configured scope.",
+      "commands": {
+        "allow": [
+          "save_custom_profile"
+        ]
+      }
+    },
+    {
+      "identifier": "allow-save-provider",
+      "description": "Enables the save_provider command without any pre-configured scope.",
+      "commands": {
+        "allow": [
+          "save_provider"
+        ]
+      }
+    },
+    {
+      "identifier": "allow-save-stt-config",
+      "description": "Enables the save_stt_config command without any pre-configured scope.",
+      "commands": {
+        "allow": [
+          "save_stt_config"
+        ]
+      }
+    },
+    {
+      "identifier": "allow-save-text-file",
+      "description": "Enables the save_text_file command without any pre-configured scope.",
+      "commands": {
+        "allow": [
+          "save_text_file"
+        ]
+      }
+    },
+    {
+      "identifier": "allow-save-voice-local-config",
+      "description": "Enables the save_voice_local_config command without any pre-configured scope.",
+      "commands": {
+        "allow": [
+          "save_voice_local_config"
+        ]
+      }
+    },
+    {
+      "identifier": "allow-save-webhook-config",
+      "description": "Enables the save_webhook_config command without any pre-configured scope.",
+      "commands": {
+        "allow": [
+          "save_webhook_config"
+        ]
+      }
+    },
+    {
+      "identifier": "allow-scan-prompt-injection",
+      "description": "Enables the scan_prompt_injection command without any pre-configured scope.",
+      "commands": {
+        "allow": [
+          "scan_prompt_injection"
+        ]
+      }
+    },
+    {
+      "identifier": "allow-scan-prompt-injection-with-readme",
+      "description": "Enables the scan_prompt_injection_with_readme command without any pre-configured scope.",
+      "commands": {
+        "allow": [
+          "scan_prompt_injection_with_readme"
+        ]
+      }
+    },
+    {
+      "identifier": "allow-search-memories",
+      "description": "Enables the search_memories command without any pre-configured scope.",
+      "commands": {
+        "allow": [
+          "search_memories"
+        ]
+      }
+    },
+    {
+      "identifier": "allow-search-sessions",
+      "description": "Enables the search_sessions command without any pre-configured scope.",
+      "commands": {
+        "allow": [
+          "search_sessions"
+        ]
+      }
+    },
+    {
+      "identifier": "allow-seed-sample-data",
+      "description": "Enables the seed_sample_data command without any pre-configured scope.",
+      "commands": {
+        "allow": [
+          "seed_sample_data"
+        ]
+      }
+    },
+    {
+      "identifier": "allow-send-message",
+      "description": "Enables the send_message command without any pre-configured scope.",
+      "commands": {
+        "allow": [
+          "send_message"
+        ]
+      }
+    },
+    {
+      "identifier": "allow-send-notification",
+      "description": "Enables the send_notification command without any pre-configured scope.",
+      "commands": {
+        "allow": [
+          "send_notification"
+        ]
+      }
+    },
+    {
+      "identifier": "allow-set-active-provider",
+      "description": "Enables the set_active_provider command without any pre-configured scope.",
+      "commands": {
+        "allow": [
+          "set_active_provider"
+        ]
+      }
+    },
+    {
+      "identifier": "allow-set-notification-prefs",
+      "description": "Enables the set_notification_prefs command without any pre-configured scope.",
+      "commands": {
+        "allow": [
+          "set_notification_prefs"
+        ]
+      }
+    },
+    {
+      "identifier": "allow-set-session-budget",
+      "description": "Enables the set_session_budget command without any pre-configured scope.",
+      "commands": {
+        "allow": [
+          "set_session_budget"
+        ]
+      }
+    },
+    {
+      "identifier": "allow-set-session-working-dir",
+      "description": "Enables the set_session_working_dir command without any pre-configured scope.",
+      "commands": {
+        "allow": [
+          "set_session_working_dir"
+        ]
+      }
+    },
+    {
+      "identifier": "allow-skill-loop-approve",
+      "description": "Enables the skill_loop_approve command without any pre-configured scope.",
+      "commands": {
+        "allow": [
+          "skill_loop_approve"
+        ]
+      }
+    },
+    {
+      "identifier": "allow-skill-loop-evaluate",
+      "description": "Enables the skill_loop_evaluate command without any pre-configured scope.",
+      "commands": {
+        "allow": [
+          "skill_loop_evaluate"
+        ]
+      }
+    },
+    {
+      "identifier": "allow-skill-loop-generate",
+      "description": "Enables the skill_loop_generate command without any pre-configured scope.",
+      "commands": {
+        "allow": [
+          "skill_loop_generate"
+        ]
+      }
+    },
+    {
+      "identifier": "allow-skill-loop-list-proposals",
+      "description": "Enables the skill_loop_list_proposals command without any pre-configured scope.",
+      "commands": {
+        "allow": [
+          "skill_loop_list_proposals"
+        ]
+      }
+    },
+    {
+      "identifier": "allow-skill-loop-reject",
+      "description": "Enables the skill_loop_reject command without any pre-configured scope.",
+      "commands": {
+        "allow": [
+          "skill_loop_reject"
+        ]
+      }
+    },
+    {
+      "identifier": "allow-start-background-task",
+      "description": "Enables the start_background_task command without any pre-configured scope.",
+      "commands": {
+        "allow": [
+          "start_background_task"
+        ]
+      }
+    },
+    {
+      "identifier": "allow-start-batch-run",
+      "description": "Enables the start_batch_run command without any pre-configured scope.",
+      "commands": {
+        "allow": [
+          "start_batch_run"
+        ]
+      }
+    },
+    {
+      "identifier": "allow-start-goal-run",
+      "description": "Enables the start_goal_run command without any pre-configured scope.",
+      "commands": {
+        "allow": [
+          "start_goal_run"
+        ]
+      }
+    },
+    {
+      "identifier": "allow-stop-goal-run",
+      "description": "Enables the stop_goal_run command without any pre-configured scope.",
+      "commands": {
+        "allow": [
+          "stop_goal_run"
+        ]
+      }
+    },
+    {
+      "identifier": "allow-switch-session",
+      "description": "Enables the switch_session command without any pre-configured scope.",
+      "commands": {
+        "allow": [
+          "switch_session"
+        ]
+      }
+    },
+    {
+      "identifier": "allow-terminal-kill",
+      "description": "Enables the terminal_kill command without any pre-configured scope.",
+      "commands": {
+        "allow": [
+          "terminal_kill"
+        ]
+      }
+    },
+    {
+      "identifier": "allow-terminal-list",
+      "description": "Enables the terminal_list command without any pre-configured scope.",
+      "commands": {
+        "allow": [
+          "terminal_list"
+        ]
+      }
+    },
+    {
+      "identifier": "allow-terminal-resize",
+      "description": "Enables the terminal_resize command without any pre-configured scope.",
+      "commands": {
+        "allow": [
+          "terminal_resize"
+        ]
+      }
+    },
+    {
+      "identifier": "allow-terminal-spawn",
+      "description": "Enables the terminal_spawn command without any pre-configured scope.",
+      "commands": {
+        "allow": [
+          "terminal_spawn"
+        ]
+      }
+    },
+    {
+      "identifier": "allow-terminal-write",
+      "description": "Enables the terminal_write command without any pre-configured scope.",
+      "commands": {
+        "allow": [
+          "terminal_write"
+        ]
+      }
+    },
+    {
+      "identifier": "allow-test-all-providers",
+      "description": "Enables the test_all_providers command without any pre-configured scope.",
+      "commands": {
+        "allow": [
+          "test_all_providers"
+        ]
+      }
+    },
+    {
+      "identifier": "allow-test-provider-connection",
+      "description": "Enables the test_provider_connection command without any pre-configured scope.",
+      "commands": {
+        "allow": [
+          "test_provider_connection"
+        ]
+      }
+    },
+    {
+      "identifier": "allow-toggle-scheduled-task",
+      "description": "Enables the toggle_scheduled_task command without any pre-configured scope.",
+      "commands": {
+        "allow": [
+          "toggle_scheduled_task"
+        ]
+      }
+    },
+    {
+      "identifier": "allow-toggle-triggered-routine",
+      "description": "Enables the toggle_triggered_routine command without any pre-configured scope.",
+      "commands": {
+        "allow": [
+          "toggle_triggered_routine"
+        ]
+      }
+    },
+    {
+      "identifier": "allow-trace-timeline",
+      "description": "Enables the trace_timeline command without any pre-configured scope.",
+      "commands": {
+        "allow": [
+          "trace_timeline"
+        ]
+      }
+    },
+    {
+      "identifier": "allow-transcribe-audio",
+      "description": "Enables the transcribe_audio command without any pre-configured scope.",
+      "commands": {
+        "allow": [
+          "transcribe_audio"
+        ]
+      }
+    },
+    {
+      "identifier": "allow-transcribe-audio-local",
+      "description": "Enables the transcribe_audio_local command without any pre-configured scope.",
+      "commands": {
+        "allow": [
+          "transcribe_audio_local"
+        ]
+      }
+    },
+    {
+      "identifier": "allow-transcribe-audio-local-base64",
+      "description": "Enables the transcribe_audio_local_base64 command without any pre-configured scope.",
+      "commands": {
+        "allow": [
+          "transcribe_audio_local_base64"
+        ]
+      }
+    },
+    {
+      "identifier": "allow-trigger-skill-pattern-detection",
+      "description": "Enables the trigger_skill_pattern_detection command without any pre-configured scope.",
+      "commands": {
+        "allow": [
+          "trigger_skill_pattern_detection"
+        ]
+      }
+    },
+    {
+      "identifier": "allow-trigger-task-now",
+      "description": "Enables the trigger_task_now command without any pre-configured scope.",
+      "commands": {
+        "allow": [
+          "trigger_task_now"
+        ]
+      }
+    },
+    {
+      "identifier": "allow-uninstall-agent-plugin",
+      "description": "Enables the uninstall_agent_plugin command without any pre-configured scope.",
+      "commands": {
+        "allow": [
+          "uninstall_agent_plugin"
+        ]
+      }
+    },
+    {
+      "identifier": "allow-uninstall-data-source",
+      "description": "Enables the uninstall_data_source command without any pre-configured scope.",
+      "commands": {
+        "allow": [
+          "uninstall_data_source"
+        ]
+      }
+    },
+    {
+      "identifier": "allow-uninstall-mcp-server",
+      "description": "Enables the uninstall_mcp_server command without any pre-configured scope.",
+      "commands": {
+        "allow": [
+          "uninstall_mcp_server"
+        ]
+      }
+    },
+    {
+      "identifier": "allow-uninstall-plugin",
+      "description": "Enables the uninstall_plugin command without any pre-configured scope.",
+      "commands": {
+        "allow": [
+          "uninstall_plugin"
+        ]
+      }
+    },
+    {
+      "identifier": "allow-uninstall-skill-plugin",
+      "description": "Enables the uninstall_skill_plugin command without any pre-configured scope.",
+      "commands": {
+        "allow": [
+          "uninstall_skill_plugin"
+        ]
+      }
+    },
+    {
+      "identifier": "allow-update-goal-objective",
+      "description": "Enables the update_goal_objective command without any pre-configured scope.",
+      "commands": {
+        "allow": [
+          "update_goal_objective"
+        ]
+      }
+    },
+    {
+      "identifier": "allow-update-inbox-item-status",
+      "description": "Enables the update_inbox_item_status command without any pre-configured scope.",
+      "commands": {
+        "allow": [
+          "update_inbox_item_status"
+        ]
+      }
+    },
+    {
+      "identifier": "allow-update-memory",
+      "description": "Enables the update_memory command without any pre-configured scope.",
+      "commands": {
+        "allow": [
+          "update_memory"
+        ]
+      }
+    },
+    {
+      "identifier": "allow-update-plugin",
+      "description": "Enables the update_plugin command without any pre-configured scope.",
+      "commands": {
+        "allow": [
+          "update_plugin"
+        ]
+      }
+    },
+    {
+      "identifier": "allow-update-scheduled-task",
+      "description": "Enables the update_scheduled_task command without any pre-configured scope.",
+      "commands": {
+        "allow": [
+          "update_scheduled_task"
+        ]
+      }
+    },
+    {
+      "identifier": "allow-update-task",
+      "description": "Enables the update_task command without any pre-configured scope.",
+      "commands": {
+        "allow": [
+          "update_task"
+        ]
+      }
+    },
+    {
+      "identifier": "allow-verify-signature",
+      "description": "Enables the verify_signature command without any pre-configured scope.",
+      "commands": {
+        "allow": [
+          "verify_signature"
+        ]
+      }
+    },
+    {
+      "identifier": "allow-workspace-get-layout",
+      "description": "Enables the workspace_get_layout command without any pre-configured scope.",
+      "commands": {
+        "allow": [
+          "workspace_get_layout"
+        ]
+      }
+    },
+    {
+      "identifier": "allow-workspace-set-layout",
+      "description": "Enables the workspace_set_layout command without any pre-configured scope.",
+      "commands": {
+        "allow": [
+          "workspace_set_layout"
+        ]
+      }
+    }
+  ],
+  "set": [
+    {
+      "identifier": "app-chat",
+      "description": "Core chat transport (send_message + streaming background-task lifecycle) and chat metadata commands.",
+      "permissions": [
+        "allow-cancel-background-task",
+        "allow-cancel-query",
+        "allow-get-background-tasks",
+        "allow-get-conversation",
+        "allow-get-provider-allowlist",
+        "allow-get-status",
+        "allow-list-models",
+        "allow-list-tools",
+        "allow-send-message",
+        "allow-start-background-task"
+      ]
+    },
+    {
+      "identifier": "app-config",
+      "description": "Provider/model configuration management commands.",
+      "permissions": [
+        "allow-configure",
+        "allow-delete-provider",
+        "allow-detect-provider-from-env",
+        "allow-get-config",
+        "allow-list-providers",
+        "allow-save-provider",
+        "allow-set-active-provider",
+        "allow-test-all-providers",
+        "allow-test-provider-connection"
+      ]
+    },
+    {
+      "identifier": "app-connections",
+      "description": "Gateway social connections, gateway supervisor control and remote target (SSH/Docker) management commands.",
+      "permissions": [
+        "allow-gateway-delete-secret",
+        "allow-gateway-get-secret",
+        "allow-gateway-has-secret",
+        "allow-gateway-read-config",
+        "allow-gateway-set-managed",
+        "allow-gateway-set-secret",
+        "allow-gateway-supervisor-start",
+        "allow-gateway-supervisor-status",
+        "allow-gateway-supervisor-stop",
+        "allow-gateway-write-config",
+        "allow-remote-add-target",
+        "allow-remote-discover-ssh-hosts",
+        "allow-remote-list-docker-containers",
+        "allow-remote-list-targets",
+        "allow-remote-remove-target",
+        "allow-remote-set-default-target",
+        "allow-remote-test-target"
+      ]
+    },
+    {
+      "identifier": "app-platform",
+      "description": "Surface identity, in-app CLI install, update checks and mobile pairing commands.",
+      "permissions": [
+        "allow-check-app-update",
+        "allow-engine-discovery-get-mode",
+        "allow-get-cli-install-status",
+        "allow-get-surface-info",
+        "allow-install-cli-to-path",
+        "allow-mobile-generate-pair-token",
+        "allow-mobile-list-paired-devices",
+        "allow-mobile-revoke-device",
+        "allow-mobile-set-tls",
+        "allow-mobile-tls-status",
+        "allow-open-release-page"
+      ]
+    },
+    {
+      "identifier": "app-voice",
+      "description": "Speech-to-text (cloud + local whisper) and whisper model catalog commands.",
+      "permissions": [
+        "allow-delete-whisper-model",
+        "allow-download-whisper-model",
+        "allow-get-stt-config",
+        "allow-get-voice-local-config",
+        "allow-list-whisper-models",
+        "allow-save-stt-config",
+        "allow-save-voice-local-config",
+        "allow-transcribe-audio",
+        "allow-transcribe-audio-local",
+        "allow-transcribe-audio-local-base64"
+      ]
+    },
+    {
+      "identifier": "app-sessions",
+      "description": "Session CRUD/branch/export, slash/rewind/feedback, skill loop and interactive-permission commands.",
+      "permissions": [
+        "allow-approve-skill-candidate",
+        "allow-branch-session",
+        "allow-compact-session",
+        "allow-create-session-worktree",
+        "allow-delete-session",
+        "allow-duplicate-session",
+        "allow-export-session",
+        "allow-get-session-context-stats",
+        "allow-get-session-git-diff",
+        "allow-get-session-plan",
+        "allow-list-agent-authored-skills",
+        "allow-list-checkpoints",
+        "allow-list-feedback-sessions",
+        "allow-list-message-feedback",
+        "allow-list-sessions",
+        "allow-list-skill-candidates",
+        "allow-load-session",
+        "allow-new-session",
+        "allow-record-message-feedback",
+        "allow-refine-skill-candidate",
+        "allow-reject-skill-candidate",
+        "allow-rename-session",
+        "allow-request-permission",
+        "allow-respond-permission",
+        "allow-rewind-session",
+        "allow-search-sessions",
+        "allow-set-session-working-dir",
+        "allow-skill-loop-approve",
+        "allow-skill-loop-evaluate",
+        "allow-skill-loop-generate",
+        "allow-skill-loop-list-proposals",
+        "allow-skill-loop-reject",
+        "allow-switch-session",
+        "allow-trace-timeline",
+        "allow-trigger-skill-pattern-detection"
+      ]
+    },
+    {
+      "identifier": "app-files",
+      "description": "File inspection (tree, diffs, attachments) and LSP code-action commands.",
+      "permissions": [
+        "allow-apply-code-action",
+        "allow-apply-diff",
+        "allow-get-file-diff",
+        "allow-get-file-tree",
+        "allow-get-working-dir-info",
+        "allow-lsp-code-actions",
+        "allow-read-attachment",
+        "allow-read-attachments",
+        "allow-read-source-file",
+        "allow-run-file-diagnostics",
+        "allow-save-text-file"
+      ]
+    },
+    {
+      "identifier": "app-extensions",
+      "description": "MCP server management, extension/skill/agent/data-source installers and plugin marketplace commands.",
+      "permissions": [
+        "allow-add-mcp-server",
+        "allow-clear-catalog-report",
+        "allow-disable-plugin",
+        "allow-enable-plugin",
+        "allow-featured-vendor-to-entry",
+        "allow-get-mcp-server-config",
+        "allow-get-skill-detail",
+        "allow-install-agent-from-repo",
+        "allow-install-data-source",
+        "allow-install-mcp-mcpb",
+        "allow-install-mcp-oauth-authorize-url",
+        "allow-install-mcp-oauth-complete",
+        "allow-install-mcp-oauth-loopback",
+        "allow-install-mcp-stdio",
+        "allow-install-native-agent",
+        "allow-install-native-skill",
+        "allow-install-plugin",
+        "allow-install-plugin-from-git",
+        "allow-install-skill-from-repo",
+        "allow-list-agent-catalog",
+        "allow-list-catalog-reports",
+        "allow-list-catalog-upstreams",
+        "allow-list-data-source-adapters",
+        "allow-list-data-source-catalog",
+        "allow-list-featured-vendors",
+        "allow-list-installed-addons",
+        "allow-list-installed-agent-plugins",
+        "allow-list-installed-data-sources",
+        "allow-list-installed-skill-plugins",
+        "allow-list-mcp-registry-servers",
+        "allow-list-mcp-servers",
+        "allow-list-plugin-marketplace",
+        "allow-list-plugins",
+        "allow-list-skill-catalog",
+        "allow-list-skills",
+        "allow-query-data-source",
+        "allow-read-data-source-config",
+        "allow-remove-mcp-server",
+        "allow-report-catalog-entry",
+        "allow-restart-mcp-server",
+        "allow-scan-prompt-injection",
+        "allow-scan-prompt-injection-with-readme",
+        "allow-uninstall-agent-plugin",
+        "allow-uninstall-data-source",
+        "allow-uninstall-mcp-server",
+        "allow-uninstall-plugin",
+        "allow-uninstall-skill-plugin",
+        "allow-update-plugin",
+        "allow-verify-signature"
+      ]
+    },
+    {
+      "identifier": "app-agents",
+      "description": "Agent definitions, sub-agent registry and inter-agent message commands.",
+      "permissions": [
+        "allow-create-agent-definition",
+        "allow-delete-agent-definition",
+        "allow-list-agent-definitions",
+        "allow-list-agent-message-teams",
+        "allow-list-agent-messages",
+        "allow-list-agents",
+        "allow-list-subagents",
+        "allow-list-tasks",
+        "allow-record-agent-message",
+        "allow-update-task"
+      ]
+    },
+    {
+      "identifier": "app-automation",
+      "description": "Scheduled tasks, routines, triage, inbox, goal/batch runs and hook permission-profile commands.",
+      "permissions": [
+        "allow-activate-permission-profile",
+        "allow-adopt-batch-branch",
+        "allow-archive-triage-item",
+        "allow-continue-inbox-item-session",
+        "allow-create-scheduled-task",
+        "allow-create-task-worktree",
+        "allow-create-triggered-routine",
+        "allow-delete-custom-profile",
+        "allow-delete-scheduled-task",
+        "allow-discard-batch-run",
+        "allow-get-batch-branch-diff",
+        "allow-get-execution-detail",
+        "allow-get-goal-run",
+        "allow-get-inbox-stats",
+        "allow-get-opc-metrics",
+        "allow-get-triage-stats",
+        "allow-instantiate-routine-template",
+        "allow-list-batch-runs",
+        "allow-list-goal-runs",
+        "allow-list-hook-events",
+        "allow-list-inbox-items",
+        "allow-list-permission-profiles",
+        "allow-list-routine-templates",
+        "allow-list-scheduled-tasks",
+        "allow-list-task-executions",
+        "allow-list-task-worktrees",
+        "allow-list-triage-items",
+        "allow-list-triggered-routines",
+        "allow-mark-triage-read",
+        "allow-pause-goal-run",
+        "allow-preview-cron",
+        "allow-prune-task-worktrees",
+        "allow-remove-task-worktree",
+        "allow-rerun-inbox-item",
+        "allow-resume-goal-run",
+        "allow-save-custom-profile",
+        "allow-start-batch-run",
+        "allow-start-goal-run",
+        "allow-stop-goal-run",
+        "allow-toggle-scheduled-task",
+        "allow-toggle-triggered-routine",
+        "allow-trigger-task-now",
+        "allow-update-goal-objective",
+        "allow-update-inbox-item-status",
+        "allow-update-scheduled-task"
+      ]
+    },
+    {
+      "identifier": "app-usage",
+      "description": "Usage statistics, session budgets/cost breakdown and billing commands.",
+      "permissions": [
+        "allow-get-billing-history",
+        "allow-get-billing-plan",
+        "allow-get-cost-history",
+        "allow-get-session-budget",
+        "allow-get-session-context-breakdown",
+        "allow-get-session-usage",
+        "allow-get-usage-by-session",
+        "allow-get-usage-stats",
+        "allow-set-session-budget"
+      ]
+    },
+    {
+      "identifier": "app-window-management",
+      "description": "Session multi-window lifecycle and draggable workspace layout commands.",
+      "permissions": [
+        "allow-close-session-window",
+        "allow-list-session-windows",
+        "allow-open-session-window",
+        "allow-reveal-session-in-main",
+        "allow-workspace-get-layout",
+        "allow-workspace-set-layout"
+      ]
+    },
+    {
+      "identifier": "app-notifications",
+      "description": "Native OS notification bridge and onboarding seed commands.",
+      "permissions": [
+        "allow-clear-webhook-config",
+        "allow-get-notification-prefs",
+        "allow-get-webhook-config",
+        "allow-save-webhook-config",
+        "allow-seed-sample-data",
+        "allow-send-notification",
+        "allow-set-notification-prefs"
+      ]
+    },
+    {
+      "identifier": "app-devtools",
+      "description": "Dev-server preview, migration wizard, persona packs and integrated terminal commands.",
+      "permissions": [
+        "allow-migration-apply",
+        "allow-migration-preview",
+        "allow-migration-scan",
+        "allow-persona-pack-export",
+        "allow-persona-pack-import",
+        "allow-persona-pack-inspect",
+        "allow-preview-capture",
+        "allow-preview-detect",
+        "allow-preview-logs",
+        "allow-preview-start",
+        "allow-preview-status",
+        "allow-preview-stop",
+        "allow-terminal-kill",
+        "allow-terminal-list",
+        "allow-terminal-resize",
+        "allow-terminal-spawn",
+        "allow-terminal-write"
+      ]
+    },
+    {
+      "identifier": "app-memory",
+      "description": "Persistent memory layer commands.",
+      "permissions": [
+        "allow-create-memory",
+        "allow-delete-memory",
+        "allow-get-memory-graph",
+        "allow-get-memory-source",
+        "allow-get-memory-stats",
+        "allow-list-memories",
+        "allow-list-memory-projects",
+        "allow-search-memories",
+        "allow-update-memory"
+      ]
+    }
+  ]
+}
