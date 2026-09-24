@@ -103,7 +103,7 @@ vi.mock('@/lib/tauri-api', async () => {
 })
 
 function makeItem(o: Partial<InboxItem> & { id: number }): InboxItem {
-  return {
+  const base: InboxItem = {
     source: 'routine',
     sourceId: 'sched-001',
     sessionId: null,
@@ -115,6 +115,10 @@ function makeItem(o: Partial<InboxItem> & { id: number }): InboxItem {
     updatedAtMs: 1_700_000_000_000,
     ...o,
   }
+  // Store invariant: a freshly appended row has updatedAtMs == createdAtMs
+  // (only an in-place upsert refresh diverges them). Fixtures that set only
+  // createdAtMs therefore inherit it as updatedAtMs too.
+  return { ...base, updatedAtMs: o.updatedAtMs ?? o.createdAtMs ?? base.updatedAtMs }
 }
 
 const baseStats = { pending: 0, today: 0 }
@@ -540,6 +544,43 @@ describe('Triage — session sources, skill candidates and pending pinning (IA T
     const cardsAfter = container.querySelectorAll('.glass-panel')
     expect(cardsAfter[0]).toHaveTextContent('Older pending')
     expect(cardsAfter[1]).toHaveTextContent('Newer read')
+  })
+
+  // 卡 3a: upsert_pending refreshes an existing row's updatedAtMs in place.
+  // A same-session failure that re-fails must float to the top of its band
+  // even though its createdAtMs is older than other entries.
+  it('floats an upsert-refreshed item to the top of its status band', () => {
+    setItems([
+      // Session A failed once at t=9s and was never refreshed.
+      makeItem({
+        id: 1,
+        source: 'session_failed',
+        sourceId: 'sess-a',
+        title: 'Stale failure',
+        createdAtMs: 9_000,
+        updatedAtMs: 9_000,
+      }),
+      // Session B failed at t=1s, then failed AGAIN at t=12s — the second
+      // event updated the same row in place (createdAtMs stays 1s).
+      makeItem({
+        id: 2,
+        source: 'session_failed',
+        sourceId: 'sess-b',
+        title: 'Re-failed session',
+        createdAtMs: 1_000,
+        updatedAtMs: 12_000,
+      }),
+    ])
+    const { container } = renderPage()
+    const cards = container.querySelectorAll('.glass-panel')
+    expect(cards[0]).toHaveTextContent('Re-failed session')
+    expect(cards[1]).toHaveTextContent('Stale failure')
+    // The toggle still only reorders inside the band — the refreshed entry
+    // lands last under 'oldest', never losing its band membership.
+    fireEvent.click(screen.getByRole('button', { name: 'Toggle sort order' }))
+    const cardsAfter = container.querySelectorAll('.glass-panel')
+    expect(cardsAfter[0]).toHaveTextContent('Stale failure')
+    expect(cardsAfter[1]).toHaveTextContent('Re-failed session')
   })
 
   it('filters the three new sources through the source dropdown', () => {
