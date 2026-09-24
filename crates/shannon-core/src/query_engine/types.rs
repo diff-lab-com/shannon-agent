@@ -4,7 +4,6 @@ use once_cell::sync::Lazy;
 use serde::{Deserialize, Serialize};
 use shannon_engine::permissions::{PermissionChoice, PermissionPrompt};
 use std::collections::HashMap;
-use tokio::sync::mpsc;
 use uuid::Uuid;
 
 /// Pre-query cost estimate
@@ -700,11 +699,23 @@ impl Default for CostTracker {
     }
 }
 
+/// Capacity suggested for the bounded host-side permission-request channel
+/// that feeds `QueryEngine::process_query` (review §P3-6). Prompts are
+/// strictly sequential — the engine waits for each response before
+/// proceeding — so this bound only guards against a host that stopped
+/// draining; it is not a batching queue.
+pub const PERMISSION_REQUEST_CHANNEL_CAPACITY: usize = 8;
+
 /// Permission request for user approval
-#[derive(Debug, Clone)]
+///
+/// The response lane is a **oneshot**: exactly one [`PermissionChoice`] is
+/// sent back per prompt (review §P3-6). A dropped sender — the host went away
+/// without answering — resolves the engine's `recv` with an error, which the
+/// engine treats as deny.
+#[derive(Debug)]
 pub struct PermissionRequest {
     pub prompt: PermissionPrompt,
-    pub response_tx: mpsc::UnboundedSender<PermissionChoice>,
+    pub response_tx: tokio::sync::oneshot::Sender<PermissionChoice>,
 }
 
 /// Errors that can occur during query processing

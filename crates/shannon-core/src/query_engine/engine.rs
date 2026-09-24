@@ -1508,10 +1508,18 @@ impl QueryEngine {
     }
 
     /// Process a query with streaming events
+    ///
+    /// `permission_request_tx` carries interactive approval prompts to the
+    /// host. It is intentionally a **bounded** channel
+    /// ([`PERMISSION_REQUEST_CHANNEL_CAPACITY`], review §P3-6): prompts are
+    /// strictly sequential (the engine waits for each response before
+    /// continuing), so the small bound only guards against a host that
+    /// stopped draining. The per-request response lane is a oneshot (see
+    /// [`super::types::PermissionRequest`]).
     pub async fn process_query(
         &self,
         context: QueryContext,
-        permission_request_tx: Option<mpsc::UnboundedSender<super::types::PermissionRequest>>,
+        permission_request_tx: Option<mpsc::Sender<super::types::PermissionRequest>>,
     ) -> QueryStream {
         let query_id = context.query_id;
         // Secret-guard Phase 2 enablement: env-gated
@@ -3663,23 +3671,41 @@ impl QueryEngine {
                                                                         }
                                                                     }
                                                                 }
-                                                                let (response_tx, mut response_rx) =
-                                                                    mpsc::unbounded_channel();
+                                                                // Single-use response lane:
+                                                                // exactly one PermissionChoice
+                                                                // comes back per prompt, so a
+                                                                // oneshot carries no unbounded
+                                                                // buffer and surfaces a dropped
+                                                                // host as a recv error (§P3-6).
+                                                                let (response_tx, response_rx) =
+                                                                    tokio::sync::oneshot::channel();
                                                                 // Clone prompt for the request; keep a reference for deny message
                                                                 let prompt_desc =
                                                                     prompt.description.clone();
                                                                 let prompt_for_choice =
                                                                     prompt.clone();
-                                                                let _ = req_tx.send(
-                                                                    super::types::PermissionRequest {
-                                                                        prompt,
-                                                                        response_tx,
-                                                                    },
-                                                                );
+                                                                // Bounded request channel:
+                                                                // await the send. If the host
+                                                                // dropped its receiver this
+                                                                // fails and `response_tx` is
+                                                                // dropped with the unsent
+                                                                // request, so the recv below
+                                                                // still resolves (→ deny).
+                                                                let _ = req_tx
+                                                                    .send(
+                                                                        super::types::PermissionRequest {
+                                                                            prompt,
+                                                                            response_tx,
+                                                                        },
+                                                                    )
+                                                                    .await;
 
-                                                                // Wait for user response
-                                                                match response_rx.recv().await {
-                                                                    Some(
+                                                                // Wait for user response (a
+                                                                // dropped sender resolves to
+                                                                // Err → deny, same contract as
+                                                                // the old channel's `None`).
+                                                                match response_rx.await {
+                                                                    Ok(
                                                                         shannon_engine::permissions::PermissionChoice::Deny,
                                                                     ) => {
                                                                         consecutive_denials += 1;
@@ -3713,7 +3739,7 @@ impl QueryEngine {
                                                                             });
                                                                         continue;
                                                                     }
-                                                                    Some(
+                                                                    Ok(
                                                                         shannon_engine::permissions::PermissionChoice::AllowOnce,
                                                                     ) => {
                                                                         crate::query_engine::guard_nodes::emit_decision(
@@ -3725,7 +3751,7 @@ impl QueryEngine {
                                                                             0,
                                                                         );
                                                                     }
-                                                                    Some(
+                                                                    Ok(
                                                                         shannon_engine::permissions::PermissionChoice::AlwaysAllow,
                                                                     ) => {
                                                                         let _ = recover_lock(permissions.write())
@@ -3743,7 +3769,7 @@ impl QueryEngine {
                                                                             0,
                                                                         );
                                                                     }
-                                                                    Some(
+                                                                    Ok(
                                                                         shannon_engine::permissions::PermissionChoice::EditAndRun,
                                                                     ) => {
                                                                         // User edited the command; treat as allow-once
@@ -3762,7 +3788,7 @@ impl QueryEngine {
                                                                             0,
                                                                         );
                                                                     }
-                                                                    None => {
+                                                                    Err(_) => {
                                                                         crate::query_engine::guard_nodes::emit_decision(
                                                                             &session_bus,
                                                                             &tool_name,

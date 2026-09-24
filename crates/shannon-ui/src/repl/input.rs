@@ -1687,7 +1687,7 @@ fn handle_tool_approval_input(repl: &mut Repl, key: KeyEvent) -> Result<()> {
         Some(crate::widgets::tool_approval::ApprovalDecision::AllowOnce) => {
             repl.state.tool_approval.dismiss();
             // Forward to permission system
-            if let Some(ref tx) = repl.state.permission_response_tx.take() {
+            if let Some(tx) = repl.state.permission_response_tx.take() {
                 let _ = tx.send(shannon_engine::permissions::PermissionChoice::AllowOnce);
             }
             repl.state.permission_dialog = None;
@@ -1707,14 +1707,14 @@ fn handle_tool_approval_input(repl: &mut Repl, key: KeyEvent) -> Result<()> {
                 );
             }
             repl.state.tool_approval.dismiss();
-            if let Some(ref tx) = repl.state.permission_response_tx.take() {
+            if let Some(tx) = repl.state.permission_response_tx.take() {
                 let _ = tx.send(shannon_engine::permissions::PermissionChoice::AlwaysAllow);
             }
             repl.state.permission_dialog = None;
         }
         Some(crate::widgets::tool_approval::ApprovalDecision::Deny) => {
             repl.state.tool_approval.dismiss();
-            if let Some(ref tx) = repl.state.permission_response_tx.take() {
+            if let Some(tx) = repl.state.permission_response_tx.take() {
                 let _ = tx.send(shannon_engine::permissions::PermissionChoice::Deny);
             }
             repl.state.permission_dialog = None;

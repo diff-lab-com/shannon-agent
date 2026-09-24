@@ -30,8 +30,9 @@ pub use repo_map_injector::RepoMapInjector;
 pub use team_prompt::teammate_instructions;
 pub use types::{
     CompressionStrategy, ConversationStats, CostEstimate, CostTracker, EffortLevel,
-    GOAL_BLOCKED_MARKER, GOAL_COMPLETE_MARKER, GoalSpec, PermissionRequest, QueryContext,
-    QueryEngineConfig, QueryError, QueryEvent, QueryMetadata, QueryStream, pricing_for_model_opt,
+    GOAL_BLOCKED_MARKER, GOAL_COMPLETE_MARKER, GoalSpec, PERMISSION_REQUEST_CHANNEL_CAPACITY,
+    PermissionRequest, QueryContext, QueryEngineConfig, QueryError, QueryEvent, QueryMetadata,
+    QueryStream, pricing_for_model_opt,
 };
 
 #[cfg(test)]
