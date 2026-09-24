@@ -28,7 +28,7 @@ Two commitments shape every design decision:
 
 ### 1. Open source, total control
 
-- **Every line auditable** — Apache-2.0, no black boxes. <!-- metrics:start:intro -->Every line of code is auditable, and every behavior is verified by **12,555 automated tests**.<!-- metrics:end:intro -->
+- **Every line auditable** — Apache-2.0, no black boxes. <!-- metrics:start:intro -->Every line of code is auditable, and every behavior is verified by **12,562 automated tests**.<!-- metrics:end:intro -->
 - **Every agent action replayable** — sessions are event-sourced: each turn lands in an append-only `events.jsonl`, and `shannon trace show / replay / diff / export` lets you reconstruct exactly what happened, like a dashcam for your agents.
 - **Every cost visible** — BYOK pay-per-use with session budget caps, context breakdown by category, cache hit-rate visibility, and no subscription quotas.
 - **No vendor lock-in** — switch providers anytime; upstream price hikes and model retirements don't strand you. Claude Code ecosystem compatible: `CLAUDE.md`, `.claude/` agents, skills, hooks, and `.mcp.json` work out of the box.
@@ -51,7 +51,7 @@ Two commitments shape every design decision:
 | LLM providers | Any (BYOK) | Single vendor | Multi / any |
 | Cost model | Pay-per-use + budget caps + visible breakdown | Subscription quotas / credits | BYOK |
 | Auditability | Event-sourced sessions, `trace` replay/diff | Varies, often black box | Varies |
-<!-- metrics:start:diffrow -->| Test coverage | **12,555** tests across 22 workspace members | n/a (closed source) | Varies |<!-- metrics:end:diffrow -->
+<!-- metrics:start:diffrow -->| Test coverage | **12,562** tests across 22 workspace members | n/a (closed source) | Varies |<!-- metrics:end:diffrow -->
 | Surfaces | Terminal + headless + server + desktop, one engine | Vary | Vary |
 
 ---
@@ -510,9 +510,9 @@ Artifacts go to `target/dist/` as `.tar.gz` (Linux/macOS) or `.zip` (Windows).
 <!-- metrics:start:table -->
 | Metric | Value |
 |--------|-------|
-| Total Rust code | 526,439 lines |
-| Source files | 756 |
-| Total tests (nextest, runnable) | **12,555** |
+| Total Rust code | 527,094 lines |
+| Source files | 758 |
+| Total tests (nextest, runnable) | **12,562** |
 | Crates (workspace members) | 22 (21 crates + desktop) |
 | Crates with zero tests | 1 (`shannon-stability-attr`) |
 | CI lint | `cargo clippy --workspace -- -D warnings` (zero warnings) |
@@ -527,8 +527,8 @@ Per-crate test counts:
 | `shannon-tools` | 1,780 | Tool implementations: file ops, git, search, notebook |
 | `shannon-ui` | 1,529 | Terminal UI, REPL, widgets, rendering |
 | `shannon-engine` | 1,162 | LLM API client, streaming, compaction/context budget, permissions |
+| `shannon-desktop` | 913 | Tauri desktop app shell and commands |
 | `shannon-agents` | 907 | Multi-agent coordination: teams, worktree isolation |
-| `shannon-desktop` | 906 | Tauri desktop app shell and commands |
 | `shannon-mcp` | 581 | MCP protocol: transport, server, client, process pool |
 | `shannon-cli` | 502 | CLI entry point (`shannon` binary) |
 | `shannon-commands` | 435 | Built-in slash commands |
