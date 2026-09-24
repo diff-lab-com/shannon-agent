@@ -140,7 +140,7 @@ fn every_app_command_allowed_on_main_and_session_windows() {
 /// plugin commands alike.
 #[test]
 fn unknown_windows_and_remote_origins_are_denied_everything() {
-    let remote_url = "https://untrusted.example/".parse().expect("static URL");
+    let remote_url: tauri::Url = "https://untrusted.example/".parse().expect("static URL");
     for (cmd, window) in [
         ("send_message", MAIN),
         ("send_message", SESSION),
