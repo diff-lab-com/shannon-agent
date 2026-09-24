@@ -2801,7 +2801,7 @@
     "settings.permissions.rules.title": "规则语法",
   "settings.permissions.scope.filterLabel": "按服务器过滤规则",
   "settings.permissions.scope.resultsTitle": "匹配 {scope} 的规则",
-  "settings.permissions.scope.clear": "清除范围过滤",
+  "settings.permissions.scope.clear": "清除面板过滤",
   "settings.permissions.scope.empty": "该服务器暂无规则。",
   "settings.permissions.scope.addCta": "去添加规则",
   "settings.permissions.rules.intro": "配置规则与设置中的权限规则使用相同语法:",

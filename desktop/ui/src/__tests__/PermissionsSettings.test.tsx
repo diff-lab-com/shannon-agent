@@ -314,7 +314,9 @@ describe('X3 scope filter — deep link panel', () => {
       within(panel).queryByText(/settings\.permissions\.editor\./),
     ).not.toBeInTheDocument()
     // Clearing the chip removes the panel (back to the unfiltered page).
-    fireEvent.click(within(panel).getByRole('button', { name: 'Clear scope filter' }))
+    // 卡 3d wording: the chip only lifts the panel overlay on the
+    // unfiltered page — "panel filter", not "scope filter".
+    fireEvent.click(within(panel).getByRole('button', { name: 'Clear panel filter' }))
     await waitFor(() => {
       expect(screen.queryByTestId('permissions-scope-panel')).not.toBeInTheDocument()
     })

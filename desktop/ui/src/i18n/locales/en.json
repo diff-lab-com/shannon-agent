@@ -2801,7 +2801,7 @@
     "settings.permissions.rules.title": "Rule syntax",
   "settings.permissions.scope.filterLabel": "Server scope filter",
   "settings.permissions.scope.resultsTitle": "Rules matching {scope}",
-  "settings.permissions.scope.clear": "Clear scope filter",
+  "settings.permissions.scope.clear": "Clear panel filter",
   "settings.permissions.scope.empty": "No rules for this server yet.",
   "settings.permissions.scope.addCta": "Add a rule",
   "settings.permissions.rules.intro": "Profile rules use the same patterns as settings permission rules:",
