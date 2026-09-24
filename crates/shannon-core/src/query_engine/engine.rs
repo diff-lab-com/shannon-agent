@@ -1511,7 +1511,7 @@ impl QueryEngine {
     ///
     /// `permission_request_tx` carries interactive approval prompts to the
     /// host. It is intentionally a **bounded** channel
-    /// ([`PERMISSION_REQUEST_CHANNEL_CAPACITY`], review §P3-6): prompts are
+    /// (`PERMISSION_REQUEST_CHANNEL_CAPACITY`, review §P3-6): prompts are
     /// strictly sequential (the engine waits for each response before
     /// continuing), so the small bound only guards against a host that
     /// stopped draining. The per-request response lane is a oneshot (see

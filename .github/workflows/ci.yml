@@ -778,7 +778,12 @@ jobs:
       # ToolExecutionService/StreamingToolExecutor dead infrastructure
       # (pub types in shannon-core/shannon-engine). Intentional minor-cycle
       # break; new TAG NAME so the baseline-rustdoc cache invalidates.
-      SEMVER_BASELINE: semver-baseline-2026-09-11
+      # Twelfth move (2026-09-24, structural task 2): backpressure made
+      # EventTx::send/ProgressSender::send async (tool-interface trait method
+      # return value added) and removed Clone from PermissionRequest
+      # (core auto/derive trait impl changes). Intentional minor-cycle
+      # break; new TAG NAME so the baseline-rustdoc cache invalidates.
+      SEMVER_BASELINE: semver-baseline-2026-09-12
     steps:
       - uses: actions/checkout@f548e57e544e1ff5a4c46bf1e1b8685f8e4a348a
         with:

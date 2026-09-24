@@ -193,7 +193,7 @@ pub struct WebhookReceiver {
 impl WebhookReceiver {
     /// Create a new receiver with the given configuration.
     ///
-    /// The event channel is bounded at [`WEBHOOK_EVENT_CHANNEL_CAPACITY`]
+    /// The event channel is bounded at `WEBHOOK_EVENT_CHANNEL_CAPACITY`
     /// (review §P3-6): handler threads suspend when the consumer falls
     /// `capacity` deliveries behind, instead of queueing without bound.
     pub fn new(config: WebhookConfig) -> Self {
