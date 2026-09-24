@@ -5,19 +5,19 @@
 
 ## Snapshot
 
-- **Generated (UTC)**: `2026-09-24T00:46:08Z`
+- **Generated (UTC)**: `2026-09-24T04:52:47Z`
 - **Branch**: `HEAD`
-- **Commit**: `63dc18a`
-- **Describe**: `63dc18a-dirty`
+- **Commit**: `bcb1ed6`
+- **Describe**: `bcb1ed6-dirty`
 
 ## Summary
 
 | metric | value |
 |---|---:|
-| Tests (nextest, runnable) | 12547 |
-| Tests (source `#[test]`/`#[tokio::test]` attrs) | 12452 |
+| Tests (nextest, runnable) | 12555 |
+| Tests (source `#[test]`/`#[tokio::test]` attrs) | 12460 |
 | Rust source files | 756 |
-| Rust LOC (code) | 525754 |
+| Rust LOC (code) | 526439 |
 | Workspace members | 22 |
 | `cargo clippy --workspace -- -D warnings` | pass |
 | `cargo deny check` | pass |
@@ -29,12 +29,12 @@ Counts below come from `cargo nextest list --workspace --message-format=json`
 
 | crate | tests | binaries |
 |---|---:|---:|
-| shannon-core | 3892 | 46 |
+| shannon-core | 3897 | 46 |
 | shannon-tools | 1780 | 18 |
 | shannon-ui | 1529 | 8 |
 | shannon-engine | 1162 | 4 |
 | shannon-agents | 907 | 10 |
-| shannon-desktop | 903 | 5 |
+| shannon-desktop | 906 | 5 |
 | shannon-mcp | 581 | 9 |
 | shannon-cli | 502 | 9 |
 | shannon-commands | 435 | 5 |
@@ -59,8 +59,8 @@ Legacy archives and vendored directories are excluded.
 
 | language | files | code |
 |---|---:|---:|
-| Rust (.rs) | 756 | 525754 |
-| TypeScript/TSX | 643 | 108211 |
+| Rust (.rs) | 756 | 526439 |
+| TypeScript/TSX | 643 | 108303 |
 
 ## Lint / audit status
 
@@ -71,7 +71,7 @@ Legacy archives and vendored directories are excluded.
 ```text
 [1m[33mwarning[0m[1m:[0m shannon-types@0.11.0: Generated ProviderModelConfig JSON Schema at: /home/runner/work/shannon-agent/shannon-agent/crates/shannon-types/schema/provider-model-config.schema.json
 [1m[32m   Compiling[0m shannon-desktop v0.11.0 (/home/runner/work/shannon-agent/shannon-agent/desktop)
-[1m[32m    Finished[0m \`dev\` profile [unoptimized + debuginfo] target(s) in 23.65s
+[1m[32m    Finished[0m \`dev\` profile [unoptimized + debuginfo] target(s) in 23.06s
 ```
 
 ### `cargo deny check`
