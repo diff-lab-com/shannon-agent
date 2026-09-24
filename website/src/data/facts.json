@@ -1,9 +1,9 @@
 {
   "generatedFrom": "docs/metrics.md",
-  "tests": 12515,
-  "rustLoc": 523606,
-  "sourceFiles": 754,
+  "tests": 12522,
+  "rustLoc": 524159,
+  "sourceFiles": 755,
   "workspaceMembers": 22,
-  "testsDisplay": "12,515+",
+  "testsDisplay": "12,522+",
   "rustLocDisplay": "524K+"
 }

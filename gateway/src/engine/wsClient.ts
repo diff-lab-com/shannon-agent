@@ -6,7 +6,12 @@ import {
   type EngineEventType,
   isTerminalEvent,
 } from "./runtime.js";
-import { type MessageAttachment, type WsClientMessageQuery } from "./types.gen.js";
+import {
+  type MessageAttachment,
+  PROTOCOL_VERSION,
+  type WsClientMessageQuery,
+  type WsServerMessageSessionInfo,
+} from "./types.gen.js";
 
 /**
  * Typed WebSocket client for the Shannon engine's `/api/ws`.
@@ -96,9 +101,17 @@ function parseFrame(data: RawData): unknown {
   return JSON.parse(text);
 }
 
+/** Leading major component of a semver-ish string (`"0.8.0"` → `0`). */
+function majorVersionOf(version: string): number {
+  const major = Number.parseInt(version.split(".", 1)[0] ?? "", 10);
+  return Number.isNaN(major) ? -1 : major;
+}
+
 export class EngineWsClient {
   private socket: WebSocket | null = null;
   private activeQueue: PushQueue<EngineEvent> | null = null;
+  private engineProtocolVersion: string | null = null;
+  private versionObserved = false;
   private readonly url: string;
   private readonly defaultModel: string | null;
   private readonly defaultSessionId: string | null;
@@ -118,6 +131,16 @@ export class EngineWsClient {
     return this.socket !== null && this.socket.readyState === WebSocket.OPEN;
   }
 
+  /**
+   * review §P2-24: the wire protocol version reported by the engine's
+   * greeting frame (`WsServerMessage::SessionInfo.protocol_version`), or
+   * `null` until a greeting arrived / when talking to a pre-versioning
+   * engine that omits the field.
+   */
+  get protocolVersion(): string | null {
+    return this.engineProtocolVersion;
+  }
+
   /** Open the socket and wait for it to be ready. Idempotent. */
   async connect(): Promise<void> {
     if (this.socket) return;
@@ -125,6 +148,15 @@ export class EngineWsClient {
       Object.keys(this.headers).length > 0
         ? new WebSocket(this.url, { headers: this.headers })
         : new WebSocket(this.url);
+    // Attach frame routing BEFORE the handshake wait resolves: the engine
+    // sends its greeting as soon as it accepts the connection, so the frame
+    // can land between the upgrade completing and the `open` event's
+    // continuation running — an EventEmitter silently drops it (review
+    // §P2-24). Until the socket is stored below, the handlers are harmless
+    // no-ops (`activeQueue` is null, `socket` stays null).
+    socket.on("message", (data) => this.onMessage(data));
+    socket.on("close", () => this.onSocketClosed());
+    socket.on("error", (err) => this.onSocketError(err));
     try {
       await waitForOpen(socket, this.handshakeTimeoutMs);
     } catch (err) {
@@ -135,9 +167,6 @@ export class EngineWsClient {
       socket.terminate();
       throw err;
     }
-    socket.on("message", (data) => this.onMessage(data));
-    socket.on("close", () => this.onSocketClosed());
-    socket.on("error", (err) => this.onSocketError(err));
     this.socket = socket;
   }
 
@@ -212,11 +241,47 @@ export class EngineWsClient {
   private onMessage(data: RawData): void {
     const parsed = parseEngineEvent(parseFrame(data));
     if (!parsed) return; // unknown / malformed — ignore for now
+    // review §P2-24: the greeting (unsolicited `session_info`) used to be
+    // dropped here because no query consumer is active yet. Consume its
+    // protocol version first; a `session_info` that arrives mid-query (a
+    // response to an `info` frame) is still routed to the consumer below.
+    if (parsed.type === "session_info") {
+      this.observeProtocolVersion(parsed);
+    }
     const queue = this.activeQueue;
     if (!queue) return; // no active consumer (e.g. unsolicited session_info)
     queue.push(parsed);
     if (isTerminalEvent(parsed)) {
       queue.close({ kind: "done" } satisfies CloseReason);
+    }
+  }
+
+  /**
+   * Capture the engine's protocol version from a `session_info` frame, log
+   * it once, and warn on a *major*-version mismatch. Policy (§P2-24): the
+   * mismatch is a warning, never a hard failure — minor-cycle differences
+   * are additive by contract.
+   */
+  private observeProtocolVersion(frame: WsServerMessageSessionInfo): void {
+    const version = frame.protocol_version ?? null;
+    // Announce each distinct observation once — a mid-query `session_info`
+    // echoing the same version must not re-log.
+    if (this.versionObserved && version === this.engineProtocolVersion) return;
+    this.versionObserved = true;
+    this.engineProtocolVersion = version;
+    if (!version) {
+      console.warn(
+        `[engine-ws] engine greeting carries no protocol_version (pre-versioning engine, gateway speaks ${PROTOCOL_VERSION}); continuing`,
+      );
+      return;
+    }
+    console.info(
+      `[engine-ws] engine protocol version ${version} (gateway ${PROTOCOL_VERSION})`,
+    );
+    if (majorVersionOf(version) !== majorVersionOf(PROTOCOL_VERSION)) {
+      console.warn(
+        `[engine-ws] engine protocol major version mismatch: engine ${version} vs gateway ${PROTOCOL_VERSION}; continuing, wire compatibility is not guaranteed`,
+      );
     }
   }
 

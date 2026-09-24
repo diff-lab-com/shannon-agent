@@ -1,9 +1,10 @@
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import net from "node:net";
 import { type AddressInfo, WebSocketServer, type WebSocket } from "ws";
 
 import { EngineWsClient } from "../wsClient.js";
 import { type EngineEvent } from "../runtime.js";
+import { PROTOCOL_VERSION } from "../types.gen.js";
 
 /**
  * The client is exercised against a real `ws` server speaking the engine's
@@ -188,6 +189,137 @@ describe("EngineWsClient", () => {
     });
     const client = new EngineWsClient({ url: server.url });
     await expect(client.connect()).resolves.toBeUndefined();
+    await client.close();
+  });
+});
+
+// ── §P2-24: greeting / protocol-version negotiation ─────────────────────
+
+/**
+ * Wait until `probe()` stops returning `null` (the greeting arrives
+ * asynchronously after the WS handshake completes).
+ */
+async function waitForVersion(client: EngineWsClient): Promise<string | null> {
+  for (let i = 0; i < 100; i++) {
+    const version = client.protocolVersion;
+    if (version !== null) return version;
+    await new Promise((r) => setImmediate(r));
+  }
+  return client.protocolVersion;
+}
+
+/** Wait until `mock` has observed at least one call (bounded). */
+async function waitForWarnCall(mock: {
+  mock: { calls: unknown[][] };
+}): Promise<void> {
+  for (let i = 0; i < 100 && mock.mock.calls.length === 0; i++) {
+    await new Promise((r) => setImmediate(r));
+  }
+}
+
+describe("EngineWsClient greeting consumption (§P2-24)", () => {
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  it("captures protocol_version from the unsolicited greeting frame", async () => {
+    vi.spyOn(console, "warn").mockImplementation(() => {});
+    vi.spyOn(console, "info").mockImplementation(() => {});
+    const server = await startMockServer((ws) => {
+      send(ws, {
+        type: "session_info",
+        message_count: 0,
+        model: null,
+        protocol_version: PROTOCOL_VERSION,
+      });
+    });
+
+    const client = new EngineWsClient({ url: server.url });
+    await client.connect();
+    expect(await waitForVersion(client)).toBe(PROTOCOL_VERSION);
+    await client.close();
+  });
+
+  it("does not warn when the engine's major version matches", async () => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    vi.spyOn(console, "info").mockImplementation(() => {});
+    const server = await startMockServer((ws) => {
+      // Same major (0), different minor/patch — additive, no warning.
+      send(ws, {
+        type: "session_info",
+        message_count: 0,
+        model: null,
+        protocol_version: "0.999.0",
+      });
+    });
+
+    const client = new EngineWsClient({ url: server.url });
+    await client.connect();
+    expect(await waitForVersion(client)).toBe("0.999.0");
+    expect(warn).not.toHaveBeenCalled();
+    await client.close();
+  });
+
+  it("warns on a major-version mismatch without dropping the connection", async () => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    vi.spyOn(console, "info").mockImplementation(() => {});
+    const server = await startMockServer((ws) => {
+      send(ws, {
+        type: "session_info",
+        message_count: 0,
+        model: null,
+        protocol_version: "1.0.0",
+      });
+    });
+
+    const client = new EngineWsClient({ url: server.url });
+    await client.connect();
+    expect(await waitForVersion(client)).toBe("1.0.0");
+    expect(warn).toHaveBeenCalledTimes(1);
+    expect(String(warn.mock.calls[0]?.[0] ?? "")).toMatch(/major version mismatch/);
+    // Policy: warn, never hard-fail (minor-cycle compatibility).
+    expect(client.isConnected).toBe(true);
+    await client.close();
+  });
+
+  it("warns when a legacy engine omits protocol_version from the greeting", async () => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    vi.spyOn(console, "info").mockImplementation(() => {});
+    const server = await startMockServer((ws) => {
+      send(ws, { type: "session_info", message_count: 0, model: null });
+    });
+
+    const client = new EngineWsClient({ url: server.url });
+    await client.connect();
+    await waitForWarnCall(warn);
+    expect(warn).toHaveBeenCalledTimes(1);
+    expect(String(warn.mock.calls[0]?.[0] ?? "")).toMatch(/no protocol_version/);
+    await client.close();
+  });
+
+  it("routes a mid-query session_info response to the consumer AND updates the version", async () => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    vi.spyOn(console, "info").mockImplementation(() => {});
+    const server = await startMockServer((ws) => {
+      onQuery(ws, () => {
+        send(ws, {
+          type: "session_info",
+          message_count: 3,
+          model: "gpt-test",
+          protocol_version: "1.0.0",
+        });
+        send(ws, { type: "completed", model: "gpt-test" });
+      });
+    });
+
+    const client = new EngineWsClient({ url: server.url });
+    await client.connect();
+    const events: EngineEvent[] = [];
+    for await (const ev of client.runQuery("hi")) events.push(ev);
+
+    expect(events.map((e) => e.type)).toEqual(["session_info", "completed"]);
+    expect(client.protocolVersion).toBe("1.0.0");
+    expect(warn).toHaveBeenCalledTimes(1);
     await client.close();
   });
 });

@@ -22,8 +22,8 @@ use schemars::JsonSchema;
 use schemars::schema::{InstanceType, RootSchema, Schema, SchemaObject, SingleOrVec};
 use shannon_api_protocol::{
     ApprovalDecision, ApprovalRespondRequest, HealthResponse, MessageAttachment, ModelInfo,
-    ModelsResponse, PROTOCOL_VERSION, QueryRequest, QueryResponse, ToolEntry, ToolsListResponse,
-    UsageInfo, WsClientMessage, WsServerMessage,
+    ModelsResponse, PROTOCOL_VERSION, QueryRequest, QueryResponse, SseEventName, ToolEntry,
+    ToolsListResponse, UsageInfo, WsClientMessage, WsServerMessage,
 };
 use std::collections::BTreeMap;
 use std::fmt::Write as _;
@@ -67,6 +67,17 @@ struct Ctx<'a> {
     defs: &'a std::collections::BTreeMap<String, Schema>,
 }
 
+/// Protocol types published to TypeScript, in emission order. Review §P2-7:
+/// this list is guarded by the `codegen_drift` test
+/// `every_pub_protocol_type_is_emitted`, which fails when a `pub struct` or
+/// `pub enum` in the crate root is missing from here — extend this list (and
+/// regenerate) whenever a type is added.
+///
+/// Note `QueryEvent` (the SSE *payload* shape) is deliberately absent: it
+/// lives in `shannon-core` and references engine types, so the leaf protocol
+/// crate cannot carry its schema. The SSE event *names* — the part that
+/// actually drifted between servers (review §P2-6) — are published via
+/// [`shannon_api_protocol::SseEventName`].
 fn collect_entries() -> Vec<TypeEntry> {
     vec![
         entry_struct::<MessageAttachment>("MessageAttachment"),
@@ -79,7 +90,8 @@ fn collect_entries() -> Vec<TypeEntry> {
         entry_struct::<ToolEntry>("ToolEntry"),
         entry_struct::<ToolsListResponse>("ToolsListResponse"),
         entry_struct::<ApprovalRespondRequest>("ApprovalRespondRequest"),
-        entry_enum_simple("ApprovalDecision"),
+        entry_enum_simple::<ApprovalDecision>("ApprovalDecision"),
+        entry_enum_simple::<SseEventName>("SseEventName"),
         entry_tagged_enum::<WsClientMessage>("WsClientMessage"),
         entry_tagged_enum::<WsServerMessage>("WsServerMessage"),
     ]
@@ -101,13 +113,14 @@ fn entry_tagged_enum<T: JsonSchema>(ts_name: &'static str) -> TypeEntry {
     }
 }
 
-/// `ApprovalDecision` is a plain enum (no `tag`) — its schemars rendering is
-/// a `oneOf` over single-string values, which we materialise as a union of
-/// string literals to match the wire shape exactly.
-fn entry_enum_simple(ts_name: &'static str) -> TypeEntry {
+/// Plain unit-only enums (`ApprovalDecision`, `SseEventName`) — their
+/// schemars rendering is a `oneOf` over single-string values, which we
+/// materialise as a union of string literals to match the wire shape
+/// exactly.
+fn entry_enum_simple<T: JsonSchema>(ts_name: &'static str) -> TypeEntry {
     TypeEntry {
         ts_name,
-        root: schemars::schema_for!(ApprovalDecision),
+        root: schemars::schema_for!(T),
         is_struct: false,
     }
 }
