@@ -12,6 +12,7 @@ fn main() {
     use shannon_desktop::commands_chat;
     use shannon_desktop::commands_config;
     use shannon_desktop::commands_connections;
+    use shannon_desktop::commands_dream;
     use shannon_desktop::commands_feedback;
     use shannon_desktop::commands_files;
     use shannon_desktop::commands_mcp;
@@ -172,6 +173,12 @@ fn main() {
             commands_skill_candidates::refine_skill_candidate,
             commands_skill_candidates::list_agent_authored_skills,
             skill_pattern_detection::trigger_skill_pattern_detection,
+            // Dream pass — manual trigger + shadow-proposal review surface
+            commands_dream::run_dream_pass,
+            commands_dream::list_dream_proposals,
+            commands_dream::read_dream_report,
+            commands_dream::apply_dream_proposal,
+            commands_dream::discard_dream_proposal,
             commands_permissions::request_permission,
             commands_permissions::respond_permission,
             commands_slash::get_session_context_stats,

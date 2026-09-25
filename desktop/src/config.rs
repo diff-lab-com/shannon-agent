@@ -65,6 +65,13 @@ pub struct DesktopConfig {
     /// scanning sessions. Default: true.
     #[serde(default = "default_skill_detection_enabled")]
     pub skill_detection_enabled: bool,
+    /// Dream distillation (L2) master switch. When false, `run_dream_pass`
+    /// returns a skipped result without reading a single session or memory
+    /// file — the pass is opt-in and its output review-gated. Default:
+    /// false. Gated additionally by `skill_detection_enabled` (the privacy
+    /// main switch).
+    #[serde(default)]
+    pub dream_enabled: bool,
     /// Master switch for desktop (OS) notifications. When false, the
     /// `TauriNotificationHandler` silently drops every notification.
     /// Default: enabled (existing users keep notifications on upgrade).
@@ -550,6 +557,7 @@ impl Default for DesktopConfig {
             skill_loop_min_duration_secs: default_skill_loop_min_duration_secs(),
             skill_loop_min_tool_calls: default_skill_loop_min_tool_calls(),
             skill_detection_enabled: default_skill_detection_enabled(),
+            dream_enabled: false,
             notifications_master_enabled: default_true(),
             notifications_dnd_enabled: false,
             notifications_dnd_start: None,

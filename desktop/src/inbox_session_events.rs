@@ -17,17 +17,21 @@
 //!   `skill_pattern_detection::trigger_skill_pattern_detection`, right where
 //!   `skill-candidates-changed` fires; resolved (archived) by the
 //!   approve/reject commands in `commands_skill_candidates`.
+//! - `dream_report` — a dream distillation pass finished and its report is
+//!   ready. Written in `commands_dream::execute_dream_pass` when the pass
+//!   completes; day-deduplicated (`dream-{YYYY-MM-DD}`), never resolved by
+//!   this module — the Triage read interaction consumes it.
 //!
 //! Dedup contract (store-level `upsert_pending` / `resolve_by_source`):
 //! approvals and failures key on the session (`source_id` = session id, one
-//! live entry per session per kind), candidates key on the candidate id.
-//! Everything here is **best-effort**: an inbox write failure is logged and
-//! dropped so the interactive query / permission paths can never fail
-//! because of it. Generic over `tauri::Runtime` so tests drive it with
-//! `tauri::test::mock_app()`.
+//! live entry per session per kind), candidates key on the candidate id,
+//! dream reports key on the calendar day. Everything here is **best-effort**:
+//! an inbox write failure is logged and dropped so the interactive query /
+//! permission paths can never fail because of it. Generic over
+//! `tauri::Runtime` so tests drive it with `tauri::test::mock_app()`.
 
 use shannon_core::inbox_store::{
-    InboxItem, InboxItemNew, InboxStatus, InboxStore, SOURCE_SESSION_APPROVAL,
+    InboxItem, InboxItemNew, InboxStatus, InboxStore, SOURCE_DREAM_REPORT, SOURCE_SESSION_APPROVAL,
     SOURCE_SESSION_FAILED, SOURCE_SKILL_CANDIDATE,
 };
 use tauri::Emitter;
@@ -238,6 +242,57 @@ pub(crate) fn resolve_skill_candidate<R: tauri::Runtime>(
         candidate_id,
         InboxStatus::Archived,
     )
+}
+
+// ── dream_report ────────────────────────────────────────────────────────
+
+/// Record (or refresh) the dream distillation report card.
+///
+/// Dedup entity = the calendar day (`dream-{YYYY-MM-DD}`, derived from the
+/// report timestamp), so the daily noise budget is at most one card: two
+/// passes on the same day refresh the same entry instead of adding a second.
+/// `session_id` stays `None` — a dream report is reviewed on its own, not
+/// continued in a chat. No resolve function: the card is consumed by the
+/// Triage read interaction like any other report item.
+pub(crate) fn record_dream_report<R: tauri::Runtime>(
+    inbox: &InboxStore,
+    app: &tauri::AppHandle<R>,
+    result: &crate::commands_dream::DreamPassResult,
+    report_ts: &str,
+) -> Option<InboxItem> {
+    // Day key of the report: unix seconds → `YYYY-MM-DD` (UTC), falling back
+    // to today when the ts is not parseable.
+    let date = report_ts
+        .parse::<i64>()
+        .ok()
+        .and_then(|ts| chrono::DateTime::from_timestamp(ts, 0))
+        .map(|dt| dt.format("%Y-%m-%d").to_string())
+        .unwrap_or_else(|| chrono::Utc::now().format("%Y-%m-%d").to_string());
+    let item = inbox
+        .upsert_pending(InboxItemNew {
+            source: SOURCE_DREAM_REPORT.into(),
+            // Dedup entity = the day: ≤1 dream card per day.
+            source_id: Some(format!("dream-{date}")),
+            session_id: None,
+            title: truncate_chars("Dream distillation report", 120),
+            summary: format!(
+                "Merged {} \u{00b7} Removed {} \u{00b7} New insights {} \u{00b7} {} session(s) scanned",
+                result.merge_proposed, result.remove_proposed, result.add_proposed,
+                result.scanned_sessions
+            ),
+            error: None,
+        })
+        .map_err(|e| e.to_string());
+    match item {
+        Ok(saved) => {
+            notify(app, &format!("dream-{date}"));
+            Some(saved)
+        }
+        Err(e) => {
+            tracing::warn!(report_ts = %report_ts, error = %e, "inbox: failed to record dream report");
+            None
+        }
+    }
 }
 
 // ── shared resolve ──────────────────────────────────────────────────────
@@ -497,6 +552,86 @@ mod tests {
         let inbox = store();
         assert!(resolve_session_approval(&inbox, app.handle(), "sess-none").is_none());
         assert!(resolve_session_failure(&inbox, app.handle(), "sess-none").is_none());
+    }
+
+    // ── dream_report ─────────────────────────────────────────────────────
+
+    fn dream_result(
+        merge: u32,
+        remove: u32,
+        add: u32,
+        scanned: u32,
+    ) -> crate::commands_dream::DreamPassResult {
+        crate::commands_dream::DreamPassResult {
+            skipped_reason: None,
+            scanned_sessions: scanned,
+            projects: vec!["/work/app".into()],
+            merge_proposed: merge,
+            remove_proposed: remove,
+            add_proposed: add,
+            proposal_ids: vec!["proposal-1".into()],
+            report_path: None,
+            duration_ms: 42,
+        }
+    }
+
+    #[test]
+    fn dream_write_carries_source_day_key_and_summary() {
+        let app = tauri::test::mock_app();
+        let inbox = store();
+        let item = record_dream_report(
+            &inbox,
+            app.handle(),
+            &dream_result(4, 2, 3, 7),
+            "1758768000", // 2025-09-25 UTC
+        )
+        .unwrap();
+        assert_eq!(item.source, SOURCE_DREAM_REPORT);
+        assert_eq!(item.status, "pending");
+        assert_eq!(item.source_id.as_deref(), Some("dream-2025-09-25"));
+        assert!(item.session_id.is_none(), "no live session behind a report");
+        assert_eq!(item.title, "Dream distillation report");
+        assert_eq!(
+            item.summary,
+            "Merged 4 \u{00b7} Removed 2 \u{00b7} New insights 3 \u{00b7} 7 session(s) scanned"
+        );
+        let stored = by_source(&inbox, SOURCE_DREAM_REPORT, "dream-2025-09-25");
+        assert_eq!(stored.id, item.id);
+    }
+
+    #[test]
+    fn dream_reports_on_one_day_dedup_to_a_single_card() {
+        let app = tauri::test::mock_app();
+        let inbox = store();
+        // Two runs on the same UTC day (both ts fall on 1970-01-01): the
+        // second refreshes the first — daily noise budget ≤1 card.
+        record_dream_report(&inbox, app.handle(), &dream_result(1, 0, 0, 2), "100").unwrap();
+        let second =
+            record_dream_report(&inbox, app.handle(), &dream_result(4, 2, 3, 7), "200").unwrap();
+        assert_eq!(second.source_id.as_deref(), Some("dream-1970-01-01"));
+        let all = inbox.list(None, None, 10).unwrap();
+        assert_eq!(all.len(), 1, "one card per day");
+        assert_eq!(
+            all[0].summary,
+            "Merged 4 \u{00b7} Removed 2 \u{00b7} New insights 3 \u{00b7} 7 session(s) scanned",
+            "content refreshed by the later run"
+        );
+        // A different day gets its own card.
+        record_dream_report(&inbox, app.handle(), &dream_result(0, 0, 0, 1), "172800").unwrap();
+        assert_eq!(inbox.list(None, None, 10).unwrap().len(), 2);
+    }
+
+    #[test]
+    fn dream_write_with_unparseable_ts_falls_back_to_today() {
+        let app = tauri::test::mock_app();
+        let inbox = store();
+        let today = chrono::Utc::now().format("%Y-%m-%d").to_string();
+        let item =
+            record_dream_report(&inbox, app.handle(), &dream_result(0, 0, 0, 0), "oops").unwrap();
+        assert_eq!(
+            item.source_id.as_deref(),
+            Some(format!("dream-{today}").as_str())
+        );
     }
 
     // ── helpers ──────────────────────────────────────────────────────────

@@ -70,6 +70,10 @@ pub const SOURCE_SESSION_FAILED: &str = "session_failed";
 /// Inbox source: a detected skill candidate awaits review (T5). Dedup
 /// entity: the candidate id.
 pub const SOURCE_SKILL_CANDIDATE: &str = "skill_candidate";
+/// Inbox source: a dream distillation pass finished and its report awaits
+/// review (dream pass). Dedup entity: the calendar day
+/// (`dream-{YYYY-MM-DD}`), so the daily noise budget is at most one card.
+pub const SOURCE_DREAM_REPORT: &str = "dream_report";
 
 /// Status vocabulary for inbox items (validated at the write boundary).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
