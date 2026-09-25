@@ -72,6 +72,13 @@ pub struct DesktopConfig {
     /// main switch).
     #[serde(default)]
     pub dream_enabled: bool,
+    /// L3 skill-distillation leg of the dream pass. When true, a running
+    /// dream pass additionally runs the skill-pattern detector over the same
+    /// session window and LLM-refines each newly appended candidate into the
+    /// review queue (`refined=true`) — never auto-promoted. Requires both
+    /// `dream_enabled` and `skill_detection_enabled`; default false.
+    #[serde(default)]
+    pub dream_skill_distill_enabled: bool,
     /// Master switch for desktop (OS) notifications. When false, the
     /// `TauriNotificationHandler` silently drops every notification.
     /// Default: enabled (existing users keep notifications on upgrade).
@@ -558,6 +565,7 @@ impl Default for DesktopConfig {
             skill_loop_min_tool_calls: default_skill_loop_min_tool_calls(),
             skill_detection_enabled: default_skill_detection_enabled(),
             dream_enabled: false,
+            dream_skill_distill_enabled: false,
             notifications_master_enabled: default_true(),
             notifications_dnd_enabled: false,
             notifications_dnd_start: None,

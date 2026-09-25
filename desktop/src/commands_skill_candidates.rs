@@ -262,6 +262,62 @@ pub async fn reject_skill_candidate(
     Ok(())
 }
 
+/// Split a refined LLM reply into cleaned procedure lines (trimmed,
+/// empties dropped) — the normalization both [`refine_skill_candidate`]
+/// and the dream pass's candidate write-back apply.
+pub(crate) fn procedure_lines(text: &str) -> Vec<String> {
+    text.lines()
+        .map(|l| l.trim().to_string())
+        .filter(|l| !l.is_empty())
+        .collect()
+}
+
+/// Ask the configured LLM to rewrite a candidate's procedure into a clean,
+/// numbered step list. The shared LLM body of [`refine_skill_candidate`]
+/// and the dream pass's L3 refine step.
+///
+/// Returns `None` when the LLM call fails or the reply carries no usable
+/// text — the caller falls back to the original procedure in that case
+/// (the command keeps showing something usable; the dream pass leaves the
+/// candidate untouched and uncounted).
+pub(crate) async fn refine_candidate_text(
+    state: &crate::commands::AppState,
+    name: &str,
+    trigger: &str,
+    procedure_text: &str,
+) -> Option<String> {
+    let system = "You refine agent-authored skill procedures. Output ONLY a numbered list of concrete steps, no preamble, no markdown headings. Keep each step under 120 characters. Preserve every tool the original procedure referenced.";
+    let user = format!(
+        "Skill name: {name}\nTrigger: {trigger}\nOriginal procedure:\n{procedure_text}\n\nRewrite as a clean numbered list:"
+    );
+
+    let client_config = state.client_config.read().await.clone();
+    let client = shannon_engine::api::client::LlmClient::new(client_config);
+    let messages = vec![shannon_engine::api::types::Message {
+        role: "user".into(),
+        content: shannon_engine::api::types::MessageContent::Text(user),
+    }];
+
+    let blocks = client
+        .send_message(messages, None, Some(system.into()))
+        .await
+        .ok()?;
+    let mut out = String::new();
+    for block in blocks {
+        if let shannon_engine::api::types::ContentBlock::Text { text } = block {
+            if !out.is_empty() {
+                out.push('\n');
+            }
+            out.push_str(&text);
+        }
+    }
+    if out.trim().is_empty() {
+        None
+    } else {
+        Some(out)
+    }
+}
+
 /// Ask the configured LLM to rewrite a candidate's procedure into a
 /// clean, step-by-step skill procedure. Stores the result back into
 /// the candidate and marks `refined=true`. Returns the refined text
@@ -285,43 +341,13 @@ pub async fn refine_skill_candidate(
     let trigger = candidates[idx].proposed_trigger.clone();
     let name = candidates[idx].proposed_name.clone();
 
-    let system = "You refine agent-authored skill procedures. Output ONLY a numbered list of concrete steps, no preamble, no markdown headings. Keep each step under 120 characters. Preserve every tool the original procedure referenced.";
-    let user = format!(
-        "Skill name: {name}\nTrigger: {trigger}\nOriginal procedure:\n{original}\n\nRewrite as a clean numbered list:"
-    );
-
-    let client_config = state.client_config.read().await.clone();
-    let client = shannon_engine::api::client::LlmClient::new(client_config);
-    let messages = vec![shannon_engine::api::types::Message {
-        role: "user".into(),
-        content: shannon_engine::api::types::MessageContent::Text(user),
-    }];
-
-    let refined = match client
-        .send_message(messages, None, Some(system.into()))
+    // None = LLM failed or produced nothing usable → fall back to the
+    // original procedure (identical to the previous inline behavior).
+    let refined = refine_candidate_text(&state, &name, &trigger, &original)
         .await
-    {
-        Ok(blocks) => {
-            let mut out = String::new();
-            for block in blocks {
-                if let shannon_engine::api::types::ContentBlock::Text { text } = block {
-                    if !out.is_empty() {
-                        out.push('\n');
-                    }
-                    out.push_str(&text);
-                }
-            }
-            if out.trim().is_empty() { original } else { out }
-        }
-        Err(_) => original,
-    };
+        .unwrap_or_else(|| original.clone());
 
-    let new_procedure: Vec<String> = refined
-        .lines()
-        .map(|l| l.trim().to_string())
-        .filter(|l| !l.is_empty())
-        .collect();
-    candidates[idx].procedure = new_procedure;
+    candidates[idx].procedure = procedure_lines(&refined);
     candidates[idx].refined = true;
     save_candidates(&candidates)?;
 
@@ -375,6 +401,27 @@ pub(crate) fn append_candidate_in(dir: &Path, candidate: SkillCandidate) -> Resu
     let mut current = load_candidates_in(dir)?;
     current.push(candidate);
     save_candidates_in(dir, &current)
+}
+
+/// Replace one candidate's procedure (matched by `id`) inside an explicit
+/// `desktop` dir's candidates JSONL and set `refined = true`. The write-back
+/// seam of the dream pass's L3 refine step — the `_in` DI twin keeps tests on
+/// tempdirs, exactly like [`append_candidate_in`]. Errors when the id is
+/// unknown. Never promotes the candidate: approval stays the only path into
+/// the skill catalog.
+pub(crate) fn mark_candidate_refined_in(
+    dir: &Path,
+    id: &str,
+    procedure: Vec<String>,
+) -> Result<(), String> {
+    let mut candidates = load_candidates_in(dir)?;
+    let idx = candidates
+        .iter()
+        .position(|c| c.id == id)
+        .ok_or_else(|| format!("Candidate {id} not found"))?;
+    candidates[idx].procedure = procedure;
+    candidates[idx].refined = true;
+    save_candidates_in(dir, &candidates)
 }
 
 #[cfg(test)]
@@ -516,5 +563,55 @@ mod tests {
             "expected candidates file at {}",
             file.display()
         );
+    }
+
+    #[test]
+    fn procedure_lines_trims_and_drops_empties() {
+        assert_eq!(
+            procedure_lines("1. first step\n\n   2.  second step   \n3.\n4. fourth"),
+            vec!["1. first step", "2.  second step", "3.", "4. fourth"]
+        );
+        assert!(procedure_lines("  \n \n ").is_empty());
+    }
+
+    /// The dream pass's L3 write-back: procedure replaced + `refined=true`
+    /// persisted, other candidates untouched, unknown id errors — all inside
+    /// an injected tempdir (no `HOME` mutation).
+    #[test]
+    fn mark_candidate_refined_in_updates_only_the_named_candidate() {
+        let dir = tempfile::tempdir().expect("tmp");
+        append_candidate_in(dir.path(), sample_candidate("sig-target")).expect("append");
+        append_candidate_in(dir.path(), sample_candidate("sig-other")).expect("append");
+
+        mark_candidate_refined_in(
+            dir.path(),
+            "sig-target",
+            vec!["1. do the thing".into(), "2. verify".into()],
+        )
+        .expect("mark refined");
+
+        let loaded = load_candidates_in(dir.path()).expect("load");
+        let target = loaded.iter().find(|c| c.id == "sig-target").unwrap();
+        assert!(target.refined);
+        assert_eq!(target.procedure, vec!["1. do the thing", "2. verify"]);
+        let untouched = loaded.iter().find(|c| c.id == "sig-other").unwrap();
+        assert!(!untouched.refined, "only the named candidate is marked");
+        assert_eq!(untouched.procedure, vec!["invoke bash"]);
+
+        assert!(mark_candidate_refined_in(dir.path(), "sig-missing", vec![]).is_err());
+    }
+
+    fn sample_candidate(id: &str) -> SkillCandidate {
+        SkillCandidate {
+            id: id.into(),
+            detected_at: "2026-07-01T00:00:00Z".into(),
+            occurrence_count: 3,
+            example_session_ids: vec!["s1".into()],
+            proposed_name: "bash".into(),
+            proposed_trigger: "recurring bash(cmd) calls".into(),
+            procedure: vec!["invoke bash".into()],
+            source_tool_calls: vec![],
+            refined: false,
+        }
     }
 }

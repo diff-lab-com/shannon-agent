@@ -569,6 +569,8 @@ mod tests {
             merge_proposed: merge,
             remove_proposed: remove,
             add_proposed: add,
+            candidates_detected: 0,
+            candidates_refined: 0,
             proposal_ids: vec!["proposal-1".into()],
             report_path: None,
             duration_ms: 42,

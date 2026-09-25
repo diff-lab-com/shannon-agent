@@ -184,6 +184,11 @@ fn main() {
             commands_slash::get_session_context_stats,
             commands_slash::get_session_git_diff,
             commands_slash::compact_session,
+            // Slash backends for the dream-distill feature (Task 4 adds the
+            // menu entries; /dream writes review-gated proposals only,
+            // /detect-skills is heuristic-only).
+            commands_slash::dream_slash,
+            commands_slash::detect_slash,
             commands_usage::get_session_usage,
             commands_rewind::list_checkpoints,
             commands_rewind::rewind_session,
@@ -517,6 +522,12 @@ fn main() {
                 let backfill_state: tauri::State<'_, commands::AppState> = app.state();
                 shannon_desktop::inbox_commands::spawn_run_history_backfill(backfill_state.inner());
             }
+
+            // Dream pass — nightly scheduler (default off: `dream_enabled`
+            // gates every wake). Detached task, wakes every 30 min and fires
+            // a 7-day pass only inside the 1–5 local-hour window when the
+            // last pass is ≥24h old; all errors log-only.
+            commands_dream::spawn_night_dream(app.handle().clone());
 
             // Bundle A — Click-to-foreground: when a Shannon notification is
             // clicked, bring the main window to the foreground. On macOS and

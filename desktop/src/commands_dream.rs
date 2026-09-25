@@ -226,6 +226,13 @@ pub struct DreamPassResult {
     pub remove_proposed: u32,
     /// Add actions proposed.
     pub add_proposed: u32,
+    /// Skill candidates the L3 distill leg appended this pass (0 unless
+    /// `dream_skill_distill_enabled` is on). They land in the review queue
+    /// only — never promoted.
+    pub candidates_detected: u32,
+    /// Of the detected candidates, how many the LLM refine step rewrote and
+    /// wrote back (`refined=true`).
+    pub candidates_refined: u32,
     /// Ids of the proposals written this pass (review them via
     /// [`list_dream_proposals`]).
     pub proposal_ids: Vec<String>,
@@ -1117,24 +1124,44 @@ async fn consult_llm(
     Ok(out)
 }
 
-/// Core of the dream pass against injected directories and an injected LLM
-/// consult — the seam that makes the pipeline testable (tests pass a fake
-/// `consult` and tempdirs; the production wrapper passes [`consult_llm`] and
-/// real paths). One consult per project that has entries; all consults run
+/// Core of the dream pass against injected directories and injected seams —
+/// what makes the pipeline testable (tests pass fake closures and tempdirs;
+/// the production wrapper passes the real ones). One consult per project that
+/// has entries, then the optional L3 skill-distill leg; all consults run
 /// before any artifact is written, so a transport failure mid-run leaves no
 /// partial output. Response *parse* failures are not errors — the pass still
 /// produces its report with zero proposals.
-pub(crate) async fn execute_dream_pass_inner<C, F>(
+///
+/// Seams:
+/// - `consult` — the L2 model call per project (transport errors abort).
+/// - `detect(days)` — the L3 heuristic detection + recording; returns the
+///   newly appended candidates. Never called before every consult succeeded.
+/// - `refine(candidate)` — the L3 per-candidate LLM refine + write-back;
+///   `Some(text)` counts as refined, `None` (LLM failure) leaves the
+///   candidate untouched.
+///
+/// L3 is best-effort by design: a detection error is logged and the pass
+/// continues with zero candidate counts — losing a report to a candidates
+/// JSONL hiccup would be worse than shipping one without L3 numbers.
+pub(crate) async fn execute_dream_pass_inner<C, F, D, DF, R, RF>(
     days_back: u32,
     memory_store: &SharedMemoryStore,
     sessions_dir: &Path,
     dreams_dir: &Path,
     client_config: shannon_engine::api::types::LlmClientConfig,
     consult: C,
+    detect: D,
+    refine: R,
 ) -> Result<DreamPassOutcome, String>
 where
     C: Fn(shannon_engine::api::types::LlmClientConfig, String, String) -> F,
     F: std::future::Future<Output = Result<String, String>>,
+    D: Fn(u32) -> DF,
+    DF: std::future::Future<
+            Output = Result<Vec<crate::commands_skill_candidates::SkillCandidate>, String>,
+        >,
+    R: Fn(crate::commands_skill_candidates::SkillCandidate) -> RF,
+    RF: std::future::Future<Output = Option<String>>,
 {
     let started = Utc::now();
 
@@ -1174,7 +1201,8 @@ where
         .sum::<usize>() as u32;
 
     // Phase 1 — consult the model for every project. Any transport failure
-    // propagates before a single artifact is written.
+    // propagates before a single artifact is written (and before the L3 leg
+    // runs — no skill candidates are recorded for a failed pass either).
     let mut prompt_chars = 0u64;
     let mut consults: Vec<(&String, &Vec<MemoryEntry>, String)> = Vec::new();
     for (project, entries) in &by_project {
@@ -1182,6 +1210,29 @@ where
         prompt_chars += (system.chars().count() + user.chars().count()) as u64;
         let text = consult(client_config.clone(), system, user).await?;
         consults.push((project, entries, text));
+    }
+
+    // Phase 1.5 — L3 skill distill: heuristic detection over the same
+    // session window + a per-candidate LLM refine with write-back. Only
+    // reached once every consult succeeded. Best-effort: a detection error
+    // is logged and the pass continues with zero candidate counts; a refine
+    // failure (None) just leaves that candidate untouched and uncounted.
+    // Candidates land in the review queue only — there is no promote here.
+    let mut candidates_detected = 0u32;
+    let mut candidates_refined = 0u32;
+    match detect(days_back).await {
+        Ok(appended) => {
+            candidates_detected = appended.len() as u32;
+            for candidate in appended {
+                if refine(candidate).await.is_some() {
+                    candidates_refined += 1;
+                }
+            }
+        }
+        Err(e) => tracing::warn!(
+            error = %e,
+            "dream: L3 skill distill failed; continuing without candidate counts"
+        ),
     }
 
     // Phase 2 — everything succeeded: build, count, persist.
@@ -1218,10 +1269,8 @@ where
         merge_proposed,
         remove_proposed,
         add_proposed,
-        // L3 skill distill lands in Task 3; the report always carries both
-        // counters.
-        candidates_detected: 0,
-        candidates_refined: 0,
+        candidates_detected,
+        candidates_refined,
         redactions_applied,
         duration_ms: (Utc::now() - started).num_milliseconds().max(0) as u64,
         projects: by_project.keys().cloned().collect(),
@@ -1237,6 +1286,8 @@ where
         merge_proposed,
         remove_proposed,
         add_proposed,
+        candidates_detected,
+        candidates_refined,
         proposal_ids,
         report_path: Some(report_path.display().to_string()),
         duration_ms: stats.duration_ms,
@@ -1285,10 +1336,74 @@ pub(crate) async fn execute_dream_pass(
     };
 
     // 4–6. Gather inputs and consult the LLM (transport errors abort here,
-    // before any artifact is written).
+    // before any artifact is written). The L3 skill-distill seams ride along:
+    // detection reuses `detect_and_record` on the same sessions dir + the
+    // shared inbox; each newly appended candidate is refined through the
+    // shared LLM body and written back into the candidates JSONL. Both
+    // closures carry `dream_skill_distill_enabled` (the pass's privacy gates
+    // already guaranteed `skill_detection_enabled`) so `_inner` stays
+    // config-agnostic and tests can swap in fakes.
     let state = app.state::<AppState>();
     let sessions_dir = crate::skill_pattern_detection::default_sessions_dir()?;
     let client_config = state.client_config.read().await.clone();
+
+    let distill_enabled = cfg.dream_skill_distill_enabled;
+    let detect = {
+        let handle = app.clone();
+        let inbox = state.inbox_store();
+        let dir = sessions_dir.clone();
+        move |days: u32| {
+            let inbox = inbox.clone();
+            let handle = handle.clone();
+            let dir = dir.clone();
+            async move {
+                if !distill_enabled {
+                    return Ok(Vec::new());
+                }
+                crate::skill_pattern_detection::detect_and_record(
+                    &handle,
+                    inbox.as_ref(),
+                    &dir,
+                    days,
+                )
+                .await
+            }
+        }
+    };
+    let refine = {
+        let state_ref = state.inner();
+        let desktop = desktop.clone();
+        move |candidate: crate::commands_skill_candidates::SkillCandidate| {
+            let desktop = desktop.clone();
+            async move {
+                let Some(text) = crate::commands_skill_candidates::refine_candidate_text(
+                    state_ref,
+                    &candidate.proposed_name,
+                    &candidate.proposed_trigger,
+                    &candidate.procedure.join("\n"),
+                )
+                .await
+                else {
+                    return None;
+                };
+                let procedure = crate::commands_skill_candidates::procedure_lines(&text);
+                if let Err(e) = crate::commands_skill_candidates::mark_candidate_refined_in(
+                    &desktop,
+                    &candidate.id,
+                    procedure,
+                ) {
+                    tracing::warn!(
+                        candidate = %candidate.id,
+                        error = %e,
+                        "dream: candidate refine write-back failed"
+                    );
+                    return None;
+                }
+                Some(text)
+            }
+        }
+    };
+
     let outcome = execute_dream_pass_inner(
         days_back,
         &state.memory_store,
@@ -1296,6 +1411,8 @@ pub(crate) async fn execute_dream_pass(
         &dreams,
         client_config,
         consult_llm,
+        detect,
+        refine,
     )
     .await?;
 
@@ -1317,6 +1434,99 @@ pub(crate) async fn execute_dream_pass(
     );
     let _ = app.emit(DREAM_PASS_FINISHED_EVENT, &outcome.result);
     Ok(outcome.result)
+}
+
+// ============================================================================
+// Nightly scheduler (Task 3, default off — needs `dream_enabled`)
+// ============================================================================
+
+/// Local-hour window (01:00–05:59) in which the nightly dream pass may fire.
+pub(crate) const NIGHT_WINDOW: std::ops::RangeInclusive<u32> = 1..=5;
+/// How often the nightly scheduler wakes to re-check the fire conditions.
+pub(crate) const NIGHT_CHECK_INTERVAL_SECS: u64 = 30 * 60;
+/// Minimum age of the last dream pass before the nightly scheduler fires
+/// again (mirrors the state-file `last_dream_at` check).
+pub(crate) const NIGHT_MIN_INTERVAL_HOURS: i64 = 24;
+/// Session-window length the nightly scheduler passes to
+/// [`execute_dream_pass`] (manual entry points default to 3 instead).
+pub(crate) const NIGHT_DAYS_BACK: u32 = 7;
+
+/// True when `hour` (local wall clock 0–23) is inside [`NIGHT_WINDOW`] —
+/// the off-hours window in which the nightly dream pass may fire. Pure so
+/// tests pin the boundaries without touching the clock.
+pub(crate) fn is_night_hour(hour: u32) -> bool {
+    NIGHT_WINDOW.contains(&hour)
+}
+
+/// True when the nightly pass may fire given the state-file timestamp: due
+/// when the stamp is missing or unparseable (nothing to throttle on — the
+/// file is shared and may predate this feature) and otherwise at least
+/// [`NIGHT_MIN_INTERVAL_HOURS`] old. Pure; unit-tested.
+pub(crate) fn is_state_due(last_dream_at: Option<&str>, now: DateTime<Utc>) -> bool {
+    match last_dream_at.and_then(|s| DateTime::parse_from_rfc3339(s).ok()) {
+        Some(ts) => now - ts.with_timezone(&Utc) >= Duration::hours(NIGHT_MIN_INTERVAL_HOURS),
+        None => true,
+    }
+}
+
+/// One nightly-scheduler wake: fire a 7-day dream pass only when all of
+/// these hold — the local wall-clock hour is inside [`NIGHT_WINDOW`],
+/// `dream_enabled` is on (config re-read every wake so a Settings toggle
+/// takes effect without a restart), and the shared state file's
+/// `last_dream_at` is at least [`NIGHT_MIN_INTERVAL_HOURS`] old.
+/// [`execute_dream_pass`]'s own gates, 6h throttle and single-flight lock
+/// re-apply on top. Errors are logged, never propagated or panicked.
+pub(crate) async fn maybe_night_dream(app: &tauri::AppHandle) {
+    use chrono::Timelike;
+    let cfg = crate::config::load_config();
+    if !cfg.dream_enabled || !cfg.skill_detection_enabled {
+        return;
+    }
+    if !is_night_hour(chrono::Local::now().hour()) {
+        return;
+    }
+    let desktop = match crate::commands_skill_candidates::desktop_dir() {
+        Ok(dir) => dir,
+        Err(e) => {
+            tracing::warn!(error = %e, "nightly dream: cannot resolve desktop dir");
+            return;
+        }
+    };
+    if !is_state_due(read_state_in(&desktop).last_dream_at.as_deref(), Utc::now()) {
+        return;
+    }
+    match execute_dream_pass(app.clone(), NIGHT_DAYS_BACK).await {
+        Ok(result) => match result.skipped_reason {
+            Some(reason) => tracing::info!(reason = %reason, "nightly dream: skipped"),
+            None => tracing::info!(
+                scanned = result.scanned_sessions,
+                merge = result.merge_proposed,
+                remove = result.remove_proposed,
+                add = result.add_proposed,
+                candidates = result.candidates_detected,
+                "nightly dream: pass completed"
+            ),
+        },
+        Err(e) => tracing::warn!(error = %e, "nightly dream: pass failed"),
+    }
+}
+
+/// Spawn the detached nightly dream scheduler: wakes every 30 minutes and
+/// hands the wake to the crate-internal `maybe_night_dream` check.
+/// Detached like the routine scheduler, so it never blocks shutdown — the
+/// async runtime simply dies with the process. `pub` because `main.rs` (the
+/// binary crate) calls it from `setup`.
+pub fn spawn_night_dream(app: tauri::AppHandle) {
+    tauri::async_runtime::spawn(async move {
+        tracing::info!(
+            interval_secs = NIGHT_CHECK_INTERVAL_SECS,
+            "nightly dream scheduler started"
+        );
+        loop {
+            tokio::time::sleep(std::time::Duration::from_secs(NIGHT_CHECK_INTERVAL_SECS)).await;
+            maybe_night_dream(&app).await;
+        }
+    });
 }
 
 // ============================================================================
@@ -2106,6 +2316,40 @@ mod tests {
     }
 
     // ------------------------------------------------------------------
+    // Nightly scheduler (pure fire-condition helpers)
+    // ------------------------------------------------------------------
+
+    #[test]
+    fn night_hour_window_boundaries() {
+        for hour in [1, 2, 3, 4, 5] {
+            assert!(is_night_hour(hour), "{hour} must be inside the window");
+        }
+        for hour in [0, 6, 12, 18, 23] {
+            assert!(!is_night_hour(hour), "{hour} must be outside the window");
+        }
+        assert_eq!(*NIGHT_WINDOW.start(), 1);
+        assert_eq!(*NIGHT_WINDOW.end(), 5);
+    }
+
+    #[test]
+    fn state_due_requires_twenty_four_hour_old_stamp() {
+        let now = Utc::now();
+        // No stamp (or a corrupt one) never blocks the nightly pass.
+        assert!(is_state_due(None, now));
+        assert!(is_state_due(Some("not a timestamp"), now));
+        // 23h ago → still fresh; exactly 24h and 25h → due.
+        let fresh = (now - Duration::hours(23)).to_rfc3339();
+        assert!(!is_state_due(Some(&fresh), now), "<24h → not due");
+        let exact = (now - Duration::hours(24)).to_rfc3339();
+        assert!(is_state_due(Some(&exact), now), "exactly 24h → due");
+        let old = (now - Duration::hours(25)).to_rfc3339();
+        assert!(is_state_due(Some(&old), now));
+        // A timestamp in the future is never due.
+        let future = (now + Duration::hours(2)).to_rfc3339();
+        assert!(!is_state_due(Some(&future), now));
+    }
+
+    // ------------------------------------------------------------------
     // Reports on disk
     // ------------------------------------------------------------------
 
@@ -2199,6 +2443,37 @@ mod tests {
         move |_cfg, _system, _user| std::future::ready(Ok(body.clone()))
     }
 
+    /// No-op L3 detection seam: distill disabled / nothing found.
+    fn no_detect() -> impl Fn(
+        u32,
+    ) -> std::future::Ready<
+        Result<Vec<crate::commands_skill_candidates::SkillCandidate>, String>,
+    > {
+        |_days| std::future::ready(Ok(Vec::new()))
+    }
+
+    /// No-op L3 refine seam: every candidate unrefined.
+    fn no_refine()
+    -> impl Fn(crate::commands_skill_candidates::SkillCandidate) -> std::future::Ready<Option<String>>
+    {
+        |_candidate| std::future::ready(None)
+    }
+
+    /// A freshly detected (unrefined) candidate as the L3 detector appends it.
+    fn l3_candidate(id: &str) -> crate::commands_skill_candidates::SkillCandidate {
+        crate::commands_skill_candidates::SkillCandidate {
+            id: id.into(),
+            detected_at: Utc::now().to_rfc3339(),
+            occurrence_count: 3,
+            example_session_ids: vec!["sess-1".into()],
+            proposed_name: "bash".into(),
+            proposed_trigger: "Detected bash call recurring across 3 session(s)".into(),
+            procedure: vec!["Invoke bash with the same argument shape".into()],
+            source_tool_calls: vec![],
+            refined: false,
+        }
+    }
+
     #[tokio::test]
     async fn dream_pass_inner_writes_proposals_report_and_leaves_memories_untouched() {
         let mem_dir = tempdir().unwrap();
@@ -2235,6 +2510,8 @@ mod tests {
             dreams.path(),
             shannon_engine::api::types::LlmClientConfig::default(),
             canned_consult(&canned),
+            no_detect(),
+            no_refine(),
         )
         .await
         .unwrap();
@@ -2246,6 +2523,8 @@ mod tests {
         assert_eq!(outcome.result.merge_proposed, 1);
         assert_eq!(outcome.result.remove_proposed, 1);
         assert_eq!(outcome.result.add_proposed, 1);
+        assert_eq!(outcome.result.candidates_detected, 0);
+        assert_eq!(outcome.result.candidates_refined, 0);
         assert_eq!(outcome.result.proposal_ids.len(), 1);
         assert!(
             outcome
@@ -2298,6 +2577,8 @@ mod tests {
             dreams.path(),
             shannon_engine::api::types::LlmClientConfig::default(),
             canned_consult("I would suggest merging some entries, honestly."),
+            no_detect(),
+            no_refine(),
         )
         .await
         .unwrap();
@@ -2329,6 +2610,8 @@ mod tests {
             dreams.path(),
             shannon_engine::api::types::LlmClientConfig::default(),
             consult,
+            no_detect(),
+            no_refine(),
         )
         .await
         .unwrap_err();
@@ -2363,12 +2646,168 @@ mod tests {
                 |_cfg, _system, _user| -> std::future::Ready<Result<String, String>> {
                     panic!("no consult may run without memory entries")
                 },
+                no_detect(),
+                no_refine(),
             )
             .await
             .unwrap();
             assert_eq!(outcome.result.projects, Vec::<String>::new());
             assert!(outcome.result.proposal_ids.is_empty());
             assert!(read_report_in(dreams.path(), None).is_ok());
+        });
+    }
+
+    #[tokio::test]
+    async fn dream_pass_inner_l3_detects_refines_and_counts_candidates() {
+        let mem_dir = tempdir().unwrap();
+        let store = seed_shared_store(mem_dir.path(), vec![dream_entry("/work/app", "solo", 0.9)]);
+        let sessions = tempdir().unwrap();
+        let dreams = tempdir().unwrap();
+        // Candidates JSONL in its own tempdir — the fake refine writes back
+        // through the same `mark_candidate_refined_in` seam the production
+        // closure uses, so the test never touches the real ~/.shannon.
+        let candidates_dir = tempdir().unwrap();
+        for id in ["sig-1", "sig-2"] {
+            crate::commands_skill_candidates::append_candidate_in(
+                candidates_dir.path(),
+                l3_candidate(id),
+            )
+            .unwrap();
+        }
+
+        let detect =
+            |_days: u32| std::future::ready(Ok(vec![l3_candidate("sig-1"), l3_candidate("sig-2")]));
+        let candidates_path = candidates_dir.path().to_path_buf();
+        let refine = move |candidate: crate::commands_skill_candidates::SkillCandidate| {
+            let candidates_path = candidates_path.clone();
+            async move {
+                // Mirror the production closure: only "sig-1" refines
+                // successfully; "sig-2" simulates an LLM failure (None).
+                if candidate.id != "sig-1" {
+                    return None;
+                }
+                let text = "1. run bash\n2. check output".to_string();
+                crate::commands_skill_candidates::mark_candidate_refined_in(
+                    &candidates_path,
+                    &candidate.id,
+                    crate::commands_skill_candidates::procedure_lines(&text),
+                )
+                .ok()?;
+                Some(text)
+            }
+        };
+
+        let outcome = execute_dream_pass_inner(
+            3,
+            &store,
+            sessions.path(),
+            dreams.path(),
+            shannon_engine::api::types::LlmClientConfig::default(),
+            canned_consult("no proposals in here"),
+            detect,
+            refine,
+        )
+        .await
+        .unwrap();
+
+        // Counts land in result + stats + report.
+        assert_eq!(outcome.result.candidates_detected, 2);
+        assert_eq!(outcome.result.candidates_refined, 1);
+        assert_eq!(outcome.stats.candidates_detected, 2);
+        assert_eq!(outcome.stats.candidates_refined, 1);
+        let report = read_report_in(dreams.path(), Some(&outcome.report_ts)).unwrap();
+        assert!(report.contains("Skill candidates detected: 2"), "{report}");
+        assert!(report.contains("Skill candidates refined: 1"), "{report}");
+
+        // The refined candidate was written back (procedure + refined=true);
+        // the failed one is untouched.
+        let jsonl =
+            std::fs::read_to_string(candidates_dir.path().join("skill-candidates.jsonl")).unwrap();
+        let refined: crate::commands_skill_candidates::SkillCandidate = jsonl
+            .lines()
+            .map(serde_json::from_str)
+            .collect::<Result<Vec<_>, _>>()
+            .unwrap()
+            .into_iter()
+            .find(|c: &crate::commands_skill_candidates::SkillCandidate| c.id == "sig-1")
+            .unwrap();
+        assert!(refined.refined);
+        assert_eq!(refined.procedure, vec!["1. run bash", "2. check output"]);
+        let untouched: crate::commands_skill_candidates::SkillCandidate = jsonl
+            .lines()
+            .map(serde_json::from_str)
+            .collect::<Result<Vec<_>, _>>()
+            .unwrap()
+            .into_iter()
+            .find(|c: &crate::commands_skill_candidates::SkillCandidate| c.id == "sig-2")
+            .unwrap();
+        assert!(!untouched.refined);
+        assert_eq!(untouched.procedure.len(), 1);
+    }
+
+    #[tokio::test]
+    async fn dream_pass_inner_l3_detection_error_never_fails_the_pass() {
+        let mem_dir = tempdir().unwrap();
+        let store = seed_shared_store(mem_dir.path(), vec![dream_entry("/work/app", "solo", 0.9)]);
+        let sessions = tempdir().unwrap();
+        let dreams = tempdir().unwrap();
+
+        let detect = |_days: u32| {
+            std::future::ready(Err::<
+                Vec<crate::commands_skill_candidates::SkillCandidate>,
+                String,
+            >("candidates disk full".to_string()))
+        };
+        let outcome = execute_dream_pass_inner(
+            3,
+            &store,
+            sessions.path(),
+            dreams.path(),
+            shannon_engine::api::types::LlmClientConfig::default(),
+            canned_consult("no proposals in here"),
+            detect,
+            no_refine(),
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(outcome.result.skipped_reason, None);
+        assert_eq!(outcome.result.candidates_detected, 0);
+        assert_eq!(outcome.result.candidates_refined, 0);
+        assert!(
+            read_report_in(dreams.path(), None).is_ok(),
+            "report still written despite the L3 failure"
+        );
+    }
+
+    #[test]
+    fn l3_disabled_seams_yield_zero_candidate_counts() {
+        // Mirrors `dream_skill_distill_enabled = false`: execute_dream_pass
+        // hands _inner no-op seams, so every count stays zero.
+        let rt = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap();
+        rt.block_on(async {
+            let mem_dir = tempdir().unwrap();
+            let store =
+                seed_shared_store(mem_dir.path(), vec![dream_entry("/work/app", "solo", 0.9)]);
+            let sessions = tempdir().unwrap();
+            let dreams = tempdir().unwrap();
+            let outcome = execute_dream_pass_inner(
+                3,
+                &store,
+                sessions.path(),
+                dreams.path(),
+                shannon_engine::api::types::LlmClientConfig::default(),
+                canned_consult("no proposals in here"),
+                no_detect(),
+                no_refine(),
+            )
+            .await
+            .unwrap();
+            assert_eq!(outcome.result.candidates_detected, 0);
+            assert_eq!(outcome.result.candidates_refined, 0);
         });
     }
 
