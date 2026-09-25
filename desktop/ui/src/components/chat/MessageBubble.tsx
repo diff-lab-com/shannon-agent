@@ -31,7 +31,6 @@ import { ArtifactChipList } from '@/components/artifact/ArtifactChip'
 import { detectArtifacts } from '@/components/artifact/detectArtifact'
 import { FileRefChip } from '@/components/shared/FileRefChip'
 import { extractToolInputPath, FILE_MUTATING_TOOLS } from '@/lib/fileRefs'
-import { openLink } from '@/lib/openLink'
 import { openWithDefaultApp } from '@/lib/tauri-api'
 import type { ChatMessage, ToolCall, FileAttachment } from '@/types'
 import { cn } from '@/lib/utils'
@@ -909,10 +908,8 @@ export function LinkifiedText({ text }: { text: string }) {
             href={part.url}
             target="_blank"
             rel="noopener noreferrer"
-            onClick={(e) => {
-              e.preventDefault()
-              void openLink(part.url)
-            }}
+            // Opening is handled by the global link interceptor (P0-A) —
+            // an onClick here would fire a second openLink per click.
             className="underline underline-offset-2 decoration-current/50 hover:decoration-current break-all cursor-pointer"
           >
             {part.url}
