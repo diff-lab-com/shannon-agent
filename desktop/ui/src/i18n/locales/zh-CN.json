@@ -3182,6 +3182,8 @@
   "memory.dream.report.empty": "暂无报告——请先运行一次提炼。",
   "memory.dream.report.error": "报告加载失败——详情请见通知。",
   "memory.dream.report.loadFailed": "无法加载报告",
+  "memory.dream.lastDistilled": "上次提炼：{time} · {stats}",
+  "memory.dream.lastDistilledNoStats": "上次提炼：{time}",
   "usage.chart.byDay.title": "每日 token",
   "usage.chart.byDay.subtitle": "每日 token 用量——柱状堆叠输入（底部）和输出（顶部）。",
   "usage.chart.byModel.title": "按模型的 token",

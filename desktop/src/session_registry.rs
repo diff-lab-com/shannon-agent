@@ -285,6 +285,25 @@ impl SessionRegistry {
         }
     }
 
+    /// 卡C dream catch-up: whether ANY registry-tracked session currently
+    /// has a live query — the cheap global "user is mid-query" signal the
+    /// one-shot startup catch-up gates on. Arcs are cloned out of the
+    /// DashMap shards before any flag mutex is awaited (a held DashMap
+    /// guard is not Send and must not cross await, same as `is_querying`).
+    pub async fn any_querying(&self) -> bool {
+        let states: Vec<Arc<SessionState>> = self
+            .sessions
+            .iter()
+            .map(|entry| Arc::clone(entry.value()))
+            .collect();
+        for state in states {
+            if *state.querying.lock().await {
+                return true;
+            }
+        }
+        false
+    }
+
     /// Create a new session with a freshly-generated UUID, insert it into
     /// the registry, and mark it as the active session. Returns the key.
     ///
@@ -453,6 +472,21 @@ mod tests {
             "get_or_create must return the same Arc for the same key"
         );
         assert_eq!(reg.list().len(), 1, "no duplicate SessionState created");
+    }
+
+    #[tokio::test]
+    async fn session_registry_any_querying_reflects_live_queries() {
+        // 卡C catch-up gate: empty registry → idle; one live query among
+        // several → busy; query ended → idle again.
+        let reg = SessionRegistry::new();
+        assert!(!reg.any_querying().await, "empty registry is idle");
+        let _idle = reg.get_or_create(SessionKey::new());
+        let busy = reg.get_or_create(SessionKey::new());
+        assert!(!reg.any_querying().await, "all flags false → idle");
+        *busy.querying.lock().await = true;
+        assert!(reg.any_querying().await, "one live query → busy");
+        *busy.querying.lock().await = false;
+        assert!(!reg.any_querying().await, "query ended → idle again");
     }
 
     #[test]

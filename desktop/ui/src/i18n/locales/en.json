@@ -3182,6 +3182,8 @@
   "memory.dream.report.empty": "No report yet — run a pass first.",
   "memory.dream.report.error": "The report could not be loaded — details are in the notification.",
   "memory.dream.report.loadFailed": "Could not load the report",
+  "memory.dream.lastDistilled": "Last distilled: {time} · {stats}",
+  "memory.dream.lastDistilledNoStats": "Last distilled: {time}",
   "usage.chart.byDay.title": "Daily tokens",
   "usage.chart.byDay.subtitle": "Tokens used per day — bars stack input (bottom) and output (top).",
   "usage.chart.byModel.title": "Tokens by model",

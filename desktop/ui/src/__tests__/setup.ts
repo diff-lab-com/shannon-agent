@@ -396,6 +396,8 @@ vi.mock('@/lib/tauri-api', () => ({
   readDreamReport: vi.fn().mockResolvedValue(''),
   applyDreamProposal: vi.fn().mockResolvedValue({ applied: [], skipped: [] }),
   discardDreamProposal: vi.fn().mockResolvedValue(undefined),
+  // 卡C — cold-start read-back; null fields keep the 「上次提炼」 line off.
+  readDreamState: vi.fn().mockResolvedValue({ last_dream_at: null, last_stats: null }),
   detectSkillsSlash: vi.fn().mockResolvedValue(0),
   // P0-3 inbox — defaults so components consuming useInboxStats (e.g. the
   // sidebar badge) render sanely without per-test mocking.

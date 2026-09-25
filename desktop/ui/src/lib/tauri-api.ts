@@ -2067,6 +2067,35 @@ export async function discardDreamProposal(proposalId: string): Promise<void> {
   return invoke('discard_dream_proposal', { proposalId })
 }
 
+/// Full counters of one completed pass, as persisted in the shared
+/// detection-state file (`DreamState.last_stats`). `Partial` on the wire —
+/// the file is shared and a writer may have recorded only the timestamp.
+export interface DreamPassStats {
+  scanned_sessions: number
+  entries_reviewed: number
+  merge_proposed: number
+  remove_proposed: number
+  add_proposed: number
+  candidates_detected: number
+  candidates_refined: number
+  redactions_applied: number
+  duration_ms: number
+  projects: string[]
+  token_estimate: number
+}
+
+/// Persisted dream state (read_dream_state): the last pass's timestamp and
+/// stats, for cold-start display. Both fields null when no pass ever ran.
+export interface DreamState {
+  last_dream_at: string | null
+  last_stats: Partial<DreamPassStats> | null
+}
+
+/// Read the persisted dream state — the cold-start 「上次提炼」 line's data.
+export async function readDreamState(): Promise<DreamState> {
+  return invoke('read_dream_state')
+}
+
 /// `/detect-skills` backend — heuristic pattern detection only (zero LLM),
 /// bypasses dream throttles by design. Returns the number of newly appended
 /// candidates (dedup by the backend's sig-hash id).

@@ -1658,6 +1658,15 @@
       }
     },
     {
+      "identifier": "allow-read-dream-state",
+      "description": "Enables the read_dream_state command without any pre-configured scope.",
+      "commands": {
+        "allow": [
+          "read_dream_state"
+        ]
+      }
+    },
+    {
       "identifier": "allow-read-source-file",
       "description": "Enables the read_source_file command without any pre-configured scope.",
       "commands": {
@@ -2748,6 +2757,7 @@
         "allow-list-memory-projects",
         "allow-promote-memory-to-instruction",
         "allow-read-dream-report",
+        "allow-read-dream-state",
         "allow-run-dream-pass",
         "allow-search-memories",
         "allow-update-memory"

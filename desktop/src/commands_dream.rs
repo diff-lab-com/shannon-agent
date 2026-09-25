@@ -44,7 +44,8 @@
 //! ## Orchestration
 //!
 //! `execute_dream_pass` is the single entry point shared by the manual
-//! command and the (future) nightly scheduler: privacy gates → throttle
+//! command and the two scheduler tracks (the 1–5 点 nightly window and the
+//! one-shot startup catch-up): privacy gates → throttle
 //! (state timestamp + a process-wide [`ConsolidationLock`]) → gather inputs →
 //! one LLM consult per project → per-project proposals + one merged report +
 //! state update + inbox card + `dream-pass-finished` event. The LLM call is
@@ -137,8 +138,11 @@ pub struct DreamAddEntry {
     pub confidence: f64,
     /// Session ids the content was distilled from (provenance).
     pub source_session_ids: Vec<String>,
-    /// True once the content has been user-verified; dream proposals always
-    /// start `false` and stay review-gated.
+    /// Minimal back-source corroboration (卡C): set at proposal-build time
+    /// when ≥2 distinct content keywords hit the excerpt text of one of the
+    /// *claimed* source sessions — the model's own claim is never trusted
+    /// (its `verified` output is ignored). Independently of this flag every
+    /// add stays review-gated: nothing is written until the user approves.
     pub verified: bool,
 }
 
@@ -169,6 +173,13 @@ pub struct DreamProposal {
     pub created_at: String,
     /// The proposed actions, reviewed (apply/discard) as a unit.
     pub actions: Vec<DreamAction>,
+    /// Incremental apply journal (卡C 4a): action ids already applied to the
+    /// memory store, written back into this file after each successful
+    /// action. A mid-apply failure leaves the proposal on disk, and a retry
+    /// skips these ids instead of double-applying (the double-add case).
+    /// `#[serde(default)]` so pre-journal proposal files keep parsing.
+    #[serde(default)]
+    pub applied_ids: Vec<String>,
 }
 
 /// Shared, forward-compatible detection state persisted at
@@ -974,17 +985,99 @@ fn next_proposal_id(used: &mut HashSet<String>) -> String {
     candidate
 }
 
+// ============================================================================
+// Verified minimal back-source (卡C)
+// ============================================================================
+
+/// Minimum distinct content-keyword hits, inside ONE claimed source
+/// session's excerpt text, before an `add` action's `verified` flag is set.
+pub(crate) const VERIFIED_MIN_TOKEN_HITS: usize = 2;
+
+/// Common English function/content-free words stripped before the
+/// back-source check — short, ubiquitous tokens ("the", "and", "for")
+/// would substring-hit almost any excerpt text and inflate `verified`
+/// falsely. Deliberately small and conservative; the length floors below
+/// carry most of the filtering.
+const VERIFIED_STOPWORDS: &[&str] = &[
+    "about", "also", "and", "are", "been", "being", "but", "can", "could", "did", "do", "does",
+    "for", "from", "had", "has", "have", "her", "here", "his", "into", "its", "just", "may",
+    "might", "must", "new", "not", "now", "only", "onto", "our", "out", "over", "shall", "should",
+    "some", "such", "than", "that", "the", "their", "then", "there", "these", "they", "this",
+    "those", "too", "use", "used", "uses", "using", "was", "were", "what", "when", "where",
+    "which", "while", "will", "with", "would", "you", "your",
+];
+
+/// Keyword tokens distilled from a proposed `add` content for the
+/// back-source check: split on non-alphanumeric boundaries (unicode-aware —
+/// a CJK run without separators stays one token, which the substring match
+/// handles fine), lowercased, deduplicated, with stopword-ish short tokens
+/// dropped: single chars, ASCII tokens under 3 chars ("on", "is"), and the
+/// common-word list. Pure; heavily unit-tested.
+pub(crate) fn content_keywords(content: &str) -> Vec<String> {
+    let mut out: Vec<String> = Vec::new();
+    for raw in content.split(|c: char| !c.is_alphanumeric()) {
+        let token = raw.to_lowercase();
+        let char_count = token.chars().count();
+        if char_count < 2
+            || (token.is_ascii() && char_count < 3)
+            || VERIFIED_STOPWORDS.contains(&token.as_str())
+        {
+            continue;
+        }
+        if !out.contains(&token) {
+            out.push(token);
+        }
+    }
+    out
+}
+
+/// The minimal back-source check for one `add` action: at least
+/// [`VERIFIED_MIN_TOKEN_HITS`] distinct [`content_keywords`] of the proposed
+/// content must appear — case-insensitively — in the excerpt text of a
+/// single one of the action's claimed `source_session_ids`. Hits scattered
+/// across different sessions do not corroborate the provenance claim, so
+/// they deliberately don't count. Pure; heavily unit-tested.
+pub(crate) fn verify_add_against_excerpts(
+    content: &str,
+    source_session_ids: &[String],
+    excerpts: &[SessionExcerpt],
+) -> bool {
+    if source_session_ids.is_empty() {
+        return false;
+    }
+    let keywords = content_keywords(content);
+    if keywords.len() < VERIFIED_MIN_TOKEN_HITS {
+        return false;
+    }
+    for excerpt in excerpts {
+        if !source_session_ids.contains(&excerpt.session_id) {
+            continue;
+        }
+        let haystack = excerpt.user_texts.join("\n").to_lowercase();
+        let hits = keywords
+            .iter()
+            .filter(|kw| haystack.contains(kw.as_str()))
+            .count();
+        if hits >= VERIFIED_MIN_TOKEN_HITS {
+            return true;
+        }
+    }
+    false
+}
+
 /// Turn raw LLM output into a review-gated [`DreamProposal`] for `project`.
 ///
 /// Pure and total: parse failures or empty results produce a proposal with
 /// zero actions (the caller skips saving those). Merge/remove ids are
 /// filtered to entries that actually exist in `project`'s memory set and
 /// deduplicated across actions, so a hallucinated or double-referenced id
-/// can never reach the apply path. `add` entries get `verified = false` —
-/// the user, not the model, verifies.
+/// can never reach the apply path. `add` entries get `verified` from the
+/// minimal back-source check (`verify_add_against_excerpts`) over the
+/// excerpts gathered for this pass — never from the model's own claim.
 pub(crate) fn build_proposal_from_llm(
     project: &str,
     entries: &[MemoryEntry],
+    excerpts: &[SessionExcerpt],
     llm_text: &str,
     proposal_id: &str,
     created_at: &str,
@@ -1054,8 +1147,8 @@ pub(crate) fn build_proposal_from_llm(
                 category: normalize_dream_category(&add.category),
                 content: content.to_string(),
                 confidence: add.confidence.clamp(0.0, 1.0),
+                verified: verify_add_against_excerpts(content, &source_session_ids, excerpts),
                 source_session_ids,
-                verified: false,
             }),
         });
     }
@@ -1065,6 +1158,7 @@ pub(crate) fn build_proposal_from_llm(
         project: project.to_string(),
         created_at: created_at.to_string(),
         actions,
+        applied_ids: Vec::new(),
     }
 }
 
@@ -1235,6 +1329,7 @@ where
         let proposal = build_proposal_from_llm(
             project,
             entries,
+            &excerpts,
             text,
             &next_proposal_id(&mut used_ids),
             &started.to_rfc3339(),
@@ -1458,7 +1553,7 @@ pub(crate) async fn execute_dream_pass_in<R: tauri::Runtime>(
 }
 
 // ============================================================================
-// Nightly scheduler (Task 3, default off — needs `dream_enabled`)
+// Scheduler — dual track (卡C), default off (needs `dream_enabled`)
 // ============================================================================
 
 /// Local-hour window (01:00–05:59) in which the nightly dream pass may fire.
@@ -1468,9 +1563,13 @@ pub(crate) const NIGHT_CHECK_INTERVAL_SECS: u64 = 30 * 60;
 /// Minimum age of the last dream pass before the nightly scheduler fires
 /// again (mirrors the state-file `last_dream_at` check).
 pub(crate) const NIGHT_MIN_INTERVAL_HOURS: i64 = 24;
-/// Session-window length the nightly scheduler passes to
-/// [`execute_dream_pass`] (manual entry points default to 3 instead).
+/// Session-window length the scheduler tracks pass to [`execute_dream_pass`]
+/// (manual entry points default to 3 instead).
 pub(crate) const NIGHT_DAYS_BACK: u32 = 7;
+/// Delay between app setup and the one-shot startup catch-up check (the
+/// second track): long enough that the app has settled, short enough to
+/// still catch machines that are rarely on during the 1–5 点 window.
+pub(crate) const CATCHUP_DELAY_SECS: u64 = 10 * 60;
 
 /// True when `hour` (local wall clock 0–23) is inside [`NIGHT_WINDOW`] —
 /// the off-hours window in which the nightly dream pass may fire. Pure so
@@ -1490,13 +1589,50 @@ pub(crate) fn is_state_due(last_dream_at: Option<&str>, now: DateTime<Utc>) -> b
     }
 }
 
-/// One nightly-scheduler wake: fire a 7-day dream pass only when all of
+/// Pure fire predicate for the catch-up wake (unit-tested): the privacy
+/// gates must be open (`skip_reason = None`), the last pass must be at
+/// least [`NIGHT_MIN_INTERVAL_HOURS`] old, and no session query may be in
+/// flight. The idle input is `SessionRegistry::any_querying` — the global
+/// read added beside the existing per-session `is_querying`; without it
+/// the fixed 10-minute startup delay would be the only idle proxy
+/// (documented choice: the delay alone stays the fallback on runtimes
+/// where the registry is unreachable).
+pub(crate) fn is_catchup_due(
+    skip_reason: Option<&str>,
+    state_due: bool,
+    any_querying: bool,
+) -> bool {
+    skip_reason.is_none() && state_due && !any_querying
+}
+
+/// Run one scheduled 7-day pass and log the outcome — the shared tail of
+/// both tracks. `execute_dream_pass` re-applies its own gates, 6h throttle
+/// and single-flight lock on top; everything here is log-only.
+async fn run_scheduled_pass(app: &tauri::AppHandle, trigger: &str) {
+    match execute_dream_pass(app.clone(), NIGHT_DAYS_BACK).await {
+        Ok(result) => match result.skipped_reason {
+            Some(reason) => {
+                tracing::info!(trigger, reason, "dream: scheduled pass skipped")
+            }
+            None => tracing::info!(
+                trigger,
+                scanned = result.scanned_sessions,
+                merge = result.merge_proposed,
+                remove = result.remove_proposed,
+                add = result.add_proposed,
+                candidates = result.candidates_detected,
+                "dream: scheduled pass completed"
+            ),
+        },
+        Err(e) => tracing::warn!(trigger, error = %e, "dream: scheduled pass failed"),
+    }
+}
+
+/// One nightly-window wake: fire a 7-day dream pass only when all of
 /// these hold — the local wall-clock hour is inside [`NIGHT_WINDOW`],
 /// `dream_enabled` is on (config re-read every wake so a Settings toggle
 /// takes effect without a restart), and the shared state file's
 /// `last_dream_at` is at least [`NIGHT_MIN_INTERVAL_HOURS`] old.
-/// [`execute_dream_pass`]'s own gates, 6h throttle and single-flight lock
-/// re-apply on top. Errors are logged, never propagated or panicked.
 pub(crate) async fn maybe_night_dream(app: &tauri::AppHandle) {
     use chrono::Timelike;
     let cfg = crate::config::load_config();
@@ -1516,24 +1652,53 @@ pub(crate) async fn maybe_night_dream(app: &tauri::AppHandle) {
     if !is_state_due(read_state_in(&desktop).last_dream_at.as_deref(), Utc::now()) {
         return;
     }
-    match execute_dream_pass(app.clone(), NIGHT_DAYS_BACK).await {
-        Ok(result) => match result.skipped_reason {
-            Some(reason) => tracing::info!(reason = %reason, "nightly dream: skipped"),
-            None => tracing::info!(
-                scanned = result.scanned_sessions,
-                merge = result.merge_proposed,
-                remove = result.remove_proposed,
-                add = result.add_proposed,
-                candidates = result.candidates_detected,
-                "nightly dream: pass completed"
-            ),
-        },
-        Err(e) => tracing::warn!(error = %e, "nightly dream: pass failed"),
+    run_scheduled_pass(app, "nightly").await;
+}
+
+/// One catch-up wake (the second scheduler track): fire a 7-day pass when
+/// the privacy gates are open, the last pass is at least
+/// [`NIGHT_MIN_INTERVAL_HOURS`] old — a machine that is never on during the
+/// 1–5 点 window would otherwise never dream — and no session query is in
+/// flight (the [`is_catchup_due`] idle signal).
+pub(crate) async fn maybe_catchup_dream(app: &tauri::AppHandle) {
+    let cfg = crate::config::load_config();
+    let skip = dream_skip_reason(&cfg);
+    let desktop = match crate::commands_skill_candidates::desktop_dir() {
+        Ok(dir) => dir,
+        Err(e) => {
+            tracing::warn!(error = %e, "catch-up dream: cannot resolve desktop dir");
+            return;
+        }
+    };
+    let state_due = is_state_due(read_state_in(&desktop).last_dream_at.as_deref(), Utc::now());
+    let any_querying = app.state::<AppState>().registry.any_querying().await;
+    if !is_catchup_due(skip, state_due, any_querying) {
+        tracing::info!(
+            disabled = skip.is_some(),
+            state_due,
+            any_querying,
+            "catch-up dream: conditions not met, skipping"
+        );
+        return;
+    }
+    run_scheduled_pass(app, "catch-up").await;
+}
+
+/// Run one scheduler wake inside its own task and await it: a panic in the
+/// wake kills only that throwaway task — logged at warn — and the calling
+/// loop lives on. Chosen over `std::panic::catch_unwind` because driving an
+/// async body through `catch_unwind` needs `AssertUnwindSafe` assertions on
+/// every borrowed capture, while a `JoinHandle` surfaces the same signal
+/// (`Err(JoinError)`) with none of them.
+async fn run_wake_isolated(wake: impl std::future::Future<Output = ()> + Send + 'static) {
+    if let Err(e) = tauri::async_runtime::spawn(wake).await {
+        tracing::warn!(error = %e, "dream scheduler wake panicked; scheduler survives");
     }
 }
 
-/// Spawn the detached nightly dream scheduler: wakes every 30 minutes and
-/// hands the wake to the crate-internal `maybe_night_dream` check.
+/// Spawn the detached nightly dream scheduler (track 1): wakes every 30
+/// minutes and hands the wake to the crate-internal `maybe_night_dream`
+/// check, panic-isolated per iteration (`run_wake_isolated`).
 /// Detached like the routine scheduler, so it never blocks shutdown — the
 /// async runtime simply dies with the process. `pub` because `main.rs` (the
 /// binary crate) calls it from `setup`.
@@ -1545,8 +1710,23 @@ pub fn spawn_night_dream(app: tauri::AppHandle) {
         );
         loop {
             tokio::time::sleep(std::time::Duration::from_secs(NIGHT_CHECK_INTERVAL_SECS)).await;
-            maybe_night_dream(&app).await;
+            let handle = app.clone();
+            run_wake_isolated(async move { maybe_night_dream(&handle).await }).await;
         }
+    });
+}
+
+/// Spawn the one-shot startup catch-up (track 2, 卡C): ~10 minutes after
+/// setup, run one `maybe_catchup_dream` check — a 7-day pass fires when the
+/// dream switch is on, the last pass is ≥24h old, and no query is running.
+/// Dual-track with [`spawn_night_dream`]: the nightly window stays the
+/// primary off-hours path, the catch-up covers machines that are not
+/// running during it. `pub` because `main.rs` calls it from `setup`.
+pub fn spawn_catchup_dream(app: tauri::AppHandle) {
+    tauri::async_runtime::spawn(async move {
+        tokio::time::sleep(std::time::Duration::from_secs(CATCHUP_DELAY_SECS)).await;
+        let handle = app.clone();
+        run_wake_isolated(async move { maybe_catchup_dream(&handle).await }).await;
     });
 }
 
@@ -1637,23 +1817,65 @@ fn apply_action(store: &mut MemoryStore, project: &str, action: &DreamAction) ->
     }
 }
 
+/// Best-effort journal write: persist `proposal` (whose `applied_ids` just
+/// grew) back to its on-disk file. A failure is logged, never fatal — the
+/// journal is a mitigation, and failing the apply over it would put the
+/// real write (the store save) behind a weaker guarantee.
+fn journal_applied_ids(proposal: &DreamProposal, path: &Path) {
+    let json = match serde_json::to_string_pretty(proposal) {
+        Ok(json) => json,
+        Err(e) => {
+            tracing::warn!(error = %e, "dream apply: cannot serialize proposal journal");
+            return;
+        }
+    };
+    if let Err(e) = std::fs::write(path, json) {
+        tracing::warn!(
+            path = %path.display(),
+            error = %e,
+            "dream apply: journal write failed"
+        );
+    }
+}
+
 /// Apply the selected actions of `proposal` to the store (the only write
-/// path into the memory store this feature has). Actions are applied in
+/// path into the memory store this feature has) with the incremental
+/// `applied_ids` journal (卡C 4a). Apply is not atomic — the proposal file
+/// is deleted only after the store save succeeds — so every freshly applied
+/// action is journaled into the proposal JSON immediately, and actions
+/// already journaled are skipped on entry (reported as applied: they are
+/// durably in the store from the earlier attempt). A mid-apply failure +
+/// retry therefore no longer double-applies. Actions are applied in
 /// proposal order; unknown requested ids are ignored; actions whose targets
-/// are gone are reported as skipped in order.
-pub(crate) fn apply_actions_to_store(
+/// are gone are reported as skipped in order. `path` is the proposal's
+/// on-disk file (`None`: journal-free, used by pure store-level tests).
+pub(crate) fn apply_actions_journaled_in(
     store: &mut MemoryStore,
-    proposal: &DreamProposal,
+    proposal: &mut DreamProposal,
+    path: Option<&Path>,
     action_ids: &[String],
 ) -> ApplyDreamOutcome {
     let selected: HashSet<&str> = action_ids.iter().map(String::as_str).collect();
+    // Snapshot so the loop can mutate `proposal.applied_ids` (the journal)
+    // while still reading the action list.
+    let actions: Vec<DreamAction> = proposal.actions.clone();
     let mut outcome = ApplyDreamOutcome::default();
-    for action in &proposal.actions {
+    for action in &actions {
         if !selected.contains(action.id.as_str()) {
+            continue;
+        }
+        // Journal skip: this id already landed (possibly in a crashed
+        // attempt) — re-running it would double-apply (the double-add case).
+        if proposal.applied_ids.contains(&action.id) {
+            outcome.applied.push(action.id.clone());
             continue;
         }
         if apply_action(store, &proposal.project, action) {
             outcome.applied.push(action.id.clone());
+            proposal.applied_ids.push(action.id.clone());
+            if let Some(path) = path {
+                journal_applied_ids(proposal, path);
+            }
         } else {
             outcome.skipped.push(action.id.clone());
         }
@@ -1692,9 +1914,22 @@ pub async fn read_dream_report(ts: Option<String>) -> Result<String, String> {
     read_report_in(&dreams_dir()?, ts.as_deref())
 }
 
+/// The persisted dream state (`last_dream_at` + `last_stats`) for the
+/// Memory panel's cold-start 「上次提炼」 line (卡C) — the state file was
+/// previously write-only. Missing or corrupt file returns the default
+/// (both fields `None`), which the UI renders as no line at all.
+#[tauri::command]
+pub async fn read_dream_state() -> Result<DreamState, String> {
+    let desktop = crate::commands_skill_candidates::desktop_dir()?;
+    Ok(read_state_in(&desktop))
+}
+
 /// Apply the selected actions of a proposal to the memory store, then delete
 /// the proposal file — review is consumed as a unit, so a partial apply
-/// discards the unselected actions (“应用所选，其余丢弃”).
+/// discards the unselected actions (“应用所选，其余丢弃”). Every successful
+/// action is journaled into the proposal file on the way (卡C 4a): if the
+/// store save or the delete fails, a retry skips the already-applied ids
+/// instead of double-applying.
 #[tauri::command]
 pub async fn apply_dream_proposal(
     _app: tauri::AppHandle,
@@ -1703,11 +1938,14 @@ pub async fn apply_dream_proposal(
     action_ids: Vec<String>,
 ) -> Result<ApplyDreamOutcome, String> {
     let dir = dreams_dir()?;
-    let proposal = load_proposal_in(&dir, &proposal_id)?;
+    let path = find_proposal_file_in(&dir, &proposal_id)
+        .ok_or_else(|| format!("Proposal {proposal_id} not found"))?;
+    let mut proposal = load_proposal_in(&dir, &proposal_id)?;
     let outcome = {
         let store = &state.memory_store;
         let mut guard = store.write().map_err(|e| e.to_string())?;
-        let outcome = apply_actions_to_store(&mut guard, &proposal, &action_ids);
+        let outcome =
+            apply_actions_journaled_in(&mut guard, &mut proposal, Some(&path), &action_ids);
         guard.save().map_err(|e| e.to_string())?;
         outcome
     };
@@ -1762,6 +2000,7 @@ mod tests {
                 add_entry: None,
                 rationale: "Superseded by a newer decision".into(),
             }],
+            applied_ids: Vec::new(),
         }
     }
 
@@ -2330,6 +2569,7 @@ mod tests {
         let proposal = build_proposal_from_llm(
             "proj",
             &entries,
+            &[],
             &text,
             "proposal-1",
             "2026-09-25T00:00:00+00:00",
@@ -2385,6 +2625,7 @@ mod tests {
             let proposal = build_proposal_from_llm(
                 "proj",
                 &entries,
+                &[],
                 text,
                 "proposal-1",
                 "2026-01-01T00:00:00+00:00",
@@ -2405,6 +2646,151 @@ mod tests {
         assert_eq!(next_proposal_id(&mut used), format!("proposal-{ms}-2"));
         let fresh = next_proposal_id(&mut used);
         assert!(fresh.starts_with("proposal-"));
+    }
+
+    // ------------------------------------------------------------------
+    // Verified minimal back-source (卡C)
+    // ------------------------------------------------------------------
+
+    fn excerpt_for(session_id: &str, texts: &[&str]) -> SessionExcerpt {
+        SessionExcerpt {
+            session_id: session_id.into(),
+            user_texts: texts.iter().map(|s| (*s).to_string()).collect(),
+            tool_names: vec![],
+        }
+    }
+
+    #[test]
+    fn content_keywords_strip_stopwords_and_short_ascii_tokens() {
+        // "the"/"for" are stopwords, "new" too; 2-char ASCII tokens dropped.
+        assert_eq!(
+            content_keywords("The new API for key handling: go"),
+            vec!["api".to_string(), "key".to_string(), "handling".to_string()]
+        );
+        // CJK: 2-char words are meaningful and kept; an unseparated run is
+        // one token (the substring match handles that).
+        assert_eq!(
+            content_keywords("使用 PostgreSQL 部署"),
+            vec![
+                "使用".to_string(),
+                "postgresql".to_string(),
+                "部署".to_string()
+            ]
+        );
+        // Case folding + dedup.
+        assert_eq!(
+            content_keywords("Rust rust RUST!"),
+            vec!["rust".to_string()]
+        );
+        // Stopword-only content leaves nothing usable.
+        assert!(content_keywords("the and with for of to").is_empty());
+    }
+
+    #[test]
+    fn verify_add_requires_two_keyword_hits_in_one_claimed_session() {
+        let excerpts = vec![
+            excerpt_for("sess-1", &["We Ships things on Thursdays, unless delayed"]),
+            excerpt_for("sess-2", &["deploy often"]),
+        ];
+        let claimed = vec!["sess-1".to_string()];
+        assert!(
+            verify_add_against_excerpts("User ships on Thursdays", &claimed, &excerpts),
+            "ships + thursdays both hit sess-1 → verified"
+        );
+        // Exactly one hit in the claimed session is not enough.
+        assert!(
+            !verify_add_against_excerpts("User ships often", &claimed, &excerpts),
+            "only 'ships' hits sess-1 ('often' lives in sess-2)"
+        );
+        // Hits split across two claimed sessions do not corroborate: each
+        // single session tops out at one hit.
+        let both = vec!["sess-1".to_string(), "sess-2".to_string()];
+        assert!(!verify_add_against_excerpts(
+            "ships often",
+            &both,
+            &excerpts
+        ));
+    }
+
+    #[test]
+    fn verify_add_empty_or_unknown_sources_stay_unverified() {
+        let excerpts = vec![excerpt_for("sess-1", &["ships thursdays ships thursdays"])];
+        // No claimed sources at all.
+        assert!(!verify_add_against_excerpts(
+            "ships thursdays",
+            &[],
+            &excerpts
+        ));
+        // Claimed id that is not among this pass's excerpts.
+        let claimed = vec!["sess-9".to_string()];
+        assert!(!verify_add_against_excerpts(
+            "ships thursdays",
+            &claimed,
+            &excerpts
+        ));
+        // Content with fewer usable keywords than the hit floor.
+        assert!(!verify_add_against_excerpts(
+            "the of to",
+            &claimed,
+            &excerpts
+        ));
+    }
+
+    #[test]
+    fn verify_add_handles_unicode_content_case_insensitively() {
+        let excerpts = vec![excerpt_for("sess-1", &["我们用 PostgreSQL 部署数据库"])];
+        let claimed = vec!["sess-1".to_string()];
+        assert!(
+            verify_add_against_excerpts("PostgreSQL 部署 is the norm", &claimed, &excerpts),
+            "postgresql + 部署 both hit, case-folded"
+        );
+        // A single CJK run is one distinct token — under the two-hit floor.
+        assert!(!verify_add_against_excerpts(
+            "部署数据库",
+            &claimed,
+            &excerpts
+        ));
+        // Two distinct CJK tokens both present → verified.
+        assert!(verify_add_against_excerpts(
+            "PostgreSQL 部署",
+            &claimed,
+            &excerpts
+        ));
+    }
+
+    #[test]
+    fn build_proposal_sets_verified_from_backsource_check_never_from_model() {
+        let entries = vec![dream_entry("proj", "alpha", 0.9)];
+        let excerpts = vec![excerpt_for("sess-1", &["Ships on Thursdays, usually"])];
+        // Both LLM adds claim verified:true (see `llm_add`) — the flag on
+        // the built proposal must come only from the back-source check.
+        let text = format!(
+            "{{\"add\": [{}, {}]}}",
+            llm_add("pattern", "User ships on Thursdays", 0.8),
+            llm_add("pattern", "Untethered widget claim", 0.8),
+        );
+        let proposal = build_proposal_from_llm(
+            "proj",
+            &entries,
+            &excerpts,
+            &text,
+            "proposal-1",
+            "2026-09-25T00:00:00+00:00",
+        );
+        let adds: Vec<&DreamAddEntry> = proposal
+            .actions
+            .iter()
+            .filter_map(|a| a.add_entry.as_ref())
+            .collect();
+        assert_eq!(adds.len(), 2);
+        assert!(
+            adds[0].verified,
+            "two keyword hits in the claimed source session"
+        );
+        assert!(
+            !adds[1].verified,
+            "no back-source corroboration → stays false"
+        );
     }
 
     // ------------------------------------------------------------------
@@ -2614,6 +3000,41 @@ mod tests {
         // A timestamp in the future is never due.
         let future = (now + Duration::hours(2)).to_rfc3339();
         assert!(!is_state_due(Some(&future), now));
+    }
+
+    #[test]
+    fn catchup_due_requires_open_gates_due_state_and_idle() {
+        assert!(
+            is_catchup_due(None, true, false),
+            "gates open + ≥24h old + no query → due"
+        );
+        assert!(
+            !is_catchup_due(Some("disabled"), true, false),
+            "privacy gate closed → never due, even when idle and overdue"
+        );
+        assert!(
+            !is_catchup_due(None, false, false),
+            "last pass <24h ago → not due"
+        );
+        assert!(
+            !is_catchup_due(None, true, true),
+            "a live session query blocks the catch-up"
+        );
+        assert!(
+            !is_catchup_due(Some("disabled"), false, true),
+            "no condition combination bypasses a closed gate"
+        );
+    }
+
+    #[tokio::test]
+    async fn wake_isolation_swallows_a_panicking_wake() {
+        // The scheduler loop must survive a panicking wake: the error lands
+        // in the JoinHandle (logged by `run_wake_isolated`), the panic does
+        // not propagate to the caller.
+        let prev = std::panic::take_hook();
+        std::panic::set_hook(Box::new(|_| {})); // keep test output pristine
+        run_wake_isolated(async { panic!("deliberate: wake isolation check") }).await;
+        std::panic::set_hook(prev);
     }
 
     // ------------------------------------------------------------------
@@ -3084,6 +3505,7 @@ mod tests {
             project: "proj".into(),
             created_at: "2026-09-25T00:00:00+00:00".into(),
             actions,
+            applied_ids: Vec::new(),
         }
     }
 
@@ -3114,7 +3536,7 @@ mod tests {
             store.add(e.clone()).unwrap();
         }
 
-        let proposal = apply_proposal(vec![
+        let mut pending = apply_proposal(vec![
             DreamAction {
                 id: "action-1".into(),
                 kind: DreamActionKind::Merge,
@@ -3132,9 +3554,10 @@ mod tests {
             dream_add_action("action-3"),
         ]);
 
-        let outcome = apply_actions_to_store(
+        let outcome = apply_actions_journaled_in(
             &mut store,
-            &proposal,
+            &mut pending,
+            None,
             &["action-1".into(), "action-2".into(), "action-3".into()],
         );
         assert_eq!(outcome.applied, vec!["action-1", "action-2", "action-3"]);
@@ -3190,7 +3613,7 @@ mod tests {
         let live_id = live.id.clone();
         store.add(live).unwrap();
 
-        let proposal = apply_proposal(vec![
+        let mut proposal = apply_proposal(vec![
             DreamAction {
                 id: "action-1".into(),
                 kind: DreamActionKind::Merge,
@@ -3216,9 +3639,10 @@ mod tests {
         ]);
 
         // "action-999" is not in the proposal — ignored, not skipped.
-        let outcome = apply_actions_to_store(
+        let outcome = apply_actions_journaled_in(
             &mut store,
-            &proposal,
+            &mut proposal,
+            None,
             &[
                 "action-1".into(),
                 "action-2".into(),
@@ -3236,5 +3660,151 @@ mod tests {
                 .any(|e| e.source_kind.as_deref() == Some(DREAM_SOURCE_KIND))
         );
         assert!(store.get(&live_id).is_none(), "selected remove landed");
+    }
+
+    // ------------------------------------------------------------------
+    // Apply journal (卡C 4a — retry after a mid-apply failure)
+    // ------------------------------------------------------------------
+
+    /// Count memory entries materialized by dream adds in `store`.
+    fn dream_added_count(store: &MemoryStore) -> usize {
+        store
+            .search("", None)
+            .iter()
+            .filter(|e| e.source_kind.as_deref() == Some(DREAM_SOURCE_KIND))
+            .count()
+    }
+
+    #[test]
+    fn apply_journal_persists_applied_ids_after_each_action() {
+        let dir = tempdir().unwrap();
+        let mut store = MemoryStore::new(dir.path().join("mem"));
+        let proposal = apply_proposal(vec![
+            dream_add_action("action-1"),
+            dream_add_action("action-2"),
+        ]);
+        save_proposal_in(dir.path(), test_hash, &proposal).unwrap();
+        let path = dir
+            .path()
+            .join(test_hash(&proposal.project))
+            .join("proposal-apply.json");
+
+        let mut pending = load_proposal_in(dir.path(), "proposal-apply").unwrap();
+        let outcome = apply_actions_journaled_in(
+            &mut store,
+            &mut pending,
+            Some(&path),
+            &["action-1".into(), "action-2".into()],
+        );
+        assert_eq!(outcome.applied, vec!["action-1", "action-2"]);
+        assert_eq!(dream_added_count(&store), 2);
+
+        // The journal reached the real on-disk file through the `_in` seam.
+        let on_disk = load_proposal_in(dir.path(), "proposal-apply").unwrap();
+        assert_eq!(on_disk.applied_ids, vec!["action-1", "action-2"]);
+    }
+
+    #[test]
+    fn apply_journal_retry_after_store_save_failure_never_double_applies() {
+        // Crash window: journal writes land per action, the store save at
+        // the end does not — the proposal file survives with the full
+        // journal while the store lost everything.
+        let dir = tempdir().unwrap();
+        let mut store = MemoryStore::new(dir.path().join("mem"));
+        let proposal = apply_proposal(vec![
+            dream_add_action("action-1"),
+            dream_add_action("action-2"),
+        ]);
+        save_proposal_in(dir.path(), test_hash, &proposal).unwrap();
+        let path = dir
+            .path()
+            .join(test_hash(&proposal.project))
+            .join("proposal-apply.json");
+
+        let mut pending = load_proposal_in(dir.path(), "proposal-apply").unwrap();
+        apply_actions_journaled_in(
+            &mut store,
+            &mut pending,
+            Some(&path),
+            &["action-1".into(), "action-2".into()],
+        );
+        // (store save "fails" here — simulated by retrying against a fresh
+        // store, exactly what the on-disk state looks like after the crash.)
+
+        let mut retried = load_proposal_in(dir.path(), "proposal-apply").unwrap();
+        let mut fresh = MemoryStore::new(dir.path().join("mem"));
+        let outcome = apply_actions_journaled_in(
+            &mut fresh,
+            &mut retried,
+            Some(&path),
+            &["action-1".into(), "action-2".into()],
+        );
+        assert_eq!(
+            outcome.applied,
+            vec!["action-1", "action-2"],
+            "journaled ids still count as applied (they are durable)"
+        );
+        assert_eq!(
+            outcome.skipped,
+            Vec::<String>::new(),
+            "no action may be re-run into a duplicate"
+        );
+        assert_eq!(
+            dream_added_count(&fresh),
+            0,
+            "double-add is the bug: journaled actions must be skipped"
+        );
+    }
+
+    #[test]
+    fn apply_journal_partial_journal_applies_only_the_rest_once() {
+        // Crash window: action-1's journal write landed, the store save did
+        // not. The retry applies only action-2 — action-1 exactly once less,
+        // action-2 exactly once.
+        let dir = tempdir().unwrap();
+        let mut store = MemoryStore::new(dir.path().join("mem"));
+        let proposal = apply_proposal(vec![
+            dream_add_action("action-1"),
+            dream_add_action("action-2"),
+        ]);
+        save_proposal_in(dir.path(), test_hash, &proposal).unwrap();
+        let path = dir
+            .path()
+            .join(test_hash(&proposal.project))
+            .join("proposal-apply.json");
+
+        let mut partial = load_proposal_in(dir.path(), "proposal-apply").unwrap();
+        partial.applied_ids = vec!["action-1".into()];
+        let outcome = apply_actions_journaled_in(
+            &mut store,
+            &mut partial,
+            Some(&path),
+            &["action-1".into(), "action-2".into()],
+        );
+        assert_eq!(outcome.applied, vec!["action-1", "action-2"]);
+        assert_eq!(
+            dream_added_count(&store),
+            1,
+            "only action-2 landed in the store; action-1 was journal-skipped"
+        );
+        // The journal on disk now covers both.
+        let on_disk = load_proposal_in(dir.path(), "proposal-apply").unwrap();
+        assert_eq!(on_disk.applied_ids, vec!["action-1", "action-2"]);
+    }
+
+    #[test]
+    fn legacy_proposal_json_without_applied_ids_parses_with_default() {
+        // Pre-卡C proposal files have no `applied_ids` field — serde default
+        // keeps them loadable (and re-appliable only for unjournaled ids).
+        let dir = tempdir().unwrap();
+        let project_dir = dir.path().join(test_hash("/work/app"));
+        std::fs::create_dir_all(&project_dir).unwrap();
+        std::fs::write(
+            project_dir.join("proposal-legacy.json"),
+            r#"{"id":"proposal-legacy","project":"/work/app","created_at":"2026-09-01T00:00:00+00:00","actions":[]}"#,
+        )
+        .unwrap();
+        let loaded = load_proposal_in(dir.path(), "proposal-legacy").unwrap();
+        assert!(loaded.applied_ids.is_empty(), "missing field → default");
     }
 }
