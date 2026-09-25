@@ -28,6 +28,7 @@ import type {
   HunkAction,
   SessionInfo,
   SessionPlan,
+  ArchivedSessionRow,
   TurnTimeline,
   McpServerInfo,
   McpServerConfig,
@@ -567,6 +568,25 @@ export async function createSessionWorktree(id: string, title: string): Promise<
 
 export async function deleteSession(id: string): Promise<boolean> {
   return invoke('delete_session', { id })
+}
+
+/** Session archive (卡A): write the archived curation flag — the session
+ *  leaves the active rail and every cross-session input layer. `true` when
+ *  this call flipped the flag (false = already archived). */
+export async function archiveSession(id: string): Promise<boolean> {
+  return invoke('archive_session', { id })
+}
+
+/** Session archive (卡A): clear the archived flag; the rail repopulates
+ *  from the store projection without a restart. `true` when flipped. */
+export async function unarchiveSession(id: string): Promise<boolean> {
+  return invoke('unarchive_session', { id })
+}
+
+/** Session archive (卡A): the archived lens — every archived session, most
+ *  recently active first. */
+export async function listArchivedSessions(): Promise<ArchivedSessionRow[]> {
+  return invoke('list_archived_sessions')
 }
 
 export async function renameSession(id: string, title: string): Promise<boolean> {
@@ -2095,6 +2115,35 @@ export async function applyDreamProposal(proposalId: string, actionIds: string[]
 /// Discard a proposal without touching the memory store.
 export async function discardDreamProposal(proposalId: string): Promise<void> {
   return invoke('discard_dream_proposal', { proposalId })
+}
+
+/// Full counters of one completed pass, as persisted in the shared
+/// detection-state file (`DreamState.last_stats`). `Partial` on the wire —
+/// the file is shared and a writer may have recorded only the timestamp.
+export interface DreamPassStats {
+  scanned_sessions: number
+  entries_reviewed: number
+  merge_proposed: number
+  remove_proposed: number
+  add_proposed: number
+  candidates_detected: number
+  candidates_refined: number
+  redactions_applied: number
+  duration_ms: number
+  projects: string[]
+  token_estimate: number
+}
+
+/// Persisted dream state (read_dream_state): the last pass's timestamp and
+/// stats, for cold-start display. Both fields null when no pass ever ran.
+export interface DreamState {
+  last_dream_at: string | null
+  last_stats: Partial<DreamPassStats> | null
+}
+
+/// Read the persisted dream state — the cold-start 「上次提炼」 line's data.
+export async function readDreamState(): Promise<DreamState> {
+  return invoke('read_dream_state')
 }
 
 /// `/detect-skills` backend — heuristic pattern detection only (zero LLM),

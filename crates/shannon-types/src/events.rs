@@ -589,6 +589,13 @@ mod tests {
         // the wire shape stays byte-identical for older consumers.
         assert!(!json.contains("running"));
         assert!(!json.contains("updated_at"));
+        // Older payloads without the optional fields still parse.
+        let legacy: SessionInfo =
+            serde_json::from_str(r#"{"id":"s1","title":"T","created_at":1,"message_count":0}"#)
+                .unwrap();
+        assert_eq!(legacy.id, "s1");
+        assert_eq!(legacy.running, None);
+        assert_eq!(legacy.updated_at, None);
     }
 
     #[test]

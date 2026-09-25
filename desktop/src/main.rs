@@ -167,6 +167,10 @@ fn main() {
             commands_sessions::rename_session,
             commands_sessions::duplicate_session,
             commands_sessions::branch_session,
+            // 卡A — session archive MVP (curation flag + archived lens)
+            commands_sessions::archive_session,
+            commands_sessions::unarchive_session,
+            commands_sessions::list_archived_sessions,
             // §4.14 — Turn Timeline panel data source
             commands_sessions::trace_timeline,
             // E2 skill loop — task evaluation and skill proposal management
@@ -185,6 +189,7 @@ fn main() {
             commands_dream::run_dream_pass,
             commands_dream::list_dream_proposals,
             commands_dream::read_dream_report,
+            commands_dream::read_dream_state,
             commands_dream::apply_dream_proposal,
             commands_dream::discard_dream_proposal,
             commands_permissions::request_permission,
@@ -541,6 +546,22 @@ fn main() {
             // a 7-day pass only inside the 1–5 local-hour window when the
             // last pass is ≥24h old; all errors log-only.
             commands_dream::spawn_night_dream(app.handle().clone());
+
+            // Dream pass — startup catch-up (卡C, track 2 of the dual-track
+            // scheduler): one-shot, ~10 min after setup, fires the same
+            // 7-day pass when dream is enabled, the last pass is ≥24h old,
+            // and no session query is running. Covers machines that are
+            // never on during the nightly window; log-only like track 1.
+            commands_dream::spawn_catchup_dream(app.handle().clone());
+
+            // 卡A — session GC: daily archived-aware retention pass. Inert
+            // unless the user enables it in config (`session_gc_enabled`,
+            // plus a `session_retention_days` window — the defaults keep
+            // "never auto-delete"); every outcome is log-only.
+            {
+                let gc_state: tauri::State<'_, commands::AppState> = app.state();
+                commands_sessions::spawn_session_gc(gc_state.inner());
+            }
 
             // Bundle A — Click-to-foreground: when a Shannon notification is
             // clicked, bring the main window to the foreground. On macOS and

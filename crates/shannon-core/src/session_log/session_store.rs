@@ -13,6 +13,7 @@
 //! <container>/<uuid>/events.jsonl   # authoritative log (L0)
 //! <container>/<uuid>/meta.json      # optional sidecar: title / lineage
 //! <container>/<uuid>/index.json     # optional cache: projection stats (E-9)
+//! <container>/<uuid>/curation.json  # optional sidecar: lifecycle flags
 //! ```
 //!
 //! `list()` consults the E-9 index sidecar first: when it validates against
@@ -89,6 +90,65 @@ pub struct SessionSidecar {
     /// sidecar never touches) fully backward-compatible.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub budget_usd: Option<f64>,
+}
+
+/// User-curation lifecycle flags for one session, persisted as its own
+/// `<container>/<id>/curation.json` sidecar (see
+/// [`session_curation_path`](super::session_curation_path)).
+///
+/// Kept out of [`SessionSidecar`] on purpose: that struct is not
+/// `#[non_exhaustive]`, so adding a field to it would break every external
+/// struct-literal constructor (a semver-major change). A dedicated file is
+/// also the natural home for lifecycle curation as it grows (Task 2's
+/// archive MVP writes `archived` through this type). A missing or unparsable
+/// file always loads as the default — nothing is archived unless the file
+/// says so.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+pub struct SessionCuration {
+    /// True once the user archived the session. Archived sessions stay on
+    /// disk and listable, but cross-session input layers (skill-pattern
+    /// detection, dream excerpts) exclude them unless explicitly asked not
+    /// to (see [`session_query`](super::session_query)).
+    #[serde(default)]
+    pub archived: bool,
+}
+
+impl SessionCuration {
+    /// Load the sidecar from `path`. A missing or unparsable file yields the
+    /// default (`archived = false`) — logged, never fatal.
+    pub fn load(path: &Path) -> Self {
+        match std::fs::read_to_string(path) {
+            Ok(text) => serde_json::from_str(&text)
+                .inspect_err(|e| {
+                    tracing::warn!(
+                        path = %path.display(),
+                        error = %e,
+                        "unparsable session curation sidecar ignored"
+                    );
+                })
+                .unwrap_or_default(),
+            Err(_) => Self::default(),
+        }
+    }
+
+    /// Persist the sidecar to `path` (atomic tmp-write + rename, mirroring
+    /// the `SessionSidecar` writer).
+    pub fn store(&self, path: &Path) -> Result<(), SessionStoreError> {
+        if let Some(parent) = path.parent() {
+            std::fs::create_dir_all(parent)?;
+        }
+        let json = serde_json::to_string_pretty(self)
+            .map_err(|e| SessionStoreError::Serialization(e.to_string()))?;
+        let tmp = path.with_extension("json.tmp");
+        {
+            use std::io::Write;
+            let mut f = std::fs::File::create(&tmp)?;
+            f.write_all(json.as_bytes())?;
+            f.sync_all()?;
+        }
+        std::fs::rename(&tmp, path)?;
+        Ok(())
+    }
 }
 
 /// Persistence DTO for an active `/loop`. The kind discriminates "task
@@ -261,7 +321,10 @@ pub struct StoredSessionInfo {
     pub project_path: Option<String>,
 }
 
-fn ns_to_datetime(ns: u64) -> chrono::DateTime<chrono::Utc> {
+/// Event-log nanoseconds → UTC timestamp (`u64::MAX`-era overflow falls back
+/// to now, matching the projection path). Crate-visible so the session-query
+/// adapter can project single-session reads with the same convention.
+pub(crate) fn ns_to_datetime(ns: u64) -> chrono::DateTime<chrono::Utc> {
     chrono::Utc
         .timestamp_opt(ns as i64 / 1_000_000_000, (ns % 1_000_000_000) as u32)
         .single()
@@ -533,6 +596,26 @@ impl SessionStore {
     /// Read the sidecar as-is.
     pub fn sidecar(&self, session_id: &Uuid) -> SessionSidecar {
         SessionSidecar::load(&self.meta_path(session_id))
+    }
+
+    fn curation_path(&self, session_id: &Uuid) -> PathBuf {
+        super::session_curation_path(&self.container, &session_id.to_string())
+    }
+
+    /// Read the curation sidecar (the lifecycle flags, e.g. `archived`).
+    /// A missing file means "nothing curated" — the default is returned.
+    pub fn curation(&self, session_id: &Uuid) -> SessionCuration {
+        SessionCuration::load(&self.curation_path(session_id))
+    }
+
+    /// Persist the curation sidecar with replace semantics (the caller is
+    /// authoritative, matching [`SessionStore::save_sidecar_replace`]).
+    pub fn save_curation(
+        &self,
+        session_id: &Uuid,
+        curation: &SessionCuration,
+    ) -> Result<(), SessionStoreError> {
+        curation.store(&self.curation_path(session_id))
     }
 
     /// Append an end-seed marker naming `parent` (fork/resume provenance).

@@ -418,7 +418,7 @@ pub async fn dream_slash(
     args: Option<String>,
 ) -> Result<crate::commands_dream::DreamPassResult, String> {
     let days = parse_days_arg(args.as_deref())?;
-    crate::commands_dream::execute_dream_pass(app, days).await
+    crate::commands_dream::execute_dream_pass(app, days, Vec::new()).await
 }
 
 /// `/detect-skills` — run the heuristic skill-pattern detector on demand,

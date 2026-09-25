@@ -47,11 +47,29 @@
       }
     },
     {
+      "identifier": "allow-apply-dream-proposal",
+      "description": "Enables the apply_dream_proposal command without any pre-configured scope.",
+      "commands": {
+        "allow": [
+          "apply_dream_proposal"
+        ]
+      }
+    },
+    {
       "identifier": "allow-approve-skill-candidate",
       "description": "Enables the approve_skill_candidate command without any pre-configured scope.",
       "commands": {
         "allow": [
           "approve_skill_candidate"
+        ]
+      }
+    },
+    {
+      "identifier": "allow-archive-session",
+      "description": "Enables the archive_session command without any pre-configured scope.",
+      "commands": {
+        "allow": [
+          "archive_session"
         ]
       }
     },
@@ -281,6 +299,15 @@
       }
     },
     {
+      "identifier": "allow-detect-slash",
+      "description": "Enables the detect_slash command without any pre-configured scope.",
+      "commands": {
+        "allow": [
+          "detect_slash"
+        ]
+      }
+    },
+    {
       "identifier": "allow-disable-plugin",
       "description": "Enables the disable_plugin command without any pre-configured scope.",
       "commands": {
@@ -299,11 +326,29 @@
       }
     },
     {
+      "identifier": "allow-discard-dream-proposal",
+      "description": "Enables the discard_dream_proposal command without any pre-configured scope.",
+      "commands": {
+        "allow": [
+          "discard_dream_proposal"
+        ]
+      }
+    },
+    {
       "identifier": "allow-download-whisper-model",
       "description": "Enables the download_whisper_model command without any pre-configured scope.",
       "commands": {
         "allow": [
           "download_whisper_model"
+        ]
+      }
+    },
+    {
+      "identifier": "allow-dream-slash",
+      "description": "Enables the dream_slash command without any pre-configured scope.",
+      "commands": {
+        "allow": [
+          "dream_slash"
         ]
       }
     },
@@ -574,15 +619,6 @@
       "commands": {
         "allow": [
           "get_memory_graph"
-        ]
-      }
-    },
-    {
-      "identifier": "allow-promote-memory-to-instruction",
-      "description": "Enables the promote_memory_to_instruction command without any pre-configured scope.",
-      "commands": {
-        "allow": [
-          "promote_memory_to_instruction"
         ]
       }
     },
@@ -956,6 +992,15 @@
       }
     },
     {
+      "identifier": "allow-list-archived-sessions",
+      "description": "Enables the list_archived_sessions command without any pre-configured scope.",
+      "commands": {
+        "allow": [
+          "list_archived_sessions"
+        ]
+      }
+    },
+    {
       "identifier": "allow-list-batch-runs",
       "description": "Enables the list_batch_runs command without any pre-configured scope.",
       "commands": {
@@ -1006,6 +1051,15 @@
       "commands": {
         "allow": [
           "list_data_source_catalog"
+        ]
+      }
+    },
+    {
+      "identifier": "allow-list-dream-proposals",
+      "description": "Enables the list_dream_proposals command without any pre-configured scope.",
+      "commands": {
+        "allow": [
+          "list_dream_proposals"
         ]
       }
     },
@@ -1604,6 +1658,15 @@
       }
     },
     {
+      "identifier": "allow-promote-memory-to-instruction",
+      "description": "Enables the promote_memory_to_instruction command without any pre-configured scope.",
+      "commands": {
+        "allow": [
+          "promote_memory_to_instruction"
+        ]
+      }
+    },
+    {
       "identifier": "allow-prune-task-worktrees",
       "description": "Enables the prune_task_worktrees command without any pre-configured scope.",
       "commands": {
@@ -1645,6 +1708,24 @@
       "commands": {
         "allow": [
           "read_data_source_config"
+        ]
+      }
+    },
+    {
+      "identifier": "allow-read-dream-report",
+      "description": "Enables the read_dream_report command without any pre-configured scope.",
+      "commands": {
+        "allow": [
+          "read_dream_report"
+        ]
+      }
+    },
+    {
+      "identifier": "allow-read-dream-state",
+      "description": "Enables the read_dream_state command without any pre-configured scope.",
+      "commands": {
+        "allow": [
+          "read_dream_state"
         ]
       }
     },
@@ -1852,6 +1933,15 @@
       "commands": {
         "allow": [
           "rewind_session"
+        ]
+      }
+    },
+    {
+      "identifier": "allow-run-dream-pass",
+      "description": "Enables the run_dream_pass command without any pre-configured scope.",
+      "commands": {
+        "allow": [
+          "run_dream_pass"
         ]
       }
     },
@@ -2243,6 +2333,15 @@
       }
     },
     {
+      "identifier": "allow-unarchive-session",
+      "description": "Enables the unarchive_session command without any pre-configured scope.",
+      "commands": {
+        "allow": [
+          "unarchive_session"
+        ]
+      }
+    },
+    {
       "identifier": "allow-uninstall-agent-plugin",
       "description": "Enables the uninstall_agent_plugin command without any pre-configured scope.",
       "commands": {
@@ -2467,16 +2566,20 @@
       "description": "Session CRUD/branch/export, slash/rewind/feedback, skill loop and interactive-permission commands.",
       "permissions": [
         "allow-approve-skill-candidate",
+        "allow-archive-session",
         "allow-branch-session",
         "allow-compact-session",
         "allow-create-session-worktree",
         "allow-delete-session",
+        "allow-detect-slash",
+        "allow-dream-slash",
         "allow-duplicate-session",
         "allow-export-session",
         "allow-get-session-context-stats",
         "allow-get-session-git-diff",
         "allow-get-session-plan",
         "allow-list-agent-authored-skills",
+        "allow-list-archived-sessions",
         "allow-list-checkpoints",
         "allow-list-feedback-sessions",
         "allow-list-message-feedback",
@@ -2500,7 +2603,8 @@
         "allow-skill-loop-reject",
         "allow-switch-session",
         "allow-trace-timeline",
-        "allow-trigger-skill-pattern-detection"
+        "allow-trigger-skill-pattern-detection",
+        "allow-unarchive-session"
       ]
     },
     {
@@ -2711,14 +2815,20 @@
       "identifier": "app-memory",
       "description": "Persistent memory layer commands.",
       "permissions": [
+        "allow-apply-dream-proposal",
         "allow-create-memory",
         "allow-delete-memory",
+        "allow-discard-dream-proposal",
         "allow-get-memory-graph",
-        "allow-promote-memory-to-instruction",
         "allow-get-memory-source",
         "allow-get-memory-stats",
+        "allow-list-dream-proposals",
         "allow-list-memories",
         "allow-list-memory-projects",
+        "allow-promote-memory-to-instruction",
+        "allow-read-dream-report",
+        "allow-read-dream-state",
+        "allow-run-dream-pass",
         "allow-search-memories",
         "allow-update-memory"
       ]

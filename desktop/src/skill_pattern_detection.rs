@@ -5,8 +5,15 @@
 //! command and can be wired into a daily routine by the scheduled-tasks
 //! layer. The algorithm:
 //!
-//! 1. Walk `~/.shannon/sessions/*.json` filtered by mtime >= `days_back`.
-//! 2. For each session, extract tool-use blocks from assistant messages.
+//! 1. List sessions in the real L0 layout
+//!    (`~/.shannon/sessions/<uuid>/events.jsonl`) active within `days_back`
+//!    through `shannon_core::session_log::SessionQuery` — the read-side
+//!    single source it shares with the dream pass's excerpt gathering
+//!    (adversarial review §2.1 F1: the retired flat `sessions/*.json` walk
+//!    silently scanned zero real sessions). Archived sessions (curation
+//!    sidecar) are excluded at this input layer.
+//! 2. For each session, project its `tool/call` events as (tool_name +
+//!    sorted argument keys) pairs — values are never read.
 //! 3. Compute a normalized signature per session (tool_name + sorted arg
 //!    keys, joined by →).
 //! 4. Group identical signatures across sessions.
@@ -18,11 +25,11 @@
 //! candidate ids are left untouched so approval flows aren't disrupted.
 
 use std::collections::HashMap;
-use std::path::{Path, PathBuf};
-use std::time::{SystemTime, UNIX_EPOCH};
+use std::path::PathBuf;
 
-use serde::Deserialize;
 use tauri::Emitter;
+
+use shannon_core::session_log::{SessionQuery, SessionRef};
 
 use crate::commands_skill_candidates::{SkillCandidate, SourceToolCall, append_candidate_in};
 
@@ -35,106 +42,14 @@ const DEFAULT_MIN_OCCURRENCES: u32 = 3;
 /// slash backend both fall back to it when no explicit window is given.
 pub(crate) const DEFAULT_DETECT_DAYS_BACK: u32 = 7;
 
-#[derive(Debug, Deserialize)]
-struct SessionFile {
-    #[serde(default)]
-    session_id: String,
-    #[serde(default)]
-    messages: Vec<serde_json::Value>,
-}
-
-/// Extract a stable signature from a tool_use block: name + sorted arg keys.
 /// Build a stable signature from a tool name + sorted argument keys.
 /// Only the **keys** participate — values are dropped on purpose so
 /// that file paths, tokens, or other user secrets never leak into
 /// candidate JSONL or the hash that deduplicates candidates.
-fn signature_of(tool_name: &str, input: &serde_json::Map<String, serde_json::Value>) -> String {
-    let mut keys: Vec<&str> = input.keys().map(|s| s.as_str()).collect();
+fn signature_of(tool_name: &str, arg_keys: &[String]) -> String {
+    let mut keys: Vec<&str> = arg_keys.iter().map(|s| s.as_str()).collect();
     keys.sort();
     format!("{tool_name}({})", keys.join(","))
-}
-
-/// Walk assistant message content arrays for tool_use blocks and return
-/// their signatures in encounter order.
-#[cfg(test)]
-fn extract_tool_signatures(msgs: &[serde_json::Value]) -> Vec<String> {
-    let mut out = Vec::new();
-    for msg in msgs {
-        let role = msg.get("role").and_then(|v| v.as_str()).unwrap_or("");
-        if role != "assistant" {
-            continue;
-        }
-        let content = match msg.get("content") {
-            Some(serde_json::Value::Array(a)) => a,
-            _ => continue,
-        };
-        for block in content {
-            let btype = block.get("type").and_then(|v| v.as_str()).unwrap_or("");
-            if btype != "tool_use" && btype != "tool_call" {
-                continue;
-            }
-            let name = block
-                .get("name")
-                .and_then(|v| v.as_str())
-                .unwrap_or("unknown");
-            let empty = serde_json::Map::new();
-            let input_obj: &serde_json::Map<String, serde_json::Value> =
-                match block.get("input").or_else(|| block.get("args")) {
-                    Some(serde_json::Value::Object(m)) => m,
-                    _ => &empty,
-                };
-            out.push(signature_of(name, input_obj));
-        }
-    }
-    out
-}
-
-/// Find session files modified within `days_back` days under the sessions dir.
-/// `pub(crate)` so the dream pass (`commands_dream`) can excerpt the same
-/// recent-session set without duplicating the mtime walk.
-pub(crate) fn list_recent_sessions(
-    sessions_dir: &Path,
-    days_back: u32,
-) -> Result<Vec<PathBuf>, String> {
-    if !sessions_dir.is_dir() {
-        return Ok(Vec::new());
-    }
-    let cutoff_secs: u64 = u64::from(days_back) * 86400;
-    let now = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .map_err(|e| format!("system clock: {e}"))?
-        .as_secs();
-    let cutoff = now.saturating_sub(cutoff_secs);
-
-    let mut paths = Vec::new();
-    for entry in std::fs::read_dir(sessions_dir).map_err(|e| format!("readdir: {e}"))? {
-        let entry = entry.map_err(|e| format!("readdir entry: {e}"))?;
-        let path = entry.path();
-        if path.extension().and_then(|s| s.to_str()) != Some("json") {
-            continue;
-        }
-        let meta = match entry.metadata() {
-            Ok(m) => m,
-            Err(_) => continue,
-        };
-        let mtime = meta
-            .modified()
-            .ok()
-            .and_then(|t| t.duration_since(UNIX_EPOCH).ok())
-            .map(|d| d.as_secs())
-            .unwrap_or(0);
-        if mtime >= cutoff {
-            paths.push(path);
-        }
-    }
-    paths.sort();
-    Ok(paths)
-}
-
-/// Load and parse a session file. Returns None on parse failure (logged + skipped).
-fn load_session(path: &Path) -> Option<SessionFile> {
-    let bytes = std::fs::read(path).ok()?;
-    serde_json::from_slice::<SessionFile>(&bytes).ok()
 }
 
 /// Aggregate: how often a signature appeared, and which sessions it appeared in.
@@ -143,18 +58,20 @@ struct SignatureAgg {
     sessions: std::collections::HashSet<String>,
     total: u32,
     sample_tool: String,
-    sample_args: serde_json::Map<String, serde_json::Value>,
+    sample_arg_keys: Vec<String>,
     sample_session_ids: Vec<String>,
 }
 
 /// Run pattern detection. Returns the candidates appended by this run.
 ///
-/// `sessions_dir` is normally `~/.shannon/sessions/` but injected for
-/// testability. Candidates are appended under the real `~/.shannon/desktop/`
-/// (resolved here); tests that need isolation call `run_detection_in` with a
-/// tempdir so they never mutate the process-global `HOME` env var.
+/// `sessions_dir` is the sessions **container** (`~/.shannon/sessions/` —
+/// the directory of per-session `<uuid>/` subdirectories, as returned by
+/// [`default_sessions_dir`]); injected for testability. Candidates are
+/// appended under the real `~/.shannon/desktop/` (resolved here); tests that
+/// need isolation call `run_detection_in` with a tempdir so they never mutate
+/// the process-global `HOME` env var.
 pub fn run_detection(
-    sessions_dir: &Path,
+    sessions_dir: &std::path::Path,
     days_back: u32,
     min_sessions: usize,
     min_occurrences: u32,
@@ -174,62 +91,42 @@ pub fn run_detection(
 /// from `~/.shannon/desktop`; tests pass a tempdir. Returns the appended
 /// candidates (T5: the caller mirrors them into the unified inbox).
 fn run_detection_in(
-    candidates_dir: &Path,
-    sessions_dir: &Path,
+    candidates_dir: &std::path::Path,
+    sessions_dir: &std::path::Path,
     days_back: u32,
     min_sessions: usize,
     min_occurrences: u32,
 ) -> Result<Vec<SkillCandidate>, String> {
-    let paths = list_recent_sessions(sessions_dir, days_back)?;
+    let query = SessionQuery::new(sessions_dir);
+    // Archived sessions are excluded at the input layer (include_archived =
+    // false): a pattern is only worth distilling while its source sessions
+    // are live inputs.
+    let recent: Vec<SessionRef> = query
+        .list_recent(days_back, false)
+        .map_err(|e| format!("session query: {e}"))?;
     let mut aggregates: HashMap<String, SignatureAgg> = HashMap::new();
 
-    for path in paths {
-        let session = match load_session(&path) {
-            Some(s) => s,
-            None => continue,
+    for session in recent {
+        let session_id = session.session_id.to_string();
+        // One unreadable log is skipped (warned), never fatal — matching the
+        // old loader's skip-on-parse-failure semantics.
+        let Ok(calls) = query.tool_calls(&session.session_id) else {
+            tracing::warn!(
+                session = %session_id,
+                "skill detection: skipping unreadable session log"
+            );
+            continue;
         };
-        let session_id = if session.session_id.is_empty() {
-            path.file_stem()
-                .and_then(|s| s.to_str())
-                .unwrap_or("unknown")
-                .to_string()
-        } else {
-            session.session_id
-        };
-
-        for msg in &session.messages {
-            let role = msg.get("role").and_then(|v| v.as_str()).unwrap_or("");
-            if role != "assistant" {
-                continue;
-            }
-            let content = match msg.get("content") {
-                Some(serde_json::Value::Array(a)) => a,
-                _ => continue,
-            };
-            for block in content {
-                let btype = block.get("type").and_then(|v| v.as_str()).unwrap_or("");
-                if btype != "tool_use" && btype != "tool_call" {
-                    continue;
-                }
-                let name = block
-                    .get("name")
-                    .and_then(|v| v.as_str())
-                    .unwrap_or("unknown")
-                    .to_string();
-                let input_obj = match block.get("input").or_else(|| block.get("args")) {
-                    Some(serde_json::Value::Object(m)) => m.clone(),
-                    _ => serde_json::Map::new(),
-                };
-                let sig = signature_of(&name, &input_obj);
-                let agg = aggregates.entry(sig).or_insert_with(|| SignatureAgg {
-                    sample_tool: name.clone(),
-                    sample_args: input_obj.clone(),
-                    ..SignatureAgg::default()
-                });
-                agg.total += 1;
-                if agg.sessions.insert(session_id.clone()) {
-                    agg.sample_session_ids.push(session_id.clone());
-                }
+        for call in calls {
+            let sig = signature_of(&call.tool_name, &call.arg_keys);
+            let agg = aggregates.entry(sig).or_insert_with(|| SignatureAgg {
+                sample_tool: call.tool_name.clone(),
+                sample_arg_keys: call.arg_keys.clone(),
+                ..SignatureAgg::default()
+            });
+            agg.total += 1;
+            if agg.sessions.insert(session_id.clone()) {
+                agg.sample_session_ids.push(session_id.clone());
             }
         }
     }
@@ -262,9 +159,9 @@ fn run_detection_in(
             source_tool_calls: vec![SourceToolCall {
                 tool: agg.sample_tool.clone(),
                 args_summary: agg
-                    .sample_args
+                    .sample_arg_keys
                     .iter()
-                    .map(|(k, _)| (k.clone(), serde_json::Value::Null))
+                    .map(|k| (k.clone(), serde_json::Value::Null))
                     .collect(),
             }],
             refined: false,
@@ -285,7 +182,8 @@ fn xxhash_simple(s: &str) -> u64 {
     h
 }
 
-/// Default sessions dir: ~/.shannon/sessions/
+/// Default sessions container: ~/.shannon/sessions/ (one `<uuid>/` directory
+/// per session — the L0 layout).
 pub fn default_sessions_dir() -> Result<PathBuf, String> {
     let home = dirs::home_dir().ok_or("Cannot determine home directory")?;
     Ok(home.join(".shannon").join("sessions"))
@@ -306,10 +204,10 @@ pub async fn trigger_skill_pattern_detection(
 
 /// Core of [`trigger_skill_pattern_detection`] — and the L3 leg of the dream
 /// pass (`commands_dream`): privacy gate (config `skill_detection_enabled`)
-/// → heuristic detection over `sessions_dir` → one `skill_candidate` inbox
-/// card per newly appended candidate → a `skill-candidates-changed` push so
-/// the badge refreshes. Purely heuristic (zero LLM cost), so callers may run
-/// it without the dream pass's throttles.
+/// → heuristic detection over the sessions container → one `skill_candidate`
+/// inbox card per newly appended candidate → a `skill-candidates-changed`
+/// push so the badge refreshes. Purely heuristic (zero LLM cost), so callers
+/// may run it without the dream pass's throttles.
 ///
 /// Returns the candidates appended by this run (empty when the privacy gate
 /// is off — session files are never read in that case).
@@ -320,7 +218,7 @@ pub async fn trigger_skill_pattern_detection(
 pub(crate) async fn detect_and_record<R: tauri::Runtime>(
     app: &tauri::AppHandle<R>,
     inbox: &shannon_core::inbox_store::InboxStore,
-    sessions_dir: &Path,
+    sessions_dir: &std::path::Path,
     days: u32,
 ) -> Result<Vec<SkillCandidate>, String> {
     // Privacy opt-out: when the user has disabled skill detection in
@@ -356,74 +254,68 @@ pub(crate) async fn detect_and_record<R: tauri::Runtime>(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::fs;
+    use shannon_core::session_log::{SessionCuration, SessionLogWriter};
+    use shannon_types::session_event::{
+        SessionEventBody, SessionStartPayload, ToolCallPayload, TurnEndPayload, TurnStartPayload,
+        UserMessagePayload,
+    };
     use tempfile::tempdir;
+    use uuid::Uuid;
 
-    fn write_session(dir: &Path, name: &str, session_id: &str, tool_calls: &[(&str, &[&str])]) {
-        let mut messages: Vec<serde_json::Value> = Vec::new();
-        messages.push(serde_json::json!({"role": "user", "content": "go"}));
-        let mut content: Vec<serde_json::Value> = Vec::new();
+    /// Seed one session through the real writer: a framed turn with one user
+    /// prompt and the given tool calls (each argument value is a dummy —
+    /// only argument keys participate in detection).
+    fn seed_session(dir: &std::path::Path, tool_calls: &[(&str, &[&str])]) -> Uuid {
+        let id = Uuid::new_v4();
+        let mut w = SessionLogWriter::open_layout(dir, &id.to_string()).unwrap();
+        w.record(SessionEventBody::SessionStart(SessionStartPayload {
+            model: "test-model".into(),
+            provider: None,
+            cwd: Some("/proj".into()),
+            app_version: None,
+            ..Default::default()
+        }));
+        w.record(SessionEventBody::TurnStart(TurnStartPayload {
+            query_id: None,
+        }));
+        w.record(SessionEventBody::UserMessage(UserMessagePayload {
+            source: UserMessagePayload::SOURCE_USER.into(),
+            content: "go".into(),
+            attachment_count: 0,
+        }));
         for (tool, keys) in tool_calls {
             let mut input = serde_json::Map::new();
             for k in *keys {
                 input.insert((*k).to_string(), serde_json::Value::String("x".into()));
             }
-            content.push(serde_json::json!({
-                "type": "tool_use",
-                "name": tool,
-                "input": serde_json::Value::Object(input),
+            w.record(SessionEventBody::ToolCall(ToolCallPayload {
+                tool_use_id: format!("u-{}", Uuid::new_v4()),
+                tool_name: (*tool).to_string(),
+                arguments: serde_json::Value::Object(input).to_string(),
             }));
         }
-        messages.push(serde_json::json!({"role": "assistant", "content": content}));
-        let body = serde_json::json!({
-            "session_id": session_id,
-            "messages": messages,
-        });
-        let path = dir.join(name);
-        fs::write(&path, serde_json::to_vec(&body).unwrap()).unwrap();
-
-        // touch mtime to now so it's "recent"
-        let file = std::fs::File::open(&path).unwrap();
-        let now = std::time::SystemTime::now();
-        let _ = file.set_times(
-            std::fs::FileTimes::new()
-                .set_modified(now)
-                .set_accessed(now),
-        );
+        w.record(SessionEventBody::TurnEnd(TurnEndPayload {
+            reason: TurnEndPayload::REASON_COMPLETED.into(),
+            usage: None,
+            error: None,
+        }));
+        w.close().unwrap();
+        id
     }
 
     #[test]
     fn signature_includes_sorted_arg_keys() {
-        let mut m = serde_json::Map::new();
-        m.insert("b".into(), serde_json::Value::Null);
-        m.insert("a".into(), serde_json::Value::Null);
-        assert_eq!(signature_of("bash", &m), "bash(a,b)");
-    }
-
-    #[test]
-    fn extracts_tool_signatures_from_assistant_blocks() {
-        let v: Vec<serde_json::Value> = vec![
-            serde_json::json!({"role": "user", "content": "go"}),
-            serde_json::json!({
-                "role": "assistant",
-                "content": [
-                    {"type": "text", "text": "ok"},
-                    {"type": "tool_use", "name": "bash", "input": {"cmd": "ls"}},
-                    {"type": "tool_use", "name": "read_file", "input": {"path": "/x", "mode": "r"}},
-                ],
-            }),
-        ];
-        let sigs = extract_tool_signatures(&v);
-        assert_eq!(sigs, vec!["bash(cmd)", "read_file(mode,path)"]);
+        let keys = vec!["b".to_string(), "a".to_string()];
+        assert_eq!(signature_of("bash", &keys), "bash(a,b)");
     }
 
     #[test]
     fn run_detection_appends_candidates_for_recurring_patterns() {
         let dir = tempdir().unwrap();
         // Three sessions, each with the same tool signature.
-        write_session(dir.path(), "s1.json", "s1", &[("bash", &["cmd"])]);
-        write_session(dir.path(), "s2.json", "s2", &[("bash", &["cmd"])]);
-        write_session(dir.path(), "s3.json", "s3", &[("bash", &["cmd"])]);
+        for _ in 0..3 {
+            seed_session(dir.path(), &[("bash", &["cmd"])]);
+        }
 
         // Candidates land in an isolated tempdir — no HOME mutation. The old
         // form set HOME to a throwaway dir, which is process-global and raced
@@ -436,12 +328,21 @@ mod tests {
         let candidate = &appended[0];
         assert!(candidate.id.starts_with("sig-"));
         assert_eq!(candidate.proposed_name, "bash");
+        assert_eq!(candidate.occurrence_count, 3);
+        assert_eq!(candidate.example_session_ids.len(), 3);
+        let summary = &candidate.source_tool_calls[0].args_summary;
+        assert_eq!(summary.len(), 1);
+        assert_eq!(
+            summary.get("cmd"),
+            Some(&serde_json::Value::Null),
+            "argument keys only — values never surface"
+        );
     }
 
     #[test]
     fn run_detection_skips_patterns_below_threshold() {
         let dir = tempdir().unwrap();
-        write_session(dir.path(), "s1.json", "s1", &[("bash", &["cmd"])]);
+        seed_session(dir.path(), &[("bash", &["cmd"])]);
 
         let candidates_dir = tempdir().unwrap();
         let result = run_detection_in(candidates_dir.path(), dir.path(), 7, 2, 3);
@@ -454,12 +355,76 @@ mod tests {
     }
 
     #[test]
+    fn run_detection_ignores_archived_sessions() {
+        let dir = tempdir().unwrap();
+        // Three sessions share the signature — but one of them is archived,
+        // leaving two live sessions: exactly `min_sessions`, still detected.
+        for _ in 0..2 {
+            seed_session(dir.path(), &[("bash", &["cmd"])]);
+        }
+        let archived = seed_session(dir.path(), &[("bash", &["cmd"])]);
+        let query = SessionQuery::new(dir.path());
+        query
+            .save_curation(&archived, &SessionCuration { archived: true })
+            .unwrap();
+
+        let candidates_dir = tempdir().unwrap();
+        let appended =
+            run_detection_in(candidates_dir.path(), dir.path(), 7, 3, 3).expect("detection ran");
+        assert_eq!(
+            appended.len(),
+            0,
+            "the archived session must not count toward the thresholds"
+        );
+
+        // Lifting the archive filter (include_archived=true is the Task 2
+        // escape hatch) brings the third session back into the input window.
+        let refs = query.list_recent(7, true).unwrap();
+        assert_eq!(refs.len(), 3);
+    }
+
+    #[test]
+    fn run_detection_respects_the_session_window() {
+        let dir = tempdir().unwrap();
+        for _ in 0..3 {
+            seed_session(dir.path(), &[("bash", &["cmd"])]);
+        }
+        let candidates_dir = tempdir().unwrap();
+        // days_back = 0 puts the window cutoff at "now" — every session was
+        // written strictly before the call, so the input set is empty.
+        let appended =
+            run_detection_in(candidates_dir.path(), dir.path(), 0, 2, 3).expect("detection ran");
+        assert_eq!(appended.len(), 0, "a zero-day window sees no sessions");
+    }
+
+    #[test]
     fn run_detection_returns_zero_when_sessions_dir_missing() {
         let candidates_dir = tempdir().unwrap();
         let bogus = PathBuf::from("/tmp/shannon-nope-does-not-exist-12345");
         let result = run_detection_in(candidates_dir.path(), &bogus, 7, 2, 3);
         assert!(result.is_ok());
         assert_eq!(result.unwrap().len(), 0);
+    }
+
+    #[test]
+    fn run_detection_skips_unreadable_logs_without_failing() {
+        let dir = tempdir().unwrap();
+        for _ in 0..3 {
+            seed_session(dir.path(), &[("bash", &["cmd"])]);
+        }
+        // A fourth session's log goes corrupt after writing: the listing
+        // degrades to directory mtimes and the per-session read skips it,
+        // so the run neither fails nor loses the real pattern.
+        let corrupt = seed_session(dir.path(), &[("bash", &["cmd"])]);
+        let log = dir.path().join(corrupt.to_string()).join("events.jsonl");
+        let mut raw = std::fs::read_to_string(&log).unwrap();
+        raw.push_str("{not json\n");
+        std::fs::write(&log, raw).unwrap();
+
+        let candidates_dir = tempdir().unwrap();
+        let appended = run_detection_in(candidates_dir.path(), dir.path(), 7, 2, 3)
+            .expect("a corrupt log must not fail the run");
+        assert_eq!(appended.len(), 1, "the three healthy sessions still detect");
     }
 
     #[test]

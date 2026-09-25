@@ -2,8 +2,9 @@
 //
 // SCOPE: run one review-gated distillation pass (run_dream_pass), browse the
 // pending shadow proposals (list_dream_proposals), apply selected actions or
-// discard each proposal, and read the newest pass report (read_dream_report,
-// rendered as plain pre-wrap text — no markdown dependency).
+// discard each proposal, read the newest pass report (read_dream_report,
+// rendered as plain pre-wrap text — no markdown dependency), and show the
+// persisted last-run stats on cold start (read_dream_state).
 //
 // Non-destructive by design: proposals live under ~/.shannon/dreams/ and the
 // only path into ~/.shannon/memories/ is applyDreamProposal — the user-
@@ -25,10 +26,12 @@ import {
   discardDreamProposal,
   listDreamProposals,
   readDreamReport,
+  readDreamState,
   runDreamPass,
   type DreamAction,
   type DreamPassResult,
   type DreamProposal,
+  type DreamState,
 } from '@/lib/tauri-api'
 import { cn } from '@/lib/utils'
 
@@ -64,9 +67,12 @@ export default function DreamPanel() {
   const [loading, setLoading] = useState(true)
   const [running, setRunning] = useState(false)
   /// Stats of the most recent pass that actually ran in this window (from
-  /// its result or the `dream-pass-finished` event — the backend has no
-  /// read-back command, so no line is shown before the first run here).
+  /// its result or the `dream-pass-finished` event). Before the first run
+  /// here, the persisted `read_dream_state` read-back below covers the line.
   const [lastRun, setLastRun] = useState<DreamPassResult | null>(null)
+  /// Persisted state read back on mount (卡C): the last pass's timestamp +
+  /// stats, so the panel shows 「上次提炼」 on cold start. Null → no line.
+  const [persisted, setPersisted] = useState<DreamState | null>(null)
   /// Per-proposal selection of action ids; defaults to all selected
   /// (「应用所选，其余丢弃」).
   const [selected, setSelected] = useState<Record<string, Set<string>>>({})
@@ -83,11 +89,14 @@ export default function DreamPanel() {
     try {
       const rows = await listDreamProposals()
       setProposals(rows)
-      // Default-select every action of any newly seen proposal.
       setSelected(prev => {
-        const next = { ...prev }
+        // Rebuild keyed on the still-pending proposals: keeps the user's
+        // selection edits, prunes keys whose proposal was consumed
+        // (applied/discarded, possibly elsewhere) so a later proposal
+        // reusing the id gets fresh defaults instead of a stale selection.
+        const next: Record<string, Set<string>> = {}
         for (const p of rows) {
-          if (!next[p.id]) next[p.id] = new Set(p.actions.map(a => a.id))
+          next[p.id] = prev[p.id] ?? new Set(p.actions.map(a => a.id))
         }
         return next
       })
@@ -103,6 +112,20 @@ export default function DreamPanel() {
   useEffect(() => {
     void fetchProposals()
   }, [fetchProposals])
+
+  // Cold-start read-back (卡C): the persisted last-pass timestamp + stats.
+  // Best-effort — a failed read just leaves the 「上次提炼」 line off.
+  useEffect(() => {
+    let cancelled = false
+    readDreamState()
+      .then((state) => {
+        if (!cancelled) setPersisted(state)
+      })
+      .catch(() => { /* demo/browser mode or unreadable state file */ })
+    return () => {
+      cancelled = true
+    }
+  }, [])
 
   // A pass that finished anywhere in the window (nightly scheduler, /dream
   // slash, another panel) refreshes the review list + the stats line.
@@ -218,6 +241,33 @@ export default function DreamPanel() {
     }
   }
 
+  // 「上次提炼：<时间> · <统计摘要>」 (卡C cold start): only when a previous
+  // run exists on disk — `last_dream_at` null shows nothing, no empty-state
+  // clutter. The stats summary reuses the live-run ICU message; a state
+  // file written without stats falls back to the timestamp-only form.
+  let coldStartLine: string | null = null
+  if (persisted?.last_dream_at) {
+    const when = new Date(persisted.last_dream_at)
+    const time = isNaN(when.getTime())
+      ? persisted.last_dream_at
+      : intl.formatDate(when, { dateStyle: 'medium', timeStyle: 'short' })
+    const stats = persisted.last_stats
+    if (stats) {
+      coldStartLine = t('memory.dream.lastDistilled', {
+        time,
+        stats: t('memory.dream.stats', {
+          scanned: Number(stats.scanned_sessions ?? 0),
+          merge: Number(stats.merge_proposed ?? 0),
+          remove: Number(stats.remove_proposed ?? 0),
+          add: Number(stats.add_proposed ?? 0),
+          candidates: Number(stats.candidates_detected ?? 0),
+        }),
+      })
+    } else {
+      coldStartLine = t('memory.dream.lastDistilledNoStats', { time })
+    }
+  }
+
   return (
     <section
       aria-label={t('memory.dream.title')}
@@ -249,7 +299,7 @@ export default function DreamPanel() {
       </div>
       <p className="text-on-surface-variant text-body-sm mb-md">{t('memory.dream.subtitle')}</p>
 
-      {lastRun && (
+      {lastRun ? (
         <div className="flex items-center gap-xs px-md py-sm rounded-lg bg-surface-container-low border border-outline-variant/30 text-label-sm text-on-surface-variant mb-md">
           <span className="material-symbols-outlined text-[16px] text-primary" aria-hidden="true">insights</span>
           {t('memory.dream.stats', {
@@ -260,7 +310,12 @@ export default function DreamPanel() {
             candidates: lastRun.candidates_detected,
           })}
         </div>
-      )}
+      ) : coldStartLine ? (
+        <div className="flex items-center gap-xs px-md py-sm rounded-lg bg-surface-container-low border border-outline-variant/30 text-label-sm text-on-surface-variant mb-md">
+          <span className="material-symbols-outlined text-[16px] text-primary" aria-hidden="true">history</span>
+          {coldStartLine}
+        </div>
+      ) : null}
 
       <div className="flex items-center gap-sm mb-xs">
         <h3 className="font-label-md text-[14px] font-bold text-on-surface">{t('memory.dream.proposals.title')}</h3>

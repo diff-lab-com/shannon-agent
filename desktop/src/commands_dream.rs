@@ -24,8 +24,11 @@
 //! - `redact`, a key/value masker applied to every user text before it
 //!   leaves the machine (into excerpts, prompts, or reports).
 //! - `session_excerpt`, which extracts redacted user texts and tool names
-//!   from a session JSON file in the format read by
-//!   `skill_pattern_detection::load_session`.
+//!   for one session through the core session-query adapter
+//!   (`shannon_core::session_log::SessionQuery` — the read-side single
+//!   source over the real `<id>/events.jsonl` layout it shares with skill
+//!   detection; the retired flat `sessions/*.json` reader silently parsed
+//!   zero production sessions).
 //! - `build_report_markdown` + `save_report_in`/`read_report_in`, the
 //!   human-readable run report (counts only — no original text ever reaches
 //!   the report).
@@ -41,7 +44,8 @@
 //! ## Orchestration
 //!
 //! `execute_dream_pass` is the single entry point shared by the manual
-//! command and the (future) nightly scheduler: privacy gates → throttle
+//! command and the two scheduler tracks (the 1–5 点 nightly window and the
+//! one-shot startup catch-up): privacy gates → throttle
 //! (state timestamp + a process-wide [`ConsolidationLock`]) → gather inputs →
 //! one LLM consult per project → per-project proposals + one merged report +
 //! state update + inbox card + `dream-pass-finished` event. The LLM call is
@@ -63,6 +67,7 @@ use regex::Regex;
 use serde::{Deserialize, Serialize};
 use shannon_core::auto_dream_consolidation::{ConsolidationLock, ConsolidationPrompt};
 use shannon_core::memory::{MemoryEntry, MemoryStore};
+use shannon_core::session_log::{SessionQuery, SessionRef};
 use tauri::{Emitter, Manager};
 
 use crate::commands::AppState;
@@ -133,8 +138,11 @@ pub struct DreamAddEntry {
     pub confidence: f64,
     /// Session ids the content was distilled from (provenance).
     pub source_session_ids: Vec<String>,
-    /// True once the content has been user-verified; dream proposals always
-    /// start `false` and stay review-gated.
+    /// Minimal back-source corroboration (卡C): set at proposal-build time
+    /// when ≥2 distinct content keywords hit the excerpt text of one of the
+    /// *claimed* source sessions — the model's own claim is never trusted
+    /// (its `verified` output is ignored). Independently of this flag every
+    /// add stays review-gated: nothing is written until the user approves.
     pub verified: bool,
 }
 
@@ -165,6 +173,13 @@ pub struct DreamProposal {
     pub created_at: String,
     /// The proposed actions, reviewed (apply/discard) as a unit.
     pub actions: Vec<DreamAction>,
+    /// Incremental apply journal (卡C 4a): action ids already applied to the
+    /// memory store, written back into this file after each successful
+    /// action. A mid-apply failure leaves the proposal on disk, and a retry
+    /// skips these ids instead of double-applying (the double-add case).
+    /// `#[serde(default)]` so pre-journal proposal files keep parsing.
+    #[serde(default)]
+    pub applied_ids: Vec<String>,
 }
 
 /// Shared, forward-compatible detection state persisted at
@@ -563,116 +578,44 @@ pub fn redact(s: &str) -> String {
 // Session excerpts
 // ============================================================================
 
-/// Parsed session file — same shape [`crate::skill_pattern_detection`] reads.
-#[derive(Debug, Deserialize)]
-struct SessionFile {
-    #[serde(default)]
-    session_id: String,
-    #[serde(default)]
-    messages: Vec<serde_json::Value>,
-}
-
-/// Extract a redacted, size-capped excerpt from the session file at `path`.
-/// Takes the first `max_user_msgs` user texts (string content or `text`
-/// blocks; `tool_result` blocks are never included), each truncated to
-/// `per_msg_chars` chars and passed through [`redact`], plus the deduplicated
-/// assistant tool names in first-seen order.
+/// Extract a redacted, size-capped excerpt for one session through the core
+/// session-query adapter. Takes the first `max_user_msgs` user texts, each
+/// truncated to `per_msg_chars` chars and passed through [`redact`], plus
+/// the deduplicated tool names in first-seen order. Archived sessions never
+/// reach this function: they are already excluded by
+/// `SessionQuery::list_recent` at the window level.
 pub fn session_excerpt(
-    path: &Path,
+    query: &SessionQuery,
+    session: &SessionRef,
     max_user_msgs: usize,
     per_msg_chars: usize,
 ) -> Result<SessionExcerpt, String> {
-    let contents =
-        std::fs::read_to_string(path).map_err(|e| format!("read {}: {e}", path.display()))?;
-    let session: SessionFile =
-        serde_json::from_str(&contents).map_err(|e| format!("parse {}: {e}", path.display()))?;
-    let session_id = if session.session_id.is_empty() {
-        path.file_stem()
-            .and_then(|s| s.to_str())
-            .unwrap_or("unknown")
-            .to_string()
-    } else {
-        session.session_id
-    };
-
     let mut user_texts = Vec::new();
+    for text in query
+        .user_texts(&session.session_id)
+        .map_err(|e| format!("session {}: {e}", session.session_id))?
+    {
+        if user_texts.len() >= max_user_msgs {
+            break;
+        }
+        user_texts.push(redact(&truncate_chars(&text, per_msg_chars)));
+    }
+
     let mut tool_names: Vec<String> = Vec::new();
-    for msg in &session.messages {
-        match msg.get("role").and_then(|v| v.as_str()).unwrap_or_default() {
-            "user" => {
-                if user_texts.len() >= max_user_msgs {
-                    continue;
-                }
-                if let Some(text) = extract_text(msg.get("content")) {
-                    if text.trim().is_empty() {
-                        continue;
-                    }
-                    user_texts.push(redact(&truncate_chars(&text, per_msg_chars)));
-                }
-            }
-            "assistant" => {
-                for block in content_blocks(msg.get("content")) {
-                    if block
-                        .get("type")
-                        .and_then(|v| v.as_str())
-                        .unwrap_or_default()
-                        != "tool_use"
-                        && block
-                            .get("type")
-                            .and_then(|v| v.as_str())
-                            .unwrap_or_default()
-                            != "tool_call"
-                    {
-                        continue;
-                    }
-                    let name = block
-                        .get("name")
-                        .and_then(|v| v.as_str())
-                        .unwrap_or("unknown")
-                        .to_string();
-                    if !tool_names.contains(&name) {
-                        tool_names.push(name);
-                    }
-                }
-            }
-            _ => {}
+    for call in query
+        .tool_calls(&session.session_id)
+        .map_err(|e| format!("session {}: {e}", session.session_id))?
+    {
+        if !tool_names.contains(&call.tool_name) {
+            tool_names.push(call.tool_name);
         }
     }
+
     Ok(SessionExcerpt {
-        session_id,
+        session_id: session.session_id.to_string(),
         user_texts,
         tool_names,
     })
-}
-
-/// User-visible text from a message `content` field: a plain string, or the
-/// concatenated `text` of `text`-type blocks (tool results and other block
-/// types are ignored on purpose).
-fn extract_text(content: Option<&serde_json::Value>) -> Option<String> {
-    match content? {
-        serde_json::Value::String(s) => Some(s.clone()),
-        serde_json::Value::Array(blocks) => {
-            let texts: Vec<String> = blocks
-                .iter()
-                .filter(|b| b.get("type").and_then(|v| v.as_str()) == Some("text"))
-                .filter_map(|b| b.get("text").and_then(|v| v.as_str()).map(String::from))
-                .collect();
-            if texts.is_empty() {
-                None
-            } else {
-                Some(texts.join("\n"))
-            }
-        }
-        _ => None,
-    }
-}
-
-/// Content blocks when `content` is an array; anything else yields nothing.
-fn content_blocks(content: Option<&serde_json::Value>) -> &[serde_json::Value] {
-    match content {
-        Some(serde_json::Value::Array(a)) => a,
-        _ => &[],
-    }
 }
 
 /// Truncate to at most `max` chars (char-boundary safe, CJK friendly).
@@ -1042,17 +985,99 @@ fn next_proposal_id(used: &mut HashSet<String>) -> String {
     candidate
 }
 
+// ============================================================================
+// Verified minimal back-source (卡C)
+// ============================================================================
+
+/// Minimum distinct content-keyword hits, inside ONE claimed source
+/// session's excerpt text, before an `add` action's `verified` flag is set.
+pub(crate) const VERIFIED_MIN_TOKEN_HITS: usize = 2;
+
+/// Common English function/content-free words stripped before the
+/// back-source check — short, ubiquitous tokens ("the", "and", "for")
+/// would substring-hit almost any excerpt text and inflate `verified`
+/// falsely. Deliberately small and conservative; the length floors below
+/// carry most of the filtering.
+const VERIFIED_STOPWORDS: &[&str] = &[
+    "about", "also", "and", "are", "been", "being", "but", "can", "could", "did", "do", "does",
+    "for", "from", "had", "has", "have", "her", "here", "his", "into", "its", "just", "may",
+    "might", "must", "new", "not", "now", "only", "onto", "our", "out", "over", "shall", "should",
+    "some", "such", "than", "that", "the", "their", "then", "there", "these", "they", "this",
+    "those", "too", "use", "used", "uses", "using", "was", "were", "what", "when", "where",
+    "which", "while", "will", "with", "would", "you", "your",
+];
+
+/// Keyword tokens distilled from a proposed `add` content for the
+/// back-source check: split on non-alphanumeric boundaries (unicode-aware —
+/// a CJK run without separators stays one token, which the substring match
+/// handles fine), lowercased, deduplicated, with stopword-ish short tokens
+/// dropped: single chars, ASCII tokens under 3 chars ("on", "is"), and the
+/// common-word list. Pure; heavily unit-tested.
+pub(crate) fn content_keywords(content: &str) -> Vec<String> {
+    let mut out: Vec<String> = Vec::new();
+    for raw in content.split(|c: char| !c.is_alphanumeric()) {
+        let token = raw.to_lowercase();
+        let char_count = token.chars().count();
+        if char_count < 2
+            || (token.is_ascii() && char_count < 3)
+            || VERIFIED_STOPWORDS.contains(&token.as_str())
+        {
+            continue;
+        }
+        if !out.contains(&token) {
+            out.push(token);
+        }
+    }
+    out
+}
+
+/// The minimal back-source check for one `add` action: at least
+/// [`VERIFIED_MIN_TOKEN_HITS`] distinct [`content_keywords`] of the proposed
+/// content must appear — case-insensitively — in the excerpt text of a
+/// single one of the action's claimed `source_session_ids`. Hits scattered
+/// across different sessions do not corroborate the provenance claim, so
+/// they deliberately don't count. Pure; heavily unit-tested.
+pub(crate) fn verify_add_against_excerpts(
+    content: &str,
+    source_session_ids: &[String],
+    excerpts: &[SessionExcerpt],
+) -> bool {
+    if source_session_ids.is_empty() {
+        return false;
+    }
+    let keywords = content_keywords(content);
+    if keywords.len() < VERIFIED_MIN_TOKEN_HITS {
+        return false;
+    }
+    for excerpt in excerpts {
+        if !source_session_ids.contains(&excerpt.session_id) {
+            continue;
+        }
+        let haystack = excerpt.user_texts.join("\n").to_lowercase();
+        let hits = keywords
+            .iter()
+            .filter(|kw| haystack.contains(kw.as_str()))
+            .count();
+        if hits >= VERIFIED_MIN_TOKEN_HITS {
+            return true;
+        }
+    }
+    false
+}
+
 /// Turn raw LLM output into a review-gated [`DreamProposal`] for `project`.
 ///
 /// Pure and total: parse failures or empty results produce a proposal with
 /// zero actions (the caller skips saving those). Merge/remove ids are
 /// filtered to entries that actually exist in `project`'s memory set and
 /// deduplicated across actions, so a hallucinated or double-referenced id
-/// can never reach the apply path. `add` entries get `verified = false` —
-/// the user, not the model, verifies.
+/// can never reach the apply path. `add` entries get `verified` from the
+/// minimal back-source check (`verify_add_against_excerpts`) over the
+/// excerpts gathered for this pass — never from the model's own claim.
 pub(crate) fn build_proposal_from_llm(
     project: &str,
     entries: &[MemoryEntry],
+    excerpts: &[SessionExcerpt],
     llm_text: &str,
     proposal_id: &str,
     created_at: &str,
@@ -1122,8 +1147,8 @@ pub(crate) fn build_proposal_from_llm(
                 category: normalize_dream_category(&add.category),
                 content: content.to_string(),
                 confidence: add.confidence.clamp(0.0, 1.0),
+                verified: verify_add_against_excerpts(content, &source_session_ids, excerpts),
                 source_session_ids,
-                verified: false,
             }),
         });
     }
@@ -1133,6 +1158,7 @@ pub(crate) fn build_proposal_from_llm(
         project: project.to_string(),
         created_at: created_at.to_string(),
         actions,
+        applied_ids: Vec::new(),
     }
 }
 
@@ -1177,6 +1203,12 @@ async fn consult_llm(
 /// partial output. Response *parse* failures are not errors — the pass still
 /// produces its report with zero proposals.
 ///
+/// `extra_session_ids` (T4, final review F1) is the explicit include: these
+/// sessions are excerpted in addition to the window, regardless of their
+/// archived flag or age — the post-archive callback names the session it
+/// just flagged so the pass can distill it. Empty for every scheduled or
+/// manual entry point.
+///
 /// Seams:
 /// - `consult` — the L2 model call per project (transport errors abort).
 /// - `detect(days)` — the L3 heuristic detection + recording; returns the
@@ -1194,6 +1226,7 @@ pub(crate) async fn execute_dream_pass_inner<C, F, D, DF, R, RF>(
     memory_store: &SharedMemoryStore,
     sessions_dir: &Path,
     dreams_dir: &Path,
+    extra_session_ids: &[uuid::Uuid],
     client_config: shannon_engine::api::types::LlmClientConfig,
     consult: C,
     detect: D,
@@ -1227,15 +1260,63 @@ where
     };
     let entries_reviewed: usize = by_project.values().map(Vec::len).sum();
 
-    // Recent session excerpts (texts already redacted by `session_excerpt`).
+    // Recent session excerpts (texts already redacted by `session_excerpt`),
+    // read through the core session-query adapter — the same single source
+    // skill detection uses. Archived sessions are excluded at the input
+    // layer (`include_archived = false`), except the explicit
+    // `extra_session_ids` below.
+    let query = SessionQuery::new(sessions_dir);
     let mut excerpts: Vec<SessionExcerpt> = Vec::new();
-    for path in crate::skill_pattern_detection::list_recent_sessions(sessions_dir, days_back)? {
-        match session_excerpt(&path, DEFAULT_MAX_USER_MSGS, DEFAULT_PER_MSG_CHARS) {
+    let mut scanned: HashSet<uuid::Uuid> = HashSet::new();
+    for session in query
+        .list_recent(days_back, false)
+        .map_err(|e| format!("session query: {e}"))?
+    {
+        scanned.insert(session.session_id);
+        match session_excerpt(
+            &query,
+            &session,
+            DEFAULT_MAX_USER_MSGS,
+            DEFAULT_PER_MSG_CHARS,
+        ) {
             Ok(excerpt) => excerpts.push(excerpt),
             Err(e) => tracing::warn!(
-                path = %path.display(),
+                session = %session.session_id,
                 error = %e,
                 "dream: skipping unreadable session"
+            ),
+        }
+    }
+    // T4 explicit includes: union-in exactly these ids even though the
+    // archived flag (and possibly the age) would exclude them — the
+    // post-archive callback distills the session it just flagged. Best-effort
+    // per id (warn + skip), deduplicated against the window path.
+    for id in extra_session_ids {
+        if !scanned.insert(*id) {
+            continue; // already excerpted via the window path
+        }
+        match query.session_by_id(id) {
+            Ok(Some(session)) => match session_excerpt(
+                &query,
+                &session,
+                DEFAULT_MAX_USER_MSGS,
+                DEFAULT_PER_MSG_CHARS,
+            ) {
+                Ok(excerpt) => excerpts.push(excerpt),
+                Err(e) => tracing::warn!(
+                    session = %id,
+                    error = %e,
+                    "dream: skipping unreadable explicitly-included session"
+                ),
+            },
+            Ok(None) => tracing::warn!(
+                session = %id,
+                "dream: explicitly-included session has no log; skipping"
+            ),
+            Err(e) => tracing::warn!(
+                session = %id,
+                error = %e,
+                "dream: skipping unreadable explicitly-included session"
             ),
         }
     }
@@ -1291,6 +1372,7 @@ where
         let proposal = build_proposal_from_llm(
             project,
             entries,
+            &excerpts,
             text,
             &next_proposal_id(&mut used_ids),
             &started.to_rfc3339(),
@@ -1351,9 +1433,15 @@ where
 /// and the (Task 3) nightly scheduler. Never reads a session or memory file
 /// when a gate or throttle skips the pass; an LLM transport failure returns
 /// `Err` with no artifacts written (the lock releases via guard drop).
+///
+/// `extra_session_ids` (T4, final review F1) names sessions the pass must
+/// distill regardless of their archived flag — the post-archive callback
+/// passes the session it just flagged; every other entry point passes an
+/// empty vec.
 pub(crate) async fn execute_dream_pass(
     app: tauri::AppHandle,
     days_back: u32,
+    extra_session_ids: Vec<String>,
 ) -> Result<DreamPassResult, String> {
     // The on-disk config is re-read per pass so a Settings toggle takes
     // effect without a restart; the real dirs resolve exactly where they
@@ -1361,7 +1449,7 @@ pub(crate) async fn execute_dream_pass(
     let cfg = crate::config::load_config();
     let dreams = dreams_dir()?;
     let desktop = crate::commands_skill_candidates::desktop_dir()?;
-    execute_dream_pass_in(&app, days_back, &cfg, &dreams, &desktop).await
+    execute_dream_pass_in(&app, days_back, &cfg, &dreams, &desktop, extra_session_ids).await
 }
 
 /// [`execute_dream_pass`] against an injected config + dreams/desktop
@@ -1376,6 +1464,7 @@ pub(crate) async fn execute_dream_pass_in<R: tauri::Runtime>(
     cfg: &crate::config::DesktopConfig,
     dreams: &Path,
     desktop: &Path,
+    extra_session_ids: Vec<String>,
 ) -> Result<DreamPassResult, String> {
     // Session window is capped centrally so every entry point is covered.
     let days_back = clamp_days_back(days_back);
@@ -1469,11 +1558,26 @@ pub(crate) async fn execute_dream_pass_in<R: tauri::Runtime>(
         }
     };
 
+    // T4 explicit includes: ids arrive as strings from the command layer;
+    // a non-UUID entry is warned and dropped, never fatal (best-effort
+    // callback contract).
+    let extra_ids: Vec<uuid::Uuid> = extra_session_ids
+        .iter()
+        .filter_map(|s| match uuid::Uuid::parse_str(s) {
+            Ok(id) => Some(id),
+            Err(_) => {
+                tracing::warn!(session = %s, "dream: ignoring non-UUID extra session id");
+                None
+            }
+        })
+        .collect();
+
     let outcome = execute_dream_pass_inner(
         days_back,
         &state.memory_store,
         &sessions_dir,
         dreams,
+        &extra_ids,
         client_config,
         consult_llm,
         detect,
@@ -1514,7 +1618,7 @@ pub(crate) async fn execute_dream_pass_in<R: tauri::Runtime>(
 }
 
 // ============================================================================
-// Nightly scheduler (Task 3, default off — needs `dream_enabled`)
+// Scheduler — dual track (卡C), default off (needs `dream_enabled`)
 // ============================================================================
 
 /// Local-hour window (01:00–05:59) in which the nightly dream pass may fire.
@@ -1524,9 +1628,13 @@ pub(crate) const NIGHT_CHECK_INTERVAL_SECS: u64 = 30 * 60;
 /// Minimum age of the last dream pass before the nightly scheduler fires
 /// again (mirrors the state-file `last_dream_at` check).
 pub(crate) const NIGHT_MIN_INTERVAL_HOURS: i64 = 24;
-/// Session-window length the nightly scheduler passes to
-/// [`execute_dream_pass`] (manual entry points default to 3 instead).
+/// Session-window length the scheduler tracks pass to [`execute_dream_pass`]
+/// (manual entry points default to 3 instead).
 pub(crate) const NIGHT_DAYS_BACK: u32 = 7;
+/// Delay between app setup and the one-shot startup catch-up check (the
+/// second track): long enough that the app has settled, short enough to
+/// still catch machines that are rarely on during the 1–5 点 window.
+pub(crate) const CATCHUP_DELAY_SECS: u64 = 10 * 60;
 
 /// True when `hour` (local wall clock 0–23) is inside [`NIGHT_WINDOW`] —
 /// the off-hours window in which the nightly dream pass may fire. Pure so
@@ -1546,13 +1654,50 @@ pub(crate) fn is_state_due(last_dream_at: Option<&str>, now: DateTime<Utc>) -> b
     }
 }
 
-/// One nightly-scheduler wake: fire a 7-day dream pass only when all of
+/// Pure fire predicate for the catch-up wake (unit-tested): the privacy
+/// gates must be open (`skip_reason = None`), the last pass must be at
+/// least [`NIGHT_MIN_INTERVAL_HOURS`] old, and no session query may be in
+/// flight. The idle input is `SessionRegistry::any_querying` — the global
+/// read added beside the existing per-session `is_querying`; without it
+/// the fixed 10-minute startup delay would be the only idle proxy
+/// (documented choice: the delay alone stays the fallback on runtimes
+/// where the registry is unreachable).
+pub(crate) fn is_catchup_due(
+    skip_reason: Option<&str>,
+    state_due: bool,
+    any_querying: bool,
+) -> bool {
+    skip_reason.is_none() && state_due && !any_querying
+}
+
+/// Run one scheduled 7-day pass and log the outcome — the shared tail of
+/// both tracks. `execute_dream_pass` re-applies its own gates, 6h throttle
+/// and single-flight lock on top; everything here is log-only.
+async fn run_scheduled_pass(app: &tauri::AppHandle, trigger: &str) {
+    match execute_dream_pass(app.clone(), NIGHT_DAYS_BACK, Vec::new()).await {
+        Ok(result) => match result.skipped_reason {
+            Some(reason) => {
+                tracing::info!(trigger, reason, "dream: scheduled pass skipped")
+            }
+            None => tracing::info!(
+                trigger,
+                scanned = result.scanned_sessions,
+                merge = result.merge_proposed,
+                remove = result.remove_proposed,
+                add = result.add_proposed,
+                candidates = result.candidates_detected,
+                "dream: scheduled pass completed"
+            ),
+        },
+        Err(e) => tracing::warn!(trigger, error = %e, "dream: scheduled pass failed"),
+    }
+}
+
+/// One nightly-window wake: fire a 7-day dream pass only when all of
 /// these hold — the local wall-clock hour is inside [`NIGHT_WINDOW`],
 /// `dream_enabled` is on (config re-read every wake so a Settings toggle
 /// takes effect without a restart), and the shared state file's
 /// `last_dream_at` is at least [`NIGHT_MIN_INTERVAL_HOURS`] old.
-/// [`execute_dream_pass`]'s own gates, 6h throttle and single-flight lock
-/// re-apply on top. Errors are logged, never propagated or panicked.
 pub(crate) async fn maybe_night_dream(app: &tauri::AppHandle) {
     use chrono::Timelike;
     let cfg = crate::config::load_config();
@@ -1572,24 +1717,53 @@ pub(crate) async fn maybe_night_dream(app: &tauri::AppHandle) {
     if !is_state_due(read_state_in(&desktop).last_dream_at.as_deref(), Utc::now()) {
         return;
     }
-    match execute_dream_pass(app.clone(), NIGHT_DAYS_BACK).await {
-        Ok(result) => match result.skipped_reason {
-            Some(reason) => tracing::info!(reason = %reason, "nightly dream: skipped"),
-            None => tracing::info!(
-                scanned = result.scanned_sessions,
-                merge = result.merge_proposed,
-                remove = result.remove_proposed,
-                add = result.add_proposed,
-                candidates = result.candidates_detected,
-                "nightly dream: pass completed"
-            ),
-        },
-        Err(e) => tracing::warn!(error = %e, "nightly dream: pass failed"),
+    run_scheduled_pass(app, "nightly").await;
+}
+
+/// One catch-up wake (the second scheduler track): fire a 7-day pass when
+/// the privacy gates are open, the last pass is at least
+/// [`NIGHT_MIN_INTERVAL_HOURS`] old — a machine that is never on during the
+/// 1–5 点 window would otherwise never dream — and no session query is in
+/// flight (the [`is_catchup_due`] idle signal).
+pub(crate) async fn maybe_catchup_dream(app: &tauri::AppHandle) {
+    let cfg = crate::config::load_config();
+    let skip = dream_skip_reason(&cfg);
+    let desktop = match crate::commands_skill_candidates::desktop_dir() {
+        Ok(dir) => dir,
+        Err(e) => {
+            tracing::warn!(error = %e, "catch-up dream: cannot resolve desktop dir");
+            return;
+        }
+    };
+    let state_due = is_state_due(read_state_in(&desktop).last_dream_at.as_deref(), Utc::now());
+    let any_querying = app.state::<AppState>().registry.any_querying().await;
+    if !is_catchup_due(skip, state_due, any_querying) {
+        tracing::info!(
+            disabled = skip.is_some(),
+            state_due,
+            any_querying,
+            "catch-up dream: conditions not met, skipping"
+        );
+        return;
+    }
+    run_scheduled_pass(app, "catch-up").await;
+}
+
+/// Run one scheduler wake inside its own task and await it: a panic in the
+/// wake kills only that throwaway task — logged at warn — and the calling
+/// loop lives on. Chosen over `std::panic::catch_unwind` because driving an
+/// async body through `catch_unwind` needs `AssertUnwindSafe` assertions on
+/// every borrowed capture, while a `JoinHandle` surfaces the same signal
+/// (`Err(JoinError)`) with none of them.
+async fn run_wake_isolated(wake: impl std::future::Future<Output = ()> + Send + 'static) {
+    if let Err(e) = tauri::async_runtime::spawn(wake).await {
+        tracing::warn!(error = %e, "dream scheduler wake panicked; scheduler survives");
     }
 }
 
-/// Spawn the detached nightly dream scheduler: wakes every 30 minutes and
-/// hands the wake to the crate-internal `maybe_night_dream` check.
+/// Spawn the detached nightly dream scheduler (track 1): wakes every 30
+/// minutes and hands the wake to the crate-internal `maybe_night_dream`
+/// check, panic-isolated per iteration (`run_wake_isolated`).
 /// Detached like the routine scheduler, so it never blocks shutdown — the
 /// async runtime simply dies with the process. `pub` because `main.rs` (the
 /// binary crate) calls it from `setup`.
@@ -1601,8 +1775,23 @@ pub fn spawn_night_dream(app: tauri::AppHandle) {
         );
         loop {
             tokio::time::sleep(std::time::Duration::from_secs(NIGHT_CHECK_INTERVAL_SECS)).await;
-            maybe_night_dream(&app).await;
+            let handle = app.clone();
+            run_wake_isolated(async move { maybe_night_dream(&handle).await }).await;
         }
+    });
+}
+
+/// Spawn the one-shot startup catch-up (track 2, 卡C): ~10 minutes after
+/// setup, run one `maybe_catchup_dream` check — a 7-day pass fires when the
+/// dream switch is on, the last pass is ≥24h old, and no query is running.
+/// Dual-track with [`spawn_night_dream`]: the nightly window stays the
+/// primary off-hours path, the catch-up covers machines that are not
+/// running during it. `pub` because `main.rs` calls it from `setup`.
+pub fn spawn_catchup_dream(app: tauri::AppHandle) {
+    tauri::async_runtime::spawn(async move {
+        tokio::time::sleep(std::time::Duration::from_secs(CATCHUP_DELAY_SECS)).await;
+        let handle = app.clone();
+        run_wake_isolated(async move { maybe_catchup_dream(&handle).await }).await;
     });
 }
 
@@ -1693,23 +1882,96 @@ fn apply_action(store: &mut MemoryStore, project: &str, action: &DreamAction) ->
     }
 }
 
+/// Best-effort journal write: persist `proposal` (whose `applied_ids` just
+/// grew) back to its on-disk file. A failure is logged, never fatal — the
+/// journal is a mitigation, and failing the apply over it would put the
+/// real write (the store save) behind a weaker guarantee.
+///
+/// Atomicity (final review F3): the payload lands via tmp-file + rename
+/// (the same pattern `SessionCuration::store` uses in shannon-core), so a
+/// mid-write crash can leave the previous journal state on disk — never a
+/// truncated, unparsable proposal JSON. The journal is still only
+/// best-effort for the *store*: the write happens after the in-memory
+/// mutation but before the store save, so a crash in that window loses the
+/// store change while the journal says applied (under-apply on retry, never
+/// a duplicate).
+fn journal_applied_ids(proposal: &DreamProposal, path: &Path) {
+    let json = match serde_json::to_string_pretty(proposal) {
+        Ok(json) => json,
+        Err(e) => {
+            tracing::warn!(error = %e, "dream apply: cannot serialize proposal journal");
+            return;
+        }
+    };
+    // Same-directory temp file, fsync, rename — a partial tmp write is
+    // invisible to readers of `path`.
+    let tmp = path.with_extension("json.tmp");
+    let written = (|| -> std::io::Result<()> {
+        use std::io::Write;
+        let mut f = std::fs::File::create(&tmp)?;
+        f.write_all(json.as_bytes())?;
+        f.sync_all()?;
+        Ok(())
+    })();
+    if let Err(e) = written {
+        tracing::warn!(
+            path = %path.display(),
+            error = %e,
+            "dream apply: journal write failed"
+        );
+        return;
+    }
+    if let Err(e) = std::fs::rename(&tmp, path) {
+        tracing::warn!(
+            path = %path.display(),
+            error = %e,
+            "dream apply: journal rename failed"
+        );
+    }
+}
+
 /// Apply the selected actions of `proposal` to the store (the only write
-/// path into the memory store this feature has). Actions are applied in
-/// proposal order; unknown requested ids are ignored; actions whose targets
-/// are gone are reported as skipped in order.
-pub(crate) fn apply_actions_to_store(
+/// path into the memory store this feature has) with the incremental
+/// `applied_ids` journal (卡C 4a; atomic per write — final review F3). Apply
+/// is not atomic: the proposal file is deleted only after the store save
+/// succeeds, and each freshly applied action is journaled into the proposal
+/// JSON (best-effort) on the way. A retry skips actions already journaled
+/// (reported as applied) — at-most-once per action. Honest crash window:
+/// the journal write lands after the in-memory mutation but before the
+/// store save, so a crash between the two may lose that action's store
+/// effect while the journal says applied (under-apply on retry). It can
+/// never cause a duplicate: journal write + rename are atomic, and
+/// journaled ids are skipped. Actions are applied in proposal order;
+/// unknown requested ids are ignored; actions whose targets are gone are
+/// reported as skipped in order. `path` is the proposal's on-disk file
+/// (`None`: journal-free, used by pure store-level tests).
+pub(crate) fn apply_actions_journaled_in(
     store: &mut MemoryStore,
-    proposal: &DreamProposal,
+    proposal: &mut DreamProposal,
+    path: Option<&Path>,
     action_ids: &[String],
 ) -> ApplyDreamOutcome {
     let selected: HashSet<&str> = action_ids.iter().map(String::as_str).collect();
+    // Snapshot so the loop can mutate `proposal.applied_ids` (the journal)
+    // while still reading the action list.
+    let actions: Vec<DreamAction> = proposal.actions.clone();
     let mut outcome = ApplyDreamOutcome::default();
-    for action in &proposal.actions {
+    for action in &actions {
         if !selected.contains(action.id.as_str()) {
+            continue;
+        }
+        // Journal skip: this id already landed (possibly in a crashed
+        // attempt) — re-running it would double-apply (the double-add case).
+        if proposal.applied_ids.contains(&action.id) {
+            outcome.applied.push(action.id.clone());
             continue;
         }
         if apply_action(store, &proposal.project, action) {
             outcome.applied.push(action.id.clone());
+            proposal.applied_ids.push(action.id.clone());
+            if let Some(path) = path {
+                journal_applied_ids(proposal, path);
+            }
         } else {
             outcome.skipped.push(action.id.clone());
         }
@@ -1733,7 +1995,12 @@ pub async fn run_dream_pass(
     _state: tauri::State<'_, AppState>,
     days_back: Option<u32>,
 ) -> Result<DreamPassResult, String> {
-    execute_dream_pass(app, days_back.unwrap_or(DEFAULT_MANUAL_DAYS_BACK)).await
+    execute_dream_pass(
+        app,
+        days_back.unwrap_or(DEFAULT_MANUAL_DAYS_BACK),
+        Vec::new(),
+    )
+    .await
 }
 
 /// Every pending (review-gated) proposal across projects, newest first.
@@ -1748,9 +2015,23 @@ pub async fn read_dream_report(ts: Option<String>) -> Result<String, String> {
     read_report_in(&dreams_dir()?, ts.as_deref())
 }
 
+/// The persisted dream state (`last_dream_at` + `last_stats`) for the
+/// Memory panel's cold-start 「上次提炼」 line (卡C) — the state file was
+/// previously write-only. Missing or corrupt file returns the default
+/// (both fields `None`), which the UI renders as no line at all.
+#[tauri::command]
+pub async fn read_dream_state() -> Result<DreamState, String> {
+    let desktop = crate::commands_skill_candidates::desktop_dir()?;
+    Ok(read_state_in(&desktop))
+}
+
 /// Apply the selected actions of a proposal to the memory store, then delete
 /// the proposal file — review is consumed as a unit, so a partial apply
-/// discards the unselected actions (“应用所选，其余丢弃”).
+/// discards the unselected actions (“应用所选，其余丢弃”). Every successful
+/// action is journaled (best-effort, atomic write) into the proposal file on
+/// the way (卡C 4a): a retry skips journaled ids — at-most-once per action.
+/// A crash between the journal write and the store save may lose that
+/// action's effect (under-apply on retry); it can never duplicate one.
 #[tauri::command]
 pub async fn apply_dream_proposal(
     _app: tauri::AppHandle,
@@ -1759,11 +2040,14 @@ pub async fn apply_dream_proposal(
     action_ids: Vec<String>,
 ) -> Result<ApplyDreamOutcome, String> {
     let dir = dreams_dir()?;
-    let proposal = load_proposal_in(&dir, &proposal_id)?;
+    let path = find_proposal_file_in(&dir, &proposal_id)
+        .ok_or_else(|| format!("Proposal {proposal_id} not found"))?;
+    let mut proposal = load_proposal_in(&dir, &proposal_id)?;
     let outcome = {
         let store = &state.memory_store;
         let mut guard = store.write().map_err(|e| e.to_string())?;
-        let outcome = apply_actions_to_store(&mut guard, &proposal, &action_ids);
+        let outcome =
+            apply_actions_journaled_in(&mut guard, &mut proposal, Some(&path), &action_ids);
         guard.save().map_err(|e| e.to_string())?;
         outcome
     };
@@ -1793,6 +2077,7 @@ pub async fn discard_dream_proposal(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::sync::Arc;
     use tempfile::tempdir;
 
     /// Deterministic, separator-free stand-in for shannon-core's
@@ -1818,6 +2103,7 @@ mod tests {
                 add_entry: None,
                 rationale: "Superseded by a newer decision".into(),
             }],
+            applied_ids: Vec::new(),
         }
     }
 
@@ -2023,44 +2309,93 @@ mod tests {
     }
 
     // ------------------------------------------------------------------
-    // Session excerpts
+    // Session excerpts (real layout: fixtures through the session_log
+    // writer — the retired flat *.json fixtures never matched production)
     // ------------------------------------------------------------------
 
-    fn write_session_file(dir: &Path, name: &str, body: serde_json::Value) -> PathBuf {
-        let path = dir.join(name);
-        std::fs::write(&path, serde_json::to_vec(&body).unwrap()).unwrap();
-        path
+    use shannon_core::session_log::SessionLogWriter;
+    use shannon_types::session_event::{
+        SessionEventBody, SessionStartPayload, ToolCallPayload, TurnEndPayload, TurnStartPayload,
+        UserMessagePayload,
+    };
+
+    /// Seed a real session through the session_log writer: session/start,
+    /// then for each `user_texts` entry a user prompt, then one framed turn
+    /// per `(tool, arg_keys)` call. Returns the session id.
+    fn seed_real_session(
+        container: &Path,
+        user_texts: &[&str],
+        calls: &[(&str, &[&str])],
+    ) -> uuid::Uuid {
+        let id = uuid::Uuid::new_v4();
+        let mut w = SessionLogWriter::open_layout(container, &id.to_string()).unwrap();
+        w.record(SessionEventBody::SessionStart(SessionStartPayload {
+            model: "test-model".into(),
+            provider: None,
+            cwd: Some("/proj".into()),
+            app_version: None,
+            ..Default::default()
+        }));
+        for text in user_texts {
+            w.record(SessionEventBody::UserMessage(UserMessagePayload {
+                source: UserMessagePayload::SOURCE_USER.into(),
+                content: (*text).into(),
+                attachment_count: 0,
+            }));
+        }
+        for (i, (tool, keys)) in calls.iter().enumerate() {
+            w.record(SessionEventBody::TurnStart(TurnStartPayload {
+                query_id: None,
+            }));
+            let mut input = serde_json::Map::new();
+            for k in *keys {
+                input.insert((*k).to_string(), serde_json::Value::String("x".into()));
+            }
+            w.record(SessionEventBody::ToolCall(ToolCallPayload {
+                tool_use_id: format!("u-{i}"),
+                tool_name: (*tool).to_string(),
+                arguments: serde_json::Value::Object(input).to_string(),
+            }));
+            w.record(SessionEventBody::TurnEnd(TurnEndPayload {
+                reason: TurnEndPayload::REASON_COMPLETED.into(),
+                usage: None,
+                error: None,
+            }));
+        }
+        w.close().unwrap();
+        id
+    }
+
+    /// Excerpt one seeded session through the adapter.
+    fn excerpt_of(
+        query: &SessionQuery,
+        id: &uuid::Uuid,
+        max_user_msgs: usize,
+        per_msg_chars: usize,
+    ) -> SessionExcerpt {
+        let session = SessionRef {
+            session_id: *id,
+            dir: query.container().join(id.to_string()),
+            updated_at: Utc::now(),
+        };
+        session_excerpt(query, &session, max_user_msgs, per_msg_chars).unwrap()
     }
 
     #[test]
     fn session_excerpt_extracts_redacted_texts_and_tool_names() {
         let dir = tempdir().unwrap();
-        let path = write_session_file(
+        let id = seed_real_session(
             dir.path(),
-            "s1.json",
-            serde_json::json!({
-                "session_id": "sess-1",
-                "messages": [
-                    {"role": "user", "content": "deploy with api_key: sk-secret1 please"},
-                    {"role": "assistant", "content": [
-                        {"type": "text", "text": "sure"},
-                        {"type": "tool_use", "name": "bash", "input": {"cmd": "deploy"}}
-                    ]},
-                    {"role": "user", "content": [
-                        {"type": "tool_result", "content": "leaked? no"},
-                        {"type": "text", "text": "now set password=hunter2"}
-                    ]},
-                    {"role": "assistant", "content": [
-                        {"type": "tool_use", "name": "bash", "input": {}},
-                        {"type": "tool_call", "name": "read_file", "input": {}}
-                    ]},
-                    {"role": "user", "content": "thanks"}
-                ]
-            }),
+            &[
+                "deploy with api_key: sk-secret1 please",
+                "now set password=hunter2",
+                "thanks",
+            ],
+            &[("bash", &["cmd"]), ("bash", &[]), ("read_file", &["path"])],
         );
-
-        let excerpt = session_excerpt(&path, DEFAULT_MAX_USER_MSGS, DEFAULT_PER_MSG_CHARS).unwrap();
-        assert_eq!(excerpt.session_id, "sess-1");
+        let query = SessionQuery::new(dir.path());
+        let excerpt = excerpt_of(&query, &id, DEFAULT_MAX_USER_MSGS, DEFAULT_PER_MSG_CHARS);
+        assert_eq!(excerpt.session_id, id.to_string());
         assert_eq!(
             excerpt.user_texts,
             vec![
@@ -2075,22 +2410,15 @@ mod tests {
     #[test]
     fn session_excerpt_caps_messages_and_truncates_chars() {
         let dir = tempdir().unwrap();
-        let mut messages = Vec::new();
-        for i in 0..5 {
-            messages.push(serde_json::json!({
-                "role": "user",
-                "content": format!("msg-{i} {}", "长".repeat(30)),
-            }));
-        }
-        let path = write_session_file(
-            dir.path(),
-            "s2.json",
-            serde_json::json!({"messages": messages}),
-        );
+        let texts: Vec<String> = (0..5)
+            .map(|i| format!("msg-{i} {}", "长".repeat(30)))
+            .collect();
+        let refs: Vec<&str> = texts.iter().map(String::as_str).collect();
+        let id = seed_real_session(dir.path(), &refs, &[]);
 
-        let excerpt = session_excerpt(&path, 3, 10).unwrap();
-        // Missing session_id falls back to the file stem.
-        assert_eq!(excerpt.session_id, "s2");
+        let query = SessionQuery::new(dir.path());
+        let excerpt = excerpt_of(&query, &id, 3, 10);
+        assert_eq!(excerpt.session_id, id.to_string());
         assert_eq!(excerpt.user_texts.len(), 3);
         for (i, text) in excerpt.user_texts.iter().enumerate() {
             assert!(text.chars().count() <= 10, "truncated: {text}");
@@ -2099,11 +2427,48 @@ mod tests {
     }
 
     #[test]
-    fn session_excerpt_errors_on_missing_or_invalid_file() {
+    fn session_excerpt_missing_log_reads_empty_and_corrupt_log_errors() {
         let dir = tempdir().unwrap();
-        assert!(session_excerpt(&dir.path().join("missing.json"), 20, 500).is_err());
-        let bad = write_session_file(dir.path(), "bad.json", serde_json::json!([1, 2, 3]));
-        assert!(session_excerpt(&bad, 20, 500).is_err());
+        let query = SessionQuery::new(dir.path());
+        // A session id with no log at all excerpts to an empty excerpt —
+        // there is nothing to fail on.
+        let ghost = uuid::Uuid::new_v4();
+        let session = SessionRef {
+            session_id: ghost,
+            dir: dir.path().join(ghost.to_string()),
+            updated_at: Utc::now(),
+        };
+        let excerpt = session_excerpt(
+            &query,
+            &session,
+            DEFAULT_MAX_USER_MSGS,
+            DEFAULT_PER_MSG_CHARS,
+        )
+        .unwrap();
+        assert!(excerpt.user_texts.is_empty());
+        assert!(excerpt.tool_names.is_empty());
+
+        // A corrupt log line makes the session unreadable: an error the pass
+        // logs and skips.
+        let id = seed_real_session(dir.path(), &["hello"], &[]);
+        let log = dir.path().join(id.to_string()).join("events.jsonl");
+        let mut raw = std::fs::read_to_string(&log).unwrap();
+        raw.push_str("{not json\n");
+        std::fs::write(&log, raw).unwrap();
+        let session = SessionRef {
+            session_id: id,
+            dir: dir.path().join(id.to_string()),
+            updated_at: Utc::now(),
+        };
+        assert!(
+            session_excerpt(
+                &query,
+                &session,
+                DEFAULT_MAX_USER_MSGS,
+                DEFAULT_PER_MSG_CHARS
+            )
+            .is_err()
+        );
     }
 
     // ------------------------------------------------------------------
@@ -2171,19 +2536,8 @@ mod tests {
         e
     }
 
-    fn write_recent_session(dir: &Path, session_id: &str, user_text: &str) -> PathBuf {
-        let body = serde_json::json!({
-            "session_id": session_id,
-            "messages": [
-                {"role": "user", "content": user_text},
-                {"role": "assistant", "content": [
-                    {"type": "tool_use", "name": "bash", "input": {}}
-                ]},
-            ],
-        });
-        let path = dir.join(format!("{session_id}.json"));
-        std::fs::write(&path, serde_json::to_vec(&body).unwrap()).unwrap();
-        path
+    fn write_recent_session(dir: &Path, user_text: &str) -> uuid::Uuid {
+        seed_real_session(dir, &[user_text], &[("bash", &[])])
     }
 
     #[test]
@@ -2318,6 +2672,7 @@ mod tests {
         let proposal = build_proposal_from_llm(
             "proj",
             &entries,
+            &[],
             &text,
             "proposal-1",
             "2026-09-25T00:00:00+00:00",
@@ -2373,6 +2728,7 @@ mod tests {
             let proposal = build_proposal_from_llm(
                 "proj",
                 &entries,
+                &[],
                 text,
                 "proposal-1",
                 "2026-01-01T00:00:00+00:00",
@@ -2393,6 +2749,151 @@ mod tests {
         assert_eq!(next_proposal_id(&mut used), format!("proposal-{ms}-2"));
         let fresh = next_proposal_id(&mut used);
         assert!(fresh.starts_with("proposal-"));
+    }
+
+    // ------------------------------------------------------------------
+    // Verified minimal back-source (卡C)
+    // ------------------------------------------------------------------
+
+    fn excerpt_for(session_id: &str, texts: &[&str]) -> SessionExcerpt {
+        SessionExcerpt {
+            session_id: session_id.into(),
+            user_texts: texts.iter().map(|s| (*s).to_string()).collect(),
+            tool_names: vec![],
+        }
+    }
+
+    #[test]
+    fn content_keywords_strip_stopwords_and_short_ascii_tokens() {
+        // "the"/"for" are stopwords, "new" too; 2-char ASCII tokens dropped.
+        assert_eq!(
+            content_keywords("The new API for key handling: go"),
+            vec!["api".to_string(), "key".to_string(), "handling".to_string()]
+        );
+        // CJK: 2-char words are meaningful and kept; an unseparated run is
+        // one token (the substring match handles that).
+        assert_eq!(
+            content_keywords("使用 PostgreSQL 部署"),
+            vec![
+                "使用".to_string(),
+                "postgresql".to_string(),
+                "部署".to_string()
+            ]
+        );
+        // Case folding + dedup.
+        assert_eq!(
+            content_keywords("Rust rust RUST!"),
+            vec!["rust".to_string()]
+        );
+        // Stopword-only content leaves nothing usable.
+        assert!(content_keywords("the and with for of to").is_empty());
+    }
+
+    #[test]
+    fn verify_add_requires_two_keyword_hits_in_one_claimed_session() {
+        let excerpts = vec![
+            excerpt_for("sess-1", &["We Ships things on Thursdays, unless delayed"]),
+            excerpt_for("sess-2", &["deploy often"]),
+        ];
+        let claimed = vec!["sess-1".to_string()];
+        assert!(
+            verify_add_against_excerpts("User ships on Thursdays", &claimed, &excerpts),
+            "ships + thursdays both hit sess-1 → verified"
+        );
+        // Exactly one hit in the claimed session is not enough.
+        assert!(
+            !verify_add_against_excerpts("User ships often", &claimed, &excerpts),
+            "only 'ships' hits sess-1 ('often' lives in sess-2)"
+        );
+        // Hits split across two claimed sessions do not corroborate: each
+        // single session tops out at one hit.
+        let both = vec!["sess-1".to_string(), "sess-2".to_string()];
+        assert!(!verify_add_against_excerpts(
+            "ships often",
+            &both,
+            &excerpts
+        ));
+    }
+
+    #[test]
+    fn verify_add_empty_or_unknown_sources_stay_unverified() {
+        let excerpts = vec![excerpt_for("sess-1", &["ships thursdays ships thursdays"])];
+        // No claimed sources at all.
+        assert!(!verify_add_against_excerpts(
+            "ships thursdays",
+            &[],
+            &excerpts
+        ));
+        // Claimed id that is not among this pass's excerpts.
+        let claimed = vec!["sess-9".to_string()];
+        assert!(!verify_add_against_excerpts(
+            "ships thursdays",
+            &claimed,
+            &excerpts
+        ));
+        // Content with fewer usable keywords than the hit floor.
+        assert!(!verify_add_against_excerpts(
+            "the of to",
+            &claimed,
+            &excerpts
+        ));
+    }
+
+    #[test]
+    fn verify_add_handles_unicode_content_case_insensitively() {
+        let excerpts = vec![excerpt_for("sess-1", &["我们用 PostgreSQL 部署数据库"])];
+        let claimed = vec!["sess-1".to_string()];
+        assert!(
+            verify_add_against_excerpts("PostgreSQL 部署 is the norm", &claimed, &excerpts),
+            "postgresql + 部署 both hit, case-folded"
+        );
+        // A single CJK run is one distinct token — under the two-hit floor.
+        assert!(!verify_add_against_excerpts(
+            "部署数据库",
+            &claimed,
+            &excerpts
+        ));
+        // Two distinct CJK tokens both present → verified.
+        assert!(verify_add_against_excerpts(
+            "PostgreSQL 部署",
+            &claimed,
+            &excerpts
+        ));
+    }
+
+    #[test]
+    fn build_proposal_sets_verified_from_backsource_check_never_from_model() {
+        let entries = vec![dream_entry("proj", "alpha", 0.9)];
+        let excerpts = vec![excerpt_for("sess-1", &["Ships on Thursdays, usually"])];
+        // Both LLM adds claim verified:true (see `llm_add`) — the flag on
+        // the built proposal must come only from the back-source check.
+        let text = format!(
+            "{{\"add\": [{}, {}]}}",
+            llm_add("pattern", "User ships on Thursdays", 0.8),
+            llm_add("pattern", "Untethered widget claim", 0.8),
+        );
+        let proposal = build_proposal_from_llm(
+            "proj",
+            &entries,
+            &excerpts,
+            &text,
+            "proposal-1",
+            "2026-09-25T00:00:00+00:00",
+        );
+        let adds: Vec<&DreamAddEntry> = proposal
+            .actions
+            .iter()
+            .filter_map(|a| a.add_entry.as_ref())
+            .collect();
+        assert_eq!(adds.len(), 2);
+        assert!(
+            adds[0].verified,
+            "two keyword hits in the claimed source session"
+        );
+        assert!(
+            !adds[1].verified,
+            "no back-source corroboration → stays false"
+        );
     }
 
     // ------------------------------------------------------------------
@@ -2502,9 +3003,10 @@ mod tests {
         let before_dreams = snapshot_dir(dreams.path());
         let before_desktop = snapshot_dir(desktop.path());
 
-        let result = execute_dream_pass_in(&app, 3, &cfg, dreams.path(), desktop.path())
-            .await
-            .unwrap();
+        let result =
+            execute_dream_pass_in(&app, 3, &cfg, dreams.path(), desktop.path(), Vec::new())
+                .await
+                .unwrap();
 
         assert_eq!(result.skipped_reason.as_deref(), Some("disabled"));
         assert_eq!(result.scanned_sessions, 0);
@@ -2530,15 +3032,16 @@ mod tests {
         // First pass holding the lock → concurrent second call must see
         // "in-progress", not "throttled".
         let first = dream_lock().try_acquire().expect("fresh process lock");
-        let second = execute_dream_pass_in(&app, 3, &cfg, dreams.path(), desktop.path())
-            .await
-            .unwrap();
+        let second =
+            execute_dream_pass_in(&app, 3, &cfg, dreams.path(), desktop.path(), Vec::new())
+                .await
+                .unwrap();
         assert_eq!(second.skipped_reason.as_deref(), Some("in-progress"));
         drop(first);
 
         // The dropped guard stamped the 6h interval (also finding #4's
         // failed-pass story): the immediate retry reports "throttled".
-        let retry = execute_dream_pass_in(&app, 3, &cfg, dreams.path(), desktop.path())
+        let retry = execute_dream_pass_in(&app, 3, &cfg, dreams.path(), desktop.path(), Vec::new())
             .await
             .unwrap();
         assert_eq!(retry.skipped_reason.as_deref(), Some("throttled"));
@@ -2562,9 +3065,10 @@ mod tests {
         )
         .unwrap();
 
-        let result = execute_dream_pass_in(&app, 3, &cfg, dreams.path(), desktop.path())
-            .await
-            .unwrap();
+        let result =
+            execute_dream_pass_in(&app, 3, &cfg, dreams.path(), desktop.path(), Vec::new())
+                .await
+                .unwrap();
         assert_eq!(result.skipped_reason.as_deref(), Some("throttled"));
         assert_eq!(result.scanned_sessions, 0);
         assert!(read_state_in(desktop.path()).last_dream_at.is_some());
@@ -2602,6 +3106,41 @@ mod tests {
         // A timestamp in the future is never due.
         let future = (now + Duration::hours(2)).to_rfc3339();
         assert!(!is_state_due(Some(&future), now));
+    }
+
+    #[test]
+    fn catchup_due_requires_open_gates_due_state_and_idle() {
+        assert!(
+            is_catchup_due(None, true, false),
+            "gates open + ≥24h old + no query → due"
+        );
+        assert!(
+            !is_catchup_due(Some("disabled"), true, false),
+            "privacy gate closed → never due, even when idle and overdue"
+        );
+        assert!(
+            !is_catchup_due(None, false, false),
+            "last pass <24h ago → not due"
+        );
+        assert!(
+            !is_catchup_due(None, true, true),
+            "a live session query blocks the catch-up"
+        );
+        assert!(
+            !is_catchup_due(Some("disabled"), false, true),
+            "no condition combination bypasses a closed gate"
+        );
+    }
+
+    #[tokio::test]
+    async fn wake_isolation_swallows_a_panicking_wake() {
+        // The scheduler loop must survive a panicking wake: the error lands
+        // in the JoinHandle (logged by `run_wake_isolated`), the panic does
+        // not propagate to the caller.
+        let prev = std::panic::take_hook();
+        std::panic::set_hook(Box::new(|_| {})); // keep test output pristine
+        run_wake_isolated(async { panic!("deliberate: wake isolation check") }).await;
+        std::panic::set_hook(prev);
     }
 
     // ------------------------------------------------------------------
@@ -2743,11 +3282,7 @@ mod tests {
         assert!(!before.is_empty(), "seed wrote jsonl files");
 
         let sessions = tempdir().unwrap();
-        write_recent_session(
-            sessions.path(),
-            "sess-1",
-            "api_key: sk-1 and password: hunter2",
-        );
+        write_recent_session(sessions.path(), "api_key: sk-1 and password: hunter2");
         let dreams = tempdir().unwrap();
 
         let canned = format!(
@@ -2763,6 +3298,7 @@ mod tests {
             &store,
             sessions.path(),
             dreams.path(),
+            &[],
             shannon_engine::api::types::LlmClientConfig::default(),
             canned_consult(&canned),
             no_detect(),
@@ -2819,6 +3355,80 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn dream_pass_inner_extra_session_ids_distill_an_archived_session() {
+        // Final review F1 (T4): the post-archive callback fires AFTER the
+        // session's archived flag is set, so the plain window path would
+        // scan zero sessions when the just-archived one is the only recent
+        // one. The explicit `extra_session_ids` include must reach the
+        // session anyway; without it the archived session stays excluded.
+        let mem_dir = tempdir().unwrap();
+        let store = seed_shared_store(mem_dir.path(), vec![dream_entry("/work/app", "solo", 0.9)]);
+        let sessions = tempdir().unwrap();
+        let dreams = tempdir().unwrap();
+
+        // One archived session, written through the real log writer.
+        let archived = write_recent_session(sessions.path(), "distill me: api_key: sk-1");
+        SessionQuery::new(sessions.path())
+            .save_curation(
+                &archived,
+                &shannon_core::session_log::SessionCuration { archived: true },
+            )
+            .unwrap();
+
+        // Record every consult user prompt so the test can assert the
+        // archived session's (redacted) content actually reached the model.
+        // The closure borrows the shared buffer (no `move`), which keeps it
+        // `Copy` so the same spy feeds both passes below.
+        let prompts: Arc<std::sync::Mutex<Vec<String>>> = Arc::default();
+        let consult =
+            |_cfg: shannon_engine::api::types::LlmClientConfig, _system: String, user: String| {
+                prompts.lock().unwrap().push(user);
+                std::future::ready(Ok::<String, String>("no proposals in here".to_string()))
+            };
+
+        // Plain path: the archived session is excluded at the input layer.
+        let plain = execute_dream_pass_inner(
+            3,
+            &store,
+            sessions.path(),
+            dreams.path(),
+            &[],
+            shannon_engine::api::types::LlmClientConfig::default(),
+            consult,
+            no_detect(),
+            no_refine(),
+        )
+        .await
+        .unwrap();
+        assert_eq!(
+            plain.result.scanned_sessions, 0,
+            "the archived session must stay excluded without the explicit include"
+        );
+
+        // Explicit include: the same archived session is distilled, and its
+        // content reaches the consult prompt (redacted).
+        let with_extra = execute_dream_pass_inner(
+            3,
+            &store,
+            sessions.path(),
+            dreams.path(),
+            &[archived],
+            shannon_engine::api::types::LlmClientConfig::default(),
+            consult,
+            no_detect(),
+            no_refine(),
+        )
+        .await
+        .unwrap();
+        assert_eq!(with_extra.result.scanned_sessions, 1);
+        let last = prompts.lock().unwrap().last().cloned().unwrap_or_default();
+        assert!(
+            last.contains("distill me: api_key: [REDACTED]"),
+            "the archived session's content reached the consult prompt: {last}"
+        );
+    }
+
+    #[tokio::test]
     async fn dream_pass_inner_parse_failure_still_produces_report() {
         let mem_dir = tempdir().unwrap();
         let store = seed_shared_store(mem_dir.path(), vec![dream_entry("/work/app", "solo", 0.9)]);
@@ -2830,6 +3440,7 @@ mod tests {
             &store,
             sessions.path(),
             dreams.path(),
+            &[],
             shannon_engine::api::types::LlmClientConfig::default(),
             canned_consult("I would suggest merging some entries, honestly."),
             no_detect(),
@@ -2863,6 +3474,7 @@ mod tests {
             &store,
             sessions.path(),
             dreams.path(),
+            &[],
             shannon_engine::api::types::LlmClientConfig::default(),
             consult,
             no_detect(),
@@ -2897,6 +3509,7 @@ mod tests {
                 &store,
                 sessions.path(),
                 dreams.path(),
+                &[],
                 shannon_engine::api::types::LlmClientConfig::default(),
                 |_cfg, _system, _user| -> std::future::Ready<Result<String, String>> {
                     panic!("no consult may run without memory entries")
@@ -2957,6 +3570,7 @@ mod tests {
             &store,
             sessions.path(),
             dreams.path(),
+            &[],
             shannon_engine::api::types::LlmClientConfig::default(),
             canned_consult("no proposals in here"),
             detect,
@@ -3018,6 +3632,7 @@ mod tests {
             &store,
             sessions.path(),
             dreams.path(),
+            &[],
             shannon_engine::api::types::LlmClientConfig::default(),
             canned_consult("no proposals in here"),
             detect,
@@ -3054,6 +3669,7 @@ mod tests {
                 &store,
                 sessions.path(),
                 dreams.path(),
+                &[],
                 shannon_engine::api::types::LlmClientConfig::default(),
                 canned_consult("no proposals in here"),
                 no_detect(),
@@ -3076,6 +3692,7 @@ mod tests {
             project: "proj".into(),
             created_at: "2026-09-25T00:00:00+00:00".into(),
             actions,
+            applied_ids: Vec::new(),
         }
     }
 
@@ -3106,7 +3723,7 @@ mod tests {
             store.add(e.clone()).unwrap();
         }
 
-        let proposal = apply_proposal(vec![
+        let mut pending = apply_proposal(vec![
             DreamAction {
                 id: "action-1".into(),
                 kind: DreamActionKind::Merge,
@@ -3124,9 +3741,10 @@ mod tests {
             dream_add_action("action-3"),
         ]);
 
-        let outcome = apply_actions_to_store(
+        let outcome = apply_actions_journaled_in(
             &mut store,
-            &proposal,
+            &mut pending,
+            None,
             &["action-1".into(), "action-2".into(), "action-3".into()],
         );
         assert_eq!(outcome.applied, vec!["action-1", "action-2", "action-3"]);
@@ -3182,7 +3800,7 @@ mod tests {
         let live_id = live.id.clone();
         store.add(live).unwrap();
 
-        let proposal = apply_proposal(vec![
+        let mut proposal = apply_proposal(vec![
             DreamAction {
                 id: "action-1".into(),
                 kind: DreamActionKind::Merge,
@@ -3208,9 +3826,10 @@ mod tests {
         ]);
 
         // "action-999" is not in the proposal — ignored, not skipped.
-        let outcome = apply_actions_to_store(
+        let outcome = apply_actions_journaled_in(
             &mut store,
-            &proposal,
+            &mut proposal,
+            None,
             &[
                 "action-1".into(),
                 "action-2".into(),
@@ -3228,5 +3847,151 @@ mod tests {
                 .any(|e| e.source_kind.as_deref() == Some(DREAM_SOURCE_KIND))
         );
         assert!(store.get(&live_id).is_none(), "selected remove landed");
+    }
+
+    // ------------------------------------------------------------------
+    // Apply journal (卡C 4a — retry after a mid-apply failure)
+    // ------------------------------------------------------------------
+
+    /// Count memory entries materialized by dream adds in `store`.
+    fn dream_added_count(store: &MemoryStore) -> usize {
+        store
+            .search("", None)
+            .iter()
+            .filter(|e| e.source_kind.as_deref() == Some(DREAM_SOURCE_KIND))
+            .count()
+    }
+
+    #[test]
+    fn apply_journal_persists_applied_ids_after_each_action() {
+        let dir = tempdir().unwrap();
+        let mut store = MemoryStore::new(dir.path().join("mem"));
+        let proposal = apply_proposal(vec![
+            dream_add_action("action-1"),
+            dream_add_action("action-2"),
+        ]);
+        save_proposal_in(dir.path(), test_hash, &proposal).unwrap();
+        let path = dir
+            .path()
+            .join(test_hash(&proposal.project))
+            .join("proposal-apply.json");
+
+        let mut pending = load_proposal_in(dir.path(), "proposal-apply").unwrap();
+        let outcome = apply_actions_journaled_in(
+            &mut store,
+            &mut pending,
+            Some(&path),
+            &["action-1".into(), "action-2".into()],
+        );
+        assert_eq!(outcome.applied, vec!["action-1", "action-2"]);
+        assert_eq!(dream_added_count(&store), 2);
+
+        // The journal reached the real on-disk file through the `_in` seam.
+        let on_disk = load_proposal_in(dir.path(), "proposal-apply").unwrap();
+        assert_eq!(on_disk.applied_ids, vec!["action-1", "action-2"]);
+    }
+
+    #[test]
+    fn apply_journal_retry_after_store_save_failure_never_double_applies() {
+        // Crash window: journal writes land per action, the store save at
+        // the end does not — the proposal file survives with the full
+        // journal while the store lost everything.
+        let dir = tempdir().unwrap();
+        let mut store = MemoryStore::new(dir.path().join("mem"));
+        let proposal = apply_proposal(vec![
+            dream_add_action("action-1"),
+            dream_add_action("action-2"),
+        ]);
+        save_proposal_in(dir.path(), test_hash, &proposal).unwrap();
+        let path = dir
+            .path()
+            .join(test_hash(&proposal.project))
+            .join("proposal-apply.json");
+
+        let mut pending = load_proposal_in(dir.path(), "proposal-apply").unwrap();
+        apply_actions_journaled_in(
+            &mut store,
+            &mut pending,
+            Some(&path),
+            &["action-1".into(), "action-2".into()],
+        );
+        // (store save "fails" here — simulated by retrying against a fresh
+        // store, exactly what the on-disk state looks like after the crash.)
+
+        let mut retried = load_proposal_in(dir.path(), "proposal-apply").unwrap();
+        let mut fresh = MemoryStore::new(dir.path().join("mem"));
+        let outcome = apply_actions_journaled_in(
+            &mut fresh,
+            &mut retried,
+            Some(&path),
+            &["action-1".into(), "action-2".into()],
+        );
+        assert_eq!(
+            outcome.applied,
+            vec!["action-1", "action-2"],
+            "journaled ids still count as applied (they are durable)"
+        );
+        assert_eq!(
+            outcome.skipped,
+            Vec::<String>::new(),
+            "no action may be re-run into a duplicate"
+        );
+        assert_eq!(
+            dream_added_count(&fresh),
+            0,
+            "double-add is the bug: journaled actions must be skipped"
+        );
+    }
+
+    #[test]
+    fn apply_journal_partial_journal_applies_only_the_rest_once() {
+        // Crash window: action-1's journal write landed, the store save did
+        // not. The retry applies only action-2 — action-1 exactly once less,
+        // action-2 exactly once.
+        let dir = tempdir().unwrap();
+        let mut store = MemoryStore::new(dir.path().join("mem"));
+        let proposal = apply_proposal(vec![
+            dream_add_action("action-1"),
+            dream_add_action("action-2"),
+        ]);
+        save_proposal_in(dir.path(), test_hash, &proposal).unwrap();
+        let path = dir
+            .path()
+            .join(test_hash(&proposal.project))
+            .join("proposal-apply.json");
+
+        let mut partial = load_proposal_in(dir.path(), "proposal-apply").unwrap();
+        partial.applied_ids = vec!["action-1".into()];
+        let outcome = apply_actions_journaled_in(
+            &mut store,
+            &mut partial,
+            Some(&path),
+            &["action-1".into(), "action-2".into()],
+        );
+        assert_eq!(outcome.applied, vec!["action-1", "action-2"]);
+        assert_eq!(
+            dream_added_count(&store),
+            1,
+            "only action-2 landed in the store; action-1 was journal-skipped"
+        );
+        // The journal on disk now covers both.
+        let on_disk = load_proposal_in(dir.path(), "proposal-apply").unwrap();
+        assert_eq!(on_disk.applied_ids, vec!["action-1", "action-2"]);
+    }
+
+    #[test]
+    fn legacy_proposal_json_without_applied_ids_parses_with_default() {
+        // Pre-卡C proposal files have no `applied_ids` field — serde default
+        // keeps them loadable (and re-appliable only for unjournaled ids).
+        let dir = tempdir().unwrap();
+        let project_dir = dir.path().join(test_hash("/work/app"));
+        std::fs::create_dir_all(&project_dir).unwrap();
+        std::fs::write(
+            project_dir.join("proposal-legacy.json"),
+            r#"{"id":"proposal-legacy","project":"/work/app","created_at":"2026-09-01T00:00:00+00:00","actions":[]}"#,
+        )
+        .unwrap();
+        let loaded = load_proposal_in(dir.path(), "proposal-legacy").unwrap();
+        assert!(loaded.applied_ids.is_empty(), "missing field → default");
     }
 }

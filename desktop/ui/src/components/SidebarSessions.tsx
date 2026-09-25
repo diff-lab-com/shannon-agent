@@ -18,6 +18,7 @@
 
 import { useState, useCallback, useEffect, useMemo, useRef, Fragment } from 'react'
 import { useNavigate } from 'react-router-dom'
+import { toast } from 'sonner'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { ScrollArea } from '@/components/ui/scroll-area'
@@ -27,7 +28,13 @@ import { useT } from '@/i18n'
 import * as api from '@/lib/tauri-api'
 import { exportSessionAsMarkdown, printSession } from '@/lib/sessionActions'
 import { toastError } from '@/lib/errorToast'
-import type { GoalRunDto, ScheduledRoutine, SessionActivity, SessionInfo } from '@/types'
+import type {
+  ArchivedSessionRow,
+  GoalRunDto,
+  ScheduledRoutine,
+  SessionActivity,
+  SessionInfo,
+} from '@/types'
 import DeleteSessionModal from '@/pages/chat/DeleteSessionModal'
 import HighlightText from './HighlightText'
 
@@ -190,6 +197,12 @@ export function SessionsSection({ sessions, sessionActivity, goalRunsBySession =
   // engine to expose working_dir on routines — deferred until that contract
   // exists.
   const [routines, setRoutines] = useState<ScheduledRoutine[]>([])
+  // 卡A archive: the collapsed 已归档 section at the bottom of the rail.
+  // Rows come from the backend's archived lens; the load refires whenever
+  // the active list changes (archive/unarchive both emit sessions-updated,
+  // which the parent refreshes from) so restore/archive reflect instantly.
+  const [archivedRows, setArchivedRows] = useState<ArchivedSessionRow[]>([])
+  const [archivedOpen, setArchivedOpen] = useState(false)
   // Wall-clock tick that drives the elapsed badges while anything runs.
   const [nowTick, setNowTick] = useState(() => Date.now())
   // U5: touch long-press (500ms) opens the ⋯ menu; the click that follows a
@@ -285,6 +298,20 @@ export function SessionsSection({ sessions, sessionActivity, goalRunsBySession =
       window.clearInterval(id)
     }
   }, [])
+
+  // 卡A: refresh the archived lens alongside the active list — the backend
+  // emits sessions-updated on every archive/unarchive, which re-renders
+  // `sessions` here. Fully defensive: engines without the command or test
+  // mocks just keep the section empty (hidden).
+  useEffect(() => {
+    let cancelled = false
+    try {
+      api.listArchivedSessions()
+        .then(rows => { if (!cancelled) setArchivedRows(Array.isArray(rows) ? rows : []) })
+        .catch(() => { if (!cancelled) setArchivedRows([]) })
+    } catch { /* section stays hidden */ }
+    return () => { cancelled = true }
+  }, [sessions])
 
   // Sort: pinned sessions first (U4 priority rule), then explicit drag-order
   // override (ascending), then created_at desc.
@@ -471,6 +498,22 @@ export function SessionsSection({ sessions, sessionActivity, goalRunsBySession =
     closeMobile?.()
   }, [switchSession, navigate, closeMobile])
 
+  // 卡A: archive from the row's ⋯ menu. The backend clears the row from
+  // the active list (sessions-updated) and the archived section refills.
+  const handleArchive = useCallback((session: SessionInfo) => {
+    api.archiveSession(session.id)
+      .then(() => toast.success(t('sidebar.sessions.archived.toast')))
+      .catch(e => toastError(t('sidebar.sessions.archived.failed'), e))
+  }, [t])
+
+  // 卡A: restore from the 已归档 section — the rail row is rebuilt by the
+  // backend and `sessions` refreshes via sessions-updated.
+  const handleRestore = useCallback((id: string) => {
+    api.unarchiveSession(id)
+      .then(() => toast.success(t('sidebar.sessions.archived.restoredToast')))
+      .catch(e => toastError(t('sidebar.sessions.archived.failed'), e))
+  }, [t])
+
   const menuItems = useCallback((session: SessionInfo): DropdownMenuItem[] => {
     const pinned = pinnedIds.has(session.id)
     return [
@@ -483,9 +526,12 @@ export function SessionsSection({ sessions, sessionActivity, goalRunsBySession =
       { id: 'open-in-window', label: t('chat.session.openInWindow'), icon: 'open_in_new', onSelect: () => { void api.openSessionWindow(session.id).catch(e => toastError(t('chat.session.openInWindow.failed'), e)) } },
       { id: 'export', label: t('chat.session.export'), icon: 'download', onSelect: () => { void exportSessionAsMarkdown(session.id, sessions, t) } },
       { id: 'print', label: t('chat.session.print'), icon: 'print', onSelect: () => { void printSession(session.id, sessions, t) } },
+      // 卡A — archive this session (leaves the active rail; restorable from
+      // the 已归档 section below).
+      { id: 'archive', label: t('chat.session.archive'), icon: 'archive', onSelect: () => handleArchive(session) },
       { id: 'delete', label: t('chat.session.delete'), icon: 'delete', destructive: true, onSelect: () => setDeleteTarget(session.id) },
     ]
-  }, [pinnedIds, t, sessions, startRename, togglePin, navigate])
+  }, [pinnedIds, t, sessions, startRename, togglePin, navigate, handleArchive])
 
   const renderGroupHeader = (group: SessionGroup) => {
     if (group.isProject) {
@@ -847,6 +893,71 @@ export function SessionsSection({ sessions, sessionActivity, goalRunsBySession =
                 )}
               </Fragment>
             ))}
+          </div>
+        )}
+        {/* 卡A — the collapsed 已归档 section at the bottom of the rail, in
+            the same lens/visual language as the 项目 folders. Archived rows
+            show title + last activity with a 恢复 action; opening a row
+            resumes it (the backend auto-unarchives). Hidden while searching
+            (active results stand alone) and when nothing is archived. */}
+        {!query.trim() && archivedRows.length > 0 && (
+          <div className="mt-2 border-t border-outline-variant/20 pt-1" data-testid="sidebar-archived-section">
+            <button
+              type="button"
+              aria-expanded={archivedOpen}
+              data-testid="sidebar-archived-toggle"
+              onClick={() => setArchivedOpen(v => !v)}
+              className="w-full flex items-center gap-1.5 px-3 pt-2 pb-1 font-label-sm text-[11px] font-bold text-on-surface-variant/90 hover:text-primary transition-colors min-w-0 cursor-pointer focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/30 rounded"
+            >
+              <span
+                className="material-symbols-outlined text-[14px] shrink-0 transition-transform duration-150"
+                style={{ transform: archivedOpen ? 'rotate(0deg)' : 'rotate(-90deg)' }}
+                aria-hidden="true"
+              >
+                expand_more
+              </span>
+              <span className="material-symbols-outlined text-[13px] shrink-0" aria-hidden="true">archive</span>
+              <span className="truncate flex-1 min-w-0 text-left">{t('sidebar.sessions.archived.title')}</span>
+              <span className="font-mono text-[10px] tabular-nums text-on-surface-variant/70 shrink-0">{archivedRows.length}</span>
+            </button>
+            {archivedOpen && (
+              <div className="pl-4 space-y-0.5" role="list" aria-label={t('sidebar.sessions.archived.aria')}>
+                {archivedRows.map(row => {
+                  const title = row.title || untitled
+                  const ago = formatRelativeTime(row.updated_at ?? undefined, nowTick, t)
+                  return (
+                    <div key={row.id} role="listitem" className="group flex items-center gap-1" data-testid={`archived-row-${row.id}`}>
+                      <button
+                        type="button"
+                        title={title}
+                        aria-label={t('sidebar.sessions.archived.row.aria', { title })}
+                        onClick={() => handleSwitch(row.id)}
+                        className="flex-1 min-w-0 text-left px-3 py-1.5 rounded-lg font-label-md text-label-md text-on-surface-variant/80 hover:bg-surface-container-low hover:text-primary transition-colors cursor-pointer select-none flex items-center gap-2 whitespace-nowrap focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/30"
+                      >
+                        <span className="flex-1 truncate">{title}</span>
+                        {ago && (
+                          <span className="font-mono text-[10px] tabular-nums text-on-surface-variant shrink-0" aria-hidden="true">{ago}</span>
+                        )}
+                      </button>
+                      <Button
+                        variant="ghost"
+                        size="icon-xs"
+                        data-testid={`archived-restore-${row.id}`}
+                        aria-label={t('sidebar.sessions.archived.restore.aria', { title })}
+                        title={t('sidebar.sessions.archived.restore')}
+                        className={cn(
+                          'rounded hover:bg-surface-container text-on-surface-variant hover:text-primary transition-opacity focus-visible:ring-2 focus-visible:ring-primary/30 focus-visible:outline-none shrink-0',
+                          'opacity-0 group-hover:opacity-100 focus-visible:opacity-100',
+                        )}
+                        onClick={() => handleRestore(row.id)}
+                      >
+                        <span className="material-symbols-outlined text-[16px]">undo</span>
+                      </Button>
+                    </div>
+                  )
+                })}
+              </div>
+            )}
           </div>
         )}
       </ScrollArea>

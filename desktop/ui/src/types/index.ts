@@ -197,6 +197,16 @@ export interface SessionInfo {
   updated_at?: number
 }
 
+/** Session archive (卡A): one archived session as the sidebar's 已归档
+ *  section renders it — returned by the `list_archived_sessions` command. */
+export interface ArchivedSessionRow {
+  id: string
+  /** Curated title; null → the UI renders its "untitled" placeholder. */
+  title?: string | null
+  /** Last activity, epoch ms; absent when unknown. */
+  updated_at?: number | null
+}
+
 /**
  * P0 plan dock: one persisted plan file from the session working dir
  * (`<workingDir>/.shannon/plans/*.md`), parsed by the `get_session_plan`
@@ -1218,6 +1228,8 @@ export const EVENT_NAMES = {
   QUERY_CANCELLED: 'query:cancelled',
   PERMISSION_REQUEST: 'permission-request',
   SESSIONS_UPDATED: 'sessions-updated',
+  /** 卡A: switch_session auto-unarchived an archived session (toast cue). */
+  SESSION_AUTO_UNARCHIVED: 'session-auto-unarchived',
   SESSION_LOADED: 'session-loaded',
   CONFIG_UPDATED: 'config-updated',
   DIFF_REVIEW_AVAILABLE: 'diff-review-available',
