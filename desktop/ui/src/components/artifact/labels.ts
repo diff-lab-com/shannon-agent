@@ -12,6 +12,9 @@ const KIND_LABEL_KEY: Record<ArtifactKind, string> = {
   svg: 'artifact.kind.svg',
   mermaid: 'artifact.kind.mermaid',
   document: 'artifact.kind.document',
+  image: 'artifact.kind.image',
+  web: 'artifact.kind.web',
+  other: 'artifact.kind.other',
 }
 
 const FALLBACK_TITLE_KEY: Record<ArtifactKind, string> = {
@@ -19,6 +22,9 @@ const FALLBACK_TITLE_KEY: Record<ArtifactKind, string> = {
   svg: 'artifact.fallback.svg',
   mermaid: 'artifact.fallback.mermaid',
   document: 'artifact.fallback.document',
+  image: 'artifact.fallback.image',
+  web: 'artifact.fallback.web',
+  other: 'artifact.fallback.other',
 }
 
 export function artifactKindLabel(kind: ArtifactKind, t: TFn): string {

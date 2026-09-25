@@ -9,7 +9,13 @@ export interface ArtifactItem extends DetectedArtifact {
 interface ArtifactContextValue {
   artifacts: ArtifactItem[]
   activeId: string | null
-  open: (artifact: DetectedArtifact) => void
+  /**
+   * Dock an artifact. Artifacts carrying an explicit `id` (disk provenance)
+   * replace their existing tab instead of stacking a duplicate; pass
+   * `activate: false` to add the tab without yanking the user's attention
+   * (decision §5-2: autoOpen only controls activation).
+   */
+  open: (artifact: DetectedArtifact, opts?: { activate?: boolean }) => void
   close: (id: string) => void
   closeAll: () => void
   setActive: (id: string) => void
@@ -46,10 +52,20 @@ export function ArtifactProvider({ children }: { children: ReactNode }) {
     writeAutoOpen(v)
   }, [])
 
-  const open = useCallback((artifact: DetectedArtifact) => {
-    const id = makeId()
-    setArtifacts(prev => [...prev, { ...artifact, id, openedAt: Date.now() }])
-    setActiveId(id)
+  const open = useCallback((artifact: DetectedArtifact, opts?: { activate?: boolean }) => {
+    const activate = opts?.activate ?? true
+    const id = artifact.id ?? makeId()
+    const item: ArtifactItem = { ...artifact, id, openedAt: Date.now() }
+    setArtifacts(prev => {
+      const existing = prev.findIndex(a => a.id === id)
+      if (existing >= 0) {
+        const next = [...prev]
+        next[existing] = item
+        return next
+      }
+      return [...prev, item]
+    })
+    if (activate) setActiveId(id)
   }, [])
 
   const close = useCallback((id: string) => {

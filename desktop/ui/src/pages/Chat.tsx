@@ -8,6 +8,8 @@ import { useCatalog } from '@/context/CatalogContext'
 import { useSessions } from '@/context/SessionContext'
 import { parseSlashInput, type SlashCommand, type SlashResult } from '@/lib/slash/commands'
 import { toastError } from '@/lib/errorToast'
+import { setActiveWorkingDir } from '@/lib/fileRefs'
+import { useDiskArtifacts } from '@/hooks/useDiskArtifacts'
 import { useBudgetGuard } from '@/hooks/useBudgetGuard'
 import BudgetBanner from '@/components/chat/BudgetBanner'
 import { TerminalPanel } from '@/components/terminal/TerminalPanel'
@@ -33,6 +35,9 @@ export default function Chat() {
   } = useChat()
   const { sessions, currentSessionId, createSession } = useSessions()
   const { config } = useCatalog()
+  // P1-C: file-mutating tool outputs (md/html/svg/mermaid/images written to
+  // disk) dock as provenance-tagged artifact tabs.
+  useDiskArtifacts(messages)
   const intl = useIntl()
   const t = useCallback((id: string) => intl.formatMessage({ id }), [intl])
   const navigate = useNavigate()
@@ -194,6 +199,27 @@ export default function Chat() {
     ?? config?.working_dir
     ?? null
 
+  // P0-B: file chips resolve relative paths against this session's working
+  // dir — publish it to the module ref the chip reads (one sync per change).
+  useEffect(() => {
+    setActiveWorkingDir(workingDir)
+  }, [workingDir])
+
+  // P0-B: a code-file chip (non-artifact extension) opens the inline editor
+  // pre-loaded with the file. Artifact extensions are handled by the
+  // ArtifactLinkHost instead.
+  const [editorInitialPath, setEditorInitialPath] = useState<string | null>(null)
+  useEffect(() => {
+    const open = (e: Event) => {
+      const path = (e as CustomEvent<{ path?: string }>).detail?.path
+      if (!path) return
+      setEditorInitialPath(path)
+      setEditorOpen(true)
+    }
+    window.addEventListener('shannon:open-code-file', open)
+    return () => window.removeEventListener('shannon:open-code-file', open)
+  }, [])
+
   return (
     <ComposerContext.Provider value={composerValue}>
         <div className="flex-1 flex w-full h-full relative">
@@ -245,6 +271,7 @@ export default function Chat() {
             onClose={() => setEditorOpen(false)}
             title={t('nav.editor')}
             panel={EditorPanel}
+            panelProps={editorInitialPath ? { initialPath: editorInitialPath } : undefined}
             size="2xl"
             modalClassName="max-w-5xl h-[90vh] flex flex-col"
             bodyClassName="flex-1 overflow-hidden"
