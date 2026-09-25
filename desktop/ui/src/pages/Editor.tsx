@@ -8,7 +8,7 @@
 // Orchestrator-only: all sub-components live under ./editor/. State and
 // callbacks stay here so the page is a single source of truth.
 
-import { useCallback, useState } from 'react'
+import { useCallback, useEffect, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { useT } from '@/i18n'
 import { open as openDialog } from '@tauri-apps/plugin-dialog'
@@ -29,7 +29,12 @@ import {
 } from './editor'
 import type { AutoDiagnostic, DrawerDiag, ManualDiagnostic, MixedDiagnostic } from './editor'
 
-export default function Editor() {
+type EditorProps = {
+  /** P0-B: pre-load this file (chat file-ref chips deep-link into the editor). */
+  initialPath?: string | null
+}
+
+export default function Editor({ initialPath }: EditorProps) {
   const t = useT()
   const navigate = useNavigate()
   const [filePath, setFilePath] = useState('')
@@ -99,14 +104,13 @@ export default function Editor() {
     }
   }, [])
 
-  const onLoad = useCallback(
-    async (e: React.FormEvent) => {
-      e.preventDefault()
-      if (!filePath.trim()) return
+  const loadPath = useCallback(
+    async (target: string) => {
+      if (!target.trim()) return
       setLoading(true)
       setLoadError(null)
       try {
-        const dto = await api.readSourceFile(filePath.trim())
+        const dto = await api.readSourceFile(target.trim())
         setFile(dto)
         setDraft(dto.content)
         setEditMode(false)
@@ -121,8 +125,24 @@ export default function Editor() {
         setLoading(false)
       }
     },
-    [filePath, fetchDiagnostics],
+    [fetchDiagnostics],
   )
+
+  const onLoad = useCallback(
+    async (e: React.FormEvent) => {
+      e.preventDefault()
+      await loadPath(filePath)
+    },
+    [filePath, loadPath],
+  )
+
+  // P0-B: deep-link support — load the chip's file once on mount (and when
+  // a new chip targets a different file while the panel is open).
+  useEffect(() => {
+    if (!initialPath) return
+    setFilePath(initialPath)
+    void loadPath(initialPath)
+  }, [initialPath, loadPath])
 
   const onBrowse = useCallback(async () => {
     try {

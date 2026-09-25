@@ -1,10 +1,19 @@
-export type ArtifactKind = 'html' | 'svg' | 'mermaid' | 'document'
+export type ArtifactKind = 'html' | 'svg' | 'mermaid' | 'document' | 'image' | 'web' | 'other'
 
 export interface DetectedArtifact {
   kind: ArtifactKind
+  /** Text content, a URL (`web`) or an absolute file path (`image`/`other`). */
   source: string
   title: string
   confidence: 'high' | 'medium'
+  /** Provenance when the artifact came from a real disk file (P1-C). */
+  path?: string
+  origin?: 'chat' | 'disk'
+  /**
+   * Explicit tab id — disk artifacts use `disk:<path>` so re-opening the
+   * same file replaces its tab instead of stacking duplicates.
+   */
+  id?: string
 }
 
 interface CodeFenceBlock {
@@ -85,6 +94,9 @@ export function artifactIcon(kind: ArtifactKind): string {
     case 'svg': return 'image'
     case 'mermaid': return 'account_tree'
     case 'document': return 'description'
+    case 'image': return 'photo_library'
+    case 'web': return 'language'
+    case 'other': return 'draft'
   }
 }
 

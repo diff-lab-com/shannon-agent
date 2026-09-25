@@ -611,6 +611,56 @@ export async function saveTextFile(path: string, content: string): Promise<void>
   await invoke('save_text_file', { path, content })
 }
 
+// --- 2026-09-25 open pipeline (docs/plans/2026-09-25-desktop-chat-ui-
+// open-and-artifact-design.md §4 P0-A / P0-B / P1-C / P1-D / P1-E) ---
+
+/** Open an http/https URL in the system browser (Rust validates the scheme). */
+export async function openExternal(url: string): Promise<void> {
+  await invoke('open_external', { url })
+}
+
+/** Open a local file with its OS default application (Rust scopes to $HOME/$TEMP). */
+export async function openWithDefaultApp(path: string): Promise<void> {
+  await invoke('open_with_default_app', { path })
+}
+
+/** Reveal a local file in the OS file manager. */
+export async function revealInFolder(path: string): Promise<void> {
+  await invoke('reveal_in_folder', { path })
+}
+
+/** Write a text artifact to $TEMP and open it with the default app; returns the path. */
+export async function openArtifactExternally(title: string, source: string, ext: string): Promise<string> {
+  return invoke('open_artifact_externally', { title, source, ext })
+}
+
+export interface FrameProbe {
+  frameable: boolean
+  status: number
+  reason: string | null
+}
+
+/** Server-side X-Frame-Options / frame-ancestors probe backing the web tab. */
+export async function probeUrlFrameable(url: string): Promise<FrameProbe> {
+  return invoke('probe_url_frameable', { url })
+}
+
+/** Existence probe for chat file references (anti-hallucination backstop). */
+export async function pathExists(path: string): Promise<boolean> {
+  return invoke('path_exists', { path })
+}
+
+export interface TextFileContent {
+  path: string
+  content: string
+  sizeBytes: number
+}
+
+/** Capped, scope-checked text read (disk artifacts / the dock's manual tab). */
+export async function readTextFile(path: string, maxBytes?: number): Promise<TextFileContent> {
+  return invoke('read_text_file', { path, maxBytes: maxBytes ?? null })
+}
+
 // --- Permissions ---
 
 export async function requestPermission(tool: string, input: unknown, risk: string): Promise<boolean> {

@@ -4,13 +4,15 @@ import { Button } from '@/components/ui/button'
 import { Modal } from '@/components/ui/modal'
 import { useT } from '@/i18n'
 
-interface InlinePanelModalProps {
+interface InlinePanelModalProps<P extends object> {
   open: boolean
   onClose: () => void
   /** Title shown in the sticky modal header. */
   title: string
   /** Lazy-loaded panel component (mounted via React.lazy). */
-  panel: ComponentType
+  panel: ComponentType<P>
+  /** Props forwarded to the panel (e.g. Editor's `initialPath`). */
+  panelProps?: P
   /** Outer modal size preset. */
   size: '2xl' | 'xl' | 'lg' | 'md' | 'sm'
   /** Modal root classes — controls max-width / height / overflow of the dialog box. */
@@ -21,15 +23,16 @@ interface InlinePanelModalProps {
 
 const LoadingFallback = () => <LoadingState />
 
-export default function InlinePanelModal({
+export default function InlinePanelModal<P extends object>({
   open,
   onClose,
   title,
   panel: Panel,
+  panelProps,
   size,
   modalClassName,
   bodyClassName,
-}: InlinePanelModalProps) {
+}: InlinePanelModalProps<P>) {
   const t = useT()
   return (
     <Modal
@@ -47,7 +50,8 @@ export default function InlinePanelModal({
       </div>
       <div className={bodyClassName}>
         <Suspense fallback={<LoadingFallback />}>
-          <Panel />
+          {/* eslint-disable-next-line @typescript-eslint/no-explicit-any */}
+          <Panel {...((panelProps ?? {}) as any)} />
         </Suspense>
       </div>
     </Modal>

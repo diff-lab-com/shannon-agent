@@ -457,6 +457,16 @@ vi.mock('@/lib/tauri-api', () => ({
   // the populated-action / failure paths.
   lspCodeActions: vi.fn().mockResolvedValue({ actions: [] }),
   applyCodeAction: vi.fn().mockResolvedValue(0),
+  // 2026-09-25 open pipeline — default: paths don't exist (FileRefChip
+  // degrades to inline code), reads/opens inert. Per-test overrides cover
+  // the exists → interactive-chip path.
+  pathExists: vi.fn().mockResolvedValue(false),
+  readTextFile: vi.fn().mockResolvedValue({ path: '', content: '', sizeBytes: 0 }),
+  openExternal: vi.fn().mockResolvedValue(undefined),
+  openWithDefaultApp: vi.fn().mockResolvedValue(undefined),
+  revealInFolder: vi.fn().mockResolvedValue(undefined),
+  openArtifactExternally: vi.fn().mockResolvedValue('/tmp/shannon-artifacts/x.html'),
+  probeUrlFrameable: vi.fn().mockResolvedValue({ frameable: true, status: 200, reason: null }),
   // P1-5 C-2 — workspace layout persistence. Default: nothing stored, so
   // the Chat page boots on the default focus preset in every test.
   workspaceGetLayout: vi.fn().mockResolvedValue(null),

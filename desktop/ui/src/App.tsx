@@ -5,7 +5,9 @@ import { AppProvider } from './context/AppContext';
 import { ThemeProvider } from './context/ThemeContext';
 import { I18nProvider } from './i18n';
 import { ArtifactProvider } from './components/artifact/ArtifactContext';
+import { ArtifactLinkHost } from './components/artifact/ArtifactLinkHost';
 import { ErrorBoundary } from './components/ErrorBoundary';
+import { LinkContextMenuHost } from './components/shared/LinkContextMenu';
 import { Layout } from './components/Layout';
 
 const Welcome = lazy(() => import('./pages/Welcome'));
@@ -58,6 +60,10 @@ export default function App() {
         <ArtifactProvider>
         <ErrorBoundary>
         <BrowserRouter>
+          {/* P0-A: global right-click menu for external links (panel/browser). */}
+          <LinkContextMenuHost />
+          {/* P0-B/P1-C/P1-E: links→web tabs, file chips→artifact tabs. */}
+          <ArtifactLinkHost />
           <Suspense fallback={<PageLoader />}>
             <Routes>
               <Route path="/welcome" element={<Welcome />} />
