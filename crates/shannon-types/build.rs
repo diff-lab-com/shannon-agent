@@ -341,9 +341,6 @@ pub struct SessionInfo {
     /// P0 sidebar telemetry mirror — must mirror src/events.rs exactly.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub updated_at: Option<i64>,
-    /// Session-archive MVP (卡A) mirror — must mirror src/events.rs exactly.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub archived: Option<bool>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]

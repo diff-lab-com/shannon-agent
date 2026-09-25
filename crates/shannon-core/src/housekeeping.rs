@@ -345,7 +345,7 @@ pub struct ArchivedPruneReport {
 ///    `None` means *never delete*, so the default configuration performs
 ///    zero deletions even with GC enabled;
 /// 4. the session's age is **known** (its `events.jsonl` mtime reads) and
-///    older than the window — fail-closed via [`prunable_since`]: a stat
+///    older than the window — fail-closed via `prunable_since`: a stat
 ///    failure skips the session, it is never guessed old.
 ///
 /// Only UUID-named directories are considered (foreign siblings are never
@@ -644,7 +644,7 @@ fn session_last_modified(events_path: &Path) -> Option<SystemTime> {
 /// cannot be determined (both mtimes unreadable) are **omitted** rather
 /// than reported with a guessed timestamp: the retention planner only sees
 /// entries of this scan, so an omitted session can never be planned for
-/// deletion (fail closed — see [`session_last_modified`]).
+/// deletion (fail closed — see `session_last_modified`).
 pub fn scan_session_usage(sessions_dir: &Path) -> Vec<SessionUsage> {
     let mut usage: Vec<SessionUsage> = crate::session_log::scan_session_summaries(sessions_dir)
         .into_iter()

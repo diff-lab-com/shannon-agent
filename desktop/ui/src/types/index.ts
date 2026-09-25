@@ -195,9 +195,6 @@ export interface SessionInfo {
   /** P0 sidebar telemetry: epoch **ms** of the session's last activity
    *  (L0 log mtime). Absent on older engines / brand-new sessions. */
   updated_at?: number
-  /** Session archive (卡A): true once the user archived the session. Absent
-   *  on older engines — treat as not archived. */
-  archived?: boolean
 }
 
 /** Session archive (卡A): one archived session as the sidebar's 已归档

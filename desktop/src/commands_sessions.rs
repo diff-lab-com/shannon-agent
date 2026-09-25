@@ -173,18 +173,16 @@ pub async fn list_sessions(
 }
 
 /// P0 sidebar telemetry: build the wire `SessionInfo`, joining the live
-/// `running` flag from the session registry, the session's last activity
-/// time (events.jsonl mtime, epoch ms), and its archived curation flag
-/// (卡A; `None` for legacy non-UUID rows / older wire consumers — see
-/// `events::SessionInfo`). All three fields are additive.
+/// `running` flag from the session registry and the session's last activity
+/// time (events.jsonl mtime, epoch ms). Both fields are additive. The
+/// archived state is deliberately not on the wire: the active list hides
+/// archived rows backend-side and the 归档 lens reads `list_archived_sessions`
+/// (the curation sidecar stays the single source of archived truth).
 async fn session_wire_info(state: &AppState, s: &SessionMeta) -> events::SessionInfo {
     let running = match uuid::Uuid::parse_str(&s.id) {
         Ok(id) => Some(state.registry.is_querying(id).await),
         Err(_) => None,
     };
-    let archived = uuid::Uuid::parse_str(&s.id)
-        .ok()
-        .map(|id| state.l0_store().curation(&id).archived);
     events::SessionInfo {
         id: s.id.clone(),
         title: s.title.clone(),
@@ -195,7 +193,6 @@ async fn session_wire_info(state: &AppState, s: &SessionMeta) -> events::Session
         branch_point: s.branch_point,
         running,
         updated_at: session_log_mtime(state, &s.id),
-        archived,
     }
 }
 
@@ -1425,7 +1422,6 @@ pub async fn duplicate_session(
         branch_point: None,
         running: Some(false),
         updated_at: None,
-        archived: Some(false),
     })
 }
 
@@ -1513,7 +1509,6 @@ pub(crate) async fn branch_session_internal(
         branch_point: Some(branch_point),
         running: Some(false),
         updated_at: None,
-        archived: Some(false),
     })
 }
 

@@ -441,13 +441,6 @@
   "SessionInfo": {
     "$schema": "http://json-schema.org/draft-07/schema#",
     "properties": {
-      "archived": {
-        "description": "Session-archive MVP (卡A) mirror — must mirror src/events.rs exactly.",
-        "type": [
-          "boolean",
-          "null"
-        ]
-      },
       "branch_point": {
         "format": "uint",
         "minimum": 0.0,
