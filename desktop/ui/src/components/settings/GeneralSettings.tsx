@@ -11,6 +11,7 @@ import { useNotification } from '@/hooks/useNotification'
 import * as api from '@/lib/tauri-api'
 import { toastError } from '@/lib/errorToast'
 import { readDensityPref, setDensityPref, type DensityPref } from '@/lib/density'
+import { getLinkTarget, setLinkTarget as setLinkTargetPref, type LinkTarget } from '@/lib/openLink'
 import { Switch } from '@/components/ui/switch'
 import { useArtifact } from '@/components/artifact/ArtifactContext'
 import type { ApprovalMode } from '@/types'
@@ -46,6 +47,12 @@ export default function GeneralSettings() {
   // Batch D4: artifact auto-open — app-scoped ArtifactContext (Settings and
   // the Chat dock share the same live preference).
   const { autoOpen, setAutoOpen: setArtifactAutoOpen } = useArtifact()
+  // P1-E (decision §5-6): default destination for external links.
+  const [linkTarget, setLinkTargetState] = useState<LinkTarget>(() => getLinkTarget())
+  const setLinkTarget = (next: LinkTarget) => {
+    setLinkTargetState(next)
+    setLinkTargetPref(next)
+  }
   const { locale, setLocale } = useI18n()
   const notify = useNotification()
   const [approvalMode, setApprovalMode] = useState<number>(2) // default to "plan"
@@ -222,6 +229,23 @@ export default function GeneralSettings() {
                 onCheckedChange={setArtifactAutoOpen}
                 aria-label={t('settings.general.artifactAutoOpen.title')}
               />
+            </div>
+            {/* P1-E (decision §5-6): where plain clicks on external links land.
+                Alt+click / right-click always offer both destinations. */}
+            <div className="flex justify-between items-center py-sm gap-md">
+              <span className="min-w-0">
+                <span className="font-label-md text-on-surface block">{t('settings.general.linkTarget')}</span>
+                <span className="font-label-sm text-on-surface-variant block">{t('settings.general.linkTarget.desc')}</span>
+              </span>
+              <select
+                value={linkTarget}
+                onChange={e => setLinkTarget(e.target.value as LinkTarget)}
+                aria-label={t('settings.general.linkTarget')}
+                className="font-label-md text-on-surface bg-surface-container rounded-lg px-sm py-xs border border-outline-variant/30 cursor-pointer"
+              >
+                <option value="panel">{t('settings.general.linkTarget.panel')}</option>
+                <option value="browser">{t('settings.general.linkTarget.browser')}</option>
+              </select>
             </div>
             <div className="flex justify-between items-center py-sm">
               <span className="font-label-md text-on-surface-variant">{t('settings.general.sessionInfo.activeProvider')}</span>

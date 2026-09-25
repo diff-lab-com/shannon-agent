@@ -20,20 +20,25 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { toast } from 'sonner'
+import { convertFileSrc } from '@tauri-apps/api/core'
 import { open as openFile, save } from '@tauri-apps/plugin-dialog'
 import { Button } from '@/components/ui/button'
 import { cn } from '@/lib/utils'
 import { toastError } from '@/lib/errorToast'
 import { useT } from '@/i18n'
 import * as api from '@/lib/tauri-api'
+import { openExternal, openWithDefaultApp, revealInFolder } from '@/lib/tauri-api'
 import { useArtifact, type ArtifactItem } from '@/components/artifact/ArtifactContext'
-import { artifactIcon } from '@/components/artifact/detectArtifact'
+import { artifactIcon, type ArtifactKind } from '@/components/artifact/detectArtifact'
 import { artifactDisplayTitle, artifactKindLabel } from '@/components/artifact/labels'
 import { DocumentToc } from '@/components/artifact/DocumentToc'
 import { DocumentRenderer } from '@/components/artifact/DocumentRenderer'
 import { HtmlRenderer } from '@/components/artifact/HtmlRenderer'
 import { MermaidRenderer } from '@/components/artifact/MermaidRenderer'
 import { SvgRenderer } from '@/components/artifact/SvgRenderer'
+import { WebRenderer } from '@/components/artifact/WebRenderer'
+import { openDiskArtifact } from '@/components/artifact/ArtifactLinkHost'
+import { registerLinkPanelRouter } from '@/lib/openLink'
 import { projectOf } from '@/components/SidebarSessions'
 import DiffReviewBody from '@/components/diff/DiffReviewBody'
 import type { ToolCall, UsagePayload } from '@/types'
@@ -101,7 +106,7 @@ export default function RightDock({
   onCloseDiff,
 }: RightDockProps) {
   const t = useT()
-  const { artifacts, setActive, open: openArtifact, close: closeArtifact } = useArtifact()
+  const { artifacts, activeId, setActive, open: openArtifact, close: closeArtifact } = useArtifact()
   const [tab, setTab] = useState<DockTab>(readTab)
   const [width, setWidth] = useState<number>(readWidth)
   const [fullscreen, setFullscreen] = useState<boolean>(readFullscreen)
@@ -164,17 +169,30 @@ export default function RightDock({
     document.body.style.cursor = 'col-resize'
   }
 
-  // Auto-dock: a newly detected artifact opens as its own tab and becomes
-  // active (parity with the standalone panel, which appeared on detection).
-  const prevArtifactCount = useRef(artifacts.length)
+  // P1-E (decision §5-6): external links' `panel` target lands here — the
+  // dock is the only place a web tab is visible, so the router registers
+  // with this component's lifecycle (openLink degrades to the browser when
+  // it is not mounted, e.g. on Settings/Welcome).
   useEffect(() => {
-    if (artifacts.length > prevArtifactCount.current) {
-      const newest = artifacts[artifacts.length - 1]
-      if (newest) setTab(`a:${newest.id}`)
+    registerLinkPanelRouter(url =>
+      openArtifact({ kind: 'web', source: url, title: url, confidence: 'high' }),
+    )
+    return () => registerLinkPanelRouter(null)
+  }, [openArtifact])
+
+  // Auto-dock: whenever the active artifact changes (new artifact opened
+  // with activation, a file chip re-opening an already-docked file, or a
+  // replace-in-place), switch the dock to its tab and reveal it. Background
+  // opens (decision §5-2: disk artifacts while autoOpen is off) never touch
+  // activeId, so they only add the tab.
+  const prevActiveId = useRef(activeId)
+  useEffect(() => {
+    if (activeId && activeId !== prevActiveId.current) {
+      setTab(`a:${activeId}`)
       onOpen()
     }
-    prevArtifactCount.current = artifacts.length
-  }, [artifacts, onOpen])
+    prevActiveId.current = activeId
+  }, [activeId, onOpen])
 
   // Q11: dismiss the Ctrl+\ hint once the user actively picks a tab —
   // engagement is a stronger dismissal signal than time alone.
@@ -203,16 +221,16 @@ export default function RightDock({
     prevDiffPath.current = diffPath
   }, [diffPath, onOpen])
 
-  // Batch F3: the dock's 「+」— open any local text file as a document tab
-  // (ZCode manual-tab affordance). The auto-dock effect above picks the new
-  // artifact up and activates it, so this only needs to open it.
+  // Batch F3, reworked in the 2026-09-25 open pipeline (§4 P1-D): the 「+」
+  // opens any local file as a dock tab — documents/artifacts inline, images
+  // via the asset protocol, anything else as an "open externally" card.
+  // (The old implementation smuggled the content through getFileDiff's
+  // old_content, which misbehaved for new/binary/oversized files.)
   const handleOpenFile = useCallback(async () => {
     try {
       const path = await openFile({ multiple: false })
       if (!path || typeof path !== 'string') return
-      const diff = await api.getFileDiff(path)
-      const base = path.split('/').pop() ?? path
-      openArtifact({ kind: 'document', source: diff.old_content, title: base, confidence: 'high' })
+      await openDiskArtifact(openArtifact, path, true)
     } catch (e) {
       toastError(t('chat.dock.openFile.failed'), e)
     }
@@ -421,7 +439,14 @@ export default function RightDock({
 
 /** Per-document body — the batch D reader: breadcrumb (项目 › 文档) +
  *  metadata row, render/code/copy/export actions, and the D1 TOC rail for
- *  multi-section documents (the ZCode 阅读器 grammar). */
+ *  multi-section documents (the ZCode 阅读器 grammar).
+ *
+ *  2026-09-25 open pipeline (§4 P1-D): per-kind routing — web tabs render
+ *  the inline browser view, disk images render via the asset protocol, and
+ *  anything without an inline renderer gets a fallback card that hands off
+ *  to the OS (default app / folder reveal) instead of dead-ending. Disk
+ *  artifacts (P1-C) carry a provenance badge and always expose the two OS
+ *  actions. */
 const DOC_FILE_EXT: Record<string, string> = {
   html: 'html',
   svg: 'svg',
@@ -429,12 +454,18 @@ const DOC_FILE_EXT: Record<string, string> = {
   document: 'md',
 }
 
+/** Kinds whose `source` is renderable/copyable text (code view, export…). */
+const TEXT_KINDS: ReadonlySet<ArtifactKind> = new Set(['html', 'svg', 'mermaid', 'document'])
+
 function ArtifactDocBody({ artifact, workingDir }: { artifact: ArtifactItem; workingDir: string | null }) {
   const t = useT()
   const [showCode, setShowCode] = useState(false)
   const displayTitle = artifactDisplayTitle(artifact, t)
   const project = workingDir ? projectOf({ working_dir: workingDir }) : null
-  const lineCount = useMemo(() => artifact.source.split('\n').length, [artifact.source])
+  const hasText = TEXT_KINDS.has(artifact.kind)
+  // `image`/`other` carry the file path in `source`; `web` carries a URL.
+  const filePath = artifact.path ?? (artifact.kind === 'image' || artifact.kind === 'other' ? artifact.source : null)
+  const lineCount = useMemo(() => (hasText ? artifact.source.split('\n').length : 0), [artifact.source, hasText])
 
   const handleCopy = async () => {
     try {
@@ -461,6 +492,27 @@ function ArtifactDocBody({ artifact, workingDir }: { artifact: ArtifactItem; wor
     }
   }
 
+  const openExternally = () => {
+    if (artifact.kind === 'web') {
+      void openExternal(artifact.source).catch(err => toastError(t('link.open.failed'), err))
+    } else if (filePath) {
+      openWithDefaultApp(filePath).catch(err => toastError(t('link.open.failed'), err))
+    } else if (hasText) {
+      // Chat-fence artifact with no backing file (§4 P1-D): write it to
+      // $TEMP and hand it to the OS default app.
+      api
+        .openArtifactExternally(displayTitle, artifact.source, DOC_FILE_EXT[artifact.kind] ?? 'txt')
+        .catch(err => toastError(t('link.open.failed'), err))
+    }
+  }
+
+  const reveal = () => {
+    if (filePath) revealInFolder(filePath).catch(err => toastError(t('link.open.failed'), err))
+  }
+
+  const actionBtn =
+    'gap-0 px-sm h-auto py-xs rounded-lg text-on-surface-variant hover:bg-surface-container hover:text-on-surface'
+
   return (
     <div className="flex flex-col min-h-0 flex-1">
       {/* D2 breadcrumb: project › document, with the metadata badges beside. */}
@@ -473,59 +525,104 @@ function ArtifactDocBody({ artifact, workingDir }: { artifact: ArtifactItem; wor
         <span className="font-label-sm font-bold text-on-surface truncate flex-1 min-w-0" title={displayTitle}>
           {displayTitle}
         </span>
+        {artifact.origin === 'disk' && (
+          <span
+            className="font-label-xs text-on-surface-variant px-xs py-[1px] rounded bg-tertiary/15 text-tertiary shrink-0"
+            title={filePath ?? undefined}
+          >
+            {t('chat.artifact.fromDisk')}
+          </span>
+        )}
         <span className="font-label-xs text-on-surface-variant px-xs py-[1px] rounded bg-surface-container-high shrink-0">
           {artifactKindLabel(artifact.kind, t)}
         </span>
-        <span className="font-mono text-[10px] tabular-nums text-on-surface-variant shrink-0" title={t('chat.artifact.lines.aria', { n: lineCount })}>
-          {lineCount}L
-        </span>
+        {hasText && (
+          <span className="font-mono text-[10px] tabular-nums text-on-surface-variant shrink-0" title={t('chat.artifact.lines.aria', { n: lineCount })}>
+            {lineCount}L
+          </span>
+        )}
       </div>
       <div className="flex items-center gap-xs pb-sm shrink-0">
-        <Button
-          type="button"
-          variant="ghost"
-          size="sm"
-          aria-pressed={showCode}
-          onClick={() => setShowCode(v => !v)}
-          className={cn(
-            'gap-0 px-sm h-auto py-xs rounded-lg',
-            showCode ? 'bg-primary/10 text-primary hover:bg-primary/10' : 'text-on-surface-variant hover:bg-surface-container hover:text-on-surface',
-          )}
-        >
-          <span className="material-symbols-outlined icon-sm align-middle" aria-hidden="true">code</span>
-          <span className="align-middle ml-xs hidden md:inline">{t('chat.artifact.tab.code')}</span>
-        </Button>
-        <Button
-          type="button"
-          variant="ghost"
-          size="sm"
-          onClick={handleCopy}
-          className="gap-0 px-sm h-auto py-xs rounded-lg text-on-surface-variant hover:bg-surface-container hover:text-on-surface"
-        >
-          <span className="material-symbols-outlined icon-sm align-middle" aria-hidden="true">content_copy</span>
-          <span className="align-middle ml-xs hidden md:inline">{t('chat.artifact.copy')}</span>
-        </Button>
-        <Button
-          type="button"
-          variant="ghost"
-          size="sm"
-          onClick={() => void handleExport()}
-          className="gap-0 px-sm h-auto py-xs rounded-lg text-on-surface-variant hover:bg-surface-container hover:text-on-surface"
-        >
-          <span className="material-symbols-outlined icon-sm align-middle" aria-hidden="true">download</span>
-          <span className="align-middle ml-xs hidden md:inline">{t('chat.artifact.export')}</span>
-        </Button>
+        {hasText && (
+          <Button
+            type="button"
+            variant="ghost"
+            size="sm"
+            aria-pressed={showCode}
+            onClick={() => setShowCode(v => !v)}
+            className={cn(
+              'gap-0 px-sm h-auto py-xs rounded-lg',
+              showCode ? 'bg-primary/10 text-primary hover:bg-primary/10' : 'text-on-surface-variant hover:bg-surface-container hover:text-on-surface',
+            )}
+          >
+            <span className="material-symbols-outlined icon-sm align-middle" aria-hidden="true">code</span>
+            <span className="align-middle ml-xs hidden md:inline">{t('chat.artifact.tab.code')}</span>
+          </Button>
+        )}
+        {hasText && (
+          <Button type="button" variant="ghost" size="sm" onClick={handleCopy} className={actionBtn}>
+            <span className="material-symbols-outlined icon-sm align-middle" aria-hidden="true">content_copy</span>
+            <span className="align-middle ml-xs hidden md:inline">{t('chat.artifact.copy')}</span>
+          </Button>
+        )}
+        {hasText && (
+          <Button type="button" variant="ghost" size="sm" onClick={() => void handleExport()} className={actionBtn}>
+            <span className="material-symbols-outlined icon-sm align-middle" aria-hidden="true">download</span>
+            <span className="align-middle ml-xs hidden md:inline">{t('chat.artifact.export')}</span>
+          </Button>
+        )}
+        {filePath && (
+          <Button type="button" variant="ghost" size="sm" onClick={reveal} className={actionBtn}>
+            <span className="material-symbols-outlined icon-sm align-middle" aria-hidden="true">folder_open</span>
+            <span className="align-middle ml-xs hidden md:inline">{t('chat.artifact.reveal')}</span>
+          </Button>
+        )}
+        {(artifact.kind === 'web' || filePath || hasText) && (
+          <Button type="button" variant="ghost" size="sm" onClick={openExternally} className={actionBtn}>
+            <span className="material-symbols-outlined icon-sm align-middle" aria-hidden="true">open_in_new</span>
+            <span className="align-middle ml-xs hidden md:inline">{t('chat.artifact.openSystem')}</span>
+          </Button>
+        )}
       </div>
       <div className="flex-1 min-h-0 overflow-hidden flex gap-sm min-w-0">
         <div className="flex-1 min-w-0 min-h-0">
-          {showCode ? (
+          {showCode && hasText ? (
             <pre className="h-full overflow-auto font-mono text-[12px] whitespace-pre-wrap break-words text-on-surface p-sm bg-surface-container-low/50 rounded-lg">
               {artifact.source}
             </pre>
           ) : artifact.kind === 'html' ? <HtmlRenderer source={artifact.source} title={artifact.title} />
-            : artifact.kind === 'svg' ? <SvgRenderer source={artifact.source} title={artifact.title} />
-              : artifact.kind === 'mermaid' ? <MermaidRenderer source={artifact.source} title={artifact.title} />
-                : <DocumentRenderer source={artifact.source} />}
+            : artifact.kind === 'web' ? <WebRenderer url={artifact.source} />
+              : artifact.kind === 'image' ? (
+                <div className="h-full w-full flex items-center justify-center bg-surface-container-low/40 rounded-lg overflow-hidden">
+                  <img src={convertFileSrc(artifact.source)} alt={displayTitle} className="max-w-full max-h-full object-contain" />
+                </div>
+              )
+                : artifact.kind === 'other' ? (
+                  // P2 (§review): the dock's 「+」 may read a plain-text file
+                  // that simply has no inline renderer — show its content as
+                  // code instead of a dead end; only truly unreadable files
+                  // get the fallback card.
+                  artifact.source && artifact.source !== filePath ? (
+                    <pre className="h-full overflow-auto font-mono text-[12px] whitespace-pre-wrap break-words text-on-surface p-sm bg-surface-container-low/50 rounded-lg">
+                      {artifact.source}
+                    </pre>
+                  ) : (
+                    <div className="h-full flex flex-col items-center justify-center text-center gap-xs py-xl px-lg">
+                      <span className="material-symbols-outlined icon-md text-on-surface-variant/60" aria-hidden="true">draft</span>
+                      <p className="font-label-md text-on-surface">{t('chat.artifact.unsupported.title')}</p>
+                      <p className="font-label-sm text-on-surface-variant max-w-sm">{t('chat.artifact.unsupported.hint')}</p>
+                      {filePath && (
+                        <div className="flex gap-xs mt-xs">
+                          <Button type="button" variant="default" size="sm" onClick={openExternally}>{t('chat.artifact.openSystem')}</Button>
+                          <Button type="button" variant="ghost" size="sm" onClick={reveal}>{t('chat.artifact.reveal')}</Button>
+                        </div>
+                      )}
+                    </div>
+                  )
+                )
+                  : artifact.kind === 'mermaid' ? <MermaidRenderer source={artifact.source} title={artifact.title} />
+                    : artifact.kind === 'svg' ? <SvgRenderer source={artifact.source} title={artifact.title} />
+                      : <DocumentRenderer source={artifact.source} />}
         </div>
         {/* D1: the reader's TOC rail — multi-section documents only. */}
         {artifact.kind === 'document' && !showCode && <DocumentToc source={artifact.source} />}

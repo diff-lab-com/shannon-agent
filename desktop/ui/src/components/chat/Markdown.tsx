@@ -7,6 +7,8 @@ import rehypeSanitize, { defaultSchema } from 'rehype-sanitize'
 import { convertFileSrc } from '@tauri-apps/api/core'
 import { Chart, parseChartSpec } from '@/components/chat/Chart'
 import { CodeBlock as SharedCodeBlock } from '@/components/code/CodeBlock'
+import { FileRefChip } from '@/components/shared/FileRefChip'
+import { looksLikeFilePath } from '@/lib/fileRefs'
 
 // Extend the default sanitize schema so syntax-highlight classes from
 // rehype-highlight (e.g. `hljs-keyword`) survive sanitization. Keep the
@@ -176,6 +178,13 @@ function BlockQuote(props: React.BlockquoteHTMLAttributes<HTMLQuoteElement>) {
 /* ────────────────────  Inline code + links  ──────────────────── */
 
 function InlineCode(props: React.HTMLAttributes<HTMLElement>) {
+  // P0-B: a token that looks like a file path becomes a FileRefChip — it
+  // highlights only after the backend existence probe confirms it, and
+  // degrades to this exact inline-code style otherwise.
+  const text = extractText(props.children)
+  if (text && looksLikeFilePath(text)) {
+    return <FileRefChip raw={text} />
+  }
   return (
     <code
       className="font-mono text-[0.92em] px-[5px] py-[1px] rounded-md bg-surface-container text-primary border border-outline-variant/15"
@@ -185,22 +194,14 @@ function InlineCode(props: React.HTMLAttributes<HTMLElement>) {
 }
 
 /**
- * External link with an outbound icon. Lazy-fetches `<title>` on hover
- * and exposes it as a tooltip via `aria-label` (screen reader) and a
- * `title` attribute (visual). Safe — only fetches same-origin or non-`file`
- * URLs, and degrades silently on error.
+ * External link with an outbound icon. Click handling lives in the global
+ * link interceptor (lib/linkInterceptor.ts — P0-A), which routes http(s)
+ * hrefs through the openLink pipeline; this component only supplies the
+ * visual affordances (icon, safe rel attrs, focus ring).
  */
 function ExternalLink(props: React.AnchorHTMLAttributes<HTMLAnchorElement>) {
   const { href, children, ...rest } = props
   const isExternal = !!href && /^https?:\/\//i.test(href)
-  // Reserved for a future CORS-friendly `<title>` fetcher (many
-  // external sites don't send CORS headers, so we'd need a proxy or
-  // extension to make the read reliable). Today: no-op, the hover
-  // handler only signals intent.
-  const handleEnter = () => {
-    if (!isExternal || !href) return
-    // intentional no-op (placeholder for future lazy title fetch)
-  }
 
   return (
     <a
@@ -208,9 +209,6 @@ function ExternalLink(props: React.AnchorHTMLAttributes<HTMLAnchorElement>) {
       target={isExternal ? '_blank' : undefined}
       rel={isExternal ? 'noopener noreferrer' : undefined}
       className="text-link hover:underline inline-flex items-baseline gap-[2px] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/30 rounded"
-      onMouseEnter={handleEnter}
-      onFocus={handleEnter}
-      onPointerEnter={handleEnter}
       {...rest}
     >
       {children}

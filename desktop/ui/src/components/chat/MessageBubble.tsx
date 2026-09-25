@@ -29,6 +29,9 @@ import { ConfirmDialog } from '@/components/ui/confirm-dialog'
 import { ResearchReportModal } from '@/components/chat/ResearchReportModal'
 import { ArtifactChipList } from '@/components/artifact/ArtifactChip'
 import { detectArtifacts } from '@/components/artifact/detectArtifact'
+import { FileRefChip } from '@/components/shared/FileRefChip'
+import { extractToolInputPath, FILE_MUTATING_TOOLS } from '@/lib/fileRefs'
+import { openWithDefaultApp } from '@/lib/tauri-api'
 import type { ChatMessage, ToolCall, FileAttachment } from '@/types'
 import { cn } from '@/lib/utils'
 
@@ -150,7 +153,9 @@ function AttachmentPreview({ attachment }: { attachment: FileAttachment }) {
             <p className="text-body-sm text-on-surface-variant mb-md break-all">{attachment.path}</p>
             <Button
               onClick={() => {
-                window.open(convertFileSrc(attachment.path), '_blank')
+                // P2-5 (§4): hand the file to the OS default app instead of
+                // opening the asset URL inside the webview.
+                openWithDefaultApp(attachment.path).catch(err => toastError(t('link.open.failed'), err))
               }}
             >
               <span className="material-symbols-outlined text-[18px] mr-xs">open_in_new</span>
@@ -254,7 +259,12 @@ export const MessageBubble = memo(function MessageBubble({ message, messageIndex
             </div>
           )}
           <div className="bg-primary-fixed text-on-primary-fixed px-lg py-md rounded-2xl rounded-tr-none shadow-sm">
-            <p className="font-body-md whitespace-pre-wrap">{message.content}</p>
+            <p className="font-body-md whitespace-pre-wrap">
+              {/* P2-1 (§4): user messages stay plain text, but pasted URLs
+                  become clickable — still no block-level markdown, so the
+                  user's own words keep their exact line breaks. */}
+              <LinkifiedText text={message.content} />
+            </p>
           </div>
           <ActionToolbar className="gap-sm mt-xs justify-end opacity-0 group-hover:opacity-100 focus-within:opacity-100 transition-opacity">
             <Button
@@ -460,7 +470,8 @@ export const MessageBubble = memo(function MessageBubble({ message, messageIndex
   )
 })
 
-const FILE_MUTATING_TOOLS = new Set(['write_file', 'edit_file', 'apply_patch', 'str_replace_editor', 'replace'])
+// FILE_MUTATING_TOOLS moved to lib/fileRefs (§4 P0-B) so chips, the dock's
+// disk-artifact hook and this diff gate share one definition.
 
 /**
  * Batch C2 (2026-09-20 delta analysis): the in-chat change summary grew
@@ -536,12 +547,7 @@ function FileChangesCard({ paths, rewindable, onReview, onReviewAll, onUndo }: {
 }
 
 function extractFilePath(toolName: string, input: unknown): string | null {
-  if (!input || typeof input !== 'object') return null
-  const obj = input as Record<string, unknown>
-  const raw = typeof obj.path === 'string' ? obj.path
-    : typeof obj.file_path === 'string' ? obj.file_path
-    : typeof obj.filePath === 'string' ? obj.filePath
-    : null
+  const raw = extractToolInputPath(input)
   if (!raw) return null
   return FILE_MUTATING_TOOLS.has(toolName) ? raw : null
 }
@@ -698,14 +704,18 @@ function ToolInputSummary({ input }: { input: unknown }) {
   if (command != null) {
     return <ToolInputPrimary label="command" body={command} />
   }
-  // file write: path + content preview
+  // file write: path chip (P0-B — clickable when the file exists) + preview
   if (filePath != null || content != null) {
-    const body = filePath
-      ? content
-        ? `${filePath} — ${summarize(content)}`
-        : filePath
-      : summarize(content!)
-    return <ToolInputPrimary label={filePath ? 'file' : 'content'} body={body} />
+    if (filePath != null) {
+      return (
+        <div className="text-body-sm bg-surface-container px-sm py-xs rounded-lg max-h-[200px] overflow-x-auto flex flex-wrap items-baseline gap-x-xs gap-y-1">
+          <span className="font-mono text-on-surface-variant">file:</span>
+          <FileRefChip raw={filePath} />
+          {content != null && <span className="font-mono text-on-surface-variant">— {summarize(content)}</span>}
+        </div>
+      )
+    }
+    return <ToolInputPrimary label="content" body={summarize(content!)} />
   }
   // search: just the query
   if (query != null) {
@@ -864,3 +874,48 @@ export const SubagentBlock = memo(function SubagentBlock({ toolCall }: { toolCal
     </div>
   )
 })
+
+/** P2-1 (§4 P2): render user-message text with bare URLs clickable. Split
+ *  is purely textual — no markdown parsing, so the user's own formatting
+ *  (line breaks, asterisks, underscores) survives untouched. */
+const URL_RE = /https?:\/\/[^\s<>"')\]]+/g
+
+export function LinkifiedText({ text }: { text: string }) {
+  const parts: (string | { url: string })[] = []
+  let last = 0
+  for (const match of text.matchAll(URL_RE)) {
+    const idx = match.index ?? 0
+    // Trailing sentence punctuation reads as part of the URL otherwise
+    // ("see https://a.com." would open with the dot).
+    const url = match[0].replace(/[.,;:!?)\]}'"]+$/, '')
+    const urlEnd = idx + url.length
+    if (idx > last) parts.push(text.slice(last, idx))
+    parts.push({ url })
+    last = urlEnd
+  }
+  if (last < text.length) parts.push(text.slice(last))
+  if (parts.length === 1 && typeof parts[0] === 'string') {
+    return <>{parts[0]}</>
+  }
+  return (
+    <>
+      {parts.map((part, i) =>
+        typeof part === 'string' ? (
+          part
+        ) : (
+          <a
+            key={i}
+            href={part.url}
+            target="_blank"
+            rel="noopener noreferrer"
+            // Opening is handled by the global link interceptor (P0-A) —
+            // an onClick here would fire a second openLink per click.
+            className="underline underline-offset-2 decoration-current/50 hover:decoration-current break-all cursor-pointer"
+          >
+            {part.url}
+          </a>
+        ),
+      )}
+    </>
+  )
+}
