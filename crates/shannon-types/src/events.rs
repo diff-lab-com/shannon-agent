@@ -233,6 +233,12 @@ pub struct SessionInfo {
     /// is missing (e.g. brand-new in-memory session).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub updated_at: Option<i64>,
+    /// Session-archive MVP (卡A): true once the user archived the session
+    /// (its `<id>/curation.json` sidecar says so). `None`/absent means "not
+    /// archived" for older wire consumers — `serde(default)` +
+    /// `skip_serializing_if` keep the pre-archive wire shape byte-identical.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub archived: Option<bool>,
 }
 
 /// Session loaded event with messages.
@@ -580,6 +586,7 @@ mod tests {
             branch_point: None,
             running: None,
             updated_at: None,
+            archived: None,
         };
         let json = serde_json::to_string(&info).unwrap();
         assert!(!json.contains("working_dir"));
@@ -589,6 +596,26 @@ mod tests {
         // the wire shape stays byte-identical for older consumers.
         assert!(!json.contains("running"));
         assert!(!json.contains("updated_at"));
+        // Session-archive MVP (卡A): `archived` is additive too — absent
+        // means "not archived" for older consumers, and an explicit flag
+        // round-trips.
+        assert!(!json.contains("archived"));
+        let archived_info = SessionInfo {
+            archived: Some(true),
+            ..info
+        };
+        let archived_json = serde_json::to_string(&archived_info).unwrap();
+        assert!(
+            archived_json.contains("\"archived\":true"),
+            "{archived_json}"
+        );
+        let back: SessionInfo = serde_json::from_str(&archived_json).unwrap();
+        assert_eq!(back.archived, Some(true));
+        // Older payloads without the field parse as "not archived".
+        let legacy: SessionInfo =
+            serde_json::from_str(r#"{"id":"s1","title":"T","created_at":1,"message_count":0}"#)
+                .unwrap();
+        assert_eq!(legacy.archived, None);
     }
 
     #[test]

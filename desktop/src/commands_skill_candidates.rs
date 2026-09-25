@@ -114,6 +114,22 @@ fn load_candidates() -> Result<Vec<SkillCandidate>, String> {
     load_candidates_in(&desktop_dir()?)
 }
 
+/// 卡A session-GC reference hygiene (裁决③): ids of candidates in `dir`
+/// whose `example_session_ids` reference any of `deleted`. Report-only —
+/// the candidate structure is deliberately untouched; the caller surfaces
+/// the ids in logs/messages. The dir is injected so tests pass a tempdir
+/// and never touch `$HOME`.
+pub(crate) fn candidate_ids_referencing_sessions_in(dir: &Path, deleted: &[String]) -> Vec<String> {
+    let Ok(candidates) = load_candidates_in(dir) else {
+        return Vec::new();
+    };
+    candidates
+        .iter()
+        .filter(|c| c.example_session_ids.iter().any(|id| deleted.contains(id)))
+        .map(|c| c.id.clone())
+        .collect()
+}
+
 fn save_candidates_in(dir: &Path, candidates: &[SkillCandidate]) -> Result<(), String> {
     let path = candidates_file_in(dir)?;
     let mut out = String::new();
@@ -599,6 +615,26 @@ mod tests {
         assert_eq!(untouched.procedure, vec!["invoke bash"]);
 
         assert!(mark_candidate_refined_in(dir.path(), "sig-missing", vec![]).is_err());
+    }
+
+    /// 卡A GC reference hygiene: only candidates whose example sessions
+    /// intersect the deleted set are named; a missing file yields none.
+    #[test]
+    fn candidate_ids_referencing_sessions_reports_only_intersecting() {
+        let dir = tempfile::tempdir().expect("tmp");
+        assert!(candidate_ids_referencing_sessions_in(dir.path(), &["gone".into()]).is_empty());
+
+        let mut hitting = sample_candidate("sig-hit");
+        hitting.example_session_ids = vec!["keep".into(), "gone".into()];
+        let other = sample_candidate("sig-other");
+        append_candidate_in(dir.path(), hitting).expect("append");
+        append_candidate_in(dir.path(), other).expect("append");
+
+        let hits = candidate_ids_referencing_sessions_in(dir.path(), &["gone".into()]);
+        assert_eq!(hits, vec!["sig-hit"]);
+        assert!(
+            candidate_ids_referencing_sessions_in(dir.path(), &["unrelated".into()]).is_empty()
+        );
     }
 
     fn sample_candidate(id: &str) -> SkillCandidate {

@@ -255,17 +255,24 @@ impl HousekeepingTask for CacheRefreshTask {
     }
 }
 
-/// Old session pruning task. Removes sessions older than 30 days.
+/// Old session pruning task — the env-gated form of the archived-aware
+/// session GC.
 ///
 /// **Opt-in and disabled by default** (adversarial review F10/F13): the
 /// desktop config key `session_gc_enabled` defaults to `false` and the
 /// core-side mirror (`SHANNON_SESSION_GC_ENABLED`, see
 /// `session_gc_enabled`) is unset unless explicitly exported, so a
-/// registration alone never deletes anything. The walk is the
-/// real per-session layout (`<container>/<uuid>/` directories, age taken
-/// from `events.jsonl`, whole directories removed) — see
-/// [`prune_old_sessions`]. Task 2 (archive MVP) replaces the policy with
-/// "archived and past the retention window" on top of this gate.
+/// registration alone never deletes anything.
+///
+/// Since Task 2 (archive MVP, 卡A) the policy this task stands for is
+/// "only **archived** sessions past a retention window are prunable" —
+/// see [`prune_archived_sessions`]. This env-gated core form has no
+/// retention-window source (the window lives in the desktop config key
+/// `session_retention_days`, default `None` = never delete), so it
+/// delegates with `None` and **deletes nothing**; it exists so the task
+/// registry keeps answering honestly ("enabled, but no retention window
+/// configured — zero deletions"). The only path that ever deletes is the
+/// desktop wiring, which passes the user's configured window.
 pub struct OldSessionPruneTask;
 
 impl HousekeepingTask for OldSessionPruneTask {
@@ -274,7 +281,8 @@ impl HousekeepingTask for OldSessionPruneTask {
     }
 
     fn description(&self) -> &str {
-        "Remove session directories older than 30 days (opt-in via session_gc_enabled)"
+        "Remove archived session directories past the retention window \
+         (opt-in via session_gc_enabled; window via desktop config, absent here)"
     }
 
     fn default_interval(&self) -> Duration {
@@ -307,54 +315,82 @@ fn prunable_since(mtime: Option<SystemTime>, cutoff: SystemTime) -> bool {
     matches!(mtime, Some(m) if m < cutoff)
 }
 
-/// 30-day session GC over the real per-session layout.
-///
-/// Iterates the session directories under `<base_dir>/sessions` (only
-/// UUID-named directories with an `events.jsonl` are considered; foreign
-/// siblings are never touched), takes each session's age from its
-/// `events.jsonl` mtime, and removes whole directories with
-/// `remove_dir_all` — never `remove_file`, which is what silently no-op'd
-/// this task against directories before the fix (adversarial review §2.1
-/// F1). A session whose mtime cannot be read is **skipped, never deleted**
-/// (fail closed — see the `prunable_since` decision helper) and reported in
-/// the outcome.
-///
-/// `enabled = false` returns a "disabled" outcome without touching anything:
-/// the default everywhere (the desktop config key defaults to `false`),
-/// because "never auto-delete" is the standing policy until Task 2 wires the
-/// archived-aware retention policy. `now` is injected for tests.
-pub fn prune_old_sessions(
-    base_dir: &Path,
-    enabled: bool,
-    now: SystemTime,
-) -> Result<(String, Option<usize>), String> {
-    if !enabled {
-        return Ok((
-            "Session GC disabled (session_gc_enabled=false); nothing pruned".to_string(),
-            Some(0),
-        ));
-    }
-    let sessions_dir = base_dir.join("sessions");
-    if !sessions_dir.exists() {
-        return Ok(("No sessions directory found".to_string(), Some(0)));
-    }
+/// Outcome of one archived-session GC pass ([`prune_archived_sessions`]).
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct ArchivedPruneReport {
+    /// Session ids whose directories were removed (deletion order).
+    pub deleted_session_ids: Vec<String>,
+    /// Sessions that were archived and old enough but whose age could not
+    /// be read (stat failure). Always skipped — a destructive path never
+    /// guesses.
+    pub skipped_unknown_age: usize,
+    /// Sessions skipped because their curation sidecar does not mark them
+    /// archived (reported for observability; never deleted by this pass).
+    pub not_archived: usize,
+}
 
-    let cutoff = now - Duration::from_secs(30 * 24 * 60 * 60);
-    let mut removed = 0usize;
-    let mut skipped_unknown_age = 0usize;
-    for entry in crate::session_log::scan_session_summaries(&sessions_dir) {
-        // Foreign directories sharing the container are never GC targets.
-        if uuid::Uuid::parse_str(&entry.session_id).is_err() {
+/// Archived-aware session GC over one sessions **container**
+/// (`<container>/<uuid>/` directories — the Task 2 / 卡A policy).
+///
+/// Policy: a session directory is removed only when **all** of these hold
+/// —
+/// 1. GC itself is enabled (the caller's gate; the desktop wiring requires
+///    the desktop config `session_gc_enabled == true` and lets the
+///    `SHANNON_SESSION_GC_ENABLED` env var only *force-disable* — an env
+///    var can never switch deletion on);
+/// 2. the session's curation sidecar (`<id>/curation.json`) marks it
+///    `archived` (a missing/unparsable sidecar reads as not archived, so
+///    nothing disappears before an explicit user action);
+/// 3. a retention window was configured (`retention_days = Some`) —
+///    `None` means *never delete*, so the default configuration performs
+///    zero deletions even with GC enabled;
+/// 4. the session's age is **known** (its `events.jsonl` mtime reads) and
+///    older than the window — fail-closed via [`prunable_since`]: a stat
+///    failure skips the session, it is never guessed old.
+///
+/// Only UUID-named directories are considered (foreign siblings are never
+/// GC targets) and removals are whole-directory `remove_dir_all`s. `now`
+/// is injected for tests.
+pub fn prune_archived_sessions(
+    sessions_dir: &Path,
+    retention_days: Option<u32>,
+    now: SystemTime,
+) -> Result<ArchivedPruneReport, String> {
+    let mut report = ArchivedPruneReport::default();
+    // No window configured → the default "never auto-delete" posture:
+    // nothing is prunable, however old or however archived.
+    let Some(days) = retention_days else {
+        return Ok(report);
+    };
+    if !sessions_dir.exists() {
+        return Ok(report);
+    }
+    // `days * 86400` cannot overflow u64 for any u32, but `checked_sub`
+    // still can (a window longer than the time since the epoch is not a
+    // representable cutoff). Fail closed: an unrepresentable window deletes
+    // nothing (falling back to `now` or the epoch would make everything or
+    // nothing look past-retention by accident).
+    let Some(cutoff) = now.checked_sub(Duration::from_secs(u64::from(days) * 24 * 60 * 60)) else {
+        return Ok(report);
+    };
+
+    let store = crate::session_log::SessionStore::new(sessions_dir);
+    for entry in crate::session_log::scan_session_summaries(sessions_dir) {
+        let Ok(id) = uuid::Uuid::parse_str(&entry.session_id) else {
+            continue; // foreign directories sharing the container
+        };
+        if !store.curation(&id).archived {
+            report.not_archived += 1;
             continue;
         }
         let mtime = entry.events_path.metadata().and_then(|m| m.modified()).ok();
         if !prunable_since(mtime, cutoff) {
             if mtime.is_none() {
-                skipped_unknown_age += 1;
+                report.skipped_unknown_age += 1;
                 warn!(
                     session_id = %entry.session_id,
                     events = %entry.events_path.display(),
-                    "old_session_prune: events.jsonl mtime unknown; skipping session (fail closed)"
+                    "archived session GC: events.jsonl mtime unknown; skipping session (fail closed)"
                 );
             }
             continue;
@@ -367,27 +403,54 @@ pub fn prune_old_sessions(
                 info!(
                     session_id = %entry.session_id,
                     dir = %dir.display(),
-                    "old_session_prune: removed session directory"
+                    retention_days = days,
+                    "archived session GC: removed archived session directory"
                 );
-                removed += 1;
+                report.deleted_session_ids.push(entry.session_id);
             }
             Err(e) => {
                 warn!(
                     session_id = %entry.session_id,
                     dir = %dir.display(),
                     error = %e,
-                    "old_session_prune: failed to remove session directory"
+                    "archived session GC: failed to remove session directory"
                 );
             }
         }
     }
+    Ok(report)
+}
 
-    let message = if skipped_unknown_age > 0 {
-        format!("Pruned {removed} old session(s); skipped {skipped_unknown_age} with unknown mtime")
-    } else {
-        format!("Pruned {removed} old session(s)")
-    };
-    Ok((message, Some(removed)))
+/// Env-gated form of the archived-session GC ([`OldSessionPruneTask`]).
+///
+/// `enabled` mirrors the desktop `session_gc_enabled` config key (default
+/// `false`): when false, nothing is touched. The core crate has no access
+/// to the desktop's `session_retention_days` config, so this form runs the
+/// policy with **no retention window** — zero deletions by construction.
+/// The deleting path is [`prune_archived_sessions`], driven by the desktop
+/// wiring with the user's configured window.
+pub fn prune_old_sessions(
+    base_dir: &Path,
+    enabled: bool,
+    now: SystemTime,
+) -> Result<(String, Option<usize>), String> {
+    if !enabled {
+        return Ok((
+            "Session GC disabled (session_gc_enabled=false); nothing pruned".to_string(),
+            Some(0),
+        ));
+    }
+    let sessions_dir = base_dir.join("sessions");
+    let report = prune_archived_sessions(&sessions_dir, None, now)?;
+    Ok((
+        format!(
+            "Session GC enabled but no retention window configured (core form has no \
+             session_retention_days source); nothing pruned. Not archived: {}; \
+             unknown age: {}",
+            report.not_archived, report.skipped_unknown_age
+        ),
+        Some(0),
+    ))
 }
 
 /// Log rotation task. Archives log files when they exceed a size threshold.
@@ -555,27 +618,40 @@ fn session_dir_usage(entry: &crate::session_log::SessionScanEntry) -> u64 {
     total
 }
 
+/// Last activity of one scanned session, fail-closed: `None` when neither
+/// the `events.jsonl` mtime nor the directory mtime can be read. Callers
+/// must treat `None` as "age unknown — never a deletion candidate" (an
+/// epoch-0 fallback here would make every unreadable session look
+/// infinitely old and delete it).
+fn session_last_modified(events_path: &Path) -> Option<SystemTime> {
+    let events_mtime = events_path.metadata().and_then(|m| m.modified()).ok();
+    let dir_mtime = events_path
+        .parent()
+        .and_then(|d| d.metadata().ok())
+        .and_then(|m| m.modified().ok());
+    match (events_mtime, dir_mtime) {
+        (Some(e), Some(d)) => Some(e.max(d)),
+        (Some(e), None) => Some(e),
+        (None, Some(d)) => Some(d),
+        (None, None) => None,
+    }
+}
+
 /// Scan a sessions container for per-session usage, oldest activity first.
 ///
 /// Only UUID-named directories with an `events.jsonl` are considered —
-/// housekeeping GC never touches foreign siblings.
+/// housekeeping GC never touches foreign siblings. Sessions whose age
+/// cannot be determined (both mtimes unreadable) are **omitted** rather
+/// than reported with a guessed timestamp: the retention planner only sees
+/// entries of this scan, so an omitted session can never be planned for
+/// deletion (fail closed — see [`session_last_modified`]).
 pub fn scan_session_usage(sessions_dir: &Path) -> Vec<SessionUsage> {
     let mut usage: Vec<SessionUsage> = crate::session_log::scan_session_summaries(sessions_dir)
         .into_iter()
         .filter(|entry| uuid::Uuid::parse_str(&entry.session_id).is_ok())
-        .map(|entry| {
-            let events_mtime = entry
-                .events_path
-                .metadata()
-                .and_then(|m| m.modified())
-                .unwrap_or(SystemTime::UNIX_EPOCH);
-            let dir_mtime = entry
-                .events_path
-                .parent()
-                .and_then(|d| d.metadata().ok())
-                .and_then(|m| m.modified().ok())
-                .unwrap_or(SystemTime::UNIX_EPOCH);
-            SessionUsage {
+        .filter_map(|entry| {
+            let last_modified = session_last_modified(&entry.events_path)?;
+            Some(SessionUsage {
                 session_id: entry.session_id.clone(),
                 dir: entry
                     .events_path
@@ -583,8 +659,8 @@ pub fn scan_session_usage(sessions_dir: &Path) -> Vec<SessionUsage> {
                     .unwrap_or(Path::new("."))
                     .to_path_buf(),
                 size_bytes: session_dir_usage(&entry),
-                last_modified: events_mtime.max(dir_mtime),
-            }
+                last_modified,
+            })
         })
         .collect();
     usage.sort_by_key(|u| u.last_modified); // oldest first
@@ -612,9 +688,13 @@ pub fn plan_session_retention(
         .retention_days
         .checked_mul(24 * 60 * 60)
         .unwrap_or(u64::MAX);
-    let cutoff = now
-        .checked_sub(Duration::from_secs(day_secs))
-        .unwrap_or(SystemTime::UNIX_EPOCH);
+    // Fail closed on cutoff arithmetic: `checked_sub` only fails when the
+    // window is longer than the time since the epoch (a nonsensical
+    // config), and the old epoch-0 fallback there made EVERY session look
+    // past-retention. An uncomputable cutoff deletes nothing.
+    let Some(cutoff) = now.checked_sub(Duration::from_secs(day_secs)) else {
+        return Vec::new();
+    };
     // Oldest activity first, regardless of the caller's input order.
     let mut candidates: Vec<&SessionUsage> =
         usage.iter().filter(|u| u.last_modified < cutoff).collect();
@@ -1153,30 +1233,23 @@ mod tests {
     }
 
     #[test]
-    fn prune_old_sessions_removes_old_session_dirs_via_events_mtime() {
+    fn prune_old_sessions_enabled_without_window_deletes_nothing() {
         let tmp = tempfile::tempdir().unwrap();
         let container = tmp.path().join("sessions");
         fs::create_dir_all(&container).unwrap();
         let old = uuid::Uuid::new_v4();
-        let recent = uuid::Uuid::new_v4();
-        seed_real_session(&container, &old, 1024, 40 * 24 * 3600);
-        seed_real_session(&container, &recent, 1024, 0);
-        // A foreign (non-UUID) sibling must survive even though it is old.
-        let foreign = container.join("not-a-uuid");
-        fs::create_dir_all(&foreign).unwrap();
-        fs::write(foreign.join("events.jsonl"), "x").unwrap();
+        seed_real_session(&container, &old, 1024, 60 * 24 * 3600);
 
+        // The env-gated core form has no retention-window source (the
+        // window lives in the desktop config), so even enabled it must
+        // never delete — the desktop wiring is the only deleting path.
         let (msg, count) = prune_old_sessions(tmp.path(), true, SystemTime::now()).unwrap();
-        assert_eq!(count, Some(1), "{msg}");
+        assert_eq!(count, Some(0), "{msg}");
+        assert!(msg.contains("no retention window"), "{msg}");
         assert!(
-            !container.join(old.to_string()).exists(),
-            "the past-30-days session directory is removed whole"
+            container.join(old.to_string()).exists(),
+            "no window configured → the real session directory is never touched"
         );
-        assert!(
-            container.join(recent.to_string()).exists(),
-            "the recent session is kept"
-        );
-        assert!(foreign.exists(), "foreign directories are never GC targets");
     }
 
     /// The destructive path must fail closed: `None` (stat failure) means
@@ -1195,12 +1268,177 @@ mod tests {
         assert!(!prunable_since(Some(recent), cutoff));
     }
 
+    /// Mark an existing real session directory archived through the real
+    /// curation sidecar (`<id>/curation.json`) — the same file the desktop
+    /// archive command writes.
+    fn archive_session_dir(container: &Path, id: &uuid::Uuid) {
+        let curation = crate::session_log::session_curation_path(container, &id.to_string());
+        std::fs::write(&curation, r#"{"archived":true}"#).unwrap();
+    }
+
+    /// Task 2 (卡A) policy boundaries: only **archived AND past-retention**
+    /// sessions are pruned; unarchived and recent sessions survive, foreign
+    /// directories are never touched, and the report names what it did.
+    #[test]
+    fn prune_archived_sessions_removes_only_archived_past_retention() {
+        let tmp = tempfile::tempdir().unwrap();
+        let container = tmp.path().join("sessions");
+        fs::create_dir_all(&container).unwrap();
+
+        let old_archived = uuid::Uuid::new_v4();
+        let old_active = uuid::Uuid::new_v4();
+        let recent_archived = uuid::Uuid::new_v4();
+        seed_real_session(&container, &old_archived, 512, 40 * 24 * 3600);
+        seed_real_session(&container, &old_active, 512, 40 * 24 * 3600);
+        seed_real_session(&container, &recent_archived, 512, 0);
+        archive_session_dir(&container, &old_archived);
+        archive_session_dir(&container, &recent_archived);
+        // A foreign (non-UUID) sibling must survive even though it is old.
+        let foreign = container.join("not-a-uuid");
+        fs::create_dir_all(&foreign).unwrap();
+        fs::write(foreign.join("events.jsonl"), "x").unwrap();
+
+        let report = prune_archived_sessions(&container, Some(30), SystemTime::now()).unwrap();
+        assert_eq!(
+            report.deleted_session_ids,
+            vec![old_archived.to_string()],
+            "exactly the archived-and-old session is deleted"
+        );
+        assert_eq!(report.not_archived, 1, "the unarchived old session");
+        assert_eq!(report.skipped_unknown_age, 0);
+        assert!(!container.join(old_archived.to_string()).exists());
+        assert!(
+            container.join(old_active.to_string()).exists(),
+            "an unarchived session is never auto-deleted, however old"
+        );
+        assert!(
+            container.join(recent_archived.to_string()).exists(),
+            "an archived session inside the retention window is kept"
+        );
+        assert!(foreign.exists(), "foreign directories are never GC targets");
+    }
+
+    /// `retention_days = None` (the config default) means **never delete**:
+    /// even archived sessions past any plausible window survive while GC
+    /// itself is enabled.
+    #[test]
+    fn prune_archived_sessions_retention_none_deletes_nothing() {
+        let tmp = tempfile::tempdir().unwrap();
+        let container = tmp.path().join("sessions");
+        fs::create_dir_all(&container).unwrap();
+        let ancient = uuid::Uuid::new_v4();
+        seed_real_session(&container, &ancient, 512, 400 * 24 * 3600);
+        archive_session_dir(&container, &ancient);
+
+        let report = prune_archived_sessions(&container, None, SystemTime::now()).unwrap();
+        assert!(report.deleted_session_ids.is_empty());
+        assert!(
+            container.join(ancient.to_string()).exists(),
+            "retention None → zero deletions even with GC enabled"
+        );
+    }
+
+    /// A retention window so large its cutoff is unrepresentable deletes
+    /// nothing (fail closed) instead of accidentally making every session
+    /// look past-retention.
+    #[test]
+    fn prune_archived_sessions_unrepresentable_window_deletes_nothing() {
+        let tmp = tempfile::tempdir().unwrap();
+        let container = tmp.path().join("sessions");
+        fs::create_dir_all(&container).unwrap();
+        let ancient = uuid::Uuid::new_v4();
+        seed_real_session(&container, &ancient, 512, 1000 * 24 * 3600);
+        archive_session_dir(&container, &ancient);
+
+        let report =
+            prune_archived_sessions(&container, Some(u32::MAX), SystemTime::now()).unwrap();
+        assert!(report.deleted_session_ids.is_empty());
+        assert!(container.join(ancient.to_string()).exists());
+    }
+
+    #[test]
+    fn prune_archived_sessions_noop_when_container_missing() {
+        let tmp = tempfile::tempdir().unwrap();
+        let report =
+            prune_archived_sessions(&tmp.path().join("sessions"), Some(30), SystemTime::now())
+                .unwrap();
+        assert!(report.deleted_session_ids.is_empty());
+    }
+
+    /// Unreadable sessions are never deleted: a session directory whose
+    /// contents cannot be stat'd never yields a known age, and both the
+    /// scan (omits it, see [`session_last_modified`]) and the archived-GC
+    /// decision ([`prunable_since`] on `None`) fail closed. Root ignores
+    /// directory permission bits, so the chmod simulation is skipped when
+    /// the stat still succeeds.
+    #[test]
+    fn unreadable_session_dirs_are_never_deleted_by_archived_gc() {
+        let tmp = tempfile::tempdir().unwrap();
+        let container = tmp.path().join("sessions");
+        let id = uuid::Uuid::new_v4();
+        seed_real_session(&container, &id, 512, 400 * 24 * 3600);
+        archive_session_dir(&container, &id);
+
+        let dir = container.join(id.to_string());
+        use std::os::unix::fs::PermissionsExt;
+        let orig = fs::metadata(&dir).unwrap().permissions();
+        fs::set_permissions(&dir, fs::Permissions::from_mode(0o000)).unwrap();
+        if fs::metadata(dir.join("events.jsonl")).is_ok() {
+            // Root (or an ACL override): the simulation is impossible here.
+            fs::set_permissions(&dir, orig).unwrap();
+            return;
+        }
+        let report = prune_archived_sessions(&container, Some(30), SystemTime::now()).unwrap();
+        fs::set_permissions(&dir, fs::Permissions::from_mode(0o755)).unwrap();
+        assert!(report.deleted_session_ids.is_empty(), "{report:?}");
+        assert!(
+            dir.exists(),
+            "a session with no readable age is never deleted"
+        );
+    }
+
+    /// `scan_session_usage` omits sessions whose age cannot be read, so the
+    /// budget planner can never even see them as candidates (fail closed).
+    #[test]
+    fn session_last_modified_is_none_for_unreadable_paths() {
+        // Neither the file nor its parent dir exists → both stat attempts
+        // fail → age unknown.
+        let missing_root = std::env::temp_dir().join(uuid::Uuid::new_v4().to_string());
+        assert!(session_last_modified(&missing_root.join("events.jsonl")).is_none());
+        // A readable file still resolves (the common case).
+        let tmp = tempfile::tempdir().unwrap();
+        fs::write(tmp.path().join("events.jsonl"), b"x").unwrap();
+        assert!(session_last_modified(&tmp.path().join("events.jsonl")).is_some());
+    }
+
+    /// A retention window whose cutoff arithmetic overflows (larger than
+    /// the time since the epoch) deletes nothing instead of falling back to
+    /// an epoch-0 cutoff that would make everything eligible.
+    #[test]
+    fn plan_session_retention_overflow_cutoff_deletes_nothing() {
+        let usage = vec![fixture_usage(
+            "ancient",
+            4 * GIB,
+            1, // ~1970-01-01: older than any sane window
+        )];
+        let config = SessionRetentionConfig {
+            retention_days: u64::MAX,
+            max_bytes: GIB,
+        };
+        let plan = plan_session_retention(&usage, &config, plan_now());
+        assert!(
+            plan.is_empty(),
+            "an unrepresentable cutoff must fail closed"
+        );
+    }
+
     #[test]
     fn prune_old_sessions_noop_when_no_sessions_dir() {
         let tmp = tempfile::tempdir().unwrap();
+        // Enabled without a container: still zero deletions, honest message.
         let (msg, count) = prune_old_sessions(tmp.path(), true, SystemTime::now()).unwrap();
         assert_eq!(count, Some(0));
-        assert!(msg.contains("No sessions directory"), "{msg}");
+        assert!(msg.contains("no retention window"), "{msg}");
     }
 
     #[test]

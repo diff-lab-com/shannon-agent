@@ -14,6 +14,7 @@ import { messageFor } from '@/i18n'
 import { listen, type UnlistenFn } from '@tauri-apps/api/event'
 import { isEventForCurrentWindow, parseWindowSession } from '@/lib/windowSession'
 import * as api from '@/lib/tauri-api'
+import { toast } from 'sonner'
 import { toastError } from '@/lib/errorToast'
 import type { CheckpointInfo, FeedbackRating } from '@/lib/tauri-api'
 import {
@@ -629,6 +630,18 @@ export function AppProvider({ children }: { children: ReactNode }) {
           setPermissionRequest(p)
         }),
         listen(EVENT_NAMES.SESSIONS_UPDATED, () => { refreshSessions() }),
+        // 卡A resume-unarchive: opening an archived session silently
+        // unarchives it — toast so the user knows why it left the 已归档
+        // section (messageFor works outside IntlProvider).
+        listen(EVENT_NAMES.SESSION_AUTO_UNARCHIVED, (e) => {
+          const p = e.payload as { session_id: string; title?: string }
+          const title = p.title?.trim()
+          toast.success(
+            title
+              ? messageFor('sidebar.sessions.archived.autoUnarchived', { title })
+              : messageFor('sidebar.sessions.archived.autoUnarchived.untitled'),
+          )
+        }),
         listen(EVENT_NAMES.CONFIG_UPDATED, () => { refreshConfig() }),
         listen(EVENT_NAMES.BACKGROUND_TASKS_UPDATED, () => { refreshBackgroundTasks() }),
         // P0-2: track which sessions a goal run owns, so the composer can

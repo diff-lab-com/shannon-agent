@@ -195,6 +195,19 @@ export interface SessionInfo {
   /** P0 sidebar telemetry: epoch **ms** of the session's last activity
    *  (L0 log mtime). Absent on older engines / brand-new sessions. */
   updated_at?: number
+  /** Session archive (卡A): true once the user archived the session. Absent
+   *  on older engines — treat as not archived. */
+  archived?: boolean
+}
+
+/** Session archive (卡A): one archived session as the sidebar's 已归档
+ *  section renders it — returned by the `list_archived_sessions` command. */
+export interface ArchivedSessionRow {
+  id: string
+  /** Curated title; null → the UI renders its "untitled" placeholder. */
+  title?: string | null
+  /** Last activity, epoch ms; absent when unknown. */
+  updated_at?: number | null
 }
 
 /**
@@ -1218,6 +1231,8 @@ export const EVENT_NAMES = {
   QUERY_CANCELLED: 'query:cancelled',
   PERMISSION_REQUEST: 'permission-request',
   SESSIONS_UPDATED: 'sessions-updated',
+  /** 卡A: switch_session auto-unarchived an archived session (toast cue). */
+  SESSION_AUTO_UNARCHIVED: 'session-auto-unarchived',
   SESSION_LOADED: 'session-loaded',
   CONFIG_UPDATED: 'config-updated',
   DIFF_REVIEW_AVAILABLE: 'diff-review-available',

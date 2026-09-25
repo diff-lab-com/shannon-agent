@@ -160,13 +160,24 @@ pub struct DesktopConfig {
     /// key is `agent_teams_enabled`; see `crate::agent_teams`.
     #[serde(default)]
     pub agent_teams_enabled: bool,
-    /// Master switch for the 30-day session GC (卡0). When false — the
-    /// default — the GC never deletes anything ("never auto-delete" is the
-    /// standing policy; adversarial review F10/F13). Task 2 (archive MVP)
-    /// wires the real archived-aware retention policy and its
-    /// `session_retention_days` knob on top of this gate.
+    /// Master switch for the session GC (卡0). When false — the default —
+    /// the GC never deletes anything ("never auto-delete" is the standing
+    /// policy; adversarial review F10/F13). Since Task 2 (archive MVP, 卡A)
+    /// the enabled GC prunes only **archived** sessions past the
+    /// [`DesktopConfig::session_retention_days`] window; the
+    /// `SHANNON_SESSION_GC_ENABLED` env var can only *force-disable* it
+    /// (an env var must never switch deletion on) — see
+    /// `commands_sessions::effective_gc_retention_days`.
     #[serde(default)]
     pub session_gc_enabled: bool,
+    /// Session GC retention window in days (卡A). Deletion candidates are
+    /// only sessions that are **archived** (their `<id>/curation.json`
+    /// sidecar says so) **and** whose last activity is older than this many
+    /// days. `None` — the default — means **never delete**, even with
+    /// `session_gc_enabled = true`: "never auto-delete" stays the standing
+    /// posture until the user configures an explicit window.
+    #[serde(default)]
+    pub session_retention_days: Option<u32>,
 }
 
 /// P2-5: payload of the desktop `offpeak.model_override` config key.
@@ -589,6 +600,7 @@ impl Default for DesktopConfig {
             offpeak: OffpeakConfig::default(),
             agent_teams_enabled: false,
             session_gc_enabled: false,
+            session_retention_days: None,
         }
     }
 }
@@ -779,6 +791,27 @@ mod tests {
         assert!(cfg.session_gc_enabled);
         let back = serde_json::to_string(&cfg).unwrap();
         assert!(back.contains("\"session_gc_enabled\":true"), "{back}");
+    }
+
+    #[test]
+    fn session_retention_days_defaults_to_never_and_round_trips() {
+        // 卡A: the retention window defaults to None = never delete, even
+        // with the GC enabled; legacy config.json files (key absent) must
+        // load as None.
+        assert_eq!(DesktopConfig::default().session_retention_days, None);
+        let legacy: DesktopConfig = serde_json::from_str(
+            r#"{"working_dir":null,"theme":null,"mcp_servers":[],"approval_mode":null}"#,
+        )
+        .expect("legacy config must deserialize");
+        assert_eq!(legacy.session_retention_days, None);
+
+        let cfg: DesktopConfig = serde_json::from_str(
+            r#"{"mcp_servers":[],"session_gc_enabled":true,"session_retention_days":90}"#,
+        )
+        .unwrap();
+        assert_eq!(cfg.session_retention_days, Some(90));
+        let back = serde_json::to_string(&cfg).unwrap();
+        assert!(back.contains("\"session_retention_days\":90"), "{back}");
     }
 
     #[test]

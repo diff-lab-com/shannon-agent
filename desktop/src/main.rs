@@ -159,6 +159,10 @@ fn main() {
             commands_sessions::rename_session,
             commands_sessions::duplicate_session,
             commands_sessions::branch_session,
+            // 卡A — session archive MVP (curation flag + archived lens)
+            commands_sessions::archive_session,
+            commands_sessions::unarchive_session,
+            commands_sessions::list_archived_sessions,
             // §4.14 — Turn Timeline panel data source
             commands_sessions::trace_timeline,
             // E2 skill loop — task evaluation and skill proposal management
@@ -529,6 +533,15 @@ fn main() {
             // a 7-day pass only inside the 1–5 local-hour window when the
             // last pass is ≥24h old; all errors log-only.
             commands_dream::spawn_night_dream(app.handle().clone());
+
+            // 卡A — session GC: daily archived-aware retention pass. Inert
+            // unless the user enables it in config (`session_gc_enabled`,
+            // plus a `session_retention_days` window — the defaults keep
+            // "never auto-delete"); every outcome is log-only.
+            {
+                let gc_state: tauri::State<'_, commands::AppState> = app.state();
+                commands_sessions::spawn_session_gc(gc_state.inner());
+            }
 
             // Bundle A — Click-to-foreground: when a Shannon notification is
             // clicked, bring the main window to the foreground. On macOS and

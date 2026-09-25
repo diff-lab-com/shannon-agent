@@ -28,6 +28,7 @@ import type {
   HunkAction,
   SessionInfo,
   SessionPlan,
+  ArchivedSessionRow,
   TurnTimeline,
   McpServerInfo,
   McpServerConfig,
@@ -567,6 +568,25 @@ export async function createSessionWorktree(id: string, title: string): Promise<
 
 export async function deleteSession(id: string): Promise<boolean> {
   return invoke('delete_session', { id })
+}
+
+/** Session archive (卡A): write the archived curation flag — the session
+ *  leaves the active rail and every cross-session input layer. `true` when
+ *  this call flipped the flag (false = already archived). */
+export async function archiveSession(id: string): Promise<boolean> {
+  return invoke('archive_session', { id })
+}
+
+/** Session archive (卡A): clear the archived flag; the rail repopulates
+ *  from the store projection without a restart. `true` when flipped. */
+export async function unarchiveSession(id: string): Promise<boolean> {
+  return invoke('unarchive_session', { id })
+}
+
+/** Session archive (卡A): the archived lens — every archived session, most
+ *  recently active first. */
+export async function listArchivedSessions(): Promise<ArchivedSessionRow[]> {
+  return invoke('list_archived_sessions')
 }
 
 export async function renameSession(id: string, title: string): Promise<boolean> {
