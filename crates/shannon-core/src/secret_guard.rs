@@ -687,6 +687,22 @@ fn install_mode(mode: SecretGuardMode) -> Option<SecretGuardMode> {
     Some(mode)
 }
 
+/// Resolve from the given `[secret_guard]` section only (env ignored) and
+/// install. Kept as a public compat surface — prefer
+/// [`init_from_env_or_config`], which applies the documented env > config
+/// precedence and is what the engine calls.
+pub fn init_from_config(
+    cfg: Option<&crate::unified_config::SecretGuardSection>,
+) -> Option<SecretGuardMode> {
+    if let Some(existing) = ENABLED.get() {
+        return Some(*existing);
+    }
+    let mode = cfg
+        .and_then(|c| c.mode.as_deref())
+        .and_then(SecretGuardMode::parse)?;
+    install_mode(mode)
+}
+
 /// Install the built-in guard when `$SHANNON_SECRET_GUARD` requests it.
 /// One-shot per process (subsequent calls are cheap no-ops). Returns the
 /// active mode when installed (or previously installed).
