@@ -160,6 +160,13 @@ pub struct DesktopConfig {
     /// key is `agent_teams_enabled`; see `crate::agent_teams`.
     #[serde(default)]
     pub agent_teams_enabled: bool,
+    /// Master switch for the 30-day session GC (卡0). When false — the
+    /// default — the GC never deletes anything ("never auto-delete" is the
+    /// standing policy; adversarial review F10/F13). Task 2 (archive MVP)
+    /// wires the real archived-aware retention policy and its
+    /// `session_retention_days` knob on top of this gate.
+    #[serde(default)]
+    pub session_gc_enabled: bool,
 }
 
 /// P2-5: payload of the desktop `offpeak.model_override` config key.
@@ -581,6 +588,7 @@ impl Default for DesktopConfig {
             sandbox: None,
             offpeak: OffpeakConfig::default(),
             agent_teams_enabled: false,
+            session_gc_enabled: false,
         }
     }
 }
@@ -751,6 +759,26 @@ mod tests {
         assert!(!config.skill_loop_enabled);
         assert_eq!(config.skill_loop_min_duration_secs, 30);
         assert_eq!(config.skill_loop_min_tool_calls, 2);
+    }
+
+    #[test]
+    fn session_gc_defaults_to_disabled_and_legacy_configs_load() {
+        // 卡0: "never auto-delete" is the standing policy — the GC flag must
+        // default to false, and config.json files written before the key
+        // existed must load with the GC still disabled.
+        assert!(!DesktopConfig::default().session_gc_enabled);
+        let legacy: DesktopConfig = serde_json::from_str(
+            r#"{"working_dir":null,"theme":null,"mcp_servers":[],"approval_mode":null}"#,
+        )
+        .expect("legacy config must deserialize");
+        assert!(!legacy.session_gc_enabled);
+
+        // An explicit opt-in round-trips.
+        let cfg: DesktopConfig =
+            serde_json::from_str(r#"{"mcp_servers":[],"session_gc_enabled":true}"#).unwrap();
+        assert!(cfg.session_gc_enabled);
+        let back = serde_json::to_string(&cfg).unwrap();
+        assert!(back.contains("\"session_gc_enabled\":true"), "{back}");
     }
 
     #[test]

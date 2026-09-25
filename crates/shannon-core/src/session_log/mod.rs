@@ -21,6 +21,7 @@ pub mod projections;
 pub mod reader;
 pub mod redaction;
 pub mod session_index;
+pub mod session_query;
 pub mod session_store;
 pub mod tee;
 pub mod writer;
@@ -35,10 +36,11 @@ pub use projections::{
 pub use reader::{SessionEventIter, SessionLogReader};
 pub use redaction::{REDACTED, RedactionPolicy};
 pub use session_index::{SessionIndex, SessionIndexAccumulator};
+pub use session_query::{SessionQuery, SessionRef, SessionToolCall};
 pub use session_store::{
-    DEFAULT_SEARCH_LIMIT, SessionSearchHit, SessionSearchOutcome, SessionSidecar, SessionStore,
-    SessionStoreError, StoredGoal, StoredLoop, StoredRalph, StoredSession, StoredSessionInfo,
-    StoredSessionMeta, default_store,
+    DEFAULT_SEARCH_LIMIT, SessionCuration, SessionSearchHit, SessionSearchOutcome, SessionSidecar,
+    SessionStore, SessionStoreError, StoredGoal, StoredLoop, StoredRalph, StoredSession,
+    StoredSessionInfo, StoredSessionMeta, default_store,
 };
 pub use tee::{SessionTee, TeeHandle};
 pub use writer::{FlushPolicy, SessionLogWriter};
@@ -144,6 +146,17 @@ pub fn session_meta_container_path(dir: &Path, session_id: &str) -> PathBuf {
 /// [`session_index`]).
 pub fn session_index_container_path(dir: &Path, session_id: &str) -> PathBuf {
     dir.join(session_id).join("index.json")
+}
+
+/// Resolve the curation sidecar for one session in a container:
+/// `<dir>/<session_id>/curation.json` (lifecycle flags such as `archived`;
+/// read via [`SessionStore::curation`], written via
+/// [`SessionStore::save_curation`]). Deliberately a separate file from
+/// `meta.json`: [`session_store::SessionSidecar`] is not `#[non_exhaustive]`,
+/// so growing it with a new field would be a breaking change for external
+/// struct-literal constructors.
+pub fn session_curation_path(dir: &Path, session_id: &str) -> PathBuf {
+    dir.join(session_id).join("curation.json")
 }
 
 /// Effective log container for an active engine: `SHANNON_HOME` relocates

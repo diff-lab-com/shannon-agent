@@ -24,8 +24,11 @@
 //! - `redact`, a key/value masker applied to every user text before it
 //!   leaves the machine (into excerpts, prompts, or reports).
 //! - `session_excerpt`, which extracts redacted user texts and tool names
-//!   from a session JSON file in the format read by
-//!   `skill_pattern_detection::load_session`.
+//!   for one session through the core session-query adapter
+//!   (`shannon_core::session_log::SessionQuery` — the read-side single
+//!   source over the real `<id>/events.jsonl` layout it shares with skill
+//!   detection; the retired flat `sessions/*.json` reader silently parsed
+//!   zero production sessions).
 //! - `build_report_markdown` + `save_report_in`/`read_report_in`, the
 //!   human-readable run report (counts only — no original text ever reaches
 //!   the report).
@@ -63,6 +66,7 @@ use regex::Regex;
 use serde::{Deserialize, Serialize};
 use shannon_core::auto_dream_consolidation::{ConsolidationLock, ConsolidationPrompt};
 use shannon_core::memory::{MemoryEntry, MemoryStore};
+use shannon_core::session_log::{SessionQuery, SessionRef};
 use tauri::{Emitter, Manager};
 
 use crate::commands::AppState;
@@ -563,116 +567,44 @@ pub fn redact(s: &str) -> String {
 // Session excerpts
 // ============================================================================
 
-/// Parsed session file — same shape [`crate::skill_pattern_detection`] reads.
-#[derive(Debug, Deserialize)]
-struct SessionFile {
-    #[serde(default)]
-    session_id: String,
-    #[serde(default)]
-    messages: Vec<serde_json::Value>,
-}
-
-/// Extract a redacted, size-capped excerpt from the session file at `path`.
-/// Takes the first `max_user_msgs` user texts (string content or `text`
-/// blocks; `tool_result` blocks are never included), each truncated to
-/// `per_msg_chars` chars and passed through [`redact`], plus the deduplicated
-/// assistant tool names in first-seen order.
+/// Extract a redacted, size-capped excerpt for one session through the core
+/// session-query adapter. Takes the first `max_user_msgs` user texts, each
+/// truncated to `per_msg_chars` chars and passed through [`redact`], plus
+/// the deduplicated tool names in first-seen order. Archived sessions never
+/// reach this function: they are already excluded by
+/// `SessionQuery::list_recent` at the window level.
 pub fn session_excerpt(
-    path: &Path,
+    query: &SessionQuery,
+    session: &SessionRef,
     max_user_msgs: usize,
     per_msg_chars: usize,
 ) -> Result<SessionExcerpt, String> {
-    let contents =
-        std::fs::read_to_string(path).map_err(|e| format!("read {}: {e}", path.display()))?;
-    let session: SessionFile =
-        serde_json::from_str(&contents).map_err(|e| format!("parse {}: {e}", path.display()))?;
-    let session_id = if session.session_id.is_empty() {
-        path.file_stem()
-            .and_then(|s| s.to_str())
-            .unwrap_or("unknown")
-            .to_string()
-    } else {
-        session.session_id
-    };
-
     let mut user_texts = Vec::new();
+    for text in query
+        .user_texts(&session.session_id)
+        .map_err(|e| format!("session {}: {e}", session.session_id))?
+    {
+        if user_texts.len() >= max_user_msgs {
+            break;
+        }
+        user_texts.push(redact(&truncate_chars(&text, per_msg_chars)));
+    }
+
     let mut tool_names: Vec<String> = Vec::new();
-    for msg in &session.messages {
-        match msg.get("role").and_then(|v| v.as_str()).unwrap_or_default() {
-            "user" => {
-                if user_texts.len() >= max_user_msgs {
-                    continue;
-                }
-                if let Some(text) = extract_text(msg.get("content")) {
-                    if text.trim().is_empty() {
-                        continue;
-                    }
-                    user_texts.push(redact(&truncate_chars(&text, per_msg_chars)));
-                }
-            }
-            "assistant" => {
-                for block in content_blocks(msg.get("content")) {
-                    if block
-                        .get("type")
-                        .and_then(|v| v.as_str())
-                        .unwrap_or_default()
-                        != "tool_use"
-                        && block
-                            .get("type")
-                            .and_then(|v| v.as_str())
-                            .unwrap_or_default()
-                            != "tool_call"
-                    {
-                        continue;
-                    }
-                    let name = block
-                        .get("name")
-                        .and_then(|v| v.as_str())
-                        .unwrap_or("unknown")
-                        .to_string();
-                    if !tool_names.contains(&name) {
-                        tool_names.push(name);
-                    }
-                }
-            }
-            _ => {}
+    for call in query
+        .tool_calls(&session.session_id)
+        .map_err(|e| format!("session {}: {e}", session.session_id))?
+    {
+        if !tool_names.contains(&call.tool_name) {
+            tool_names.push(call.tool_name);
         }
     }
+
     Ok(SessionExcerpt {
-        session_id,
+        session_id: session.session_id.to_string(),
         user_texts,
         tool_names,
     })
-}
-
-/// User-visible text from a message `content` field: a plain string, or the
-/// concatenated `text` of `text`-type blocks (tool results and other block
-/// types are ignored on purpose).
-fn extract_text(content: Option<&serde_json::Value>) -> Option<String> {
-    match content? {
-        serde_json::Value::String(s) => Some(s.clone()),
-        serde_json::Value::Array(blocks) => {
-            let texts: Vec<String> = blocks
-                .iter()
-                .filter(|b| b.get("type").and_then(|v| v.as_str()) == Some("text"))
-                .filter_map(|b| b.get("text").and_then(|v| v.as_str()).map(String::from))
-                .collect();
-            if texts.is_empty() {
-                None
-            } else {
-                Some(texts.join("\n"))
-            }
-        }
-        _ => None,
-    }
-}
-
-/// Content blocks when `content` is an array; anything else yields nothing.
-fn content_blocks(content: Option<&serde_json::Value>) -> &[serde_json::Value] {
-    match content {
-        Some(serde_json::Value::Array(a)) => a,
-        _ => &[],
-    }
 }
 
 /// Truncate to at most `max` chars (char-boundary safe, CJK friendly).
@@ -1227,13 +1159,25 @@ where
     };
     let entries_reviewed: usize = by_project.values().map(Vec::len).sum();
 
-    // Recent session excerpts (texts already redacted by `session_excerpt`).
+    // Recent session excerpts (texts already redacted by `session_excerpt`),
+    // read through the core session-query adapter — the same single source
+    // skill detection uses. Archived sessions are excluded at the input
+    // layer (`include_archived = false`).
+    let query = SessionQuery::new(sessions_dir);
     let mut excerpts: Vec<SessionExcerpt> = Vec::new();
-    for path in crate::skill_pattern_detection::list_recent_sessions(sessions_dir, days_back)? {
-        match session_excerpt(&path, DEFAULT_MAX_USER_MSGS, DEFAULT_PER_MSG_CHARS) {
+    for session in query
+        .list_recent(days_back, false)
+        .map_err(|e| format!("session query: {e}"))?
+    {
+        match session_excerpt(
+            &query,
+            &session,
+            DEFAULT_MAX_USER_MSGS,
+            DEFAULT_PER_MSG_CHARS,
+        ) {
             Ok(excerpt) => excerpts.push(excerpt),
             Err(e) => tracing::warn!(
-                path = %path.display(),
+                session = %session.session_id,
                 error = %e,
                 "dream: skipping unreadable session"
             ),
@@ -2023,44 +1967,93 @@ mod tests {
     }
 
     // ------------------------------------------------------------------
-    // Session excerpts
+    // Session excerpts (real layout: fixtures through the session_log
+    // writer — the retired flat *.json fixtures never matched production)
     // ------------------------------------------------------------------
 
-    fn write_session_file(dir: &Path, name: &str, body: serde_json::Value) -> PathBuf {
-        let path = dir.join(name);
-        std::fs::write(&path, serde_json::to_vec(&body).unwrap()).unwrap();
-        path
+    use shannon_core::session_log::SessionLogWriter;
+    use shannon_types::session_event::{
+        SessionEventBody, SessionStartPayload, ToolCallPayload, TurnEndPayload, TurnStartPayload,
+        UserMessagePayload,
+    };
+
+    /// Seed a real session through the session_log writer: session/start,
+    /// then for each `user_texts` entry a user prompt, then one framed turn
+    /// per `(tool, arg_keys)` call. Returns the session id.
+    fn seed_real_session(
+        container: &Path,
+        user_texts: &[&str],
+        calls: &[(&str, &[&str])],
+    ) -> uuid::Uuid {
+        let id = uuid::Uuid::new_v4();
+        let mut w = SessionLogWriter::open_layout(container, &id.to_string()).unwrap();
+        w.record(SessionEventBody::SessionStart(SessionStartPayload {
+            model: "test-model".into(),
+            provider: None,
+            cwd: Some("/proj".into()),
+            app_version: None,
+            ..Default::default()
+        }));
+        for text in user_texts {
+            w.record(SessionEventBody::UserMessage(UserMessagePayload {
+                source: UserMessagePayload::SOURCE_USER.into(),
+                content: (*text).into(),
+                attachment_count: 0,
+            }));
+        }
+        for (i, (tool, keys)) in calls.iter().enumerate() {
+            w.record(SessionEventBody::TurnStart(TurnStartPayload {
+                query_id: None,
+            }));
+            let mut input = serde_json::Map::new();
+            for k in *keys {
+                input.insert((*k).to_string(), serde_json::Value::String("x".into()));
+            }
+            w.record(SessionEventBody::ToolCall(ToolCallPayload {
+                tool_use_id: format!("u-{i}"),
+                tool_name: (*tool).to_string(),
+                arguments: serde_json::Value::Object(input).to_string(),
+            }));
+            w.record(SessionEventBody::TurnEnd(TurnEndPayload {
+                reason: TurnEndPayload::REASON_COMPLETED.into(),
+                usage: None,
+                error: None,
+            }));
+        }
+        w.close().unwrap();
+        id
+    }
+
+    /// Excerpt one seeded session through the adapter.
+    fn excerpt_of(
+        query: &SessionQuery,
+        id: &uuid::Uuid,
+        max_user_msgs: usize,
+        per_msg_chars: usize,
+    ) -> SessionExcerpt {
+        let session = SessionRef {
+            session_id: *id,
+            dir: query.container().join(id.to_string()),
+            updated_at: Utc::now(),
+        };
+        session_excerpt(query, &session, max_user_msgs, per_msg_chars).unwrap()
     }
 
     #[test]
     fn session_excerpt_extracts_redacted_texts_and_tool_names() {
         let dir = tempdir().unwrap();
-        let path = write_session_file(
+        let id = seed_real_session(
             dir.path(),
-            "s1.json",
-            serde_json::json!({
-                "session_id": "sess-1",
-                "messages": [
-                    {"role": "user", "content": "deploy with api_key: sk-secret1 please"},
-                    {"role": "assistant", "content": [
-                        {"type": "text", "text": "sure"},
-                        {"type": "tool_use", "name": "bash", "input": {"cmd": "deploy"}}
-                    ]},
-                    {"role": "user", "content": [
-                        {"type": "tool_result", "content": "leaked? no"},
-                        {"type": "text", "text": "now set password=hunter2"}
-                    ]},
-                    {"role": "assistant", "content": [
-                        {"type": "tool_use", "name": "bash", "input": {}},
-                        {"type": "tool_call", "name": "read_file", "input": {}}
-                    ]},
-                    {"role": "user", "content": "thanks"}
-                ]
-            }),
+            &[
+                "deploy with api_key: sk-secret1 please",
+                "now set password=hunter2",
+                "thanks",
+            ],
+            &[("bash", &["cmd"]), ("bash", &[]), ("read_file", &["path"])],
         );
-
-        let excerpt = session_excerpt(&path, DEFAULT_MAX_USER_MSGS, DEFAULT_PER_MSG_CHARS).unwrap();
-        assert_eq!(excerpt.session_id, "sess-1");
+        let query = SessionQuery::new(dir.path());
+        let excerpt = excerpt_of(&query, &id, DEFAULT_MAX_USER_MSGS, DEFAULT_PER_MSG_CHARS);
+        assert_eq!(excerpt.session_id, id.to_string());
         assert_eq!(
             excerpt.user_texts,
             vec![
@@ -2075,22 +2068,15 @@ mod tests {
     #[test]
     fn session_excerpt_caps_messages_and_truncates_chars() {
         let dir = tempdir().unwrap();
-        let mut messages = Vec::new();
-        for i in 0..5 {
-            messages.push(serde_json::json!({
-                "role": "user",
-                "content": format!("msg-{i} {}", "长".repeat(30)),
-            }));
-        }
-        let path = write_session_file(
-            dir.path(),
-            "s2.json",
-            serde_json::json!({"messages": messages}),
-        );
+        let texts: Vec<String> = (0..5)
+            .map(|i| format!("msg-{i} {}", "长".repeat(30)))
+            .collect();
+        let refs: Vec<&str> = texts.iter().map(String::as_str).collect();
+        let id = seed_real_session(dir.path(), &refs, &[]);
 
-        let excerpt = session_excerpt(&path, 3, 10).unwrap();
-        // Missing session_id falls back to the file stem.
-        assert_eq!(excerpt.session_id, "s2");
+        let query = SessionQuery::new(dir.path());
+        let excerpt = excerpt_of(&query, &id, 3, 10);
+        assert_eq!(excerpt.session_id, id.to_string());
         assert_eq!(excerpt.user_texts.len(), 3);
         for (i, text) in excerpt.user_texts.iter().enumerate() {
             assert!(text.chars().count() <= 10, "truncated: {text}");
@@ -2099,11 +2085,48 @@ mod tests {
     }
 
     #[test]
-    fn session_excerpt_errors_on_missing_or_invalid_file() {
+    fn session_excerpt_missing_log_reads_empty_and_corrupt_log_errors() {
         let dir = tempdir().unwrap();
-        assert!(session_excerpt(&dir.path().join("missing.json"), 20, 500).is_err());
-        let bad = write_session_file(dir.path(), "bad.json", serde_json::json!([1, 2, 3]));
-        assert!(session_excerpt(&bad, 20, 500).is_err());
+        let query = SessionQuery::new(dir.path());
+        // A session id with no log at all excerpts to an empty excerpt —
+        // there is nothing to fail on.
+        let ghost = uuid::Uuid::new_v4();
+        let session = SessionRef {
+            session_id: ghost,
+            dir: dir.path().join(ghost.to_string()),
+            updated_at: Utc::now(),
+        };
+        let excerpt = session_excerpt(
+            &query,
+            &session,
+            DEFAULT_MAX_USER_MSGS,
+            DEFAULT_PER_MSG_CHARS,
+        )
+        .unwrap();
+        assert!(excerpt.user_texts.is_empty());
+        assert!(excerpt.tool_names.is_empty());
+
+        // A corrupt log line makes the session unreadable: an error the pass
+        // logs and skips.
+        let id = seed_real_session(dir.path(), &["hello"], &[]);
+        let log = dir.path().join(id.to_string()).join("events.jsonl");
+        let mut raw = std::fs::read_to_string(&log).unwrap();
+        raw.push_str("{not json\n");
+        std::fs::write(&log, raw).unwrap();
+        let session = SessionRef {
+            session_id: id,
+            dir: dir.path().join(id.to_string()),
+            updated_at: Utc::now(),
+        };
+        assert!(
+            session_excerpt(
+                &query,
+                &session,
+                DEFAULT_MAX_USER_MSGS,
+                DEFAULT_PER_MSG_CHARS
+            )
+            .is_err()
+        );
     }
 
     // ------------------------------------------------------------------
@@ -2171,19 +2194,8 @@ mod tests {
         e
     }
 
-    fn write_recent_session(dir: &Path, session_id: &str, user_text: &str) -> PathBuf {
-        let body = serde_json::json!({
-            "session_id": session_id,
-            "messages": [
-                {"role": "user", "content": user_text},
-                {"role": "assistant", "content": [
-                    {"type": "tool_use", "name": "bash", "input": {}}
-                ]},
-            ],
-        });
-        let path = dir.join(format!("{session_id}.json"));
-        std::fs::write(&path, serde_json::to_vec(&body).unwrap()).unwrap();
-        path
+    fn write_recent_session(dir: &Path, user_text: &str) -> uuid::Uuid {
+        seed_real_session(dir, &[user_text], &[("bash", &[])])
     }
 
     #[test]
@@ -2743,11 +2755,7 @@ mod tests {
         assert!(!before.is_empty(), "seed wrote jsonl files");
 
         let sessions = tempdir().unwrap();
-        write_recent_session(
-            sessions.path(),
-            "sess-1",
-            "api_key: sk-1 and password: hunter2",
-        );
+        write_recent_session(sessions.path(), "api_key: sk-1 and password: hunter2");
         let dreams = tempdir().unwrap();
 
         let canned = format!(

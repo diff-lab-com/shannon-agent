@@ -256,6 +256,16 @@ impl HousekeepingTask for CacheRefreshTask {
 }
 
 /// Old session pruning task. Removes sessions older than 30 days.
+///
+/// **Opt-in and disabled by default** (adversarial review F10/F13): the
+/// desktop config key `session_gc_enabled` defaults to `false` and the
+/// core-side mirror (`SHANNON_SESSION_GC_ENABLED`, see
+/// `session_gc_enabled`) is unset unless explicitly exported, so a
+/// registration alone never deletes anything. The walk is the
+/// real per-session layout (`<container>/<uuid>/` directories, age taken
+/// from `events.jsonl`, whole directories removed) — see
+/// [`prune_old_sessions`]. Task 2 (archive MVP) replaces the policy with
+/// "archived and past the retention window" on top of this gate.
 pub struct OldSessionPruneTask;
 
 impl HousekeepingTask for OldSessionPruneTask {
@@ -264,7 +274,7 @@ impl HousekeepingTask for OldSessionPruneTask {
     }
 
     fn description(&self) -> &str {
-        "Remove session files older than 30 days"
+        "Remove session directories older than 30 days (opt-in via session_gc_enabled)"
     }
 
     fn default_interval(&self) -> Duration {
@@ -272,39 +282,91 @@ impl HousekeepingTask for OldSessionPruneTask {
     }
 
     fn execute(&self, base_dir: &Path) -> Result<(String, Option<usize>), String> {
-        let sessions_dir = base_dir.join("sessions");
-        if !sessions_dir.exists() {
-            return Ok(("No sessions directory found".to_string(), Some(0)));
+        prune_old_sessions(base_dir, session_gc_enabled(), SystemTime::now())
+    }
+}
+
+/// Session-GC master gate: the core-side mirror of the desktop config key
+/// `session_gc_enabled` (serde default `false`). Core cannot read the
+/// desktop's `config.json`, so the opt-in crosses the crate boundary as an
+/// environment variable, `SHANNON_SESSION_GC_ENABLED=1|true` — the same
+/// pattern [`SessionRetentionConfig::from_env`] uses for its policy knobs.
+/// Unset or any other value means **disabled**: nothing is ever deleted.
+fn session_gc_enabled() -> bool {
+    std::env::var("SHANNON_SESSION_GC_ENABLED")
+        .map(|v| v == "1" || v.eq_ignore_ascii_case("true"))
+        .unwrap_or(false)
+}
+
+/// 30-day session GC over the real per-session layout.
+///
+/// Iterates the session directories under `<base_dir>/sessions` (only
+/// UUID-named directories with an `events.jsonl` are considered; foreign
+/// siblings are never touched), takes each session's age from its
+/// `events.jsonl` mtime, and removes whole directories with
+/// `remove_dir_all` — never `remove_file`, which is what silently no-op'd
+/// this task against directories before the fix (adversarial review §2.1
+/// F1).
+///
+/// `enabled = false` returns a "disabled" outcome without touching anything:
+/// the default everywhere (the desktop config key defaults to `false`),
+/// because "never auto-delete" is the standing policy until Task 2 wires the
+/// archived-aware retention policy. `now` is injected for tests.
+pub fn prune_old_sessions(
+    base_dir: &Path,
+    enabled: bool,
+    now: SystemTime,
+) -> Result<(String, Option<usize>), String> {
+    if !enabled {
+        return Ok((
+            "Session GC disabled (session_gc_enabled=false); nothing pruned".to_string(),
+            Some(0),
+        ));
+    }
+    let sessions_dir = base_dir.join("sessions");
+    if !sessions_dir.exists() {
+        return Ok(("No sessions directory found".to_string(), Some(0)));
+    }
+
+    let cutoff = now - Duration::from_secs(30 * 24 * 60 * 60);
+    let mut removed = 0usize;
+    for entry in crate::session_log::scan_session_summaries(&sessions_dir) {
+        // Foreign directories sharing the container are never GC targets.
+        if uuid::Uuid::parse_str(&entry.session_id).is_err() {
+            continue;
         }
-
-        let cutoff = std::time::SystemTime::now() - Duration::from_secs(30 * 24 * 60 * 60);
-        let mut removed = 0usize;
-
-        let entries = std::fs::read_dir(&sessions_dir)
-            .map_err(|e| format!("Failed to read sessions dir: {e}"))?;
-
-        for entry in entries {
-            let entry = match entry {
-                Ok(e) => e,
-                Err(_) => continue,
-            };
-
-            if let Ok(metadata) = entry.metadata() {
-                if let Ok(modified) = metadata.modified() {
-                    if modified < cutoff {
-                        let path = entry.path();
-                        if path.extension().and_then(|e| e.to_str()) == Some("json")
-                            && std::fs::remove_file(&path).is_ok()
-                        {
-                            removed += 1;
-                        }
-                    }
-                }
+        let mtime = entry
+            .events_path
+            .metadata()
+            .and_then(|m| m.modified())
+            .unwrap_or(SystemTime::UNIX_EPOCH);
+        if mtime >= cutoff {
+            continue;
+        }
+        let Some(dir) = entry.events_path.parent() else {
+            continue;
+        };
+        match std::fs::remove_dir_all(dir) {
+            Ok(()) => {
+                info!(
+                    session_id = %entry.session_id,
+                    dir = %dir.display(),
+                    "old_session_prune: removed session directory"
+                );
+                removed += 1;
+            }
+            Err(e) => {
+                warn!(
+                    session_id = %entry.session_id,
+                    dir = %dir.display(),
+                    error = %e,
+                    "old_session_prune: failed to remove session directory"
+                );
             }
         }
-
-        Ok((format!("Pruned {removed} old sessions"), Some(removed)))
     }
+
+    Ok((format!("Pruned {removed} old session(s)"), Some(removed)))
 }
 
 /// Log rotation task. Archives log files when they exceed a size threshold.
@@ -1047,9 +1109,67 @@ mod tests {
         fs::write(sessions_dir.join("recent2.json"), "{}").unwrap();
 
         let (_msg, count) = task.execute(&dir).unwrap();
-        // All files are recent, so none should be pruned.
+        // The task is disabled by default (session_gc_enabled=false), so
+        // nothing is pruned regardless of file age — the legacy flat *.json
+        // fixtures here only assert that dead contract stays untouched.
         assert_eq!(count, Some(0));
         assert!(sessions_dir.join("recent.json").exists());
+    }
+
+    // -----------------------------------------------------------------------
+    // Session GC (prune_old_sessions over the real per-session layout)
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn prune_old_sessions_disabled_touches_nothing() {
+        let tmp = tempfile::tempdir().unwrap();
+        let container = tmp.path().join("sessions");
+        fs::create_dir_all(&container).unwrap();
+        let old = uuid::Uuid::new_v4();
+        seed_real_session(&container, &old, 1024, 60 * 24 * 3600);
+
+        let (msg, count) = prune_old_sessions(tmp.path(), false, SystemTime::now()).unwrap();
+        assert_eq!(count, Some(0), "{msg}");
+        assert!(msg.contains("disabled"), "{msg}");
+        assert!(
+            container.join(old.to_string()).exists(),
+            "GC off → nothing is deleted, however old"
+        );
+    }
+
+    #[test]
+    fn prune_old_sessions_removes_old_session_dirs_via_events_mtime() {
+        let tmp = tempfile::tempdir().unwrap();
+        let container = tmp.path().join("sessions");
+        fs::create_dir_all(&container).unwrap();
+        let old = uuid::Uuid::new_v4();
+        let recent = uuid::Uuid::new_v4();
+        seed_real_session(&container, &old, 1024, 40 * 24 * 3600);
+        seed_real_session(&container, &recent, 1024, 0);
+        // A foreign (non-UUID) sibling must survive even though it is old.
+        let foreign = container.join("not-a-uuid");
+        fs::create_dir_all(&foreign).unwrap();
+        fs::write(foreign.join("events.jsonl"), "x").unwrap();
+
+        let (msg, count) = prune_old_sessions(tmp.path(), true, SystemTime::now()).unwrap();
+        assert_eq!(count, Some(1), "{msg}");
+        assert!(
+            !container.join(old.to_string()).exists(),
+            "the past-30-days session directory is removed whole"
+        );
+        assert!(
+            container.join(recent.to_string()).exists(),
+            "the recent session is kept"
+        );
+        assert!(foreign.exists(), "foreign directories are never GC targets");
+    }
+
+    #[test]
+    fn prune_old_sessions_noop_when_no_sessions_dir() {
+        let tmp = tempfile::tempdir().unwrap();
+        let (msg, count) = prune_old_sessions(tmp.path(), true, SystemTime::now()).unwrap();
+        assert_eq!(count, Some(0));
+        assert!(msg.contains("No sessions directory"), "{msg}");
     }
 
     #[test]
