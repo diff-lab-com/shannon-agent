@@ -14,7 +14,7 @@
 
 | metric | value |
 |---|---:|
-| Tests (nextest, runnable) | 12562 |
+| Tests (nextest, runnable) | 12573 |
 | Tests (source `#[test]`/`#[tokio::test]` attrs) | 12460 |
 | Rust source files | 758 |
 | Rust LOC (code) | 527094 |
