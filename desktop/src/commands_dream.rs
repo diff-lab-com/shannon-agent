@@ -1188,6 +1188,7 @@ async fn consult_llm(
 /// L3 is best-effort by design: a detection error is logged and the pass
 /// continues with zero candidate counts — losing a report to a candidates
 /// JSONL hiccup would be worse than shipping one without L3 numbers.
+#[allow(clippy::too_many_arguments)] // injected seams (consult/detect/refine) are the testability contract
 pub(crate) async fn execute_dream_pass_inner<C, F, D, DF, R, RF>(
     days_back: u32,
     memory_store: &SharedMemoryStore,
@@ -1441,16 +1442,15 @@ pub(crate) async fn execute_dream_pass_in<R: tauri::Runtime>(
         move |candidate: crate::commands_skill_candidates::SkillCandidate| {
             let desktop = desktop.clone();
             async move {
-                let Some(text) = crate::commands_skill_candidates::refine_candidate_text(
+                // `None` (LLM failure) leaves the candidate untouched and
+                // uncounted — the `?` on the Option is that exact contract.
+                let text = crate::commands_skill_candidates::refine_candidate_text(
                     state_ref,
                     &candidate.proposed_name,
                     &candidate.proposed_trigger,
                     &candidate.procedure.join("\n"),
                 )
-                .await
-                else {
-                    return None;
-                };
+                .await?;
                 let procedure = crate::commands_skill_candidates::procedure_lines(&text);
                 if let Err(e) = crate::commands_skill_candidates::mark_candidate_refined_in(
                     &desktop,
