@@ -1347,6 +1347,19 @@ impl QueryEngine {
                                         }
                                     }
 
+                                    // Secret-guard (blueprint: redaction must
+                                    // precede the compaction request): the
+                                    // summarizer sends `messages` verbatim to
+                                    // the LLM, so transform first — the wire
+                                    // must carry surrogates only (pinned by
+                                    // `compaction_summarizer_wire_carries_surrogates_not_secrets`).
+                                    // The compacted result is surrogate-
+                                    // consistent, matching the overflow-retry
+                                    // history sync (§5.4).
+                                    let taken = std::mem::take(&mut messages);
+                                    messages = crate::secret_guard::transform_outgoing_messages(
+                                        taken,
+                                    );
                                     match compact_engine.compact(&mut messages) {
                                         Ok(result) => {
                                             compaction_failures = 0; // reset on success
@@ -1681,6 +1694,12 @@ impl QueryEngine {
                         // the visible answer lands in `assistant_text` — which
                         // also keeps reasoning markup out of saved history.
                         let mut think_splitter = ThinkStreamSplitter::default();
+                        // Display-face secret restore across streamed deltas:
+                        // a surrogate token spans several deltas, so the
+                        // restorer carries the partial tail between feeds and
+                        // flushes it with the splitter's tail below.
+                        let mut display_restorer =
+                            crate::secret_guard::DisplayRestorer::new();
                         let mut assistant_tool_uses: Vec<ContentBlock> = Vec::new();
                         // Terminal stop reason for this response, latched from
                         // whichever MessageDelta carried it (providers split
@@ -1801,17 +1820,21 @@ impl QueryEngine {
                                                         // emitted copy carries real
                                                         // values; `assistant_text`
                                                         // (history) keeps surrogates.
-                                                        let mut display = visible.clone();
-                                                        crate::secret_guard::restore_display_for_output(
-                                                            &mut display,
-                                                        );
-                                                        send_event!(
-                                                            tx,
-                                                            QueryEvent::Text {
-                                                                query_id,
-                                                                content: display,
-                                                            }
-                                                        );
+                                                        // `display_restorer` holds
+                                                        // back any partial surrogate
+                                                        // token so a token split
+                                                        // across deltas still restores.
+                                                        let display = display_restorer
+                                                            .feed(&visible);
+                                                        if !display.is_empty() {
+                                                            send_event!(
+                                                                tx,
+                                                                QueryEvent::Text {
+                                                                    query_id,
+                                                                    content: display,
+                                                                }
+                                                            );
+                                                        }
                                                     }
                                                 }
                                                 ContentDelta::InputJsonDelta { partial_json } => {
@@ -1997,17 +2020,37 @@ impl QueryEngine {
                                             }
                                             if !tail_visible.is_empty() {
                                                 assistant_text.push_str(&tail_visible);
-                                                let mut display = tail_visible.clone();
-                                                crate::secret_guard::restore_display_for_output(
-                                                    &mut display,
-                                                );
-                                                send_event!(
-                                                    tx,
-                                                    QueryEvent::Text {
-                                                        query_id,
-                                                        content: display,
-                                                    }
-                                                );
+                                                // Same display-face restore as the
+                                                // delta arm; the restorer is also
+                                                // finished here so any held-back
+                                                // partial token flushes before the
+                                                // final assistant text is used.
+                                                let mut display =
+                                                    display_restorer.feed(&tail_visible);
+                                                display.push_str(&display_restorer.finish());
+                                                if !display.is_empty() {
+                                                    send_event!(
+                                                        tx,
+                                                        QueryEvent::Text {
+                                                            query_id,
+                                                            content: display,
+                                                        }
+                                                    );
+                                                }
+                                            } else {
+                                                // Even without a visible tail, a held
+                                                // partial token must flush here or it
+                                                // would never reach the display.
+                                                let flushed = display_restorer.finish();
+                                                if !flushed.is_empty() {
+                                                    send_event!(
+                                                        tx,
+                                                        QueryEvent::Text {
+                                                            query_id,
+                                                            content: flushed,
+                                                        }
+                                                    );
+                                                }
                                             }
                                             if delta.stop_reason.is_some() {
                                                 assistant_stop_reason = delta.stop_reason.clone();

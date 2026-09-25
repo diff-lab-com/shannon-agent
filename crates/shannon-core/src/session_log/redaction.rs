@@ -47,9 +47,13 @@ pub const MIN_SECRET_VALUE_LEN: usize = 8;
 
 /// Token shapes masked wherever they appear: provider keys, GitHub PATs,
 /// Slack tokens, GitLab PATs. Fixed — user config extends it, never narrows.
+///
+/// The `\b` guard keeps `sk-` from matching inside ordinary words that end
+/// in "sk" followed by a dash (branch names like `task-12345678`); every
+/// built-in prefix starts with a word char, so the boundary is safe.
 pub static BUILTIN_PREFIX_REGEX: Lazy<Regex> = Lazy::new(|| {
     Regex::new(concat!(
-        r"(sk-[A-Za-z0-9_-]{8,}",
+        r"\b(sk-[A-Za-z0-9_-]{8,}",
         r"|ghp_[A-Za-z0-9]{8,}",
         r"|github_pat_[A-Za-z0-9_]{8,}",
         r"|xox[abp]-[A-Za-z0-9-]{8,}",
@@ -377,6 +381,20 @@ mod tests {
         let more = "a github_pat_ABCDEFGHI123456 b glpat-tuvwx56789yz c";
         let redacted = policy.redact_str(more);
         assert_eq!(redacted.matches(REDACTED).count(), 2);
+    }
+
+    #[test]
+    fn word_boundary_blocks_embedded_sk_words() {
+        // Words that merely END in "sk" (+ dash + 8 chars) are not secrets:
+        // branch names, issue keys, filenames. Without a leading word
+        // boundary the `sk-` alternative matched inside them.
+        let policy = RedactionPolicy::load(&empty_toml());
+        let text = "branch task-12345678-fix and mask-1234567890x and risk-assessment-2026 done";
+        assert_eq!(
+            policy.redact_str(text),
+            text,
+            "ordinary words ending in -sk must not be masked"
+        );
     }
 
     #[test]

@@ -1759,3 +1759,132 @@ async fn a8_non_timeout_errors_do_not_continue_turn() {
         "no A8 Progress for non-timeout errors; got {progress:?}"
     );
 }
+
+// ---- Secret-guard × compaction ------------------------------------------
+// The compaction engine sends history to the LLM verbatim, so the caller
+// must run the secret-guard transform before handing messages over; this
+// pins the summarizer wire, not the engine internals.
+
+#[test]
+fn compaction_summarizer_wire_carries_surrogates_not_secrets() {
+    use std::io::Read as _;
+    use std::io::Write as _;
+    use shannon_engine::compact::types::Summarizer as _;
+
+    const SECRET: &str = "COMPACT-SECRET-VALUE";
+    const TOKEN: &str = "SG1:COMPACTFAKEFAKE";
+
+    struct ReplaceSecret;
+    impl shannon_plugin_api::ContextTransform for ReplaceSecret {
+        fn transform_ingest(
+            &self,
+            block: &mut shannon_plugin_api::IngestBlock,
+        ) -> shannon_plugin_api::TransformAction {
+            if block.text.contains(SECRET) {
+                block.text = block.text.replace(SECRET, TOKEN);
+                shannon_plugin_api::TransformAction::Modified
+            } else {
+                shannon_plugin_api::TransformAction::Passthrough
+            }
+        }
+        fn restore_tool_args(
+            &self,
+            _tool: &str,
+            _args: &mut serde_json::Value,
+        ) -> shannon_plugin_api::RestoreAction {
+            shannon_plugin_api::RestoreAction::Unchanged
+        }
+        fn restore_display(&self, _text: &mut String) -> shannon_plugin_api::RestoreAction {
+            shannon_plugin_api::RestoreAction::Unchanged
+        }
+        fn audit_wire(&self, _wire: &serde_json::Value) -> Vec<shannon_plugin_api::AuditFinding> {
+            Vec::new()
+        }
+    }
+
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("bind");
+    let port = listener.local_addr().expect("addr").port();
+    let captured: std::sync::Arc<std::sync::Mutex<Option<String>>> =
+        std::sync::Arc::new(std::sync::Mutex::new(None));
+    let captured_clone = captured.clone();
+    let server = std::thread::spawn(move || {
+        let (mut stream, _) = match listener.accept() {
+            Ok(x) => x,
+            Err(_) => return,
+        };
+        stream
+            .set_read_timeout(Some(std::time::Duration::from_secs(5)))
+            .ok();
+        let mut buf = vec![0u8; 1 << 16];
+        let mut read = 0usize;
+        loop {
+            let n = match stream.read(&mut buf[read..]) {
+                Ok(0) | Err(_) => break,
+                Ok(n) => n,
+            };
+            read += n;
+            let s = String::from_utf8_lossy(&buf[..read]).to_string();
+            if let Some(header_end) = s.find("\r\n\r\n") {
+                let cl: usize = s[..header_end]
+                    .to_ascii_lowercase()
+                    .split("\r\n")
+                    .find_map(|l| l.strip_prefix("content-length:"))
+                    .and_then(|v| v.trim().parse().ok())
+                    .unwrap_or(0);
+                if read >= header_end + 4 + cl {
+                    break;
+                }
+            }
+            if read == buf.len() {
+                break;
+            }
+        }
+        *captured_clone.lock().unwrap() = Some(String::from_utf8_lossy(&buf[..read]).to_string());
+        let resp = r#"{"id":"msg_c","role":"assistant","content":[{"type":"text","text":"summary"}],"model":"test-model","stop_reason":"end_turn","usage":{"input_tokens":1,"output_tokens":1}}"#;
+        let http = format!(
+            "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+            resp.len(),
+            resp
+        );
+        stream.write_all(http.as_bytes()).ok();
+        stream.flush().ok();
+    });
+
+    let config = LlmClientConfig {
+        api_key: "test-key".to_string(),
+        base_url: format!("http://127.0.0.1:{port}"),
+        model: "test-model".to_string(),
+        provider: shannon_engine::api::LlmProvider::Anthropic,
+        ..Default::default()
+    };
+    let summarizer =
+        shannon_engine::compact::summarizer::LlmSummarizer::new(LlmClient::new(config));
+
+    let _g = crate::secret_guard::test_support::acquire();
+    crate::secret_guard::set_context_transform(Some(std::sync::Arc::new(ReplaceSecret)));
+    let messages = vec![Message {
+        role: "user".to_string(),
+        content: MessageContent::Text(format!("deploy key is {SECRET}")),
+    }];
+    // Fix contract: history handed to any secondary LLM send — the
+    // compaction summarizer here — is transformed first.
+    let transformed = crate::secret_guard::transform_outgoing_messages(messages);
+    let result = summarizer.summarize(&transformed, 512);
+    crate::secret_guard::set_context_transform(None);
+    assert!(result.is_ok(), "summarize must succeed: {:?}", result.err());
+
+    let body = captured
+        .lock()
+        .unwrap()
+        .clone()
+        .expect("compaction request captured");
+    assert!(
+        body.contains(TOKEN),
+        "surrogate must reach the summarizer wire: {body}"
+    );
+    assert!(
+        !body.contains(SECRET),
+        "raw secret leaked into the compaction request: {body}"
+    );
+    drop(server);
+}
