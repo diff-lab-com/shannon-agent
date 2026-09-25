@@ -30,7 +30,9 @@ pub use compaction_trigger::{
 };
 pub use consolidator::{ConsolidationResult, MemoryConsolidator};
 pub use error::MemoryError;
-pub use store::{AddOutcome, GLOBAL_SCOPE, MemoryDoctorStats, MemoryStore};
+// `store` itself stays private; the hash fn is re-exported so the desktop
+// dream pass names proposal dirs with the same scheme as the memory stores.
+pub use store::{AddOutcome, GLOBAL_SCOPE, MemoryDoctorStats, MemoryStore, project_hash};
 pub use types::{MemoryCategory, MemoryEntry, MemoryType, SessionMemoryConfig};
 
 pub mod tools;

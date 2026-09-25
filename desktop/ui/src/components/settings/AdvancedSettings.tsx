@@ -26,6 +26,10 @@ export default function AdvancedSettings() {
   const [debugConsole, setDebugConsole] = useState(config?.debug_console ?? false)
   const [skillLoopEnabled, setSkillLoopEnabled] = useState(config?.skill_loop_enabled ?? false)
   const [skillDetectionEnabled, setSkillDetectionEnabled] = useState(config?.skill_detection_enabled ?? true)
+  // Dream pass (梦境提炼): nightly idle-time distillation + its L3 refine
+  // step. Both default off; review remains the only write path.
+  const [dreamEnabled, setDreamEnabled] = useState(config?.dream_enabled ?? false)
+  const [dreamSkillDistillEnabled, setDreamSkillDistillEnabled] = useState(config?.dream_skill_distill_enabled ?? false)
   // B2: real sub-agent execution toggle (agent teams). Live effect — no
   // restart needed (the backend injects/revokes the context per call).
   const [agentTeamsEnabled, setAgentTeamsEnabled] = useState(config?.agent_teams_enabled ?? false)
@@ -77,6 +81,15 @@ export default function AdvancedSettings() {
   useEffect(() => {
     setAgentTeamsEnabled(config?.agent_teams_enabled ?? false)
   }, [config?.agent_teams_enabled])
+
+  // Dream pass switches follow the persisted config on refresh.
+  useEffect(() => {
+    setDreamEnabled(config?.dream_enabled ?? false)
+  }, [config?.dream_enabled])
+
+  useEffect(() => {
+    setDreamSkillDistillEnabled(config?.dream_skill_distill_enabled ?? false)
+  }, [config?.dream_skill_distill_enabled])
 
   const handleToggle = async (key: string, value: boolean, setter: (v: boolean) => void) => {
     setter(value)
@@ -196,6 +209,32 @@ export default function AdvancedSettings() {
               {t('settings.skillLoop.review')}
             </Button>
           )}
+        </div>
+
+        {/* Dream distillation (梦境提炼) — nightly idle-time pass + its L3
+            refine step, both default off, review-gated writes only. */}
+        <div className="bg-surface-container-lowest p-lg rounded-xl shadow-sm border border-outline-variant/30 group hover:shadow-md transition-shadow" data-testid="dream-card">
+          <div className="flex items-center gap-md mb-md">
+            <div className="p-2 bg-primary/10 rounded-lg text-primary flex items-center justify-center">
+              <span className="material-symbols-outlined">bedtime</span>
+            </div>
+            <h3 className="font-headline-md text-[24px] font-bold text-on-surface">{t('settings.dream.title')}</h3>
+          </div>
+          <p className="text-on-surface-variant text-body-sm mb-lg">{t('settings.dream.description')}</p>
+          <div className="flex items-center justify-between gap-md">
+            <div>
+              <div className="font-label-md text-[14px] text-on-surface font-semibold mb-1">{t('settings.dream.enabled')}</div>
+              <div className="font-label-sm text-[12px] text-on-surface-variant leading-tight">{t('settings.dream.enabledDesc')}</div>
+            </div>
+            <Switch checked={dreamEnabled} onCheckedChange={v => handleToggle('dream_enabled', v, setDreamEnabled)} className="shrink-0" />
+          </div>
+          <div className="flex items-center justify-between gap-md mt-md">
+            <div>
+              <div className="font-label-md text-[14px] text-on-surface font-semibold mb-1">{t('settings.dream.distillEnabled')}</div>
+              <div className="font-label-sm text-[12px] text-on-surface-variant leading-tight">{t('settings.dream.distillEnabledDesc')}</div>
+            </div>
+            <Switch checked={dreamSkillDistillEnabled} onCheckedChange={v => handleToggle('dream_skill_distill_enabled', v, setDreamSkillDistillEnabled)} className="shrink-0" />
+          </div>
         </div>
 
         {/* B2 — Agent teams (real sub-agent execution) */}

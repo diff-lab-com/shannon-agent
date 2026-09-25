@@ -263,6 +263,85 @@ pub(crate) fn validate_sandbox_mode(value: &str) -> Result<Option<String>, Strin
     }
 }
 
+// === Grouped boolean toggles (`configure`) ===
+//
+// The key set here backs the Settings → Advanced switches. It used to live
+// only in `configure`'s match arms, and `dream_enabled` /
+// `dream_skill_distill_enabled` (plus the older `skill_loop_enabled` /
+// `skill_detection_enabled`) never got an arm at all — every one of those
+// toggles errored with "Unknown config key" and snapped back. The grouped
+// arm now routes on [`is_boolean_toggle_key`], which is defined in terms of
+// [`set_boolean_toggle`], so the arm and the applier cannot drift apart.
+
+/// Apply one recognized boolean toggle key to `cfg`. Unknown keys are an
+/// error — [`is_boolean_toggle_key`] is defined in terms of this function,
+/// so `configure`'s grouped arm can never route a key here that this
+/// function does not know.
+fn set_boolean_toggle(cfg: &mut DesktopConfig, key: &str, enabled: bool) -> Result<(), String> {
+    match key {
+        "memory_enabled" => cfg.memory_enabled = Some(enabled),
+        "telemetry" => cfg.telemetry_enabled = Some(enabled),
+        "encryption" => cfg.encryption_enabled = Some(enabled),
+        "debug_console" => cfg.debug_console = Some(enabled),
+        "skill_loop_enabled" => cfg.skill_loop_enabled = enabled,
+        "skill_detection_enabled" => cfg.skill_detection_enabled = enabled,
+        "dream_enabled" => cfg.dream_enabled = enabled,
+        "dream_skill_distill_enabled" => cfg.dream_skill_distill_enabled = enabled,
+        other => return Err(format!("Unrecognized boolean key: {other}")),
+    }
+    Ok(())
+}
+
+/// True when `configure`'s grouped boolean arm handles `key` — by definition
+/// exactly the keys [`set_boolean_toggle`] accepts. Cheap: the probe writes
+/// into a throwaway default config.
+fn is_boolean_toggle_key(key: &str) -> bool {
+    set_boolean_toggle(&mut DesktopConfig::default(), key, false).is_ok()
+}
+
+/// Body of the grouped boolean-toggle arm of [`configure`], with the disk
+/// persist step injected: tests capture the snapshot instead of writing the
+/// real `~/.shannon/desktop/config.json` (tests never mutate the process
+/// `HOME`). Parses the value, applies it to the in-memory config — the same
+/// state [`get_config`] reads back — persists, then emits `CONFIG_UPDATED`
+/// so other windows and the tray follow.
+async fn apply_boolean_toggle_arm<R, P>(
+    state: &AppState,
+    app_handle: &tauri::AppHandle<R>,
+    update: &ConfigUpdate,
+    persist: P,
+) -> Result<(), String>
+where
+    R: tauri::Runtime,
+    P: FnOnce(DesktopConfig) -> Result<(), String>,
+{
+    let enabled = match update.value.to_ascii_lowercase().as_str() {
+        "true" => true,
+        "false" => false,
+        _ => {
+            return Err(format!(
+                "Invalid boolean for {}: {}",
+                update.key, update.value
+            ));
+        }
+    };
+    {
+        let mut desktop_cfg = state.desktop_config.write().await;
+        set_boolean_toggle(&mut desktop_cfg, &update.key, enabled)?;
+    }
+    persist(state.desktop_config.read().await.clone())?;
+
+    let _ = app_handle.emit(
+        event_names::CONFIG_UPDATED,
+        events::ConfigUpdatedPayload {
+            key: update.key.clone(),
+            value: update.value.clone(),
+        },
+    );
+
+    Ok(())
+}
+
 /// Update a single desktop config key. The frontend uses this for every
 /// settings panel mutation — model, api_key, theme, toggles, etc. Persists
 /// the new config to `~/.shannon/desktop/config.json` and emits
@@ -629,41 +708,16 @@ pub async fn configure(
 
             Ok(())
         }
-        "memory_enabled" | "telemetry" | "encryption" | "debug_console" => {
-            let enabled = match update.value.to_ascii_lowercase().as_str() {
-                "true" => true,
-                "false" => false,
-                _ => {
-                    return Err(format!(
-                        "Invalid boolean for {}: {}",
-                        update.key, update.value
-                    ));
-                }
-            };
-            let mut desktop_cfg = state.desktop_config.write().await;
-            match update.key.as_str() {
-                "memory_enabled" => desktop_cfg.memory_enabled = Some(enabled),
-                "telemetry" => desktop_cfg.telemetry_enabled = Some(enabled),
-                "encryption" => desktop_cfg.encryption_enabled = Some(enabled),
-                "debug_console" => desktop_cfg.debug_console = Some(enabled),
-                other => {
-                    return Err(format!("Unrecognized boolean key: {other}"));
-                }
-            }
-
-            drop(desktop_cfg);
-            let desktop_cfg = state.desktop_config.read().await;
-            config::save_config(&desktop_cfg)?;
-
-            let _ = app_handle.emit(
-                event_names::CONFIG_UPDATED,
-                events::ConfigUpdatedPayload {
-                    key: update.key.clone(),
-                    value: update.value,
-                },
-            );
-
-            Ok(())
+        // Grouped boolean toggles (the Settings switches). The guard routes
+        // on `is_boolean_toggle_key`, so the arm and `set_boolean_toggle`
+        // share one key list — a recognized key (`dream_enabled`,
+        // `dream_skill_distill_enabled`, `skill_*`, …) can never fall
+        // through to `_ => Err("Unknown config key: …")` again.
+        _ if is_boolean_toggle_key(&update.key) => {
+            apply_boolean_toggle_arm(state.inner(), &app_handle, &update, |cfg| {
+                config::save_config(&cfg)
+            })
+            .await
         }
         "temperature" => {
             let parsed: f32 = update
@@ -1590,6 +1644,7 @@ fn llm_provider_for_active_mirror(s: &str) -> Option<shannon_engine::api::LlmPro
 #[cfg(test)]
 mod tests {
     use super::*;
+    use tauri::Manager;
 
     #[test]
     fn config_update_round_trips_through_serde() {
@@ -1601,6 +1656,171 @@ mod tests {
         let back: ConfigUpdate = serde_json::from_str(&json).unwrap();
         assert_eq!(back.key, "model");
         assert_eq!(back.value, "claude-opus");
+    }
+
+    // === Grouped boolean toggles (final-review #1 regression) ===
+    //
+    // `dream_enabled` / `dream_skill_distill_enabled` shipped with no
+    // `configure` arm at all — every Settings toggle errored with "Unknown
+    // config key" and snapped back; the older `skill_loop_enabled` /
+    // `skill_detection_enabled` switches had the same hole. These tests pin
+    // the whole toggle family through the exact body the command arm runs,
+    // with the disk persist captured instead of written (tests never touch
+    // the process HOME).
+
+    /// The eight Settings toggle keys → the value `get_config` must show
+    /// after the toggle. Explicit on purpose: adding or removing a toggle
+    /// key means updating this list deliberately.
+    fn toggled_value(cfg: &DesktopConfig, key: &str) -> Option<bool> {
+        match key {
+            "memory_enabled" => cfg.memory_enabled,
+            "telemetry" => cfg.telemetry_enabled,
+            "encryption" => cfg.encryption_enabled,
+            "debug_console" => cfg.debug_console,
+            "skill_loop_enabled" => Some(cfg.skill_loop_enabled),
+            "skill_detection_enabled" => Some(cfg.skill_detection_enabled),
+            "dream_enabled" => Some(cfg.dream_enabled),
+            "dream_skill_distill_enabled" => Some(cfg.dream_skill_distill_enabled),
+            _ => None,
+        }
+    }
+
+    const TOGGLE_KEYS: [&str; 8] = [
+        "memory_enabled",
+        "telemetry",
+        "encryption",
+        "debug_console",
+        "skill_loop_enabled",
+        "skill_detection_enabled",
+        "dream_enabled",
+        "dream_skill_distill_enabled",
+    ];
+
+    #[test]
+    fn set_boolean_toggle_flips_exactly_the_requested_key() {
+        for key in TOGGLE_KEYS {
+            for value in [true, false] {
+                let mut cfg = DesktopConfig::default();
+                set_boolean_toggle(&mut cfg, key, value)
+                    .unwrap_or_else(|e| panic!("toggle {key}: {e}"));
+                assert_eq!(
+                    toggled_value(&cfg, key),
+                    Some(value),
+                    "key {key} must flip to {value}"
+                );
+            }
+        }
+        // Unknown keys are refused, never silently accepted, and never routed.
+        assert!(!is_boolean_toggle_key("not_a_toggle"));
+        assert!(!is_boolean_toggle_key("agent_teams_enabled"));
+        for key in TOGGLE_KEYS {
+            assert!(is_boolean_toggle_key(key), "{key} must be routed");
+        }
+    }
+
+    #[tokio::test]
+    async fn configure_boolean_toggle_round_trips_into_get_config() {
+        let app = tauri::test::mock_app();
+        assert!(app.manage(AppState::new()), "AppState managed once");
+        let tauri_state = app.state::<AppState>();
+        // Deterministic starting point regardless of what the ambient
+        // on-disk config `AppState::new()` loaded: every toggle false.
+        {
+            let mut cfg = tauri_state.desktop_config.write().await;
+            cfg.memory_enabled = Some(false);
+            cfg.telemetry_enabled = Some(false);
+            cfg.encryption_enabled = Some(false);
+            cfg.debug_console = Some(false);
+            cfg.skill_loop_enabled = false;
+            cfg.skill_detection_enabled = false;
+            cfg.dream_enabled = false;
+            cfg.dream_skill_distill_enabled = false;
+        }
+
+        let persisted: std::sync::Mutex<Vec<DesktopConfig>> = std::sync::Mutex::new(Vec::new());
+        for key in TOGGLE_KEYS {
+            for value in [true, false] {
+                apply_boolean_toggle_arm(
+                    tauri_state.inner(),
+                    app.handle(),
+                    &ConfigUpdate {
+                        key: key.to_string(),
+                        value: value.to_string(),
+                    },
+                    |cfg| {
+                        persisted.lock().unwrap().push(cfg);
+                        Ok(())
+                    },
+                )
+                .await
+                .unwrap_or_else(|e| panic!("toggle {key}={value} failed: {e}"));
+
+                // The command's read-back path: `get_config` shows the value
+                // the toggle just persisted.
+                let shown = get_config(app.state::<AppState>()).await.unwrap();
+                assert_eq!(
+                    toggled_value(&shown, key),
+                    Some(value),
+                    "toggle {key}={value} must round-trip into get_config"
+                );
+                // The persist step saw the same snapshot.
+                let snapshot = persisted.lock().unwrap().last().unwrap().clone();
+                assert_eq!(
+                    toggled_value(&snapshot, key),
+                    Some(value),
+                    "persisted snapshot for {key}={value}"
+                );
+            }
+        }
+        assert_eq!(
+            persisted.lock().unwrap().len(),
+            TOGGLE_KEYS.len() * 2,
+            "every toggle persisted exactly once"
+        );
+    }
+
+    #[tokio::test]
+    async fn configure_boolean_toggle_rejects_bad_values_and_surfaces_persist_errors() {
+        let app = tauri::test::mock_app();
+        assert!(app.manage(AppState::new()), "AppState managed once");
+        let tauri_state = app.state::<AppState>();
+        let before = tauri_state.desktop_config.read().await.clone();
+
+        // A non-boolean value is an error and leaves the config untouched.
+        let err = apply_boolean_toggle_arm(
+            tauri_state.inner(),
+            app.handle(),
+            &ConfigUpdate {
+                key: "dream_enabled".into(),
+                value: "maybe".into(),
+            },
+            |_| Ok(()),
+        )
+        .await
+        .unwrap_err();
+        assert!(err.contains("Invalid boolean"), "{err}");
+        assert_eq!(
+            toggled_value(
+                &tauri_state.desktop_config.read().await.clone(),
+                "dream_enabled"
+            ),
+            toggled_value(&before, "dream_enabled"),
+        );
+
+        // A persist failure propagates (the command turns it into the same
+        // Err the frontend's toastError shows).
+        let err = apply_boolean_toggle_arm(
+            tauri_state.inner(),
+            app.handle(),
+            &ConfigUpdate {
+                key: "dream_enabled".into(),
+                value: "true".into(),
+            },
+            |_| Err("disk full".into()),
+        )
+        .await
+        .unwrap_err();
+        assert!(err.contains("disk full"), "{err}");
     }
 
     #[test]

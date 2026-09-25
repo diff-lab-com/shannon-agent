@@ -54,7 +54,9 @@ function canOpenSource(item: InboxItem): boolean {
   return RERUNNABLE_SOURCES.includes(item.source) && item.sourceId != null
 }
 
-function sourceMeta(source: InboxSource): { icon: string; color: string; labelKey: string } {
+/// Exported for tests (source → icon/colour/label mapping is a contract the
+/// i18n keys depend on).
+export function sourceMeta(source: InboxSource): { icon: string; color: string; labelKey: string } {
   switch (source) {
     case 'routine':
       return { icon: 'event_repeat', color: 'text-primary', labelKey: 'inbox.source.routine' }
@@ -79,15 +81,19 @@ function sourceMeta(source: InboxSource): { icon: string; color: string; labelKe
       // T5: a detected skill pattern awaits review (auto_awesome = the same
       // sparkles language the skill catalog uses).
       return { icon: 'auto_awesome', color: 'text-tertiary', labelKey: 'inbox.source.skill_candidate' }
+    case 'dream_report':
+      // Dream pass (梦境提炼) daily summary card — bedtime icon + tertiary,
+      // the same language the Memory page's distillation section uses.
+      return { icon: 'bedtime', color: 'text-tertiary', labelKey: 'inbox.source.dream_report' }
     default:
       return { icon: 'notifications', color: 'text-on-surface-variant', labelKey: 'inbox.source.trigger' }
   }
 }
 
-const STATUS_OPTIONS: readonly (InboxItemStatus | 'all')[] = ['all', 'pending', 'read', 'archived']
-const SOURCE_OPTIONS: readonly (InboxSource | 'all')[] = ['all', 'routine', 'scheduled_task', 'goal', 'trigger', 'batch', 'session_approval', 'session_failed', 'skill_candidate']
+export const STATUS_OPTIONS: readonly (InboxItemStatus | 'all')[] = ['all', 'pending', 'read', 'archived']
+export const SOURCE_OPTIONS: readonly (InboxSource | 'all')[] = ['all', 'routine', 'scheduled_task', 'goal', 'trigger', 'batch', 'session_approval', 'session_failed', 'skill_candidate', 'dream_report']
 
-function InboxCard({ item, selected, focused, highlighted, onToggleSelected, onMarkRead, onArchive, onContinue, onRerun, onOpenSource, onReview }: {
+function InboxCard({ item, selected, focused, highlighted, onToggleSelected, onMarkRead, onArchive, onContinue, onRerun, onOpenSource, onReview, onViewReport }: {
   item: InboxItem
   selected: boolean
   focused?: boolean
@@ -101,6 +107,9 @@ function InboxCard({ item, selected, focused, highlighted, onToggleSelected, onM
   onOpenSource: (item: InboxItem) => void
   /** IA T6/X1: jump to the Extensions → Pending review queue for this candidate. */
   onReview: (item: InboxItem) => void
+  /** Dream report: open the Memory page's distillation section (report +
+      proposal review live there — there is no per-item detail view). */
+  onViewReport: (item: InboxItem) => void
 }) {
   const intl = useIntl()
   const t = (id: string, values?: Record<string, PrimitiveType>) => intl.formatMessage({ id }, values)
@@ -116,6 +125,9 @@ function InboxCard({ item, selected, focused, highlighted, onToggleSelected, onM
   // the rich review queue (Extensions → Pending) instead of approving inline
   // (评审裁决 #2: 收件箱只放发现条目，不做卡内审批).
   const reviewable = item.source === 'skill_candidate' && item.sourceId != null
+  // Dream pass: the report + the proposal review both live on the Memory
+  // page's distillation section, so the card's action is a single jump.
+  const isDreamReport = item.source === 'dream_report'
 
   return (
     <div role="listitem" data-focused={focused ? 'true' : undefined} data-highlight={highlighted ? 'true' : undefined} className={cn('glass-panel border rounded-xl p-md shadow-sm hover:shadow-md transition-all group bg-surface-container-lowest/80', isPending ? 'border-primary/20' : 'border-outline-variant/10', focused ? 'ring-2 ring-primary' : highlighted ? 'ring-2 ring-tertiary' : selected ? 'ring-2 ring-primary/40' : '')}>
@@ -198,6 +210,22 @@ function InboxCard({ item, selected, focused, highlighted, onToggleSelected, onM
             >
               <span className="material-symbols-outlined text-[16px]">rate_review</span>
               {t('inbox.review.label')}
+            </Button>
+          )}
+          {/* Dream report: 查看报告 → the Memory page's distillation section
+              (mirrors the reviewable/openSource jump pattern for sources with
+              no runnable session behind them). */}
+          {isDreamReport && (
+            <Button
+              size="sm"
+              variant="ghost"
+              aria-label={t('inbox.viewReport.aria')}
+              title={t('inbox.viewReport.aria')}
+              className="cursor-pointer inline-flex items-center gap-xs text-tertiary hover:text-primary"
+              onClick={() => onViewReport(item)}
+            >
+              <span className="material-symbols-outlined text-[16px]">bedtime</span>
+              {t('inbox.viewReport.label')}
             </Button>
           )}
           {item.sessionId && (
@@ -393,6 +421,12 @@ export default function Triage() {
   // `skillCandidateId` for a one-shot focus, mirroring the T2 pattern.
   const handleReview = useCallback((item: InboxItem) => {
     navigate('/extensions/pending', { state: { skillCandidateId: item.sourceId } })
+  }, [navigate])
+
+  // Dream report: the distillation section (run / proposals / report) lives
+  // on the Memory page — same "jump to the owning surface" pattern as T2/X1.
+  const handleViewReport = useCallback((_item: InboxItem) => {
+    navigate('/memory')
   }, [navigate])
 
   // Keyboard navigation over the inbox list (list must be focused first).
@@ -620,6 +654,7 @@ export default function Triage() {
                             onRerun={item => void handleRerun(item)}
                             onOpenSource={handleOpenSource}
                             onReview={handleReview}
+                            onViewReport={handleViewReport}
                           />
                         ))}
                       </div>
@@ -639,6 +674,7 @@ export default function Triage() {
                     onRerun={item => void handleRerun(item)}
                     onOpenSource={handleOpenSource}
                     onReview={handleReview}
+                    onViewReport={handleViewReport}
                   />
                 ))}
             </div>

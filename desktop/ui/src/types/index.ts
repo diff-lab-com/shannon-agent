@@ -479,6 +479,12 @@ export interface DesktopConfig {
   /** B2: real sub-agent execution (agent teams). Default off — placeholder
    *  agent_spawn only, until opted in (real LLM spend). */
   agent_teams_enabled?: boolean
+  /** Dream pass (梦境提炼): master switch. Default off — when false the
+   *  dream pass is skipped without reading any session or memory file. */
+  dream_enabled?: boolean
+  /** Dream pass L3: refine freshly detected skill candidates inside a
+   *  dream pass. Default off; review remains the only write path. */
+  dream_skill_distill_enabled?: boolean
   stt?: SttConfig
   /** P2-5e local-only STT (whisper-rs). Independent of `stt`
    *  so a user can keep a cloud key for fallback while local
@@ -986,7 +992,9 @@ export interface TriageStats {
 /// unified "needs attention" stream adds the session/agent events:
 /// `session_approval` (a permission prompt is waiting on the user),
 /// `session_failed` (the session's last turn failed), and `skill_candidate`
-/// (a detected skill pattern awaits review).
+/// (a detected skill pattern awaits review). `dream_report` is the daily
+/// dream-distillation summary card (at most one per day, deduped by the
+/// backend writer).
 export type InboxSource =
   | 'routine'
   | 'scheduled_task'
@@ -996,6 +1004,7 @@ export type InboxSource =
   | 'session_approval'
   | 'session_failed'
   | 'skill_candidate'
+  | 'dream_report'
 
 /// Lifecycle status of an inbox item (`pending` → `read` → `archived`).
 export type InboxItemStatus = 'pending' | 'read' | 'archived'

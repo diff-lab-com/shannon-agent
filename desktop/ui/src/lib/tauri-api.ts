@@ -1963,6 +1963,97 @@ export async function getMemoryGraph(project?: string | null): Promise<MemoryGra
   return invoke('get_memory_graph', { project: project ?? null })
 }
 
+// --- Dream Pass (梦境提炼 — review-gated memory distillation) ---
+//
+// Frozen contract with desktop/src/commands_dream.rs. The Rust DTOs do NOT
+// use serde rename_all, so every field below is snake_case on the wire.
+// Nothing here writes to ~/.shannon/memories/ directly — the only write
+// path is applyDreamProposal (user-approved actions).
+
+/** One merge/remove/add action inside a DreamProposal. */
+export interface DreamAction {
+  id: string
+  kind: 'merge' | 'remove' | 'add'
+  /** Memory ids this action targets (the merge/remove group). */
+  entry_ids: string[]
+  /** Populated for `add` actions only — the proposed new memory. */
+  add_entry: {
+    category: string
+    content: string
+    confidence: number
+    source_session_ids: string[]
+    verified: boolean
+  } | null
+  rationale: string
+}
+
+/// A review-gated distillation proposal for one project (shadow copy under
+/// ~/.shannon/dreams/ — applying is the only way it touches real memories).
+export interface DreamProposal {
+  id: string
+  project: string
+  created_at: string
+  actions: DreamAction[]
+}
+
+/// Outcome of one dream pass. `skipped_reason` is null when the pass ran;
+/// `"disabled" | "throttled" | "in-progress"` otherwise (nothing was read).
+export interface DreamPassResult {
+  skipped_reason: 'disabled' | 'throttled' | 'in-progress' | null
+  scanned_sessions: number
+  projects: string[]
+  merge_proposed: number
+  remove_proposed: number
+  add_proposed: number
+  candidates_detected: number
+  candidates_refined: number
+  proposal_ids: string[]
+  report_path: string | null
+  duration_ms: number
+}
+
+/// Result of applying the selected actions of one proposal. The proposal
+/// file is deleted either way — a partial apply discards the rest
+/// (“应用所选，其余丢弃”).
+export interface DreamApplyOutcome {
+  applied: string[]
+  skipped: string[]
+}
+
+/// Run one dream pass (Memory panel button / `/dream`). `daysBack` defaults
+/// to the backend's 3-day manual window when null.
+export async function runDreamPass(daysBack?: number | null): Promise<DreamPassResult> {
+  return invoke('run_dream_pass', { daysBack: daysBack ?? null })
+}
+
+/// Every pending proposal across projects, newest first.
+export async function listDreamProposals(): Promise<DreamProposal[]> {
+  return invoke('list_dream_proposals')
+}
+
+/// One pass report's markdown; `ts = null` reads the newest.
+export async function readDreamReport(ts?: string | null): Promise<string> {
+  return invoke('read_dream_report', { ts: ts ?? null })
+}
+
+/// Apply the selected actions of a proposal to the memory store, then
+/// delete the proposal (remaining actions are discarded with it).
+export async function applyDreamProposal(proposalId: string, actionIds: string[]): Promise<DreamApplyOutcome> {
+  return invoke('apply_dream_proposal', { proposalId, actionIds })
+}
+
+/// Discard a proposal without touching the memory store.
+export async function discardDreamProposal(proposalId: string): Promise<void> {
+  return invoke('discard_dream_proposal', { proposalId })
+}
+
+/// `/detect-skills` backend — heuristic pattern detection only (zero LLM),
+/// bypasses dream throttles by design. Returns the number of newly appended
+/// candidates (dedup by the backend's sig-hash id).
+export async function detectSkillsSlash(): Promise<number> {
+  return invoke('detect_slash')
+}
+
 // --- Skill Loop (E2) ---
 
 export const skillLoop = {

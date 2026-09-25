@@ -384,6 +384,19 @@ vi.mock('@/lib/tauri-api', () => ({
   getMemoryGraph: vi.fn().mockResolvedValue({
     project: null, nodes: [], edges: [], entryCount: 0, maxEntries: 200, truncated: false,
   }),
+  // Dream pass (梦境提炼) — defaults so the Memory page's distillation
+  // section renders its empty state without per-test mocking.
+  runDreamPass: vi.fn().mockResolvedValue({
+    skipped_reason: null, scanned_sessions: 0, projects: [],
+    merge_proposed: 0, remove_proposed: 0, add_proposed: 0,
+    candidates_detected: 0, candidates_refined: 0,
+    proposal_ids: [], report_path: null, duration_ms: 0,
+  }),
+  listDreamProposals: vi.fn().mockResolvedValue([]),
+  readDreamReport: vi.fn().mockResolvedValue(''),
+  applyDreamProposal: vi.fn().mockResolvedValue({ applied: [], skipped: [] }),
+  discardDreamProposal: vi.fn().mockResolvedValue(undefined),
+  detectSkillsSlash: vi.fn().mockResolvedValue(0),
   // P0-3 inbox — defaults so components consuming useInboxStats (e.g. the
   // sidebar badge) render sanely without per-test mocking.
   listInboxItems: vi.fn().mockResolvedValue([]),

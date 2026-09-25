@@ -1,13 +1,18 @@
 //! Slash-command backends — the desktop counterparts of the REPL's session
 //! commands that have no other Tauri surface yet:
-//!   /context → [`get_session_context_stats`] (tokens used vs context window)
-//!   /diff    → [`get_session_git_diff`] (working-tree diff of the session's
-//!              working directory)
+//!   /context       → [`get_session_context_stats`] (tokens used vs context
+//!                    window)
+//!   /diff          → [`get_session_git_diff`] (working-tree diff of the
+//!                    session's working directory)
+//!   /dream `days`  → [`dream_slash`] (one dream pass; default 3-day window)
+//!   /detect-skills → [`detect_slash`] (heuristic candidate detection)
 //! /cost lives in `commands_usage` (it owns the ledger), /export and the
 //! navigation commands are pure frontend.
 //!
-//! These are read-only diagnostics: nothing here mutates the session, the
-//! L0 log, or the working tree.
+//! `/context` and `/diff` are read-only diagnostics. `/dream` and
+//! `/detect-skills` deliberately write review-gated artifacts only (shadow
+//! proposals / reports / candidate queue entries) — nothing lands in the
+//! memory store or the skill catalog without explicit user approval.
 
 use std::path::Path;
 use std::process::Command;
@@ -383,6 +388,61 @@ pub async fn compact_session(
     })
 }
 
+// ── /dream and /detect-skills backends ──────────────────────────────────
+
+/// Parse the optional `/dream [days]` argument: `None` or blank → the manual
+/// default of [`crate::commands_dream::DEFAULT_MANUAL_DAYS_BACK`] (3), an
+/// integer → clamped to [`crate::commands_dream::DREAM_MAX_DAYS_BACK`] (30)
+/// (`execute_dream_pass` re-clamps centrally), anything else → `Err` so the
+/// UI can surface the typo instead of silently running the wrong window.
+fn parse_days_arg(args: Option<&str>) -> Result<u32, String> {
+    let Some(raw) = args.map(str::trim).filter(|s| !s.is_empty()) else {
+        return Ok(crate::commands_dream::DEFAULT_MANUAL_DAYS_BACK);
+    };
+    let days: u32 = raw
+        .parse()
+        .map_err(|_| format!("invalid days argument {raw:?} — usage: /dream [days]"))?;
+    Ok(days.min(crate::commands_dream::DREAM_MAX_DAYS_BACK))
+}
+
+/// `/dream [days]` — run one dream pass through the same orchestration as
+/// the Memory panel button and the nightly scheduler (privacy gates, 6h
+/// throttle and single-flight lock included). Produces review-gated shadow
+/// proposals + a report; nothing is applied without user approval.
+#[tauri::command]
+pub async fn dream_slash(
+    // Injected by Tauri; `execute_dream_pass` resolves state from the app
+    // handle so every entry point shares one body.
+    _state: tauri::State<'_, AppState>,
+    app: tauri::AppHandle,
+    args: Option<String>,
+) -> Result<crate::commands_dream::DreamPassResult, String> {
+    let days = parse_days_arg(args.as_deref())?;
+    crate::commands_dream::execute_dream_pass(app, days).await
+}
+
+/// `/detect-skills` — run the heuristic skill-pattern detector on demand,
+/// bypassing the dream pass's throttles by design (detection is purely
+/// local: zero LLM cost, no proposals). New candidates land in the review
+/// queue + inbox only; `skill_detection_enabled` (the privacy main switch)
+/// still applies.
+#[tauri::command]
+pub async fn detect_slash(
+    app: tauri::AppHandle,
+    state: tauri::State<'_, AppState>,
+) -> Result<usize, String> {
+    let dir = crate::skill_pattern_detection::default_sessions_dir()?;
+    let inbox = state.inbox_store();
+    let appended = crate::skill_pattern_detection::detect_and_record(
+        &app,
+        &inbox,
+        &dir,
+        crate::skill_pattern_detection::DEFAULT_DETECT_DAYS_BACK,
+    )
+    .await?;
+    Ok(appended.len())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -514,5 +574,31 @@ mod tests {
     async fn get_session_git_diff_inner(dir: &Path) -> GitDiffSummary {
         let working_dir = dir.to_string_lossy().into_owned();
         super::get_session_git_diff(working_dir).await.unwrap()
+    }
+
+    #[test]
+    fn dream_days_arg_defaults_when_missing_or_blank() {
+        assert_eq!(parse_days_arg(None).unwrap(), 3);
+        assert_eq!(parse_days_arg(Some("")).unwrap(), 3);
+        assert_eq!(parse_days_arg(Some("   ")).unwrap(), 3);
+    }
+
+    #[test]
+    fn dream_days_arg_parses_and_caps_integers() {
+        assert_eq!(parse_days_arg(Some("7")).unwrap(), 7);
+        assert_eq!(parse_days_arg(Some(" 14 ")).unwrap(), 14);
+        assert_eq!(parse_days_arg(Some("0")).unwrap(), 0);
+        assert_eq!(parse_days_arg(Some("30")).unwrap(), 30);
+        assert_eq!(parse_days_arg(Some("999")).unwrap(), 30, "capped at 30");
+    }
+
+    #[test]
+    fn dream_days_arg_rejects_garbage() {
+        for bad in ["abc", "-1", "7.5", "3 days"] {
+            assert!(
+                parse_days_arg(Some(bad)).is_err(),
+                "{bad:?} must be invalid"
+            );
+        }
     }
 }

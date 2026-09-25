@@ -17,7 +17,11 @@ use fs2::FileExt;
 // implementation-defined keys whose output may change across Rust releases —
 // a toolchain bump would re-key every project and orphan all JSONL stores.
 // FNV-1a output is stable forever.
-pub(crate) fn project_hash(project: &str) -> String {
+//
+// `pub` (re-exported from `memory`) so the desktop dream pass names its
+// per-project proposal subdirs with the same hash scheme as the memory
+// stores — one naming vocabulary, no drift.
+pub fn project_hash(project: &str) -> String {
     let mut hash: u64 = 0xcbf2_9ce4_8422_2325;
     for byte in project.as_bytes() {
         hash ^= u64::from(*byte);

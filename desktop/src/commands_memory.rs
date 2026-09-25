@@ -93,8 +93,9 @@ pub(crate) fn attach_shared_memory(engine: QueryEngine, store: &SharedMemoryStor
 /// Parse a category string ("preference" / "pattern" / "decision" / "error"
 /// / "context") into the engine enum. Case-insensitive. Unknown values fall
 /// back to [`MemoryCategory::Context`] rather than erroring so the UI doesn't
-/// hard-fail on legacy data.
-fn parse_category(s: &str) -> MemoryCategory {
+/// hard-fail on legacy data. Shared with the dream pass (`commands_dream`),
+/// which materializes `add` proposals into real entries.
+pub(crate) fn parse_category(s: &str) -> MemoryCategory {
     match s.to_ascii_lowercase().as_str() {
         "preference" => MemoryCategory::Preference,
         "pattern" => MemoryCategory::Pattern,

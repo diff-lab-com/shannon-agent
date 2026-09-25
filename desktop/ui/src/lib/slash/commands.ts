@@ -15,6 +15,7 @@
 // importantly pasted absolute paths — goes to the model as plain text.
 
 import * as api from '@/lib/tauri-api'
+import { toast } from 'sonner'
 import { exportSessionAsMarkdown } from '@/lib/sessionActions'
 
 export type {
@@ -43,7 +44,7 @@ export interface SlashCommandContext {
   compactSession: (sessionId: string) => Promise<api.CompactSessionResult>
   showResult: (result: SlashResult) => void
   toastError: (message: string, err: unknown) => void
-  t: (id: string) => string
+  t: (id: string, values?: Record<string, string | number>) => string
 }
 
 export interface SlashCommand {
@@ -169,6 +170,58 @@ export const SLASH_COMMANDS: SlashCommand[] = [
     // session, so /goal works from a fresh window too.
     run: (ctx) => {
       ctx.showResult({ kind: 'goalForm', sessionId: ctx.sessionId })
+    },
+  },
+  {
+    name: 'dream',
+    icon: 'bedtime',
+    labelKey: 'slash.command.dream.label',
+    descriptionKey: 'slash.command.dream.description',
+    // No args: the composer only fires a command when the ENTIRE input is
+    // `/name` (see parseSlashInput), so /dream always runs the backend's
+    // default 3-day window. (The backend still parses a days arg for
+    // future callers.)
+    run: async (ctx) => {
+      try {
+        const result = await api.runDreamPass(null)
+        if (result.skipped_reason === 'disabled') {
+          toast.info(ctx.t('slash.toast.dream.disabled'))
+        } else if (result.skipped_reason === 'throttled') {
+          toast.info(ctx.t('slash.toast.dream.throttled'))
+        } else if (result.skipped_reason === 'in-progress') {
+          toast.info(ctx.t('slash.toast.dream.inProgress'))
+        } else {
+          toast.success(
+            ctx.t('slash.toast.dream.done', {
+              merge: result.merge_proposed,
+              remove: result.remove_proposed,
+              add: result.add_proposed,
+            }),
+            {
+              description: ctx.t('slash.toast.dream.doneHint', {
+                proposals: result.proposal_ids.length,
+                candidates: result.candidates_detected,
+              }),
+            },
+          )
+        }
+      } catch (e) {
+        ctx.toastError(ctx.t('slash.card.error.title'), e)
+      }
+    },
+  },
+  {
+    name: 'detect-skills',
+    icon: 'person_search',
+    labelKey: 'slash.command.detectSkills.label',
+    descriptionKey: 'slash.command.detectSkills.description',
+    run: async (ctx) => {
+      try {
+        const count = await api.detectSkillsSlash()
+        toast.success(ctx.t('slash.toast.detectSkills.done', { count }))
+      } catch (e) {
+        ctx.toastError(ctx.t('slash.card.error.title'), e)
+      }
     },
   },
   { name: 'tasks', icon: 'task_alt', labelKey: 'nav.scheduled', descriptionKey: 'slash.command.tasks.description', run: (ctx) => ctx.navigate('/tasks') },

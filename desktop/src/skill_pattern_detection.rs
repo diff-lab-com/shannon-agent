@@ -30,6 +30,10 @@ use crate::commands_skill_candidates::{SkillCandidate, SourceToolCall, append_ca
 const DEFAULT_MIN_SESSIONS: usize = 2;
 /// Threshold total occurrences across sessions.
 const DEFAULT_MIN_OCCURRENCES: u32 = 3;
+/// Session-window default (days) for on-demand detection runs — the
+/// `trigger_skill_pattern_detection` command and the `/detect-skills`
+/// slash backend both fall back to it when no explicit window is given.
+pub(crate) const DEFAULT_DETECT_DAYS_BACK: u32 = 7;
 
 #[derive(Debug, Deserialize)]
 struct SessionFile {
@@ -86,7 +90,12 @@ fn extract_tool_signatures(msgs: &[serde_json::Value]) -> Vec<String> {
 }
 
 /// Find session files modified within `days_back` days under the sessions dir.
-fn list_recent_sessions(sessions_dir: &Path, days_back: u32) -> Result<Vec<PathBuf>, String> {
+/// `pub(crate)` so the dream pass (`commands_dream`) can excerpt the same
+/// recent-session set without duplicating the mtime walk.
+pub(crate) fn list_recent_sessions(
+    sessions_dir: &Path,
+    days_back: u32,
+) -> Result<Vec<PathBuf>, String> {
     if !sessions_dir.is_dir() {
         return Ok(Vec::new());
     }
@@ -288,33 +297,60 @@ pub async fn trigger_skill_pattern_detection(
     state: tauri::State<'_, crate::commands::AppState>,
     days_back: Option<u32>,
 ) -> Result<usize, String> {
+    let dir = default_sessions_dir()?;
+    let days = days_back.unwrap_or(DEFAULT_DETECT_DAYS_BACK);
+    let inbox = state.inbox_store();
+    let appended = detect_and_record(&app, &inbox, &dir, days).await?;
+    Ok(appended.len())
+}
+
+/// Core of [`trigger_skill_pattern_detection`] — and the L3 leg of the dream
+/// pass (`commands_dream`): privacy gate (config `skill_detection_enabled`)
+/// → heuristic detection over `sessions_dir` → one `skill_candidate` inbox
+/// card per newly appended candidate → a `skill-candidates-changed` push so
+/// the badge refreshes. Purely heuristic (zero LLM cost), so callers may run
+/// it without the dream pass's throttles.
+///
+/// Returns the candidates appended by this run (empty when the privacy gate
+/// is off — session files are never read in that case).
+///
+/// Generic over the runtime like the rest of the record/emit helpers it
+/// calls, so the dream pass's `execute_dream_pass_in` seam can invoke it
+/// from tests on a mock runtime too.
+pub(crate) async fn detect_and_record<R: tauri::Runtime>(
+    app: &tauri::AppHandle<R>,
+    inbox: &shannon_core::inbox_store::InboxStore,
+    sessions_dir: &Path,
+    days: u32,
+) -> Result<Vec<SkillCandidate>, String> {
     // Privacy opt-out: when the user has disabled skill detection in
-    // Settings, the detector returns 0 without touching session files.
+    // Settings, the detector returns nothing without touching session files.
     let cfg = crate::config::load_config();
     if !cfg.skill_detection_enabled {
-        return Ok(0);
+        return Ok(Vec::new());
     }
-    let dir = default_sessions_dir()?;
-    let days = days_back.unwrap_or(7);
-    let appended = run_detection(&dir, days, DEFAULT_MIN_SESSIONS, DEFAULT_MIN_OCCURRENCES)?;
+    let appended = run_detection(
+        sessions_dir,
+        days,
+        DEFAULT_MIN_SESSIONS,
+        DEFAULT_MIN_OCCURRENCES,
+    )?;
     // T5 unified needs-attention stream: each newly appended candidate gets
     // (or refreshes — dedup keys on the candidate id) a `skill_candidate`
     // inbox entry, written at the same place the `skill-candidates-changed`
     // event fires. Best-effort per candidate.
-    let inbox = state.inbox_store();
     for candidate in &appended {
-        crate::inbox_session_events::record_skill_candidate(&inbox, &app, candidate);
+        crate::inbox_session_events::record_skill_candidate(inbox, app, candidate);
     }
-    let detected = appended.len();
-    if detected > 0 {
+    if !appended.is_empty() {
         // Push instead of poll: the Header badge refreshes on the event
         // instead of sweeping the store every 30s.
         let _ = app.emit(
             "skill-candidates-changed",
-            serde_json::json!({ "detected": detected }),
+            serde_json::json!({ "detected": appended.len() }),
         );
     }
-    Ok(detected)
+    Ok(appended)
 }
 
 #[cfg(test)]
