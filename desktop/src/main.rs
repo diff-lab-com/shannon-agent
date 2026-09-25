@@ -74,6 +74,7 @@ fn main() {
 
     tauri::Builder::default()
         .plugin(tauri_plugin_shell::init())
+        .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_updater::Builder::new().build())
         .plugin(tauri_plugin_global_shortcut::Builder::new().build())
         .plugin(tauri_plugin_window_state::Builder::new().build())
@@ -123,6 +124,13 @@ fn main() {
             // C1① — semi-automatic update check (GitHub latest → open page)
             commands_surface::check_app_update,
             commands_surface::open_release_page,
+            // 2026-09-25 open pipeline (docs/plans/2026-09-25-desktop-chat-ui-
+            // open-and-artifact-design.md §4 P0-A / P1-D / P1-E)
+            commands_surface::open_external,
+            commands_surface::open_with_default_app,
+            commands_surface::reveal_in_folder,
+            commands_surface::open_artifact_externally,
+            commands_surface::probe_url_frameable,
             // P1.3 — mobile device pairing (Design D shared-file channel)
             commands_mobile_pairing::mobile_generate_pair_token,
             commands_mobile_pairing::mobile_tls_status,
@@ -260,6 +268,10 @@ fn main() {
             commands_files::get_working_dir_info,
             commands_files::read_attachment,
             commands_files::read_attachments,
+            // 2026-09-25 open pipeline (§4 P0-B / P1-C) — file-ref existence
+            // probes and capped text reads for disk artifacts
+            commands_files::path_exists,
+            commands_files::read_text_file,
             // Scheduled tasks, triage, history, triggered routines (Sprint 2)
             shannon_desktop::scheduled_commands::list_scheduled_tasks,
             shannon_desktop::scheduled_commands::create_scheduled_task,

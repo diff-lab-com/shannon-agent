@@ -11,7 +11,7 @@ homepage = "https://github.com/diff-lab-com/shannon-agent"
 
 [features]
 default = ["tauri", "preview-capture"]
-tauri = ["dep:tauri", "dep:tauri-build", "dep:tauri-plugin-shell", "dep:tauri-plugin-updater", "dep:tauri-plugin-global-shortcut", "dep:tauri-plugin-window-state", "dep:tauri-plugin-dialog", "dep:tauri-plugin-notification"]
+tauri = ["dep:tauri", "dep:tauri-build", "dep:tauri-plugin-shell", "dep:tauri-plugin-opener", "dep:tauri-plugin-updater", "dep:tauri-plugin-global-shortcut", "dep:tauri-plugin-window-state", "dep:tauri-plugin-dialog", "dep:tauri-plugin-notification"]
 # P1-5 C-1 — native window/monitor screenshot capture backing
 # `preview_capture` / the `preview_screenshot` engine tool (xcap, the same
 # capture path the computer-use tool uses). Opt-out for CI matrices that

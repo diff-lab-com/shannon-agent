@@ -1415,11 +1415,74 @@
       }
     },
     {
+      "identifier": "allow-open-artifact-externally",
+      "description": "Enables the open_artifact_externally command without any pre-configured scope.",
+      "commands": {
+        "allow": [
+          "open_artifact_externally"
+        ]
+      }
+    },
+    {
+      "identifier": "allow-open-external",
+      "description": "Enables the open_external command without any pre-configured scope.",
+      "commands": {
+        "allow": [
+          "open_external"
+        ]
+      }
+    },
+    {
       "identifier": "allow-open-release-page",
       "description": "Enables the open_release_page command without any pre-configured scope.",
       "commands": {
         "allow": [
           "open_release_page"
+        ]
+      }
+    },
+    {
+      "identifier": "allow-open-with-default-app",
+      "description": "Enables the open_with_default_app command without any pre-configured scope.",
+      "commands": {
+        "allow": [
+          "open_with_default_app"
+        ]
+      }
+    },
+    {
+      "identifier": "allow-path-exists",
+      "description": "Enables the path_exists command without any pre-configured scope.",
+      "commands": {
+        "allow": [
+          "path_exists"
+        ]
+      }
+    },
+    {
+      "identifier": "allow-probe-url-frameable",
+      "description": "Enables the probe_url_frameable command without any pre-configured scope.",
+      "commands": {
+        "allow": [
+          "probe_url_frameable"
+        ]
+      }
+    },
+    {
+      "identifier": "allow-read-text-file",
+      "description": "Enables the read_text_file command without any pre-configured scope.",
+      "commands": {
+        "allow": [
+          "read_text_file"
+        ]
+      }
+    },
+    {
+      "identifier": "allow-reveal-in-folder",
+      "description": "Enables the reveal_in_folder command without any pre-configured scope.",
+      "commands": {
+        "allow": [
+          "reveal_in_folder"
         ]
       }
     },
@@ -2366,7 +2429,12 @@
         "allow-mobile-revoke-device",
         "allow-mobile-set-tls",
         "allow-mobile-tls-status",
-        "allow-open-release-page"
+        "allow-open-artifact-externally",
+        "allow-open-external",
+        "allow-open-release-page",
+        "allow-open-with-default-app",
+        "allow-probe-url-frameable",
+        "allow-reveal-in-folder"
       ]
     },
     {
@@ -2436,9 +2504,11 @@
         "allow-get-file-tree",
         "allow-get-working-dir-info",
         "allow-lsp-code-actions",
+        "allow-path-exists",
         "allow-read-attachment",
         "allow-read-attachments",
         "allow-read-source-file",
+        "allow-read-text-file",
         "allow-run-file-diagnostics",
         "allow-save-text-file"
       ]

@@ -209,6 +209,79 @@ pub(crate) async fn save_text_file_inner(
         .map_err(|e| format!("Failed to write {}: {e}", target.display()))
 }
 
+// ---------------------------------------------------------------------------
+// External open pipeline (2026-09-25 design doc §4 P0-B / P1-C) — existence
+// probes for chat file references and capped text reads for disk artifacts.
+// ---------------------------------------------------------------------------
+
+const DEFAULT_TEXT_READ_MAX_BYTES: u64 = 512 * 1024;
+
+/// Decision §5-4: chat file references only highlight when they resolve —
+/// this probe is the anti-hallucination backstop. Lexical scope check (the
+/// probed path may not exist, so there is nothing to canonicalize), then a
+/// plain file-existence test.
+#[tauri::command]
+pub async fn path_exists(path: String) -> Result<bool, String> {
+    if !crate::commands_surface::is_probable_path_in_scope(&path) {
+        return Ok(false);
+    }
+    Ok(tokio::fs::metadata(&path)
+        .await
+        .map(|m| m.is_file())
+        .unwrap_or(false))
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TextFileContent {
+    pub path: String,
+    pub content: String,
+    pub size_bytes: u64,
+}
+
+/// True when the sampled prefix looks binary (NUL byte), the cheap check
+/// `git` and `grep` also use. Split out for tests.
+fn sniffs_as_binary(bytes: &[u8]) -> bool {
+    bytes.get(..8192).unwrap_or(bytes).contains(&0)
+}
+
+/// Capped, scope-checked text read backing the dock's manual open tab and
+/// auto-docked disk artifacts (P1-C / P1-D). Binary and oversized files
+/// return structured errors instead of content.
+#[tauri::command]
+pub async fn read_text_file(
+    path: String,
+    max_bytes: Option<u64>,
+) -> Result<TextFileContent, String> {
+    let canonical = crate::commands_surface::canonicalized_in_scope(&path)?;
+    let max = max_bytes.unwrap_or(DEFAULT_TEXT_READ_MAX_BYTES).max(1);
+    let meta = tokio::fs::metadata(&canonical)
+        .await
+        .map_err(|e| format!("failed to stat file: {e}"))?;
+    if !meta.is_file() {
+        return Err(format!("not a regular file: {path}"));
+    }
+    if meta.len() > max {
+        return Err(format!(
+            "file too large: {} bytes > {max} byte limit",
+            meta.len()
+        ));
+    }
+    let bytes = tokio::fs::read(&canonical)
+        .await
+        .map_err(|e| format!("failed to read file: {e}"))?;
+    if sniffs_as_binary(&bytes) {
+        return Err("binary file".to_string());
+    }
+    let content =
+        String::from_utf8(bytes).map_err(|_| "file is not valid UTF-8".to_string())?;
+    Ok(TextFileContent {
+        path: canonical.to_string_lossy().into_owned(),
+        content,
+        size_bytes: meta.len(),
+    })
+}
+
 /// File diff result for the diff viewer.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct FileDiff {
