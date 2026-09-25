@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
-import { render, screen, fireEvent, waitFor } from '@testing-library/react'
+import { render, screen, fireEvent, waitFor, within } from '@testing-library/react'
 import { AppProvider } from '@/context/AppContext'
 import { MemoryRouter, useLocation } from 'react-router-dom'
 import AdvancedSettings from '@/components/settings/AdvancedSettings'
@@ -158,6 +158,35 @@ describe('AdvancedSettings', () => {
     render(wrap(<AdvancedSettings />))
     expect(screen.getByText('Enable real sub-agent execution')).toBeInTheDocument()
     expect(screen.getByText('Takes effect immediately — no restart needed.')).toBeInTheDocument()
+  })
+
+  // Dream distillation (梦境提炼) card — two switches next to the skill-loop
+  // block, persisted through the same handleToggle → configure path.
+  it('renders the dream distillation card with both toggles', () => {
+    render(wrap(<AdvancedSettings />))
+    expect(screen.getByText('Dream distillation')).toBeInTheDocument()
+    expect(screen.getByText('Nightly auto-distillation')).toBeInTheDocument()
+    expect(screen.getByText('Off by default — runs between 1–5 AM when idle, at most once a day.')).toBeInTheDocument()
+    expect(screen.getByText('Review before write')).toBeInTheDocument()
+    expect(screen.getByText('Distilled entries and skill candidates are written only after you approve them.')).toBeInTheDocument()
+  })
+
+  it('persists dream_enabled through configure when toggled', async () => {
+    render(wrap(<AdvancedSettings />))
+    const row = screen.getByText('Nightly auto-distillation').closest('div.flex.items-center.justify-between')!
+    fireEvent.click(within(row).getByRole('switch'))
+    await waitFor(() => {
+      expect(api.configure).toHaveBeenCalledWith({ key: 'dream_enabled', value: 'true' })
+    })
+  })
+
+  it('persists dream_skill_distill_enabled through configure when toggled', async () => {
+    render(wrap(<AdvancedSettings />))
+    const row = screen.getByText('Review before write').closest('div.flex.items-center.justify-between')!
+    fireEvent.click(within(row).getByRole('switch'))
+    await waitFor(() => {
+      expect(api.configure).toHaveBeenCalledWith({ key: 'dream_skill_distill_enabled', value: 'true' })
+    })
   })
 })
 

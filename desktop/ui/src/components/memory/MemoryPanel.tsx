@@ -32,6 +32,7 @@ import { CATEGORIES, type CategoryFilter } from './constants'
 import { MemoryCard } from './MemoryCard'
 import { MemoryEditor, type MemorySaveInput } from './MemoryEditor'
 import { MemoryGraphView } from './MemoryGraphView'
+import DreamPanel from './DreamPanel'
 import StatCard from '@/components/ui/stat-card'
 import { cn } from '@/lib/utils'
 
@@ -176,6 +177,11 @@ export default function MemoryPanel({
         <p className="text-body-md text-on-surface-variant mb-xl">
           {t('memory.subtitle')}
         </p>
+
+        {/* Dream distillation (梦境提炼) — run / review-gated proposals /
+            report. Sits above the memory browser: it is the only surface
+            that proposes *changes* to the memories below. */}
+        <DreamPanel />
 
         {stats && (
           <div className="grid grid-cols-2 md:grid-cols-5 gap-md mb-xl">

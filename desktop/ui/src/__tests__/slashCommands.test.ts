@@ -1,4 +1,4 @@
-import { describe, it, expect, vi } from 'vitest'
+import { describe, it, expect, vi, beforeEach } from 'vitest'
 import {
   SLASH_COMMANDS,
   filterSlashCommands,
@@ -6,6 +6,20 @@ import {
   parseSlashInput,
   type SlashCommandContext,
 } from '@/lib/slash/commands'
+import * as api from '@/lib/tauri-api'
+
+// The dream / detect-skills entries report through sonner toasts; mock the
+// module so assertions don't depend on jsdom rendering.
+const toastSuccess = vi.hoisted(() => vi.fn())
+const toastInfo = vi.hoisted(() => vi.fn())
+vi.mock('sonner', () => ({
+  toast: {
+    success: toastSuccess,
+    info: toastInfo,
+    error: vi.fn(),
+    message: vi.fn(),
+  },
+}))
 
 function makeCtx(overrides: Partial<SlashCommandContext> = {}): SlashCommandContext {
   return {
@@ -98,5 +112,81 @@ describe('slash command execution', () => {
     await parseSlashInput('/memory')!.run(ctx)
     expect(ctx.navigate).toHaveBeenNthCalledWith(1, '/tasks')
     expect(ctx.navigate).toHaveBeenNthCalledWith(2, '/memory')
+  })
+})
+
+describe('/dream and /detect-skills', () => {
+  beforeEach(() => {
+    vi.clearAllMocks()
+  })
+
+  it('registers both commands and resolves them from bare /name input', () => {
+    const names = SLASH_COMMANDS.map(c => c.name)
+    expect(names).toContain('dream')
+    expect(names).toContain('detect-skills')
+    expect(parseSlashInput('/dream')?.name).toBe('dream')
+    expect(parseSlashInput('/detect-skills')?.name).toBe('detect-skills')
+    // The parser is single-token: /dream with a days arg stays plain text
+    // (the backend's days parameter remains for future callers).
+    expect(parseSlashInput('/dream 7')).toBeNull()
+    expect(filterSlashCommands('/d').map(c => c.name)).toEqual(expect.arrayContaining(['dream', 'detect-skills']))
+  })
+
+  it('/dream runs a pass with the default window and toasts the counts', async () => {
+    vi.mocked(api.runDreamPass).mockResolvedValue({
+      skipped_reason: null,
+      scanned_sessions: 3,
+      projects: ['web-app'],
+      merge_proposed: 2,
+      remove_proposed: 1,
+      add_proposed: 1,
+      candidates_detected: 2,
+      candidates_refined: 1,
+      proposal_ids: ['proposal-1'],
+      report_path: '/tmp/report.md',
+      duration_ms: 1200,
+    })
+    const ctx = makeCtx()
+    await parseSlashInput('/dream')!.run(ctx)
+    expect(api.runDreamPass).toHaveBeenCalledWith(null)
+    expect(toastSuccess).toHaveBeenCalledWith(
+      'slash.toast.dream.done',
+      expect.objectContaining({ description: 'slash.toast.dream.doneHint' }),
+    )
+  })
+
+  it('/dream surfaces the skip reason instead of counts', async () => {
+    vi.mocked(api.runDreamPass).mockResolvedValue({
+      skipped_reason: 'disabled',
+      scanned_sessions: 0,
+      projects: [],
+      merge_proposed: 0,
+      remove_proposed: 0,
+      add_proposed: 0,
+      candidates_detected: 0,
+      candidates_refined: 0,
+      proposal_ids: [],
+      report_path: null,
+      duration_ms: 0,
+    })
+    const ctx = makeCtx()
+    await parseSlashInput('/dream')!.run(ctx)
+    expect(toastInfo).toHaveBeenCalledWith('slash.toast.dream.disabled')
+    expect(toastSuccess).not.toHaveBeenCalled()
+  })
+
+  it('/detect-skills calls the backend and toasts the appended count', async () => {
+    vi.mocked(api.detectSkillsSlash).mockResolvedValue(2)
+    const ctx = makeCtx()
+    await parseSlashInput('/detect-skills')!.run(ctx)
+    expect(api.detectSkillsSlash).toHaveBeenCalledTimes(1)
+    expect(toastSuccess).toHaveBeenCalledWith('slash.toast.detectSkills.done')
+  })
+
+  it('reports backend failures through toastError', async () => {
+    vi.mocked(api.runDreamPass).mockRejectedValue(new Error('boom'))
+    const ctx = makeCtx()
+    await parseSlashInput('/dream')!.run(ctx)
+    expect(ctx.toastError).toHaveBeenCalledWith('slash.card.error.title', expect.any(Error))
   })
 })

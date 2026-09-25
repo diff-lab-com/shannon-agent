@@ -34,7 +34,7 @@ export default function Chat() {
   const { sessions, currentSessionId, createSession } = useSessions()
   const { config } = useCatalog()
   const intl = useIntl()
-  const t = useCallback((id: string) => intl.formatMessage({ id }), [intl])
+  const t = useCallback((id: string, values?: Record<string, string | number>) => intl.formatMessage({ id }, values), [intl])
   const navigate = useNavigate()
   const location = useLocation()
 
