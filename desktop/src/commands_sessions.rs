@@ -15,7 +15,7 @@ use crate::scheduled_commands::TaskWorktreeDto;
 use crate::session_registry::SessionKey;
 use crate::{config, events, events::event_names};
 use serde::Serialize;
-use shannon_core::session_log::{SessionCuration, StoredSession};
+use shannon_core::session_log::SessionCuration;
 use std::path::Path;
 use tauri::Emitter;
 
@@ -236,32 +236,73 @@ pub struct ArchivedSessionRow {
     pub updated_at: Option<i64>,
 }
 
-/// Rebuild an active-rail [`SessionMeta`] from the store projection so a
-/// restored (unarchived) session repopulates the rail without a restart.
-fn session_meta_from_stored(stored: &StoredSession) -> SessionMeta {
-    let m = &stored.metadata;
-    let title = m.title.clone().unwrap_or_else(|| {
-        let id = stored.session_id.to_string();
-        format!("Session {}", id.split('-').next().unwrap_or(&id))
-    });
+/// Rebuild an active-rail [`SessionMeta`] from one `SessionStore::list()`
+/// summary ([`StoredSessionInfo`]): single enumeration + sidecar title. The
+/// unarchive rebuild uses this — never the full `store.load` projection —
+/// so repopulating the rail cannot fail on the session's own log parsing
+/// (final review F2) and one listing serves every lookup.
+fn session_meta_from_info(info: &shannon_core::session_log::StoredSessionInfo) -> SessionMeta {
+    let id = info.session_id.to_string();
+    let title = info
+        .title
+        .clone()
+        .unwrap_or_else(|| format!("Session {}", id.split('-').next().unwrap_or(&id)));
     SessionMeta {
-        id: stored.session_id.to_string(),
+        id,
         title,
-        created_at: m.created_at.timestamp_millis(),
-        // The store projects turns, not raw messages; the rail does not
+        created_at: info.created_at.timestamp_millis(),
+        // The listing projects turns, not raw messages; the rail does not
         // render this count — turn_count is the honest closest value.
-        message_count: m.turn_count,
-        working_dir: m.project_path.clone(),
-        parent_id: m.parent_session_id.map(|p| p.to_string()),
-        branch_point: m.branch_point_message_index,
+        message_count: info.turn_count,
+        working_dir: info.project_path.clone(),
+        parent_id: info.parent_session_id.map(|p| p.to_string()),
+        branch_point: info.branch_point_message_index,
     }
+}
+
+/// Rebuild one session's active-rail row from [`SessionStore::list`] info —
+/// the shared unarchive repair behind [`apply_archived_flag`] and
+/// [`resume_unarchive_in`]. Returns whether the row was (re)built. Skips
+/// silently when the row is already on the rail; best-effort otherwise —
+/// when the listing cannot serve the session the failure is logged (the
+/// flag is already correct by then, and the next successful retry or
+/// restart repairs the row), never fatal.
+fn rebuild_rail_row_from_listing(
+    store: &shannon_core::session_log::SessionStore,
+    sessions: &mut Vec<SessionMeta>,
+    session_id: &uuid::Uuid,
+) -> bool {
+    let id_str = session_id.to_string();
+    if sessions.iter().any(|s| s.id == id_str) {
+        return false; // already on the rail — nothing to repair
+    }
+    let info = match store.list() {
+        Ok(infos) => infos.into_iter().find(|i| i.session_id == *session_id),
+        Err(e) => {
+            tracing::warn!(
+                error = %e,
+                session_id = %id_str,
+                "unarchive: store listing failed; rail row not rebuilt (retry or restart repairs)"
+            );
+            None
+        }
+    };
+    let Some(info) = info else {
+        return false;
+    };
+    sessions.push(session_meta_from_info(&info));
+    true
 }
 
 /// Shared archive/unarchive mutation (卡A): flip the curation sidecar flag
 /// and keep the in-memory display list (`state.sessions`) in sync — archive
 /// removes the row (the active rail and every input adapter stop seeing the
-/// session), unarchive rebuilds it from the store projection. Returns
-/// whether the visible state changed (idempotent no-op otherwise).
+/// session), unarchive rebuilds it from `SessionStore::list` info. Returns
+/// whether the visible state changed: a flag flip, or a display-list repair
+/// on the idempotent path (final review F2 — a previous run may have
+/// persisted the flag but died before the row moved, leaving the session in
+/// neither the active rail nor the archived lens until restart; the retry
+/// must repair instead of short-circuiting).
 /// Hermetic by design: the store and list are injected, so tests run on a
 /// tempdir container without touching `AppState` or `$HOME`.
 pub(crate) fn apply_archived_flag(
@@ -270,32 +311,37 @@ pub(crate) fn apply_archived_flag(
     session_id: &uuid::Uuid,
     archived: bool,
 ) -> Result<bool, String> {
-    // Guard: only real sessions (an L0 log on disk) are archivable.
-    if store
-        .read_events(session_id)
-        .map_err(|e| e.to_string())?
-        .is_none()
-    {
+    // Guard: only real sessions (an L0 log on disk) are archivable. Path
+    // existence, deliberately not a full read: the flag and the rail repair
+    // never depend on parsing the log, so a corrupt log can still be
+    // archived / repaired instead of wedging the session.
+    let log = shannon_core::session_log::session_log_container_path(
+        store.container(),
+        &session_id.to_string(),
+    );
+    if !log.exists() {
         return Err(format!("Session not found: {session_id}"));
     }
     let was_archived = store.curation(session_id).archived;
-    if was_archived == archived {
-        return Ok(false);
+    let flipped = was_archived != archived;
+    if flipped {
+        store
+            .save_curation(session_id, &SessionCuration { archived })
+            .map_err(|e| format!("failed to write session curation: {e}"))?;
     }
-    store
-        .save_curation(session_id, &SessionCuration { archived })
-        .map_err(|e| format!("failed to write session curation: {e}"))?;
 
+    // Display-list sync + repair — on BOTH paths: an archive request always
+    // drops a (possibly stale) rail row; an unarchive request rebuilds a
+    // missing one from the listing.
     let id_str = session_id.to_string();
-    if archived {
+    let repaired = if archived {
+        let had_row = sessions.iter().any(|s| s.id == id_str);
         sessions.retain(|s| s.id != id_str);
-    } else if let Some(stored) = store.load(session_id).map_err(|e| e.to_string())? {
-        let meta = session_meta_from_stored(&stored);
-        if !sessions.iter().any(|s| s.id == meta.id) {
-            sessions.push(meta);
-        }
-    }
-    Ok(true)
+        had_row
+    } else {
+        rebuild_rail_row_from_listing(store, sessions, session_id)
+    };
+    Ok(flipped || repaired)
 }
 
 /// Archived-lens rows over one container, most recently active first
@@ -334,7 +380,7 @@ pub async fn archive_session(
     };
     if changed {
         let _ = app_handle.emit(event_names::SESSIONS_UPDATED, ());
-        spawn_post_archive_dream(&state, app_handle).await;
+        spawn_post_archive_dream(&state, app_handle, session_uuid).await;
     }
     Ok(changed)
 }
@@ -344,22 +390,56 @@ pub async fn archive_session(
 /// "this thread is done, distill it" moment. Strictly off the hot path:
 /// failures are warn-logged, never surfaced, and the pass's own 6h throttle
 /// naturally rate-limits bursts of archives.
-async fn spawn_post_archive_dream(state: &AppState, app_handle: tauri::AppHandle) {
+///
+/// Ordering (final review F1): the session is flagged archived BEFORE this
+/// callback runs — a crash can then never leave it un-archived — which is
+/// exactly why the plain dream window can no longer see it. Its content is
+/// distilled through the pass's explicit include: `session_id` is handed to
+/// the pass as an `extra_session_ids` entry, which `SessionQuery` fetches by
+/// id regardless of the archived flag.
+async fn spawn_post_archive_dream(
+    state: &AppState,
+    app_handle: tauri::AppHandle,
+    session_id: uuid::Uuid,
+) {
     let dream_enabled = state.desktop_config.read().await.dream_enabled;
+    tauri::async_runtime::spawn(async move {
+        post_archive_dream_with(dream_enabled, session_id, |id| {
+            let app_handle = app_handle.clone();
+            async move {
+                crate::commands_dream::execute_dream_pass(
+                    app_handle,
+                    DEFAULT_ARCHIVE_DAYS_BACK,
+                    vec![id.to_string()],
+                )
+                .await
+                .map(|_| ())
+            }
+        })
+        .await;
+    });
+}
+
+/// The T4 handoff over an injected pass runner (the hermetic seam behind
+/// [`spawn_post_archive_dream`]): a disabled switch means no pass at all;
+/// otherwise the just-archived session id is handed to exactly one pass,
+/// and a pass failure is warn-logged (best-effort — the archive itself
+/// already succeeded).
+async fn post_archive_dream_with<F, Fut>(dream_enabled: bool, session_id: uuid::Uuid, run_pass: F)
+where
+    F: FnOnce(uuid::Uuid) -> Fut,
+    Fut: std::future::Future<Output = Result<(), String>>,
+{
     if !dream_enabled {
         return;
     }
-    tauri::async_runtime::spawn(async move {
-        // The pass re-checks its own privacy gates + throttle internally.
-        if let Err(e) =
-            crate::commands_dream::execute_dream_pass(app_handle, DEFAULT_ARCHIVE_DAYS_BACK).await
-        {
-            tracing::warn!(
-                error = %e,
-                "post-archive dream pass failed (best-effort; archive already succeeded)"
-            );
-        }
-    });
+    // The pass re-checks its own privacy gates + throttle internally.
+    if let Err(e) = run_pass(session_id).await {
+        tracing::warn!(
+            error = %e,
+            "post-archive dream pass failed (best-effort; archive already succeeded)"
+        );
+    }
 }
 
 /// `days_back` for the T4 post-archive dream pass (brief: 3 — same window
@@ -430,7 +510,10 @@ async fn auto_unarchive_if_archived(
 /// The resume-unarchive mutation over injected store + display list (the
 /// hermetic seam behind [`auto_unarchive_if_archived`]): returns the
 /// session's title when the flag was cleared (empty string when untitled),
-/// `None` when the session was not archived or the write failed.
+/// `None` when the session was not archived or the write failed. The rail
+/// rebuild rides the same list-based repair as [`apply_archived_flag`]
+/// (final review F2): best-effort — a listing that cannot serve the session
+/// is logged, never fatal to the resume.
 pub(crate) fn resume_unarchive_in(
     store: &shannon_core::session_log::SessionStore,
     sessions: &mut Vec<SessionMeta>,
@@ -447,17 +530,18 @@ pub(crate) fn resume_unarchive_in(
         );
         return None;
     }
-    let mut title = String::new();
-    if let Ok(Some(stored)) = store.load(session_id) {
-        if let Some(t) = &stored.metadata.title {
-            title = t.clone();
-        }
-        let meta = session_meta_from_stored(&stored);
-        if !sessions.iter().any(|s| s.id == meta.id) {
-            sessions.push(meta);
-        }
-    }
-    Some(title)
+    // Rail row: repaired from the listing when missing (logged when the
+    // listing cannot serve it). The toast title comes from the row on the
+    // rail after the repair — rebuilt or already present.
+    rebuild_rail_row_from_listing(store, sessions, session_id);
+    let id_str = session_id.to_string();
+    Some(
+        sessions
+            .iter()
+            .find(|s| s.id == id_str)
+            .map(|s| s.title.clone())
+            .unwrap_or_default(),
+    )
 }
 
 // ---------------------------------------------------------------------------
@@ -1590,6 +1674,140 @@ mod archive_tests {
         assert_eq!(meta.working_dir.as_deref(), Some("/proj"));
         assert!(meta.created_at > 1_000_000_000_000, "epoch milliseconds");
         assert_eq!(meta.message_count, 1, "one seeded turn");
+    }
+
+    #[test]
+    fn idempotent_unarchive_repairs_a_rail_row_missing_from_a_failed_rebuild() {
+        // Final review F2: the old code persisted the unarchive flag and
+        // THEN rebuilt the row via the full projection — a failure between
+        // the two wedged the session out of both lists (flag false, row
+        // absent), and the retry hit the idempotent short-circuit. The
+        // retry must now repair the rail.
+        let tmp = tempfile::tempdir().unwrap();
+        let store = store(&tmp);
+        let a = uuid::Uuid::new_v4();
+        seed_session(&store, &a, Some("Wedged"));
+
+        // The wedge: flag already cleared, row nowhere.
+        store
+            .save_curation(&a, &SessionCuration { archived: false })
+            .unwrap();
+        let mut sessions = Vec::new();
+        assert!(
+            apply_archived_flag(&store, &mut sessions, &a, false).unwrap(),
+            "the repair is a visible state change, not a no-op"
+        );
+        assert_eq!(sessions.len(), 1);
+        assert_eq!(sessions[0].id, a.to_string());
+        assert_eq!(sessions[0].title, "Wedged");
+
+        // Once repaired, the next request is a true no-op again.
+        let mut again = sessions.clone();
+        assert!(!apply_archived_flag(&store, &mut again, &a, false).unwrap());
+        assert_eq!(again.len(), 1);
+    }
+
+    #[test]
+    fn idempotent_archive_drops_a_stale_rail_row() {
+        // The mirror repair: the flag is already true (archived) but the
+        // row is back on the rail (restored by a crashed run) — the
+        // archive request must still remove it and report the change.
+        let tmp = tempfile::tempdir().unwrap();
+        let store = store(&tmp);
+        let a = uuid::Uuid::new_v4();
+        seed_session(&store, &a, Some("Stale"));
+        store
+            .save_curation(&a, &SessionCuration { archived: true })
+            .unwrap();
+        let mut sessions = display_list(&[&a]);
+        assert!(apply_archived_flag(&store, &mut sessions, &a, true).unwrap());
+        assert!(sessions.is_empty());
+
+        // Truly idempotent afterwards.
+        let mut again = display_list(&[]);
+        assert!(!apply_archived_flag(&store, &mut again, &a, true).unwrap());
+        assert!(again.is_empty());
+    }
+
+    #[test]
+    fn unarchive_rebuild_survives_a_corrupt_log_via_the_listing() {
+        // Final review F2: the rail rebuild must depend on the
+        // `SessionStore::list` summaries, not the full `store.load`
+        // projection. Corrupt the log IN PLACE (same byte length + restored
+        // mtime, so the E-9 index still validates): the projection fails on
+        // the unparsable line while the listing serves from its cache.
+        let tmp = tempfile::tempdir().unwrap();
+        let store = store(&tmp);
+        let a = uuid::Uuid::new_v4();
+        seed_session(&store, &a, Some("Durable"));
+        let mut rail = display_list(&[&a]);
+        assert!(apply_archived_flag(&store, &mut rail, &a, true).unwrap());
+
+        let log = store.container().join(a.to_string()).join("events.jsonl");
+        let mtime = std::fs::metadata(&log).unwrap().modified().unwrap();
+        let raw = std::fs::read_to_string(&log).unwrap();
+        let corrupted = raw.replacen('{', "x", 1);
+        assert_eq!(
+            corrupted.len(),
+            raw.len(),
+            "in-place corruption keeps the byte length"
+        );
+        std::fs::write(&log, corrupted).unwrap();
+        std::fs::File::open(&log)
+            .unwrap()
+            .set_modified(mtime)
+            .unwrap();
+        assert!(
+            store.load(&a).is_err(),
+            "fixture: the full projection must fail on the corrupt log"
+        );
+
+        // Wedged state (flag already cleared, row absent) + retry: the rail
+        // is rebuilt from the listing anyway — no `store.load` dependency.
+        store
+            .save_curation(&a, &SessionCuration { archived: false })
+            .unwrap();
+        let mut sessions = Vec::new();
+        assert!(apply_archived_flag(&store, &mut sessions, &a, false).unwrap());
+        assert_eq!(sessions.len(), 1);
+        assert_eq!(sessions[0].title, "Durable");
+    }
+
+    #[tokio::test]
+    async fn post_archive_dream_hands_the_archived_id_to_exactly_one_pass() {
+        // Final review F1: the archive callback must pass the just-archived
+        // session id into the dream pass (its explicit include) — verified
+        // through the injected runner seam, in the style of the other
+        // hermetic seams in this module.
+        let archived = uuid::Uuid::new_v4();
+        let seen: Arc<std::sync::Mutex<Vec<uuid::Uuid>>> = Arc::default();
+        let spy = seen.clone();
+        post_archive_dream_with(true, archived, move |id| {
+            let spy = spy.clone();
+            async move {
+                spy.lock().unwrap().push(id);
+                Ok(())
+            }
+        })
+        .await;
+        assert_eq!(
+            *seen.lock().unwrap(),
+            vec![archived],
+            "exactly one pass receives the archived id"
+        );
+
+        // Switch off → no pass at all.
+        let disabled: Arc<std::sync::Mutex<Vec<uuid::Uuid>>> = Arc::default();
+        let spy = disabled.clone();
+        post_archive_dream_with(false, archived, move |id| {
+            let spy = spy.clone();
+            async move {
+                spy.lock().unwrap().push(id);
+                Ok(())
+            }
+        })
+        .await;
+        assert!(disabled.lock().unwrap().is_empty(), "disabled → no pass");
     }
 
     #[test]

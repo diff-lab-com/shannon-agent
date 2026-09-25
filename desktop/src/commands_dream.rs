@@ -1203,6 +1203,12 @@ async fn consult_llm(
 /// partial output. Response *parse* failures are not errors — the pass still
 /// produces its report with zero proposals.
 ///
+/// `extra_session_ids` (T4, final review F1) is the explicit include: these
+/// sessions are excerpted in addition to the window, regardless of their
+/// archived flag or age — the post-archive callback names the session it
+/// just flagged so the pass can distill it. Empty for every scheduled or
+/// manual entry point.
+///
 /// Seams:
 /// - `consult` — the L2 model call per project (transport errors abort).
 /// - `detect(days)` — the L3 heuristic detection + recording; returns the
@@ -1220,6 +1226,7 @@ pub(crate) async fn execute_dream_pass_inner<C, F, D, DF, R, RF>(
     memory_store: &SharedMemoryStore,
     sessions_dir: &Path,
     dreams_dir: &Path,
+    extra_session_ids: &[uuid::Uuid],
     client_config: shannon_engine::api::types::LlmClientConfig,
     consult: C,
     detect: D,
@@ -1256,13 +1263,16 @@ where
     // Recent session excerpts (texts already redacted by `session_excerpt`),
     // read through the core session-query adapter — the same single source
     // skill detection uses. Archived sessions are excluded at the input
-    // layer (`include_archived = false`).
+    // layer (`include_archived = false`), except the explicit
+    // `extra_session_ids` below.
     let query = SessionQuery::new(sessions_dir);
     let mut excerpts: Vec<SessionExcerpt> = Vec::new();
+    let mut scanned: HashSet<uuid::Uuid> = HashSet::new();
     for session in query
         .list_recent(days_back, false)
         .map_err(|e| format!("session query: {e}"))?
     {
+        scanned.insert(session.session_id);
         match session_excerpt(
             &query,
             &session,
@@ -1274,6 +1284,39 @@ where
                 session = %session.session_id,
                 error = %e,
                 "dream: skipping unreadable session"
+            ),
+        }
+    }
+    // T4 explicit includes: union-in exactly these ids even though the
+    // archived flag (and possibly the age) would exclude them — the
+    // post-archive callback distills the session it just flagged. Best-effort
+    // per id (warn + skip), deduplicated against the window path.
+    for id in extra_session_ids {
+        if !scanned.insert(*id) {
+            continue; // already excerpted via the window path
+        }
+        match query.session_by_id(id) {
+            Ok(Some(session)) => match session_excerpt(
+                &query,
+                &session,
+                DEFAULT_MAX_USER_MSGS,
+                DEFAULT_PER_MSG_CHARS,
+            ) {
+                Ok(excerpt) => excerpts.push(excerpt),
+                Err(e) => tracing::warn!(
+                    session = %id,
+                    error = %e,
+                    "dream: skipping unreadable explicitly-included session"
+                ),
+            },
+            Ok(None) => tracing::warn!(
+                session = %id,
+                "dream: explicitly-included session has no log; skipping"
+            ),
+            Err(e) => tracing::warn!(
+                session = %id,
+                error = %e,
+                "dream: skipping unreadable explicitly-included session"
             ),
         }
     }
@@ -1390,9 +1433,15 @@ where
 /// and the (Task 3) nightly scheduler. Never reads a session or memory file
 /// when a gate or throttle skips the pass; an LLM transport failure returns
 /// `Err` with no artifacts written (the lock releases via guard drop).
+///
+/// `extra_session_ids` (T4, final review F1) names sessions the pass must
+/// distill regardless of their archived flag — the post-archive callback
+/// passes the session it just flagged; every other entry point passes an
+/// empty vec.
 pub(crate) async fn execute_dream_pass(
     app: tauri::AppHandle,
     days_back: u32,
+    extra_session_ids: Vec<String>,
 ) -> Result<DreamPassResult, String> {
     // The on-disk config is re-read per pass so a Settings toggle takes
     // effect without a restart; the real dirs resolve exactly where they
@@ -1400,7 +1449,7 @@ pub(crate) async fn execute_dream_pass(
     let cfg = crate::config::load_config();
     let dreams = dreams_dir()?;
     let desktop = crate::commands_skill_candidates::desktop_dir()?;
-    execute_dream_pass_in(&app, days_back, &cfg, &dreams, &desktop).await
+    execute_dream_pass_in(&app, days_back, &cfg, &dreams, &desktop, extra_session_ids).await
 }
 
 /// [`execute_dream_pass`] against an injected config + dreams/desktop
@@ -1415,6 +1464,7 @@ pub(crate) async fn execute_dream_pass_in<R: tauri::Runtime>(
     cfg: &crate::config::DesktopConfig,
     dreams: &Path,
     desktop: &Path,
+    extra_session_ids: Vec<String>,
 ) -> Result<DreamPassResult, String> {
     // Session window is capped centrally so every entry point is covered.
     let days_back = clamp_days_back(days_back);
@@ -1508,11 +1558,26 @@ pub(crate) async fn execute_dream_pass_in<R: tauri::Runtime>(
         }
     };
 
+    // T4 explicit includes: ids arrive as strings from the command layer;
+    // a non-UUID entry is warned and dropped, never fatal (best-effort
+    // callback contract).
+    let extra_ids: Vec<uuid::Uuid> = extra_session_ids
+        .iter()
+        .filter_map(|s| match uuid::Uuid::parse_str(s) {
+            Ok(id) => Some(id),
+            Err(_) => {
+                tracing::warn!(session = %s, "dream: ignoring non-UUID extra session id");
+                None
+            }
+        })
+        .collect();
+
     let outcome = execute_dream_pass_inner(
         days_back,
         &state.memory_store,
         &sessions_dir,
         dreams,
+        &extra_ids,
         client_config,
         consult_llm,
         detect,
@@ -1609,7 +1674,7 @@ pub(crate) fn is_catchup_due(
 /// both tracks. `execute_dream_pass` re-applies its own gates, 6h throttle
 /// and single-flight lock on top; everything here is log-only.
 async fn run_scheduled_pass(app: &tauri::AppHandle, trigger: &str) {
-    match execute_dream_pass(app.clone(), NIGHT_DAYS_BACK).await {
+    match execute_dream_pass(app.clone(), NIGHT_DAYS_BACK, Vec::new()).await {
         Ok(result) => match result.skipped_reason {
             Some(reason) => {
                 tracing::info!(trigger, reason, "dream: scheduled pass skipped")
@@ -1821,6 +1886,15 @@ fn apply_action(store: &mut MemoryStore, project: &str, action: &DreamAction) ->
 /// grew) back to its on-disk file. A failure is logged, never fatal — the
 /// journal is a mitigation, and failing the apply over it would put the
 /// real write (the store save) behind a weaker guarantee.
+///
+/// Atomicity (final review F3): the payload lands via tmp-file + rename
+/// (the same pattern `SessionCuration::store` uses in shannon-core), so a
+/// mid-write crash can leave the previous journal state on disk — never a
+/// truncated, unparsable proposal JSON. The journal is still only
+/// best-effort for the *store*: the write happens after the in-memory
+/// mutation but before the store save, so a crash in that window loses the
+/// store change while the journal says applied (under-apply on retry, never
+/// a duplicate).
 fn journal_applied_ids(proposal: &DreamProposal, path: &Path) {
     let json = match serde_json::to_string_pretty(proposal) {
         Ok(json) => json,
@@ -1829,26 +1903,48 @@ fn journal_applied_ids(proposal: &DreamProposal, path: &Path) {
             return;
         }
     };
-    if let Err(e) = std::fs::write(path, json) {
+    // Same-directory temp file, fsync, rename — a partial tmp write is
+    // invisible to readers of `path`.
+    let tmp = path.with_extension("json.tmp");
+    let written = (|| -> std::io::Result<()> {
+        use std::io::Write;
+        let mut f = std::fs::File::create(&tmp)?;
+        f.write_all(json.as_bytes())?;
+        f.sync_all()?;
+        Ok(())
+    })();
+    if let Err(e) = written {
         tracing::warn!(
             path = %path.display(),
             error = %e,
             "dream apply: journal write failed"
+        );
+        return;
+    }
+    if let Err(e) = std::fs::rename(&tmp, path) {
+        tracing::warn!(
+            path = %path.display(),
+            error = %e,
+            "dream apply: journal rename failed"
         );
     }
 }
 
 /// Apply the selected actions of `proposal` to the store (the only write
 /// path into the memory store this feature has) with the incremental
-/// `applied_ids` journal (卡C 4a). Apply is not atomic — the proposal file
-/// is deleted only after the store save succeeds — so every freshly applied
-/// action is journaled into the proposal JSON immediately, and actions
-/// already journaled are skipped on entry (reported as applied: they are
-/// durably in the store from the earlier attempt). A mid-apply failure +
-/// retry therefore no longer double-applies. Actions are applied in
-/// proposal order; unknown requested ids are ignored; actions whose targets
-/// are gone are reported as skipped in order. `path` is the proposal's
-/// on-disk file (`None`: journal-free, used by pure store-level tests).
+/// `applied_ids` journal (卡C 4a; atomic per write — final review F3). Apply
+/// is not atomic: the proposal file is deleted only after the store save
+/// succeeds, and each freshly applied action is journaled into the proposal
+/// JSON (best-effort) on the way. A retry skips actions already journaled
+/// (reported as applied) — at-most-once per action. Honest crash window:
+/// the journal write lands after the in-memory mutation but before the
+/// store save, so a crash between the two may lose that action's store
+/// effect while the journal says applied (under-apply on retry). It can
+/// never cause a duplicate: journal write + rename are atomic, and
+/// journaled ids are skipped. Actions are applied in proposal order;
+/// unknown requested ids are ignored; actions whose targets are gone are
+/// reported as skipped in order. `path` is the proposal's on-disk file
+/// (`None`: journal-free, used by pure store-level tests).
 pub(crate) fn apply_actions_journaled_in(
     store: &mut MemoryStore,
     proposal: &mut DreamProposal,
@@ -1899,7 +1995,12 @@ pub async fn run_dream_pass(
     _state: tauri::State<'_, AppState>,
     days_back: Option<u32>,
 ) -> Result<DreamPassResult, String> {
-    execute_dream_pass(app, days_back.unwrap_or(DEFAULT_MANUAL_DAYS_BACK)).await
+    execute_dream_pass(
+        app,
+        days_back.unwrap_or(DEFAULT_MANUAL_DAYS_BACK),
+        Vec::new(),
+    )
+    .await
 }
 
 /// Every pending (review-gated) proposal across projects, newest first.
@@ -1927,9 +2028,10 @@ pub async fn read_dream_state() -> Result<DreamState, String> {
 /// Apply the selected actions of a proposal to the memory store, then delete
 /// the proposal file — review is consumed as a unit, so a partial apply
 /// discards the unselected actions (“应用所选，其余丢弃”). Every successful
-/// action is journaled into the proposal file on the way (卡C 4a): if the
-/// store save or the delete fails, a retry skips the already-applied ids
-/// instead of double-applying.
+/// action is journaled (best-effort, atomic write) into the proposal file on
+/// the way (卡C 4a): a retry skips journaled ids — at-most-once per action.
+/// A crash between the journal write and the store save may lose that
+/// action's effect (under-apply on retry); it can never duplicate one.
 #[tauri::command]
 pub async fn apply_dream_proposal(
     _app: tauri::AppHandle,
@@ -1975,6 +2077,7 @@ pub async fn discard_dream_proposal(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::sync::Arc;
     use tempfile::tempdir;
 
     /// Deterministic, separator-free stand-in for shannon-core's
@@ -2900,9 +3003,10 @@ mod tests {
         let before_dreams = snapshot_dir(dreams.path());
         let before_desktop = snapshot_dir(desktop.path());
 
-        let result = execute_dream_pass_in(&app, 3, &cfg, dreams.path(), desktop.path())
-            .await
-            .unwrap();
+        let result =
+            execute_dream_pass_in(&app, 3, &cfg, dreams.path(), desktop.path(), Vec::new())
+                .await
+                .unwrap();
 
         assert_eq!(result.skipped_reason.as_deref(), Some("disabled"));
         assert_eq!(result.scanned_sessions, 0);
@@ -2928,15 +3032,16 @@ mod tests {
         // First pass holding the lock → concurrent second call must see
         // "in-progress", not "throttled".
         let first = dream_lock().try_acquire().expect("fresh process lock");
-        let second = execute_dream_pass_in(&app, 3, &cfg, dreams.path(), desktop.path())
-            .await
-            .unwrap();
+        let second =
+            execute_dream_pass_in(&app, 3, &cfg, dreams.path(), desktop.path(), Vec::new())
+                .await
+                .unwrap();
         assert_eq!(second.skipped_reason.as_deref(), Some("in-progress"));
         drop(first);
 
         // The dropped guard stamped the 6h interval (also finding #4's
         // failed-pass story): the immediate retry reports "throttled".
-        let retry = execute_dream_pass_in(&app, 3, &cfg, dreams.path(), desktop.path())
+        let retry = execute_dream_pass_in(&app, 3, &cfg, dreams.path(), desktop.path(), Vec::new())
             .await
             .unwrap();
         assert_eq!(retry.skipped_reason.as_deref(), Some("throttled"));
@@ -2960,9 +3065,10 @@ mod tests {
         )
         .unwrap();
 
-        let result = execute_dream_pass_in(&app, 3, &cfg, dreams.path(), desktop.path())
-            .await
-            .unwrap();
+        let result =
+            execute_dream_pass_in(&app, 3, &cfg, dreams.path(), desktop.path(), Vec::new())
+                .await
+                .unwrap();
         assert_eq!(result.skipped_reason.as_deref(), Some("throttled"));
         assert_eq!(result.scanned_sessions, 0);
         assert!(read_state_in(desktop.path()).last_dream_at.is_some());
@@ -3192,6 +3298,7 @@ mod tests {
             &store,
             sessions.path(),
             dreams.path(),
+            &[],
             shannon_engine::api::types::LlmClientConfig::default(),
             canned_consult(&canned),
             no_detect(),
@@ -3248,6 +3355,80 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn dream_pass_inner_extra_session_ids_distill_an_archived_session() {
+        // Final review F1 (T4): the post-archive callback fires AFTER the
+        // session's archived flag is set, so the plain window path would
+        // scan zero sessions when the just-archived one is the only recent
+        // one. The explicit `extra_session_ids` include must reach the
+        // session anyway; without it the archived session stays excluded.
+        let mem_dir = tempdir().unwrap();
+        let store = seed_shared_store(mem_dir.path(), vec![dream_entry("/work/app", "solo", 0.9)]);
+        let sessions = tempdir().unwrap();
+        let dreams = tempdir().unwrap();
+
+        // One archived session, written through the real log writer.
+        let archived = write_recent_session(sessions.path(), "distill me: api_key: sk-1");
+        SessionQuery::new(sessions.path())
+            .save_curation(
+                &archived,
+                &shannon_core::session_log::SessionCuration { archived: true },
+            )
+            .unwrap();
+
+        // Record every consult user prompt so the test can assert the
+        // archived session's (redacted) content actually reached the model.
+        // The closure borrows the shared buffer (no `move`), which keeps it
+        // `Copy` so the same spy feeds both passes below.
+        let prompts: Arc<std::sync::Mutex<Vec<String>>> = Arc::default();
+        let consult =
+            |_cfg: shannon_engine::api::types::LlmClientConfig, _system: String, user: String| {
+                prompts.lock().unwrap().push(user);
+                std::future::ready(Ok::<String, String>("no proposals in here".to_string()))
+            };
+
+        // Plain path: the archived session is excluded at the input layer.
+        let plain = execute_dream_pass_inner(
+            3,
+            &store,
+            sessions.path(),
+            dreams.path(),
+            &[],
+            shannon_engine::api::types::LlmClientConfig::default(),
+            consult,
+            no_detect(),
+            no_refine(),
+        )
+        .await
+        .unwrap();
+        assert_eq!(
+            plain.result.scanned_sessions, 0,
+            "the archived session must stay excluded without the explicit include"
+        );
+
+        // Explicit include: the same archived session is distilled, and its
+        // content reaches the consult prompt (redacted).
+        let with_extra = execute_dream_pass_inner(
+            3,
+            &store,
+            sessions.path(),
+            dreams.path(),
+            &[archived],
+            shannon_engine::api::types::LlmClientConfig::default(),
+            consult,
+            no_detect(),
+            no_refine(),
+        )
+        .await
+        .unwrap();
+        assert_eq!(with_extra.result.scanned_sessions, 1);
+        let last = prompts.lock().unwrap().last().cloned().unwrap_or_default();
+        assert!(
+            last.contains("distill me: api_key: [REDACTED]"),
+            "the archived session's content reached the consult prompt: {last}"
+        );
+    }
+
+    #[tokio::test]
     async fn dream_pass_inner_parse_failure_still_produces_report() {
         let mem_dir = tempdir().unwrap();
         let store = seed_shared_store(mem_dir.path(), vec![dream_entry("/work/app", "solo", 0.9)]);
@@ -3259,6 +3440,7 @@ mod tests {
             &store,
             sessions.path(),
             dreams.path(),
+            &[],
             shannon_engine::api::types::LlmClientConfig::default(),
             canned_consult("I would suggest merging some entries, honestly."),
             no_detect(),
@@ -3292,6 +3474,7 @@ mod tests {
             &store,
             sessions.path(),
             dreams.path(),
+            &[],
             shannon_engine::api::types::LlmClientConfig::default(),
             consult,
             no_detect(),
@@ -3326,6 +3509,7 @@ mod tests {
                 &store,
                 sessions.path(),
                 dreams.path(),
+                &[],
                 shannon_engine::api::types::LlmClientConfig::default(),
                 |_cfg, _system, _user| -> std::future::Ready<Result<String, String>> {
                     panic!("no consult may run without memory entries")
@@ -3386,6 +3570,7 @@ mod tests {
             &store,
             sessions.path(),
             dreams.path(),
+            &[],
             shannon_engine::api::types::LlmClientConfig::default(),
             canned_consult("no proposals in here"),
             detect,
@@ -3447,6 +3632,7 @@ mod tests {
             &store,
             sessions.path(),
             dreams.path(),
+            &[],
             shannon_engine::api::types::LlmClientConfig::default(),
             canned_consult("no proposals in here"),
             detect,
@@ -3483,6 +3669,7 @@ mod tests {
                 &store,
                 sessions.path(),
                 dreams.path(),
+                &[],
                 shannon_engine::api::types::LlmClientConfig::default(),
                 canned_consult("no proposals in here"),
                 no_detect(),

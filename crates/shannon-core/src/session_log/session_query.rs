@@ -138,6 +138,31 @@ impl SessionQuery {
             .collect())
     }
 
+    /// One targeted session by id, regardless of its curation `archived`
+    /// flag and regardless of the recency window — the explicit include for
+    /// consumers that already know exactly which session they want (T4: the
+    /// post-archive dream pass distills the session that was just archived,
+    /// whose flag is set by the time the pass gathers). `Ok(None)` when the
+    /// session has no log; a log that fails to parse is an `Err` (callers
+    /// decide per-session whether that is fatal).
+    pub fn session_by_id(
+        &self,
+        session_id: &Uuid,
+    ) -> Result<Option<SessionRef>, super::SessionStoreError> {
+        let Some(events) = self.store.read_events(session_id)? else {
+            return Ok(None);
+        };
+        let updated_at = events
+            .last()
+            .map(|event| super::session_store::ns_to_datetime(event.ts_ns))
+            .unwrap_or_else(Utc::now);
+        Ok(Some(SessionRef {
+            dir: self.store.container().join(session_id.to_string()),
+            session_id: *session_id,
+            updated_at,
+        }))
+    }
+
     /// The session's tool-call sequence in encounter order, projected from
     /// the `tool/call` events of its log. Empty when the session has no log
     /// or logged no tool calls.
@@ -338,6 +363,44 @@ mod tests {
         // The archived session stays on disk and fully readable.
         assert!(!query.tool_calls(&archived).unwrap().is_empty());
         assert!(!query.user_texts(&archived).unwrap().is_empty());
+    }
+
+    #[test]
+    fn session_by_id_fetches_a_targeted_session_ignoring_the_flag() {
+        // T4 (final review F1): the explicit include must reach a session the
+        // default window path excludes because it is archived.
+        let tmp = tempfile::tempdir().unwrap();
+        let query = SessionQuery::new(tmp.path().join("sessions"));
+        let id = Uuid::new_v4();
+        seed_session(query.store(), &id, "distill me");
+        query
+            .save_curation(&id, &SessionCuration { archived: true })
+            .unwrap();
+        assert!(query.curation(&id).archived);
+
+        assert_eq!(
+            query.list_recent(7, false).unwrap().len(),
+            0,
+            "the archived session is invisible to the window path"
+        );
+        let fetched = query.session_by_id(&id).unwrap().expect("targeted fetch");
+        assert_eq!(fetched.session_id, id);
+        assert_eq!(
+            fetched.dir,
+            query.container().join(id.to_string()),
+            "the ref points at the session's real directory"
+        );
+        // Its content reads exactly like any other session's.
+        assert!(
+            query
+                .user_texts(&id)
+                .unwrap()
+                .iter()
+                .all(|t| t.starts_with("distill me"))
+        );
+
+        // An id with no log is `Ok(None)`, never an error.
+        assert!(query.session_by_id(&Uuid::new_v4()).unwrap().is_none());
     }
 
     #[test]

@@ -321,7 +321,10 @@ pub struct StoredSessionInfo {
     pub project_path: Option<String>,
 }
 
-fn ns_to_datetime(ns: u64) -> chrono::DateTime<chrono::Utc> {
+/// Event-log nanoseconds → UTC timestamp (`u64::MAX`-era overflow falls back
+/// to now, matching the projection path). Crate-visible so the session-query
+/// adapter can project single-session reads with the same convention.
+pub(crate) fn ns_to_datetime(ns: u64) -> chrono::DateTime<chrono::Utc> {
     chrono::Utc
         .timestamp_opt(ns as i64 / 1_000_000_000, (ns % 1_000_000_000) as u32)
         .single()
