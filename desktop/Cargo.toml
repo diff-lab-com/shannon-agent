@@ -87,6 +87,10 @@ percent-encoding = "2"
 # direct deps introduce no new packages — they only reuse the locked versions.
 tar = "0.4"
 flate2 = "1"
+# Dream-pass redaction (`commands_dream`). Same situation as tar/flate2: regex
+# 1.x is already resolved in Cargo.lock via shannon-core, so this direct dep
+# introduces no new package.
+regex = "1.11"
 
 tauri = { version = "2", optional = true, features = ["tray-icon"] }
 tauri-plugin-shell = { version = "2", optional = true }

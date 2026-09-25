@@ -86,7 +86,12 @@ fn extract_tool_signatures(msgs: &[serde_json::Value]) -> Vec<String> {
 }
 
 /// Find session files modified within `days_back` days under the sessions dir.
-fn list_recent_sessions(sessions_dir: &Path, days_back: u32) -> Result<Vec<PathBuf>, String> {
+/// `pub(crate)` so the dream pass (`commands_dream`) can excerpt the same
+/// recent-session set without duplicating the mtime walk.
+pub(crate) fn list_recent_sessions(
+    sessions_dir: &Path,
+    days_back: u32,
+) -> Result<Vec<PathBuf>, String> {
     if !sessions_dir.is_dir() {
         return Ok(Vec::new());
     }

@@ -265,4 +265,7 @@ pub mod commands_skill_candidates;
 pub mod skill_pattern_detection;
 
 #[cfg(feature = "tauri")]
+pub mod commands_dream;
+
+#[cfg(feature = "tauri")]
 pub mod notifications;
