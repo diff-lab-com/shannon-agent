@@ -55,6 +55,13 @@ permissions:
 env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
 
+# Never cancel a release run mid-flight (a cancelled tag build would leave
+# the draft half-populated); the group only serializes duplicate triggers
+# for the same ref.
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
 jobs:
   # ───────────────────────────── Version guard ─────────────────────────────
   # Fail early if the workspace Cargo version doesn't match the pushed tag.
@@ -65,7 +72,7 @@ jobs:
     outputs:
       version: ${{ steps.guard.outputs.version }}
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8
 
       - name: Verify version matches tag
         id: guard
@@ -162,17 +169,17 @@ jobs:
     env:
       GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8
         with:
           submodules: recursive
 
       - name: Install Rust toolchain
-        uses: dtolnay/rust-toolchain@stable
+        uses: dtolnay/rust-toolchain@2c7215f132e9ebf062739d9130488b56d53c060c
         with:
           toolchain: 1.88
           targets: ${{ matrix.target }}
 
-      - uses: Swatinem/rust-cache@v2
+      - uses: Swatinem/rust-cache@72d126e709cad40056a62344eee609d696d62d33
         with:
           key: cli-${{ matrix.target }}
 
@@ -252,17 +259,17 @@ jobs:
             os: windows-latest
             ext: nsis
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8
         with:
           submodules: recursive
 
       - name: Install Rust toolchain
-        uses: dtolnay/rust-toolchain@stable
+        uses: dtolnay/rust-toolchain@2c7215f132e9ebf062739d9130488b56d53c060c
         with:
           toolchain: 1.88
           targets: ${{ matrix.target }}
 
-      - uses: Swatinem/rust-cache@v2
+      - uses: Swatinem/rust-cache@72d126e709cad40056a62344eee609d696d62d33
         with:
           key: desktop-${{ matrix.target }}-${{ matrix.ext }}
 
@@ -275,10 +282,10 @@ jobs:
             librsvg2-dev libssl-dev libxdo-dev patchelf
 
       - name: Setup Node + pnpm
-        uses: actions/setup-node@v5
+        uses: actions/setup-node@e51e5fe84fc33b4c73ebe40526b2694712b5b858
         with:
           node-version: 24
-      - uses: pnpm/action-setup@v6
+      - uses: pnpm/action-setup@ff378ebe6b225b0680b81c1ad4498ae0d1d3a5e3
         with:
           version: 10
 
@@ -365,7 +372,7 @@ jobs:
       # releaseDraft:true only creates if missing — the draft from
       # create-release already exists, so this just uploads into it.
       - name: Build & upload Tauri bundle
-        uses: tauri-apps/tauri-action@v0
+        uses: tauri-apps/tauri-action@84b9d35b5fc46c1e45415bdb6144030364f7ebc5
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           # AppImage leg: linuxdeploy is itself an AppImage — extract-and-run
@@ -440,10 +447,10 @@ jobs:
             os: windows-latest
             artifact: shannon-gateway-windows-x64.exe
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8
 
       - name: Setup Bun
-        uses: oven-sh/setup-bun@v2
+        uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6
         with:
           bun-version: latest
 
@@ -482,7 +489,7 @@ jobs:
           ARTIFACT: ${{ matrix.artifact }}
 
       - name: Upload gateway binary to release
-        uses: softprops/action-gh-release@v2
+        uses: softprops/action-gh-release@3bb12739c298aeb8a4eeaf626c5b8d85266b0e65
         with:
           tag_name: ${{ github.ref_name }}
           draft: true
@@ -505,7 +512,7 @@ jobs:
     env:
       GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8
 
       - name: Download all release assets
         shell: bash

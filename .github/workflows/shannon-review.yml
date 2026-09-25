@@ -4,23 +4,31 @@ on:
   pull_request:
     types: [opened, synchronize]
 
+# The paid-model review is expensive (40-min release build per push) — run
+# once per PR head, supersede superseded pushes.
+concurrency:
+  group: shannon-review-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
   review:
     runs-on: ubuntu-latest
     timeout-minutes: 40
     permissions:
+      # Output goes to the artifact below; the review bot never comments.
       contents: read
-      pull-requests: write
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@f548e57e544e1ff5a4c46bf1e1b8685f8e4a348a
         with:
           fetch-depth: 0
 
       - name: Install Rust toolchain
-        uses: dtolnay/rust-toolchain@stable
+        uses: dtolnay/rust-toolchain@2c7215f132e9ebf062739d9130488b56d53c060c
+        with:
+          toolchain: "1.88"
 
       - name: Cache cargo registry
-        uses: actions/cache@v4
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830
         with:
           path: |
             ~/.cargo/registry
@@ -46,7 +54,7 @@ jobs:
 
       - name: Upload review output
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
         with:
           name: review-output
           path: review-output.jsonl
