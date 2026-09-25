@@ -66,7 +66,9 @@ pub fn audit_wire_and_log(wire: &serde_json::Value) -> usize {
 /// The engine drives these at the outgoing-send boundary and the tool
 /// execution boundary. Both are no-ops until a plugin is installed via
 /// [`set_context_transform`].
-use shannon_engine::api::types::{ContentBlock, Message, MessageContent, ToolResultContent};
+use shannon_engine::api::types::{
+    ContentBlock, Message, MessageContent, SystemContentBlock, ToolDefinition, ToolResultContent,
+};
 use shannon_plugin_api::{IngestBlock, IngestSource, RestoreAction};
 
 fn ingest_source_for_role(role: &str) -> IngestSource {
@@ -141,20 +143,99 @@ pub fn transform_outgoing_messages(messages: Vec<Message>) -> Vec<Message> {
         .collect()
 }
 
+/// Wiring point 1b (send boundary, injected-context face): transform the
+/// structured system blocks so injected content — CLAUDE.md / AGENTS.md,
+/// repo map, memory injection, the base prompt — redacts like conversation
+/// content. The blocks carry the stable cached prefix; the deterministic
+/// (I1) transform keeps that prefix byte-stable across turns, so provider
+/// prompt caching is unaffected.
+pub fn transform_system_blocks(blocks: &mut [SystemContentBlock]) {
+    let Some(t) = context_transform() else {
+        return;
+    };
+    for block in blocks.iter_mut() {
+        transform_text(
+            t.as_ref(),
+            IngestSource::InjectedContext { path: None },
+            &mut block.text,
+        );
+    }
+}
+
+/// The plain-string system prompt used by providers without structured
+/// blocks — same injected-context face as [`transform_system_blocks`].
+pub fn transform_system_prompt_text(text: &mut String) {
+    let Some(t) = context_transform() else {
+        return;
+    };
+    transform_text(
+        t.as_ref(),
+        IngestSource::InjectedContext { path: None },
+        text,
+    );
+}
+
+/// Wiring point 1c (send boundary, tool-schema face): tool DESCRIPTIONS
+/// redact like other outbound text (they are free-form prose and may quote
+/// config examples). Names and `input_schema` stay verbatim on purpose —
+/// the model must reproduce tool names and parameter shapes exactly for
+/// calls to parse, so rewriting them would break every invocation.
+pub fn transform_tool_definitions(defs: &mut [ToolDefinition]) {
+    let Some(t) = context_transform() else {
+        return;
+    };
+    for def in defs.iter_mut() {
+        transform_text(t.as_ref(), IngestSource::Other, &mut def.description);
+    }
+}
+
+/// Rebuild the surrogate registry from raw conversation history the host
+/// restored into the engine (session resume across processes). The
+/// derivation is deterministic, so re-detecting over the restored raw text
+/// re-registers identical surrogate→secret mappings — no persistent secret
+/// store is needed. Redact mode only: audit mode keeps no registry.
+pub fn rebuild_registry_from_history(messages: &[Message]) {
+    let Some(t) = context_transform() else {
+        return;
+    };
+    for message in messages {
+        let source = ingest_source_for_role(&message.role);
+        match &message.content {
+            MessageContent::Text(text) => {
+                let mut block = IngestBlock {
+                    source,
+                    text: text.clone(),
+                };
+                let _ = t.transform_ingest(&mut block);
+            }
+            MessageContent::Blocks(blocks) => {
+                let mut blocks = blocks.clone();
+                transform_content_blocks(t.as_ref(), source, &mut blocks);
+            }
+        }
+    }
+}
+
 /// Wiring point 2 (tool execution boundary): the model echoes surrogates
 /// into tool arguments; restore real values here, on the execution face
 /// only. Never persist the restored input back into conversation history.
 /// `Err(reason)` means the plugin failed under `FailMode::Closed` — the
 /// caller must refuse execution with a tool-level error.
+///
+/// On success the returned [`RestoreStats`] carries `unresolved` — tokens
+/// the model echoed that have no registry mapping (possible F3/F4, e.g.
+/// after a restart whose store could not be rebuilt). The host must
+/// surface those to the user on the tool-output face instead of silently
+/// shipping a broken artifact.
 pub fn restore_tool_args_for_execution(
     tool: &str,
     input: &mut serde_json::Value,
-) -> Result<(), String> {
+) -> Result<RestoreStats, String> {
     let Some(t) = context_transform() else {
-        return Ok(());
+        return Ok(RestoreStats::default());
     };
     match t.restore_tool_args(tool, input) {
-        RestoreAction::Unchanged => Ok(()),
+        RestoreAction::Unchanged => Ok(RestoreStats::default()),
         RestoreAction::Restored(stats) => {
             for token in &stats.unresolved {
                 tracing::warn!(
@@ -164,7 +245,7 @@ pub fn restore_tool_args_for_execution(
                     "unresolved placeholder in tool arguments (possible F3/F4); passing through to execution"
                 );
             }
-            Ok(())
+            Ok(stats)
         }
         RestoreAction::Failed { reason } => Err(reason),
     }
@@ -263,8 +344,16 @@ impl DisplayRestorer {
 /// implementation (gitleaks corpus); this built-in keeps the default
 /// install dependency-free. Enablement is process-wide and one-shot.
 use hmac::Mac as _;
+use once_cell::sync::Lazy;
+use regex::Regex;
 use sha2::Digest as _;
 use shannon_plugin_api::{AuditFinding, RestoreStats, TransformAction};
+
+/// Surrogate-shaped token left after restore — the model echoed a
+/// placeholder whose mapping is unknown (F3/F4). Base32 body (A-Z, 2-7),
+/// 20 chars total.
+static UNRESOLVED_SG1: Lazy<Regex> =
+    Lazy::new(|| Regex::new(r"\bSG1:[A-Z2-7]{16}\b").expect("unresolved-surrogate regex compiles"));
 
 /// Outbound policy for the built-in guard.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -391,12 +480,9 @@ impl HostSecretGuard {
     }
 
     fn restore_text(&self, text: &mut String) -> RestoreAction {
-        let mut pairs = self.store.pairs();
-        if pairs.is_empty() {
-            return RestoreAction::Unchanged;
-        }
-        pairs.sort_by_key(|(k, _)| std::cmp::Reverse(k.len()));
         let mut replaced = 0usize;
+        let mut pairs = self.store.pairs();
+        pairs.sort_by_key(|(k, _)| std::cmp::Reverse(k.len()));
         for (token, real) in &pairs {
             let hits = text.matches(token.as_str()).count();
             if hits > 0 {
@@ -404,7 +490,15 @@ impl HostSecretGuard {
                 replaced += hits;
             }
         }
-        if replaced == 0 {
+        // Contract F3/F4, display face: a surrogate token with no registry
+        // mapping must be visibly marked rather than shipped as if it were
+        // real data. Display copy only — history keeps the bare token (I2).
+        let marked = UNRESOLVED_SG1
+            .replace_all(text.as_str(), "[secret-guard: unresolved placeholder $0]")
+            .into_owned();
+        let marked_any = marked != *text;
+        *text = marked;
+        if replaced == 0 && !marked_any {
             RestoreAction::Unchanged
         } else {
             RestoreAction::Restored(RestoreStats {
@@ -478,6 +572,9 @@ fn walk_restore(v: &mut serde_json::Value, pairs: &[(String, String)], stats: &m
                     *s = s.replace(token.as_str(), real);
                     stats.replaced += 1;
                 }
+            }
+            for m in UNRESOLVED_SG1.find_iter(s) {
+                stats.unresolved.push(m.as_str().to_string());
             }
         }
         serde_json::Value::Array(a) => a.iter_mut().for_each(|x| walk_restore(x, pairs, stats)),
@@ -564,11 +661,18 @@ fn mode_from_env() -> Option<SecretGuardMode> {
         .and_then(|v| SecretGuardMode::parse(&v))
 }
 
-/// Install the built-in guard when `$SHANNON_SECRET_GUARD` requests it.
-/// One-shot per process (subsequent calls are cheap no-ops). Returns the
-/// active mode when installed (or previously installed).
-pub fn init_from_env() -> Option<SecretGuardMode> {
-    let mode = mode_from_env()?;
+/// Enablement precedence: a PRESENT env var decides whatever it says
+/// (`audit`/`redact` enable; anything else — including `"off"` — is an
+/// explicit opt-out that beats config); only when it is absent does the
+/// config section's mode apply.
+fn resolve_mode(env_raw: Option<&str>, section_mode: Option<&str>) -> Option<SecretGuardMode> {
+    match env_raw {
+        Some(raw) => SecretGuardMode::parse(raw),
+        None => section_mode.and_then(SecretGuardMode::parse),
+    }
+}
+
+fn install_mode(mode: SecretGuardMode) -> Option<SecretGuardMode> {
     if let Some(existing) = ENABLED.get() {
         return Some(*existing);
     }
@@ -583,24 +687,41 @@ pub fn init_from_env() -> Option<SecretGuardMode> {
     Some(mode)
 }
 
+/// Resolve from the given `[secret_guard]` section only (env ignored) and
+/// install. Kept as a public compat surface — prefer
+/// [`init_from_env_or_config`], which applies the documented env > config
+/// precedence and is what the engine calls.
 pub fn init_from_config(
     cfg: Option<&crate::unified_config::SecretGuardSection>,
 ) -> Option<SecretGuardMode> {
-    let mode = cfg
-        .and_then(|c| c.mode.as_deref())
-        .and_then(SecretGuardMode::parse)?;
     if let Some(existing) = ENABLED.get() {
         return Some(*existing);
     }
-    let key = load_or_create_key(&shannon_home())?;
-    let exact = crate::session_log::redaction::global_policy()
-        .exact_values()
-        .to_vec();
-    let guard = HostSecretGuard::new(key, exact, mode == SecretGuardMode::Redact);
-    set_context_transform(Some(std::sync::Arc::new(guard)));
-    let _ = ENABLED.set(mode);
-    tracing::info!(target: "shannon::secret_guard", ?mode, "secret-guard enabled (built-in transform)");
-    Some(mode)
+    let mode = cfg
+        .and_then(|c| c.mode.as_deref())
+        .and_then(SecretGuardMode::parse)?;
+    install_mode(mode)
+}
+
+/// Install the built-in guard when `$SHANNON_SECRET_GUARD` requests it.
+/// One-shot per process (subsequent calls are cheap no-ops). Returns the
+/// active mode when installed (or previously installed).
+pub fn init_from_env() -> Option<SecretGuardMode> {
+    let mode = mode_from_env()?;
+    install_mode(mode)
+}
+
+/// Resolve enablement from env first, config section second, then install
+/// (one-shot per process). Called from the engine's query entry so every
+/// host (CLI / desktop / server) picks up `[secret_guard]` automatically.
+pub fn init_from_env_or_config() -> Option<SecretGuardMode> {
+    if let Some(existing) = ENABLED.get() {
+        return Some(*existing);
+    }
+    let env_raw = std::env::var("SHANNON_SECRET_GUARD").ok();
+    let section_mode = crate::unified_config::SecretGuardSection::load().mode;
+    let mode = resolve_mode(env_raw.as_deref(), section_mode.as_deref())?;
+    install_mode(mode)
 }
 
 #[cfg(test)]
@@ -964,6 +1085,72 @@ mod tests {
         std::fs::remove_dir_all(home).ok();
     }
 
+    /// Perf + I1 at conversation scale: a multi-message history with
+    /// scattered secrets must re-transform byte-identically on every turn
+    /// (provider prompt caches key on the byte-exact prefix) and stay far
+    /// inside the soft latency budget per send.
+    #[test]
+    fn full_history_retransform_is_byte_stable_and_within_budget() {
+        let guard = HostSecretGuard::new(b"master-key-0123456789abcdef".to_vec(), vec![], true);
+        let line = "const padding_line = compute(padding_arg); // ordinary code\n";
+        let secrets = [
+            "ghp_ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghij",
+            "sk-proj-abcdefghijklmnop123456",
+        ];
+        let raw_messages: Vec<String> = (0..200)
+            .map(|i| {
+                let mut text = String::with_capacity(8 * 1024);
+                while text.len() < 8 * 1024 {
+                    text.push_str(line);
+                    if (text.len() / line.len()) % 32 == 0 {
+                        text.push_str(secrets[i % secrets.len()]);
+                        text.push('\n');
+                    }
+                }
+                format!("{i}: {text}")
+            })
+            .collect();
+
+        let transform_all = |raw: &[String]| -> (Vec<String>, std::time::Duration) {
+            let mut blocks: Vec<shannon_plugin_api::IngestBlock> = raw
+                .iter()
+                .map(|text| shannon_plugin_api::IngestBlock {
+                    source: IngestSource::ToolResult {
+                        tool: "Read".to_string(),
+                    },
+                    text: text.clone(),
+                })
+                .collect();
+            let start = std::time::Instant::now();
+            for block in &mut blocks {
+                let _ = ContextTransform::transform_ingest(&guard, block);
+            }
+            let texts = blocks.into_iter().map(|b| b.text).collect();
+            (texts, start.elapsed())
+        };
+
+        let (first_pass, first_elapsed) = transform_all(&raw_messages);
+        assert!(
+            first_elapsed.as_secs() < 2,
+            "1.6 MB history transform took {first_elapsed:?}"
+        );
+        assert!(
+            first_pass.iter().all(|t| t.contains("SG1:")),
+            "secrets must be surrogate-form"
+        );
+
+        // Turns 2 and 3: raw history re-transforms byte-identically — the
+        // prompt-cache stability contract (I1) at full-history scale.
+        for turn in 2..=3 {
+            let (pass, elapsed) = transform_all(&raw_messages);
+            assert_eq!(
+                pass, first_pass,
+                "turn {turn} output diverged from turn 1 (cache-breaking)"
+            );
+            assert!(elapsed.as_secs() < 2, "turn {turn} took {elapsed:?}");
+        }
+    }
+
     #[test]
     fn audit_noops_without_plugin_then_reports_findings() {
         let _g = global_lock();
@@ -1189,5 +1376,220 @@ mod tests {
         let flushed = r.finish();
         assert_eq!(emitted, "wait ", "a partial SG1: lead must be held back");
         assert_eq!(flushed, "SG", "finish must flush the held tail");
+    }
+
+    // ---- T4: enablement precedence (env > config) --------------------------
+    //
+    // An env var that is PRESENT decides, whatever it says ("off"/junk =
+    // explicit opt-out); only when it is absent does the config section
+    // apply. Lock this as a pure function — the real init is one-shot per
+    // process and cannot be unit-tested here.
+
+    #[test]
+    fn resolve_mode_env_overrides_config() {
+        let cfg = Some("redact");
+        assert_eq!(
+            resolve_mode(Some("audit"), cfg),
+            Some(SecretGuardMode::Audit)
+        );
+        // Explicit opt-out beats config.
+        assert_eq!(resolve_mode(Some("off"), cfg), None);
+        assert_eq!(resolve_mode(Some(""), cfg), None);
+        // Config applies only when the env var is absent.
+        assert_eq!(resolve_mode(None, cfg), Some(SecretGuardMode::Redact));
+        assert_eq!(
+            resolve_mode(None, Some("audit")),
+            Some(SecretGuardMode::Audit)
+        );
+        assert_eq!(resolve_mode(None, None), None);
+        assert_eq!(resolve_mode(None, Some("bogus")), None);
+    }
+
+    // ---- T3: registry rebuild from restored raw history --------------------
+    //
+    // The derivation is deterministic, so a restart can rebuild the
+    // surrogate registry by re-detecting over the raw history the host
+    // restores into the engine — no persistent secret store needed.
+
+    #[derive(Default)]
+    struct RebuildStore(std::sync::Mutex<Vec<(String, String)>>);
+    impl shannon_plugin_api::SurrogateStore for RebuildStore {
+        fn register(&self, surrogate: &str, secret: &str) {
+            self.0
+                .lock()
+                .unwrap()
+                .push((surrogate.to_string(), secret.to_string()));
+        }
+        fn pairs(&self) -> Vec<(String, String)> {
+            self.0.lock().unwrap().clone()
+        }
+        fn len(&self) -> usize {
+            self.0.lock().unwrap().len()
+        }
+    }
+
+    #[test]
+    fn rebuild_registry_from_history_registers_deterministic_mappings() {
+        use shannon_plugin_api::SurrogateStore as _;
+        let _g = global_lock();
+        let store = std::sync::Arc::new(RebuildStore::default());
+        let guard = HostSecretGuard::with_store(
+            b"master-key-0123456789abcdef".to_vec(),
+            vec![],
+            true,
+            store.clone(),
+        );
+        set_context_transform(Some(Arc::new(guard)));
+        rebuild_registry_from_history(&[Message {
+            role: "user".to_string(),
+            content: MessageContent::Text("k=ghp_ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghij".to_string()),
+        }]);
+        set_context_transform(None);
+
+        let pairs = store.pairs();
+        assert_eq!(pairs.len(), 1, "rebuild must register the detected secret");
+        assert!(pairs[0].0.starts_with("SG1:"), "surrogate form: {pairs:?}");
+        assert!(
+            pairs[0].1.contains("ghp_ABC"),
+            "real value mapped: {pairs:?}"
+        );
+    }
+
+    #[test]
+    fn rebuild_registry_without_transform_is_noop() {
+        let _g = global_lock();
+        set_context_transform(None);
+        // Must not panic; nothing to observe without a transform.
+        rebuild_registry_from_history(&[Message {
+            role: "user".to_string(),
+            content: MessageContent::Text("k=ghp_ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghij".to_string()),
+        }]);
+    }
+
+    // ---- T1: injected context (system blocks) transforms like content -----
+
+    #[test]
+    fn transform_system_blocks_redacts_texts_and_keeps_structure() {
+        let _g = global_lock();
+        let (guard, _token, secret) = split_guard();
+        set_context_transform(Some(Arc::new(guard)));
+        let mut blocks = vec![SystemContentBlock {
+            block_type: "text".to_string(),
+            text: format!("cfg {secret}"),
+            cache_control: None,
+        }];
+        transform_system_blocks(&mut blocks);
+        set_context_transform(None);
+        assert!(
+            !blocks[0].text.contains(secret),
+            "injected text must redact: {}",
+            blocks[0].text
+        );
+        assert!(blocks[0].text.contains("SG1:"));
+        assert_eq!(blocks[0].block_type, "text", "structure preserved");
+    }
+
+    // ---- T6a: tool descriptions redact; schemas stay verbatim --------------
+
+    #[test]
+    fn transform_tool_definitions_redacts_descriptions_only() {
+        let _g = global_lock();
+        let (guard, _token, secret) = split_guard();
+        set_context_transform(Some(Arc::new(guard)));
+        let mut defs = vec![ToolDefinition {
+            name: "Read".to_string(),
+            description: format!("reads files, e.g. {secret}"),
+            input_schema: serde_json::json!({
+                "type": "object",
+                "description": format!("schema doc {secret}"),
+                "properties": {}
+            }),
+            cache_control: None,
+            strict: None,
+        }];
+        transform_tool_definitions(&mut defs);
+        set_context_transform(None);
+        assert!(
+            !defs[0].description.contains(secret),
+            "description must redact: {}",
+            defs[0].description
+        );
+        assert!(defs[0].description.contains("SG1:"));
+        assert!(
+            defs[0].input_schema.to_string().contains(secret),
+            "input_schema must stay verbatim (call-compat surface)"
+        );
+        assert_eq!(defs[0].name, "Read", "names stay verbatim");
+    }
+
+    // ---- T2: unresolved placeholders must be surfaced, not silent ----------
+
+    const UNMAPPED_TOKEN: &str = "SG1:BBBBBBBBBBBBBBBB";
+
+    #[test]
+    fn restore_tool_args_reports_unresolved_tokens() {
+        let _g = global_lock();
+        let (guard, token, secret) = split_guard();
+        set_context_transform(Some(Arc::new(guard)));
+        let mut args = json!({
+            "file_path": "/app/.env",
+            "content": format!("{token} and {UNMAPPED_TOKEN}"),
+        });
+        let stats =
+            restore_tool_args_for_execution("Write", &mut args).expect("restore must succeed");
+        set_context_transform(None);
+
+        assert_eq!(stats.replaced, 1, "the mapped token restores");
+        assert_eq!(
+            stats.unresolved,
+            vec![UNMAPPED_TOKEN.to_string()],
+            "the unmapped token must be reported"
+        );
+        let content = args["content"].as_str().unwrap();
+        assert!(content.contains(secret), "mapped value restored: {content}");
+        assert!(
+            content.contains(UNMAPPED_TOKEN),
+            "unmapped token passes through verbatim: {content}"
+        );
+    }
+
+    #[test]
+    fn unmapped_token_is_marked_on_display_face() {
+        let _g = global_lock();
+        // Empty store (e.g. right after a restart): the token cannot map, so
+        // the display copy must visibly mark it instead of shipping it as if
+        // it were real data.
+        let guard = HostSecretGuard::new(b"master-key-0123456789abcdef".to_vec(), vec![], true);
+        set_context_transform(Some(Arc::new(guard)));
+        let mut display = format!("value {UNMAPPED_TOKEN} end");
+        restore_display_for_output(&mut display);
+        set_context_transform(None);
+        assert!(
+            display.contains("[secret-guard: unresolved placeholder SG1:BBBBBBBBBBBBBBBB]"),
+            "unmapped token must be visibly marked: {display}"
+        );
+        assert_eq!(
+            display, "value [secret-guard: unresolved placeholder SG1:BBBBBBBBBBBBBBBB] end",
+            "marker wraps the token; surrounding text untouched"
+        );
+    }
+
+    #[test]
+    fn mapped_token_display_restore_carries_no_marker() {
+        let _g = global_lock();
+        let (guard, token, secret) = split_guard();
+        set_context_transform(Some(Arc::new(guard)));
+        let mut display = format!("see {token}");
+        restore_display_for_output(&mut display);
+        set_context_transform(None);
+        assert_eq!(
+            display,
+            format!("see {secret}"),
+            "mapped token restores clean"
+        );
+        assert!(
+            !display.contains("unresolved"),
+            "no marker for mapped tokens"
+        );
     }
 }
