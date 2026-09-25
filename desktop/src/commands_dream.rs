@@ -30,6 +30,14 @@
 //!   human-readable run report (counts only — no original text ever reaches
 //!   the report).
 //!
+//! ## Privacy boundary of `redact`
+//!
+//! Only *session excerpts* pass through `redact`. Stored memory entry
+//! content goes into the consult prompt verbatim — it already left the
+//! machine once, to the same configured provider that produced it — and the
+//! report carries counts only, so no `redact`-masked or raw text appears
+//! there either way.
+//!
 //! ## Orchestration
 //!
 //! `execute_dream_pass` is the single entry point shared by the manual
@@ -77,14 +85,19 @@ pub const DREAM_MAX_DAYS_BACK: u32 = 30;
 /// state-file timestamp check and the process-wide consolidation lock.
 pub const DREAM_MIN_INTERVAL: Duration = Duration::hours(6);
 /// Total character budget for the LLM user prompt (memories + excerpts).
-/// Session excerpts are truncated first to keep every memory id visible.
+/// The memory list is laid out first and is never cut (every entry id must
+/// stay referenceable), so the session-excerpt block gets whatever budget
+/// remains — a memory store large enough to saturate that remainder squeezes
+/// session excerpts out entirely (a `tracing::warn!` fires when that
+/// happens; see `build_dream_prompt`).
 pub const DREAM_PROMPT_CHAR_BUDGET: usize = 24_000;
 /// `source_kind` stamped on memory entries materialized from an applied
 /// dream proposal (P2-4 provenance, plain String value — no schema break).
 pub const DREAM_SOURCE_KIND: &str = "dream";
 /// Tauri event pushed when a dream pass completes (payload = the
 /// [`DreamPassResult`] JSON). Mirrors the `skill-candidates-changed` push
-/// pattern; Header badge and the Memory panel refresh on it.
+/// pattern; today only the Memory panel's `DreamPanel` listens (it refreshes
+/// the review list and the last-run stats line).
 pub const DREAM_PASS_FINISHED_EVENT: &str = "dream-pass-finished";
 /// Marker counted to approximate how many values [`redact`] masked during a
 /// pass (excerpt texts carry the mask inline).
@@ -809,6 +822,22 @@ fn clamp_days_back(days_back: u32) -> u32 {
     days_back.min(DREAM_MAX_DAYS_BACK)
 }
 
+/// Privacy-gate predicate for the dream pass: `Some("disabled")` when the
+/// pass must not read anything — either the L2 master switch
+/// (`dream_enabled`, default off) or the privacy main switch this whole
+/// feature hangs under (`skill_detection_enabled`) is off — and `None` when
+/// it may proceed to the throttle/single-flight rungs. Pure so the spec
+/// §8.6 promise ("switches all off → the pass returns 0 and touches no
+/// session file") is pinned by a unit test without a live AppHandle; the
+/// `execute_dream_pass_in` gate tests cover the no-disk-read half.
+fn dream_skip_reason(cfg: &crate::config::DesktopConfig) -> Option<&'static str> {
+    if !cfg.dream_enabled || !cfg.skill_detection_enabled {
+        Some("disabled")
+    } else {
+        None
+    }
+}
+
 /// Skip reason when [`ConsolidationLock::try_acquire`] refused: a held guard
 /// means a pass is genuinely running (`"in-progress"`); an idle lock means
 /// only the 6h min interval blocked the attempt (`"throttled"`) — e.g. a
@@ -851,14 +880,18 @@ fn memory_list_lines(entries: &[MemoryEntry]) -> String {
 
 /// Render excerpts into `### Session` sections, stopping (or cutting the last
 /// section) once `max_chars` is reached. Redaction already happened inside
-/// [`session_excerpt`]; this only sizes the block.
-fn render_excerpt_block(excerpts: &[SessionExcerpt], max_chars: usize) -> String {
+/// [`session_excerpt`]; this only sizes the block. Returns the rendered block
+/// plus how many excerpts made it in whole or in part, so the caller can
+/// warn when the budget squeezed sessions out of the prompt.
+fn render_excerpt_block(excerpts: &[SessionExcerpt], max_chars: usize) -> (String, usize) {
     let mut out = String::new();
+    let mut included = 0usize;
     for excerpt in excerpts {
         let used = out.chars().count();
         if used >= max_chars {
             break;
         }
+        included += 1;
         let mut section = format!("### Session {}\n", excerpt.session_id);
         if !excerpt.tool_names.is_empty() {
             section.push_str(&format!("Tools: {}\n", excerpt.tool_names.join(", ")));
@@ -874,7 +907,7 @@ fn render_excerpt_block(excerpts: &[SessionExcerpt], max_chars: usize) -> String
         }
         out.push_str(&section);
     }
-    out
+    (out, included)
 }
 
 /// Build the dream consult prompt for one project: system = consolidation
@@ -918,11 +951,23 @@ pub(crate) fn build_dream_prompt(
     let excerpt_header = "\n## Recent Session Excerpts (redacted)\n\n";
     let remaining = DREAM_PROMPT_CHAR_BUDGET
         .saturating_sub(mem_section.chars().count() + excerpt_header.chars().count());
-    let excerpt_body = if excerpts.is_empty() {
-        "(no recent sessions in the scan window)\n".to_string()
+    let (excerpt_body, included) = if excerpts.is_empty() {
+        ("(no recent sessions in the scan window)\n".to_string(), 0)
     } else {
         render_excerpt_block(excerpts, remaining)
     };
+    if included < excerpts.len() {
+        // Review finding #7: the memory section is unbounded, so a very
+        // large store can saturate the budget and silently drop session
+        // excerpts. Never fatal — but never silent either.
+        tracing::warn!(
+            memories_chars = mem_section.chars().count(),
+            budget = DREAM_PROMPT_CHAR_BUDGET,
+            included,
+            total_excerpts = excerpts.len(),
+            "dream: prompt budget squeezed session excerpts out of the consult prompt"
+        );
+    }
 
     let user = format!("{mem_section}{excerpt_header}{excerpt_body}");
     (system, user)
@@ -1309,26 +1354,46 @@ pub(crate) async fn execute_dream_pass(
     app: tauri::AppHandle,
     days_back: u32,
 ) -> Result<DreamPassResult, String> {
+    // The on-disk config is re-read per pass so a Settings toggle takes
+    // effect without a restart; the real dirs resolve exactly where they
+    // always did. Everything below runs against the injected `_in` seam.
+    let cfg = crate::config::load_config();
+    let dreams = dreams_dir()?;
+    let desktop = crate::commands_skill_candidates::desktop_dir()?;
+    execute_dream_pass_in(&app, days_back, &cfg, &dreams, &desktop).await
+}
+
+/// [`execute_dream_pass`] against an injected config + dreams/desktop
+/// directories — the `_in` seam that makes the gate ladder testable without
+/// touching `$HOME` or the on-disk config (`cfg` is a parameter, and the
+/// skipped rungs below return before the sessions dir is even resolved).
+/// The process-wide consolidation lock is still shared, deliberately: the
+/// gate tests hold it to exercise the `"in-progress"` rung end-to-end.
+pub(crate) async fn execute_dream_pass_in<R: tauri::Runtime>(
+    app: &tauri::AppHandle<R>,
+    days_back: u32,
+    cfg: &crate::config::DesktopConfig,
+    dreams: &Path,
+    desktop: &Path,
+) -> Result<DreamPassResult, String> {
     // Session window is capped centrally so every entry point is covered.
     let days_back = clamp_days_back(days_back);
 
     // 1. Expire stale proposals first — dreams dir only, always safe.
-    let dreams = dreams_dir()?;
-    self_heal_expired_proposals_in(&dreams, DREAM_PROPOSAL_MAX_AGE_DAYS);
+    self_heal_expired_proposals_in(dreams, DREAM_PROPOSAL_MAX_AGE_DAYS);
 
     // 2. Privacy gates. `dream_enabled` is the L2 master switch (default
     // off); `skill_detection_enabled` is the privacy main switch this whole
-    // feature hangs under. Either off → skip without reading anything.
-    let cfg = crate::config::load_config();
-    if !cfg.dream_enabled || !cfg.skill_detection_enabled {
-        return Ok(DreamPassResult::skipped("disabled"));
+    // feature hangs under. Either off → skip without reading anything
+    // (nothing below this line has been touched — no state file, no lock).
+    if let Some(reason) = dream_skip_reason(cfg) {
+        return Ok(DreamPassResult::skipped(reason));
     }
 
     // 3. Throttle: the state-file timestamp first (cheap), then the
     // in-process lock (single flight + its own 6h min interval). The guard
     // is held for the rest of the pass.
-    let desktop = crate::commands_skill_candidates::desktop_dir()?;
-    if is_state_throttled(read_state_in(&desktop).last_dream_at.as_deref(), Utc::now()) {
+    if is_state_throttled(read_state_in(desktop).last_dream_at.as_deref(), Utc::now()) {
         return Ok(DreamPassResult::skipped("throttled"));
     }
     let Some(_lock_guard) = dream_lock().try_acquire() else {
@@ -1372,7 +1437,7 @@ pub(crate) async fn execute_dream_pass(
     };
     let refine = {
         let state_ref = state.inner();
-        let desktop = desktop.clone();
+        let desktop = desktop.to_path_buf();
         move |candidate: crate::commands_skill_candidates::SkillCandidate| {
             let desktop = desktop.clone();
             async move {
@@ -1408,27 +1473,39 @@ pub(crate) async fn execute_dream_pass(
         days_back,
         &state.memory_store,
         &sessions_dir,
-        &dreams,
+        dreams,
         client_config,
         consult_llm,
         detect,
         refine,
     )
-    .await?;
+    .await
+    .inspect_err(|_| {
+        // Review finding #4: a failed pass must not disappear silently into
+        // the throttle. `ConsolidationGuard::drop` stamps the 6h interval on
+        // the way out (shannon-core is not modified for this), so every
+        // retry within that window reports "throttled" — until the app
+        // restarts or the interval elapses. Surface it in the logs next to
+        // the transport error itself.
+        tracing::warn!(
+            "dream pass failed: the consolidation lock stamps its 6h interval on drop, \
+             so retries within that window report \"throttled\" until it elapses"
+        );
+    })?;
 
     // 7. Products. The detection-state file is shared with other features:
     // re-read immediately before writing and touch only the two dream-owned
     // fields (see the module doc for the ownership contract).
-    let mut shared_state = read_state_in(&desktop);
+    let mut shared_state = read_state_in(desktop);
     shared_state.last_dream_at = Some(Utc::now().to_rfc3339());
     shared_state.last_stats =
         Some(serde_json::to_value(&outcome.stats).map_err(|e| format!("serialize stats: {e}"))?);
-    write_state_in(&desktop, &shared_state)?;
+    write_state_in(desktop, &shared_state)?;
 
     // Inbox card (day-deduped) and push event, both best-effort.
     crate::inbox_session_events::record_dream_report(
         state.inbox_store().as_ref(),
-        &app,
+        app,
         &outcome.result,
         &outcome.report_ts,
     );
@@ -1479,7 +1556,7 @@ pub(crate) fn is_state_due(last_dream_at: Option<&str>, now: DateTime<Utc>) -> b
 pub(crate) async fn maybe_night_dream(app: &tauri::AppHandle) {
     use chrono::Timelike;
     let cfg = crate::config::load_config();
-    if !cfg.dream_enabled || !cfg.skill_detection_enabled {
+    if dream_skip_reason(&cfg).is_some() {
         return;
     }
     if !is_night_hour(chrono::Local::now().hour()) {
@@ -2155,6 +2232,56 @@ mod tests {
         );
     }
 
+    #[test]
+    fn dream_prompt_includes_every_excerpt_within_budget() {
+        let entries = vec![dream_entry("/work/app", "small store", 0.9)];
+        let excerpts: Vec<SessionExcerpt> = (0..3)
+            .map(|i| SessionExcerpt {
+                session_id: format!("sess-{i}"),
+                user_texts: vec![format!("text {i}")],
+                tool_names: vec![],
+            })
+            .collect();
+        let (_system, user) = build_dream_prompt("/work/app", &entries, &excerpts);
+        for i in 0..3 {
+            assert!(
+                user.contains(&format!("### Session sess-{i}")),
+                "excerpt {i} must survive a comfortable budget: {user}"
+            );
+        }
+    }
+
+    #[test]
+    fn dream_prompt_squeezes_excerpts_out_when_memories_saturate_the_budget() {
+        // Finding #7: the memory section is laid out first and never cut, so
+        // a huge store consumes the whole budget — the excerpts are dropped
+        // (a `tracing::warn!` now fires at the call site) while every memory
+        // id stays referenceable.
+        let huge = dream_entry(
+            "/work/app",
+            &"x".repeat(DREAM_PROMPT_CHAR_BUDGET + 1_000),
+            0.9,
+        );
+        let huge_id = huge.id.clone();
+        let excerpts = vec![SessionExcerpt {
+            session_id: "sess-squeezed".into(),
+            user_texts: vec!["should not appear".into()],
+            tool_names: vec![],
+        }];
+        let (_system, user) = build_dream_prompt("/work/app", &[huge], &excerpts);
+        assert!(
+            user.contains(&huge_id),
+            "memory ids are never dropped: {}",
+            user.chars().count()
+        );
+        assert!(
+            !user.contains("### Session"),
+            "saturated budget squeezes the excerpt block out entirely: {}",
+            user.chars().count()
+        );
+        assert!(!user.contains("should not appear"));
+    }
+
     // ------------------------------------------------------------------
     // LLM output → proposal
     // ------------------------------------------------------------------
@@ -2313,6 +2440,134 @@ mod tests {
             lock.try_acquire().is_none(),
             "6h min interval still blocks the retry"
         );
+    }
+
+    // ------------------------------------------------------------------
+    // Privacy gate + full gate ladder (execute_dream_pass_in)
+    // ------------------------------------------------------------------
+
+    /// Desktop config with the three dream switches set explicitly.
+    fn dream_cfg(
+        dream_enabled: bool,
+        skill_detection_enabled: bool,
+    ) -> crate::config::DesktopConfig {
+        crate::config::DesktopConfig {
+            dream_enabled,
+            skill_detection_enabled,
+            dream_skill_distill_enabled: false,
+            ..Default::default()
+        }
+    }
+
+    /// Mock-runtime handle for the gate tests: the skipped rungs return
+    /// before the handle is ever used, so no `AppState` needs managing.
+    fn mock_handle() -> tauri::AppHandle<tauri::test::MockRuntime> {
+        tauri::test::mock_app().handle().clone()
+    }
+
+    #[test]
+    fn dream_skip_reason_gates_on_either_switch() {
+        assert_eq!(dream_skip_reason(&dream_cfg(true, true)), None);
+        assert_eq!(
+            dream_skip_reason(&dream_cfg(false, true)),
+            Some("disabled"),
+            "dream_enabled off (the default) → disabled"
+        );
+        assert_eq!(
+            dream_skip_reason(&dream_cfg(true, false)),
+            Some("disabled"),
+            "skill_detection_enabled off → disabled"
+        );
+        assert_eq!(
+            dream_skip_reason(&dream_cfg(false, false)),
+            Some("disabled")
+        );
+    }
+
+    #[tokio::test]
+    async fn dream_pass_gate_all_switches_off_reports_disabled_and_touches_nothing() {
+        // Spec §8.6: switches all off → the pass returns 0 and does not read
+        // a single session file. Both dirs are tempdirs, so "untouched"
+        // asserts the whole pass had no side effect on disk at all.
+        let app = mock_handle();
+        let cfg = dream_cfg(false, false);
+        let dreams = tempdir().unwrap();
+        let desktop = tempdir().unwrap();
+        // A pre-existing shared state file must survive untouched too.
+        std::fs::write(
+            desktop.path().join(DETECTION_STATE_FILE),
+            r#"{"last_stats": {"scanned_sessions": 9}}"#,
+        )
+        .unwrap();
+        let before_dreams = snapshot_dir(dreams.path());
+        let before_desktop = snapshot_dir(desktop.path());
+
+        let result = execute_dream_pass_in(&app, 3, &cfg, dreams.path(), desktop.path())
+            .await
+            .unwrap();
+
+        assert_eq!(result.skipped_reason.as_deref(), Some("disabled"));
+        assert_eq!(result.scanned_sessions, 0);
+        assert!(result.projects.is_empty());
+        assert!(result.proposal_ids.is_empty());
+        assert!(result.report_path.is_none());
+        assert_eq!(snapshot_dir(dreams.path()), before_dreams);
+        assert_eq!(snapshot_dir(desktop.path()), before_desktop);
+    }
+
+    #[tokio::test]
+    async fn dream_pass_reports_in_progress_then_throttled_for_a_retry() {
+        // Finding #3, end-to-end: the "second concurrent run reports
+        // in-progress" story, driven through the real gate ladder with the
+        // same process-wide lock `execute_dream_pass` acquires. (Deliberate
+        // use of the global lock: no other test touches it, and both rungs
+        // return before the handle's state is ever consulted.)
+        let app = mock_handle();
+        let cfg = dream_cfg(true, true);
+        let dreams = tempdir().unwrap();
+        let desktop = tempdir().unwrap();
+
+        // First pass holding the lock → concurrent second call must see
+        // "in-progress", not "throttled".
+        let first = dream_lock().try_acquire().expect("fresh process lock");
+        let second = execute_dream_pass_in(&app, 3, &cfg, dreams.path(), desktop.path())
+            .await
+            .unwrap();
+        assert_eq!(second.skipped_reason.as_deref(), Some("in-progress"));
+        drop(first);
+
+        // The dropped guard stamped the 6h interval (also finding #4's
+        // failed-pass story): the immediate retry reports "throttled".
+        let retry = execute_dream_pass_in(&app, 3, &cfg, dreams.path(), desktop.path())
+            .await
+            .unwrap();
+        assert_eq!(retry.skipped_reason.as_deref(), Some("throttled"));
+    }
+
+    #[tokio::test]
+    async fn dream_pass_reports_throttled_from_the_state_file() {
+        // The state-file rung fires on its own (fresh `last_dream_at`
+        // written into the tempdir desktop dir), before the lock is even
+        // consulted.
+        let app = mock_handle();
+        let cfg = dream_cfg(true, true);
+        let dreams = tempdir().unwrap();
+        let desktop = tempdir().unwrap();
+        write_state_in(
+            desktop.path(),
+            &DreamState {
+                last_dream_at: Some(Utc::now().to_rfc3339()),
+                last_stats: None,
+            },
+        )
+        .unwrap();
+
+        let result = execute_dream_pass_in(&app, 3, &cfg, dreams.path(), desktop.path())
+            .await
+            .unwrap();
+        assert_eq!(result.skipped_reason.as_deref(), Some("throttled"));
+        assert_eq!(result.scanned_sessions, 0);
+        assert!(read_state_in(desktop.path()).last_dream_at.is_some());
     }
 
     // ------------------------------------------------------------------

@@ -313,8 +313,12 @@ pub async fn trigger_skill_pattern_detection(
 ///
 /// Returns the candidates appended by this run (empty when the privacy gate
 /// is off — session files are never read in that case).
-pub(crate) async fn detect_and_record(
-    app: &tauri::AppHandle,
+///
+/// Generic over the runtime like the rest of the record/emit helpers it
+/// calls, so the dream pass's `execute_dream_pass_in` seam can invoke it
+/// from tests on a mock runtime too.
+pub(crate) async fn detect_and_record<R: tauri::Runtime>(
+    app: &tauri::AppHandle<R>,
     inbox: &shannon_core::inbox_store::InboxStore,
     sessions_dir: &Path,
     days: u32,

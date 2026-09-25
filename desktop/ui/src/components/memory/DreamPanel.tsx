@@ -75,6 +75,9 @@ export default function DreamPanel() {
   const [reportOpen, setReportOpen] = useState(false)
   const [reportLoading, setReportLoading] = useState(false)
   const [report, setReport] = useState<string | null>(null)
+  /// Distinguishes a failed fetch (error body) from a fetched-but-empty
+  /// report (empty-state body) — review finding #8.
+  const [reportError, setReportError] = useState(false)
 
   const fetchProposals = useCallback(async () => {
     try {
@@ -165,7 +168,15 @@ export default function DreamPanel() {
     setBusyProposalId(proposal.id)
     try {
       const outcome = await applyDreamProposal(proposal.id, actionIds)
-      toast.success(t('memory.dream.applyDone', { count: outcome.applied.length }))
+      toast.success(t('memory.dream.applyDone', { count: outcome.applied.length }), {
+        // Review finding #9: actions whose targets vanished between the pass
+        // and the apply are skipped by the backend — surface the count so
+        // "applied 2" never silently means "you asked for 5".
+        description:
+          outcome.skipped.length > 0
+            ? t('memory.dream.apply.skippedToast', { count: outcome.skipped.length })
+            : undefined,
+      })
       await fetchProposals()
     } catch (e) {
       toast.error(t('memory.dream.applyFailed'), {
@@ -194,9 +205,11 @@ export default function DreamPanel() {
   const openReport = async () => {
     setReportOpen(true)
     setReportLoading(true)
+    setReportError(false)
     try {
       setReport(await readDreamReport(null))
     } catch (e) {
+      setReportError(true)
       toast.error(t('memory.dream.report.loadFailed'), {
         description: e instanceof Error ? e.message : String(e),
       })
@@ -378,6 +391,13 @@ export default function DreamPanel() {
         <div className="px-xl pb-xl">
           {reportLoading ? (
             <div className="text-label-sm text-on-surface-variant py-md">{t('memory.dream.report.loading')}</div>
+          ) : reportError ? (
+            <div
+              role="alert"
+              className="text-body-sm text-error py-md"
+            >
+              {t('memory.dream.report.error')}
+            </div>
           ) : (
             <div
               tabIndex={0}
