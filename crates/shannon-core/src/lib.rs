@@ -38,6 +38,7 @@ rust_i18n::i18n!("../../locales", fallback = "en");
 
 pub mod ai_limits;
 pub mod api_services;
+pub mod attachments;
 pub mod away_summary;
 pub mod bridge_service;
 pub mod bus;
@@ -118,6 +119,7 @@ pub mod scheduled_runs;
 pub mod scheduled_task_store;
 pub mod scheduled_worktree;
 pub mod session_log;
+pub mod session_search_tool;
 pub mod skill_loop;
 pub mod team_memory_sync;
 pub mod telemetry;
@@ -188,6 +190,7 @@ pub use remote_settings::{
     RemoteManagedSettings, RemoteSettingsError, RemoteSettingsProvider, SettingOverride,
     SettingSource,
 };
+pub use session_search_tool::SessionSearchTool;
 pub use settings::{Settings, SettingsError, SettingsManager};
 pub use settings_sync::{
     DeviceInfo, DeviceRegistry, SettingsSyncService, SyncError, SyncRecord, SyncStatus,

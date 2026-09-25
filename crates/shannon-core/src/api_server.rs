@@ -291,6 +291,14 @@ impl ShannonApiServer {
             router = router.merge(extra.clone().with_state(()));
         }
         router
+            .layer(
+                // axum 0.7 defaults to a 2 MiB request body limit, which
+                // 413'd any real multimodal request before attachment
+                // validation could run. The shared rule allows 8 × 10 MiB
+                // decoded attachments; inflated 4/3 through base64 that is
+                // ~107 MiB, so 128 MiB covers it plus JSON headroom.
+                axum::extract::DefaultBodyLimit::max(128 * 1024 * 1024),
+            )
             .layer(axum::middleware::from_fn_with_state(
                 self.auth_token.clone(),
                 auth_middleware,
@@ -487,13 +495,14 @@ fn attach_session(engine: &mut QueryEngine, session_id: Uuid) {
     }
 }
 
-/// Maximum attachments per message (Anthropic accepts up to 100; this keeps
-/// a single request's multimodal payload bounded).
-pub const MAX_ATTACHMENTS: usize = 8;
-/// 10 MiB per attachment after base64 decode.
-pub const MAX_ATTACHMENT_BYTES: usize = 10 * 1024 * 1024;
-/// MIME types the multimodal adapters can serialize.
-const SUPPORTED_MEDIA_TYPES: [&str; 4] = ["image/png", "image/jpeg", "image/gif", "image/webp"];
+use crate::attachments::{
+    AttachmentError, is_supported_image_type, validate_base64_size, validate_count,
+    validate_decoded_size,
+};
+/// Shared attachment limits + validation live in [`crate::attachments`] —
+/// the single source of truth every entry path (REST, WS, desktop, TUI,
+/// headless CLI) enforces. Re-exported here for existing callers.
+pub use crate::attachments::{MAX_ATTACHMENTS, MAX_IMAGE_BYTES};
 
 /// Validate attachments and convert them to provider-agnostic content
 /// blocks. Returns a user-facing error message on the first violation.
@@ -501,17 +510,16 @@ const SUPPORTED_MEDIA_TYPES: [&str; 4] = ["image/png", "image/jpeg", "image/gif"
 /// Shared by every entry path (REST `/v1/sessions/:id/messages`,
 /// `POST /api/query`, and the `WsClientMessage::Query` frame) so the
 /// gateway's IM media pipeline (B4) faces exactly one set of rules.
+///
+/// Per attachment the checks run count → media type → base64 length
+/// pre-check → decode → post-decode size, so an oversized payload is
+/// rejected from its length alone instead of being fully decoded first.
 pub fn attachments_to_blocks(
     attachments: &[MessageAttachment],
 ) -> Result<Vec<shannon_engine::api::ContentBlock>, String> {
     use base64::Engine;
 
-    if attachments.len() > MAX_ATTACHMENTS {
-        return Err(format!(
-            "too many attachments: {} (max {MAX_ATTACHMENTS})",
-            attachments.len()
-        ));
-    }
+    validate_count(attachments.len()).map_err(|e| e.to_string())?;
 
     let mut blocks = Vec::with_capacity(attachments.len());
     for (i, att) in attachments.iter().enumerate() {
@@ -519,22 +527,23 @@ pub fn attachments_to_blocks(
             .name
             .clone()
             .unwrap_or_else(|| format!("attachment-{i}"));
-        if !SUPPORTED_MEDIA_TYPES.contains(&att.media_type.as_str()) {
-            return Err(format!(
-                "attachment \"{label}\": unsupported media_type \"{}\" (supported: {})",
-                att.media_type,
-                SUPPORTED_MEDIA_TYPES.join(", ")
-            ));
+        // Wrap the shared error with the attachment label so the caller can
+        // tell which attachment violated the rule (wording kept stable).
+        let labeled = |e: AttachmentError| format!("attachment \"{label}\": {e}");
+        if !is_supported_image_type(&att.media_type) {
+            return Err(labeled(AttachmentError::Unsupported {
+                media_type: att.media_type.clone(),
+            }));
         }
+        // Cheap length pre-check BEFORE decoding: rejects oversized
+        // payloads from the base64 character count alone, without
+        // materialising them in memory.
+        validate_base64_size(att.data.len()).map_err(labeled)?;
         let decoded = base64::engine::general_purpose::STANDARD
             .decode(att.data.as_bytes())
             .map_err(|_| format!("attachment \"{label}\": data is not valid base64"))?;
-        if decoded.len() > MAX_ATTACHMENT_BYTES {
-            return Err(format!(
-                "attachment \"{label}\": {} bytes exceeds the {MAX_ATTACHMENT_BYTES} byte limit",
-                decoded.len()
-            ));
-        }
+        // Exact check on the real decoded bytes.
+        validate_decoded_size(decoded.len()).map_err(labeled)?;
         blocks.push(shannon_engine::api::ContentBlock::Image {
             source: shannon_engine::api::ImageSource::base64(
                 att.media_type.clone(),
@@ -1334,10 +1343,27 @@ mod tests {
         let atts = vec![MessageAttachment {
             name: Some("big.png".into()),
             media_type: "image/png".into(),
-            data: png_b64(MAX_ATTACHMENT_BYTES + 1),
+            data: png_b64(MAX_IMAGE_BYTES + 1),
         }];
         let err = attachments_to_blocks(&atts).unwrap_err();
         assert!(err.contains("exceeds"), "got: {err}");
+    }
+
+    #[test]
+    fn attachments_oversized_base64_rejected_before_decode() {
+        // 14 MiB of invalid base64 characters: long enough that the length
+        // pre-check fires, invalid enough that a decode-first order would
+        // have reported "not valid base64". The size error proves the
+        // payload is rejected without a full base64 decode.
+        let data = "!".repeat(14 * 1024 * 1024);
+        let atts = vec![MessageAttachment {
+            name: Some("big.png".into()),
+            media_type: "image/png".into(),
+            data,
+        }];
+        let err = attachments_to_blocks(&atts).unwrap_err();
+        assert!(err.contains("exceeds"), "got: {err}");
+        assert!(!err.contains("not valid base64"), "got: {err}");
     }
 
     #[test]
@@ -1353,7 +1379,6 @@ mod tests {
         assert!(err.contains("too many attachments"), "got: {err}");
     }
 
-    use super::*;
     use axum::Router;
     use axum::body::Body;
     use axum::http::{Request, StatusCode};

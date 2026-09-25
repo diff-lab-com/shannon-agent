@@ -30,7 +30,7 @@ pub use compaction_trigger::{
 };
 pub use consolidator::{ConsolidationResult, MemoryConsolidator};
 pub use error::MemoryError;
-pub use store::{AddOutcome, MemoryStore};
+pub use store::{AddOutcome, GLOBAL_SCOPE, MemoryDoctorStats, MemoryStore};
 pub use types::{MemoryCategory, MemoryEntry, MemoryType, SessionMemoryConfig};
 
 pub mod tools;
@@ -45,3 +45,24 @@ mod types;
 
 // Re-export the private error type as public
 pub use error::MemoryError as Error;
+
+/// Whether automatic memory extraction is enabled.
+///
+/// Two switches existed with zero consumers — the `auto_memory` feature flag
+/// (`SHANNON_FEATURE_AUTO_MEMORY` / `settings.json` `features`) and the
+/// `auto_memory` key in `config.toml` (`Settings`) — while the engine
+/// extracted unconditionally. Both are now honored: either `false`
+/// disables. Missing/unreadable config falls back to enabled (both default
+/// true).
+pub fn auto_memory_enabled() -> bool {
+    if !crate::feature_flags::FeatureFlagManager::new()
+        .is_enabled(&crate::feature_flags::flags::AUTO_MEMORY)
+    {
+        return false;
+    }
+    let mut manager = crate::SettingsManager::new();
+    match manager.load() {
+        Ok(()) => manager.settings().auto_memory,
+        Err(_) => true,
+    }
+}

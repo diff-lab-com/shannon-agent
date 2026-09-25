@@ -323,6 +323,11 @@ fn detect_media_type(path: &str) -> Option<String> {
 /// @-reference FILE_CONTENT_LIMIT).
 const PDF_TEXT_INJECT_LIMIT: usize = 50 * 1024;
 
+/// Hard cap on PDF attachments on the real send path: a metadata precheck
+/// before the file is read or handed to `pdftotext`. (Images are capped at
+/// the shared `shannon_core::attachments::MAX_IMAGE_BYTES` instead.)
+const MAX_PDF_BYTES: u64 = 100 * 1024 * 1024;
+
 fn file_to_base64(path: &str) -> Result<(String, String), String> {
     use base64::Engine;
     use std::fs;
@@ -636,6 +641,88 @@ pub async fn send_message(
         budget_bypass,
     )
     .await?;
+    // Attachment collection + hard size caps run BEFORE the querying latch:
+    // the latch is only cleared when the spawned query task finishes, so a
+    // rejected send must happen before it is taken (mirrors the pre-turn
+    // budget guard above). Hard limits live here in the Rust backend — the
+    // 25 MiB preview cap in `commands_files` alone never guarded this path.
+    let attachment_working_dir = resolve_working_dir(&state).await;
+    let attachments = match file_paths.as_deref() {
+        None | Some([]) => None,
+        Some(paths) => {
+            let mut collected = Vec::with_capacity(paths.len());
+            for path in paths {
+                // Security: reject any attachment path that resolves outside
+                // the working directory. A compromised frontend must not be
+                // able to exfiltrate `~/.ssh/id_rsa`,
+                // `~/.shannon/desktop/config.json`, or any other sensitive
+                // file via the attachment pipeline. (Unresolvable/unreadable
+                // paths stay silently dropped, as before.)
+                let canonical =
+                    match crate::resolve_path_in_working_dir(path, &attachment_working_dir) {
+                        Ok(c) => c,
+                        Err(_) => continue,
+                    };
+                let canonical_str = canonical.to_string_lossy().into_owned();
+                let Ok(meta) = std::fs::metadata(&canonical) else {
+                    continue;
+                };
+                // Hard size caps: images over the shared 10 MiB limit and
+                // PDFs over 100 MiB are rejected outright. The metadata
+                // check fires before any read; the post-read base64 gate
+                // below re-checks what was actually read.
+                let media_type = detect_media_type(&canonical_str);
+                if media_type
+                    .as_deref()
+                    .is_some_and(|m| m.starts_with("image/"))
+                    && meta.len() > shannon_core::attachments::MAX_IMAGE_BYTES as u64
+                {
+                    return Err(format!(
+                        "Image attachment exceeds the 10 MB limit: {canonical_str} ({} bytes)",
+                        meta.len()
+                    ));
+                }
+                let is_pdf = canonical
+                    .extension()
+                    .and_then(|e| e.to_str())
+                    .is_some_and(|e| e.eq_ignore_ascii_case("pdf"));
+                if is_pdf && meta.len() > MAX_PDF_BYTES {
+                    return Err(format!(
+                        "PDF attachment exceeds the 100 MB limit: {canonical_str} ({} bytes)",
+                        meta.len()
+                    ));
+                }
+                let Some(name_str) = std::path::Path::new(&canonical)
+                    .file_name()
+                    .and_then(|name| name.to_str())
+                else {
+                    continue;
+                };
+                // Try to read file and convert to base64 for images
+                let (base64_data, media_type) = match file_to_base64(&canonical_str) {
+                    Ok(pair) => pair,
+                    Err(_) => continue,
+                };
+                // Second gate after the read: the base64 payload must still
+                // fit the shared image limit before it can enter the query.
+                if media_type.starts_with("image/") {
+                    if let Err(e) =
+                        shannon_core::attachments::validate_base64_size(base64_data.len())
+                    {
+                        return Err(format!("Image attachment \"{canonical_str}\": {e}"));
+                    }
+                }
+                collected.push(FileAttachment {
+                    name: name_str.to_string(),
+                    path: canonical_str.clone(),
+                    size: meta.len(),
+                    media_type: Some(media_type),
+                    base64_data: Some(base64_data),
+                });
+            }
+            Some(collected)
+        }
+    };
     // Prevent concurrent queries — check and set in a single lock scope to avoid TOCTOU race
     {
         let mut querying = active_session.querying.lock().await;
@@ -654,48 +741,6 @@ pub async fn send_message(
 
     // Add user message
     let now = chrono_timestamp();
-    // Resolve working directory once for attachment-path validation below.
-    let attachment_working_dir = resolve_working_dir(&state).await;
-    let attachments = file_paths.and_then(|paths| {
-        if paths.is_empty() {
-            None
-        } else {
-            Some(
-                paths
-                    .into_iter()
-                    .filter_map(|path| {
-                        // Security: reject any attachment path that resolves
-                        // outside the working directory. A compromised
-                        // frontend must not be able to exfiltrate
-                        // `~/.ssh/id_rsa`, `~/.shannon/desktop/config.json`,
-                        // or any other sensitive file via the attachment
-                        // pipeline.
-                        let canonical =
-                            crate::resolve_path_in_working_dir(&path, &attachment_working_dir)
-                                .ok()?;
-                        let canonical_str = canonical.to_string_lossy().into_owned();
-                        std::path::Path::new(&canonical)
-                            .file_name()
-                            .and_then(|name| name.to_str())
-                            .and_then(|name_str| {
-                                std::fs::metadata(&canonical).ok().and_then(|meta| {
-                                    // Try to read file and convert to base64 for images
-                                    file_to_base64(&canonical_str).ok().map(
-                                        |(base64_data, media_type)| FileAttachment {
-                                            name: name_str.to_string(),
-                                            path: canonical_str.clone(),
-                                            size: meta.len(),
-                                            media_type: Some(media_type),
-                                            base64_data: Some(base64_data),
-                                        },
-                                    )
-                                })
-                            })
-                    })
-                    .collect::<Vec<_>>(),
-            )
-        }
-    });
 
     // Route image attachments into the multimodal query path so the model
     // actually sees them. The `FileAttachment`s stored on the ChatMessage
@@ -751,7 +796,12 @@ pub async fn send_message(
             .unwrap_or_default();
         for (name, size, text) in futures::future::join_all(pdf_futs).await {
             let trimmed = text.trim();
-            let body = if trimmed.is_empty() {
+            let body = if crate::commands_files::is_pdf_unavailable_placeholder(trimmed) {
+                // Extraction failed (no poppler / pdftotext error): surface
+                // the placeholder as-is instead of framing it as extracted
+                // text.
+                format!("Attached PDF \"{name}\" ({size} bytes). {trimmed}")
+            } else if trimmed.is_empty() {
                 format!(
                     "Attached PDF \"{name}\" ({size} bytes). No extractable text — the PDF is likely scanned/image-only; OCR is not available."
                 )

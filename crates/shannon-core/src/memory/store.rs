@@ -1,4 +1,5 @@
 use chrono::{DateTime, Duration, Utc};
+use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet};
 use std::fs::{self, File, OpenOptions};
 use std::io::{BufRead, BufReader, Write};
@@ -7,6 +8,7 @@ use std::path::{Path, PathBuf};
 use super::consolidator::{ConsolidationResult, MemoryConsolidator};
 use super::error::MemoryError;
 use super::types::{MemoryCategory, MemoryEntry, MemoryType, SessionMemoryConfig};
+use crate::team_memory_sync::SecretScanner;
 use fs2::FileExt;
 
 // Hash a project path to a safe filename.
@@ -84,8 +86,8 @@ fn atomic_write(path: &Path, content: &str) -> std::io::Result<()> {
 
 // Simple word-level Jaccard similarity between two strings.
 fn content_similarity(a: &str, b: &str) -> f64 {
-    let words_a: std::collections::HashSet<&str> = a.split_whitespace().collect();
-    let words_b: std::collections::HashSet<&str> = b.split_whitespace().collect();
+    let words_a = tokenize(a);
+    let words_b = tokenize(b);
 
     if words_a.is_empty() && words_b.is_empty() {
         return 1.0;
@@ -101,21 +103,159 @@ fn content_similarity(a: &str, b: &str) -> f64 {
     intersection as f64 / union as f64
 }
 
-/// Parse a `<hash>.jsonl` file into entries, tolerating a trailing partial
-/// line (skipped + logged) so a crash mid-append never blocks a load. Shared
-/// by [`MemoryStore::load`] and the [`MemoryStore::save`] reload-reconcile.
-fn parse_jsonl_file(path: &Path) -> Vec<MemoryEntry> {
+/// Whether `ch` is a CJK ideograph / kana / hangul character.
+fn is_cjk_char(ch: char) -> bool {
+    matches!(ch as u32,
+        0x3400..=0x4DBF   // CJK Extension A
+        | 0x4E00..=0x9FFF // CJK Unified Ideographs
+        | 0x3040..=0x30FF // Hiragana + Katakana
+        | 0xAC00..=0xD7AF // Hangul syllables
+        | 0xF900..=0xFAFF // CJK Compatibility Ideographs
+    )
+}
+
+/// Tokenize text for similarity comparison.
+///
+/// Plain `split_whitespace` made every Chinese/Japanese/Korean sentence a
+/// single token, pinning CJK similarity at 0-or-1 and silently disabling
+/// both write-time dedup and compaction merge for CJK content. This
+/// tokenizer splits `snake_case` / `kebab-case` / `camelCase` identifiers
+/// at their boundaries and treats each CJK character as its own token, so
+/// two paraphrased CJK sentences share most character tokens.
+fn tokenize(text: &str) -> HashSet<String> {
+    let mut out: HashSet<String> = HashSet::new();
+    let mut word = String::new();
+    let mut prev_lowercase = false;
+    for ch in text.chars() {
+        let is_separator = ch.is_whitespace() || matches!(ch, '_' | '-' | '.' | '/' | ':');
+        if is_separator {
+            if !word.is_empty() {
+                out.insert(word.to_lowercase());
+                word.clear();
+            }
+            prev_lowercase = false;
+        } else if is_cjk_char(ch) {
+            if !word.is_empty() {
+                out.insert(word.to_lowercase());
+                word.clear();
+            }
+            out.insert(ch.to_lowercase().to_string());
+            prev_lowercase = false;
+        } else if ch.is_uppercase() && prev_lowercase {
+            // camelCase boundary: flush "foo" before "Bar".
+            if !word.is_empty() {
+                out.insert(word.to_lowercase());
+                word.clear();
+            }
+            word.push(ch);
+            prev_lowercase = false;
+        } else {
+            word.push(ch);
+            prev_lowercase = ch.is_lowercase() || ch.is_numeric();
+        }
+    }
+    if !word.is_empty() {
+        out.insert(word.to_lowercase());
+    }
+    out
+}
+
+/// Rough token estimate for injection budgeting.
+///
+/// `chars / 4` underestimates CJK by ~4x (one CJK char is ~one token), which
+/// let a Chinese memory budget of 2000 tokens actually inject ~8000. CJK
+/// characters count as one token each; everything else keeps the codebase's
+/// `chars / 4` heuristic.
+pub(crate) fn estimate_tokens(text: &str) -> usize {
+    let mut cjk = 0usize;
+    let mut other = 0usize;
+    for ch in text.chars() {
+        if is_cjk_char(ch) {
+            cjk += 1;
+        } else {
+            other += 1;
+        }
+    }
+    cjk + other.div_ceil(4)
+}
+
+/// Mask secret-shaped substrings (API keys, cloud tokens) before content
+/// enters the store. Memory write paths previously had no defense, so a
+/// spoken "my api key is sk-..." was extracted verbatim and re-injected
+/// into every later session. Rules are shared with team-memory sync.
+pub(crate) fn redact_secrets(content: &str) -> String {
+    static RULES: std::sync::OnceLock<Vec<(String, regex::Regex)>> = std::sync::OnceLock::new();
+    let rules = RULES.get_or_init(|| {
+        SecretScanner::default_rules()
+            .into_iter()
+            .filter_map(|mut rule| {
+                let re = rule.compiled().ok()?.clone();
+                Some((rule.id, re))
+            })
+            .collect()
+    });
+    let mut out = content.to_string();
+    for (id, re) in rules {
+        if re.is_match(&out) {
+            out = re
+                .replace_all(&out, format!("[REDACTED:{id}]"))
+                .into_owned();
+        }
+    }
+    out
+}
+
+/// Sentinel project key for cross-project (user-level) memories. Global
+/// entries live in their own `<hash>.jsonl` like any project and are
+/// injected into every session alongside the active project's entries.
+pub const GLOBAL_SCOPE: &str = "__global__";
+
+/// A durable deletion marker, stored as its own JSONL line:
+/// `{"tombstone":"<id>","at":"<ts>"}`. In-process tombstones alone cannot
+/// cross processes: a long-running REPL that never reloads would resurrect
+/// an entry deleted by the desktop (or vice versa) from its in-memory map
+/// on its next `save`. Appending the marker to the shared file makes the
+/// deletion visible to any later `load`, same atomicity argument as `add`.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub(crate) struct StoreTombstone {
+    /// Id of the deleted entry.
+    pub tombstone: String,
+    /// When the deletion happened (UTC). Lets `save`'s reconcile ignore a
+    /// tombstone that is older than a concurrent re-add of the same id.
+    pub at: DateTime<Utc>,
+}
+
+/// Parse a `<hash>.jsonl` file into entries and tombstone markers,
+/// tolerating a trailing partial line (skipped + logged) so a crash
+/// mid-append never blocks a load. Shared by [`MemoryStore::load`] and the
+/// [`MemoryStore::save`] reload-reconcile. Line order is preserved by the
+/// caller — for tombstones, last writer per id wins.
+fn parse_jsonl_file(path: &Path) -> (Vec<MemoryEntry>, Vec<StoreTombstone>) {
     let Ok(file) = File::open(path) else {
-        return Vec::new();
+        return (Vec::new(), Vec::new());
     };
-    let mut out = Vec::new();
+    let mut entries = Vec::new();
+    let mut tombstones = Vec::new();
     for line in BufReader::new(file).lines() {
         let Ok(line) = line else { continue };
         if line.trim().is_empty() {
             continue;
         }
+        if line.contains("\"tombstone\"") {
+            match serde_json::from_str::<StoreTombstone>(&line) {
+                Ok(t) => {
+                    tombstones.push(t);
+                    continue;
+                }
+                Err(e) => tracing::warn!(
+                    path = %path.display(),
+                    error = %e,
+                    "skipping unparseable tombstone line"
+                ),
+            }
+        }
         match serde_json::from_str::<MemoryEntry>(&line) {
-            Ok(mem) => out.push(mem),
+            Ok(mem) => entries.push(mem),
             Err(e) => tracing::warn!(
                 path = %path.display(),
                 error = %e,
@@ -123,7 +263,7 @@ fn parse_jsonl_file(path: &Path) -> Vec<MemoryEntry> {
             ),
         }
     }
-    out
+    (entries, tombstones)
 }
 
 // ============================================================================
@@ -141,13 +281,20 @@ pub struct MemoryStore {
     /// [`save`](Self::save)'s reload-reconcile can propagate the deletion to
     /// disk without resurrecting the entry from a stale line — and without
     /// clobbering entries another agent appended concurrently (ADR-0010 C5').
-    tombstones: HashMap<String, HashSet<String>>,
+    /// The value is the deletion time, mirrored into the durable
+    /// [`StoreTombstone`] line [`evict`](Self::evict) appends.
+    tombstones: HashMap<String, HashMap<String, DateTime<Utc>>>,
 }
 
 /// Conservative cap on how many memories [`MemoryStore::format_for_injection`]
 /// loads into the system prompt (ADR-0010 C3' default, ~Claude Code's curated
 /// `memory/` volume). Tuned empirically once injection is exercised.
 const MAX_INJECTED_MEMORIES: usize = 50;
+
+/// Cap on cross-project ([`GLOBAL_SCOPE`]) entries injected alongside the
+/// active project's memories. User-level preferences are few and high-signal;
+/// they must not crowd out project facts.
+const MAX_INJECTED_GLOBAL: usize = 10;
 
 /// Injection token budget for [`MemoryStore::format_for_injection`]
 /// (ADR-0010 C5'). Enforced at injection time, not just at compaction time.
@@ -159,8 +306,10 @@ const MAX_INJECTED_TOKENS: usize = 2000;
 /// [`MemoryConsolidator`](super::consolidator::MemoryConsolidator) default.
 const DEDUP_SIMILARITY_THRESHOLD: f64 = 0.8;
 
-/// Rough characters-per-token estimate for injection budgeting (ADR-0010 C5').
-const CHARS_PER_TOKEN: usize = 4;
+/// Durable tombstone lines older than this are garbage-collected from the
+/// store file at the next rewrite. A tombstone only needs to outlive
+/// processes that loaded before the deletion; weeks is generous.
+const TOMBSTONE_TTL: Duration = Duration::days(30);
 
 /// Outcome of a dedup-aware write ([`MemoryStore::add_or_update`]).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -192,19 +341,38 @@ impl MemoryStore {
     }
 
     /// Remove `id` from the in-memory map and record it as a deliberate
-    /// deletion in the per-project tombstone set, so the next
-    /// [`save`](Self::save) propagates the removal to disk instead of
-    /// resurrecting the entry from a stale line. Returns `true` if the id was
+    /// deletion — in the per-project tombstone set for the next
+    /// [`save`](Self::save), **and** as a durable [`StoreTombstone`] line in
+    /// the project's JSONL so other processes' loads see the deletion
+    /// without waiting for our rewrite. Returns `true` if the id was
     /// present.
     fn evict(&mut self, id: &str) -> bool {
         if let Some(entry) = self.entries.remove(id) {
+            let at = Utc::now();
             self.tombstones
-                .entry(entry.project)
+                .entry(entry.project.clone())
                 .or_default()
-                .insert(id.to_string());
+                .insert(id.to_string(), at);
+            self.append_tombstone_line(&entry.project, id, at);
             true
         } else {
             false
+        }
+    }
+
+    /// Best-effort durable tombstone append (hot path, same atomicity
+    /// argument as [`add`](Self::add)). A failed append is non-fatal: the
+    /// in-memory tombstone still reaches disk at the next `save`.
+    fn append_tombstone_line(&self, project: &str, id: &str, at: DateTime<Utc>) {
+        let path = project_jsonl_path(&self.storage_path, project);
+        let Ok(line) = serde_json::to_string(&StoreTombstone {
+            tombstone: id.to_string(),
+            at,
+        }) else {
+            return;
+        };
+        if let Ok(mut file) = OpenOptions::new().create(true).append(true).open(&path) {
+            let _ = file.write_all(format!("{line}\n").as_bytes());
         }
     }
 
@@ -237,14 +405,17 @@ impl MemoryStore {
     }
 
     /// Find the id of an existing entry that [`add_or_update`](Self::add_or_update)
-    /// would treat as the same fact: same project, same category, content
-    /// overlap ≥ [`DEDUP_SIMILARITY_THRESHOLD`].
+    /// would treat as the same fact: same project, same category, still
+    /// valid (not bi-temporally expired), content overlap ≥
+    /// [`DEDUP_SIMILARITY_THRESHOLD`].
     fn find_dedup_match(&self, entry: &MemoryEntry) -> Option<String> {
+        let now = Utc::now();
         self.entries
             .values()
             .find(|e| {
                 e.project == entry.project
                     && e.category == entry.category
+                    && !e.is_expired(now)
                     && content_similarity(&e.content, &entry.content) >= DEDUP_SIMILARITY_THRESHOLD
             })
             .map(|e| e.id.clone())
@@ -275,6 +446,10 @@ impl MemoryStore {
     }
 
     pub fn add_or_update(&mut self, mut entry: MemoryEntry) -> Result<AddOutcome, MemoryError> {
+        // Choke-point redaction: every production write path (MemorySave tool,
+        // /remember, auto-extraction, desktop CRUD) funnels through here, so
+        // secret-shaped content is masked exactly once, before dedup.
+        entry.content = redact_secrets(&entry.content);
         let matched_id = self.find_dedup_match(&entry);
         if let Some(id) = matched_id {
             if let Some(existing) = self.entries.get(&id).cloned() {
@@ -299,18 +474,20 @@ impl MemoryStore {
     }
 
     /// Prune `project`'s entries until [`format_for_injection`](Self::format_for_injection)
-    /// fits within `budget_tokens`, removing lowest-confidence entries first
-    /// (ties broken by oldest `accessed_at`). Returns the number removed. Does
-    /// not persist; the caller is expected to [`save`](Self::save) (ADR-0010
-    /// C5' size control).
+    /// fits within `budget_tokens`. Victims are **invalidated** (bi-temporal
+    /// close), not destroyed — size control must not destroy data; expired
+    /// entries remain on disk and `/recall --all` still finds them. Lowest-
+    /// confidence entries first (ties broken by oldest `accessed_at`).
+    /// Returns the number invalidated. Does not persist; the caller is
+    /// expected to [`save`](Self::save) (ADR-0010 C5' size control).
     pub fn prune_to_token_budget(&mut self, project: &str, budget_tokens: usize) -> usize {
-        let budget_chars = budget_tokens.saturating_mul(CHARS_PER_TOKEN);
         // Victim ids in ascending value order: lowest confidence first, then
         // least-recently-accessed.
+        let now = Utc::now();
         let mut victims: Vec<(String, f64, DateTime<Utc>)> = self
             .entries
             .values()
-            .filter(|e| e.project == project)
+            .filter(|e| e.project == project && !e.is_expired(now))
             .map(|e| (e.id.clone(), e.confidence, e.accessed_at))
             .collect();
         victims.sort_by(|a, b| {
@@ -322,13 +499,14 @@ impl MemoryStore {
         let mut removed = 0;
         for (id, _, _) in &victims {
             let fits = self
-                .format_for_injection(project)
-                .map(|t| t.len() <= budget_chars)
+                .format_for_injection(project, None)
+                .map(|t| estimate_tokens(&t) <= budget_tokens)
                 .unwrap_or(true);
             if fits {
                 break;
             }
-            if self.evict(id) {
+            if let Some(entry) = self.entries.get_mut(id) {
+                entry.expire(Utc::now());
                 removed += 1;
             }
         }
@@ -353,8 +531,34 @@ impl MemoryStore {
     /// Search memories by substring match on content and tags.
     ///
     /// If `project` is provided, results are filtered to that project.
+    /// Bi-temporally expired entries are excluded (see
+    /// [`search_including_expired`](Self::search_including_expired)).
     /// Results are sorted by confidence descending.
     pub fn search(&self, query: &str, project: Option<&str>) -> Vec<MemoryEntry> {
+        let now = Utc::now();
+        let mut results: Vec<MemoryEntry> = self
+            .entries
+            .values()
+            .filter(|e| {
+                let project_match = project.is_none_or(|p| e.project == p);
+                project_match && !e.is_expired(now) && e.matches_query(query)
+            })
+            .cloned()
+            .collect();
+
+        results.sort_by(|a, b| {
+            let score_a = relevance_score(a);
+            let score_b = relevance_score(b);
+            score_b
+                .partial_cmp(&score_a)
+                .unwrap_or(std::cmp::Ordering::Equal)
+        });
+        results
+    }
+
+    /// Like [`search`](Self::search) but including bi-temporally expired
+    /// entries (used by `/recall --all`).
+    pub fn search_including_expired(&self, query: &str, project: Option<&str>) -> Vec<MemoryEntry> {
         let mut results: Vec<MemoryEntry> = self
             .entries
             .values()
@@ -377,8 +581,26 @@ impl MemoryStore {
 
     /// Get all memories belonging to a specific project.
     ///
-    /// Results are sorted by creation date, most recent first.
+    /// Results are sorted by creation date, most recent first. Bi-temporally
+    /// expired entries are excluded — listing surfaces live facts; use
+    /// [`project_memories_all`](Self::project_memories_all) for the full set.
     pub fn project_memories(&self, project: &str) -> Vec<MemoryEntry> {
+        let now = Utc::now();
+        let mut results: Vec<MemoryEntry> = self
+            .entries
+            .values()
+            .filter(|e| e.project == project && !e.is_expired(now))
+            .cloned()
+            .collect();
+
+        results.sort_by(|a, b| b.created_at.cmp(&a.created_at));
+        results
+    }
+
+    /// Like [`project_memories`](Self::project_memories) but including
+    /// bi-temporally expired entries (used by delete paths so stale facts
+    /// remain forgettable, and by `/recall --all`).
+    pub fn project_memories_all(&self, project: &str) -> Vec<MemoryEntry> {
         let mut results: Vec<MemoryEntry> = self
             .entries
             .values()
@@ -390,45 +612,105 @@ impl MemoryStore {
         results
     }
 
-    /// Format the active project's memories for system-prompt injection
-    /// (ADR-0010 D2 scoped retrieval).
+    /// Format the active project's (plus global-scope) memories for
+    /// system-prompt injection (ADR-0010 D2 scoped retrieval).
     ///
     /// Unlike [`search`](Self::search) (substring match, used by the REPL
-    /// `/memory` command), this returns **every** memory for `project` —
-    /// content only, grouped by [`MemoryCategory`] — capped at
-    /// `MAX_INJECTED_MEMORIES` most-recent entries. Recall is 100% for the
-    /// bounded volume a curated layer holds; the model decides relevance.
-    /// Returns `None` when the project has no memories.
-    pub fn format_for_injection(&self, project: &str) -> Option<String> {
-        let mut entries = self.project_memories(project);
-        if entries.is_empty() {
+    /// `/memory` command), this returns **every** live memory for `project`
+    /// — content only, grouped by [`MemoryCategory`] — capped at
+    /// `MAX_INJECTED_MEMORIES` entries plus up to `MAX_INJECTED_GLOBAL`
+    /// cross-project ([`GLOBAL_SCOPE`]) entries, all inside a
+    /// `MAX_INJECTED_TOKENS` budget measured with the CJK-aware
+    /// [`estimate_tokens`]. When `query` is provided (the user's current
+    /// prompt), candidates beyond the cap are ranked by
+    /// [`semantic_relevance_score`] instead of raw recency, so the most
+    /// relevant facts survive truncation. Returns `None` when there is
+    /// nothing to inject.
+    pub fn format_for_injection(&self, project: &str, query: Option<&str>) -> Option<String> {
+        let now = Utc::now();
+        let mut project_entries: Vec<MemoryEntry> = self
+            .entries
+            .values()
+            .filter(|e| e.project == project && !e.is_expired(now))
+            .cloned()
+            .collect();
+        let mut global_entries: Vec<MemoryEntry> = if project == GLOBAL_SCOPE {
+            Vec::new()
+        } else {
+            self.entries
+                .values()
+                .filter(|e| e.project == GLOBAL_SCOPE && !e.is_expired(now))
+                .cloned()
+                .collect()
+        };
+        if project_entries.is_empty() && global_entries.is_empty() {
             return None;
         }
-        entries.truncate(MAX_INJECTED_MEMORIES);
-        // Injection-time token budget (~`MAX_INJECTED_TOKENS`): previously the
-        // only budget check ran at compaction time, so between compactions 50
-        // long entries could blow well past the intended prompt volume. Oldest
-        // entries beyond the budget are simply not injected — never deleted
-        // (size control must not destroy data).
-        let budget_chars = MAX_INJECTED_TOKENS * CHARS_PER_TOKEN;
-        let mut used = "## Project Memories\n".len();
-        let mut by_cat: std::collections::BTreeMap<&MemoryCategory, Vec<&str>> =
-            std::collections::BTreeMap::new();
-        let mut omitted = 0usize;
-        for e in &entries {
-            let cost = e.content.len() + 2;
-            if used + cost > budget_chars {
-                omitted += 1;
-                continue;
-            }
-            used += cost;
-            by_cat.entry(&e.category).or_default().push(&e.content);
+
+        if let Some(q) = query {
+            let q_lower = q.to_lowercase();
+            let terms: std::collections::HashSet<&str> = q_lower.split_whitespace().collect();
+            let score = |e: &MemoryEntry| semantic_relevance_score(e, &terms);
+            project_entries.sort_by(|a, b| {
+                score(b)
+                    .partial_cmp(&score(a))
+                    .unwrap_or(std::cmp::Ordering::Equal)
+                    .then_with(|| b.created_at.cmp(&a.created_at))
+            });
+            global_entries.sort_by(|a, b| {
+                score(b)
+                    .partial_cmp(&score(a))
+                    .unwrap_or(std::cmp::Ordering::Equal)
+                    .then_with(|| b.created_at.cmp(&a.created_at))
+            });
+        } else {
+            project_entries.sort_by(|a, b| b.created_at.cmp(&a.created_at));
+            global_entries.sort_by(|a, b| b.created_at.cmp(&a.created_at));
         }
-        let mut out = String::from("## Project Memories\n");
-        for (cat, contents) in &by_cat {
-            out.push_str(&format!("### {cat}\n"));
-            for c in contents {
-                out.push_str(&format!("- {c}\n"));
+        global_entries.truncate(MAX_INJECTED_GLOBAL);
+        project_entries.truncate(MAX_INJECTED_MEMORIES);
+
+        // Injection-time token budget (~`MAX_INJECTED_TOKENS`), measured with
+        // the CJK-aware estimator — the previous chars/4 accounting let CJK
+        // memories quadruple the intended prompt volume. Entries beyond the
+        // budget are simply not injected — never deleted or expired here
+        // (size control must not destroy data).
+        let budget_tokens = MAX_INJECTED_TOKENS;
+        let mut used = estimate_tokens("## Project Memories\n");
+        let mut sections: std::collections::BTreeMap<
+            &str,
+            std::collections::BTreeMap<&MemoryCategory, Vec<&str>>,
+        > = std::collections::BTreeMap::new();
+        let mut omitted = 0usize;
+        for (scope, entries) in [("Project", &project_entries), ("Global", &global_entries)] {
+            let section = if scope == "Global" {
+                "## Global Memories\n"
+            } else {
+                "## Project Memories\n"
+            };
+            for e in entries {
+                let cost = estimate_tokens(&format!("- {}\n", e.content)) + 1;
+                if used + cost > budget_tokens {
+                    omitted += 1;
+                    continue;
+                }
+                used += cost;
+                sections
+                    .entry(section)
+                    .or_default()
+                    .entry(&e.category)
+                    .or_default()
+                    .push(&e.content);
+            }
+        }
+        let mut out = String::new();
+        for (section, by_cat) in &sections {
+            out.push_str(section);
+            for (cat, contents) in by_cat {
+                out.push_str(&format!("### {cat}\n"));
+                for c in contents {
+                    out.push_str(&format!("- {c}\n"));
+                }
             }
         }
         if omitted > 0 {
@@ -458,9 +740,14 @@ impl MemoryStore {
     ///
     /// Under the lock the on-disk file is reloaded and reconciled with the
     /// in-memory view (ADR-0010 C5'): entries another agent appended since our
-    /// [`load`](Self::load) are **preserved** (not clobbered), while ids in the
-    /// per-project tombstone set (deliberate deletions) are **dropped** rather
-    /// than resurrected from stale lines.
+    /// [`load`](Self::load) are **preserved** (not clobbered), while ids in
+    /// the per-project tombstone set (deliberate deletions) are **dropped**
+    /// rather than resurrected from stale lines — unless the disk line is
+    /// *newer* than our tombstone (another agent re-added the id after we
+    /// deleted it), in which case the re-add wins and our tombstone is
+    /// retired. Durable tombstone lines (ours and other agents') survive the
+    /// rewrite so deletions stay visible to processes that have not reloaded;
+    /// they are garbage-collected after [`TOMBSTONE_TTL`].
     pub fn save(&mut self) -> Result<(), MemoryError> {
         fs::create_dir_all(&self.storage_path)?;
 
@@ -483,18 +770,24 @@ impl MemoryStore {
             let path = project_jsonl_path(&self.storage_path, &project);
             let _lock = acquire_exclusive_lock(&path)?;
 
-            let disk = parse_jsonl_file(&path);
-            let removed = self.tombstones.get(&project).cloned().unwrap_or_default();
+            let (disk, disk_tombstones) = parse_jsonl_file(&path);
+            let own_tombstones = self.tombstones.get(&project).cloned().unwrap_or_default();
+            let mut retired_tombstones: HashSet<String> = HashSet::new();
             let mem_ids: HashSet<&String> = mem_entries.iter().map(|e| &e.id).collect();
 
             let mut reconciled: Vec<MemoryEntry> = Vec::new();
             let mut seen: HashSet<String> = HashSet::new();
             for e in disk {
-                if removed.contains(&e.id) {
-                    continue; // deliberate deletion — drop the stale line
-                }
                 if mem_ids.contains(&e.id) {
                     continue; // our (possibly updated) version wins; emitted below
+                }
+                if let Some(deleted_at) = own_tombstones.get(&e.id) {
+                    if *deleted_at >= e.accessed_at {
+                        continue; // deliberate deletion — drop the stale line
+                    }
+                    // The disk line is newer than our deletion: another agent
+                    // re-added this id. Keep the entry, retire the tombstone.
+                    retired_tombstones.insert(e.id.clone());
                 }
                 // Another agent's append we don't know about — preserve it.
                 seen.insert(e.id.clone());
@@ -508,14 +801,43 @@ impl MemoryStore {
             // Deterministic order so re-saves produce stable diffs.
             reconciled.sort_by(|a, b| a.created_at.cmp(&b.created_at));
 
-            let jsonl: String = reconciled
+            // Preserve surviving tombstones (ours not yet applied + other
+            // agents'), GC'd past the TTL so they don't accumulate forever.
+            let gc_cutoff = Utc::now() - TOMBSTONE_TTL;
+            let mut tombstone_lines: Vec<StoreTombstone> = disk_tombstones
                 .iter()
-                .map(|e| serde_json::to_string(e).map(|s| s + "\n"))
-                .collect::<Result<String, _>>()?;
+                .filter(|t| t.at > gc_cutoff && !retired_tombstones.contains(&t.tombstone))
+                .cloned()
+                .collect();
+            for (id, at) in &own_tombstones {
+                if !retired_tombstones.contains(id) && *at > gc_cutoff {
+                    tombstone_lines.push(StoreTombstone {
+                        tombstone: id.clone(),
+                        at: *at,
+                    });
+                }
+            }
+
+            let mut jsonl = String::new();
+            for e in &reconciled {
+                jsonl.push_str(&serde_json::to_string(e)?);
+                jsonl.push('\n');
+            }
+            // Deduplicate tombstone ids (disk + own may overlap) before emitting.
+            let mut emitted: HashSet<&str> = HashSet::new();
+            for t in &tombstone_lines {
+                if emitted.insert(t.tombstone.as_str()) {
+                    jsonl.push_str(&serde_json::to_string(t)?);
+                    jsonl.push('\n');
+                }
+            }
             atomic_write(&path, &jsonl)?;
 
             // Tombstones for this project are consumed (excluded from disk).
             if let Some(r) = self.tombstones.get_mut(&project) {
+                for id in retired_tombstones {
+                    r.remove(&id);
+                }
                 r.clear();
             }
         }
@@ -539,9 +861,12 @@ impl MemoryStore {
     /// `{project_hash}.json` array is rewritten as `{project_hash}.jsonl` and
     /// the `.json` set aside as `.json.migrated` (never read again — no
     /// read-compat tail; ADR-0010 D7). Then every `{project_hash}.jsonl` is
-    /// streamed line-by-line into the in-memory store. A trailing partial line
-    /// (a crash mid-append) is skipped + logged rather than failing the whole
-    /// store (ADR-0010 D1 crash-safety).
+    /// streamed line-by-line into the in-memory store in **line order**, so
+    /// the last writer per id wins: an entry line re-added after a
+    /// [`StoreTombstone`] line revives the id, and a tombstone after an
+    /// entry deletes it. This is what makes deletions durable across
+    /// processes. A trailing partial line (a crash mid-append) is skipped +
+    /// logged rather than failing the whole store (ADR-0010 D1 crash-safety).
     pub fn load(&mut self) -> Result<(), MemoryError> {
         fs::create_dir_all(&self.storage_path)?;
         if !self.storage_path.exists() {
@@ -612,6 +937,7 @@ impl MemoryStore {
                         continue;
                     }
                     let Some(project) = parse_jsonl_file(&path)
+                        .0
                         .into_iter()
                         .next()
                         .map(|f| f.project)
@@ -630,8 +956,9 @@ impl MemoryStore {
             }
         }
 
-        // Stream every `<hash>.jsonl`, one MemoryEntry per line (last write
-        // wins by id — how add_or_update's supersede and C4' reclaim work).
+        // Stream every `<hash>.jsonl`, one record per line, in line order
+        // (last writer wins by id — how add_or_update's supersede, C4'
+        // reclaim, and durable tombstones all work).
         for entry in fs::read_dir(&self.storage_path)? {
             let path = match entry {
                 Ok(e) => e.path(),
@@ -640,60 +967,129 @@ impl MemoryStore {
             if path.extension().and_then(|e| e.to_str()) != Some("jsonl") {
                 continue;
             }
-            for mem in parse_jsonl_file(&path) {
-                self.entries.insert(mem.id.clone(), mem);
+            let (file_entries, file_tombstones) = parse_jsonl_file(&path);
+            // zip the two streams back into line order via a merge: entries
+            // and tombstones were collected in file order each; a simple
+            // apply-all-entries-then-all-tombstones would mis-order. Instead
+            // re-walk the file once, dispatching per line.
+            if !file_tombstones.is_empty() {
+                let Ok(file) = File::open(&path) else {
+                    continue;
+                };
+                for line in BufReader::new(file).lines().map_while(Result::ok) {
+                    if line.trim().is_empty() {
+                        continue;
+                    }
+                    if line.contains("\"tombstone\"") {
+                        if let Ok(t) = serde_json::from_str::<StoreTombstone>(&line) {
+                            self.entries.remove(&t.tombstone);
+                            self.tombstones
+                                .entry(self.project_key_for_line(&t.tombstone, &file_entries))
+                                .or_default()
+                                .insert(t.tombstone.clone(), t.at);
+                            continue;
+                        }
+                    }
+                    if let Ok(mem) = serde_json::from_str::<MemoryEntry>(&line) {
+                        self.tombstones
+                            .entry(mem.project.clone())
+                            .or_default()
+                            .remove(&mem.id);
+                        self.entries.insert(mem.id.clone(), mem);
+                    }
+                }
+            } else {
+                for mem in file_entries {
+                    self.entries.insert(mem.id.clone(), mem);
+                }
             }
         }
 
         Ok(())
     }
 
-    /// Remove old entries and cap the total count.
-    ///
-    /// First removes entries older than `max_age`. Then, if the store still
-    /// exceeds `max_entries`, removes the least-recently-accessed entries until
-    /// the cap is met.
-    ///
-    /// Returns the total number of entries removed.
-    pub fn cleanup(&mut self, max_age: Duration, max_entries: usize) -> Result<usize, MemoryError> {
-        let cutoff = Utc::now() - max_age;
-        let initial_count = self.entries.len();
+    /// Project key for a tombstone loaded from the file of `fallback_project`:
+    /// the tombstone line itself doesn't carry the project, so we attribute it
+    /// to the project of the deleted entry when we saw one, else the store
+    /// file's dominant project (the first entry parsed from this file).
+    fn project_key_for_line(&self, _id: &str, file_entries: &[MemoryEntry]) -> String {
+        file_entries
+            .first()
+            .map(|e| e.project.clone())
+            .unwrap_or_else(|| _id.to_string())
+    }
 
-        // Remove entries older than max_age (tombstoned so `save` propagates).
+    /// Remove old entries and cap the total count **for one project**.
+    ///
+    /// Entries of `project` older than `max_age` are bi-temporally
+    /// invalidated (recoverable, excluded from injection); if the project
+    /// still exceeds `max_entries` live entries, the least-recently-accessed
+    /// ones are deleted outright. Other projects are never touched —
+    /// `cleanup` used to sweep every project in the store and delete
+    /// another project's history (review 2026-09 P0).
+    ///
+    /// Returns the total number of entries invalidated or removed.
+    pub fn cleanup(
+        &mut self,
+        project: &str,
+        max_age: Duration,
+        max_entries: usize,
+    ) -> Result<usize, MemoryError> {
+        let cutoff = Utc::now() - max_age;
+        let now = Utc::now();
+        let mut affected = 0usize;
+
+        // Invalidate entries older than max_age (scoped to `project`).
         let aged_out: Vec<String> = self
             .entries
-            .iter()
-            .filter(|(_, entry)| entry.created_at <= cutoff)
-            .map(|(id, _)| id.clone())
+            .values()
+            .filter(|entry| {
+                entry.project == project && !entry.is_expired(now) && entry.created_at <= cutoff
+            })
+            .map(|entry| entry.id.clone())
             .collect();
         for id in aged_out {
-            self.evict(&id);
+            if let Some(entry) = self.entries.get_mut(&id) {
+                entry.expire(now);
+                affected += 1;
+            }
         }
 
-        // If still over capacity, remove least-recently-accessed entries
-        if self.entries.len() > max_entries {
-            let mut access_times: Vec<(String, DateTime<Utc>)> = self
-                .entries
-                .iter()
-                .map(|(id, entry)| (id.clone(), entry.accessed_at))
-                .collect();
-
+        // If still over capacity, delete least-recently-accessed live entries.
+        let live: Vec<(String, DateTime<Utc>)> = self
+            .entries
+            .values()
+            .filter(|e| e.project == project && !e.is_expired(now))
+            .map(|e| (e.id.clone(), e.accessed_at))
+            .collect();
+        if live.len() > max_entries {
+            let mut access_times = live;
             access_times.sort_by_key(|(_, t)| *t);
 
-            let to_remove = self.entries.len() - max_entries;
+            let to_remove = access_times.len() - max_entries;
             for (id, _) in access_times.into_iter().take(to_remove) {
-                self.evict(&id);
+                if self.evict(&id) {
+                    affected += 1;
+                }
             }
         }
 
         // Persist changes after cleanup
         self.save()?;
 
-        Ok(initial_count - self.entries.len())
+        Ok(affected)
     }
 
-    /// Return the number of entries currently in the store.
+    /// Return the number of live (non-expired) entries currently in the
+    /// store.
     pub fn len(&self) -> usize {
+        let now = Utc::now();
+        self.entries.values().filter(|e| !e.is_expired(now)).count()
+    }
+
+    /// Return the total number of entries including bi-temporally expired
+    /// ones.
+    pub fn total_len(&self) -> usize {
         self.entries.len()
     }
 
@@ -729,16 +1125,18 @@ impl MemoryStore {
             .collect()
     }
 
-    /// Consolidate memories: merge duplicates, remove stale entries, enforce caps.
+    /// Consolidate memories: merge duplicates, invalidate stale entries,
+    /// enforce caps — scoped to `project`.
     ///
     /// This is a convenience method that creates a default [`MemoryConsolidator`]
     /// and runs consolidation with the given config.
     pub fn consolidate_memories(
         &mut self,
+        project: &str,
         config: &SessionMemoryConfig,
     ) -> Result<ConsolidationResult, MemoryError> {
         let consolidator = MemoryConsolidator::default();
-        consolidator.consolidate(self, config)
+        consolidator.consolidate(self, project, config)
     }
 
     /// Auto-extract memories from a list of message summaries.
@@ -866,14 +1264,29 @@ impl MemoryStore {
         deduplicate_memories(memories)
     }
 
-    /// Merge duplicate memories based on Jaccard similarity.
+    /// Merge duplicate memories based on Jaccard similarity, **scoped to one
+    /// project**. Merging used to sweep every project in the store, so
+    /// compacting project A could delete project B's similar-but-distinct
+    /// entries (review 2026-09 P0).
     ///
-    /// When two entries have similarity above the threshold, the one with
-    /// the higher confidence is kept and the other is removed.
+    /// When two live entries have similarity above the threshold, the one
+    /// with the higher source trust (manual > import > auto-extract), then
+    /// the higher confidence, is kept and the other is deleted. Expired
+    /// entries never participate.
     /// Returns the number of duplicates removed.
-    pub fn merge_duplicates(&mut self, similarity_threshold: f64) -> Result<usize, MemoryError> {
+    pub fn merge_duplicates(
+        &mut self,
+        similarity_threshold: f64,
+        project: &str,
+    ) -> Result<usize, MemoryError> {
+        let now = Utc::now();
         let mut to_remove: Vec<String> = Vec::new();
-        let ids: Vec<String> = self.entries.keys().cloned().collect();
+        let ids: Vec<String> = self
+            .entries
+            .values()
+            .filter(|e| e.project == project && !e.is_expired(now))
+            .map(|e| e.id.clone())
+            .collect();
 
         for i in 0..ids.len() {
             if to_remove.contains(&ids[i]) {
@@ -889,12 +1302,12 @@ impl MemoryStore {
                 if entry_i.category == entry_j.category
                     && content_similarity(&entry_i.content, &entry_j.content) > similarity_threshold
                 {
-                    // Remove the one with lower confidence
-                    let remove_id = if entry_i.confidence >= entry_j.confidence {
-                        &ids[j]
-                    } else {
-                        &ids[i]
-                    };
+                    // Remove the lower-value one: source trust first (a
+                    // hand-saved fact must not be eaten by an auto-extracted
+                    // paraphrase), then confidence.
+                    let keep_j = (trust_rank(entry_j), entry_j.confidence)
+                        > (trust_rank(entry_i), entry_i.confidence);
+                    let remove_id = if keep_j { &ids[i] } else { &ids[j] };
                     to_remove.push(remove_id.clone());
                 }
             }
@@ -907,35 +1320,45 @@ impl MemoryStore {
         Ok(to_remove.len())
     }
 
-    /// Remove entries that are older than the given TTL.
-    ///
-    /// Returns the number of entries removed.
-    pub fn remove_stale(&mut self, ttl: Duration) -> Result<usize, MemoryError> {
+    /// Invalidate entries of **one project** older than the given TTL
+    /// (bi-temporal close — they stay on disk and `/recall --all` finds
+    /// them, but never reach injection again). Returns the number
+    /// invalidated.
+    pub fn remove_stale(&mut self, ttl: Duration, project: &str) -> Result<usize, MemoryError> {
         let cutoff = Utc::now() - ttl;
-        let initial_count = self.entries.len();
+        let now = Utc::now();
 
         let stale: Vec<String> = self
             .entries
-            .iter()
-            .filter(|(_, entry)| entry.created_at <= cutoff)
-            .map(|(id, _)| id.clone())
+            .values()
+            .filter(|entry| {
+                entry.project == project && !entry.is_expired(now) && entry.created_at <= cutoff
+            })
+            .map(|entry| entry.id.clone())
             .collect();
-        for id in stale {
-            self.evict(&id);
+        for id in &stale {
+            if let Some(entry) = self.entries.get_mut(id) {
+                entry.expire(now);
+            }
         }
 
-        Ok(initial_count - self.entries.len())
+        Ok(stale.len())
     }
 
-    /// Enforce per-category caps by removing the least-accessed entries.
-    pub fn enforce_category_caps(&mut self, max_per_category: usize) {
+    /// Enforce per-category caps by removing the least-accessed **live**
+    /// entries of one project. Expired entries are skipped (they are already
+    /// out of injection).
+    pub fn enforce_category_caps(&mut self, max_per_category: usize, project: &str) {
+        let now = Utc::now();
         let mut by_category: HashMap<MemoryCategory, Vec<String>> = HashMap::new();
 
         for (id, entry) in &self.entries {
-            by_category
-                .entry(entry.category.clone())
-                .or_default()
-                .push(id.clone());
+            if entry.project == project && !entry.is_expired(now) {
+                by_category
+                    .entry(entry.category.clone())
+                    .or_default()
+                    .push(id.clone());
+            }
         }
 
         for (_category, mut ids) in by_category {
@@ -995,22 +1418,33 @@ impl MemoryStore {
         scored.into_iter().map(|(_, e)| e).collect()
     }
 
-    /// Detect and resolve contradictory memories.
+    /// Detect and resolve contradictory memories **within one project**.
     ///
-    /// Finds pairs of memories in the same category that express opposing
-    /// sentiments (e.g., "always use X" vs "never use X"). The newer memory
-    /// replaces the older one. Returns the number of conflicts resolved.
-    pub fn resolve_conflicts(&mut self) -> Result<usize, MemoryError> {
-        let mut to_remove: Vec<String> = Vec::new();
+    /// Finds pairs of live memories in the same category that express
+    /// opposing sentiments (e.g., "always use X" vs "never use X"). The
+    /// older memory is bi-temporally invalidated — it stays on disk for
+    /// audit (`/recall --all`) but stops being injected; the newer fact
+    /// wins. Wired into the compaction pass so contradictions between
+    /// injected memories are actually resolved (previously this existed
+    /// with no production caller). Returns the number of conflicts
+    /// resolved.
+    pub fn resolve_conflicts(&mut self, project: &str) -> Result<usize, MemoryError> {
+        let now = Utc::now();
+        let mut to_expire: Vec<String> = Vec::new();
 
-        let ids: Vec<String> = self.entries.keys().cloned().collect();
+        let ids: Vec<String> = self
+            .entries
+            .values()
+            .filter(|e| e.project == project && !e.is_expired(now))
+            .map(|e| e.id.clone())
+            .collect();
 
         for i in 0..ids.len() {
-            if to_remove.contains(&ids[i]) {
+            if to_expire.contains(&ids[i]) {
                 continue;
             }
             for j in (i + 1)..ids.len() {
-                if to_remove.contains(&ids[j]) {
+                if to_expire.contains(&ids[j]) {
                     continue;
                 }
 
@@ -1020,27 +1454,86 @@ impl MemoryStore {
                 if entry_i.category == entry_j.category
                     && are_contradictory(&entry_i.content, &entry_j.content)
                 {
-                    // Remove the older one
-                    let remove_id = if entry_i.created_at < entry_j.created_at {
+                    // Invalidate the older one
+                    let stale_id = if entry_i.created_at < entry_j.created_at {
                         &ids[i]
                     } else {
                         &ids[j]
                     };
-                    to_remove.push(remove_id.clone());
+                    to_expire.push(stale_id.clone());
                 }
             }
         }
 
-        let count = to_remove.len();
-        for id in &to_remove {
-            self.evict(id);
-        }
-
-        if count > 0 {
-            self.save()?;
+        let count = to_expire.len();
+        for id in &to_expire {
+            if let Some(entry) = self.entries.get_mut(id) {
+                entry.expire(now);
+            }
         }
 
         Ok(count)
+    }
+
+    /// Health statistics for the `/memory doctor` report: live vs expired
+    /// counts, per-category distribution, and a near-duplicate pair count
+    /// (same project+category, Jaccard ≥ 0.8 but not yet merged).
+    pub fn doctor_stats(&self, project: Option<&str>) -> MemoryDoctorStats {
+        let now = Utc::now();
+        let mut stats = MemoryDoctorStats::default();
+        let mut live: Vec<&MemoryEntry> = Vec::new();
+
+        for entry in self.entries.values() {
+            if project.is_some_and(|p| entry.project != p) {
+                continue;
+            }
+            stats.total += 1;
+            if entry.is_expired(now) {
+                stats.expired += 1;
+            } else {
+                live.push(entry);
+                *stats.by_category.entry(entry.category.clone()).or_default() += 1;
+            }
+        }
+
+        for i in 0..live.len() {
+            for j in (i + 1)..live.len() {
+                if live[i].category == live[j].category
+                    && live[i].project == live[j].project
+                    && content_similarity(&live[i].content, &live[j].content)
+                        >= DEDUP_SIMILARITY_THRESHOLD
+                {
+                    stats.near_duplicate_pairs += 1;
+                }
+            }
+        }
+
+        stats
+    }
+}
+
+/// Health snapshot produced by [`MemoryStore::doctor_stats`].
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct MemoryDoctorStats {
+    /// All entries in scope, including expired ones.
+    pub total: usize,
+    /// Entries bi-temporally invalidated (excluded from injection).
+    pub expired: usize,
+    /// Live entries per category.
+    pub by_category: HashMap<MemoryCategory, usize>,
+    /// Live same-project, same-category pairs above the dedup threshold
+    /// that a compaction pass should merge.
+    pub near_duplicate_pairs: usize,
+}
+
+/// Source-trust rank used when two near-duplicates compete: a hand-saved
+/// fact must not be eaten by an auto-extracted paraphrase of it.
+fn trust_rank(entry: &MemoryEntry) -> u8 {
+    match entry.source_kind.as_deref() {
+        Some(MemoryEntry::SOURCE_MANUAL) => 3,
+        Some(MemoryEntry::SOURCE_IMPORT) => 2,
+        Some(MemoryEntry::SOURCE_AUTO_EXTRACT) => 1,
+        _ => 0,
     }
 }
 
@@ -1198,6 +1691,7 @@ mod tests {
             access_count,
             source_session_id: None,
             source_kind: None,
+            valid_until: None,
         }
     }
 
@@ -1565,7 +2059,11 @@ mod tests {
     fn test_format_for_injection_none_when_empty() {
         let dir = TempDir::new().unwrap();
         let store = MemoryStore::new(dir.path().to_path_buf());
-        assert!(store.format_for_injection("no-such-project").is_none());
+        assert!(
+            store
+                .format_for_injection("no-such-project", None)
+                .is_none()
+        );
     }
 
     #[test]
@@ -1597,7 +2095,7 @@ mod tests {
             ))
             .unwrap();
 
-        let out = store.format_for_injection("proj").unwrap();
+        let out = store.format_for_injection("proj", None).unwrap();
         // Header + both categories present, content included ...
         assert!(out.starts_with("## Project Memories\n"));
         assert!(out.contains("### preference\n"));
@@ -1619,7 +2117,7 @@ mod tests {
         store
             .add(make_entry("proj-b", MemoryCategory::Context, "from b"))
             .unwrap();
-        let out = store.format_for_injection("proj-a").unwrap();
+        let out = store.format_for_injection("proj-a", None).unwrap();
         assert!(out.contains("from a"));
         assert!(!out.contains("from b"));
     }
@@ -1637,7 +2135,7 @@ mod tests {
                 ))
                 .unwrap();
         }
-        let out = store.format_for_injection("proj").unwrap();
+        let out = store.format_for_injection("proj", None).unwrap();
         // 120 stored, but injection capped at MAX_INJECTED_MEMORIES (50).
         assert_eq!(out.lines().filter(|l| l.starts_with("- ")).count(), 50);
     }
@@ -1888,12 +2386,20 @@ mod tests {
         // confidence entry is pruned.
         let removed = store.prune_to_token_budget("p", 18);
         assert_eq!(removed, 1);
+        // Prune invalidates (bi-temporal close), it never destroys: the
+        // entry remains retrievable via /recall --all.
         assert!(
-            store.get(&low_id).is_none(),
-            "lowest-confidence pruned first"
+            store.get(&low_id).unwrap().is_expired(Utc::now()),
+            "lowest-confidence pruned (invalidated) first"
         );
-        assert!(store.get(&mid_id).is_some());
-        assert!(store.get(&high_id).is_some(), "highest-confidence survives");
+        assert!(
+            !store.get(&mid_id).unwrap().is_expired(Utc::now()),
+            "mid-confidence survives"
+        );
+        assert!(
+            !store.get(&high_id).unwrap().is_expired(Utc::now()),
+            "highest-confidence survives"
+        );
     }
 
     #[test]
@@ -1943,7 +2449,7 @@ mod tests {
         );
         store.add(old).unwrap();
         store.add(recent).unwrap();
-        let removed = store.cleanup(Duration::days(30), 100).unwrap();
+        let removed = store.cleanup("p", Duration::days(30), 100).unwrap();
         assert_eq!(removed, 1);
         assert_eq!(store.len(), 1);
         assert_eq!(store.get("2").unwrap().content, "recent");
@@ -1967,7 +2473,7 @@ mod tests {
             entry.access_count = i;
             store.add(entry).unwrap();
         }
-        let removed = store.cleanup(Duration::days(365), 2).unwrap();
+        let removed = store.cleanup("p", Duration::days(365), 2).unwrap();
         assert_eq!(removed, 3);
         assert_eq!(store.len(), 2);
     }
@@ -1995,7 +2501,7 @@ mod tests {
             ))
             .unwrap();
         assert_eq!(store.len(), 2);
-        let merged = store.merge_duplicates(0.8).unwrap();
+        let merged = store.merge_duplicates(0.8, "p").unwrap();
         assert_eq!(merged, 1);
         assert_eq!(store.len(), 1);
         let survivor = store.entries.values().next().unwrap();
@@ -2022,7 +2528,7 @@ mod tests {
                 0.9,
             ))
             .unwrap();
-        let merged = store.merge_duplicates(0.8).unwrap();
+        let merged = store.merge_duplicates(0.8, "p").unwrap();
         assert_eq!(merged, 0);
         assert_eq!(store.len(), 2);
     }
@@ -2047,7 +2553,7 @@ mod tests {
                 0.9,
             ))
             .unwrap();
-        let merged = store.merge_duplicates(0.8).unwrap();
+        let merged = store.merge_duplicates(0.8, "p").unwrap();
         assert_eq!(merged, 0);
         assert_eq!(store.len(), 2);
     }
@@ -2080,7 +2586,7 @@ mod tests {
         );
         store.add(old).unwrap();
         store.add(fresh).unwrap();
-        let removed = store.remove_stale(Duration::days(30)).unwrap();
+        let removed = store.remove_stale(Duration::days(30), "p").unwrap();
         assert_eq!(removed, 1);
         assert_eq!(store.len(), 1);
         assert_eq!(store.get("2").unwrap().content, "fresh");
@@ -2093,7 +2599,7 @@ mod tests {
         store
             .add(make_entry("p", MemoryCategory::Context, "fresh"))
             .unwrap();
-        let removed = store.remove_stale(Duration::days(365)).unwrap();
+        let removed = store.remove_stale(Duration::days(365), "p").unwrap();
         assert_eq!(removed, 0);
     }
 
@@ -2117,7 +2623,7 @@ mod tests {
             entry.access_count = i;
             store.add(entry).unwrap();
         }
-        store.enforce_category_caps(2);
+        store.enforce_category_caps(2, "proj");
         assert_eq!(store.len(), 2);
         for entry in store.entries.values() {
             assert!(entry.access_count > 0);
@@ -2134,7 +2640,7 @@ mod tests {
         store
             .add(make_entry("p", MemoryCategory::Decision, "two"))
             .unwrap();
-        store.enforce_category_caps(10);
+        store.enforce_category_caps(10, "p");
         assert_eq!(store.len(), 2);
     }
 
@@ -2166,10 +2672,11 @@ mod tests {
         );
         store.add(older).unwrap();
         store.add(newer).unwrap();
-        let resolved = store.resolve_conflicts().unwrap();
+        let resolved = store.resolve_conflicts("p").unwrap();
         assert_eq!(resolved, 1);
-        assert_eq!(store.len(), 1);
-        assert_eq!(store.entries.values().next().unwrap().id, "2");
+        assert_eq!(store.len(), 1, "only the newer fact stays live");
+        assert!(store.get("1").unwrap().is_expired(Utc::now()));
+        assert!(!store.get("2").unwrap().is_expired(Utc::now()));
     }
 
     #[test]
@@ -2186,7 +2693,7 @@ mod tests {
         store
             .add(make_entry("p", MemoryCategory::Decision, "Use PostgreSQL"))
             .unwrap();
-        let resolved = store.resolve_conflicts().unwrap();
+        let resolved = store.resolve_conflicts("p").unwrap();
         assert_eq!(resolved, 0);
     }
 
@@ -2447,5 +2954,322 @@ mod tests {
     #[test]
     fn test_are_contradictory_low_overlap_not_contradictory() {
         assert!(!are_contradictory("always alpha beta", "never gamma delta"));
+    }
+
+    // --- Review 2026-09 regression tests ---
+
+    #[test]
+    fn compaction_of_project_a_never_touches_project_b() {
+        // P0 regression: merge_duplicates/remove_stale/enforce_category_caps
+        // used to sweep every project, so compacting A deleted B's
+        // similar-but-distinct entries.
+        let dir = TempDir::new().unwrap();
+        let mut store = MemoryStore::new(dir.path().to_path_buf());
+        let a = make_entry_with_confidence(
+            "proj-a",
+            MemoryCategory::Preference,
+            "always use tabs for indentation",
+            0.6,
+        );
+        let b = make_entry_with_confidence(
+            "proj-b",
+            MemoryCategory::Preference,
+            "always use tabs for indentation",
+            0.9,
+        );
+        let b_id = b.id.clone();
+        store.add(a).unwrap();
+        store.add(b).unwrap();
+
+        store
+            .consolidate_memories("proj-a", &SessionMemoryConfig::default())
+            .unwrap();
+
+        assert!(
+            store.get(&b_id).is_some(),
+            "project B's entry must survive A's compaction"
+        );
+    }
+
+    #[test]
+    fn deletion_is_visible_to_a_fresh_load_without_save() {
+        // P0 regression: evict now appends a durable tombstone line, so a
+        // deletion made by process A is honored by any later load even if A
+        // never rewrites the file.
+        let dir = TempDir::new().unwrap();
+        let path = dir.path().to_path_buf();
+
+        let mut writer = MemoryStore::new(path.clone());
+        writer.load().unwrap();
+        let e = make_entry("p", MemoryCategory::Context, "ephemeral fact");
+        let id = e.id.clone();
+        writer.add(e).unwrap();
+        writer.delete(&id).unwrap();
+
+        let mut reader = MemoryStore::new(path);
+        reader.load().unwrap();
+        assert!(
+            reader.get(&id).is_none(),
+            "fresh load must honor the tombstone without a rewrite"
+        );
+    }
+
+    #[test]
+    fn other_process_save_does_not_resurrect_deleted_entry() {
+        // P0 regression: a long-running process B that loaded before A's
+        // deletion used to resurrect the entry from its in-memory map on its
+        // next save. Now B's save honors A's (older) tombstone line.
+        let dir = TempDir::new().unwrap();
+        let path = dir.path().to_path_buf();
+
+        let mut b = MemoryStore::new(path.clone());
+        b.load().unwrap();
+        let e = make_entry("p", MemoryCategory::Context, "shared fact");
+        let id = e.id.clone();
+        b.add(e).unwrap();
+
+        // Process A loads, deletes, saves (rewrites without the entry but
+        // with a tombstone line).
+        let mut a = MemoryStore::new(path.clone());
+        a.load().unwrap();
+        a.delete(&id).unwrap();
+        a.save().unwrap();
+
+        // B has not reloaded; its next save must not resurrect the entry.
+        b.save().unwrap();
+
+        let mut fresh = MemoryStore::new(path);
+        fresh.load().unwrap();
+        assert!(
+            fresh.get(&id).is_none(),
+            "deletion must win over B's stale view"
+        );
+    }
+
+    #[test]
+    fn readd_after_tombstone_revives_the_entry() {
+        let dir = TempDir::new().unwrap();
+        let path = dir.path().to_path_buf();
+
+        let mut store = MemoryStore::new(path.clone());
+        store.load().unwrap();
+        let e = make_entry("p", MemoryCategory::Context, "comeback fact");
+        let id = e.id.clone();
+        store.add(e).unwrap();
+        store.delete(&id).unwrap();
+
+        // Re-add the same id after the tombstone: last writer wins.
+        let mut revived = make_entry("p", MemoryCategory::Context, "comeback fact");
+        revived.id = id.clone();
+        store.add(revived).unwrap();
+
+        let mut fresh = MemoryStore::new(path);
+        fresh.load().unwrap();
+        assert!(
+            fresh.get(&id).is_some(),
+            "entry line after tombstone revives the id"
+        );
+    }
+
+    #[test]
+    fn global_memories_inject_alongside_project_memories() {
+        let dir = TempDir::new().unwrap();
+        let mut store = MemoryStore::new(dir.path().to_path_buf());
+        store
+            .add(make_entry(
+                super::super::store::GLOBAL_SCOPE,
+                MemoryCategory::Preference,
+                "user prefers pnpm over npm",
+            ))
+            .unwrap();
+        store
+            .add(make_entry(
+                "proj",
+                MemoryCategory::Decision,
+                "use postgres here",
+            ))
+            .unwrap();
+
+        let out = store.format_for_injection("proj", None).unwrap();
+        assert!(out.contains("## Global Memories"), "{out}");
+        assert!(out.contains("## Project Memories"), "{out}");
+        assert!(out.contains("pnpm"), "{out}");
+        assert!(out.contains("postgres"), "{out}");
+
+        // Other projects must not see proj's entries.
+        let other = store.format_for_injection("other-proj", None).unwrap();
+        assert!(!other.contains("postgres"), "{other}");
+        assert!(other.contains("pnpm"), "globals are cross-project: {other}");
+    }
+
+    #[test]
+    fn expired_entries_are_excluded_from_injection_and_search() {
+        let dir = TempDir::new().unwrap();
+        let mut store = MemoryStore::new(dir.path().to_path_buf());
+        let mut e = make_entry("p", MemoryCategory::Context, "stale beyond recall");
+        e.valid_until = Some(Utc::now() - Duration::hours(1));
+        store.add(e).unwrap();
+
+        assert!(store.format_for_injection("p", None).is_none());
+        assert!(store.search("stale", Some("p")).is_empty());
+        assert_eq!(store.len(), 0);
+        assert_eq!(store.total_len(), 1);
+        // --all surfaces it for audit.
+        assert_eq!(store.search_including_expired("stale", Some("p")).len(), 1);
+        // And it is still on disk.
+        let mut reloaded = MemoryStore::new(dir.path().to_path_buf());
+        reloaded.load().unwrap();
+        assert_eq!(reloaded.total_len(), 1, "invalidation is not deletion");
+    }
+
+    #[test]
+    fn cjk_similarity_detects_paraphrases() {
+        // split_whitespace made a whole CJK sentence one token (similarity
+        // 0-or-1), silently disabling dedup for Chinese content.
+        let a = "这个项目总是使用 cargo 构建和测试";
+        let b = "这个项目总是使用 cargo 构建与测试";
+        assert!(
+            content_similarity(a, b) >= 0.8,
+            "CJK paraphrase must merge: {}",
+            content_similarity(a, b)
+        );
+        let c = "完全不同的另一句话";
+        assert!(content_similarity(a, c) < 0.8);
+    }
+
+    #[test]
+    fn estimate_tokens_counts_cjk_as_one_token_each() {
+        // chars/4 underestimated CJK ~4x, letting 2000-token budgets inject
+        // ~8000 tokens of Chinese.
+        let ascii = "abcdefgh"; // 8 chars -> 2 tokens
+        assert_eq!(estimate_tokens(ascii), 2);
+        let cjk = "四个汉字"; // 4 chars -> 4 tokens
+        assert_eq!(estimate_tokens(cjk), 4);
+        let mixed = "abc四个"; // 3 ascii -> 1 + 2 cjk
+        assert_eq!(estimate_tokens(mixed), 3);
+    }
+
+    #[test]
+    fn add_or_update_masks_secrets() {
+        let dir = TempDir::new().unwrap();
+        let mut store = MemoryStore::new(dir.path().to_path_buf());
+        let secret = format!("my api key is sk-ant-api03-{}", "a".repeat(95));
+        let e = make_entry("p", MemoryCategory::Context, &secret);
+        store.add_or_update(e).unwrap();
+
+        let stored = store.project_memories("p").remove(0);
+        assert!(
+            !stored.content.contains("sk-ant-api03-"),
+            "secret must not persist: {}",
+            stored.content
+        );
+        assert!(stored.content.contains("[REDACTED:"), "{}", stored.content);
+    }
+
+    #[test]
+    fn injection_orders_by_relevance_to_query_when_truncating() {
+        let dir = TempDir::new().unwrap();
+        let mut store = MemoryStore::new(dir.path().to_path_buf());
+        // MAX_INJECTED_MEMORIES + 10 entries, all recent; the kubernetes one
+        // is oldest but must survive when the query is about kubernetes.
+        for i in 0..(MAX_INJECTED_MEMORIES + 10) {
+            let content = if i == 0 {
+                "kubernetes deploy pipeline details".to_string()
+            } else {
+                format!("filler entry number {i} about unrelated things")
+            };
+            let mut e = make_entry_with_timestamps(
+                &format!("e{i}"),
+                "p",
+                MemoryCategory::Context,
+                &content,
+                0.8,
+                Utc::now(),
+                Utc::now(),
+                0,
+            );
+            // oldest first for i == 0 so recency ordering would drop it.
+            e.created_at = Utc::now() - Duration::hours(i as i64 + 1);
+            store.add(e).unwrap();
+        }
+        let out = store
+            .format_for_injection("p", Some("kubernetes deploy pipeline"))
+            .unwrap();
+        assert!(
+            out.contains("kubernetes deploy pipeline"),
+            "relevance must outrank recency under the cap: {{out}}"
+        );
+    }
+
+    #[test]
+    fn conflict_resolution_invalidates_instead_of_deleting() {
+        let dir = TempDir::new().unwrap();
+        let mut store = MemoryStore::new(dir.path().to_path_buf());
+        let older = make_entry_with_timestamps(
+            "1",
+            "p",
+            MemoryCategory::Preference,
+            "always use spaces for formatting code",
+            0.9,
+            Utc::now() - Duration::hours(2),
+            Utc::now(),
+            0,
+        );
+        let newer = make_entry_with_timestamps(
+            "2",
+            "p",
+            MemoryCategory::Preference,
+            "never use spaces for formatting code",
+            0.9,
+            Utc::now(),
+            Utc::now(),
+            0,
+        );
+        store.add(older).unwrap();
+        store.add(newer).unwrap();
+
+        let resolved = store.resolve_conflicts("p").unwrap();
+        assert_eq!(resolved, 1);
+        // The loser stays on disk (auditable) but is out of injection.
+        assert!(store.get("1").is_some());
+        assert!(store.get("1").unwrap().is_expired(Utc::now()));
+        assert!(store.format_for_injection("p", None).is_some());
+        assert!(
+            !store
+                .format_for_injection("p", None)
+                .unwrap()
+                .contains("always use spaces")
+        );
+    }
+
+    #[test]
+    fn merge_prefers_manual_over_auto_extract_source() {
+        let dir = TempDir::new().unwrap();
+        let mut store = MemoryStore::new(dir.path().to_path_buf());
+        let mut manual = make_entry_with_confidence(
+            "p",
+            MemoryCategory::Preference,
+            "always use tabs for indentation",
+            0.5,
+        );
+        manual.source_kind = Some(MemoryEntry::SOURCE_MANUAL.to_string());
+        let mut auto = make_entry_with_confidence(
+            "p",
+            MemoryCategory::Preference,
+            "always use tabs for indentation",
+            0.99,
+        );
+        auto.source_kind = Some(MemoryEntry::SOURCE_AUTO_EXTRACT.to_string());
+        let manual_id = manual.id.clone();
+        store.add(manual).unwrap();
+        store.add(auto).unwrap();
+
+        store.merge_duplicates(0.8, "p").unwrap();
+        assert_eq!(store.project_memories("p").len(), 1);
+        let survivor = store.project_memories("p").remove(0);
+        assert_eq!(survivor.id, manual_id, "hand-saved fact must win");
+        // merge_duplicates deletes the loser outright; only add_or_update
+        // merges confidence — the manual entry keeps its own score.
+        assert!((survivor.confidence - 0.5).abs() < f64::EPSILON);
     }
 }

@@ -613,6 +613,28 @@ impl QueryEngine {
         self.memory.as_ref()
     }
 
+    /// Pin the session's working directory for host-dependent reads keyed on
+    /// the session's location (memory injection/extraction project key).
+    /// Hosts running multiple sessions in one process MUST set this — the
+    /// process cwd races between sessions. See
+    /// [`QueryEngineConfig::working_directory`](crate::query_engine::QueryEngineConfig::working_directory).
+    pub fn with_working_directory(mut self, dir: impl Into<std::path::PathBuf>) -> Self {
+        self.config.working_directory = Some(dir.into());
+        self
+    }
+
+    /// The project key memory reads/writes use: the explicitly configured
+    /// session working directory when set, else the process current
+    /// directory, else `"default"`.
+    pub(crate) fn memory_project_key(&self) -> String {
+        if let Some(dir) = self.config.working_directory.as_ref() {
+            return dir.display().to_string();
+        }
+        std::env::current_dir()
+            .map(|p| p.display().to_string())
+            .unwrap_or_else(|_| "default".to_string())
+    }
+
     /// Attach a context injector for project instructions and preference memory.
     ///
     /// When set, the injector provides project instructions and user preferences
@@ -875,10 +897,8 @@ impl QueryEngine {
 
         let memory_text = self.memory.as_ref().and_then(|mem| {
             mem.read().ok().and_then(|store| {
-                let project = std::env::current_dir()
-                    .map(|p| p.display().to_string())
-                    .unwrap_or_else(|_| "default".to_string());
-                store.format_for_injection(&project)
+                let project = self.memory_project_key();
+                store.format_for_injection(&project, None)
             })
         });
         let input = ContextBreakdownInput {

@@ -19,8 +19,13 @@ pub(crate) fn handle_image_paste(repl: &mut Repl, prompt_args: &str) -> Result<(
         prompt_args.to_string()
     };
 
-    // Try reading clipboard image via platform tools
-    let tmp_path = std::env::temp_dir().join("shannon_clipboard_paste.png");
+    // Try reading clipboard image via platform tools. Unique per process:
+    // a fixed name collides across concurrent instances and is a
+    // predictable symlink target on shared machines.
+    let tmp_path = std::env::temp_dir().join(format!(
+        "shannon_clipboard_paste_{}.png",
+        std::process::id()
+    ));
     let tmp_str = tmp_path.to_string_lossy().to_string();
 
     let result = if cfg!(target_os = "macos") {
@@ -505,9 +510,16 @@ pub(crate) fn handle_copy(repl: &mut Repl, args: &str) -> Result<()> {
         repl.chat
             .add_message(ChatRole::System, format!("Copied to clipboard: {preview}"));
     } else {
-        // Fallback: write to temp file
-        let tmp = std::env::temp_dir().join("shannon-clipboard.txt");
-        if std::fs::write(&tmp, &content).is_ok() {
+        // Fallback: write to a private temp file (unique per process, 0600 —
+        // the content can be sensitive and the clipboard fallback used to
+        // leave a world-readable file with a guessable name).
+        let tmp =
+            std::env::temp_dir().join(format!("shannon-clipboard-{}.txt", std::process::id()));
+        let written = std::fs::write(&tmp, &content).and_then(|_| {
+            use std::os::unix::fs::PermissionsExt;
+            std::fs::set_permissions(&tmp, std::fs::Permissions::from_mode(0o600))
+        });
+        if written.is_ok() {
             repl.chat.add_message(ChatRole::System,
                 format!("Clipboard unavailable. Content saved to: {}\nInstall xclip or xsel for clipboard support.", tmp.display()));
         } else {

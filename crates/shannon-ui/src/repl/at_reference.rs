@@ -8,6 +8,8 @@
 
 use std::path::Path;
 
+use shannon_core::attachments::{MAX_IMAGE_BYTES, MAX_PDF_BYTES};
+
 /// Default maximum depth for directory tree listings.
 const DEFAULT_TREE_DEPTH: usize = 3;
 
@@ -103,6 +105,16 @@ pub fn load_image_block(file_path: &str) -> Result<shannon_engine::api::ContentB
         "svg" => "image/svg+xml",
         _ => return Err(format!("Unsupported image format: {file_path}")),
     };
+    // Shared size gate: stat before read, so an oversized file is rejected
+    // without pulling its bytes into memory (same 10 MiB limit every other
+    // entry path enforces).
+    let meta = std::fs::metadata(path).map_err(|e| format!("Could not read {file_path}: {e}"))?;
+    if meta.len() > MAX_IMAGE_BYTES as u64 {
+        return Err(format!(
+            "Image \"{file_path}\" is too large to attach: {} bytes (limit: {MAX_IMAGE_BYTES} bytes)",
+            meta.len()
+        ));
+    }
     let bytes = std::fs::read(path).map_err(|e| format!("Could not read {file_path}: {e}"))?;
     let data = base64::engine::general_purpose::STANDARD.encode(&bytes);
     Ok(shannon_engine::api::ContentBlock::Image {
@@ -215,6 +227,17 @@ pub fn extract_pdf_text(file_path: &str) -> AtReferenceResult {
 
     if !path.exists() {
         return AtReferenceResult::error(format!("PDF file not found: {file_path}"));
+    }
+
+    // Shared size gate: refuse to spawn pdftotext on a pathologically large
+    // PDF (metadata precheck, same 100 MiB cap the desktop send path uses).
+    if let Ok(meta) = path.metadata() {
+        if meta.len() > MAX_PDF_BYTES {
+            return AtReferenceResult::error(format!(
+                "PDF \"{file_path}\" is too large to attach: {} bytes (limit: {MAX_PDF_BYTES} bytes)",
+                meta.len()
+            ));
+        }
     }
 
     // Get page count via pdfinfo
@@ -871,6 +894,39 @@ mod tests {
         let result = extract_pdf_text("/nonexistent/file.pdf");
         assert!(result.is_error);
         assert!(result.status_message.unwrap().contains("not found"));
+    }
+
+    // ── Attachment size gates ──────────────────────────────────────
+
+    #[test]
+    fn load_image_block_rejects_oversized_files_before_reading() {
+        // Sparse 10 MiB + 1 byte file: the metadata gate must reject it
+        // without reading the bytes.
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = dir.path().join("huge.png");
+        let f = std::fs::File::create(&path).expect("create sparse file");
+        f.set_len(shannon_core::attachments::MAX_IMAGE_BYTES as u64 + 1)
+            .expect("set len");
+        drop(f);
+        let err = load_image_block(&path.to_string_lossy()).expect_err("oversize must fail");
+        assert!(err.contains("too large"), "got: {err}");
+        assert!(err.contains("limit"), "got: {err}");
+    }
+
+    #[test]
+    fn extract_pdf_text_rejects_oversized_files() {
+        // Sparse 100 MiB + 1 byte PDF: rejected by the metadata precheck
+        // before pdfinfo/pdftotext are ever spawned.
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = dir.path().join("huge.pdf");
+        let f = std::fs::File::create(&path).expect("create sparse file");
+        f.set_len(shannon_core::attachments::MAX_PDF_BYTES + 1)
+            .expect("set len");
+        drop(f);
+        let result = extract_pdf_text(&path.to_string_lossy());
+        assert!(result.is_error);
+        let msg = result.status_message.unwrap();
+        assert!(msg.contains("too large"), "got: {msg}");
     }
 
     // ── URL fetching tests ─────────────────────────────────────────

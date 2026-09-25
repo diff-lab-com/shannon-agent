@@ -17,27 +17,51 @@ use crate::resolve_write_target_in_working_dir;
 const MAX_ATTACHMENT_SIZE: u64 = 25 * 1024 * 1024;
 const MAX_ATTACHMENT_COUNT: usize = 10;
 
+/// Prefix + wording of the placeholder returned when PDF text extraction is
+/// unavailable. Kept next to the builder so the two cannot drift.
+const PDF_UNAVAILABLE_PREFIX: &str = "[PDF text extraction unavailable: ";
+
+/// Build the placeholder injected when PDF text extraction is unavailable.
+/// Pure function so tests can lock the exact wording.
+pub(crate) fn pdf_unavailable_placeholder(reason: &str) -> String {
+    format!("{PDF_UNAVAILABLE_PREFIX}{reason}]")
+}
+
+/// Whether `text` is the placeholder produced by
+/// [`pdf_unavailable_placeholder`] — lets callers frame it as an extraction
+/// failure instead of presenting it as "extracted text".
+pub(crate) fn is_pdf_unavailable_placeholder(text: &str) -> bool {
+    text.starts_with(PDF_UNAVAILABLE_PREFIX) && text.ends_with(']')
+}
+
 /// Best-effort PDF text extraction. We intentionally avoid pulling in a
 /// heavy PDF crate; the approach is to shell out to `pdftotext` (poppler)
-/// if installed, otherwise fall back to the raw UTF-8 decode. This keeps
-/// the dependency surface flat while still giving real content for the
-/// common case where poppler is available on the user's PATH.
+/// if installed. This keeps the dependency surface flat while still giving
+/// real content for the common case where poppler is available on the
+/// user's PATH.
+///
+/// When extraction fails or poppler is missing, [`pdf_unavailable_placeholder`]
+/// is returned instead of the old raw-bytes UTF-8 lossy decode: lossy-decoding
+/// a PDF pours binary mojibake into the model context, while the placeholder
+/// tells the model (and user) exactly what went wrong.
 pub(crate) async fn extract_pdf_text_best_effort(path: &Path) -> String {
     use std::process::Command;
 
     let path_str = path.to_string_lossy().into_owned();
     let output = Command::new("pdftotext").arg(&path_str).arg("-").output();
-    if let Ok(out) = output {
-        if out.status.success() {
-            return String::from_utf8_lossy(&out.stdout).into_owned();
-        }
+    match output {
+        Ok(out) if out.status.success() => String::from_utf8_lossy(&out.stdout).into_owned(),
+        Ok(out) => pdf_unavailable_placeholder(&format!(
+            "pdftotext exited with {}",
+            out.status
+                .code()
+                .map(|c| c.to_string())
+                .unwrap_or_else(|| "signal".to_string())
+        )),
+        Err(e) => pdf_unavailable_placeholder(&format!(
+            "pdftotext is not runnable ({e}) — install poppler-utils"
+        )),
     }
-
-    // Fallback: best-effort UTF-8 decode of the raw bytes.
-    tokio::fs::read(path)
-        .await
-        .map(|b| String::from_utf8_lossy(&b).into_owned())
-        .unwrap_or_default()
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -651,6 +675,44 @@ mod tests {
         assert_eq!(payload.mime, "application/pdf");
         assert!(payload.base64.is_none());
         assert!(payload.text.is_some());
+    }
+
+    // ---- PDF extraction-failure placeholder ----
+
+    #[test]
+    fn pdf_placeholder_has_stable_wording() {
+        let placeholder = pdf_unavailable_placeholder("pdftotext missing");
+        assert_eq!(
+            placeholder,
+            "[PDF text extraction unavailable: pdftotext missing]"
+        );
+        assert!(is_pdf_unavailable_placeholder(&placeholder));
+    }
+
+    #[test]
+    fn pdf_placeholder_predicate_rejects_normal_text() {
+        assert!(!is_pdf_unavailable_placeholder("real extracted pdf body"));
+        assert!(!is_pdf_unavailable_placeholder(""));
+        // Missing the closing bracket → not our placeholder.
+        assert!(!is_pdf_unavailable_placeholder(
+            "[PDF text extraction unavailable: nope"
+        ));
+    }
+
+    #[tokio::test]
+    async fn pdf_extraction_failure_returns_placeholder_not_binary_garbage() {
+        // Binary junk that is not a PDF: the old lossy-UTF-8 fallback would
+        // have injected mojibake into the model context; the placeholder
+        // names the failure instead.
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = dir.path().join("garbage.pdf");
+        std::fs::write(&path, [0xFFu8, 0x00, 0xFE, 0x25, 0x50, 0x44, 0x46, 0x01]).unwrap();
+        let text = extract_pdf_text_best_effort(&path).await;
+        assert!(
+            text.starts_with("[PDF text extraction unavailable:"),
+            "expected placeholder, got: {text}"
+        );
+        assert!(text.ends_with(']'), "got: {text}");
     }
 
     #[tokio::test]

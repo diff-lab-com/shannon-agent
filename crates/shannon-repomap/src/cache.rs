@@ -74,7 +74,17 @@ impl RepoMapCache {
         if let Some(ref path) = cache_path {
             if let Ok(blob) = fs::read(path) {
                 if let Ok(disk) = bincode::deserialize::<DiskCache>(&blob) {
-                    if disk.version == CACHE_SCHEMA_VERSION && disk.map.root == canonical {
+                    // Version and root only prove the blob is *shaped* for
+                    // this project; the symbols in it may still describe a
+                    // tree that has since moved (edits made while no watcher
+                    // was attached, branch switches, rebases). Verify every
+                    // tracked file against a stat-only walk before trusting
+                    // the blob — a full re-parse on any mismatch is cheap
+                    // next to serving wrong symbols to the query engine.
+                    if disk.version == CACHE_SCHEMA_VERSION
+                        && disk.map.root == canonical
+                        && disk_cache_matches_fs(&canonical, &disk)
+                    {
                         return Ok(Self::from_parts(
                             canonical,
                             disk.map.files,
@@ -151,13 +161,17 @@ impl RepoMapCache {
     /// Re-parse a single file and replace its entry in the cache.
     ///
     /// Behaviour:
+    /// - File tracked & its mtime unchanged on disk → no-op (returns
+    ///   `false`) without parsing; this is the cheap fast path for
+    ///   editor-save churn that touches a file but not its contents.
     /// - File exists & parses → entry is upserted with fresh symbols + mtime.
     /// - File exists & fails to parse → entry is removed (treat as deleted).
     /// - File does not exist → entry is removed (no-op if absent).
     ///
-    /// Returns `true` if the file's symbol list changed (insert / replace /
-    /// remove) and `false` if it was a no-op (same mtime, no structural
-    /// change). Useful for the watcher to suppress redundant flushes.
+    /// An unreadable mtime skips the fast path and always re-parses — the
+    /// safe default. Returns `true` if the file's symbol list changed
+    /// (insert / replace / remove) and `false` if it was a no-op. Useful for
+    /// the watcher to suppress redundant flushes.
     pub fn update_file(&mut self, path: &Path) -> Result<bool> {
         let abs = match absolutize(&self.root, path) {
             Some(p) => p,
@@ -168,7 +182,17 @@ impl RepoMapCache {
             return Ok(self.remove_file(&abs));
         }
 
-        let mtime = read_mtime(&abs).unwrap_or(0);
+        let mtime = read_mtime(&abs);
+        if let Some(mtime) = mtime {
+            // Only an already-tracked file can take the fast path: the
+            // symbol list for it cannot have changed if its mtime hasn't
+            // moved. Untracked files must always be parsed (insert).
+            let tracked = self.files.iter().any(|(p, _)| p == &abs);
+            if tracked && self.mtimes.get(&abs) == Some(&mtime) {
+                return Ok(false);
+            }
+        }
+        let mtime = mtime.unwrap_or(0);
         match parse_file(&abs) {
             Ok(syms) => {
                 let changed = self.upsert_symbols(abs.clone(), syms);
@@ -411,6 +435,70 @@ pub(crate) fn walk_and_parse(root: &Path) -> Result<Vec<(PathBuf, Vec<SymbolNode
     Ok(out)
 }
 
+/// Stat-only walk of `root`: current mtime for every file with a supported
+/// extension, pruning the same ignored directories as [`walk_and_parse`].
+/// Never parses — this exists so a loaded disk cache can be validated
+/// against the tree for the cost of a directory walk.
+///
+/// A `None` mtime means the file could not be stat'ed; callers must treat
+/// that as "cache unverifiable" (the safe default).
+fn stat_walk(root: &Path) -> HashMap<PathBuf, Option<u64>> {
+    use walkdir::WalkDir;
+    let mut out = HashMap::new();
+    for entry in WalkDir::new(root)
+        .into_iter()
+        .filter_entry(|e| !crate::is_ignored_dir(e))
+        .filter_map(|e| e.ok())
+    {
+        let path = entry.path();
+        if !path.is_file() {
+            continue;
+        }
+        let Some(ext) = path.extension().and_then(|e| e.to_str()) else {
+            continue;
+        };
+        if LanguageParser::from_extension(ext).is_err() {
+            continue;
+        }
+        out.insert(path.to_path_buf(), read_mtime(path));
+    }
+    out
+}
+
+/// `true` when the cache's tracked-file set and per-file mtimes exactly
+/// match a fresh stat-only walk of `root`: every tracked file still exists
+/// with its recorded mtime, and no supported-extension file is missing from
+/// the cache. A tracked file with no recorded mtime cannot be verified and
+/// fails the check, as does an unreadable current mtime.
+fn disk_cache_matches_fs(root: &Path, disk: &DiskCache) -> bool {
+    let mut tracked: HashMap<&Path, u64> = HashMap::with_capacity(disk.map.files.len());
+    for (path, _) in &disk.map.files {
+        match disk.mtimes.get(path) {
+            Some(mtime) => {
+                tracked.insert(path.as_path(), *mtime);
+            }
+            // Cannot verify without a recorded mtime — treat as stale.
+            None => return false,
+        }
+    }
+    for (path, current) in stat_walk(root) {
+        let Some(recorded) = tracked.remove(path.as_path()) else {
+            // On-disk file the cache doesn't track.
+            return false;
+        };
+        let Some(mtime) = current else {
+            // Stat failed — the file may have just been replaced.
+            return false;
+        };
+        if recorded != mtime {
+            // Touched since the cache was written.
+            return false;
+        }
+    }
+    // Anything left here vanished from disk.
+    tracked.is_empty()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -439,14 +527,21 @@ mod tests {
         assert!(cache.update_file(&root.join("b.rs")).unwrap());
         assert_eq!(cache.file_count(), 2);
 
-        // Modify an existing file — symbols differ so the cache flips.
+        // Modify an existing file — symbols differ so the cache flips. The
+        // cache only re-parses when the mtime moves past the whole-second
+        // value recorded by the walk, so pin a distinctly different one
+        // rather than racing the clock.
         fs::write(
             root.join("a.rs"),
             "pub fn a() {}\npub fn a2() -> i32 { 0 }\n",
         )
         .unwrap();
-        // Sleep 1s to ensure mtime advances; coarse but portable.
-        std::thread::sleep(std::time::Duration::from_millis(1_100));
+        let f = fs::OpenOptions::new()
+            .append(true)
+            .open(root.join("a.rs"))
+            .unwrap();
+        f.set_modified(std::time::UNIX_EPOCH + std::time::Duration::from_secs(1_700_000_000))
+            .unwrap();
         assert!(cache.update_file(&root.join("a.rs")).unwrap());
     }
 

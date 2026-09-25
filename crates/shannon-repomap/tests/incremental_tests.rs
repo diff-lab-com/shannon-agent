@@ -9,11 +9,16 @@
 //! 3. The trimmed markdown respects the budget.
 //! 4. Removing a file via `update_file` (when it no longer exists) evicts
 //!    it from the cache.
+//! 5. `update_file` takes the no-parse fast path when a tracked file's
+//!    mtime is unchanged (editor-save churn).
+//! 6. `RepoMapCache::new` validates a loaded disk cache against a stat-only
+//!    walk: modified / deleted / added files force a full re-parse instead
+//!    of serving stale symbols.
 
 use shannon_repomap::budget::total_tokens;
 use shannon_repomap::{RepoMap, RepoMapCache, SymbolKind, SymbolMap, SymbolNode};
 use std::path::PathBuf;
-use std::time::Instant;
+use std::time::{Duration, Instant, UNIX_EPOCH};
 
 fn fixtures_dir() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures")
@@ -120,6 +125,10 @@ impl TokenAuth {\n    pub fn new(secret: impl Into<String>) -> Self {\n        S
 pub fn extra_helper_v2() -> &'static str { \"v2\" }\n\
 pub fn second_helper_v2() -> usize { 42 }\n";
     std::fs::write(&auth_path, updated).expect("rewrite auth.rs");
+    // The cache re-parses only when the mtime moves past the whole-second
+    // value recorded by the walk; pin a distinctly different one rather
+    // than racing the clock.
+    set_mtime_seconds(&auth_path, PINNED_MTIME_SECS);
 
     let changed = cache.update_file(&auth_path).expect("update_file");
     assert!(
@@ -156,6 +165,66 @@ fn incremental_update_handles_removed_file() {
         "update_file must report a change when file is gone"
     );
     assert_eq!(cache.file_count(), EXPECTED_FILE_COUNT - 1);
+}
+
+#[test]
+fn update_file_skips_reparse_when_mtime_unchanged() {
+    // Fixed epoch offsets hours apart: the cache stores whole-second
+    // mtimes, so this sidesteps same-second collisions without sleeps.
+    const T_OLD: u64 = 1_700_000_000;
+    const T_NEW: u64 = T_OLD + 3_600;
+
+    let root = snapshot_multi_lang("mtime_fast_path");
+    let mut cache = RepoMapCache::ephemeral(&root).expect("ephemeral cache");
+    assert_eq!(cache.file_count(), EXPECTED_FILE_COUNT);
+
+    // Write a brand-new file and record it: an insert always parses and
+    // must report a change.
+    let probe = root.join("fast_path_probe.rs");
+    std::fs::write(&probe, "pub fn probe_v1() -> u8 { 1 }\n").expect("write probe");
+    set_mtime_seconds(&probe, T_OLD);
+    assert!(
+        cache.update_file(&probe).expect("first update"),
+        "insert of a new file must report a change"
+    );
+    assert_eq!(cache.file_count(), EXPECTED_FILE_COUNT + 1);
+
+    // Same content, same mtime: the documented no-op fast path.
+    assert!(
+        !cache.update_file(&probe).expect("no-op update"),
+        "unchanged mtime must take the no-parse fast path"
+    );
+
+    // Rewrite the contents but restore the recorded mtime — exactly what a
+    // save-without-changes looks like to the filesystem. The cache cannot
+    // tell, so it must skip the parse and keep the old symbols.
+    std::fs::write(&probe, "pub fn probe_v2() -> u8 { 2 }\n").expect("rewrite probe");
+    set_mtime_seconds(&probe, T_OLD);
+    assert!(
+        !cache.update_file(&probe).expect("backdated update"),
+        "backdated mtime must still take the fast path"
+    );
+    let names = collect_names(&cache.map());
+    assert!(
+        names.iter().any(|n| n == "probe_v1"),
+        "old symbol must survive a backdated edit: {names:?}"
+    );
+    assert!(
+        !names.iter().any(|n| n == "probe_v2"),
+        "backdated edit must not be parsed in: {names:?}"
+    );
+
+    // A real mtime advance re-parses and picks the new symbols up.
+    set_mtime_seconds(&probe, T_NEW);
+    assert!(
+        cache.update_file(&probe).expect("real update"),
+        "changed mtime with changed content must re-parse and report it"
+    );
+    let names = collect_names(&cache.map());
+    assert!(
+        names.iter().any(|n| n == "probe_v2"),
+        "edited symbols missing after a real mtime change: {names:?}"
+    );
 }
 
 #[test]
@@ -235,6 +304,11 @@ fn incremental_update_is_much_faster_than_full_reparse() {
         std::fs::write(&target, &edited).expect("write edit");
         let mut cache = RepoMapCache::ephemeral(&tmp).expect("ephemeral");
 
+        // The walk above recorded the target's current whole-second mtime;
+        // pin a distinctly different one so the timed update_file actually
+        // re-parses instead of taking the same-mtime fast path.
+        set_mtime_seconds(&target, PINNED_MTIME_SECS);
+
         let t_inc = Instant::now();
         cache.update_file(&target).expect("incremental update_file");
         let inc = t_inc.elapsed();
@@ -274,6 +348,88 @@ fn cache_round_trips_through_disk() {
 }
 
 #[test]
+fn disk_cache_invalidated_when_tracked_file_modified() {
+    // Pin an mtime before the cold walk so the recorded value is exact;
+    // the offset edit guarantees the change survives the cache's
+    // whole-second mtime granularity without any sleeps.
+    const T0: u64 = 1_700_100_000;
+
+    let root = snapshot_multi_lang("load_stale_modified");
+    let auth_path = root.join("src/auth.rs");
+    set_mtime_seconds(&auth_path, T0);
+    {
+        let cache = RepoMapCache::new(&root).expect("cold cache");
+        assert_eq!(cache.file_count(), EXPECTED_FILE_COUNT);
+        cache.flush().expect("flush cold cache");
+    }
+
+    // Edit the file while "no session is running"; the mtime moves with
+    // the write. The next `new` must reject the disk cache and re-walk
+    // instead of serving the stale symbol list.
+    std::fs::write(&auth_path, "pub fn fresh_after_restart() -> u8 { 7 }\n")
+        .expect("rewrite auth.rs");
+    set_mtime_seconds(&auth_path, T0 + 3_600);
+
+    let cache = RepoMapCache::new(&root).expect("reload cache");
+    let names = collect_names(&cache.map());
+    assert!(
+        names.iter().any(|n| n == "fresh_after_restart"),
+        "reload served stale symbols after an offline edit: {names:?}"
+    );
+    cache.invalidate().expect("clean up disk cache");
+}
+
+#[test]
+fn disk_cache_invalidated_when_tracked_file_deleted() {
+    let root = snapshot_multi_lang("load_stale_deleted");
+    {
+        let cache = RepoMapCache::new(&root).expect("cold cache");
+        assert_eq!(cache.file_count(), EXPECTED_FILE_COUNT);
+        cache.flush().expect("flush cold cache");
+    }
+
+    std::fs::remove_file(root.join("pkg/server.go")).expect("remove go file");
+
+    let cache = RepoMapCache::new(&root).expect("reload cache");
+    let tracked: Vec<PathBuf> = cache.tracked_files();
+    assert!(
+        !tracked.iter().any(|p| p.ends_with("server.go")),
+        "deleted file still tracked after reload: {tracked:?}"
+    );
+    assert_eq!(cache.file_count(), EXPECTED_FILE_COUNT - 1);
+    cache.invalidate().expect("clean up disk cache");
+}
+
+#[test]
+fn disk_cache_invalidated_when_new_file_added() {
+    let root = snapshot_multi_lang("load_stale_added");
+    {
+        let cache = RepoMapCache::new(&root).expect("cold cache");
+        assert_eq!(cache.file_count(), EXPECTED_FILE_COUNT);
+        cache.flush().expect("flush cold cache");
+    }
+
+    let added = root.join("src/late_addition.rs");
+    std::fs::write(&added, "pub fn late_to_the_party() -> bool { true }\n")
+        .expect("write new file");
+
+    let cache = RepoMapCache::new(&root).expect("reload cache");
+    assert!(
+        cache
+            .tracked_files()
+            .iter()
+            .any(|p| p.ends_with("late_addition.rs")),
+        "new file missing from reloaded cache"
+    );
+    let names = collect_names(&cache.map());
+    assert!(
+        names.iter().any(|n| n == "late_to_the_party"),
+        "new file's symbols missing after reload: {names:?}"
+    );
+    cache.invalidate().expect("clean up disk cache");
+}
+
+#[test]
 fn markdown_for_multi_lang_is_self_contained() {
     // Spot-check that the rendered markdown references symbols from every
     // language. This guards against a future refactor that accidentally
@@ -300,6 +456,24 @@ fn markdown_for_multi_lang_is_self_contained() {
 }
 
 // -- helpers --------------------------------------------------------------
+
+/// Fixed mtime (2023-11-14) used to pin file timestamps. The cache stores
+/// whole-second mtimes, so tests that edit a file and expect a re-parse pin
+/// a value that is always distinct from the walk/flush times recorded on a
+/// modern clock instead of racing `SystemTime::now`.
+const PINNED_MTIME_SECS: u64 = 1_700_000_000;
+
+/// Set a file's mtime to an exact whole-second epoch value via
+/// `std::fs::File::set_modified` (stable since 1.75). Opening in append
+/// mode gets a writable fd without touching the contents.
+fn set_mtime_seconds(path: &std::path::Path, secs: u64) {
+    let f = std::fs::OpenOptions::new()
+        .append(true)
+        .open(path)
+        .expect("open file to set mtime");
+    f.set_modified(UNIX_EPOCH + Duration::from_secs(secs))
+        .expect("set_modified");
+}
 
 fn collect_kinds(map: &SymbolMap) -> Vec<SymbolKind> {
     let mut out = Vec::new();
