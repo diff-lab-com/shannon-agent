@@ -1357,9 +1357,8 @@ impl QueryEngine {
                                     // consistent, matching the overflow-retry
                                     // history sync (§5.4).
                                     let taken = std::mem::take(&mut messages);
-                                    messages = crate::secret_guard::transform_outgoing_messages(
-                                        taken,
-                                    );
+                                    messages =
+                                        crate::secret_guard::transform_outgoing_messages(taken);
                                     match compact_engine.compact(&mut messages) {
                                         Ok(result) => {
                                             compaction_failures = 0; // reset on success
@@ -1698,8 +1697,7 @@ impl QueryEngine {
                         // a surrogate token spans several deltas, so the
                         // restorer carries the partial tail between feeds and
                         // flushes it with the splitter's tail below.
-                        let mut display_restorer =
-                            crate::secret_guard::DisplayRestorer::new();
+                        let mut display_restorer = crate::secret_guard::DisplayRestorer::new();
                         let mut assistant_tool_uses: Vec<ContentBlock> = Vec::new();
                         // Terminal stop reason for this response, latched from
                         // whichever MessageDelta carried it (providers split
@@ -1824,8 +1822,8 @@ impl QueryEngine {
                                                         // back any partial surrogate
                                                         // token so a token split
                                                         // across deltas still restores.
-                                                        let display = display_restorer
-                                                            .feed(&visible);
+                                                        let display =
+                                                            display_restorer.feed(&visible);
                                                         if !display.is_empty() {
                                                             send_event!(
                                                                 tx,

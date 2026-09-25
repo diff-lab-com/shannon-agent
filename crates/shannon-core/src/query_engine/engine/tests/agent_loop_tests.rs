@@ -1767,9 +1767,9 @@ async fn a8_non_timeout_errors_do_not_continue_turn() {
 
 #[test]
 fn compaction_summarizer_wire_carries_surrogates_not_secrets() {
+    use shannon_engine::compact::types::Summarizer as _;
     use std::io::Read as _;
     use std::io::Write as _;
-    use shannon_engine::compact::types::Summarizer as _;
 
     const SECRET: &str = "COMPACT-SECRET-VALUE";
     const TOKEN: &str = "SG1:COMPACTFAKEFAKE";
