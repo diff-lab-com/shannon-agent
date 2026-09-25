@@ -18,9 +18,11 @@ set -u
 # --check accepted for backward compatibility; it is a no-op since the
 # README exact-count drift gate was removed (2026-09-25, PR #116).
 CHECK_MODE=0
+QUICK=0
 for arg in "$@"; do
   case "${arg}" in
-    --check) CHECK_MODE=1 ;;
+    --check) CHECK_MODE=1 ;; # no-op since PR #116 (README carries floor claims)
+    --quick) QUICK=1 ;; # skip clippy/deny report sections (CI artifact runs)
     *) echo "[gen-metrics] unknown arg: ${arg}" >&2; exit 2 ;;
   esac
 done
@@ -163,7 +165,17 @@ WORKSPACE_MEMBERS="$(cargo metadata --no-deps --format-version 1 2>/dev/null \
 
 # ----------------------------------------------------------------------------
 # 3. Clippy status (must succeed with -D warnings).
+# 4. cargo-deny check (optional).
+# Both are skipped in --quick mode (the CI metrics artifact run): clippy and
+# deny are already standalone required jobs, and re-running them here cost a
+# third/fourth full workspace pass for numbers the dedicated jobs report
+# better. The nightly metrics-update workflow runs the full report.
 # ----------------------------------------------------------------------------
+CLIPPY_STATUS="skipped (--quick)"
+CLIPPY_TAIL=""
+DENY_STATUS="skipped (--quick)"
+DENY_TAIL=""
+if [ "${QUICK}" = "0" ]; then
 echo "[gen-metrics] Checking clippy --workspace -- -D warnings..." >&2
 CLIPPY_STATUS="pass"
 CLIPPY_TAIL="(no output captured)"
@@ -180,9 +192,6 @@ else
 fi
 CLIPPY_TAIL="$(tail -n 3 "${TMP_CLIPPY}" | sed 's/`/\\`/g')"
 
-# ----------------------------------------------------------------------------
-# 4. cargo-deny check (optional).
-# ----------------------------------------------------------------------------
 DENY_STATUS="not installed"
 DENY_TAIL=""
 if command -v cargo-deny >/dev/null 2>&1; then
@@ -195,6 +204,7 @@ if command -v cargo-deny >/dev/null 2>&1; then
     DENY_STATUS="fail"
   fi
   DENY_TAIL="$(tail -n 3 "${TMP_DENY}" | sed 's/`/\\`/g')"
+fi
 fi
 
 # ----------------------------------------------------------------------------

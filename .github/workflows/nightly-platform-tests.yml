@@ -1,0 +1,44 @@
+name: Nightly Platform Tests
+
+# P2 (2026-09-25 CI review): the cross-platform legs in ci.yml are
+# check-only — platform-conditional RUNTIME differences (path separators,
+# permission bits, line endings, cfg(target_os) test bodies) were never
+# executed outside a developer's laptop. This nightly leg runs the two
+# core, GUI-dependency-free crates on macOS and Windows. Deliberately NOT
+# a PR gate: it exists to surface drift within a day instead of at release.
+on:
+  schedule:
+    - cron: '0 4 * * *' # Daily 4am UTC
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: nightly-platform-tests-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  core-tests:
+    name: Core tests (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 45
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [macos-latest, windows-latest]
+    steps:
+      - uses: actions/checkout@f548e57e544e1ff5a4c46bf1e1b8685f8e4a348a
+      - uses: dtolnay/rust-toolchain@2c7215f132e9ebf062739d9130488b56d53c060c
+        with:
+          toolchain: "1.88"
+      - uses: Swatinem/rust-cache@72d126e709cad40056a62344eee609d696d62d33
+      - name: Install nextest
+        uses: taiki-e/install-action@67729d5c413db75907f0ad1e39bb04b9c868ff60
+        with:
+          tool: cargo-nextest
+      - name: Run core-crate tests
+        # shannon-core + shannon-tools: the platform-conditional heart of
+        # the workspace (file ops, shell, grep, permissions). No Tauri/GTK
+        # system deps needed — desktop packaging is covered by release.yml.
+        run: cargo nextest run -p shannon-core -p shannon-tools --profile ci
