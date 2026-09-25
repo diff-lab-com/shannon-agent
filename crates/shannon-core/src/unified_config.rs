@@ -96,6 +96,44 @@ pub struct SecretGuardSection {
     pub fail_mode: Option<String>,
 }
 
+impl SecretGuardSection {
+    /// Load this section from the same config files [`ConfigBuilder`] reads
+    /// (`~/.shannon/config.toml`, then a `.shannon.toml` override). Kept
+    /// independent of `ShannonConfig` so the secret-guard's process-wide
+    /// one-shot init does not depend on the merged-config call path.
+    pub fn load() -> Self {
+        Self::load_from(&[
+            dirs::home_dir()
+                .map(|home| home.join(".shannon").join("config.toml"))
+                .unwrap_or_default(),
+            std::path::PathBuf::from(".shannon.toml"),
+        ])
+    }
+
+    /// Layered parse: later files override earlier ones; broken files are
+    /// skipped (same degrade-not-fail posture as the rest of the loader).
+    fn load_from(paths: &[std::path::PathBuf]) -> Self {
+        let mut section = Self::default();
+        for path in paths {
+            let Ok(text) = std::fs::read_to_string(path) else {
+                continue;
+            };
+            let Ok(value) = toml::from_str::<toml::Value>(&text) else {
+                continue;
+            };
+            if let Ok(parsed) = value
+                .get("secret_guard")
+                .cloned()
+                .unwrap_or(toml::Value::Boolean(false))
+                .try_into::<Self>()
+            {
+                section = parsed;
+            }
+        }
+        section
+    }
+}
+
 /// `[hooks]` config section: inbound webhook endpoints (P2-7).
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct HooksConfig {
@@ -682,6 +720,37 @@ pub fn build_client_from_resolved(
 #[cfg(test)]
 #[allow(clippy::unwrap_used)]
 mod tests {
+
+    #[test]
+    fn secret_guard_section_loads_layered_and_degrades() {
+        let dir = std::env::temp_dir().join(format!(
+            "sg-section-{}-{}",
+            std::process::id(),
+            uuid::Uuid::new_v4().simple()
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+        let global = dir.join("config.toml");
+        let local = dir.join(".shannon.toml");
+        std::fs::write(&global, "[secret_guard]\nmode = \"audit\"\n").unwrap();
+        std::fs::write(&local, "[secret_guard]\nmode = \"redact\"\n").unwrap();
+        let section = SecretGuardSection::load_from(&[global.clone(), local.clone()]);
+        assert_eq!(
+            section.mode.as_deref(),
+            Some("redact"),
+            "local overrides global"
+        );
+
+        // A type-broken local section is skipped; the global value survives.
+        std::fs::write(&local, "[secret_guard]\nmode = 7\n").unwrap();
+        let section = SecretGuardSection::load_from(&[global, local]);
+        assert_eq!(
+            section.mode.as_deref(),
+            Some("audit"),
+            "degrade keeps global"
+        );
+
+        std::fs::remove_dir_all(dir).ok();
+    }
     use super::*;
     use shannon_engine::api::{LlmClientConfig, LlmProvider};
     use shannon_types::provider_config::{
