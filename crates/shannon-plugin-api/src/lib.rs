@@ -79,7 +79,7 @@ pub enum TransformAction {
 }
 
 /// Aggregate outcome of a restore pass.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct RestoreStats {
     /// Occurrences restored by exact match.
     pub replaced: usize,

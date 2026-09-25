@@ -1888,3 +1888,186 @@ fn compaction_summarizer_wire_carries_surrogates_not_secrets() {
     );
     drop(server);
 }
+
+// ---- Secret-guard × injected context (T1) -------------------------------
+// CLAUDE.md / AGENTS.md / repo map / the base prompt ride the system
+// blocks; redact mode must transform them like conversation content. The
+// blocks are the cached stable prefix — the transform must keep their
+// structure (cache breakpoints intact) and stay byte-stable.
+
+#[tokio::test]
+async fn secret_guard_system_prompt_redacted_on_wire() {
+    use futures::StreamExt as _;
+    use std::io::Read as _;
+    use std::io::Write as _;
+
+    const SECRET: &str = "SYSBLOCK-SECRET-VALUE";
+    const TOKEN: &str = "SG1:SYSFAKESYSFAKE";
+
+    struct ReplaceSecret;
+    impl shannon_plugin_api::ContextTransform for ReplaceSecret {
+        fn transform_ingest(
+            &self,
+            block: &mut shannon_plugin_api::IngestBlock,
+        ) -> shannon_plugin_api::TransformAction {
+            if block.text.contains(SECRET) {
+                block.text = block.text.replace(SECRET, TOKEN);
+                shannon_plugin_api::TransformAction::Modified
+            } else {
+                shannon_plugin_api::TransformAction::Passthrough
+            }
+        }
+        fn restore_tool_args(
+            &self,
+            _tool: &str,
+            _args: &mut serde_json::Value,
+        ) -> shannon_plugin_api::RestoreAction {
+            shannon_plugin_api::RestoreAction::Unchanged
+        }
+        fn restore_display(&self, _text: &mut String) -> shannon_plugin_api::RestoreAction {
+            shannon_plugin_api::RestoreAction::Unchanged
+        }
+        fn audit_wire(&self, _wire: &serde_json::Value) -> Vec<shannon_plugin_api::AuditFinding> {
+            Vec::new()
+        }
+    }
+
+    let session_for_cleanup = uuid::Uuid::new_v4();
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("bind");
+    let port = listener.local_addr().expect("addr").port();
+    let captured: std::sync::Arc<std::sync::Mutex<Vec<String>>> =
+        std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+    let captured_clone = captured.clone();
+    std::thread::spawn(move || {
+        for mut stream in listener.incoming().flatten() {
+            let mut buf = vec![0u8; 1 << 16];
+            let mut read = 0usize;
+            loop {
+                let n = match stream.read(&mut buf[read..]) {
+                    Ok(0) | Err(_) => break,
+                    Ok(n) => n,
+                };
+                read += n;
+                let s = String::from_utf8_lossy(&buf[..read]).to_string();
+                if let Some(header_end) = s.find("\r\n\r\n") {
+                    let cl: usize = s[..header_end]
+                        .to_ascii_lowercase()
+                        .split("\r\n")
+                        .find_map(|l| l.strip_prefix("content-length:"))
+                        .and_then(|v| v.trim().parse().ok())
+                        .unwrap_or(0);
+                    if read >= header_end + 4 + cl {
+                        break;
+                    }
+                }
+                if read == buf.len() {
+                    break;
+                }
+            }
+            captured_clone
+                .lock()
+                .unwrap()
+                .push(String::from_utf8_lossy(&buf[..read]).to_string());
+            let resp = concat!(
+                "event: message_start\n",
+                r#"data: {"type":"message_start","message":{"id":"msg_sys","role":"assistant","content":[],"model":"test-model","stop_reason":null,"usage":{"input_tokens":2,"output_tokens":0}}}"#,
+                "\n\n",
+                "event: content_block_start\n",
+                r#"data: {"type":"content_block_start","index":0,"content_block":{"type":"text","text":""}}"#,
+                "\n\n",
+                "event: content_block_delta\n",
+                r#"data: {"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"done"}}"#,
+                "\n\n",
+                "event: content_block_stop\n",
+                r#"data: {"type":"content_block_stop","index":0}"#,
+                "\n\n",
+                "event: message_delta\n",
+                r#"data: {"type":"message_delta","delta":{"stop_reason":"end_turn"},"usage":{"input_tokens":2,"output_tokens":1}}"#,
+                "\n\n",
+                "event: message_stop\n",
+                r#"data: {"type":"message_stop"}"#,
+                "\n\n"
+            );
+            let http = format!(
+                "HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+                resp.len(),
+                resp
+            );
+            stream.write_all(http.as_bytes()).ok();
+            stream.flush().ok();
+        }
+    });
+
+    let _g = crate::secret_guard::test_support::acquire();
+    crate::secret_guard::set_context_transform(Some(std::sync::Arc::new(ReplaceSecret)));
+    let config = LlmClientConfig {
+        api_key: "test-key".to_string(),
+        base_url: format!("http://127.0.0.1:{port}"),
+        model: "test-model".to_string(),
+        provider: shannon_engine::api::LlmProvider::Anthropic,
+        ..Default::default()
+    };
+    let client = LlmClient::new(config);
+    let engine = QueryEngine::new(
+        client,
+        ToolRegistry::new(),
+        PermissionManager::new(),
+        StateManager::new(),
+        QueryEngineConfig {
+            system_prompt: Some(format!("base instructions {SECRET}")),
+            ..Default::default()
+        },
+    );
+    let context = QueryContext {
+        query_id: uuid::Uuid::new_v4(),
+        session_id: session_for_cleanup,
+        user_message: "hello".to_string(),
+        attachments: Vec::new(),
+        metadata: QueryMetadata {
+            timestamp: chrono::Utc::now(),
+            tools_allowed: false,
+            max_tokens: None,
+            model: "test-model".to_string(),
+            temperature: None,
+            top_p: None,
+        },
+    };
+    let mut stream = engine.process_query(context, None).await;
+    let mut completed = false;
+    let mut failed = String::new();
+    while let Some(ev) = stream.next().await {
+        match ev {
+            Ok(QueryEvent::Completed { .. }) => {
+                completed = true;
+                break;
+            }
+            Ok(QueryEvent::Failed { error, .. }) => {
+                failed = error;
+                break;
+            }
+            Err(e) => {
+                failed = e.to_string();
+                break;
+            }
+            _ => {}
+        }
+    }
+    crate::secret_guard::set_context_transform(None);
+
+    assert!(completed, "query must complete; failed: {failed}");
+    let bodies = captured.lock().unwrap().clone();
+    assert!(!bodies.is_empty(), "request must be captured");
+    let body = bodies.join("\n");
+    assert!(
+        body.contains(TOKEN),
+        "surrogate must reach the system blocks: {body}"
+    );
+    assert!(
+        !body.contains(SECRET),
+        "raw secret leaked via the system prompt: {body}"
+    );
+    assert!(
+        body.contains("cache_control"),
+        "system block structure (cache breakpoints) must be preserved: {body}"
+    );
+}

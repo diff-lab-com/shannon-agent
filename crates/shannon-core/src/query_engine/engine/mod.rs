@@ -837,6 +837,10 @@ impl QueryEngine {
             last_role,
             "restore_messages: syncing conversation from background task"
         );
+        // Secret-guard: the raw history just restored is the rebuild source
+        // for the surrogate registry (deterministic derivation) — tokens the
+        // model echoed in a previous process restore correctly after this.
+        crate::secret_guard::rebuild_registry_from_history(&messages);
         if msg_count > 0 && last_role != "assistant" {
             tracing::warn!(
                 msg_count,
