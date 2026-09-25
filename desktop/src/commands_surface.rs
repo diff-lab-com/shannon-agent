@@ -360,14 +360,38 @@ fn is_openable_url(url: &str) -> bool {
 }
 
 /// Path roots the external-open commands may touch. Mirrors the asset
-/// protocol scope in tauri.conf.json (`$HOME/**`, `$TEMP/**`).
+/// protocol scope in tauri.conf.json (`$HOME/**`, `$TEMP/**`). Bases are
+/// canonicalized the same way the probed path will be — macOS resolves
+/// `/var` → `/private/var` inside `std::env::temp_dir()`, and Windows
+/// `canonicalize` returns `\\?\`-prefixed verbatim paths, both of which
+/// would otherwise never `starts_with` the raw base (§review P1-3).
 pub(crate) fn allowed_path_bases() -> Vec<std::path::PathBuf> {
     let mut bases = Vec::new();
     if let Some(home) = dirs::home_dir() {
-        bases.push(home);
+        bases.push(normalized_base(&home));
     }
-    bases.push(std::env::temp_dir());
+    bases.push(normalized_base(&std::env::temp_dir()));
     bases
+}
+
+fn normalized_base(base: &std::path::Path) -> std::path::PathBuf {
+    let canonical = base.canonicalize().unwrap_or_else(|_| base.to_path_buf());
+    strip_windows_verbatim(&canonical)
+}
+
+fn strip_windows_verbatim(p: &std::path::Path) -> std::path::PathBuf {
+    #[cfg(windows)]
+    {
+        p.as_os_str()
+            .to_string_lossy()
+            .strip_prefix(r"\\?\")
+            .map(std::path::PathBuf::from)
+            .unwrap_or_else(|| p.to_path_buf())
+    }
+    #[cfg(not(windows))]
+    {
+        p.to_path_buf()
+    }
 }
 
 /// Strict scope check for commands that *act* on a path (open / reveal /
@@ -381,6 +405,7 @@ pub(crate) fn canonicalized_in_scope(path: &str) -> Result<std::path::PathBuf, S
     let canonical = p
         .canonicalize()
         .map_err(|e| format!("path not accessible: {path}: {e}"))?;
+    let canonical = strip_windows_verbatim(&canonical);
     if allowed_path_bases().iter().any(|base| canonical.starts_with(base)) {
         Ok(canonical)
     } else {
@@ -435,7 +460,7 @@ pub async fn reveal_in_folder(app: tauri::AppHandle, path: String) -> Result<(),
     let canonical = canonicalized_in_scope(&path)?;
     use tauri_plugin_opener::OpenerExt;
     app.opener()
-        .reveal_item_in_dir(canonical.to_string_lossy())
+        .reveal_item_in_dir(&canonical)
         .map_err(|e| format!("failed to reveal path: {e}"))
 }
 
@@ -515,17 +540,18 @@ pub struct FrameProbe {
 }
 
 /// Pure header inspection for `probe_url_frameable`, split out for tests.
+/// Reads every CSP header (a site may emit several; the strictest wins) —
 /// `frame-ancestors` with any explicit list is treated as "not frameable"
 /// (the app origin is never on a third party's allowlist; `*` and absence
 /// of the directive frame freely).
-fn headers_allow_framing(xfo: Option<&str>, csp: Option<&str>) -> (bool, Option<String>) {
+fn headers_allow_framing(xfo: Option<&str>, csps: &[&str]) -> (bool, Option<String>) {
     if let Some(xfo) = xfo {
         let v = xfo.to_ascii_lowercase();
         if v.contains("deny") || v.contains("sameorigin") {
             return (false, Some(format!("x-frame-options: {xfo}")));
         }
     }
-    if let Some(csp) = csp {
+    for csp in csps {
         for directive in csp.split(';') {
             if let Some(rest) = directive.trim().strip_prefix("frame-ancestors") {
                 let rest = rest.trim();
@@ -556,16 +582,19 @@ pub async fn probe_url_frameable(url: String) -> Result<FrameProbe, String> {
     match resp {
         Ok(resp) => {
             let status = resp.status().as_u16();
-            let header = |name: &str| {
+            let header = |name: &str| -> Vec<String> {
                 resp.headers()
-                    .get(name)
-                    .and_then(|v| v.to_str().ok())
+                    .get_all(name)
+                    .iter()
+                    .filter_map(|v| v.to_str().ok())
                     .map(|s| s.to_string())
+                    .collect()
             };
-            let (frameable, reason) = headers_allow_framing(
-                header("x-frame-options").as_deref(),
-                header("content-security-policy").as_deref(),
-            );
+            let xfo = header("x-frame-options");
+            let csps = header("content-security-policy");
+            let xfo_ref: Option<&str> = xfo.first().map(|s| s.as_str());
+            let csp_refs: Vec<&str> = csps.iter().map(|s| s.as_str()).collect();
+            let (frameable, reason) = headers_allow_framing(xfo_ref, &csp_refs);
             Ok(FrameProbe {
                 frameable,
                 status,
@@ -584,7 +613,17 @@ pub async fn probe_url_frameable(url: String) -> Result<FrameProbe, String> {
 
 #[cfg(test)]
 mod tests {
-    use super::{is_official_release_url, version_is_newer};
+    use super::{
+        artifact_temp_file_name,
+        canonicalized_in_scope,
+        headers_allow_framing,
+        is_openable_url,
+        is_probable_path_in_scope,
+        is_official_release_url,
+        slugify_title,
+        version_is_newer,
+        ARTIFACT_EXPORT_EXTS,
+    };
 
     #[test]
     fn detects_newer_patch_minor_major() {
@@ -675,9 +714,14 @@ mod tests {
 
     #[test]
     fn probable_scope_rejects_relative_and_traversal() {
-        assert!(is_probable_path_in_scope("/home/u/file.md"));
+        let inside = std::env::temp_dir().join("somewhere/file.md");
+        assert!(is_probable_path_in_scope(&inside.to_string_lossy()));
         assert!(!is_probable_path_in_scope("relative/file.md"));
-        assert!(!is_probable_path_in_scope("/home/u/../../etc/passwd"));
+        let traversal = std::env::temp_dir()
+            .join("a/../../etc/passwd")
+            .to_string_lossy()
+            .into_owned();
+        assert!(!is_probable_path_in_scope(&traversal));
     }
 
     // -- artifact export (§4 P1-D) ------------------------------------------
@@ -711,14 +755,14 @@ mod tests {
 
     #[test]
     fn xfo_headers_block_framing() {
-        let (frameable, reason) = headers_allow_framing(Some("DENY"), None);
+        let (frameable, reason) = headers_allow_framing(Some("DENY"), &[]);
         assert!(!frameable);
         assert!(reason.unwrap().contains("DENY"));
 
-        let (frameable, _) = headers_allow_framing(Some("SAMEORIGIN"), None);
+        let (frameable, _) = headers_allow_framing(Some("SAMEORIGIN"), &[]);
         assert!(!frameable);
 
-        let (frameable, _) = headers_allow_framing(Some("allow-from https://a"), None);
+        let (frameable, _) = headers_allow_framing(Some("allow-from https://a"), &[]);
         assert!(frameable, "legacy allow-from is not the common block case");
     }
 
@@ -726,30 +770,39 @@ mod tests {
     fn csp_frame_ancestors_blocks_framing_unless_star() {
         let (frameable, _) = headers_allow_framing(
             None,
-            Some("default-src 'self'; frame-ancestors 'none'; script-src 'self'"),
+            &["default-src 'self'; frame-ancestors 'none'; script-src 'self'"],
         );
         assert!(!frameable);
 
         let (frameable, _) = headers_allow_framing(
             None,
-            Some("default-src 'self'; frame-ancestors https://partner.example"),
+            &["default-src 'self'; frame-ancestors https://partner.example"],
         );
         assert!(!frameable);
 
         let (frameable, _) = headers_allow_framing(
             None,
-            Some("default-src 'self'; frame-ancestors *; script-src 'self'"),
+            &["default-src 'self'; frame-ancestors *; script-src 'self'"],
         );
         assert!(frameable);
     }
 
     #[test]
+    fn second_csp_header_with_ancestors_still_blocks() {
+        let (frameable, _) = headers_allow_framing(
+            None,
+            &["default-src 'self'", "frame-ancestors 'none'"],
+        );
+        assert!(!frameable);
+    }
+
+    #[test]
     fn no_framing_headers_means_frameable() {
-        let (frameable, reason) = headers_allow_framing(None, None);
+        let (frameable, reason) = headers_allow_framing(None, &[]);
         assert!(frameable);
         assert!(reason.is_none());
 
-        let (frameable, _) = headers_allow_framing(None, Some("default-src 'self'"));
+        let (frameable, _) = headers_allow_framing(None, &["default-src 'self'"]);
         assert!(frameable);
     }
 }

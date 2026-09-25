@@ -886,9 +886,13 @@ export function LinkifiedText({ text }: { text: string }) {
   let last = 0
   for (const match of text.matchAll(URL_RE)) {
     const idx = match.index ?? 0
+    // Trailing sentence punctuation reads as part of the URL otherwise
+    // ("see https://a.com." would open with the dot).
+    const url = match[0].replace(/[.,;:!?)\]}'"]+$/, '')
+    const urlEnd = idx + url.length
     if (idx > last) parts.push(text.slice(last, idx))
-    parts.push({ url: match[0] })
-    last = idx + match[0].length
+    parts.push({ url })
+    last = urlEnd
   }
   if (last < text.length) parts.push(text.slice(last))
   if (parts.length === 1 && typeof parts[0] === 'string') {

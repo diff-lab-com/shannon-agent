@@ -38,6 +38,7 @@ import { MermaidRenderer } from '@/components/artifact/MermaidRenderer'
 import { SvgRenderer } from '@/components/artifact/SvgRenderer'
 import { WebRenderer } from '@/components/artifact/WebRenderer'
 import { openDiskArtifact } from '@/components/artifact/ArtifactLinkHost'
+import { registerLinkPanelRouter } from '@/lib/openLink'
 import { projectOf } from '@/components/SidebarSessions'
 import DiffReviewBody from '@/components/diff/DiffReviewBody'
 import type { ToolCall, UsagePayload } from '@/types'
@@ -168,20 +169,30 @@ export default function RightDock({
     document.body.style.cursor = 'col-resize'
   }
 
-  // Auto-dock: an *actively* opened artifact switches the dock to its tab
-  // and reveals the dock. Background opens (decision §5-2: disk artifacts
-  // while autoOpen is off) only add the tab — the dock stays put.
-  const prevArtifactCount = useRef(artifacts.length)
+  // P1-E (decision §5-6): external links' `panel` target lands here — the
+  // dock is the only place a web tab is visible, so the router registers
+  // with this component's lifecycle (openLink degrades to the browser when
+  // it is not mounted, e.g. on Settings/Welcome).
   useEffect(() => {
-    if (artifacts.length > prevArtifactCount.current) {
-      const newest = artifacts[artifacts.length - 1]
-      if (newest && newest.id === activeId) {
-        setTab(`a:${newest.id}`)
-        onOpen()
-      }
+    registerLinkPanelRouter(url =>
+      openArtifact({ kind: 'web', source: url, title: url, confidence: 'high' }),
+    )
+    return () => registerLinkPanelRouter(null)
+  }, [openArtifact])
+
+  // Auto-dock: whenever the active artifact changes (new artifact opened
+  // with activation, a file chip re-opening an already-docked file, or a
+  // replace-in-place), switch the dock to its tab and reveal it. Background
+  // opens (decision §5-2: disk artifacts while autoOpen is off) never touch
+  // activeId, so they only add the tab.
+  const prevActiveId = useRef(activeId)
+  useEffect(() => {
+    if (activeId && activeId !== prevActiveId.current) {
+      setTab(`a:${activeId}`)
+      onOpen()
     }
-    prevArtifactCount.current = artifacts.length
-  }, [artifacts, activeId, onOpen])
+    prevActiveId.current = activeId
+  }, [activeId, onOpen])
 
   // Q11: dismiss the Ctrl+\ hint once the user actively picks a tab —
   // engagement is a stronger dismissal signal than time alone.
@@ -486,6 +497,12 @@ function ArtifactDocBody({ artifact, workingDir }: { artifact: ArtifactItem; wor
       void openExternal(artifact.source).catch(err => toastError(t('link.open.failed'), err))
     } else if (filePath) {
       openWithDefaultApp(filePath).catch(err => toastError(t('link.open.failed'), err))
+    } else if (hasText) {
+      // Chat-fence artifact with no backing file (§4 P1-D): write it to
+      // $TEMP and hand it to the OS default app.
+      api
+        .openArtifactExternally(displayTitle, artifact.source, DOC_FILE_EXT[artifact.kind] ?? 'txt')
+        .catch(err => toastError(t('link.open.failed'), err))
     }
   }
 
@@ -560,7 +577,7 @@ function ArtifactDocBody({ artifact, workingDir }: { artifact: ArtifactItem; wor
             <span className="align-middle ml-xs hidden md:inline">{t('chat.artifact.reveal')}</span>
           </Button>
         )}
-        {(artifact.kind === 'web' || filePath) && (
+        {(artifact.kind === 'web' || filePath || hasText) && (
           <Button type="button" variant="ghost" size="sm" onClick={openExternally} className={actionBtn}>
             <span className="material-symbols-outlined icon-sm align-middle" aria-hidden="true">open_in_new</span>
             <span className="align-middle ml-xs hidden md:inline">{t('chat.artifact.openSystem')}</span>
@@ -581,17 +598,27 @@ function ArtifactDocBody({ artifact, workingDir }: { artifact: ArtifactItem; wor
                 </div>
               )
                 : artifact.kind === 'other' ? (
-                  <div className="h-full flex flex-col items-center justify-center text-center gap-xs py-xl px-lg">
-                    <span className="material-symbols-outlined icon-md text-on-surface-variant/60" aria-hidden="true">draft</span>
-                    <p className="font-label-md text-on-surface">{t('chat.artifact.unsupported.title')}</p>
-                    <p className="font-label-sm text-on-surface-variant max-w-sm">{t('chat.artifact.unsupported.hint')}</p>
-                    {filePath && (
-                      <div className="flex gap-xs mt-xs">
-                        <Button type="button" variant="default" size="sm" onClick={openExternally}>{t('chat.artifact.openSystem')}</Button>
-                        <Button type="button" variant="ghost" size="sm" onClick={reveal}>{t('chat.artifact.reveal')}</Button>
-                      </div>
-                    )}
-                  </div>
+                  // P2 (§review): the dock's 「+」 may read a plain-text file
+                  // that simply has no inline renderer — show its content as
+                  // code instead of a dead end; only truly unreadable files
+                  // get the fallback card.
+                  artifact.source && artifact.source !== filePath ? (
+                    <pre className="h-full overflow-auto font-mono text-[12px] whitespace-pre-wrap break-words text-on-surface p-sm bg-surface-container-low/50 rounded-lg">
+                      {artifact.source}
+                    </pre>
+                  ) : (
+                    <div className="h-full flex flex-col items-center justify-center text-center gap-xs py-xl px-lg">
+                      <span className="material-symbols-outlined icon-md text-on-surface-variant/60" aria-hidden="true">draft</span>
+                      <p className="font-label-md text-on-surface">{t('chat.artifact.unsupported.title')}</p>
+                      <p className="font-label-sm text-on-surface-variant max-w-sm">{t('chat.artifact.unsupported.hint')}</p>
+                      {filePath && (
+                        <div className="flex gap-xs mt-xs">
+                          <Button type="button" variant="default" size="sm" onClick={openExternally}>{t('chat.artifact.openSystem')}</Button>
+                          <Button type="button" variant="ghost" size="sm" onClick={reveal}>{t('chat.artifact.reveal')}</Button>
+                        </div>
+                      )}
+                    </div>
+                  )
                 )
                   : artifact.kind === 'mermaid' ? <MermaidRenderer source={artifact.source} title={artifact.title} />
                     : artifact.kind === 'svg' ? <SvgRenderer source={artifact.source} title={artifact.title} />

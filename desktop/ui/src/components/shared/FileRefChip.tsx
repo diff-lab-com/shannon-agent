@@ -9,9 +9,8 @@
 
 import { useEffect, useMemo, useState } from 'react'
 import { useIntl } from 'react-intl'
-import { toast } from 'sonner'
 import { cn } from '@/lib/utils'
-import { messageFor, useT } from '@/i18n'
+import { useT } from '@/i18n'
 import {
   basenameOf,
   getActiveWorkingDir,
@@ -56,7 +55,10 @@ export function FileRefChip({ raw, className }: FileRefChipProps) {
         if (alive) setExists(v)
       })
       .catch(() => {
-        if (alive) setExists(null)
+        // Probe unavailable (mock mode, bridge down): degrade to plain
+        // inline code — §5-4 says an unverifiable path must never look
+        // clickable, and it must never stay stuck "probing".
+        if (alive) setExists(false)
       })
     return () => {
       alive = false
@@ -112,7 +114,7 @@ export function FileRefChip({ raw, className }: FileRefChipProps) {
           <div className="fixed inset-0 z-modal" onClick={() => setMenu(null)} onContextMenu={(e) => { e.preventDefault(); setMenu(null) }} />
           <div
             role="menu"
-            aria-label={messageFor('link.fileRef.menu.aria', { path: baseName })}
+            aria-label={t('link.fileRef.menu.aria', { path: baseName })}
             className="fixed z-modal min-w-44 rounded-lg border border-outline-variant/20 bg-surface-container-high p-xs shadow-lg animate-in fade-in zoom-in-95"
             style={{
               left: Math.max(4, Math.min(menu.x, window.innerWidth - 200)),
@@ -136,9 +138,4 @@ export function FileRefChip({ raw, className }: FileRefChipProps) {
       )}
     </span>
   )
-}
-
-/** Shared "missing file" toast for hosts that open paths directly. */
-export function toastMissingFile(path: string): void {
-  toast.error(messageFor('link.fileRef.missing', { path: basenameOf(path) }))
 }

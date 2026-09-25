@@ -25,8 +25,9 @@ export function classifyHref(href: string): HrefKind {
 }
 
 let installed = false
+let clickHandler: ((e: MouseEvent) => void) | null = null
 
-/** Idempotent — SafeMode double-mounts under StrictMode are harmless. */
+/** Idempotent — StrictMode double-mounts are harmless. */
 export function installLinkInterception(): void {
   if (installed || typeof document === 'undefined') return
   installed = true
@@ -49,11 +50,17 @@ export function installLinkInterception(): void {
     }
   }
 
+  clickHandler = handle
   document.addEventListener('click', handle, true)
   document.addEventListener('auxclick', handle, true)
 }
 
-/** Test hook — uninstall and allow a fresh install. */
+/** Test hook — uninstall (removing the listeners) and allow a fresh install. */
 export function resetLinkInterceptionForTests(): void {
+  if (clickHandler && typeof document !== 'undefined') {
+    document.removeEventListener('click', clickHandler, true)
+    document.removeEventListener('auxclick', clickHandler, true)
+  }
+  clickHandler = null
   installed = false
 }

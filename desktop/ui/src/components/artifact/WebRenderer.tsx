@@ -46,7 +46,9 @@ export function WebRenderer({ url }: { url: string }) {
 
   const onFrameLoad = useCallback(() => {
     // XFO error pages also fire `load` — only count it as success while the
-    // probe hasn't already ruled the site blocked.
+    // probe hasn't already ruled the site blocked. A real load disarms the
+    // timeout so a slow site finishing at 13s isn't flipped to blocked.
+    if (timerRef.current) clearTimeout(timerRef.current)
     setPhase(p => (p === 'loading' ? 'loaded' : p))
   }, [])
 

@@ -273,8 +273,8 @@ pub async fn read_text_file(
     if sniffs_as_binary(&bytes) {
         return Err("binary file".to_string());
     }
-    let content =
-        String::from_utf8(bytes).map_err(|_| "file is not valid UTF-8".to_string())?;
+    let content = String::from_utf8(bytes)
+        .map_err(|_| "binary file: not valid UTF-8".to_string())?;
     Ok(TextFileContent {
         path: canonical.to_string_lossy().into_owned(),
         content,

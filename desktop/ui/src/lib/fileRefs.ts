@@ -17,7 +17,7 @@ export const FILE_MUTATING_TOOLS = new Set([
 ])
 
 /** Tool-input fields that carry a file path across the engine's tools. */
-export const PATH_INPUT_FIELDS = ['path', 'file_path', 'filepath', 'notebook_path'] as const
+export const PATH_INPUT_FIELDS = ['path', 'file_path', 'filePath', 'filepath', 'notebook_path'] as const
 
 const PATHY_EXT_RE =
   /\.(rs|ts|tsx|js|jsx|mjs|cjs|py|pyw|go|java|kt|kts|swift|rb|php|c|h|cpp|hpp|cc|hh|cs|fs|fsx|lua|vue|svelte|astro|sql|sh|bash|zsh|fish|ps1|psm1|bat|cmd|toml|yaml|yml|json|json5|xml|ini|cfg|conf|env|properties|gradle|proto|graphql|tf|hcl|md|markdown|mdx|html|htm|css|scss|sass|less|svg|mermaid|mmd|txt|csv|tsv|log|lock|mk|nix|el|clj|cljs|ex|exs|erl|hrl|hs|ml|mli|dart|r|jl|scala|groovy|pl|pm|dart|sol|move|circom)$/i
@@ -39,7 +39,9 @@ export function looksLikeFilePath(token: string): boolean {
 /**
  * Resolve a detected token to an absolute path for the existence probe.
  * Returns null when it cannot be resolved (`~` needs a home hint the UI
- * does not have; relative paths need a working directory).
+ * does not have; relative paths need a working directory). `..` segments
+ * are resolved against the base's own segments, so leading `..` correctly
+ * climbs out of the working dir.
  */
 export function resolveFileRefPath(raw: string, workingDir: string | null): string | null {
   const t = raw.trim()
@@ -47,20 +49,16 @@ export function resolveFileRefPath(raw: string, workingDir: string | null): stri
   if (t.startsWith('/')) return t
   if (t.startsWith('~')) return null
   if (!workingDir) return null
-  const base = workingDir.replace(/\/+$/, '')
-  if (t.startsWith('./') || t.startsWith('../')) {
-    const parts: string[] = []
-    for (const seg of t.split('/')) {
-      if (seg === '' || seg === '.') continue
-      if (seg === '..') {
-        parts.pop()
-        continue
-      }
-      parts.push(seg)
+  const segs = workingDir.replace(/\/+$/, '').split('/').filter(Boolean)
+  for (const seg of t.split('/')) {
+    if (seg === '' || seg === '.') continue
+    if (seg === '..') {
+      segs.pop()
+      continue
     }
-    return [base, ...parts].join('/')
+    segs.push(seg)
   }
-  return `${base}/${t}`
+  return '/' + segs.join('/')
 }
 
 /** Extract the path-ish input field from a tool call's input object. */
