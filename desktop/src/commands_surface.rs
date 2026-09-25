@@ -406,7 +406,10 @@ pub(crate) fn canonicalized_in_scope(path: &str) -> Result<std::path::PathBuf, S
         .canonicalize()
         .map_err(|e| format!("path not accessible: {path}: {e}"))?;
     let canonical = strip_windows_verbatim(&canonical);
-    if allowed_path_bases().iter().any(|base| canonical.starts_with(base)) {
+    if allowed_path_bases()
+        .iter()
+        .any(|base| canonical.starts_with(base))
+    {
         Ok(canonical)
     } else {
         Err(format!(
@@ -464,7 +467,9 @@ pub async fn reveal_in_folder(app: tauri::AppHandle, path: String) -> Result<(),
         .map_err(|e| format!("failed to reveal path: {e}"))
 }
 
-const ARTIFACT_EXPORT_EXTS: [&str; 8] = ["md", "markdown", "html", "htm", "svg", "mmd", "mermaid", "txt"];
+const ARTIFACT_EXPORT_EXTS: [&str; 8] = [
+    "md", "markdown", "html", "htm", "svg", "mmd", "mermaid", "txt",
+];
 const MAX_ARTIFACT_EXPORT_BYTES: usize = 2 * 1024 * 1024;
 
 fn slugify_title(title: &str) -> String {
@@ -491,7 +496,11 @@ fn artifact_temp_file_name(title: &str, source: &str, ext: &str) -> String {
     use std::hash::{Hash, Hasher};
     let mut hasher = DefaultHasher::new();
     source.hash(&mut hasher);
-    format!("{}-{:08x}.{ext}", slugify_title(title), hasher.finish() as u32)
+    format!(
+        "{}-{:08x}.{ext}",
+        slugify_title(title),
+        hasher.finish() as u32
+    )
 }
 
 /// P1-D escape hatch: render HTML (or other text artifacts) where the OS
@@ -614,15 +623,9 @@ pub async fn probe_url_frameable(url: String) -> Result<FrameProbe, String> {
 #[cfg(test)]
 mod tests {
     use super::{
-        artifact_temp_file_name,
-        canonicalized_in_scope,
-        headers_allow_framing,
-        is_openable_url,
-        is_probable_path_in_scope,
-        is_official_release_url,
-        slugify_title,
-        version_is_newer,
-        ARTIFACT_EXPORT_EXTS,
+        ARTIFACT_EXPORT_EXTS, artifact_temp_file_name, canonicalized_in_scope,
+        headers_allow_framing, is_official_release_url, is_openable_url, is_probable_path_in_scope,
+        slugify_title, version_is_newer,
     };
 
     #[test]
@@ -789,10 +792,8 @@ mod tests {
 
     #[test]
     fn second_csp_header_with_ancestors_still_blocks() {
-        let (frameable, _) = headers_allow_framing(
-            None,
-            &["default-src 'self'", "frame-ancestors 'none'"],
-        );
+        let (frameable, _) =
+            headers_allow_framing(None, &["default-src 'self'", "frame-ancestors 'none'"]);
         assert!(!frameable);
     }
 
