@@ -134,7 +134,7 @@ fn test_with_memory_arc_shares_one_instance_across_engines() {
 
     let store_b = handle_b.read().unwrap_or_else(|e| e.into_inner());
     let injected = store_b
-        .format_for_injection(&project)
+        .format_for_injection(&project, None)
         .expect("injection text for the cwd project");
     assert!(
         injected.contains("shared fact"),
@@ -176,7 +176,7 @@ fn test_with_memory_arc_feeds_the_injection_read_path() {
         .unwrap()
         .read()
         .unwrap_or_else(|e| e.into_inner())
-        .format_for_injection(&project)
+        .format_for_injection(&project, None)
         .expect("memory text");
     assert!(text.contains("engine injected this"));
 

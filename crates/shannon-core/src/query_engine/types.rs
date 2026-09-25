@@ -955,6 +955,14 @@ pub struct QueryEngineConfig {
     /// tool-calling API. Default `true`; opt-out via env
     /// `SHANNON_MARKDOWN_TOOL_FALLBACK=false`.
     pub markdown_tool_fallback: bool,
+    /// Explicit working directory for host-dependent reads keyed on the
+    /// session's location: the memory injection/extraction project key and
+    /// (indirectly) prompt-content decisions. When `None` the process
+    /// `current_dir()` is used — which is wrong for hosts running several
+    /// sessions in one process (the desktop used to flip the process cwd on
+    /// every session switch, racing the memory project key). Hosts SHOULD
+    /// set this per session.
+    pub working_directory: Option<std::path::PathBuf>,
 }
 
 impl Default for QueryEngineConfig {
@@ -1040,6 +1048,7 @@ impl Default for QueryEngineConfig {
             turn_checkpoint_turn: None,
             token_budget_warning: true,
             markdown_tool_fallback: true,
+            working_directory: None,
         }
     }
 }

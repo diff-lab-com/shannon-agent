@@ -944,6 +944,11 @@ impl Repl {
         // Create state manager
         let state_manager = StateManager::new();
 
+        // The session's project key for memory reads/writes: pinned to the
+        // launch cwd so it matches the tool handles below (the process cwd
+        // itself is never used as a memory key anymore).
+        let repl_cwd = std::env::current_dir().unwrap_or_default();
+
         // Create query engine with optional memory store
         let base_engine = QueryEngine::with_defaults_arc(
             client,
@@ -951,7 +956,8 @@ impl Repl {
             permission_manager,
             state_manager,
         )
-        .with_plan_mode_active(plan_mode_flag.clone());
+        .with_plan_mode_active(plan_mode_flag.clone())
+        .with_working_directory(repl_cwd.clone());
 
         // Initialize memory store at ~/.shannon/memories/
         let mut query_engine = {
@@ -967,11 +973,22 @@ impl Repl {
             // store stays multi-writer safe on disk for other processes.
             let shared = std::sync::Arc::new(std::sync::RwLock::new(mem_store));
             let _ = tool_registry.register(Box::new(
-                shannon_core::memory::tools::MemorySaveTool::with_shared_store(shared.clone()),
+                shannon_core::memory::tools::MemorySaveTool::with_shared_store(shared.clone())
+                    .with_working_dir(repl_cwd.display().to_string()),
             ));
             let _ = tool_registry.register(Box::new(
-                shannon_core::memory::tools::MemoryForgetTool::with_shared_store(shared.clone()),
+                shannon_core::memory::tools::MemoryForgetTool::with_shared_store(shared.clone())
+                    .with_working_dir(repl_cwd.display().to_string()),
             ));
+            // Episodic layer access: let the model search past session
+            // transcripts (previously only the REPL /search could, and the
+            // model had no path to history at all).
+            if let Some(sessions_dir) =
+                dirs::home_dir().map(|h| h.join(".shannon").join("sessions"))
+            {
+                let _ = tool_registry
+                    .register(Box::new(shannon_core::SessionSearchTool::new(sessions_dir)));
+            }
             base_engine.with_memory_arc(shared)
         };
 

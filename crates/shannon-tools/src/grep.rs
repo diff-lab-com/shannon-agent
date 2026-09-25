@@ -11,6 +11,7 @@ use shannon_core::tools::ToolError;
 use shannon_core::{Tool, ToolOutput, ToolResult};
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
+use std::time::Duration;
 
 /// Maximum number of results returned by default
 const DEFAULT_MAX_RESULTS: usize = 1000;
@@ -18,6 +19,78 @@ const DEFAULT_MAX_RESULTS: usize = 1000;
 const MAX_ALLOWED_RESULTS: usize = 10000;
 /// Maximum context lines per side
 const MAX_CONTEXT_LINES: usize = 100;
+
+/// Default wall-clock budget for a single grep search. A pathological
+/// directory tree (or a stalled remote world) must degrade to a truncated
+/// result instead of hanging the conversation turn.
+const DEFAULT_TIMEOUT: Duration = Duration::from_secs(30);
+
+/// Environment variable (seconds) overriding `DEFAULT_TIMEOUT`. Unset,
+/// unparsable or zero values fall back to the default.
+const TIMEOUT_ENV_VAR: &str = "SHANNON_GREP_TIMEOUT_SECS";
+
+/// Resolve the search timeout from a `SHANNON_GREP_TIMEOUT_SECS` string.
+/// `None`, unparsable, zero or negative values all fall back to
+/// `DEFAULT_TIMEOUT`.
+fn timeout_from_secs(raw: Option<&str>) -> Duration {
+    match raw.and_then(|s| s.trim().parse::<u64>().ok()) {
+        Some(secs) if secs > 0 => Duration::from_secs(secs),
+        _ => DEFAULT_TIMEOUT,
+    }
+}
+
+/// Read [`TIMEOUT_ENV_VAR`] and resolve the effective search timeout.
+fn search_timeout() -> Duration {
+    timeout_from_secs(std::env::var(TIMEOUT_ENV_VAR).ok().as_deref())
+}
+
+/// Await `fut` under `timeout`. On expiry return the graceful timed-out
+/// marker (`timed_out = true`, empty results) instead of an error — a search
+/// that overruns its budget degrades, it never panics and never errors out
+/// the turn. An expired `spawn_blocking` worker keeps running in the
+/// background and its result is simply dropped.
+async fn run_with_timeout(
+    timeout: Duration,
+    fut: impl std::future::Future<Output = ToolResult<(Vec<GrepFileMatch>, usize)>>,
+) -> ToolResult<(Vec<GrepFileMatch>, usize, bool)> {
+    match tokio::time::timeout(timeout, fut).await {
+        Ok(result) => result.map(|(matches, total)| (matches, total, false)),
+        Err(_elapsed) => Ok((Vec::new(), 0, true)),
+    }
+}
+
+/// Human-readable duration for the timeout notice ("30s", "250ms", ...).
+fn timeout_display(timeout: Duration) -> String {
+    if timeout.as_secs() >= 1 {
+        format!("{}s", timeout.as_secs())
+    } else {
+        format!("{}ms", timeout.as_millis())
+    }
+}
+
+/// Build the graceful (non-error) output for a search that exceeded its
+/// budget: empty results plus the standard `truncated` flag, a `timed_out`
+/// marker and a hint pointing at the env override.
+fn timed_out_output(timeout: Duration, output_mode: &GrepOutputMode) -> ToolOutput {
+    let mut metadata = HashMap::new();
+    metadata.insert("total_files".to_string(), json!(0));
+    metadata.insert("total_matches".to_string(), json!(0));
+    metadata.insert(
+        "output_mode".to_string(),
+        json!(format!("{output_mode:?}").to_lowercase()),
+    );
+    metadata.insert("truncated".to_string(), json!(true));
+    metadata.insert("timed_out".to_string(), json!(true));
+    ToolOutput {
+        content: format!(
+            "Search timed out after {} and was stopped early; results may be incomplete. \
+             Narrow the pattern or path, or raise SHANNON_GREP_TIMEOUT_SECS.",
+            timeout_display(timeout)
+        ),
+        is_error: false,
+        metadata,
+    }
+}
 
 /// Number of bytes to check for binary detection
 const BINARY_CHECK_BYTES: usize = 8192;
@@ -98,6 +171,9 @@ pub struct GrepTool {
     sandbox: PathSandbox,
     /// Filesystem world backing binary sniffing and line reads (§4.11).
     fs: std::sync::Arc<dyn shannon_tool_interface::FileSystemProvider>,
+    /// Fixed search timeout (test hook). `None` resolves from
+    /// `SHANNON_GREP_TIMEOUT_SECS` / `DEFAULT_TIMEOUT` per call.
+    timeout_override: Option<Duration>,
 }
 
 impl GrepTool {
@@ -111,6 +187,7 @@ impl GrepTool {
                 strict_mode: false,
             }),
             fs: crate::defaults::fs(),
+            timeout_override: None,
         }
     }
 
@@ -119,7 +196,20 @@ impl GrepTool {
         Self {
             sandbox,
             fs: crate::defaults::fs(),
+            timeout_override: None,
         }
+    }
+
+    /// Pin the search timeout (tests). When unset, the timeout is resolved
+    /// per call from `SHANNON_GREP_TIMEOUT_SECS` / `DEFAULT_TIMEOUT`.
+    pub fn with_timeout(mut self, timeout: Duration) -> Self {
+        self.timeout_override = Some(timeout);
+        self
+    }
+
+    /// Resolve the effective search timeout for a call.
+    fn resolved_timeout(&self) -> Duration {
+        self.timeout_override.unwrap_or_else(search_timeout)
     }
 
     /// Inject a filesystem world override (sandbox/remote assemblies).
@@ -422,7 +512,13 @@ case_insensitive matching."
             .unwrap_or(DEFAULT_MAX_RESULTS)
             .min(MAX_ALLOWED_RESULTS);
         let output_mode = grep_input.output_mode.unwrap_or_default();
-        let (all_matches, total_matches) = tokio::task::spawn_blocking(move || {
+
+        // Wall-clock budget: a pathological tree must not hang the turn. The
+        // blocking job runs under `tokio::time::timeout`; on expiry we return
+        // the graceful truncated "timed out" output and drop the abandoned
+        // worker's (late) result.
+        let timeout = self.resolved_timeout();
+        let join = tokio::task::spawn_blocking(move || {
             // Existence is provider-checked: on a remote world the search
             // root lives on the target, so `Path::exists` would probe the
             // wrong disk. When the raw spelling is missing but the sandbox
@@ -497,9 +593,20 @@ case_insensitive matching."
             })
             .map_err(|e| ToolError::ExecutionFailed(format!("walk failed: {e}")))?;
             Ok((all_matches, total_matches))
+        });
+        let (all_matches, total_matches, timed_out) = run_with_timeout(timeout, async move {
+            match join.await {
+                Ok(result) => result,
+                Err(e) => Err(ToolError::ExecutionFailed(format!(
+                    "grep blocking worker failed: {e}"
+                ))),
+            }
         })
-        .await
-        .map_err(|e| ToolError::ExecutionFailed(format!("grep blocking worker failed: {e}")))??;
+        .await?;
+
+        if timed_out {
+            return Ok(timed_out_output(timeout, &output_mode));
+        }
 
         // Format output based on mode
         let content = match output_mode {
@@ -523,6 +630,7 @@ case_insensitive matching."
                     json!(format!("{output_mode:?}").to_lowercase()),
                 );
                 map.insert("truncated".to_string(), json!(total_matches >= max_results));
+                map.insert("timed_out".to_string(), json!(false));
                 map
             },
         })
@@ -724,6 +832,158 @@ mod tests {
     use super::*;
     use std::fs;
     use tempfile::TempDir;
+
+    // ── Search timeout (graceful degradation) ─────────────────────────
+
+    #[test]
+    fn test_timeout_from_secs_parsing() {
+        // Unset / empty / unparsable / zero / negative all fall back to the
+        // default; valid values override it.
+        assert_eq!(timeout_from_secs(None), DEFAULT_TIMEOUT);
+        assert_eq!(timeout_from_secs(Some("")), DEFAULT_TIMEOUT);
+        assert_eq!(timeout_from_secs(Some("abc")), DEFAULT_TIMEOUT);
+        assert_eq!(timeout_from_secs(Some("0")), DEFAULT_TIMEOUT);
+        assert_eq!(timeout_from_secs(Some("-5")), DEFAULT_TIMEOUT);
+        assert_eq!(timeout_from_secs(Some(" 7 ")), Duration::from_secs(7));
+        assert_eq!(timeout_from_secs(Some("120")), Duration::from_secs(120));
+    }
+
+    #[tokio::test]
+    async fn test_search_timeout_returns_graceful_marker() {
+        // A never-completing search under a 1ms budget must expire into the
+        // graceful timed-out result — no panic, no error.
+        let result = run_with_timeout(
+            Duration::from_millis(1),
+            std::future::pending::<ToolResult<(Vec<GrepFileMatch>, usize)>>(),
+        )
+        .await;
+        let (matches, total, timed_out) = result.expect("timeout must degrade, not error");
+        assert!(timed_out);
+        assert!(matches.is_empty());
+        assert_eq!(total, 0);
+
+        let out = timed_out_output(Duration::from_secs(30), &GrepOutputMode::Content);
+        assert!(!out.is_error);
+        assert!(out.content.contains("timed out"), "got: {}", out.content);
+        assert_eq!(out.metadata.get("truncated"), Some(&json!(true)));
+        assert_eq!(out.metadata.get("timed_out"), Some(&json!(true)));
+        assert_eq!(out.metadata.get("output_mode"), Some(&json!("content")));
+    }
+
+    /// End-to-end: a stalled search world must degrade to the graceful
+    /// timed-out output (is_error=false, truncated + timed_out flags), never
+    /// hang or panic.
+    #[tokio::test]
+    async fn grep_timeout_degrades_gracefully() {
+        use shannon_tool_interface::{DirEntryInfo, FileMeta, FileSystemProvider};
+        use std::io;
+        use std::sync::Arc;
+
+        struct StalledFs;
+
+        #[async_trait]
+        impl FileSystemProvider for StalledFs {
+            async fn read_text(&self, _path: &Path) -> io::Result<String> {
+                unimplemented!()
+            }
+            async fn read_bytes(&self, _p: &Path) -> io::Result<Vec<u8>> {
+                unimplemented!()
+            }
+            async fn metadata(&self, _p: &Path) -> io::Result<FileMeta> {
+                unimplemented!()
+            }
+            async fn create_dir_all(&self, _p: &Path) -> io::Result<()> {
+                unimplemented!()
+            }
+            async fn write_bytes(&self, _p: &Path, _c: &[u8]) -> io::Result<()> {
+                unimplemented!()
+            }
+            async fn rename(&self, _f: &Path, _t: &Path) -> io::Result<()> {
+                unimplemented!()
+            }
+            async fn canonicalize(&self, p: &Path) -> io::Result<PathBuf> {
+                Ok(p.to_path_buf())
+            }
+            fn read_text_blocking(&self, _p: &Path) -> io::Result<String> {
+                unimplemented!()
+            }
+            fn write_bytes_blocking(&self, _p: &Path, _c: &[u8]) -> io::Result<()> {
+                unimplemented!()
+            }
+            fn create_dir_all_blocking(&self, _p: &Path) -> io::Result<()> {
+                unimplemented!()
+            }
+            fn rename_blocking(&self, _from: &Path, _to: &Path) -> io::Result<()> {
+                unimplemented!()
+            }
+            fn remove_file_blocking(&self, _p: &Path) -> io::Result<()> {
+                unimplemented!()
+            }
+            fn canonicalize_blocking(&self, p: &Path) -> io::Result<PathBuf> {
+                Ok(p.to_path_buf())
+            }
+            fn metadata_blocking(&self, _p: &Path) -> io::Result<FileMeta> {
+                Ok(FileMeta {
+                    len: 64,
+                    is_dir: false,
+                    modified: None,
+                })
+            }
+            fn read_prefix_blocking(&self, _p: &Path, _m: usize) -> io::Result<Vec<u8>> {
+                unimplemented!()
+            }
+            fn list_dir_blocking(&self, _p: &Path) -> io::Result<Vec<DirEntryInfo>> {
+                unimplemented!()
+            }
+            fn exists_blocking(&self, _p: &Path) -> bool {
+                true
+            }
+            fn walk_blocking(
+                &self,
+                root: &Path,
+                cb: &mut dyn FnMut(&DirEntryInfo) -> bool,
+            ) -> io::Result<()> {
+                // Simulate a pathological tree: the walk stalls well past the
+                // 1ms budget before yielding anything.
+                std::thread::sleep(Duration::from_millis(200));
+                cb(&DirEntryInfo {
+                    path: root.to_path_buf(),
+                    len: 0,
+                    is_dir: true,
+                });
+                Ok(())
+            }
+        }
+
+        let fs: Arc<dyn FileSystemProvider> = Arc::new(StalledFs);
+        let sandbox =
+            crate::file::sandbox::PathSandbox::with_config(crate::file::sandbox::SandboxConfig {
+                allowed_roots: vec![PathBuf::from("/remote-host/proj")],
+                denied_patterns: crate::file::sandbox::SandboxConfig::default_denied_patterns(),
+                strict_mode: true,
+            })
+            .with_fs_provider(fs.clone());
+        let tool = GrepTool::with_sandbox(sandbox)
+            .with_fs(fs)
+            .with_timeout(Duration::from_millis(1));
+
+        let output = Tool::execute(
+            &tool,
+            json!({ "pattern": "needle", "path": "/remote-host/proj" }),
+        )
+        .await
+        .expect("timeout must degrade to a graceful result, not an error");
+
+        assert!(!output.is_error);
+        assert!(
+            output.content.contains("timed out"),
+            "notice must mention the timeout, got: {}",
+            output.content
+        );
+        assert_eq!(output.metadata.get("timed_out"), Some(&json!(true)));
+        assert_eq!(output.metadata.get("truncated"), Some(&json!(true)));
+        assert_eq!(output.metadata.get("total_matches"), Some(&json!(0)));
+    }
 
     // ── A3: sandbox-visible output paths (docs/eval-findings-2026-09-glm.md) ──
 

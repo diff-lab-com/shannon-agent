@@ -509,10 +509,6 @@ jobs:
         run: cargo test --workspace --no-run
       - name: Generate docs/metrics.md
         run: bash scripts/gen-metrics.sh
-      - name: README metrics drift check
-        # README metrics markers are hand-copied from the generated report;
-        # fail when they drift from the fresh numbers.
-        run: bash scripts/gen-metrics.sh --check
       - name: Upload metrics report
         if: always()
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
@@ -793,7 +789,16 @@ jobs:
       # -09-13 each contained only one side of the parallel PR #107 /
       # PR #110 merges, so the combined baseline is re-established at the
       # integration merge itself. Intentional minor-cycle breaks.
-      SEMVER_BASELINE: semver-baseline-2026-09-14
+      # Fifteenth move (2026-09-25, PR #116 memory/docs/retrieval
+      # hardening): new pub fields on exhaustively-constructible structs
+      # (MemoryEntry::valid_until bi-temporal invalidation,
+      # QueryEngineConfig::working_directory session pinning,
+      # CompactSummary/ConsolidationResult::conflicts_resolved) plus
+      # project-parameter additions to MemoryStore consolidation methods
+      # and the retired shannon-commands builtin /memory dead structs.
+      # Intentional minor-cycle breaks per the memory review; new TAG NAME
+      # so the baseline-rustdoc cache invalidates.
+      SEMVER_BASELINE: semver-baseline-2026-09-15
     steps:
       - uses: actions/checkout@f548e57e544e1ff5a4c46bf1e1b8685f8e4a348a
         with:

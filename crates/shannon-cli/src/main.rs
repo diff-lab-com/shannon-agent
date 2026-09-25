@@ -1377,17 +1377,26 @@ fn shared_memory_store() -> std::sync::Arc<std::sync::RwLock<shannon_core::Memor
     std::sync::Arc::new(std::sync::RwLock::new(store))
 }
 
-/// Register the model-facing memory tools against a shared store handle.
+/// Register the model-facing memory tools against a shared store handle,
+/// plus the session-search tool (episodic layer access).
 fn register_memory_tools(
     tools: &mut shannon_core::tools::ToolRegistry,
     shared: std::sync::Arc<std::sync::RwLock<shannon_core::MemoryStore>>,
 ) {
+    // Headless runs are single-shot: the process cwd is the stable project
+    // key (pinned so the tools never re-read it mid-run).
+    let working_dir = std::env::current_dir().unwrap_or_default();
     let _ = tools.register(Box::new(
-        shannon_core::memory::tools::MemorySaveTool::with_shared_store(shared.clone()),
+        shannon_core::memory::tools::MemorySaveTool::with_shared_store(shared.clone())
+            .with_working_dir(working_dir.display().to_string()),
     ));
     let _ = tools.register(Box::new(
-        shannon_core::memory::tools::MemoryForgetTool::with_shared_store(shared),
+        shannon_core::memory::tools::MemoryForgetTool::with_shared_store(shared)
+            .with_working_dir(working_dir.display().to_string()),
     ));
+    let _ = tools.register(Box::new(shannon_core::SessionSearchTool::new(
+        sessions_container_from_env(),
+    )));
 }
 
 /// Resolve the sessions container for headless flows: `SHANNON_SESSIONS_DIR`
@@ -2850,6 +2859,10 @@ fn load_headless_webhook_config() -> Option<shannon_core::notifier::WebhookConfi
 /// Mirrors the supported set advertised by the flag doc-comment (and the
 /// REST `MessageRequest.attachments` allowlist); bmp accepted here for
 /// parity with the TUI `/image` command.
+///
+/// Files over the shared 10 MiB image limit (`shannon_core::attachments`)
+/// are skipped with a stderr warning — never read into memory — and the
+/// remaining attachments still go out.
 const CLI_ATTACH_MEDIA: &[(&str, &str)] = &[
     ("png", "image/png"),
     ("jpg", "image/jpeg"),
@@ -2861,6 +2874,7 @@ const CLI_ATTACH_MEDIA: &[(&str, &str)] = &[
 
 fn parse_attachments(paths: &[String]) -> Result<Vec<shannon_engine::api::ContentBlock>> {
     use base64::Engine;
+    use shannon_core::attachments::MAX_IMAGE_BYTES;
     use std::path::Path;
 
     let mut blocks = Vec::with_capacity(paths.len());
@@ -2881,6 +2895,17 @@ fn parse_attachments(paths: &[String]) -> Result<Vec<shannon_engine::api::Conten
                     "--attach: unsupported extension for {p} (supported: png, jpg, jpeg, gif, webp, bmp)"
                 )
             })?;
+        // Shared size gate: stat before read, so an oversized image is
+        // skipped (with a warning) instead of being read whole into memory.
+        let meta =
+            std::fs::metadata(path).map_err(|e| anyhow::anyhow!("--attach: metadata {p}: {e}"))?;
+        if meta.len() > MAX_IMAGE_BYTES as u64 {
+            eprintln!(
+                "Warning: skipping --attach '{p}': {} bytes exceeds the {MAX_IMAGE_BYTES} byte image attachment limit",
+                meta.len()
+            );
+            continue;
+        }
         let bytes = std::fs::read(path).map_err(|e| anyhow::anyhow!("--attach: read {p}: {e}"))?;
         let data = base64::engine::general_purpose::STANDARD.encode(&bytes);
         blocks.push(shannon_engine::api::ContentBlock::Image {

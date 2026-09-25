@@ -248,6 +248,21 @@ pub(crate) fn handle_context(repl: &mut Repl, args: &str) -> Result<()> {
                         return Ok(());
                     }
                 };
+                // Dedup guard: append_system_prompt is cumulative, so re-running
+                // /context reload with unchanged files would stack duplicate
+                // copies of the instructions into the system prompt. Skip when
+                // the exact payload is already present.
+                if query_engine
+                    .system_prompt()
+                    .is_some_and(|prompt| prompt.contains(&instructions.content))
+                {
+                    repl.chat.add_message(
+                        ChatRole::System,
+                        "Project instructions already reloaded in this session; start a new session to pick up further changes."
+                            .to_string(),
+                    );
+                    return Ok(());
+                }
                 query_engine.append_system_prompt(&instructions.content);
                 let files = instructions.loaded_files.join(", ");
                 {
@@ -508,4 +523,57 @@ pub(crate) fn handle_local_models(repl: &mut Repl) -> Result<()> {
 
     repl.chat.add_message(ChatRole::System, output);
     Ok(())
+}
+
+#[cfg(test)]
+#[allow(clippy::unwrap_used)]
+mod tests {
+    use super::*;
+    use crate::repl::commands::submit_input;
+
+    /// `/context reload` must not stack duplicate instruction payloads into
+    /// the system prompt: the first reload appends, a second reload with
+    /// unchanged files is refused with a hint instead of appending again.
+    #[test]
+    fn test_context_reload_does_not_duplicate_instructions() {
+        let mut repl = Repl::new().expect("repl should construct");
+        assert!(repl.query_engine.is_some());
+
+        repl.prompt.set_input("/context reload".to_string());
+        submit_input(&mut repl, None).unwrap();
+
+        let prompt_after_first = repl
+            .query_engine
+            .as_ref()
+            .and_then(|e| e.system_prompt())
+            .expect("first reload should append project instructions");
+        assert!(
+            prompt_after_first.contains("scope:"),
+            "appended prompt should carry instruction scope headers, got: {prompt_after_first}"
+        );
+        let last_msg = &repl.chat.last_message().unwrap().content;
+        assert!(
+            last_msg.contains("Project context reloaded"),
+            "first reload should confirm, got: {last_msg}"
+        );
+
+        // Second reload with unchanged files: prompt must not grow.
+        repl.prompt.set_input("/context reload".to_string());
+        submit_input(&mut repl, None).unwrap();
+
+        let prompt_after_second = repl
+            .query_engine
+            .as_ref()
+            .and_then(|e| e.system_prompt())
+            .expect("system prompt should persist across reloads");
+        assert_eq!(
+            prompt_after_first, prompt_after_second,
+            "second reload must not append the same instructions again"
+        );
+        let last_msg = &repl.chat.last_message().unwrap().content;
+        assert!(
+            last_msg.contains("already reloaded in this session"),
+            "second reload should be refused with a hint, got: {last_msg}"
+        );
+    }
 }
