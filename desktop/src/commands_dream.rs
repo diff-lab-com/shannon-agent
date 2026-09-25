@@ -69,6 +69,10 @@ pub const DEFAULT_PER_MSG_CHARS: usize = 500;
 /// `days_back` used by the manual entry point (`run_dream_pass` / `/dream`).
 /// The nightly scheduler passes 7 instead (Task 3).
 pub const DEFAULT_MANUAL_DAYS_BACK: u32 = 3;
+/// Upper bound on the session-window length. Callers may pass anything, but
+/// a pass never scans more than 30 days of session files (a stray
+/// `days_back=100000` must not walk every session on disk).
+pub const DREAM_MAX_DAYS_BACK: u32 = 30;
 /// Minimum interval between two dream passes — mirrored in both the
 /// state-file timestamp check and the process-wide consolidation lock.
 pub const DREAM_MIN_INTERVAL: Duration = Duration::hours(6);
@@ -791,6 +795,28 @@ fn is_state_throttled(last_dream_at: Option<&str>, now: DateTime<Utc>) -> bool {
         .is_some_and(|ts| now - ts.with_timezone(&Utc) < DREAM_MIN_INTERVAL)
 }
 
+/// Clamp the session-window length to [`DREAM_MAX_DAYS_BACK`]. Applied in
+/// [`execute_dream_pass`] — after gating, before gathering — so every entry
+/// point (manual command, `/dream`, the Task 3 nightly scheduler) is capped.
+fn clamp_days_back(days_back: u32) -> u32 {
+    days_back.min(DREAM_MAX_DAYS_BACK)
+}
+
+/// Skip reason when [`ConsolidationLock::try_acquire`] refused: a held guard
+/// means a pass is genuinely running (`"in-progress"`); an idle lock means
+/// only the 6h min interval blocked the attempt (`"throttled"`) — e.g. a
+/// retry after a failed pass, whose guard `drop` stamped the timestamp
+/// without any state-file record. Kept accurate locally because
+/// `ConsolidationGuard::drop` unconditionally stamps (shannon-core is not
+/// modified for this).
+fn lock_skip_reason(lock: &ConsolidationLock) -> &'static str {
+    if lock.is_in_progress() {
+        "in-progress"
+    } else {
+        "throttled"
+    }
+}
+
 // ============================================================================
 // Prompt construction
 // ============================================================================
@@ -1232,6 +1258,9 @@ pub(crate) async fn execute_dream_pass(
     app: tauri::AppHandle,
     days_back: u32,
 ) -> Result<DreamPassResult, String> {
+    // Session window is capped centrally so every entry point is covered.
+    let days_back = clamp_days_back(days_back);
+
     // 1. Expire stale proposals first — dreams dir only, always safe.
     let dreams = dreams_dir()?;
     self_heal_expired_proposals_in(&dreams, DREAM_PROPOSAL_MAX_AGE_DAYS);
@@ -1252,7 +1281,7 @@ pub(crate) async fn execute_dream_pass(
         return Ok(DreamPassResult::skipped("throttled"));
     }
     let Some(_lock_guard) = dream_lock().try_acquire() else {
-        return Ok(DreamPassResult::skipped("in-progress"));
+        return Ok(DreamPassResult::skipped(lock_skip_reason(dream_lock())));
     };
 
     // 4–6. Gather inputs and consult the LLM (transport errors abort here,
@@ -1406,7 +1435,8 @@ pub(crate) fn apply_actions_to_store(
 // ============================================================================
 
 /// Manual entry point (Memory panel button, `/dream`): run one dream pass.
-/// Defaults to a 3-day session window; the nightly scheduler (Task 3) calls
+/// Defaults to a 3-day session window, capped at [`DREAM_MAX_DAYS_BACK`]
+/// (30) inside `execute_dream_pass`; the nightly scheduler (Task 3) calls
 /// `execute_dream_pass` directly with 7.
 #[tauri::command]
 pub async fn run_dream_pass(
@@ -2044,6 +2074,35 @@ mod tests {
         assert!(is_state_throttled(Some(&recent), now), "<6h → throttled");
         let old = (now - Duration::hours(7)).to_rfc3339();
         assert!(!is_state_throttled(Some(&old), now), "≥6h → allowed");
+    }
+
+    #[test]
+    fn days_back_is_capped_at_thirty() {
+        assert_eq!(clamp_days_back(0), 0);
+        assert_eq!(clamp_days_back(DEFAULT_MANUAL_DAYS_BACK), 3);
+        assert_eq!(clamp_days_back(DREAM_MAX_DAYS_BACK), 30, "boundary passes");
+        assert_eq!(clamp_days_back(31), 30);
+        assert_eq!(clamp_days_back(u32::MAX), 30, "stray huge value clamped");
+    }
+
+    #[test]
+    fn lock_skip_reason_distinguishes_running_from_interval_blocked() {
+        // Local lock — the process-global static is never touched from tests.
+        let lock = ConsolidationLock::new(DREAM_MIN_INTERVAL);
+        // Idle lock refusing acquisition = only the min interval blocked the
+        // attempt (the failed-pass retry case): must NOT read "in-progress".
+        assert_eq!(lock_skip_reason(&lock), "throttled");
+        // Held guard → a pass is genuinely running.
+        let guard = lock.try_acquire().unwrap();
+        assert_eq!(lock_skip_reason(&lock), "in-progress");
+        drop(guard);
+        // Guard dropped stamps the timestamp: interval-blocked again, and a
+        // retry really is refused until the interval elapses.
+        assert_eq!(lock_skip_reason(&lock), "throttled");
+        assert!(
+            lock.try_acquire().is_none(),
+            "6h min interval still blocks the retry"
+        );
     }
 
     // ------------------------------------------------------------------
