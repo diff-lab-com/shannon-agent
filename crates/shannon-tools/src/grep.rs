@@ -25,13 +25,13 @@ const MAX_CONTEXT_LINES: usize = 100;
 /// result instead of hanging the conversation turn.
 const DEFAULT_TIMEOUT: Duration = Duration::from_secs(30);
 
-/// Environment variable (seconds) overriding [`DEFAULT_TIMEOUT`]. Unset,
+/// Environment variable (seconds) overriding `DEFAULT_TIMEOUT`. Unset,
 /// unparsable or zero values fall back to the default.
 const TIMEOUT_ENV_VAR: &str = "SHANNON_GREP_TIMEOUT_SECS";
 
 /// Resolve the search timeout from a `SHANNON_GREP_TIMEOUT_SECS` string.
 /// `None`, unparsable, zero or negative values all fall back to
-/// [`DEFAULT_TIMEOUT`].
+/// `DEFAULT_TIMEOUT`.
 fn timeout_from_secs(raw: Option<&str>) -> Duration {
     match raw.and_then(|s| s.trim().parse::<u64>().ok()) {
         Some(secs) if secs > 0 => Duration::from_secs(secs),
@@ -172,7 +172,7 @@ pub struct GrepTool {
     /// Filesystem world backing binary sniffing and line reads (§4.11).
     fs: std::sync::Arc<dyn shannon_tool_interface::FileSystemProvider>,
     /// Fixed search timeout (test hook). `None` resolves from
-    /// `SHANNON_GREP_TIMEOUT_SECS` / [`DEFAULT_TIMEOUT`] per call.
+    /// `SHANNON_GREP_TIMEOUT_SECS` / `DEFAULT_TIMEOUT` per call.
     timeout_override: Option<Duration>,
 }
 
@@ -201,7 +201,7 @@ impl GrepTool {
     }
 
     /// Pin the search timeout (tests). When unset, the timeout is resolved
-    /// per call from `SHANNON_GREP_TIMEOUT_SECS` / [`DEFAULT_TIMEOUT`].
+    /// per call from `SHANNON_GREP_TIMEOUT_SECS` / `DEFAULT_TIMEOUT`.
     pub fn with_timeout(mut self, timeout: Duration) -> Self {
         self.timeout_override = Some(timeout);
         self

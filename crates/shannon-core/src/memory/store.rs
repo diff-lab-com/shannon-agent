@@ -282,7 +282,7 @@ pub struct MemoryStore {
     /// disk without resurrecting the entry from a stale line — and without
     /// clobbering entries another agent appended concurrently (ADR-0010 C5').
     /// The value is the deletion time, mirrored into the durable
-    /// [`StoreTombstone`] line [`evict`](Self::evict) appends.
+    /// `StoreTombstone` line [`evict`](Self::evict) appends.
     tombstones: HashMap<String, HashMap<String, DateTime<Utc>>>,
 }
 
@@ -342,7 +342,7 @@ impl MemoryStore {
 
     /// Remove `id` from the in-memory map and record it as a deliberate
     /// deletion — in the per-project tombstone set for the next
-    /// [`save`](Self::save), **and** as a durable [`StoreTombstone`] line in
+    /// [`save`](Self::save), **and** as a durable `StoreTombstone` line in
     /// the project's JSONL so other processes' loads see the deletion
     /// without waiting for our rewrite. Returns `true` if the id was
     /// present.
@@ -621,9 +621,9 @@ impl MemoryStore {
     /// `MAX_INJECTED_MEMORIES` entries plus up to `MAX_INJECTED_GLOBAL`
     /// cross-project ([`GLOBAL_SCOPE`]) entries, all inside a
     /// `MAX_INJECTED_TOKENS` budget measured with the CJK-aware
-    /// [`estimate_tokens`]. When `query` is provided (the user's current
+    /// `estimate_tokens`. When `query` is provided (the user's current
     /// prompt), candidates beyond the cap are ranked by
-    /// [`semantic_relevance_score`] instead of raw recency, so the most
+    /// `semantic_relevance_score` instead of raw recency, so the most
     /// relevant facts survive truncation. Returns `None` when there is
     /// nothing to inject.
     pub fn format_for_injection(&self, project: &str, query: Option<&str>) -> Option<String> {
@@ -747,7 +747,7 @@ impl MemoryStore {
     /// deleted it), in which case the re-add wins and our tombstone is
     /// retired. Durable tombstone lines (ours and other agents') survive the
     /// rewrite so deletions stay visible to processes that have not reloaded;
-    /// they are garbage-collected after [`TOMBSTONE_TTL`].
+    /// they are garbage-collected after `TOMBSTONE_TTL`.
     pub fn save(&mut self) -> Result<(), MemoryError> {
         fs::create_dir_all(&self.storage_path)?;
 
@@ -863,7 +863,7 @@ impl MemoryStore {
     /// read-compat tail; ADR-0010 D7). Then every `{project_hash}.jsonl` is
     /// streamed line-by-line into the in-memory store in **line order**, so
     /// the last writer per id wins: an entry line re-added after a
-    /// [`StoreTombstone`] line revives the id, and a tombstone after an
+    /// `StoreTombstone` line revives the id, and a tombstone after an
     /// entry deletes it. This is what makes deletions durable across
     /// processes. A trailing partial line (a crash mid-append) is skipped +
     /// logged rather than failing the whole store (ADR-0010 D1 crash-safety).
