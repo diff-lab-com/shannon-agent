@@ -91,19 +91,20 @@ fn transform_text(
 
 fn transform_content_blocks(
     t: &dyn shannon_plugin_api::ContextTransform,
+    text_source: IngestSource,
     blocks: &mut [ContentBlock],
 ) {
     for b in blocks.iter_mut() {
         match b {
             ContentBlock::Text { text } => {
-                transform_text(t, IngestSource::Other, text);
+                transform_text(t, text_source.clone(), text);
             }
             ContentBlock::ToolResult { content, .. } => match content {
                 Some(ToolResultContent::Single(s)) => {
                     transform_text(t, IngestSource::Other, s);
                 }
                 Some(ToolResultContent::Multiple(inner)) => {
-                    transform_content_blocks(t, inner);
+                    transform_content_blocks(t, IngestSource::Other, inner);
                 }
                 None => {}
             },
@@ -132,7 +133,7 @@ pub fn transform_outgoing_messages(messages: Vec<Message>) -> Vec<Message> {
                     transform_text(t.as_ref(), ingest_source_for_role(&m.role), text);
                 }
                 MessageContent::Blocks(blocks) => {
-                    transform_content_blocks(t.as_ref(), blocks);
+                    transform_content_blocks(t.as_ref(), ingest_source_for_role(&m.role), blocks);
                 }
             }
             m
@@ -176,6 +177,78 @@ pub fn restore_tool_args_for_execution(
 pub fn restore_display_for_output(text: &mut String) {
     if let Some(t) = context_transform() {
         let _ = t.restore_display(text);
+    }
+}
+
+/// Streaming display-face restore (wiring point 3 for streamed output).
+///
+/// Restoring per-delta misses surrogate tokens that arrive split across
+/// deltas — a 20-char token spans several model tokens, so streamed output
+/// showed raw `SG1:…` placeholders to the user. The restorer feeds deltas
+/// through a carry buffer: complete tokens are restored immediately, and
+/// only a tail that is (or could grow into) a token is held back. [`Self::finish`]
+/// flushes the remainder at end of stream.
+///
+/// Built around the built-in guard's `SG1:` token shape; other shapes are
+/// simply passed through the same hold-back window (complete `SG1:`-formed
+/// tokens always restore, partial ones wait for `finish`).
+#[derive(Default)]
+pub struct DisplayRestorer {
+    buf: String,
+}
+
+/// `"SG1:"` lead of the built-in surrogate token.
+const SG1_LEAD: &str = "SG1:";
+/// Full built-in token length: lead + 16 base32 chars (10 HMAC bytes).
+const SG1_TOKEN_LEN: usize = 20;
+
+impl DisplayRestorer {
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// Feed one streamed delta; returns the prefix safe to emit now
+    /// (already restored). Empty output means everything is still held.
+    pub fn feed(&mut self, delta: &str) -> String {
+        self.buf.push_str(delta);
+        let cut = self.safe_cut();
+        let mut out = std::mem::take(&mut self.buf);
+        self.buf = out.split_off(cut);
+        if !out.is_empty() {
+            restore_display_for_output(&mut out);
+        }
+        out
+    }
+
+    /// Flush at end of stream: restore and return everything still held.
+    pub fn finish(&mut self) -> String {
+        let mut out = std::mem::take(&mut self.buf);
+        if !out.is_empty() {
+            restore_display_for_output(&mut out);
+        }
+        out
+    }
+
+    /// How much of the buffer is safe to emit: everything up to an
+    /// incomplete token, minus any trailing interrupted `SG1:` lead.
+    fn safe_cut(&self) -> usize {
+        let cut = match self.buf.rfind(SG1_LEAD) {
+            Some(i) if self.buf.len() - i < SG1_TOKEN_LEN => i,
+            _ => self.buf.len(),
+        };
+        cut.min(self.len_minus_partial_lead())
+    }
+
+    /// Buffer length after dropping a trailing proper prefix of `"SG1:"` —
+    /// an interrupted lead must wait for the next delta (or `finish`).
+    fn len_minus_partial_lead(&self) -> usize {
+        let max = SG1_LEAD.len().min(self.buf.len());
+        for keep in (1..=max).rev() {
+            if self.buf.ends_with(&SG1_LEAD[..keep]) {
+                return self.buf.len() - keep;
+            }
+        }
+        self.buf.len()
     }
 }
 
@@ -269,6 +342,10 @@ impl HostSecretGuard {
         redact: bool,
         store: std::sync::Arc<dyn shannon_plugin_api::SurrogateStore>,
     ) -> Self {
+        let mut exact_values = exact_values;
+        // Longest-first so a value nested inside another is replaced first
+        // (F5); sorted once here, not on every redaction call.
+        exact_values.sort_by_key(|v| std::cmp::Reverse(v.len()));
         Self {
             master_key,
             redact,
@@ -284,26 +361,28 @@ impl HostSecretGuard {
     fn redact_text(&self, text: &mut String) -> bool {
         let mut changed = false;
         // Exact known values first, longest first (F5: substring nesting).
-        let mut exact = self.exact_values.clone();
-        exact.sort_by_key(|v| std::cmp::Reverse(v.len()));
-        for value in exact {
+        // `exact_values` is pre-sorted longest-first at construction, not
+        // per call.
+        for value in &self.exact_values {
             if text.contains(value.as_str()) {
-                let token = self.surrogate_of(&value);
-                self.store.register(&token, &value);
+                let token = self.surrogate_of(value);
+                self.store.register(&token, value);
                 *text = text.replace(value.as_str(), &token);
                 changed = true;
             }
         }
         // Built-in token shapes (sk- / ghp_ / xox / glpat- …) on the result.
+        // Every finding is replaced, unconditionally: the store's only job is
+        // the token→secret mapping and registration is idempotent. Gating the
+        // replacement on "already registered" leaked the raw secret on every
+        // send after the first (history re-transforms the same raw text each
+        // turn) and flipped the wire bytes against the prompt cache.
         let findings: Vec<String> = crate::session_log::redaction::BUILTIN_PREFIX_REGEX
             .find_iter(text)
             .map(|m| m.as_str().to_string())
             .collect();
         for secret in findings {
             let token = self.surrogate_of(&secret);
-            if self.store.pairs().iter().any(|(k, _)| *k == token) {
-                continue;
-            }
             self.store.register(&token, &secret);
             *text = text.replace(&secret, &token);
             changed = true;
@@ -420,13 +499,25 @@ fn shannon_home() -> std::path::PathBuf {
 /// Load (or create, `0600`) the per-machine master key at
 /// `<shannon-home>/secret_guard.key`. The key is the only durable state;
 /// the surrogate registry is rebuildable from local secret sources.
+///
+/// A missing key is created silently; a corrupt one is regenerated **with a
+/// warning** — every previously minted surrogate changes, so persisted
+/// history can no longer be restored and provider prompt caches invalidate.
 fn load_or_create_key(home: &std::path::Path) -> Option<Vec<u8>> {
     let path = home.join("secret_guard.key");
     if let Ok(hex) = std::fs::read_to_string(&path) {
         let hex = hex.trim();
         if hex.len() == 64 {
-            return decode_hex(hex);
+            if let Some(key) = decode_hex(hex) {
+                return Some(key);
+            }
         }
+        tracing::warn!(
+            target: "shannon::secret_guard",
+            path = %path.display(),
+            "unreadable secret_guard.key — regenerating; previously minted \
+             surrogates become unrestorable and prompt caches will miss"
+        );
     }
     // 4 random UUIDs (122 random bits each) → SHA-256 → 32 key bytes.
     let mut raw = String::new();
@@ -435,8 +526,17 @@ fn load_or_create_key(home: &std::path::Path) -> Option<Vec<u8>> {
     }
     let key: [u8; 32] = sha2::Sha256::digest(raw.as_bytes()).into();
     let hex: String = key.iter().map(|b| format!("{b:02x}")).collect();
-    std::fs::create_dir_all(home).ok()?;
-    std::fs::write(&path, &hex).ok()?;
+    std::fs::create_dir_all(home).ok();
+    if let Err(e) = std::fs::write(&path, &hex) {
+        tracing::warn!(
+            target: "shannon::secret_guard",
+            path = %path.display(),
+            error = %e,
+            "cannot persist secret_guard.key — secret guard stays disabled \
+             (surrogates would not survive a restart)"
+        );
+        return None;
+    }
     #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt as _;
@@ -876,5 +976,218 @@ mod tests {
         set_context_transform(None);
         assert_eq!(n, 1);
         assert!(context_transform().is_none());
+    }
+
+    // ---- Regression: repeated occurrences must keep redacting -------------
+    //
+    // History keeps raw text and the transform re-runs over the full clone
+    // every turn (agent_loop send boundary). A secret seen in turn 1 is
+    // therefore scanned again in turn 2; the shape layer must replace it
+    // again, byte-identically (I1: prompt-cache prefix stability) — the
+    // store lookup must only ever gate registration, never replacement.
+
+    #[test]
+    fn repeat_occurrence_redacts_on_every_send() {
+        let guard = HostSecretGuard::new(b"master-key-0123456789abcdef".to_vec(), vec![], true);
+        let raw = "token: ghp_ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghij".to_string();
+
+        let mut first = shannon_plugin_api::IngestBlock {
+            source: IngestSource::UserMessage,
+            text: raw.clone(),
+        };
+        let _ = ContextTransform::transform_ingest(&guard, &mut first);
+        assert!(
+            !first.text.contains("ghp_ABC"),
+            "turn 1 must redact: {}",
+            first.text
+        );
+
+        // Turn 2: the same raw text is still in history and is re-transformed.
+        let mut second = shannon_plugin_api::IngestBlock {
+            source: IngestSource::UserMessage,
+            text: raw,
+        };
+        let _ = ContextTransform::transform_ingest(&guard, &mut second);
+        assert!(
+            !second.text.contains("ghp_ABC"),
+            "turn 2 must also redact (repeat leak): {}",
+            second.text
+        );
+        assert_eq!(
+            first.text, second.text,
+            "repeat transforms must be byte-identical (I1 cache stability)"
+        );
+    }
+
+    #[test]
+    fn transform_is_idempotent_on_already_transformed_text() {
+        let guard = HostSecretGuard::new(b"master-key-0123456789abcdef".to_vec(), vec![], true);
+        let mut block = shannon_plugin_api::IngestBlock {
+            source: IngestSource::UserMessage,
+            text: "k=ghp_ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghij".to_string(),
+        };
+        let _ = ContextTransform::transform_ingest(&guard, &mut block);
+        let once = block.text.clone();
+        let _ = ContextTransform::transform_ingest(&guard, &mut block);
+        assert_eq!(once, block.text, "I3: re-transform must be a no-op");
+    }
+
+    // ---- Regression: word-boundary on the shape layer ----------------------
+    //
+    // `sk-` must not match inside ordinary words that merely end in "sk"
+    // followed by a dash and 8 characters (branch/issue names like
+    // task-12345678). In the LLM path a false positive rewrites the text
+    // the model sees; in the log path it corrupts ordinary content.
+
+    #[test]
+    fn words_ending_in_sk_are_not_secrets() {
+        let guard = HostSecretGuard::new(b"master-key-0123456789abcdef".to_vec(), vec![], true);
+        let raw = "branch: task-12345678-fix done".to_string();
+        let mut block = shannon_plugin_api::IngestBlock {
+            source: IngestSource::ToolResult {
+                tool: "Bash".to_string(),
+            },
+            text: raw.clone(),
+        };
+        let _ = ContextTransform::transform_ingest(&guard, &mut block);
+        assert_eq!(block.text, raw, "ordinary text must not be corrupted");
+    }
+
+    #[test]
+    fn real_keys_after_word_chars_are_still_matched() {
+        // A key glued to a word char is ambiguous; after a separator or at
+        // string start it must match. Cover start / space / colon / newline.
+        let guard = HostSecretGuard::new(b"master-key-0123456789abcdef".to_vec(), vec![], true);
+        for raw in [
+            "ghp_ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghij".to_string(),
+            "key: ghp_ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghij".to_string(),
+            "line1\nsk-proj-abcdefgh123456789 line2".to_string(),
+        ] {
+            let mut block = shannon_plugin_api::IngestBlock {
+                source: IngestSource::UserMessage,
+                text: raw,
+            };
+            let _ = ContextTransform::transform_ingest(&guard, &mut block);
+            assert!(
+                block.text.contains("SG1:"),
+                "expected a surrogate for {:?}",
+                block.text
+            );
+        }
+    }
+
+    // ---- Regression: provenance on the send boundary -----------------------
+    //
+    // The contract lets plugins apply per-source policy, so the host must
+    // report honest sources: typed user text is UserMessage whether it
+    // arrives as plain text or as a Text block inside a user message.
+
+    #[test]
+    fn user_text_in_blocks_reports_user_source() {
+        let _g = global_lock();
+        let seen: Arc<std::sync::Mutex<Vec<IngestSource>>> =
+            Arc::new(std::sync::Mutex::new(Vec::new()));
+        struct RecordSources(Arc<std::sync::Mutex<Vec<IngestSource>>>);
+        impl ContextTransform for RecordSources {
+            fn transform_ingest(&self, block: &mut IngestBlock) -> TransformAction {
+                self.0.lock().unwrap().push(block.source.clone());
+                TransformAction::Passthrough
+            }
+            fn restore_tool_args(
+                &self,
+                _tool: &str,
+                _args: &mut serde_json::Value,
+            ) -> RestoreAction {
+                RestoreAction::Unchanged
+            }
+            fn restore_display(&self, _text: &mut String) -> RestoreAction {
+                RestoreAction::Unchanged
+            }
+            fn audit_wire(&self, _wire: &serde_json::Value) -> Vec<AuditFinding> {
+                Vec::new()
+            }
+        }
+        set_context_transform(Some(Arc::new(RecordSources(seen.clone()))));
+        let messages = vec![Message {
+            role: "user".to_string(),
+            content: MessageContent::Blocks(vec![ContentBlock::Text {
+                text: "typed text".to_string(),
+            }]),
+        }];
+        let _ = transform_outgoing_messages(messages);
+        set_context_transform(None);
+        assert_eq!(
+            *seen.lock().unwrap(),
+            vec![IngestSource::UserMessage],
+            "Text blocks of a user message must carry UserMessage provenance"
+        );
+    }
+
+    // ---- DisplayRestorer: streaming display-face restore -------------------
+    //
+    // Model output streams in deltas and a 20-char surrogate token usually
+    // spans several of them; per-delta restore therefore left raw `SG1:…`
+    // placeholders in the user-visible text. The restorer must hold back
+    // only a possible partial token and restore complete ones immediately.
+
+    fn split_guard() -> (HostSecretGuard, String, &'static str) {
+        let guard = HostSecretGuard::new(b"master-key-0123456789abcdef".to_vec(), vec![], true);
+        let secret = "sk-split-test-secret-value";
+        let mut block = shannon_plugin_api::IngestBlock {
+            source: IngestSource::UserMessage,
+            text: format!("k={secret}"),
+        };
+        let _ = ContextTransform::transform_ingest(&guard, &mut block);
+        let token = block.text.trim_start_matches("k=").to_string();
+        assert!(token.starts_with("SG1:"), "unexpected token {token}");
+        (guard, token, secret)
+    }
+
+    #[test]
+    fn display_restorer_restores_token_split_across_deltas() {
+        let _g = global_lock();
+        let (guard, token, secret) = split_guard();
+        set_context_transform(Some(Arc::new(guard)));
+        let mut r = DisplayRestorer::new();
+        let mid = token.len() / 2;
+        let part1 = r.feed(&format!("see {}", &token[..mid]));
+        let part2 = r.feed(&token[mid..]);
+        let part3 = r.finish();
+        set_context_transform(None);
+        let out = format!("{part1}{part2}{part3}");
+        assert!(!out.contains("SG1:"), "surrogate reached display: {out}");
+        assert_eq!(out, format!("see {secret}"), "split token must restore");
+    }
+
+    #[test]
+    fn display_restorer_restores_whole_token_immediately() {
+        let _g = global_lock();
+        let (guard, token, secret) = split_guard();
+        set_context_transform(Some(Arc::new(guard)));
+        let mut r = DisplayRestorer::new();
+        let out = r.feed(&format!("a {token} b"));
+        let tail = r.finish();
+        set_context_transform(None);
+        assert_eq!(format!("{out}{tail}"), format!("a {secret} b"));
+    }
+
+    #[test]
+    fn display_restorer_passes_plain_text_through_unheld() {
+        let _g = global_lock();
+        set_context_transform(None);
+        let mut r = DisplayRestorer::new();
+        assert_eq!(r.feed("hello world"), "hello world");
+        assert_eq!(r.finish(), "");
+    }
+
+    #[test]
+    fn display_restorer_finish_flushes_interrupted_lead() {
+        let _g = global_lock();
+        set_context_transform(None);
+        let mut r = DisplayRestorer::new();
+        let emitted = r.feed("wait SG");
+        let flushed = r.finish();
+        assert_eq!(emitted, "wait ", "a partial SG1: lead must be held back");
+        assert_eq!(flushed, "SG", "finish must flush the held tail");
     }
 }

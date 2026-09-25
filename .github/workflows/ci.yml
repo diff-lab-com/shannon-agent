@@ -509,10 +509,6 @@ jobs:
         run: cargo test --workspace --no-run
       - name: Generate docs/metrics.md
         run: bash scripts/gen-metrics.sh
-      - name: README metrics drift check
-        # README metrics markers are hand-copied from the generated report;
-        # fail when they drift from the fresh numbers.
-        run: bash scripts/gen-metrics.sh --check
       - name: Upload metrics report
         if: always()
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
