@@ -510,15 +510,21 @@ pub(crate) fn handle_copy(repl: &mut Repl, args: &str) -> Result<()> {
         repl.chat
             .add_message(ChatRole::System, format!("Copied to clipboard: {preview}"));
     } else {
-        // Fallback: write to a private temp file (unique per process, 0600 —
-        // the content can be sensitive and the clipboard fallback used to
-        // leave a world-readable file with a guessable name).
+        // Fallback: write to a private temp file (unique per process; on
+        // Unix also 0600 — the content can be sensitive and the clipboard
+        // fallback used to leave a world-readable file with a guessable
+        // name).
         let tmp =
             std::env::temp_dir().join(format!("shannon-clipboard-{}.txt", std::process::id()));
-        let written = std::fs::write(&tmp, &content).and_then(|_| {
-            use std::os::unix::fs::PermissionsExt;
-            std::fs::set_permissions(&tmp, std::fs::Permissions::from_mode(0o600))
-        });
+        #[allow(unused_mut)]
+        let mut written = std::fs::write(&tmp, &content);
+        #[cfg(unix)]
+        {
+            written = written.and_then(|_| {
+                use std::os::unix::fs::PermissionsExt;
+                std::fs::set_permissions(&tmp, std::fs::Permissions::from_mode(0o600))
+            });
+        }
         if written.is_ok() {
             repl.chat.add_message(ChatRole::System,
                 format!("Clipboard unavailable. Content saved to: {}\nInstall xclip or xsel for clipboard support.", tmp.display()));
