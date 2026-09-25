@@ -7,7 +7,7 @@
 // exact same inline-code style the reader already knows. Right-click offers
 // the three file actions; plain click takes the app's best default surface.
 
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import { useIntl } from 'react-intl'
 import { cn } from '@/lib/utils'
 import { useT } from '@/i18n'
@@ -42,6 +42,7 @@ export function FileRefChip({ raw, className }: FileRefChipProps) {
   )
   const [exists, setExists] = useState<boolean | null>(null)
   const [menu, setMenu] = useState<{ x: number; y: number } | null>(null)
+  const menuRef = useRef<HTMLDivElement>(null)
 
   useEffect(() => {
     if (!absPath) {
@@ -64,6 +65,25 @@ export function FileRefChip({ raw, className }: FileRefChipProps) {
       alive = false
     }
   }, [absPath])
+
+  // Close on outside mousedown / Escape — document listeners instead of a
+  // full-screen backdrop, per the overlay audit (check-overlays.sh keeps
+  // full-viewport layers in the ui primitives only).
+  useEffect(() => {
+    if (!menu) return
+    const onPointerDown = (e: MouseEvent) => {
+      if (menuRef.current && !menuRef.current.contains(e.target as Node)) setMenu(null)
+    }
+    const onKeyDown = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') setMenu(null)
+    }
+    document.addEventListener('mousedown', onPointerDown)
+    document.addEventListener('keydown', onKeyDown)
+    return () => {
+      document.removeEventListener('mousedown', onPointerDown)
+      document.removeEventListener('keydown', onKeyDown)
+    }
+  }, [menu])
 
   if (!absPath || exists === false) {
     return <code className={cn(INLINE_CODE_FALLBACK_CLASS, className)}>{raw}</code>
@@ -110,31 +130,29 @@ export function FileRefChip({ raw, className }: FileRefChipProps) {
         {raw}
       </button>
       {menu && (
-        <>
-          <div className="fixed inset-0 z-modal" onClick={() => setMenu(null)} onContextMenu={(e) => { e.preventDefault(); setMenu(null) }} />
-          <div
-            role="menu"
-            aria-label={t('link.fileRef.menu.aria', { path: baseName })}
-            className="fixed z-modal min-w-44 rounded-lg border border-outline-variant/20 bg-surface-container-high p-xs shadow-lg animate-in fade-in zoom-in-95"
-            style={{
-              left: Math.max(4, Math.min(menu.x, window.innerWidth - 200)),
-              top: Math.max(4, Math.min(menu.y, window.innerHeight - 130)),
-            }}
-          >
-            <button type="button" role="menuitem" className={itemClass} onClick={() => { setMenu(null); handleOpen() }}>
-              <span className="material-symbols-outlined text-[16px]" aria-hidden="true">chat_info</span>
-              {t('link.fileRef.menu.open')}
-            </button>
-            <button type="button" role="menuitem" className={itemClass} onClick={() => { setMenu(null); withPathErrors(revealInFolder) }}>
-              <span className="material-symbols-outlined text-[16px]" aria-hidden="true">folder_open</span>
-              {t('link.fileRef.menu.reveal')}
-            </button>
-            <button type="button" role="menuitem" className={itemClass} onClick={() => { setMenu(null); withPathErrors(openWithDefaultApp) }}>
-              <span className="material-symbols-outlined text-[16px]" aria-hidden="true">open_in_new</span>
-              {t('link.fileRef.menu.system')}
-            </button>
-          </div>
-        </>
+        <div
+          ref={menuRef}
+          role="menu"
+          aria-label={t('link.fileRef.menu.aria', { path: baseName })}
+          className="fixed z-modal min-w-44 rounded-lg border border-outline-variant/20 bg-surface-container-high p-xs shadow-lg animate-in fade-in zoom-in-95"
+          style={{
+            left: Math.max(4, Math.min(menu.x, window.innerWidth - 200)),
+            top: Math.max(4, Math.min(menu.y, window.innerHeight - 130)),
+          }}
+        >
+          <button type="button" role="menuitem" className={itemClass} onClick={() => { setMenu(null); handleOpen() }}>
+            <span className="material-symbols-outlined text-[16px]" aria-hidden="true">chat_info</span>
+            {t('link.fileRef.menu.open')}
+          </button>
+          <button type="button" role="menuitem" className={itemClass} onClick={() => { setMenu(null); withPathErrors(revealInFolder) }}>
+            <span className="material-symbols-outlined text-[16px]" aria-hidden="true">folder_open</span>
+            {t('link.fileRef.menu.reveal')}
+          </button>
+          <button type="button" role="menuitem" className={itemClass} onClick={() => { setMenu(null); withPathErrors(openWithDefaultApp) }}>
+            <span className="material-symbols-outlined text-[16px]" aria-hidden="true">open_in_new</span>
+            {t('link.fileRef.menu.system')}
+          </button>
+        </div>
       )}
     </span>
   )
