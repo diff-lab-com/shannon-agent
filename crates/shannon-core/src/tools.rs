@@ -547,8 +547,8 @@ impl ToolRegistry {
     pub async fn execute(&self, name: &str, input: Value) -> ToolResult<ToolOutput> {
         self.check_plugin_permission(name)?;
         let tool = self.get(name).ok_or_else(|| self.lookup_error(name))?;
-        let input = match self.restore_for_execution(name, input) {
-            Ok(v) => v,
+        let (input, unresolved) = match self.restore_for_execution(name, input) {
+            Ok(pair) => pair,
             Err(blocked) => return Ok(blocked),
         };
 
@@ -578,7 +578,7 @@ impl ToolRegistry {
             }
         }
 
-        let result = if let Some(timeout) = self.execution_timeout {
+        let mut result = if let Some(timeout) = self.execution_timeout {
             match tokio::time::timeout(timeout, tool.execute(input)).await {
                 Ok(output) => output,
                 Err(_) => Err(ToolError::Timeout {
@@ -589,6 +589,10 @@ impl ToolRegistry {
         } else {
             tool.execute(input).await
         };
+
+        if let Ok(ref mut output) = result {
+            Self::append_unresolved_note(output, &unresolved);
+        }
 
         // Cache successful results from read-only tools
         if let Some(hash) = input_hash {
@@ -618,6 +622,21 @@ impl ToolRegistry {
         }
 
         result
+    }
+
+    /// Surface contract F3/F4 on the output face: the tool ran, but
+    /// argument placeholders without a registry mapping passed through
+    /// verbatim — the output must say so next to the broken value
+    /// (I2: output copy only; the input is never rewritten).
+    fn append_unresolved_note(output: &mut ToolOutput, unresolved: &[String]) {
+        if unresolved.is_empty() {
+            return;
+        }
+        output.content.push_str(&format!(
+            "\n[secret-guard] warning: {} argument placeholder(s) had no mapping and were passed through verbatim: {}",
+            unresolved.len(),
+            unresolved.join(", ")
+        ));
     }
 
     /// Hash tool input for cache key generation.
@@ -665,9 +684,16 @@ impl ToolRegistry {
     /// surrogates the model echoed into tool arguments — on the execution
     /// face only; the restored input is never persisted back into history.
     /// Fail-closed plugin failures surface as tool-level error outputs.
-    fn restore_for_execution(&self, name: &str, mut input: Value) -> Result<Value, ToolOutput> {
+    /// On success returns the restored input plus the plugin's unresolved
+    /// placeholder tokens (contract F3/F4) for the caller to surface on the
+    /// output face.
+    fn restore_for_execution(
+        &self,
+        name: &str,
+        mut input: Value,
+    ) -> Result<(Value, Vec<String>), ToolOutput> {
         match crate::secret_guard::restore_tool_args_for_execution(name, &mut input) {
-            Ok(()) => Ok(input),
+            Ok(stats) => Ok((input, stats.unresolved)),
             Err(reason) => {
                 tracing::warn!(
                     target: "shannon::secret_guard",
@@ -691,8 +717,8 @@ impl ToolRegistry {
     ) -> ToolResult<ToolOutput> {
         self.check_plugin_permission(name)?;
         let tool = self.get(name).ok_or_else(|| self.lookup_error(name))?;
-        let input = match self.restore_for_execution(name, input) {
-            Ok(v) => v,
+        let (input, unresolved) = match self.restore_for_execution(name, input) {
+            Ok(pair) => pair,
             Err(blocked) => return Ok(blocked),
         };
 
@@ -708,7 +734,7 @@ impl ToolRegistry {
             }
         }
 
-        let result = if let Some(timeout) = self.execution_timeout {
+        let mut result = if let Some(timeout) = self.execution_timeout {
             // Review §P2-2: the engine's agent loop goes through
             // `execute_streaming`, so the default timeout must be enforced on
             // this path too — a hung tool otherwise stalls the query forever.
@@ -724,6 +750,10 @@ impl ToolRegistry {
         } else {
             tool.execute_streaming(input.clone(), progress).await
         };
+
+        if let Ok(ref mut output) = result {
+            Self::append_unresolved_note(output, &unresolved);
+        }
 
         // Cache successful results from read-only tools
         if let Some(ref cache) = self.streaming_cache {
@@ -2030,6 +2060,32 @@ mod tests {
         }
     }
 
+    /// Test helper: collect 20-char `SG1:`-shaped tokens left in the args —
+    /// the placeholder-shaped strings a real guard would report unresolved.
+    fn collect_sg1_tokens(v: &Value) -> Vec<String> {
+        fn scan(s: &str, out: &mut Vec<String>) {
+            let mut from = 0;
+            while let Some(pos) = s[from..].find("SG1:") {
+                let start = from + pos;
+                if start + 20 <= s.len() {
+                    out.push(s[start..start + 20].to_string());
+                }
+                from = start + 4;
+            }
+        }
+        fn walk(v: &Value, out: &mut Vec<String>) {
+            match v {
+                Value::String(s) => scan(s, out),
+                Value::Array(a) => a.iter().for_each(|x| walk(x, out)),
+                Value::Object(m) => m.values().for_each(|x| walk(x, out)),
+                _ => {}
+            }
+        }
+        let mut out = Vec::new();
+        walk(v, &mut out);
+        out
+    }
+
     impl shannon_plugin_api::ContextTransform for BoundaryRestore {
         fn transform_ingest(
             &self,
@@ -2048,11 +2104,13 @@ mod tests {
                     reason: "registry unavailable".to_string(),
                 };
             }
-            if walk_replace(args, BOUNDARY_TOKEN, BOUNDARY_REAL) {
+            let replaced = walk_replace(args, BOUNDARY_TOKEN, BOUNDARY_REAL);
+            let unresolved = collect_sg1_tokens(args);
+            if replaced || !unresolved.is_empty() {
                 shannon_plugin_api::RestoreAction::Restored(shannon_plugin_api::RestoreStats {
-                    replaced: 1,
+                    replaced: usize::from(replaced),
                     fuzzy: 0,
-                    unresolved: Vec::new(),
+                    unresolved,
                 })
             } else {
                 shannon_plugin_api::RestoreAction::Unchanged
@@ -2146,6 +2204,37 @@ mod tests {
         assert!(
             out.content.contains("fail-closed"),
             "reason must surface: {}",
+            out.content
+        );
+    }
+
+    #[tokio::test]
+    async fn unresolved_tool_args_pass_through_with_visible_warning() {
+        let _g = crate::secret_guard::test_support::acquire();
+        crate::secret_guard::set_context_transform(Some(std::sync::Arc::new(BoundaryRestore {
+            fail: false,
+        })));
+        let registry = ToolRegistry::default();
+        registry
+            .register(Box::new(EchoInputTool))
+            .expect("register");
+        let out = registry
+            .execute(
+                "secret-guard-echo",
+                json!({"file_path": "/app/.env", "content": "id=SG1:AAAAAAAAAAAAAAAA"}),
+            )
+            .await
+            .expect("execute");
+        crate::secret_guard::set_context_transform(None);
+
+        // BoundaryRestore resolves the mapped token but reports the input's
+        // fake token as unresolved — the tool ran, so the output must carry a
+        // visible warning next to the verbatim token (contract F3/F4), and
+        // must not be flagged as a tool error.
+        assert!(!out.is_error, "unresolved is a warning, not a tool failure");
+        assert!(
+            out.content.contains("[secret-guard]") && out.content.contains("passed through"),
+            "tool output must surface the unresolved warning: {}",
             out.content
         );
     }

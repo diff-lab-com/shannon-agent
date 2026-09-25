@@ -358,10 +358,11 @@ impl QueryEngine {
         permission_request_tx: Option<mpsc::Sender<crate::query_engine::types::PermissionRequest>>,
     ) -> QueryStream {
         let query_id = context.query_id;
-        // Secret-guard Phase 2 enablement: env-gated
-        // (`SHANNON_SECRET_GUARD=audit|redact`), installs once per process,
-        // no-op unless explicitly enabled (blueprint §9.6).
-        crate::secret_guard::init_from_env();
+        // Secret-guard Phase 2 enablement: env first (`SHANNON_SECRET_GUARD
+        // =audit|redact`; anything set but unparseable means explicit off),
+        // then the `[secret_guard]` config section. Installs once per
+        // process; no-op unless explicitly enabled (blueprint §9.6).
+        crate::secret_guard::init_from_env_or_config();
         let config = self.config.clone();
         let session_id_for_permissions = context.session_id;
 
@@ -460,7 +461,7 @@ impl QueryEngine {
         // Cache policy + assembly logic live in `system_prompt` (A PR-1
         // extraction). This block is now 6 lines: pass the inputs in,
         // read the assembled blocks + plain-string fallback back out.
-        let assembled = crate::query_engine::system_prompt::build(
+        let mut assembled = crate::query_engine::system_prompt::build(
             &crate::query_engine::system_prompt::SystemPromptInputs {
                 config: &config,
                 tools: &tools,
@@ -472,6 +473,16 @@ impl QueryEngine {
                 plan_mode_active: self.is_plan_mode_active(),
             },
         );
+        // Secret-guard wiring point 1b (blueprint §9.6, injected-context
+        // face): CLAUDE.md / AGENTS.md / repo map / memory / the base prompt
+        // ride these blocks, so they must redact like conversation content.
+        // Deterministic (I1) keeps the cached stable prefix byte-stable.
+        if let Some(ref mut blocks) = assembled.blocks {
+            crate::secret_guard::transform_system_blocks(blocks);
+        }
+        if let Some(ref mut plain) = assembled.plain {
+            crate::secret_guard::transform_system_prompt_text(plain);
+        }
         let mut system_blocks_opt = assembled.blocks;
         let mut system_prompt = if context.metadata.tools_allowed {
             // Prefer the plain fallback assembled by the system_prompt
@@ -1002,7 +1013,11 @@ impl QueryEngine {
                 // Also replace the full system prompt with a minimal one to free up
                 // context for actual conversation.
                 let mut tools_schema = if context.metadata.tools_allowed {
-                    let tool_defs = tools.to_tool_definitions();
+                    let mut tool_defs = tools.to_tool_definitions();
+                    // Secret-guard wiring point 1c: descriptions redact;
+                    // names/input schemas stay verbatim (the model must
+                    // reproduce them exactly for calls to parse).
+                    crate::secret_guard::transform_tool_definitions(&mut tool_defs);
                     if client_provider == shannon_engine::api::LlmProvider::Ollama
                         && effective_max_context < 8192
                     {
@@ -1702,6 +1717,10 @@ impl QueryEngine {
                         // restorer carries the partial tail between feeds and
                         // flushes it with the splitter's tail below.
                         let mut display_restorer = crate::secret_guard::DisplayRestorer::new();
+                        // Same display-face restore for the thinking stream:
+                        // reasoning echoes surrogates and a token spans
+                        // deltas just the same.
+                        let mut thinking_restorer = crate::secret_guard::DisplayRestorer::new();
                         let mut assistant_tool_uses: Vec<ContentBlock> = Vec::new();
                         // Terminal stop reason for this response, latched from
                         // whichever MessageDelta carried it (providers split
@@ -1808,13 +1827,17 @@ impl QueryEngine {
                                                     let (thinking, visible) =
                                                         think_splitter.feed(&text);
                                                     if !thinking.is_empty() {
-                                                        send_event!(
-                                                            tx,
-                                                            QueryEvent::Thinking {
-                                                                query_id,
-                                                                content: thinking,
-                                                            }
-                                                        );
+                                                        let restored =
+                                                            thinking_restorer.feed(&thinking);
+                                                        if !restored.is_empty() {
+                                                            send_event!(
+                                                                tx,
+                                                                QueryEvent::Thinking {
+                                                                    query_id,
+                                                                    content: restored,
+                                                                }
+                                                            );
+                                                        }
                                                     }
                                                     if !visible.is_empty() {
                                                         assistant_text.push_str(&visible);
@@ -1847,13 +1870,17 @@ impl QueryEngine {
                                                     }
                                                 }
                                                 ContentDelta::ThinkingDelta { thinking } => {
-                                                    send_event!(
-                                                        tx,
-                                                        QueryEvent::Thinking {
-                                                            query_id,
-                                                            content: thinking,
-                                                        }
-                                                    );
+                                                    let restored =
+                                                        thinking_restorer.feed(&thinking);
+                                                    if !restored.is_empty() {
+                                                        send_event!(
+                                                            tx,
+                                                            QueryEvent::Thinking {
+                                                                query_id,
+                                                                content: restored,
+                                                            }
+                                                        );
+                                                    }
                                                 }
                                                 // Signature/unknown deltas: parsed for
                                                 // stream compatibility, nothing to emit.
@@ -2011,12 +2038,16 @@ impl QueryEngine {
                                             // routes to Thinking.
                                             let (tail_thinking, tail_visible) =
                                                 think_splitter.finish();
-                                            if !tail_thinking.is_empty() {
+                                            let mut tail_thinking_restored =
+                                                thinking_restorer.feed(&tail_thinking);
+                                            tail_thinking_restored
+                                                .push_str(&thinking_restorer.finish());
+                                            if !tail_thinking_restored.is_empty() {
                                                 send_event!(
                                                     tx,
                                                     QueryEvent::Thinking {
                                                         query_id,
-                                                        content: tail_thinking,
+                                                        content: tail_thinking_restored,
                                                     }
                                                 );
                                             }
