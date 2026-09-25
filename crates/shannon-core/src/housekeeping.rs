@@ -298,6 +298,15 @@ fn session_gc_enabled() -> bool {
         .unwrap_or(false)
 }
 
+/// Fail-closed prune decision for one session: prune only when its age is
+/// **known** (`Some`) and past the cutoff. `None` — a stat failure means the
+/// age is unknown — always keeps the session: a destructive path must never
+/// guess (an epoch-0 fallback would make every unreadable session look
+/// infinitely old and delete it).
+fn prunable_since(mtime: Option<SystemTime>, cutoff: SystemTime) -> bool {
+    matches!(mtime, Some(m) if m < cutoff)
+}
+
 /// 30-day session GC over the real per-session layout.
 ///
 /// Iterates the session directories under `<base_dir>/sessions` (only
@@ -306,7 +315,9 @@ fn session_gc_enabled() -> bool {
 /// `events.jsonl` mtime, and removes whole directories with
 /// `remove_dir_all` — never `remove_file`, which is what silently no-op'd
 /// this task against directories before the fix (adversarial review §2.1
-/// F1).
+/// F1). A session whose mtime cannot be read is **skipped, never deleted**
+/// (fail closed — see the `prunable_since` decision helper) and reported in
+/// the outcome.
 ///
 /// `enabled = false` returns a "disabled" outcome without touching anything:
 /// the default everywhere (the desktop config key defaults to `false`),
@@ -330,17 +341,22 @@ pub fn prune_old_sessions(
 
     let cutoff = now - Duration::from_secs(30 * 24 * 60 * 60);
     let mut removed = 0usize;
+    let mut skipped_unknown_age = 0usize;
     for entry in crate::session_log::scan_session_summaries(&sessions_dir) {
         // Foreign directories sharing the container are never GC targets.
         if uuid::Uuid::parse_str(&entry.session_id).is_err() {
             continue;
         }
-        let mtime = entry
-            .events_path
-            .metadata()
-            .and_then(|m| m.modified())
-            .unwrap_or(SystemTime::UNIX_EPOCH);
-        if mtime >= cutoff {
+        let mtime = entry.events_path.metadata().and_then(|m| m.modified()).ok();
+        if !prunable_since(mtime, cutoff) {
+            if mtime.is_none() {
+                skipped_unknown_age += 1;
+                warn!(
+                    session_id = %entry.session_id,
+                    events = %entry.events_path.display(),
+                    "old_session_prune: events.jsonl mtime unknown; skipping session (fail closed)"
+                );
+            }
             continue;
         }
         let Some(dir) = entry.events_path.parent() else {
@@ -366,7 +382,12 @@ pub fn prune_old_sessions(
         }
     }
 
-    Ok((format!("Pruned {removed} old session(s)"), Some(removed)))
+    let message = if skipped_unknown_age > 0 {
+        format!("Pruned {removed} old session(s); skipped {skipped_unknown_age} with unknown mtime")
+    } else {
+        format!("Pruned {removed} old session(s)")
+    };
+    Ok((message, Some(removed)))
 }
 
 /// Log rotation task. Archives log files when they exceed a size threshold.
@@ -1089,36 +1110,30 @@ mod tests {
         assert!(cache_dir.join(".last_refresh").exists());
     }
 
-    #[test]
-    fn test_old_session_prune_task_no_dir() {
-        let task = OldSessionPruneTask;
-        let dir = temp_dir();
-        let (_msg, count) = task.execute(&dir).unwrap();
-        assert_eq!(count, Some(0));
-    }
-
-    #[test]
-    fn test_old_session_prune_task() {
-        let task = OldSessionPruneTask;
-        let dir = temp_dir();
-        let sessions_dir = dir.join("sessions");
-        fs::create_dir_all(&sessions_dir).unwrap();
-
-        // Create recent session files (should not be removed).
-        fs::write(sessions_dir.join("recent.json"), "{}").unwrap();
-        fs::write(sessions_dir.join("recent2.json"), "{}").unwrap();
-
-        let (_msg, count) = task.execute(&dir).unwrap();
-        // The task is disabled by default (session_gc_enabled=false), so
-        // nothing is pruned regardless of file age — the legacy flat *.json
-        // fixtures here only assert that dead contract stays untouched.
-        assert_eq!(count, Some(0));
-        assert!(sessions_dir.join("recent.json").exists());
-    }
-
     // -----------------------------------------------------------------------
     // Session GC (prune_old_sessions over the real per-session layout)
     // -----------------------------------------------------------------------
+
+    /// The task handle itself is opt-in-disabled (`SHANNON_SESSION_GC_ENABLED`
+    /// unset in tests): a 60-day-old real session directory survives the
+    /// daily run untouched. Supersedes the retired flat `*.json` fixtures.
+    #[test]
+    fn old_session_prune_task_is_disabled_by_default_over_real_layout() {
+        let task = OldSessionPruneTask;
+        let tmp = tempfile::tempdir().unwrap();
+        let container = tmp.path().join("sessions");
+        fs::create_dir_all(&container).unwrap();
+        let old = uuid::Uuid::new_v4();
+        seed_real_session(&container, &old, 1024, 60 * 24 * 3600);
+
+        let (msg, count) = task.execute(tmp.path()).unwrap();
+        assert_eq!(count, Some(0), "{msg}");
+        assert!(msg.contains("disabled"), "{msg}");
+        assert!(
+            container.join(old.to_string()).exists(),
+            "GC off → the real session directory is never touched"
+        );
+    }
 
     #[test]
     fn prune_old_sessions_disabled_touches_nothing() {
@@ -1162,6 +1177,22 @@ mod tests {
             "the recent session is kept"
         );
         assert!(foreign.exists(), "foreign directories are never GC targets");
+    }
+
+    /// The destructive path must fail closed: `None` (stat failure) means
+    /// "keep" — an epoch fallback would make every unreadable session look
+    /// infinitely old and delete it.
+    #[test]
+    fn prunable_since_fails_closed_on_unknown_age() {
+        let now = SystemTime::UNIX_EPOCH + Duration::from_secs(10_000_000);
+        let cutoff = now - Duration::from_secs(30 * 24 * 60 * 60);
+        // Unknown age → never prunable.
+        assert!(!prunable_since(None, cutoff));
+        // Known ages decide normally.
+        let ancient = SystemTime::UNIX_EPOCH + Duration::from_secs(1);
+        let recent = now - Duration::from_secs(60);
+        assert!(prunable_since(Some(ancient), cutoff));
+        assert!(!prunable_since(Some(recent), cutoff));
     }
 
     #[test]
