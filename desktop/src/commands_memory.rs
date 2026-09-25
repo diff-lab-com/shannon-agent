@@ -79,7 +79,15 @@ pub(crate) fn refresh_shared_store(store: &SharedMemoryStore) {
 /// engine construction sites call this — pass the handle, never rebuild.
 pub(crate) fn attach_shared_memory(engine: QueryEngine, store: &SharedMemoryStore) -> QueryEngine {
     refresh_shared_store(store);
-    engine.with_memory_arc(store.clone())
+    let engine = engine.with_memory_arc(store.clone());
+    // Freeze the memory project key at construction time: the desktop flips
+    // the process cwd on every session switch, and an engine built for
+    // session 1 must keep keying memory to session 1's directory after the
+    // user switches to session 2 — previously injection and extraction
+    // re-read the process cwd on every query, so concurrent session engines
+    // raced each other's keys.
+    let cwd = std::env::current_dir().unwrap_or_default();
+    engine.with_working_directory(cwd)
 }
 
 /// Parse a category string ("preference" / "pattern" / "decision" / "error"
@@ -212,9 +220,17 @@ pub async fn create_memory(
     )?;
     let store = &state.memory_store;
     let mut guard = store.write().map_err(|e| e.to_string())?;
-    guard.add(entry.clone()).map_err(|e| e.to_string())?;
+    // add_or_update (not raw add) so hand-created entries go through the
+    // same dedup + secret-redaction choke point as every other write path.
+    let (_outcome, id) = guard
+        .add_or_update_with_id(entry)
+        .map_err(|e| e.to_string())?;
     guard.save().map_err(|e| e.to_string())?;
-    Ok(entry)
+    let stored = guard
+        .get(&id)
+        .cloned()
+        .ok_or_else(|| format!("saved memory {id} vanished"))?;
+    Ok(stored)
 }
 
 /// Update an existing memory entry's mutable fields (content, tags, category).
@@ -230,6 +246,9 @@ pub async fn update_memory(
     category: Option<String>,
 ) -> Result<MemoryEntryDto, String> {
     let store = &state.memory_store;
+    // Reload from disk first: without this, entries written by the CLI (or a
+    // migration) after app start report "not found" until restart.
+    refresh_shared_store(store);
     let mut guard = store.write().map_err(|e| e.to_string())?;
     {
         let entry = guard
@@ -557,6 +576,95 @@ pub async fn get_memory_graph(
     Ok(build_memory_graph(project.as_deref(), &entries))
 }
 
+/// Append a memory entry's content to the project's `CLAUDE.md` under a
+/// `## Memories` section, then delete the entry from the store. Promotion is
+/// the right exit for stable facts (per the memory governance review):
+/// instruction files are user-owned, cached in the prompt prefix, and
+/// version-controlled — the store is for working, machine-curated facts.
+/// Returns the instruction file path written.
+#[tauri::command]
+pub async fn promote_memory_to_instruction(
+    state: tauri::State<'_, AppState>,
+    project: String,
+    id: String,
+) -> Result<String, String> {
+    // Pure helper is unit-tested below.
+    let store = &state.memory_store;
+    refresh_shared_store(store);
+    let entry = {
+        let guard = store.read().map_err(|e| e.to_string())?;
+        guard
+            .project_memories_all(&project)
+            .into_iter()
+            .find(|e| e.id == id)
+            .ok_or_else(|| format!("memory {id} not found in {project}"))?
+    };
+
+    let project_dir = std::path::PathBuf::from(&project);
+    if !project_dir.is_dir() {
+        return Err(format!("project directory does not exist: {project}"));
+    }
+    let file = project_dir.join("CLAUDE.md");
+    let existing = if file.exists() {
+        std::fs::read_to_string(&file).map_err(|e| format!("reading {}: {e}", file.display()))?
+    } else {
+        String::new()
+    };
+    let updated = append_memory_bullet(&existing, &entry.content);
+    std::fs::write(&file, &updated).map_err(|e| format!("writing {}: {e}", file.display()))?;
+
+    // The fact now lives in instructions; remove it from the store so it is
+    // not injected twice.
+    {
+        let mut guard = store.write().map_err(|e| e.to_string())?;
+        guard.delete(&entry.id).map_err(|e| e.to_string())?;
+        guard.save().map_err(|e| e.to_string())?;
+    }
+    Ok(file.display().to_string())
+}
+
+/// Insert `- <content>` under a `## Memories` section of a CLAUDE.md body,
+/// creating the section (and a minimal file header) when absent. Idempotent
+/// per content: appending identical content twice is still the caller's
+/// responsibility.
+fn append_memory_bullet(existing: &str, content: &str) -> String {
+    let section = "## Memories";
+    if let Some(pos) = existing.find(section) {
+        // Append at the END of the Memories section (just before the next
+        // "## " header or EOF) so existing bullets keep their order.
+        let after_header = existing[pos..]
+            .find('\n')
+            .map(|i| pos + i + 1)
+            .unwrap_or(existing.len());
+        let rest = &existing[after_header..];
+        let section_end = rest
+            .find("\n## ")
+            .map(|i| after_header + i + 1) // keep the newline before the next header
+            .unwrap_or(existing.len());
+        let mut out = String::with_capacity(existing.len() + content.len() + 3);
+        out.push_str(&existing[..section_end]);
+        if !out.ends_with('\n') {
+            out.push('\n');
+        }
+        out.push_str(&format!("- {content}\n"));
+        out.push_str(&existing[section_end..]);
+        out
+    } else {
+        let mut out = String::with_capacity(existing.len() + content.len() + 32);
+        if !existing.is_empty() {
+            out.push_str(existing);
+            if !existing.ends_with('\n') {
+                out.push('\n');
+            }
+            out.push('\n');
+        }
+        out.push_str(section);
+        out.push_str("\n\n");
+        out.push_str(&format!("- {content}\n"));
+        out
+    }
+}
+
 #[cfg(test)]
 #[allow(clippy::unwrap_used)]
 mod tests {
@@ -656,7 +764,7 @@ mod tests {
             .unwrap()
             .read()
             .unwrap()
-            .format_for_injection(&project)
+            .format_for_injection(&project, None)
             .expect("injection text");
         assert!(injected.contains("desktop injects this"));
     }
@@ -831,5 +939,31 @@ mod tests {
         let g2 = build_memory_graph(None, &entries);
         assert_eq!(g1.nodes, g2.nodes);
         assert_eq!(g1.edges.len(), g2.edges.len());
+    }
+
+    #[test]
+    fn append_memory_bullet_creates_section_when_absent() {
+        let out = append_memory_bullet("", "use pnpm not npm");
+        assert!(out.starts_with("## Memories"), "{out}");
+        assert!(out.contains("- use pnpm not npm"), "{out}");
+    }
+
+    #[test]
+    fn append_memory_bullet_inserts_after_existing_section_header() {
+        let existing = "# Project\n\nSome intro.\n\n## Memories\n\n- old fact\n\n## Notes\n\nnote";
+        let out = append_memory_bullet(existing, "new fact");
+        let new_pos = out.find("- new fact").unwrap();
+        let old_pos = out.find("- old fact").unwrap();
+        let notes_pos = out.find("## Notes").unwrap();
+        assert!(new_pos > old_pos, "appended after old bullet");
+        assert!(new_pos < notes_pos, "stays inside the Memories section");
+    }
+
+    #[test]
+    fn append_memory_bullet_handles_file_without_trailing_newline() {
+        let out = append_memory_bullet("# Title", "fact");
+        assert!(out.contains("# Title"));
+        assert!(out.contains("## Memories"));
+        assert!(out.contains("- fact"));
     }
 }

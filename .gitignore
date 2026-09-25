@@ -181,3 +181,6 @@ reference/
 # resolution tree (CI uses pnpm install --frozen-lockfile). Block future
 # npm lockfile commits.
 gateway/package-lock.json
+
+# Stray artifacts from unexpanded "~" paths (historical bug, keep out of git)
+/~

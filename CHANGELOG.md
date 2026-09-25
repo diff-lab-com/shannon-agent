@@ -4,6 +4,124 @@ All notable changes to Shannon Code are documented here. Entries are grouped by 
 
 ## [Unreleased] — §4.14 W1-P2 · OTLP bridge + full RedactionPolicy + desktop Turn Timeline
 
+### Memory / docs / retrieval hardening (2026-09-25)
+
+Follow-ups from the 2026-09-25 memory / document-management / retrieval
+review (see `docs/plans/2026-09-25-memory-doc-rag-review.md` for the audit and
+competitor analysis).
+
+**Fixed — memory correctness**
+
+- Compaction and `/memory cleanup` were store-wide: merging project A's
+  near-duplicates could delete project B's similar-but-distinct entries, and
+  cleanup deleted every project's aged-out history. All consolidation phases
+  (`merge_duplicates` / `remove_stale` / `enforce_category_caps` /
+  `resolve_conflicts` / `cleanup`) are now scoped to the active project.
+- Deletions are now durable across processes: `delete` appends a tombstone
+  line to the project JSONL, so a fresh `load` honors it without waiting for
+  a rewrite, and a long-running REPL's next `save` no longer resurrects an
+  entry deleted by the desktop (or vice versa). Tombstones older than 30 days
+  are garbage-collected on rewrite; a re-added id after its tombstone revives.
+- Automatic memory extraction is now actually switchable
+  (`SHANNON_FEATURE_AUTO_MEMORY` / `settings.json` features / `auto_memory`
+  in `settings.json` config — previously both knobs had zero consumers and
+  extraction ran unconditionally). Extraction failures are logged instead of
+  silently swallowed, run on the blocking pool (no longer cancellable
+  mid-extraction by runtime shutdown), and the extraction cursor only
+  advances on success so a failed batch is retried.
+- Memory write paths redact secret-shaped content (`SecretScanner` rules
+  shared with team-memory sync): saying "my api key is sk-..." no longer
+  persists the key into every future prompt.
+- The memory project key is the session's pinned working directory
+  (`QueryEngineConfig::working_directory`) instead of the process cwd, which
+  the desktop flipped per session switch, racing concurrent engines.
+- `compaction-state.json` is written atomically (temp + rename); a brand-new
+  project's first query no longer triggers a full compaction rewrite (the
+  schedule is seeded on first sight; first real compaction comes from the
+  ≥5-session threshold or the 24 h clock).
+- TUI clipboard paste uses a unique per-process temp file, and `/copy`'s
+  fallback file is per-process and 0600 (was a fixed world-readable name).
+- `extract_memories` (LLM pipeline, currently unwired) no longer points at
+  the canonical `memories/` directory, which it littered with orphan
+  per-fact files the store never read.
+
+**Fixed — CJK + injection quality**
+
+- CJK memory content no longer bypasses dedup and budget: the similarity
+  tokenizer splits CJK characters individually (plain whitespace splitting
+  made whole Chinese sentences one token, pinning similarity at 0-or-1), and
+  the injection budget uses a CJK-aware token estimate (chars/4
+  underestimated CJK ~4×, letting a 2000-token budget inject ~8000).
+- When memories exceed the injection cap, candidates are ranked by relevance
+  to the current query (previously raw recency — the 51st-most-recent entry
+  was unreachable even if it was the only relevant one).
+
+**Fixed — cross-project / global memory layer**
+
+- New `global` memory scope (`MemorySave` tool `global: true`, `/remember
+  --global`): cross-project preferences live in their own JSONL and inject
+  alongside every project's memories (capped at 10 entries), closing the
+  gap where Claude Code / Codex / Copilot all have a user-level layer.
+
+**Fixed — bi-temporal invalidation**
+
+- TTL expiry, budget pruning, and conflict resolution now *invalidate*
+  (new `valid_until` field, serde-compatible) instead of deleting: expired
+  entries stay on disk and are surfaced by `/recall --all` (marked), while
+  injection / listings / search only show live facts. `resolve_conflicts`
+  is wired into compaction so "prefer X" vs "never use X" contradictions
+  actually resolve (newer fact wins; previously the resolver had no
+  callers). Duplicate merging prefers the hand-saved entry over an
+  auto-extracted paraphrase.
+
+**Fixed — docs & retrieval hygiene**
+
+- The built-in `/memory` prompt-command no longer teaches a different
+  on-disk schema (`~/.shannon/memory/*.json`) that the engine never read;
+  it now documents the real `MemorySave`/`MemoryForget` contract, and its
+  `remember` alias no longer collides with the REPL command. `/remember` no
+  longer double-writes a read-never markdown copy.
+- Instruction files: per-file 1 MiB cap (a giant CLAUDE.md used to be read
+  whole into the cached prompt prefix), the watcher actually preheats its
+  cache (first turn no longer re-scans the whole instruction hierarchy
+  twice), User-scope now also checks `~/.shannon/` (not only `~/.claude/`),
+  and a `@import` whose path cannot be canonicalized is kept as literal
+  text instead of being read anyway (TOCTOU).
+- Repo map: disk caches validate file mtimes on load (a refactored repo no
+  longer serves a stale symbol map on the first query), and `update_file`
+  honors its documented mtime fast path (unchanged files are not re-parsed).
+- The `Grep` tool runs under a 30 s timeout (`SHANNON_GREP_TIMEOUT_SECS`)
+  and degrades to a truncated result instead of hanging the turn;
+  smart-context's external grep skips `.git`/`node_modules`/`target`/`dist`;
+  `/context reload` no longer stacks a second copy of the instructions into
+  the system prompt.
+
+**Added**
+
+- `SessionSearch` tool: the model can finally search past session
+  transcripts (previously history was a black box to the model — only the
+  REPL `/search` could scan, and the server exposed no search endpoint).
+- `/memory doctor` (REPL): live/expired counts, per-category distribution,
+  near-duplicate pair warnings, and cleanup suggestions.
+- `promote_memory_to_instruction` (desktop command): promote a stable
+  memory into the project's `CLAUDE.md` (`## Memories` section) and remove
+  it from the store, so stable facts graduate into version-controlled
+  instructions instead of churning in the curated store.
+- Desktop memory CRUD now goes through the dedup + redaction write path and
+  reloads from disk before update, so entries written by the CLI after app
+  start are editable without a restart.
+
+**Attachment safety**
+
+- Shared attachment validation (`shannon-core::attachments`): one 10 MiB
+  per-image / 8-image rule across REST, desktop, TUI, and headless instead
+  of four ad-hoc paths; REST size checks happen before base64 decoding and
+  the request body limit now actually admits the documented 10 MiB rule
+  (previously axum's default 2 MiB body limit rejected large images first).
+- The desktop send path enforces the size gate it previously only applied
+  to previews; desktop PDF extraction failure injects an explicit
+  placeholder instead of raw lossy-decoded binary noise.
+
 ### Windows desktop-control bring-up (2026-09-21)
 
 Phase 0/1/2 of the Windows computer-use/browser improvement plan (evaluation +

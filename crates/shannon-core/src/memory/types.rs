@@ -191,6 +191,15 @@ pub struct MemoryEntry {
     /// Serde-defaulted / skipped on `None`, same as `source_session_id`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub source_kind: Option<String>,
+    /// Bi-temporal invalidation (review 2026-09): when set, the fact stopped
+    /// holding at this instant. Expired entries stay on disk (auditable,
+    /// recoverable via `/recall --all`) but are excluded from injection,
+    /// listing, and search-by-default. `created_at` is the validity start;
+    /// TTL expiry and conflict resolution *invalidate* rather than delete.
+    /// Serde-defaulted / skipped on `None` so pre-existing files load
+    /// unchanged and rewrites stay byte-compatible.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub valid_until: Option<DateTime<Utc>>,
 }
 
 impl MemoryEntry {
@@ -217,6 +226,7 @@ impl MemoryEntry {
             access_count: 0,
             source_session_id: None,
             source_kind: None,
+            valid_until: None,
         }
     }
 
@@ -243,7 +253,21 @@ impl MemoryEntry {
             access_count: 0,
             source_session_id: None,
             source_kind: None,
+            valid_until: None,
         })
+    }
+
+    /// Whether this entry's fact has been invalidated (see [`Self::valid_until`]).
+    pub fn is_expired(&self, now: DateTime<Utc>) -> bool {
+        self.valid_until.is_some_and(|t| t <= now)
+    }
+
+    /// Invalidate this entry's fact at `now` (bi-temporal close, not delete).
+    /// No-op if already expired.
+    pub fn expire(&mut self, now: DateTime<Utc>) {
+        if self.valid_until.is_none_or(|t| t > now) {
+            self.valid_until = Some(now);
+        }
     }
 
     /// Record an access to this memory (updates timestamp and count).

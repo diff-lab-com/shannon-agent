@@ -21,6 +21,55 @@ const DEFAULT_MAX_IMPORT_DEPTH: usize = 5;
 /// Default maximum total imported content size in bytes.
 const DEFAULT_MAX_IMPORT_SIZE: usize = 100 * 1024;
 
+/// Maximum size in bytes for a single instruction file (1 MiB).
+///
+/// The main CLAUDE.md/AGENTS.md body has no other size guard (the @import
+/// budget above only bounds *imported* content), so a runaway instruction
+/// file would otherwise be pulled wholesale into the system prompt. Files
+/// larger than this cap are truncated at the limit with a stderr warning.
+const MAX_INSTRUCTION_FILE_SIZE: u64 = 1024 * 1024;
+
+/// Read an instruction file with a hard per-file size cap.
+///
+/// Streams at most [`MAX_INSTRUCTION_FILE_SIZE`] `+ 1` bytes from the file so
+/// the read itself never buffers more than the cap allows. Returns `None` if
+/// the file cannot be opened/read (matching the previous `read_to_string`
+/// behaviour) and truncates with a stderr warning when the file exceeds the
+/// cap.
+fn read_instruction_file_capped(path: &Path) -> Option<String> {
+    use std::io::Read;
+
+    let file = std::fs::File::open(path).ok()?;
+    let mut buf = Vec::new();
+    file.take(MAX_INSTRUCTION_FILE_SIZE + 1)
+        .read_to_end(&mut buf)
+        .ok()?;
+
+    if buf.len() as u64 > MAX_INSTRUCTION_FILE_SIZE {
+        buf.truncate(MAX_INSTRUCTION_FILE_SIZE as usize);
+        eprintln!(
+            "warning: instruction file '{}' exceeds the 1 MiB size limit, truncating",
+            path.display()
+        );
+    }
+
+    String::from_utf8(buf).ok()
+}
+
+/// Candidate directories for user-level instruction files, in priority order
+/// within the same `User` scope level: Shannon's own directory wins over the
+/// Claude compatibility directory; within each directory the
+/// [`INSTRUCTION_FILES`] order applies.
+///
+/// Returns `(display label, directory)` pairs so callers can render stable
+/// `~/.shannon/...` style paths regardless of where the real home lives.
+fn user_instruction_dirs(home: &Path) -> Vec<(&'static str, PathBuf)> {
+    vec![
+        ("~/.shannon", home.join(".shannon")),
+        ("~/.claude", home.join(".claude")),
+    ]
+}
+
 /// Instruction scope levels for hierarchical priority.
 ///
 /// Priority order (highest to lowest):
@@ -144,7 +193,7 @@ fn load_from_directory_with_scope(
         for filename in INSTRUCTION_FILES {
             let candidate = path.join(filename);
             if candidate.is_file() {
-                if let Ok(content) = std::fs::read_to_string(&candidate) {
+                if let Some(content) = read_instruction_file_capped(&candidate) {
                     if !content.trim().is_empty() {
                         found.push((candidate, content, scope));
                     }
@@ -337,7 +386,17 @@ fn process_import_line_inner(
                         }
                     }
                     Err(_) => {
-                        // Path doesn't exist yet, will be caught by read below
+                        // Path doesn't resolve (missing, or unresolvable):
+                        // refuse the import instead of falling back to a raw
+                        // read, which would bypass the containment check
+                        // above (TOCTOU / escape window). Keep the `@`
+                        // reference verbatim, matching the other skip paths.
+                        eprintln!(
+                            "warning: @import path '{path_str}' not found, keeping reference as-is"
+                        );
+                        result.push('@');
+                        i += 1;
+                        continue;
                     }
                 }
 
@@ -349,9 +408,11 @@ fn process_import_line_inner(
                     continue;
                 }
 
-                // Try to read and inline the file
-                match std::fs::read_to_string(&full_path) {
-                    Ok(file_content) => {
+                // Try to read and inline the file (same 1 MiB per-file cap as
+                // the main instruction body; the 100 KiB total import budget
+                // below still applies on top of it).
+                match read_instruction_file_capped(&full_path) {
+                    Some(file_content) => {
                         let new_bytes = file_content.len();
                         if *total_imported_bytes + new_bytes > max_total_size {
                             eprintln!(
@@ -407,8 +468,10 @@ fn process_import_line_inner(
                         i += 1 + path_str.len();
                         continue;
                     }
-                    Err(e) => {
-                        eprintln!("warning: @import file '{path_str}' not found: {e}");
+                    None => {
+                        eprintln!(
+                            "warning: @import file '{path_str}' not found or unreadable, keeping reference as-is"
+                        );
                         result.push('@');
                         i += 1;
                         continue;
@@ -578,34 +641,35 @@ fn load_full_context_with_scopes(dir: &Path) -> Option<ProjectInstructions> {
         instruction_files.extend(proj.instruction_files);
     }
 
-    // 3. Load user-level global instructions from ~/.claude/CLAUDE.md
+    // 3. Load user-level global instructions (~/.shannon/, then ~/.claude/),
+    //    each directory searched in INSTRUCTION_FILES order.
     if let Some(home) = dirs::home_dir() {
-        let claude_dir = home.join(".claude");
-        for filename in INSTRUCTION_FILES {
-            let home_file = claude_dir.join(filename);
-            if home_file.is_file() {
-                if let Ok(content) = std::fs::read_to_string(&home_file) {
-                    if !content.trim().is_empty() {
-                        let (resolved, imported) = resolve_content_imports(
-                            &content,
-                            &claude_dir,
-                            &claude_dir,
-                            DEFAULT_MAX_IMPORT_DEPTH,
-                            DEFAULT_MAX_IMPORT_SIZE,
-                        );
-                        all_imported.extend(imported);
-                        all_content.push_str(&format!(
-                            "## {} scope: ~/.claude/{}\n\n{}\n\n",
-                            InstructionScope::User.name(),
-                            filename,
-                            resolved
-                        ));
-                        all_files.push(format!("~/.claude/{filename}"));
-                        instruction_files.push(InstructionFile {
-                            path: home_file,
-                            content,
-                            scope: InstructionScope::User,
-                        });
+        for (user_label, user_dir) in user_instruction_dirs(&home) {
+            for filename in INSTRUCTION_FILES {
+                let home_file = user_dir.join(filename);
+                if home_file.is_file() {
+                    if let Some(content) = read_instruction_file_capped(&home_file) {
+                        if !content.trim().is_empty() {
+                            let (resolved, imported) = resolve_content_imports(
+                                &content,
+                                &user_dir,
+                                &user_dir,
+                                DEFAULT_MAX_IMPORT_DEPTH,
+                                DEFAULT_MAX_IMPORT_SIZE,
+                            );
+                            all_imported.extend(imported);
+                            all_content.push_str(&format!(
+                                "## {} scope: {user_label}/{filename}\n\n{}\n\n",
+                                InstructionScope::User.name(),
+                                resolved
+                            ));
+                            all_files.push(format!("{user_label}/{filename}"));
+                            instruction_files.push(InstructionFile {
+                                path: home_file,
+                                content,
+                                scope: InstructionScope::User,
+                            });
+                        }
                     }
                 }
             }
@@ -625,7 +689,7 @@ fn load_full_context_with_scopes(dir: &Path) -> Option<ProjectInstructions> {
         for filename in INSTRUCTION_FILES {
             let local_file = local_dir.join(filename);
             if local_file.is_file() {
-                if let Ok(content) = std::fs::read_to_string(&local_file) {
+                if let Some(content) = read_instruction_file_capped(&local_file) {
                     if !content.trim().is_empty() {
                         let canonical = local_file
                             .canonicalize()
@@ -667,7 +731,7 @@ fn load_full_context_with_scopes(dir: &Path) -> Option<ProjectInstructions> {
         let local_filename = base_filename.replace(".md", ".local.md");
         let local_file = dir.join(&local_filename);
         if local_file.is_file() {
-            if let Ok(content) = std::fs::read_to_string(&local_file) {
+            if let Some(content) = read_instruction_file_capped(&local_file) {
                 if !content.trim().is_empty() {
                     let canonical = local_file
                         .canonicalize()
@@ -797,13 +861,14 @@ fn load_managed_instructions(_dir: &Path) -> Result<Option<String>, Box<dyn std:
 pub fn get_active_scopes(dir: &Path) -> Vec<InstructionScope> {
     let mut scopes = Vec::new();
 
-    // Check global scope
+    // Check global scope (~/.shannon/, then ~/.claude/)
     if let Some(home) = dirs::home_dir() {
-        let claude_dir = home.join(".claude");
-        for filename in INSTRUCTION_FILES {
-            if claude_dir.join(filename).is_file() {
-                scopes.push(InstructionScope::Global);
-                break;
+        for (_, user_dir) in user_instruction_dirs(&home) {
+            for filename in INSTRUCTION_FILES {
+                if user_dir.join(filename).is_file() {
+                    scopes.push(InstructionScope::Global);
+                    break;
+                }
             }
         }
     }
@@ -867,7 +932,7 @@ pub fn get_instruction_info(dir: &Path) -> String {
                     .strip_prefix(&home)
                     .ok()
                     .and_then(|p| {
-                        if p.starts_with(".claude") {
+                        if p.starts_with(".claude") || p.starts_with(".shannon") {
                             Some(format!("~/{}", p.to_string_lossy()))
                         } else {
                             None
@@ -923,14 +988,23 @@ pub struct InstructionWatcher {
 
 impl InstructionWatcher {
     /// Create a new watcher for the given working directory.
+    ///
+    /// The constructor performs the initial scan *and* preheats the content
+    /// cache: `mtimes` is seeded with the freshly observed modification times
+    /// and `cached_content` holds the merged instruction payload, so the very
+    /// first `cached_instructions()` call hits without waiting for a file
+    /// change (and the first `check_and_reload()` compares against a real
+    /// baseline instead of reporting a spurious full reload).
     pub fn new(watch_dir: PathBuf) -> Self {
         let mut watcher = Self {
             watch_dir,
             mtimes: std::collections::HashMap::new(),
             cached_content: None,
         };
-        // Initial scan
-        let _ = watcher.scan_mtimes();
+        watcher.mtimes = watcher.scan_mtimes();
+        watcher.cached_content = Some(
+            load_full_context(&watcher.watch_dir).map_or_else(String::new, |instr| instr.content),
+        );
         watcher
     }
 
@@ -938,14 +1012,16 @@ impl InstructionWatcher {
     fn scan_mtimes(&mut self) -> std::collections::HashMap<PathBuf, std::time::SystemTime> {
         let mut current_mtimes = std::collections::HashMap::new();
 
-        // Check home-level instructions (global scope)
+        // Check home-level instructions (global scope: ~/.shannon/ then ~/.claude/)
         if let Some(home) = dirs::home_dir() {
-            for filename in INSTRUCTION_FILES {
-                let path = home.join(".claude").join(filename);
-                if path.is_file() {
-                    if let Ok(meta) = std::fs::metadata(&path) {
-                        if let Ok(mtime) = meta.modified() {
-                            current_mtimes.insert(path, mtime);
+            for (_, user_dir) in user_instruction_dirs(&home) {
+                for filename in INSTRUCTION_FILES {
+                    let path = user_dir.join(filename);
+                    if path.is_file() {
+                        if let Ok(meta) = std::fs::metadata(&path) {
+                            if let Ok(mtime) = meta.modified() {
+                                current_mtimes.insert(path, mtime);
+                            }
                         }
                     }
                 }
@@ -1037,7 +1113,11 @@ impl InstructionWatcher {
         Some((changed_paths, new_content))
     }
 
-    /// Get the cached instruction content (reload first if needed).
+    /// Get the cached instruction content.
+    ///
+    /// Preheated at construction time and refreshed by [`Self::check_and_reload`]
+    /// whenever a file changes, so callers can hit the cache without a full
+    /// rescan on the common (unchanged) path. Empty when no instructions exist.
     pub fn cached_instructions(&self) -> Option<&str> {
         self.cached_content.as_deref()
     }
@@ -1837,5 +1917,112 @@ mod tests {
         }
 
         let _ = fs::remove_dir_all(&tmp);
+    }
+
+    // -----------------------------------------------------------------------
+    // Size cap / canonicalize / watcher preheat / user dirs tests
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn test_load_oversized_file_truncated() {
+        // A single instruction file larger than MAX_INSTRUCTION_FILE_SIZE must
+        // be truncated at the cap (never pulled wholesale into the prompt).
+        let tmp = std::env::temp_dir().join(format!("shannon-test-{}", uuid::Uuid::new_v4()));
+        fs::create_dir_all(&tmp).unwrap();
+        let oversized = format!(
+            "{}\nTAIL_MARKER_BEYOND_CAP\n",
+            "X".repeat(MAX_INSTRUCTION_FILE_SIZE as usize)
+        );
+        fs::write(tmp.join("CLAUDE.md"), &oversized).unwrap();
+
+        let result = load_from_directory(&tmp).expect("oversized file should still load");
+        let x_count = result.content.matches('X').count();
+        assert_eq!(
+            x_count, MAX_INSTRUCTION_FILE_SIZE as usize,
+            "payload must be truncated to exactly the per-file cap, got {x_count} bytes"
+        );
+        assert!(
+            !result.content.contains("TAIL_MARKER_BEYOND_CAP"),
+            "content beyond the cap must be cut off"
+        );
+
+        let _ = fs::remove_dir_all(&tmp);
+    }
+
+    #[test]
+    fn test_import_canonicalize_failure_keeps_reference() {
+        // When canonicalize fails (missing target) the import must be refused
+        // outright — no fallback raw read that would bypass the containment
+        // check — and the literal `@path` kept in the output.
+        let tmp = std::env::temp_dir().join(format!("shannon-test-{}", uuid::Uuid::new_v4()));
+        fs::create_dir_all(&tmp).unwrap();
+        fs::write(
+            tmp.join("CLAUDE.md"),
+            "# Project\n\n@missing.md\nMore text.\n",
+        )
+        .unwrap();
+
+        let result = load_from_directory(&tmp).unwrap();
+        assert!(
+            result.content.contains("@missing.md"),
+            "unresolvable import must keep the @reference verbatim: {:?}",
+            result.content
+        );
+        assert!(
+            result.imported_files.is_empty(),
+            "nothing may be imported when canonicalize fails: {:?}",
+            result.imported_files
+        );
+
+        let _ = fs::remove_dir_all(&tmp);
+    }
+
+    #[test]
+    fn test_watcher_preheats_cache() {
+        // InstructionWatcher::new must preheat the content cache: the first
+        // cached_instructions() hit requires no file-change event, and the
+        // first check_and_reload() must not report a spurious reload.
+        let tmp = std::env::temp_dir().join(format!("shannon-test-{}", uuid::Uuid::new_v4()));
+        fs::create_dir_all(&tmp).unwrap();
+        fs::write(tmp.join("CLAUDE.md"), "# Watcher preheat probe").unwrap();
+
+        let mut watcher = InstructionWatcher::new(tmp.clone());
+        let cached = watcher.cached_instructions();
+        assert!(
+            cached.is_some(),
+            "cache must be preheated at construction time"
+        );
+        assert!(
+            cached.unwrap().contains("Watcher preheat probe"),
+            "preheated cache should hold the loaded instructions: {cached:?}"
+        );
+
+        // No file changed since construction: no reload may be reported.
+        assert!(
+            watcher.check_and_reload().is_none(),
+            "first check must compare against the seeded mtime baseline, not report a change"
+        );
+
+        let _ = fs::remove_dir_all(&tmp);
+    }
+
+    #[test]
+    fn test_user_instruction_dirs_order() {
+        // ~/.shannon ranks before ~/.claude inside the same User scope level.
+        let home = Path::new("/home/tester");
+        let dirs = user_instruction_dirs(home);
+        assert_eq!(dirs.len(), 2, "two user-level candidate directories");
+        assert_eq!(dirs[0].0, "~/.shannon");
+        assert_eq!(dirs[0].1, home.join(".shannon"));
+        assert_eq!(dirs[1].0, "~/.claude");
+        assert_eq!(dirs[1].1, home.join(".claude"));
+
+        // Within each directory the INSTRUCTION_FILES order is preserved.
+        for (_, dir) in &dirs {
+            for (i, filename) in INSTRUCTION_FILES.iter().enumerate() {
+                let expected = dir.join(INSTRUCTION_FILES[i]);
+                assert_eq!(dir.join(filename), expected);
+            }
+        }
     }
 }

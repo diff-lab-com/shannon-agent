@@ -1563,6 +1563,7 @@ fn import_memories(data: &[u8], roots: &PackRoots, report: &mut PackImportReport
                 .unwrap_or_else(chrono::Utc::now),
             accessed_at: chrono::Utc::now(),
             access_count: 0,
+            valid_until: None,
             // Provenance: the packed kind is preserved; never a session id.
             source_session_id: None,
             source_kind: Some(

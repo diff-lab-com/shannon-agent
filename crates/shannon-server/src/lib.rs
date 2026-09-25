@@ -98,6 +98,14 @@ pub fn router_full(
             "/openapi.json",
             get(|| async { axum::Json(ApiDoc::openapi()) }),
         )
+        .layer(
+            // axum 0.7 caps request bodies at 2 MiB by default, which 413'd
+            // any real multimodal message before attachment validation could
+            // run. The shared rule (`shannon_core::attachments`) allows 8
+            // attachments × 10 MiB decoded; base64 inflates that 4/3 to
+            // ~107 MiB, and 128 MiB leaves JSON-encoding headroom on top.
+            axum::extract::DefaultBodyLimit::max(128 * 1024 * 1024),
+        )
         .layer(middleware::from_fn_with_state(
             auth::AuthConfig::new(token.or_else(|| std::env::var("SHANNON_SERVE_TOKEN").ok())),
             auth::bearer_middleware,
@@ -350,6 +358,33 @@ mod tests {
                 .as_str()
                 .unwrap_or_default();
         assert!(desc.contains("desktop"), "501 must document the limitation");
+    }
+
+    #[tokio::test]
+    async fn message_route_accepts_bodies_above_axum_default_limit() {
+        // axum 0.7's default body limit is 2 MiB, which 413'd every real
+        // multimodal message. The raised limit must let a 3 MiB JSON body
+        // reach the handler — it then 404s on the unknown session, so any
+        // status other than 413 proves the body was consumed.
+        let app = router_with_secret(test_config(), None, None);
+        let body = format!("{{\"content\":\"{}\"}}", "x".repeat(3 * 1024 * 1024));
+        let req = Request::builder()
+            .method("POST")
+            .uri("/v1/sessions/00000000-0000-0000-0000-000000000000/messages")
+            .header("content-type", "application/json")
+            .body(Body::from(body))
+            .expect("build request");
+        let res = app.oneshot(req).await.expect("oneshot");
+        let status = res.status();
+        assert_ne!(
+            status,
+            StatusCode::PAYLOAD_TOO_LARGE,
+            "body limit still stuck at the axum default"
+        );
+        assert!(
+            status == StatusCode::BAD_REQUEST || status == StatusCode::NOT_FOUND,
+            "unexpected status {status}"
+        );
     }
 
     // -------------------------------------------------------------------

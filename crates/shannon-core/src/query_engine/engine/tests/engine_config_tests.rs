@@ -109,6 +109,7 @@ fn context_breakdown_counts_registry_skills_memory_and_history() {
         access_count: 0,
         source_session_id: None,
         source_kind: None,
+        valid_until: None,
     };
     store.add(entry).expect("add memory");
 

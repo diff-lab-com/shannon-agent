@@ -1,9 +1,16 @@
-name: Nightly Benchmarks
+name: Weekly Benchmarks
 
 on:
   schedule:
     - cron: '0 3 * * 0'  # Weekly Sunday 3am UTC
   workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: benchmarks-${{ github.ref }}
+  cancel-in-progress: true
 
 env:
   CARGO_TERM_COLOR: always
@@ -15,13 +22,13 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 60
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@f548e57e544e1ff5a4c46bf1e1b8685f8e4a348a
         with:
           fetch-depth: 0
-      - uses: dtolnay/rust-toolchain@stable
+      - uses: dtolnay/rust-toolchain@2c7215f132e9ebf062739d9130488b56d53c060c
         with:
           toolchain: "1.88"
-      - uses: Swatinem/rust-cache@v2
+      - uses: Swatinem/rust-cache@72d126e709cad40056a62344eee609d696d62d33
 
       - name: Run regression tests
         run: |
@@ -32,7 +39,7 @@ jobs:
         run: bash scripts/bench-regression.sh save
 
       - name: Upload baseline artifact
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
         with:
           name: bench-baseline
           path: target/criterion
@@ -40,7 +47,7 @@ jobs:
 
       - name: Upload timing log
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
         with:
           name: regression-timing
           path: /tmp/shannon-regression-timing.log
@@ -48,20 +55,22 @@ jobs:
 
   compare-baseline:
     name: Compare Against Previous Baseline
+    # A real gate now: a criterion regression fails this job. The artifact
+    # download step keeps its own continue-on-error — a missing baseline is
+    # the legitimate first-run condition (handled by saving an initial one).
     runs-on: ubuntu-latest
     timeout-minutes: 60
-    continue-on-error: true
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@f548e57e544e1ff5a4c46bf1e1b8685f8e4a348a
         with:
           fetch-depth: 0
-      - uses: dtolnay/rust-toolchain@stable
+      - uses: dtolnay/rust-toolchain@2c7215f132e9ebf062739d9130488b56d53c060c
         with:
           toolchain: "1.88"
-      - uses: Swatinem/rust-cache@v2
+      - uses: Swatinem/rust-cache@72d126e709cad40056a62344eee609d696d62d33
 
       - name: Download previous baseline
-        uses: dawidd6/action-download-artifact@v6
+        uses: dawidd6/action-download-artifact@bf251b5aa9c2f7eeb574a96ee720e24f801b7c11
         continue-on-error: true
         with:
           name: bench-baseline
@@ -79,7 +88,7 @@ jobs:
 
       - name: Upload comparison results
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
         with:
           name: benchmark-comparison
           path: benchmark-results.txt

@@ -19,20 +19,15 @@ use std::sync::{Arc, RwLock};
 
 use shannon_tool_interface::{Tool, ToolError, ToolOutput, ToolResult};
 
-use super::store::{AddOutcome, MemoryStore};
+use super::store::{AddOutcome, GLOBAL_SCOPE, MemoryStore};
 use super::types::{MemoryCategory, MemoryEntry};
-
-/// Current project key for tool writes — the canonical working directory.
-fn current_project() -> String {
-    std::env::current_dir()
-        .unwrap_or_else(|_| PathBuf::from("."))
-        .to_string_lossy()
-        .to_string()
-}
 
 /// Save a durable fact to the project's curated memory.
 pub struct MemorySaveTool {
     store: Arc<RwLock<MemoryStore>>,
+    /// Pinned project key: hosts running multiple sessions in one process
+    /// must set this, since the process cwd races between sessions.
+    working_dir: Option<String>,
 }
 
 impl MemorySaveTool {
@@ -43,13 +38,33 @@ impl MemorySaveTool {
         let _ = store.load();
         Self {
             store: Arc::new(RwLock::new(store)),
+            working_dir: None,
         }
     }
 
     /// Operate on the host's injection store so saves are immediately
     /// visible to prompt injection (N-1).
     pub fn with_shared_store(shared: Arc<RwLock<MemoryStore>>) -> Self {
-        Self { store: shared }
+        Self {
+            store: shared,
+            working_dir: None,
+        }
+    }
+
+    /// Pin the session working directory used as the project key.
+    pub fn with_working_dir(mut self, dir: impl Into<String>) -> Self {
+        self.working_dir = Some(dir.into());
+        self
+    }
+
+    fn project_key(&self) -> String {
+        if let Some(dir) = &self.working_dir {
+            return dir.clone();
+        }
+        std::env::current_dir()
+            .unwrap_or_else(|_| PathBuf::from("."))
+            .to_string_lossy()
+            .to_string()
     }
 }
 
@@ -86,6 +101,11 @@ impl Tool for MemorySaveTool {
                     "type": "array",
                     "items": { "type": "string" },
                     "description": "Optional short tags (e.g. [\"build\", \"cargo\"])"
+                },
+                "global": {
+                    "type": "boolean",
+                    "description": "Save as a cross-project (user-level) memory instead of project-scoped. Use only for preferences that apply everywhere (e.g. editor choice, language habits).",
+                    "default": false
                 }
             },
             "required": ["content"]
@@ -122,8 +142,17 @@ impl Tool for MemorySaveTool {
                     .collect()
             })
             .unwrap_or_default();
+        let global = input
+            .get("global")
+            .and_then(|v| v.as_bool())
+            .unwrap_or(false);
+        let project = if global {
+            GLOBAL_SCOPE.to_string()
+        } else {
+            self.project_key()
+        };
 
-        let mut entry = MemoryEntry::new(&current_project(), category, content);
+        let mut entry = MemoryEntry::new(&project, category, content);
         entry.tags = tags;
         entry.source_kind = Some(MemoryEntry::SOURCE_MANUAL.to_string());
 
@@ -160,9 +189,12 @@ impl Tool for MemorySaveTool {
 }
 
 /// Delete a stale/incorrect memory by id prefix (as shown by `MemorySave` /
-/// the `/recall` listing).
+/// the `/recall` listing). Searches the active project **and** the global
+/// scope, including bi-temporally expired entries (stale facts stay
+/// forgettable).
 pub struct MemoryForgetTool {
     store: Arc<RwLock<MemoryStore>>,
+    working_dir: Option<String>,
 }
 
 impl MemoryForgetTool {
@@ -171,13 +203,33 @@ impl MemoryForgetTool {
         let _ = store.load();
         Self {
             store: Arc::new(RwLock::new(store)),
+            working_dir: None,
         }
     }
 
     /// Operate on the host's injection store so deletes take effect on the
     /// next prompt (N-1).
     pub fn with_shared_store(shared: Arc<RwLock<MemoryStore>>) -> Self {
-        Self { store: shared }
+        Self {
+            store: shared,
+            working_dir: None,
+        }
+    }
+
+    /// Pin the session working directory used as the project key.
+    pub fn with_working_dir(mut self, dir: impl Into<String>) -> Self {
+        self.working_dir = Some(dir.into());
+        self
+    }
+
+    fn project_key(&self) -> String {
+        if let Some(dir) = &self.working_dir {
+            return dir.clone();
+        }
+        std::env::current_dir()
+            .unwrap_or_else(|_| PathBuf::from("."))
+            .to_string_lossy()
+            .to_string()
     }
 }
 
@@ -216,17 +268,19 @@ impl Tool for MemoryForgetTool {
                 ToolError::InvalidInput("id must be a memory id prefix (min 8 chars)".into())
             })?;
 
-        let project = current_project();
+        let project = self.project_key();
         let mut store = self
             .store
             .write()
             .map_err(|_| ToolError::ExecutionFailed("memory store lock poisoned".into()))?;
-        let candidates: Vec<String> = store
-            .project_memories(&project)
-            .into_iter()
-            .map(|m| m.id)
-            .filter(|mem_id| mem_id.starts_with(id))
-            .collect();
+        let mut candidates: Vec<String> = Vec::new();
+        for scope in [&project, GLOBAL_SCOPE] {
+            for m in store.project_memories_all(scope) {
+                if m.id.starts_with(id) && !candidates.contains(&m.id) {
+                    candidates.push(m.id);
+                }
+            }
+        }
 
         match candidates.len() {
             0 => Ok(ToolOutput {

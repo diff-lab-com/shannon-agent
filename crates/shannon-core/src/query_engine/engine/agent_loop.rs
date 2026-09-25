@@ -440,14 +440,15 @@ impl QueryEngine {
         // memories into the prompt rather than search-then-inject-matches.
         // Recall is 100% for the bounded volume a curated layer holds; the
         // model decides relevance. `search()` is retained for the REPL
-        // `/memory` command (a deliberate user keyword search).
+        // `/memory` command (a deliberate user keyword search). The current
+        // user message ranks candidates when the cap forces truncation, and
+        // the project key is the session's pinned working directory (the
+        // process cwd races between desktop sessions).
         let memory_injection: Option<String> = if let Some(ref mem_store) = self.memory {
             match mem_store.read() {
                 Ok(store) => {
-                    let project = std::env::current_dir()
-                        .map(|p| p.display().to_string())
-                        .unwrap_or_else(|_| "default".to_string());
-                    store.format_for_injection(&project)
+                    let project = self.memory_project_key();
+                    store.format_for_injection(&project, Some(&user_message))
                 }
                 Err(_) => None,
             }
@@ -537,6 +538,9 @@ impl QueryEngine {
 
         // Clone memory store for post-query extraction (fire-and-forget)
         let memory_for_extraction = self.memory.clone();
+        // The session's pinned project key (owned — the spawned producer
+        // must not capture `self`).
+        let memory_project_key = self.memory_project_key();
         // Extraction cursor (P0-10 incremental extraction): index into the
         // conversation up to which facts have already been extracted.
         let memory_extract_cursor_cell = self.memory_extract_cursor.clone();
@@ -4797,39 +4801,78 @@ impl QueryEngine {
                 }
             }
 
-            // Post-query: fire-and-forget memory extraction via AutoDreamService.
+            // Post-query: memory extraction via AutoDreamService.
             // INCREMENTAL (P0-10): only the post-cursor delta is extracted.
             // The previous full-conversation rescan on every query re-matched
             // old facts each turn, refreshing `accessed_at` on noise and
             // spawning paraphrase siblings at a rate the 0.8 Jaccard dedup
             // could not absorb.
+            //
+            // Honors the `auto_memory` switches (feature flag / config.toml)
+            // — previously extraction ran unconditionally and could not be
+            // turned off. Runs on the blocking pool and logs outcomes:
+            // the old `tokio::spawn` + `let _ =` silently discarded every
+            // failure, and an async task could be cancelled mid-extraction
+            // when the runtime shut down (dropped query stream), losing the
+            // batch. Blocking tasks are not cancelled at shutdown, and the
+            // extraction cursor only advances on success so a failed batch
+            // is retried by the next query (dedup absorbs re-runs).
             if let Some(ref mem_store) = memory_for_extraction {
-                let store_arc = mem_store.clone();
-                let total = conversation.messages.len();
-                let cursor = memory_extract_cursor_cursor.min(total);
-                let delta: Vec<Message> = conversation.messages[cursor..].to_vec();
-                // P2-4 provenance: stamp extracted entries with the session
-                // that produced them so the Memory page can jump back.
-                let session_for_extraction = self_session_id.clone();
-                tokio::spawn(async move {
-                    if !delta.is_empty() {
-                        let dream = AutoDreamService::new(store_arc);
-                        let project = std::env::current_dir()
-                            .map(|p| p.display().to_string())
-                            .unwrap_or_else(|_| "default".to_string());
-                        let _ = dream.process_conversation_with_session(
-                            &delta,
-                            &project,
-                            Some(&session_for_extraction),
-                        );
-                        // Periodic compaction (ADR-0010 C5'): dedupe + prune +
-                        // size control, gated by a persisted sidecar schedule.
-                        // Each query is one session; compaction fires at ~24 h
-                        // or ≥ 5 sessions.
-                        let _ = dream.maybe_compact(&project, &SessionMemoryConfig::default());
-                    }
-                });
-                memory_extract_cursor_cell.store(total, std::sync::atomic::Ordering::Relaxed);
+                if crate::memory::auto_memory_enabled() {
+                    let store_arc = mem_store.clone();
+                    let total = conversation.messages.len();
+                    let cursor = memory_extract_cursor_cursor.min(total);
+                    let delta: Vec<Message> = conversation.messages[cursor..].to_vec();
+                    // P2-4 provenance: stamp extracted entries with the session
+                    // that produced them so the Memory page can jump back.
+                    let session_for_extraction = self_session_id.clone();
+                    let project = memory_project_key.clone();
+                    let cursor_cell = memory_extract_cursor_cell.clone();
+                    tokio::spawn(async move {
+                        if delta.is_empty() {
+                            return;
+                        }
+                        let joined = tokio::task::spawn_blocking(move || {
+                            let dream = AutoDreamService::new(store_arc);
+                            let extracted = dream.process_conversation_with_session(
+                                &delta,
+                                &project,
+                                Some(&session_for_extraction),
+                            );
+                            // Periodic compaction (ADR-0010 C5'): dedupe +
+                            // prune + size control, gated by a persisted
+                            // sidecar schedule. Each query is one session;
+                            // compaction fires at ~24 h or ≥ 5 sessions.
+                            let compacted =
+                                dream.maybe_compact(&project, &SessionMemoryConfig::default());
+                            (extracted, compacted)
+                        })
+                        .await;
+                        match joined {
+                            Ok((extracted, compaction)) => match extracted {
+                                Ok(entries) => {
+                                    cursor_cell.store(total, std::sync::atomic::Ordering::Relaxed);
+                                    if let Err(e) = compaction {
+                                        tracing::warn!(error = %e, "memory compaction failed");
+                                    }
+                                    tracing::debug!(
+                                        extracted = entries.len(),
+                                        "auto-memory extraction complete"
+                                    );
+                                }
+                                Err(e) => {
+                                    tracing::warn!(error = %e, "auto-memory extraction failed");
+                                }
+                            },
+                            Err(e) => {
+                                tracing::warn!(
+                                    error = %e,
+                                    "auto-memory extraction task failed to join"
+                                );
+                            }
+                        }
+                    });
+                }
             }
         }));
 

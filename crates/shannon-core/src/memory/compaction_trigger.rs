@@ -33,15 +33,18 @@ const STATE_FILENAME: &str = "compaction-state.json";
 /// Summary of a single compaction pass (ADR-0010 C5').
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct CompactSummary {
-    /// Near-duplicate entries merged (higher-confidence kept).
+    /// Near-duplicate entries merged (higher-trust/confidence kept).
     pub duplicates_merged: usize,
-    /// Entries older than the TTL removed.
+    /// Entries older than the TTL invalidated (bi-temporal close).
     pub stale_removed: usize,
-    /// Entries pruned to fit the injection token budget.
+    /// Contradictory pairs resolved (older fact invalidated).
+    #[serde(default)]
+    pub conflicts_resolved: usize,
+    /// Entries pruned to fit the injection token budget (invalidated).
     pub budget_pruned: usize,
-    /// Store size before compaction.
+    /// Live store size before compaction.
     pub before_count: usize,
-    /// Store size after compaction.
+    /// Live store size after compaction.
     pub after_count: usize,
 }
 
@@ -110,13 +113,23 @@ impl MemoryCompactionTrigger {
             let _ = std::fs::create_dir_all(parent);
         }
         if let Ok(json) = serde_json::to_string_pretty(state) {
-            let _ = std::fs::write(&self.state_path, json);
+            // Atomic via temp + rename: the sidecar used to be written in
+            // place, so a crash (or two processes) could leave a truncated
+            // schedule that silently resets everyone's counters.
+            let tmp = self.state_path.with_extension("json.tmp");
+            if std::fs::write(&tmp, json).is_ok() {
+                let _ = std::fs::rename(&tmp, &self.state_path);
+            }
         }
     }
 
-    /// Whether `project` should be compacted at `now`: the wall-clock interval
-    /// has elapsed (or it has never been compacted), **or** the session count
-    /// has reached the threshold.
+    /// Whether `project` should be compacted at `now`: the wall-clock
+    /// interval has elapsed, **or** the session count has reached the
+    /// threshold. A project that has never been compacted is **not** due by
+    /// itself — [`maybe_compact`](Self::maybe_compact) seeds the schedule on
+    /// first sight, so a brand-new project's first query no longer triggers
+    /// a pointless full rewrite; its first real compaction comes from the
+    /// session threshold or the 24 h clock.
     pub fn should_compact(
         &self,
         state: &CompactionState,
@@ -125,17 +138,19 @@ impl MemoryCompactionTrigger {
     ) -> bool {
         let age_due = match state.last_compaction_at.get(project) {
             Some(last) => now - *last >= self.max_age,
-            None => true, // never compacted
+            // Never compacted and never recorded: not due yet.
+            None => false,
         };
         let sessions = state.session_count.get(project).copied().unwrap_or(0);
         age_due || sessions >= self.max_sessions
     }
 
     /// Run one compaction pass on `store` for `project`: dedupe near-duplicates,
-    /// drop stale entries, enforce per-category caps (all via the rule-based
-    /// consolidator, respecting `config` bounds), then prune to the token
-    /// budget and persist through [`MemoryStore::save`]. No schedule side
-    /// effects — callers update the sidecar via [`CompactionState`].
+    /// invalidate stale entries, enforce per-category caps, resolve
+    /// contradictions (all via the rule-based consolidator, respecting
+    /// `config` bounds), then prune to the token budget and persist through
+    /// [`MemoryStore::save`]. No schedule side effects — callers update the
+    /// sidecar via [`CompactionState`].
     pub fn run_compaction(
         &self,
         store: &mut MemoryStore,
@@ -143,12 +158,13 @@ impl MemoryCompactionTrigger {
         config: &SessionMemoryConfig,
     ) -> Result<CompactSummary, MemoryError> {
         let before_count = store.len();
-        let result = MemoryConsolidator::default().consolidate(store, config)?;
+        let result = MemoryConsolidator::default().consolidate(store, project, config)?;
         let budget_pruned = store.prune_to_token_budget(project, self.token_budget);
         store.save()?;
         Ok(CompactSummary {
             duplicates_merged: result.duplicates_merged,
             stale_removed: result.stale_removed,
+            conflicts_resolved: result.conflicts_resolved,
             budget_pruned,
             before_count,
             after_count: store.len(),
@@ -166,6 +182,12 @@ impl MemoryCompactionTrigger {
     ) -> Result<Option<CompactSummary>, MemoryError> {
         let now = Utc::now();
         let mut state = self.load_state();
+        // Seed the schedule on first sight so the 24 h clock starts at the
+        // project's first session instead of "immediately due".
+        state
+            .last_compaction_at
+            .entry(project.to_string())
+            .or_insert(now);
         *state.session_count.entry(project.to_string()).or_insert(0) += 1;
 
         if !self.should_compact(&state, project, now) {
@@ -223,17 +245,37 @@ mod tests {
             access_count: 0,
             source_session_id: None,
             source_kind: None,
+            valid_until: None,
         }
     }
 
     // --- should_compact ---
 
     #[test]
-    fn test_should_compact_when_never_compacted() {
+    fn test_should_not_compact_when_never_compacted() {
         let dir = TempDir::new().unwrap();
         let t = trigger(&dir, Duration::hours(24), 5);
         let state = CompactionState::default();
-        assert!(t.should_compact(&state, "p", Utc::now()));
+        // A brand-new project is not due: maybe_compact seeds the schedule on
+        // first sight, so the first query no longer triggers a full rewrite.
+        assert!(!t.should_compact(&state, "p", Utc::now()));
+    }
+
+    #[test]
+    fn test_maybe_compact_seeds_schedule_on_first_session() {
+        let dir = TempDir::new().unwrap();
+        let t = trigger(&dir, Duration::hours(24), 5);
+        let mut store = empty_store(&dir);
+        let config = SessionMemoryConfig::default();
+
+        // First session: schedule seeded, no compaction yet.
+        assert!(t.maybe_compact(&mut store, "p", &config).unwrap().is_none());
+        let state = t.load_state();
+        assert!(
+            state.last_compaction_at.contains_key("p"),
+            "schedule seeded"
+        );
+        assert_eq!(state.session_count.get("p").copied(), Some(1));
     }
 
     #[test]

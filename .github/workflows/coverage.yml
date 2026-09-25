@@ -5,6 +5,9 @@ on:
     - cron: '0 5 * * *'  # Daily 5am UTC
   workflow_dispatch:
 
+permissions:
+  contents: read
+
 # Action refs are pinned to full commit SHAs (same pins as ci.yml) per the
 # supply-chain hardening note at the top of ci.yml: never use a moving tag.
 # codecov/codecov-action SHA = the v4 release tag's commit.

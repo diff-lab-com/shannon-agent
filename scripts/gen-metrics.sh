@@ -12,15 +12,17 @@
 # failures (missing cwd, missing nextest, etc.).
 #
 # Usage: bash scripts/gen-metrics.sh [--check]
-#   --check: after generating, compare the fresh numbers against the
-#   README metrics markers (<!-- metrics:start:* -->) and exit 1 on drift.
-#   Wired into CI so hand-edited or stale README numbers fail the build.
+#   --check accepted for backward compatibility only; it is a no-op.
 set -u
 
+# --check accepted for backward compatibility; it is a no-op since the
+# README exact-count drift gate was removed (2026-09-25, PR #116).
 CHECK_MODE=0
+QUICK=0
 for arg in "$@"; do
   case "${arg}" in
-    --check) CHECK_MODE=1 ;;
+    --check) CHECK_MODE=1 ;; # no-op since PR #116 (README carries floor claims)
+    --quick) QUICK=1 ;; # skip clippy/deny report sections (CI artifact runs)
     *) echo "[gen-metrics] unknown arg: ${arg}" >&2; exit 2 ;;
   esac
 done
@@ -163,7 +165,17 @@ WORKSPACE_MEMBERS="$(cargo metadata --no-deps --format-version 1 2>/dev/null \
 
 # ----------------------------------------------------------------------------
 # 3. Clippy status (must succeed with -D warnings).
+# 4. cargo-deny check (optional).
+# Both are skipped in --quick mode (the CI metrics artifact run): clippy and
+# deny are already standalone required jobs, and re-running them here cost a
+# third/fourth full workspace pass for numbers the dedicated jobs report
+# better. The nightly metrics-update workflow runs the full report.
 # ----------------------------------------------------------------------------
+CLIPPY_STATUS="skipped (--quick)"
+CLIPPY_TAIL=""
+DENY_STATUS="skipped (--quick)"
+DENY_TAIL=""
+if [ "${QUICK}" = "0" ]; then
 echo "[gen-metrics] Checking clippy --workspace -- -D warnings..." >&2
 CLIPPY_STATUS="pass"
 CLIPPY_TAIL="(no output captured)"
@@ -180,9 +192,6 @@ else
 fi
 CLIPPY_TAIL="$(tail -n 3 "${TMP_CLIPPY}" | sed 's/`/\\`/g')"
 
-# ----------------------------------------------------------------------------
-# 4. cargo-deny check (optional).
-# ----------------------------------------------------------------------------
 DENY_STATUS="not installed"
 DENY_TAIL=""
 if command -v cargo-deny >/dev/null 2>&1; then
@@ -195,6 +204,7 @@ if command -v cargo-deny >/dev/null 2>&1; then
     DENY_STATUS="fail"
   fi
   DENY_TAIL="$(tail -n 3 "${TMP_DENY}" | sed 's/`/\\`/g')"
+fi
 fi
 
 # ----------------------------------------------------------------------------
@@ -270,47 +280,8 @@ fi
 
 echo "[gen-metrics] Wrote ${OUTPUT}" >&2
 
-# ----------------------------------------------------------------------------
-# --check: compare fresh numbers against README metric markers. The README
-# carries hand-copied figures inside <!-- metrics:start:ID --> … end markers;
-# this guards them against drift when the generated numbers move.
-# ----------------------------------------------------------------------------
-if [ "${CHECK_MODE}" = "1" ]; then
-  README_FILE="${REPO_ROOT}/README.md"
-  if [ ! -f "${README_FILE}" ]; then
-    echo "[gen-metrics] --check: README.md not found" >&2
-    exit 1
-  fi
+# NOTE (2026-09-25, PR #116): the former --check README test-count drift gate
+# was removed. README now carries floor claims ("over 12,000 automated
+# tests") that cannot drift on test additions; exact live numbers live in
+# this file (docs/metrics.md) and the metrics-report artifact.
 
-  # Skip when nextest couldn't run locally (TEST_TOTAL=0): CI's Generate
-  # Metrics job is the authoritative checker.
-  if [ "${TEST_TOTAL}" = "0" ]; then
-    echo "[gen-metrics] --check: TEST_TOTAL=0 (nextest unavailable locally) — skipping" >&2
-    exit 0
-  fi
-
-  fail=0
-  # Every README occurrence of "**N** automated tests" must match the fresh
-  # count (currently the metrics:intro and metrics:diffrow markers). Line-
-  # anchored block extraction over-matches when start/end share a line, so we
-  # check ALL occurrences globally instead.
-  counts="$(grep -oE '[0-9,]+ automated tests' "${README_FILE}" | grep -oE '[0-9,]+' | tr -d ',' | sort -u)"
-  if [ -z "${counts}" ]; then
-    echo "[gen-metrics] --check: no 'automated tests' figures found in README" >&2
-    exit 1
-  fi
-  while IFS= read -r n; do
-    if [ "${n}" != "${TEST_TOTAL}" ]; then
-      echo "[gen-metrics] --check: README test count drifted — README says ${n}, fresh run says ${TEST_TOTAL}" >&2
-      echo "[gen-metrics]           → re-run bash scripts/gen-metrics.sh and update the README markers" >&2
-      fail=1
-    fi
-  done <<< "${counts}"
-  if [ "${fail}" = "1" ]; then
-    echo "[gen-metrics] --check: FAILED" >&2
-    exit 1
-  fi
-  echo "[gen-metrics] --check: README markers match fresh numbers" >&2
-fi
-
-exit 0
