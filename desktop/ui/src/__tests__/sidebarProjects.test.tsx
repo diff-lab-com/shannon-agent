@@ -181,6 +181,25 @@ describe('P-U1 nesting', () => {
     })
     expect(await screen.findByTestId('sidebar-routine-row-housed')).toBeInTheDocument()
   })
+
+  // I3 review fix: outside the project lens the tree is not rendered at
+  // all, so the section must carry ALL enabled routines (housed ∪ unhoused)
+  // — otherwise housed automations go dark in the time/smart lenses.
+  it('lists housed routines too in the time/smart lenses', async () => {
+    fixtures.routines = [
+      { id: 'housed', name: 'Housed job', enabled: true, working_dir: '/w/alpha', next_fire_at: NOW + 60_000 } as ScheduledRoutine,
+      { id: 'free', name: 'Unhoused job', enabled: true, next_fire_at: null } as ScheduledRoutine,
+    ]
+    for (const lens of ['session', 'smart'] as const) {
+      const view = renderRail([session('s1')], lens)
+      const sec = await screen.findByTestId('sidebar-automations')
+      expect(sec.textContent).toContain('Housed job')
+      expect(sec.textContent).toContain('Unhoused job')
+      // The tree is not rendered in these lenses — exactly one row per routine.
+      expect(screen.queryByTestId('sidebar-routine-row-housed')).not.toBeInTheDocument()
+      view.unmount()
+    }
+  })
 })
 
 describe('P-U2 empty projects and tree-worthiness', () => {
@@ -284,6 +303,41 @@ describe('P-U2 archived projects section', () => {
     renderRail([session('s1')])
     await screen.findByTestId('project-header-/w/alpha')
     expect(screen.queryByTestId('sidebar-archived-projects')).not.toBeInTheDocument()
+  })
+
+  // I5 review fix: a project with LIVE sessions must not render twice
+  // (tree folder from its sessions + the archived row). Archiving skips
+  // its session/routine buckets from the tree; restoring rebuilds them.
+  it('archived project with live sessions leaves the tree and returns on restore', async () => {
+    fixtures.registry = [projectRecord('/w/alpha')]
+    renderRail([
+      session('s1', { working_dir: '/w/alpha' }),
+      session('s2', { working_dir: '/w/beta' }),
+    ])
+    expect(await screen.findByTestId('project-header-/w/alpha')).toBeInTheDocument()
+    expect(screen.getByTestId('project-header-/w/beta')).toBeInTheDocument()
+
+    // Archive from the ⋯ menu (applyProjectRecord updates local state).
+    fireEvent.click(screen.getByRole('button', { name: 'Project actions: alpha' }))
+    fireEvent.click(screen.getByRole('menuitem', { name: 'Archive project' }))
+    await waitFor(() => expect(api.archiveProject).toHaveBeenCalledWith('/w/alpha'))
+
+    // Gone from the tree (its live session s1 renders no duplicate folder);
+    // the other project stays; the archived row keeps its 恢复 action.
+    await waitFor(() =>
+      expect(screen.queryByTestId('project-header-/w/alpha')).not.toBeInTheDocument(),
+    )
+    expect(screen.getByTestId('project-header-/w/beta')).toBeInTheDocument()
+    fireEvent.click(screen.getByTestId('sidebar-archived-projects-toggle'))
+    expect(screen.getByTestId('archived-project-row-/w/alpha')).toBeInTheDocument()
+
+    // Restore → the project (and its sessions) return to the tree.
+    fireEvent.click(screen.getByRole('button', { name: 'Restore project alpha' }))
+    await waitFor(() =>
+      expect(screen.getByTestId('project-header-/w/alpha')).toBeInTheDocument(),
+    )
+    expect(screen.queryByTestId('archived-project-row-/w/alpha')).not.toBeInTheDocument()
+    expect(screen.getByTestId('desktop-session-row-s1')).toBeInTheDocument()
   })
 })
 

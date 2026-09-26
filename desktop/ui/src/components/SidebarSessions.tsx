@@ -562,6 +562,16 @@ export function SessionsSection({ sessions, sessionActivity, goalRunsBySession =
     () => routines.filter(r => !normalizePathKey(r.working_dir)),
     [routines],
   )
+  // I3 (review fix): only the project lens nests housed routines into their
+  // project tree. In the time/smart lenses the tree is not rendered at all,
+  // so the standalone 自动化 section must carry ALL enabled routines (housed
+  // ∪ unhoused) — pre-branch, every enabled routine was always visible
+  // there. In project lens it stays unhoused-only (housed ones live in the
+  // tree above).
+  const lensRoutines = useMemo(
+    () => (grouping === 'project' ? unhousedRoutines : routines),
+    [grouping, routines, unhousedRoutines],
+  )
 
   // Grouping (P0-④). null = render flat. While searching the list stays
   // flat (matches hit ranking); project mode stays flat while there is at
@@ -623,7 +633,18 @@ export function SessionsSection({ sessions, sessionActivity, goalRunsBySession =
         key === '' ? t('sidebar.sessions.project.untitled') : (registryByKey.get(key)?.name ?? pathTail(key))
       const out: SessionGroup[] = []
       const seen = new Set<string>()
+      // I5 (review fix): a bucket whose key maps to a REGISTRY-ARCHIVED row
+      // is skipped — the project must not render twice (once from its live
+      // sessions/routines, once in 已归档项目). Its sessions stay reachable
+      // via the time/smart lenses and search; the archived section keeps
+      // the 恢复 action.
+      const archivedKeys = new Set(
+        archivedRegistryProjects
+          .map(p => normalizePathKey(p.path))
+          .filter((k): k is string => !!k),
+      )
       const pushGroup = (key: string, list: SessionInfo[], rs: ScheduledRoutine[]) => {
+        if (archivedKeys.has(key)) return
         seen.add(key)
         const isEmpty = list.length === 0 && rs.length === 0
         out.push({
@@ -653,7 +674,7 @@ export function SessionsSection({ sessions, sessionActivity, goalRunsBySession =
     }
     // Session mode — flat, no headers. The list itself is the order.
     return null
-  }, [filtered, grouping, query, t, sessionActivity, registryByKey, housedRoutines, activeRegistryProjects])
+  }, [filtered, grouping, query, t, sessionActivity, registryByKey, housedRoutines, activeRegistryProjects, archivedRegistryProjects])
 
   const persistOrder = useCallback((next: Record<string, number>) => {
     setOrderOverride(next)
@@ -1319,18 +1340,20 @@ export function SessionsSection({ sessions, sessionActivity, goalRunsBySession =
         aria-label={t('sidebar.sessions.search.aria')}
         className="w-full mb-xs px-2 py-1 rounded-md bg-surface-container-lowest border border-outline-variant/30 font-label-md text-label-md text-on-surface placeholder:text-on-surface-variant/70 focus-visible:border-primary focus-visible:ring-2 focus-visible:ring-primary/30 shrink-0 min-w-0"
       />
-      {/* P-U1: the rail's standalone 自动化 section now lists ONLY unhoused
-          routines (enabled, no working_dir). Routines with a project nest
-          into their project group above; when nothing is unhoused the whole
-          section hides. */}
-      {!query.trim() && unhousedRoutines.length > 0 && (
+      {/* P-U1/I3: the rail's standalone 自动化 section. In project lens it
+          lists ONLY unhoused routines (the housed ones nest into their
+          project groups above); in the time/smart lenses the tree is not
+          rendered, so this section carries ALL enabled routines instead —
+          otherwise housed automations would go dark outside the project
+          lens. Hidden when nothing to show. */}
+      {!query.trim() && lensRoutines.length > 0 && (
         <div className="mb-xs" data-testid="sidebar-automations">
           <div className="flex items-center gap-1.5 px-3 pt-1 pb-1 font-label-sm text-[11px] font-bold text-on-surface-variant/90 min-w-0">
             <span className="material-symbols-outlined text-[13px] shrink-0" aria-hidden="true">event_repeat</span>
             <span className="truncate flex-1 min-w-0">{t('sidebar.automations.title')}</span>
-            <span className="font-mono text-[10px] tabular-nums text-on-surface-variant shrink-0">{unhousedRoutines.length}</span>
+            <span className="font-mono text-[10px] tabular-nums text-on-surface-variant shrink-0">{lensRoutines.length}</span>
           </div>
-          {unhousedRoutines.slice(0, 3).map(r => {
+          {lensRoutines.slice(0, 3).map(r => {
             const soon = r.next_fire_at != null && r.next_fire_at - nowTick < 3600_000
             return (
               <button
@@ -1350,13 +1373,13 @@ export function SessionsSection({ sessions, sessionActivity, goalRunsBySession =
               </button>
             )
           })}
-          {unhousedRoutines.length > 3 && (
+          {lensRoutines.length > 3 && (
             <button
               type="button"
               onClick={() => navigate('/tasks')}
               className="w-full px-3 py-1 text-left font-label-xs text-on-surface-variant hover:text-primary hover:underline cursor-pointer"
             >
-              {t('sidebar.automations.more', { n: unhousedRoutines.length - 3 })}
+              {t('sidebar.automations.more', { n: lensRoutines.length - 3 })}
             </button>
           )}
         </div>
