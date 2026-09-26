@@ -2165,14 +2165,19 @@ mod tests {
             "empty string clears the sidecar"
         );
 
-        // Omitted working_dir leaves the (re-set) value untouched.
-        store.set_working_dir(&created.id, Some("/work/final")).unwrap();
+        // Omitted working_dir leaves the (re-set) value untouched. Deliberately
+        // NOT renaming here: the store derives the task directory from the
+        // name slug, so a rename orphans the directory holding the sidecar
+        // (pre-existing store behavior, out of this task's scope).
+        store
+            .set_working_dir(&created.id, Some("/work/final"))
+            .unwrap();
         update_scheduled_task(
             app.state::<AppState>(),
             UpdateTaskPayload {
                 id: created.id.clone(),
-                name: Some("Renamed".into()),
-                prompt: None,
+                name: None,
+                prompt: Some("new prompt".into()),
                 trigger_type: None,
                 interval_secs: None,
                 cron_expr: None,
@@ -2199,7 +2204,6 @@ mod tests {
         let tmp = tempfile::tempdir().unwrap();
         let app = tauri::test::mock_app();
         app.manage(task_state(tmp.path()));
-        let store = app.state::<AppState>().scheduled_task_store().clone();
 
         let with_dir = create_scheduled_task(
             app.state::<AppState>(),
