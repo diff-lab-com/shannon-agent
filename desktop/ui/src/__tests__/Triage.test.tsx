@@ -10,6 +10,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { render, screen, fireEvent, waitFor, within } from '@testing-library/react'
 import { IntlProvider } from 'react-intl'
 import { MemoryRouter, useLocation } from 'react-router-dom'
+import { toast } from 'sonner'
 import Triage from '@/pages/Triage'
 import * as api from '@/lib/tauri-api'
 import type { InboxItem, InboxListFilter } from '@/types'
@@ -68,6 +69,13 @@ const testMessages: Record<string, string> = {
   'inbox.bulk.toast.markRead.plural': 'Marked {count} items as read',
   'inbox.bulk.toast.archived': 'Archived {count} item',
   'inbox.bulk.toast.archived.plural': 'Archived {count} items',
+  'inbox.bulk.toast.failedAll': 'Nothing was updated — all {count} operations failed',
+  'inbox.bulk.toast.partial': 'Updated {written} of {total} items — {failed} failed',
+  'inbox.undo': 'Undo',
+  'inbox.undo.failed': 'Undo failed — could not restore {count} items',
+  'inbox.errorState.title': "Couldn't load the inbox",
+  'inbox.errorState.description': 'The automation inbox could not be reached.',
+  'inbox.errorState.retry': 'Retry',
   'inbox.list.aria': 'Inbox items. Use j or k to move focus, Enter to mark read, and a to archive.',
   'inbox.empty.title': 'All clear.',
   'inbox.empty.description': 'The automation inbox collects results from routines and triggers.',
@@ -146,6 +154,7 @@ function LocationCapture() {
     <div
       data-testid="location"
       data-state={JSON.stringify(location.state ?? null)}
+      data-search={location.search}
     >{location.pathname}</div>
   )
 }
@@ -169,6 +178,8 @@ beforeEach(() => {
   switchSessionSpy.mockReset()
   switchSessionSpy.mockResolvedValue(undefined)
   vi.mocked(api.updateInboxItemStatus).mockClear()
+  vi.mocked(toast.success).mockClear()
+  vi.mocked(toast.error).mockClear()
   setItems([])
 })
 
@@ -599,5 +610,170 @@ describe('Triage — session sources, skill candidates and pending pinning (IA T
       fireEvent.click(target!)
       expect(setFilter).toHaveBeenCalledWith({ status: undefined, source })
     }
+  })
+})
+
+// ─── B4 hardening (P1-28 / P1-29 / P1-30, §7-26 + §7-28) ───────────────────
+
+describe('Triage — B4 keyboard/focus hardening', () => {
+  it('grouped mode rings exactly one card and a archives THAT card (P1-28)', () => {
+    // Flat order under grouping: routine bucket [1, 2] then trigger bucket [3].
+    // The old bucket-local index (j) rang cards 1 AND 2 (j=1 in each bucket)
+    // while the cursor acted on a third item entirely.
+    const { archive } = setItems([
+      makeItem({ id: 1, source: 'routine' }),
+      makeItem({ id: 2, source: 'routine' }),
+      makeItem({ id: 3, source: 'trigger' }),
+    ])
+    renderPage()
+    fireEvent.click(screen.getByRole('button', { name: 'Group by source' }))
+    const list = screen.getByRole('list', { name: /Inbox items/ })
+    list.focus()
+    fireEvent.keyDown(list, { key: 'j' })
+    fireEvent.keyDown(list, { key: 'j' })
+    // Exactly one ring — the second routine card (flat index 1).
+    const ringed = document.querySelectorAll('[data-focused="true"]')
+    expect(ringed).toHaveLength(1)
+    expect(ringed[0]).toHaveTextContent('Item 2')
+    fireEvent.keyDown(list, { key: 'a' })
+    expect(archive).toHaveBeenCalledWith(2)
+  })
+
+  it('Enter on a focused card button is not hijacked into mark-read (P1-29)', () => {
+    const { markRead } = setItems([makeItem({ id: 1 })])
+    renderPage()
+    const list = screen.getByRole('list', { name: /Inbox items/ })
+    list.focus()
+    fireEvent.keyDown(list, { key: 'j' })
+    const archiveBtn = within(list).getByRole('button', { name: 'Archive item 1' })
+    fireEvent.keyDown(archiveBtn, { key: 'Enter' })
+    expect(markRead).not.toHaveBeenCalled()
+  })
+
+  it('j/k still navigate while focus rests on a card button', () => {
+    setItems([makeItem({ id: 1 }), makeItem({ id: 2 })])
+    renderPage()
+    const list = screen.getByRole('list', { name: /Inbox items/ })
+    list.focus()
+    fireEvent.keyDown(list, { key: 'j' })
+    const btn = within(list).getAllByRole('button', { name: 'Rerun the routine behind this item' })[0]
+    btn.focus()
+    fireEvent.keyDown(btn, { key: 'j' })
+    const ringed = document.querySelectorAll('[data-focused="true"]')
+    expect(ringed).toHaveLength(1)
+    expect(ringed[0]).toHaveTextContent('Item 2')
+  })
+})
+
+describe('Triage — B4 bulk failures and undo (P1-30)', () => {
+  it('keeps the selection and toasts when every bulk write fails', async () => {
+    setItems([makeItem({ id: 1 }), makeItem({ id: 2 })])
+    vi.mocked(api.updateInboxItemStatus).mockRejectedValue(new Error('db locked'))
+    renderPage()
+    fireEvent.click(screen.getByLabelText('Select all visible items'))
+    const bar = screen.getByRole('region', { name: 'Bulk actions' })
+    fireEvent.click(within(bar).getByRole('button', { name: 'Archive' }))
+    await waitFor(() =>
+      expect(toast.error).toHaveBeenCalledWith('Nothing was updated — all 2 operations failed'),
+    )
+    // The selection survives so a retry is one click away.
+    expect(screen.getByText('2 selected')).toBeInTheDocument()
+    expect(toast.success).not.toHaveBeenCalled()
+  })
+
+  it('reports partial bulk failure truthfully and keeps failed items selected', async () => {
+    setItems([makeItem({ id: 1 }), makeItem({ id: 2 })])
+    vi.mocked(api.updateInboxItemStatus).mockImplementation((id: number) =>
+      id === 1 ? Promise.resolve(undefined) : Promise.reject(new Error('boom')),
+    )
+    renderPage()
+    fireEvent.click(screen.getByLabelText('Select all visible items'))
+    const bar = screen.getByRole('region', { name: 'Bulk actions' })
+    fireEvent.click(within(bar).getByRole('button', { name: 'Archive' }))
+    await waitFor(() =>
+      expect(toast.error).toHaveBeenCalledWith('Updated 1 of 2 items — 1 failed'),
+    )
+    expect(toast.success).not.toHaveBeenCalled()
+    // Only the failed item stays selected.
+    expect(screen.getByText('1 selected')).toBeInTheDocument()
+  })
+
+  it('successful bulk archive offers an Undo that restores prior statuses', async () => {
+    setItems([
+      makeItem({ id: 1, status: 'read' }),
+      makeItem({ id: 2, status: 'pending' }),
+    ])
+    vi.mocked(api.updateInboxItemStatus).mockResolvedValue(undefined)
+    renderPage()
+    fireEvent.click(screen.getByLabelText('Select all visible items'))
+    const bar = screen.getByRole('region', { name: 'Bulk actions' })
+    fireEvent.click(within(bar).getByRole('button', { name: 'Archive' }))
+    await waitFor(() => expect(api.updateInboxItemStatus).toHaveBeenCalledWith(1, 'archived'))
+    await waitFor(() => expect(toast.success).toHaveBeenCalled())
+    const archiveToast = vi.mocked(toast.success).mock.calls.find(([msg]) => String(msg).startsWith('Archived'))
+    expect(archiveToast).toBeTruthy()
+    const action = (archiveToast![1] as { action: { label: string; onClick: () => void } }).action
+    expect(action.label).toBe('Undo')
+    vi.mocked(api.updateInboxItemStatus).mockClear()
+    action.onClick()
+    // Undo restores each item's PRE-operation status, not a blanket 'pending'.
+    await waitFor(() => expect(api.updateInboxItemStatus).toHaveBeenCalledWith(1, 'read'))
+    expect(api.updateInboxItemStatus).toHaveBeenCalledWith(2, 'pending')
+  })
+})
+
+describe('Triage — B4 URL view state and error state (§7-28)', () => {
+  it('initializes status/sort/group from search params and writes changes back', () => {
+    const { setFilter } = setItems([
+      makeItem({ id: 1, status: 'read', title: 'Read later', createdAtMs: 5_000 }),
+      makeItem({ id: 2, status: 'read', title: 'Read earlier', createdAtMs: 1_000 }),
+    ])
+    renderPage('/triage?status=read&sort=oldest')
+    expect(setFilter).toHaveBeenCalledWith({ status: 'read', source: undefined })
+    // oldest-first honored from the param.
+    const cards = document.querySelectorAll('.glass-panel')
+    expect(cards[0]).toHaveTextContent('Read earlier')
+    expect(cards[1]).toHaveTextContent('Read later')
+    // Interactions write the params back (replace navigation).
+    fireEvent.click(screen.getByRole('button', { name: 'Toggle sort order' }))
+    expect(screen.getByTestId('location').getAttribute('data-search')).toContain('sort=newest')
+    fireEvent.click(screen.getByRole('button', { name: 'Group by source' }))
+    expect(screen.getByTestId('location').getAttribute('data-search')).toContain('group=source')
+    fireEvent.click(screen.getByRole('button', { name: 'Pending' }))
+    expect(screen.getByTestId('location').getAttribute('data-search')).toContain('status=pending')
+  })
+
+  it('ignores unknown param values instead of silently narrowing the list', () => {
+    const { setFilter } = setItems([makeItem({ id: 1 })])
+    renderPage('/triage?status=bogus&source=warp&sort=sideways')
+    expect(setFilter).toHaveBeenCalledWith({ status: undefined, source: undefined })
+    expect(screen.getByText('Item 1')).toBeInTheDocument()
+  })
+
+  it('renders the full error state when the inbox IPC fails with no rows', () => {
+    const refresh = vi.fn()
+    itemsSpy.mockReturnValue({
+      items: [], loading: false, error: 'db locked', filter: undefined,
+      setFilter: vi.fn(), refresh, markRead: vi.fn(), archive: vi.fn(),
+      rerun: vi.fn(), getSessionId: vi.fn(),
+    })
+    statsSpy.mockReturnValue({ stats: baseStats, loading: false, error: null, refresh: vi.fn() })
+    renderPage()
+    expect(screen.getByText("Couldn't load the inbox")).toBeInTheDocument()
+    expect(screen.queryByText('All clear.')).not.toBeInTheDocument()
+    fireEvent.click(screen.getByRole('button', { name: 'Retry' }))
+    expect(refresh).toHaveBeenCalled()
+  })
+
+  it('shows a stale-rows banner (not a silent list) when refresh fails with rows present', () => {
+    itemsSpy.mockReturnValue({
+      items: [makeItem({ id: 1 })], loading: false, error: 'db locked', filter: undefined,
+      setFilter: vi.fn(), refresh: vi.fn(), markRead: vi.fn(), archive: vi.fn(),
+      rerun: vi.fn(), getSessionId: vi.fn(),
+    })
+    statsSpy.mockReturnValue({ stats: baseStats, loading: false, error: null, refresh: vi.fn() })
+    renderPage()
+    expect(screen.getByRole('alert')).toHaveTextContent("Couldn't load the inbox")
+    expect(screen.getByText('Item 1')).toBeInTheDocument()
   })
 })

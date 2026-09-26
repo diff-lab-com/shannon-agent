@@ -165,6 +165,46 @@ export function computeHunks(oldContent: string, newContent: string): Hunk[] {
   return groupHunks(lines)
 }
 
+/**
+ * Per-diff-object memoized hunks + line counts (B4 P1-32).
+ *
+ * The review surfaces used to call `computeHunks` up to three times per
+ * file on every render (status pill, +count, −count in FileDiffList, plus
+ * the batch totals), each call an O(file) diff — 50 large files froze the
+ * main thread on every decision toggle. Keyed on the FileDiff object
+ * identity (the fetch result is immutable), so a cached entry can never
+ * go stale: same object → same content.
+ */
+export interface DiffStats {
+  hunks: Hunk[]
+  /** Number of `added` lines across all hunks. */
+  added: number
+  /** Number of `removed` lines across all hunks. */
+  removed: number
+}
+
+const statsCache = new WeakMap<object, DiffStats>()
+
+export function computeDiffStats(diff: {
+  readonly old_content: string
+  readonly new_content: string
+}): DiffStats {
+  const cached = statsCache.get(diff)
+  if (cached) return cached
+  const hunks = computeHunks(diff.old_content, diff.new_content)
+  let added = 0
+  let removed = 0
+  for (const h of hunks) {
+    for (const line of h.lines) {
+      if (line.type === 'added') added += 1
+      else if (line.type === 'removed') removed += 1
+    }
+  }
+  const stats: DiffStats = { hunks, added, removed }
+  statsCache.set(diff, stats)
+  return stats
+}
+
 function splitToLines(content: string): string[] {
   if (content === '') return []
   const lines = content.split('\n')
