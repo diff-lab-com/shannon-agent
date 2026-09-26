@@ -10,6 +10,7 @@ import { cn } from '../lib/utils';
 import { useSessions } from '@/context/SessionContext';
 import { useCatalog } from '@/context/CatalogContext';
 import { SessionsSection } from './SidebarSessions';
+import * as api from '@/lib/tauri-api';
 import { useSidebar } from './Layout';
 import { useInboxStats } from '@/hooks/inbox';
 
@@ -107,6 +108,23 @@ export const Sidebar = memo(function Sidebar({ mobile, open = true }: { mobile?:
     { id: 'routine', label: intl.formatMessage({ id: 'nav.new.routine' }), icon: 'event_repeat', onSelect: () => { setNewMenuOpen(false); navigate('/tasks') } },
   ];
   const { stats: inboxStats, refresh: refreshInboxStats } = useInboxStats();
+
+  // 卡A 收尾: when the active list is empty, the archived lens decides
+  // whether the rail still renders — archiving the last session must not
+  // orphan the 已归档 restore section behind the onboarding EmptyState.
+  // Defensive like the rail's own lens load: engines without the command
+  // (or test mocks) just keep the EmptyState.
+  const [hasArchived, setHasArchived] = useState(false);
+  useEffect(() => {
+    if (sessions.length > 0) { setHasArchived(false); return; }
+    let cancelled = false;
+    try {
+      api.listArchivedSessions()
+        .then(rows => { if (!cancelled) setHasArchived(Array.isArray(rows) && rows.length > 0) })
+        .catch(() => { if (!cancelled) setHasArchived(false) });
+    } catch { if (!cancelled) setHasArchived(false) }
+    return () => { cancelled = true };
+  }, [sessions]);
 
   useEffect(() => {
     if (typeof document === 'undefined') return;
@@ -299,7 +317,10 @@ export const Sidebar = memo(function Sidebar({ mobile, open = true }: { mobile?:
           project folder or by time (the toggle lives inside the rail, ZCode
           分组/项目 style). Takes the remaining vertical space. B4 P2-4: the
           initial load shows a small skeleton instead of flashing the
-          "no sessions" guide card on slow boots. */}
+          "no sessions" guide card on slow boots. 卡A 收尾: the onboarding
+          EmptyState yields to the rail whenever archived sessions exist, so
+          the 已归档 restore section stays reachable even with an empty
+          active list. */}
       <div className="flex-1 min-h-0 mb-lg">
         {sessions.length === 0 && catalogLoading ? (
           <div className="px-2 py-3 space-y-2" data-testid="sidebar-sessions-skeleton" aria-hidden="true">
@@ -307,7 +328,7 @@ export const Sidebar = memo(function Sidebar({ mobile, open = true }: { mobile?:
               <div key={i} className="h-8 rounded-lg bg-surface-container animate-pulse" />
             ))}
           </div>
-        ) : sessions.length === 0 ? (
+        ) : sessions.length === 0 && !hasArchived ? (
           <EmptyState
             icon="forum"
             title={intl.formatMessage({ id: 'sidebar.sessions.empty.title' })}

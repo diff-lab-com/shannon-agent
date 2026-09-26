@@ -223,7 +223,13 @@ export function SessionsSection({ sessions, sessionActivity, goalRunsBySession =
   // the active list changes (archive/unarchive both emit sessions-updated,
   // which the parent refreshes from) so restore/archive reflect instantly.
   const [archivedRows, setArchivedRows] = useState<ArchivedSessionRow[]>([])
-  const [archivedOpen, setArchivedOpen] = useState(false)
+  // 卡A 收尾: collapsed by default, but when every session is archived (the
+  // active list is empty) the section opens by default — the onboarding
+  // EmptyState no longer covers the rail, so restore must be reachable
+  // without an extra click. An explicit toggle wins over the derived
+  // default; the existing collapse interaction and aria-expanded stay.
+  const [archivedOpenOverride, setArchivedOpen] = useState<boolean | null>(null)
+  const archivedOpen = archivedOpenOverride ?? sessions.length === 0
   // Wall-clock tick that drives the elapsed badges while anything runs.
   const [nowTick, setNowTick] = useState(() => Date.now())
   // U5: touch long-press (500ms) opens the ⋯ menu; the click that follows a
@@ -962,7 +968,16 @@ export function SessionsSection({ sessions, sessionActivity, goalRunsBySession =
         </div>
       )}
       <ScrollArea className="flex-1 min-h-0">
-        {filtered.length === 0 ? (
+        {sessions.length === 0 && !query.trim() ? (
+          // 卡A 收尾: light empty hint for the active area while the rail
+          // stays up for the 已归档 section (everything archived).
+          <div
+            className="px-2 py-3 text-center font-label-sm text-label-sm text-on-surface-variant"
+            data-testid="sidebar-active-empty-hint"
+          >
+            {t('sidebar.active.empty')}
+          </div>
+        ) : filtered.length === 0 ? (
           <div className="px-2 py-3 text-center font-label-sm text-label-sm text-on-surface-variant">
             {t('sidebar.sessions.noResults')}
           </div>
@@ -1014,7 +1029,7 @@ export function SessionsSection({ sessions, sessionActivity, goalRunsBySession =
               type="button"
               aria-expanded={archivedOpen}
               data-testid="sidebar-archived-toggle"
-              onClick={() => setArchivedOpen(v => !v)}
+              onClick={() => setArchivedOpen(!archivedOpen)}
               className="w-full flex items-center gap-1.5 px-3 pt-2 pb-1 font-label-sm text-[11px] font-bold text-on-surface-variant/90 hover:text-primary transition-colors min-w-0 cursor-pointer focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/30 rounded"
             >
               <span

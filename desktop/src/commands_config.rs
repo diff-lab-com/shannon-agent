@@ -239,6 +239,24 @@ async fn remove_profile_from_engine_store(
     .await
 }
 
+/// 卡A GC: parse the `session_retention_days` wire value into the stored
+/// window. Accepts a non-negative number of days — negatives are excluded
+/// by the `u32` parse — where `0` (the UI's 永不 gear) maps to `None`
+/// ("never auto-delete", the standing default) and anything above 3650
+/// clamps to 3650 so a stray value cannot park an effectively eternal
+/// window in the config.
+fn parse_session_retention_days(value: &str) -> Result<Option<u32>, String> {
+    let days: u32 = value
+        .trim()
+        .parse()
+        .map_err(|e| format!("Invalid session_retention_days `{value}`: {e}"))?;
+    Ok(if days == 0 {
+        None
+    } else {
+        Some(days.min(3650))
+    })
+}
+
 /// Configuration update payload.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ConfigUpdate {
@@ -287,6 +305,10 @@ fn set_boolean_toggle(cfg: &mut DesktopConfig, key: &str, enabled: bool) -> Resu
         "skill_detection_enabled" => cfg.skill_detection_enabled = enabled,
         "dream_enabled" => cfg.dream_enabled = enabled,
         "dream_skill_distill_enabled" => cfg.dream_skill_distill_enabled = enabled,
+        // 卡A GC: the session archive auto-clean master switch. Default off,
+        // and (per the config docs) an enabled GC still only ever prunes
+        // **archived** sessions past the retention window.
+        "session_gc_enabled" => cfg.session_gc_enabled = enabled,
         other => return Err(format!("Unrecognized boolean key: {other}")),
     }
     Ok(())
@@ -757,6 +779,29 @@ pub async fn configure(
                 event_names::CONFIG_UPDATED,
                 events::ConfigUpdatedPayload {
                     key: "max_tokens".into(),
+                    value: update.value,
+                },
+            );
+
+            Ok(())
+        }
+        "session_retention_days" => {
+            // 卡A GC: retention window for archived sessions. `0` (永不)
+            // stores as `None`; see [`parse_session_retention_days`]. The
+            // GC consults this live (with `session_gc_enabled`) — no
+            // restart needed.
+            let days = parse_session_retention_days(&update.value)?;
+            let mut desktop_cfg = state.desktop_config.write().await;
+            desktop_cfg.session_retention_days = days;
+
+            drop(desktop_cfg);
+            let desktop_cfg = state.desktop_config.read().await;
+            config::save_config(&desktop_cfg)?;
+
+            let _ = app_handle.emit(
+                event_names::CONFIG_UPDATED,
+                events::ConfigUpdatedPayload {
+                    key: "session_retention_days".into(),
                     value: update.value,
                 },
             );
@@ -1668,9 +1713,9 @@ mod tests {
     // with the disk persist captured instead of written (tests never touch
     // the process HOME).
 
-    /// The eight Settings toggle keys → the value `get_config` must show
-    /// after the toggle. Explicit on purpose: adding or removing a toggle
-    /// key means updating this list deliberately.
+    /// The Settings toggle keys → the value `get_config` must show after
+    /// the toggle. Explicit on purpose: adding or removing a toggle key
+    /// means updating this list deliberately.
     fn toggled_value(cfg: &DesktopConfig, key: &str) -> Option<bool> {
         match key {
             "memory_enabled" => cfg.memory_enabled,
@@ -1681,11 +1726,12 @@ mod tests {
             "skill_detection_enabled" => Some(cfg.skill_detection_enabled),
             "dream_enabled" => Some(cfg.dream_enabled),
             "dream_skill_distill_enabled" => Some(cfg.dream_skill_distill_enabled),
+            "session_gc_enabled" => Some(cfg.session_gc_enabled),
             _ => None,
         }
     }
 
-    const TOGGLE_KEYS: [&str; 8] = [
+    const TOGGLE_KEYS: [&str; 9] = [
         "memory_enabled",
         "telemetry",
         "encryption",
@@ -1694,6 +1740,7 @@ mod tests {
         "skill_detection_enabled",
         "dream_enabled",
         "dream_skill_distill_enabled",
+        "session_gc_enabled",
     ];
 
     #[test]
@@ -1821,6 +1868,25 @@ mod tests {
         .await
         .unwrap_err();
         assert!(err.contains("disk full"), "{err}");
+    }
+
+    #[test]
+    fn session_retention_days_wire_value_maps_zero_to_never_and_clamps() {
+        // 卡A GC: 0 is the UI's 永不 gear → `None` (never auto-delete).
+        assert_eq!(parse_session_retention_days("0").unwrap(), None);
+        assert_eq!(parse_session_retention_days(" 30 ").unwrap(), Some(30));
+        assert_eq!(parse_session_retention_days("90").unwrap(), Some(90));
+        // Overshoot clamps to the 3650-day ceiling instead of persisting an
+        // effectively eternal window.
+        assert_eq!(
+            parse_session_retention_days("99999").unwrap(),
+            Some(3650),
+            "clamp to ≤3650"
+        );
+        // Negatives are excluded by the u32 wire parse; so is any junk.
+        assert!(parse_session_retention_days("-1").is_err());
+        assert!(parse_session_retention_days("soon").is_err());
+        assert!(parse_session_retention_days("").is_err());
     }
 
     #[test]
