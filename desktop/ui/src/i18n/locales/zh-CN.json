@@ -839,6 +839,8 @@
   "extensions.installed.cta": "浏览目录",
   "extensions.installed.disabled": "已禁用",
   "extensions.installed.installedAt": "安装于 {date}",
+  "extensions.installed.statsCalls": "{days} 天调用 {calls} 次",
+  "extensions.installed.statsTokens": "约 {tokens} tokens",
   "extensions.installed.mcpServers": "MCP 服务器",
   "extensions.installed.skills": "技能",
   "extensions.installed.agents": "智能体",

@@ -71,6 +71,7 @@ import type {
   UsageStats,
   SessionUsageRow,
   ContextBreakdown,
+  ExtensionStats,
   HookEventInfo,
   ProfilesList,
   ActiveProfileStatus,
@@ -1365,6 +1366,11 @@ export async function getSessionContextBreakdown(sessionId: string): Promise<Con
 /** Per-session usage aggregation for the last `days` days (recency order). */
 export async function getUsageBySession(days: number): Promise<SessionUsageRow[]> {
   return invoke('get_usage_by_session', { days })
+}
+
+/** X7 per-extension (skill / MCP tool) invocation + token stats. */
+export async function getExtensionStats(days: number): Promise<ExtensionStats> {
+  return invoke('get_extension_stats', { days })
 }
 
 // --- Scheduled Tasks (Sprint 2) ---

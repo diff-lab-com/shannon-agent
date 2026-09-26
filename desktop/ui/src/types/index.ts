@@ -842,6 +842,36 @@ export interface BudgetStatusPayload {
   budgetUsd: number
 }
 
+// --- X7 Extension Stats Types ---
+//
+// Field names mirror the Rust DTOs in shannon-desktop/src/cost_commands.rs
+// exactly (serde camelCase on the wire).
+
+/** One tool's invocation stats within the stats window. */
+export interface ExtensionToolStatRow {
+  name: string
+  calls: number
+  totalTokens: number
+}
+
+/** Per-server MCP rollup: server totals plus the per-tool detail. */
+export interface ExtensionMcpServerStats {
+  server: string
+  calls: number
+  totalTokens: number
+  tools: ExtensionToolStatRow[]
+}
+
+/** Per-extension stats bucketed by engine tool name (skills / MCP / other). */
+export interface ExtensionStats {
+  days: number
+  /** Skill ids with the `skill_` prefix stripped. */
+  skills: ExtensionToolStatRow[]
+  mcpServers: ExtensionMcpServerStats[]
+  /** Non-extension tools keep the raw engine tool name. */
+  other: ExtensionToolStatRow[]
+}
+
 // --- Usage Stats Types ---
 //
 // Field names mirror the Rust DTOs in shannon-desktop/src/commands_usage.rs
