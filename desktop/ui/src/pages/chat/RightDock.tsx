@@ -580,6 +580,21 @@ function ArtifactDocBody({ artifact, workingDir }: { artifact: ArtifactItem; wor
   const filePath = artifact.path ?? (artifact.kind === 'image' || artifact.kind === 'other' ? artifact.source : null)
   const lineCount = useMemo(() => (hasText ? artifact.source.split('\n').length : 0), [artifact.source, hasText])
 
+  // 2026-09-26 round2 §5-1 A — chat-fence HTML (no backing file, never
+  // disk-provenance) runs interactive through the artifact:// custom
+  // protocol; disk files keep the static preview. Discriminator note: the
+  // dock's `origin` field is only ever set to 'disk' (ArtifactLinkHost);
+  // chat-fence artifacts carry no path, so `!filePath && origin !== 'disk'`
+  // is exactly the chat-fence set — the same test the static hint below
+  // has always used.
+  const interactiveHtml = artifact.kind === 'html' && !filePath && artifact.origin !== 'disk'
+  // When the interactive registration fails (web dev, oversize artifact…)
+  // HtmlRenderer silently falls back to static — surface the hint again.
+  const [htmlInteractiveFailed, setHtmlInteractiveFailed] = useState(false)
+  useEffect(() => {
+    setHtmlInteractiveFailed(false)
+  }, [artifact.id, artifact.source])
+
   const handleCopy = async () => {
     try {
       await navigator.clipboard.writeText(artifact.source)
@@ -697,10 +712,11 @@ function ArtifactDocBody({ artifact, workingDir }: { artifact: ArtifactItem; wor
           </Button>
         )}
       </div>
-      {/* §P1-9 honest-static posture: chat-fence HTML (no backing file) can
-          never run scripts in the panel — say so, and put the OS escape
-          hatch one click away instead of a silently dead interactive page. */}
-      {artifact.kind === 'html' && !filePath && (
+      {/* §P1-9 / §5-1 A: the static hint now covers exactly the HTML that
+          still renders statically — disk files (and a chat artifact whose
+          interactive registration failed). Interactive chat-fence HTML runs
+          in its own sandboxed protocol document and needs no disclaimer. */}
+      {artifact.kind === 'html' && (!interactiveHtml || htmlInteractiveFailed) && (
         <div
           role="note"
           data-testid="artifact-html-static-hint"
@@ -720,7 +736,14 @@ function ArtifactDocBody({ artifact, workingDir }: { artifact: ArtifactItem; wor
             <pre className="h-full overflow-auto font-mono text-[12px] whitespace-pre-wrap break-words text-on-surface p-sm bg-surface-container-low/50 rounded-lg">
               {artifact.source}
             </pre>
-          ) : artifact.kind === 'html' ? <HtmlRenderer source={artifact.source} title={artifact.title} />
+          ) : artifact.kind === 'html' ? (
+            <HtmlRenderer
+              source={artifact.source}
+              title={artifact.title}
+              interactive={interactiveHtml}
+              onRegistrationFailed={() => setHtmlInteractiveFailed(true)}
+            />
+          )
             : artifact.kind === 'web' ? <WebRenderer url={artifact.source} />
               : artifact.kind === 'image' ? <ImageDocBody src={convertFileSrc(artifact.source)} alt={displayTitle} />
                 : artifact.kind === 'other' ? (

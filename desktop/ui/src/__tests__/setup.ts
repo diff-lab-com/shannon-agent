@@ -474,6 +474,12 @@ vi.mock('@/lib/tauri-api', () => ({
   revealInFolder: vi.fn().mockResolvedValue(undefined),
   openArtifactExternally: vi.fn().mockResolvedValue('/tmp/shannon-artifacts/x.html'),
   probeUrlFrameable: vi.fn().mockResolvedValue({ frameable: true, status: 200, reason: null }),
+  // 2026-09-26 round2 §5-1 A — artifact:// interactive HTML registry.
+  // Default: one stable registration; per-test overrides cover rejection /
+  // fallback paths. The mock is exhaustive — a missing export crashes every
+  // test that renders MessageBubble/RightDock.
+  registerInteractiveHtml: vi.fn().mockResolvedValue({ id: 'mock-artifact', url: 'artifact://mock-artifact' }),
+  unregisterInteractiveArtifact: vi.fn().mockResolvedValue(undefined),
   // P1-5 C-2 — workspace layout persistence. Default: nothing stored, so
   // the Chat page boots on the default focus preset in every test.
   workspaceGetLayout: vi.fn().mockResolvedValue(null),

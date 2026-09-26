@@ -134,6 +134,11 @@ pub mod engine_discovery_commands;
 #[cfg(feature = "tauri")]
 pub mod commands_surface;
 
+// 2026-09-26 round2 §5-1 A — `artifact://` custom protocol: interactive
+// HTML artifacts served from a registry with per-response strict CSP.
+#[cfg(feature = "tauri")]
+pub mod commands_artifact;
+
 #[cfg(feature = "tauri")]
 pub mod commands_memory;
 
