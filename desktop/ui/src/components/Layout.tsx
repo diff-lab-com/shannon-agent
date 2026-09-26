@@ -50,6 +50,19 @@ export function Layout() {
   // one crash covered every page visited afterwards.
   const location = useLocation();
   const intl = useIntl();
+  // B6-36: the footer amount used to bypass Intl with `$…toFixed(4)`; format
+  // as USD currency in the app locale instead (grouping + decimal separator
+  // follow the locale; up to 4 decimals like the usage ledger).
+  const fmtFooterCost = useCallback(
+    (n: number) =>
+      new Intl.NumberFormat(intl.locale, {
+        style: 'currency',
+        currency: 'USD',
+        minimumFractionDigits: 2,
+        maximumFractionDigits: 4,
+      }).format(n),
+    [intl.locale],
+  );
   // P1-1 window mode: this window is pinned to one session — sidebar hidden
   // (lowest-cost slim chrome; nav lives in the main window), content spans
   // the full width, and the native window title tracks the session title.
@@ -198,7 +211,7 @@ export function Layout() {
                 <span className="w-2 h-2 rounded-full bg-tertiary shrink-0" />
                 <span>{intl.formatMessage({ id: 'footer.tokens' }, { count: (usage.input_tokens + usage.output_tokens) })}</span>
                 <span className="text-outline-variant">·</span>
-                <span className="text-primary">${usage.cost_usd.toFixed(4)}</span>
+                <span className="text-primary">{fmtFooterCost(usage.cost_usd)}</span>
               </>
             ) : (
               <>

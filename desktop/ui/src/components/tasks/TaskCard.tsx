@@ -50,7 +50,8 @@ export default function TaskCard({ task, isRunning, onSelect, onRunNow, onCancel
               ) : null}
               {task.team ? (
                 <span
-                  title={`Team: ${task.team}`}
+                  // B6-36: the tooltip used to hardcode "Team: …".
+                  title={intl.formatMessage({ id: 'tasks.taskCard.teamTitle' }, { team: task.team })}
                   className="font-label-sm text-label-sm text-on-surface-variant flex items-center gap-xs"
                 >
                   <span className="material-symbols-outlined text-[14px]">groups</span>

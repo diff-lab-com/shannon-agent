@@ -49,7 +49,12 @@ export default function ModelsSettings() {
   const setStrategy = (s: 'speed' | 'balanced' | 'high-quality') => {
     setStrategyState(s)
     api.configure({ key: 'performance_strategy', value: s })
-      .then(() => toast.success(intl.formatMessage({ id: 'settings.models.strategySet' }, { strategy: s })))
+      // B6-36: the toast used to interpolate the raw enum (`speed`) — show
+      // the translated strategy label instead (same keys as the pills).
+      .then(() => toast.success(intl.formatMessage(
+        { id: 'settings.models.strategySet' },
+        { strategy: intl.formatMessage({ id: `settings.models.stratLabel.${s}` }) },
+      )))
       .catch(async (e) => {
         toastError(t('settings.models.strategyFailed'), e)
         // Revert the optimistic flip by re-reading the persisted config.

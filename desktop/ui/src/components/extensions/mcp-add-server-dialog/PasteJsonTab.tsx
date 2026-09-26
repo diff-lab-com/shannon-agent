@@ -36,7 +36,10 @@ export function PasteJsonTab({ onInstalled }: { onInstalled: () => void }) {
       setParseError(null);
     } catch (e) {
       setParsed(null);
-      setParseError(safeErrorMessage(e, "parse failed"));
+      // B6-36: the fallback text used to be the hardcoded "parse failed";
+      // resolve it from the locale files so the rendered error is fully
+      // translated regardless of what the underlying error carries.
+      setParseError(safeErrorMessage(e, t("extensions.mcp.addDialog.paste.parseFailed")));
     }
   }
 

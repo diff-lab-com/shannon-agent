@@ -16,16 +16,20 @@ import { Button } from '@/components/ui/button'
 import * as api from '@/lib/tauri-api'
 import type { TriggeredRoutineDto } from '@/types'
 
-const TRIGGER_OPTIONS: Array<{ value: string; label: string; hint: string }> = [
-  { value: 'PostToolUse', label: 'PostToolUse', hint: 'After any tool runs (e.g. after edit, bash)' },
-  { value: 'PreToolUse', label: 'PreToolUse', hint: 'Before a tool runs (gated approval)' },
-  { value: 'TaskCompleted', label: 'TaskCompleted', hint: 'When a task is marked completed' },
-  { value: 'TaskCreated', label: 'TaskCreated', hint: 'When a new task is created' },
-  { value: 'SubagentStart', label: 'SubagentStart', hint: 'When a subagent launches' },
-  { value: 'SubagentStop', label: 'SubagentStop', hint: 'When a subagent finishes' },
-  { value: 'PreCompact', label: 'PreCompact', hint: 'Before context compaction' },
-  { value: 'PostCompact', label: 'PostCompact', hint: 'After context compaction' },
-  { value: 'ConfigChange', label: 'ConfigChange', hint: 'When shannon config changes' },
+// B6-36: the per-event hint lines used to be hardcoded English; they now
+// resolve through `tasks.hookRoutineCreateDialog.triggerHint.{event}`.
+// The labels stay the literal event names — those are hook payloads the
+// backend matches on, not display text.
+const TRIGGER_OPTIONS: Array<{ value: string }> = [
+  { value: 'PostToolUse' },
+  { value: 'PreToolUse' },
+  { value: 'TaskCompleted' },
+  { value: 'TaskCreated' },
+  { value: 'SubagentStart' },
+  { value: 'SubagentStop' },
+  { value: 'PreCompact' },
+  { value: 'PostCompact' },
+  { value: 'ConfigChange' },
 ]
 
 export interface HookRoutineCreateDialogProps {
@@ -86,7 +90,7 @@ export default function HookRoutineCreateDialog({ open, onClose, onCreated }: Ho
     }
   }
 
-  const selectedHint = TRIGGER_OPTIONS.find(o => o.value === trigger)?.hint ?? ''
+  const selectedHint = t(`tasks.hookRoutineCreateDialog.triggerHint.${trigger}`)
 
   return (
     <Modal
@@ -137,7 +141,7 @@ export default function HookRoutineCreateDialog({ open, onClose, onCreated }: Ho
               className="bg-surface-container-low border border-outline-variant/40 rounded-lg px-md py-sm font-body-md text-on-surface focus:outline-none focus-visible:ring-2 focus-visible:ring-primary/40"
             >
               {TRIGGER_OPTIONS.map(o => (
-                <option key={o.value} value={o.value}>{o.label}</option>
+                <option key={o.value} value={o.value}>{o.value}</option>
               ))}
             </select>
             <span className="font-label-sm text-[11px] text-on-surface-variant">{selectedHint}</span>

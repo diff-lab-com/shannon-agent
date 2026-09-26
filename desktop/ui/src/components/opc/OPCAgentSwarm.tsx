@@ -162,7 +162,10 @@ export default function OPCAgentSwarm({ agents, tasks }: Props) {
                 <div
                   role="button"
                   tabIndex={0}
-                  aria-label={`${agent.name} — ${agent.status}${agent.worktree_path ? ` (${shortWorktree(agent.worktree_path)})` : ''}`}
+                  // B6-36: the aria label used to interpolate the raw status
+                  // code; translate it via the shared `status.*` keys (B3),
+                  // falling back to the code for values this build doesn't know.
+                  aria-label={`${agent.name} — ${intl.formatMessage({ id: `status.${agent.status}`, defaultMessage: agent.status })}${agent.worktree_path ? ` (${shortWorktree(agent.worktree_path)})` : ''}`}
                   className="bg-surface-container-lowest/70 backdrop-blur-md border border-outline-variant/20 rounded-xl p-md flex flex-col shadow-sm cursor-pointer hover:border-primary/30 transition-colors group"
                   onClick={() => handleAgentClick(agent.id, agent.session_id)}
                   onKeyDown={e => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); handleAgentClick(agent.id, agent.session_id) } }}
@@ -182,7 +185,7 @@ export default function OPCAgentSwarm({ agents, tasks }: Props) {
                 <div className="flex items-center gap-2">
                   <div className={cn("w-1 h-3 rounded-full shrink-0", isActive ? 'bg-tertiary' : 'bg-outline-variant')} />
                   <span className={cn("font-label-sm text-[12px]", isActive ? 'text-tertiary' : 'text-on-surface-variant italic opacity-80')}>
-                    {agent.task || agent.status}
+                    {agent.task || intl.formatMessage({ id: `status.${agent.status}`, defaultMessage: agent.status })}
                   </span>
                 </div>
                 {agent.worktree_path ? (
@@ -197,7 +200,9 @@ export default function OPCAgentSwarm({ agents, tasks }: Props) {
                   <div
                     ref={menuRef}
                     role="menu"
-                    aria-label={`${agent.name} actions`}
+                    // B6-36: was the hardcoded `${agent.name} actions` — reuse
+                    // the same key as the trigger button.
+                    aria-label={intl.formatMessage({ id: 'opc.agentSwarm.actions.name' }, { name: agent.name })}
                     className="absolute right-2 top-12 z-modal w-40 bg-surface-container-lowest border border-outline-variant/30 rounded-lg shadow-lg py-1 text-on-surface"
                     onClick={e => e.stopPropagation()}
                   >

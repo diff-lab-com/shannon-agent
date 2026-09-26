@@ -9,7 +9,7 @@
 // to it, reserved for precise reconciliation ("the exact cost row 12
 // minutes ago").
 
-import { useEffect, useMemo, useState } from 'react'
+import { useCallback, useEffect, useMemo, useState } from 'react'
 import { useIntl } from 'react-intl'
 import { useT } from '@/i18n'
 import LoadingState from '@/components/ui/loading-state'
@@ -203,7 +203,7 @@ function BucketDataTable({ labelTitle, buckets, locale, emptyLabel }: {
         <span className="font-mono text-label-sm text-on-surface-variant">{fmtCost(locale, getValue() as number)}</span>
       ),
     },
-    { accessorKey: 'requests', header: 'Reqs' },
+    { accessorKey: 'requests', header: tB('usage.col.reqs') },
   ]
   return <DataTable columns={columns} data={buckets} emptyMessage={emptyLabel} />
 }
@@ -281,14 +281,29 @@ function SessionTable({ rows, locale, emptyTitle, emptyLabel }: {
   )
 }
 
-const TOKEN_SERIES: BarSeriesDef[] = [
-  { key: 'input', label: 'Input', colorClass: 'text-primary' },
-  { key: 'output', label: 'Output', colorClass: 'text-secondary' },
-]
+// B6-36: the backend (commands_usage.rs) attributes unattributable spend —
+// scheduled-routine runs — to model/provider buckets labelled with the
+// SCHEDULED_LABEL constant ("Scheduled tasks"). Front-end mapping (per
+// decision in the review): translate that literal wherever a bucket label
+// renders, without touching the wire format or the backend ACL.
+const SCHEDULED_LABEL = 'Scheduled tasks'
+
+function useBucketLabel() {
+  const intl = useIntl()
+  return useCallback(
+    (label: string) =>
+      label === SCHEDULED_LABEL
+        ? intl.formatMessage({ id: 'usage.scheduledTasks' })
+        : label,
+    [intl],
+  )
+}
 
 export default function Usage() {
   const intl = useIntl()
   const t = (id: string) => intl.formatMessage({ id })
+  // B6-36: "Scheduled tasks" bucket label → translated (frontend mapping).
+  const bucketLabel = useBucketLabel()
   const [days, setDays] = useState<number>(30)
   const [stats, setStats] = useState<UsageStats | null>(null)
   const [loading, setLoading] = useState(true)
@@ -350,13 +365,19 @@ export default function Usage() {
     return stats.by_model
       .map(m => ({
         key: m.label,
-        label: m.label,
+        label: bucketLabel(m.label),
         value: m.input_tokens + m.output_tokens,
       }))
       .filter(s => s.value > 0)
       .sort((a, b) => b.value - a.value)
       .slice(0, 5)
-  }, [stats])
+  }, [stats, bucketLabel])
+
+  // B6-36: series labels ("Input"/"Output") come from the locale, not literals.
+  const tokenSeries: BarSeriesDef[] = useMemo(() => [
+    { key: 'input', label: intl.formatMessage({ id: 'usage.chart.series.input' }), colorClass: 'text-primary' },
+    { key: 'output', label: intl.formatMessage({ id: 'usage.chart.series.output' }), colorClass: 'text-secondary' },
+  ], [intl])
 
   const totalTokens = stats
     ? stats.totals.input_tokens + stats.totals.output_tokens
@@ -447,7 +468,7 @@ export default function Usage() {
             title={t('usage.section.byModel')}
             icon="smart_toy"
             labelTitle={t('usage.col.model')}
-            buckets={stats!.by_model}
+            buckets={stats!.by_model.map(b => ({ ...b, label: bucketLabel(b.label) }))}
             locale={intl.locale}
             emptyTitle={t('usage.empty.title')}
             emptyLabel={t('usage.empty')}
@@ -456,7 +477,7 @@ export default function Usage() {
             title={t('usage.section.byProvider')}
             icon="cloud"
             labelTitle={t('usage.col.provider')}
-            buckets={stats!.by_provider}
+            buckets={stats!.by_provider.map(b => ({ ...b, label: bucketLabel(b.label) }))}
             locale={intl.locale}
             emptyTitle={t('usage.empty.title')}
             emptyLabel={t('usage.empty')}
@@ -513,7 +534,7 @@ export default function Usage() {
           >
             <BarChart
               data={dailyBars}
-              series={TOKEN_SERIES}
+              series={tokenSeries}
               formatValue={(n) => fmtTokens(intl.locale, n)}
             />
           </ChartCard>
@@ -551,7 +572,7 @@ export default function Usage() {
                 title={t('usage.chart.byProvider.title')}
                 icon="cloud"
                 labelTitle={t('usage.col.provider')}
-                buckets={stats!.by_provider}
+                buckets={stats!.by_provider.map(b => ({ ...b, label: bucketLabel(b.label) }))}
                 locale={intl.locale}
                 emptyTitle={t('usage.empty.title')}
                 emptyLabel={t('usage.empty')}

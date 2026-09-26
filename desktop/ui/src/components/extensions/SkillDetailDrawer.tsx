@@ -12,25 +12,31 @@ interface SkillDetailDrawerProps {
   onInstall: () => void
 }
 
-function formatLastUpdated(ts: string | null): string {
+/** B6-36: format in the app locale (was `toLocaleDateString()`, which follows
+ *  the OS locale and diverges from the language picked in Shannon). */
+function formatLastUpdated(ts: string | null, locale: string): string {
   if (!ts) return ''
   const d = new Date(ts)
   if (Number.isNaN(d.getTime())) return ''
-  return d.toLocaleDateString()
+  return new Intl.DateTimeFormat(locale, { dateStyle: 'short' }).format(d)
 }
 
-function describeSource(entry: SkillCatalogEntry): string {
+/** B6-36: the source line used to hardcode English ("Built-in", "Featured
+ *  vendor", "@ main"). Every shape now resolves through the locale files;
+ *  repo names, urls and git refs stay verbatim — they are identifiers. */
+function describeSource(entry: SkillCatalogEntry, intl: ReturnType<typeof useIntl>): string {
   switch (entry.source.type) {
     case 'native':
-      return 'Built-in'
+      return intl.formatMessage({ id: 'extensions.skills.drawer.source.builtin' })
     case 'mcp_registry':
-      return `Registry · ${entry.source.publisher}`
+      return intl.formatMessage({ id: 'extensions.skills.drawer.source.registry' }, { publisher: entry.source.publisher })
     case 'featured_vendor':
-      return 'Featured vendor'
-    case 'git_hub_repo': {
-      const refPart = entry.source.ref_ ? `@ ${entry.source.ref_}` : '@ main'
-      return `${entry.source.repo} ${refPart}`
-    }
+      return intl.formatMessage({ id: 'extensions.skills.drawer.source.featuredVendor' })
+    case 'git_hub_repo':
+      return intl.formatMessage(
+        { id: 'extensions.skills.drawer.source.gitHub' },
+        { repo: entry.source.repo, ref: entry.source.ref_ ?? 'main' },
+      )
     case 'custom':
       return entry.source.url
   }
@@ -57,7 +63,7 @@ export default function SkillDetailDrawer({
   if (!entry) return null
   const trust = TRUST_LABELS[entry.trust]
   const trustTextKey = `extensions.skills.trust.${entry.trust}`
-  const lastUpdated = formatLastUpdated(entry.last_updated)
+  const lastUpdated = formatLastUpdated(entry.last_updated, intl.locale)
 
   return (
     <SidePanel
@@ -128,7 +134,7 @@ export default function SkillDetailDrawer({
                 {t('extensions.skills.drawer.source')}
               </dt>
               <dd className="font-label-md text-on-surface font-mono break-all">
-                {describeSource(entry)}
+                {describeSource(entry, intl)}
               </dd>
             </div>
             {lastUpdated && (
