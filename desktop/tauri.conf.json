@@ -10,7 +10,6 @@
         "beforeBuildCommand": "pnpm build"
     },
     "bundle": {
-        "createUpdaterArtifacts": false,
         "externalBin": [
             "binaries/shannon"
         ],
@@ -77,16 +76,6 @@
         }
     },
     "plugins": {
-        "updater": {
-            "endpoints": [
-                "https://gitea.diff-lab.com/bigdong89/shannon-desktop/releases/download/latest/latest.json"
-            ],
-            "pubkey": "UPDATER_PUBKEY_PLACEHOLDER_REPLACE_WITH_TAURI_SIGNER_GENERATE_OUTPUT",
-            "dialog": false,
-            "windows": {
-                "installMode": "passive"
-            }
-        },
         "globalShortcut": {
             "shortcuts": [
                 {

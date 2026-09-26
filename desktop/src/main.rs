@@ -52,7 +52,6 @@ fn main() {
         menu::{MenuBuilder, MenuItemBuilder},
         tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent},
     };
-    use tauri_plugin_updater::UpdaterExt;
 
     // E5: tracing-subscriber with JSON exporter for offline performance
     // analysis. SHANNON_LOG_FORMAT=json → newline-delimited JSON to stderr;
@@ -78,7 +77,6 @@ fn main() {
     tauri::Builder::default()
         .plugin(tauri_plugin_shell::init())
         .plugin(tauri_plugin_opener::init())
-        .plugin(tauri_plugin_updater::Builder::new().build())
         .plugin(tauri_plugin_global_shortcut::Builder::new().build())
         .plugin(tauri_plugin_window_state::Builder::new().build())
         .plugin(tauri_plugin_dialog::init())
@@ -654,22 +652,11 @@ fn main() {
                     let _ = app.emit("focus-input", ());
                 });
 
-            // Listen for check-updates events from frontend
-            let handle = app.handle().clone();
-            let _ = app.listen("check-updates", move |_event| {
-                let handle = handle.clone();
-                tauri::async_runtime::spawn(async move {
-                    if let Ok(Some(update_info)) = handle.updater()?.check().await {
-                        let payload = serde_json::json!({
-                            "version": update_info.version,
-                            "date": update_info.date.map(|d| d.to_string()),
-                            "body": update_info.body
-                        });
-                        let _ = handle.emit("update-available", payload);
-                    }
-                    Ok::<(), tauri_plugin_updater::Error>(())
-                });
-            });
+            // B1-15 (review decision 6): the updater plugin and its
+            // check-updates wiring are removed — the placeholder pubkey +
+            // third-party endpoint were a half-enabled state that could
+            // never deliver a verified update. Reintroduce with the release
+            // pipeline when it exists.
 
             // System tray configuration.
             //
@@ -682,21 +669,13 @@ fn main() {
             let show_item = MenuItemBuilder::with_id("show", "Show Shannon").build(app)?;
             let new_session_item =
                 MenuItemBuilder::with_id("new-session", "New Session").build(app)?;
-            let check_updates_item =
-                MenuItemBuilder::with_id("check-updates", "Check for Updates").build(app)?;
             let status_item = MenuItemBuilder::with_id("status", initial_label.clone())
                 .enabled(false)
                 .build(app)?;
             let quit_item = MenuItemBuilder::with_id("quit", "Quit").build(app)?;
 
             let menu = MenuBuilder::new(app)
-                .items(&[
-                    &status_item,
-                    &show_item,
-                    &new_session_item,
-                    &check_updates_item,
-                    &quit_item,
-                ])
+                .items(&[&status_item, &show_item, &new_session_item, &quit_item])
                 .build()?;
 
             let _tray = TrayIconBuilder::with_id(TRAY_ID)
@@ -713,10 +692,6 @@ fn main() {
                     "new-session" => {
                         // Trigger new session via event
                         let _ = app.emit("new-session", ());
-                    }
-                    "check-updates" => {
-                        // Trigger update check via event
-                        let _ = app.emit("check-updates", ());
                     }
                     "quit" => {
                         app.exit(0);
@@ -756,57 +731,9 @@ fn main() {
                 },
             );
 
-            // Auto-update check on startup (review §P1-12). The tauri.conf.json
-            // `updater.pubkey` is a placeholder until the release pipeline
-            // injects the real `tauri signer generate` output; while it is a
-            // placeholder every signed-update check fails verification. We
-            // detect the placeholder at startup and surface it loudly so the
-            // tray "Check for updates" action and the auto-update check both
-            // report the configuration gap rather than silently no-op.
-            const PLACEHOLDER_PUBKEY: &str =
-                "UPDATER_PUBKEY_PLACEHOLDER_REPLACE_WITH_TAURI_SIGNER_GENERATE_OUTPUT";
-            let configured_pubkey = app
-                .config()
-                .plugins
-                .0
-                .get("updater")
-                .and_then(|p| p.get("pubkey"))
-                .and_then(|v| v.as_str())
-                .unwrap_or_default();
-            let pubkey_is_placeholder =
-                configured_pubkey == PLACEHOLDER_PUBKEY || configured_pubkey.is_empty();
-            if pubkey_is_placeholder {
-                tracing::error!(
-                    "updater.pubkey is unconfigured (placeholder string or empty); \
-                     auto-update will not work. Generate one with `tauri signer \
-                     generate` and inject it into the release pipeline before \
-                     shipping to users."
-                );
-                let payload = serde_json::json!({
-                    "version": "0.0.0-unconfigured",
-                    "date": None::<String>,
-                    "body": "Auto-update is not configured for this build. \
-                             Run `tauri signer generate` and inject the public \
-                             key into the release pipeline.",
-                });
-                let _ = app.handle().emit("update-available", payload);
-                return Ok(());
-            }
-            let handle = app.handle().clone();
-            tauri::async_runtime::spawn(async move {
-                if let Ok(Some(update_info)) = handle.updater()?.check().await {
-                    // Emit update-available event for frontend
-                    let payload = serde_json::json!({
-                        "version": update_info.version,
-                        "date": update_info.date.map(|d| d.to_string()),
-                        "body": update_info.body
-                    });
-                    let _ = handle.emit("update-available", payload);
-                } else {
-                    tracing::info!("No updates available or update check failed");
-                }
-                Ok::<(), tauri_plugin_updater::Error>(())
-            });
+            // B1-15: the startup auto-update check went away with the
+            // updater plugin (decision 6 — placeholder pubkey made every
+            // signed-update check fail verification anyway).
 
             Ok(())
         })
@@ -875,21 +802,13 @@ fn rebuild_tray_menu(
 
     let show_item = MenuItemBuilder::with_id("show", "Show Shannon").build(app)?;
     let new_session_item = MenuItemBuilder::with_id("new-session", "New Session").build(app)?;
-    let check_updates_item =
-        MenuItemBuilder::with_id("check-updates", "Check for Updates").build(app)?;
     let status_item = MenuItemBuilder::with_id("status", label)
         .enabled(false)
         .build(app)?;
     let quit_item = MenuItemBuilder::with_id("quit", "Quit").build(app)?;
 
     let menu = MenuBuilder::new(app)
-        .items(&[
-            &status_item,
-            &show_item,
-            &new_session_item,
-            &check_updates_item,
-            &quit_item,
-        ])
+        .items(&[&status_item, &show_item, &new_session_item, &quit_item])
         .build()?;
 
     tray.set_menu(Some(menu))?;

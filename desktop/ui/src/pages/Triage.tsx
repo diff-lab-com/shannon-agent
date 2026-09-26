@@ -16,10 +16,11 @@
 // cards, chip filters, keyboard j/k navigation, bulk selection bar).
 
 import { useState, useMemo, useCallback, useEffect, useRef, type KeyboardEvent as ReactKeyboardEvent } from 'react'
-import { useLocation, useNavigate } from 'react-router-dom'
+import { useLocation, useNavigate, useSearchParams } from 'react-router-dom'
 import { useIntl, type PrimitiveType } from 'react-intl'
 import { toast } from 'sonner'
 import EmptyState from '@/components/ui/empty-state'
+import ErrorState from '@/components/ui/error-state'
 import { CardSkeleton } from '@/components/SkeletonLoader'
 import { Button } from '@/components/ui/button'
 import { DropdownMenu, type DropdownMenuItem } from '@/components/ui/dropdown-menu'
@@ -95,6 +96,21 @@ export function sourceMeta(source: InboxSource): { icon: string; color: string; 
 
 export const STATUS_OPTIONS: readonly (InboxItemStatus | 'all')[] = ['all', 'pending', 'read', 'archived']
 export const SOURCE_OPTIONS: readonly (InboxSource | 'all')[] = ['all', 'routine', 'scheduled_task', 'goal', 'trigger', 'batch', 'session_approval', 'session_failed', 'skill_candidate', 'dream_report']
+
+// ─── B4 #28: URL-persisted view state ──────────────────────────────────────
+// Filters, sort and grouping live in the search params (?status=&source=
+// &sort=&group=source) so a triage session survives reloads and can be
+// bookmarked — same convention as the ?project= deep link. Unknown values
+// fall back to the defaults instead of silently narrowing the list.
+const STATUS_VALUES: readonly InboxItemStatus[] = ['pending', 'read', 'archived']
+
+function parseStatusParam(v: string | null): StatusFilter {
+  return STATUS_VALUES.includes(v as InboxItemStatus) ? (v as InboxItemStatus) : undefined
+}
+
+function parseSourceParam(v: string | null): SourceFilter {
+  return v !== null && v !== 'all' && SOURCE_OPTIONS.includes(v as InboxSource) ? (v as InboxSource) : undefined
+}
 
 function InboxCard({ item, selected, focused, highlighted, onToggleSelected, onMarkRead, onArchive, onContinue, onRerun, onOpenSource, onReview, onViewReport }: {
   item: InboxItem
@@ -178,7 +194,8 @@ function InboxCard({ item, selected, focused, highlighted, onToggleSelected, onM
             <div className="flex items-center gap-md flex-wrap">
               <span className="font-label-sm text-label-sm text-on-surface-variant flex items-center gap-xs">
                 <span className="material-symbols-outlined text-[14px]" aria-hidden="true">schedule</span>
-                {new Date(item.createdAtMs).toLocaleString([], { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' })}
+                {/* B4 #28: format in the app's locale, not the OS default. */}
+                {new Date(item.createdAtMs).toLocaleString(intl.locale, { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' })}
               </span>
             </div>
           </div>
@@ -298,15 +315,31 @@ export default function Triage() {
   // too). The chip removes the param.
   const { projectKey, projectLabel, clearProject } = useProjectDeepLink()
 
-  const [statusFilter, setStatusFilter] = useState<StatusFilter>(undefined)
-  const [sourceFilter, setSourceFilter] = useState<SourceFilter>(undefined)
-  const [sortOrder, setSortOrder] = useState<SortOrder>('newest')
+  // B4 #28: view state (status / source / sort / grouping) is URL-owned.
+  // The chips write search params (replace navigation — no history spam,
+  // same convention as the ?project= chip); the values below are derived.
+  const [searchParams, setSearchParams] = useSearchParams()
+  const statusFilter = parseStatusParam(searchParams.get('status'))
+  const sourceFilter = parseSourceParam(searchParams.get('source'))
+  const sortOrder: SortOrder = searchParams.get('sort') === 'oldest' ? 'oldest' : 'newest'
   // 2026-09 P0-4: Triage list can render flat (default) or grouped by
   // source (each source becomes a collapsible folder). The grouping mode
   // sits next to the source filter dropdown so the relationship reads.
-  const [groupBySource, setGroupBySource] = useState<boolean>(false)
+  const groupBySource = searchParams.get('group') === 'source'
+  const updateParams = useCallback((patch: Record<string, string | null>) => {
+    const next = new URLSearchParams(searchParams)
+    for (const [key, value] of Object.entries(patch)) {
+      if (value == null) next.delete(key)
+      else next.set(key, value)
+    }
+    setSearchParams(next, { replace: true })
+  }, [searchParams, setSearchParams])
   const [selectedIds, setSelectedIds] = useState<Set<number>>(new Set())
   const [bulkRunning, setBulkRunning] = useState(false)
+  // B4 P1-28: the keyboard cursor is a GLOBAL flat index over the rendered
+  // order (grouped mode included) — see `flatItems` below. A bucket-local
+  // index used to let several cards ring at once while Enter/a acted on a
+  // different card than the one that lit up.
   const [focusedIndex, setFocusedIndex] = useState<number | null>(null)
   const listRef = useRef<HTMLDivElement>(null)
 
@@ -319,13 +352,17 @@ export default function Triage() {
   )
   useEffect(() => {
     if (highlightId == null) return
-    navigate(location.pathname, { replace: true })
+    // B4 #28: keep the search string — view state now lives in the params,
+    // only the hand-over state is being drained here.
+    navigate({ pathname: location.pathname, search: location.search }, { replace: true })
     // Run once per mount — the point is to drain the router state.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
 
   const { stats } = useInboxStats()
-  const { items, loading, markRead, archive, rerun, getSessionId, setFilter, refresh } = useInboxItems()
+  // B4 #28: `error` is consumed below — an IPC failure used to render as an
+  // empty inbox, indistinguishable from "all clear".
+  const { items, loading, error, markRead, archive, rerun, getSessionId, setFilter, refresh } = useInboxItems()
 
   // Server-side filtering: status + source chips map 1:1 onto the
   // `list_inbox_items` filter args; sort stays client-side. Both hooks
@@ -373,6 +410,27 @@ export default function Triage() {
     return sorted
   }, [items, sortOrder, projectKey, dirBySessionId])
 
+  // B4 P1-28: the one ordering the keyboard cursor is allowed to talk about.
+  // Grouped mode renders buckets in SOURCE_OPTIONS order, so the flat list
+  // is exactly that concatenation — a single global index drives both the
+  // visible ring and what Enter/a act on, in either render mode.
+  const flatItems = useMemo(() => {
+    if (!groupBySource) return visibleItems
+    const out: InboxItem[] = []
+    for (const src of SOURCE_OPTIONS) {
+      if (src === 'all') continue
+      for (const it of visibleItems) if (it.source === src) out.push(it)
+    }
+    return out
+  }, [groupBySource, visibleItems])
+
+  // Card id → position in `flatItems`; render looks the focus up from here
+  // so a card rings iff the keyboard cursor points at it.
+  const flatIndexById = useMemo(
+    () => new Map(flatItems.map((it, idx) => [it.id, idx])),
+    [flatItems],
+  )
+
   // Drop selections that no longer match the visible list.
   const effectiveSelected = useMemo(() => {
     const visibleIds = new Set(visibleItems.map(i => i.id))
@@ -399,19 +457,69 @@ export default function Triage() {
 
   const clearSelection = useCallback(() => setSelectedIds(new Set()), [])
 
-  const bulkSetStatus = useCallback(async (status: InboxItemStatus, toastKey: string, toastKeyPlural: string) => {
-    setBulkRunning(true)
+  // B4 P1-30: restore previously-captured statuses (the Undo path behind
+  // archive). Best-effort per item; a failed restore is reported instead of
+  // swallowed.
+  const undoStatuses = useCallback(async (entries: Array<[number, InboxItemStatus]>) => {
     const results = await Promise.allSettled(
-      Array.from(effectiveSelected).map(id => api.updateInboxItemStatus(id, status)),
+      entries.map(([id, status]) => api.updateInboxItemStatus(id, status)),
     )
     await refresh()
+    const failed = results.filter(r => r.status === 'rejected').length
+    if (failed > 0) {
+      toast.error(intl.formatMessage({ id: 'inbox.undo.failed' }, { count: failed }))
+    }
+  }, [refresh, intl])
+
+  const bulkSetStatus = useCallback(async (status: InboxItemStatus, toastKey: string, toastKeyPlural: string) => {
+    const ids = Array.from(effectiveSelected)
+    if (ids.length === 0) return
+    // Snapshot the pre-operation statuses so Undo restores what was there
+    // before (a `read` item bulk-archived comes back as `read`, not pending).
+    const prevById = new Map(items.map(i => [i.id, i.status]))
+    setBulkRunning(true)
+    const results = await Promise.allSettled(ids.map(id => api.updateInboxItemStatus(id, status)))
+    await refresh()
     setBulkRunning(false)
-    const ok = results.filter(r => r.status === 'fulfilled').length
-    if (ok > 0) {
-      toast.success(intl.formatMessage({ id: ok === 1 ? toastKey : toastKeyPlural }, { count: ok }))
+    const okIds: number[] = []
+    const failedIds: number[] = []
+    results.forEach((r, idx) => { (r.status === 'fulfilled' ? okIds : failedIds).push(ids[idx]) })
+    if (okIds.length === 0) {
+      // B4 P1-30: a total failure used to pass in silence with the selection
+      // cleared — the worst possible read ("everything worked, inbox empty").
+      toast.error(intl.formatMessage({ id: 'inbox.bulk.toast.failedAll' }, { count: ids.length }))
+      return
+    }
+    const successMsg = intl.formatMessage(
+      { id: okIds.length === 1 ? toastKey : toastKeyPlural },
+      { count: okIds.length },
+    )
+    if (failedIds.length > 0) {
+      // Partial failure: report both sides truthfully, keep the failed items
+      // selected so a retry is one click away.
+      toast.error(intl.formatMessage(
+        { id: 'inbox.bulk.toast.partial' },
+        { written: okIds.length, total: ids.length, failed: failedIds.length },
+      ))
+      setSelectedIds(new Set(failedIds))
+      return
+    }
+    if (status === 'archived') {
+      // B4 P1-30: bulk archive is recoverable — the toast carries an Undo
+      // that writes every item's pre-operation status back.
+      const undoEntries: Array<[number, InboxItemStatus]> =
+        okIds.map(id => [id, prevById.get(id) ?? 'pending'])
+      toast.success(successMsg, {
+        action: {
+          label: intl.formatMessage({ id: 'inbox.undo' }),
+          onClick: () => { void undoStatuses(undoEntries) },
+        },
+      })
+    } else {
+      toast.success(successMsg)
     }
     clearSelection()
-  }, [effectiveSelected, refresh, clearSelection, intl])
+  }, [effectiveSelected, refresh, clearSelection, intl, items, undoStatuses])
 
   const bulkMarkRead = useCallback(
     () => bulkSetStatus('read', 'inbox.bulk.toast.markRead', 'inbox.bulk.toast.markRead.plural'),
@@ -454,13 +562,15 @@ export default function Triage() {
 
   // Keyboard navigation over the inbox list (list must be focused first).
   // j/ArrowDown = next, k/ArrowUp = previous, Enter = mark read, a = archive.
-  // Ignored when the keystroke originates from a form field so the filter
-  // chips keep working normally.
+  // The cursor is a global flat index over `flatItems` (B4 P1-28) so the
+  // ringed card is always the one an action would hit. Ignored when the
+  // keystroke originates from a form field so the filter chips keep working
+  // normally.
   useEffect(() => {
     if (focusedIndex == null) return
-    if (visibleItems.length === 0) { setFocusedIndex(null); return }
-    if (focusedIndex >= visibleItems.length) setFocusedIndex(visibleItems.length - 1)
-  }, [visibleItems, focusedIndex])
+    if (flatItems.length === 0) { setFocusedIndex(null); return }
+    if (focusedIndex >= flatItems.length) setFocusedIndex(flatItems.length - 1)
+  }, [flatItems, focusedIndex])
 
   useEffect(() => {
     if (focusedIndex == null) return
@@ -469,9 +579,10 @@ export default function Triage() {
   }, [focusedIndex])
 
   const handleListKey = (e: ReactKeyboardEvent<HTMLDivElement>) => {
-    const tag = (e.target as HTMLElement).tagName
-    if (tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT') return
-    const max = visibleItems.length
+    const el = e.target as HTMLElement
+    const tag = el.tagName
+    if (tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT' || el.isContentEditable) return
+    const max = flatItems.length
     if (max === 0) return
     const cur = focusedIndex ?? -1
     if (e.key === 'j' || e.key === 'ArrowDown') {
@@ -480,16 +591,16 @@ export default function Triage() {
     } else if (e.key === 'k' || e.key === 'ArrowUp') {
       e.preventDefault()
       setFocusedIndex(Math.max(cur - 1, 0))
-    } else if (e.key === 'Enter') {
-      if (cur >= 0) {
-        const it = visibleItems[cur]
-        if (it && it.status === 'pending') { e.preventDefault(); markRead(it.id) }
-      }
-    } else if (e.key === 'a') {
-      if (cur >= 0) {
-        const it = visibleItems[cur]
-        if (it && it.status !== 'archived') { e.preventDefault(); archive(it.id) }
-      }
+    } else if (e.key === 'Enter' || e.key === 'a') {
+      // B4 P1-29: a keystroke aimed at a focused button belongs to that
+      // button — Enter on「查看会话」used to be swallowed and mark the item
+      // read instead. Same passthrough rule as useDiffKeyboard (T5).
+      if (tag === 'BUTTON' || el.closest('[role="button"]')) return
+      if (cur < 0) return
+      const it = flatItems[cur]
+      if (!it) return
+      if (e.key === 'Enter' && it.status === 'pending') { e.preventDefault(); markRead(it.id) }
+      else if (e.key === 'a' && it.status !== 'archived') { e.preventDefault(); archive(it.id) }
     }
   }
 
@@ -528,7 +639,7 @@ export default function Triage() {
               <Button
                 key={opt}
                 variant="ghost"
-                onClick={() => setStatusFilter(opt === 'all' ? undefined : opt)}
+                onClick={() => updateParams({ status: opt === 'all' ? null : opt })}
                 aria-pressed={active}
                 className={cn("px-sm py-xs rounded-full text-label-sm transition-colors cursor-pointer", active ? 'bg-primary/10 text-primary font-bold' : 'bg-surface-container-low text-on-surface-variant hover:text-primary hover:bg-primary/10')}
               >
@@ -543,7 +654,7 @@ export default function Triage() {
         <div className="flex items-center gap-sm mb-lg flex-wrap">
           <SourceFilterDropdown
             value={sourceFilter}
-            onChange={setSourceFilter}
+            onChange={src => updateParams({ source: src ?? null })}
             sourceMeta={sourceMeta}
             allLabel={t('inbox.filter.all')}
             label={t('inbox.source.label')}
@@ -551,7 +662,7 @@ export default function Triage() {
           <Button
             type="button"
             variant="ghost"
-            onClick={() => setGroupBySource(v => !v)}
+            onClick={() => updateParams({ group: groupBySource ? null : 'source' })}
             aria-pressed={groupBySource}
             aria-label={t('inbox.groupBySource')}
             title={t('inbox.groupBySource')}
@@ -567,7 +678,7 @@ export default function Triage() {
           </Button>
           <Button
             variant="ghost"
-            onClick={() => setSortOrder(sortOrder === 'newest' ? 'oldest' : 'newest')}
+            onClick={() => updateParams({ sort: sortOrder === 'newest' ? 'oldest' : 'newest' })}
             aria-label={t('inbox.sort.aria')}
             className="ml-auto px-sm py-xs rounded-full text-label-sm transition-colors cursor-pointer bg-surface-container-low text-on-surface-variant hover:text-primary hover:bg-primary/10"
           >
@@ -622,6 +733,15 @@ export default function Triage() {
           <div className="space-y-md">
             {Array.from({ length: 3 }).map((_, i) => <CardSkeleton key={i} />)}
           </div>
+        ) : error && items.length === 0 ? (
+          // B4 #28: an IPC failure must not read as an empty inbox. With no
+          // stale rows to show, the failure gets the full error state.
+          <ErrorState
+            icon="inbox"
+            title={t('inbox.errorState.title')}
+            description={t('inbox.errorState.description')}
+            action={{ label: t('inbox.errorState.retry'), onClick: () => void refresh() }}
+          />
         ) : items.length === 0 ? (
           <EmptyState
             icon="inbox"
@@ -631,6 +751,25 @@ export default function Triage() {
           />
         ) : (
           <>
+            {/* Stale-rows banner: the last refresh failed but older items are
+                still on screen — say so instead of letting them pass as fresh
+                (T1: failure and empty must never look alike). */}
+            {error && (
+              <div
+                role="alert"
+                className="mb-md flex items-center gap-sm px-md py-sm rounded-xl bg-error/10 border border-error/30 text-error"
+              >
+                <span className="material-symbols-outlined text-[18px]" aria-hidden="true">cloud_off</span>
+                <span className="font-label-md flex-1 min-w-0">{t('inbox.errorState.title')}</span>
+                <Button
+                  variant="ghost"
+                  onClick={() => void refresh()}
+                  className="px-sm py-xs rounded-lg text-label-md text-error hover:bg-error/10 cursor-pointer"
+                >
+                  {t('inbox.errorState.retry')}
+                </Button>
+              </div>
+            )}
             {/* Select-all row */}
             <div className="flex items-center gap-sm mb-sm">
               <label className="flex items-center gap-xs cursor-pointer">
@@ -669,12 +808,15 @@ export default function Triage() {
                           <span className={meta.color}>{t(meta.labelKey)}</span>
                           <span className="text-on-surface-variant/60">· {bucket.length}</span>
                         </div>
-                        {bucket.map((item, j) => (
+                        {/* B4 P1-28: focus compares against the GLOBAL flat
+                            index (flatIndexById), never the bucket-local j —
+                            exactly one card rings, and Enter/a hit that one. */}
+                        {bucket.map(item => (
                           <InboxCard
                             key={item.id}
                             item={item}
                             selected={effectiveSelected.has(item.id)}
-                            focused={focusedIndex === j}
+                            focused={focusedIndex === flatIndexById.get(item.id)}
                             highlighted={highlightId === item.id}
                             onToggleSelected={toggleSelected}
                             onMarkRead={markRead}
@@ -689,12 +831,12 @@ export default function Triage() {
                       </div>
                     )
                   })
-                : visibleItems.map((item, i) => (
+                : visibleItems.map(item => (
                   <InboxCard
                     key={item.id}
                     item={item}
                     selected={effectiveSelected.has(item.id)}
-                    focused={focusedIndex === i}
+                    focused={focusedIndex === flatIndexById.get(item.id)}
                     highlighted={highlightId === item.id}
                     onToggleSelected={toggleSelected}
                     onMarkRead={markRead}

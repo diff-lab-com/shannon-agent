@@ -17,9 +17,18 @@ import { useInboxStats } from '@/hooks/inbox';
 const MIN_W = 200
 const MAX_W = 400
 const DEFAULT_W = 280
-const STORAGE_KEY = 'shannon-sidebar-width'
+export const SIDEBAR_WIDTH_STORAGE_KEY = 'shannon-sidebar-width'
 export const SIDEBAR_MODE_KEY = 'shannon-sidebar-mode'
 export type SidebarMode = 'simple' | 'dev'
+
+/** Clamped persisted width (B1-10): both the Sidebar's own state and the
+ *  Layout's `--sidebar-w` writer initialize from this one helper so the two
+ *  can never disagree on the first paint. */
+export function readStoredSidebarWidth(): number {
+  if (typeof window === 'undefined') return DEFAULT_W
+  const stored = window.localStorage.getItem(SIDEBAR_WIDTH_STORAGE_KEY)
+  return stored ? Math.min(MAX_W, Math.max(MIN_W, parseInt(stored, 10) || DEFAULT_W)) : DEFAULT_W
+}
 
 /** Batch B3/B4: platform-correct modifier for kbd hints (⌘ on macOS). */
 function modKey(): string {
@@ -89,12 +98,14 @@ function NavRow({ to, icon, labelId, titleId, kbd, trail, onNavigate }: {
 }
 
 export const Sidebar = memo(function Sidebar({ mobile, open = true }: { mobile?: boolean; open?: boolean }) {
-  const { close: closeMobile } = useSidebar();
+  // B1-10 (review P1-4 / R1-2): the Sidebar only OWNS the width state and
+  // reports it upward — Layout is the single writer of the `--sidebar-w`
+  // CSS variable (0px in window/mobile mode, the reported value on desktop).
+  // The old self-write effect is what let the variable stay at 280px after
+  // a desktop→mobile→desktop breakpoint round-trip.
+  const { close: closeMobile, reportWidth } = useSidebar();
   const [mode, toggleMode] = useSidebarMode();
-  const [width, setWidth] = useState(() => {
-    const stored = localStorage.getItem(STORAGE_KEY)
-    return stored ? Math.min(MAX_W, Math.max(MIN_W, parseInt(stored, 10) || DEFAULT_W)) : DEFAULT_W
-  });
+  const [width, setWidth] = useState(readStoredSidebarWidth);
   const dragging = useRef(false);
   const navigate = useNavigate();
   // P2-⑩: split-"New" dropdown (goal / routine entry points).
@@ -143,11 +154,11 @@ export const Sidebar = memo(function Sidebar({ mobile, open = true }: { mobile?:
 
   // U5: double-click resets to the default width; arrow keys resize by 16px
   // (the handle is a focusable separator so keyboard users can widen the
-  // sidebar too — P3-1).
+  // sidebar too — P3-1). Persisting is the Sidebar's job; the CSS variable
+  // follows via reportWidth → Layout.
   const resetWidth = useCallback(() => {
     setWidth(DEFAULT_W)
-    localStorage.setItem(STORAGE_KEY, String(DEFAULT_W))
-    document.documentElement.style.setProperty('--sidebar-w', `${DEFAULT_W}px`)
+    localStorage.setItem(SIDEBAR_WIDTH_STORAGE_KEY, String(DEFAULT_W))
   }, [])
 
   const handleResizeKey = useCallback((e: React.KeyboardEvent) => {
@@ -156,7 +167,7 @@ export const Sidebar = memo(function Sidebar({ mobile, open = true }: { mobile?:
     const delta = e.key === 'ArrowLeft' ? -16 : 16
     setWidth(prev => {
       const next = Math.min(MAX_W, Math.max(MIN_W, prev + delta))
-      localStorage.setItem(STORAGE_KEY, String(next))
+      localStorage.setItem(SIDEBAR_WIDTH_STORAGE_KEY, String(next))
       return next
     })
   }, [])
@@ -166,14 +177,13 @@ export const Sidebar = memo(function Sidebar({ mobile, open = true }: { mobile?:
       if (!dragging.current) return
       const next = Math.min(MAX_W, Math.max(MIN_W, e.clientX))
       setWidth(next)
-      document.documentElement.style.setProperty('--sidebar-w', `${next}px`)
     }
     const handleMouseUp = () => {
       if (!dragging.current) return
       dragging.current = false
       document.body.style.cursor = ''
       document.body.style.userSelect = ''
-      localStorage.setItem(STORAGE_KEY, String(width))
+      localStorage.setItem(SIDEBAR_WIDTH_STORAGE_KEY, String(width))
     }
     window.addEventListener('mousemove', handleMouseMove)
     window.addEventListener('mouseup', handleMouseUp)
@@ -183,9 +193,11 @@ export const Sidebar = memo(function Sidebar({ mobile, open = true }: { mobile?:
     }
   }, [width])
 
+  // B1-10: the ONLY path from width state to the `--sidebar-w` variable —
+  // Layout applies it (and the mobileMode/window-mode 0px overrides).
   useEffect(() => {
-    document.documentElement.style.setProperty('--sidebar-w', `${width}px`)
-  }, [width])
+    reportWidth(width)
+  }, [width, reportWidth])
 
   const handleNavClick = () => { if (mobile) closeMobile() }
 
@@ -246,7 +258,10 @@ export const Sidebar = memo(function Sidebar({ mobile, open = true }: { mobile?:
           aria-label={intl.formatMessage({ id: 'nav.newChat.aria' })}
           title={`${intl.formatMessage({ id: 'nav.newChat' })} · ${mod}N`}
           className="flex-1 min-w-0 py-2.5 px-3 bg-primary text-on-primary rounded-xl font-bold flex items-center justify-center gap-2 hover:shadow-lg hover:shadow-primary/30 active:scale-95 transition-all"
-          onClick={createSession}
+          // B1-13 (review P1-8): align with Mod+N — creation must also LAND
+          // on /chat. From /settings the old create-only behavior looked
+          // like a dead button.
+          onClick={() => { void createSession(); navigate('/chat'); handleNavClick() }}
         >
           <span className="material-symbols-outlined icon-md shrink-0">add</span>
           <span className="truncate">{intl.formatMessage({ id: 'nav.newChat' })}</span>

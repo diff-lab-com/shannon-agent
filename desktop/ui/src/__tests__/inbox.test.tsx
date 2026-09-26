@@ -8,6 +8,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { renderHook, act, waitFor } from '@testing-library/react'
 import type { Mock } from 'vitest'
 import { listen } from '@tauri-apps/api/event'
+import { toast } from 'sonner'
 import { I18nProvider } from '@/i18n'
 import { useInboxItems, useInboxStats } from '@/hooks/inbox'
 import * as api from '@/lib/tauri-api'
@@ -102,6 +103,23 @@ describe('useInboxItems', () => {
     expect(ok).toBe(true)
     expect(api.updateInboxItemStatus).toHaveBeenCalledWith(7, 'archived')
     expect(api.listInboxItems).toHaveBeenCalledTimes(2)
+  })
+
+  // B4 P1-30: the archive toast carries an Undo action that writes the
+  // item's pre-archive status back (a `read` item returns as `read`).
+  it('archive toast offers Undo restoring the pre-archive status', async () => {
+    vi.mocked(api.updateInboxItemStatus).mockResolvedValue(undefined)
+    vi.mocked(api.listInboxItems).mockResolvedValue([makeItem({ id: 7, status: 'read' })])
+    const { result } = renderHook(() => useInboxItems(), { wrapper })
+    await waitFor(() => expect(result.current.loading).toBe(false))
+    const ok = await result.current.archive(7)
+    expect(ok).toBe(true)
+    expect(toast.success).toHaveBeenCalledTimes(1)
+    const action = vi.mocked(toast.success).mock.calls[0][1]?.action as { label: string; onClick: () => void }
+    expect(action.label).toBe('Undo')
+    vi.mocked(api.updateInboxItemStatus).mockClear()
+    action.onClick()
+    await waitFor(() => expect(api.updateInboxItemStatus).toHaveBeenCalledWith(7, 'read'))
   })
 
   it('markRead reports failure and does not refresh when the command rejects', async () => {
