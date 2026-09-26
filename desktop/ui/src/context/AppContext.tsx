@@ -35,7 +35,7 @@ import {
   type McpServerInfo,
   type SubAgentLive,
 } from '@/types'
-import { ChatProvider, useChat, type ChatContextValue } from './ChatContext'
+import { ChatProvider, useChat, type ChatContextValue, type PromptQueueItem } from './ChatContext'
 import { SessionContext, useSessions, type SessionContextValue } from './SessionContext'
 import { CatalogContext, useCatalog, type CatalogContextValue } from './CatalogContext'
 
@@ -62,11 +62,23 @@ function logSoftFailure(what: string, e: unknown) {
   console.warn(`[shannon] ${what} failed:`, e)
 }
 
+// B1 P1-13: dock open state persists under the dock's own key namespace.
+const DOCK_OPEN_KEY = 'shannon.dock.open'
+// B1 P2-13: minimum interval between visible streaming-bucket projections.
+const STREAM_FLUSH_MS = 50
+// B1 §4-9: per-session prompt queue capacity (spec: 1–3, we take 3).
+const PROMPT_QUEUE_CAP = 3
+
 export function AppProvider({ children }: { children: ReactNode }) {
   const [messages, setMessages] = useState<ChatMessage[]>([])
   const [streamingText, setStreamingText] = useState('')
   const [thinkingText, setThinkingText] = useState('')
-  const [isQuerying, setIsQuerying] = useState(false)
+  // B1 P1-5: per-session query state. The old single boolean let a background
+  // session's run disable the foreground session's composer and pointed the
+  // stop button at the wrong run. The record holds `true` per session id
+  // currently running; `isQuerying` (below) projects the VISIBLE session's
+  // entry, so gating/stop/error UI all key off the session on screen.
+  const [queryingSessions, setQueryingSessions] = useState<Record<string, true>>({})
   const [activeToolCalls, setActiveToolCalls] = useState<ToolCall[]>([])
   const [usage, setUsage] = useState<UsagePayload | null>(null)
   // B2: live registry state of the currently running sub-agent, from the
@@ -76,7 +88,21 @@ export function AppProvider({ children }: { children: ReactNode }) {
   const [subagentLive, setSubagentLive] = useState<SubAgentLive | null>(null)
   // U2: ContextPanel visibility — owned here (not in the /chat page) so the
   // global Header can host the toggle while Chat renders the panel.
-  const [contextPanelOpen, setContextPanelOpen] = useState(false)
+  // B1 P1-13: persisted (`shannon.dock.open`) like the dock's tab/width/
+  // fullscreen keys — the toggle, Ctrl+\ and RightDock's close button all
+  // funnel through the same persisted setter below.
+  const [contextPanelOpen, setContextPanelOpen] = useState<boolean>(() => {
+    try { return localStorage.getItem(DOCK_OPEN_KEY) === '1' } catch { return false }
+  })
+  // B1 §4-9: per-session FIFO of prompts typed while that session was still
+  // streaming. State is the rendered projection (queue chips); the ref mirror
+  // lets event handlers and the drain path read/mutate synchronously without
+  // stale-closure races.
+  const [promptQueues, setPromptQueues] = useState<Record<string, PromptQueueItem[]>>({})
+  const promptQueuesRef = useRef<Map<string, PromptQueueItem[]>>(new Map())
+  const queueItemIdRef = useRef(0)
+  // B1 P2-3: transient flag while a session-switch IPC is in flight.
+  const [switchingSession, setSwitchingSession] = useState(false)
   const [sessions, setSessions] = useState<SessionInfo[]>([])
   // P0 sidebar telemetry: live per-session activity (running / elapsed /
   // active tool) for the session rail. Derived from the same query:* events
@@ -119,7 +145,6 @@ export function AppProvider({ children }: { children: ReactNode }) {
   // chat-canvas error and no retry. initError is surfaced by the Layout
   // banner; retryInit re-runs the whole load.
   const [initError, setInitError] = useState<string | null>(null)
-  const [_currentQueryId, setCurrentQueryId] = useState<string | null>(null)
 
   // Review §P2-18: the main window receives every session's query:* events
   // (isEventForCurrentWindow passes all through), so streaming text must be
@@ -131,6 +156,50 @@ export function AppProvider({ children }: { children: ReactNode }) {
   const thinkingBucketsRef = useRef<Map<string, string>>(new Map())
   const visibleSessionIdRef = useRef<string | null>(windowSessionId)
   visibleSessionIdRef.current = windowSessionId ?? currentSessionId
+  // B1 P1-5: the visible session's own run gates this session's composer,
+  // stop button and error surface — never another session's.
+  const isQuerying = !!queryingSessions[visibleSessionIdRef.current ?? '']
+
+  // B1 P2-13: token-by-token setStreamingText re-parsed the whole markdown
+  // document per token (O(n²) over a long reply). Buckets still absorb every
+  // token synchronously; the visible projection is flushed at most once per
+  // STREAM_FLUSH_MS. setTimeout (not rAF) is the single mechanism on purpose:
+  // rAF stalls in occluded windows and needs a timeout backstop anyway, and
+  // it stays deterministic under fake timers. A guaranteed synchronous flush
+  // runs on query end (COMPLETED/FAILED/CANCELLED), session switch and new
+  // sends so no tail is ever left in a pending timer.
+  const streamFlushTimerRef = useRef<number | null>(null)
+  const projectVisibleBuckets = useCallback(() => {
+    const key = visibleSessionIdRef.current ?? ''
+    setStreamingText(streamingBucketsRef.current.get(key) ?? '')
+    setThinkingText(thinkingBucketsRef.current.get(key) ?? '')
+  }, [])
+  const scheduleStreamFlush = useCallback(() => {
+    if (streamFlushTimerRef.current != null) return
+    streamFlushTimerRef.current = window.setTimeout(() => {
+      streamFlushTimerRef.current = null
+      projectVisibleBuckets()
+    }, STREAM_FLUSH_MS)
+  }, [projectVisibleBuckets])
+  const cancelStreamFlush = useCallback(() => {
+    if (streamFlushTimerRef.current != null) {
+      window.clearTimeout(streamFlushTimerRef.current)
+      streamFlushTimerRef.current = null
+    }
+  }, [])
+
+  // B1 P1-5: flip one session's query entry. No-op writes keep object
+  // identity stable so memoized context values don't churn.
+  const setSessionQuerying = useCallback((sessionId: string | null | undefined, on: boolean) => {
+    const key = sessionId ?? ''
+    setQueryingSessions(prev => {
+      if (!!prev[key] === on) return prev
+      const next = { ...prev }
+      if (on) next[key] = true
+      else delete next[key]
+      return next
+    })
+  }, [])
 
   // P0 sidebar telemetry: record one query-stream observation for a session.
   // `kind === 'event'` (text/thinking/usage) only refreshes the ref's
@@ -209,13 +278,65 @@ export function AppProvider({ children }: { children: ReactNode }) {
     } catch (e) { logSoftFailure('refresh sessions', e) }
   }, [])
 
-  const toggleContextPanel = useCallback(() => {
-    setContextPanelOpen(v => !v)
+  // B1 P1-13: every open/close path (Header button, Ctrl+\, RightDock's
+  // close button, auto-dock) funnels through this persisted setter, so
+  // `shannon.dock.open` stays single-sourced.
+  const updateContextPanelOpen = useCallback((value: boolean | ((prev: boolean) => boolean)) => {
+    setContextPanelOpen(prev => {
+      const next = typeof value === 'function' ? value(prev) : value
+      try { localStorage.setItem(DOCK_OPEN_KEY, next ? '1' : '0') } catch { /* quota / private mode */ }
+      return next
+    })
   }, [])
-  // P1-⑦: RightDock auto-docks (plan mode / artifact / diff) by opening
-  // the dock directly.
-  const openContextPanel = useCallback(() => {
-    setContextPanelOpen(true)
+
+  const toggleContextPanel = useCallback(() => {
+    updateContextPanelOpen(v => !v)
+  }, [updateContextPanelOpen])
+  // (P1-⑦ auto-dock: Chat's setContextPanelOpen(true) — the same persisted
+  // setter — is the auto-dock entry point.)
+
+  // B1 §4-9: prompt queue — enqueue/take/remove for the VISIBLE session.
+  // The ref mirror is the source of truth for the synchronous decision
+  // (cap check, drain head); state follows it for rendering. Returning
+  // false on overflow lets the caller keep the draft; the toast is raised
+  // here (messageFor works outside IntlProvider).
+  const enqueuePrompt = useCallback((text: string, attachments: string[]): boolean => {
+    const key = visibleSessionIdRef.current ?? ''
+    const queue = promptQueuesRef.current.get(key) ?? []
+    if (queue.length >= PROMPT_QUEUE_CAP) {
+      toast.error(messageFor('chat.queue.full', { max: PROMPT_QUEUE_CAP }))
+      return false
+    }
+    const item: PromptQueueItem = { id: ++queueItemIdRef.current, text, attachments }
+    promptQueuesRef.current.set(key, [...queue, item])
+    setPromptQueues(Object.fromEntries(promptQueuesRef.current))
+    return true
+  }, [])
+
+  const dequeuePrompt = useCallback((): PromptQueueItem | null => {
+    const key = visibleSessionIdRef.current ?? ''
+    const queue = promptQueuesRef.current.get(key) ?? []
+    if (queue.length === 0) return null
+    const [head, ...rest] = queue
+    if (rest.length > 0) promptQueuesRef.current.set(key, rest)
+    else promptQueuesRef.current.delete(key)
+    setPromptQueues(Object.fromEntries(promptQueuesRef.current))
+    return head
+  }, [])
+
+  const removeQueuedPrompt = useCallback((id: number) => {
+    const key = visibleSessionIdRef.current ?? ''
+    const queue = promptQueuesRef.current.get(key) ?? []
+    const next = queue.filter(item => item.id !== id)
+    if (next.length > 0) promptQueuesRef.current.set(key, next)
+    else promptQueuesRef.current.delete(key)
+    setPromptQueues(Object.fromEntries(promptQueuesRef.current))
+  }, [])
+
+  const dropPromptQueue = useCallback((sessionId: string) => {
+    if (!promptQueuesRef.current.has(sessionId)) return
+    promptQueuesRef.current.delete(sessionId)
+    setPromptQueues(Object.fromEntries(promptQueuesRef.current))
   }, [])
 
   const refreshStatus = useCallback(async () => {
@@ -250,11 +371,11 @@ export function AppProvider({ children }: { children: ReactNode }) {
     message: string,
     filePaths?: string[],
     options?: { budgetBypass?: boolean },
-  ) => {
+  ): Promise<boolean> => {
     if (currentSessionId && goalOwnedSessionIds.includes(currentSessionId)) {
       setError(messageFor('goal.composer.blocked'))
-      setIsQuerying(false)
-      return
+      setSessionQuerying(windowSessionId ?? currentSessionId, false)
+      return false
     }
     setError(null)
     // §P2-18: a new turn resets its session's stream buckets, not just the
@@ -263,23 +384,26 @@ export function AppProvider({ children }: { children: ReactNode }) {
     const targetKey = targetSessionId ?? ''
     streamingBucketsRef.current.set(targetKey, '')
     thinkingBucketsRef.current.set(targetKey, '')
+    cancelStreamFlush()
     setStreamingText('')
     setThinkingText('')
     setActiveToolCalls([])
-    setIsQuerying(true)
+    // B1 P1-5: the run is tracked on ITS session — other sessions keep a
+    // usable composer while this one streams.
+    setSessionQuerying(targetSessionId, true)
     setMessages(prev => [...prev, { role: 'user', content: message, timestamp: Date.now() }])
     try {
       // P1-1 fix: explicit session routing — the window targets its own
       // session, the main window its current one; the backend never routes
       // via the shared active pointer for these calls. `null` (no session
       // yet) keeps the backend's legacy active fallback.
-      const resp = await api.sendMessage(
+      await api.sendMessage(
         message,
         filePaths,
         options?.budgetBypass,
         targetSessionId ?? undefined,
       )
-      setCurrentQueryId(resp.query_id)
+      return true
     } catch (e) {
       // P0-4 fix: the backend rejected the send BEFORE recording the user
       // message (budget-exceeded pre-turn guard, goal-owned guard,
@@ -297,9 +421,10 @@ export function AppProvider({ children }: { children: ReactNode }) {
         return prev
       })
       setError(String(e))
-      setIsQuerying(false)
+      setSessionQuerying(targetSessionId, false)
+      return false
     }
-  }, [currentSessionId, goalOwnedSessionIds, windowSessionId])
+  }, [currentSessionId, goalOwnedSessionIds, windowSessionId, setSessionQuerying, cancelStreamFlush])
 
   // P1-1 fix: cancelQuery's targetSessionId mirrors sendMessage's — both
   // route explicitly instead of re-pointing the shared pointer.
@@ -307,7 +432,12 @@ export function AppProvider({ children }: { children: ReactNode }) {
     const targetSessionId = windowSessionId ?? currentSessionId
     try {
       await api.cancelQuery(targetSessionId ?? undefined)
-    } catch (e) { toastError('Failed to cancel query', e) }
+    } catch (e) {
+      // B0 P2-11: messageFor works outside IntlProvider (the provider may
+      // not wrap this context's call sites) — same helper SESSION_AUTO_
+      // UNARCHIVED uses.
+      toastError(messageFor('chat.error.cancelFailed'), e)
+    }
   }, [windowSessionId, currentSessionId])
 
   const createSession = useCallback(async () => {
@@ -347,7 +477,12 @@ export function AppProvider({ children }: { children: ReactNode }) {
     }
   }, [refreshSessions])
 
+  // B1 P2-3: a session switch now carries a transient loading flag for the
+  // message area's skeleton. Same-session calls (and Chat remounts that
+  // re-run against the same id) never set it — no skeleton flash.
   const switchToSession = useCallback(async (id: string) => {
+    const isSwitch = id !== visibleSessionIdRef.current
+    if (isSwitch) setSwitchingSession(true)
     try {
       const msgs = await api.switchSession(id)
       setCurrentSessionId(id)
@@ -355,6 +490,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
       // §P2-18: project the switched-to session's own stream buckets — a
       // background run keeps streaming into them while another session is
       // on screen, so a single shared buffer would show foreign tokens.
+      cancelStreamFlush()
       setStreamingText(streamingBucketsRef.current.get(id) ?? '')
       setThinkingText(thinkingBucketsRef.current.get(id) ?? '')
       setActiveToolCalls([])
@@ -365,7 +501,8 @@ export function AppProvider({ children }: { children: ReactNode }) {
         setSessionActivity(Object.fromEntries(sessionActivityRef.current))
       }
     } catch (e) { setError(String(e)) }
-  }, [])
+    finally { if (isSwitch) setSwitchingSession(false) }
+  }, [cancelStreamFlush])
 
   const deleteSessionAction = useCallback(async (id: string) => {
     try {
@@ -373,13 +510,15 @@ export function AppProvider({ children }: { children: ReactNode }) {
       // §P2-18: drop the deleted session's stream buckets.
       streamingBucketsRef.current.delete(id)
       thinkingBucketsRef.current.delete(id)
+      // B1 §4-9: its queued prompts die with the session too.
+      dropPromptQueue(id)
       if (currentSessionId === id) {
         setMessages([])
         setCurrentSessionId(null)
       }
       await refreshSessions()
     } catch (e) { setError(String(e)) }
-  }, [currentSessionId, refreshSessions])
+  }, [currentSessionId, refreshSessions, dropPromptQueue])
 
   const renameSessionAction = useCallback(async (id: string, title: string) => {
     try {
@@ -454,6 +593,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
       setMessages(msgs)
       streamingBucketsRef.current.set(currentSessionId, '')
       thinkingBucketsRef.current.set(currentSessionId, '')
+      cancelStreamFlush()
       setStreamingText('')
       setThinkingText('')
       setActiveToolCalls([])
@@ -463,7 +603,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
       setError(String(e))
       throw e
     }
-  }, [currentSessionId, refreshSessions, refreshCheckpoints])
+  }, [currentSessionId, refreshSessions, refreshCheckpoints, cancelStreamFlush])
   const compactSessionAction = useCallback(async () => {
     if (!currentSessionId) throw new Error('no active session')
     try {
@@ -471,6 +611,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
       setMessages(result.messages)
       streamingBucketsRef.current.set(currentSessionId, '')
       thinkingBucketsRef.current.set(currentSessionId, '')
+      cancelStreamFlush()
       setStreamingText('')
       setThinkingText('')
       setActiveToolCalls([])
@@ -481,7 +622,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
       setError(String(e))
       throw e
     }
-  }, [currentSessionId, refreshSessions, refreshCheckpoints])
+  }, [currentSessionId, refreshSessions, refreshCheckpoints, cancelStreamFlush])
 
   // P0-2/P2-⑥: derive both the goal-owned id set (composer guard) and the
   // full per-session run map (sidebar badge) from one fetch.
@@ -504,16 +645,24 @@ export function AppProvider({ children }: { children: ReactNode }) {
           // §P2-18: append to this session's own bucket; only the visible
           // session's bucket is projected into state, so tokens from a
           // background session never land in the on-screen stream.
+          // B1 P2-13: the projection itself is throttled — tokens coalesce
+          // in the bucket and the flush re-reads it at most every 50ms.
           const visibleKey = visibleSessionIdRef.current ?? ''
           const key = p.session_id ?? visibleKey
           const next = (streamingBucketsRef.current.get(key) ?? '') + p.content
           streamingBucketsRef.current.set(key, next)
-          if (key === visibleKey) setStreamingText(next)
+          if (key === visibleKey) scheduleStreamFlush()
         }),
         listen(EVENT_NAMES.QUERY_TOOL_START, (e) => {
           const p = e.payload as { tool_use_id: string; tool_name: string; tool_input: unknown; session_id?: string }
           if (!isEventForCurrentWindow(p.session_id, windowSessionId)) return
           noteSessionActivity(p.session_id, 'tool-start', p.tool_name)
+          // B1 P1-5: tool cards belong to the session that runs them — a
+          // background session's tools never bleed into the visible list
+          // (same visibility rule as the text/thinking buckets).
+          const visibleKey = visibleSessionIdRef.current ?? ''
+          const key = p.session_id ?? visibleKey
+          if (key !== visibleKey) return
           setActiveToolCalls(prev => [...prev, {
             tool_use_id: p.tool_use_id,
             tool_name: p.tool_name,
@@ -526,6 +675,9 @@ export function AppProvider({ children }: { children: ReactNode }) {
           const p = e.payload as { tool_use_id: string; result: string; is_error: boolean; meta?: unknown; tokens_used?: number; session_id?: string }
           if (!isEventForCurrentWindow(p.session_id, windowSessionId)) return
           noteSessionActivity(p.session_id, 'tool-end')
+          const visibleKey = visibleSessionIdRef.current ?? ''
+          const key = p.session_id ?? visibleKey
+          if (key !== visibleKey) return
           setActiveToolCalls(prev => prev.map(tc => {
             if (tc.tool_use_id !== p.tool_use_id) return tc
             // P1-⑤ telemetry: client-side wall-clock duration for the card.
@@ -537,6 +689,9 @@ export function AppProvider({ children }: { children: ReactNode }) {
           const p = e.payload as { tool_use_id: string; progress: number; message: string; session_id?: string }
           if (!isEventForCurrentWindow(p.session_id, windowSessionId)) return
           noteSessionActivity(p.session_id, 'event')
+          const visibleKey = visibleSessionIdRef.current ?? ''
+          const key = p.session_id ?? visibleKey
+          if (key !== visibleKey) return
           setActiveToolCalls(prev => prev.map(tc =>
             tc.tool_use_id === p.tool_use_id
               ? { ...tc, progress: p.progress, progress_message: p.message }
@@ -555,12 +710,13 @@ export function AppProvider({ children }: { children: ReactNode }) {
           const p = e.payload as { content: string; session_id?: string }
           if (!isEventForCurrentWindow(p.session_id, windowSessionId)) return
           noteSessionActivity(p.session_id, 'event')
-          // §P2-18: same per-session bucketing as QUERY_TEXT.
+          // §P2-18: same per-session bucketing as QUERY_TEXT (B1 P2-13: and
+          // the same throttled projection).
           const visibleKey = visibleSessionIdRef.current ?? ''
           const key = p.session_id ?? visibleKey
           const next = (thinkingBucketsRef.current.get(key) ?? '') + p.content
           thinkingBucketsRef.current.set(key, next)
-          if (key === visibleKey) setThinkingText(next)
+          if (key === visibleKey) scheduleStreamFlush()
         }),
         listen(EVENT_NAMES.QUERY_USAGE, (e) => {
           const p = e.payload as UsagePayload
@@ -580,18 +736,24 @@ export function AppProvider({ children }: { children: ReactNode }) {
           // double-append and concurrent sessions can't cross-commit.
           const visibleKey = visibleSessionIdRef.current ?? ''
           const key = sid ?? visibleKey
+          // B1 P1-5/P2-13: the run's own session settles regardless of
+          // visibility; a pending throttled flush must die BEFORE the
+          // buckets are cleared so it can't resurrect stale text.
+          setSessionQuerying(key, false)
+          cancelStreamFlush()
           const finalText = streamingBucketsRef.current.get(key) ?? ''
           streamingBucketsRef.current.set(key, '')
           thinkingBucketsRef.current.set(key, '')
           if (key === visibleKey) {
-            setIsQuerying(false)
             setSubagentLive(null)
             if (finalText) {
               setMessages(msgs => [...msgs, { role: 'assistant', content: finalText, timestamp: Date.now() }])
             }
             setStreamingText('')
             setThinkingText('')
-            setCurrentQueryId(null)
+            // Review P2-4 (round 2): completed tool cards must not linger
+            // under the committed reply until the next send/switch.
+            setActiveToolCalls([])
             refreshStatus()
           }
         }),
@@ -600,24 +762,42 @@ export function AppProvider({ children }: { children: ReactNode }) {
           if (!isEventForCurrentWindow(p.session_id, windowSessionId)) return
           noteSessionActivity(p.session_id, 'fail')
           // §P2-18: like QUERY_COMPLETED, failure state is scoped to the
-          // visible session — a background run failing must not overwrite
-          // the on-screen session's composer/error state (its failure is
-          // still surfaced by the rail's red dot via noteSessionActivity).
+          // session that owns the run — a background run failing must not
+          // overwrite the on-screen session's composer/error state (its
+          // failure is still surfaced by the rail's red dot via
+          // noteSessionActivity). B0 P1-2: a failed run leaves no ghost
+          // bubble — drop the run's buckets AND the visible projections.
+          // Persisting the partial text needs a backend commit path (none
+          // exists yet), so clearing is the approved behavior.
           const visibleKey = visibleSessionIdRef.current ?? ''
-          if ((p.session_id ?? visibleKey) === visibleKey) {
+          const key = p.session_id ?? visibleKey
+          setSessionQuerying(key, false)
+          cancelStreamFlush()
+          streamingBucketsRef.current.set(key, '')
+          thinkingBucketsRef.current.set(key, '')
+          if (key === visibleKey) {
             setError(p.error)
-            setIsQuerying(false)
-            setCurrentQueryId(null)
+            setStreamingText('')
+            setThinkingText('')
+            setActiveToolCalls([])
           }
         }),
         listen(EVENT_NAMES.QUERY_CANCELLED, (e) => {
           const sid = (e.payload as { session_id?: string }).session_id
           if (!isEventForCurrentWindow(sid, windowSessionId)) return
           noteSessionActivity(sid, 'end')
+          // B0 P1-2: same ghost-bubble cleanup as QUERY_FAILED — the
+          // cancelled session's buckets and, when visible, the projections.
           const visibleKey = visibleSessionIdRef.current ?? ''
-          if ((sid ?? visibleKey) === visibleKey) {
-            setIsQuerying(false)
-            setCurrentQueryId(null)
+          const key = sid ?? visibleKey
+          setSessionQuerying(key, false)
+          cancelStreamFlush()
+          streamingBucketsRef.current.set(key, '')
+          thinkingBucketsRef.current.set(key, '')
+          if (key === visibleKey) {
+            setStreamingText('')
+            setThinkingText('')
+            setActiveToolCalls([])
           }
         }),
         listen(EVENT_NAMES.PERMISSION_REQUEST, (e) => {
@@ -668,6 +848,8 @@ export function AppProvider({ children }: { children: ReactNode }) {
     return () => {
       cancelled = true
       unlisteners.forEach(fn => fn())
+      // B1 P2-13: a pending streaming flush must not fire post-unmount.
+      cancelStreamFlush()
     }
   }, []) // eslint-disable-line react-hooks/exhaustive-deps
 
@@ -708,17 +890,23 @@ export function AppProvider({ children }: { children: ReactNode }) {
     void loadInitialData()
   }, [loadInitialData])
 
+  const visibleKey = windowSessionId ?? currentSessionId ?? ''
   const chatValue = useMemo<ChatContextValue>(() => ({
     messages, streamingText, thinkingText, isQuerying, activeToolCalls, usage,
-    sendMessage, cancelQuery, contextPanelOpen, toggleContextPanel, setContextPanelOpen: openContextPanel,
+    sendMessage, cancelQuery,
+    promptQueue: promptQueues[visibleKey] ?? [],
+    enqueuePrompt, dequeuePrompt, removeQueuedPrompt,
+    contextPanelOpen, toggleContextPanel, setContextPanelOpen: updateContextPanelOpen,
     checkpoints, rewindSession: rewindSessionAction, compactSession: compactSessionAction,
     feedback, recordFeedback: recordFeedbackAction,
-  }), [messages, streamingText, thinkingText, isQuerying, activeToolCalls, usage, sendMessage, cancelQuery, contextPanelOpen, toggleContextPanel, openContextPanel, checkpoints, rewindSessionAction, compactSessionAction, feedback, recordFeedbackAction])
+  }), [messages, streamingText, thinkingText, isQuerying, activeToolCalls, usage, sendMessage, cancelQuery,
+    promptQueues, visibleKey, enqueuePrompt, dequeuePrompt, removeQueuedPrompt,
+    contextPanelOpen, toggleContextPanel, updateContextPanelOpen, checkpoints, rewindSessionAction, compactSessionAction, feedback, recordFeedbackAction])
 
   const sessionValue = useMemo<SessionContextValue>(() => ({
-    sessions, sessionActivity, goalRunsBySession, subagentLive, currentSessionId, windowSessionId, createSession, createSessionInWorktree, switchSession: switchToSession,
+    sessions, sessionActivity, goalRunsBySession, subagentLive, currentSessionId, windowSessionId, switchingSession, createSession, createSessionInWorktree, switchSession: switchToSession,
     deleteSession: deleteSessionAction, renameSession: renameSessionAction, refreshSessions,
-  }), [sessions, sessionActivity, goalRunsBySession, subagentLive, currentSessionId, windowSessionId, createSession, createSessionInWorktree, switchToSession,
+  }), [sessions, sessionActivity, goalRunsBySession, subagentLive, currentSessionId, windowSessionId, switchingSession, createSession, createSessionInWorktree, switchToSession,
     deleteSessionAction, renameSessionAction, refreshSessions])
 
   const catalogValue = useMemo<CatalogContextValue>(() => ({

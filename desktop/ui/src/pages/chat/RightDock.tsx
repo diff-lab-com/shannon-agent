@@ -16,7 +16,8 @@
 //
 // Persisted keys:
 //   shannon.dock.tab   — last active tab
-//   shannon.dock.width — dock width in px (280–720, clamped to viewport)
+//   shannon.dock.width — dock width in px (280–720, clamped to 60% of the
+//                        current viewport; see clampWidth)
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { toast } from 'sonner'
@@ -37,6 +38,7 @@ import { HtmlRenderer } from '@/components/artifact/HtmlRenderer'
 import { MermaidRenderer } from '@/components/artifact/MermaidRenderer'
 import { SvgRenderer } from '@/components/artifact/SvgRenderer'
 import { WebRenderer } from '@/components/artifact/WebRenderer'
+import { ArtifactZoomBar, useArtifactZoom } from '@/components/artifact/ArtifactZoomBar'
 import { openDiskArtifact } from '@/components/artifact/ArtifactLinkHost'
 import { registerLinkPanelRouter } from '@/lib/openLink'
 import { projectOf } from '@/components/SidebarSessions'
@@ -56,6 +58,8 @@ const FULLSCREEN_KEY = 'shannon.dock.fullscreen'
 const MIN_WIDTH = 280
 const MAX_WIDTH = 720
 const DEFAULT_WIDTH = 340
+/** B3 §P2-21: resizer keyboard step (ArrowLeft/ArrowRight). */
+const RESIZE_STEP_PX = 16
 const UTILITY_TABS: readonly UtilityTab[] = ['context', 'plan', 'live', 'diff']
 
 /** Batch D4: dock fullscreen — the reading position from the dead-code
@@ -72,11 +76,46 @@ function readTab(): DockTab {
   return 'context'
 }
 
+/**
+ * B3 §P2-22 width clamp: the 60%-viewport cap wins over MIN_WIDTH on
+ * narrow windows (effectiveMin = min(MIN_WIDTH, innerWidth * 0.6)) and
+ * over MAX_WIDTH always. Applied on drag, on restore from localStorage,
+ * and on window resize — a width saved under a wide window must shrink
+ * when the window is narrow, not overflow it.
+ */
+function clampWidth(value: number): number {
+  const cap = Math.floor(window.innerWidth * 0.6)
+  const max = Math.min(MAX_WIDTH, cap)
+  const min = Math.min(MIN_WIDTH, cap)
+  return Math.max(min, Math.min(max, value))
+}
+
 function readWidth(): number {
   try {
     const v = Number(localStorage.getItem(WIDTH_KEY))
-    return Number.isFinite(v) && v >= MIN_WIDTH && v <= MAX_WIDTH ? v : DEFAULT_WIDTH
-  } catch { return DEFAULT_WIDTH }
+    // Stored values re-clamp against the *current* window instead of being
+    // discarded when they fall outside the static bounds.
+    return Number.isFinite(v) && v > 0 ? clampWidth(v) : DEFAULT_WIDTH
+  } catch {
+    return DEFAULT_WIDTH
+  }
+}
+
+/**
+ * §P1-12: stable web-tab id — one tab per URL. Normalization is deliberately
+ * minimal: trim surrounding whitespace and drop a single trailing slash
+ * (`https://x/` and `https://x` are the same document). Scheme, host case,
+ * query and fragment stay significant. Users who truly want a second tab of
+ * the same URL get a context-menu escape hatch later (decision §5-4).
+ */
+function webTabId(url: string): string {
+  return `web:${url.trim().replace(/\/$/, '')}`
+}
+
+/** §P2-21: the DOM id of a tab button — tabpanel aria-labelledby must point
+ * at the same id, including artifact tabs (`a:<id>` → `dock-tab-a-<id>`). */
+function tabDomId(key: DockTab): string {
+  return key.startsWith('a:') ? `dock-tab-a-${key.slice(2)}` : `dock-tab-${key}`
 }
 
 interface RightDockProps {
@@ -108,8 +147,12 @@ export default function RightDock({
   const t = useT()
   const { artifacts, activeId, setActive, open: openArtifact, close: closeArtifact } = useArtifact()
   const [tab, setTab] = useState<DockTab>(readTab)
-  const [width, setWidth] = useState<number>(readWidth)
+  const [width, setWidth] = useState<number>(() => clampWidth(readWidth()))
   const [fullscreen, setFullscreen] = useState<boolean>(readFullscreen)
+  // §P2-22: the open/close width transition must not run during a drag —
+  // every setWidth would chase a 300ms ease and the panel lags the cursor
+  // like a rubber band.
+  const [resizing, setResizing] = useState(false)
   // Q11: a one-time hint the first time the user opens the dock — they
   // learn Ctrl+\ can toggle it. Dismissed by interaction; never shown twice.
   const [hintDismissed, setHintDismissed] = useState<boolean>(
@@ -141,13 +184,13 @@ export default function RightDock({
 
   const onPointerMove = useCallback((e: PointerEvent) => {
     if (!draggingRef.current) return
-    const raw = window.innerWidth - e.clientX
-    setWidth(Math.max(MIN_WIDTH, Math.min(MAX_WIDTH, raw, Math.floor(window.innerWidth * 0.6))))
+    setWidth(clampWidth(window.innerWidth - e.clientX))
   }, [])
 
   const onPointerUp = useCallback(() => {
     if (draggingRef.current) {
       draggingRef.current = false
+      setResizing(false)
       document.body.style.userSelect = ''
       document.body.style.cursor = ''
     }
@@ -162,9 +205,18 @@ export default function RightDock({
     }
   }, [onPointerMove, onPointerUp])
 
+  // §P2-22: re-clamp the persisted width whenever the window itself
+  // resizes, so the 60% cap keeps holding at the current size.
+  useEffect(() => {
+    const onWindowResize = () => setWidth(w => clampWidth(w))
+    window.addEventListener('resize', onWindowResize)
+    return () => window.removeEventListener('resize', onWindowResize)
+  }, [])
+
   const startResize = (e: React.PointerEvent) => {
     e.preventDefault()
     draggingRef.current = true
+    setResizing(true)
     document.body.style.userSelect = 'none'
     document.body.style.cursor = 'col-resize'
   }
@@ -173,9 +225,11 @@ export default function RightDock({
   // dock is the only place a web tab is visible, so the router registers
   // with this component's lifecycle (openLink degrades to the browser when
   // it is not mounted, e.g. on Settings/Welcome).
+  // §P1-12: the explicit `web:<normalized-url>` id makes a second click on
+  // the same URL reuse + activate its tab instead of stacking duplicates.
   useEffect(() => {
     registerLinkPanelRouter(url =>
-      openArtifact({ kind: 'web', source: url, title: url, confidence: 'high' }),
+      openArtifact({ kind: 'web', source: url, title: url, confidence: 'high', id: webTabId(url) }),
     )
     return () => registerLinkPanelRouter(null)
   }, [openArtifact])
@@ -200,6 +254,34 @@ export default function RightDock({
     setTab(next)
     if (!hintDismissed) dismissHint()
   }, [hintDismissed, dismissHint])
+
+  // §P2-21: WAI-ARIA tabs pattern — Left/Right step through tabs (skipping
+  // the disabled Diff tab), Home/End jump, selection follows focus
+  // (automatic activation), and only the selected tab is in the page Tab
+  // order (roving tabIndex).
+  const orderedTabs = useMemo<DockTab[]>(
+    () => [
+      ...UTILITY_TABS.filter(key => !(key === 'diff' && !diffPath)),
+      ...artifacts.map(a => `a:${a.id}` as DockTab),
+    ],
+    [diffPath, artifacts],
+  )
+
+  const onTablistKeyDown = useCallback((e: React.KeyboardEvent) => {
+    if (e.key !== 'ArrowRight' && e.key !== 'ArrowLeft' && e.key !== 'Home' && e.key !== 'End') return
+    const order = orderedTabs
+    if (order.length === 0) return
+    e.preventDefault()
+    const idx = order.indexOf(tab)
+    let nextIdx: number
+    if (e.key === 'Home') nextIdx = 0
+    else if (e.key === 'End') nextIdx = order.length - 1
+    else if (e.key === 'ArrowRight') nextIdx = (Math.max(idx, 0) + 1) % order.length
+    else nextIdx = (Math.max(idx, 0) - 1 + order.length) % order.length
+    const next = order[nextIdx]
+    handleTabPick(next)
+    document.getElementById(tabDomId(next))?.focus()
+  }, [orderedTabs, tab, handleTabPick])
 
   // Entering plan mode docks the plan document (ZCode's 计划 tab behavior).
   const prevPlanMode = useRef(planModeActive)
@@ -267,13 +349,19 @@ export default function RightDock({
       aria-label={t('chat.dock.aria')}
       // Keyboard-scrollable region (axe scrollable-region-focusable).
       tabIndex={0}
-      className={cn(
+      className={
         fullscreen
           ? // Batch D4: fullscreen reading position — the dock covers the
             // window (above the chat, below toasts) instead of hugging it.
             'glass-panel fixed inset-0 z-modal flex flex-col overflow-hidden bg-surface-container-lowest'
-          : 'glass-panel shrink-0 relative flex flex-col overflow-hidden border-l border-outline-variant/10 bg-surface-container-lowest/50 transition-all duration-300 ease-in-out',
-      )}
+          : cn(
+              'glass-panel shrink-0 relative flex flex-col overflow-hidden border-l border-outline-variant/10 bg-surface-container-lowest/50',
+              // §P2-22: suppress the open/close width transition while the
+              // user is dragging the resizer — otherwise every pointermove
+              // chases a 300ms ease and the panel lags like a rubber band.
+              !resizing && 'transition-all duration-300 ease-in-out',
+            )
+      }
       style={
         fullscreen
           ? undefined
@@ -287,12 +375,22 @@ export default function RightDock({
     >
       {open && (
         <>
+          {/* §P2-21: the separator is keyboard-operable — the dock hugs the
+              right edge, so ArrowLeft widens and ArrowRight narrows. */}
           <div
             role="separator"
             aria-orientation="vertical"
-            onPointerDown={startResize}
-            className="absolute left-0 top-0 bottom-0 w-1 cursor-col-resize hover:bg-primary/30 transition-colors z-raised"
+            tabIndex={0}
             aria-label={t('chat.dock.resize.aria')}
+            onPointerDown={startResize}
+            onKeyDown={(e: React.KeyboardEvent) => {
+              const widen = e.key === 'ArrowLeft'
+              const narrow = e.key === 'ArrowRight'
+              if (!widen && !narrow) return
+              e.preventDefault()
+              setWidth(w => clampWidth(w + (widen ? RESIZE_STEP_PX : -RESIZE_STEP_PX)))
+            }}
+            className="absolute left-0 top-0 bottom-0 w-1 cursor-col-resize hover:bg-primary/30 focus-visible:bg-primary/40 focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-primary/40 transition-colors z-raised"
           />
           {!hintDismissed && (
             <div
@@ -312,102 +410,117 @@ export default function RightDock({
               </button>
             </div>
           )}
-          <div role="tablist" aria-label={t('chat.dock.aria')} className="flex items-center gap-xs px-sm py-xs border-b border-outline-variant/10 shrink-0 overflow-x-auto">
-            {(Object.keys(utilityLabels) as UtilityTab[]).map(key => {
-              const meta = utilityLabels[key]
-              const disabled = key === 'diff' && !diffPath
-              return (
-                <Button
-                  key={key}
-                  type="button"
-                  variant="ghost"
-                  size="sm"
-                  role="tab"
-                  id={`dock-tab-${key}`}
-                  aria-selected={tab === key}
-                  disabled={disabled}
-                  onClick={() => handleTabPick(key)}
-                  title={meta.label}
-                  className={cn(tabClass(tab === key), disabled && 'opacity-40 pointer-events-none')}
-                >
-                  <span className="material-symbols-outlined icon-sm align-middle" aria-hidden="true">{meta.icon}</span>
-                  <span className="align-middle ml-xs hidden md:inline">{meta.label}</span>
-                </Button>
-              )
-            })}
-            {/* One tab per open document/artifact — closable, ZCode style. */}
-            {artifacts.map(a => (
+          {/* §P2-21: the utility buttons (+ / fullscreen / collapse) are not
+              tabs — they live in a sibling of the tablist and stay on the
+              same visual row via this wrapper. */}
+          <div className="flex items-center px-sm py-xs border-b border-outline-variant/10 shrink-0 gap-xs">
+            <div
+              role="tablist"
+              aria-label={t('chat.dock.aria')}
+              onKeyDown={onTablistKeyDown}
+              className="flex items-center gap-xs flex-1 min-w-0 overflow-x-auto"
+            >
+              {(Object.keys(utilityLabels) as UtilityTab[]).map(key => {
+                const meta = utilityLabels[key]
+                const disabled = key === 'diff' && !diffPath
+                return (
+                  <Button
+                    key={key}
+                    type="button"
+                    variant="ghost"
+                    size="sm"
+                    role="tab"
+                    id={tabDomId(key)}
+                    aria-selected={tab === key}
+                    tabIndex={tab === key ? 0 : -1}
+                    disabled={disabled}
+                    onClick={() => handleTabPick(key)}
+                    title={meta.label}
+                    className={cn(tabClass(tab === key), disabled && 'opacity-40 pointer-events-none')}
+                  >
+                    <span className="material-symbols-outlined icon-sm align-middle" aria-hidden="true">{meta.icon}</span>
+                    <span className="align-middle ml-xs hidden md:inline">{meta.label}</span>
+                  </Button>
+                )
+              })}
+              {/* One tab per open document/artifact — closable, ZCode style.
+                  §P2-21: the close control is a real button *sibling*
+                  (absolutely positioned) with stopPropagation — an
+                  interactive span nested inside the tab button violated the
+                  tabs pattern and trapped assistive tech. */}
+              {artifacts.map(a => {
+                const active = tab === `a:${a.id}`
+                return (
+                  <div key={a.id} className="relative shrink-0 flex">
+                    <Button
+                      type="button"
+                      variant="ghost"
+                      size="sm"
+                      role="tab"
+                      id={tabDomId(`a:${a.id}`)}
+                      aria-selected={active}
+                      tabIndex={active ? 0 : -1}
+                      onClick={() => { setActive(a.id); handleTabPick(`a:${a.id}`) }}
+                      title={artifactDisplayTitle(a, t)}
+                      className={cn(tabClass(active), 'pr-md')}
+                    >
+                      <span className="material-symbols-outlined icon-sm align-middle" aria-hidden="true">{artifactIcon(a.kind)}</span>
+                      <span className="align-middle ml-xs max-w-24 truncate">{artifactDisplayTitle(a, t)}</span>
+                    </Button>
+                    <button
+                      type="button"
+                      aria-label={t('chat.dock.tab.close.aria', { title: artifactDisplayTitle(a, t) })}
+                      onClick={e => { e.stopPropagation(); closeArtifact(a.id) }}
+                      className="absolute right-0 top-1/2 -translate-y-1/2 p-0.5 rounded-full text-on-surface-variant hover:bg-surface-container-high hover:text-on-surface focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/30"
+                    >
+                      <span className="material-symbols-outlined icon-sm" aria-hidden="true">close</span>
+                    </button>
+                  </div>
+                )
+              })}
+            </div>
+            <div className="flex items-center gap-xs shrink-0">
+              {/* Batch F3: manual tab — open a local file as a document tab. */}
               <Button
-                key={a.id}
                 type="button"
                 variant="ghost"
-                size="sm"
-                role="tab"
-                id={`dock-tab-a-${a.id}`}
-                aria-selected={tab === `a:${a.id}`}
-                onClick={() => { setActive(a.id); handleTabPick(`a:${a.id}`) }}
-                title={artifactDisplayTitle(a, t)}
-                className={tabClass(tab === `a:${a.id}`)}
+                size="icon-sm"
+                onClick={() => void handleOpenFile()}
+                aria-label={t('chat.dock.openFile.aria')}
+                title={t('chat.dock.openFile.aria')}
+                className="text-on-surface-variant hover:text-on-surface hover:bg-surface-container shrink-0"
               >
-                <span className="material-symbols-outlined icon-sm align-middle" aria-hidden="true">{artifactIcon(a.kind)}</span>
-                <span className="align-middle ml-xs max-w-24 truncate">{artifactDisplayTitle(a, t)}</span>
-                <span
-                  role="button"
-                  tabIndex={0}
-                  aria-label={t('chat.dock.tab.close.aria', { title: artifactDisplayTitle(a, t) })}
-                  className="material-symbols-outlined icon-sm align-middle ml-xs rounded-full hover:bg-surface-container-high shrink-0"
-                  onClick={e => { e.stopPropagation(); closeArtifact(a.id) }}
-                  onKeyDown={e => {
-                    if (e.key === 'Enter' || e.key === ' ') {
-                      e.preventDefault(); e.stopPropagation(); closeArtifact(a.id)
-                    }
-                  }}
-                >
-                  close
-                </span>
+                <span className="material-symbols-outlined icon-sm">note_add</span>
               </Button>
-            ))}
-            <div className="flex-1" />
-            {/* Batch F3: manual tab — open a local file as a document tab. */}
-            <Button
-              type="button"
-              variant="ghost"
-              size="icon-sm"
-              onClick={() => void handleOpenFile()}
-              aria-label={t('chat.dock.openFile.aria')}
-              title={t('chat.dock.openFile.aria')}
-              className="text-on-surface-variant hover:text-on-surface hover:bg-surface-container shrink-0"
-            >
-              <span className="material-symbols-outlined icon-sm">note_add</span>
-            </Button>
-            <Button
-              type="button"
-              variant="ghost"
-              size="icon-sm"
-              onClick={() => setFullscreen(v => !v)}
-              aria-label={t(fullscreen ? 'chat.dock.fullscreenExit.aria' : 'chat.dock.fullscreen.aria')}
-              title={t(fullscreen ? 'chat.dock.fullscreenExit.aria' : 'chat.dock.fullscreen.aria')}
-              aria-pressed={fullscreen}
-              className="text-on-surface-variant hover:text-on-surface hover:bg-surface-container shrink-0"
-            >
-              <span className="material-symbols-outlined icon-sm">{fullscreen ? 'fullscreen_exit' : 'fullscreen'}</span>
-            </Button>
-            <Button
-              type="button"
-              variant="ghost"
-              size="icon-sm"
-              onClick={onClose}
-              aria-label={t('chat.dock.close.aria')}
-              title={t('chat.dock.close.aria')}
-              className="text-on-surface-variant hover:text-on-surface hover:bg-surface-container shrink-0 sticky right-0"
-            >
-              <span className="material-symbols-outlined icon-sm">keyboard_double_arrow_right</span>
-            </Button>
+              <Button
+                type="button"
+                variant="ghost"
+                size="icon-sm"
+                onClick={() => setFullscreen(v => !v)}
+                aria-label={t(fullscreen ? 'chat.dock.fullscreenExit.aria' : 'chat.dock.fullscreen.aria')}
+                title={t(fullscreen ? 'chat.dock.fullscreenExit.aria' : 'chat.dock.fullscreen.aria')}
+                aria-pressed={fullscreen}
+                className="text-on-surface-variant hover:text-on-surface hover:bg-surface-container shrink-0"
+              >
+                <span className="material-symbols-outlined icon-sm">{fullscreen ? 'fullscreen_exit' : 'fullscreen'}</span>
+              </Button>
+              <Button
+                type="button"
+                variant="ghost"
+                size="icon-sm"
+                onClick={onClose}
+                aria-label={t('chat.dock.close.aria')}
+                title={t('chat.dock.close.aria')}
+                className="text-on-surface-variant hover:text-on-surface hover:bg-surface-container shrink-0"
+              >
+                <span className="material-symbols-outlined icon-sm">keyboard_double_arrow_right</span>
+              </Button>
+            </div>
           </div>
           <div
             role="tabpanel"
             id="dock-tabpanel"
-            aria-labelledby={`dock-tab-${tab}`}
+            aria-labelledby={tabDomId(tab)}
             className="flex-1 min-h-0 overflow-y-auto p-lg"
           >
             {tab === 'context' && <ContextPanelContent usage={usage} activeToolCalls={activeToolCalls} />}
@@ -584,6 +697,23 @@ function ArtifactDocBody({ artifact, workingDir }: { artifact: ArtifactItem; wor
           </Button>
         )}
       </div>
+      {/* §P1-9 honest-static posture: chat-fence HTML (no backing file) can
+          never run scripts in the panel — say so, and put the OS escape
+          hatch one click away instead of a silently dead interactive page. */}
+      {artifact.kind === 'html' && !filePath && (
+        <div
+          role="note"
+          data-testid="artifact-html-static-hint"
+          className="flex items-center gap-xs px-sm py-xs mb-sm rounded-lg bg-surface-container-high/50 text-on-surface-variant shrink-0"
+        >
+          <span className="material-symbols-outlined icon-sm shrink-0" aria-hidden="true">info</span>
+          <p className="font-label-xs flex-1 min-w-0">{t('chat.dock.html.staticHint')}</p>
+          <Button type="button" variant="default" size="sm" onClick={openExternally} className="shrink-0">
+            <span className="material-symbols-outlined icon-sm align-middle" aria-hidden="true">open_in_new</span>
+            <span className="align-middle ml-xs">{t('chat.artifact.openSystem')}</span>
+          </Button>
+        </div>
+      )}
       <div className="flex-1 min-h-0 overflow-hidden flex gap-sm min-w-0">
         <div className="flex-1 min-w-0 min-h-0">
           {showCode && hasText ? (
@@ -592,11 +722,7 @@ function ArtifactDocBody({ artifact, workingDir }: { artifact: ArtifactItem; wor
             </pre>
           ) : artifact.kind === 'html' ? <HtmlRenderer source={artifact.source} title={artifact.title} />
             : artifact.kind === 'web' ? <WebRenderer url={artifact.source} />
-              : artifact.kind === 'image' ? (
-                <div className="h-full w-full flex items-center justify-center bg-surface-container-low/40 rounded-lg overflow-hidden">
-                  <img src={convertFileSrc(artifact.source)} alt={displayTitle} className="max-w-full max-h-full object-contain" />
-                </div>
-              )
+              : artifact.kind === 'image' ? <ImageDocBody src={convertFileSrc(artifact.source)} alt={displayTitle} />
                 : artifact.kind === 'other' ? (
                   // P2 (§review): the dock's 「+」 may read a plain-text file
                   // that simply has no inline renderer — show its content as
@@ -636,6 +762,28 @@ function DockEmpty({ icon, title }: { icon: string; title: string }) {
     <div className="h-full flex flex-col items-center justify-center text-center gap-xs py-xl">
       <span className="material-symbols-outlined icon-md text-on-surface-variant/60" aria-hidden="true">{icon}</span>
       <p className="font-label-md text-on-surface-variant">{title}</p>
+    </div>
+  )
+}
+
+/** B3 item 22: dock image tab with the shared zoom affordance — step
+ *  buttons + Ctrl+wheel scale via CSS transform; no pan, nothing persisted. */
+function ImageDocBody({ src, alt }: { src: string; alt: string }) {
+  const { zoom, zoomIn, zoomOut, reset, containerRef } = useArtifactZoom()
+  return (
+    <div className="relative w-full h-full min-h-0">
+      <div
+        ref={containerRef}
+        className="w-full h-full overflow-hidden bg-surface-container-low/40 rounded-lg flex items-start justify-center"
+      >
+        <img
+          src={src}
+          alt={alt}
+          className="max-w-full object-contain"
+          style={{ transform: `scale(${zoom})`, transformOrigin: 'top center' }}
+        />
+      </div>
+      <ArtifactZoomBar zoom={zoom} zoomIn={zoomIn} zoomOut={zoomOut} reset={reset} className="absolute top-2 right-2 z-10" />
     </div>
   )
 }

@@ -269,6 +269,39 @@ fn sniffs_as_binary(bytes: &[u8]) -> bool {
     bytes.get(..8192).unwrap_or(bytes).contains(&0)
 }
 
+/// Machine-readable failure codes for `read_text_file` (§P2-24). The
+/// frontend branches on `code` — `message` is display text only, so
+/// rewording it can never flip an elegant degradation back into a toast.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ReadTextFileErrorCode {
+    OutOfScope,
+    NotAFile,
+    FileTooLarge,
+    BinaryFile,
+    NotUtf8,
+    IoError,
+}
+
+/// Structured error payload for `read_text_file`. Tauri serializes the
+/// `Err` variant into the IPC rejection verbatim, so the frontend catches
+/// `{ code, message }`.
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ReadTextFileError {
+    pub code: ReadTextFileErrorCode,
+    pub message: String,
+}
+
+impl ReadTextFileError {
+    fn new(code: ReadTextFileErrorCode, message: impl std::fmt::Display) -> Self {
+        Self {
+            code,
+            message: message.to_string(),
+        }
+    }
+}
+
 /// Capped, scope-checked text read backing the dock's manual open tab and
 /// auto-docked disk artifacts (P1-C / P1-D). Binary and oversized files
 /// return structured errors instead of content.
@@ -276,29 +309,42 @@ fn sniffs_as_binary(bytes: &[u8]) -> bool {
 pub async fn read_text_file(
     path: String,
     max_bytes: Option<u64>,
-) -> Result<TextFileContent, String> {
-    let canonical = crate::commands_surface::canonicalized_in_scope(&path)?;
+) -> Result<TextFileContent, ReadTextFileError> {
+    let canonical = crate::commands_surface::canonicalized_in_scope(&path)
+        .map_err(|e| ReadTextFileError::new(ReadTextFileErrorCode::OutOfScope, e))?;
     let max = max_bytes.unwrap_or(DEFAULT_TEXT_READ_MAX_BYTES).max(1);
-    let meta = tokio::fs::metadata(&canonical)
-        .await
-        .map_err(|e| format!("failed to stat file: {e}"))?;
+    let meta = tokio::fs::metadata(&canonical).await.map_err(|e| {
+        ReadTextFileError::new(
+            ReadTextFileErrorCode::IoError,
+            format!("failed to stat file: {e}"),
+        )
+    })?;
     if !meta.is_file() {
-        return Err(format!("not a regular file: {path}"));
-    }
-    if meta.len() > max {
-        return Err(format!(
-            "file too large: {} bytes > {max} byte limit",
-            meta.len()
+        return Err(ReadTextFileError::new(
+            ReadTextFileErrorCode::NotAFile,
+            format!("not a regular file: {path}"),
         ));
     }
-    let bytes = tokio::fs::read(&canonical)
-        .await
-        .map_err(|e| format!("failed to read file: {e}"))?;
-    if sniffs_as_binary(&bytes) {
-        return Err("binary file".to_string());
+    if meta.len() > max {
+        return Err(ReadTextFileError::new(
+            ReadTextFileErrorCode::FileTooLarge,
+            format!("file too large: {} bytes > {max} byte limit", meta.len()),
+        ));
     }
-    let content =
-        String::from_utf8(bytes).map_err(|_| "binary file: not valid UTF-8".to_string())?;
+    let bytes = tokio::fs::read(&canonical).await.map_err(|e| {
+        ReadTextFileError::new(
+            ReadTextFileErrorCode::IoError,
+            format!("failed to read file: {e}"),
+        )
+    })?;
+    if sniffs_as_binary(&bytes) {
+        return Err(ReadTextFileError::new(
+            ReadTextFileErrorCode::BinaryFile,
+            "binary file (NUL byte in the first 8 KiB)",
+        ));
+    }
+    let content = String::from_utf8(bytes)
+        .map_err(|_| ReadTextFileError::new(ReadTextFileErrorCode::NotUtf8, "not valid UTF-8"))?;
     Ok(TextFileContent {
         path: canonical.to_string_lossy().into_owned(),
         content,
@@ -1040,5 +1086,94 @@ mod tests {
                 .iter()
                 .any(|f| f.ends_with("tracked.txt"))
         );
+    }
+    // ---- read_text_file structured errors (review §P2-24 / batch B3) ----
+    //
+    // The frontend (ArtifactLinkHost) degrades oversized/binary/non-UTF-8
+    // reads to an OS-handoff tab by branching on `error.code`; only true
+    // failures (io / scope) should ever surface as a toast. These tests pin
+    // the wire shape `{ code, message }` and every code the command emits.
+
+    #[tokio::test]
+    async fn read_text_file_returns_content_size_and_canonical_path() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = dir.path().join("doc.md");
+        std::fs::write(&path, "# hello\nworld").unwrap();
+
+        let out = read_text_file(path.to_string_lossy().into_owned(), None)
+            .await
+            .expect("plain text read must succeed");
+        assert_eq!(out.content, "# hello\nworld");
+        assert_eq!(out.size_bytes, "# hello\nworld".len() as u64);
+        assert!(out.path.ends_with("doc.md"), "got: {}", out.path);
+    }
+
+    #[tokio::test]
+    async fn read_text_file_rejects_oversized_with_file_too_large_code() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = dir.path().join("huge.txt");
+        let f = std::fs::File::create(&path).unwrap();
+        f.set_len(4096).unwrap();
+        drop(f);
+
+        let err = read_text_file(path.to_string_lossy().into_owned(), Some(1024))
+            .await
+            .expect_err("oversized read must be rejected");
+        assert_eq!(err.code, ReadTextFileErrorCode::FileTooLarge);
+        assert!(err.message.contains("too large"), "got: {}", err.message);
+    }
+
+    #[tokio::test]
+    async fn read_text_file_rejects_nul_byte_with_binary_file_code() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = dir.path().join("prog.bin");
+        std::fs::write(&path, b"MZ\x00\x00payload").unwrap();
+
+        let err = read_text_file(path.to_string_lossy().into_owned(), None)
+            .await
+            .expect_err("NUL-sniffing read must be rejected");
+        assert_eq!(err.code, ReadTextFileErrorCode::BinaryFile);
+    }
+
+    #[tokio::test]
+    async fn read_text_file_rejects_non_utf8_with_not_utf8_code() {
+        // Invalid UTF-8 *without* a NUL byte — must land on `not_utf8`, not
+        // on the NUL-sniffing `binary_file` branch.
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = dir.path().join("latin1.txt");
+        std::fs::write(&path, [0xCA, 0xFE, 0xBA, 0xBE]).unwrap();
+
+        let err = read_text_file(path.to_string_lossy().into_owned(), None)
+            .await
+            .expect_err("non-UTF-8 read must be rejected");
+        assert_eq!(err.code, ReadTextFileErrorCode::NotUtf8);
+    }
+
+    #[tokio::test]
+    async fn read_text_file_rejects_directory_with_not_a_file_code() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let sub = dir.path().join("a-directory");
+        std::fs::create_dir_all(&sub).unwrap();
+
+        let err = read_text_file(sub.to_string_lossy().into_owned(), None)
+            .await
+            .expect_err("directory read must be rejected");
+        assert_eq!(err.code, ReadTextFileErrorCode::NotAFile);
+    }
+
+    #[tokio::test]
+    async fn read_text_file_rejects_relative_path_with_out_of_scope_code() {
+        let err = read_text_file("relative/answer.md".to_string(), None)
+            .await
+            .expect_err("relative path must be rejected");
+        assert_eq!(err.code, ReadTextFileErrorCode::OutOfScope);
+    }
+
+    #[test]
+    fn read_text_file_error_serializes_code_and_message() {
+        let err = ReadTextFileError::new(ReadTextFileErrorCode::FileTooLarge, "too big");
+        let json = serde_json::to_value(&err).unwrap();
+        assert_eq!(json["code"], "file_too_large");
+        assert_eq!(json["message"], "too big");
     }
 }

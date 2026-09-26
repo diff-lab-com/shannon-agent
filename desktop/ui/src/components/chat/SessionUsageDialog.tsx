@@ -5,6 +5,7 @@
 
 import { useState } from 'react'
 import { useNavigate } from 'react-router-dom'
+import { useIntl } from 'react-intl'
 import { Modal, ModalBody, ModalFooter } from '@/components/ui/modal'
 import { Button } from '@/components/ui/button'
 import { useT } from '@/i18n'
@@ -22,6 +23,7 @@ export interface SessionUsageDialogProps {
 
 export default function SessionUsageDialog({ open, onClose, usageTick }: SessionUsageDialogProps) {
   const t = useT()
+  const intl = useIntl()
   const navigate = useNavigate()
   const { currentSessionId } = useSessions()
   const { budget, usage: sessionUsage, refresh: refreshBudget } = useSessionBudget(currentSessionId)
@@ -31,6 +33,12 @@ export default function SessionUsageDialog({ open, onClose, usageTick }: Session
 
   const spent = sessionUsage?.cost_usd ?? 0
   const hasCap = budget != null && budget > 0
+  // B4 P2-11: USD via Intl (same approach as SlashResultCard) — the summary
+  // line used to hardcode `$x / $y` regardless of locale. The spend keeps
+  // 4 fraction digits (the old toFixed(4) precision); the cap falls back to
+  // the currency default (2).
+  const usd = (v: number) =>
+    new Intl.NumberFormat(intl.locale, { style: 'currency', currency: 'USD', maximumFractionDigits: 4 }).format(v)
 
   return (
     <>
@@ -42,7 +50,7 @@ export default function SessionUsageDialog({ open, onClose, usageTick }: Session
               {/* 预算摘要一行 — 编辑走既有 BudgetDialog,与右侧 Dock 同源。 */}
               <div className="flex items-center justify-between gap-sm px-md py-sm rounded-xl bg-surface-container border border-outline-variant/10">
                 <span className="font-body-sm text-on-surface-variant truncate tabular-nums">
-                  {hasCap ? `$${spent.toFixed(4)} / $${budget!.toFixed(2)}` : t('budget.dialog.label')}
+                  {hasCap ? `${usd(spent)} / ${usd(budget!)}` : t('budget.dialog.label')}
                 </span>
                 <Button
                   variant="outline"

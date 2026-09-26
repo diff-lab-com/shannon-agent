@@ -1,5 +1,6 @@
-import { createContext, useContext, useState, useCallback, useMemo, useEffect, type ReactNode } from 'react'
+import { createContext, useContext, useState, useCallback, useMemo, useRef, useEffect, type ReactNode } from 'react'
 import type { DetectedArtifact } from './detectArtifact'
+import { stableArtifactId } from './detectArtifact'
 
 export interface ArtifactItem extends DetectedArtifact {
   id: string
@@ -10,18 +11,33 @@ interface ArtifactContextValue {
   artifacts: ArtifactItem[]
   activeId: string | null
   /**
-   * Dock an artifact. Artifacts carrying an explicit `id` (disk provenance)
-   * replace their existing tab instead of stacking a duplicate; pass
-   * `activate: false` to add the tab without yanking the user's attention
-   * (decision §5-2: autoOpen only controls activation).
+   * Dock an artifact. Artifacts carrying an explicit `id` (disk provenance
+   * or a chat content hash) replace their existing tab instead of stacking
+   * a duplicate; pass `activate: false` to add the tab without yanking the
+   * user's attention (decision §5-2: autoOpen only controls activation).
    */
   open: (artifact: DetectedArtifact, opts?: { activate?: boolean }) => void
   close: (id: string) => void
   closeAll: () => void
+  /**
+   * Remove every tab with `origin === 'chat'` (§P1-14 session scoping) —
+   * disk artifacts (`origin === 'disk'`) and web tabs (no origin) survive a
+   * session switch. Also clears the auto-open bookkeeping, so the new
+   * session's chips may auto-open again.
+   */
+  closeChatArtifacts: () => void
   setActive: (id: string) => void
   cycleNext: () => void
   autoOpen: boolean
   setAutoOpen: (v: boolean) => void
+  /**
+   * Auto-open with provider-level once-per-id bookkeeping (§P1-11). The
+   * old per-chip `firedRef` reset on every virtualized remount and re-opened
+   * the same artifact on each scroll cycle; this set lives as long as the
+   * provider (the app window), so an id auto-opens exactly once however
+   * often its chip remounts.
+   */
+  autoOpenOnce: (artifact: DetectedArtifact) => void
 }
 
 const ArtifactContext = createContext<ArtifactContextValue | null>(null)
@@ -46,6 +62,9 @@ export function ArtifactProvider({ children }: { children: ReactNode }) {
   const [artifacts, setArtifacts] = useState<ArtifactItem[]>([])
   const [activeId, setActiveId] = useState<string | null>(null)
   const [autoOpen, setAutoOpenState] = useState<boolean>(readAutoOpen)
+  // §P1-11: ids already auto-opened. A ref (not state) — marking must not
+  // re-render, and the set must outlive chip mount/unmount cycles.
+  const autoOpenedRef = useRef(new Set<string>())
 
   const setAutoOpen = useCallback((v: boolean) => {
     setAutoOpenState(v)
@@ -83,6 +102,22 @@ export function ArtifactProvider({ children }: { children: ReactNode }) {
     setActiveId(null)
   }, [])
 
+  const closeChatArtifacts = useCallback(() => {
+    setArtifacts(prev => {
+      const next = prev.filter(a => a.origin !== 'chat')
+      if (next.length !== prev.length) {
+        // Same fallback as close(): a removed tab must not stay active —
+        // fall back to the last surviving tab (or none).
+        setActiveId(cur => (cur != null && next.some(a => a.id === cur) ? cur : next.length > 0 ? next[next.length - 1].id : null))
+      }
+      return next
+    })
+    // Everything in this set came from chat chips (disk artifacts bookkeep
+    // in useDiskArtifacts, web tabs never auto-open), so the whole set can
+    // go with the session's tabs.
+    autoOpenedRef.current.clear()
+  }, [])
+
   const setActive = useCallback((id: string) => setActiveId(id), [])
 
   const cycleNext = useCallback(() => {
@@ -94,6 +129,15 @@ export function ArtifactProvider({ children }: { children: ReactNode }) {
       return prev
     })
   }, [activeId])
+
+  const autoOpenOnce = useCallback((artifact: DetectedArtifact) => {
+    // Chips without an explicit id (hand-built artifacts) hash to the same
+    // stable id detection would give them, so dedup still converges.
+    const id = artifact.id ?? stableArtifactId(artifact.kind, artifact.source)
+    if (autoOpenedRef.current.has(id)) return
+    autoOpenedRef.current.add(id)
+    open(artifact)
+  }, [open])
 
   useEffect(() => {
     function onKey(e: KeyboardEvent) {
@@ -107,8 +151,8 @@ export function ArtifactProvider({ children }: { children: ReactNode }) {
   }, [cycleNext])
 
   const value = useMemo<ArtifactContextValue>(
-    () => ({ artifacts, activeId, open, close, closeAll, setActive, cycleNext, autoOpen, setAutoOpen }),
-    [artifacts, activeId, open, close, closeAll, setActive, cycleNext, autoOpen, setAutoOpen],
+    () => ({ artifacts, activeId, open, close, closeAll, closeChatArtifacts, setActive, cycleNext, autoOpen, setAutoOpen, autoOpenOnce }),
+    [artifacts, activeId, open, close, closeAll, closeChatArtifacts, setActive, cycleNext, autoOpen, setAutoOpen, autoOpenOnce],
   )
 
   return <ArtifactContext.Provider value={value}>{children}</ArtifactContext.Provider>
@@ -119,4 +163,3 @@ export function useArtifact(): ArtifactContextValue {
   if (!ctx) throw new Error('useArtifact must be used within ArtifactProvider')
   return ctx
 }
-

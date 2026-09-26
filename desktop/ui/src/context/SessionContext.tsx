@@ -22,6 +22,9 @@ export interface SessionContextValue {
   currentSessionId: string | null
   /** P1-1: session pinned to this window via `/?windowSession=<id>`; null in the main window. In-memory only. */
   windowSessionId: string | null
+  /** B1 P2-3: true while a session-switch IPC is in flight (drives the
+   *  message-area skeleton). Never set for same-session remounts. */
+  switchingSession: boolean
   createSession: () => Promise<void>
   createSessionInWorktree: () => Promise<void>
   switchSession: (id: string) => Promise<void>

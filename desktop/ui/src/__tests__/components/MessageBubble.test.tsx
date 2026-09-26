@@ -4,12 +4,10 @@ import { MemoryRouter } from 'react-router-dom'
 import { MessageBubble } from '@/components/chat/MessageBubble'
 import type { ChatMessage } from '@/types'
 
+const useChatMock = vi.hoisted(() => vi.fn())
+
 vi.mock('@/context/ChatContext', () => ({
-  useChat: () => ({
-    sendMessage: vi.fn(),
-    feedback: {},
-    recordFeedback: vi.fn().mockResolvedValue(undefined),
-  }),
+  useChat: useChatMock,
 }))
 vi.mock('@/context/SessionContext', () => ({
   useSessions: () => ({
@@ -17,6 +15,15 @@ vi.mock('@/context/SessionContext', () => ({
     switchSession: vi.fn(),
     refreshSessions: vi.fn(),
   }),
+}))
+
+// Default chat-slice stub; individual tests can override once via
+// useChatMock.mockReturnValueOnce(...).
+useChatMock.mockImplementation(() => ({
+  sendMessage: vi.fn(),
+  feedback: {},
+  recordFeedback: vi.fn().mockResolvedValue(undefined),
+  isQuerying: false,
 }))
 
 const wrap = (ui: React.ReactNode) => <MemoryRouter>{ui}</MemoryRouter>
@@ -79,11 +86,28 @@ describe('MessageBubble — hover actions have accessible names (P2-5d a11y)', (
     expect(screen.getByRole('button', { name: /branch from this message/i })).toBeInTheDocument()
   })
 
-  it('assistant bubble has Like / Regenerate / Branch buttons', () => {
+  it('assistant bubble has Like / Branch buttons, regenerate only when payload present (B1)', () => {
     render(wrap(<MessageBubble message={baseAssistant()} messageIndex={0} onViewDiff={vi.fn()} />))
     expect(screen.getByRole('button', { name: /like message/i })).toBeInTheDocument()
-    expect(screen.getByRole('button', { name: /regenerate/i })).toBeInTheDocument()
+    // B1 §4-7: without a regenerate payload (only the LAST assistant message
+    // of a rewindable session gets one), the button must not render.
+    expect(screen.queryByRole('button', { name: /regenerate/i })).toBeNull()
     expect(screen.getByRole('button', { name: /branch from this message/i })).toBeInTheDocument()
+  })
+
+  it('renders the regenerate button when the regenerate payload is present', () => {
+    render(
+      wrap(
+        <MessageBubble
+          message={baseAssistant()}
+          messageIndex={0}
+          onViewDiff={vi.fn()}
+          regenerate={{ turnIndex: 0, content: 'question', attachmentPaths: [] }}
+          onRewind={vi.fn().mockResolvedValue(undefined)}
+        />,
+      ),
+    )
+    expect(screen.getByRole('button', { name: /regenerate response/i })).toBeInTheDocument()
   })
 
   it('tool bubble hides Like / Regenerate (those actions only apply to text)', () => {
@@ -111,6 +135,18 @@ describe('MessageBubble — a11y structure', () => {
     ))
     const time = screen.getAllByText((_, el) => !!el?.tagName.match(/TIME/i))[0]
     expect(time).toBeDefined()
+  })
+
+  // B1 P2-17 — the header used to be blanket aria-hidden (role/timestamp
+  // invisible to screen readers). Only the decorative bits stay hidden now.
+  it('keeps the message header (role + timestamp) accessible', () => {
+    const when = Date.UTC(2026, 0, 1, 12, 30)
+    render(wrap(
+      <MessageBubble message={baseAssistant({ timestamp: when })} messageIndex={0} onViewDiff={vi.fn()} />
+    ))
+    const header = screen.getByText(/assistant/i).closest('div')!
+    expect(header).not.toHaveAttribute('aria-hidden', 'true')
+    expect(screen.getByText(/assistant/i)).not.toHaveAttribute('aria-hidden', 'true')
   })
 })
 
@@ -146,5 +182,86 @@ describe('MessageBubble — persisted feedback (PM-12)', () => {
     render(wrap(<MessageBubble message={baseAssistant()} messageIndex={0} onViewDiff={vi.fn()} />))
     expect(screen.getByRole('button', { name: 'Like message' })).toHaveAttribute('aria-pressed', 'false')
     expect(screen.getByRole('button', { name: 'Dislike response' })).toHaveAttribute('aria-pressed', 'false')
+  })
+})
+
+// B1 §4-7 — TRUE regenerate: rewind to the checkpoint before the preceding
+// user turn, then re-send that turn's text (plus attachment paths). The old
+// canned-prompt fake is gone.
+describe('MessageBubble — true regenerate (B1 §4-7)', () => {
+  const regeneratePayload = {
+    turnIndex: 1,
+    content: 'the original question',
+    attachmentPaths: ['/tmp/report.pdf'],
+  }
+
+  it('rewinds then resends the ORIGINAL user turn (text + attachments)', async () => {
+    const onRewind = vi.fn().mockResolvedValue(undefined)
+    const sendMessage = vi.fn().mockResolvedValue(undefined)
+    useChatMock.mockReturnValueOnce({
+      sendMessage,
+      feedback: {},
+      recordFeedback: vi.fn().mockResolvedValue(undefined),
+      isQuerying: false,
+    } as any)
+    render(
+      wrap(
+        <MessageBubble
+          message={baseAssistant()}
+          messageIndex={4}
+          onViewDiff={vi.fn()}
+          regenerate={regeneratePayload}
+          onRewind={onRewind}
+        />,
+      ),
+    )
+    fireEvent.click(screen.getByRole('button', { name: /regenerate response/i }))
+    await waitFor(() => expect(onRewind).toHaveBeenCalledWith(1))
+    await waitFor(() => expect(sendMessage).toHaveBeenCalledWith('the original question', ['/tmp/report.pdf']))
+  })
+
+  it('sends text only when the turn had no attachments', async () => {
+    const onRewind = vi.fn().mockResolvedValue(undefined)
+    const sendMessage = vi.fn().mockResolvedValue(undefined)
+    useChatMock.mockReturnValueOnce({
+      sendMessage,
+      feedback: {},
+      recordFeedback: vi.fn().mockResolvedValue(undefined),
+      isQuerying: false,
+    } as any)
+    render(
+      wrap(
+        <MessageBubble
+          message={baseAssistant()}
+          messageIndex={4}
+          onViewDiff={vi.fn()}
+          regenerate={{ turnIndex: 0, content: 'plain question', attachmentPaths: [] }}
+          onRewind={onRewind}
+        />,
+      ),
+    )
+    fireEvent.click(screen.getByRole('button', { name: /regenerate response/i }))
+    await waitFor(() => expect(sendMessage).toHaveBeenCalledWith('plain question', undefined))
+  })
+
+  it('is disabled while the session is querying', () => {
+    useChatMock.mockReturnValueOnce({
+      sendMessage: vi.fn(),
+      feedback: {},
+      recordFeedback: vi.fn().mockResolvedValue(undefined),
+      isQuerying: true,
+    } as any)
+    render(
+      wrap(
+        <MessageBubble
+          message={baseAssistant()}
+          messageIndex={4}
+          onViewDiff={vi.fn()}
+          regenerate={regeneratePayload}
+          onRewind={vi.fn().mockResolvedValue(undefined)}
+        />,
+      ),
+    )
+    expect(screen.getByRole('button', { name: /regenerate response/i })).toBeDisabled()
   })
 })

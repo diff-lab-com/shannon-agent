@@ -1,5 +1,4 @@
 import { useState, useCallback, useRef, useEffect } from 'react'
-import { createTtsSpeaker, type TtsSpeaker } from '@/lib/voice/tts'
 import {
   createVoiceProvider,
   defaultVoiceConfig,
@@ -7,13 +6,17 @@ import {
   type VoiceProviderError,
 } from '@/lib/voice'
 
-export type VoiceState = 'idle' | 'recording' | 'transcribing' | 'speaking'
+// B4 P2-5: the former TTS half of this hook (speak/stopSpeaking, the
+// cross-instance speaker cancellation and lib/voice/tts.ts) had zero
+// callers — assistant-voice playback is deferred as a future feature.
+// The hook is speech-to-text only now.
+
+export type VoiceState = 'idle' | 'recording' | 'transcribing'
 
 export interface UseVoiceOptions {
   onTranscript?: (text: string) => void
   /** Non-silent provider failures (rejected mic, bad key, network, …). */
   onError?: (message: string) => void
-  lang?: string
   /**
    * P2-5e: force a specific STT provider. When unset, the hook
    * falls back to the cloud provider (default). Local recordings
@@ -41,25 +44,11 @@ export interface UseVoiceResult {
   supported: boolean
   startRecording: () => Promise<void>
   stopRecording: () => Promise<void>
-  speak: (text: string) => Promise<void>
-  stopSpeaking: () => void
   reset: () => void
 }
 
-// Track the active TTS speaker across hook instances so that a new
-// useVoice mount cancels any utterance that is still playing. Without
-// this, navigating away from a spoken assistant reply leaves the audio
-// running in the background.
-let activeSpeaker: TtsSpeaker | null = null
-function claimSpeaker(speaker: TtsSpeaker) {
-  if (activeSpeaker && activeSpeaker !== speaker) {
-    activeSpeaker.cancel()
-  }
-  activeSpeaker = speaker
-}
-
 export function useVoice(options: UseVoiceOptions = {}): UseVoiceResult {
-  const { onTranscript, onError, lang = 'en-US', provider = 'cloud', local } = options
+  const { onTranscript, onError, provider = 'cloud', local } = options
   const [state, setState] = useState<VoiceState>('idle')
   const [partialTranscript, setPartialTranscript] = useState('')
   const [error, setError] = useState<string | null>(null)
@@ -83,14 +72,6 @@ export function useVoice(options: UseVoiceOptions = {}): UseVoiceResult {
   }
   const supported = providerRef.current.isSupported()
 
-  const ttsRef = useRef<TtsSpeaker | null>(null)
-  if (!ttsRef.current) {
-    ttsRef.current = createTtsSpeaker({
-      lang,
-      onError: (msg) => setError(`Speech synthesis error: ${msg}`),
-    })
-  }
-
   const handleError = useCallback((err: VoiceProviderError) => {
     if (!err.silent) {
       setError(err.message)
@@ -99,13 +80,7 @@ export function useVoice(options: UseVoiceOptions = {}): UseVoiceResult {
   }, [])
 
   useEffect(() => {
-    const speaker = ttsRef.current!
-    claimSpeaker(speaker)
-    return () => {
-      providerRef.current?.abort()
-      speaker.cancel()
-      if (activeSpeaker === speaker) activeSpeaker = null
-    }
+    return () => { providerRef.current?.abort() }
   }, [])
 
   const startRecording = useCallback(async () => {
@@ -156,22 +131,6 @@ export function useVoice(options: UseVoiceOptions = {}): UseVoiceResult {
     // completes; nothing to do here synchronously.
   }, [])
 
-  const speak = useCallback(async (text: string) => {
-    setError(null)
-    const speaker = ttsRef.current!
-    setState('speaking')
-    if (!speaker.isSupported()) {
-      setError('Speech synthesis not supported in this browser')
-      return
-    }
-    speaker.speak(text)
-  }, [])
-
-  const stopSpeaking = useCallback(() => {
-    ttsRef.current?.cancel()
-    setState('idle')
-  }, [])
-
   const reset = useCallback(() => {
     providerRef.current?.abort()
     setState('idle')
@@ -179,5 +138,5 @@ export function useVoice(options: UseVoiceOptions = {}): UseVoiceResult {
     setError(null)
   }, [])
 
-  return { state, partialTranscript, error, supported, startRecording, stopRecording, speak, stopSpeaking, reset }
+  return { state, partialTranscript, error, supported, startRecording, stopRecording, reset }
 }

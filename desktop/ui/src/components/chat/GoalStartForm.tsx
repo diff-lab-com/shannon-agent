@@ -35,6 +35,10 @@ export default function GoalStartForm({ sessionId, onDismiss }: GoalStartFormPro
   const [budgetUsd, setBudgetUsd] = useState('')
   const [submitting, setSubmitting] = useState(false)
   const [error, setError] = useState<string | null>(null)
+  // B4: field-level validation for the optional caps — invalid numbers used
+  // to be silently dropped, so a typo'd "12x" started an unlimited run.
+  const [turnsError, setTurnsError] = useState(false)
+  const [budgetError, setBudgetError] = useState(false)
   const [startedSessionId, setStartedSessionId] = useState<string | null>(null)
 
   const canSubmit = objective.trim().length > 0 && !submitting
@@ -42,11 +46,19 @@ export default function GoalStartForm({ sessionId, onDismiss }: GoalStartFormPro
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault()
     if (!canSubmit) return
-    setSubmitting(true)
     setError(null)
+    // An empty field means "no cap" (the placeholder's contract); a filled
+    // field must parse to a positive number or the submit is blocked with an
+    // inline error instead of silently discarding the value.
+    const turns = Number.parseInt(maxTurns.trim(), 10)
+    const turnsInvalid = maxTurns.trim() !== '' && (!Number.isFinite(turns) || turns <= 0 || String(turns) !== maxTurns.trim())
+    const budget = Number.parseFloat(budgetUsd.trim())
+    const budgetInvalid = budgetUsd.trim() !== '' && (!Number.isFinite(budget) || budget <= 0)
+    setTurnsError(turnsInvalid)
+    setBudgetError(budgetInvalid)
+    if (turnsInvalid || budgetInvalid) return
+    setSubmitting(true)
     try {
-      const turns = Number.parseInt(maxTurns, 10)
-      const budget = Number.parseFloat(budgetUsd)
       const { sessionId: id } = await api.startGoalRun({
         sessionId,
         title: title.trim() || objective.trim(),
@@ -104,20 +116,28 @@ export default function GoalStartForm({ sessionId, onDismiss }: GoalStartFormPro
             <input
               className={inputClass}
               value={maxTurns}
-              onChange={e => setMaxTurns(e.target.value)}
+              onChange={e => { setMaxTurns(e.target.value); setTurnsError(false) }}
               inputMode="numeric"
               placeholder={t('slash.card.goal.unlimited')}
+              aria-invalid={turnsError || undefined}
             />
+            {turnsError && (
+              <p role="alert" className="font-label-xs text-error">{t('slash.card.goal.maxTurns.invalid')}</p>
+            )}
           </label>
           <label className="flex flex-col gap-xxs">
             <span className="font-label-sm text-on-surface-variant">{t('slash.card.goal.budget')}</span>
             <input
               className={inputClass}
               value={budgetUsd}
-              onChange={e => setBudgetUsd(e.target.value)}
+              onChange={e => { setBudgetUsd(e.target.value); setBudgetError(false) }}
               inputMode="decimal"
               placeholder={t('slash.card.goal.noCap')}
+              aria-invalid={budgetError || undefined}
             />
+            {budgetError && (
+              <p role="alert" className="font-label-xs text-error">{t('slash.card.goal.budget.invalid')}</p>
+            )}
           </label>
         </div>
       </div>

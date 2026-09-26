@@ -52,3 +52,9 @@ export async function summarizeDiffLineStats(paths: string[], cap = 6): Promise<
   }
   return counted ? { additions, deletions } : null
 }
+
+/** B4 P2-20: called on session switch — the "+x −y" snapshot belongs to the
+ *  session that produced it, not the life of the window. */
+export function clearDiffStatsCache(): void {
+  cache.clear()
+}

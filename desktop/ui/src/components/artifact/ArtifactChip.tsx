@@ -1,4 +1,4 @@
-import { useEffect, useRef } from 'react'
+import { useEffect } from 'react'
 import { useIntl } from 'react-intl'
 import { cn } from '@/lib/utils'
 import { useT } from '@/i18n'
@@ -16,19 +16,20 @@ interface ArtifactChipProps {
  * ZCode 产物卡 form — kind icon tile + display title + localized kind badge
  * (「文档」) + an explicit 打开 affordance, one card per detected artifact.
  * The whole card is one button; the trailing 打开 pill is decorative.
+ *
+ * B3 §P1-11: auto-open bookkeeping moved into the provider
+ * (`autoOpenOnce`) — this component remounts every time the virtualized
+ * message list scrolls it out of view, so a per-mount ref re-fired the
+ * open on each scroll cycle (tab storm with autoOpen enabled).
  */
 export function ArtifactChip({ artifact }: ArtifactChipProps) {
   const intl = useIntl()
   const t = useT()
-  const { open, autoOpen } = useArtifact()
-  const firedRef = useRef(false)
+  const { open, autoOpen, autoOpenOnce } = useArtifact()
 
   useEffect(() => {
-    if (autoOpen && !firedRef.current) {
-      firedRef.current = true
-      open(artifact)
-    }
-  }, [autoOpen, artifact, open])
+    if (autoOpen) autoOpenOnce(artifact)
+  }, [autoOpen, artifact, autoOpenOnce])
 
   return (
     <button

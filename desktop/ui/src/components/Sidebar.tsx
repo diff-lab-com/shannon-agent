@@ -100,7 +100,7 @@ export const Sidebar = memo(function Sidebar({ mobile, open = true }: { mobile?:
   // P2-⑩: split-"New" dropdown (goal / routine entry points).
   const [newMenuOpen, setNewMenuOpen] = useState(false);
   const { createSession, sessions, sessionActivity, goalRunsBySession, currentSessionId, switchSession, renameSession, deleteSession, createSessionInWorktree } = useSessions();
-  const { status } = useCatalog();
+  const { status, loading: catalogLoading } = useCatalog();
   const intl = useIntl();
   const mod = modKey();
   const newMenuItems: DropdownMenuItem[] = [
@@ -315,12 +315,20 @@ export const Sidebar = memo(function Sidebar({ mobile, open = true }: { mobile?:
 
       {/* U1: the session rail is the app's only session list — organized by
           project folder or by time (the toggle lives inside the rail, ZCode
-          分组/项目 style). Takes the remaining vertical space. 卡A 收尾:
-          the onboarding EmptyState yields to the rail whenever archived
-          sessions exist, so the 已归档 restore section stays reachable even
-          with an empty active list. */}
+          分组/项目 style). Takes the remaining vertical space. B4 P2-4: the
+          initial load shows a small skeleton instead of flashing the
+          "no sessions" guide card on slow boots. 卡A 收尾: the onboarding
+          EmptyState yields to the rail whenever archived sessions exist, so
+          the 已归档 restore section stays reachable even with an empty
+          active list. */}
       <div className="flex-1 min-h-0 mb-lg">
-        {sessions.length === 0 && !hasArchived ? (
+        {sessions.length === 0 && catalogLoading ? (
+          <div className="px-2 py-3 space-y-2" data-testid="sidebar-sessions-skeleton" aria-hidden="true">
+            {[0, 1, 2].map(i => (
+              <div key={i} className="h-8 rounded-lg bg-surface-container animate-pulse" />
+            ))}
+          </div>
+        ) : sessions.length === 0 && !hasArchived ? (
           <EmptyState
             icon="forum"
             title={intl.formatMessage({ id: 'sidebar.sessions.empty.title' })}

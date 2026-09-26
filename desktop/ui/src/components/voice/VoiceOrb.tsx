@@ -6,16 +6,12 @@ interface VoiceOrbProps {
   size?: number
 }
 
+// B4 P2-5: STT-only states — the TTS `speaking` branch was removed with
+// lib/voice/tts.ts (no reachable caller).
 export function VoiceOrb({ state, size = 64 }: VoiceOrbProps) {
-  const baseColor = state === 'recording'
-    ? 'bg-error/80'
-    : state === 'speaking'
-    ? 'bg-primary'
-    : 'bg-primary/40'
+  const baseColor = state === 'recording' ? 'bg-error/80' : 'bg-primary/40'
   const ringClass = state === 'recording'
     ? 'before:bg-error/30 animate-pulse'
-    : state === 'speaking'
-    ? 'before:bg-primary/40 before:animate-ping'
     : 'before:bg-primary/20'
 
   return (
@@ -27,7 +23,7 @@ export function VoiceOrb({ state, size = 64 }: VoiceOrbProps) {
     >
       <div className="absolute inset-2 rounded-full bg-surface-container-lowest/40 backdrop-blur-sm flex items-center justify-center">
         <span className="material-symbols-outlined text-on-surface">
-          {state === 'recording' ? 'mic' : state === 'speaking' ? 'graphic_eq' : 'auto_awesome'}
+          {state === 'recording' ? 'mic' : 'auto_awesome'}
         </span>
       </div>
     </div>
