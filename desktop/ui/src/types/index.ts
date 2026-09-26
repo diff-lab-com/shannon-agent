@@ -924,6 +924,10 @@ export interface ScheduledRoutine {
   last_error?: string | null
   /// IDs of routines that must succeed before this one fires.
   depends_on?: string[]
+  /// P-E1: project directory the routine belongs to (persisted as the task's
+  /// `working_dir` sidecar, flattened onto this shape by the desktop
+  /// `RoutineDto`). null/undefined = no project.
+  working_dir?: string | null
 }
 
 /// Payload for `create_scheduled_task`.
@@ -937,6 +941,8 @@ export interface CreateTaskPayload {
   expires_at?: number
   max_fires?: number
   policy?: ExecutionPolicy
+  /// P-E1: project directory; stored as the routine's working_dir sidecar.
+  working_dir?: string | null
 }
 
 /// Payload for `update_scheduled_task`. All fields optional except `id`.
@@ -954,6 +960,9 @@ export interface UpdateTaskPayload {
   policy?: ExecutionPolicy
   /// Replaces dependency list. Send the full list (add or remove); empty clears.
   depends_on?: string[]
+  /// P-E1: non-empty replaces the routine's project, empty string clears it,
+  /// omitted leaves it unchanged.
+  working_dir?: string | null
 }
 
 /// Result of `preview_cron`.
@@ -1174,6 +1183,10 @@ export interface GoalRunDto {
   lastError: string | null
   startedAtMs: number
   updatedAtMs: number
+  /// P-E2: project directory inherited from the originating session.
+  /// null on interrupted (restart-reconciled) cards — the sidecar cannot
+  /// round-trip a working dir.
+  workingDir: string | null
 }
 
 // --- Batch runs (P1-2 desktop best-of-N; serde contract is camelCase) ---
