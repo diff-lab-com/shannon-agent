@@ -262,6 +262,14 @@ vi.mock('@/lib/tauri-api', () => ({
   listArchivedSessions: vi.fn().mockResolvedValue([]),
   archiveSession: vi.fn().mockResolvedValue(true),
   unarchiveSession: vi.fn().mockResolvedValue(true),
+  // P-E3/P-U3 project registry — default empty so pages degrade to path-tail
+  // labels without per-test mocking (the rail tree and the deep-link chips).
+  listProjects: vi.fn().mockResolvedValue([]),
+  registerProject: vi.fn().mockResolvedValue(null),
+  renameProject: vi.fn().mockResolvedValue(null),
+  setProjectAppearance: vi.fn().mockResolvedValue(null),
+  archiveProject: vi.fn().mockResolvedValue(null),
+  unarchiveProject: vi.fn().mockResolvedValue(null),
   loadSession: vi.fn().mockResolvedValue([]),
   switchSession: vi.fn().mockResolvedValue([]),
   setSessionWorkingDir: vi.fn().mockResolvedValue(undefined),

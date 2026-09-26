@@ -40,8 +40,14 @@ type MemoryView = 'list' | 'graph'
 
 export default function MemoryPanel({
   onOpenMemorySource,
+  projectPreset,
 }: {
   onOpenMemorySource?: (memoryId: string, sourceSessionId: string) => void
+  /** P-U3: /memory?project= preset — resolved by the page against
+   *  listMemoryProjects (labels, not paths). Applied to the EXISTING
+   *  project filter when it lands; manual changes afterwards win because
+   *  the effect only re-runs when the preset value itself changes. */
+  projectPreset?: string | null
 }) {
   const intl = useIntl()
   const t = (id: string) => intl.formatMessage({ id })
@@ -71,6 +77,12 @@ export default function MemoryPanel({
     const id = window.setTimeout(() => setDebouncedQuery(query), 250)
     return () => window.clearTimeout(id)
   }, [query])
+
+  // P-U3: apply the deep-link preset to the existing project filter once the
+  // page has resolved it (see the prop doc above).
+  useEffect(() => {
+    if (projectPreset) setProjectFilter(projectPreset)
+  }, [projectPreset])
 
   const fetchAll = useCallback(async () => {
     setLoading(true)
