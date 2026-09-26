@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import LoadingState from "@/components/ui/loading-state";
 import { useNavigate, useOutletContext } from "react-router-dom";
 import { useIntl } from "react-intl";
@@ -94,6 +94,27 @@ export default function Installed() {
     };
   }, []);
 
+  // A2 polish: manual retry from the error state — refetches the addons list
+  // AND the usage stats (the mount path's two fetches), then clears back into
+  // the loading state like a fresh mount.
+  const refetchAll = useCallback(() => {
+    setLoading(true);
+    listInstalledAddons()
+      .then((rows) => {
+        setAddons(rows);
+        setError(null);
+      })
+      .catch((err) => {
+        setError(String(err));
+      })
+      .finally(() => {
+        setLoading(false);
+      });
+    getExtensionStats(STATS_WINDOW_DAYS)
+      .then((s) => setStats(s))
+      .catch(() => setStats(null));
+  }, []);
+
   const filtered = search
     ? addons.filter(
         (a) =>
@@ -121,6 +142,19 @@ export default function Installed() {
             <div>
               <h3 className="font-bold text-error mb-xs">{t('extensions.installed.loadFailed')}</h3>
               <p className="text-label-sm text-on-surface-variant font-mono">{error}</p>
+              {/* A2 polish: the error state was a dead end — the 重试 button
+                  refetches BOTH the addons list and the usage stats, exactly
+                  like the mount path, so a transient backend hiccup is
+                  recoverable without leaving the tab. */}
+              <button
+                type="button"
+                data-testid="installed-retry"
+                onClick={refetchAll}
+                className="mt-sm inline-flex items-center gap-xs px-sm py-xs rounded-lg border border-error/40 bg-surface-container-lowest text-label-sm font-bold text-on-surface hover:bg-surface-container-low cursor-pointer focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-error/40"
+              >
+                <span className="material-symbols-outlined text-[14px]" aria-hidden="true">refresh</span>
+                {t('extensions.installed.retry')}
+              </button>
             </div>
           </div>
         </div>

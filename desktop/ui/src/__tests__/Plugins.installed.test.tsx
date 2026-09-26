@@ -121,10 +121,23 @@ describe('Plugins — installed section (X6)', () => {
     await waitFor(() => expect(screen.getByText('Nothing installed yet')).toBeInTheDocument())
   })
 
-  it('shows an error state when listPlugins rejects', async () => {
-    vi.mocked(api.listPlugins).mockRejectedValue(new Error('boom'))
+  // A2 polish: the installed section no longer borrows the CATALOG error
+  // title (「Could not load catalog」) — it has its own title, and 重试
+  // re-runs the installed-list fetch.
+  it('shows a dedicated error title with a working Retry when listPlugins rejects', async () => {
+    vi.mocked(api.listPlugins).mockRejectedValueOnce(new Error('boom')).mockResolvedValueOnce([])
     renderPlugins()
-    await waitFor(() => expect(screen.getByText('Could not load installed plugins.')).toBeInTheDocument())
+    await waitFor(() =>
+      expect(screen.getByText('Could not load your installed plugins')).toBeInTheDocument(),
+    )
+    expect(screen.getByText('Could not load installed plugins.')).toBeInTheDocument()
+    // The catalog title must not leak into the installed section.
+    expect(screen.queryByText('Could not load catalog')).not.toBeInTheDocument()
+
+    fireEvent.click(screen.getByRole('button', { name: 'Retry' }))
+    await waitFor(() => expect(api.listPlugins).toHaveBeenCalledTimes(2))
+    // The retry recovered into the empty state.
+    expect(await screen.findByText('Nothing installed yet')).toBeInTheDocument()
   })
 
   it('refreshes the installed list when shannon:extension-installed fires', async () => {

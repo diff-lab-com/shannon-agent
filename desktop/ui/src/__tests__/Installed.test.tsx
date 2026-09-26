@@ -66,6 +66,32 @@ describe('Installed extensions tab', () => {
     })
   })
 
+  // A2 polish: the error state is no longer a dead end — 重试 refetches BOTH
+  // the addons list and the usage stats, and a clean refetch recovers the tab.
+  it('offers a Retry that refetches both addons and stats', async () => {
+    vi.mocked(api.listInstalledAddons)
+      .mockRejectedValueOnce(new Error('disk corruption'))
+      .mockResolvedValueOnce(sampleRows)
+    vi.mocked(api.getExtensionStats)
+      .mockRejectedValueOnce(new Error('stats down'))
+      .mockResolvedValueOnce(emptyStats)
+    renderInstalled()
+    await waitFor(() => {
+      expect(screen.getByText('Failed to load installed addons')).toBeInTheDocument()
+    })
+    expect(api.listInstalledAddons).toHaveBeenCalledTimes(1)
+    expect(api.getExtensionStats).toHaveBeenCalledTimes(1)
+
+    fireEvent.click(screen.getByTestId('installed-retry'))
+    await waitFor(() => {
+      expect(api.listInstalledAddons).toHaveBeenCalledTimes(2)
+      expect(api.getExtensionStats).toHaveBeenCalledTimes(2)
+    })
+    // The tab recovered into the populated list.
+    expect(await screen.findByText('notion')).toBeInTheDocument()
+    expect(screen.queryByText('Failed to load installed addons')).not.toBeInTheDocument()
+  })
+
   it('shows empty state when no addons installed', async () => {
     vi.mocked(api.listInstalledAddons).mockResolvedValueOnce([])
     renderInstalled()

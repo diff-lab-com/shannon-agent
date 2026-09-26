@@ -668,10 +668,17 @@ export default function Plugins() {
         {installedLoading ? (
           <LoadingState size="sm" label={t("extensions.plugins.installed.loading")} />
         ) : installedError ? (
+          // A2 polish: the installed section had the CATALOG error title
+          // (「Could not load catalog」) — wrong surface, and no way out. Its
+          // own title key plus a 重试 that re-runs the installed list fetch.
           <ErrorState
             icon="cloud_off"
-            title={t("extensions.plugins.loadFailed")}
+            title={t("extensions.plugins.installed.loadFailed")}
             description={t("extensions.plugins.installed.loadError")}
+            action={{
+              label: t("extensions.plugins.installed.retry"),
+              onClick: refreshInstalled,
+            }}
           />
         ) : installed.length === 0 ? (
           <EmptyState
