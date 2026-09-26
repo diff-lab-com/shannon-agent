@@ -89,14 +89,20 @@ export function Header() {
     return () => document.removeEventListener('mousedown', handleClick)
   }, [modelOpen])
 
-  // U2: absorbed ChatInput's dual-write — configure the model NAME plus its
-  // provider (the config's `model` key holds a name, not the catalog id).
-  // Header is now the only model switcher in the app.
+  // Decision 1 (review P1-2 / B1-8): the config's `model` key stores the
+  // catalog ID. The old "U2 config stores the name" convention is retired —
+  // `provider_resolver` passes the stored string through as the API `model`
+  // parameter verbatim and display_name ≠ id for most catalog models, so the
+  // name-writing path failed for every such model. Legacy display_name
+  // values already on disk are normalized back to the id inside
+  // `configure('model')` (commands_config.rs `normalize_model_id`).
+  // Header remains the only model switcher outside /chat; the composer chip
+  // owns /chat.
   const handleModelSwitch = async (modelId: string) => {
     const model = models.find(m => m.id === modelId)
     if (!model) return
     try {
-      await api.configure({ key: 'model', value: model.name })
+      await api.configure({ key: 'model', value: model.id })
       await api.configure({ key: 'provider', value: model.provider })
       await refreshConfig()
       await refreshStatus()
