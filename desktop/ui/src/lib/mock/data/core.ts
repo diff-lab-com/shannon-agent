@@ -523,6 +523,7 @@ export const MOCK_PLUGINS: PluginInfo[] = [
     enabled: true,
     path: '~/.shannon/plugins/web-clip',
     source_format: 'shannon-toml',
+    source: 'local',
     migration_imported: false,
   },
   {
@@ -534,6 +535,7 @@ export const MOCK_PLUGINS: PluginInfo[] = [
     enabled: true,
     path: '~/.shannon/plugins/gmail-triage',
     source_format: 'shannon-toml',
+    source: 'git',
     migration_imported: false,
   },
   {
@@ -545,6 +547,7 @@ export const MOCK_PLUGINS: PluginInfo[] = [
     enabled: false,
     path: '~/.shannon/plugins/gcal-brief',
     source_format: 'claude-json',
+    source: 'local',
     migration_imported: false,
   },
   {
@@ -557,6 +560,7 @@ export const MOCK_PLUGINS: PluginInfo[] = [
     enabled: true,
     path: '~/.config/shannon/plugins/imported-claude-code',
     source_format: 'claude-json',
+    source: 'migration',
     migration_imported: true,
   },
 ]

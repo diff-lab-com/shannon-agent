@@ -30,10 +30,34 @@ pub struct PluginInfo {
     pub enabled: bool,
     pub path: String,
     pub source_format: &'static str,
+    /// Install origin for the X6 source badge, derived by
+    /// [`plugin_source_for_path`]: `"migration"`, `"git"` or `"local"`.
+    /// (There is deliberately no `"registry"` origin — marketplace plugin
+    /// bundles are git clones and badge as `"git"`.)
+    pub source: &'static str,
     /// True for the thin `imported-<source>` records `migration_apply`
     /// registers (X5). UI suppresses uninstall/enable/disable on these —
     /// uninstalling the record must not mean "delete my imported data".
     pub migration_imported: bool,
+}
+
+/// Derive the X6 install-origin badge from what is on disk. The core
+/// registry does not record origin (its `InstalledPlugin` struct is frozen
+/// by the semver-additive policy), so the desktop derives it:
+/// - `"migration"` — the thin `imported-<source>` record (marker keyword);
+/// - `"git"` — the plugin directory carries a `.git` checkout. This is
+///   exactly the condition `PluginRegistry::update` requires, so it doubles
+///   as the honest "更新 (git pull) will work" signal for the UI;
+/// - `"local"` — everything else (copied in from a local directory or a
+///   `.dxt`/`.mcpb`/`.zip` archive).
+pub fn plugin_source_for_path(path: &std::path::Path, migration_imported: bool) -> &'static str {
+    if migration_imported {
+        "migration"
+    } else if path.join(".git").exists() {
+        "git"
+    } else {
+        "local"
+    }
 }
 
 /// Result of an install command: the registered plugin name plus the
@@ -62,20 +86,24 @@ pub async fn list_plugins(state: tauri::State<'_, AppState>) -> Result<Vec<Plugi
     Ok(registry
         .list()
         .iter()
-        .map(|p| PluginInfo {
-            name: p.manifest.name.clone(),
-            version: p.manifest.version.clone(),
-            description: p.manifest.description.clone(),
-            author: p.manifest.author.clone(),
-            plugin_type: p.manifest.plugin_type.clone(),
-            enabled: p.enabled,
-            path: p.path.display().to_string(),
-            source_format: source_format_for_path(&p.path),
-            migration_imported: p
+        .map(|p| {
+            let migration_imported = p
                 .manifest
                 .keywords
                 .iter()
-                .any(|k| k == MIGRATION_IMPORT_MARKER),
+                .any(|k| k == MIGRATION_IMPORT_MARKER);
+            PluginInfo {
+                name: p.manifest.name.clone(),
+                version: p.manifest.version.clone(),
+                description: p.manifest.description.clone(),
+                author: p.manifest.author.clone(),
+                plugin_type: p.manifest.plugin_type.clone(),
+                enabled: p.enabled,
+                path: p.path.display().to_string(),
+                source_format: source_format_for_path(&p.path),
+                source: plugin_source_for_path(&p.path, migration_imported),
+                migration_imported,
+            }
         })
         .collect())
 }
@@ -821,5 +849,21 @@ mod lifecycle_tests {
         let marker_miss: Vec<String> = vec!["community".into()];
         assert!(marker_hit.iter().any(|k| k == MIGRATION_IMPORT_MARKER));
         assert!(!marker_miss.iter().any(|k| k == MIGRATION_IMPORT_MARKER));
+    }
+
+    /// X6 source-badge derivation: migration wins over everything, a `.git`
+    /// checkout badges as `git` (the same condition `PluginRegistry::update`
+    /// requires), and a plain copied directory badges as `local`.
+    #[test]
+    fn plugin_source_for_path_covers_git_local_migration() {
+        let tmp = TempDir::new().unwrap();
+        assert_eq!(plugin_source_for_path(tmp.path(), false), "local");
+
+        let git_dir = tmp.path().join(".git");
+        std::fs::create_dir(&git_dir).unwrap();
+        assert_eq!(plugin_source_for_path(tmp.path(), false), "git");
+
+        // Migration wins even when the record happens to sit in a checkout.
+        assert_eq!(plugin_source_for_path(tmp.path(), true), "migration");
     }
 }

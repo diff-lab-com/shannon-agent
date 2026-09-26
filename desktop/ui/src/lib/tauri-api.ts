@@ -1185,6 +1185,14 @@ export interface PluginInfo {
   enabled: boolean
   path: string
   source_format: 'shannon-toml' | 'claude-json' | 'unknown'
+  /** Install origin for the X6 source badge, derived desktop-side:
+   *  - `migration` — thin `imported-<source>` record (`migration_imported`);
+   *  - `git` — the plugin directory carries a `.git` checkout (exactly the
+   *    condition `update` needs, so 更新 is offered only for these);
+   *  - `local` — copied in from a local directory / .dxt/.mcpb/.zip archive.
+   *  There is no `registry` origin: marketplace plugin bundles are git
+   *  clones and badge as `git`. */
+  source: 'git' | 'local' | 'migration'
   /** Thin `imported-<source>` migration record (X5): the UI suppresses
    *  uninstall/enable/disable on it. */
   migration_imported: boolean
