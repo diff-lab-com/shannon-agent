@@ -2504,7 +2504,7 @@
   "extensions.plugins.uninstallConfirm.title": "Uninstall {name}",
   "extensions.plugins.uninstallConfirm.message": "Uninstalling removes the plugin and reverses what it materialized into your extension folders:",
   "extensions.plugins.uninstallConfirm.dirNote": "…plus the plugin's own directory and its materialization record.",
-  "extensions.plugins.uninstallConfirm.inspectFailed": "Could not read this plugin's bundle, so the removal cannot be itemized. Only the registry entry will be removed — anything already materialized into your extension folders stays as-is.",
+  "extensions.plugins.uninstallConfirm.inspectFailed": "Could not read this plugin's bundle, so the removal cannot be itemized. Uninstall still removes the artifacts recorded in the plugin's materialization sidecar; only when the sidecar itself is unusable is the removal limited to the registry entry.",
   "extensions.plugins.uninstallConfirm.empty": "The manifest declares no bundle contents.",
   "extensions.plugins.uninstallConfirm.confirm": "Uninstall",
   "extensions.plugins.uninstallConfirm.cancel": "Cancel",

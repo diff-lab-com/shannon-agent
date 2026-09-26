@@ -220,6 +220,10 @@ describe('Plugins — installed section (X6)', () => {
     await waitFor(() => expect(api.listPlugins).toHaveBeenCalledTimes(2))
   })
 
+  // A4 polish: the honest fallback copy — a failed PREVIEW does not mean a
+  // registry-only uninstall. The backend reverse-materializes from the
+  // sidecar, so sidecar-recorded artifacts still go; only an unusable
+  // sidecar limits the removal to the registry entry.
   it('says removal is registry-only when the bundle preview fails', async () => {
     vi.mocked(api.inspectPluginSource).mockRejectedValue(new Error('unreadable'))
     vi.mocked(api.listPlugins).mockResolvedValue([plugin()])
@@ -228,9 +232,11 @@ describe('Plugins — installed section (X6)', () => {
 
     fireEvent.click(screen.getByTestId('installed-uninstall-web-plugin'))
     await waitFor(() => expect(screen.getByTestId('uninstall-inspect-failed')).toBeInTheDocument())
-    expect(screen.getByTestId('uninstall-inspect-failed')).toHaveTextContent(
-      'Only the registry entry will be removed',
-    )
+    const note = screen.getByTestId('uninstall-inspect-failed')
+    expect(note.textContent).toContain('materialization sidecar')
+    expect(note.textContent).toContain('registry entry')
+    // The dishonest claim must stay gone.
+    expect(note.textContent).not.toContain('stays as-is')
 
     // consent stays possible — honest, not blocking
     fireEvent.click(screen.getByTestId('uninstall-confirm-button'))

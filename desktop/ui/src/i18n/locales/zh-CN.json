@@ -2504,7 +2504,7 @@
   "extensions.plugins.uninstallConfirm.title": "卸载 {name}",
   "extensions.plugins.uninstallConfirm.message": "卸载将移除该插件，并撤销其落料到各扩展目录的内容：",
   "extensions.plugins.uninstallConfirm.dirNote": "……以及插件自身的目录与其落料记录。",
-  "extensions.plugins.uninstallConfirm.inspectFailed": "无法读取该插件的 bundle，无法逐项列出将被移除的内容。仅移除注册表条目——已落料到各扩展目录的文件保持原样。",
+  "extensions.plugins.uninstallConfirm.inspectFailed": "无法读取该插件的 bundle，无法逐项列出将被移除的内容。卸载仍会移除其落料记录（materialized.json）中登记的产物；仅当该记录不可用时才只移除注册表条目。",
   "extensions.plugins.uninstallConfirm.empty": "清单未声明任何 bundle 内容。",
   "extensions.plugins.uninstallConfirm.confirm": "卸载",
   "extensions.plugins.uninstallConfirm.cancel": "取消",
