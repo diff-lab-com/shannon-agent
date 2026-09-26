@@ -9,9 +9,8 @@
 //! read —
 //!
 //! 1. the session store's `project_path` values (deduplicated),
-//! 2. routine sidecar working dirs (empty until Task 2 delivers
-//!    `ScheduledTaskStore::working_dirs()` — see the `routine_working_dirs`
-//!    seam below),
+//! 2. routine sidecar working dirs (`ScheduledTaskStore::working_dirs`,
+//!    see [`routine_working_dirs`]),
 //! 3. on first seed (empty table) the memory layer's distinct project
 //!    labels (reusing [`crate::commands_memory`]'s enumeration).
 //!
@@ -215,7 +214,7 @@ fn adoption_candidates(state: &AppState, first_seed: bool) -> Vec<ProjectAdoptCa
         }
     }
 
-    // (b) routine working dirs (Task 2 seam — currently an empty set).
+    // (b) routine working dirs (P-E1 sidecars).
     for dir in routine_working_dirs(state) {
         push_candidate(&mut candidates, &mut seen, &dir);
     }
@@ -266,14 +265,14 @@ pub(crate) fn normalize_path(path: &str) -> &str {
     path.trim().trim_end_matches(['/', '\\'])
 }
 
-/// Routine working dirs feeding project adoption (collector source b).
+/// Routine working dirs feeding project adoption (collector source b, P-E1).
 ///
-/// `ScheduledRoutine` carries no `working_dir` until Task 2 (P-E1/P-E2)
-/// adds the sidecar + `ScheduledTaskStore::working_dirs()`. The collector
-/// is wired through this seam so Task 2 only replaces this body.
-// Task 2: replace with `state.scheduled_task_store().working_dirs()`.
-fn routine_working_dirs(_state: &AppState) -> Vec<String> {
-    Vec::new()
+/// Reads every task's `working_dir` sidecar through
+/// [`shannon_core::scheduled_task_store::ScheduledTaskStore::working_dirs`]
+/// (deduplicated, sorted). Best-effort by construction: missing or blank
+/// sidecars simply contribute nothing.
+fn routine_working_dirs(state: &AppState) -> Vec<String> {
+    state.scheduled_task_store().working_dirs()
 }
 
 /// Name hint for an adopted project: the path's tail segment (basename on
@@ -583,6 +582,51 @@ mod tests {
             state.project_registry().get(&dir).unwrap().unwrap().name.as_deref(),
             Some("Custom"),
             "adoption must never overwrite an existing row"
+        );
+    }
+
+    // P-E1: routine sidecar working dirs are an adoption source (collector b).
+    #[tokio::test]
+    async fn list_projects_adopts_routine_working_dirs() {
+        let tmp = tempfile::tempdir().unwrap();
+        let app = tauri::test::mock_app();
+        // Hermetic scheduled-task store too: `project_state` swaps sessions +
+        // memory + registry; the task store gets its own tempdir base.
+        let mut app_state = project_state(tmp.path());
+        app_state.scheduled_task_store = std::sync::Arc::new(
+            shannon_core::scheduled_task_store::ScheduledTaskStore::with_base(
+                tmp.path().join("tasks"),
+            ),
+        );
+        app.manage(app_state);
+        let state = app.state::<AppState>();
+
+        // Two routines sharing one project, one elsewhere, one unhoused.
+        let store = state.scheduled_task_store().clone();
+        let housed = shannon_core::scheduled_routines::ScheduledRoutine::new(
+            "housed".into(),
+            "p".into(),
+            60,
+        );
+        store.save(&housed).unwrap();
+        store.set_working_dir(&housed.id, Some("/work/routine-proj/")).unwrap();
+        let twin =
+            shannon_core::scheduled_routines::ScheduledRoutine::new("twin".into(), "p".into(), 60);
+        store.save(&twin).unwrap();
+        store.set_working_dir(&twin.id, Some("/work/routine-proj")).unwrap();
+        let other =
+            shannon_core::scheduled_routines::ScheduledRoutine::new("other".into(), "p".into(), 60);
+        store.save(&other).unwrap();
+        store.set_working_dir(&other.id, Some("/work/routine-other")).unwrap();
+        let unhoused =
+            shannon_core::scheduled_routines::ScheduledRoutine::new("free".into(), "p".into(), 60);
+        store.save(&unhoused).unwrap();
+
+        let rows = list_projects(app.state::<AppState>(), None).await.unwrap();
+        assert_eq!(
+            paths(&rows),
+            ["/work/routine-other", "/work/routine-proj"],
+            "routine sidecars adopted, deduplicated (separator variants collapse), normalized"
         );
     }
 }

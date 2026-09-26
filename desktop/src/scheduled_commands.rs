@@ -2256,6 +2256,97 @@ mod tests {
         assert_eq!(unhoused_row.working_dir, None);
     }
 
+    // ── P-E1: working_dir stamp on the run's session ─────────────────────
+
+    /// First `session/start` payload of the run's session log, if any.
+    fn read_session_start(container: &std::path::Path) -> Option<shannon_types::session_event::SessionStartPayload> {
+        let entries = std::fs::read_dir(container).ok()?;
+        for entry in entries.flatten() {
+            let name = entry.file_name().to_string_lossy().to_string();
+            let Ok(uuid) = uuid::Uuid::parse_str(&name) else {
+                continue;
+            };
+            let store = shannon_core::session_log::SessionStore::new(container.to_path_buf());
+            let Ok(Some(events)) = store.read_events(&uuid) else {
+                continue;
+            };
+            for event in events {
+                if let shannon_types::session_event::SessionEventBody::SessionStart(payload) =
+                    event.body
+                {
+                    return Some(payload);
+                }
+            }
+        }
+        None
+    }
+
+    /// Wait (bounded) for the spawned engine future to create the run's
+    /// session log, then return its `session/start` payload.
+    async fn wait_for_session_start(container: &std::path::Path) -> shannon_types::session_event::SessionStartPayload {
+        for _ in 0..250 {
+            if let Some(payload) = read_session_start(container) {
+                return payload;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+        }
+        panic!("run session log with session/start never appeared");
+    }
+
+    #[tokio::test]
+    async fn routine_run_stamps_session_working_dir_and_threads_engine_cwd() {
+        let app = tauri::test::mock_app();
+        let tmp = tempfile::tempdir().unwrap();
+        let (deps, tasks, runs, _inbox) = scheduler_fixture(tmp.path());
+
+        let routine = ScheduledRoutine::new("scoped run".into(), "p".into(), 60);
+        tasks.save(&routine).unwrap();
+        tasks
+            .set_working_dir(&routine.id, Some("/work/scoped-project/"))
+            .unwrap();
+
+        let executed = run_due_check_at(&deps, &tasks, &runs, app.handle(), utc_at(12, 0))
+            .await
+            .unwrap();
+        assert_eq!(executed, 1);
+
+        // The run session's durable metadata carries the routine's working
+        // dir (normalized) — this is the field the session store projects to
+        // `project_path` / `SessionMeta.working_dir`.
+        let container = tmp.path().join("sessions");
+        let start = wait_for_session_start(&container).await;
+        assert_eq!(
+            start.cwd.as_deref(),
+            Some("/work/scoped-project"),
+            "session/start stamped with the routine's normalized working dir"
+        );
+    }
+
+    #[tokio::test]
+    async fn routine_run_without_working_dir_keeps_the_default_session_start() {
+        let app = tauri::test::mock_app();
+        let tmp = tempfile::tempdir().unwrap();
+        let (deps, tasks, runs, _inbox) = scheduler_fixture(tmp.path());
+
+        let routine = ScheduledRoutine::new("unhoused run".into(), "p".into(), 60);
+        tasks.save(&routine).unwrap();
+
+        let executed = run_due_check_at(&deps, &tasks, &runs, app.handle(), utc_at(12, 0))
+            .await
+            .unwrap();
+        assert_eq!(executed, 1);
+
+        // No sidecar → no pre-stamp; the engine tee writes its own
+        // session/start (process cwd), exactly the pre-P-E1 behavior.
+        let container = tmp.path().join("sessions");
+        let start = wait_for_session_start(&container).await;
+        assert_ne!(
+            start.cwd.as_deref(),
+            Some("/work/unhoused-project"),
+            "no stamp may appear for a routine without a working dir"
+        );
+    }
+
     // ── Cron preview ─────────────────────────────────────────────────────
 
     #[tokio::test]
@@ -2849,6 +2940,10 @@ mod tests {
             memory_store: std::sync::Arc::new(std::sync::RwLock::new(
                 shannon_core::MemoryStore::new(tmp.join("memories")),
             )),
+            scheduled_tasks: std::sync::Arc::new(ScheduledTaskStore::with_base(
+                tmp.join("tasks").to_path_buf(),
+            )),
+            sessions_dir: tmp.join("sessions"),
         };
         let tasks = ScheduledTaskStore::with_base(tmp.join("tasks").to_path_buf());
         (deps, tasks, runs, inbox)

@@ -446,6 +446,13 @@ pub(crate) struct RoutineRunDeps {
     /// Shared memory store handle (P2-4b) — passed into the spawned runner so
     /// its engine attaches the same store the interactive path uses.
     pub(crate) memory_store: crate::commands_memory::SharedMemoryStore,
+    /// Scheduled-task store (P-E1): read for the routine's `working_dir`
+    /// sidecar at spawn time.
+    pub(crate) scheduled_tasks: std::sync::Arc<shannon_core::scheduled_task_store::ScheduledTaskStore>,
+    /// Base sessions directory for the run's engine (P-E1). Resolved through
+    /// `effective_log_container` so the working-dir stamp lands in exactly
+    /// the container the engine's L0 tee will open.
+    pub(crate) sessions_dir: std::path::PathBuf,
 }
 
 impl RoutineRunDeps {
@@ -458,6 +465,10 @@ impl RoutineRunDeps {
             desktop_config: state.desktop_config.clone(),
             tools: state.tools.clone(),
             memory_store: state.memory_store.clone(),
+            scheduled_tasks: state.scheduled_task_store.clone(),
+            sessions_dir: shannon_core::session_log::effective_log_container(
+                state.state_manager.sessions_dir(),
+            ),
         }
     }
 }
@@ -577,6 +588,20 @@ pub(crate) async fn spawn_routine_run<R: tauri::Runtime>(
     let usage_store = deps.usage_store.clone();
     let tools = deps.tools.clone();
     let memory_store = deps.memory_store.clone();
+    // P-E1: the routine's project directory, when it has one. Best-effort —
+    // a vanished task dir or unreadable sidecar degrades to "no project".
+    let routine_working_dir = deps
+        .scheduled_tasks
+        .working_dir_of(&routine.id)
+        .unwrap_or_else(|e| {
+            tracing::debug!(
+                task_id = %routine.id,
+                error = %e,
+                "routine run: working_dir sidecar unreadable"
+            );
+            None
+        })
+        .filter(|d| !d.trim().is_empty());
 
     let finish_deps = RoutineRunDeps {
         inbox: deps.inbox.clone(),
@@ -586,6 +611,8 @@ pub(crate) async fn spawn_routine_run<R: tauri::Runtime>(
         desktop_config: deps.desktop_config.clone(),
         tools: deps.tools.clone(),
         memory_store: deps.memory_store.clone(),
+        scheduled_tasks: deps.scheduled_tasks.clone(),
+        sessions_dir: deps.sessions_dir.clone(),
     };
     let ctx = RunFinishContext {
         run_id: run_id.clone(),
@@ -595,6 +622,10 @@ pub(crate) async fn spawn_routine_run<R: tauri::Runtime>(
         note,
         started_ms: chrono::Utc::now().timestamp_millis(),
     };
+
+    // Owned copy for the engine future (the closure must be 'static; `deps`
+    // is only borrowed here).
+    let run_sessions_dir = deps.sessions_dir.clone();
 
     let engine_future = async move {
         let client = LlmClient::new(client_config);
@@ -619,12 +650,47 @@ pub(crate) async fn spawn_routine_run<R: tauri::Runtime>(
             ));
         }
 
+        // P-E1: pin the run's engine to the SAME sessions container the L0
+        // tee will resolve (`effective_log_container`), so the working-dir
+        // stamp below lands in the log the engine actually opens. Falls back
+        // to the default manager if the custom dir cannot be created.
+        let state_manager =
+            shannon_engine::state::StateManager::with_sessions_dir(run_sessions_dir.clone())
+                .unwrap_or_else(|e| {
+                    tracing::warn!(
+                        error = %e,
+                        "routine run: custom sessions dir unusable, using default"
+                    );
+                    StateManager::new()
+                });
         let engine = crate::commands_memory::attach_shared_memory(
-            QueryEngine::with_defaults_arc(client, tools, permissions, StateManager::new()),
+            QueryEngine::with_defaults_arc(client, tools, permissions, state_manager),
             &memory_store,
         );
+        // P-E1: the routine's project drives the engine's host-dependent
+        // reads (memory injection/extraction project key) — an existing
+        // per-run working-directory parameter, so it is threaded here
+        // instead of ever touching the process cwd (global state).
+        let engine = match &routine_working_dir {
+            Some(dir) => engine.with_working_directory(crate::commands_projects::normalize_path(dir)),
+            None => engine,
+        };
 
         let session_id = uuid::Uuid::new_v4();
+        // P-E1: stamp the session's durable metadata before the engine's
+        // tee opens the (fresh) log — session/start with the routine's
+        // working dir as `cwd`, the field the session store projects to
+        // `project_path` / `SessionMeta.working_dir`. `None` keeps today's
+        // behavior byte-for-byte (the tee writes its own row).
+        if let Some(dir) = &routine_working_dir {
+            stamp_session_working_dir(
+                &shannon_core::session_log::effective_log_container(&run_sessions_dir),
+                session_id,
+                &model,
+                &provider,
+                dir,
+            );
+        }
         let context = QueryContext {
             query_id: uuid::Uuid::new_v4(),
             session_id,
@@ -700,6 +766,75 @@ pub(crate) async fn spawn_routine_run<R: tauri::Runtime>(
     });
 
     Ok(run_id)
+}
+
+/// Record the run session's `session/start` with the routine's working
+/// directory (P-E1) — the durable session metadata of an unattended run.
+///
+/// The engine's L0 tee writes `session/start` itself only on a fresh log,
+/// and it always records the *process* cwd; pre-recording the row here pins
+/// the session's project path to the routine's directory instead. That is
+/// the field the session store projects to `project_path` /
+/// `SessionMeta.working_dir` (project adoption, triage join, restart
+/// hydration) — the same pre-creation pattern as the goal runner's
+/// `create_goal_session`. The process cwd is never touched here: background
+/// threads must not move process-global state; host-dependent engine reads
+/// are pinned separately via `QueryEngine::with_working_directory`.
+///
+/// Best-effort: a failed or skipped stamp is logged and the run proceeds —
+/// the tee then writes its own `session/start` exactly as before. A log
+/// that already has events is never touched (no double `session/start`).
+fn stamp_session_working_dir(
+    container: &std::path::Path,
+    session_id: uuid::Uuid,
+    model: &str,
+    provider: &str,
+    working_dir: &str,
+) {
+    let mut writer =
+        match shannon_core::session_log::SessionLogWriter::open_layout(
+            container,
+            &session_id.to_string(),
+        ) {
+            Ok(writer) => writer,
+            Err(e) => {
+                tracing::warn!(
+                    session = %session_id,
+                    error = %e,
+                    "routine run: session log unreachable, working_dir not stamped"
+                );
+                return;
+            }
+        };
+    if writer.next_seq() > 0 {
+        tracing::debug!(
+            session = %session_id,
+            "routine run: session log already started, working_dir stamp skipped"
+        );
+        return;
+    }
+    writer.record(shannon_types::session_event::SessionEventBody::SessionStart(
+        shannon_types::session_event::SessionStartPayload {
+            model: model.to_string(),
+            provider: Some(provider.to_string()),
+            cwd: Some(crate::commands_projects::normalize_path(working_dir).to_string()),
+            app_version: Some(env!("CARGO_PKG_VERSION").to_string()),
+            os: Some(std::env::consts::OS.to_string()),
+            arch: Some(std::env::consts::ARCH.to_string()),
+            browser_cdp: Some(
+                std::env::var("SHANNON_BROWSER_CDP")
+                    .map(|v| !v.trim().is_empty())
+                    .unwrap_or(false),
+            ),
+        },
+    ));
+    if let Err(e) = writer.close() {
+        tracing::warn!(
+            session = %session_id,
+            error = %e,
+            "routine run: working_dir stamp write failed"
+        );
+    }
 }
 
 /// Close out a run: legacy JSONL finish (best-effort), inbox item, SQLite
@@ -1076,6 +1211,12 @@ mod tests {
             memory_store: std::sync::Arc::new(std::sync::RwLock::new(
                 shannon_core::MemoryStore::new(tmp.join("memories")),
             )),
+            scheduled_tasks: std::sync::Arc::new(
+                shannon_core::scheduled_task_store::ScheduledTaskStore::with_base(
+                    tmp.join("tasks"),
+                ),
+            ),
+            sessions_dir: tmp.join("sessions"),
         };
         (deps, inbox)
     }
@@ -1089,6 +1230,72 @@ mod tests {
             note: None,
             started_ms,
         }
+    }
+
+    #[test]
+    fn stamp_session_working_dir_writes_start_row_and_is_idempotent() {
+        let tmp = tempfile::tempdir().unwrap();
+        let container = tmp.path().join("sessions");
+        let session = uuid::Uuid::new_v4();
+
+        stamp_session_working_dir(&container, session, "m1", "prov", "/work/x/");
+        // A second stamp (log already started) must be a no-op.
+        stamp_session_working_dir(&container, session, "m2", "prov2", "/work/y");
+
+        let store = shannon_core::session_log::SessionStore::new(container);
+        let events = store
+            .read_events(&session)
+            .unwrap()
+            .expect("session log exists");
+        let starts: Vec<_> = events
+            .iter()
+            .filter_map(|e| match &e.body {
+                shannon_types::session_event::SessionEventBody::SessionStart(p) => Some(p),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(starts.len(), 1, "exactly one session/start row");
+        assert_eq!(starts[0].cwd.as_deref(), Some("/work/x"), "normalized");
+        assert_eq!(starts[0].model, "m1", "first stamp wins");
+    }
+
+    #[test]
+    fn stamp_session_working_dir_skips_a_log_that_already_started() {
+        let tmp = tempfile::tempdir().unwrap();
+        let container = tmp.path().join("sessions");
+        let session = uuid::Uuid::new_v4();
+
+        // Pre-existing log (as when the engine's tee already wrote it).
+        let mut writer =
+            shannon_core::session_log::SessionLogWriter::open_layout(&container, &session.to_string())
+                .unwrap();
+        writer.record(shannon_types::session_event::SessionEventBody::SessionStart(
+            shannon_types::session_event::SessionStartPayload {
+                model: "tee-model".into(),
+                provider: None,
+                cwd: Some("/process/cwd".into()),
+                app_version: None,
+                os: None,
+                arch: None,
+                browser_cdp: None,
+            },
+        ));
+        writer.close().unwrap();
+
+        stamp_session_working_dir(&container, session, "m", "p", "/work/y");
+
+        let store = shannon_core::session_log::SessionStore::new(container);
+        let events = store.read_events(&session).unwrap().unwrap();
+        let starts: Vec<_> = events
+            .iter()
+            .filter(|e| {
+                matches!(
+                    &e.body,
+                    shannon_types::session_event::SessionEventBody::SessionStart(_)
+                )
+            })
+            .collect();
+        assert_eq!(starts.len(), 1, "no second session/start appended");
     }
 
     #[test]
