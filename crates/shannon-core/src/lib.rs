@@ -110,6 +110,7 @@ pub mod lsp;
 pub mod mcp_server_approval;
 pub mod plugin;
 pub mod preference_memory;
+pub mod project_registry;
 pub mod providers;
 pub mod sandbox;
 pub mod scheduled_budget;
