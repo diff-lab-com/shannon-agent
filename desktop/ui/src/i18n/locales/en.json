@@ -3325,5 +3325,21 @@
   "chat.dock.zoom.aria": "Zoom controls",
   "chat.dock.zoom.in": "Zoom in",
   "chat.dock.zoom.out": "Zoom out",
-  "chat.dock.zoom.reset": "Reset zoom (100%)"
+  "chat.dock.zoom.reset": "Reset zoom (100%)",
+  "usage.ctx.budgetSaved": "Budget cap saved",
+  "usage.ctx.budgetSaveFailed": "Failed to save the budget cap",
+  "usage.ctx.budgetInvalid": "Enter a positive amount, or clear the input to remove the cap",
+  "settings.models.paramSaveFailed": "Failed to save {key}",
+  "ui.modal.discard.title": "Discard unsaved changes?",
+  "ui.modal.discard.message": "Closing now loses the edits made in this dialog.",
+  "ui.modal.discard.confirm": "Discard changes",
+  "ui.modal.discard.cancel": "Keep editing",
+  "settings.permissions.loadFailed.title": "Couldn't load permission profiles",
+  "settings.permissions.loadFailed.description": "The list of built-in and custom profiles could not be read. Your saved profiles on disk are untouched.",
+  "settings.permissions.loadFailed.retry": "Retry",
+  "settings.permissions.editor.saving": "Saving…",
+  "settings.notifications.error.customBodyRequired": "Enter a custom template body, or pick a channel preset, before saving.",
+  "settings.advanced.openLogsDir": "Open log directory",
+  "settings.advanced.openLogsDirFailed": "Failed to open the log directory",
+  "settings.advanced.logsHint": "Session logs, the usage ledger, and scheduled-run records live in ~/.shannon. The desktop's own runtime log goes to stderr (RUST_LOG=debug for verbose output)."
 }

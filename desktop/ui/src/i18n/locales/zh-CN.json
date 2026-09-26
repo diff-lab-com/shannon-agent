@@ -3325,5 +3325,21 @@
   "chat.dock.zoom.aria": "缩放控制",
   "chat.dock.zoom.in": "放大",
   "chat.dock.zoom.out": "缩小",
-  "chat.dock.zoom.reset": "重置缩放（100%）"
+  "chat.dock.zoom.reset": "重置缩放（100%）",
+  "usage.ctx.budgetSaved": "预算上限已保存",
+  "usage.ctx.budgetSaveFailed": "保存预算上限失败",
+  "usage.ctx.budgetInvalid": "请输入正数金额；清空输入框即可移除上限",
+  "settings.models.paramSaveFailed": "保存 {key} 失败",
+  "ui.modal.discard.title": "放弃未保存的修改？",
+  "ui.modal.discard.message": "现在关闭将丢失此弹窗中未保存的修改。",
+  "ui.modal.discard.confirm": "放弃修改",
+  "ui.modal.discard.cancel": "继续编辑",
+  "settings.permissions.loadFailed.title": "无法加载权限配置",
+  "settings.permissions.loadFailed.description": "无法读取内置与自定义权限档列表。磁盘上已保存的配置不受影响。",
+  "settings.permissions.loadFailed.retry": "重试",
+  "settings.permissions.editor.saving": "保存中…",
+  "settings.notifications.error.customBodyRequired": "保存前请填写自定义模板内容，或改选一个渠道预设。",
+  "settings.advanced.openLogsDir": "打开日志目录",
+  "settings.advanced.openLogsDirFailed": "打开日志目录失败",
+  "settings.advanced.logsHint": "会话日志、用量账本与定时任务记录存放在 ~/.shannon；应用自身运行日志输出到 stderr（RUST_LOG=debug 可开启详细输出）。"
 }
