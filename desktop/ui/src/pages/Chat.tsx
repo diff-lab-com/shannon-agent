@@ -10,6 +10,7 @@ import { parseSlashInput, type SlashCommand, type SlashResult } from '@/lib/slas
 import { toastError } from '@/lib/errorToast'
 import { setActiveWorkingDir } from '@/lib/fileRefs'
 import { useDiskArtifacts } from '@/hooks/useDiskArtifacts'
+import { useArtifact } from '@/components/artifact/ArtifactContext'
 import { useBudgetGuard } from '@/hooks/useBudgetGuard'
 import BudgetBanner from '@/components/chat/BudgetBanner'
 import { TerminalPanel } from '@/components/terminal/TerminalPanel'
@@ -151,6 +152,18 @@ export default function Chat() {
   useEffect(() => {
     setSlashResult(null)
   }, [currentSessionId])
+
+  // B3 §P1-14 (decision §5-6): chat-fence artifact tabs belong to the
+  // session that produced them — clear them on session switch. Disk
+  // artifacts and web tabs survive. The prev-ref guard keeps a Chat
+  // remount on the same session from wiping the dock.
+  const { closeChatArtifacts } = useArtifact()
+  const prevArtifactSessionRef = useRef(currentSessionId)
+  useEffect(() => {
+    if (prevArtifactSessionRef.current === currentSessionId) return
+    prevArtifactSessionRef.current = currentSessionId
+    closeChatArtifacts()
+  }, [currentSessionId, closeChatArtifacts])
 
   const executeSlash = useCallback((cmd: SlashCommand) => {
     void cmd.run({

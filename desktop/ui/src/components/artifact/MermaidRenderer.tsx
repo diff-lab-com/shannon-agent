@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from 'react'
 import { useIntl } from 'react-intl'
 import { themeModeOf, useTheme } from '@/context/ThemeContext'
+import { ArtifactZoomBar, useArtifactZoom } from './ArtifactZoomBar'
 
 interface MermaidRendererProps {
   source: string
@@ -56,6 +57,10 @@ export function MermaidRenderer({ source, title }: MermaidRendererProps) {
   }, [source, mode])
 
   const srcDoc = useMemo(() => (svg ? buildSrcDoc(svg, mode) : ''), [svg, mode])
+  // B3 item 22: the iframe content is untouchable (opaque origin), so the
+  // zoom scales the iframe element itself — CSS transform, no pan, nothing
+  // persisted.
+  const { zoom, zoomIn, zoomOut, reset, containerRef } = useArtifactZoom()
 
   return (
     <div className="w-full h-full bg-background" style={{ minHeight: '300px' }}>
@@ -76,17 +81,23 @@ export function MermaidRenderer({ source, title }: MermaidRendererProps) {
           {loadingLabel}
         </div>
       ) : (
-        <iframe
-          title={title || diagramTitle}
-          srcDoc={srcDoc}
-          // The document is static SVG — no scripts, no same-origin access.
-          // An empty sandbox is the strictest form: script execution is
-          // impossible even if a diagram ever smuggled markup past mermaid's
-          // `securityLevel: 'strict'` sanitizer.
-          sandbox=""
-          loading="lazy"
-          className="w-full h-full border-0"
-        />
+        <div className="relative w-full h-full min-h-0">
+          <div ref={containerRef} className="w-full h-full overflow-hidden rounded-lg">
+            <iframe
+              title={title || diagramTitle}
+              srcDoc={srcDoc}
+              // The document is static SVG — no scripts, no same-origin access.
+              // An empty sandbox is the strictest form: script execution is
+              // impossible even if a diagram ever smuggled markup past mermaid's
+              // `securityLevel: 'strict'` sanitizer.
+              sandbox=""
+              loading="lazy"
+              className="w-full h-full border-0"
+              style={{ transform: `scale(${zoom})`, transformOrigin: 'top center' }}
+            />
+          </div>
+          <ArtifactZoomBar zoom={zoom} zoomIn={zoomIn} zoomOut={zoomOut} reset={reset} className="absolute top-2 right-2 z-10" />
+        </div>
       )}
     </div>
   )

@@ -3285,5 +3285,10 @@
   "artifact.fallback.image": "Image",
   "artifact.fallback.web": "Web page",
   "artifact.fallback.other": "File",
-  "chat.dock.web.reload": "Reload"
+  "chat.dock.web.reload": "Reload",
+  "chat.dock.html.staticHint": "Interactive HTML cannot run inside the panel — this is a static preview. Use \"Open in system\" to run it with full scripting.",
+  "chat.dock.zoom.aria": "Zoom controls",
+  "chat.dock.zoom.in": "Zoom in",
+  "chat.dock.zoom.out": "Zoom out",
+  "chat.dock.zoom.reset": "Reset zoom (100%)"
 }

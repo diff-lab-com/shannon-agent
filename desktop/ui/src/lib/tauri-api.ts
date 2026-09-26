@@ -685,7 +685,49 @@ export interface TextFileContent {
   sizeBytes: number
 }
 
-/** Capped, scope-checked text read (disk artifacts / the dock's manual tab). */
+/**
+ * Machine-readable failure codes for `readTextFile` (§P2-24): the Rust
+ * command rejects with a structured `{ code, message }` payload instead of
+ * English prose the frontend had to substring-match. Branch on the code —
+ * never on the message.
+ */
+export type ReadTextFileErrorCode =
+  | 'out_of_scope'
+  | 'not_a_file'
+  | 'file_too_large'
+  | 'binary_file'
+  | 'not_utf8'
+  | 'io_error'
+
+export interface ReadTextFileError {
+  code: ReadTextFileErrorCode
+  message: string
+}
+
+const READ_TEXT_FILE_CODES: ReadonlySet<string> = new Set([
+  'out_of_scope',
+  'not_a_file',
+  'file_too_large',
+  'binary_file',
+  'not_utf8',
+  'io_error',
+])
+
+/**
+ * Normalize a `readTextFile` rejection to its code. Anything without the
+ * structured payload (mock environments, unexpected throws) degrades to
+ * `io_error` so callers keep a safe default branch.
+ */
+export function readTextFileErrorCode(e: unknown): ReadTextFileErrorCode {
+  if (e && typeof e === 'object' && 'code' in e) {
+    const code = (e as { code: unknown }).code
+    if (typeof code === 'string' && READ_TEXT_FILE_CODES.has(code)) return code as ReadTextFileErrorCode
+  }
+  return 'io_error'
+}
+
+/** Capped, scope-checked text read (disk artifacts / the dock's manual tab).
+ * Rejects with a `ReadTextFileError` payload — see `readTextFileErrorCode`. */
 export async function readTextFile(path: string, maxBytes?: number): Promise<TextFileContent> {
   return invoke('read_text_file', { path, maxBytes: maxBytes ?? null })
 }
