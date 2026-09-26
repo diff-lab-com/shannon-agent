@@ -53,6 +53,10 @@ export function VoiceLocalSettings({ featureDisabled = false }: VoiceLocalSettin
   const [models, setModels] = useState<api.WhisperModelInfo[]>([])
   const [config, setConfig] = useState<api.VoiceLocalConfig | null>(null)
   const [saving, setSaving] = useState(false)
+  // P1-16: the language field used to save (and toast!) on every keystroke.
+  // The draft state holds the in-progress text; the write happens on blur /
+  // Enter with the committed value.
+  const [languageDraft, setLanguageDraft] = useState('')
   const [activeDownload, setActiveDownload] = useState<string | null>(null)
   const [downloadProgress, setDownloadProgress] = useState<DownloadProgress | null>(null)
   const unlistenRef = useRef<UnlistenFn | null>(null)
@@ -65,6 +69,7 @@ export function VoiceLocalSettings({ featureDisabled = false }: VoiceLocalSettin
       ])
       setConfig(cfg)
       setModels(m)
+      setLanguageDraft(cfg?.language ?? '')
     } catch (e) {
       // Silent — the card is best-effort. A toast here would
       // pile up on every Settings open.
@@ -134,6 +139,14 @@ export function VoiceLocalSettings({ featureDisabled = false }: VoiceLocalSettin
       toastError(t('settings.voiceLocal.saveFailed'), e)
     }
     setSaving(false)
+  }
+
+  /** Commit the language draft once editing ends (blur / Enter). */
+  const commitLanguage = () => {
+    if (!config) return
+    const next = languageDraft.trim() || null
+    if ((config.language ?? null) === next) return
+    void handleSave({ language: next })
   }
 
   const handleDownload = async (model: string) => {
@@ -303,13 +316,19 @@ export function VoiceLocalSettings({ featureDisabled = false }: VoiceLocalSettin
         </div>
 
         <div>
-          <label className="block font-label-sm text-[12px] text-on-surface-variant mb-1">
+          <label className="block font-label-sm text-[12px] text-on-surface-variant mb-1" htmlFor="voice-local-language">
             {t('settings.voiceLocal.language')}
           </label>
           <Input
+            id="voice-local-language"
             type="text"
-            value={config?.language ?? ''}
-            onChange={(e) => void handleSave({ language: e.target.value || null })}
+            value={languageDraft}
+            onChange={(e) => setLanguageDraft(e.target.value)}
+            onBlur={commitLanguage}
+            onKeyDown={(e) => {
+              if (e.key === 'Enter') commitLanguage()
+            }}
+            disabled={!config}
             placeholder="auto (en, zh, …)"
           />
         </div>

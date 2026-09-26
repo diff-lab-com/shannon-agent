@@ -1,5 +1,7 @@
 import { useState, useEffect } from 'react'
 import { useNavigate } from 'react-router-dom'
+import { getVersion } from '@tauri-apps/api/app'
+import { homeDir, join } from '@tauri-apps/api/path'
 import { Spinner } from '@/components/ui/loading-state'
 import { useIntl } from 'react-intl'
 import { toast } from 'sonner'
@@ -39,10 +41,15 @@ export default function AdvancedSettings() {
   const [savingOffpeak, setSavingOffpeak] = useState(false)
   const [clearing, setClearing] = useState(false)
   const [resetting, setResetting] = useState(false)
-  const [showLogs, setShowLogs] = useState(false)
+  // P2: the real app version (the old "System Logs" modal hardcoded v0.1.0).
+  const [appVersion, setAppVersion] = useState<string | null>(null)
   const [showApiKeys, setShowApiKeys] = useState(false)
   const [showResetConfirm, setShowResetConfirm] = useState(false)
   const [showClearConfirm, setShowClearConfirm] = useState(false)
+
+  useEffect(() => {
+    getVersion().then(setAppVersion).catch(() => { /* jsdom / denied ACL — show no version */ })
+  }, [])
 
   // IA T3 (审批面收敛) + X1: this page no longer mounts a second
   // SkillApprovalModal. We keep the toggle + pending count, and the
@@ -91,6 +98,33 @@ export default function AdvancedSettings() {
     setDreamSkillDistillEnabled(config?.dream_skill_distill_enabled ?? false)
   }, [config?.dream_skill_distill_enabled])
 
+  // P1-10: the six core switches follow the persisted config on refresh too
+  // (same pattern as the dream switches) — otherwise a failed write, another
+  // settings surface, or a factory reset leaves the toggle lying.
+  useEffect(() => {
+    setMemoryEnabled(config?.memory_enabled ?? true)
+  }, [config?.memory_enabled])
+
+  useEffect(() => {
+    setTelemetryEnabled(config?.telemetry_enabled ?? false)
+  }, [config?.telemetry_enabled])
+
+  useEffect(() => {
+    setEncryptionEnabled(config?.encryption_enabled ?? true)
+  }, [config?.encryption_enabled])
+
+  useEffect(() => {
+    setDebugConsole(config?.debug_console ?? false)
+  }, [config?.debug_console])
+
+  useEffect(() => {
+    setSkillLoopEnabled(config?.skill_loop_enabled ?? false)
+  }, [config?.skill_loop_enabled])
+
+  useEffect(() => {
+    setSkillDetectionEnabled(config?.skill_detection_enabled ?? true)
+  }, [config?.skill_detection_enabled])
+
   // 卡A GC — session storage management: auto-clean switch (default off)
   // + retention gear (永不 0 / 30 / 90 days). Both follow the persisted
   // config on refresh, like the dream switches above.
@@ -111,7 +145,13 @@ export default function AdvancedSettings() {
       await api.configure({ key, value: String(value) })
       await refreshConfig()
       toast.success(intl.formatMessage({ id: 'settings.advanced.toggled' }, { key: key.replace(/_/g, ' '), state: value ? t('settings.advanced.enabled') : t('settings.advanced.disabled') }))
-    } catch (e) { toastError(t('settings.advanced.updateFailed'), e) }
+    } catch (e) {
+      // P1-10: don't leave the switch lying — re-read the persisted config
+      // so the config→state sync effects put the toggle back where the disk
+      // says it belongs.
+      toastError(t('settings.advanced.updateFailed'), e)
+      refreshConfig().catch(() => {})
+    }
   }
 
   const handleClearCache = async () => {
@@ -122,7 +162,14 @@ export default function AdvancedSettings() {
 
   const handleFactoryReset = async () => {
     setResetting(true)
-    try { await api.configure({ key: 'factory_reset', value: 'true' }); toast.success(t('settings.advanced.resetComplete')) } catch (e) { toastError(t('settings.advanced.resetFailed'), e) }
+    try {
+      await api.configure({ key: 'factory_reset', value: 'true' })
+      // The reset rewrites the config file — re-read it so every toggle on
+      // this page snaps back to the restored defaults instead of the stale
+      // pre-reset UI state.
+      await refreshConfig()
+      toast.success(t('settings.advanced.resetComplete'))
+    } catch (e) { toastError(t('settings.advanced.resetFailed'), e) }
     setResetting(false)
     setShowResetConfirm(false)
   }
@@ -163,6 +210,19 @@ export default function AdvancedSettings() {
       await api.openReleasePage(updateInfo.releaseUrl)
     } catch (e) {
       toastError(t('settings.advanced.updateOpenFailed'), e)
+    }
+  }
+
+  // P2: replace the fake "System Logs" modal (a hardcoded one-liner with a
+  // made-up version) with an honest entry point: the Shannon state directory
+  // under $HOME holds the on-disk logs (session events, usage ledger,
+  // scheduled runs); the desktop's own runtime log goes to stderr.
+  const handleOpenLogsDir = async () => {
+    try {
+      const dir = await join(await homeDir(), '.shannon')
+      await api.openWithDefaultApp(dir)
+    } catch (e) {
+      toastError(t('settings.advanced.openLogsDirFailed'), e)
     }
   }
 
@@ -528,11 +588,13 @@ export default function AdvancedSettings() {
           </div>
           <div className="flex flex-col md:flex-row md:items-center justify-between gap-lg">
             <div className="flex-1">
-              <p className="text-on-surface-variant text-body-sm mb-md">{t('settings.advanced.devOptionsDesc')}</p>
+              <p className="text-on-surface-variant text-body-sm mb-md">
+                {t('settings.advanced.devOptionsDesc')}
+              </p>
               <div className="flex items-center gap-md">
-                <Button variant="ghost" className="flex items-center gap-xs text-link font-label-md text-[14px] hover:underline cursor-pointer" onClick={() => setShowLogs(true)}>
-                  <span className="material-symbols-outlined icon-sm">description</span>
-                  {t('settings.advanced.viewLogs')}
+                <Button variant="ghost" className="flex items-center gap-xs text-link font-label-md text-[14px] hover:underline cursor-pointer" onClick={() => void handleOpenLogsDir()}>
+                  <span className="material-symbols-outlined icon-sm">folder_open</span>
+                  {t('settings.advanced.openLogsDir')}
                 </Button>
                 <span className="text-outline-variant">|</span>
                 <Button variant="ghost" className="flex items-center gap-xs text-link font-label-md text-[14px] hover:underline cursor-pointer" onClick={() => setShowApiKeys(true)}>
@@ -540,8 +602,16 @@ export default function AdvancedSettings() {
                   {t('settings.advanced.manageApiKeys')}
                 </Button>
               </div>
+              <p className="text-on-surface-variant text-label-sm mt-sm">
+                {t('settings.advanced.logsHint')}
+              </p>
             </div>
             <div className="flex items-center gap-md bg-surface-container-low p-md rounded-xl border border-outline-variant/20 shrink-0">
+              {appVersion && (
+                <span className="px-sm py-[2px] rounded-full bg-surface-container-high text-on-surface-variant text-label-xs font-bold whitespace-nowrap">
+                  v{appVersion}
+                </span>
+              )}
               <span className="font-label-md text-[14px] text-on-surface">{t('settings.advanced.enableDebug')}</span>
               <Switch checked={debugConsole} onCheckedChange={v => handleToggle('debug_console', v, setDebugConsole)} />
             </div>
@@ -570,17 +640,6 @@ export default function AdvancedSettings() {
           </div>
         </div>
       </div>
-
-      {/* System Logs Modal */}
-      <Modal open={showLogs} onClose={() => setShowLogs(false)} title={t('settings.advanced.systemLogs')} size="2xl">
-        <div className="px-xl pb-xl">
-          <div className="bg-surface-container-high rounded-xl p-md font-mono text-label-sm text-on-surface-variant max-h-[50vh] overflow-y-auto">
-            <p>Shannon Desktop v0.1.0</p>
-            <p>{t('settings.advanced.logsHelp')}</p>
-            <p className="mt-sm opacity-60">{t('settings.advanced.logsVerbose')}</p>
-          </div>
-        </div>
-      </Modal>
 
       {/* API Keys Modal */}
       <Modal open={showApiKeys} onClose={() => setShowApiKeys(false)} title={t('settings.advanced.manageApiKeys')} size="lg">

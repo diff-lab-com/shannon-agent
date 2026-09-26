@@ -43,7 +43,13 @@ const KNOWN_WINDOW_PATTERNS: [&str; 2] = ["main", "session-*"];
 /// Plugin manifests `desktop/build.rs` actually defines. `build.rs` fails
 /// the compile on anything else via `Resolved::resolve`; this mirror keeps
 /// the test failure readable when the drift is in a capability file.
-const DEFINED_PLUGIN_MANIFESTS: [&str; 3] = ["core:event", "core:window", "dialog"];
+const DEFINED_PLUGIN_MANIFESTS: [&str; 5] = [
+    "core:event",
+    "core:window",
+    "core:app",
+    "core:path",
+    "dialog",
+];
 
 // ---------------------------------------------------------------------------
 // File-format structs (mirror the tauri-utils ACL types we consume)
