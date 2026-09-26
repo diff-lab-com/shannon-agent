@@ -602,7 +602,7 @@ pub fn summarize_archive(path: &Path) -> Result<PluginBundleSummary, String> {
             // skills/<n>/SKILL.md — the skill's name is the first segment.
             let mut segs = rest.split('/');
             if let (Some(dir), Some(file)) = (segs.next(), segs.next_back()) {
-                if file == "SKILL.md" && dir != "" {
+                if file == "SKILL.md" && !dir.is_empty() {
                     skills.push(dir.to_string());
                 }
             }

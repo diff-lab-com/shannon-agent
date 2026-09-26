@@ -10,7 +10,7 @@
 //!
 //! 1. the session store's `project_path` values (deduplicated),
 //! 2. routine sidecar working dirs (`ScheduledTaskStore::working_dirs`,
-//!    see [`routine_working_dirs`]),
+//!    see `routine_working_dirs`),
 //! 3. on first seed (empty table) the memory layer's distinct project
 //!    labels (reusing [`crate::commands_memory`]'s enumeration).
 //!
