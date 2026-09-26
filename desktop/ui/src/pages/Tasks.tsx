@@ -29,6 +29,9 @@ import { useSessions } from '@/context/SessionContext'
 import * as api from '@/lib/tauri-api'
 import { useScheduledTasks, useTaskExecutions } from '@/hooks/scheduled-tasks'
 import { useBatchRuns } from '@/hooks/batchRuns'
+import { useProjectDeepLink } from '@/hooks/projectDeepLink'
+import ProjectFilterChip from '@/components/ProjectFilterChip'
+import { projectKeyOf } from '@/components/SidebarSessions'
 import type { CreateTaskPayload } from '@/types'
 import { type FilterStatus, statusMatchesFilter, TASKS_PER_PAGE } from '@/components/tasks/shared'
 import { useSidebarMode } from '@/components/Sidebar'
@@ -82,6 +85,11 @@ export default function Tasks() {
   // P1-2: start action for the batch form (the live cards in BatchRunPanel
   // keep their own subscription, mirroring the goal-run split).
   const { start: startBatch } = useBatchRuns()
+  // P-U3: /tasks?project=<encoded path> — scope the page to one project.
+  // Drives the removable chip, the 例行 tab's working_dir filter, the
+  // goal-run cards (dto.workingDir) and the execution history (joined
+  // through its routine's working_dir).
+  const { projectKey, projectLabel, clearProject } = useProjectDeepLink()
   const intl = useIntl()
   const t = (id: string) => intl.formatMessage({ id })
 
@@ -144,6 +152,22 @@ export default function Tasks() {
     for (const t of tasks) if (t.team) set.add(t.team)
     return Array.from(set).sort()
   }, [tasks])
+
+  // P-U3: routines scoped to the deep-linked project (working_dir matches the
+  // normalized project key). Routines with no working_dir drop out while the
+  // filter is active — they are not the project's automations.
+  const scopedRoutines = useMemo(() => {
+    if (!projectKey) return scheduledTasks
+    return scheduledTasks.filter(r => projectKeyOf({ working_dir: r.working_dir }) === projectKey)
+  }, [scheduledTasks, projectKey])
+
+  // P-U3: task_id → routine working_dir join for the execution-history tab
+  // (rows only know the routine id; the project lives on the routine).
+  const routineDirById = useMemo(() => {
+    const m: Record<string, string | null | undefined> = {}
+    for (const r of scheduledTasks) m[r.id] = r.working_dir
+    return m
+  }, [scheduledTasks])
 
   const filteredTasks = tasks.filter(t => {
     if (!statusMatchesFilter(t.status, activeFilter)) return false
@@ -253,6 +277,12 @@ export default function Tasks() {
           mode={mode}
         />
 
+        {/* P-U3: project deep-link chip — × strips ?project= and the page
+            falls back to the unscoped view. */}
+        {projectKey && projectLabel && (
+          <ProjectFilterChip label={projectLabel} onRemove={clearProject} />
+        )}
+
         {/* P2.2: Active / History / Worktrees tab switcher — Simple mode
             only shows the two universal tabs; the dev-only surfaces move
             behind the sidebar Dev-mode toggle. */}
@@ -279,13 +309,17 @@ export default function Tasks() {
         </div>
 
         {tab === 'history' ? (
-          <HistoryView onGoToActive={() => setTab('active')} />
+          <HistoryView
+            onGoToActive={() => setTab('active')}
+            projectDir={projectKey}
+            routineDirById={routineDirById}
+          />
         ) : tab === 'worktrees' ? (
           <WorktreePanel />
         ) : tab === 'routines' ? (
           <div className="space-y-gutter">
-            <ScheduleDAGView routines={scheduledTasks} onSelectRoutine={setSelectedRoutineId} queuedTaskIds={queuedRoutineIds} />
-            <WebhookTriggerCard routines={scheduledTasks} />
+            <ScheduleDAGView routines={scopedRoutines} onSelectRoutine={setSelectedRoutineId} queuedTaskIds={queuedRoutineIds} />
+            <WebhookTriggerCard routines={scopedRoutines} />
             <RoutineTemplatesBrowser onInstantiated={() => void refreshScheduled()} />
           </div>
         ) : tab === 'pipelines' ? (
@@ -314,8 +348,9 @@ export default function Tasks() {
           />
         )}
 
-        {/* P0-2: live goal-run cards sit above the regular task list. */}
-        <GoalRunPanel onViewSession={handleViewGoalSession} />
+        {/* P0-2: live goal-run cards sit above the regular task list.
+            P-U3: scoped to the deep-linked project when ?project= is set. */}
+        <GoalRunPanel onViewSession={handleViewGoalSession} projectDir={projectKey} />
 
         {/* B2 follow-up: live sub-agent inventory (system-wide). Hidden
             when the user has not enabled agent teams. */}

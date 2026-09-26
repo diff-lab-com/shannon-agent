@@ -6,7 +6,7 @@
 //
 // P2.2 deliverable from OPC-SCHEDULED-GAP-ANALYSIS.md §2.6 Phase 2.
 
-import { useEffect, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import { useIntl } from 'react-intl'
 import { useNavigate } from 'react-router-dom'
 import { useT } from '@/i18n'
@@ -15,6 +15,7 @@ import ErrorState from '@/components/ui/error-state'
 import { RowSkeleton } from '@/components/SkeletonLoader'
 import { Button } from '@/components/ui/button'
 import { cn } from '@/lib/utils'
+import { projectKeyOf } from '@/components/SidebarSessions'
 import * as api from '@/lib/tauri-api'
 import type { InboxItem, TaskExecution, TaskExecutionDetail } from '@/types'
 import { statusBadge, formatUnixDateTime } from './shared'
@@ -39,7 +40,24 @@ function StatusPill({ status }: { status: string }) {
   )
 }
 
-export default function HistoryView({ taskId, limit = 50, onGoToActive }: { taskId?: string; limit?: number; onGoToActive?: () => void }) {
+export default function HistoryView({
+  taskId,
+  limit = 50,
+  onGoToActive,
+  projectDir,
+  routineDirById,
+}: {
+  taskId?: string
+  limit?: number
+  onGoToActive?: () => void
+  /** P-U3: active project key (/tasks?project=). Rows whose routine's
+   *  working_dir maps elsewhere are hidden; standalone usage (no props)
+   *  keeps the full timeline. */
+  projectDir?: string | null
+  /** P-U3: task_id → routine working_dir join (the execution rows only
+   *  know the routine id; Tasks supplies it from useScheduledTasks). */
+  routineDirById?: Record<string, string | null | undefined>
+}) {
   const intl = useIntl()
   const t = useT()
   const navigate = useNavigate()
@@ -95,6 +113,14 @@ export default function HistoryView({ taskId, limit = 50, onGoToActive }: { task
   // Normalize: TaskExecution uses run_id; we expose `id` for keys/lookups
   const rowId = (r: TaskExecution) => r.run_id
 
+  // P-U3: project scope — a run stays only when its routine's working_dir
+  // maps to the active project key. Runs of routines without a working_dir
+  // (or of unknown routines) drop out while the filter is active.
+  const visibleRows = useMemo(() => {
+    if (!projectDir) return rows
+    return rows.filter(r => projectKeyOf({ working_dir: routineDirById?.[r.task_id] }) === projectDir)
+  }, [rows, projectDir, routineDirById])
+
   // IA T2: jump to the run's inbox card on /triage (highlighted via router
   // state); with no matching item, fall back to the plain inbox list.
   const openInInbox = (row: TaskExecution) => {
@@ -120,7 +146,7 @@ export default function HistoryView({ taskId, limit = 50, onGoToActive }: { task
       </div>
     )
   }
-  if (rows.length === 0) {
+  if (visibleRows.length === 0) {
     return (
       <div className="bg-surface-container-lowest/70 border border-outline-variant/20 rounded-xl p-xl">
         <EmptyState
@@ -137,10 +163,10 @@ export default function HistoryView({ taskId, limit = 50, onGoToActive }: { task
     <div className="space-y-sm">
       <div className="flex items-center justify-between mb-md">
         <h3 className="font-label-md text-[14px] font-bold text-on-surface-variant uppercase tracking-widest">{t('tasks.historyView.title')}</h3>
-        <span className="font-label-sm text-[11px] text-on-surface-variant">{intl.formatMessage({ id: 'tasks.historyView.runsCount' }, { count: rows.length })}</span>
+        <span className="font-label-sm text-[11px] text-on-surface-variant">{intl.formatMessage({ id: 'tasks.historyView.runsCount' }, { count: visibleRows.length })}</span>
       </div>
       <div className="space-y-sm">
-        {rows.map(row => {
+        {visibleRows.map(row => {
           const id = rowId(row)
           const isExpanded = expandedId === id
           return (
