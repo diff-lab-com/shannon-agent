@@ -116,7 +116,12 @@ impl SessionQuery {
         days_back: u32,
         include_archived: bool,
     ) -> Result<Vec<SessionRef>, super::SessionStoreError> {
-        let cutoff = Utc::now() - chrono::Duration::days(i64::from(days_back));
+        // Checked: a window wide enough to underflow the representable date
+        // range means "everything", so the cutoff clamps to the minimum
+        // instead of panicking in the subtraction.
+        let cutoff = Utc::now()
+            .checked_sub_signed(chrono::Duration::days(i64::from(days_back)))
+            .unwrap_or(DateTime::<Utc>::MIN_UTC);
         let listed = match self.store.list() {
             Ok(infos) => infos
                 .into_iter()
@@ -235,10 +240,18 @@ impl SessionQuery {
         days_back: u64,
     ) -> Result<Vec<ToolCallStat>, super::SessionStoreError> {
         // `list_recent` windows on u32 days; a wider u64 ask simply means
-        // "everything", so saturate instead of erroring.
+        // "everything", so saturate instead of erroring. The cutoff is
+        // computed with checked arithmetic: a window so wide that
+        // `now - window` underflows the representable range (or whose
+        // cutoff sits before the epoch, where a naive `as u64` would wrap
+        // and filter everything out) degenerates to `cutoff_ns = 0` —
+        // every logged event counts, exactly what "everything" means.
         let window_days = u32::try_from(days_back).unwrap_or(u32::MAX);
-        let cutoff = Utc::now() - chrono::Duration::days(i64::from(window_days));
-        let cutoff_ns = cutoff.timestamp_nanos_opt().unwrap_or(0) as u64;
+        let cutoff_ns = Utc::now()
+            .checked_sub_signed(chrono::Duration::days(i64::from(window_days)))
+            .and_then(|cutoff| cutoff.timestamp_nanos_opt())
+            .map(|ns| ns.max(0) as u64)
+            .unwrap_or(0);
 
         let mut stats: BTreeMap<String, ToolCallStat> = BTreeMap::new();
         for session in self.list_recent(window_days, false)? {
@@ -796,5 +809,31 @@ mod tests {
             "the session's healthy rows still count"
         );
         assert_eq!(by_name["read_file"].calls, 1);
+    }
+
+    // M9 review fix: a `days_back` so wide that `now - window` underflows
+    // the representable date range must saturate to "scan everything",
+    // not panic in the subtraction (the "saturate instead of erroring"
+    // contract, now actually true).
+    #[test]
+    fn tool_call_stats_huge_days_back_degenerates_to_a_full_scan_without_panicking() {
+        let tmp = tempfile::tempdir().unwrap();
+        let query = SessionQuery::new(tmp.path().join("sessions"));
+        let id = Uuid::new_v4();
+        seed_session(query.store(), &id, "any age"); // Bash + read_file
+
+        // u64::MAX saturates to u32::MAX days ≈ 11.7M years — far outside
+        // DateTime's representable range, the exact panic trigger.
+        let by_name = stats_by_name(&query.tool_call_stats(u64::MAX).unwrap());
+        assert_eq!(by_name["Bash"].calls, 1, "full scan: every event counts");
+        assert_eq!(by_name["read_file"].calls, 1);
+
+        // Same for the u32 edge itself and for a value that survives the
+        // subtraction but lands before the epoch (where a naive `as u64`
+        // cutoff would wrap and silently filter everything out).
+        let by_name = stats_by_name(&query.tool_call_stats(u64::from(u32::MAX)).unwrap());
+        assert_eq!(by_name["Bash"].calls, 1);
+        let by_name = stats_by_name(&query.tool_call_stats(60 * 365).unwrap()).remove("Bash").unwrap();
+        assert_eq!(by_name.calls, 1, "pre-epoch cutoffs still count every event");
     }
 }
