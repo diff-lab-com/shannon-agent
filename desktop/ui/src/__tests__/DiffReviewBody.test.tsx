@@ -90,3 +90,37 @@ describe('DiffReviewBody — apply guards (B0 P0-3 / P0-4)', () => {
     expect(onClose).not.toHaveBeenCalled()
   })
 })
+
+// ─── B4 P1-33: j/k keyboard focus is visible (ring + scroll anchor) ─────────
+
+describe('DiffReviewBody — visible hunk focus (B4 P1-33)', () => {
+  it('moves the focus ring to the next hunk header on j', async () => {
+    // Two separate single-line edits → two hunks.
+    const twoHunks = {
+      old_content: 'alpha\nbeta\ngamma\ndelta',
+      new_content: 'ALPHA\nbeta\nGAMMA\ndelta',
+      file_name: 'src/app.ts',
+      language: 'typescript',
+      mtime: '2026-09-26T00:00:00+00:00',
+    }
+    vi.mocked(api.getFileDiff).mockResolvedValue(twoHunks)
+    const { container } = render(<DiffReviewBody filePath="src/app.ts" onClose={() => {}} active />)
+    await screen.findByText('Accept all')
+
+    // Initially the cursor sits on hunk 0.
+    expect(container.querySelector('[data-current-hunk="true"]')).not.toBeNull()
+    const first = container.querySelector('[data-current-hunk="true"]')
+    expect(first!.className).toContain('ring-2')
+
+    // j advances the cursor — the anchor moves to the second hunk's header.
+    fireEvent.keyDown(container.firstElementChild as HTMLElement, { key: 'j' })
+    await waitFor(() => {
+      const anchors = container.querySelectorAll('[data-current-hunk="true"]')
+      expect(anchors).toHaveLength(1)
+      expect(anchors[0].className).toContain('ring-2')
+    })
+    // Exactly one anchor, and it is not the same node as before.
+    const after = container.querySelector('[data-current-hunk="true"]')!
+    expect(after).not.toBe(first)
+  })
+})
