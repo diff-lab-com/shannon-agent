@@ -5,7 +5,7 @@ import { useEffect, useMemo, useRef, useState, useCallback } from 'react'
 import type { Virtualizer } from '@tanstack/react-virtual'
 import { Button } from '@/components/ui/button'
 import WelcomeState from '@/components/WelcomeState'
-import { MessageBubble } from '@/components/chat/MessageBubble'
+import { MessageBubble, type RegeneratePayload } from '@/components/chat/MessageBubble'
 import StreamingResponse from '@/components/chat/StreamingResponse'
 import { useChat } from '@/context/ChatContext'
 import { useCatalog } from '@/context/CatalogContext'
@@ -15,7 +15,9 @@ import * as api from '@/lib/tauri-api'
 // Virtualization only kicks in past the threshold. Below it, the overhead
 // of measuring/positioning outweighs the win from fewer DOM nodes — and
 // jsdom can't provide real dimensions, so tests would render zero items.
-const VIRTUALIZE_THRESHOLD = 30
+// (Exported: Chat's search bar needs the same threshold to pick the jump
+// mechanism for a match.)
+export const VIRTUALIZE_THRESHOLD = 30
 
 /** djb2 hex — short stable salt for React keys of messages that carry no id. */
 function hashContent(s: string): string {
@@ -108,6 +110,35 @@ interface MessageAreaProps {
   virtualizer: Virtualizer<HTMLDivElement, Element>
   setDiffPath: (p: string | null) => void
   setDiffPaths: (p: string[] | null) => void
+  /** B1 §4-12: the message a search jump landed on (transient ring). */
+  searchFlashIndex?: number | null
+  /** B1 §4-8: begin a composer-based edit of the user message at `index`. */
+  onEditMessage?: (index: number) => void
+}
+
+/** B1 §4-7: everything the LAST assistant message needs for a true
+ *  regenerate — rewind to the checkpoint before its preceding user turn and
+ *  re-send that turn's text + attachment paths. Null when there is no
+ *  preceding user turn or no checkpoint covers it (fresh/demo sessions):
+ *  then the button simply does not render, like the rewind affordance.
+ *  (Shape: RegeneratePayload, declared in MessageBubble.) */
+function regenerateInfoFor(messages: { role: string; content: string; file_attachments?: { path: string }[] }[], lastAssistantIndex: number, checkpointTurns: number[]): RegeneratePayload | null {
+  let userIdx = -1
+  for (let i = lastAssistantIndex - 1; i >= 0; i--) {
+    if (messages[i]?.role === 'user') {
+      userIdx = i
+      break
+    }
+  }
+  if (userIdx < 0) return null
+  const { turnIndex, rewindable } = rewindInfoFor(messages, userIdx, checkpointTurns)
+  if (!rewindable) return null
+  const userMessage = messages[userIdx]
+  return {
+    turnIndex,
+    content: userMessage.content,
+    attachmentPaths: (userMessage.file_attachments ?? []).map(a => a.path),
+  }
 }
 
 /** True when the user is scrolled away from the very bottom by at least
@@ -138,9 +169,11 @@ export default function MessageArea({
   virtualizer,
   setDiffPath,
   setDiffPaths,
+  searchFlashIndex,
+  onEditMessage,
 }: MessageAreaProps) {
   const { messages, streamingText, thinkingText, activeToolCalls, checkpoints, rewindSession, isQuerying } = useChat()
-  const { currentSessionId, sessionActivity } = useSessions()
+  const { currentSessionId, sessionActivity, switchingSession } = useSessions()
   const durationLookup = useToolDurationLookup(currentSessionId)
   const checkpointTurns = useMemo(() => checkpoints.map(c => c.turn_index), [checkpoints])
   const rewind = useMemo(() => {
@@ -149,6 +182,18 @@ export default function MessageArea({
       return rewindable ? turnIndex : null
     }
   }, [messages, checkpointTurns])
+  // B1 §4-7: true regenerate — only the LAST assistant message carries the
+  // button, and only when the rewind+resend pipeline can actually run.
+  const lastAssistantIndex = useMemo(() => {
+    for (let i = messages.length - 1; i >= 0; i--) {
+      if (messages[i]?.role === 'assistant') return i
+    }
+    return -1
+  }, [messages])
+  const regenerateInfo = useMemo(
+    () => (lastAssistantIndex >= 0 ? regenerateInfoFor(messages, lastAssistantIndex, checkpointTurns) : null),
+    [messages, lastAssistantIndex, checkpointTurns],
+  )
   const { error } = useCatalog()
   const t = useT()
   const shouldVirtualize = messages.length > VIRTUALIZE_THRESHOLD
@@ -177,8 +222,21 @@ export default function MessageArea({
     if (el) el.scrollTo({ top: el.scrollHeight, behavior: 'smooth' })
   }, [scrollParentRef])
 
+  // B1 §4-7: shared bubble props — the regenerate payload rides only on the
+  // last assistant message; the edit affordance rides on every user message.
+  const bubbleProps = (index: number) => ({
+    onViewDiff: setDiffPath,
+    onViewDiffMulti: setDiffPaths,
+    rewindTurnIndex: rewind(index),
+    onRewind: rewindSession,
+    durationLookup,
+    onEditMessage,
+    searchFlash: searchFlashIndex === index,
+    regenerate: index === lastAssistantIndex ? regenerateInfo : undefined,
+  })
+
   return (
-    <div ref={scrollParentRef} className="flex-1 overflow-y-auto px-xl pt-lg pb-md">
+    <div ref={scrollParentRef} className="relative flex-1 overflow-y-auto px-xl pt-lg pb-md">
       <StreamStatusRegion active={streamActive} />
       {messages.length === 0 && !streamingText && <ComposerWelcome />}
 
@@ -193,11 +251,12 @@ export default function MessageArea({
               <div
                 key={messageKeys[vItem.index]}
                 data-index={vItem.index}
+                data-message-index={vItem.index}
                 ref={virtualizer.measureElement}
                 className="pb-lg"
                 style={{ position: 'absolute', top: 0, left: 0, width: '100%', transform: `translateY(${vItem.start}px)` }}
               >
-                <MessageBubble message={msg} messageIndex={vItem.index} onViewDiff={setDiffPath} onViewDiffMulti={setDiffPaths} rewindTurnIndex={rewind(vItem.index)} onRewind={rewindSession} durationLookup={durationLookup} />
+                <MessageBubble message={msg} messageIndex={vItem.index} {...bubbleProps(vItem.index)} />
               </div>
             )
           })}
@@ -207,8 +266,8 @@ export default function MessageArea({
       {messages.length > 0 && !shouldVirtualize && (
         <div aria-label={t('chat.history.aria')}>
           {messages.map((msg, i) => (
-            <div key={messageKeys[i]} className="pb-lg">
-              <MessageBubble message={msg} messageIndex={i} onViewDiff={setDiffPath} onViewDiffMulti={setDiffPaths} rewindTurnIndex={rewind(i)} onRewind={rewindSession} durationLookup={durationLookup} />
+            <div key={messageKeys[i]} data-message-index={i} className="pb-lg">
+              <MessageBubble message={msg} messageIndex={i} {...bubbleProps(i)} />
             </div>
           ))}
         </div>
@@ -254,6 +313,23 @@ export default function MessageArea({
         >
           <span className="material-symbols-outlined icon-md" aria-hidden="true">arrow_downward</span>
         </Button>
+      )}
+
+      {/* B1 P2-3: session-swap skeleton — shown only while a switch IPC is in
+          flight (AppContext never sets the flag for same-session remounts),
+          so opening a session reads as instant-and-loading instead of stale. */}
+      {switchingSession && (
+        <div
+          data-testid="session-switch-overlay"
+          aria-busy="true"
+          role="status"
+          className="absolute inset-0 z-raised flex items-center justify-center bg-surface-container-lowest/60 backdrop-blur-[2px]"
+        >
+          <div className="flex flex-col items-center gap-sm">
+            <span className="material-symbols-outlined text-primary animate-spin">progress_activity</span>
+            <span className="font-label-sm text-on-surface-variant">{t('chat.session.switching')}</span>
+          </div>
+        </div>
       )}
     </div>
   )

@@ -42,9 +42,14 @@ interface ChatInputProps {
   attachedFiles: string[]
   onAttach: (files: string[]) => void
   onDetachAll: () => void
-  disabled: boolean
+  /** B1 P1-5/§4-9: the CURRENT session's query state. The textarea stays
+   *  typable while streaming (queued sends); it only gates the mic, the
+   *  stop/send swap and the Escape-cancels-run affordance. */
   isQuerying: boolean
   onCancelQuery: () => void
+  /** B1 §4-8: present only while a message edit is in flight — Escape
+   *  cancels the edit (restores the pre-edit draft) instead. */
+  onCancelEdit?: () => void
   onOpenQuickFix: () => void
   onOpenEditor: () => void
   /** Session working directory — picks a context-aware composer placeholder. */
@@ -65,9 +70,9 @@ export default function ChatInput({
   attachedFiles,
   onAttach,
   onDetachAll,
-  disabled,
   isQuerying,
   onCancelQuery,
+  onCancelEdit,
   onOpenQuickFix,
   onOpenEditor,
   sessionWorkingDir,
@@ -90,10 +95,11 @@ export default function ChatInput({
   // Slash-command autocomplete: open while the input is a single `/token`.
   // Escape hides it until the query changes again; a space or newline closes
   // it naturally (the query regex stops matching), turning the text back
-  // into a regular prompt.
+  // into a regular prompt. B1 §4-9: also usable while streaming — local
+  // slash commands never need to queue.
   const [slashDismissed, setSlashDismissed] = useState(false)
   const [slashActive, setSlashActive] = useState(0)
-  const slashQuery = isSlashQuery(value) && !isQuerying ? value.trim() : null
+  const slashQuery = isSlashQuery(value) ? value.trim() : null
   const slashMatches = slashQuery && !slashDismissed ? filterSlashCommands(slashQuery) : []
   const slashOpen = slashMatches.length > 0
 
@@ -224,6 +230,14 @@ export default function ChatInput({
     }
   }, [])
 
+  // B1 §4-12: the chat search bar's Esc/close hands focus back to whatever
+  // surface the user left — which is usually this textarea.
+  useEffect(() => {
+    const onFocusComposer = () => textareaRef.current?.focus()
+    window.addEventListener('shannon:focus-composer', onFocusComposer)
+    return () => window.removeEventListener('shannon:focus-composer', onFocusComposer)
+  }, [])
+
   // B0 P0-3 — IME composition guard. While a CJK conversion is in flight,
   // the Enter/Tab keydown belongs to the IME (it confirms the candidate);
   // sending it would post half-converted pinyin. Two browser orderings need
@@ -276,9 +290,17 @@ export default function ChatInput({
       e.preventDefault()
       onSend()
     }
-    if (e.key === 'Escape' && isQuerying) {
-      e.preventDefault()
-      onCancelQuery()
+    // Escape priority: exit message edit > cancel the running query.
+    if (e.key === 'Escape') {
+      if (onCancelEdit) {
+        e.preventDefault()
+        onCancelEdit()
+        return
+      }
+      if (isQuerying) {
+        e.preventDefault()
+        onCancelQuery()
+      }
     }
   }
 
@@ -485,7 +507,7 @@ export default function ChatInput({
             className="flex-1 bg-transparent border-none outline-none focus:ring-0 font-body-lg py-md px-sm placeholder:text-on-surface-variant/70 text-on-surface resize-none min-h-[24px] max-h-[200px]"
             placeholder={
               isQuerying
-                ? t('chat.input.processing')
+                ? t('chat.input.queued.placeholder')
                 : sessionWorkingDir
                   ? intl.formatMessage({ id: 'chat.input.placeholder.project' }, { dir: basename(sessionWorkingDir) })
                   : t('chat.input.placeholder.empty')
@@ -513,7 +535,6 @@ export default function ChatInput({
               compositionEndedAtRef.current = Date.now()
             }}
             rows={1}
-            disabled={disabled}
           />
         </div>
 
@@ -662,7 +683,7 @@ export default function ChatInput({
           <div className="flex items-center gap-xs shrink-0">
             <MicButton
               state={voice.state}
-              disabled={disabled}
+              disabled={isQuerying}
               onStart={() => void voice.startRecording()}
               onStop={() => void voice.stopRecording()}
             />

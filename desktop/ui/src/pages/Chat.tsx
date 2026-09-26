@@ -17,11 +17,14 @@ import { TerminalPanel } from '@/components/terminal/TerminalPanel'
 import RightDock from './chat/RightDock'
 import {
   ApiKeyBanner,
+  ChatSearchBar,
   ComposerPanel,
   InlinePanelModal,
   MessageArea,
   ComposerContext,
 } from './chat'
+import { VIRTUALIZE_THRESHOLD } from './chat/MessageArea'
+import type { EditingMessageState } from './chat/ComposerContext'
 
 // QuickFix is a chat-inline tool launched from the composer toolbar (it has
 // no standalone route); the Editor exists both inline and as a standalone
@@ -29,12 +32,51 @@ import {
 const QuickFixPanel = lazy(() => import('@/pages/QuickFix'))
 const EditorPanel = lazy(() => import('@/pages/Editor'))
 
+// ── B1 §4-11 per-session draft storage ───────────────────────────────────
+const DRAFT_KEY_PREFIX = 'shannon.draft.'
+const DRAFT_DEBOUNCE_MS = 300
+const DRAFT_MAX_BYTES = 64 * 1024
+// B1 §4-12: how long the search-jump bubble keeps its ring (ms).
+const SEARCH_FLASH_MS = 1200
+
+function draftKey(sessionId: string): string {
+  return `${DRAFT_KEY_PREFIX}${sessionId}`
+}
+
+function readDraft(sessionId: string): { text: string; attachments: string[] } | null {
+  try {
+    const raw = localStorage.getItem(draftKey(sessionId))
+    if (!raw) return null
+    const parsed = JSON.parse(raw) as { text?: unknown; attachments?: unknown }
+    if (typeof parsed.text !== 'string' || !Array.isArray(parsed.attachments)) return null
+    return {
+      text: parsed.text,
+      attachments: parsed.attachments.filter((a): a is string => typeof a === 'string'),
+    }
+  } catch { return null }
+}
+
+function writeDraft(sessionId: string, text: string, attachments: string[]): void {
+  try {
+    const payload = JSON.stringify({ text, attachments, updatedAt: Date.now() })
+    // Size cap: a runaway draft must not crowd the quota for the dock's
+    // persisted keys. Oversized drafts simply stay in-memory.
+    if (payload.length > DRAFT_MAX_BYTES) return
+    localStorage.setItem(draftKey(sessionId), payload)
+  } catch { /* quota / private mode — drafts are best-effort */ }
+}
+
+function clearDraft(sessionId: string): void {
+  try { localStorage.removeItem(draftKey(sessionId)) } catch { /* noop */ }
+}
+
 export default function Chat() {
   const {
     messages, streamingText, isQuerying, usage, activeToolCalls,
     sendMessage, contextPanelOpen, setContextPanelOpen, compactSession,
+    promptQueue, dequeuePrompt, enqueuePrompt, rewindSession, checkpoints,
   } = useChat()
-  const { sessions, currentSessionId, createSession } = useSessions()
+  const { sessions, currentSessionId, windowSessionId, createSession } = useSessions()
   const { config } = useCatalog()
   // P1-C: file-mutating tool outputs (md/html/svg/mermaid/images written to
   // disk) dock as provenance-tagged artifact tabs.
@@ -75,6 +117,107 @@ export default function Chat() {
       navigate(location.pathname, { replace: true, state: null })
     }
   }, [location.state, location.pathname, navigate])
+
+  // ── B1 §4-11 / P2-1: per-session drafts ────────────────────────────────
+  // The draft (text + attachments) used to be one page-level pair of states
+  // that cross-contaminated every session and died with the tab. It now
+  // persists per session under `shannon.draft.<id>`: debounced write while
+  // typing, synchronous flush on switch, cleared when emptied (send).
+  const visibleSessionId = windowSessionId ?? currentSessionId
+  useEffect(() => {
+    if (!visibleSessionId) return
+    const id = window.setTimeout(() => {
+      if (!input.trim() && attachedFiles.length === 0) clearDraft(visibleSessionId)
+      else writeDraft(visibleSessionId, input, attachedFiles)
+    }, DRAFT_DEBOUNCE_MS)
+    return () => window.clearTimeout(id)
+  }, [input, attachedFiles, visibleSessionId])
+
+  // ── B1 §4-8: message edit (composer-based) ─────────────────────────────
+  // One message editable at a time; the composer is prefilled and a banner
+  // identifies the target. Sending rewinds to before that turn and resends
+  // the edited text with the ORIGINAL attachments (attachment editing is
+  // out of scope). Escape/cancel restores the pre-edit draft.
+  const [editing, setEditing] = useState<EditingMessageState | null>(null)
+
+  // Restore the incoming session's draft on switch (replacing whatever the
+  // previous session left in the composer) and cancel any in-flight message
+  // edit — editing is scoped to the session it started in. The prev-ref
+  // guard keeps a same-session remount from resetting the composer.
+  const prevDraftSessionRef = useRef(visibleSessionId)
+  useEffect(() => {
+    if (prevDraftSessionRef.current === visibleSessionId) return
+    const previousId = prevDraftSessionRef.current
+    prevDraftSessionRef.current = visibleSessionId
+    // Flush synchronously so the old session's last keystrokes survive.
+    if (previousId) writeDraft(previousId, input, attachedFiles)
+    const draft = visibleSessionId ? readDraft(visibleSessionId) : null
+    setInput(draft?.text ?? '')
+    setAttachedFiles(draft?.attachments ?? [])
+    setEditing(null)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [visibleSessionId])
+
+  const startEdit = useCallback((index: number) => {
+    if (isQuerying || editing) return
+    const msg = messages[index]
+    if (!msg || msg.role !== 'user') return
+    // Same turn math as MessageArea's rewind affordance: the rewind target
+    // is the number of user messages before this one; no checkpoint at or
+    // after that turn means nothing to rewind onto (fresh/demo session).
+    let turnIndex = 0
+    for (let i = 0; i < index; i++) {
+      if (messages[i]?.role === 'user') turnIndex++
+    }
+    const rewindable = checkpoints.some(c => c.turn_index >= turnIndex)
+    if (!rewindable) return
+    setEditing({
+      index,
+      turnIndex,
+      content: msg.content,
+      timestamp: msg.timestamp,
+      attachmentPaths: (msg.file_attachments ?? []).map(a => a.path),
+      draft: { text: input, attachments: attachedFiles },
+    })
+    setInput(msg.content)
+  }, [isQuerying, editing, messages, checkpoints, input, attachedFiles])
+
+  const cancelEdit = useCallback(() => {
+    if (!editing) return
+    setInput(editing.draft.text)
+    setAttachedFiles(editing.draft.attachments)
+    setEditing(null)
+  }, [editing])
+
+  // ── B1 §4-12: in-conversation search ───────────────────────────────────
+  const [searchOpen, setSearchOpen] = useState(false)
+  const [searchFlashIndex, setSearchFlashIndex] = useState<number | null>(null)
+  const searchFlashTimerRef = useRef<number | null>(null)
+  const flashMessage = useCallback((index: number | null) => {
+    setSearchFlashIndex(index)
+    if (searchFlashTimerRef.current != null) window.clearTimeout(searchFlashTimerRef.current)
+    if (index != null) {
+      searchFlashTimerRef.current = window.setTimeout(() => setSearchFlashIndex(null), SEARCH_FLASH_MS)
+    }
+  }, [])
+  useEffect(() => () => {
+    if (searchFlashTimerRef.current != null) window.clearTimeout(searchFlashTimerRef.current)
+  }, [])
+  // Ctrl/Cmd+F owns the shortcut everywhere on the chat page — the desktop
+  // webview has no native find dialog to fall back to. preventDefault even
+  // inside editable targets so the composer can't shadow it.
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (!(e.metaKey || e.ctrlKey) || e.altKey) return
+      if (e.key !== 'f' && e.key !== 'F') return
+      e.preventDefault()
+      setSearchOpen(true)
+    }
+    window.addEventListener('keydown', onKey)
+    return () => window.removeEventListener('keydown', onKey)
+  }, [])
+  const closeSearch = useCallback(() => setSearchOpen(false), [])
+
 
   // Cmd/Ctrl+\ toggles the right dock — same one in AppContext the Header
   // button drives. Mirrors the terminal's Ctrl+` and keeps the keyboard
@@ -181,6 +324,25 @@ export default function Chat() {
     })
   }, [navigate, currentSessionId, sessions, config?.working_dir, createSession, compactSession, t])
 
+  // B1 §4-8: commit an edit — rewind to before the edited turn, then resend
+  // the edited text with the message's ORIGINAL attachment paths (editing
+  // attachments themselves is out of scope). A failed rewind keeps editing
+  // mode alive so the user can retry or cancel.
+  const commitEdit = useCallback(async (newText: string) => {
+    if (!editing) return
+    try {
+      await rewindSession(editing.turnIndex)
+    } catch (e) {
+      toastError(t('chat.edit.failed'), e)
+      return
+    }
+    setEditing(null)
+    void sendMessage(newText, editing.attachmentPaths.length > 0 ? editing.attachmentPaths : undefined)
+    setInput('')
+    setAttachedFiles([])
+    if (visibleSessionId) clearDraft(visibleSessionId)
+  }, [editing, rewindSession, sendMessage, visibleSessionId, t])
+
   const handleSend = () => {
     const trimmed = input.trim()
     const hasAttachments = attachedFiles.length > 0
@@ -189,12 +351,13 @@ export default function Chat() {
     // emptiness; the engine turns the attachments into content blocks), so
     // an empty text with files now goes through instead of silently
     // no-oping behind an enabled send button.
-    if ((!trimmed && !hasAttachments) || isQuerying) return
+    if (!trimmed && !hasAttachments) return
     if (trimmed) {
       // Slash commands never reach the model: a bare `/name` runs locally
       // (the desktop's counterpart of the REPL command line), and anything
       // else starting with `/` — typically a pasted absolute path — is sent
-      // as plain text.
+      // as plain text. They execute locally regardless of query state —
+      // there is nothing to stream, so nothing to queue.
       const slashCommand = parseSlashInput(trimmed)
       if (slashCommand) {
         executeSlash(slashCommand)
@@ -202,11 +365,50 @@ export default function Chat() {
         return
       }
     }
+    // B1 §4-8: an in-flight edit replaces the turn (rewind + resend) instead
+    // of appending. Blocked while querying — rewinding mid-run is unsafe.
+    if (editing) {
+      if (isQuerying || !trimmed) return
+      void commitEdit(trimmed)
+      return
+    }
     const filePaths = hasAttachments ? attachedFiles : undefined
+    // B1 §4-9: while THIS session streams, sends join its FIFO queue instead
+    // of being dropped. Accepted items clear the draft (they render as
+    // removable chips); an overflow keeps it. The pre-existing edge stands:
+    // attachments-only input still no-ops while querying.
+    if (isQuerying) {
+      if (!trimmed) return
+      const accepted = enqueuePrompt(trimmed, hasAttachments ? attachedFiles : [])
+      if (accepted) {
+        setInput('')
+        setAttachedFiles([])
+      }
+      return
+    }
     sendMessage(trimmed, filePaths)
     setInput('')
     setAttachedFiles([])
+    if (visibleSessionId) clearDraft(visibleSessionId)
   }
+
+  // B1 §4-9: drain — when this session's run settles and prompts are still
+  // queued, auto-send the head. Queued slash commands (if any land here)
+  // execute locally like normal; the dequeue ref in AppContext keeps this
+  // single-shot even under StrictMode double-invocation.
+  useEffect(() => {
+    if (isQuerying || promptQueue.length === 0) return
+    const item = dequeuePrompt()
+    if (!item) return
+    const cmd = item.text.trim() ? parseSlashInput(item.text.trim()) : null
+    if (cmd) {
+      executeSlash(cmd)
+      return
+    }
+    void sendMessage(item.text, item.attachments.length > 0 ? item.attachments : undefined)
+    // `promptQueue` re-triggers the drain for the next item once the new run
+    // settles; sendMessage flips isQuerying synchronously during the send.
+  }, [isQuerying, promptQueue, dequeuePrompt, executeSlash, sendMessage])
 
   // Attach files via Tauri's native dialog so the backend receives real
   // absolute paths (the backend reads bytes via std::fs and base64-encodes).
@@ -224,6 +426,7 @@ export default function Chat() {
     input, setInput, handleSend,
     attachedFiles, handleAttach, handleDetachAll,
     executeSlash, slashResult, dismissSlashResult,
+    editing, cancelEdit,
   }
 
   const showApiKeyBanner =
@@ -289,12 +492,25 @@ export default function Chat() {
               sessionId={currentSessionId}
             />
 
+            {searchOpen && (
+              <ChatSearchBar
+                messages={messages}
+                virtualized={messages.length > VIRTUALIZE_THRESHOLD}
+                virtualizer={virtualizer}
+                scrollParentRef={scrollParentRef}
+                onFlash={flashMessage}
+                onClose={closeSearch}
+              />
+            )}
+
             <MessageArea
               scrollParentRef={scrollParentRef}
               messagesEndRef={messagesEndRef}
               virtualizer={virtualizer}
               setDiffPath={setDiffPath}
               setDiffPaths={setDiffPaths}
+              searchFlashIndex={searchFlashIndex}
+              onEditMessage={startEdit}
             />
             <ComposerPanel
               setQuickFixOpen={setQuickFixOpen}

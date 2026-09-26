@@ -34,6 +34,16 @@ import { openWithDefaultApp } from '@/lib/tauri-api'
 import type { ChatMessage, ToolCall, FileAttachment } from '@/types'
 import { cn } from '@/lib/utils'
 
+/** B1 §4-7: payload for a TRUE regenerate — rewind to the checkpoint before
+ *  the preceding user turn, then re-send that turn's text (plus its
+ *  attachment paths; the rewind cannot restore files by itself, so they are
+ *  explicitly re-attached on the resend). */
+export interface RegeneratePayload {
+  turnIndex: number
+  content: string
+  attachmentPaths: string[]
+}
+
 interface MessageBubbleProps {
   message: ChatMessage
   messageIndex: number
@@ -47,6 +57,13 @@ interface MessageBubbleProps {
    *  trace timeline — the authoritative durations for historical messages
    *  (live tool calls carry their own client-measured duration_ms). */
   durationLookup?: Map<string, number>
+  /** B1 §4-7: present only on the LAST assistant message of the session —
+   *  its presence is the regenerate button's visibility condition. */
+  regenerate?: RegeneratePayload | null
+  /** B1 §4-8: open the composer-based edit flow for this user message. */
+  onEditMessage?: (index: number) => void
+  /** B1 §4-12: transient highlight ring while a search jump lands here. */
+  searchFlash?: boolean
 }
 
 const IMAGE_EXTENSIONS = new Set(['png', 'jpg', 'jpeg', 'gif', 'webp', 'bmp', 'svg'])
@@ -74,13 +91,16 @@ function MessageHeader({
       : role === 'tool' ? t('chat.message.header.tool')
       : t('chat.message.header.assistant')
   const time = timestamp ? new Date(timestamp).toLocaleTimeString(intl.locale, { hour: '2-digit', minute: '2-digit' }) : ''
+  // P2-17 (B1): the whole header used to be aria-hidden, leaving screen
+  // readers unable to tell who spoke or when. The role label and <time> are
+  // real content now; only the decorative separators and icon stay hidden.
   return (
-    <div className="flex items-center gap-xs text-label-xs text-on-surface-variant mb-xs" aria-hidden="true">
+    <div className="flex items-center gap-xs text-label-xs text-on-surface-variant mb-xs">
       <span className="font-label-xs uppercase tracking-wide font-medium">{label}</span>
       {isBranch && (
         <>
           <span aria-hidden="true">·</span>
-          <span className="material-symbols-outlined text-[12px]">fork_right</span>
+          <span className="material-symbols-outlined text-[12px]" aria-hidden="true">fork_right</span>
           <span>{t('chat.message.branch')}</span>
         </>
       )}
@@ -175,14 +195,15 @@ function AttachmentPreview({ attachment }: { attachment: FileAttachment }) {
   )
 }
 
-export const MessageBubble = memo(function MessageBubble({ message, messageIndex, isBranch, onViewDiff, onViewDiffMulti, rewindTurnIndex, onRewind, durationLookup }: MessageBubbleProps) {
+export const MessageBubble = memo(function MessageBubble({ message, messageIndex, isBranch, onViewDiff, onViewDiffMulti, rewindTurnIndex, onRewind, durationLookup, regenerate, onEditMessage, searchFlash }: MessageBubbleProps) {
   const isUser = message.role === 'user'
   const [isBranching, setIsBranching] = useState(false)
   const [pendingBranch, setPendingBranch] = useState(false)
   const [pendingRewind, setPendingRewind] = useState(false)
   const [isRewinding, setIsRewinding] = useState(false)
+  const [isRegenerating, setIsRegenerating] = useState(false)
   const [reportOpen, setReportOpen] = useState(false)
-  const { sendMessage, feedback, recordFeedback } = useChat()
+  const { sendMessage, feedback, recordFeedback, isQuerying } = useChat()
   const { currentSessionId, switchSession, refreshSessions } = useSessions()
   const intl = useIntl()
   const t = (id: string) => intl.formatMessage({ id })
@@ -201,8 +222,25 @@ export const MessageBubble = memo(function MessageBubble({ message, messageIndex
     navigator.clipboard.writeText(message.content).catch((e) => toastError(t('chat.toast.copyFailed'), e))
   }
 
-  const handleRegenerate = () => {
-    sendMessage(t('chat.regenerate.prompt')).catch((e) => toastError(t('chat.toast.regenerateFailed'), e))
+  // B1 §4-7: TRUE regenerate — rewind the session to the checkpoint before
+  // the preceding user turn, then re-send that turn verbatim (text +
+  // attachment paths). Direct execution with a toast; no modal, and the
+  // canned-prompt fake from the first round is gone.
+  const handleRegenerate = async () => {
+    if (!regenerate || !onRewind || isRegenerating) return
+    setIsRegenerating(true)
+    try {
+      await onRewind(regenerate.turnIndex)
+      await sendMessage(
+        regenerate.content,
+        regenerate.attachmentPaths.length > 0 ? regenerate.attachmentPaths : undefined,
+      )
+      toast.success(t('chat.message.regenerate.started'))
+    } catch (error) {
+      toastError(t('chat.message.regenerate.failed'), error)
+    } finally {
+      setIsRegenerating(false)
+    }
   }
 
   const confirmRewind = async () => {
@@ -252,7 +290,7 @@ export const MessageBubble = memo(function MessageBubble({ message, messageIndex
   if (isUser) {
     return (
       <>
-      <Message from="user" className="flex justify-end">
+      <Message from="user" className={cn('flex justify-end', searchFlash && 'search-flash rounded-2xl')}>
         <MessageContent className="max-w-[80%]">
           <MessageHeader role="user" timestamp={message.timestamp} isBranch={isBranch} />
           {hasAttachments && (
@@ -278,6 +316,20 @@ export const MessageBubble = memo(function MessageBubble({ message, messageIndex
             >
               <span className="material-symbols-outlined text-[18px]" aria-hidden="true">content_copy</span>
             </Button>
+            {/* B1 §4-8: composer-based edit — same rewindability gate as the
+                rewind button (a checkpoint must exist at or after this turn,
+                otherwise there is nothing to rewind onto). */}
+            {onEditMessage && rewindTurnIndex != null && (
+              <Button
+                aria-label={t('chat.message.edit.aria')}
+                onClick={() => onEditMessage(messageIndex)}
+                disabled={isQuerying}
+                className="flex items-center gap-xs px-sm py-xs rounded-lg hover:bg-surface-container text-on-surface-variant transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/30"
+                title={t('chat.message.edit.button')}
+              >
+                <span className="material-symbols-outlined text-[18px]" aria-hidden="true">edit</span>
+              </Button>
+            )}
             <Button
               aria-label={t('chat.message.branch.aria')}
               onClick={handleBranch}
@@ -335,7 +387,7 @@ export const MessageBubble = memo(function MessageBubble({ message, messageIndex
   const isTool = message.role === 'tool'
 
   return (
-    <Message from={isTool ? 'system' : 'assistant'} className="flex gap-md max-w-4xl group">
+    <Message from={isTool ? 'system' : 'assistant'} className={cn('flex gap-md max-w-4xl group', searchFlash && 'search-flash rounded-2xl')}>
       <MessageAvatar from="assistant" icon={isTool ? 'build' : 'smart_toy'} />
       <MessageContent className="space-y-md flex-1">
         <MessageHeader role={isTool ? 'tool' : 'assistant'} timestamp={message.timestamp} />
@@ -435,9 +487,21 @@ export const MessageBubble = memo(function MessageBubble({ message, messageIndex
               <Button aria-label={t('chat.message.dislike.aria')} aria-pressed={myRating === 'down'} onClick={() => toggleFeedback('down')} className={cn('flex items-center gap-xs px-sm py-xs rounded-lg hover:bg-surface-container transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/30', myRating === 'down' ? 'text-error' : 'text-on-surface-variant')}>
                 <span className="material-symbols-outlined text-[18px]" aria-hidden="true">{myRating === 'down' ? 'thumb_down' : 'thumb_down_off_alt'}</span>
               </Button>
-              <Button aria-label={t('chat.message.regenerate.aria')} onClick={handleRegenerate} className="flex items-center gap-xs px-sm py-xs rounded-lg hover:bg-surface-container text-on-surface-variant transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/30">
-                <span className="material-symbols-outlined text-[18px]" aria-hidden="true">refresh</span>
-              </Button>
+              {/* B1 §4-7: true regenerate renders ONLY on the last assistant
+                  message (presence of the `regenerate` payload), and only
+                  when the session is idle. */}
+              {regenerate && (
+                <Button
+                  aria-label={t('chat.message.regenerate.aria')}
+                  onClick={() => void handleRegenerate()}
+                  disabled={isQuerying || isRegenerating}
+                  className="flex items-center gap-xs px-sm py-xs rounded-lg hover:bg-surface-container text-on-surface-variant transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/30 disabled:opacity-40"
+                >
+                  <span className="material-symbols-outlined text-[18px]" aria-hidden="true">
+                    {isRegenerating ? 'hourglass_empty' : 'refresh'}
+                  </span>
+                </Button>
+              )}
               <Button
                 aria-label={t('chat.message.branch.aria')}
                 onClick={handleBranch}

@@ -2,7 +2,6 @@ import { useIntl } from 'react-intl'
 import { Markdown } from '@/components/chat/Markdown'
 import { SubagentBlock, ToolCallDisplay } from '@/components/chat/MessageBubble'
 import { Reasoning } from '@/components/ai-elements'
-import type { ReactNode } from 'react'
 import type { ToolCall } from '@/types'
 
 interface StreamingResponseProps {
@@ -10,9 +9,6 @@ interface StreamingResponseProps {
   thinkingText: string
   activeToolCalls: ToolCall[]
   onViewDiff: (path: string) => void
-  /** Slots for extra content above/below the streaming bubble (e.g.
-   *  prepended regeneration blocks). Default empty. */
-  headerSlot?: ReactNode
 }
 
 /* B0 P1-1: the old near-bottom auto-scroll guard here was dead code — this
@@ -32,14 +28,12 @@ export default function StreamingResponse({
   thinkingText,
   activeToolCalls,
   onViewDiff,
-  headerSlot,
 }: StreamingResponseProps) {
   const intl = useIntl()
   const t = (id: string) => intl.formatMessage({ id })
 
   return (
     <div className="relative" role="presentation">
-      {headerSlot}
       <div className="flex gap-md max-w-[90%] pt-lg">
         <div className="h-10 w-10 rounded-full bg-primary-container flex items-center justify-center shrink-0 shadow-md">
           <span className="material-symbols-outlined text-on-primary-container">smart_toy</span>

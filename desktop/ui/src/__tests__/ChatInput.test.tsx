@@ -90,7 +90,6 @@ function renderChatInput(props: Partial<React.ComponentProps<typeof ChatInput>> 
     attachedFiles: [],
     onAttach: vi.fn(),
     onDetachAll: vi.fn(),
-    disabled: false,
     isQuerying: false,
     onCancelQuery: vi.fn(),
     onOpenQuickFix: vi.fn(),
@@ -347,11 +346,14 @@ describe('ChatInput', () => {
     expect(onChange).toHaveBeenCalledWith('New message')
   })
 
-  it('shows "Processing..." placeholder when querying', () => {
+  it('shows the queued-input placeholder (textarea stays typable) when querying', () => {
     renderChatInput({ isQuerying: true })
 
-    const textarea = screen.getByPlaceholderText('Processing...')
+    // B1 §4-9 — the textarea is no longer disabled while streaming; the
+    // placeholder advertises queueing instead of a hard block.
+    const textarea = screen.getByPlaceholderText('Reply generating — press Enter to queue your message')
     expect(textarea).toBeInTheDocument()
+    expect(textarea).not.toBeDisabled()
   })
 
   it('shows hourglass icon when querying', () => {
@@ -431,7 +433,6 @@ describe('ChatInput — slash-command menu', () => {
           attachedFiles={[]}
           onAttach={vi.fn()}
           onDetachAll={vi.fn()}
-          disabled={false}
           isQuerying={false}
           onCancelQuery={vi.fn()}
           onOpenQuickFix={vi.fn()}

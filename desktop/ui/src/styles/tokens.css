@@ -172,6 +172,23 @@
   50.01%, 100% { opacity: 0; }
 }
 
+/* B1 §4-12: transient ring on the bubble an in-conversation search jump
+ * landed on (~1.2s, driven by Chat's flash timer). Reduced-motion users get
+ * a static outline instead of the animation. */
+.search-flash {
+  animation: search-flash-ring 1.2s ease-out;
+}
+@keyframes search-flash-ring {
+  0%   { box-shadow: 0 0 0 3px var(--color-primary); }
+  100% { box-shadow: 0 0 0 3px transparent; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .search-flash {
+    animation: none;
+    box-shadow: 0 0 0 2px var(--color-primary);
+  }
+}
+
 
 /* ───── P2-⑧ compact density ───────────────────────────────────────────
    html[data-density="compact"] scales the shared type & spacing tokens

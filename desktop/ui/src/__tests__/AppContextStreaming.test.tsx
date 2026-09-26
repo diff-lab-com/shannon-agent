@@ -76,8 +76,9 @@ describe('AppContext — §P2-18 per-session streaming buckets', () => {
     })
 
     // The visible stream shows ONLY session A's tokens — B's went to B's
-    // own bucket (the old single buffer produced "A1B1A2B2").
-    expect(result.current.streamingText).toBe('A1A2')
+    // own bucket (the old single buffer produced "A1B1A2B2"). B1 P2-13:
+    // the visible projection is throttled (~50ms), so await the flush.
+    await waitFor(() => expect(result.current.streamingText).toBe('A1A2'))
 
     // B completing must not append its (own) text to the visible session's
     // messages, clear the visible stream, or settle the composer state of
@@ -110,7 +111,8 @@ describe('AppContext — §P2-18 per-session streaming buckets', () => {
       flush(EVENT_NAMES.QUERY_THINKING, { content: 'more-A', session_id: SESSION_A })
     })
 
-    expect(result.current.thinkingText).toBe('think-A more-A')
+    // B1 P2-13: thinking projections ride the same throttled flush.
+    await waitFor(() => expect(result.current.thinkingText).toBe('think-A more-A'))
   })
 
   it('switching to a background session shows that session\'s own bucket', async () => {
@@ -126,7 +128,7 @@ describe('AppContext — §P2-18 per-session streaming buckets', () => {
       flush(EVENT_NAMES.QUERY_TEXT, { content: 'B1', session_id: SESSION_B })
       flush(EVENT_NAMES.QUERY_THINKING, { content: 'thought-B', session_id: SESSION_B })
     })
-    expect(result.current.streamingText).toBe('A1 ')
+    await waitFor(() => expect(result.current.streamingText).toBe('A1 '))
 
     // Open the background session: its own buffered text is projected.
     await act(async () => { await result.current.switchSession(SESSION_B) })
@@ -163,8 +165,10 @@ describe('AppContext — B0 P1-2 ghost-bubble cleanup on fail/cancel', () => {
         tool_use_id: 'tc-1', tool_name: 'bash', tool_input: {}, session_id: SESSION_A,
       })
     })
-    expect(result.current.streamingText).toBe('partial answer')
-    expect(result.current.thinkingText).toBe('partial thought ')
+    await waitFor(() => {
+      expect(result.current.streamingText).toBe('partial answer')
+      expect(result.current.thinkingText).toBe('partial thought ')
+    })
     expect(result.current.activeToolCalls).toHaveLength(1)
     expect(result.current.isQuerying).toBe(true)
     return result

@@ -1,7 +1,9 @@
 import { useEffect } from 'react'
+import { useIntl } from 'react-intl'
 import { Button } from '@/components/ui/button'
 import ChatInput from '@/components/chat/ChatInput'
 import SlashResultCard from '@/components/chat/SlashResultCard'
+import QueueChips from './QueueChips'
 import { useT } from '@/i18n'
 import { useChat } from '@/context/ChatContext'
 import { useSessions } from '@/context/SessionContext'
@@ -22,7 +24,7 @@ interface ComposerPanelProps {
 // Cmd/Ctrl+D WD-picker shortcut is handled by this panel too — it owns the
 // picker button).
 export default function ComposerPanel({ setQuickFixOpen, setEditorOpen }: ComposerPanelProps) {
-  const { input, setInput, handleSend, attachedFiles, handleAttach, handleDetachAll, executeSlash, slashResult, dismissSlashResult } = useComposer()
+  const { input, setInput, handleSend, attachedFiles, handleAttach, handleDetachAll, executeSlash, slashResult, dismissSlashResult, editing, cancelEdit } = useComposer()
   const { isQuerying, cancelQuery, usage } = useChat()
   const { sessions, currentSessionId } = useSessions()
   const { config } = useCatalog()
@@ -46,6 +48,11 @@ export default function ComposerPanel({ setQuickFixOpen, setEditorOpen }: Compos
       <div className="max-w-4xl mx-auto">
         <div className="glass-surface rounded-2xl">
           {slashResult && <SlashResultCard result={slashResult} onDismiss={dismissSlashResult} />}
+          {/* B1 §4-8: while editing, the banner identifies the target message
+              and offers the escape hatch (restores the pre-edit draft). */}
+          {editing && <EditBanner timestamp={editing.timestamp} onCancel={cancelEdit} />}
+          {/* B1 §4-9: prompts queued while this session streams. */}
+          <QueueChips />
           <ChatInput
             value={input}
             onChange={setInput}
@@ -54,9 +61,11 @@ export default function ComposerPanel({ setQuickFixOpen, setEditorOpen }: Compos
             attachedFiles={attachedFiles}
             onAttach={handleAttach}
             onDetachAll={handleDetachAll}
-            disabled={isQuerying}
             isQuerying={isQuerying}
             onCancelQuery={cancelQuery}
+            // Present only while an edit is in flight — Escape inside the
+            // textarea then exits edit mode (restoring the pre-edit draft).
+            onCancelEdit={editing ? cancelEdit : undefined}
             onOpenQuickFix={() => setQuickFixOpen(true)}
             onOpenEditor={() => setEditorOpen(true)}
             sessionWorkingDir={sessionWorkingDir}
@@ -80,6 +89,33 @@ export default function ComposerPanel({ setQuickFixOpen, setEditorOpen }: Compos
           </Button>
         </div>
       </div>
+    </div>
+  )
+}
+
+/** B1 §4-8: dismissible banner naming the message under edit (chat.edit.banner). */
+function EditBanner({ timestamp, onCancel }: { timestamp: number; onCancel: () => void }) {
+  const intl = useIntl()
+  const t = useT()
+  const time = new Date(timestamp).toLocaleTimeString(intl.locale, { hour: '2-digit', minute: '2-digit' })
+  return (
+    <div
+      role="status"
+      data-testid="edit-banner"
+      className="flex items-center gap-xs px-md py-xs bg-secondary-container/40 border-b border-outline-variant/20 rounded-t-2xl text-on-surface"
+    >
+      <span className="material-symbols-outlined icon-sm text-secondary shrink-0" aria-hidden="true">edit</span>
+      <span className="font-label-sm truncate flex-1">{t('chat.edit.banner', { time })}</span>
+      <Button
+        variant="ghost"
+        size="icon-xs"
+        onClick={onCancel}
+        aria-label={t('chat.edit.cancel.aria')}
+        title={t('chat.edit.cancel.aria')}
+        className="rounded hover:bg-error/10 hover:text-error shrink-0"
+      >
+        <span className="material-symbols-outlined icon-sm" aria-hidden="true">close</span>
+      </Button>
     </div>
   )
 }
