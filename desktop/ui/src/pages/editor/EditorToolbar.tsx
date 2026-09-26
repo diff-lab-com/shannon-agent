@@ -38,7 +38,9 @@ export default function EditorToolbar({
         {file.language_id}
       </span>
       <span>·</span>
-      <span>{diagCount} {t(`editor.diagnostics`, { count: diagCount })}</span>
+      {/* The message itself contains {count} — prepending diagCount here
+          rendered "3 3 diagnostics" in English locales (review §5). */}
+      <span>{t(`editor.diagnostics`, { count: diagCount })}</span>
       <Button
         type="button"
         variant="outline"
@@ -50,7 +52,7 @@ export default function EditorToolbar({
         {diagLoading ? (
           <Spinner className="text-[14px]" />
         ) : (
-          <span className="text-[14px]">refresh</span>
+          <span className="material-symbols-outlined text-[14px]">refresh</span>
         )}
         <span>{diagLoading ? t('editor.running') : t('editor.reRun')}</span>
       </Button>

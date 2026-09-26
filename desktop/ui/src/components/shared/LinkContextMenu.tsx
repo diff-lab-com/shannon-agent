@@ -9,6 +9,7 @@
 import { useEffect, useRef, useState } from 'react'
 import { useIntl } from 'react-intl'
 import { isExternalHttpUrl, openLink } from '@/lib/openLink'
+import { focusFirstMenuItem, handleMenuKeyDown } from './menuKeyboard'
 
 interface MenuState {
   url: string
@@ -57,6 +58,12 @@ export function LinkContextMenuHost() {
     }
   }, [menu])
 
+  // Menu keyboard semantics (review §5): focus the first item on open.
+  useEffect(() => {
+    if (!menu) return
+    focusFirstMenuItem(menuRef.current)
+  }, [menu])
+
   if (!menu) return null
 
   const itemClass =
@@ -68,6 +75,7 @@ export function LinkContextMenuHost() {
       role="menu"
       aria-label={intl.formatMessage({ id: 'link.menu.aria' })}
       data-testid="link-context-menu"
+      onKeyDown={(e) => handleMenuKeyDown(e, menuRef.current, () => setMenu(null))}
       className="fixed z-modal min-w-52 rounded-lg border border-outline-variant/20 bg-surface-container-high p-xs shadow-lg animate-in fade-in zoom-in-95"
       style={{
         left: Math.max(4, Math.min(menu.x, window.innerWidth - MENU_WIDTH - 8)),

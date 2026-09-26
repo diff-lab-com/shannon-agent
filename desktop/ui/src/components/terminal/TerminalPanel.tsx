@@ -25,32 +25,22 @@
  */
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useIntl, type PrimitiveType } from 'react-intl';
+import { toastError } from '@/lib/errorToast';
 import '@xterm/xterm/css/xterm.css';
 import * as api from '@/lib/tauri-api';
 import type { TerminalInfo } from '@/types';
 import { bytesContainAscii, decodeTerminalOutput, listenTerminalOutput } from '@/lib/runtime/terminalEvents';
 import { xtermTheme } from './xtermTheme';
+import { readResolvedThemeAttr, useResolvedThemeAttr } from '@/hooks/useResolvedThemeAttr';
+import { ConfirmDialog } from '@/components/ui/confirm-dialog';
 import type { Terminal as XTerm } from '@xterm/xterm';
 import type { FitAddon as XTermFitAddon } from '@xterm/addon-fit';
 
 /**
- * Resolved theme id read straight off `<html data-theme>` (what
- * ThemeProvider mirrors). Deliberately NOT `useTheme()`: the panel must be
- * mountable anywhere — including test trees that render the Chat page
- * without a ThemeProvider — and the attribute is observable.
+ * Hook form lives in `@/hooks/useResolvedThemeAttr` (shared with the
+ * editor's CodeMirror theme) — see there for why the attribute is read
+ * instead of `useTheme()`.
  */
-function useResolvedThemeAttr(): string {
-  const read = () =>
-    typeof document === 'undefined' ? 'material' : document.documentElement.getAttribute('data-theme') ?? 'material';
-  const [theme, setTheme] = useState(read);
-  useEffect(() => {
-    if (typeof MutationObserver === 'undefined') return;
-    const observer = new MutationObserver(() => setTheme(read()));
-    observer.observe(document.documentElement, { attributes: true, attributeFilter: ['data-theme'] });
-    return () => observer.disconnect();
-  }, []);
-  return theme;
-}
 
 /** Backend cap (terminal_commands.rs MAX_TERMINALS) mirrored for the UI. */
 const MAX_TERMINALS = 4;
@@ -114,6 +104,9 @@ export function TerminalPanel({ projectDir, variant = 'drawer' }: TerminalPanelP
   const [activeId, setActiveId] = useState<string | null>(null);
   const [showHistoryHint, setShowHistoryHint] = useState(true);
   const [booted, setBooted] = useState(false);
+  // P2 (review §5): a multi-line paste into a shell executes every line —
+  // intercept pastes containing line breaks behind an explicit confirmation.
+  const [pendingPaste, setPendingPaste] = useState<string | null>(null);
 
   const containerRef = useRef<HTMLDivElement>(null);
   const toggleRef = useRef<HTMLButtonElement>(null);
@@ -161,7 +154,11 @@ export function TerminalPanel({ projectDir, variant = 'drawer' }: TerminalPanelP
       fontFamily: FONT_FAMILY,
       fontSize: 12,
       scrollback: 5000,
-      theme: xtermTheme(resolvedTheme),
+      // P1-36: read the CURRENT theme off `<html data-theme>` at creation —
+      // this callback has stable deps, so the `resolvedTheme` captured by
+      // the closure is stale for any instance created after a theme switch.
+      // (Live instances are still re-themed wholesale by the effect below.)
+      theme: xtermTheme(readResolvedThemeAttr()),
     });
     term.loadAddon(fit);
 
@@ -207,9 +204,6 @@ export function TerminalPanel({ projectDir, variant = 'drawer' }: TerminalPanelP
     const entry: TermEntry = { term, fit, detachOutput };
     termsRef.current.set(info.terminalId, entry);
     return entry;
-    // resolvedTheme is intentionally not a dependency: instances keep
-    // their creation theme and are re-themed wholesale by the effect below.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   // Re-theme every live terminal when the app theme changes (the
@@ -273,29 +267,37 @@ export function TerminalPanel({ projectDir, variant = 'drawer' }: TerminalPanelP
   // ── Session lifecycle ───────────────────────────────────────────────
 
   const spawnTab = useCallback(async (dir?: string | null) => {
-    const { terminalId } = await api.terminalSpawn(dir ?? projectDir ?? null);
-    const info: TerminalInfo = {
-      terminalId,
-      projectDir: dir ?? projectDir ?? '',
-      shell: '',
-      startedAtMs: Date.now(),
-    };
-    // The backend list is authoritative for shell/startedAt; merge the
-    // spawn response in first so the tab appears instantly.
-    setTabs(prev => {
-      if (prev.some(tab => tab.info.terminalId === terminalId)) return prev;
-      return [...prev, { info, exited: false }];
-    });
-    setActiveId(terminalId);
-    void api.terminalList().then(list => {
-      const fresh = list.find(entry => entry.terminalId === terminalId);
-      if (!fresh) return;
-      setTabs(prev => prev.map(tab => (
-        tab.info.terminalId === terminalId ? { ...tab, info: fresh } : tab
-      )));
-    }).catch(() => {});
-    return terminalId;
-  }, [projectDir]);
+    try {
+      const { terminalId } = await api.terminalSpawn(dir ?? projectDir ?? null);
+      const info: TerminalInfo = {
+        terminalId,
+        projectDir: dir ?? projectDir ?? '',
+        shell: '',
+        startedAtMs: Date.now(),
+      };
+      // The backend list is authoritative for shell/startedAt; merge the
+      // spawn response in first so the tab appears instantly.
+      setTabs(prev => {
+        if (prev.some(tab => tab.info.terminalId === terminalId)) return prev;
+        return [...prev, { info, exited: false }];
+      });
+      setActiveId(terminalId);
+      void api.terminalList().then(list => {
+        const fresh = list.find(entry => entry.terminalId === terminalId);
+        if (!fresh) return;
+        setTabs(prev => prev.map(tab => (
+          tab.info.terminalId === terminalId ? { ...tab, info: fresh } : tab
+        )));
+      }).catch(() => {});
+      return terminalId;
+    } catch (e) {
+      // P2: spawn used to be an unhandled rejection — surface it instead.
+      // Swallowed here so both call sites (`void spawnTab()` on the +
+      // button, `await spawnTab()` in openPanel) stay rejection-free.
+      toastError(t('terminal.spawn.failed'), e);
+      return undefined;
+    }
+  }, [projectDir, t]);
 
   /** Open the drawer; first open reconciles with the backend. */
   const openPanel = useCallback(async () => {
@@ -360,6 +362,37 @@ export function TerminalPanel({ projectDir, variant = 'drawer' }: TerminalPanelP
     window.addEventListener('keydown', handler, true);
     return () => window.removeEventListener('keydown', handler, true);
   }, [embedded, togglePanel]);
+
+  // ── Multi-line paste guard (P2, review §5) ──────────────────────────
+  // A paste containing line breaks makes the shell execute every line —
+  // pasting a block of `rm …` or `git push …` lines into the wrong window
+  // is a classic footgun. Intercepted on the container in the CAPTURE
+  // phase (an ancestor of xterm's hidden textarea) so xterm's own paste
+  // handler never sees the multi-line event. Single-line pastes are left
+  // untouched and keep xterm's native path (incl. bracketed paste).
+
+  const confirmPaste = useCallback(() => {
+    const text = pendingPaste;
+    setPendingPaste(null);
+    if (!text || !activeId) return;
+    void api.terminalWrite(activeId, text).catch(() => {
+      /* dead terminal: nothing sensible to report a paste into */
+    });
+  }, [pendingPaste, activeId]);
+
+  useEffect(() => {
+    const container = containerRef.current;
+    if (!open || !container) return;
+    const onPaste = (e: ClipboardEvent) => {
+      const text = e.clipboardData?.getData('text/plain') ?? '';
+      if (!text || !(text.includes('\n') || text.includes('\r'))) return;
+      e.preventDefault();
+      e.stopPropagation();
+      setPendingPaste(text);
+    };
+    container.addEventListener('paste', onPaste, true);
+    return () => container.removeEventListener('paste', onPaste, true);
+  }, [open, activeId]);
 
   const closeTab = useCallback((terminalId: string) => {
     void api.terminalKill(terminalId).catch(() => {});
@@ -518,6 +551,19 @@ export function TerminalPanel({ projectDir, variant = 'drawer' }: TerminalPanelP
           </div>
         )}
       </div>
+
+      {/* Multi-line paste confirmation (P2, review §5). */}
+      <ConfirmDialog
+        open={pendingPaste !== null}
+        title={t('terminal.paste.multiline.title')}
+        message={t('terminal.paste.multiline.message', {
+          lines: pendingPaste ? pendingPaste.split(/\r\n|\r|\n/).length : 0,
+        })}
+        confirmLabel={t('terminal.paste.multiline.confirm')}
+        cancelLabel={t('terminal.paste.multiline.cancel')}
+        onConfirm={confirmPaste}
+        onCancel={() => setPendingPaste(null)}
+      />
     </section>
   );
 }

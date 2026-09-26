@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest'
-import { render, screen, fireEvent, waitFor } from '@testing-library/react'
+import { render, screen, fireEvent, waitFor, within } from '@testing-library/react'
 import { MemoryRouter } from 'react-router-dom'
 import MigrationWizard from '@/components/migration/MigrationWizard'
 import type * as api from '@/lib/tauri-api'
@@ -150,11 +150,30 @@ describe('MigrationWizard', () => {
     await waitFor(() => expect(screen.getByText(/Nothing to import/)).toBeInTheDocument())
   })
 
-  it('survives a rejected scan with an empty review list', async () => {
-    const backend = makeBackend({ migrationScan: vi.fn().mockRejectedValue(new Error('boom')) })
+  // P1-37: a failed scan must not masquerade as "nothing to import" — it
+  // renders the distinct error state with a working retry.
+  it('renders a distinct scan error with retry instead of a fake empty list', async () => {
+    const backend = makeBackend({
+      migrationScan: vi
+        .fn()
+        .mockRejectedValueOnce(new Error('boom'))
+        .mockResolvedValueOnce(SCAN_RESULT),
+    })
     render(<MigrationWizard open onClose={() => {}} apiOverride={backend} />)
     fireEvent.click(screen.getByTestId('migration-source-claude-code'))
-    await waitFor(() => expect(screen.getByText(/Nothing to import/)).toBeInTheDocument())
+
+    const err = await screen.findByTestId('migration-scan-error')
+    expect(within(err).getByText('Scan failed')).toBeInTheDocument()
+    expect(within(err).getByText(/boom/)).toBeInTheDocument()
+    // Genuinely-empty copy must not appear.
+    expect(screen.queryByText(/Nothing to import/)).toBeNull()
+
+    // Retry re-runs the scan for the same source and recovers.
+    fireEvent.click(within(err).getByRole('button', { name: /Retry scan/i }))
+    await waitFor(() =>
+      expect(screen.getByTestId('migration-check-claude-code:skill:commit')).toBeInTheDocument(),
+    )
+    expect(screen.queryByTestId('migration-scan-error')).toBeNull()
   })
 
   // ─── Review step ──────────────────────────────────────────────────────────
