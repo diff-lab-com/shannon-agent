@@ -162,6 +162,63 @@ describe('MemoryPanel', () => {
       expect(api.deleteMemory).toHaveBeenCalledWith('m1')
     })
   })
+
+  // B3-24 (decision 3-A): the update contract carries `project` — editing a
+  // memory's project must reach updateMemory instead of being silently
+  // dropped (the old behavior toasted "updated" then reverted on refetch).
+  it('passes the edited project through to updateMemory', async () => {
+    vi.mocked(api.updateMemory).mockResolvedValue({
+      id: 'm1',
+      project: 'other-project',
+      category: 'preference',
+      content: 'Use tabs not spaces',
+      tags: [],
+      confidence: 1.0,
+      created_at: '2026-06-01T00:00:00Z',
+      accessed_at: '2026-06-01T00:00:00Z',
+      access_count: 0,
+    })
+    vi.mocked(api.getMemoryStats).mockResolvedValue({
+      total: 1,
+      by_category: { preference: 1 },
+      by_project: { '.': 1 },
+      most_recent_at: null,
+    })
+    vi.mocked(api.listMemories).mockResolvedValue([
+      {
+        id: 'm1',
+        project: '.',
+        category: 'preference',
+        content: 'Use tabs not spaces',
+        tags: [],
+        confidence: 1.0,
+        created_at: '2026-06-01T00:00:00Z',
+        accessed_at: '2026-06-01T00:00:00Z',
+        access_count: 0,
+      },
+    ])
+    vi.mocked(api.listMemoryProjects).mockResolvedValue(['.'])
+
+    render(<MemoryPanel />)
+    await waitFor(() => {
+      expect(screen.getByText('Use tabs not spaces')).toBeInTheDocument()
+    })
+
+    // Open the editor via the card's Edit action.
+    fireEvent.click(screen.getByRole('button', { name: /edit/i }))
+
+    // The editor pre-fills the project input with the current value.
+    const projectInput = await screen.findByDisplayValue('.')
+    fireEvent.change(projectInput, { target: { value: 'other-project' } })
+
+    fireEvent.click(screen.getByRole('button', { name: /^Save$/i }))
+
+    await waitFor(() => {
+      expect(api.updateMemory).toHaveBeenCalledWith(
+        expect.objectContaining({ id: 'm1', project: 'other-project' }),
+      )
+    })
+  })
 })
 
 describe('MemoryPanel — dream distillation section', () => {

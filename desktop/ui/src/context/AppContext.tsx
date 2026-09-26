@@ -893,7 +893,13 @@ export function AppProvider({ children }: { children: ReactNode }) {
           )
         }),
         listen(EVENT_NAMES.CONFIG_UPDATED, () => { refreshConfig() }),
-        listen(EVENT_NAMES.BACKGROUND_TASKS_UPDATED, () => { refreshBackgroundTasks() }),
+        // B3 P1-25: a background-task change can also mean a new/finished
+        // agent run — refresh the agents inventory alongside the tasks so
+        // the OPC load/workflow views don't need an app restart to catch up.
+        listen(EVENT_NAMES.BACKGROUND_TASKS_UPDATED, () => {
+          refreshBackgroundTasks()
+          void refreshAgents()
+        }),
         // P0-2: track which sessions a goal run owns, so the composer can
         // block manual sends while a run is driving the conversation.
         listen(EVENT_NAMES.GOAL_UPDATED, () => {

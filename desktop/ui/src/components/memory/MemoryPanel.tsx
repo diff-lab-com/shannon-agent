@@ -160,11 +160,15 @@ export default function MemoryPanel({
   const handleSave = async (input: MemorySaveInput) => {
     try {
       if (input.id) {
+        // B3-24 (decision 3-A): project is part of the update contract — a
+        // project edit moves the entry instead of being silently dropped
+        // (the old behavior showed "updated" then reverted on refetch).
         await updateMemory({
           id: input.id,
           content: input.content,
           tags: input.tags,
           category: input.category,
+          project: input.project,
         })
         toast.success(t('memory.toast.updated'))
       } else {

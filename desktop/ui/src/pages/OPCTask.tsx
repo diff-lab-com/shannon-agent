@@ -7,6 +7,7 @@ import { useIntl, type PrimitiveType } from 'react-intl'
 import { toast } from 'sonner'
 import AgentMessagesPanel from '@/components/tasks/AgentMessagesPanel'
 import AgentLoadPanel from '@/components/tasks/AgentLoadPanel'
+import { statusBadge } from '@/components/tasks/shared'
 import { Button } from '@/components/ui/button'
 import { cn } from '@/lib/utils'
 import { toastError } from '@/lib/errorToast'
@@ -14,9 +15,34 @@ import { ConfirmDialog } from '@/components/ui/confirm-dialog'
 import { Textarea } from '@/components/ui/textarea'
 import { Badge } from '@/components/ui/badge'
 
+// B3 P1-27: localized status chip for raw task-status codes (shared mapping
+// with TaskCard / TaskExecutionLog / the calendar view).
+function StatusBadge({ status }: { status: string }) {
+  const intl = useIntl()
+  const badge = statusBadge(status)
+  return (
+    <span
+      title={intl.formatMessage({ id: badge.tipId }, badge.values)}
+      className={cn('inline-flex items-center gap-1 px-xs py-0.5 rounded-full border', badge.bg)}
+    >
+      <span className={cn('w-1.5 h-1.5 rounded-full', badge.dot)} />
+      <span className="font-label-sm text-[11px] font-bold uppercase tracking-wider">
+        {intl.formatMessage({ id: badge.labelId }, badge.values)}
+      </span>
+    </span>
+  )
+}
+
 export default function OPCTask() {
   const intl = useIntl()
-  const t = (id: string, values?: Record<string, PrimitiveType>) => intl.formatMessage({ id }, values)
+  // B3 P1-27: the helper accepts an explicit defaultMessage — dynamic keys
+  // like `opcTask.status.${task.status}` used to render as the raw key
+  // string (the descriptor field was silently dropped into ICU `values`).
+  const t = (
+    id: string,
+    values?: Record<string, PrimitiveType>,
+    defaultMessage?: string,
+  ) => intl.formatMessage({ id, defaultMessage }, values)
   const { usage } = useChat()
   const { tasks, agents, permissionRequest, respondPermission } = useCatalog()
   const { sessions, goalRunsBySession } = useSessions()
@@ -130,7 +156,7 @@ export default function OPCTask() {
                       task.status === 'running' || task.status === 'in_progress' ? 'primary' :
                       task.status === 'failed' ? 'error' :
                       'neutral'
-                    }>{t(`opcTask.status.${task.status}`, { defaultMessage: task.status })}</Badge>
+                    }>{t(`opcTask.status.${task.status}`, undefined, task.status)}</Badge>
                     {task.assignee ? <span className="font-label-sm text-on-surface-variant">{t('opcTask.assignedTo', { assignee: task.assignee })}</span> : null}
                     {task.priority ? <span className="font-label-sm text-on-surface-variant">{t('opcTask.priority', { priority: task.priority })}</span> : null}
                   </div>
@@ -309,11 +335,9 @@ export default function OPCTask() {
                   </div>
                   <div>
                     <div className="font-label-md text-[14px] font-bold text-on-surface mb-0.5 group-hover:text-primary transition-colors">{t.title}</div>
-                    <Badge variant={
-                      t.status === 'completed' ? 'tertiary' :
-                      t.status === 'in_progress' || t.status === 'running' ? 'primary' :
-                      'neutral'
-                    } size="sm">{t.status}</Badge>
+                    {/* B3 P1-27: the status code was rendered raw here — reuse
+                        the shared badge mapping so labels are localized. */}
+                    <StatusBadge status={t.status} />
                   </div>
                 </Link>
               ))}

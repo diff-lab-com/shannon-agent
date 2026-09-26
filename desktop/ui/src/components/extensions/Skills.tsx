@@ -16,6 +16,7 @@ import SkillDetailDrawer from "./SkillDetailDrawer";
 import { ConfirmDialog } from "@/components/ui/confirm-dialog";
 import { AgentAuthoredBadge } from "@/components/self-improve/SkillBadge";
 import LoadingState from "@/components/ui/loading-state";
+import ErrorState from "@/components/ui/error-state";
 import { usePagedVisible } from "@/hooks/usePagedVisible";
 import { useTauriEvent } from "@/hooks/useTauriEvent";
 import { Button } from "@/components/ui/button";
@@ -55,9 +56,12 @@ export default function Skills() {
 
   const [installed, setInstalled] = useState<InstalledSkill[]>([]);
   const [installedLoading, setInstalledLoading] = useState(true);
+  // B3 P1-17: failed list reads surface as error states, not as "none".
+  const [installedError, setInstalledError] = useState<string | null>(null);
 
   const [agentAuthored, setAgentAuthored] = useState<AgentAuthoredSkill[]>([]);
   const [agentAuthoredLoading, setAgentAuthoredLoading] = useState(true);
+  const [agentAuthoredError, setAgentAuthoredError] = useState<string | null>(null);
   const [installedFilter, setInstalledFilter] = useState<"all" | "curated" | "agent">("all");
 
   const [busyId, setBusyId] = useState<string | null>(null);
@@ -88,14 +92,28 @@ export default function Skills() {
 
   const refreshInstalled = () => {
     listInstalledSkillPlugins()
-      .then(setInstalled)
+      .then((rows) => {
+        setInstalled(rows);
+        setInstalledError(null);
+      })
+      .catch((err) => {
+        setInstalledError(err instanceof Error ? err.message : String(err));
+      })
       .finally(() => setInstalledLoading(false));
   };
 
   const refreshAgentAuthored = () => {
     listAgentAuthoredSkills()
-      .then(setAgentAuthored)
-      .catch(() => setAgentAuthored([]))
+      .then((rows) => {
+        setAgentAuthored(rows);
+        setAgentAuthoredError(null);
+      })
+      .catch((err) => {
+        // B3 P1-17: was a silent `.catch(() => set([]))` — a dead read was
+        // indistinguishable from "no agent-authored skills".
+        setAgentAuthored([]);
+        setAgentAuthoredError(err instanceof Error ? err.message : String(err));
+      })
       .finally(() => setAgentAuthoredLoading(false));
   };
 
@@ -276,6 +294,21 @@ export default function Skills() {
         </div>
         {installedLoading || agentAuthoredLoading ? (
           <div className="text-center py-md text-on-surface-variant text-label-sm">{t('extensions.skills.loadingInstalled')}</div>
+        ) : installedError || agentAuthoredError ? (
+          <div className="border border-outline-variant/30 rounded-2xl bg-surface-container-lowest/50">
+            <ErrorState
+              icon="extension"
+              title={t('extensions.skills.installedLoadFailed')}
+              description={installedError ?? agentAuthoredError ?? ''}
+              action={{
+                label: t('common.retry'),
+                onClick: () => {
+                  refreshInstalled();
+                  refreshAgentAuthored();
+                },
+              }}
+            />
+          </div>
         ) : filteredInstalled.length === 0 ? (
           <div className="text-center py-md text-on-surface-variant text-label-sm">
             {installedFilter === "agent"

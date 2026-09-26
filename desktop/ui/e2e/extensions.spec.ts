@@ -3,12 +3,12 @@ import { test, expect } from '@playwright/test'
 test.describe('Extensions pages', () => {
   test('navigates to extensions hub (skills)', async ({ page }) => {
     await page.goto('/extensions/skills')
-    await expect(page.getByRole('heading', { name: 'Skills' })).toBeVisible()
+    await expect(page.getByRole('heading', { name: 'Skills', exact: true })).toBeVisible()
   })
 
   test('navigates to my agents page', async ({ page }) => {
     await page.goto('/extensions/agents')
-    await expect(page.getByRole('heading', { name: 'Agents' })).toBeVisible()
+    await expect(page.getByRole('heading', { name: 'Agents', exact: true })).toBeVisible()
   })
 
   test('shows no agents message', async ({ page }) => {
@@ -20,7 +20,7 @@ test.describe('Extensions pages', () => {
 
   test('navigates to data sources page', async ({ page }) => {
     await page.goto('/extensions/datasources')
-    await expect(page.getByRole('heading', { name: 'Data Sources' })).toBeVisible()
+    await expect(page.getByRole('heading', { name: 'Data Sources', exact: true })).toBeVisible()
   })
 
   test('extensions tab navigation works', async ({ page }) => {

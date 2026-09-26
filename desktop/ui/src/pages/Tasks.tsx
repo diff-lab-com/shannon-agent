@@ -81,7 +81,10 @@ export default function Tasks() {
   const { tasks: scheduledTasks, create: createScheduled, refresh: refreshScheduled } = useScheduledTasks()
   // P2-5: recent executions across all routines — drives the "queued for
   // off-peak window" status chip on the routines DAG nodes.
-  const { executions } = useTaskExecutions()
+  // B3 P1-25: the refresh handle is kept so routine edits (off-peak window,
+  // dependencies) re-pull the execution list too — no event exists for
+  // scheduled-task changes, so the editors' onUpdated callback is the wire.
+  const { executions, refresh: refreshExecutions } = useTaskExecutions()
   // P1-2: start action for the batch form (the live cards in BatchRunPanel
   // keep their own subscription, mirroring the goal-run split).
   const { start: startBatch } = useBatchRuns()
@@ -472,7 +475,13 @@ export default function Tasks() {
         routine={selectedRoutine}
         routines={scheduledTasks}
         onClose={() => setSelectedRoutineId(null)}
-        onUpdated={() => {/* useScheduledTasks auto-refreshes via its own hook */}}
+        // B3 P1-25: the editors save via update_scheduled_task directly, so
+        // without this wire the drawer, DAG, calendar and queued-chips all
+        // kept showing the pre-edit values until a full page remount.
+        onUpdated={() => {
+          void refreshScheduled()
+          void refreshExecutions()
+        }}
       />
       <CancelTaskModal
         open={cancelTarget !== null}

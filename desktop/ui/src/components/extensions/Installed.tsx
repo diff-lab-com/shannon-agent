@@ -125,7 +125,7 @@ export default function Installed() {
     );
   }
 
-  if (filtered.length === 0) {
+  if (addons.length === 0) {
     return (
       <div className="p-lg max-w-7xl mx-auto">
         <EmptyState
@@ -133,6 +133,20 @@ export default function Installed() {
           title={t('extensions.installed.nothingInstalled')}
           description={t('extensions.installed.nothingDesc')}
           action={{ label: t('extensions.installed.cta'), onClick: () => navigate('/extensions/skills') }}
+        />
+      </div>
+    );
+  }
+
+  // B3 (P2 顺带): with a query active, zero rows means "no match" — the
+  // "you haven't installed anything" state was a false alarm.
+  if (filtered.length === 0) {
+    return (
+      <div className="p-lg max-w-7xl mx-auto">
+        <EmptyState
+          icon="search_off"
+          title={intl.formatMessage({ id: 'extensions.installed.noMatches' }, { search })}
+          description={t('extensions.installed.noMatchesDesc')}
         />
       </div>
     );

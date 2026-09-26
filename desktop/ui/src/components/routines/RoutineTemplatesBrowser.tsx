@@ -1,5 +1,6 @@
-import { useEffect, useMemo, useState } from 'react'
+import { useCallback, useEffect, useMemo, useState } from 'react'
 import LoadingState from '@/components/ui/loading-state'
+import ErrorState from '@/components/ui/error-state'
 import { useIntl } from 'react-intl'
 import { toast } from 'sonner'
 import { toastError } from '@/lib/errorToast'
@@ -26,18 +27,23 @@ export default function RoutineTemplatesBrowser({ onInstantiated }: Props) {
 
   const [templates, setTemplates] = useState<api.RoutineTemplate[]>([])
   const [loading, setLoading] = useState(true)
+  // B3 P1-17: a failed read used to be console.warn + "no templates" empty
+  // state — surface the failure with a retry instead.
+  const [error, setError] = useState<string | null>(null)
   const [filter, setFilter] = useState<string>('all')
   const [instantiating, setInstantiating] = useState<string | null>(null)
 
-  useEffect(() => {
+  const refresh = useCallback(() => {
     let cancelled = false
+    setError(null)
+    setLoading(true)
     api
       .listRoutineTemplates()
       .then((list) => {
         if (!cancelled) setTemplates(list)
       })
       .catch((e) => {
-        console.warn('listRoutineTemplates error:', e)
+        if (!cancelled) setError(e instanceof Error ? e.message : String(e))
       })
       .finally(() => {
         if (!cancelled) setLoading(false)
@@ -46,6 +52,8 @@ export default function RoutineTemplatesBrowser({ onInstantiated }: Props) {
       cancelled = true
     }
   }, [])
+
+  useEffect(() => refresh(), [refresh])
 
   const categories = useMemo(() => {
     const set = new Set(templates.map((t) => t.category))
@@ -77,6 +85,19 @@ export default function RoutineTemplatesBrowser({ onInstantiated }: Props) {
         aria-live="polite"
       >
         <LoadingState size="md" label={t('routines.templates.loading')} />
+      </div>
+    )
+  }
+
+  if (error) {
+    return (
+      <div className="rounded-xl border border-outline-variant/20 bg-surface-container-lowest/60">
+        <ErrorState
+          icon="bolt"
+          title={t('routines.templates.loadFailed')}
+          description={error}
+          action={{ label: t('common.retry'), onClick: refresh }}
+        />
       </div>
     )
   }

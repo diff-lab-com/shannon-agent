@@ -6,15 +6,19 @@ import { useState, useEffect, useCallback } from 'react'
  * keeps the DOM small for the common case while still letting users page
  * through everything without an extra network round-trip.
  *
- * The visible count resets whenever `items` changes (new filter, new fetch),
- * so the user always starts at the top of a fresh list.
+ * The visible count resets when the list's **length** changes (new fetch, a
+ * filter that adds/removes rows) so the user starts at the top of a fresh
+ * list. B3 P1-18: the reset used to key on array *identity*, which meant any
+ * unmemoized derived list (e.g. Skills' per-render `filtered`) reset the
+ * count on every render — "Show more" bounced straight back inside search,
+ * the one context where paging matters most.
  */
 export function usePagedVisible<T>(items: T[], pageSize: number, initialCount: number = pageSize) {
   const [visible, setVisible] = useState(initialCount)
 
   useEffect(() => {
     setVisible(initialCount)
-  }, [items, initialCount])
+  }, [items.length, initialCount])
 
   const showMore = useCallback(() => {
     setVisible(v => Math.min(items.length, v + pageSize))

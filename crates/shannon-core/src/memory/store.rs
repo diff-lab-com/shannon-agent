@@ -732,6 +732,64 @@ impl MemoryStore {
         Ok(self.evict(id))
     }
 
+    /// Move an entry to another project, preserving its id, timestamps, and
+    /// provenance. Returns the moved entry.
+    ///
+    /// This is the update path behind the desktop's `update_memory(project)`
+    /// (decision 3-A). It deliberately does **not** go through
+    /// [`delete`](Self::delete) + [`add`](Self::add): persistence is
+    /// per-project JSONL, and a tombstone line left in the old project's file
+    /// removes its id from the in-memory map **globally** on the next
+    /// [`load`](Self::load) — file iteration order decides whether the
+    /// re-added line in the new project's file is processed before or after
+    /// that tombstone, so the moved entry would resurrect or vanish
+    /// nondeterministically. Instead the move rewrites the old project's file
+    /// without the entry (no tombstone: the id intentionally continues to
+    /// live, elsewhere) and hot-appends the updated entry to the new
+    /// project's file.
+    pub fn move_entry(&mut self, id: &str, new_project: &str) -> Result<MemoryEntry, MemoryError> {
+        let mut moved = self
+            .entries
+            .get(id)
+            .cloned()
+            .ok_or_else(|| MemoryError::NotFound(id.to_string()))?;
+        if moved.project == new_project {
+            return Ok(moved);
+        }
+        let old_project = moved.project.clone();
+        moved.project = new_project.to_string();
+
+        fs::create_dir_all(&self.storage_path)?;
+
+        // Rewrite the old project's file minus the moved entry. Same cold-path
+        // guarantees as `save`: sidecar flock + temp/atomic rename. Other
+        // agents' entries and tombstone lines in the file are preserved.
+        {
+            let old_path = project_jsonl_path(&self.storage_path, &old_project);
+            let _lock = acquire_exclusive_lock(&old_path)?;
+            let (disk, disk_tombstones) = parse_jsonl_file(&old_path);
+            let mut jsonl = String::new();
+            for e in &disk {
+                if e.id != id {
+                    jsonl.push_str(&serde_json::to_string(e)?);
+                    jsonl.push('\n');
+                }
+            }
+            for t in &disk_tombstones {
+                jsonl.push_str(&serde_json::to_string(t)?);
+                jsonl.push('\n');
+            }
+            atomic_write(&old_path, &jsonl)?;
+        }
+
+        // Hot-append the moved entry under its new project (and clear any
+        // in-memory tombstone recorded for the id in the old project — a
+        // deliberate delete followed by a move of a since-re-added id).
+        self.tombstones.entry(old_project).or_default().remove(id);
+        self.add(moved.clone())?;
+        Ok(moved)
+    }
+
     /// Persist the in-memory view to disk by rewriting each project's JSONL.
     ///
     /// This is the **cold path** — the only writer that rewrites the whole
@@ -3275,5 +3333,84 @@ mod tests {
         // merge_duplicates deletes the loser outright; only add_or_update
         // merges confidence — the manual entry keeps its own score.
         assert!((survivor.confidence - 0.5).abs() < f64::EPSILON);
+    }
+
+    // --- move_entry (B3-24: update_memory project moves) ---
+
+    #[test]
+    fn move_entry_moves_between_projects_preserving_identity() {
+        let dir = TempDir::new().unwrap();
+        let mut store = MemoryStore::new(dir.path().to_path_buf());
+        let e = make_entry("proj-a", MemoryCategory::Decision, "portable fact");
+        let id = e.id.clone();
+        store.add(e).unwrap();
+
+        let moved = store.move_entry(&id, "proj-b").unwrap();
+        assert_eq!(moved.id, id, "a move keeps the entry's identity");
+        assert_eq!(moved.project, "proj-b");
+        assert_eq!(moved.content, "portable fact");
+        assert!(store.project_memories("proj-a").is_empty());
+        assert_eq!(store.project_memories("proj-b").len(), 1);
+    }
+
+    #[test]
+    fn move_entry_unknown_id_errors() {
+        let dir = TempDir::new().unwrap();
+        let mut store = MemoryStore::new(dir.path().to_path_buf());
+        assert!(matches!(
+            store.move_entry("missing", "proj-b"),
+            Err(MemoryError::NotFound(_))
+        ));
+    }
+
+    #[test]
+    fn move_entry_to_same_project_is_noop() {
+        let dir = TempDir::new().unwrap();
+        let mut store = MemoryStore::new(dir.path().to_path_buf());
+        let e = make_entry("proj-a", MemoryCategory::Context, "already home");
+        let id = e.id.clone();
+        store.add(e).unwrap();
+
+        let moved = store.move_entry(&id, "proj-a").unwrap();
+        assert_eq!(moved.project, "proj-a");
+        assert_eq!(store.project_memories("proj-a").len(), 1);
+    }
+
+    #[test]
+    fn move_entry_survives_reload_without_old_project_stale_line() {
+        // The invariant the desktop move relies on: after the move, the old
+        // project's JSONL no longer carries the entry line, so a reload —
+        // in any file order — finds the entry exactly once, under the new
+        // project. (A tombstone-based move would be order-dependent: the
+        // durable tombstone removes the id globally on load.)
+        let dir = TempDir::new().unwrap();
+        let mut store = MemoryStore::new(dir.path().to_path_buf());
+        let e = make_entry("proj-a", MemoryCategory::Pattern, "durable move");
+        let id = e.id.clone();
+        store.add(e).unwrap();
+        store.move_entry(&id, "proj-b").unwrap();
+
+        let mut reloaded = MemoryStore::new(dir.path().to_path_buf());
+        reloaded.load().unwrap();
+        assert!(reloaded.project_memories("proj-a").is_empty());
+        let proj_b = reloaded.project_memories("proj-b");
+        assert_eq!(proj_b.len(), 1);
+        assert_eq!(proj_b[0].id, id);
+        assert_eq!(proj_b[0].content, "durable move");
+    }
+
+    #[test]
+    fn move_entry_keeps_other_entries_in_old_project_file() {
+        let dir = TempDir::new().unwrap();
+        let mut store = MemoryStore::new(dir.path().to_path_buf());
+        let moved_e = make_entry("proj-a", MemoryCategory::Context, "moves away");
+        let staying = make_entry("proj-a", MemoryCategory::Context, "stays put");
+        let moved_id = moved_e.id.clone();
+        store.add(moved_e).unwrap();
+        store.add(staying).unwrap();
+
+        store.move_entry(&moved_id, "proj-b").unwrap();
+        assert_eq!(store.project_memories("proj-a").len(), 1);
+        assert_eq!(store.project_memories("proj-a")[0].content, "stays put");
     }
 }
