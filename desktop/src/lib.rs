@@ -161,6 +161,11 @@ pub mod commands_slash;
 #[cfg(feature = "tauri")]
 pub mod commands_plugins;
 
+// X5 — plugin package materialization into the per-type extension homes
+// (skills/agents/commands/mcp), with the `materialized.json` sidecar that
+// drives reverse-materialization on uninstall/disable/update.
+pub mod plugin_materialize;
+
 // P-E3 — project registry commands (`~/.shannon/projects.db`).
 #[cfg(feature = "tauri")]
 pub mod commands_projects;
