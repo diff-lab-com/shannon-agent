@@ -1211,6 +1211,11 @@ fn import_command(
     let commands_dir = shannon_commands_dir(roots);
     let rel = format!("{}.md", asset.name);
     let mut target = commands_dir.join(&rel);
+    // The store name this import actually wrote — `<name>`, or
+    // `<name>-imported` when a rename-conflict import took the side slot
+    // (M10 review fix: the rename branch used to keep reporting the source
+    // name, so the thin plugin record listed a store entry it never wrote).
+    let mut final_name = asset.name.clone();
     if let Some(existing) = target_variant(&target) {
         if existing == incoming {
             return Ok(AssetOutcome::Skipped); // identical — idempotent no-op
@@ -1218,11 +1223,12 @@ fn import_command(
         match conflict_choice {
             "overwrite" => {}
             "rename" => {
-                let renamed = format!("{}-imported.md", asset.name);
-                target = commands_dir.join(&renamed);
+                let renamed = format!("{}-imported", asset.name);
+                target = commands_dir.join(format!("{renamed}.md"));
                 if target_variant(&target).is_some() {
                     return Ok(AssetOutcome::Skipped); // renamed slot already populated — skip
                 }
+                final_name = renamed;
             }
             _ => return Ok(AssetOutcome::Skipped), // "skip"
         }
@@ -1231,9 +1237,7 @@ fn import_command(
         std::fs::create_dir_all(parent).map_err(|e| format!("create {}: {e}", parent.display()))?;
     }
     std::fs::write(&target, incoming).map_err(|e| format!("write {}: {e}", target.display()))?;
-    Ok(AssetOutcome::Imported {
-        final_name: asset.name.clone(),
-    })
+    Ok(AssetOutcome::Imported { final_name })
 }
 
 /// CLAUDE.md / AGENTS.md → one `MemoryStore` entry (category `context`,
@@ -2301,6 +2305,40 @@ mod tests {
             imported.args,
             vec!["-y", "@modelcontextprotocol/server-filesystem", "/tmp"]
         );
+    }
+
+    // M10 review fix: a rename-conflict COMMAND import lands on disk as
+    // `<name>-imported.md`, and `AppliedImports` (which feeds the thin
+    // plugin record's manifest) must report that final store name — not
+    // the pre-existing source-name entry it never wrote.
+    #[test]
+    fn apply_command_conflict_rename_reports_the_imported_store_name() {
+        let (_dir, roots) = temp_roots("apply-command-conflict");
+        seed_claude_code(&roots);
+        // The destination already ships its own deploy.md with other content.
+        write(&shannon_commands_dir(&roots).join("deploy.md"), "local edit\n");
+
+        let items = vec![MigrationItemInput {
+            id: "claude-code:command:deploy".into(),
+            action: "import".into(),
+            conflict: Some("rename".into()),
+        }];
+        let (report, applied) = apply_core(MigrationSource::ClaudeCode, &items, &roots).expect("apply");
+        assert_eq!(report.imported, 1);
+
+        // The renamed copy carries the incoming content; the local edit wins
+        // the original slot.
+        assert_eq!(
+            std::fs::read_to_string(shannon_commands_dir(&roots).join("deploy.md")).unwrap(),
+            "local edit\n"
+        );
+        assert_eq!(
+            std::fs::read_to_string(shannon_commands_dir(&roots).join("deploy-imported.md")).unwrap(),
+            "Deploy the service.\n"
+        );
+        // …and `applied` reports the FINAL store name (no `.md` suffix),
+        // exactly the name the plugin record's manifest will list.
+        assert_eq!(applied.commands, vec!["deploy-imported".to_string()], "{applied:?}");
     }
 
     #[test]
