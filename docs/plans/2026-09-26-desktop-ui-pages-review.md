@@ -2,7 +2,7 @@
 
 - 日期：2026-09-26
 - 版本：**v2.1**（基线重定：对话页第二轮 B0-B4 已合入 dev@7efc12bc（PR #122/#123/#124，96 文件/+9840 行），开工前对全部 P0 与 B0/B6 相关条目重验——见下方「基线重定」块）
-- 状态：**已批准 · 实施中**（v2 评审通过；实施按 §9 批次顺序，每批独立 PR 目标 `dev`）
+- 状态：**✅ 已全部落地（2026-09-27）**——7 批 = PR #126~#133 全部合并入 `dev`（含两轮 CI 修复），实施记录见文末「§11 实施记录」
 - 范围：`desktop/ui` **对话页之外**的全部页面、骨架与组件——应用骨架/导航/主题/i18n 基础设施、设置、使用统计、扩展（MCP/技能/Agent/数据源）、记忆、任务/OPC、Triage、TurnTimeline、QuickFix、Diff 评审、编辑器、终端、Welcome/迁移向导、共享 UI
 - 方法：基于 dev@ddcddab1 的全量代码审查（约 5.6 万行 TS/TSX + 关键 Rust 命令交叉核对）。六个独立审查线程（骨架导航 / 设置+Usage / 扩展+记忆+技能 / 任务集群 / Triage+diff+时间线 / 编辑器+终端+Welcome+共享UI）并行推进；经初审 + Red Team 复审两轮，**6 条 P0 + 17 条 P1 已由主审逐条读码坐实**（含一处 node 实际复现），其余 P1/P2 实现前请先复测（约 30 秒/条）。
 - 关联文档：
@@ -291,3 +291,23 @@
 - **代码证据**：六个审查线程全量通读各自范围（含关键 Rust 命令与语言包比对）；主审经两轮（初审 + Red Team 复审）逐条坐实 **6 条 P0 + 17 条 P1**（P1-1/2/3/4/5/6/9/15/18/19/21/25/26/28/29/31/34），并源码证实决策 1 的完整语义链（`provider_resolver.rs:60` 透传 + `model_registry.rs:790-791` display_name≠id）；P0-2 另有 node 级复现。**未复核的 P1/P2（约 40 条）在实现前请先复测（约 30 秒/条）**，个别条目已在文中标注「待复测」（theme=system 的 setState bail-out、Base UI Dialog 的 Escape 传播、终端键盘陷阱实机行为）。
 - **行号基准**：dev@ddcddab1。落实现时以内容定位为准，行号可能因并行改动漂移。
 - 与对话页第二轮文档的关系：零重叠；两份文档合计构成桌面 UI 的完整问题面。B0 两批止血（对话页 B0 + 本文 B0）可合并为一个发布里程碑。
+
+---
+
+## 11. 实施记录（2026-09-26 ~ 09-27，agent team 实施）
+
+| 批次 | PR | 内容与关键实现 |
+|---|---|---|
+| B0 止血 | #127 | 6 条 P0：OPC 审批 request_id+fail-closed 归属；mergeFile 位置寻址（28 单测）；二进制 diff 结构化拒绝 + FileDiff.mtime + save_text_file expected_mtime；diff 键盘焦点门控；编辑器 dirty 守卫；safe_plugin_name（4 处 join） |
+| B2 设置 | #126 | 预算面板、审批模式禁乐观、滑块防抖落盘、profile 重命名 save→deactivate→delete→重激活、Usage 本地时区、webhook secret/body、RemoteTargetsDto 回读 |
+| B4 评审线 | #128 | Triage 全局扁平焦点、归档 Undo（快照恢复）、多文件 Apply mtime/纯删除守卫、computeDiffStats WeakMap 缓存、4000 行渲染上限、j/k 可视焦点 |
+| B1 骨架 | #130 | 模型统一写 id + 后端 normalize_model_id 存量迁移；switchToSession 单调 token；--sidebar-w 所有权收归 Layout；Escape 治理（stopPropagation + overlayOwnsEscape）；ErrorBoundary key；IntlProvider en 兜底；**updater 全链路摘除（决策 6）** |
+| B5 编辑器 | #131 | cmTheme 零依赖主题跟随；quick fix 应用后重读；终端主题/多行粘贴确认/spawn catch；Migration 错误态；Welcome 诚实文案（决策 4-B）；FileRefChip/LinkContextMenu 菜单键盘 |
+| B3 扩展/任务 | #132 | 6 处列表错误态；usePagedVisible 依赖 length 治本；core MemoryStore.move_entry（墓碑非确定复活 bug，决策 3-A）；BACKGROUND_TASKS_UPDATED 刷 agents；日历按日过滤；25 个状态键 |
+| B6 i18n/a11y | #133 | i18n-check.mjs 挂入 lint（缺键/多键即红）；补 174 键 ×8 locale；硬编码清单七领域清尾（含 footer Intl 货币）；a11y 批量（Switch 命名/表单关联/aria-live/长按复位/listbox 双触发） |
+
+**过程数据**：7 PR 全部 20/20 CI 绿后合并；前端测试 1897 → 2050+；桌面 Rust 测试 1039 → 1116+。两次 CI 拦截并修复：#132 的 rustdoc 私有 intra-doc 链接与 E2E 标题子串冲突；#133 的 walkthrough axe 门禁抓住 TaskCard nested-interactive（容器 role=button 含真按钮），改为标题真按钮的标准可访问卡片模式。
+
+**决策落地对账**：决策 1（B1/#130，含 R1-4 存量迁移）、2（B2/#126，remoteListTargets 带出）、3-A（B3/#132，含 move_entry）、4-B（B5/#131）、5（B1 provider 兜底 + B6 CI 门禁）、6（B1/#130，updater 摘除）——全部按拍板执行。
+
+**明确 deferred**：CSP frame-src / assetProtocol scope 收敛（需与网页 tab/文件引用共同决策）；8 locale 约 3.1k 键的 en 副本值翻译（决策 5 分档策略，en 兜底覆盖）；cmTheme 暗色语法着色（待引入 @uiw/codemirror-themes）；跨窗口权限弹层 resolved 广播事件。
