@@ -24,29 +24,28 @@ export default function TaskCard({ task, isRunning, onSelect, onRunNow, onCancel
   const badge = statusBadge(task.status)
   const isActive = task.status === 'running' || task.status === 'in_progress'
   return (
-    // B6-37 (§5 任务): the whole card is clickable but was mouse-only — add
-    // role="button" + keyboard activation. The inner action buttons remain
-    // natively focusable and stopPropagation keeps their clicks card-local.
-    <div
-      role="button"
-      tabIndex={0}
-      aria-label={task.title}
-      className="glass-panel border border-outline-variant/10 rounded-xl p-md shadow-sm hover:shadow-md hover:-translate-y-0.5 transition-all duration-300 group bg-surface-container-lowest/80 cursor-pointer"
-      onClick={onSelect}
-      onKeyDown={(e) => {
-        if (e.key === 'Enter' || e.key === ' ') {
-          e.preventDefault()
-          onSelect()
-        }
-      }}
-    >
+    // B6-37 (§5 任务): the card is clickable via its title button. The card
+    // container itself must NOT carry role="button" — it contains real action
+    // buttons, and nested interactive controls are an axe serious violation
+    // (caught by the walkthrough gate). The title button is the keyboard-
+    // reachable open action; inner buttons stay natively focusable and
+    // stopPropagation keeps their clicks card-local.
+    <div className="glass-panel border border-outline-variant/10 rounded-xl p-md shadow-sm hover:shadow-md hover:-translate-y-0.5 transition-all duration-300 group bg-surface-container-lowest/80">
       <div className="flex items-center justify-between">
         <div className="flex items-center gap-md">
           <div className="w-12 h-12 rounded-xl bg-primary/10 flex items-center justify-center text-primary">
             <span className="material-symbols-outlined text-[28px]">task_alt</span>
           </div>
           <div>
-            <h3 className="font-body-lg font-semibold text-on-surface group-hover:text-primary transition-colors">{task.title}</h3>
+            <h3 className="font-body-lg font-semibold text-on-surface group-hover:text-primary transition-colors">
+              <button
+                type="button"
+                className="text-left w-full hover:underline underline-offset-2 focus-visible:outline focus-visible:outline-2 focus-visible:outline-primary rounded-sm"
+                onClick={onSelect}
+              >
+                {task.title}
+              </button>
+            </h3>
             <div className="flex items-center gap-md mt-1">
               {task.assignee ? (
                 <span className="font-label-sm text-label-sm text-on-surface-variant flex items-center gap-xs">

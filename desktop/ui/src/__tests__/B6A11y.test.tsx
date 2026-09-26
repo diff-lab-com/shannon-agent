@@ -2,8 +2,9 @@
 //
 // Each case pins a change from review §7 item 37:
 //   - AdvancedSettings switches carry accessible names (aria-label).
-//   - TaskCard / TaskCalendarView day cells / selected-day rows are keyboard
-//     activatable (role="button" + Enter/Space), not mouse-only clickables.
+//   - TaskCard opens via a title button (container must stay non-interactive:
+//     role="button" around real buttons is a nested-interactive violation);
+//     TaskCalendarView day cells / selected-day rows are keyboard activatable.
 //   - TaskCard status badge container announces politely (aria-live).
 //   - Usage's mode toggle is an aria-pressed button pair (not a tablist).
 
@@ -57,16 +58,16 @@ describe('B6-37 Switch accessible names (AdvancedSettings)', () => {
 })
 
 describe('B6-37 TaskCard keyboard activation', () => {
-  it('renders role="button" and opens the task on Enter and Space', () => {
+  it('opens the task from the title button on click (card carries no role="button" — inner action buttons make a container button a nested-interactive axe violation)', () => {
     const onSelect = vi.fn()
     const { container } = render(wrap(
       <TaskCard task={taskFixture()} isRunning={false} onSelect={onSelect} onRunNow={() => {}} onCancel={() => {}} />,
     ))
-    const card = container.querySelector('[role="button"]') as HTMLElement
-    expect(card).not.toBeNull()
-    fireEvent.keyDown(card, { key: 'Enter' })
-    fireEvent.keyDown(card, { key: ' ' })
-    expect(onSelect).toHaveBeenCalledTimes(2)
+    expect(container.querySelector('[role="button"]')).toBeNull()
+    const titleButton = container.querySelector('h3 button') as HTMLButtonElement
+    expect(titleButton).not.toBeNull()
+    fireEvent.click(titleButton)
+    expect(onSelect).toHaveBeenCalledTimes(1)
   })
 
   it('the status badge container announces politely', () => {
