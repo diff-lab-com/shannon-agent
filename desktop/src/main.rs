@@ -274,6 +274,8 @@ fn main() {
             commands_plugins::update_plugin,
             commands_plugins::list_plugin_marketplace,
             commands_plugins::list_catalog_upstreams,
+            // X5 trust preview — inspect a plugin source before install
+            commands_plugins::inspect_plugin_source,
             commands::start_background_task,
             commands::get_background_tasks,
             commands::cancel_background_task,

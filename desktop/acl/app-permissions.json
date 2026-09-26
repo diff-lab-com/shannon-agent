@@ -929,6 +929,15 @@
       }
     },
     {
+      "identifier": "allow-inspect-plugin-source",
+      "description": "Enables the inspect_plugin_source command without any pre-configured scope.",
+      "commands": {
+        "allow": [
+          "inspect_plugin_source"
+        ]
+      }
+    },
+    {
       "identifier": "allow-install-skill-from-repo",
       "description": "Enables the install_skill_from_repo command without any pre-configured scope.",
       "commands": {
@@ -2708,6 +2717,7 @@
         "allow-install-native-skill",
         "allow-install-plugin",
         "allow-install-plugin-from-git",
+        "allow-inspect-plugin-source",
         "allow-install-skill-from-repo",
         "allow-list-agent-catalog",
         "allow-list-catalog-reports",
