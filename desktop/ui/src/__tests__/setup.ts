@@ -362,6 +362,24 @@ vi.mock('@/lib/tauri-api', () => ({
   saveCustomProfile: vi.fn().mockResolvedValue({ name: 'p', description: '', auto_approve: [], confirm: [], deny: [] }),
   deleteCustomProfile: vi.fn().mockResolvedValue([]),
   listHookEvents: vi.fn().mockResolvedValue([]),
+  // X6 plugins page — installed management + add-from-three-sources.
+  // Defaults keep the installed section quiet; plugin tests override via
+  // vi.mocked(...).
+  listPlugins: vi.fn().mockResolvedValue([]),
+  installPlugin: vi.fn().mockResolvedValue({ name: 'plugin-x', warnings: [] }),
+  installPluginFromGit: vi.fn().mockResolvedValue({ name: 'plugin-git', warnings: [] }),
+  uninstallPlugin: vi.fn().mockResolvedValue({ warnings: [] }),
+  enablePlugin: vi.fn().mockResolvedValue({ warnings: [] }),
+  disablePlugin: vi.fn().mockResolvedValue({ warnings: [] }),
+  updatePlugin: vi.fn().mockResolvedValue({ warnings: [] }),
+  inspectPluginSource: vi.fn().mockResolvedValue({
+    name: 'preview-plugin',
+    source_format: 'claude-json',
+    skills: [],
+    agents: [],
+    commands: [],
+    mcp_servers: [],
+  }),
   listPluginMarketplace: vi.fn().mockResolvedValue([]),
   listCatalogUpstreams: vi.fn().mockResolvedValue([]),
   installSkillFromRepo: vi.fn().mockResolvedValue({ id: 'skill-1', name: 'Test Skill', install_path: '/path/to/skill' }),
