@@ -80,8 +80,10 @@ function normalizePathKey(dir: string | null | undefined): string | null {
 }
 
 /** Tail segment of a path for default display labels (slash or backslash
- *  separated — the engine canonicalizes, but never assume the separator). */
-function pathTail(dir: string): string {
+ *  separated — the engine canonicalizes, but never assume the separator).
+ *  Exported for the P-U3 deep-link chips' fallback label (registry name
+ *  ?? tail). */
+export function pathTail(dir: string): string {
   const parts = dir.split(/[\\/]/).filter(Boolean)
   return parts.length > 0 ? parts[parts.length - 1] : dir
 }
@@ -839,12 +841,17 @@ export function SessionsSection({ sessions, sessionActivity, goalRunsBySession =
   }, [pinnedIds, t, sessions, startRename, togglePin, navigate, handleArchive])
 
   // P-U2: the project header's ⋯ menu. `path` is the group key (full, trail-
-  // normalized working dir) — the registry's unique key.
+  // normalized working dir) — the registry's unique key. P-U3: the
+  // project-context entry points carry ?project= so the target page opens
+  // already scoped to this project (the chip there removes it).
   const projectMenuItems = useCallback((group: SessionGroup): DropdownMenuItem[] => {
     const path = group.key
+    const projectHref = (pathname: string) => `${pathname}?project=${encodeURIComponent(path)}`
     return [
       { id: 'new-session', label: t('sidebar.projects.newSessionHere'), icon: 'chat_bubble', onSelect: () => handleNewSessionInProject(path) },
-      { id: 'new-routine', label: t('sidebar.projects.newRoutine'), icon: 'event_repeat', onSelect: () => { navigate('/tasks'); closeMobile?.() } },
+      { id: 'new-routine', label: t('sidebar.projects.newRoutine'), icon: 'event_repeat', onSelect: () => { navigate(projectHref('/tasks')); closeMobile?.() } },
+      { id: 'view-automations', label: t('sidebar.projects.viewAutomations'), icon: 'schedule', onSelect: () => { navigate(projectHref('/tasks')); closeMobile?.() } },
+      { id: 'view-inbox', label: t('sidebar.projects.viewInbox'), icon: 'inbox', onSelect: () => { navigate(projectHref('/triage')); closeMobile?.() } },
       { id: 'open-folder', label: t('sidebar.projects.openFolder'), icon: 'folder_open', onSelect: () => handleOpenProjectDir(path) },
       { id: 'rename', label: t('sidebar.projects.rename'), icon: 'edit', onSelect: () => { setEditingProject(path); setProjectNameDraft(group.label) } },
       { id: 'color', label: t('sidebar.projects.color'), icon: 'palette', onSelect: () => setColorPickerFor(path) },
