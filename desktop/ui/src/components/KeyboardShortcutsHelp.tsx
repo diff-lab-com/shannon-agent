@@ -19,7 +19,10 @@ const SECTIONS: ShortcutSection[] = [
     entries: [
       { keys: '?', actionKey: 'shortcuts.help.show' },
       { keys: formatShortcut('K'), actionKey: 'shortcuts.help.openPalette' },
-      { keys: formatShortcut('/'), actionKey: 'shortcuts.help.toggle' },
+      // B1-16: Ctrl+/ is real now (useKeyboardShortcuts) — same action as `?`.
+      // The old entry advertised the binding with a "Toggle sidebar" label
+      // (the binding didn't exist and never toggled the sidebar).
+      { keys: formatShortcut('/'), actionKey: 'shortcuts.help.show' },
     ],
   },
   {

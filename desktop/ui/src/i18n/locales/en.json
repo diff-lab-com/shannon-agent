@@ -168,6 +168,7 @@
   "nav.resize.title": "Drag to resize sidebar",
   "nav.newChat": "New Chat",
   "nav.newChat.aria": "New chat",
+  "nav.routeChanged.aria": "Navigated to {title}",
   "nav.chat": "Chat",
   "nav.connections": "Gateway",
   "nav.scheduled": "Automations",

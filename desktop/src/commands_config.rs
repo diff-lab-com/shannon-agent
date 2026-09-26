@@ -364,6 +364,38 @@ where
     Ok(())
 }
 
+/// B1-8 [R1-4] (review decision 1): normalize a `configure('model')` value
+/// to the canonical catalog id for the given provider.
+///
+/// The Header historically wrote the display NAME (`model.name`) into this
+/// key, so existing `providers.toml` files carry display names (or aliases)
+/// in `active_target.model_id` — and `provider_resolver` passes that stored
+/// string through as the API `model` parameter verbatim, which fails for
+/// every model whose display_name ≠ id. One normalization at the write
+/// entry repairs those legacy values:
+///
+/// - exact catalog id → unchanged;
+/// - display_name or alias (case-insensitive) of a model of the SAME
+///   provider → rewritten to that model's id;
+/// - anything else (unknown / custom ids, local ollama tags) → unchanged,
+///   preserving the resolver's passthrough contract.
+fn normalize_model_id(provider: shannon_engine::api::LlmProvider, value: &str) -> String {
+    let models = shannon_core::model_registry::merged_models_for_provider(provider);
+    // Exact id: pass through untouched (the hot path post-decision-1).
+    if models.iter().any(|m| m.id == value) {
+        return value.to_string();
+    }
+    // Legacy display_name / alias spellings → the canonical id.
+    let lower = value.to_lowercase();
+    if let Some(m) = models.iter().find(|m| {
+        m.display_name.to_lowercase() == lower
+            || m.aliases.iter().any(|a| a.eq_ignore_ascii_case(&lower))
+    }) {
+        return m.id.to_string();
+    }
+    value.to_string()
+}
+
 /// Update a single desktop config key. The frontend uses this for every
 /// settings panel mutation — model, api_key, theme, toggles, etc. Persists
 /// the new config to `~/.shannon/desktop/config.json` and emits
@@ -382,7 +414,10 @@ pub async fn configure(
             // it by `rebuild_client_config_from_store` so any reader
             // (`send_message`, `get_status`, etc.) sees the new model
             // on the next read.
-            let new_model_id = update.value.clone();
+            //
+            // B1-8 [R1-4]: the value is normalized to the catalog id here —
+            // legacy clients wrote the display name, and the resolver
+            // passes the stored string through verbatim.
             let kind_str = with_engine_store(&state, |svc| {
                 let (_, kind_str) = active_provider_id_and_kind(svc.store()).ok_or_else(|| {
                     "configure('model'): no active provider — add one in Settings → Models first"
@@ -391,6 +426,7 @@ pub async fn configure(
                 let provider = llm_provider_for_active_mirror(&kind_str).ok_or_else(|| {
                     format!("configure('model'): unsupported active kind `{kind_str}`")
                 })?;
+                let new_model_id = normalize_model_id(provider.clone(), &update.value);
                 let mut locked = svc
                     .lock()
                     .map_err(|e| format!("could not lock providers.toml: {e}"))?;
@@ -400,7 +436,7 @@ pub async fn configure(
                 locked
                     .set_active(&provider, &new_model_id)
                     .map_err(|e| format!("could not persist providers.toml: {e}"))?;
-                Ok(kind_str)
+                Ok((kind_str, new_model_id))
             })
             .await?;
             rebuild_client_config_from_store(&state).await?;
@@ -408,10 +444,10 @@ pub async fn configure(
                 event_names::CONFIG_UPDATED,
                 events::ConfigUpdatedPayload {
                     key: "model".into(),
-                    value: new_model_id,
+                    value: kind_str.1,
                 },
             );
-            let _ = kind_str;
+            let _ = kind_str.0;
             Ok(())
         }
         "api_key" => {
@@ -2662,5 +2698,68 @@ mod tests {
             "removing the active profile must clear the surfaced active id on read",
         );
         assert!(file.providers.is_empty());
+    }
+
+    // === B1-8 [R1-4]: `configure('model')` value normalization (decision 1) ===
+    //
+    // The Header used to write the display NAME into the config's `model`
+    // key, so existing providers.toml files carry names/aliases in
+    // `active_target.model_id` while the resolver passes the stored string
+    // through as the API model parameter verbatim. `normalize_model_id` is
+    // the write-entry repair: exact id unchanged, name/alias → id, unknown
+    // → unchanged.
+
+    #[test]
+    fn normalize_model_id_rewrites_legacy_display_name_to_id() {
+        use shannon_engine::api::LlmProvider;
+        // Catalog: id "claude-sonnet-4-20250514", display_name "Claude Sonnet 4".
+        assert_eq!(
+            normalize_model_id(LlmProvider::Anthropic, "Claude Sonnet 4"),
+            "claude-sonnet-4-20250514"
+        );
+        // Case-insensitive on the display name too.
+        assert_eq!(
+            normalize_model_id(LlmProvider::OpenAI, "gpt-4o mini"),
+            "gpt-4o-mini"
+        );
+    }
+
+    #[test]
+    fn normalize_model_id_rewrites_alias_to_id() {
+        use shannon_engine::api::LlmProvider;
+        // Catalog: "claude-sonnet-4-20250514" aliases include "sonnet4".
+        assert_eq!(
+            normalize_model_id(LlmProvider::Anthropic, "sonnet4"),
+            "claude-sonnet-4-20250514"
+        );
+        assert_eq!(normalize_model_id(LlmProvider::OpenAI, "GPT4O"), "gpt-4o");
+    }
+
+    #[test]
+    fn normalize_model_id_passes_exact_id_through() {
+        use shannon_engine::api::LlmProvider;
+        assert_eq!(
+            normalize_model_id(LlmProvider::Anthropic, "claude-sonnet-4-20250514"),
+            "claude-sonnet-4-20250514"
+        );
+        assert_eq!(normalize_model_id(LlmProvider::OpenAI, "gpt-4o"), "gpt-4o");
+    }
+
+    #[test]
+    fn normalize_model_id_passes_unknown_values_through() {
+        use shannon_engine::api::LlmProvider;
+        // Unknown ids must not be mangled — the resolver's passthrough
+        // contract covers custom endpoints and freshly published models.
+        assert_eq!(
+            normalize_model_id(LlmProvider::Anthropic, "totally-custom-model"),
+            "totally-custom-model"
+        );
+        // A display name of a DIFFERENT provider must not resolve — the
+        // value is only rewritten within the active provider's own catalog.
+        assert_eq!(
+            normalize_model_id(LlmProvider::Anthropic, "GPT-4o"),
+            "GPT-4o"
+        );
+        assert_eq!(normalize_model_id(LlmProvider::OpenAI, ""), "");
     }
 }

@@ -91,8 +91,17 @@ export function I18nProvider({ children }: { children: ReactNode }) {
 
   const value = useMemo<I18nContextValue>(() => ({ locale, setLocale }), [locale, setLocale])
 
+  // B1-14 (review P1-5 / R1-3): en merged UNDER every locale so missing keys
+  // resolve to English instead of rendering the raw message id — and instead
+  // of react-intl logging a console error per miss. Doing it at the provider
+  // level is the only spot that covers every `formatMessage` path (useT,
+  // direct useIntl, IntlProvider context consumers) in one line. Memoized
+  // per locale so the merged identity stays stable between switches and
+  // memoized subtrees don't re-render.
+  const messages = useMemo(() => ({ ...MESSAGES.en, ...MESSAGES[locale] }), [locale])
+
   return (
-    <IntlProvider locale={locale} defaultLocale="en" messages={MESSAGES[locale]}>
+    <IntlProvider locale={locale} defaultLocale="en" messages={messages}>
       <I18nContext.Provider value={value}>{children}</I18nContext.Provider>
     </IntlProvider>
   )
@@ -138,16 +147,13 @@ export function useT(): (id: string, values?: Record<string, PrimitiveType>) => 
 /**
  * Provider-independent message lookup for non-component contexts — e.g. a
  * context provider rendered beside (not inside) `<IntlProvider>` that still
- * needs a translated user-facing string. Reads the persisted locale the same
- * way `I18nProvider` does; falls back to `en`, then to the raw id.
+ * needs a translated user-facing string. Detects the persisted locale the
+ * same way `I18nProvider` does (B1-14: any supported locale, not just
+ * en/zh-CN); every key falls back to `en`, then to the raw id — the same
+ * merge semantics the IntlProvider applies above.
  */
 export function messageFor(id: string, values?: Record<string, PrimitiveType>): string {
-  let locale: Locale = 'en'
-  if (typeof window !== 'undefined') {
-    const stored = window.localStorage.getItem(LOCALE_STORAGE_KEY)
-    if (stored === 'en' || stored === 'zh-CN') locale = stored
-    else if ((window.navigator?.language?.toLowerCase() ?? '').startsWith('zh')) locale = 'zh-CN'
-  }
+  const locale = detectDefault()
   const tpl = MESSAGES[locale][id] ?? MESSAGES.en[id] ?? id
   if (!values) return tpl
   return tpl.replace(/\{(\w+)\}/g, (_, k: string) =>

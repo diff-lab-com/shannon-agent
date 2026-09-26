@@ -141,8 +141,8 @@ describe('Header component', () => {
     })
   })
 
-  // U2 — Header absorbed ChatInput's dual-write: it configures the model
-  // NAME plus the model's provider (not just the catalog id).
+  // Decision 1 (B1-8) — the config's `model` key stores the catalog ID:
+  // Header writes the id plus the model's provider (never the name).
   it('switches model when option is clicked', async () => {
     const api = await import('@/lib/tauri-api')
     render(wrap(<Header />, { route: '/tasks' }))
@@ -152,7 +152,7 @@ describe('Header component', () => {
     })
     fireEvent.click(screen.getByText('GPT-4o'))
     await waitFor(() => {
-      expect(api.configure).toHaveBeenCalledWith({ key: 'model', value: 'GPT-4o' })
+      expect(api.configure).toHaveBeenCalledWith({ key: 'model', value: 'gpt-4o' })
       expect(api.configure).toHaveBeenCalledWith({ key: 'provider', value: 'openai' })
     })
   })
