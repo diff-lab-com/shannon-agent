@@ -141,10 +141,7 @@ impl ProjectRegistry {
 
     /// All projects sorted by path ascending. Archived rows are included
     /// only when `include_archived` is `true`.
-    pub fn list(
-        &self,
-        include_archived: bool,
-    ) -> Result<Vec<ProjectRecord>, ProjectRegistryError> {
+    pub fn list(&self, include_archived: bool) -> Result<Vec<ProjectRecord>, ProjectRegistryError> {
         let conn = self.lock_conn()?;
         let sql = if include_archived {
             "SELECT path, name, icon, color, archived_at_ms, created_at_ms
@@ -436,7 +433,9 @@ mod tests {
         assert_eq!(created.name.as_deref(), Some("Fresh"));
         assert!(created.created_at_ms > 0, "auto-created row is timestamped");
 
-        let created = store.set_appearance("/work/new2", None, Some("rose".into())).unwrap();
+        let created = store
+            .set_appearance("/work/new2", None, Some("rose".into()))
+            .unwrap();
         assert_eq!(created.color.as_deref(), Some("rose"));
 
         let created = store.set_archived("/work/new3", true).unwrap();

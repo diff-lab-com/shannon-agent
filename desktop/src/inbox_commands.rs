@@ -448,7 +448,8 @@ pub(crate) struct RoutineRunDeps {
     pub(crate) memory_store: crate::commands_memory::SharedMemoryStore,
     /// Scheduled-task store (P-E1): read for the routine's `working_dir`
     /// sidecar at spawn time.
-    pub(crate) scheduled_tasks: std::sync::Arc<shannon_core::scheduled_task_store::ScheduledTaskStore>,
+    pub(crate) scheduled_tasks:
+        std::sync::Arc<shannon_core::scheduled_task_store::ScheduledTaskStore>,
     /// Base sessions directory for the run's engine (P-E1). Resolved through
     /// `effective_log_container` so the working-dir stamp lands in exactly
     /// the container the engine's L0 tee will open.
@@ -672,7 +673,9 @@ pub(crate) async fn spawn_routine_run<R: tauri::Runtime>(
         // per-run working-directory parameter, so it is threaded here
         // instead of ever touching the process cwd (global state).
         let engine = match &routine_working_dir {
-            Some(dir) => engine.with_working_directory(crate::commands_projects::normalize_path(dir)),
+            Some(dir) => {
+                engine.with_working_directory(crate::commands_projects::normalize_path(dir))
+            }
             None => engine,
         };
 
@@ -791,21 +794,20 @@ fn stamp_session_working_dir(
     provider: &str,
     working_dir: &str,
 ) {
-    let mut writer =
-        match shannon_core::session_log::SessionLogWriter::open_layout(
-            container,
-            &session_id.to_string(),
-        ) {
-            Ok(writer) => writer,
-            Err(e) => {
-                tracing::warn!(
-                    session = %session_id,
-                    error = %e,
-                    "routine run: session log unreachable, working_dir not stamped"
-                );
-                return;
-            }
-        };
+    let mut writer = match shannon_core::session_log::SessionLogWriter::open_layout(
+        container,
+        &session_id.to_string(),
+    ) {
+        Ok(writer) => writer,
+        Err(e) => {
+            tracing::warn!(
+                session = %session_id,
+                error = %e,
+                "routine run: session log unreachable, working_dir not stamped"
+            );
+            return;
+        }
+    };
     if writer.next_seq() > 0 {
         tracing::debug!(
             session = %session_id,
@@ -813,21 +815,23 @@ fn stamp_session_working_dir(
         );
         return;
     }
-    writer.record(shannon_types::session_event::SessionEventBody::SessionStart(
-        shannon_types::session_event::SessionStartPayload {
-            model: model.to_string(),
-            provider: Some(provider.to_string()),
-            cwd: Some(crate::commands_projects::normalize_path(working_dir).to_string()),
-            app_version: Some(env!("CARGO_PKG_VERSION").to_string()),
-            os: Some(std::env::consts::OS.to_string()),
-            arch: Some(std::env::consts::ARCH.to_string()),
-            browser_cdp: Some(
-                std::env::var("SHANNON_BROWSER_CDP")
-                    .map(|v| !v.trim().is_empty())
-                    .unwrap_or(false),
-            ),
-        },
-    ));
+    writer.record(
+        shannon_types::session_event::SessionEventBody::SessionStart(
+            shannon_types::session_event::SessionStartPayload {
+                model: model.to_string(),
+                provider: Some(provider.to_string()),
+                cwd: Some(crate::commands_projects::normalize_path(working_dir).to_string()),
+                app_version: Some(env!("CARGO_PKG_VERSION").to_string()),
+                os: Some(std::env::consts::OS.to_string()),
+                arch: Some(std::env::consts::ARCH.to_string()),
+                browser_cdp: Some(
+                    std::env::var("SHANNON_BROWSER_CDP")
+                        .map(|v| !v.trim().is_empty())
+                        .unwrap_or(false),
+                ),
+            },
+        ),
+    );
     if let Err(e) = writer.close() {
         tracing::warn!(
             session = %session_id,
@@ -1266,20 +1270,24 @@ mod tests {
         let session = uuid::Uuid::new_v4();
 
         // Pre-existing log (as when the engine's tee already wrote it).
-        let mut writer =
-            shannon_core::session_log::SessionLogWriter::open_layout(&container, &session.to_string())
-                .unwrap();
-        writer.record(shannon_types::session_event::SessionEventBody::SessionStart(
-            shannon_types::session_event::SessionStartPayload {
-                model: "tee-model".into(),
-                provider: None,
-                cwd: Some("/process/cwd".into()),
-                app_version: None,
-                os: None,
-                arch: None,
-                browser_cdp: None,
-            },
-        ));
+        let mut writer = shannon_core::session_log::SessionLogWriter::open_layout(
+            &container,
+            &session.to_string(),
+        )
+        .unwrap();
+        writer.record(
+            shannon_types::session_event::SessionEventBody::SessionStart(
+                shannon_types::session_event::SessionStartPayload {
+                    model: "tee-model".into(),
+                    provider: None,
+                    cwd: Some("/process/cwd".into()),
+                    app_version: None,
+                    os: None,
+                    arch: None,
+                    browser_cdp: None,
+                },
+            ),
+        );
         writer.close().unwrap();
 
         stamp_session_working_dir(&container, session, "m", "p", "/work/y");

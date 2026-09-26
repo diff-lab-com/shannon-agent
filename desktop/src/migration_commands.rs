@@ -248,9 +248,7 @@ pub async fn migration_apply(
     let (report, applied) = apply_core(source, &items, &roots)?;
     if !applied.is_empty() {
         let mut registry = state.plugin_registry.write().await;
-        if let Err(e) =
-            register_migration_import(&mut registry, source, &applied, &roots).await
-        {
+        if let Err(e) = register_migration_import(&mut registry, source, &applied, &roots).await {
             tracing::warn!(target: "migration", "thin imported-plugin registration failed: {e}");
         }
     }
@@ -337,7 +335,10 @@ async fn register_migration_import(
     );
     manifest.insert(
         "keywords".into(),
-        serde_json::json!(["migration", crate::commands_plugins::MIGRATION_IMPORT_MARKER]),
+        serde_json::json!([
+            "migration",
+            crate::commands_plugins::MIGRATION_IMPORT_MARKER
+        ]),
     );
     if !mcp_servers.is_empty() {
         manifest.insert("mcpServers".into(), serde_json::Value::Object(mcp_servers));
@@ -368,7 +369,6 @@ async fn register_migration_import(
         .await
         .map_err(|e| format!("reload plugin registry: {e}"))
 }
-
 
 // ─── Destination paths (Shannon stores) ─────────────────────────────────────
 
@@ -1151,7 +1151,9 @@ fn import_mcp(
                         ..spec
                     });
                     save_mcp_store(roots, &store)?;
-                    return Ok(AssetOutcome::Imported { final_name: renamed });
+                    return Ok(AssetOutcome::Imported {
+                        final_name: renamed,
+                    });
                 }
                 _ => return Ok(AssetOutcome::Skipped), // "skip"
             }
@@ -1198,7 +1200,9 @@ fn import_skill(
     }
     let target = skills_dir.join(&target_name);
     copy_dir_recursive(&src, &target)?;
-    Ok(AssetOutcome::Imported { final_name: target_name })
+    Ok(AssetOutcome::Imported {
+        final_name: target_name,
+    })
 }
 
 fn import_command(
@@ -1770,7 +1774,8 @@ mod tests {
             action: "import".into(),
             conflict: None,
         }];
-        let (report, _applied) = apply_core(MigrationSource::ClaudeCode, &items, &roots).expect("apply");
+        let (report, _applied) =
+            apply_core(MigrationSource::ClaudeCode, &items, &roots).expect("apply");
         assert_eq!(report.imported, 0, "{report:?}");
         assert_eq!(report.failed.len(), 1);
         assert!(report.failed[0].id == "claude-code:skill:commit");
@@ -2165,7 +2170,8 @@ mod tests {
             })
             .collect();
 
-        let (first, _first_applied) = apply_core(MigrationSource::ClaudeCode, &items, &roots).expect("apply 1");
+        let (first, _first_applied) =
+            apply_core(MigrationSource::ClaudeCode, &items, &roots).expect("apply 1");
         assert_eq!(
             first.imported,
             scan.items.len(),
@@ -2198,7 +2204,8 @@ mod tests {
 
         // Re-entry: every item now resolves through conflict handling as a
         // skip — no duplicates, no failures.
-        let (second, _second_applied) = apply_core(MigrationSource::ClaudeCode, &items, &roots).expect("apply 2");
+        let (second, _second_applied) =
+            apply_core(MigrationSource::ClaudeCode, &items, &roots).expect("apply 2");
         assert_eq!(
             second.imported, 0,
             "re-import must not duplicate: {second:?}"
@@ -2232,7 +2239,8 @@ mod tests {
                 conflict: None,
             })
             .collect();
-        let (report, _applied) = apply_core(MigrationSource::ClaudeCode, &items, &roots).expect("apply");
+        let (report, _applied) =
+            apply_core(MigrationSource::ClaudeCode, &items, &roots).expect("apply");
         assert_eq!(report.imported, scan.items.len() - 2);
         assert_eq!(report.skipped, 2);
         assert!(!shannon_skills_dir(&roots).join("commit").exists());
@@ -2252,7 +2260,8 @@ mod tests {
                 action: "import".into(),
                 conflict: Some(choice.into()),
             }];
-            let (report, _applied) = apply_core(MigrationSource::ClaudeCode, &items, &roots).expect("apply");
+            let (report, _applied) =
+                apply_core(MigrationSource::ClaudeCode, &items, &roots).expect("apply");
             let original =
                 std::fs::read_to_string(shannon_skills_dir(&roots).join("review/SKILL.md"))
                     .expect("read target");
@@ -2290,7 +2299,8 @@ mod tests {
             action: "import".into(),
             conflict: Some("rename".into()),
         }];
-        let (report, _applied) = apply_core(MigrationSource::ClaudeCode, &items, &roots).expect("apply");
+        let (report, _applied) =
+            apply_core(MigrationSource::ClaudeCode, &items, &roots).expect("apply");
         assert_eq!(report.imported, 1);
         let store = load_mcp_store(&roots);
         assert_eq!(store.len(), 2);
@@ -2316,14 +2326,18 @@ mod tests {
         let (_dir, roots) = temp_roots("apply-command-conflict");
         seed_claude_code(&roots);
         // The destination already ships its own deploy.md with other content.
-        write(&shannon_commands_dir(&roots).join("deploy.md"), "local edit\n");
+        write(
+            &shannon_commands_dir(&roots).join("deploy.md"),
+            "local edit\n",
+        );
 
         let items = vec![MigrationItemInput {
             id: "claude-code:command:deploy".into(),
             action: "import".into(),
             conflict: Some("rename".into()),
         }];
-        let (report, applied) = apply_core(MigrationSource::ClaudeCode, &items, &roots).expect("apply");
+        let (report, applied) =
+            apply_core(MigrationSource::ClaudeCode, &items, &roots).expect("apply");
         assert_eq!(report.imported, 1);
 
         // The renamed copy carries the incoming content; the local edit wins
@@ -2333,12 +2347,17 @@ mod tests {
             "local edit\n"
         );
         assert_eq!(
-            std::fs::read_to_string(shannon_commands_dir(&roots).join("deploy-imported.md")).unwrap(),
+            std::fs::read_to_string(shannon_commands_dir(&roots).join("deploy-imported.md"))
+                .unwrap(),
             "Deploy the service.\n"
         );
         // …and `applied` reports the FINAL store name (no `.md` suffix),
         // exactly the name the plugin record's manifest will list.
-        assert_eq!(applied.commands, vec!["deploy-imported".to_string()], "{applied:?}");
+        assert_eq!(
+            applied.commands,
+            vec!["deploy-imported".to_string()],
+            "{applied:?}"
+        );
     }
 
     #[test]
@@ -2350,7 +2369,8 @@ mod tests {
             action: "import".into(),
             conflict: None,
         }];
-        let (report, _applied) = apply_core(MigrationSource::ClaudeCode, &items, &roots).expect("apply");
+        let (report, _applied) =
+            apply_core(MigrationSource::ClaudeCode, &items, &roots).expect("apply");
         assert_eq!(report.imported, 1);
 
         let path = shannon_profiles_dir(&roots).join("claude-code-imported.toml");
@@ -2366,7 +2386,8 @@ mod tests {
         );
 
         // Idempotent re-apply: identical profile → skipped.
-        let (second, _second_applied) = apply_core(MigrationSource::ClaudeCode, &items, &roots).expect("apply 2");
+        let (second, _second_applied) =
+            apply_core(MigrationSource::ClaudeCode, &items, &roots).expect("apply 2");
         assert_eq!(second.imported, 0);
         assert_eq!(second.skipped, 1);
     }
@@ -2385,7 +2406,8 @@ mod tests {
             action: "import".into(),
             conflict: None,
         }];
-        let (first, _first_applied) = apply_core(MigrationSource::ClaudeCode, &items, &roots).expect("apply");
+        let (first, _first_applied) =
+            apply_core(MigrationSource::ClaudeCode, &items, &roots).expect("apply");
         assert_eq!(first.imported, 1);
         // Scan now reports the identical entry as skip-existing.
         let rescan = scan_core(MigrationSource::ClaudeCode, &roots);
@@ -2393,7 +2415,8 @@ mod tests {
             find(&rescan, "claude-code:memory:project-memory").conflict,
             "skip-existing"
         );
-        let (second, _second_applied) = apply_core(MigrationSource::ClaudeCode, &items, &roots).expect("apply 2");
+        let (second, _second_applied) =
+            apply_core(MigrationSource::ClaudeCode, &items, &roots).expect("apply 2");
         assert_eq!(second.imported, 0);
         assert_eq!(second.skipped, 1);
     }
@@ -2419,7 +2442,8 @@ mod tests {
                 conflict: None,
             },
         ];
-        let (report, _applied) = apply_core(MigrationSource::ClaudeCode, &items, &roots).expect("apply");
+        let (report, _applied) =
+            apply_core(MigrationSource::ClaudeCode, &items, &roots).expect("apply");
         assert_eq!(report.imported, 0);
         assert_eq!(report.failed.len(), 3);
         assert!(report.failed[0].error.contains("invalid action"));
@@ -2478,7 +2502,8 @@ mod tests {
             })
             .collect();
         assert_eq!(items.len(), 1);
-        let (report, _applied) = apply_core(MigrationSource::ClaudeCode, &items, &roots).expect("apply");
+        let (report, _applied) =
+            apply_core(MigrationSource::ClaudeCode, &items, &roots).expect("apply");
         assert_eq!(report.imported, 1);
         let mut mem = MemoryStore::new(shannon_memories_dir(&roots));
         mem.load().expect("load");
@@ -2733,7 +2758,11 @@ mod tests {
         assert_eq!(record.manifest.mcp.len(), 1);
         assert_eq!(record.manifest.mcp[0].name, "srv-imported");
         assert_eq!(record.manifest.mcp[0].command.as_deref(), Some("npx"));
-        assert!(record.manifest.mcp[0].args.contains(&"new-thing".to_string()));
+        assert!(
+            record.manifest.mcp[0]
+                .args
+                .contains(&"new-thing".to_string())
+        );
     }
 
     #[tokio::test]

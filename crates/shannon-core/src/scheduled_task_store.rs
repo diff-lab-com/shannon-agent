@@ -182,9 +182,9 @@ impl ScheduledTaskStore {
     /// shape, so hosts gain the field additively (desktop DTO) instead of
     /// through a struct change.
     pub fn working_dir_of(&self, id: &str) -> io::Result<Option<String>> {
-        let task_dir = self
-            .resolve_task_dir(id)
-            .ok_or_else(|| io::Error::new(io::ErrorKind::NotFound, format!("task not found: {id}")))?;
+        let task_dir = self.resolve_task_dir(id).ok_or_else(|| {
+            io::Error::new(io::ErrorKind::NotFound, format!("task not found: {id}"))
+        })?;
         match fs::read_to_string(task_dir.join(WORKING_DIR_SIDECAR)) {
             Ok(content) => Ok(Some(content.trim().to_string())),
             Err(e) if e.kind() == io::ErrorKind::NotFound => Ok(None),
@@ -200,9 +200,9 @@ impl ScheduledTaskStore {
     /// idempotent). `Err` (`io::ErrorKind::NotFound`) when no task
     /// directory matches `id`.
     pub fn set_working_dir(&self, id: &str, dir: Option<&str>) -> io::Result<()> {
-        let task_dir = self
-            .resolve_task_dir(id)
-            .ok_or_else(|| io::Error::new(io::ErrorKind::NotFound, format!("task not found: {id}")))?;
+        let task_dir = self.resolve_task_dir(id).ok_or_else(|| {
+            io::Error::new(io::ErrorKind::NotFound, format!("task not found: {id}"))
+        })?;
         let sidecar = task_dir.join(WORKING_DIR_SIDECAR);
         let trimmed = dir.map(str::trim).unwrap_or("");
         if trimmed.is_empty() {
@@ -347,9 +347,7 @@ impl ScheduledTaskStore {
             .flatten()
             .filter(|e| {
                 e.file_type().map(|t| t.is_dir()).unwrap_or(false)
-                    && e.file_name()
-                        .to_string_lossy()
-                        .ends_with(&format!("-{id}"))
+                    && e.file_name().to_string_lossy().ends_with(&format!("-{id}"))
             })
             .map(|e| e.path())
             .collect();
@@ -650,7 +648,9 @@ mod tests {
 
         let err = store.working_dir_of("nonexistent").unwrap_err();
         assert_eq!(err.kind(), std::io::ErrorKind::NotFound);
-        let err = store.set_working_dir("nonexistent", Some("/x")).unwrap_err();
+        let err = store
+            .set_working_dir("nonexistent", Some("/x"))
+            .unwrap_err();
         assert_eq!(err.kind(), std::io::ErrorKind::NotFound);
         let err = store.set_working_dir("nonexistent", None).unwrap_err();
         assert_eq!(err.kind(), std::io::ErrorKind::NotFound);
@@ -797,7 +797,11 @@ mod tests {
         let first = store.working_dir_of(id).unwrap();
         let second = store.working_dir_of(id).unwrap();
         assert_eq!(first, second, "resolution must not flip between calls");
-        assert_eq!(first.as_deref(), Some("/work/alpha"), "lexicographic winner");
+        assert_eq!(
+            first.as_deref(),
+            Some("/work/alpha"),
+            "lexicographic winner"
+        );
         assert!(
             store.load(id).unwrap().is_none(),
             "sanity: synthetic dirs have no task.json; resolve itself was still exercised"

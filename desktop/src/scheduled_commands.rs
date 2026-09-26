@@ -2338,7 +2338,9 @@ mod tests {
     // ── P-E1: working_dir stamp on the run's session ─────────────────────
 
     /// First `session/start` payload of the run's session log, if any.
-    fn read_session_start(container: &std::path::Path) -> Option<shannon_types::session_event::SessionStartPayload> {
+    fn read_session_start(
+        container: &std::path::Path,
+    ) -> Option<shannon_types::session_event::SessionStartPayload> {
         let entries = std::fs::read_dir(container).ok()?;
         for entry in entries.flatten() {
             let name = entry.file_name().to_string_lossy().to_string();
@@ -2362,7 +2364,9 @@ mod tests {
 
     /// Wait (bounded) for the spawned engine future to create the run's
     /// session log, then return its `session/start` payload.
-    async fn wait_for_session_start(container: &std::path::Path) -> shannon_types::session_event::SessionStartPayload {
+    async fn wait_for_session_start(
+        container: &std::path::Path,
+    ) -> shannon_types::session_event::SessionStartPayload {
         for _ in 0..250 {
             if let Some(payload) = read_session_start(container) {
                 return payload;

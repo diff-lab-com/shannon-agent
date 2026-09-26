@@ -37,21 +37,19 @@ impl AppState {
         &self,
     ) -> std::sync::Arc<shannon_core::project_registry::ProjectRegistry> {
         self.project_registry
-            .get_or_init(
-                || match ProjectRegistry::open_default() {
-                    Ok(store) => std::sync::Arc::new(store),
-                    Err(e) => {
-                        tracing::warn!(
-                            error = %e,
-                            "project registry: on-disk open failed, using in-memory fallback"
-                        );
-                        std::sync::Arc::new(
-                            ProjectRegistry::open_in_memory()
-                                .expect("in-memory SQLite must always open"),
-                        )
-                    }
-                },
-            )
+            .get_or_init(|| match ProjectRegistry::open_default() {
+                Ok(store) => std::sync::Arc::new(store),
+                Err(e) => {
+                    tracing::warn!(
+                        error = %e,
+                        "project registry: on-disk open failed, using in-memory fallback"
+                    );
+                    std::sync::Arc::new(
+                        ProjectRegistry::open_in_memory()
+                            .expect("in-memory SQLite must always open"),
+                    )
+                }
+            })
             .clone()
     }
 }
@@ -70,10 +68,7 @@ pub async fn list_projects(
     include_archived: Option<bool>,
 ) -> Result<Vec<ProjectRecord>, String> {
     let registry = state.project_registry();
-    let first_seed = registry
-        .list(true)
-        .map_err(|e| e.to_string())?
-        .is_empty();
+    let first_seed = registry.list(true).map_err(|e| e.to_string())?.is_empty();
     let candidates = adoption_candidates(state.inner(), first_seed);
     if !candidates.is_empty() {
         if let Err(e) = registry.ensure_adopted(&candidates) {
@@ -380,9 +375,21 @@ mod tests {
 
         // Two sessions in one project (differing only by a trailing slash —
         // one registry row), one elsewhere, one without a cwd.
-        seed_session_with_cwd(state.inner(), &uuid::Uuid::new_v4(), Some("/work/proj-alpha/"));
-        seed_session_with_cwd(state.inner(), &uuid::Uuid::new_v4(), Some("/work/proj-alpha"));
-        seed_session_with_cwd(state.inner(), &uuid::Uuid::new_v4(), Some("/work/proj-beta"));
+        seed_session_with_cwd(
+            state.inner(),
+            &uuid::Uuid::new_v4(),
+            Some("/work/proj-alpha/"),
+        );
+        seed_session_with_cwd(
+            state.inner(),
+            &uuid::Uuid::new_v4(),
+            Some("/work/proj-alpha"),
+        );
+        seed_session_with_cwd(
+            state.inner(),
+            &uuid::Uuid::new_v4(),
+            Some("/work/proj-beta"),
+        );
         seed_session_with_cwd(state.inner(), &uuid::Uuid::new_v4(), None);
 
         // One memory entry in a project no session has touched yet.
@@ -481,14 +488,10 @@ mod tests {
         .unwrap();
         assert_eq!(styled.icon.as_deref(), Some("folder"));
         assert_eq!(styled.color.as_deref(), Some("teal"));
-        let cleared = set_project_appearance(
-            app.state::<AppState>(),
-            "/work/proj".into(),
-            None,
-            None,
-        )
-        .await
-        .unwrap();
+        let cleared =
+            set_project_appearance(app.state::<AppState>(), "/work/proj".into(), None, None)
+                .await
+                .unwrap();
         assert_eq!(cleared.icon, None);
         assert_eq!(cleared.color, None);
 
@@ -519,11 +522,15 @@ mod tests {
                 .map(|_| ())
                 .unwrap_err();
             assert!(rename.contains("empty"), "{path:?} → {rename}");
-            let appearance =
-                set_project_appearance(app.state::<AppState>(), path.into(), None, Some("red".into()))
-                    .await
-                    .map(|_| ())
-                    .unwrap_err();
+            let appearance = set_project_appearance(
+                app.state::<AppState>(),
+                path.into(),
+                None,
+                Some("red".into()),
+            )
+            .await
+            .map(|_| ())
+            .unwrap_err();
             assert!(appearance.contains("empty"), "{path:?} → {appearance}");
             let archive = archive_project(app.state::<AppState>(), path.into())
                 .await
@@ -634,7 +641,13 @@ mod tests {
             .unwrap();
         adopt_working_dir(state.inner(), &dir);
         assert_eq!(
-            state.project_registry().get(&dir).unwrap().unwrap().name.as_deref(),
+            state
+                .project_registry()
+                .get(&dir)
+                .unwrap()
+                .unwrap()
+                .name
+                .as_deref(),
             Some("Custom"),
             "adoption must never overwrite an existing row"
         );
@@ -664,15 +677,21 @@ mod tests {
             60,
         );
         store.save(&housed).unwrap();
-        store.set_working_dir(&housed.id, Some("/work/routine-proj/")).unwrap();
+        store
+            .set_working_dir(&housed.id, Some("/work/routine-proj/"))
+            .unwrap();
         let twin =
             shannon_core::scheduled_routines::ScheduledRoutine::new("twin".into(), "p".into(), 60);
         store.save(&twin).unwrap();
-        store.set_working_dir(&twin.id, Some("/work/routine-proj")).unwrap();
+        store
+            .set_working_dir(&twin.id, Some("/work/routine-proj"))
+            .unwrap();
         let other =
             shannon_core::scheduled_routines::ScheduledRoutine::new("other".into(), "p".into(), 60);
         store.save(&other).unwrap();
-        store.set_working_dir(&other.id, Some("/work/routine-other")).unwrap();
+        store
+            .set_working_dir(&other.id, Some("/work/routine-other"))
+            .unwrap();
         let unhoused =
             shannon_core::scheduled_routines::ScheduledRoutine::new("free".into(), "p".into(), 60);
         store.save(&unhoused).unwrap();

@@ -328,11 +328,7 @@ fn sorted_arg_keys(arguments: &str) -> Vec<String> {
 /// are touched, and only three fields of each: `kind`, `ts_ns`,
 /// `tool_name` (plus the optional `tokens_used` summand). Anything else in
 /// the line — argument values, outputs — is never surfaced.
-fn scan_session_tool_rows(
-    log: &Path,
-    cutoff_ns: u64,
-    stats: &mut BTreeMap<String, ToolCallStat>,
-) {
+fn scan_session_tool_rows(log: &Path, cutoff_ns: u64, stats: &mut BTreeMap<String, ToolCallStat>) {
     let Ok(file) = std::fs::File::open(log) else {
         // A vanished log costs only this session's contribution.
         return;
@@ -717,29 +713,65 @@ mod tests {
         seed_session(query.store(), &a, "a");
         seed_session(query.store(), &b, "b");
         let ts = now_ns();
-        append_raw(&query, &a, &raw_tool_row("tool/call", "mcp__notion__search", ts, None));
-        append_raw(&query, &a, &raw_tool_row("tool/result", "mcp__notion__search", ts, Some(42)));
-        append_raw(&query, &b, &raw_tool_row("tool/call", "skill_deploy", ts, None));
-        append_raw(&query, &b, &raw_tool_row("tool/result", "skill_deploy", ts, Some(7)));
+        append_raw(
+            &query,
+            &a,
+            &raw_tool_row("tool/call", "mcp__notion__search", ts, None),
+        );
+        append_raw(
+            &query,
+            &a,
+            &raw_tool_row("tool/result", "mcp__notion__search", ts, Some(42)),
+        );
+        append_raw(
+            &query,
+            &b,
+            &raw_tool_row("tool/call", "skill_deploy", ts, None),
+        );
+        append_raw(
+            &query,
+            &b,
+            &raw_tool_row("tool/result", "skill_deploy", ts, Some(7)),
+        );
         // A result without the token field must not disturb the sums.
-        append_raw(&query, &b, &raw_tool_row("tool/result", "skill_deploy", ts, None));
+        append_raw(
+            &query,
+            &b,
+            &raw_tool_row("tool/result", "skill_deploy", ts, None),
+        );
 
         let by_name = stats_by_name(&query.tool_call_stats(7).unwrap());
         assert_eq!(
             by_name["Bash"],
-            ToolCallStat { name: "Bash".into(), calls: 2, total_tokens: 0 }
+            ToolCallStat {
+                name: "Bash".into(),
+                calls: 2,
+                total_tokens: 0
+            }
         );
         assert_eq!(
             by_name["read_file"],
-            ToolCallStat { name: "read_file".into(), calls: 2, total_tokens: 0 }
+            ToolCallStat {
+                name: "read_file".into(),
+                calls: 2,
+                total_tokens: 0
+            }
         );
         assert_eq!(
             by_name["mcp__notion__search"],
-            ToolCallStat { name: "mcp__notion__search".into(), calls: 1, total_tokens: 42 }
+            ToolCallStat {
+                name: "mcp__notion__search".into(),
+                calls: 1,
+                total_tokens: 42
+            }
         );
         assert_eq!(
             by_name["skill_deploy"],
-            ToolCallStat { name: "skill_deploy".into(), calls: 1, total_tokens: 7 }
+            ToolCallStat {
+                name: "skill_deploy".into(),
+                calls: 1,
+                total_tokens: 7
+            }
         );
 
         // Deterministic order: most-called first, ties by name.
@@ -767,15 +799,29 @@ mod tests {
             .timestamp_nanos_opt()
             .unwrap() as u64;
         // Two 40-day-old tool rows share the log with the fresh ones.
-        append_raw(&query, &id, &raw_tool_row("tool/call", "Bash", old_ns, None));
-        append_raw(&query, &id, &raw_tool_row("tool/call", "skill_old", old_ns, None));
+        append_raw(
+            &query,
+            &id,
+            &raw_tool_row("tool/call", "Bash", old_ns, None),
+        );
+        append_raw(
+            &query,
+            &id,
+            &raw_tool_row("tool/call", "skill_old", old_ns, None),
+        );
 
         let by_name = stats_by_name(&query.tool_call_stats(7).unwrap());
-        assert_eq!(by_name["Bash"].calls, 1, "aged Bash row is outside the window");
+        assert_eq!(
+            by_name["Bash"].calls, 1,
+            "aged Bash row is outside the window"
+        );
         assert!(!by_name.contains_key("skill_old"));
 
         let by_name = stats_by_name(&query.tool_call_stats(90).unwrap());
-        assert_eq!(by_name["Bash"].calls, 2, "wider window re-admits the aged row");
+        assert_eq!(
+            by_name["Bash"].calls, 2,
+            "wider window re-admits the aged row"
+        );
         assert_eq!(by_name["skill_old"].calls, 1);
 
         // days_back = 0 puts the cutoff at "now": nothing counts.
@@ -805,7 +851,11 @@ mod tests {
         let by_name = stats_by_name(&query.tool_call_stats(7).unwrap());
         assert_eq!(
             by_name["Bash"],
-            ToolCallStat { name: "Bash".into(), calls: 1, total_tokens: 0 },
+            ToolCallStat {
+                name: "Bash".into(),
+                calls: 1,
+                total_tokens: 0
+            },
             "the session's healthy rows still count"
         );
         assert_eq!(by_name["read_file"].calls, 1);
@@ -833,7 +883,12 @@ mod tests {
         // cutoff would wrap and silently filter everything out).
         let by_name = stats_by_name(&query.tool_call_stats(u64::from(u32::MAX)).unwrap());
         assert_eq!(by_name["Bash"].calls, 1);
-        let by_name = stats_by_name(&query.tool_call_stats(60 * 365).unwrap()).remove("Bash").unwrap();
-        assert_eq!(by_name.calls, 1, "pre-epoch cutoffs still count every event");
+        let by_name = stats_by_name(&query.tool_call_stats(60 * 365).unwrap())
+            .remove("Bash")
+            .unwrap();
+        assert_eq!(
+            by_name.calls, 1,
+            "pre-epoch cutoffs still count every event"
+        );
     }
 }

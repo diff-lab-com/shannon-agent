@@ -460,12 +460,14 @@ fn bucket_extension_stats(
                 total_tokens: stat.total_tokens,
             }),
             Some(Bucket::Mcp { server, tool }) => {
-                let entry = mcp.entry(server).or_insert_with(|| ExtensionMcpServerStats {
-                    server: String::new(),
-                    calls: 0,
-                    total_tokens: 0,
-                    tools: Vec::new(),
-                });
+                let entry = mcp
+                    .entry(server)
+                    .or_insert_with(|| ExtensionMcpServerStats {
+                        server: String::new(),
+                        calls: 0,
+                        total_tokens: 0,
+                        tools: Vec::new(),
+                    });
                 entry.calls += stat.calls;
                 entry.total_tokens += stat.total_tokens;
                 entry.tools.push(ExtensionToolStatRow {
@@ -810,8 +812,16 @@ mod tests {
         assert_eq!(
             dto.skills,
             vec![
-                ExtensionToolStatRow { name: "deploy".into(), calls: 12, total_tokens: 3_500 },
-                ExtensionToolStatRow { name: "commit".into(), calls: 5, total_tokens: 900 },
+                ExtensionToolStatRow {
+                    name: "deploy".into(),
+                    calls: 12,
+                    total_tokens: 3_500
+                },
+                ExtensionToolStatRow {
+                    name: "commit".into(),
+                    calls: 5,
+                    total_tokens: 900
+                },
             ]
         );
 
@@ -822,23 +832,43 @@ mod tests {
         assert_eq!(dto.mcp_servers[0].total_tokens, 2_000);
         assert_eq!(
             dto.mcp_servers[0].tools,
-            vec![ExtensionToolStatRow { name: "pr".into(), calls: 9, total_tokens: 2_000 }]
+            vec![ExtensionToolStatRow {
+                name: "pr".into(),
+                calls: 9,
+                total_tokens: 2_000
+            }]
         );
         assert_eq!(dto.mcp_servers[1].server, "notion");
-        assert_eq!(dto.mcp_servers[1].calls, 7 + 2, "server total sums its tools");
+        assert_eq!(
+            dto.mcp_servers[1].calls,
+            7 + 2,
+            "server total sums its tools"
+        );
         assert_eq!(dto.mcp_servers[1].total_tokens, 1_500);
         assert_eq!(
             dto.mcp_servers[1].tools,
             vec![
-                ExtensionToolStatRow { name: "search".into(), calls: 7, total_tokens: 1_200 },
-                ExtensionToolStatRow { name: "write".into(), calls: 2, total_tokens: 300 },
+                ExtensionToolStatRow {
+                    name: "search".into(),
+                    calls: 7,
+                    total_tokens: 1_200
+                },
+                ExtensionToolStatRow {
+                    name: "write".into(),
+                    calls: 2,
+                    total_tokens: 300
+                },
             ]
         );
 
         // Everything else keeps the raw tool name.
         assert_eq!(
             dto.other,
-            vec![ExtensionToolStatRow { name: "Bash".into(), calls: 40, total_tokens: 0 }]
+            vec![ExtensionToolStatRow {
+                name: "Bash".into(),
+                calls: 40,
+                total_tokens: 0
+            }]
         );
     }
 
@@ -870,7 +900,10 @@ mod tests {
         let json = serde_json::to_value(&dto).unwrap();
         assert!(json.get("days").is_some(), "{json}");
         assert!(json.get("skills").is_some());
-        assert!(json.get("mcpServers").is_some(), "camelCase on the wire: {json}");
+        assert!(
+            json.get("mcpServers").is_some(),
+            "camelCase on the wire: {json}"
+        );
         assert!(json.get("other").is_some());
         let server = &json["mcpServers"][0];
         assert!(server.get("totalTokens").is_some(), "{server}");
@@ -906,7 +939,11 @@ mod tests {
         let dto = bucket_extension_stats(30, &stats);
         assert_eq!(
             dto.skills,
-            vec![ExtensionToolStatRow { name: "deploy".into(), calls: 1, total_tokens: 0 }]
+            vec![ExtensionToolStatRow {
+                name: "deploy".into(),
+                calls: 1,
+                total_tokens: 0
+            }]
         );
         assert_eq!(dto.mcp_servers.len(), 1);
         assert_eq!(dto.mcp_servers[0].server, "notion");

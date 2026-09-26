@@ -452,7 +452,8 @@ pub fn read_sidecar(plugin_dir: &Path) -> Result<Option<MaterializedRecord>, Str
     if !path.exists() {
         return Ok(None);
     }
-    let text = std::fs::read_to_string(&path).map_err(|e| format!("read {}: {e}", path.display()))?;
+    let text =
+        std::fs::read_to_string(&path).map_err(|e| format!("read {}: {e}", path.display()))?;
     serde_json::from_str(&text)
         .map(Some)
         .map_err(|e| format!("parse {}: {e}", path.display()))
@@ -473,8 +474,7 @@ fn load_mcp_store(path: &Path) -> Result<Vec<serde_json::Value>, String> {
 
 fn save_mcp_store(path: &Path, servers: &[serde_json::Value]) -> Result<(), String> {
     if let Some(parent) = path.parent() {
-        std::fs::create_dir_all(parent)
-            .map_err(|e| format!("create {}: {e}", parent.display()))?;
+        std::fs::create_dir_all(parent).map_err(|e| format!("create {}: {e}", parent.display()))?;
     }
     let text =
         serde_json::to_string_pretty(servers).map_err(|e| format!("serialize store: {e}"))?;
@@ -484,11 +484,7 @@ fn save_mcp_store(path: &Path, servers: &[serde_json::Value]) -> Result<(), Stri
 }
 
 /// Upsert one namespaced key. Collision = overwrite that key only.
-pub fn upsert_mcp_store(
-    path: &Path,
-    key: &str,
-    config: &serde_json::Value,
-) -> Result<(), String> {
+pub fn upsert_mcp_store(path: &Path, key: &str, config: &serde_json::Value) -> Result<(), String> {
     let mut servers = load_mcp_store(path)?;
     servers.retain(|s| s.get("name").and_then(|n| n.as_str()) != Some(key));
     servers.push(config.clone());
@@ -531,8 +527,8 @@ pub struct PluginBundleSummary {
 pub fn read_manifest_from_dir(dir: &Path) -> Result<(PluginManifest, &'static str), String> {
     let toml_path = dir.join("plugin.toml");
     if toml_path.is_file() {
-        let bytes = std::fs::read(&toml_path)
-            .map_err(|e| format!("read {}: {e}", toml_path.display()))?;
+        let bytes =
+            std::fs::read(&toml_path).map_err(|e| format!("read {}: {e}", toml_path.display()))?;
         return PluginManifest::from_toml_bytes(&bytes)
             .map(|m| (m, "shannon-toml"))
             .map_err(|e| format!("parse {}: {e}", toml_path.display()));
@@ -568,8 +564,7 @@ pub fn summarize_dir(plugin_dir: &Path) -> Result<PluginBundleSummary, String> {
 /// Summarize a `.dxt` / `.mcpb` / `.zip` bundle, reading the archive
 /// in-memory (extraction-free; nothing is written or executed).
 pub fn summarize_archive(path: &Path) -> Result<PluginBundleSummary, String> {
-    let file =
-        std::fs::File::open(path).map_err(|e| format!("open {}: {e}", path.display()))?;
+    let file = std::fs::File::open(path).map_err(|e| format!("open {}: {e}", path.display()))?;
     let mut archive =
         zip::ZipArchive::new(file).map_err(|e| format!("invalid zip {}: {e}", path.display()))?;
 
@@ -754,7 +749,10 @@ mod tests {
         assert!(sanitize_component("a\\b").is_err());
         assert!(sanitize_component(".hidden").is_err());
         assert!(sanitize_component("bad\nname").is_err());
-        assert_eq!(sanitize_component("good-name_1.md").unwrap(), "good-name_1.md");
+        assert_eq!(
+            sanitize_component("good-name_1.md").unwrap(),
+            "good-name_1.md"
+        );
         assert_eq!(sanitize_component("  spaced  ").unwrap(), "spaced");
     }
 
@@ -774,7 +772,10 @@ mod tests {
         // Flattened layout: <skills_root>/<plugin>-<skill>/SKILL.md (depth 2).
         let skill = homes.skills_root.join("demo-greet").join("SKILL.md");
         assert!(skill.is_file(), "{} missing", skill.display());
-        assert!(!homes.skills_root.join("demo").exists(), "no nested <plugin> dir");
+        assert!(
+            !homes.skills_root.join("demo").exists(),
+            "no nested <plugin> dir"
+        );
         let agent = homes.agents_root.join("demo").join("reviewer.md");
         assert!(agent.is_file());
         let command = homes.commands_root.join("ship.md");
@@ -826,7 +827,13 @@ mod tests {
 
         // The runtime-visible identity is the flattened dir name, so the
         // Installed row and the loader agree on one name per skill.
-        assert!(homes.skills_root.join("demo-greet").join("SKILL.md").is_file());
+        assert!(
+            homes
+                .skills_root
+                .join("demo-greet")
+                .join("SKILL.md")
+                .is_file()
+        );
     }
 
     #[test]
@@ -905,13 +912,25 @@ mod tests {
         let warnings = reverse_materialize(&installed.record, &homes);
         assert!(warnings.is_empty(), "{warnings:?}");
         assert!(!homes.skills_root.join("demo-greet").exists());
-        assert!(plugin_dir.join("skills").join("greet").join("SKILL.md").is_file());
+        assert!(
+            plugin_dir
+                .join("skills")
+                .join("greet")
+                .join("SKILL.md")
+                .is_file()
+        );
         assert!(plugin_dir.join(MATERIALIZED_SIDECAR).is_file());
 
         // enable = re-materialize from the manifest
         let re_enabled = materialize_plugin(&plugin_dir, &manifest, &homes).unwrap();
         assert!(re_enabled.warnings.is_empty(), "{:?}", re_enabled.warnings);
-        assert!(homes.skills_root.join("demo-greet").join("SKILL.md").is_file());
+        assert!(
+            homes
+                .skills_root
+                .join("demo-greet")
+                .join("SKILL.md")
+                .is_file()
+        );
         assert!(homes.commands_root.join("ship.md").is_file());
     }
 
@@ -938,8 +957,18 @@ mod tests {
         assert_eq!(refreshed.commands, vec!["launch.md".to_string()]);
         let second = materialize_plugin(&plugin_dir, &manifest, &homes).unwrap();
         assert!(homes.commands_root.join("launch.md").is_file());
-        assert!(second.record.commands.contains(&homes.commands_root.join("launch.md").display().to_string()));
-        assert!(!second.record.commands.contains(&homes.commands_root.join("ship.md").display().to_string()));
+        assert!(
+            second
+                .record
+                .commands
+                .contains(&homes.commands_root.join("launch.md").display().to_string())
+        );
+        assert!(
+            !second
+                .record
+                .commands
+                .contains(&homes.commands_root.join("ship.md").display().to_string())
+        );
     }
 
     // ── uninstall without sidecar ───────────────────────────────────────
@@ -987,15 +1016,44 @@ mod tests {
         std::fs::create_dir_all(&commands).unwrap();
         std::fs::write(commands.join("fine.md"), "ok").unwrap();
 
-        let outcome = materialize_plugin(&plugin_dir, &read_manifest_from_dir(&plugin_dir).unwrap().0, &homes).unwrap();
+        let outcome = materialize_plugin(
+            &plugin_dir,
+            &read_manifest_from_dir(&plugin_dir).unwrap().0,
+            &homes,
+        )
+        .unwrap();
         // the traversal-ish names were rejected, the clean ones landed…
-        assert_eq!(outcome.record.agents, vec![homes.agents_root.join("trav").join("fine.md").display().to_string()]);
-        assert_eq!(outcome.record.commands, vec![homes.commands_root.join("fine.md").display().to_string()]);
+        assert_eq!(
+            outcome.record.agents,
+            vec![
+                homes
+                    .agents_root
+                    .join("trav")
+                    .join("fine.md")
+                    .display()
+                    .to_string()
+            ]
+        );
+        assert_eq!(
+            outcome.record.commands,
+            vec![homes.commands_root.join("fine.md").display().to_string()]
+        );
         // …nothing escaped the homes, and warnings name the rejections
-        assert!(outcome.warnings.iter().any(|w| w.contains("agents/") && w.contains("hidden")), "{:?}", outcome.warnings);
+        assert!(
+            outcome
+                .warnings
+                .iter()
+                .any(|w| w.contains("agents/") && w.contains("hidden")),
+            "{:?}",
+            outcome.warnings
+        );
         // …and nothing left the homes
         assert!(homes.agents_root.join("trav").join("fine.md").is_file());
-        assert!(outcome.warnings.iter().any(|w| w.contains("agents/")), "{:?}", outcome.warnings);
+        assert!(
+            outcome.warnings.iter().any(|w| w.contains("agents/")),
+            "{:?}",
+            outcome.warnings
+        );
     }
 
     #[test]
@@ -1014,15 +1072,22 @@ mod tests {
         std::fs::create_dir_all(&commands).unwrap();
         std::fs::write(commands.join("ok.md"), "ok").unwrap();
 
-        let outcome =
-            materialize_plugin(&plugin_dir, &read_manifest_from_dir(&plugin_dir).unwrap().0, &homes)
-                .unwrap();
+        let outcome = materialize_plugin(
+            &plugin_dir,
+            &read_manifest_from_dir(&plugin_dir).unwrap().0,
+            &homes,
+        )
+        .unwrap();
         // the sse server warns instead of registering; the rest proceed
         assert_eq!(outcome.record.mcp_servers, vec!["half-local".to_string()]);
-        assert!(outcome
-            .warnings
-            .iter()
-            .any(|w| w.contains("mcp server 'r'") && w.contains("sse")), "{:?}", outcome.warnings);
+        assert!(
+            outcome
+                .warnings
+                .iter()
+                .any(|w| w.contains("mcp server 'r'") && w.contains("sse")),
+            "{:?}",
+            outcome.warnings
+        );
         assert!(homes.commands_root.join("ok.md").is_file());
     }
 
@@ -1040,9 +1105,12 @@ mod tests {
 
         let plugin_dir = tmp.path().join("src").join("demo");
         write_claude_plugin(&plugin_dir, stdio_mcp());
-        let outcome =
-            materialize_plugin(&plugin_dir, &read_manifest_from_dir(&plugin_dir).unwrap().0, &homes)
-                .unwrap();
+        let outcome = materialize_plugin(
+            &plugin_dir,
+            &read_manifest_from_dir(&plugin_dir).unwrap().0,
+            &homes,
+        )
+        .unwrap();
         assert!(outcome.warnings.is_empty());
 
         let store: Vec<serde_json::Value> =
@@ -1052,7 +1120,10 @@ mod tests {
             .iter()
             .find(|s| s["name"] == "demo-relay")
             .expect("namespaced key present");
-        assert_eq!(relay["command"], "npx", "collision overwrites the namespaced key");
+        assert_eq!(
+            relay["command"], "npx",
+            "collision overwrites the namespaced key"
+        );
         assert_eq!(relay["enabled"], true);
         let own = store.iter().find(|s| s["name"] == "user-own").unwrap();
         assert_eq!(own["command"], "uvx", "foreign entry untouched");
@@ -1176,7 +1247,10 @@ mod tests {
         let summary = summarize_archive(&archive_path).unwrap();
         assert_eq!(summary.name, "archived");
         assert_eq!(summary.source_format, "claude-json");
-        assert_eq!(summary.skills, vec!["alpha".to_string(), "beta".to_string()]);
+        assert_eq!(
+            summary.skills,
+            vec!["alpha".to_string(), "beta".to_string()]
+        );
         assert_eq!(summary.agents, vec!["scout.md".to_string()]);
         assert_eq!(summary.commands, vec!["go.md".to_string()]);
         assert_eq!(summary.mcp_servers, vec!["srv".to_string()]);
@@ -1206,7 +1280,9 @@ mod tests {
         // review hardening: git's ext:: transport executes its argument via
         // the shell — the pre-consent preview must never admit it.
         assert!(!looks_like_git_source("ext::sh -c calc#git=calc /tmp/x"));
-        assert!(!looks_like_git_source("ext::sh -c calc#git=calc /tmp/x.git"));
+        assert!(!looks_like_git_source(
+            "ext::sh -c calc#git=calc /tmp/x.git"
+        ));
         // scheme allowlist: a bare `.git` path is no longer admitted
         assert!(!looks_like_git_source("/some/path/repo.git"));
         assert!(!looks_like_git_source("github.com:u/r.git"));

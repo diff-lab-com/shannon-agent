@@ -1939,15 +1939,19 @@ mod tests {
 
     async fn rail_row(state: &AppState, id: Uuid, working_dir: Option<&str>) {
         let now = crate::commands::chrono_timestamp();
-        state.sessions.lock().await.push(crate::commands::SessionMeta {
-            id: id.to_string(),
-            title: "Origin".into(),
-            created_at: now,
-            message_count: 0,
-            working_dir: working_dir.map(str::to_string),
-            parent_id: None,
-            branch_point: None,
-        });
+        state
+            .sessions
+            .lock()
+            .await
+            .push(crate::commands::SessionMeta {
+                id: id.to_string(),
+                title: "Origin".into(),
+                created_at: now,
+                message_count: 0,
+                working_dir: working_dir.map(str::to_string),
+                parent_id: None,
+                branch_point: None,
+            });
     }
 
     #[tokio::test]
@@ -1992,7 +1996,9 @@ mod tests {
         let active = Uuid::new_v4();
         rail_row(&state, active, Some("/work/active-proj")).await;
         state.registry.insert(active);
-        state.registry.set_active(crate::session_registry::SessionKey(active));
+        state
+            .registry
+            .set_active(crate::session_registry::SessionKey(active));
 
         let inherited = goal_inherited_working_dir(&state, None).await;
         assert_eq!(
@@ -2001,14 +2007,9 @@ mod tests {
             "no target → the active session donates its dir"
         );
 
-        let created = create_goal_session(
-            &state,
-            &app.handle().clone(),
-            "Goal session",
-            inherited,
-        )
-        .await
-        .unwrap();
+        let created = create_goal_session(&state, &app.handle().clone(), "Goal session", inherited)
+            .await
+            .unwrap();
         let sessions = state.sessions.lock().await;
         let meta = sessions
             .iter()

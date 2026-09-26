@@ -215,7 +215,10 @@ fn finish_install_with_materialize(
         (plugin.path.clone(), plugin.manifest.clone())
     };
     match plugin_materialize::materialize_plugin(&plugin_dir, &manifest, homes) {
-        Ok(MaterializeOutcome { record: _, warnings }) => Ok(PluginInstallResult {
+        Ok(MaterializeOutcome {
+            record: _,
+            warnings,
+        }) => Ok(PluginInstallResult {
             name: name.to_string(),
             warnings,
         }),
@@ -330,9 +333,10 @@ fn rematerialize_from_manifest(
         (plugin.path.clone(), plugin.manifest.clone())
     };
     match plugin_materialize::materialize_plugin(&plugin_dir, &manifest, homes) {
-        Ok(MaterializeOutcome { record: MaterializedRecord { .. }, warnings }) => {
-            Ok(PluginLifecycleResult { warnings })
-        }
+        Ok(MaterializeOutcome {
+            record: MaterializedRecord { .. },
+            warnings,
+        }) => Ok(PluginLifecycleResult { warnings }),
         Err(e) => Err(e),
     }
 }
@@ -721,11 +725,14 @@ mod lifecycle_tests {
         assert!(installed.warnings.is_empty(), "{:?}", installed.warnings);
         let plugin_dir = registry.get("bundle").unwrap().path.clone();
         assert!(
-            homes.skills_root.join("bundle-main").join("SKILL.md").is_file()
+            homes
+                .skills_root
+                .join("bundle-main")
+                .join("SKILL.md")
+                .is_file()
         );
         assert!(homes.commands_root.join("go.md").is_file());
-        let store =
-            std::fs::read_to_string(&homes.mcp_store_path).expect("mcp store materialized");
+        let store = std::fs::read_to_string(&homes.mcp_store_path).expect("mcp store materialized");
         assert!(store.contains("bundle-relay"), "{store}");
 
         // disable: reverse-materialize, keep plugin dir + sidecar
@@ -738,11 +745,17 @@ mod lifecycle_tests {
         assert!(!homes.skills_root.join("bundle-main").exists());
         assert!(!homes.commands_root.join("go.md").exists());
         assert!(
-            plugin_dir.join(plugin_materialize::MATERIALIZED_SIDECAR).is_file(),
+            plugin_dir
+                .join(plugin_materialize::MATERIALIZED_SIDECAR)
+                .is_file(),
             "sidecar must survive disable"
         );
         assert!(
-            plugin_dir.join("skills").join("main").join("SKILL.md").is_file(),
+            plugin_dir
+                .join("skills")
+                .join("main")
+                .join("SKILL.md")
+                .is_file(),
             "plugin dir must survive disable"
         );
 
@@ -750,7 +763,11 @@ mod lifecycle_tests {
         let enabled = rematerialize_from_manifest(&mut registry, "bundle", &homes).unwrap();
         expect_clean(&enabled);
         assert!(
-            homes.skills_root.join("bundle-main").join("SKILL.md").is_file()
+            homes
+                .skills_root
+                .join("bundle-main")
+                .join("SKILL.md")
+                .is_file()
         );
         assert!(homes.commands_root.join("go.md").is_file());
 
@@ -823,7 +840,11 @@ mod lifecycle_tests {
         // the dropped command is not re-materialized; skill + mcp are back
         assert!(!homes.commands_root.join("go.md").exists());
         assert!(
-            homes.skills_root.join("upd-main").join("SKILL.md").is_file()
+            homes
+                .skills_root
+                .join("upd-main")
+                .join("SKILL.md")
+                .is_file()
         );
     }
 
