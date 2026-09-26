@@ -188,6 +188,9 @@ export default function DiffReviewBody({ filePath, onClose, active }: DiffReview
     }
   }
 
+  // B4 P1-33: the keyboard cursor is now visual — DiffViewer rings the
+  // current hunk's header and scrolls it into view (previously the id was
+  // computed and discarded with `void`).
   const { currentHunkId } = useDiffKeyboard({
     enabled: active && !!diff,
     hunks,
@@ -196,7 +199,6 @@ export default function DiffReviewBody({ filePath, onClose, active }: DiffReview
     onToggleDecision: handleSetDecision,
     onApply: acceptedCount > 0 && !wholeFileDeletion ? handleApply : undefined,
   })
-  void currentHunkId
 
   return (
     <div ref={containerRef} className="flex flex-col flex-1 min-h-0">
@@ -270,6 +272,7 @@ export default function DiffReviewBody({ filePath, onClose, active }: DiffReview
               diff={diff}
               decisions={decisions}
               onToggleHunk={handleToggleHunk}
+              currentHunkId={currentHunkId}
             />
           </>
         ) : null}

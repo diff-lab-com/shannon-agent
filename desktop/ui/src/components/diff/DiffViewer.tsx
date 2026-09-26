@@ -7,8 +7,14 @@
 // cycles the decision: pending → accept → reject → pending.
 //
 // The viewer is presentational — fetch + apply lives in the caller.
+//
+// B4 P1-32: rendering is capped at MAX_RENDER_LINES rows (display only —
+// decisions and Apply always run against the full diff, mergeFile never
+// sees this slice). B4 P1-33: when the caller passes `currentHunkId` (from
+// useDiffKeyboard), that hunk's header gets a focus ring and is scrolled
+// into view, so j/k/a/r/u visibly operate on something.
 
-import { Fragment, useMemo } from 'react'
+import { Fragment, useEffect, useMemo, useRef } from 'react'
 import { useIntl } from 'react-intl'
 import { Button } from '@/components/ui/button'
 import { cn } from '@/lib/utils'
@@ -22,8 +28,15 @@ interface DiffViewerProps {
   /** Hunk id → decision. Hunks absent from the map are treated as pending. */
   decisions: Map<string, HunkDecision>
   onToggleHunk?: (hunkId: string) => void
+  /** B4 P1-33: hunk the keyboard cursor is on — rings + scrolls into view. */
+  currentHunkId?: string | null
   className?: string
 }
+
+/** B4 P1-32: max rendered diff rows. Beyond this the tail is hidden (with a
+    notice) so a minified-JS-sized diff can't freeze the main thread. The
+    threshold mirrors common review tools (≈4k lines). */
+const MAX_RENDER_LINES = 4000
 
 type LineKind = 'context' | 'add' | 'del'
 
@@ -108,14 +121,41 @@ function escapePlain(s: string): string {
   return s.replace(/[&<>]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;' }[c] ?? c))
 }
 
-export default function DiffViewer({ diff, decisions, onToggleHunk, className }: DiffViewerProps) {
+export default function DiffViewer({ diff, decisions, onToggleHunk, currentHunkId, className }: DiffViewerProps) {
   const intl = useIntl()
+  const rootRef = useRef<HTMLDivElement | null>(null)
   const hunks = useMemo(
     () => computeHunks(diff.old_content, diff.new_content),
     [diff.old_content, diff.new_content],
   )
   const lines = useMemo(() => flattenHunks(hunks), [hunks])
-  const headerIndices = useMemo(() => hunkHeaderIndices(lines), [lines])
+  // B4 P1-32: display cap — everything downstream of the slice (headers,
+  // counts, gutters) works on `visibleLines`; the notice reports the tail.
+  const visibleLines = useMemo(
+    () => lines.length > MAX_RENDER_LINES ? lines.slice(0, MAX_RENDER_LINES) : lines,
+    [lines],
+  )
+  const truncated = lines.length > visibleLines.length
+  const headerIndices = useMemo(() => hunkHeaderIndices(visibleLines), [visibleLines])
+  // +/− counts used to be two full array filters on every render; memoized
+  // off `lines` now (B4 P1-32).
+  const counts = useMemo(() => {
+    let add = 0
+    let del = 0
+    for (const l of lines) {
+      if (l.kind === 'add') add += 1
+      else if (l.kind === 'del') del += 1
+    }
+    return { add, del }
+  }, [lines])
+
+  // B4 P1-33: keep the keyboard-current hunk on screen — scroll its header
+  // row into view whenever the cursor moves (j/k).
+  useEffect(() => {
+    if (!currentHunkId) return
+    const el = rootRef.current?.querySelector('[data-current-hunk="true"]')
+    el?.scrollIntoView({ block: 'nearest' })
+  }, [currentHunkId])
 
   const lang = useMemo(
     () => resolveDiffLang(diff.language, diff.file_name),
@@ -132,9 +172,6 @@ export default function DiffViewer({ diff, decisions, onToggleHunk, className }:
     return escapePlain(line.text)
   }
 
-  const addCount = lines.filter(l => l.kind === 'add').length
-  const delCount = lines.filter(l => l.kind === 'del').length
-
   const gutterWidth = Math.max(
     String(Math.max(...lines.map(l => l.oldNo ?? 0), 1)).length,
     String(Math.max(...lines.map(l => l.newNo ?? 0), 1)).length,
@@ -149,7 +186,7 @@ export default function DiffViewer({ diff, decisions, onToggleHunk, className }:
   }
 
   return (
-    <div className={cn("rounded-xl border border-outline-variant/30 overflow-hidden bg-surface-container-lowest", className)}>
+    <div ref={rootRef} className={cn("rounded-xl border border-outline-variant/30 overflow-hidden bg-surface-container-lowest", className)}>
       <header className="flex items-center justify-between px-md py-sm border-b border-outline-variant/30 bg-surface-container-low">
         <div className="flex items-center gap-md min-w-0">
           <span className="material-symbols-outlined text-[18px] text-on-surface-variant">difference</span>
@@ -159,8 +196,8 @@ export default function DiffViewer({ diff, decisions, onToggleHunk, className }:
           ) : null}
         </div>
         <div className="flex items-center gap-md shrink-0">
-          <span className="font-label-sm text-tertiary">+{addCount}</span>
-          <span className="font-label-sm text-error">−{delCount}</span>
+          <span className="font-label-sm text-tertiary">+{counts.add}</span>
+          <span className="font-label-sm text-error">−{counts.del}</span>
         </div>
       </header>
       <div className="overflow-x-auto font-mono text-[12px] leading-[1.5]">
@@ -169,7 +206,7 @@ export default function DiffViewer({ diff, decisions, onToggleHunk, className }:
         ) : (
           <table className="w-full border-collapse">
             <tbody>
-              {lines.map((line, idx) => {
+              {visibleLines.map((line, idx) => {
                 const style = KIND_STYLES[line.kind]
                 const decision = line.hunkId !== null ? (decisions.get(line.hunkId) ?? 'pending') : 'pending'
                 const bgClass = line.kind === 'add'
@@ -180,10 +217,16 @@ export default function DiffViewer({ diff, decisions, onToggleHunk, className }:
                 const headerIdx = line.hunkId !== null ? headerIndices.get(line.hunkId) : undefined
                 const renderHeader = headerIdx === idx
                 const hunkId = line.hunkId
+                // B4 P1-33: the keyboard-current hunk's header carries the
+                // focus ring (and the scroll anchor attribute).
+                const isCurrentHunk = hunkId !== null && hunkId === currentHunkId
                 return (
                   <Fragment key={idx}>
                     {renderHeader && hunkId !== null && (
-                      <tr className={decisionHeaderStyle(decision)}>
+                      <tr
+                        data-current-hunk={isCurrentHunk ? 'true' : undefined}
+                        className={cn(decisionHeaderStyle(decision), isCurrentHunk && 'ring-2 ring-inset ring-primary')}
+                      >
                         <td colSpan={4} className="px-md py-xs">
                           <Button
                             variant="ghost"
@@ -225,6 +268,17 @@ export default function DiffViewer({ diff, decisions, onToggleHunk, className }:
           </table>
         )}
       </div>
+      {truncated && (
+        <p
+          role="note"
+          className="px-md py-sm border-t border-outline-variant/30 bg-surface-container-low font-label-sm text-on-surface-variant"
+        >
+          {intl.formatMessage(
+            { id: 'diff.viewer.truncated' },
+            { limit: visibleLines.length, total: lines.length },
+          )}
+        </p>
+      )}
     </div>
   )
 }

@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { computeHunks, mergeFile, type HunkDecision } from '@/lib/diff-merge'
+import { computeHunks, computeDiffStats, mergeFile, type HunkDecision } from '@/lib/diff-merge'
 
 // All fixtures use explicit \n line endings. Trailing-newline semantics:
 // all-accept → new content verbatim, none accepted → old content verbatim,
@@ -252,5 +252,38 @@ describe('mergeFile', () => {
       [hunks[1].id, 'reject'],
     ])
     expect(mergeFile(oldC, newC, decisions)).toBe('A\nk\nx\nb')
+  })
+})
+
+// ─── B4 P1-32: per-diff-object memoized stats ──────────────────────────────
+
+describe('computeDiffStats', () => {
+  it('returns hunks plus added/removed line counts', () => {
+    const diff = { old_content: 'a\nb\nc', new_content: 'a\nB\nc\nd' }
+    const stats = computeDiffStats(diff)
+    expect(stats.hunks).toEqual(computeHunks(diff.old_content, diff.new_content))
+    expect(stats.added).toBe(2) // 'B' replaces 'b', 'd' is new
+    expect(stats.removed).toBe(1) // 'b'
+  })
+
+  it('caches per object identity — same object returns the same arrays', () => {
+    const diff = { old_content: 'x', new_content: 'x\ny' }
+    const first = computeDiffStats(diff)
+    const second = computeDiffStats(diff)
+    expect(second).toBe(first)
+    expect(second.hunks).toBe(first.hunks)
+  })
+
+  it('distinct objects get distinct stats even with equal content', () => {
+    const a = { old_content: 'x', new_content: 'x\ny' }
+    const b = { old_content: 'x', new_content: 'x\ny' }
+    expect(computeDiffStats(a)).not.toBe(computeDiffStats(b))
+  })
+
+  it('identical content yields zero hunks and zero counts', () => {
+    const stats = computeDiffStats({ old_content: 'same', new_content: 'same' })
+    expect(stats.hunks).toHaveLength(0)
+    expect(stats.added).toBe(0)
+    expect(stats.removed).toBe(0)
   })
 })

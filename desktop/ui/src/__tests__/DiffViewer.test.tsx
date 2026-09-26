@@ -129,3 +129,43 @@ describe('DiffViewer — per-hunk controls (Day 3)', () => {
     expect(screen.getAllByText(/lines$/).length).toBeGreaterThan(0)
   })
 })
+
+// ─── B4 P1-33 / P1-32: visible keyboard focus + render cap ─────────────────
+
+describe('DiffViewer — current hunk focus and line cap', () => {
+  it('marks the current hunk header as the focus anchor and rings it', () => {
+    const hunks = computeHunks(baseDiff.old_content, baseDiff.new_content)
+    const { container } = render(
+      <DiffViewer diff={baseDiff} decisions={new Map()} currentHunkId={hunks[0].id} />,
+    )
+    const anchored = container.querySelector('[data-current-hunk="true"]')
+    expect(anchored).not.toBeNull()
+    expect(anchored!.className).toContain('ring-2')
+    // The anchor is the hunk header row of hunk[0] — the second hunk is not.
+    expect(anchored!).toHaveTextContent('Undecided')
+  })
+
+  it('does not anchor any hunk without currentHunkId', () => {
+    const { container } = render(<DiffViewer diff={baseDiff} decisions={new Map()} />)
+    expect(container.querySelector('[data-current-hunk="true"]')).toBeNull()
+  })
+
+  it('caps rendered rows and shows a truncation notice (display only)', () => {
+    const lines = Array.from({ length: 4100 }, (_, i) => `line ${i}`)
+    const big: FileDiff = {
+      old_content: lines.join('\n'),
+      // Every line changed → one 8200-line hunk (4100 del + 4100 add).
+      new_content: lines.map(l => `${l} changed`).join('\n'),
+      file_name: 'big.txt',
+      language: 'text',
+    }
+    const { container } = render(<DiffViewer diff={big} decisions={new Map()} />)
+    const rows = container.querySelectorAll('tbody tr')
+    // 4000 line rows + 1 hunk header row; the remaining 4200 lines are hidden.
+    expect(rows.length).toBe(4001)
+    expect(screen.getByRole('note')).toHaveTextContent(/first 4000 of 8200 lines/)
+    // Header +/− counts are computed over the FULL diff, not the slice.
+    expect(screen.getByText('+4100')).toBeInTheDocument()
+    expect(screen.getByText('−4100')).toBeInTheDocument()
+  })
+})
