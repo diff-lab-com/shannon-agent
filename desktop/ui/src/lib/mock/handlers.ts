@@ -224,8 +224,9 @@ const goalRuns = [
     lastError: null,
     startedAtMs: Date.now() - 26 * 60_000,
     updatedAtMs: Date.now() - 2 * 60_000,
-    // P-E2: inherited from the originating session.
-    workingDir: '/home/dev/work/shannon',
+    // P-E2: inherited from the originating session. P-U3: aligned with the
+    // demoProjects registry row so /tasks?project= resolves the run.
+    workingDir: '/home/demo/workspace/shannon',
   },
   {
     sessionId: '0196aaaa-0000-7000-8000-000000000002',
