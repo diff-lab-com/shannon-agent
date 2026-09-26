@@ -171,7 +171,15 @@ export default function Plugins() {
     refreshInstalled();
   };
 
+  // A10 (picker busy gate): one shared in-flight flag for the page's own
+  // add-flows — both picker paths (local folder / archive) route through
+  // `runInstall`. While an install is in flight the「+ 添加插件」trigger is
+  // disabled so installs cannot stack. (The git-URL dialog keeps the trigger
+  // covered by its own modal and manages its `installing` state internally.)
+  const [installBusy, setInstallBusy] = useState(false);
+
   const runInstall = async (install: () => Promise<api.PluginInstallResult>) => {
+    setInstallBusy(true);
     try {
       const result = await install();
       toast.success(t("extensions.plugins.installSuccess", { name: result.name }));
@@ -184,6 +192,8 @@ export default function Plugins() {
       toast.error(
         t("extensions.plugins.installError", { error: safeErrorMessage(e, "install failed") }),
       );
+    } finally {
+      setInstallBusy(false);
     }
   };
 
@@ -480,6 +490,19 @@ export default function Plugins() {
           {plugin.description && (
             <p className="text-label-sm text-on-surface-variant truncate">{plugin.description}</p>
           )}
+          {/* A8 (a11y): the migration row's suppression explanation lived
+              only in a `title` — invisible to keyboards and screen readers.
+              It now renders as a visible in-row note that the disabled
+              controls reference via aria-describedby. */}
+          {migration && (
+            <p
+              id={`migration-note-${plugin.name}`}
+              data-testid={`migration-note-${plugin.name}`}
+              className="text-label-xs text-on-surface-variant mt-[2px]"
+            >
+              {migrationTooltip}
+            </p>
+          )}
         </div>
 
         {/* Migration records are informational: their imported originals
@@ -492,6 +515,7 @@ export default function Plugins() {
             disabled={migration || busy}
             onCheckedChange={(next) => handleToggle(plugin, next === true)}
             aria-label={t("extensions.plugins.installed.toggleAria", { name: plugin.name })}
+            aria-describedby={migration ? `migration-note-${plugin.name}` : undefined}
             data-testid={`installed-toggle-${plugin.name}`}
           />
         </span>
@@ -520,6 +544,7 @@ export default function Plugins() {
             disabled={migration || busy}
             onClick={() => requestUninstall(plugin)}
             aria-label={t("extensions.plugins.installed.uninstallAria", { name: plugin.name })}
+            aria-describedby={migration ? `migration-note-${plugin.name}` : undefined}
             data-testid={`installed-uninstall-${plugin.name}`}
             className="px-sm py-xs rounded-lg text-on-surface-variant hover:text-error hover:bg-error/10 cursor-pointer"
           >
@@ -647,11 +672,13 @@ export default function Plugins() {
           <span className="relative inline-flex">
             <Button
               onClick={() => setAddMenuOpen((open) => !open)}
+              disabled={installBusy}
+              aria-busy={installBusy}
               aria-haspopup="menu"
               aria-expanded={addMenuOpen}
               aria-label={t("extensions.plugins.add.aria")}
               data-testid="add-plugin-button"
-              className="px-md py-xs rounded-lg hover:bg-primary/90 cursor-pointer focus-visible:ring-2 focus-visible:ring-primary/30"
+              className="px-md py-xs rounded-lg hover:bg-primary/90 cursor-pointer focus-visible:ring-2 focus-visible:ring-primary/30 disabled:opacity-50 disabled:cursor-not-allowed"
             >
               <span className="material-symbols-outlined text-[14px]">add</span>
               {t("extensions.plugins.add.label")}

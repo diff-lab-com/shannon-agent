@@ -279,6 +279,30 @@ describe('Plugins — migration rows suppress destructive actions (X6)', () => {
     expect(api.disablePlugin).not.toHaveBeenCalled()
     expect(api.uninstallPlugin).not.toHaveBeenCalled()
   })
+
+  // A8 (a11y): the suppression explanation must not live only in a `title` —
+  // it renders as a visible in-row note and the disabled controls reference
+  // it via aria-describedby (screen-reader/keyboard reachable).
+  it('exposes the migration explanation through aria-describedby to a visible note', async () => {
+    vi.mocked(api.listPlugins).mockResolvedValue([migrationRow])
+    renderPlugins()
+    const note = await screen.findByTestId('migration-note-imported-claude-code')
+    // The note is real visible text (not a title-only tooltip)…
+    expect(note).toBeVisible()
+    expect(note).toHaveTextContent('Migration import record')
+    // …and BOTH disabled controls point at it.
+    const toggle = screen.getByLabelText('Enable or disable imported-claude-code')
+    expect(toggle).toHaveAttribute('aria-describedby', 'migration-note-imported-claude-code')
+    const uninstall = screen.getByTestId('installed-uninstall-imported-claude-code')
+    expect(uninstall).toHaveAttribute('aria-describedby', 'migration-note-imported-claude-code')
+
+    // Non-migration rows carry no note and no describedby.
+    vi.mocked(api.listPlugins).mockResolvedValue([plugin()])
+    renderPlugins()
+    await waitFor(() => expect(screen.getByTestId('installed-row-web-plugin')).toBeInTheDocument())
+    expect(screen.queryByTestId('migration-note-web-plugin')).not.toBeInTheDocument()
+    expect(screen.getByTestId('installed-toggle-web-plugin')).not.toHaveAttribute('aria-describedby')
+  })
 })
 
 describe('Plugins — add plugin from three sources (X6)', () => {
@@ -428,5 +452,33 @@ describe('Plugins — add plugin from three sources (X6)', () => {
     fireEvent.click(screen.getByRole('menuitem', { name: 'From local folder…' }))
 
     await waitFor(() => expect(toast.warning).toHaveBeenCalledWith('sse-only mcp server skipped'))
+  })
+
+  // A10 (picker busy gate): while an install is in flight the「+ 添加插件」
+  // trigger is disabled — picker installs cannot stack.
+  it('disables the add-plugin trigger while an install is in flight', async () => {
+    vi.mocked(api.listPlugins).mockResolvedValue([])
+    let resolveInstall: (v: api.PluginInstallResult) => void = () => {}
+    vi.mocked(api.installPlugin).mockImplementation(
+      () =>
+        new Promise<api.PluginInstallResult>((resolve) => {
+          resolveInstall = resolve
+        }),
+    )
+    vi.mocked(openDialog).mockResolvedValue('/home/u/my-plugin')
+    renderPlugins()
+    await openAddMenu()
+
+    fireEvent.click(screen.getByRole('menuitem', { name: 'From local folder…' }))
+    await waitFor(() => expect(api.installPlugin).toHaveBeenCalledWith('/home/u/my-plugin'))
+
+    const trigger = screen.getByTestId('add-plugin-button')
+    expect(trigger).toBeDisabled()
+    expect(trigger).toHaveAttribute('aria-busy', 'true')
+
+    resolveInstall({ name: 'plugin-x', warnings: [] })
+    await waitFor(() => expect(trigger).not.toBeDisabled())
+    expect(trigger).toHaveAttribute('aria-busy', 'false')
+    expect(toast.success).toHaveBeenCalledWith('Installed plugin-x.')
   })
 })
