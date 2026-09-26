@@ -111,6 +111,11 @@ export default function AddPluginGitDialog({
             onChange={(e) => {
               setUrl(e.target.value)
               setNeedsUrl(false)
+              // SEC-1 (review fix): the refusal armed the opt-in for one
+              // specific remote. Editing the URL aims the install at a
+              // different repo, so the armed consent is withdrawn — a new
+              // refusal from the new remote must re-arm it.
+              setNeedsUnverifiedConsent(false)
             }}
             placeholder={t('extensions.plugins.addGit.urlPlaceholder')}
             aria-label={t('extensions.plugins.addGit.urlLabel')}

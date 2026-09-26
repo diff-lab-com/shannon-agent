@@ -318,6 +318,45 @@ describe('Plugins — add plugin from three sources (X6)', () => {
     )
   })
 
+  // Review fix (SEC-1): the refusal arms the opt-in for ONE remote. Editing
+  // the URL aims the install at a different repo, so the armed consent must
+  // reset — the opt-in stays hidden until the new remote earns its own
+  // refusal.
+  it('withdraws the unverified opt-in when the URL is edited after a refusal', async () => {
+    vi.mocked(api.listPlugins).mockResolvedValue([])
+    vi.mocked(api.installPluginFromGit).mockRejectedValueOnce(
+      new Error('refused: manifest declares no permissions (set allow_unverified to override)'),
+    )
+    renderPlugins()
+    await openAddMenu()
+    fireEvent.click(screen.getByRole('menuitem', { name: 'From Git URL…' }))
+    await waitFor(() => expect(screen.getByTestId('add-git-url-input')).toBeInTheDocument())
+
+    fireEvent.change(screen.getByTestId('add-git-url-input'), {
+      target: { value: 'https://github.com/u/shady.git' },
+    })
+    fireEvent.click(screen.getByTestId('add-git-install'))
+    await waitFor(() => expect(screen.getByTestId('add-git-unverified-warning')).toBeInTheDocument())
+    expect(screen.getByTestId('add-git-install-unverified')).toBeInTheDocument()
+
+    // A different URL withdraws the armed consent.
+    fireEvent.change(screen.getByTestId('add-git-url-input'), {
+      target: { value: 'https://github.com/u/other.git' },
+    })
+    expect(screen.queryByTestId('add-git-install-unverified')).not.toBeInTheDocument()
+    expect(screen.queryByTestId('add-git-unverified-warning')).not.toBeInTheDocument()
+    // The default install button re-enables (it is disabled while armed).
+    expect(screen.getByTestId('add-git-install')).not.toBeDisabled()
+
+    // Re-typing the refused URL does NOT re-arm — only a fresh backend
+    // refusal may. (The one-shot mock now resolves, so the default install
+    // path goes through; the opt-in must still never appear.)
+    fireEvent.change(screen.getByTestId('add-git-url-input'), {
+      target: { value: 'https://github.com/u/shady.git' },
+    })
+    expect(screen.queryByTestId('add-git-install-unverified')).not.toBeInTheDocument()
+  })
+
   it('installs from a local directory picked via the directory dialog', async () => {
     vi.mocked(api.listPlugins).mockResolvedValue([])
     vi.mocked(openDialog).mockResolvedValue('/home/u/my-plugin')
