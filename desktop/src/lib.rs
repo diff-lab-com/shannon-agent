@@ -161,6 +161,10 @@ pub mod commands_slash;
 #[cfg(feature = "tauri")]
 pub mod commands_plugins;
 
+// P-E3 — project registry commands (`~/.shannon/projects.db`).
+#[cfg(feature = "tauri")]
+pub mod commands_projects;
+
 #[cfg(feature = "tauri")]
 pub mod commands_sessions;
 

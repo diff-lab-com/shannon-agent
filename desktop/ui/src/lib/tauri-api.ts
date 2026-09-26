@@ -45,6 +45,7 @@ import type {
   CatalogEntry,
   DataSourceResult,
   MobileTlsStatus,
+  ProjectRecord,
 } from '@/types'
 import type {
   ScheduledRoutine,
@@ -2418,3 +2419,44 @@ export async function terminalList(): Promise<TerminalInfo[]> {
 // workspace_get_layout / workspace_set_layout Tauri commands and their
 // types still live on disk but are no longer wired into the chat page.
 // Keep the mock layer aware so existing data files don't trip type-check.
+// --- P-E3 project registry (projects.db, adopt-not-migrate) ---
+
+/** Every registered project, path-ascending. Archived rows are included
+ *  only with `includeArchived`. The registry is back-filled from session
+ *  working dirs (and, on first seed, memory project labels) before the
+ *  read, so a fresh install already knows its projects. */
+export async function listProjects(includeArchived?: boolean): Promise<ProjectRecord[]> {
+  return invoke('list_projects', { includeArchived: includeArchived ?? false })
+}
+
+/** Register a project path. Idempotent: an already-registered path (any
+ *  name, archived or not) is returned unchanged — registration never
+ *  overwrites an existing row. */
+export async function registerProject(path: string): Promise<ProjectRecord> {
+  return invoke('register_project', { path })
+}
+
+/** Set a project's custom display name (`null` clears it, falling back to
+ *  the path's tail segment in the UI). */
+export async function renameProject(path: string, name: string | null): Promise<ProjectRecord> {
+  return invoke('rename_project', { path, name })
+}
+
+/** Set a project's custom icon and color (`null` clears a field). */
+export async function setProjectAppearance(
+  path: string,
+  icon: string | null,
+  color: string | null,
+): Promise<ProjectRecord> {
+  return invoke('set_project_appearance', { path, icon, color })
+}
+
+/** Archive a project (stamps archivedAtMs; hidden from the default list). */
+export async function archiveProject(path: string): Promise<ProjectRecord> {
+  return invoke('archive_project', { path })
+}
+
+/** Unarchive a project (clears archivedAtMs). */
+export async function unarchiveProject(path: string): Promise<ProjectRecord> {
+  return invoke('unarchive_project', { path })
+}

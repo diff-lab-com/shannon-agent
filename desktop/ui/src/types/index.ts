@@ -1414,3 +1414,17 @@ export interface RemoteHealth {
   latencyMs: number
   error: string | null
 }
+
+/** A registered project (P-E3 project registry, `~/.shannon/projects.db`).
+ *  `path` is the unique key (canonical working dir). `name`/`icon`/`color`
+ *  are curation layers — `null` means the UI renders the default (the
+ *  path's tail segment). Wire shape mirrors the Rust `ProjectRecord`
+ *  (camelCase serde). */
+export interface ProjectRecord {
+  path: string
+  name: string | null
+  icon: string | null
+  color: string | null
+  archivedAtMs: number | null
+  createdAtMs: number
+}

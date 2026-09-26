@@ -22,6 +22,7 @@ fn main() {
     use shannon_desktop::commands_onboarding;
     use shannon_desktop::commands_permissions;
     use shannon_desktop::commands_plugins;
+    use shannon_desktop::commands_projects;
     use shannon_desktop::commands_remote;
     use shannon_desktop::commands_rewind;
     use shannon_desktop::commands_routine_templates;
@@ -173,6 +174,13 @@ fn main() {
             commands_sessions::list_archived_sessions,
             // §4.14 — Turn Timeline panel data source
             commands_sessions::trace_timeline,
+            // P-E3 — project registry (adopt-not-migrate)
+            commands_projects::list_projects,
+            commands_projects::register_project,
+            commands_projects::rename_project,
+            commands_projects::set_project_appearance,
+            commands_projects::archive_project,
+            commands_projects::unarchive_project,
             // E2 skill loop — task evaluation and skill proposal management
             commands_skill_loop::skill_loop_evaluate,
             commands_skill_loop::skill_loop_generate,

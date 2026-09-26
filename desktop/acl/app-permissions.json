@@ -65,6 +65,15 @@
       }
     },
     {
+      "identifier": "allow-archive-project",
+      "description": "Enables the archive_project command without any pre-configured scope.",
+      "commands": {
+        "allow": [
+          "archive_project"
+        ]
+      }
+    },
+    {
       "identifier": "allow-archive-session",
       "description": "Enables the archive_session command without any pre-configured scope.",
       "commands": {
@@ -1226,6 +1235,15 @@
       }
     },
     {
+      "identifier": "allow-list-projects",
+      "description": "Enables the list_projects command without any pre-configured scope.",
+      "commands": {
+        "allow": [
+          "list_projects"
+        ]
+      }
+    },
+    {
       "identifier": "allow-list-providers",
       "description": "Enables the list_providers command without any pre-configured scope.",
       "commands": {
@@ -1757,6 +1775,15 @@
       }
     },
     {
+      "identifier": "allow-register-project",
+      "description": "Enables the register_project command without any pre-configured scope.",
+      "commands": {
+        "allow": [
+          "register_project"
+        ]
+      }
+    },
+    {
       "identifier": "allow-refine-skill-candidate",
       "description": "Enables the refine_skill_candidate command without any pre-configured scope.",
       "commands": {
@@ -1852,6 +1879,15 @@
       "commands": {
         "allow": [
           "remove_task_worktree"
+        ]
+      }
+    },
+    {
+      "identifier": "allow-rename-project",
+      "description": "Enables the rename_project command without any pre-configured scope.",
+      "commands": {
+        "allow": [
+          "rename_project"
         ]
       }
     },
@@ -2086,6 +2122,15 @@
       "commands": {
         "allow": [
           "set_notification_prefs"
+        ]
+      }
+    },
+    {
+      "identifier": "allow-set-project-appearance",
+      "description": "Enables the set_project_appearance command without any pre-configured scope.",
+      "commands": {
+        "allow": [
+          "set_project_appearance"
         ]
       }
     },
@@ -2333,6 +2378,15 @@
       }
     },
     {
+      "identifier": "allow-unarchive-project",
+      "description": "Enables the unarchive_project command without any pre-configured scope.",
+      "commands": {
+        "allow": [
+          "unarchive_project"
+        ]
+      }
+    },
+    {
       "identifier": "allow-unarchive-session",
       "description": "Enables the unarchive_session command without any pre-configured scope.",
       "commands": {
@@ -2566,6 +2620,7 @@
       "description": "Session CRUD/branch/export, slash/rewind/feedback, skill loop and interactive-permission commands.",
       "permissions": [
         "allow-approve-skill-candidate",
+        "allow-archive-project",
         "allow-archive-session",
         "allow-branch-session",
         "allow-compact-session",
@@ -2583,18 +2638,22 @@
         "allow-list-checkpoints",
         "allow-list-feedback-sessions",
         "allow-list-message-feedback",
+        "allow-list-projects",
         "allow-list-sessions",
         "allow-list-skill-candidates",
         "allow-load-session",
         "allow-new-session",
         "allow-record-message-feedback",
         "allow-refine-skill-candidate",
+        "allow-register-project",
         "allow-reject-skill-candidate",
+        "allow-rename-project",
         "allow-rename-session",
         "allow-request-permission",
         "allow-respond-permission",
         "allow-rewind-session",
         "allow-search-sessions",
+        "allow-set-project-appearance",
         "allow-set-session-working-dir",
         "allow-skill-loop-approve",
         "allow-skill-loop-evaluate",
@@ -2604,6 +2663,7 @@
         "allow-switch-session",
         "allow-trace-timeline",
         "allow-trigger-skill-pattern-detection",
+        "allow-unarchive-project",
         "allow-unarchive-session"
       ]
     },
