@@ -110,12 +110,17 @@ test.describe('Sidebar sessions rail (U1)', () => {
     await expect(
       page.getByTestId('desktop-session-row-sess-008')
     ).toBeVisible({ timeout: 15000 })
-    const rows = page.getByRole('listitem')
+    // Scope to session rows, not every listitem on the rail: project
+    // groups (P-U1/P-U2) are listitem wrappers too, and their first button
+    // is the header/menu control — `getByRole('listitem')` would resolve
+    // rows through it and read a null aria-label.
+    const rows = page.locator('[data-testid^="desktop-session-row-"]')
     await expect(rows.first()).toBeVisible()
     // Compare by the row button's aria-label ("Chat: <title>") — innerText
     // also drags in the icon-font glyphs (drag_indicator / more_horiz).
-    const nameOf = (i: number) =>
-      rows.nth(i).locator('button').first().getAttribute('aria-label')
+    // The row itself IS the button (role=listitem sits on its wrapper), so
+    // read the attribute off the matched element directly.
+    const nameOf = (i: number) => rows.nth(i).getAttribute('aria-label')
     const before0 = await nameOf(0)
     const before1 = await nameOf(1)
     expect(before0 && before1 && before0 !== before1).toBeTruthy()
@@ -123,12 +128,12 @@ test.describe('Sidebar sessions rail (U1)', () => {
     await page.getByRole('button', { name: before0!, exact: true }).focus()
     await page.keyboard.press('Alt+ArrowDown')
 
-    await expect(rows.nth(0).locator('button').first()).toHaveAttribute('aria-label', before1!)
-    await expect(rows.nth(1).locator('button').first()).toHaveAttribute('aria-label', before0!)
+    await expect(rows.nth(0)).toHaveAttribute('aria-label', before1!)
+    await expect(rows.nth(1)).toHaveAttribute('aria-label', before0!)
     // Persisted: the reorder survives a reload.
     await page.reload()
     await expect(rows.first()).toBeVisible()
-    await expect(rows.nth(0).locator('button').first()).toHaveAttribute('aria-label', before1!)
+    await expect(rows.nth(0)).toHaveAttribute('aria-label', before1!)
   })
 
   test('session rail has no critical axe violations (U5)', async ({ page }) => {
@@ -140,7 +145,7 @@ test.describe('Sidebar sessions rail (U1)', () => {
     await expect(
       page.getByTestId('desktop-session-row-sess-008')
     ).toBeVisible({ timeout: 15000 })
-    await expect(page.getByRole('listitem').first()).toBeVisible()
+    await expect(page.locator('[data-testid^="desktop-session-row-"]').first()).toBeVisible()
     const results = await new AxeBuilder({ page })
       .include('[data-sidebar]')
       .analyze()
