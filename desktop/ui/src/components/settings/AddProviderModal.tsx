@@ -21,6 +21,7 @@ import { useIntl } from 'react-intl'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Modal } from '@/components/ui/modal'
+import { ConfirmDialog } from '@/components/ui/confirm-dialog'
 import * as api from '@/lib/tauri-api'
 import type {
   ProviderConnection,
@@ -60,6 +61,24 @@ export default function AddProviderModal({ editing, onClose, onSaved }: AddProvi
   const [advancedOpen, setAdvancedOpen] = useState(false)
   const [saving, setSaving] = useState(false)
   const [error, setError] = useState<string | null>(null)
+  // P2: the modal holds unsaved edits (label, key, advanced rows…) — a stray
+  // Esc / backdrop click must not silently throw them away once anything is
+  // filled in.
+  const [confirmDiscard, setConfirmDiscard] = useState(false)
+  const dirty =
+    label.trim() !== (editing?.display_name ?? '') ||
+    kind !== (editing?.kind ?? 'openai-compatible') ||
+    baseUrl.trim() !== (editing?.base_url ?? '') ||
+    apiKey.trim() !== '' ||
+    model.trim() !== ''
+
+  const requestClose = () => {
+    if (dirty) {
+      setConfirmDiscard(true)
+      return
+    }
+    onClose()
+  }
 
   const info = KIND_INFO[kind] ?? KIND_INFO['openai-compatible']
 
@@ -116,7 +135,9 @@ export default function AddProviderModal({ editing, onClose, onSaved }: AddProvi
   return (
     <Modal
       open
-      onClose={onClose}
+      onClose={requestClose}
+      closeOnEscape={!dirty}
+      closeOnBackdrop={!dirty}
       size="2xl"
       title={editing ? t('settings.models.providers.editTitle') : t('settings.models.providers.addTitle')}
       className="max-h-[90vh] overflow-y-auto p-lg space-y-md"
@@ -223,7 +244,7 @@ export default function AddProviderModal({ editing, onClose, onSaved }: AddProvi
         ) : null}
 
         <div className="flex justify-end gap-sm pt-xs">
-          <Button className="px-md py-sm border border-outline-variant bg-surface-container-lowest text-on-surface font-label-md rounded-lg hover:bg-surface-container cursor-pointer" onClick={onClose}>
+          <Button className="px-md py-sm border border-outline-variant bg-surface-container-lowest text-on-surface font-label-md rounded-lg hover:bg-surface-container cursor-pointer" onClick={requestClose}>
             {t('settings.models.providers.cancel')}
           </Button>
           <Button className="px-lg py-sm bg-primary text-on-primary font-label-md rounded-lg hover:bg-primary/90 transition-colors flex items-center gap-sm cursor-pointer disabled:opacity-50" onClick={submit} disabled={saving}>
@@ -232,6 +253,17 @@ export default function AddProviderModal({ editing, onClose, onSaved }: AddProvi
           </Button>
         </div>
       </div>
+
+      <ConfirmDialog
+        open={confirmDiscard}
+        title={t('ui.modal.discard.title')}
+        message={t('ui.modal.discard.message')}
+        confirmLabel={t('ui.modal.discard.confirm')}
+        cancelLabel={t('ui.modal.discard.cancel')}
+        destructive
+        onConfirm={onClose}
+        onCancel={() => setConfirmDiscard(false)}
+      />
     </Modal>
   )
 }

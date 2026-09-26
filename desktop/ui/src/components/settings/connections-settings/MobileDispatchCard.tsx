@@ -79,16 +79,20 @@ export function MobileDispatchCard({ config, procState, onConfigChange }: Mobile
   // The page URL a browser opens (PWA page served by the gateway itself).
   // Loopback-bound: advertise the machine-local URL + a configuration note.
   // Routable bind: prefer the LAN endpoint from a freshly minted token, then
-  // the configured bind address.
+  // the configured bind address. The scheme follows the TLS state — a
+  // gateway serving https:// must not advertise http:// (mixed-content
+  // browsers and pairing both break).
+  const tlsEnabled = tlsStatus?.enabled ?? config.mobile?.tls?.enabled === true
   const pageUrl = (() => {
     if (!mobileEnabled) return null
+    const scheme = tlsEnabled ? 'https' : 'http'
     if (loopbackBound) {
-      return `http://127.0.0.1:${config.mobile?.port ?? DEFAULT_MOBILE_PORT}/`
+      return `${scheme}://127.0.0.1:${config.mobile?.port ?? DEFAULT_MOBILE_PORT}/`
     }
     if (pairToken) return pairToken.lanEndpoint.replace(/^ws(s)?:\/\//, 'http$1://') + '/'
     const host = config.mobile?.host
     if (host && !isLoopback(host)) {
-      return `http://${host}:${config.mobile?.port ?? DEFAULT_MOBILE_PORT}/`
+      return `${scheme}://${host}:${config.mobile?.port ?? DEFAULT_MOBILE_PORT}/`
     }
     return null
   })()

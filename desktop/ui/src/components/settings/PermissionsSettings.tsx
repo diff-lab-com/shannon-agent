@@ -3,6 +3,7 @@ import { useIntl, type PrimitiveType } from 'react-intl'
 import { useSearchParams } from 'react-router-dom'
 import { toast } from 'sonner'
 import { Button } from '@/components/ui/button'
+import ErrorState from '@/components/ui/error-state'
 import { Modal } from '@/components/ui/modal'
 import { ConfirmDialog } from '@/components/ui/confirm-dialog'
 import { Input } from '@/components/ui/input'
@@ -82,6 +83,17 @@ const EMPTY_EDITOR: EditorState = {
   deny: [],
 }
 
+/** Whether the editor state drifted from its opening snapshot (dirty guard). */
+function editorModified(a: EditorState, b: EditorState): boolean {
+  return (
+    a.name !== b.name ||
+    a.description !== b.description ||
+    a.auto_approve.join('\n') !== b.auto_approve.join('\n') ||
+    a.confirm.join('\n') !== b.confirm.join('\n') ||
+    a.deny.join('\n') !== b.deny.join('\n')
+  )
+}
+
 /**
  * X3 权限就近直达 — deep-link scope filter.
  *
@@ -137,8 +149,12 @@ export default function PermissionsSettings() {
 
   const [profiles, setProfiles] = useState<ProfilesList | null>(null)
   const [loading, setLoading] = useState(true)
+  // P1-13: a failed load must not render as "no permission tiers exist" —
+  // it renders an explicit error state with a retry.
+  const [loadError, setLoadError] = useState<unknown>(null)
   const [activating, setActivating] = useState<string | null>(null)
   const [editor, setEditor] = useState<EditorState | null>(null)
+  const [savingProfile, setSavingProfile] = useState(false)
   const [deleteTarget, setDeleteTarget] = useState<string | null>(null)
   const [deleting, setDeleting] = useState(false)
   const [sandboxBusy, setSandboxBusy] = useState(false)
@@ -149,10 +165,18 @@ export default function PermissionsSettings() {
     api
       .listPermissionProfiles()
       .then((list) => {
-        if (active) setProfiles(list)
+        if (active) {
+          setProfiles(list)
+          setLoadError(null)
+        }
       })
-      .catch(() => {
-        if (active) setProfiles({ builtin: [], custom: [] })
+      .catch((e) => {
+        if (active) {
+          // Deliberately NOT set to an empty list: the builtin tiers come
+          // from the same response, so a failure would render as "the system
+          // has no permission profiles at all".
+          setLoadError(e)
+        }
       })
       .finally(() => {
         if (active) setLoading(false)
@@ -225,8 +249,15 @@ export default function PermissionsSettings() {
   }
 
   const handleSaveProfile = async () => {
-    if (!editor) return
+    if (!editor || savingProfile) return
+    const originalName = editor.originalName
+    const wasActive = originalName != null && activeProfile === originalName
+    const renamed = originalName != null && originalName !== editor.name.trim()
+    setSavingProfile(true)
     try {
+      // The backend treats the payload name as the filename, so a rename is
+      // save-under-new-name + delete-old (automation_commands.rs:353-355).
+      // Save first: if this fails the old profile is still intact.
       await api.saveCustomProfile({
         name: editor.name,
         description: editor.description || undefined,
@@ -234,11 +265,23 @@ export default function PermissionsSettings() {
         confirm: editor.confirm,
         deny: editor.deny,
       })
+      if (renamed && originalName != null) {
+        // P1-12: deactivate a renamed active profile before the delete so
+        // active_permission_profile never keeps pointing at the removed file.
+        if (wasActive) await api.activatePermissionProfile(null)
+        await api.deleteCustomProfile(originalName)
+        // Keep the renamed profile active — the user was editing their live
+        // configuration, not switching away from it.
+        if (wasActive) await api.activatePermissionProfile(editor.name)
+      }
+      if (renamed || wasActive) await refreshConfig()
       toast.success(t('settings.permissions.toast.saved', { name: editor.name }))
       setEditor(null)
       loadProfiles()
     } catch (e) {
       toastError(t('settings.permissions.toast.saveFailed'), e)
+    } finally {
+      setSavingProfile(false)
     }
   }
 
@@ -276,6 +319,18 @@ export default function PermissionsSettings() {
           <Spinner />
           <span className="sr-only">{t('settings.permissions.loading')}</span>
         </div>
+      ) : loadError != null ? (
+        <ErrorState
+          title={t('settings.permissions.loadFailed.title')}
+          description={t('settings.permissions.loadFailed.description')}
+          action={{
+            label: t('settings.permissions.loadFailed.retry'),
+            onClick: () => {
+              setLoading(true)
+              loadProfiles()
+            },
+          }}
+        />
       ) : (
         <>
           {/* X3: server-scoped rule view, opened from an MCP server row's
@@ -506,6 +561,7 @@ export default function PermissionsSettings() {
           onCancel={() => setEditor(null)}
           onSave={() => void handleSaveProfile()}
           valid={editorValid}
+          saving={savingProfile}
         />
       )}
 
@@ -599,12 +655,14 @@ function ProfileEditorModal({
   onCancel,
   onSave,
   valid,
+  saving,
 }: {
   editor: EditorState
   onChange: (next: EditorState) => void
   onCancel: () => void
   onSave: () => void
   valid: boolean
+  saving: boolean
 }) {
   const intl = useIntl()
   const t = (id: string) => intl.formatMessage({ id })
@@ -615,6 +673,20 @@ function ProfileEditorModal({
     titleKey: RULE_GROUP_TITLE_KEYS[key],
     hintKey: RULE_GROUP_HINT_KEYS[key],
   }))
+
+  // P2: the modal holds unsaved edits — Esc / backdrop / the X must not
+  // silently throw them away once something changed.
+  const [openingState] = useState<EditorState>(editor)
+  const [confirmDiscard, setConfirmDiscard] = useState(false)
+  const dirty = editorModified(openingState, editor)
+
+  const requestClose = () => {
+    if (dirty) {
+      setConfirmDiscard(true)
+      return
+    }
+    onCancel()
+  }
 
   const addRule = (group: RuleGroup, value: string) => {
     if (value.trim() === '') return
@@ -627,7 +699,9 @@ function ProfileEditorModal({
   return (
     <Modal
       open
-      onClose={onCancel}
+      onClose={requestClose}
+      closeOnEscape={!dirty}
+      closeOnBackdrop={!dirty}
       title={
         editor.originalName
           ? t('settings.permissions.editor.titleEdit')
@@ -671,17 +745,28 @@ function ProfileEditorModal({
         ))}
       </div>
       <div className="flex justify-end gap-md pt-md">
-        <Button variant="ghost" className="px-md py-sm rounded-lg font-label-md" onClick={onCancel}>
+        <Button variant="ghost" className="px-md py-sm rounded-lg font-label-md" onClick={requestClose} disabled={saving}>
           {t('settings.permissions.editor.cancel')}
         </Button>
         <Button
           className="px-md py-sm rounded-lg bg-primary text-on-primary font-label-md"
-          disabled={!valid}
+          disabled={!valid || saving}
           onClick={onSave}
         >
-          {t('settings.permissions.editor.save')}
+          {saving ? t('settings.permissions.editor.saving') : t('settings.permissions.editor.save')}
         </Button>
       </div>
+
+      <ConfirmDialog
+        open={confirmDiscard}
+        title={t('ui.modal.discard.title')}
+        message={t('ui.modal.discard.message')}
+        confirmLabel={t('ui.modal.discard.confirm')}
+        cancelLabel={t('ui.modal.discard.cancel')}
+        destructive
+        onConfirm={onCancel}
+        onCancel={() => setConfirmDiscard(false)}
+      />
     </Modal>
   )
 }
