@@ -1577,6 +1577,15 @@
       }
     },
     {
+      "identifier": "allow-register-interactive-artifact",
+      "description": "Enables the register_interactive_artifact command without any pre-configured scope.",
+      "commands": {
+        "allow": [
+          "register_interactive_artifact"
+        ]
+      }
+    },
+    {
       "identifier": "allow-reveal-in-folder",
       "description": "Enables the reveal_in_folder command without any pre-configured scope.",
       "commands": {
@@ -2414,6 +2423,15 @@
       }
     },
     {
+      "identifier": "allow-unregister-interactive-artifact",
+      "description": "Enables the unregister_interactive_artifact command without any pre-configured scope.",
+      "commands": {
+        "allow": [
+          "unregister_interactive_artifact"
+        ]
+      }
+    },
+    {
       "identifier": "allow-uninstall-agent-plugin",
       "description": "Enables the uninstall_agent_plugin command without any pre-configured scope.",
       "commands": {
@@ -2597,7 +2615,7 @@
     },
     {
       "identifier": "app-platform",
-      "description": "Surface identity, in-app CLI install, update checks and mobile pairing commands.",
+      "description": "Surface identity, in-app CLI install, update checks, mobile pairing and artifact:// interactive-HTML commands.",
       "permissions": [
         "allow-check-app-update",
         "allow-engine-discovery-get-mode",
@@ -2614,7 +2632,9 @@
         "allow-open-release-page",
         "allow-open-with-default-app",
         "allow-probe-url-frameable",
-        "allow-reveal-in-folder"
+        "allow-register-interactive-artifact",
+        "allow-reveal-in-folder",
+        "allow-unregister-interactive-artifact"
       ]
     },
     {

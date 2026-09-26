@@ -107,6 +107,57 @@ describe('detectArtifacts', () => {
   })
 })
 
+// B3 §P1-10/§P2-24: stable content-hash ids, ~~~ fences, htm tag, and
+// content-derived titles for SVG/mermaid.
+describe('detectArtifacts — B3 robustness', () => {
+  it('assigns stable content-hash ids: same content converges, different content differs', () => {
+    const md = `\`\`\`svg\n${SVG_FIXTURE}\n\`\`\``
+    const [a] = detectArtifacts(md)
+    const [b] = detectArtifacts(md)
+    expect(a.id).toMatch(/^svg:/)
+    expect(a.id).toBe(b.id)
+    const [c] = detectArtifacts(`\`\`\`svg\n<svg xmlns="http://www.w3.org/2000/svg"></svg>\n\`\`\``)
+    expect(c.id).not.toBe(a.id)
+    // CRLF vs LF and outer whitespace are normalized away.
+    const [d] = detectArtifacts(`\`\`\`svg\n${SVG_FIXTURE.replace(/\n/g, '\r\n')}\n\`\`\`\n`)
+    expect(d.id).toBe(a.id)
+  })
+
+  it('detects ~~~ fences', () => {
+    const md = `~~~svg\n${SVG_FIXTURE}\n~~~`
+    const out = detectArtifacts(md)
+    expect(out).toHaveLength(1)
+    expect(out[0].kind).toBe('svg')
+  })
+
+  it('detects the htm language tag as html', () => {
+    const md = '```htm\n<html><body><p>' + 'line\n'.repeat(6) + '</p></body></html>\n```'
+    const out = detectArtifacts(md)
+    expect(out).toHaveLength(1)
+    expect(out[0].kind).toBe('html')
+  })
+
+  it('does not report a ~~~ sequence inside a ``` fence body twice', () => {
+    const body = `${SVG_FIXTURE}\n~~~svg\n<svg></svg>\n~~~`
+    const md = `\`\`\`svg\n${body}\n\`\`\``
+    const out = detectArtifacts(md)
+    expect(out).toHaveLength(1)
+  })
+
+  it('extracts an SVG title from <title> and falls back to <text>', () => {
+    const withTitle = detectArtifacts('```svg\n<svg><title>Revenue 2026</title><rect/></svg>\n```')
+    expect(withTitle[0].title).toBe('Revenue 2026')
+    const withText = detectArtifacts('```svg\n<svg><text x="0" y="0">Quarterly Report</text></svg>\n```')
+    expect(withText[0].title).toBe('Quarterly Report')
+    expect(detectArtifacts('```svg\n<svg><rect/></svg>\n```')[0].title).toBe('')
+  })
+
+  it('extracts a mermaid title from the first node label', () => {
+    const out = detectArtifacts('```mermaid\nflowchart LR\nA[Checkout Flow] --> B{Paid?}\n```')
+    expect(out[0].title).toBe('Checkout Flow')
+  })
+})
+
 describe('ArtifactContext', () => {
   function Probe() {
     const { artifacts, activeId, open, close, closeAll } = useArtifact()
@@ -163,6 +214,107 @@ describe('ArtifactContext', () => {
     const spy = vi.spyOn(console, 'error').mockImplementation(() => {})
     expect(() => render(<Probe />)).toThrow(/ArtifactProvider/)
     spy.mockRestore()
+  })
+})
+
+// B3 §P1-14 / §P1-11: session-scoped chat tabs + provider-level auto-open
+// bookkeeping that survives virtualized chip remounts.
+describe('ArtifactContext — B3 scoping & autoOpen dedup', () => {
+  const CHAT = { kind: 'html' as const, source: '<p>chat</p>', title: 'Chat doc', confidence: 'high' as const, origin: 'chat' as const, id: 'html:abc' }
+  const DISK = { kind: 'document' as const, source: '# d', title: 'Disk doc', confidence: 'high' as const, origin: 'disk' as const, path: '/tmp/d.md', id: 'disk:/tmp/d.md' }
+  const WEB = { kind: 'web' as const, source: 'https://example.com', title: 'https://example.com', confidence: 'high' as const, id: 'web:https://example.com' }
+
+  function ScopeProbe() {
+    const { artifacts, open, closeChatArtifacts } = useArtifact()
+    return (
+      <div>
+        <div data-testid="ids">{artifacts.map(a => a.id).join(',')}</div>
+        <button onClick={() => { open(CHAT); open(DISK); open(WEB) }}>seed</button>
+        <button onClick={() => closeChatArtifacts()}>sweep</button>
+      </div>
+    )
+  }
+
+  it('closeChatArtifacts removes chat tabs, keeps disk and web tabs', () => {
+    render(
+      <I18nProvider>
+        <ArtifactProvider>
+          <ScopeProbe />
+        </ArtifactProvider>
+      </I18nProvider>,
+    )
+    fireEvent.click(screen.getByText('seed'))
+    expect(screen.getByTestId('ids')).toHaveTextContent('html:abc')
+    expect(screen.getByTestId('ids')).toHaveTextContent('disk:/tmp/d.md')
+    expect(screen.getByTestId('ids')).toHaveTextContent('web:https://example.com')
+    fireEvent.click(screen.getByText('sweep'))
+    expect(screen.getByTestId('ids').textContent).toBe('disk:/tmp/d.md,web:https://example.com')
+  })
+
+  it('autoOpenOnce opens an id exactly once across chip remounts', () => {
+    const artifact = { kind: 'svg' as const, source: '<svg><text>remount</text></svg>', title: 'R', confidence: 'high' as const }
+
+    function ChipAndProbe() {
+      const { autoOpenOnce, artifacts } = useArtifact()
+      return (
+        <div>
+          <button onClick={() => autoOpenOnce(artifact)}>fire</button>
+          <div data-testid="count">{artifacts.length}</div>
+        </div>
+      )
+    }
+
+    // Simulates two virtualization cycles of the same chip: fresh component
+    // instances, same provider — the old per-mount firedRef re-fired here.
+    const { rerender } = render(
+      <I18nProvider>
+        <ArtifactProvider>
+          <ChipAndProbe />
+        </ArtifactProvider>
+      </I18nProvider>,
+    )
+    fireEvent.click(screen.getByText('fire'))
+    expect(screen.getByTestId('count')).toHaveTextContent('1')
+    rerender(
+      <I18nProvider>
+        <ArtifactProvider>
+          <ChipAndProbe />
+        </ArtifactProvider>
+      </I18nProvider>,
+    )
+    fireEvent.click(screen.getByText('fire'))
+    expect(screen.getByTestId('count')).toHaveTextContent('1')
+  })
+
+  it('closeChatArtifacts re-arms auto-open for a fresh session', () => {
+    const artifact = { kind: 'svg' as const, source: '<svg><text>session</text></svg>', title: 'S', confidence: 'high' as const, origin: 'chat' as const }
+
+    function ChipAndProbe() {
+      const { autoOpenOnce, artifacts, closeChatArtifacts } = useArtifact()
+      return (
+        <div>
+          <button onClick={() => autoOpenOnce(artifact)}>fire</button>
+          <button onClick={() => closeChatArtifacts()}>sweep</button>
+          <div data-testid="count">{artifacts.length}</div>
+        </div>
+      )
+    }
+
+    render(
+      <I18nProvider>
+        <ArtifactProvider>
+          <ChipAndProbe />
+        </ArtifactProvider>
+      </I18nProvider>,
+    )
+    fireEvent.click(screen.getByText('fire'))
+    expect(screen.getByTestId('count')).toHaveTextContent('1')
+    // Session switch sweeps the tab — and with it the auto-open marker —
+    // so the next session's identical chip may open once again.
+    fireEvent.click(screen.getByText('sweep'))
+    expect(screen.getByTestId('count')).toHaveTextContent('0')
+    fireEvent.click(screen.getByText('fire'))
+    expect(screen.getByTestId('count')).toHaveTextContent('1')
   })
 })
 
@@ -254,22 +406,53 @@ describe('ArtifactContext keyboard shortcut', () => {
 })
 
 describe('HtmlRenderer security', () => {
-  it('renders iframe with sandbox attribute', async () => {
+  it('renders a fully-sandboxed iframe — honest-static, no scripts (B3 §P1-9)', async () => {
     const { HtmlRenderer } = await import('@/components/artifact/HtmlRenderer')
     const { container } = render(<HtmlRenderer source="<p>hi</p>" />)
     const iframe = container.querySelector('iframe')
     expect(iframe).toBeTruthy()
-    expect(iframe?.getAttribute('sandbox')).toBe('allow-scripts')
-    expect(iframe?.getAttribute('sandbox')?.includes('allow-same-origin')).toBe(false)
+    // Empty sandbox: opaque origin, script execution impossible. The old
+    // `allow-scripts` only ever produced a silently static page (srcdoc
+    // inherits the parent CSP), so the posture is now truthful.
+    expect(iframe?.getAttribute('sandbox')).toBe('')
   })
 
-  it('injects strict CSP meta tag', async () => {
+  it('injects a strict CSP meta without script-src', async () => {
     const { HtmlRenderer } = await import('@/components/artifact/HtmlRenderer')
     const { container } = render(<HtmlRenderer source="<p>hi</p>" />)
     const iframe = container.querySelector('iframe')
     const srcDoc = iframe?.getAttribute('srcdoc') ?? ''
     expect(srcDoc).toContain("Content-Security-Policy")
     expect(srcDoc).toContain("default-src 'none'")
+    // The old script-src 'unsafe-inline' could never re-grant scripts
+    // under the intersecting parent policy — it must stay gone.
+    expect(srcDoc).not.toContain('script-src')
+    expect(srcDoc).toContain('style-src')
+  })
+
+  it('injects into case-variant / attribute-carrying <head> tags once', async () => {
+    const { HtmlRenderer } = await import('@/components/artifact/HtmlRenderer')
+    const source = '<!DOCTYPE html><HTML><HEAD id="x"><meta charset="utf-8"></HEAD><body></body></html>'
+    const { container } = render(<HtmlRenderer source={source} />)
+    const srcDoc = container.querySelector('iframe')?.getAttribute('srcdoc') ?? ''
+    expect(srcDoc).toContain('<HEAD id="x"><meta http-equiv="Content-Security-Policy"')
+    expect(srcDoc.match(/Content-Security-Policy/g)).toHaveLength(1)
+  })
+
+  it('injects after <html …> when no <head> exists', async () => {
+    const { HtmlRenderer } = await import('@/components/artifact/HtmlRenderer')
+    const source = '<html lang="zh"><body><p>x</p></body></html>'
+    const { container } = render(<HtmlRenderer source={source} />)
+    const srcDoc = container.querySelector('iframe')?.getAttribute('srcdoc') ?? ''
+    expect(srcDoc).toContain('<html lang="zh"><head><meta http-equiv="Content-Security-Policy"')
+  })
+
+  it('wraps fragments without any html/head scaffold', async () => {
+    const { HtmlRenderer } = await import('@/components/artifact/HtmlRenderer')
+    const { container } = render(<HtmlRenderer source="<p>x</p>" />)
+    const srcDoc = container.querySelector('iframe')?.getAttribute('srcdoc') ?? ''
+    expect(srcDoc.startsWith('<!DOCTYPE html><html><head>')).toBe(true)
+    expect(srcDoc.endsWith('<p>x</p></body></html>')).toBe(true)
   })
 })
 

@@ -140,6 +140,9 @@ vi.mock('@/lib/tauri-api', () => ({
   sendMessage: vi.fn().mockResolvedValue({ message_id: '1', status: 'sent' }),
   getConversation: vi.fn().mockResolvedValue([]),
   cancelQuery: vi.fn().mockResolvedValue(undefined),
+  // B0 P0-2 — webview file drag-drop. Default: registration resolves with a
+  // no-op unlisten and no events ever fire; drag-flow tests override it.
+  onWebviewFileDrop: vi.fn().mockResolvedValue(() => {}),
   getConfig: vi.fn().mockResolvedValue({
     provider: 'anthropic',
     model: 'claude-sonnet-4-6',
@@ -501,6 +504,12 @@ vi.mock('@/lib/tauri-api', () => ({
   revealInFolder: vi.fn().mockResolvedValue(undefined),
   openArtifactExternally: vi.fn().mockResolvedValue('/tmp/shannon-artifacts/x.html'),
   probeUrlFrameable: vi.fn().mockResolvedValue({ frameable: true, status: 200, reason: null }),
+  // 2026-09-26 round2 §5-1 A — artifact:// interactive HTML registry.
+  // Default: one stable registration; per-test overrides cover rejection /
+  // fallback paths. The mock is exhaustive — a missing export crashes every
+  // test that renders MessageBubble/RightDock.
+  registerInteractiveHtml: vi.fn().mockResolvedValue({ id: 'mock-artifact', url: 'artifact://mock-artifact' }),
+  unregisterInteractiveArtifact: vi.fn().mockResolvedValue(undefined),
   // P1-5 C-2 — workspace layout persistence. Default: nothing stored, so
   // the Chat page boots on the default focus preset in every test.
   workspaceGetLayout: vi.fn().mockResolvedValue(null),

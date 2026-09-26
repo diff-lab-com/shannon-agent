@@ -1,4 +1,5 @@
 import { invoke } from '@tauri-apps/api/core'
+import { getCurrentWebview } from '@tauri-apps/api/webview'
 import type {
   ChatMessage,
   StatusResponse,
@@ -124,6 +125,34 @@ export async function getConversation(): Promise<ChatMessage[]> {
 
 export async function cancelQuery(sessionId?: string): Promise<void> {
   await invoke('cancel_query', { sessionId: sessionId ?? null })
+}
+
+// --- Webview file drag-drop (Tauri v2) ---
+//
+// B0 P0-2: with the webview's `dragDropEnabled` (default on), HTML5
+// dragover/drop events never reach the page and `File.path` — the Tauri v1
+// injection the composer used to read — no longer exists, so the old drop
+// handler silently produced zero paths. The only live signal is the
+// webview's own onDragDropEvent, so the composer consumes it through this
+// normalized wrapper. Note the @tauri-apps/api DragDropEvent union gives
+// `over` a position only — paths ride on `enter` and `drop`.
+
+export type WebviewFileDropEvent =
+  | { type: 'enter'; paths: string[] }
+  | { type: 'over' }
+  | { type: 'drop'; paths: string[] }
+  | { type: 'leave' }
+
+export async function onWebviewFileDrop(
+  handler: (event: WebviewFileDropEvent) => void,
+): Promise<() => void> {
+  const unlisten = await getCurrentWebview().onDragDropEvent((event) => {
+    const p = event.payload
+    if (p.type === 'enter' || p.type === 'drop') handler({ type: p.type, paths: p.paths })
+    else if (p.type === 'over') handler({ type: 'over' })
+    else handler({ type: 'leave' })
+  })
+  return unlisten
 }
 
 // --- Config ---
@@ -637,6 +666,35 @@ export async function openArtifactExternally(title: string, source: string, ext:
   return invoke('open_artifact_externally', { title, source, ext })
 }
 
+// --- 2026-09-26 round2 §5-1 A — artifact:// interactive HTML (design doc
+// docs/plans/2026-09-26-desktop-chat-ui-round2-design.md) ---
+
+/** Result of registering an interactive HTML artifact with the Rust-side
+ * registry: the id (pass to {@link unregisterInteractiveArtifact}) and the
+ * ready-to-load iframe URL (platform-shaped, computed Rust-side). */
+export interface ArtifactRegistration {
+  id: string
+  url: string
+}
+
+/**
+ * Store an interactive HTML artifact in the Rust-side registry and get back
+ * the `artifact://` (or `http://artifact.localhost/` on Windows) URL to load
+ * in a sandboxed iframe. The response carries its own strict CSP and the
+ * document runs in an opaque origin — that is what unlocks real scripts
+ * where srcdoc iframes could never have them.
+ */
+export async function registerInteractiveHtml(html: string): Promise<ArtifactRegistration> {
+  return invoke('register_interactive_artifact', { html })
+}
+
+/** Remove a previously registered artifact (unknown/expired ids are a
+ * silent no-op Rust-side). */
+export async function unregisterInteractiveArtifact(id: string): Promise<void> {
+  await invoke('unregister_interactive_artifact', { id })
+}
+
+
 export interface FrameProbe {
   frameable: boolean
   status: number
@@ -659,7 +717,49 @@ export interface TextFileContent {
   sizeBytes: number
 }
 
-/** Capped, scope-checked text read (disk artifacts / the dock's manual tab). */
+/**
+ * Machine-readable failure codes for `readTextFile` (§P2-24): the Rust
+ * command rejects with a structured `{ code, message }` payload instead of
+ * English prose the frontend had to substring-match. Branch on the code —
+ * never on the message.
+ */
+export type ReadTextFileErrorCode =
+  | 'out_of_scope'
+  | 'not_a_file'
+  | 'file_too_large'
+  | 'binary_file'
+  | 'not_utf8'
+  | 'io_error'
+
+export interface ReadTextFileError {
+  code: ReadTextFileErrorCode
+  message: string
+}
+
+const READ_TEXT_FILE_CODES: ReadonlySet<string> = new Set([
+  'out_of_scope',
+  'not_a_file',
+  'file_too_large',
+  'binary_file',
+  'not_utf8',
+  'io_error',
+])
+
+/**
+ * Normalize a `readTextFile` rejection to its code. Anything without the
+ * structured payload (mock environments, unexpected throws) degrades to
+ * `io_error` so callers keep a safe default branch.
+ */
+export function readTextFileErrorCode(e: unknown): ReadTextFileErrorCode {
+  if (e && typeof e === 'object' && 'code' in e) {
+    const code = (e as { code: unknown }).code
+    if (typeof code === 'string' && READ_TEXT_FILE_CODES.has(code)) return code as ReadTextFileErrorCode
+  }
+  return 'io_error'
+}
+
+/** Capped, scope-checked text read (disk artifacts / the dock's manual tab).
+ * Rejects with a `ReadTextFileError` payload — see `readTextFileErrorCode`. */
 export async function readTextFile(path: string, maxBytes?: number): Promise<TextFileContent> {
   return invoke('read_text_file', { path, maxBytes: maxBytes ?? null })
 }

@@ -9,12 +9,6 @@ import { useSessionBudget } from '@/hooks/useSessionBudget'
 import ContextBreakdownCard from '@/components/chat/ContextBreakdownCard'
 import BudgetDialog from '@/components/chat/BudgetDialog'
 
-interface ContextPanelProps {
-  open: boolean
-  usage: UsagePayload | null
-  activeToolCalls: ToolCall[]
-}
-
 /**
  * P1-⑦ (ZCode delta): the panel's cards without the aside/width chrome —
  * this is what the right dock renders inside its Context tab. Kept separate
@@ -134,29 +128,7 @@ export function ContextPanelContent({ usage, activeToolCalls }: { usage: UsagePa
   )
 }
 
-/**
- * Legacy standalone wrapper (fixed 300px slide-in). The chat page now hosts
- * this content inside RightDock's Context tab; the wrapper remains for
- * non-chat consumers and tests.
- */
-export default function ContextPanel({ open, usage, activeToolCalls }: ContextPanelProps) {
-  const t = useT()
-  return (
-    <aside
-      aria-label={t('chat.context.aria')}
-      // tabIndex: the panel is a keyboard-scrollable region (axe
-      // scrollable-region-focusable) — without focus, keyboard users can
-      // never reach the overflowed content.
-      tabIndex={0}
-      className="glass-panel shrink-0 overflow-y-auto p-lg border-l border-outline-variant/10 bg-surface-container-lowest/50 transition-all duration-300 ease-in-out"
-      style={{
-        width: open ? 300 : 0,
-        padding: open ? undefined : 0,
-        borderWidth: open ? undefined : 0,
-        opacity: open ? 1 : 0,
-      }}
-    >
-      <ContextPanelContent usage={usage} activeToolCalls={activeToolCalls} />
-    </aside>
-  )
-}
+// B4 audit: the legacy standalone wrapper (fixed 300px slide-in aside) is
+// gone — the chat page hosts `ContextPanelContent` inside RightDock's
+// Context tab and nothing rendered the wrapper. Only the content component
+// remains.

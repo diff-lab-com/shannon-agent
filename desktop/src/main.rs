@@ -8,6 +8,7 @@
 fn main() {
     use shannon_desktop::commands;
     use shannon_desktop::commands_agents;
+    use shannon_desktop::commands_artifact;
     use shannon_desktop::commands_billing;
     use shannon_desktop::commands_chat;
     use shannon_desktop::commands_config;
@@ -133,6 +134,10 @@ fn main() {
             commands_surface::reveal_in_folder,
             commands_surface::open_artifact_externally,
             commands_surface::probe_url_frameable,
+            // 2026-09-26 round2 §5-1 A — artifact:// interactive HTML
+            // (registry-backed custom protocol, sandboxed iframe rendering)
+            commands_artifact::register_interactive_artifact,
+            commands_artifact::unregister_interactive_artifact,
             // P1.3 — mobile device pairing (Design D shared-file channel)
             commands_mobile_pairing::mobile_generate_pair_token,
             commands_mobile_pairing::mobile_tls_status,
@@ -419,6 +424,20 @@ fn main() {
             workspace_commands::workspace_get_layout,
             workspace_commands::workspace_set_layout,
         ])
+        // 2026-09-26 round2 §5-1 A — the `artifact://` custom protocol:
+        // interactive HTML artifacts are served from a bounded in-memory
+        // registry so the sandboxed iframe gets its own strict response CSP
+        // (real scripts, opaque origin) instead of inheriting the app CSP
+        // through srcdoc. The handler is sync and memcpy-fast; the registry
+        // is managed below so `try_state` always resolves after startup.
+        .register_uri_scheme_protocol(commands_artifact::ARTIFACT_SCHEME, |ctx, request| match ctx
+            .app_handle()
+            .try_state::<commands_artifact::InteractiveArtifactRegistry>()
+        {
+            Some(registry) => commands_artifact::serve_artifact_request(registry.inner(), request),
+            None => commands_artifact::not_found_response(),
+        })
+        .manage(commands_artifact::InteractiveArtifactRegistry::default())
         // P1-1 — session window lifecycle: a destroyed `session-*` window
         // (titlebar close, close_session_window, OS teardown) drops its
         // registry entry and refreshes the persisted restore list.

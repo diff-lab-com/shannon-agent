@@ -49,6 +49,12 @@ const SESSIONS_ORDER_KEY = 'shannon-sessions-order'
 const SESSIONS_PINNED_KEY = 'shannon-sessions-pinned'
 const SESSIONS_GROUPING_KEY = 'shannon-sessions-grouping'
 const SESSIONS_FOLDED_KEY = 'shannon-sessions-folded'
+// B4 P2-4: per-list render cap — the rail used to map every session into
+// DOM (thousands of rows on old accounts). Each list (flat / project /
+// smart section / archived lens) renders the newest CAP rows plus the
+// active one, with a 显示全部 expander; the sections themselves are
+// untouched.
+const SESSIONS_VISIBLE_CAP = 50
 // P-U2: legacy localStorage project-name registry (dirname → display name).
 // The engine registry (projects.db, P-E3) replaced it; this key is only
 // read once on mount to migrate custom names into the registry, then
@@ -258,6 +264,15 @@ interface SessionsSectionProps {
   closeMobile?: () => void
 }
 
+/** B4 P2-6: what the delete dialog is pointed at. `permanent` selects the
+ *  archived-session 永久删除 variant; `title` feeds the confirm copy so the
+ *  dialog names its target. */
+interface DeleteTarget {
+  id: string
+  title: string
+  permanent?: boolean
+}
+
 export function SessionsSection({ sessions, sessionActivity, goalRunsBySession = {}, currentSessionId, switchSession, renameSession, deleteSession, closeMobile }: SessionsSectionProps) {
   const t = useT()
   const navigate = useNavigate()
@@ -267,7 +282,13 @@ export function SessionsSection({ sessions, sessionActivity, goalRunsBySession =
   const [menuFor, setMenuFor] = useState<string | null>(null)
   const [editingId, setEditingId] = useState<string | null>(null)
   const [editTitle, setEditTitle] = useState('')
-  const [deleteTarget, setDeleteTarget] = useState<string | null>(null)
+  const [deleteTarget, setDeleteTarget] = useState<DeleteTarget | null>(null)
+  // B4 P2-6: true while the confirm's delete call is in flight (buttons
+  // disabled); a failed delete drops it and keeps the dialog open.
+  const [deletePending, setDeletePending] = useState(false)
+  // B4 P2-4: lists the user expanded past the initial render cap
+  // ('flat' | group key | 'archived').
+  const [expandedLists, setExpandedLists] = useState<ReadonlySet<string>>(new Set())
   const [orderOverride, setOrderOverride] = useState<Record<string, number>>(readOrderOverride)
   const [pinnedIds, setPinnedIds] = useState<ReadonlySet<string>>(readPinned)
   const [grouping, setGrouping] = useState<GroupingMode>(readGrouping)
@@ -745,6 +766,46 @@ export function SessionsSection({ sessions, sessionActivity, goalRunsBySession =
     })
   }, [])
 
+  // B4 P2-7: drop a session's entries from the persisted order/pinned maps
+  // when it is really deleted — deleted ids used to sit there forever. On
+  // archive nothing is pruned: archive is reversible, archived ids are
+  // inert in both maps (archived rows never render in the main rail), and
+  // pruning would silently destroy the user's pin/drag-order across an
+  // archive→unarchive round-trip.
+  const pruneSessionMeta = useCallback((id: string) => {
+    setOrderOverride(prev => {
+      if (!(id in prev)) return prev
+      const next = { ...prev }
+      delete next[id]
+      persist(SESSIONS_ORDER_KEY, next)
+      return next
+    })
+    setPinnedIds(prev => {
+      if (!prev.has(id)) return prev
+      const next = new Set(prev)
+      next.delete(id)
+      persist(SESSIONS_PINNED_KEY, [...next])
+      return next
+    })
+  }, [])
+
+  // B4 P2-4: bounded rendering. Each list shows its first CAP rows — the
+  // active session is always kept visible even when it sorts beyond the
+  // cap — unless the user expanded the list. DOM stays O(cap) per section.
+  const visibleSlice = useCallback(<T extends { id: string }>(list: T[], key: string): T[] => {
+    if (expandedLists.has(key) || list.length <= SESSIONS_VISIBLE_CAP) return list
+    return list.filter((s, i) => i < SESSIONS_VISIBLE_CAP || s.id === currentSessionId)
+  }, [expandedLists, currentSessionId])
+
+  const expandList = useCallback((key: string) => {
+    setExpandedLists(prev => {
+      if (prev.has(key)) return prev
+      const next = new Set(prev)
+      next.add(key)
+      return next
+    })
+  }, [])
+
   // P-U2: commit a project rename (double-click or ⋯ menu) through the
   // engine registry — the localStorage registry is gone; the returned record
   // updates local state immediately (the backend also persists it).
@@ -842,6 +903,36 @@ export function SessionsSection({ sessions, sessionActivity, goalRunsBySession =
       .catch(e => toastError(t('sidebar.sessions.archived.failed'), e))
   }, [t])
 
+  // B4 P2-6: the delete action never rejects — AppContext funnels backend
+  // failures into the shared error banner — so success is detected by the
+  // target actually leaving its list (active list, or the archived lens for
+  // the 永久删除 variant) once the post-delete refresh lands. Until then the
+  // dialog stays open; on failure the user can retry or cancel.
+  useEffect(() => {
+    if (!deleteTarget) return
+    const gone = deleteTarget.permanent
+      ? !archivedRows.some(r => r.id === deleteTarget.id)
+      : !sessions.some(s => s.id === deleteTarget.id)
+    if (!gone) return
+    // B4 P2-7: the real delete happened — prune its stale pin/order entries.
+    pruneSessionMeta(deleteTarget.id)
+    setDeleteTarget(null)
+  }, [deleteTarget, sessions, archivedRows, pruneSessionMeta])
+
+  const handleDeleteConfirm = useCallback(() => {
+    if (!deleteTarget || deletePending) return
+    setDeletePending(true)
+    // deleteSession funnels backend failures into the shared error banner
+    // without rejecting; the catch is belt-and-braces so an unexpected
+    // rejection can never surface as an unhandled promise error.
+    void deleteSession(deleteTarget.id).catch(() => {}).finally(() => {
+      // Gone → the effect above already closed the dialog. Still present →
+      // the delete failed: drop the pending flag and leave the dialog open
+      // (the error is visible through the shared banner path).
+      setDeletePending(false)
+    })
+  }, [deleteTarget, deletePending, deleteSession])
+
   const menuItems = useCallback((session: SessionInfo): DropdownMenuItem[] => {
     const pinned = pinnedIds.has(session.id)
     return [
@@ -857,9 +948,9 @@ export function SessionsSection({ sessions, sessionActivity, goalRunsBySession =
       // 卡A — archive this session (leaves the active rail; restorable from
       // the 已归档 section below).
       { id: 'archive', label: t('chat.session.archive'), icon: 'archive', onSelect: () => handleArchive(session) },
-      { id: 'delete', label: t('chat.session.delete'), icon: 'delete', destructive: true, onSelect: () => setDeleteTarget(session.id) },
+      { id: 'delete', label: t('chat.session.delete'), icon: 'delete', destructive: true, onSelect: () => setDeleteTarget({ id: session.id, title: session.title || untitled }) },
     ]
-  }, [pinnedIds, t, sessions, startRename, togglePin, navigate, handleArchive])
+  }, [pinnedIds, t, untitled, sessions, startRename, togglePin, navigate, handleArchive])
 
   // P-U2: the project header's ⋯ menu. `path` is the group key (full, trail-
   // normalized working dir) — the registry's unique key. P-U3: the
@@ -1399,12 +1490,22 @@ export function SessionsSection({ sessions, sessionActivity, goalRunsBySession =
             {t('sidebar.sessions.noResults')}
           </div>
         ) : groups === null ? (
-          <div className="space-y-0.5 pr-1" role="list" aria-label={t('sidebar.sessions.list.aria')}>
-            {filtered.map(renderRow)}
-          </div>
+          <>
+            <div className="space-y-0.5 pr-1" role="list" aria-label={t('sidebar.sessions.list.aria')}>
+              {visibleSlice(filtered, 'flat').map(renderRow)}
+            </div>
+            {visibleSlice(filtered, 'flat').length < filtered.length && (
+              <ExpanderRow
+                label={t('sidebar.sessions.showAll', { n: filtered.length })}
+                onClick={() => expandList('flat')}
+              />
+            )}
+          </>
         ) : (
           <div className="space-y-0.5 pr-1" role="list" aria-label={t('sidebar.sessions.list.aria')}>
-            {groups.map(group => (
+            {groups.map(group => {
+              const visibleSessions = visibleSlice(group.sessions, group.key)
+              return (
               <Fragment key={group.key}>
                 {group.isProject ? (
                   // The project group is ONE list item of the rail's list:
@@ -1412,7 +1513,10 @@ export function SessionsSection({ sessions, sessionActivity, goalRunsBySession =
                   // list all live inside it — role=listitem is the only
                   // child role role="list" accepts, and the rows keep their
                   // own nested role="list" so session-row listitem semantics
-                  // stay axe-clean.
+                  // stay axe-clean. Project conversations nest under their
+                  // folder (ZCode 项目 tree); folded projects collapse their
+                  // rows. B4 P2-4: the mixed session/routine row list is
+                  // capped like every other list.
                   <div role="listitem" className="min-w-0">
                     {renderGroupHeader(group)}
                     {!foldedProjects.has(group.key) && (
@@ -1421,22 +1525,49 @@ export function SessionsSection({ sessions, sessionActivity, goalRunsBySession =
                         aria-label={group.label}
                         className="pl-4"
                       >
-                        {group.isEmpty
-                          ? renderProjectEmptyRow()
-                          : group.rows!.map(row =>
-                            row.kind === 'session' ? renderRow(row.session) : renderRoutineRow(row.routine),
-                          )}
+                        {group.isEmpty ? (
+                          renderProjectEmptyRow()
+                        ) : (() => {
+                          const rows = (group.rows ?? []).map(r =>
+                            r.kind === 'session'
+                              ? { kind: 'session' as const, session: r.session, id: r.session.id }
+                              : { kind: 'routine' as const, routine: r.routine, id: r.routine.id },
+                          )
+                          const visibleRows = visibleSlice(rows, group.key)
+                          return (
+                            <>
+                              {visibleRows.map(r =>
+                                r.kind === 'session' ? renderRow(r.session) : renderRoutineRow(r.routine),
+                              )}
+                              {visibleRows.length < rows.length && (
+                                <ExpanderRow
+                                  label={t('sidebar.sessions.showAll', { n: rows.length })}
+                                  onClick={() => expandList(group.key)}
+                                />
+                              )}
+                            </>
+                          )
+                        })()}
                       </div>
                     )}
                   </div>
                 ) : (
                   <>
                     {renderGroupHeader(group)}
-                    <div>{group.sessions.map(renderRow)}</div>
+                    <div>
+                      {visibleSessions.map(renderRow)}
+                      {visibleSessions.length < group.sessions.length && (
+                        <ExpanderRow
+                          label={t('sidebar.sessions.showAll', { n: group.sessions.length })}
+                          onClick={() => expandList(group.key)}
+                        />
+                      )}
+                    </div>
                   </>
                 )}
               </Fragment>
-            ))}
+              )
+            })}
           </div>
         )}
         {/* 卡A — the collapsed 已归档 section at the bottom of the rail, in
@@ -1466,7 +1597,7 @@ export function SessionsSection({ sessions, sessionActivity, goalRunsBySession =
             </button>
             {archivedOpen && (
               <div className="pl-4 space-y-0.5" role="list" aria-label={t('sidebar.sessions.archived.aria')}>
-                {archivedRows.map(row => {
+                {visibleSlice(archivedRows, 'archived').map(row => {
                   const title = row.title || untitled
                   const ago = formatRelativeTime(row.updated_at ?? undefined, nowTick, t)
                   return (
@@ -1497,9 +1628,34 @@ export function SessionsSection({ sessions, sessionActivity, goalRunsBySession =
                       >
                         <span className="material-symbols-outlined text-[16px]">undo</span>
                       </Button>
+                      {/* B4 P2-6: archived sessions finally have a way out —
+                          delete_session removes the whole L0 directory
+                          (log + sidecar, including the archived flag), so
+                          no Rust change is needed. Destructive confirm via
+                          the same dialog's 永久删除 variant. */}
+                      <Button
+                        variant="ghost"
+                        size="icon-xs"
+                        data-testid={`archived-delete-${row.id}`}
+                        aria-label={t('sidebar.sessions.archived.delete.aria', { title })}
+                        title={t('sidebar.sessions.archived.delete.aria', { title })}
+                        className={cn(
+                          'rounded hover:bg-error/10 text-on-surface-variant hover:text-error transition-opacity focus-visible:ring-2 focus-visible:ring-error/30 focus-visible:outline-none shrink-0',
+                          'opacity-0 group-hover:opacity-100 focus-visible:opacity-100',
+                        )}
+                        onClick={() => setDeleteTarget({ id: row.id, title, permanent: true })}
+                      >
+                        <span className="material-symbols-outlined text-[16px]">delete_forever</span>
+                      </Button>
                     </div>
                   )
                 })}
+                {archivedOpen && visibleSlice(archivedRows, 'archived').length < archivedRows.length && (
+                  <ExpanderRow
+                    label={t('sidebar.sessions.showAll', { n: archivedRows.length })}
+                    onClick={() => expandList('archived')}
+                  />
+                )}
               </div>
             )}
           </div>
@@ -1566,12 +1722,25 @@ export function SessionsSection({ sessions, sessionActivity, goalRunsBySession =
 
       <DeleteSessionModal
         t={t}
-        deleteTarget={deleteTarget}
-        onCancel={() => setDeleteTarget(null)}
-        onConfirm={() => {
-          if (deleteTarget) { void deleteSession(deleteTarget); setDeleteTarget(null) }
-        }}
+        target={deleteTarget}
+        pending={deletePending}
+        onCancel={() => { if (!deletePending) setDeleteTarget(null) }}
+        onConfirm={handleDeleteConfirm}
       />
     </div>
+  )
+}
+
+/** B4 P2-4: the 显示全部 expander under a capped list. */
+function ExpanderRow({ label, onClick }: { label: string; onClick: () => void }) {
+  return (
+    <button
+      type="button"
+      data-testid="sidebar-show-all"
+      onClick={onClick}
+      className="w-full px-3 py-1 text-left font-label-xs text-on-surface-variant hover:text-primary hover:underline cursor-pointer"
+    >
+      {label}
+    </button>
   )
 }

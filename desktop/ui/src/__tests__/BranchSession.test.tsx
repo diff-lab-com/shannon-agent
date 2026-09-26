@@ -32,6 +32,11 @@ const ctx = vi.hoisted(() => ({
   switchSession: vi.fn(),
   renameSession: vi.fn(),
   refreshSessions: vi.fn(),
+  // B1 §4-9 — prompt queue surface consumed by Chat + ComposerPanel.
+  promptQueue: [] as any[],
+  enqueuePrompt: vi.fn().mockReturnValue(true),
+  dequeuePrompt: vi.fn().mockReturnValue(null),
+  removeQueuedPrompt: vi.fn(),
 }))
 
 vi.mock('@/context/ChatContext', () => ({

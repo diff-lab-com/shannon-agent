@@ -45,6 +45,7 @@ export function ExecutionModeSwitcher() {
   const [busy, setBusy] = useState(false)
   const [focus, setFocus] = useState(-1)
   const ref = useRef<HTMLDivElement>(null)
+  const optionRefs = useRef<Array<HTMLButtonElement | null>>([])
 
   const state = deriveExecutionMode(config)
   const options: Array<{ key: string; tier: ExecutionMode; profile: string | null }> = [
@@ -63,11 +64,31 @@ export function ExecutionModeSwitcher() {
     return () => document.removeEventListener('mousedown', handleClick)
   }, [open])
 
+  // P2-10: opening the menu moves focus to the selected item (listbox
+  // roving-focus pattern) — previously focus stayed on the trigger, so the
+  // menu's key handling was unreachable dead code.
+  useEffect(() => {
+    if (!open) return
+    const selectedIdx = options.findIndex((o) => o.tier === state.mode)
+    const idx = selectedIdx >= 0 ? selectedIdx : 0
+    setFocus(idx)
+    optionRefs.current[idx]?.focus()
+    // options/state.mode are stable while the menu is open; re-running on
+    // every render would yank focus back after hover/arrow navigation.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [open])
+
+  /** Close and put focus back on the trigger (Escape / activation). */
+  const closeAndRestoreFocus = () => {
+    setOpen(false)
+    ref.current?.querySelector<HTMLButtonElement>(':scope > button')?.focus()
+  }
+
   const handlePick = async (option: (typeof options)[number]) => {
     if (busy) return
     // 自定义 → the Profiles settings page (enable/edit lives there).
     if (option.tier === 'custom') {
-      setOpen(false)
+      closeAndRestoreFocus()
       navigate('/settings/permissions')
       return
     }
@@ -75,7 +96,7 @@ export function ExecutionModeSwitcher() {
     try {
       await api.activatePermissionProfile(option.profile)
       await refreshConfig()
-      setOpen(false)
+      closeAndRestoreFocus()
       toast.success(t('execMode.toast.switched', { tier: t(TIER_LABEL_KEY[option.tier]) }))
     } catch (e) {
       toastError(t('execMode.toast.failed'), e)
@@ -84,18 +105,27 @@ export function ExecutionModeSwitcher() {
     }
   }
 
+  const moveFocus = (delta: number) => {
+    const next = (focus + delta + options.length) % options.length
+    setFocus(next)
+    optionRefs.current[next]?.focus()
+  }
+
   const handleKeyDown = (e: React.KeyboardEvent) => {
     if (e.key === 'ArrowDown') {
       e.preventDefault()
-      setFocus((f) => Math.min(f + 1, options.length - 1))
+      moveFocus(1)
     } else if (e.key === 'ArrowUp') {
       e.preventDefault()
-      setFocus((f) => Math.max(f - 1, 0))
+      moveFocus(-1)
     } else if (e.key === 'Enter') {
+      // preventDefault also suppresses the focused option's native click,
+      // so Enter activates exactly once.
       e.preventDefault()
       if (focus >= 0) void handlePick(options[focus])
     } else if (e.key === 'Escape') {
-      setOpen(false)
+      e.preventDefault()
+      closeAndRestoreFocus()
     }
   }
 
@@ -148,6 +178,7 @@ export function ExecutionModeSwitcher() {
             return (
               <Button
                 key={option.key}
+                ref={(el) => { optionRefs.current[i] = el }}
                 variant="ghost"
                 role="option"
                 aria-selected={selected}

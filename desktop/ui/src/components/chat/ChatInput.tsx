@@ -1,4 +1,4 @@
-import { useState, useRef, useEffect, useLayoutEffect, useCallback } from 'react'
+import { useState, useRef, useEffect, useLayoutEffect, useId, useCallback } from 'react'
 import { useIntl } from 'react-intl'
 import { open } from '@tauri-apps/plugin-dialog'
 import { Button } from '@/components/ui/button'
@@ -42,9 +42,14 @@ interface ChatInputProps {
   attachedFiles: string[]
   onAttach: (files: string[]) => void
   onDetachAll: () => void
-  disabled: boolean
+  /** B1 P1-5/§4-9: the CURRENT session's query state. The textarea stays
+   *  typable while streaming (queued sends); it only gates the mic, the
+   *  stop/send swap and the Escape-cancels-run affordance. */
   isQuerying: boolean
   onCancelQuery: () => void
+  /** B1 §4-8: present only while a message edit is in flight — Escape
+   *  cancels the edit (restores the pre-edit draft) instead. */
+  onCancelEdit?: () => void
   onOpenQuickFix: () => void
   onOpenEditor: () => void
   /** Session working directory — picks a context-aware composer placeholder. */
@@ -65,9 +70,9 @@ export default function ChatInput({
   attachedFiles,
   onAttach,
   onDetachAll,
-  disabled,
   isQuerying,
   onCancelQuery,
+  onCancelEdit,
   onOpenQuickFix,
   onOpenEditor,
   sessionWorkingDir,
@@ -82,14 +87,21 @@ export default function ChatInput({
   const textareaRef = useRef<HTMLTextAreaElement>(null)
   const [isDragging, setIsDragging] = useState(false)
 
+  // P2-9: combobox wiring — the textarea acts as the combobox and points at
+  // the slash listbox via aria-controls/aria-activedescendant.
+  const slashListboxId = useId()
+  const slashOptionId = (name: string) => `${slashListboxId}-opt-${name}`
+
   // Slash-command autocomplete: open while the input is a single `/token`.
   // Escape hides it until the query changes again; a space or newline closes
   // it naturally (the query regex stops matching), turning the text back
-  // into a regular prompt.
+  // into a regular prompt. B1 §4-9: also usable while streaming — local
+  // slash commands never need to queue.
   const [slashDismissed, setSlashDismissed] = useState(false)
   const [slashActive, setSlashActive] = useState(0)
-  const slashQuery = isSlashQuery(value) && !isQuerying ? value.trim() : null
+  const slashQuery = isSlashQuery(value) ? value.trim() : null
   const slashMatches = slashQuery && !slashDismissed ? filterSlashCommands(slashQuery) : []
+  const slashOpen = slashMatches.length > 0
 
   useEffect(() => {
     setSlashActive(0)
@@ -120,12 +132,9 @@ export default function ChatInput({
   })
 
   const handleModeChange = async (mode: string | null) => {
-    console.log('[dbg] handleModeChange', mode)
     if (!mode) return
     try {
-      console.log('[dbg] calling api.configure')
       await api.configure({ key: 'approval_mode', value: mode })
-      console.log('[dbg] configure resolved')
       await refreshConfig()
     } catch (err) {
       toastError(t('chat.input.mode.failed'), err)
@@ -169,16 +178,6 @@ export default function ChatInput({
     }
   }
 
-  const handleDragOver = (e: React.DragEvent) => {
-    e.preventDefault()
-    setIsDragging(true)
-  }
-
-  const handleDragLeave = (e: React.DragEvent) => {
-    e.preventDefault()
-    setIsDragging(false)
-  }
-
   const mergePaths = (paths: string[]) => {
     const merged = [...new Set([...attachedFiles, ...paths])]
     if (merged.length > api.MAX_ATTACHMENT_COUNT) {
@@ -191,28 +190,78 @@ export default function ChatInput({
     }
     onAttach(merged)
   }
+  // B0 P0-2: the drag-drop subscription outlives single renders, so it
+  // dispatches through a latest-ref instead of re-subscribing on every
+  // attachments change.
+  const mergePathsRef = useRef(mergePaths)
+  useEffect(() => {
+    mergePathsRef.current = mergePaths
+  })
 
-  const handleDrop = async (e: React.DragEvent) => {
-    e.preventDefault()
-    setIsDragging(false)
-
-    const files: FileList = e.dataTransfer.files
-    if (!files || files.length === 0) return
-
-    const paths: string[] = []
-    for (let i = 0; i < files.length; i++) {
-      const file = files[i]
-      if ('path' in file && typeof file.path === 'string') {
-        paths.push(file.path)
+  // B0 P0-2 — file drag-drop via the webview's own Tauri v2 events. With
+  // `dragDropEnabled` (the default) HTML5 dragover/drop never fire and
+  // `File.path` no longer exists, so the overlay + attachment list are
+  // driven entirely by onDragDropEvent (enter/over → show, out/leave →
+  // hide, drop → attach the real absolute paths). In mock/demo mode the
+  // registration resolves and nothing fires — acceptable.
+  useEffect(() => {
+    let unlisten: (() => void) | null = null
+    let cancelled = false
+    void api.onWebviewFileDrop(event => {
+      if (event.type === 'enter' || event.type === 'over') {
+        setIsDragging(true)
+      } else if (event.type === 'leave') {
+        setIsDragging(false)
+      } else {
+        // drop — attach the real absolute paths.
+        setIsDragging(false)
+        if (event.paths.length > 0) mergePathsRef.current(event.paths)
       }
+    }).then(fn => {
+      if (cancelled) fn?.()
+      else unlisten = fn ?? null
+    }).catch(() => {
+      // Outside a Tauri webview (plain-browser dev) registration fails —
+      // nothing fires, which is the acceptable mock/demo behavior.
+    })
+    return () => {
+      cancelled = true
+      unlisten?.()
     }
+  }, [])
 
-    if (paths.length > 0) {
-      mergePaths(paths)
-    }
-  }
+  // B1 §4-12: the chat search bar's Esc/close hands focus back to whatever
+  // surface the user left — which is usually this textarea.
+  useEffect(() => {
+    const onFocusComposer = () => textareaRef.current?.focus()
+    window.addEventListener('shannon:focus-composer', onFocusComposer)
+    return () => window.removeEventListener('shannon:focus-composer', onFocusComposer)
+  }, [])
+
+  // B0 P0-3 — IME composition guard. While a CJK conversion is in flight,
+  // the Enter/Tab keydown belongs to the IME (it confirms the candidate);
+  // sending it would post half-converted pinyin. Two browser orderings need
+  // covering:
+  //   - Chrome fires keydown(isComposing=true) BEFORE compositionend —
+  //     caught by the ref and by nativeEvent.isComposing;
+  //   - Safari/Firefox fire compositionend BEFORE the confirming keydown,
+  //     so that keydown arrives with every flag already false — caught by
+  //     the just-ended timestamp window.
+  const COMPOSITION_END_GRACE_MS = 100
+  const isComposingRef = useRef(false)
+  const compositionEndedAtRef = useRef(0)
+  const isCompositionKey = (e: React.KeyboardEvent): boolean =>
+    isComposingRef.current ||
+    (e.nativeEvent as KeyboardEvent).isComposing ||
+    Date.now() - compositionEndedAtRef.current < COMPOSITION_END_GRACE_MS
 
   const handleKeyDown = (e: React.KeyboardEvent) => {
+    // IME guard first: swallow only the send/execute keys so the candidate
+    // window keeps them; navigation keys pass through untouched.
+    if (isCompositionKey(e)) {
+      if (e.key === 'Enter' || e.key === 'Tab') e.preventDefault()
+      return
+    }
     // Slash menu captures the navigation keys while it is open.
     if (slashMatches.length > 0) {
       if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
@@ -241,9 +290,17 @@ export default function ChatInput({
       e.preventDefault()
       onSend()
     }
-    if (e.key === 'Escape' && isQuerying) {
-      e.preventDefault()
-      onCancelQuery()
+    // Escape priority: exit message edit > cancel the running query.
+    if (e.key === 'Escape') {
+      if (onCancelEdit) {
+        e.preventDefault()
+        onCancelEdit()
+        return
+      }
+      if (isQuerying) {
+        e.preventDefault()
+        onCancelQuery()
+      }
     }
   }
 
@@ -287,10 +344,21 @@ export default function ChatInput({
         e.preventDefault()
         void handlePlanToggle()
       }
-      // `/` focuses the composer (when not already typing in an input)
-      if (e.key === '/' && !isQuerying && document.activeElement?.tagName !== 'TEXTAREA') {
-        e.preventDefault()
-        textareaRef.current?.focus()
+      // `/` focuses the composer — unless the keystroke already sits inside
+      // any editable surface (search boxes, command palette, selects,
+      // contentEditable), which the old TEXTAREA-only check let be hijacked.
+      // Same guard shape as hooks/useKeyboardShortcuts.ts. No isQuerying
+      // gate: while a run streams is exactly when focusing the composer to
+      // queue a prompt is most useful (B1 §4-9).
+      if (e.key === '/') {
+        const el = e.target as HTMLElement | null
+        const inEditable =
+          el != null &&
+          (el.tagName === 'INPUT' || el.tagName === 'TEXTAREA' || el.tagName === 'SELECT' || el.isContentEditable)
+        if (!inEditable) {
+          e.preventDefault()
+          textareaRef.current?.focus()
+        }
       }
     }
     window.addEventListener('keydown', onKey)
@@ -345,14 +413,12 @@ export default function ChatInput({
   return (
     <div
       className={cn('relative group transition-all', isDragging ? 'ring-2 ring-primary/50 rounded-2xl' : '')}
-      onDragOver={handleDragOver}
-      onDragLeave={handleDragLeave}
-      onDrop={handleDrop}
       role="region"
       aria-label={t('chat.input.ariaLabel')}
     >
       {slashMatches.length > 0 && (
         <div
+          id={slashListboxId}
           role="listbox"
           aria-label={t('slash.menu.aria')}
           className="absolute left-0 right-0 bottom-full mb-sm z-modal rounded-2xl border border-outline-variant/30 bg-surface-container-low shadow-lg overflow-hidden"
@@ -363,6 +429,7 @@ export default function ChatInput({
                 <button
                   type="button"
                   role="option"
+                  id={slashOptionId(cmd.name)}
                   aria-selected={i === slashActive}
                   onMouseDown={e => { e.preventDefault(); executeSlash(cmd) }}
                   onMouseEnter={() => setSlashActive(i)}
@@ -382,6 +449,21 @@ export default function ChatInput({
             {t('slash.menu.hint')}
           </div>
         </div>
+      )}
+
+      {/* P2-9, revised after integration review: the composer keeps its
+          implicit multi-line `textbox` role — a permanent `role="combobox"`
+          mislabels the 99%-of-the-time plain text area for assistive tech
+          (and broke the `getByRole('textbox', { name: 'Message' })` E2E
+          contract). Menu state is announced through this polite status
+          region instead: open/count/selection updates are all render-driven. */}
+      {slashOpen && (
+        <span role="status" className="sr-only">
+          {intl.formatMessage(
+            { id: 'chat.input.slashMenu.status' },
+            { count: slashMatches.length, current: `/${slashMatches[slashActive]?.name ?? ''}` },
+          )}
+        </span>
       )}
 
       {isDragging && (
@@ -442,7 +524,7 @@ export default function ChatInput({
             className="flex-1 bg-transparent border-none outline-none focus:ring-0 font-body-lg py-md px-sm placeholder:text-on-surface-variant/70 text-on-surface resize-none min-h-[24px] max-h-[200px]"
             placeholder={
               isQuerying
-                ? t('chat.input.processing')
+                ? t('chat.input.queued.placeholder')
                 : sessionWorkingDir
                   ? intl.formatMessage({ id: 'chat.input.placeholder.project' }, { dir: basename(sessionWorkingDir) })
                   : t('chat.input.placeholder.empty')
@@ -451,8 +533,17 @@ export default function ChatInput({
             value={value}
             onChange={e => onChange(e.target.value)}
             onKeyDown={handleKeyDown}
+            onCompositionStart={() => {
+              isComposingRef.current = true
+              compositionEndedAtRef.current = 0
+            }}
+            onCompositionEnd={() => {
+              isComposingRef.current = false
+              // Stamps the grace window that covers the Safari/Firefox
+              // ordering, where the confirming keydown lands afterwards.
+              compositionEndedAtRef.current = Date.now()
+            }}
             rows={1}
-            disabled={disabled}
           />
         </div>
 
@@ -599,21 +690,31 @@ export default function ChatInput({
           </div>
 
           <div className="flex items-center gap-xs shrink-0">
-            <MicButton
-              state={voice.state}
-              disabled={disabled}
-              onStart={() => void voice.startRecording()}
-              onStop={() => void voice.stopRecording()}
-            />
+            {/* B4 P2-5: no STT provider (no MediaRecorder/getUserMedia) → no
+                mic button; a control that only opens a doomed recording is
+                worse than none. */}
+            {voice.supported && (
+              <MicButton
+                state={voice.state}
+                disabled={isQuerying}
+                onStart={() => void voice.startRecording()}
+                onStop={() => void voice.stopRecording()}
+              />
+            )}
 
             {showCharCount && (
-              <span
-                role="status"
-                aria-live="polite"
-                className={cn('font-mono text-label-xs tabular-nums px-xs', isOverSoftWarn ? 'text-error' : 'text-on-surface-variant/70')}
-              >
-                {charCount.toLocaleString()}
-              </span>
+              <>
+                {/* P2-9: the counter used to carry aria-live="polite", which
+                    announced every keystroke past 2000 chars. It is a purely
+                    visual readout now; a static sr-only note about limits
+                    replaces the per-key announcements. */}
+                <span
+                  className={cn('font-mono text-label-xs tabular-nums px-xs', isOverSoftWarn ? 'text-error' : 'text-on-surface-variant/70')}
+                >
+                  {charCount.toLocaleString()}
+                </span>
+                <span className="sr-only">{t('chat.input.charCount.hint')}</span>
+              </>
             )}
 
             {isQuerying ? (

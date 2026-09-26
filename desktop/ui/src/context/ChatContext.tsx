@@ -15,24 +15,60 @@ import { createContext, useContext, type ReactNode } from 'react'
 import type { CheckpointInfo, CompactSessionResult, FeedbackRating } from '@/lib/tauri-api'
 import type { ChatMessage, ToolCall, UsagePayload } from '@/types'
 
+/** B1 §4-9: a prompt held back while its session was still streaming. */
+export interface PromptQueueItem {
+  id: number
+  text: string
+  attachments: string[]
+}
+
 export interface ChatContextValue {
   messages: ChatMessage[]
   streamingText: string
   thinkingText: string
+  /**
+   * B1 P1-5: query state of the VISIBLE session only (windowSessionId ??
+   * currentSessionId). A background session's run no longer disables this
+   * session's composer — the full per-session map stays internal.
+   */
   isQuerying: boolean
   activeToolCalls: ToolCall[]
+  /**
+   * P2-19: live progress of the visible session's currently-running tool,
+   * from QUERY_TOOL_PROGRESS — `progress` (0..=100, normalized once from
+   * the backend's 0..=1 fraction; absent when the backend reports the
+   * indeterminate −1) and/or `progress_message` (backend-authored text).
+   * Null before the first progress event of a run, on every new tool
+   * start, when the run settles (completed/failed/cancelled), on new
+   * sends and on session switches. Mirrors what RunStatusLine's pill shows.
+   */
+  toolProgress: { progress?: number; message?: string } | null
   usage: UsagePayload | null
   /**
    * `options.budgetBypass` is the "continue (ignore once)" choice from the
    * budget-exceeded banner — it exempts exactly that send's pre-turn
    * budget check (the mid-turn cap stays enforced backend-side).
+   *
+   * Resolves `false` when the backend rejected the send before recording
+   * it (budget guard, concurrent-query guard, goal-owned guard) — callers
+   * that hand off state to the send (edit commit, queue drain) branch on
+   * it instead of assuming success.
    */
   sendMessage: (
     message: string,
     filePaths?: string[],
     options?: { budgetBypass?: boolean },
-  ) => Promise<void>
+  ) => Promise<boolean>
   cancelQuery: () => Promise<void>
+  /** B1 §4-9: this session's FIFO of prompts queued while streaming. */
+  promptQueue: PromptQueueItem[]
+  /** Append to the visible session's queue. False when the queue is full
+   *  (an overflow toast is raised here; the caller keeps the draft). */
+  enqueuePrompt: (text: string, attachments: string[]) => boolean
+  /** Take the head of the visible session's queue (drain step). */
+  dequeuePrompt: () => PromptQueueItem | null
+  /** Remove one queued item by id (queue chip dismiss). */
+  removeQueuedPrompt: (id: number) => void
   /** /rewind: completed checkpoints for the current session (turn indices). */
   checkpoints: CheckpointInfo[]
   /** Rewind to before `turnIndex`: drops that turn and everything after. */
@@ -45,6 +81,8 @@ export interface ChatContextValue {
   recordFeedback: (key: string, rating: FeedbackRating | null) => Promise<void>
   /** U2: dock open state lives here so the global Header (in Layout,
    * outside the /chat route) can toggle the dock that Chat renders.
+   * B1 P1-13: persisted to `shannon.dock.open` — every path below funnels
+   * through the same persisted setter.
    * P1-⑦: Chat also sets it directly — RightDock auto-docks itself on
    * plan-mode entry / artifact detection / a "Diff" click. */
   contextPanelOpen: boolean

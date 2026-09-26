@@ -1,5 +1,5 @@
-import { describe, it, expect } from 'vitest'
-import { render, screen } from '@testing-library/react'
+import { describe, it, expect, vi } from 'vitest'
+import { render, screen, fireEvent } from '@testing-library/react'
 import { I18nProvider } from '@/i18n'
 import { Markdown } from '@/components/chat/Markdown'
 
@@ -162,5 +162,163 @@ describe('Markdown — safety', () => {
     const img = container.querySelector('img')
     expect(img).not.toBeNull()
     expect(img?.getAttribute('onclick')).toBeNull()
+  })
+
+  // B2 P2-16: `convertFileSrc` produces `http://asset.localhost/…` on Linux
+  // (and `asset://localhost/…` elsewhere). The GitHub-schema protocol
+  // whitelist allows http(s), so the Linux asset shape must survive
+  // sanitization unchanged — this documents the behavior (no widening).
+  it('keeps http://asset.localhost image sources through rehype-sanitize', () => {
+    renderMd('![shot](http://asset.localhost/some/file.png)')
+    const img = screen.getByAltText('shot')
+    expect(img).toHaveAttribute('src', 'http://asset.localhost/some/file.png')
+  })
+})
+
+describe('Markdown — GFM footnotes (P1-6)', () => {
+  const md = [
+    'See the docs[^1] and the spec[^note].',
+    '',
+    '[^1]: https://example.com/docs',
+    '[^note]: The note text',
+  ].join('\n')
+
+  it('renders footnote refs as superscript badge links via remark-gfm', () => {
+    const { container } = renderMd(md)
+    const refs = container.querySelectorAll('sup a[data-footnote-ref], sup a[aria-label^="Footnote"]')
+    expect(refs.length).toBeGreaterThanOrEqual(2)
+    // Badge visual language from the old FootnoteMarkdown renderer.
+    expect(refs[0].className).toContain('rounded-full')
+    expect(refs[0].className).toContain('bg-primary')
+    expect(refs[0].getAttribute('aria-label')).toBe('Footnote 1')
+  })
+
+  it('renders the footnotes section styled like the old footer', () => {
+    const { container } = renderMd(md)
+    const section = container.querySelector('section[data-footnotes]')
+    expect(section).not.toBeNull()
+    // Top border + ordered list, as the old footer had.
+    expect(section?.className).toContain('border-t')
+    const ol = section?.querySelector('ol')
+    expect(ol).not.toBeNull()
+    expect(section?.textContent).toContain('https://example.com/docs')
+    expect(section?.textContent).toContain('The note text')
+  })
+
+  it('keeps footnote anchors navigable (ids match hrefs after sanitize clobbering)', () => {
+    const { container } = renderMd(md)
+    const ref = container.querySelector('a[aria-label="Footnote 1"]')
+    const refHref = ref?.getAttribute('href') // #user-content-fn-1
+    expect(refHref).toBe('#user-content-fn-1')
+    // querySelector('#user-content-fn-1') — the li id must match the href.
+    const target = refHref ? container.querySelector(refHref) : null
+    expect(target).not.toBeNull()
+    expect(target?.tagName).toBe('LI')
+    // And the back-link inside the definition must point back at the ref id.
+    const backref = target?.querySelector('a[href^="#user-content-fnref-"]')
+    expect(backref?.getAttribute('href')).toBe(`#${ref?.getAttribute('id')}`)
+  })
+
+  it('localizes the ↩ back-link label from chat.footnotes.back', () => {
+    const { container } = renderMd(md)
+    // The component strips mdast's data-footnote-backref attr when it
+    // re-renders the link; back-links are identified by their fnref target.
+    const backrefs = container.querySelectorAll('section[data-footnotes] a[href*="fnref"]')
+    expect(backrefs.length).toBe(2)
+    expect(backrefs[0].getAttribute('aria-label')).toMatch(/Back to reference 1/)
+    expect(backrefs[0].textContent).toContain('↩')
+  })
+
+  it('leaves footnote-lookalike text inside code fences untouched', () => {
+    const md = ['```text', 'not a def: [^x]: stays literal', '[^ref] in code', '```'].join('\n')
+    const { container } = renderMd(md)
+    // No footnotes section, no broken body — the fence content survives.
+    expect(container.querySelector('section[data-footnotes]')).toBeNull()
+    expect(container.querySelector('pre')?.textContent).toContain('[^x]: stays literal')
+    expect(container.querySelector('pre')?.textContent).toContain('[^ref] in code')
+  })
+
+  it('keeps tables intact when cells contain [^…] tokens', () => {
+    const md = '| ref |\n|-----|\n| [^1] |'
+    const { container } = renderMd(md)
+    expect(container.querySelector('table')).not.toBeNull()
+  })
+
+  it('renders plain markdown without a footnotes section', () => {
+    const { container } = renderMd('Hello **world**')
+    expect(container.querySelector('section[data-footnotes]')).toBeNull()
+  })
+})
+
+describe('Markdown — math (KaTeX)', () => {
+  it('renders inline $…$ math with KaTeX markup', () => {
+    const { container } = renderMd('Energy: $E=mc^2$ indeed.')
+    expect(container.querySelector('.katex')).not.toBeNull()
+    // No raw dollar delimiters left in the paragraph text.
+    expect(container.querySelector('p')?.textContent).not.toContain('$E')
+  })
+
+  it('renders $$…$$ display math', () => {
+    const { container } = renderMd('$$\nx = \\frac{1}{2}\n$$')
+    expect(container.querySelector('.katex-display')).not.toBeNull()
+    expect(container.querySelector('.katex')).not.toBeNull()
+    // Display math is not dressed in the code-block chrome.
+    expect(container.querySelector('.katex-display')?.closest('pre')).toBeNull()
+  })
+
+  it('does not mathify $ inside inline code spans', () => {
+    const { container } = renderMd('Use `$a+b$` literally.')
+    expect(container.querySelector('.katex')).toBeNull()
+    expect(container.querySelector('p code')?.textContent).toBe('$a+b$')
+  })
+
+  it('does not mathify $ inside fenced code blocks', () => {
+    const md = '```js\nconst s = "$x$ and $y$"\n```'
+    const { container } = renderMd(md)
+    expect(container.querySelector('.katex')).toBeNull()
+    expect(container.querySelector('pre')?.textContent).toContain('$x$ and $y$')
+  })
+})
+
+describe('Markdown — images (P2-15)', () => {
+  it('renders local images lazily with a max-height constraint', () => {
+    renderMd('![alt](/some/file.png)')
+    const img = screen.getByAltText('alt')
+    expect(img.getAttribute('loading')).toBe('lazy')
+    expect(img.className).toContain('max-h-96')
+    expect(img.className).toContain('object-contain')
+  })
+
+  it('opens local images in the dock via shannon:open-artifact-file on click', () => {
+    const { container } = renderMd('![shot](/some/pic.png)')
+    const img = screen.getByAltText('shot')
+    const seen = vi.fn()
+    window.addEventListener('shannon:open-artifact-file', seen)
+    fireEvent.click(container.querySelector('img')!)
+    window.removeEventListener('shannon:open-artifact-file', seen)
+    expect(seen).toHaveBeenCalledTimes(1)
+    const detail = (seen.mock.calls[0][0] as CustomEvent).detail
+    expect(detail.path).toBe('/some/pic.png')
+    expect(img.getAttribute('role')).toBe('button')
+  })
+
+  it('activates the dock open via keyboard (Enter) on local images', () => {
+    const seen = vi.fn()
+    window.addEventListener('shannon:open-artifact-file', seen)
+    renderMd('![shot](/some/pic.png)')
+    fireEvent.keyDown(screen.getByAltText('shot'), { key: 'Enter' })
+    window.removeEventListener('shannon:open-artifact-file', seen)
+    expect(seen).toHaveBeenCalledTimes(1)
+  })
+
+  it('does not make remote images interactive', () => {
+    const seen = vi.fn()
+    window.addEventListener('shannon:open-artifact-file', seen)
+    renderMd('![remote](https://example.com/cat.png)')
+    const img = screen.getByAltText('remote')
+    expect(img.getAttribute('role')).toBeNull()
+    fireEvent.click(img)
+    window.removeEventListener('shannon:open-artifact-file', seen)
+    expect(seen).not.toHaveBeenCalled()
   })
 })

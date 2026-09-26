@@ -10,17 +10,17 @@ interface MicButtonProps {
   onStop: () => void
 }
 
+// B4 P2-5: rendered only while the STT provider is supported (ChatInput
+// gates the mount) — the TTS `speaking` state was removed with tts.ts.
 export function MicButton({ state, disabled, onStart, onStop }: MicButtonProps) {
   const intl = useIntl()
   const t = (id: string) => intl.formatMessage({ id })
 
-  const isActive = state === 'recording' || state === 'transcribing' || state === 'speaking'
+  const isActive = state === 'recording' || state === 'transcribing'
   const labelKey = state === 'recording'
     ? 'voice.mic.stop.aria'
     : state === 'transcribing'
     ? 'voice.mic.transcribing.aria'
-    : state === 'speaking'
-    ? 'voice.mic.speaking.aria'
     : 'voice.mic.start.aria'
 
   return (
@@ -42,7 +42,7 @@ export function MicButton({ state, disabled, onStart, onStop }: MicButtonProps) 
         aria-hidden="true"
         className={cn("material-symbols-outlined icon-md", state === 'recording' && 'animate-pulse')}
       >
-        {state === 'recording' ? 'stop_circle' : state === 'transcribing' ? 'hourglass_empty' : state === 'speaking' ? 'graphic_eq' : 'mic'}
+        {state === 'recording' ? 'stop_circle' : state === 'transcribing' ? 'hourglass_empty' : 'mic'}
       </span>
       {state === 'recording' && (
         <span

@@ -19,7 +19,7 @@ import {
   extOf,
 } from '@/lib/openFileRef'
 import { basenameOf } from '@/lib/fileRefs'
-import { readTextFile } from '@/lib/tauri-api'
+import { readTextFile, readTextFileErrorCode } from '@/lib/tauri-api'
 import { messageFor } from '@/i18n'
 import { toast } from 'sonner'
 import { errorMessage } from '@/lib/errorToast'
@@ -44,12 +44,15 @@ export async function openDiskArtifact(
     const dto = await readTextFile(path)
     open({ kind, source: dto.content, path, origin: 'disk', title, confidence: 'high', id }, { activate })
   } catch (e) {
-    const msg = errorMessage(e)
-    if (msg.includes('too large') || msg.includes('binary')) {
+    // §P2-24: branch on the structured error code, not English substrings —
+    // these three codes mean "readable, just not inline-renderable", so the
+    // tab degrades to the OS-handoff card instead of a failure toast.
+    const code = readTextFileErrorCode(e)
+    if (code === 'file_too_large' || code === 'binary_file' || code === 'not_utf8') {
       open({ kind: 'other', source: path, path, origin: 'disk', title, confidence: 'high', id }, { activate })
       return
     }
-    toast.error(messageFor('link.open.failed'), { description: msg })
+    toast.error(messageFor('link.open.failed'), { description: errorMessage(e) })
   }
 }
 

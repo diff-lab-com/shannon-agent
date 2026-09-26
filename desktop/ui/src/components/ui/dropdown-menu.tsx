@@ -14,15 +14,17 @@ import { cn } from "@/lib/utils"
 // <Menu.Item> roving tabindex requires a working anchor trigger that the
 // legacy API does not expose. Without a real trigger, Base UI never
 // initializes focus on open and ArrowDown does nothing — breaking the test
-// contract. When a real call site lands and `triggerRef` is wired to a
-// real <button>, regenerate the shadcn primitive
-// (`pnpm dlx shadcn@latest add dropdown-menu`) and swap this wrapper for
-// the Base UI composition — focus behavior then moves to <Menu.Item>'s
-// roving tabindex out of the box. (The previously parked
+// contract. If the composition ever migrates, regenerate the shadcn
+// primitive (`pnpm dlx shadcn@latest add dropdown-menu`) and move call sites
+// to the Base UI composition — focus behavior then moves to
+// <Menu.Item>'s roving tabindex out of the box. (The previously parked
 // dropdown-menu.prim.tsx was 0-ref inventory and was removed in the
 // 2026-08-26 audit cleanup.)
 //
 // For now: legacy focus hook + Base UI surface tokens. Compat shim.
+// (B4 audit: this is NOT dead code — it backs the composer's "+" menu, the
+// session rail's ⋯ menu, and the sidebar's split-New menu. The unused
+// `triggerRef` prop that once hinted at the Base UI migration was removed.)
 
 export interface DropdownMenuItem {
   id: string
@@ -39,7 +41,6 @@ export interface DropdownMenuProps {
   items: DropdownMenuItem[]
   align?: "start" | "end"
   className?: string
-  triggerRef?: React.RefObject<HTMLElement | null>
   ariaLabel?: string
 }
 
@@ -48,10 +49,6 @@ export interface DropdownMenuProps {
  * outside-click + Escape semantics; surface tokens aligned with the
  * shadcn base-nova primitives so a future call site can migrate to the
  * Base UI composition directly.
- *
- * Zero production callers today (only __tests__/components/DropdownMenu.test.tsx),
- * so this is a compat shim. Once a real call site lands, prefer the
- * base-nova primitives (DropdownMenuTrigger, DropdownMenuContent, …) directly.
  */
 export function DropdownMenu({
   open,

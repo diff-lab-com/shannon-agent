@@ -1,11 +1,11 @@
 import { useT } from '@/i18n'
 import { Banner } from '@/components/ui/banner'
 import type { RefObject } from 'react'
-import { useEffect, useMemo, useState, useCallback } from 'react'
+import { useEffect, useMemo, useRef, useState, useCallback } from 'react'
 import type { Virtualizer } from '@tanstack/react-virtual'
 import { Button } from '@/components/ui/button'
 import WelcomeState from '@/components/WelcomeState'
-import { MessageBubble } from '@/components/chat/MessageBubble'
+import { MessageBubble, type RegeneratePayload } from '@/components/chat/MessageBubble'
 import StreamingResponse from '@/components/chat/StreamingResponse'
 import { useChat } from '@/context/ChatContext'
 import { useCatalog } from '@/context/CatalogContext'
@@ -15,7 +15,63 @@ import * as api from '@/lib/tauri-api'
 // Virtualization only kicks in past the threshold. Below it, the overhead
 // of measuring/positioning outweighs the win from fewer DOM nodes — and
 // jsdom can't provide real dimensions, so tests would render zero items.
-const VIRTUALIZE_THRESHOLD = 30
+// (Exported: Chat's search bar needs the same threshold to pick the jump
+// mechanism for a match.)
+export const VIRTUALIZE_THRESHOLD = 30
+
+/** djb2 hex — short stable salt for React keys of messages that carry no id. */
+function hashContent(s: string): string {
+  let h = 5381
+  for (let i = 0; i < s.length; i++) h = ((h << 5) + h + s.charCodeAt(i)) | 0
+  return (h >>> 0).toString(36)
+}
+
+/**
+ * P2-13 (§4-15): virtualizer keys must be stable identity, not index-bound.
+ * ChatMessage carries no id, so the most stable available fingerprint is
+ * role + timestamp + content hash, deduplicated in list order for the rare
+ * identical twins.
+ */
+function useStableMessageKeys(messages: { role: string; content: string; timestamp: number }[]): string[] {
+  return useMemo(() => {
+    const seen = new Map<string, number>()
+    return messages.map((m) => {
+      const base = `${m.role}-${m.timestamp}-${hashContent(m.content)}`
+      const n = seen.get(base) ?? 0
+      seen.set(base, n + 1)
+      return n === 0 ? base : `${base}#${n}`
+    })
+  }, [messages])
+}
+
+/**
+ * P2-17 (§4-17): the single aria-live region for run state transitions.
+ * The streaming log itself used to be a polite live region (screen-reader
+ * token spam) — now only the transitions announce: "generating" when a run
+ * starts, "reply complete" when it ends. Exported for direct testability.
+ */
+export function StreamStatusRegion({ active }: { active: boolean }) {
+  const t = useT()
+  const [message, setMessage] = useState('')
+  const wasActiveRef = useRef(false)
+  useEffect(() => {
+    if (active) {
+      wasActiveRef.current = true
+      setMessage(t('chat.stream.status.active'))
+    } else if (wasActiveRef.current) {
+      wasActiveRef.current = false
+      setMessage(t('chat.stream.status.done'))
+    }
+    // Transitions strictly alternate, so consecutive writes always change
+    // the text — a polite live region announces each one; no clear/rewrite
+    // dance (and no timer) needed.
+  }, [active, t])
+  return (
+    <div role="status" aria-live="polite" className="sr-only" data-testid="stream-status-region">
+      {message}
+    </div>
+  )
+}
 
 /**
  * P1-⑤ telemetry: tool_use_id → duration (ms) from the session's L0 trace
@@ -54,6 +110,35 @@ interface MessageAreaProps {
   virtualizer: Virtualizer<HTMLDivElement, Element>
   setDiffPath: (p: string | null) => void
   setDiffPaths: (p: string[] | null) => void
+  /** B1 §4-12: the message a search jump landed on (transient ring). */
+  searchFlashIndex?: number | null
+  /** B1 §4-8: begin a composer-based edit of the user message at `index`. */
+  onEditMessage?: (index: number) => void
+}
+
+/** B1 §4-7: everything the LAST assistant message needs for a true
+ *  regenerate — rewind to the checkpoint before its preceding user turn and
+ *  re-send that turn's text + attachment paths. Null when there is no
+ *  preceding user turn or no checkpoint covers it (fresh/demo sessions):
+ *  then the button simply does not render, like the rewind affordance.
+ *  (Shape: RegeneratePayload, declared in MessageBubble.) */
+function regenerateInfoFor(messages: { role: string; content: string; file_attachments?: { path: string }[] }[], lastAssistantIndex: number, checkpointTurns: number[]): RegeneratePayload | null {
+  let userIdx = -1
+  for (let i = lastAssistantIndex - 1; i >= 0; i--) {
+    if (messages[i]?.role === 'user') {
+      userIdx = i
+      break
+    }
+  }
+  if (userIdx < 0) return null
+  const { turnIndex, rewindable } = rewindInfoFor(messages, userIdx, checkpointTurns)
+  if (!rewindable) return null
+  const userMessage = messages[userIdx]
+  return {
+    turnIndex,
+    content: userMessage.content,
+    attachmentPaths: (userMessage.file_attachments ?? []).map(a => a.path),
+  }
 }
 
 /** True when the user is scrolled away from the very bottom by at least
@@ -84,9 +169,11 @@ export default function MessageArea({
   virtualizer,
   setDiffPath,
   setDiffPaths,
+  searchFlashIndex,
+  onEditMessage,
 }: MessageAreaProps) {
-  const { messages, streamingText, thinkingText, activeToolCalls, checkpoints, rewindSession, isQuerying } = useChat()
-  const { currentSessionId, sessionActivity } = useSessions()
+  const { messages, streamingText, thinkingText, activeToolCalls, toolProgress, checkpoints, rewindSession, isQuerying } = useChat()
+  const { currentSessionId, sessionActivity, switchingSession } = useSessions()
   const durationLookup = useToolDurationLookup(currentSessionId)
   const checkpointTurns = useMemo(() => checkpoints.map(c => c.turn_index), [checkpoints])
   const rewind = useMemo(() => {
@@ -95,9 +182,25 @@ export default function MessageArea({
       return rewindable ? turnIndex : null
     }
   }, [messages, checkpointTurns])
+  // B1 §4-7: true regenerate — only the LAST assistant message carries the
+  // button, and only when the rewind+resend pipeline can actually run.
+  const lastAssistantIndex = useMemo(() => {
+    for (let i = messages.length - 1; i >= 0; i--) {
+      if (messages[i]?.role === 'assistant') return i
+    }
+    return -1
+  }, [messages])
+  const regenerateInfo = useMemo(
+    () => (lastAssistantIndex >= 0 ? regenerateInfoFor(messages, lastAssistantIndex, checkpointTurns) : null),
+    [messages, lastAssistantIndex, checkpointTurns],
+  )
   const { error } = useCatalog()
   const t = useT()
   const shouldVirtualize = messages.length > VIRTUALIZE_THRESHOLD
+  const messageKeys = useStableMessageKeys(messages)
+  // P2-17: one run-level status region for the whole flow — the list and
+  // the streaming log no longer announce every content change themselves.
+  const streamActive = isQuerying || !!streamingText || !!thinkingText || activeToolCalls.length > 0
 
   // X-2: surface a "scroll to latest" FAB whenever the user is scrolled
   // away from the bottom. Cheap: one passive scroll listener, no re-render
@@ -119,28 +222,41 @@ export default function MessageArea({
     if (el) el.scrollTo({ top: el.scrollHeight, behavior: 'smooth' })
   }, [scrollParentRef])
 
+  // B1 §4-7: shared bubble props — the regenerate payload rides only on the
+  // last assistant message; the edit affordance rides on every user message.
+  const bubbleProps = (index: number) => ({
+    onViewDiff: setDiffPath,
+    onViewDiffMulti: setDiffPaths,
+    rewindTurnIndex: rewind(index),
+    onRewind: rewindSession,
+    durationLookup,
+    onEditMessage,
+    searchFlash: searchFlashIndex === index,
+    regenerate: index === lastAssistantIndex ? regenerateInfo : undefined,
+  })
+
   return (
-    <div ref={scrollParentRef} className="flex-1 overflow-y-auto px-xl pt-lg pb-md">
+    <div ref={scrollParentRef} className="relative flex-1 overflow-y-auto px-xl pt-lg pb-md">
+      <StreamStatusRegion active={streamActive} />
       {messages.length === 0 && !streamingText && <ComposerWelcome />}
 
       {messages.length > 0 && shouldVirtualize && (
         <div
           style={{ height: `${virtualizer.getTotalSize()}px`, position: 'relative' }}
-          role="log"
-          aria-live="polite"
           aria-label={t('chat.history.aria')}
         >
           {virtualizer.getVirtualItems().map(vItem => {
             const msg = messages[vItem.index]
             return (
               <div
-                key={`${msg.timestamp}-${vItem.index}`}
+                key={messageKeys[vItem.index]}
                 data-index={vItem.index}
+                data-message-index={vItem.index}
                 ref={virtualizer.measureElement}
                 className="pb-lg"
                 style={{ position: 'absolute', top: 0, left: 0, width: '100%', transform: `translateY(${vItem.start}px)` }}
               >
-                <MessageBubble message={msg} messageIndex={vItem.index} onViewDiff={setDiffPath} onViewDiffMulti={setDiffPaths} rewindTurnIndex={rewind(vItem.index)} onRewind={rewindSession} durationLookup={durationLookup} />
+                <MessageBubble message={msg} messageIndex={vItem.index} {...bubbleProps(vItem.index)} />
               </div>
             )
           })}
@@ -148,10 +264,10 @@ export default function MessageArea({
       )}
 
       {messages.length > 0 && !shouldVirtualize && (
-        <div role="log" aria-live="polite" aria-label={t('chat.history.aria')}>
+        <div aria-label={t('chat.history.aria')}>
           {messages.map((msg, i) => (
-            <div key={`${msg.timestamp}-${i}`} className="pb-lg">
-              <MessageBubble message={msg} messageIndex={i} onViewDiff={setDiffPath} onViewDiffMulti={setDiffPaths} rewindTurnIndex={rewind(i)} onRewind={rewindSession} durationLookup={durationLookup} />
+            <div key={messageKeys[i]} data-message-index={i} className="pb-lg">
+              <MessageBubble message={msg} messageIndex={i} {...bubbleProps(i)} />
             </div>
           ))}
         </div>
@@ -170,7 +286,7 @@ export default function MessageArea({
       {/* Batch C3 (ZCode「已工作 3 分 34 秒」): wall-clock status pill pinned
           to the flow bottom while a run is live — time awareness without
           expanding tool cards. */}
-      {isQuerying && <RunStatusLine startedAt={currentSessionId ? sessionActivity[currentSessionId]?.startedAt ?? null : null} activeTool={currentSessionId ? sessionActivity[currentSessionId]?.activeTool ?? null : null} />}
+      {isQuerying && <RunStatusLine startedAt={currentSessionId ? sessionActivity[currentSessionId]?.startedAt ?? null : null} activeTool={currentSessionId ? sessionActivity[currentSessionId]?.activeTool ?? null : null} toolProgress={toolProgress} />}
 
       {error && (
         <Banner
@@ -198,6 +314,23 @@ export default function MessageArea({
           <span className="material-symbols-outlined icon-md" aria-hidden="true">arrow_downward</span>
         </Button>
       )}
+
+      {/* B1 P2-3: session-swap skeleton — shown only while a switch IPC is in
+          flight (AppContext never sets the flag for same-session remounts),
+          so opening a session reads as instant-and-loading instead of stale. */}
+      {switchingSession && (
+        <div
+          data-testid="session-switch-overlay"
+          aria-busy="true"
+          role="status"
+          className="absolute inset-0 z-raised flex items-center justify-center bg-surface-container-lowest/60 backdrop-blur-[2px]"
+        >
+          <div className="flex flex-col items-center gap-sm">
+            <span className="material-symbols-outlined text-primary animate-spin">progress_activity</span>
+            <span className="font-label-sm text-on-surface-variant">{t('chat.session.switching')}</span>
+          </div>
+        </div>
+      )}
     </div>
   )
 }
@@ -213,8 +346,14 @@ function ComposerWelcome() {
  * Batch C3: sticky status pill for a live run —「已工作 3分34秒 · 正在 bash」.
  * The startedAt/activeTool pair comes from the same SessionActivity the
  * sidebar rail consumes; a 1s tick drives the elapsed label while mounted.
+ * P2-19: when the backend streams QUERY_TOOL_PROGRESS, the pill grows a
+ * compact percentage chip (`· 45%`) next to the tool name and the backend's
+ * progress_message, truncated with the full text in `title`. Both are raw
+ * backend data (not UI chrome) — no new i18n keys; announcements ride the
+ * existing role="status" region. Additive only: the pre-existing roles/
+ * testids/aria structure is unchanged.
  */
-export function RunStatusLine({ startedAt, activeTool }: { startedAt: number | null; activeTool: string | null }) {
+export function RunStatusLine({ startedAt, activeTool, toolProgress }: { startedAt: number | null; activeTool: string | null; toolProgress?: { progress?: number; message?: string } | null }) {
   const t = useT()
   const [now, setNow] = useState(() => Date.now())
   useEffect(() => {
@@ -222,18 +361,42 @@ export function RunStatusLine({ startedAt, activeTool }: { startedAt: number | n
     return () => window.clearInterval(id)
   }, [])
   const elapsed = startedAt != null ? formatWorked(Math.max(0, now - startedAt)) : null
+  // Only a sane 0..=100 percentage renders — out-of-range/NaN payloads are
+  // ignored instead of shown as garbage next to the tool name.
+  const pct = toolProgress?.progress
+  const pctText = typeof pct === 'number' && Number.isFinite(pct) && pct >= 0 && pct <= 100
+    ? `${Math.round(pct)}%`
+    : null
+  const progressMsg = toolProgress?.message?.trim() ?? ''
   return (
     <div
       role="status"
       aria-live="polite"
       data-testid="run-status-line"
-      className="sticky bottom-0 mt-md mx-auto w-fit flex items-center gap-xs px-md py-xs rounded-full bg-surface-container-lowest/95 backdrop-blur-md border border-outline-variant/30 shadow-sm"
+      className="sticky bottom-0 mt-md mx-auto w-fit max-w-full flex items-center gap-xs px-md py-xs rounded-full bg-surface-container-lowest/95 backdrop-blur-md border border-outline-variant/30 shadow-sm"
     >
       <span className="size-1.5 rounded-full bg-secondary animate-pulse shrink-0" aria-hidden="true" />
       <span className="font-label-sm text-on-surface-variant whitespace-nowrap">
         {elapsed != null && t('chat.status.worked', { time: elapsed })}
         {activeTool && t('chat.status.tool', { tool: activeTool })}
       </span>
+      {pctText && (
+        <span
+          data-testid="run-progress-pct"
+          className="font-label-sm text-on-surface-variant tabular-nums whitespace-nowrap shrink-0"
+        >
+          · {pctText}
+        </span>
+      )}
+      {progressMsg && (
+        <span
+          data-testid="run-progress-message"
+          title={progressMsg.slice(0, 200)}
+          className="font-label-sm text-on-surface-variant truncate max-w-[16rem]"
+        >
+          {progressMsg}
+        </span>
+      )}
     </div>
   )
 }
@@ -248,14 +411,26 @@ function formatWorked(ms: number): string {
   return `${Math.floor(min / 60)}h${min % 60}m`
 }
 
+// B0 P1-3: the composer is cleared on send, so a retry gated on composer
+// text was a guaranteed no-op. Retry now resends the LAST USER MESSAGE of
+// the conversation — the same mechanism as the budget banner's "continue
+// once". With no previous user message there is nothing to resend, so the
+// button hides entirely.
 function ComposerRetryButton() {
-  const { input, handleSend } = useComposer()
+  const { messages, sendMessage } = useChat()
   const t = useT()
+  const lastUser = useMemo(() => {
+    for (let i = messages.length - 1; i >= 0; i--) {
+      if (messages[i]?.role === 'user') return messages[i]
+    }
+    return null
+  }, [messages])
+  if (!lastUser) return null
   return (
     <Button
       variant="ghost"
       className="mt-sm text-error hover:bg-error/10 text-label-md cursor-pointer"
-      onClick={() => { if (input.trim()) handleSend() }}
+      onClick={() => void sendMessage(lastUser.content)}
     >
       {t('chat.error.retry')}
     </Button>
