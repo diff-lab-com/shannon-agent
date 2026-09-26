@@ -226,6 +226,9 @@ export function VoiceLocalSettings({ featureDisabled = false }: VoiceLocalSettin
             checked={config?.enabled ?? false}
             disabled={!config}
             onCheckedChange={(v) => void handleSave({ enabled: v })}
+            // B6-37: switches must carry an accessible name — reuse the
+            // adjacent label's key.
+            aria-label={t('settings.voiceLocal.enable')}
           />
         </div>
 
@@ -346,6 +349,7 @@ export function VoiceLocalSettings({ featureDisabled = false }: VoiceLocalSettin
             checked={config?.auto_download ?? true}
             disabled={!config}
             onCheckedChange={(v) => void handleSave({ auto_download: v })}
+            aria-label={t('settings.voiceLocal.autoDownload')}
           />
         </div>
 

@@ -3520,5 +3520,6 @@
   "diff.viewer.untitled": "제목 없음",
   "diff.viewer.lines": "{count}줄",
   "sessionsPanel.title": "대화",
-  "sessionsPanel.messageCount": "{count, plural, =0 {메시지 없음} other {메시지 #개}}"
+  "sessionsPanel.messageCount": "{count, plural, =0 {메시지 없음} other {메시지 #개}}",
+  "tasks.taskCalendarView.day.aria": "{day}일"
 }

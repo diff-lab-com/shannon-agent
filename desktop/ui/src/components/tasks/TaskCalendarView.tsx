@@ -76,8 +76,14 @@ export default function TaskCalendarView({
             const dayFires = firesByDay.get(day) ?? []
             const isSelected = selectedDay === day
             return (
+              // B6-37 (§5 任务): the day cell is clickable but was mouse-only —
+              // give it button semantics + keyboard activation.
               <div
                 key={day}
+                role="button"
+                tabIndex={0}
+                aria-label={intl.formatMessage({ id: 'tasks.taskCalendarView.day.aria' }, { day })}
+                aria-pressed={isSelected}
                 title={dayFires.length > 0 ? intl.formatMessage({ id: 'tasks.taskCalendarView.scheduledRuns' }, { count: dayFires.length }) : undefined}
                 className={cn('min-h-[80px] p-xs rounded-lg border cursor-pointer transition-all',
                   isSelected ? 'border-primary bg-primary/5 ring-1 ring-primary/20' :
@@ -85,6 +91,12 @@ export default function TaskCalendarView({
                   'border-outline-variant/10 hover:bg-surface-container-low'
                 )}
                 onClick={() => onSelectDay(isSelected ? null : day)}
+                onKeyDown={(e) => {
+                  if (e.key === 'Enter' || e.key === ' ') {
+                    e.preventDefault()
+                    onSelectDay(isSelected ? null : day)
+                  }
+                }}
               >
                 <div className={cn('text-[12px] font-bold mb-xs', isToday ? 'w-6 h-6 rounded-full bg-primary text-on-primary flex items-center justify-center' : 'text-on-surface-variant')}>
                   {day}
@@ -128,10 +140,20 @@ export default function TaskCalendarView({
               return dayTasks.slice(0, 5).map(task => {
                 const badge = statusBadge(task.status)
                 return (
+                  // B6-37: clickable row → button semantics + keyboard.
                   <div
                     key={task.id}
+                    role="button"
+                    tabIndex={0}
+                    aria-label={task.title}
                     className="glass-panel border border-outline-variant/10 rounded-xl p-md shadow-sm hover:shadow-md transition-all group bg-surface-container-lowest/80 cursor-pointer"
                     onClick={() => onSelectTask(task.id)}
+                    onKeyDown={(e) => {
+                      if (e.key === 'Enter' || e.key === ' ') {
+                        e.preventDefault()
+                        onSelectTask(task.id)
+                      }
+                    }}
                   >
                     <div className="flex items-center justify-between">
                       <div className="flex items-center gap-md">
@@ -143,7 +165,8 @@ export default function TaskCalendarView({
                           {task.assignee ? <span className="font-label-sm text-on-surface-variant">{task.assignee}</span> : null}
                         </div>
                       </div>
-                      <div title={intl.formatMessage({ id: badge.tipId }, badge.values)} className={cn('flex items-center gap-xs px-sm py-1 rounded-full border', badge.bg)}>
+                      {/* B6-37: status changes announce politely. */}
+                      <div aria-live="polite" title={intl.formatMessage({ id: badge.tipId }, badge.values)} className={cn('flex items-center gap-xs px-sm py-1 rounded-full border', badge.bg)}>
                         <span className={cn('w-2 h-2 rounded-full', badge.dot)} />
                         <span className="font-label-sm text-[11px] font-bold uppercase tracking-wider">{intl.formatMessage({ id: badge.labelId }, badge.values)}</span>
                       </div>

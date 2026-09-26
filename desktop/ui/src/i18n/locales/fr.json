@@ -3520,5 +3520,6 @@
   "diff.viewer.untitled": "sans titre",
   "diff.viewer.lines": "{count, plural, =1 {1 ligne} other {{count} lignes}}",
   "sessionsPanel.title": "Conversations",
-  "sessionsPanel.messageCount": "{count, plural, =0 {Aucun message} one {# message} other {# messages}}"
+  "sessionsPanel.messageCount": "{count, plural, =0 {Aucun message} one {# message} other {# messages}}",
+  "tasks.taskCalendarView.day.aria": "Jour {day}"
 }

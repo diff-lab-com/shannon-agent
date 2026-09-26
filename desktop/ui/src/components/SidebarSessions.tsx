@@ -392,12 +392,23 @@ export function SessionsSection({ sessions, sessionActivity, goalRunsBySession =
     if (longPressTimer.current !== null) {
       clearTimeout(longPressTimer.current)
       longPressTimer.current = null
+      // B6-37 (§5 骨架): the timer hadn't fired, so this was a plain tap —
+      // clear a stale suppress flag from a previous gesture here, before the
+      // synthesized click arrives; otherwise the flag could hang past the
+      // gesture it belonged to and silently swallow this tap.
+      suppressClickRef.current = false
     }
   }, [])
   useEffect(() => clearLongPress, [clearLongPress])
   const startLongPress = useCallback((id: string, kind: 'session' | 'project') => {
     clearLongPress()
+    // New touch gesture: a hung suppress flag from a previous long-press
+    // (menu intercepted the synthesized click) must not eat this gesture.
+    suppressClickRef.current = false
     longPressTimer.current = window.setTimeout(() => {
+      // The press fired — it is no longer cancellable, and the touchend that
+      // follows must not treat it as a pending (tap) timer.
+      longPressTimer.current = null
       suppressClickRef.current = true
       if (kind === 'project') setProjectMenuFor(id)
       else setMenuFor(id)
@@ -1034,7 +1045,11 @@ export function SessionsSection({ sessions, sessionActivity, goalRunsBySession =
         >
           <button
             type="button"
-            role="presentation"
+            // B6-37 (§5 骨架): `role="presentation"` stripped the button from
+            // the a11y tree; restore native button semantics. The visible
+            // label + aria-expanded + explicit aria-label carry the fold
+            // state to assistive tech.
+            aria-label={group.label}
             aria-expanded={!isFolded}
             title={group.label}
             onClick={() => {

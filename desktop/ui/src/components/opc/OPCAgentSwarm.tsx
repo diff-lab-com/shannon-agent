@@ -182,7 +182,8 @@ export default function OPCAgentSwarm({ agents, tasks }: Props) {
                     </div>
                     <span className={cn("w-2 h-2 rounded-full shrink-0 mr-6", isActive ? 'bg-tertiary animate-pulse' : 'bg-outline-variant')} />
                   </div>
-                <div className="flex items-center gap-2">
+                {/* B6-37: agent status changes announce politely. */}
+                <div aria-live="polite" className="flex items-center gap-2">
                   <div className={cn("w-1 h-3 rounded-full shrink-0", isActive ? 'bg-tertiary' : 'bg-outline-variant')} />
                   <span className={cn("font-label-sm text-[12px]", isActive ? 'text-tertiary' : 'text-on-surface-variant italic opacity-80')}>
                     {agent.task || intl.formatMessage({ id: `status.${agent.status}`, defaultMessage: agent.status })}

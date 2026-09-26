@@ -67,7 +67,9 @@ describe('Usage page', () => {
     await waitFor(() => {
       expect(screen.getByText('claude-sonnet-4-6')).toBeInTheDocument()
     })
-    fireEvent.click(screen.getByRole('tab', { name: /Audit \(table\)/ }))
+    // B6-37: the mode toggle is an aria-pressed button pair (it never
+    // implemented the tab keyboard pattern).
+    fireEvent.click(screen.getByRole('button', { name: /Audit \(table\)/ }))
     await waitFor(() => {
       expect(screen.getByText('By model')).toBeInTheDocument()
       expect(screen.getByText('By provider')).toBeInTheDocument()

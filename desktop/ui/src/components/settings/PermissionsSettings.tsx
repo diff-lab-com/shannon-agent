@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useId, useMemo, useState } from 'react'
 import { useIntl, type PrimitiveType } from 'react-intl'
 import { useSearchParams } from 'react-router-dom'
 import { toast } from 'sonner'
@@ -787,6 +787,9 @@ function RuleGroupEditor({
   const intl = useIntl()
   const t = (id: string) => intl.formatMessage({ id })
   const [draft, setDraft] = useState('')
+  // B6-37: announce rule validation errors (role=alert + aria-invalid +
+  // aria-describedby) instead of a silently-appearing hint paragraph.
+  const errorId = useId()
   const errorKey = draft === '' ? null : validateRuleInput(draft)
 
   return (
@@ -818,6 +821,8 @@ function RuleGroupEditor({
           onChange={(e) => setDraft(e.target.value)}
           placeholder="Bash(git push *)"
           aria-label={title}
+          aria-invalid={errorKey != null || undefined}
+          aria-describedby={errorKey != null ? errorId : undefined}
           onKeyDown={(e) => {
             if (e.key === 'Enter' && errorKey == null && draft.trim() !== '') {
               onAdd(draft)
@@ -837,7 +842,9 @@ function RuleGroupEditor({
           {t('settings.permissions.editor.addRule')}
         </Button>
       </div>
-      {errorKey && <p className="text-label-sm text-error">{t(errorKey)}</p>}
+      {errorKey && (
+        <p id={errorId} role="alert" className="text-label-sm text-error">{t(errorKey)}</p>
+      )}
     </fieldset>
   )
 }

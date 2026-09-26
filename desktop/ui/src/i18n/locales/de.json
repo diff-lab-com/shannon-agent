@@ -3520,5 +3520,6 @@
   "diff.viewer.untitled": "unbenannt",
   "diff.viewer.lines": "{count, plural, =1 {1 Zeile} other {{count} Zeilen}}",
   "sessionsPanel.title": "Unterhaltungen",
-  "sessionsPanel.messageCount": "{count, plural, =0 {Keine Nachrichten} one {# Nachricht} other {{count} Nachrichten}}"
+  "sessionsPanel.messageCount": "{count, plural, =0 {Keine Nachrichten} one {# Nachricht} other {{count} Nachrichten}}",
+  "tasks.taskCalendarView.day.aria": "Tag {day}"
 }

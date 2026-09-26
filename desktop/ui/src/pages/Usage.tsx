@@ -391,16 +391,15 @@ export default function Usage() {
 
       <div className="flex items-center gap-xs mb-lg flex-wrap">
         {/* 2026-09: two-mode toggle — Overview (charts) is the default;
-            Audit (tables) sits next to it for precise reconciliation. */}
-        <div
-          role="tablist"
-          aria-label={t('usage.title')}
-          className="flex items-center gap-xs mr-md p-xs bg-surface-container-low/60 rounded-full border border-outline-variant/20"
-        >
+            Audit (tables) sits next to it for precise reconciliation.
+            B6-37: these are toggle buttons (aria-pressed), not a tablist —
+            the two buttons were always independently focusable/clickable and
+            never implemented the tab keyboard pattern (no roving focus, no
+            aria-controls/tabpanels), so the tab roles misannounced them. */}
+        <div className="flex items-center gap-xs mr-md p-xs bg-surface-container-low/60 rounded-full border border-outline-variant/20">
           <button
             type="button"
-            role="tab"
-            aria-selected={mode === 'overview'}
+            aria-pressed={mode === 'overview'}
             onClick={() => setMode('overview')}
             className={cn(
               'px-md py-xs rounded-full font-label-md text-label-md transition-all focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/30',
@@ -414,8 +413,7 @@ export default function Usage() {
           </button>
           <button
             type="button"
-            role="tab"
-            aria-selected={mode === 'audit'}
+            aria-pressed={mode === 'audit'}
             title={t('usage.view.audit.aria')}
             onClick={() => setMode('audit')}
             className={cn(

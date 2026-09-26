@@ -61,6 +61,8 @@ export default function AddProviderModal({ editing, onClose, onSaved }: AddProvi
   const [advancedOpen, setAdvancedOpen] = useState(false)
   const [saving, setSaving] = useState(false)
   const [error, setError] = useState<string | null>(null)
+  // B6-37: which field the error belongs to — drives aria-invalid/aria-describedby.
+  const [errorField, setErrorField] = useState<'label' | 'baseUrl' | null>(null)
   // P2: the modal holds unsaved edits (label, key, advanced rows…) — a stray
   // Esc / backdrop click must not silently throw them away once anything is
   // filled in.
@@ -93,14 +95,17 @@ export default function AddProviderModal({ editing, onClose, onSaved }: AddProvi
     const trimmedLabel = label.trim()
     if (!trimmedLabel) {
       setError(t('settings.models.providers.needLabel'))
+      setErrorField('label')
       return
     }
     if (info.baseUrlRequired && !baseUrl.trim()) {
       setError(t('settings.models.providers.needBaseUrl'))
+      setErrorField('baseUrl')
       return
     }
     setSaving(true)
     setError(null)
+    setErrorField(null)
     const input: ProviderInput = {
       id: editing?.id,
       display_name: trimmedLabel,
@@ -127,6 +132,7 @@ export default function AddProviderModal({ editing, onClose, onSaved }: AddProvi
       onSaved(fresh)
     } catch (e) {
       setError(String(e))
+      setErrorField(null)
     } finally {
       setSaving(false)
     }
@@ -166,7 +172,15 @@ export default function AddProviderModal({ editing, onClose, onSaved }: AddProvi
 
         <div className="space-y-sm">
           <Field label={t('settings.models.providers.labelField')}>
-            <Input className="w-full px-md py-sm bg-surface text-on-surface border border-outline-variant/50 rounded-lg outline-none focus:ring-2 focus:ring-primary font-body-sm" value={label} onChange={(e) => { setLabel(e.target.value); setError(null) }} placeholder={t('settings.models.providers.labelPlaceholder')} autoFocus />
+            <Input
+              className="w-full px-md py-sm bg-surface text-on-surface border border-outline-variant/50 rounded-lg outline-none focus:ring-2 focus:ring-primary font-body-sm"
+              value={label}
+              onChange={(e) => { setLabel(e.target.value); setError(null); setErrorField(null) }}
+              placeholder={t('settings.models.providers.labelPlaceholder')}
+              autoFocus
+              aria-invalid={errorField === 'label' || undefined}
+              aria-describedby={error ? 'add-provider-error' : undefined}
+            />
           </Field>
 
           <Field label={t('settings.models.providers.kindField')}>
@@ -182,7 +196,14 @@ export default function AddProviderModal({ editing, onClose, onSaved }: AddProvi
           </Field>
 
           <Field label={t(info.baseUrlRequired ? 'settings.models.providers.baseUrlRequired' : 'settings.models.providers.baseUrlOptional')}>
-            <Input className="w-full px-md py-sm bg-surface text-on-surface border border-outline-variant/50 rounded-lg outline-none focus:ring-2 focus:ring-primary font-body-sm font-mono" value={baseUrl} onChange={(e) => { setBaseUrl(e.target.value); setError(null) }} placeholder="https://api.example.com/v1" />
+            <Input
+              className="w-full px-md py-sm bg-surface text-on-surface border border-outline-variant/50 rounded-lg outline-none focus:ring-2 focus:ring-primary font-body-sm font-mono"
+              value={baseUrl}
+              onChange={(e) => { setBaseUrl(e.target.value); setError(null); setErrorField(null) }}
+              placeholder="https://api.example.com/v1"
+              aria-invalid={errorField === 'baseUrl' || undefined}
+              aria-describedby={error ? 'add-provider-error' : undefined}
+            />
           </Field>
 
           <Field label={t('settings.models.providers.apiKeyField')}>
@@ -240,7 +261,7 @@ export default function AddProviderModal({ editing, onClose, onSaved }: AddProvi
         </div>
 
         {error ? (
-          <div className="font-label-sm text-[12px] text-error">{error}</div>
+          <div id="add-provider-error" role="alert" className="font-label-sm text-[12px] text-error">{error}</div>
         ) : null}
 
         <div className="flex justify-end gap-sm pt-xs">

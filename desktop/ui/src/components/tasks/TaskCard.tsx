@@ -24,9 +24,21 @@ export default function TaskCard({ task, isRunning, onSelect, onRunNow, onCancel
   const badge = statusBadge(task.status)
   const isActive = task.status === 'running' || task.status === 'in_progress'
   return (
+    // B6-37 (§5 任务): the whole card is clickable but was mouse-only — add
+    // role="button" + keyboard activation. The inner action buttons remain
+    // natively focusable and stopPropagation keeps their clicks card-local.
     <div
+      role="button"
+      tabIndex={0}
+      aria-label={task.title}
       className="glass-panel border border-outline-variant/10 rounded-xl p-md shadow-sm hover:shadow-md hover:-translate-y-0.5 transition-all duration-300 group bg-surface-container-lowest/80 cursor-pointer"
       onClick={onSelect}
+      onKeyDown={(e) => {
+        if (e.key === 'Enter' || e.key === ' ') {
+          e.preventDefault()
+          onSelect()
+        }
+      }}
     >
       <div className="flex items-center justify-between">
         <div className="flex items-center gap-md">
@@ -62,7 +74,8 @@ export default function TaskCard({ task, isRunning, onSelect, onRunNow, onCancel
           </div>
         </div>
         <div className="flex items-center gap-lg">
-          <div title={intl.formatMessage({ id: badge.tipId }, badge.values)} className={cn('flex items-center gap-xs px-sm py-1 rounded-full border', badge.bg)}>
+          {/* B6-37: status changes announce politely. */}
+          <div aria-live="polite" title={intl.formatMessage({ id: badge.tipId }, badge.values)} className={cn('flex items-center gap-xs px-sm py-1 rounded-full border', badge.bg)}>
             <span className={cn('w-2 h-2 rounded-full', badge.dot)} />
             <span className="font-label-sm text-[11px] font-bold uppercase tracking-wider">{intl.formatMessage({ id: badge.labelId }, badge.values)}</span>
           </div>

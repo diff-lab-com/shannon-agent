@@ -280,14 +280,14 @@ export default function AdvancedSettings() {
               <div className="font-label-md text-[14px] text-on-surface font-semibold mb-1">{t('settings.skillLoop.enabled')}</div>
               <div className="font-label-sm text-[12px] text-on-surface-variant leading-tight">{t('settings.skillLoop.enabledDesc')}</div>
             </div>
-            <Switch checked={skillLoopEnabled} onCheckedChange={v => handleToggle('skill_loop_enabled', v, setSkillLoopEnabled)} className="shrink-0" />
+            <Switch checked={skillLoopEnabled} onCheckedChange={v => handleToggle('skill_loop_enabled', v, setSkillLoopEnabled)} className="shrink-0" aria-label={t('settings.skillLoop.enabled')} />
           </div>
           <div className="flex items-center justify-between gap-md mt-md">
             <div>
               <div className="font-label-md text-[14px] text-on-surface font-semibold mb-1">{t('settings.skillLoop.detectionEnabled')}</div>
               <div className="font-label-sm text-[12px] text-on-surface-variant leading-tight">{t('settings.skillLoop.detectionEnabledDesc')}</div>
             </div>
-            <Switch checked={skillDetectionEnabled} onCheckedChange={v => handleToggle('skill_detection_enabled', v, setSkillDetectionEnabled)} className="shrink-0" />
+            <Switch checked={skillDetectionEnabled} onCheckedChange={v => handleToggle('skill_detection_enabled', v, setSkillDetectionEnabled)} className="shrink-0" aria-label={t('settings.skillLoop.detectionEnabled')} />
           </div>
           {candidates.length > 0 && (
             <Button
@@ -316,14 +316,14 @@ export default function AdvancedSettings() {
               <div className="font-label-md text-[14px] text-on-surface font-semibold mb-1">{t('settings.dream.enabled')}</div>
               <div className="font-label-sm text-[12px] text-on-surface-variant leading-tight">{t('settings.dream.enabledDesc')}</div>
             </div>
-            <Switch checked={dreamEnabled} onCheckedChange={v => handleToggle('dream_enabled', v, setDreamEnabled)} className="shrink-0" />
+            <Switch checked={dreamEnabled} onCheckedChange={v => handleToggle('dream_enabled', v, setDreamEnabled)} className="shrink-0" aria-label={t('settings.dream.enabled')} />
           </div>
           <div className="flex items-center justify-between gap-md mt-md">
             <div>
               <div className="font-label-md text-[14px] text-on-surface font-semibold mb-1">{t('settings.dream.distillEnabled')}</div>
               <div className="font-label-sm text-[12px] text-on-surface-variant leading-tight">{t('settings.dream.distillEnabledDesc')}</div>
             </div>
-            <Switch checked={dreamSkillDistillEnabled} onCheckedChange={v => handleToggle('dream_skill_distill_enabled', v, setDreamSkillDistillEnabled)} className="shrink-0" />
+            <Switch checked={dreamSkillDistillEnabled} onCheckedChange={v => handleToggle('dream_skill_distill_enabled', v, setDreamSkillDistillEnabled)} className="shrink-0" aria-label={t('settings.dream.distillEnabled')} />
           </div>
         </div>
 
@@ -344,7 +344,7 @@ export default function AdvancedSettings() {
               <div className="font-label-md text-[14px] text-on-surface font-semibold mb-1">{t('settings.advanced.sessionGc.enabled')}</div>
               <div className="font-label-sm text-[12px] text-on-surface-variant leading-tight">{t('settings.advanced.sessionGc.enabledDesc')}</div>
             </div>
-            <Switch checked={sessionGcEnabled} onCheckedChange={v => handleToggle('session_gc_enabled', v, setSessionGcEnabled)} className="shrink-0" />
+            <Switch checked={sessionGcEnabled} onCheckedChange={v => handleToggle('session_gc_enabled', v, setSessionGcEnabled)} className="shrink-0" aria-label={t('settings.advanced.sessionGc.enabled')} />
           </div>
           <div className="mt-md">
             <label className="block font-label-sm text-[12px] text-on-surface-variant mb-1" htmlFor="session-retention-select">
@@ -381,7 +381,7 @@ export default function AdvancedSettings() {
               <div className="font-label-md text-[14px] text-on-surface font-semibold mb-1">{t('settings.advanced.agentTeamsToggle')}</div>
               <div className="font-label-sm text-[12px] text-on-surface-variant leading-tight">{t('settings.advanced.agentTeamsLive')}</div>
             </div>
-            <Switch checked={agentTeamsEnabled} onCheckedChange={v => handleToggle('agent_teams_enabled', v, setAgentTeamsEnabled)} className="shrink-0" />
+            <Switch checked={agentTeamsEnabled} onCheckedChange={v => handleToggle('agent_teams_enabled', v, setAgentTeamsEnabled)} className="shrink-0" aria-label={t('settings.advanced.agentTeamsToggle')} />
           </div>
         </div>
 
@@ -400,7 +400,7 @@ export default function AdvancedSettings() {
                 <div className="font-label-md text-[14px] text-on-surface font-semibold mb-1">{t('settings.advanced.longTermMemory')}</div>
                 <div className="font-label-sm text-[12px] text-on-surface-variant leading-tight">{t('settings.advanced.longTermMemoryDesc')}</div>
               </div>
-              <Switch checked={memoryEnabled} onCheckedChange={v => handleToggle('memory_enabled', v, setMemoryEnabled)} className="shrink-0" />
+              <Switch checked={memoryEnabled} onCheckedChange={v => handleToggle('memory_enabled', v, setMemoryEnabled)} className="shrink-0" aria-label={t('settings.advanced.longTermMemory')} />
             </div>
             <Button
               className="w-full py-md border border-outline-variant/50 rounded-xl text-on-surface font-label-md font-bold text-[14px] hover:bg-surface-container-low transition-colors active:scale-[0.99] cursor-pointer"
@@ -428,14 +428,14 @@ export default function AdvancedSettings() {
                 <div className="font-label-md text-[14px] text-on-surface font-semibold mb-1">{t('settings.advanced.anonReporting')}</div>
                 <div className="font-label-sm text-[12px] text-on-surface-variant leading-tight">{t('settings.advanced.anonReportingDesc')}</div>
               </div>
-              <Switch checked={telemetryEnabled} onCheckedChange={v => handleToggle('telemetry', v, setTelemetryEnabled)} className="shrink-0" />
+              <Switch checked={telemetryEnabled} onCheckedChange={v => handleToggle('telemetry', v, setTelemetryEnabled)} className="shrink-0" aria-label={t('settings.advanced.anonReporting')} />
             </div>
             <div className="flex items-center justify-between gap-md">
               <div>
                 <div className="font-label-md text-[14px] text-on-surface font-semibold mb-1">{t('settings.advanced.encryption')}</div>
                 <div className="font-label-sm text-[12px] text-on-surface-variant leading-tight">{t('settings.advanced.encryptionDesc')}</div>
               </div>
-              <Switch checked={encryptionEnabled} onCheckedChange={v => handleToggle('encryption', v, setEncryptionEnabled)} className="shrink-0" />
+              <Switch checked={encryptionEnabled} onCheckedChange={v => handleToggle('encryption', v, setEncryptionEnabled)} className="shrink-0" aria-label={t('settings.advanced.encryption')} />
             </div>
           </div>
         </div>
@@ -613,7 +613,7 @@ export default function AdvancedSettings() {
                 </span>
               )}
               <span className="font-label-md text-[14px] text-on-surface">{t('settings.advanced.enableDebug')}</span>
-              <Switch checked={debugConsole} onCheckedChange={v => handleToggle('debug_console', v, setDebugConsole)} />
+              <Switch checked={debugConsole} onCheckedChange={v => handleToggle('debug_console', v, setDebugConsole)} aria-label={t('settings.advanced.enableDebug')} />
             </div>
           </div>
         </div>

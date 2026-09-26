@@ -116,21 +116,21 @@ describe('OPCAgentSwarm', () => {
 
   it('agent card is keyboard focusable as button', () => {
     renderSwarm([{ id: 'a1', name: 'Bot', status: 'running' } as AgentInfo])
-    const card = screen.getByRole('button', { name: /Bot — running/ })
+    const card = screen.getByRole('button', { name: /Bot — Running/ })
     expect(card).toHaveAttribute('tabindex', '0')
   })
 
   it('uses research icon for "research" agent', () => {
     renderSwarm([{ id: 'a1', name: 'Research Agent', status: 'running' } as AgentInfo])
     // Agent card is the role=button — the icon inside its header (first .material-symbols-outlined within card)
-    const card = screen.getByRole('button', { name: /Research Agent — running/ })
+    const card = screen.getByRole('button', { name: /Research Agent — Running/ })
     const icon = card.querySelector('.material-symbols-outlined')
     expect(icon?.textContent).toBe('query_stats')
   })
 
   it('uses smart_toy icon for unknown agent', () => {
     renderSwarm([{ id: 'a1', name: 'Mystery Agent', status: 'running' } as AgentInfo])
-    const card = screen.getByRole('button', { name: /Mystery Agent — running/ })
+    const card = screen.getByRole('button', { name: /Mystery Agent — Running/ })
     const icon = card.querySelector('.material-symbols-outlined')
     expect(icon?.textContent).toBe('smart_toy')
   })
