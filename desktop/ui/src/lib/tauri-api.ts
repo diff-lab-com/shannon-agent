@@ -2389,8 +2389,18 @@ export async function transcribeAudioLocalBase64(
 
 // --- Remote targets (SSH hosts / Docker containers) ---
 
-/** List saved remote targets from ~/.shannon/remotes.toml. */
-export async function remoteListTargets(): Promise<RemoteTargetListItem[]> {
+/**
+ * Response of `remote_list_targets`: the saved targets plus the persisted
+ * default (P1-16 — the UI reads it back instead of treating reloads as a
+ * no-op).
+ */
+export interface RemoteTargetsList {
+  targets: RemoteTargetListItem[]
+  defaultTarget: string | null
+}
+
+/** List saved remote targets (and the default) from ~/.shannon/remotes.toml. */
+export async function remoteListTargets(): Promise<RemoteTargetsList> {
   return invoke('remote_list_targets')
 }
 
