@@ -245,6 +245,9 @@ export default function Tasks() {
     await refreshTasks()
   }
 
+  // P1-23: `running` is a real pending flag now — it tracks the in-flight
+  // trigger call and clears when it settles (previously a fixed 1.5s
+  // setTimeout faked success and leaked a timer across unmounts).
   const handleRunNow = async (id: string) => {
     setRunning(id)
     try {
@@ -260,7 +263,9 @@ export default function Tasks() {
       }
       await refreshTasks()
     } catch (e) { setErrorMsg(e instanceof Error ? e.message : t('tasks.error.run')); toastError(t('tasks.toast.failed.run'), e) }
-    setTimeout(() => setRunning(null), 1500)
+    finally {
+      setRunning(null)
+    }
   }
 
   // P0-2: open the session a goal run is driving in the chat page.

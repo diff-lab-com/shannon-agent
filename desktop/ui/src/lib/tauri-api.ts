@@ -639,8 +639,11 @@ export async function exportSession(id: string, format: 'markdown' | 'json'): Pr
 
 // Save a UTF-8 text payload (e.g. an exported Markdown blob) to an absolute
 // path chosen by the user via @tauri-apps/plugin-dialog's save().
-export async function saveTextFile(path: string, content: string): Promise<void> {
-  await invoke('save_text_file', { path, content })
+// B0 P0-3: `expectedMtime` opts into a stale-write conflict check — the
+// command rejects with `{ code: 'mtime_conflict' }` when the file changed
+// since it was read.
+export async function saveTextFile(path: string, content: string, expectedMtime?: string): Promise<void> {
+  await invoke('save_text_file', { path, content, expectedMtime })
 }
 
 // --- 2026-09-25 open pipeline (docs/plans/2026-09-25-desktop-chat-ui-

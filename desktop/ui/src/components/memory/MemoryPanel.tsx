@@ -72,6 +72,9 @@ export default function MemoryPanel({
 
   const [editing, setEditing] = useState<MemoryEntry | null>(null)
   const [creating, setCreating] = useState(false)
+  // B0 item 7 (P2 follow-up): the delete confirm needs a busy state — a
+  // double click used to fire two deletes and toast a bogus "not found".
+  const [deleting, setDeleting] = useState(false)
 
   useEffect(() => {
     const id = window.setTimeout(() => setDebouncedQuery(query), 250)
@@ -136,7 +139,8 @@ export default function MemoryPanel({
 
   const confirmDelete = async () => {
     const id = pendingDeleteId
-    if (!id) return
+    if (!id || deleting) return
+    setDeleting(true)
     try {
       const ok = await deleteMemory(id)
       if (!ok) {
@@ -148,6 +152,7 @@ export default function MemoryPanel({
     } catch (e) {
       toast.error(e instanceof Error ? e.message : t('memory.toast.failedDelete'))
     } finally {
+      setDeleting(false)
       setPendingDeleteId(null)
     }
   }
@@ -386,6 +391,7 @@ export default function MemoryPanel({
         confirmLabel={t('memory.confirmDelete.confirm')}
         cancelLabel={t('memory.confirmDelete.cancel')}
         destructive
+        busy={deleting}
         onConfirm={() => void confirmDelete()}
         onCancel={() => setPendingDeleteId(null)}
       />

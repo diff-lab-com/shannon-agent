@@ -6,9 +6,9 @@
 // write the merged result via `save_text_file`, which already exists. Zero
 // Rust changes.
 //
-// Hunk IDs are content-addressed (oldStart-oldEnd-newStart-newEnd) so React
+// Hunk IDs are position-addressed (oldStart-oldEnd-newStart-newEnd) so React
 // keys stay stable across re-renders as long as the underlying diff doesn't
-// shift.
+// shift, and two identical changes at different positions never share an id.
 
 import { diffArrays, type Change } from 'diff'
 
@@ -181,6 +181,18 @@ function splitToLines(content: string): string[] {
  *
  * Hunks with no entry in `decisions` are treated as `pending` / `reject`.
  *
+ * Segment→hunk pairing is positional: the k-th maximal non-context run of
+ * diff lines *is* `hunks[k]` by construction (both derive from the same
+ * walk in `groupHunks`), so identical repeated changes can never share a
+ * decision (B0 P0-2 — the old content-equality `hunks.find` made a
+ * rejected hunk inherit the first matching hunk's lookup and let rejected
+ * edits reach the file).
+ *
+ * Trailing-newline semantics follow the merge outcome instead of always
+ * appending `\n`: all-accept → `newContent` verbatim, none accepted →
+ * `oldContent` verbatim, mixed → the old file's convention (a partial
+ * merge never removes the on-disk file's final newline).
+ *
  * The result is a complete file string ready for `saveTextFile`.
  */
 export function mergeFile(
@@ -189,13 +201,21 @@ export function mergeFile(
   decisions: Map<string, HunkDecision>,
 ): string {
   const hunks = computeHunks(oldContent, newContent)
+  // No hunks → the only possible difference is a trailing-newline-only
+  // edit, which has no hunk to accept. Keep the on-disk file exactly.
+  if (hunks.length === 0) return oldContent
+  if (hunks.every(h => decisions.get(h.id) === 'accept')) return newContent
+  const anyAccepted = hunks.some(h => decisions.get(h.id) === 'accept')
+  if (!anyAccepted) return oldContent
+
   const oldLines = splitToLines(oldContent)
   const newLines = splitToLines(newContent)
   const changes = diffArrays(oldLines, newLines) as ArrayChange[]
   const lines = expandChanges(changes)
   // Walk `lines` linearly. When we cross from context → non-context, we've
-  // entered a hunk; look up the decision and emit the chosen side.
+  // entered a hunk; consume decisions positionally, in order.
   const out: string[] = []
+  let hunkIdx = 0
   let i = 0
   while (i < lines.length) {
     const line = lines[i]
@@ -209,15 +229,8 @@ export function mergeFile(
       i += 1
     }
     const segment = lines.slice(hunkStartIdx, i)
-    const hunk = hunks.find(h =>
-      h.lines.length === segment.length &&
-      h.lines.every((hl, idx) =>
-        hl.type === segment[idx].type &&
-        hl.text === segment[idx].text
-      )
-    )
-    const decision = hunk ? (decisions.get(hunk.id) ?? 'pending') : 'pending'
-    const emitNew = decision === 'accept'
+    const hunk = hunks[hunkIdx++]
+    const emitNew = decisions.get(hunk.id) === 'accept'
     for (const l of segment) {
       if (l.type === 'context') {
         out.push(l.text)
@@ -230,5 +243,5 @@ export function mergeFile(
       // removed && accept → drop
     }
   }
-  return out.length > 0 ? out.join('\n') + '\n' : ''
+  return out.length > 0 ? out.join('\n') + (oldContent.endsWith('\n') ? '\n' : '') : ''
 }

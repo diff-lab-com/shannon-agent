@@ -16,6 +16,16 @@ import { ConfirmDialog } from "@/components/ui/confirm-dialog";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
 
+// B0 P0-6: catalog names come from upstream HTTP — enforce the same shape
+// the backend sanitizes to before an install can be attempted.
+const SAFE_NAME_RE = /^[a-z0-9][a-z0-9._-]*$/;
+
+/** P1-22: a catalog description with newlines could inject extra YAML
+ *  frontmatter fields — collapse it to a single line before interpolating. */
+function singleLine(text: string): string {
+  return text.replace(/\s+/g, ' ').trim();
+}
+
 /**
  * P4 Agents tab — federated catalog + install/remove.
  *
@@ -74,14 +84,19 @@ export default function Agents() {
   }, []);
 
   async function handleInstall(entry: AgentCatalogEntry) {
+    if (!SAFE_NAME_RE.test(entry.name)) {
+      setFeedback({ id: entry.id, msg: t('extensions.agents.invalidName', { name: entry.name }), ok: false });
+      return;
+    }
     setBusyId(entry.id);
     setFeedback(null);
     try {
       if (entry.source.type === 'native') {
-        const model = (entry.metadata.model as string | undefined) ?? 'claude-sonnet-4-6';
+        const model = singleLine((entry.metadata.model as string | undefined) ?? 'claude-sonnet-4-6');
         const tools = Array.isArray(entry.metadata.tools) ? entry.metadata.tools : [];
         const toolsYaml = tools.length > 0 ? `\ntools: [${tools.join(', ')}]` : '';
-        const body = `---\nname: ${entry.name}\ndescription: ${entry.description}\nmodel: ${model}${toolsYaml}\n---\n# ${entry.name}\n\n${entry.description}\n`;
+        const description = singleLine(entry.description);
+        const body = `---\nname: ${entry.name}\ndescription: ${description}\nmodel: ${model}${toolsYaml}\n---\n# ${entry.name}\n\n${entry.description}\n`;
         await installNativeAgent(entry.name, body);
       } else if (entry.source.type === 'git_hub_repo') {
         const repo = entry.source.repo;

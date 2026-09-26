@@ -110,4 +110,70 @@ describe('useDiffKeyboard', () => {
     expect(onToggle).not.toHaveBeenCalled()
     document.body.removeChild(input)
   })
+
+  // ---- B0 P0-4: focus gating + button passthrough ----
+
+  /** Gated hook wired to a real container div appended to the document. */
+  function renderGated(onToggle: ReturnType<typeof vi.fn>, onApply?: ReturnType<typeof vi.fn>) {
+    const container = document.createElement('div')
+    document.body.appendChild(container)
+    const containerRef = { current: container } as React.RefObject<HTMLElement | null>
+    renderHook(() =>
+      useDiffKeyboard({
+        enabled: true,
+        hunks: computeHunks(sampleDiff.old, sampleDiff.new),
+        containerRef,
+        onToggleDecision: onToggle,
+        onApply,
+      }),
+    )
+    const inner = document.createElement('p')
+    container.appendChild(inner)
+    const fireInside = (key: string, target: EventTarget = inner) =>
+      target.dispatchEvent(new KeyboardEvent('keydown', { key, bubbles: true, cancelable: true }))
+    return { container, fireInside }
+  }
+
+  it('ignores keys when focus is outside the gated container', () => {
+    const onToggle = vi.fn()
+    const { container, fireInside } = renderGated(onToggle)
+    fireInside('a', document.body)
+    expect(onToggle).not.toHaveBeenCalled()
+    container.remove()
+  })
+
+  it('responds to keys dispatched inside the gated container', () => {
+    const onToggle = vi.fn()
+    const { container, fireInside } = renderGated(onToggle)
+    fireInside('a')
+    expect(onToggle).toHaveBeenCalledTimes(1)
+    container.remove()
+  })
+
+  it('lets a focused BUTTON keep Enter instead of triggering apply', () => {
+    const onApply = vi.fn()
+    const { container } = renderGated(vi.fn(), onApply)
+    const button = document.createElement('button')
+    container.appendChild(button)
+    const event = new KeyboardEvent('keydown', { key: 'Enter', bubbles: true, cancelable: true })
+    button.dispatchEvent(event)
+    expect(onApply).not.toHaveBeenCalled()
+    expect(event.defaultPrevented).toBe(false)
+    container.remove()
+  })
+
+  it('ignores all shortcuts while applying', () => {
+    const onToggle = vi.fn()
+    const hunks = computeHunks(sampleDiff.old, sampleDiff.new)
+    const { rerender } = renderHook(
+      ({ applying }: { applying: boolean }) =>
+        useDiffKeyboard({ enabled: true, hunks, applying, onToggleDecision: onToggle }),
+      { initialProps: { applying: false } },
+    )
+    act(() => fireKey('a'))
+    expect(onToggle).toHaveBeenCalledTimes(1)
+    rerender({ applying: true })
+    act(() => fireKey('a'))
+    expect(onToggle).toHaveBeenCalledTimes(1)
+  })
 })
