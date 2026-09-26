@@ -641,18 +641,26 @@ pub fn summarize_archive(path: &Path) -> Result<PluginBundleSummary, String> {
 }
 
 /// Does this string look like a git source (rather than a local path)?
-/// Guards against leading-dash option injection into `git clone`.
+///
+/// Deliberately a **scheme allowlist**: `https://`, `http://`, `git://`,
+/// `ssh://`, and the scp-like `git@host:path` form. Git's `ext::`
+/// "transport" executes everything after `ext::` through the shell, and
+/// the preview runs BEFORE any install consent — so anything without an
+/// explicit remote scheme is refused, including bare `<path>.git` strings
+/// and every `ext::…` form. (The explicit `ext::` check below is
+/// redundant with the allowlist but keeps the refusal greppable.) The
+/// leading-dash option-injection guard is likewise subsumed: no allowed
+/// prefix starts with `-`.
 pub fn looks_like_git_source(source: &str) -> bool {
-    if source.trim_start().starts_with('-') {
+    let lowered = source.trim_start().to_ascii_lowercase();
+    if lowered.starts_with("ext::") {
         return false;
     }
-    let lowered = source.to_ascii_lowercase();
     lowered.starts_with("https://")
         || lowered.starts_with("http://")
         || lowered.starts_with("git://")
         || lowered.starts_with("ssh://")
         || lowered.starts_with("git@")
-        || lowered.ends_with(".git")
 }
 
 /// Summarize a git source by shallow-cloning (`--depth 1`) into a tempdir
@@ -1143,8 +1151,16 @@ mod tests {
         assert!(looks_like_git_source("https://github.com/u/r"));
         assert!(looks_like_git_source("git@github.com:u/r.git"));
         assert!(looks_like_git_source("ssh://host/x/y"));
-        assert!(looks_like_git_source("/some/path/repo.git"));
+        assert!(looks_like_git_source("http://host/x/y.git"));
+        assert!(looks_like_git_source("git://host/x/y.git"));
         assert!(!looks_like_git_source("--upload-pack=evil"));
         assert!(!looks_like_git_source("/plain/local/dir"));
+        // review hardening: git's ext:: transport executes its argument via
+        // the shell — the pre-consent preview must never admit it.
+        assert!(!looks_like_git_source("ext::sh -c calc#git=calc /tmp/x"));
+        assert!(!looks_like_git_source("ext::sh -c calc#git=calc /tmp/x.git"));
+        // scheme allowlist: a bare `.git` path is no longer admitted
+        assert!(!looks_like_git_source("/some/path/repo.git"));
+        assert!(!looks_like_git_source("github.com:u/r.git"));
     }
 }
