@@ -72,6 +72,11 @@ const testMessages: Record<string, string> = {
   'inbox.empty.title': 'All clear.',
   'inbox.empty.description': 'The automation inbox collects results from routines and triggers.',
   'inbox.empty.cta': 'Refresh',
+  'inbox.empty.project.title': 'Nothing here for this project',
+  'inbox.empty.project.description': 'Every inbox item in this view belongs to another project (or has no session). Clear the filter to see the full inbox.',
+  'inbox.empty.project.cta': 'Clear project filter',
+  'project.filter.chip.aria': 'Filtered by project: {name}',
+  'project.filter.remove.aria': 'Remove project filter',
 }
 
 // Hook spies — useInboxItems returns
@@ -178,6 +183,30 @@ describe('Triage page (inbox)', () => {
     renderPage()
     expect(screen.getByText('All clear.')).toBeInTheDocument()
     expect(screen.getByText(/automation inbox collects results/i)).toBeInTheDocument()
+  })
+
+  // A1 polish: emptiness is judged on the VISIBLE list. A project deep-link
+  // that filters every item out must land on the scoped empty state — not a
+  // select-all row reading 「shown 0 of 1」 — with the 清除筛选 escape hatch.
+  it('shows the scoped empty state (no select-all row) when the project filter excludes every item', () => {
+    setItems([makeItem({ id: 1, sessionId: 'sess-elsewhere' })])
+    renderPage('/triage?project=%2Fw%2Falpha')
+    expect(screen.getByText('Nothing here for this project')).toBeInTheDocument()
+    expect(screen.queryByLabelText('Select all visible items')).not.toBeInTheDocument()
+    expect(screen.queryByText('0 of 1')).not.toBeInTheDocument()
+
+    // 清除筛选 strips ?project= — the unscoped inbox and its select-all row return.
+    fireEvent.click(screen.getByRole('button', { name: 'Clear project filter' }))
+    expect(screen.getByText('Item 1')).toBeInTheDocument()
+    expect(screen.getByLabelText('Select all visible items')).toBeInTheDocument()
+    expect(screen.queryByText('Nothing here for this project')).not.toBeInTheDocument()
+  })
+
+  it('keeps the plain empty state when no project filter is active and the inbox is empty', () => {
+    setItems([])
+    renderPage('/triage?project=%2Fw%2Falpha')
+    // Zero items everywhere WITH the param → still the scoped variant.
+    expect(screen.getByText('Nothing here for this project')).toBeInTheDocument()
   })
 
   it('renders one card per inbox item with title and summary', () => {
