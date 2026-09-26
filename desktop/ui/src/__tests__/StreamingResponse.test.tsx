@@ -73,7 +73,11 @@ describe('StreamingResponse', () => {
     expect(screen.getAllByTestId('tool-call')).toHaveLength(2)
   })
 
-  it('exposes aria-live=polite for screen readers', () => {
+  // B2 P2-17 — the streaming log used to announce every token via a whole
+  // region aria-live=polite. Announcements moved to MessageArea's
+  // StreamStatusRegion (state transitions only), so this component must
+  // carry NO live region of its own.
+  it('carries no aria-live region (status announcements live in MessageArea)', () => {
     const { container } = render(
       <StreamingResponse
         streamingText=""
@@ -82,10 +86,11 @@ describe('StreamingResponse', () => {
         onViewDiff={vi.fn()}
       />,
     )
-    expect(container.querySelector('[aria-live="polite"]')).not.toBeNull()
+    expect(container.querySelector('[aria-live]')).toBeNull()
+    expect(container.querySelector('[role="status"]')).toBeNull()
   })
 
-  // P2-5d — typing cursor + jump-to-bottom + role=log
+  // P2-5d — typing cursor + role=log
   it('renders a typing cursor when streamingText is non-empty', () => {
     const { container } = render(
       <StreamingResponse
@@ -100,7 +105,9 @@ describe('StreamingResponse', () => {
     expect(cursor?.getAttribute('aria-hidden')).toBe('true')
   })
 
-  it('renders the role=log list for message history conformance', () => {
+  // B2 P2-17 — role="log" implies aria-live=polite, so the streaming log
+  // container dropped it along with the explicit live region.
+  it('renders the streaming log without an implicit live role', () => {
     const { container } = render(
       <StreamingResponse
         streamingText="x"
@@ -109,7 +116,7 @@ describe('StreamingResponse', () => {
         onViewDiff={vi.fn()}
       />,
     )
-    expect(container.querySelector('[role="log"]')).not.toBeNull()
+    expect(container.querySelector('[role="log"]')).toBeNull()
   })
 
   // B0 P1-1 — the dead inner scroll guard (and its conditional

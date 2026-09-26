@@ -159,3 +159,43 @@ describe('plan checkbox writeback (D5)', () => {
     expect(content).toContain('Status: pending')
   })
 })
+
+// B2 §4-14: artifact documents render math through the same KaTeX pipeline
+// as chat — sanitize first, katex last, so KaTeX's markup is never stripped.
+describe('DocumentRenderer math (KaTeX)', () => {
+  it('renders inline $…$ math with KaTeX markup', () => {
+    const md = '能量公式 $E=mc^2$ 很有名。'
+    const { container } = render(
+      <I18nProvider>
+        <DocumentRenderer source={md} />
+      </I18nProvider>,
+    )
+    expect(container.querySelector('.katex')).not.toBeNull()
+    expect(container.textContent).not.toContain('$E')
+  })
+
+  it('renders $$…$$ display math and keeps it out of the code-block chrome', () => {
+    const md = '$$\nx = \\frac{1}{2}\n$$'
+    const { container } = render(
+      <I18nProvider>
+        <DocumentRenderer source={md} />
+      </I18nProvider>,
+    )
+    const display = container.querySelector('.katex-display')
+    expect(display).not.toBeNull()
+    // No shared CodeBlock header/copy button around display math.
+    expect(display?.closest('div.group\\/code')).toBeNull()
+    expect(container.querySelector('button[aria-label]')).toBeNull()
+  })
+
+  it('does not mathify $ inside fenced code blocks', () => {
+    const md = '```js\nconst s = "$x$ and $y$"\n```'
+    const { container } = render(
+      <I18nProvider>
+        <DocumentRenderer source={md} />
+      </I18nProvider>,
+    )
+    expect(container.querySelector('.katex')).toBeNull()
+    expect(container.querySelector('pre')?.textContent).toContain('$x$ and $y$')
+  })
+})

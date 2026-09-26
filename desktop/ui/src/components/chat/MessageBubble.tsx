@@ -1,4 +1,4 @@
-import { useState, memo, useEffect } from 'react'
+import { useState, memo, useEffect, useMemo } from 'react'
 import { useIntl } from 'react-intl'
 import { useNavigate } from 'react-router-dom'
 import { toast } from 'sonner'
@@ -13,7 +13,6 @@ import { useSessions } from '@/context/SessionContext'
 import { useCatalog } from '@/context/CatalogContext'
 import * as api from '@/lib/tauri-api'
 import { Markdown } from '@/components/chat/Markdown'
-import { FootnoteMarkdown } from '@/components/chat/FootnoteMarkdown'
 import { summarizeDiffLineStats, type DiffLineStats } from '@/components/chat/diffStats'
 import {
   Message,
@@ -243,7 +242,12 @@ export const MessageBubble = memo(function MessageBubble({ message, messageIndex
 
   const hasAttachments = message.file_attachments && message.file_attachments.length > 0
   const hasReport = !!message.research_report
-  const detectedArtifacts = !isUser ? detectArtifacts(message.content) : []
+  // P2-14 (§4-15): detectArtifacts runs a full regex sweep over the body —
+  // memoize on content so streaming re-renders of unchanged messages skip it.
+  const detectedArtifacts = useMemo(
+    () => (!isUser ? detectArtifacts(message.content) : []),
+    [isUser, message.content],
+  )
 
   if (isUser) {
     return (
@@ -266,7 +270,7 @@ export const MessageBubble = memo(function MessageBubble({ message, messageIndex
               <LinkifiedText text={message.content} />
             </p>
           </div>
-          <ActionToolbar className="gap-sm mt-xs justify-end opacity-0 group-hover:opacity-100 focus-within:opacity-100 transition-opacity">
+          <ActionToolbar className="gap-sm mt-xs justify-end opacity-0 group-hover:opacity-100 group-focus-within:opacity-100 focus-within:opacity-100 transition-opacity">
             <Button
               aria-label={t('chat.message.copy.aria')}
               onClick={handleCopy}
@@ -337,7 +341,7 @@ export const MessageBubble = memo(function MessageBubble({ message, messageIndex
         <MessageHeader role={isTool ? 'tool' : 'assistant'} timestamp={message.timestamp} />
         <div className="bg-surface-container-lowest px-lg py-md rounded-2xl rounded-tl-none border border-outline-variant/20 shadow-sm min-w-0 overflow-x-auto">
           <ResponseStream className="font-body-md text-on-surface prose prose-sm max-w-none prose-p:my-1 prose-pre:bg-surface-container prose-pre:p-md prose-pre:rounded-lg prose-code:text-primary prose-code:before:content-[''] prose-code:after:content-['']">
-            <FootnoteMarkdown>{message.content}</FootnoteMarkdown>
+            <Markdown>{message.content}</Markdown>
           </ResponseStream>
           {detectedArtifacts.length > 0 && (
             <div className="mt-md">
@@ -419,7 +423,7 @@ export const MessageBubble = memo(function MessageBubble({ message, messageIndex
             </div>
           )}
         </div>
-        <ActionToolbar className="opacity-0 group-hover:opacity-100 focus-within:opacity-100 transition-opacity">
+        <ActionToolbar className="opacity-0 group-hover:opacity-100 group-focus-within:opacity-100 focus-within:opacity-100 transition-opacity">
           <Button aria-label={t('chat.message.copy.aria')} onClick={handleCopy} className="flex items-center gap-xs px-sm py-xs rounded-lg hover:bg-surface-container text-on-surface-variant transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/30">
             <span className="material-symbols-outlined text-[18px]" aria-hidden="true">content_copy</span>
           </Button>

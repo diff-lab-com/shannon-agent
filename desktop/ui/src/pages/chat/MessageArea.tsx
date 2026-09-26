@@ -1,7 +1,7 @@
 import { useT } from '@/i18n'
 import { Banner } from '@/components/ui/banner'
 import type { RefObject } from 'react'
-import { useEffect, useMemo, useState, useCallback } from 'react'
+import { useEffect, useMemo, useRef, useState, useCallback } from 'react'
 import type { Virtualizer } from '@tanstack/react-virtual'
 import { Button } from '@/components/ui/button'
 import WelcomeState from '@/components/WelcomeState'
@@ -16,6 +16,60 @@ import * as api from '@/lib/tauri-api'
 // of measuring/positioning outweighs the win from fewer DOM nodes — and
 // jsdom can't provide real dimensions, so tests would render zero items.
 const VIRTUALIZE_THRESHOLD = 30
+
+/** djb2 hex — short stable salt for React keys of messages that carry no id. */
+function hashContent(s: string): string {
+  let h = 5381
+  for (let i = 0; i < s.length; i++) h = ((h << 5) + h + s.charCodeAt(i)) | 0
+  return (h >>> 0).toString(36)
+}
+
+/**
+ * P2-13 (§4-15): virtualizer keys must be stable identity, not index-bound.
+ * ChatMessage carries no id, so the most stable available fingerprint is
+ * role + timestamp + content hash, deduplicated in list order for the rare
+ * identical twins.
+ */
+function useStableMessageKeys(messages: { role: string; content: string; timestamp: number }[]): string[] {
+  return useMemo(() => {
+    const seen = new Map<string, number>()
+    return messages.map((m) => {
+      const base = `${m.role}-${m.timestamp}-${hashContent(m.content)}`
+      const n = seen.get(base) ?? 0
+      seen.set(base, n + 1)
+      return n === 0 ? base : `${base}#${n}`
+    })
+  }, [messages])
+}
+
+/**
+ * P2-17 (§4-17): the single aria-live region for run state transitions.
+ * The streaming log itself used to be a polite live region (screen-reader
+ * token spam) — now only the transitions announce: "generating" when a run
+ * starts, "reply complete" when it ends. Exported for direct testability.
+ */
+export function StreamStatusRegion({ active }: { active: boolean }) {
+  const t = useT()
+  const [message, setMessage] = useState('')
+  const wasActiveRef = useRef(false)
+  useEffect(() => {
+    if (active) {
+      wasActiveRef.current = true
+      setMessage(t('chat.stream.status.active'))
+    } else if (wasActiveRef.current) {
+      wasActiveRef.current = false
+      setMessage(t('chat.stream.status.done'))
+    }
+    // Transitions strictly alternate, so consecutive writes always change
+    // the text — a polite live region announces each one; no clear/rewrite
+    // dance (and no timer) needed.
+  }, [active, t])
+  return (
+    <div role="status" aria-live="polite" className="sr-only" data-testid="stream-status-region">
+      {message}
+    </div>
+  )
+}
 
 /**
  * P1-⑤ telemetry: tool_use_id → duration (ms) from the session's L0 trace
@@ -98,6 +152,10 @@ export default function MessageArea({
   const { error } = useCatalog()
   const t = useT()
   const shouldVirtualize = messages.length > VIRTUALIZE_THRESHOLD
+  const messageKeys = useStableMessageKeys(messages)
+  // P2-17: one run-level status region for the whole flow — the list and
+  // the streaming log no longer announce every content change themselves.
+  const streamActive = isQuerying || !!streamingText || !!thinkingText || activeToolCalls.length > 0
 
   // X-2: surface a "scroll to latest" FAB whenever the user is scrolled
   // away from the bottom. Cheap: one passive scroll listener, no re-render
@@ -121,20 +179,19 @@ export default function MessageArea({
 
   return (
     <div ref={scrollParentRef} className="flex-1 overflow-y-auto px-xl pt-lg pb-md">
+      <StreamStatusRegion active={streamActive} />
       {messages.length === 0 && !streamingText && <ComposerWelcome />}
 
       {messages.length > 0 && shouldVirtualize && (
         <div
           style={{ height: `${virtualizer.getTotalSize()}px`, position: 'relative' }}
-          role="log"
-          aria-live="polite"
           aria-label={t('chat.history.aria')}
         >
           {virtualizer.getVirtualItems().map(vItem => {
             const msg = messages[vItem.index]
             return (
               <div
-                key={`${msg.timestamp}-${vItem.index}`}
+                key={messageKeys[vItem.index]}
                 data-index={vItem.index}
                 ref={virtualizer.measureElement}
                 className="pb-lg"
@@ -148,9 +205,9 @@ export default function MessageArea({
       )}
 
       {messages.length > 0 && !shouldVirtualize && (
-        <div role="log" aria-live="polite" aria-label={t('chat.history.aria')}>
+        <div aria-label={t('chat.history.aria')}>
           {messages.map((msg, i) => (
-            <div key={`${msg.timestamp}-${i}`} className="pb-lg">
+            <div key={messageKeys[i]} className="pb-lg">
               <MessageBubble message={msg} messageIndex={i} onViewDiff={setDiffPath} onViewDiffMulti={setDiffPaths} rewindTurnIndex={rewind(i)} onRewind={rewindSession} durationLookup={durationLookup} />
             </div>
           ))}

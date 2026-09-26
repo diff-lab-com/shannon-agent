@@ -1,4 +1,4 @@
-import { useState, useRef, useEffect, useLayoutEffect, useCallback } from 'react'
+import { useState, useRef, useEffect, useLayoutEffect, useId, useCallback } from 'react'
 import { useIntl } from 'react-intl'
 import { open } from '@tauri-apps/plugin-dialog'
 import { Button } from '@/components/ui/button'
@@ -82,6 +82,11 @@ export default function ChatInput({
   const textareaRef = useRef<HTMLTextAreaElement>(null)
   const [isDragging, setIsDragging] = useState(false)
 
+  // P2-9: combobox wiring — the textarea acts as the combobox and points at
+  // the slash listbox via aria-controls/aria-activedescendant.
+  const slashListboxId = useId()
+  const slashOptionId = (name: string) => `${slashListboxId}-opt-${name}`
+
   // Slash-command autocomplete: open while the input is a single `/token`.
   // Escape hides it until the query changes again; a space or newline closes
   // it naturally (the query regex stops matching), turning the text back
@@ -90,6 +95,7 @@ export default function ChatInput({
   const [slashActive, setSlashActive] = useState(0)
   const slashQuery = isSlashQuery(value) && !isQuerying ? value.trim() : null
   const slashMatches = slashQuery && !slashDismissed ? filterSlashCommands(slashQuery) : []
+  const slashOpen = slashMatches.length > 0
 
   useEffect(() => {
     setSlashActive(0)
@@ -388,6 +394,7 @@ export default function ChatInput({
     >
       {slashMatches.length > 0 && (
         <div
+          id={slashListboxId}
           role="listbox"
           aria-label={t('slash.menu.aria')}
           className="absolute left-0 right-0 bottom-full mb-sm z-modal rounded-2xl border border-outline-variant/30 bg-surface-container-low shadow-lg overflow-hidden"
@@ -398,6 +405,7 @@ export default function ChatInput({
                 <button
                   type="button"
                   role="option"
+                  id={slashOptionId(cmd.name)}
                   aria-selected={i === slashActive}
                   onMouseDown={e => { e.preventDefault(); executeSlash(cmd) }}
                   onMouseEnter={() => setSlashActive(i)}
@@ -483,6 +491,14 @@ export default function ChatInput({
                   : t('chat.input.placeholder.empty')
             }
             aria-label={t('chat.input.ariaLabel')}
+            // P2-9: combobox a11y for the slash autocomplete — the listbox
+            // exists only while the menu is open; selection is reflected via
+            // aria-activedescendant pointing at the highlighted option.
+            role="combobox"
+            aria-expanded={slashOpen}
+            aria-controls={slashOpen ? slashListboxId : undefined}
+            aria-activedescendant={slashOpen ? slashOptionId(slashMatches[slashActive]?.name ?? '') : undefined}
+            aria-autocomplete="list"
             value={value}
             onChange={e => onChange(e.target.value)}
             onKeyDown={handleKeyDown}
@@ -652,13 +668,18 @@ export default function ChatInput({
             />
 
             {showCharCount && (
-              <span
-                role="status"
-                aria-live="polite"
-                className={cn('font-mono text-label-xs tabular-nums px-xs', isOverSoftWarn ? 'text-error' : 'text-on-surface-variant/70')}
-              >
-                {charCount.toLocaleString()}
-              </span>
+              <>
+                {/* P2-9: the counter used to carry aria-live="polite", which
+                    announced every keystroke past 2000 chars. It is a purely
+                    visual readout now; a static sr-only note about limits
+                    replaces the per-key announcements. */}
+                <span
+                  className={cn('font-mono text-label-xs tabular-nums px-xs', isOverSoftWarn ? 'text-error' : 'text-on-surface-variant/70')}
+                >
+                  {charCount.toLocaleString()}
+                </span>
+                <span className="sr-only">{t('chat.input.charCount.hint')}</span>
+              </>
             )}
 
             {isQuerying ? (

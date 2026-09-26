@@ -2,8 +2,14 @@ import { memo, useMemo, useRef, useState } from 'react'
 import { useIntl } from 'react-intl'
 import ReactMarkdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
+import remarkMath from 'remark-math'
 import rehypeSanitize from 'rehype-sanitize'
 import rehypeHighlight from 'rehype-highlight'
+// B2 (§4-14): math in artifact documents renders with the same KaTeX
+// pipeline as chat. Order matters: sanitize first, highlight, then katex
+// LAST so KaTeX's generated markup is never stripped by the sanitizer.
+import rehypeKatex from 'rehype-katex'
+import 'katex/dist/katex.min.css'
 import { save } from '@tauri-apps/plugin-dialog'
 import { CodeBlock as SharedCodeBlock } from '@/components/code/CodeBlock'
 import { cn } from '@/lib/utils'
@@ -137,6 +143,12 @@ export const DocumentRenderer = memo(function DocumentRenderer({ source }: Docum
       // same reader experience as conversation and plan code blocks.
       pre: ({ children }: { children?: React.ReactNode }) => {
         const codeProps = getCodeChildProps(children)
+        // B2 §4-14: `$$…$$` flow math keeps its <pre> wrapper after
+        // rehype-katex swaps the <code> for KaTeX markup — render it bare
+        // instead of dressing it in code-block chrome.
+        if (codeProps?.className && /\bkatex\b/.test(codeProps.className)) {
+          return <div className="my-sm overflow-x-auto">{children}</div>
+        }
         const code = extractText(codeProps?.children)
         const language = extractLanguage(codeProps?.className)
         return (
@@ -173,8 +185,8 @@ export const DocumentRenderer = memo(function DocumentRenderer({ source }: Docum
   return (
     <article className={cn('p-md max-w-none')}>
       <ReactMarkdown
-        remarkPlugins={[remarkGfm]}
-        rehypePlugins={[rehypeSanitize, rehypeHighlight]}
+        remarkPlugins={[remarkGfm, remarkMath]}
+        rehypePlugins={[rehypeSanitize, rehypeHighlight, rehypeKatex]}
         components={components}
       >
         {source}

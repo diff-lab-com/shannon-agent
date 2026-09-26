@@ -22,6 +22,48 @@ describe('parseChartSpec', () => {
   })
 })
 
+// B2 (§4-17 chart spec numeric validation): non-finite values must never
+// reach the SVG geometry (NaN silently produced broken charts before).
+describe('parseChartSpec — numeric validation', () => {
+  it('coerces numeric strings into numbers', () => {
+    const spec = parseChartSpec('{"type":"bar","data":[{"label":"a","value":"3.5"}]}')
+    expect(spec?.data).toEqual([{ label: 'a', value: 3.5 }])
+  })
+
+  it('drops entries with non-finite values (NaN, Infinity, garbage)', () => {
+    const spec = parseChartSpec(
+      '{"type":"line","data":[{"label":"ok","value":1},{"label":"nan","value":"NaN"},{"label":"inf","value":1e999},{"label":"junk","value":"abc"},{"label":"ok2","value":2}]}',
+    )
+    expect(spec?.data).toEqual([
+      { label: 'ok', value: 1 },
+      { label: 'ok2', value: 2 },
+    ])
+  })
+
+  it('returns null when every entry is invalid (all-invalid series)', () => {
+    expect(parseChartSpec('{"type":"bar","data":[{"label":"a","value":"NaN"},{"label":"b"}]}')).toBeNull()
+  })
+
+  it('returns null for entries that are not objects', () => {
+    expect(parseChartSpec('{"type":"bar","data":[1,"x",null]}')).toBeNull()
+  })
+
+  it('renders a partial-valid series as geometry without NaN points', () => {
+    const spec = parseChartSpec('{"type":"bar","data":[{"label":"a","value":1},{"label":"bad","value":"NaN"}]}')
+    expect(spec).not.toBeNull()
+    render(<Chart spec={spec!} />)
+    const circles = document.querySelectorAll('circle')
+    circles.forEach((c) => {
+      expect(Number(c.getAttribute('cy'))).not.toBeNaN()
+    })
+    const rects = document.querySelectorAll('rect')
+    rects.forEach((r) => {
+      expect(Number(r.getAttribute('y'))).not.toBeNaN()
+      expect(Number(r.getAttribute('height'))).not.toBeNaN()
+    })
+  })
+})
+
 describe('Chart component', () => {
   it('renders a chart title and SVG for bar type', () => {
     render(

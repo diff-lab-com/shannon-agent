@@ -223,18 +223,24 @@ describe('ChatInput', () => {
     expect(container.querySelector('[role="status"][aria-live="polite"]')).toBeNull()
   })
 
-  it('shows a character counter once the input grows past the threshold', () => {
+  // B2 P2-9: the counter used to be role="status" aria-live="polite" — it
+  // announced every keystroke past 2000 chars. It is a visual readout now;
+  // a single static sr-only note about limits replaces the live region.
+  it('shows a character counter once the input grows past the threshold (no live region)', () => {
     const big = 'a'.repeat(2100)
     const { container } = renderChatInput({ value: big })
-    const counter = container.querySelector('[role="status"][aria-live="polite"]')
+    const counter = container.querySelector('span.font-mono.tabular-nums')
     expect(counter).not.toBeNull()
     expect(counter?.textContent).toMatch(/2,100|2100/)
+    expect(counter).not.toHaveAttribute('aria-live')
+    expect(counter).not.toHaveAttribute('role', 'status')
+    expect(screen.getByText('Very long messages may exceed the model context limit.')).toBeInTheDocument()
   })
 
   it('promotes the counter to error color past the soft-warn threshold', () => {
     const huge = 'a'.repeat(9000)
     const { container } = renderChatInput({ value: huge })
-    const counter = container.querySelector('[role="status"]')
+    const counter = container.querySelector('span.font-mono.tabular-nums')
     expect(counter?.className).toMatch(/text-error/)
   })
 
@@ -442,6 +448,47 @@ describe('ChatInput — slash-command menu', () => {
     expect(screen.queryByRole('listbox', { name: 'Slash commands' })).toBeNull()
     fireEvent.keyDown(container.querySelector('textarea')!, { key: 'Enter' })
     expect(onSend).toHaveBeenCalledTimes(1)
+  })
+})
+
+// B2 P2-9: the slash autocomplete previously had zero combobox a11y — the
+// textarea now exposes aria-expanded/aria-controls/aria-activedescendant and
+// the options carry ids so selection changes are announced.
+describe('ChatInput — slash combobox a11y', () => {
+  it('wires the textarea as a combobox pointing at the slash listbox', () => {
+    const { container } = renderChatInput({ value: '/' })
+    const textarea = container.querySelector('textarea')!
+    expect(textarea).toHaveAttribute('role', 'combobox')
+    expect(textarea).toHaveAttribute('aria-expanded', 'true')
+    expect(textarea).toHaveAttribute('aria-autocomplete', 'list')
+    const listbox = screen.getByRole('listbox', { name: 'Slash commands' })
+    expect(textarea.getAttribute('aria-controls')).toBe(listbox.id)
+    const optionIds = Array.from(listbox.querySelectorAll('[role="option"]')).map(o => o.id)
+    optionIds.forEach(id => expect(id).toBeTruthy())
+    // The active descendant points at the highlighted option.
+    expect(textarea.getAttribute('aria-activedescendant')).toBe(optionIds[0])
+    fireEvent.keyDown(textarea, { key: 'ArrowDown' })
+    expect(textarea.getAttribute('aria-activedescendant')).toBe(optionIds[1])
+  })
+
+  it('reflects the closed state after Escape', () => {
+    const { container } = renderChatInput({ value: '/' })
+    const textarea = container.querySelector('textarea')!
+    fireEvent.keyDown(textarea, { key: 'Escape' })
+    expect(screen.queryByRole('listbox', { name: 'Slash commands' })).toBeNull()
+    expect(textarea).toHaveAttribute('aria-expanded', 'false')
+    expect(textarea.getAttribute('aria-controls')).toBeNull()
+    expect(textarea.getAttribute('aria-activedescendant')).toBeNull()
+  })
+
+  it('drops the per-keystroke live announcements from the char counter', () => {
+    const { container } = renderChatInput({ value: 'x'.repeat(2100) })
+    const counter = container.querySelector('span.font-mono.tabular-nums')!
+    expect(counter).toBeInTheDocument()
+    expect(counter).not.toHaveAttribute('aria-live')
+    expect(counter).not.toHaveAttribute('role', 'status')
+    // A single static sr-only note about limits replaces the per-key spam.
+    expect(screen.getByText('Very long messages may exceed the model context limit.')).toBeInTheDocument()
   })
 })
 

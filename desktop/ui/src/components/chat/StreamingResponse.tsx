@@ -21,6 +21,12 @@ interface StreamingResponseProps {
  * tracking itself. Only the visuals remain (bubble, tool cards, typing
  * cursor); "back to live output" is MessageArea's scroll-to-latest FAB. */
 
+/* B2 P2-17: the whole streaming log used to sit in aria-live="polite"
+ * (role="log"), re-announcing every token. Announcements are now state
+ * transitions only, handled by MessageArea's StreamStatusRegion ("generating
+ * …" on start, "reply complete" on end) — this component carries no live
+ * region of its own. */
+
 export default function StreamingResponse({
   streamingText,
   thinkingText,
@@ -34,12 +40,7 @@ export default function StreamingResponse({
   return (
     <div className="relative" role="presentation">
       {headerSlot}
-      <div
-        className="flex gap-md max-w-[90%] pt-lg"
-        aria-live="polite"
-        aria-label={t('chat.streaming.aria')}
-        role="log"
-      >
+      <div className="flex gap-md max-w-[90%] pt-lg">
         <div className="h-10 w-10 rounded-full bg-primary-container flex items-center justify-center shrink-0 shadow-md">
           <span className="material-symbols-outlined text-on-primary-container">smart_toy</span>
         </div>
