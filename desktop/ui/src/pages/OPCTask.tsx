@@ -1,5 +1,6 @@
 import { useChat } from '@/context/ChatContext'
 import { useCatalog } from '@/context/CatalogContext'
+import { useSessions } from '@/context/SessionContext'
 import { useParams, Link } from 'react-router-dom'
 import { useState } from 'react'
 import { useIntl, type PrimitiveType } from 'react-intl'
@@ -8,6 +9,7 @@ import AgentMessagesPanel from '@/components/tasks/AgentMessagesPanel'
 import AgentLoadPanel from '@/components/tasks/AgentLoadPanel'
 import { Button } from '@/components/ui/button'
 import { cn } from '@/lib/utils'
+import { toastError } from '@/lib/errorToast'
 import { ConfirmDialog } from '@/components/ui/confirm-dialog'
 import { Textarea } from '@/components/ui/textarea'
 import { Badge } from '@/components/ui/badge'
@@ -17,14 +19,52 @@ export default function OPCTask() {
   const t = (id: string, values?: Record<string, PrimitiveType>) => intl.formatMessage({ id }, values)
   const { usage } = useChat()
   const { tasks, agents, permissionRequest, respondPermission } = useCatalog()
+  const { sessions, goalRunsBySession } = useSessions()
   const [revisionNote, setRevisionNote] = useState('')
   const [showRevisionInput, setShowRevisionInput] = useState<string | null>(null)
   const [pendingAction, setPendingAction] = useState<'approve' | 'rollback' | null>(null)
+  const [responding, setResponding] = useState(false)
   const { id } = useParams()
 
   // Find the task by URL param, or the first in-progress task
   const task = (id ? tasks.find(t => t.id === id) : null) ?? tasks.find(t => t.status === 'in_progress' || t.status === 'running')
   const taskId = task?.id ?? ''
+
+  // R1-1: the main window receives every session's permission events, so a
+  // plain chat session's pending request can show up on this page and be
+  // mistaken for the OPC task's. Show the owning session's title and only
+  // allow approval when the request provably belongs to an agent-run
+  // session (OPC workflow / goal run); anything else must be answered in
+  // its own conversation.
+  const requestSession = permissionRequest?.session_id
+    ? sessions.find(s => s.id === permissionRequest.session_id) ?? null
+    : null
+  const requestSessionLabel = requestSession?.title ?? permissionRequest?.session_id ?? ''
+  const requestOwnedByAgentRun = permissionRequest != null && (
+    (requestSession?.is_agent_run ?? false) ||
+    (permissionRequest.session_id != null && permissionRequest.session_id in goalRunsBySession)
+  )
+  const ownershipMismatch = !requestOwnedByAgentRun
+
+  const respond = async (allow: boolean, options?: { note?: string }) => {
+    if (!permissionRequest || responding) return
+    const requestId = permissionRequest.request_id
+    setResponding(true)
+    try {
+      await respondPermission(requestId, allow, options)
+      if (allow) {
+        toast.success(t('opcTask.approvedExecution'))
+      } else if (options?.note) {
+        toast.success(t('opcTask.revisionSubmitted'))
+      } else {
+        toast.info(t('opcTask.rollbackRequested'))
+      }
+    } catch (e) {
+      toastError(t('opcTask.respondFailed'), e)
+    } finally {
+      setResponding(false)
+    }
+  }
 
   return (
     <div className="flex-1 w-full bg-background overflow-y-auto h-full px-lg py-xl">
@@ -193,10 +233,11 @@ export default function OPCTask() {
                       />
                       <Button
                         className="self-end px-md py-xs rounded-lg bg-primary/10 text-primary font-label-sm hover:bg-primary/20 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
-                        disabled={!revisionNote.trim()}
+                        disabled={!revisionNote.trim() || responding}
                         onClick={() => {
-                          respondPermission(taskId, false, { note: revisionNote.trim() })
-                          toast.success(t('opcTask.revisionSubmitted'))
+                          // P0-1: keyed by the pending request's id, awaited
+                          // so the toast only fires on real success.
+                          void respond(false, { note: revisionNote.trim() })
                           setRevisionNote('')
                           setShowRevisionInput(null)
                         }}
@@ -284,21 +325,32 @@ export default function OPCTask() {
       <ConfirmDialog
         open={pendingAction !== null}
         title={pendingAction === 'approve' ? t('opcTask.approveConfirm.title') : t('opcTask.rollbackConfirm.title')}
-        message={pendingAction === 'approve'
-          ? t('opcTask.approveConfirm.message', { title: task?.title ?? '', count: agents.length })
-          : t('opcTask.rollbackConfirm.message', { title: task?.title ?? '' })}
+        message={(() => {
+          const base = pendingAction === 'approve'
+            ? t('opcTask.approveConfirm.message', { title: task?.title ?? '', count: agents.length })
+            : t('opcTask.rollbackConfirm.message', { title: task?.title ?? '' })
+          // R1-1: surface the pending request's owner so the operator can
+          // spot a borrowed (chat-session) prompt before confirming.
+          if (requestSessionLabel) {
+            return ownershipMismatch
+              ? `${base} ${t('opcTask.approveConfirm.ownershipMismatch', { session: requestSessionLabel })}`
+              : `${base} ${t('opcTask.approveConfirm.ownership', { session: requestSessionLabel })}`
+          }
+          return `${base} ${t('opcTask.approveConfirm.ownershipUnknown')}`
+        })()}
         confirmLabel={pendingAction === 'approve' ? t('opcTask.approveConfirm.confirm') : t('opcTask.rollbackConfirm.confirm')}
         cancelLabel={pendingAction === 'approve' ? t('opcTask.approveConfirm.cancel') : t('opcTask.rollbackConfirm.cancel')}
         destructive={pendingAction === 'rollback'}
+        busy={responding}
+        confirmDisabled={ownershipMismatch}
         onConfirm={() => {
-          if (pendingAction === 'approve') {
-            respondPermission(taskId, true)
-            toast.success(t('opcTask.approvedExecution'))
-          } else if (pendingAction === 'rollback') {
-            respondPermission(taskId, false)
-            toast.info(t('opcTask.rollbackRequested'))
-          }
+          const action = pendingAction
           setPendingAction(null)
+          if (action === 'approve') {
+            void respond(true)
+          } else if (action === 'rollback') {
+            void respond(false)
+          }
         }}
         onCancel={() => setPendingAction(null)}
       />

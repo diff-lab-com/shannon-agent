@@ -301,7 +301,7 @@ export function Header() {
       {permissionRequest && (
       <Modal
         open
-        onClose={() => respondPermission(permissionRequest.request_id, false)}
+        onClose={() => respondPermission(permissionRequest.request_id, false).catch(() => {})}
         size="md"
         role="alertdialog"
         showCloseButton={false}
@@ -363,13 +363,13 @@ export function Header() {
                 settings.json permissions.allow). The engine's rule checker
                 consumes those rules (Deny > Ask > Allow). */}
             <div className="flex gap-md">
-              <Button autoFocus className="flex-1 py-sm bg-surface-container text-on-surface rounded-xl hover:bg-surface-container-high transition-all font-label-md" onClick={() => respondPermission(permissionRequest.request_id, false)}>
+              <Button autoFocus className="flex-1 py-sm bg-surface-container text-on-surface rounded-xl hover:bg-surface-container-high transition-all font-label-md" onClick={() => respondPermission(permissionRequest.request_id, false).catch(() => {})}>
                 {t('header.permRequest.deny')}
               </Button>
-              <Button className="flex-1 py-sm border border-primary/40 bg-transparent text-primary rounded-xl hover:bg-primary/10 transition-all font-label-md" onClick={() => respondPermission(permissionRequest.request_id, true, { scope: 'always_tool' })}>
+              <Button className="flex-1 py-sm border border-primary/40 bg-transparent text-primary rounded-xl hover:bg-primary/10 transition-all font-label-md" onClick={() => respondPermission(permissionRequest.request_id, true, { scope: 'always_tool' }).catch(() => {})}>
                 {t('header.permRequest.allowAlways')}
               </Button>
-              <Button className="flex-1 py-sm bg-primary text-on-primary rounded-xl hover:shadow-md hover:shadow-primary/30 active:scale-95 transition-all font-label-md" onClick={() => respondPermission(permissionRequest.request_id, true)}>
+              <Button className="flex-1 py-sm bg-primary text-on-primary rounded-xl hover:shadow-md hover:shadow-primary/30 active:scale-95 transition-all font-label-md" onClick={() => respondPermission(permissionRequest.request_id, true).catch(() => {})}>
                 {t('header.permRequest.allowOnce')}
               </Button>
             </div>

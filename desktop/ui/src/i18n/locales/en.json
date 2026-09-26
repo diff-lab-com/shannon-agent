@@ -3325,5 +3325,9 @@
   "chat.dock.zoom.aria": "Zoom controls",
   "chat.dock.zoom.in": "Zoom in",
   "chat.dock.zoom.out": "Zoom out",
-  "chat.dock.zoom.reset": "Reset zoom (100%)"
+  "chat.dock.zoom.reset": "Reset zoom (100%)",
+  "opcTask.approveConfirm.ownership": "Pending request from session «{session}».",
+  "opcTask.approveConfirm.ownershipMismatch": "This request belongs to session «{session}», which is not an agent-run session of this task. Review and answer it in its own conversation instead.",
+  "opcTask.approveConfirm.ownershipUnknown": "The pending request has no owner session, so it cannot be verified as belonging to this task.",
+  "opcTask.respondFailed": "Failed to submit the decision"
 }

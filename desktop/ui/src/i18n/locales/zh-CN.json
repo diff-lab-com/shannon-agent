@@ -3325,5 +3325,9 @@
   "chat.dock.zoom.aria": "缩放控制",
   "chat.dock.zoom.in": "放大",
   "chat.dock.zoom.out": "缩小",
-  "chat.dock.zoom.reset": "重置缩放（100%）"
+  "chat.dock.zoom.reset": "重置缩放（100%）",
+  "opcTask.approveConfirm.ownership": "待审请求来自会话「{session}」。",
+  "opcTask.approveConfirm.ownershipMismatch": "该请求属于会话「{session}」，并非本任务的智能体运行会话。请回到对应会话中处理。",
+  "opcTask.approveConfirm.ownershipUnknown": "待审请求没有归属会话，无法确认它属于本任务。",
+  "opcTask.respondFailed": "提交决定失败"
 }
