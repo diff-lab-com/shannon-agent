@@ -557,6 +557,10 @@ pub(crate) fn resume_unarchive_in(
 ///   effect.
 /// - **`Ok(None)` = enabled but windowless.** `session_retention_days`
 ///   defaults to `None` = never delete; a pass runs and deletes nothing.
+///   A stored `Some(0)` is honored as 永不 too: the wire/UI define 0 as
+///   "never auto-delete", so folding it into this windowless path keeps a
+///   hand-edited config (`session_retention_days = 0`) from becoming a
+///   0-day window that deletes every archived session.
 pub(crate) fn effective_gc_retention_days(
     cfg: &config::DesktopConfig,
 ) -> Result<Option<u32>, &'static str> {
@@ -582,7 +586,7 @@ fn effective_gc_retention_days_with(
             return Err("session GC force-disabled via SHANNON_SESSION_GC_ENABLED");
         }
     }
-    Ok(retention_days)
+    Ok(retention_days.filter(|days| *days > 0))
 }
 
 /// One archived-session GC pass over injected state — the hermetic seam
@@ -1981,6 +1985,13 @@ mod archive_tests {
             effective_gc_retention_days_with(&true, None, None).unwrap(),
             None
         );
+        // 0 is 永不 on the wire/UI; the gate honors it so a hand-edited
+        // `session_retention_days = 0` can never become a 0-day window that
+        // deletes every archived session.
+        assert_eq!(
+            effective_gc_retention_days_with(&true, Some(0), None).unwrap(),
+            None
+        );
         // The env var can only force-disable.
         assert!(effective_gc_retention_days_with(&true, Some(90), Some("0")).is_err());
         assert!(effective_gc_retention_days_with(&true, Some(90), Some("FALSE")).is_err());
@@ -2061,6 +2072,34 @@ mod archive_tests {
             sessions.lock().await.is_empty(),
             "stale display rows are dropped by the pass"
         );
+    }
+
+    #[tokio::test]
+    async fn gc_pass_treats_retention_zero_as_never() {
+        // Review finding (GC deletion-path duality): the wire/UI define
+        // `session_retention_days = 0` as 永不 (never auto-delete). The gate
+        // must honor that for a hand-edited config — folding it into the
+        // windowless path — never letting it become a 0-day window that
+        // deletes every archived session.
+        let tmp = tempfile::tempdir().unwrap();
+        let container = tmp.path().join("sessions");
+        std::fs::create_dir_all(&container).unwrap();
+        let (old_archived, recent_archived, old_active) = seed_old_archived_and_active(&container);
+        let sessions = Arc::new(tokio::sync::Mutex::new(Vec::new()));
+        let candidates = tempfile::tempdir().unwrap();
+
+        let zero_window = Arc::new(tokio::sync::RwLock::new(gc_config(true, Some(0))));
+        let msg = run_session_gc_with(&zero_window, &sessions, &container, candidates.path())
+            .await
+            .unwrap();
+        // The windowless outcome: a pass ran, deleted nothing.
+        assert!(msg.contains("no session_retention_days"), "{msg}");
+        assert!(
+            container.join(old_archived.to_string()).exists(),
+            "0 = 永不 → even the ancient archived session survives"
+        );
+        assert!(container.join(recent_archived.to_string()).exists());
+        assert!(container.join(old_active.to_string()).exists());
     }
 
     #[tokio::test]
