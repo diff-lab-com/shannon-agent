@@ -720,8 +720,18 @@ export function AppProvider({ children }: { children: ReactNode }) {
               ? { ...tc, progress: p.progress, progress_message: p.message }
               : tc
           ))
-          // P2-19: same visible-only slot for the RunStatusLine pill.
-          setToolProgress({ progress: p.progress, message: p.message })
+          // P2-19: same visible-only slot for the RunStatusLine pill. The
+          // backend sends a FRACTION (−1 indeterminate, 0..=1 determinate —
+          // agent_loop.rs); normalize to the 0..=100 percent the pill
+          // renders here, so the wire contract lives in exactly one place.
+          const frac = p.progress
+          setToolProgress({
+            progress:
+              typeof frac === 'number' && frac >= 0 && frac <= 1
+                ? Math.round(frac * 100)
+                : undefined,
+            message: p.message,
+          })
         }),
         listen(EVENT_NAMES.SUBAGENT_START, (e) => {
           const p = e.payload as SubAgentLive

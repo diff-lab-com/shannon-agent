@@ -96,6 +96,11 @@ export function HtmlRenderer({ source, title, interactive = false, onRegistratio
         // Registration unavailable (web dev without the command, ACL
         // denial, oversize artifact): stay on the static srcDoc path.
         if (cancelled) return
+        // This may be a failed RE-registration after a source change — the
+        // previous entry can still be live; release it so it never outlives
+        // the interactive rendering (until silent eviction).
+        const stale = registeredIdRef.current
+        if (stale) unregisterInteractiveArtifact(stale).catch(() => {})
         registeredIdRef.current = null
         setInteractiveUrl(null)
         if (!failedNotifiedRef.current) {

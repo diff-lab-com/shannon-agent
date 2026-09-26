@@ -712,10 +712,10 @@ function ArtifactDocBody({ artifact, workingDir }: { artifact: ArtifactItem; wor
           </Button>
         )}
       </div>
-      {/* §P1-9 / §5-1 A: the static hint now covers exactly the HTML that
-          still renders statically — disk files (and a chat artifact whose
-          interactive registration failed). Interactive chat-fence HTML runs
-          in its own sandboxed protocol document and needs no disclaimer. */}
+      {/* §P1-9 / §5-1 A: the static hint covers exactly the HTML that still
+          renders statically — disk files (expected static, informative
+          copy), and a chat artifact whose interactive registration failed
+          (a distinct honest-fallback copy, per the round-2 review). */}
       {artifact.kind === 'html' && (!interactiveHtml || htmlInteractiveFailed) && (
         <div
           role="note"
@@ -723,7 +723,9 @@ function ArtifactDocBody({ artifact, workingDir }: { artifact: ArtifactItem; wor
           className="flex items-center gap-xs px-sm py-xs mb-sm rounded-lg bg-surface-container-high/50 text-on-surface-variant shrink-0"
         >
           <span className="material-symbols-outlined icon-sm shrink-0" aria-hidden="true">info</span>
-          <p className="font-label-xs flex-1 min-w-0">{t('chat.dock.html.staticHint')}</p>
+          <p className="font-label-xs flex-1 min-w-0">
+            {t(htmlInteractiveFailed ? 'chat.dock.html.staticHint.fallback' : 'chat.dock.html.staticHint')}
+          </p>
           <Button type="button" variant="default" size="sm" onClick={openExternally} className="shrink-0">
             <span className="material-symbols-outlined icon-sm align-middle" aria-hidden="true">open_in_new</span>
             <span className="align-middle ml-xs">{t('chat.artifact.openSystem')}</span>

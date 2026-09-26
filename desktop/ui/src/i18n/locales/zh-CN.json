@@ -3321,6 +3321,7 @@
   "artifact.fallback.other": "文件",
   "chat.dock.web.reload": "重新加载",
   "chat.dock.html.staticHint": "对话生成的 HTML 在面板内以交互模式运行；磁盘文件保持静态预览——需要完整交互请使用「用系统打开」。",
+  "chat.dock.html.staticHint.fallback": "该 HTML 无法在面板内交互运行——已回退为静态预览。需要完整交互请使用「用系统打开」。",
   "chat.dock.zoom.aria": "缩放控制",
   "chat.dock.zoom.in": "放大",
   "chat.dock.zoom.out": "缩小",

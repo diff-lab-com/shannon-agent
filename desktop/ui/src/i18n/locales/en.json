@@ -3321,6 +3321,7 @@
   "artifact.fallback.other": "File",
   "chat.dock.web.reload": "Reload",
   "chat.dock.html.staticHint": "Chat-generated HTML runs interactively in this panel. Files from disk stay a static preview — use \"Open in system\" to run one with full scripting.",
+  "chat.dock.html.staticHint.fallback": "This HTML could not run interactively — showing a static preview instead. Use 'Open in system' to run it with full scripting.",
   "chat.dock.zoom.aria": "Zoom controls",
   "chat.dock.zoom.in": "Zoom in",
   "chat.dock.zoom.out": "Zoom out",

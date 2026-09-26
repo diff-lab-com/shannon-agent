@@ -234,22 +234,38 @@ describe('AppContext — P2-19 tool progress lifecycle', () => {
   it('QUERY_TOOL_PROGRESS sets and updates the visible progress', async () => {
     const result = await setupStreamingSession()
 
+    // The backend sends a 0..=1 fraction (agent_loop.rs); the context
+    // normalizes it to the 0..=100 percent the pill renders.
     act(() => {
-      flush(EVENT_NAMES.QUERY_TOOL_PROGRESS, { tool_use_id: 'tc-1', progress: 30, message: 'Compiling', session_id: SESSION_A })
+      flush(EVENT_NAMES.QUERY_TOOL_PROGRESS, { tool_use_id: 'tc-1', progress: 0.3, message: 'Compiling', session_id: SESSION_A })
     })
     expect(result.current.toolProgress).toEqual({ progress: 30, message: 'Compiling' })
 
     act(() => {
-      flush(EVENT_NAMES.QUERY_TOOL_PROGRESS, { tool_use_id: 'tc-1', progress: 62, message: 'Linking', session_id: SESSION_A })
+      flush(EVENT_NAMES.QUERY_TOOL_PROGRESS, { tool_use_id: 'tc-1', progress: 0.62, message: 'Linking', session_id: SESSION_A })
     })
     expect(result.current.toolProgress).toEqual({ progress: 62, message: 'Linking' })
+  })
+
+  it('indeterminate (−1) and out-of-scale progress drops the percentage but keeps the message', async () => {
+    const result = await setupStreamingSession()
+
+    act(() => {
+      flush(EVENT_NAMES.QUERY_TOOL_PROGRESS, { tool_use_id: 'tc-1', progress: -1, message: 'streaming output…', session_id: SESSION_A })
+    })
+    expect(result.current.toolProgress).toEqual({ progress: undefined, message: 'streaming output…' })
+
+    act(() => {
+      flush(EVENT_NAMES.QUERY_TOOL_PROGRESS, { tool_use_id: 'tc-1', progress: 45, message: 'scale mismatch', session_id: SESSION_A })
+    })
+    expect(result.current.toolProgress).toEqual({ progress: undefined, message: 'scale mismatch' })
   })
 
   it('progress from a background session never reaches the visible state', async () => {
     const result = await setupStreamingSession()
 
     act(() => {
-      flush(EVENT_NAMES.QUERY_TOOL_PROGRESS, { tool_use_id: 'tc-bg', progress: 99, message: 'background', session_id: SESSION_B })
+      flush(EVENT_NAMES.QUERY_TOOL_PROGRESS, { tool_use_id: 'tc-bg', progress: 0.99, message: 'background', session_id: SESSION_B })
     })
     expect(result.current.toolProgress).toBeNull()
   })
@@ -257,7 +273,7 @@ describe('AppContext — P2-19 tool progress lifecycle', () => {
   it('clears on QUERY_COMPLETED', async () => {
     const result = await setupStreamingSession()
     act(() => {
-      flush(EVENT_NAMES.QUERY_TOOL_PROGRESS, { tool_use_id: 'tc-1', progress: 45, message: 'halfway', session_id: SESSION_A })
+      flush(EVENT_NAMES.QUERY_TOOL_PROGRESS, { tool_use_id: 'tc-1', progress: 0.45, message: 'halfway', session_id: SESSION_A })
     })
     expect(result.current.toolProgress).toEqual({ progress: 45, message: 'halfway' })
 
@@ -271,7 +287,7 @@ describe('AppContext — P2-19 tool progress lifecycle', () => {
   it('clears on QUERY_FAILED', async () => {
     const result = await setupStreamingSession()
     act(() => {
-      flush(EVENT_NAMES.QUERY_TOOL_PROGRESS, { tool_use_id: 'tc-1', progress: 10, message: 'soon broken', session_id: SESSION_A })
+      flush(EVENT_NAMES.QUERY_TOOL_PROGRESS, { tool_use_id: 'tc-1', progress: 0.1, message: 'soon broken', session_id: SESSION_A })
     })
 
     await act(async () => { flush(EVENT_NAMES.QUERY_FAILED, { error: 'boom', session_id: SESSION_A }) })
@@ -291,7 +307,7 @@ describe('AppContext — P2-19 tool progress lifecycle', () => {
   it('clears when a new tool starts (no stale % on the next tool)', async () => {
     const result = await setupStreamingSession()
     act(() => {
-      flush(EVENT_NAMES.QUERY_TOOL_PROGRESS, { tool_use_id: 'tc-1', progress: 45, message: 'halfway', session_id: SESSION_A })
+      flush(EVENT_NAMES.QUERY_TOOL_PROGRESS, { tool_use_id: 'tc-1', progress: 0.45, message: 'halfway', session_id: SESSION_A })
     })
     expect(result.current.toolProgress).toEqual({ progress: 45, message: 'halfway' })
 
@@ -304,7 +320,7 @@ describe('AppContext — P2-19 tool progress lifecycle', () => {
   it('clears on a new send', async () => {
     const result = await setupStreamingSession()
     act(() => {
-      flush(EVENT_NAMES.QUERY_TOOL_PROGRESS, { tool_use_id: 'tc-1', progress: 45, message: 'halfway', session_id: SESSION_A })
+      flush(EVENT_NAMES.QUERY_TOOL_PROGRESS, { tool_use_id: 'tc-1', progress: 0.45, message: 'halfway', session_id: SESSION_A })
     })
     expect(result.current.toolProgress).toEqual({ progress: 45, message: 'halfway' })
 
@@ -315,7 +331,7 @@ describe('AppContext — P2-19 tool progress lifecycle', () => {
   it('clears on session switch and does not capture the invisible session afterwards', async () => {
     const result = await setupStreamingSession()
     act(() => {
-      flush(EVENT_NAMES.QUERY_TOOL_PROGRESS, { tool_use_id: 'tc-1', progress: 45, message: 'halfway', session_id: SESSION_A })
+      flush(EVENT_NAMES.QUERY_TOOL_PROGRESS, { tool_use_id: 'tc-1', progress: 0.45, message: 'halfway', session_id: SESSION_A })
     })
     expect(result.current.toolProgress).toEqual({ progress: 45, message: 'halfway' })
 

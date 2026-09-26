@@ -15,8 +15,8 @@
 //!   'unsafe-inline'; img-src data:; font-src data:; connect-src 'none';
 //!   form-action 'none';` — no network, no subresource/frame loading at all;
 //! * `Cache-Control: no-store` + `X-Content-Type-Options: nosniff`;
-//! * ids are unguessable, dependency-free tokens (ns timestamp + atomic
-//!   counter); lookups reject anything outside `^[A-Za-z0-9_-]{1,64}$`
+//! * ids are unguessable tokens (128 random bits, hex-encoded); lookups
+//!   reject anything outside `^[A-Za-z0-9_-]{1,64}$`
 //!   (traversal, query strings, extra segments, unicode → 404);
 //! * content is capped at 2 MiB (same cap as `open_artifact_externally`),
 //!   the registry is capped at 64 entries with oldest-eviction, and
@@ -24,8 +24,6 @@
 
 use std::collections::VecDeque;
 use std::sync::Mutex;
-use std::sync::atomic::{AtomicU64, Ordering};
-use std::time::{SystemTime, UNIX_EPOCH};
 
 use serde::Serialize;
 use tauri::http::header::{
@@ -67,9 +65,6 @@ pub struct ArtifactRegistration {
 pub struct InteractiveArtifactRegistry {
     /// `(id, html)` pairs, oldest first (the front of the queue).
     entries: Mutex<VecDeque<(String, String)>>,
-    /// Monotonic disambiguator so two registrations in the same nanosecond
-    /// can never share an id.
-    counter: AtomicU64,
 }
 
 /// `^[A-Za-z0-9_-]{1,64}$` — one unambiguous path segment, nothing else.
@@ -82,16 +77,22 @@ fn is_valid_artifact_id(id: &str) -> bool {
             .all(|b| b.is_ascii_alphanumeric() || b == b'_' || b == b'-')
 }
 
+/// `a` + 32 hex chars (128 random bits): an id an attacker cannot guess or
+/// enumerate. A wall-clock+counter scheme would leave only ~1e6·counter
+/// candidates per millisecond to anyone who can issue requests.
+fn fresh_artifact_id() -> String {
+    use rand::RngCore;
+    let mut bytes = [0u8; 16];
+    rand::thread_rng().fill_bytes(&mut bytes);
+    let hex: String = bytes.iter().map(|b| format!("{b:02x}")).collect();
+    format!("a{hex}")
+}
+
 impl InteractiveArtifactRegistry {
     /// Store `html` under a fresh unguessable id and return it. Evicts the
     /// oldest entry when the registry is over its cap.
     pub fn register(&self, html: String) -> String {
-        let nanos = SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .map(|d| d.as_nanos())
-            .unwrap_or_default();
-        let seq = self.counter.fetch_add(1, Ordering::Relaxed);
-        let id = format!("a{nanos}-{seq}");
+        let id = fresh_artifact_id();
 
         let mut entries = self.entries.lock().expect("artifact registry poisoned");
         entries.push_back((id.clone(), html));
