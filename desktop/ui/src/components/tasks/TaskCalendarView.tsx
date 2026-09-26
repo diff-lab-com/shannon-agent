@@ -110,10 +110,22 @@ export default function TaskCalendarView({
             {monthName(intl.locale, viewMonth)} {selectedDay} — {t('tasks.taskCalendarView.tasks')}
           </h4>
           <div className="space-y-md">
-            {filteredTasks.length === 0 ? (
-              <p className="text-body-sm text-on-surface-variant text-center py-lg">{t('tasks.taskCalendarView.noTasks')}</p>
-            ) : (
-              filteredTasks.slice(0, 5).map(task => {
+            {/* B3 P1-26: only tasks actually due on the selected day — the
+                list used to render the global first five regardless of the
+                selection, so every day showed the same cards. Tasks without
+                a due_date have no place on the calendar and are excluded. */}
+            {(() => {
+              const dayTasks = filteredTasks.filter(task => {
+                if (task.due_date == null) return false
+                const d = new Date(task.due_date * 1000)
+                return d.getDate() === selectedDay && d.getMonth() === viewMonth && d.getFullYear() === viewYear
+              })
+              if (dayTasks.length === 0) {
+                return (
+                  <p className="text-body-sm text-on-surface-variant text-center py-lg">{t('tasks.taskCalendarView.noTasksForDay')}</p>
+                )
+              }
+              return dayTasks.slice(0, 5).map(task => {
                 const badge = statusBadge(task.status)
                 return (
                   <div
@@ -139,7 +151,7 @@ export default function TaskCalendarView({
                   </div>
                 )
               })
-            )}
+            })()}
           </div>
         </div>
       )}

@@ -4,8 +4,27 @@
 // split components. Pure functions only — no React state.
 
 import type { PrimitiveType } from 'react-intl'
+import type { ExecutionPolicy } from '@/types'
 
 export type FilterStatus = 'all' | 'pending' | 'running' | 'completed'
+
+/**
+ * Shared default execution policy (B3 顺带): the single source of truth for
+ * "what a routine without a stored policy behaves like". ScheduleForm seeds
+ * its fields from it, and OffpeakWindowEditor builds a full policy object
+ * from it when the routine's `policy` is null — the previous ad-hoc fallback
+ * there (max_retries 0, auto-archive on, notifications off) was silently
+ * harsher than what the create form promises.
+ */
+export const DEFAULT_POLICY: ExecutionPolicy = {
+  max_retries: 2,
+  timeout_secs: 600,
+  worktree: null,
+  notify_on_failure: true,
+  budget_usd: null,
+  auto_archive_when_empty: false,
+  result_routing: [],
+}
 
 export interface StatusBadge {
   bg: string
