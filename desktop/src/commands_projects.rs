@@ -259,7 +259,10 @@ fn push_candidate(
 /// entry point runs its `path` argument through this before touching the
 /// store — the core registry stays mechanical (raw keys, auto-create) and
 /// would otherwise grow a phantom duplicate row for a separator variant.
-fn normalize_path(path: &str) -> &str {
+///
+/// `pub(crate)` because every working-dir writer shares it: routine sidecar
+/// persistence (P-E1) stores the same normalized key the registry adopts.
+pub(crate) fn normalize_path(path: &str) -> &str {
     path.trim().trim_end_matches(['/', '\\'])
 }
 

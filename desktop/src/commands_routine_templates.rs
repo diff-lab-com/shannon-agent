@@ -41,6 +41,7 @@ pub async fn instantiate_routine_template(
         max_fires: None,
         policy: None,
         depends_on: None,
+        working_dir: None,
     };
 
     let trigger_type = payload

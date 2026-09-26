@@ -62,6 +62,11 @@ pub struct CreateTaskPayload {
     /// Initial dependency list. Defaults to empty when omitted.
     #[serde(default)]
     pub depends_on: Option<Vec<String>>,
+    /// Project directory the routine belongs to (P-E1). Persisted as the
+    /// task's `working_dir` sidecar; `None` = no project. Normalized like
+    /// the project registry key (trimmed, trailing separators stripped).
+    #[serde(default)]
+    pub working_dir: Option<String>,
 }
 
 /// Payload for `update_scheduled_task`. All fields optional except `id`.
@@ -92,6 +97,11 @@ pub struct UpdateTaskPayload {
     /// the full new list (add or remove); an empty vec clears all deps.
     #[serde(default)]
     pub depends_on: Option<Vec<String>>,
+    /// Project directory change (P-E1). Supplied non-empty value replaces
+    /// the routine's working_dir; supplied empty string clears it; omitted
+    /// leaves it unchanged. Normalized like the project registry key.
+    #[serde(default)]
+    pub working_dir: Option<String>,
 }
 
 /// Result of `preview_cron`.
@@ -203,6 +213,23 @@ pub struct TriggerResponse {
     pub run_id: String,
     pub task_id: String,
     pub task_name: String,
+}
+
+/// One scheduled routine as `list_scheduled_tasks` returns it.
+///
+/// A desktop-side wire type, not a core change: [`ScheduledRoutine`] keeps
+/// its exact serialized shape (pub struct — adding a field would be
+/// semver-major), and this DTO flattens it so the JSON the UI sees is the
+/// old fields **plus** `working_dir` (the task's `working_dir` sidecar,
+/// `null` when unset). Backward-compatible for any consumer of the old
+/// plain-routine shape.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct RoutineDto {
+    #[serde(flatten)]
+    pub routine: ScheduledRoutine,
+    /// Project directory the routine belongs to (P-E1); `None` when unset.
+    #[serde(default)]
+    pub working_dir: Option<String>,
 }
 
 // ─── AppState storage helpers ───────────────────────────────────────────────
@@ -536,14 +563,33 @@ pub(crate) fn run_to_execution(run: &ScheduledRun) -> TaskExecution {
 // ─── 15 Tauri commands ──────────────────────────────────────────────────────
 
 /// List all scheduled tasks, sorted by `created_at`.
+///
+/// Each row is a [`RoutineDto`]: the routine's fields verbatim plus its
+/// `working_dir` sidecar (`null` when unset). A sidecar read failure is
+/// best-effort — the row still lists, without a working dir.
 #[tauri::command]
 pub async fn list_scheduled_tasks(
     state: tauri::State<'_, AppState>,
-) -> Result<Vec<ScheduledRoutine>, String> {
-    state
-        .scheduled_task_store()
-        .list()
-        .map_err(|e| e.to_string())
+) -> Result<Vec<RoutineDto>, String> {
+    let store = state.scheduled_task_store();
+    let routines = store.list().map_err(|e| e.to_string())?;
+    Ok(routines
+        .into_iter()
+        .map(|routine| {
+            let working_dir = store.working_dir_of(&routine.id).unwrap_or_else(|e| {
+                tracing::debug!(
+                    task_id = %routine.id,
+                    error = %e,
+                    "list_scheduled_tasks: working_dir sidecar unreadable"
+                );
+                None
+            });
+            RoutineDto {
+                routine,
+                working_dir,
+            }
+        })
+        .collect())
 }
 
 /// Create a new scheduled task and persist it.
@@ -595,6 +641,14 @@ pub async fn create_scheduled_task(
         .scheduled_task_store()
         .save(&routine)
         .map_err(|e| e.to_string())?;
+
+    // P-E1: persist the routine's project as the `working_dir` sidecar.
+    // Best-effort: the task itself is saved, so a sidecar failure must not
+    // turn a successful create into an error the UI reports as lost.
+    if let Some(dir) = payload.working_dir.as_deref() {
+        persist_working_dir(state.scheduled_task_store(), &routine.id, Some(dir));
+    }
+
     Ok(routine)
 }
 
@@ -655,7 +709,39 @@ pub async fn update_scheduled_task(
     }
 
     store.save(&routine).map_err(|e| e.to_string())?;
+
+    // P-E1: working_dir change. Supplied non-empty replaces, supplied empty
+    // clears, omitted leaves unchanged — then best-effort sidecar write
+    // (same contract as create).
+    if let Some(dir) = payload.working_dir.as_deref() {
+        persist_working_dir(store, &payload.id, Some(dir));
+    }
+
     Ok(routine)
+}
+
+/// Normalize + persist a routine's working-dir sidecar (P-E1 helper).
+///
+/// The path is normalized to the project registry key (trimmed, trailing
+/// separators stripped) so a routine and its project land on one row; an
+/// empty remainder clears the sidecar. Failures are warn-logged, never
+/// fatal: the routine itself is already persisted.
+fn persist_working_dir(store: &ScheduledTaskStore, task_id: &str, dir: Option<&str>) {
+    let normalized = dir
+        .map(crate::commands_projects::normalize_path)
+        .unwrap_or("");
+    let value = if normalized.is_empty() {
+        None
+    } else {
+        Some(normalized)
+    };
+    if let Err(e) = store.set_working_dir(task_id, value) {
+        tracing::warn!(
+            task_id = %task_id,
+            error = %e,
+            "scheduled task: working_dir sidecar write failed"
+        );
+    }
 }
 
 /// Delete a task by ID (also removes its `SKILL.md` / `task.json` directory).
@@ -1835,6 +1921,7 @@ pub async fn prune_task_worktrees(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use tauri::Manager as _;
 
     // ── DTO round-trips ──────────────────────────────────────────────────
 
@@ -1851,6 +1938,7 @@ mod tests {
             max_fires: None,
             policy: None,
             depends_on: None,
+            working_dir: None,
         };
         let json = serde_json::to_string(&payload).unwrap();
         let back: CreateTaskPayload = serde_json::from_str(&json).unwrap();
@@ -1871,6 +1959,7 @@ mod tests {
             max_fires: Some(260),
             policy: None,
             depends_on: None,
+            working_dir: None,
         };
         let json = serde_json::to_string(&payload).unwrap();
         assert!(json.contains("\"cron_expr\""));
@@ -1900,6 +1989,7 @@ mod tests {
             max_fires: None,
             policy: None,
             depends_on: Some(vec!["dep1".into(), "dep2".into()]),
+            working_dir: None,
         };
         let json = serde_json::to_string(&create).unwrap();
         let back: CreateTaskPayload = serde_json::from_str(&json).unwrap();
@@ -1921,6 +2011,7 @@ mod tests {
             max_fires: None,
             policy: None,
             depends_on: Some(Vec::new()),
+            working_dir: None,
         };
         let ujson = serde_json::to_string(&update).unwrap();
         assert!(ujson.contains("\"depends_on\":[]"));
@@ -1941,6 +2032,228 @@ mod tests {
         let json = serde_json::to_string(&policy).unwrap();
         assert!(json.contains("budget_usd"));
         assert!(!json.contains("monthly"));
+    }
+
+    // ── P-E1: routine working_dir sidecar ────────────────────────────────
+
+    /// AppState with a hermetic scheduled-task store (`AppState::new` only
+    /// reads ambient config; the store is swapped onto a tempdir base —
+    /// same fixture contract as the project-registry tests).
+    fn task_state(dir: &std::path::Path) -> AppState {
+        let mut state = AppState::new();
+        state.scheduled_task_store =
+            std::sync::Arc::new(ScheduledTaskStore::with_base(dir.join("tasks")));
+        state
+    }
+
+    #[test]
+    fn routine_dto_flatten_keeps_old_fields_and_adds_working_dir() {
+        let routine = ScheduledRoutine::new("Flat Shape".into(), "p".into(), 60);
+        let plain = serde_json::to_value(&routine).unwrap();
+
+        let dto = RoutineDto {
+            routine: routine.clone(),
+            working_dir: Some("/work/proj".into()),
+        };
+        let json = serde_json::to_value(&dto).unwrap();
+
+        // The routine's fields appear at the TOP level (flatten)…
+        assert_eq!(json["id"], plain["id"]);
+        assert_eq!(json["name"], plain["name"]);
+        assert_eq!(json["created_at"], plain["created_at"]);
+        // …and working_dir rides alongside.
+        assert_eq!(json["working_dir"], "/work/proj");
+
+        // Round-trip preserves the routine verbatim; null working_dir also
+        // deserializes (older writers / unset sidecar).
+        let back: RoutineDto = serde_json::from_value(json).unwrap();
+        assert_eq!(back.routine.id, routine.id);
+        assert_eq!(back.routine.prompt, routine.prompt);
+        assert_eq!(back.working_dir.as_deref(), Some("/work/proj"));
+        let none_json = serde_json::to_value(RoutineDto {
+            routine,
+            working_dir: None,
+        })
+        .unwrap();
+        let back_none: RoutineDto = serde_json::from_value(none_json).unwrap();
+        assert_eq!(back_none.working_dir, None);
+    }
+
+    #[tokio::test]
+    async fn create_update_roundtrip_working_dir_sidecar() {
+        let tmp = tempfile::tempdir().unwrap();
+        let app = tauri::test::mock_app();
+        app.manage(task_state(tmp.path()));
+
+        let created = create_scheduled_task(
+            app.state::<AppState>(),
+            CreateTaskPayload {
+                name: "Scoped scan".into(),
+                prompt: "p".into(),
+                trigger_type: None,
+                interval_secs: Some(60),
+                cron_expr: None,
+                timezone: None,
+                expires_at: None,
+                max_fires: None,
+                policy: None,
+                depends_on: None,
+                working_dir: Some("/work/proj/".into()),
+            },
+        )
+        .await
+        .unwrap();
+
+        let store = app.state::<AppState>().scheduled_task_store().clone();
+        assert_eq!(
+            store.working_dir_of(&created.id).unwrap().as_deref(),
+            Some("/work/proj"),
+            "sidecar persisted, normalized like the registry key"
+        );
+
+        // Update replaces the value.
+        let updated = update_scheduled_task(
+            app.state::<AppState>(),
+            UpdateTaskPayload {
+                id: created.id.clone(),
+                name: None,
+                prompt: None,
+                trigger_type: None,
+                interval_secs: None,
+                cron_expr: None,
+                timezone: None,
+                enabled: None,
+                expires_at: None,
+                max_fires: None,
+                policy: None,
+                depends_on: None,
+                working_dir: Some("/work/other".into()),
+            },
+        )
+        .await
+        .unwrap();
+        assert_eq!(updated.id, created.id);
+        assert_eq!(
+            store.working_dir_of(&created.id).unwrap().as_deref(),
+            Some("/work/other")
+        );
+
+        // Update with an empty string clears it.
+        update_scheduled_task(
+            app.state::<AppState>(),
+            UpdateTaskPayload {
+                id: created.id.clone(),
+                name: None,
+                prompt: None,
+                trigger_type: None,
+                interval_secs: None,
+                cron_expr: None,
+                timezone: None,
+                enabled: None,
+                expires_at: None,
+                max_fires: None,
+                policy: None,
+                depends_on: None,
+                working_dir: Some("  ".into()),
+            },
+        )
+        .await
+        .unwrap();
+        assert_eq!(
+            store.working_dir_of(&created.id).unwrap(),
+            None,
+            "empty string clears the sidecar"
+        );
+
+        // Omitted working_dir leaves the (re-set) value untouched.
+        store.set_working_dir(&created.id, Some("/work/final")).unwrap();
+        update_scheduled_task(
+            app.state::<AppState>(),
+            UpdateTaskPayload {
+                id: created.id.clone(),
+                name: Some("Renamed".into()),
+                prompt: None,
+                trigger_type: None,
+                interval_secs: None,
+                cron_expr: None,
+                timezone: None,
+                enabled: None,
+                expires_at: None,
+                max_fires: None,
+                policy: None,
+                depends_on: None,
+                working_dir: None,
+            },
+        )
+        .await
+        .unwrap();
+        assert_eq!(
+            store.working_dir_of(&created.id).unwrap().as_deref(),
+            Some("/work/final"),
+            "omitted working_dir must not clobber the sidecar"
+        );
+    }
+
+    #[tokio::test]
+    async fn list_scheduled_tasks_returns_flattened_dto_with_working_dir() {
+        let tmp = tempfile::tempdir().unwrap();
+        let app = tauri::test::mock_app();
+        app.manage(task_state(tmp.path()));
+        let store = app.state::<AppState>().scheduled_task_store().clone();
+
+        let with_dir = create_scheduled_task(
+            app.state::<AppState>(),
+            CreateTaskPayload {
+                name: "Housed".into(),
+                prompt: "p".into(),
+                trigger_type: None,
+                interval_secs: Some(60),
+                cron_expr: None,
+                timezone: None,
+                expires_at: None,
+                max_fires: None,
+                policy: None,
+                depends_on: None,
+                working_dir: Some("/work/housed".into()),
+            },
+        )
+        .await
+        .unwrap();
+        let unhoused = create_scheduled_task(
+            app.state::<AppState>(),
+            CreateTaskPayload {
+                name: "Unhoused".into(),
+                prompt: "p".into(),
+                trigger_type: None,
+                interval_secs: Some(60),
+                cron_expr: None,
+                timezone: None,
+                expires_at: None,
+                max_fires: None,
+                policy: None,
+                depends_on: None,
+                working_dir: None,
+            },
+        )
+        .await
+        .unwrap();
+
+        let rows = list_scheduled_tasks(app.state::<AppState>()).await.unwrap();
+        assert_eq!(rows.len(), 2);
+        let housed = rows
+            .iter()
+            .find(|r| r.routine.id == with_dir.id)
+            .expect("housed row listed");
+        assert_eq!(housed.working_dir.as_deref(), Some("/work/housed"));
+        // Old wire fields still present on the row (flatten).
+        assert_eq!(housed.routine.name, "Housed");
+        assert_eq!(housed.routine.prompt, "p");
+
+        let unhoused_row = rows
+            .iter()
+            .find(|r| r.routine.id == unhoused.id)
+            .expect("unhoused row listed");
+        assert_eq!(unhoused_row.working_dir, None);
     }
 
     // ── Cron preview ─────────────────────────────────────────────────────
