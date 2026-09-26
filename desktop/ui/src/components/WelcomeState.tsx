@@ -21,6 +21,9 @@ export default function WelcomeState({ onSelectPrompt }: WelcomeStateProps) {
     t('welcomeState.subtitleItem.research'),
     t('welcomeState.subtitleItem.code'),
   ]
+  // Localized prompt per example (review §5: prompts used to be en-only).
+  const promptOf = (ex: (typeof WELCOME_EXAMPLES)[number]) =>
+    intl.formatMessage({ id: ex.promptKey })
   return (
     <div className="flex items-center justify-center h-full min-h-full">
       <div className="text-center max-w-[560px] w-full mx-auto px-lg">
@@ -38,12 +41,12 @@ export default function WelcomeState({ onSelectPrompt }: WelcomeStateProps) {
               key={ex.icon}
               variant="outline"
               className="h-auto justify-start items-start text-left whitespace-normal p-md rounded-xl hover:bg-surface-container-high hover:border-primary/30 cursor-pointer group"
-              onClick={() => onSelectPrompt(ex.prompt)}
+              onClick={() => onSelectPrompt(promptOf(ex))}
             >
               <span className="material-symbols-outlined icon-md text-on-surface-variant mt-0.5 group-hover:text-primary transition-colors">{ex.icon}</span>
               <div className="min-w-0">
                 <p className="font-label-md text-on-surface font-bold">{t(ex.titleKey)}</p>
-                <p className="font-body-sm text-on-surface-variant line-clamp-2">{ex.prompt}</p>
+                <p className="font-body-sm text-on-surface-variant line-clamp-2">{promptOf(ex)}</p>
               </div>
             </Button>
           ))}

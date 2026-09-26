@@ -336,7 +336,7 @@ export const Sidebar = memo(function Sidebar({ mobile, open = true }: { mobile?:
             suggestions={WELCOME_EXAMPLES.slice(0, 2).map(ex => ({
               label: intl.formatMessage({ id: ex.titleKey }),
               icon: ex.icon,
-              onClick: () => void startWithPrompt(ex.prompt),
+              onClick: () => void startWithPrompt(intl.formatMessage({ id: ex.promptKey })),
             }))}
           />
         ) : (

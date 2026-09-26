@@ -255,6 +255,26 @@ describe('Welcome component — 2-step flow', () => {
     expect(screen.getByText('Shortcuts')).toBeInTheDocument()
   })
 
+  // B5-33 (decision 4-B): the summary states a recommendation — it must not
+  // claim tools were "enabled", since Welcome never persists tool config.
+  it('Done step states the tool recommendation honestly (B5-33)', async () => {
+    vi.mocked(api.detectProviderFromEnv).mockResolvedValue({
+      provider: 'anthropic',
+      has_api_key: true,
+    })
+    wrap()
+    fireEvent.click(screen.getByRole('button', { name: /A bit of everything/ }))
+    await waitFor(() => {
+      const continueBtns = screen.getAllByRole('button', { name: /Continue/ })
+      expect(continueBtns[continueBtns.length - 1]).not.toBeDisabled()
+    })
+    fireEvent.click(screen.getAllByRole('button', { name: /Continue/ }).at(-1)!)
+    await waitFor(() => expect(screen.getByText("You're all set")).toBeInTheDocument())
+    // General task recommends 2 tools, phrased as a recommendation.
+    expect(screen.getByText('2 recommended tools — enable them in Settings')).toBeInTheDocument()
+    expect(screen.queryByText(/tools? enabled/i)).not.toBeInTheDocument()
+  })
+
   it('Done step shows chosen task in summary', async () => {
     wrap()
     // Pick Writing task
