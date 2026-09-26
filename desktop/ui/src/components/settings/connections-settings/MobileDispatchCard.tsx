@@ -215,6 +215,7 @@ export function MobileDispatchCard({ config, procState, onConfigChange }: Mobile
             onCheckedChange={(v) => void toggleTls(v)}
             disabled={tlsBusy}
             className="shrink-0"
+            aria-label={t('settings.connections.mobile.tlsToggle')}
             data-testid="mobile-tls-switch"
           />
         </div>

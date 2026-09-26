@@ -350,7 +350,9 @@ export default function DreamPanel() {
                 <div className="flex items-center gap-sm flex-wrap mb-sm">
                   <span className="font-label-md text-[14px] font-bold text-on-surface break-all">{proposal.project}</span>
                   <span className="font-label-sm text-[12px] text-on-surface-variant">
-                    {new Date(proposal.created_at).toLocaleString([], { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' })}
+                    {/* B6-36: was `toLocaleString([], …)` — followed the OS
+                        locale; format in the app locale instead. */}
+                    {intl.formatDate(proposal.created_at, { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' })}
                   </span>
                   <span className="ml-auto flex items-center gap-xs">
                     {(['merge', 'remove', 'add'] as const).map((kind) => {

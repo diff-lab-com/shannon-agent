@@ -310,7 +310,7 @@ function InstalledRow({
         )}
         {row.installed_at && (
           <p className="text-label-xs text-on-surface-variant mt-[2px]">
-            {intl.formatMessage({ id: 'extensions.installed.installedAt' }, { date: formatDate(row.installed_at) })}
+            {intl.formatMessage({ id: 'extensions.installed.installedAt' }, { date: formatDate(row.installed_at, intl.locale) })}
           </p>
         )}
         {/* Disabled entries have no in-row toggle (no write Tauri command yet),
@@ -371,10 +371,12 @@ function groupByKind(rows: InstalledAddonSummary[]): Record<AddonKind, Installed
   return out;
 }
 
-function formatDate(iso: string): string {
+/** B6-36: was `toLocaleDateString(undefined, …)` — followed the OS locale;
+ *  format in the app locale instead. */
+function formatDate(iso: string, locale: string): string {
   try {
     const d = new Date(iso);
-    return d.toLocaleDateString(undefined, { year: "numeric", month: "short", day: "numeric" });
+    return new Intl.DateTimeFormat(locale, { year: "numeric", month: "short", day: "numeric" }).format(d);
   } catch {
     return iso;
   }

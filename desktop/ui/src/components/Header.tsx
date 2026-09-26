@@ -264,7 +264,12 @@ export function Header() {
                 <div className="absolute right-0 top-full mt-sm w-[280px] bg-surface-container-lowest/95 backdrop-blur-lg rounded-xl border border-outline-variant/20 shadow-xl z-modal py-sm" role="listbox" onKeyDown={e => {
                   if (e.key === 'ArrowDown') { e.preventDefault(); setModelFocus(f => Math.min(f + 1, models.length - 1)) }
                   else if (e.key === 'ArrowUp') { e.preventDefault(); setModelFocus(f => Math.max(f - 1, 0)) }
-                  else if (e.key === 'Enter' && modelFocus >= 0) { handleModelSwitch(models[modelFocus].id) }
+                  // B6-37: only handle Enter when the keydown originated on the
+                  // container itself. An option Button is natively focusable —
+                  // its own click handler fires on Enter, and the old
+                  // unguarded branch switched twice (and to a different model
+                  // whenever Tab focus and modelFocus had diverged).
+                  else if (e.key === 'Enter' && modelFocus >= 0 && e.target === e.currentTarget) { handleModelSwitch(models[modelFocus].id) }
                   else if (e.key === 'Escape') {
                     // T5 (review P1-6): this listbox owns Escape while open —
                     // don't let the same keydown also hit the window-level
@@ -286,6 +291,9 @@ export function Header() {
                       )}
                       onClick={() => handleModelSwitch(m.id)}
                       onMouseEnter={() => setModelFocus(i)}
+                      // B6-37: keep the highlight in sync with real focus, so
+                      // Tab-through and the arrow-key index can't disagree.
+                      onFocus={() => setModelFocus(i)}
                     >
                       <span className="font-mono font-label-md truncate">{m.name}</span>
                       <span className="text-label-sm text-on-surface-variant">{m.context_window > 0 ? `${(m.context_window / 1000).toFixed(0)}k` : ''}</span>

@@ -131,8 +131,11 @@ describe('Agents (P4 federated catalog)', () => {
     expect(screen.getByText('doc-writer')).toBeInTheDocument()
     expect(screen.getByText('Verified')).toBeInTheDocument()
     expect(screen.getByText('Community')).toBeInTheDocument()
-    expect(screen.getByText(/model: claude-sonnet-4-6/)).toBeInTheDocument()
-    expect(screen.getByText(/tools: read, grep, glob/)).toBeInTheDocument()
+    // B6-36: the meta prefixes resolve through the locale files now
+    // (extensions.myAgents.modelLabel / .toolsInline — en renders
+    // "Model: …" / "Tools: …").
+    expect(screen.getByText(/Model: claude-sonnet-4-6/)).toBeInTheDocument()
+    expect(screen.getByText(/Tools: read, grep, glob/)).toBeInTheDocument()
   })
 
   it('shows Installed badge when agent already installed', async () => {

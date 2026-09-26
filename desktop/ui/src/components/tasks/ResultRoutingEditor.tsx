@@ -23,11 +23,16 @@ interface ResultRoutingEditorProps {
   onChange: (next: string[]) => void
 }
 
-const KIND_OPTIONS: { kind: RoutingKind; icon: string; label: string; placeholder: string }[] = [
-  { kind: 'email', icon: 'mail', label: 'Email', placeholder: 'user@example.com' },
-  { kind: 'notification', icon: 'notifications', label: 'Notification', placeholder: '' },
-  { kind: 'log', icon: 'description', label: 'Log', placeholder: '' },
+// B6-36: channel labels used to be hardcoded English; resolve them through
+// `tasks.resultRouting.kind.*` at render time. Placeholders are examples,
+// not copy — they stay as-is.
+const KIND_OPTIONS: { kind: RoutingKind; icon: string }[] = [
+  { kind: 'email', icon: 'mail' },
+  { kind: 'notification', icon: 'notifications' },
+  { kind: 'log', icon: 'description' },
 ]
+
+const EMAIL_PLACEHOLDER = 'user@example.com'
 
 export function encodeChannel(kind: RoutingKind, target: string): string {
   if (kind === 'notification' || kind === 'log') return kind
@@ -86,7 +91,7 @@ export default function ResultRoutingEditor({ value, onChange }: ResultRoutingEd
               >
                 <span className="material-symbols-outlined text-[14px] text-on-surface-variant">{opt?.icon ?? 'circle'}</span>
                 <span className="font-label-md text-on-surface flex-1 truncate">
-                  {kind === 'email' ? `${kind}: ${target}` : opt?.label ?? kind}
+                  {kind === 'email' ? `${kind}: ${target}` : t(`tasks.resultRouting.kind.${kind}`)}
                 </span>
                 <Button
                   variant="ghost"
@@ -115,14 +120,14 @@ export default function ResultRoutingEditor({ value, onChange }: ResultRoutingEd
             onChange={e => { setPendingKind(e.target.value as RoutingKind); setPendingTarget('') }}
             className="bg-surface-container-low rounded-md border border-outline-variant/30 px-sm py-xs font-label-md focus:outline-none focus:ring-2 focus:ring-primary/30"
           >
-            {KIND_OPTIONS.map(o => <option key={o.kind} value={o.kind}>{o.label}</option>)}
+            {KIND_OPTIONS.map(o => <option key={o.kind} value={o.kind}>{t(`tasks.resultRouting.kind.${o.kind}`)}</option>)}
           </select>
         </label>
         {pendingKind === 'email' ? (
           <input
             type="text"
             aria-label={intl.formatMessage({ id: 'tasks.resultRoutingEditor.targetAria' }, { kind: pendingKind })}
-            placeholder={KIND_OPTIONS.find(o => o.kind === pendingKind)?.placeholder}
+            placeholder={pendingKind === 'email' ? EMAIL_PLACEHOLDER : undefined}
             value={pendingTarget}
             onChange={e => setPendingTarget(e.target.value)}
             onKeyDown={e => { if (e.key === 'Enter') { e.preventDefault(); addChannel() } }}

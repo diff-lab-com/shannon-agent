@@ -279,7 +279,7 @@ function AgentCard({
   onInstall: () => void;
 }) {
   const intl = useIntl()
-  const t = (id: string) => intl.formatMessage({ id })
+  const t = (id: string, values?: Record<string, string | number>) => intl.formatMessage({ id }, values)
 
   const trustLabel = TRUST_LABELS[entry.trust];
   const model = (entry.metadata.model as string | undefined) ?? null;
@@ -300,9 +300,9 @@ function AgentCard({
       </p>
       {(model || tools.length > 0) && (
         <div className="text-label-xs text-on-surface-variant mb-xs font-mono">
-          {model && <span>model: {model}</span>}
+          {model && <span>{t('extensions.myAgents.modelLabel', { model })}</span>}
           {model && tools.length > 0 && <span> · </span>}
-          {tools.length > 0 && <span>tools: {tools.join(', ')}</span>}
+          {tools.length > 0 && <span>{t('extensions.myAgents.toolsInline', { tools: tools.join(', ') })}</span>}
         </div>
       )}
       {entry.author && (

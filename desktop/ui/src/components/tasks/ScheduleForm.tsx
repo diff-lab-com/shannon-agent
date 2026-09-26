@@ -27,18 +27,18 @@ interface ScheduleFormProps {
 
 type TriggerOption = {
   value: TriggerType
-  label: string
   icon: string
-  hint: string
 }
 
 const clampHour = (v: number): number => Math.min(23, Math.max(0, Math.round(v) || 0))
 
+// B6-36: labels/hints used to be hardcoded English; resolve them per trigger
+// type through the locale files at render time instead.
 const TRIGGER_OPTIONS: TriggerOption[] = [
-  { value: 'interval', label: 'Interval', icon: 'timer', hint: 'Run every N seconds' },
-  { value: 'cron', label: 'Cron', icon: 'schedule', hint: 'Unix cron expression' },
-  { value: 'webhook', label: 'Webhook', icon: 'webhook', hint: 'Triggered by HTTP POST' },
-  { value: 'event', label: 'Event', icon: 'bolt', hint: 'Triggered by another task' },
+  { value: 'interval', icon: 'timer' },
+  { value: 'cron', icon: 'schedule' },
+  { value: 'webhook', icon: 'webhook' },
+  { value: 'event', icon: 'bolt' },
 ]
 
 export default function ScheduleForm({ onSubmit, onCancel }: ScheduleFormProps) {
@@ -265,9 +265,9 @@ export default function ScheduleForm({ onSubmit, onCancel }: ScheduleFormProps) 
               >
                 <span className="flex items-center gap-xs">
                   <span className="material-symbols-outlined icon-sm">{opt.icon}</span>
-                  <span className="font-label-md font-bold">{opt.label}</span>
+                  <span className="font-label-md font-bold">{t(`tasks.scheduleForm.type.${opt.value}`)}</span>
                 </span>
-                <span className="font-label-sm text-[11px] text-on-surface-variant">{opt.hint}</span>
+                <span className="font-label-sm text-[11px] text-on-surface-variant">{t(`tasks.scheduleForm.typeHint.${opt.value}`)}</span>
               </Button>
             )
           })}
