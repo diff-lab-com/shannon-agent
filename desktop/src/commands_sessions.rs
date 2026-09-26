@@ -1648,6 +1648,102 @@ mod archive_tests {
     }
 
     #[test]
+    fn unarchive_restores_input_layer_visibility() {
+        // 收尾钉死: the reverse of the archive-hides assertion above —
+        // after unarchive, `SessionQuery::list_recent(days, false)` (the
+        // input adapter's lens) sees the session again. Archiving hides a
+        // session from the input layer; it must not be a one-way door.
+        let tmp = tempfile::tempdir().unwrap();
+        let store = store(&tmp);
+        let a = uuid::Uuid::new_v4();
+        seed_session(&store, &a, Some("Comeback"));
+        let mut sessions = display_list(&[&a]);
+
+        assert!(apply_archived_flag(&store, &mut sessions, &a, true).unwrap());
+        let query = SessionQuery::new(store.container().to_path_buf());
+        assert!(
+            query
+                .list_recent(7, false)
+                .unwrap()
+                .iter()
+                .all(|s| s.session_id != a),
+            "fixture: the archived session is invisible to the input layer"
+        );
+
+        // Unarchive → the input layer sees the session again.
+        assert!(apply_archived_flag(&store, &mut sessions, &a, false).unwrap());
+        let visible: Vec<_> = query.list_recent(7, false).unwrap();
+        assert!(
+            visible.iter().any(|s| s.session_id == a),
+            "unarchive → the session re-enters list_recent(days, false)"
+        );
+    }
+
+    /// Overwrite every event's `ts_ns` in one seeded session's log, keeping
+    /// the JSONL shape (so the projection still parses) — gives the ordering
+    /// test wall-clock-independent `updated_at` values.
+    fn rewrite_event_ts(store: &SessionStore, id: &uuid::Uuid, ts_ns: u64) {
+        let log = store.container().join(id.to_string()).join("events.jsonl");
+        let rewritten = std::fs::read_to_string(&log)
+            .unwrap()
+            .lines()
+            .map(|line| {
+                let mut event: serde_json::Value = serde_json::from_str(line).unwrap();
+                event["ts_ns"] = serde_json::json!(ts_ns);
+                event.to_string()
+            })
+            .collect::<Vec<_>>()
+            .join("\n");
+        std::fs::write(&log, rewritten + "\n").unwrap();
+    }
+
+    #[test]
+    fn archived_rows_are_ordered_most_recently_active_first() {
+        // 收尾钉死: the 归档 lens's UI contract — `list_archived_sessions`
+        // (via its [`archived_rows`] seam) returns archived sessions ordered
+        // by `updated_at` descending, most recently active first. The
+        // ordering is inherited from `SessionStore::list`; if the store's
+        // sort ever drifts, this fails here instead of silently reordering
+        // the rail. Event timestamps are rewritten so the fixture does not
+        // depend on the real clock.
+        let tmp = tempfile::tempdir().unwrap();
+        let store = store(&tmp);
+        let older = uuid::Uuid::new_v4();
+        let newer = uuid::Uuid::new_v4();
+        seed_session(&store, &older, Some("Older"));
+        seed_session(&store, &newer, Some("Newer"));
+        let hour_ns = 3_600_000_000_000u64;
+        let now_ns: u64 = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos() as u64;
+        rewrite_event_ts(&store, &older, now_ns - 48 * hour_ns);
+        rewrite_event_ts(&store, &newer, now_ns - hour_ns);
+
+        store
+            .save_curation(&older, &SessionCuration { archived: true })
+            .unwrap();
+        store
+            .save_curation(&newer, &SessionCuration { archived: true })
+            .unwrap();
+
+        let rows = archived_rows(&store).unwrap();
+        assert_eq!(rows.len(), 2);
+        assert_eq!(rows[0].id, newer.to_string(), "most recently active first");
+        assert_eq!(rows[1].id, older.to_string());
+        // The lens reports epoch-millisecond last activity (the rail's
+        // time-ago badges), newest first.
+        assert_eq!(
+            (rows[0].updated_at, rows[1].updated_at),
+            (
+                Some(((now_ns - hour_ns) / 1_000_000) as i64),
+                Some(((now_ns - 48 * hour_ns) / 1_000_000) as i64),
+            ),
+            "rows carry last-activity and run updated_at-descending"
+        );
+    }
+
+    #[test]
     fn unarchive_rebuilds_the_rail_row_from_the_store_projection() {
         let tmp = tempfile::tempdir().unwrap();
         let store = store(&tmp);

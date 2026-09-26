@@ -188,6 +188,64 @@ describe('AdvancedSettings', () => {
       expect(api.configure).toHaveBeenCalledWith({ key: 'dream_skill_distill_enabled', value: 'true' })
     })
   })
+
+  // 卡A GC — session storage management card, next to the dream block.
+  // The description carries the informed-consent copy the review required
+  // (archived-only, last-activity clocked, never-auto-delete by default).
+  it('renders the session storage management card with the required disclosure copy', () => {
+    render(wrap(<AdvancedSettings />))
+    const card = screen.getByTestId('session-gc-card')
+    expect(within(card).getByText('Session storage management')).toBeInTheDocument()
+    const desc = within(card).getByText(/Automatically free storage by cleaning up archived sessions/)
+    const copy = desc.textContent ?? ''
+    expect(copy).toMatch(/Only archived sessions are ever cleaned/)
+    expect(copy).toMatch(/last activity/)
+    expect(copy).toMatch(/nothing is auto-deleted by default/)
+  })
+
+  it('renders the GC switch default-off and the retention select defaulting to Never', () => {
+    render(wrap(<AdvancedSettings />))
+    const card = screen.getByTestId('session-gc-card')
+    expect(within(card).getByRole('switch')).toHaveAttribute('aria-checked', 'false')
+    const select = within(card).getByRole('combobox', { name: 'Retention window' }) as HTMLSelectElement
+    expect(select.value).toBe('0')
+    expect(select.selectedOptions[0].textContent).toBe('Never')
+  })
+
+  it('persists session_gc_enabled through configure when toggled', async () => {
+    render(wrap(<AdvancedSettings />))
+    const card = screen.getByTestId('session-gc-card')
+    fireEvent.click(within(card).getByRole('switch'))
+    await waitFor(() => {
+      expect(api.configure).toHaveBeenCalledWith({ key: 'session_gc_enabled', value: 'true' })
+    })
+  })
+
+  it('persists retention 30 days through configure as session_retention_days=30', async () => {
+    render(wrap(<AdvancedSettings />))
+    const card = screen.getByTestId('session-gc-card')
+    fireEvent.change(within(card).getByRole('combobox', { name: 'Retention window' }), { target: { value: '30' } })
+    await waitFor(() => {
+      expect(api.configure).toHaveBeenCalledWith({ key: 'session_retention_days', value: '30' })
+    })
+  })
+
+  it('persists the 永不 gear as session_retention_days=0 (0 means never)', async () => {
+    vi.mocked(api.getConfig).mockResolvedValueOnce({
+      provider: 'anthropic',
+      model: 'claude-sonnet-4-6',
+      session_retention_days: 30,
+    } as any)
+    render(wrap(<AdvancedSettings />))
+    const card = screen.getByTestId('session-gc-card')
+    // Fixture: a persisted 30-day window shows as the selected gear.
+    const select = await within(card).findByRole('combobox', { name: 'Retention window' }) as HTMLSelectElement
+    await waitFor(() => expect(select.value).toBe('30'))
+    fireEvent.change(select, { target: { value: '0' } })
+    await waitFor(() => {
+      expect(api.configure).toHaveBeenCalledWith({ key: 'session_retention_days', value: '0' })
+    })
+  })
 })
 
 describe('AdvancedSettings — Self-improvement approval', () => {

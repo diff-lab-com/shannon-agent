@@ -91,6 +91,20 @@ export default function AdvancedSettings() {
     setDreamSkillDistillEnabled(config?.dream_skill_distill_enabled ?? false)
   }, [config?.dream_skill_distill_enabled])
 
+  // 卡A GC — session storage management: auto-clean switch (default off)
+  // + retention gear (永不 0 / 30 / 90 days). Both follow the persisted
+  // config on refresh, like the dream switches above.
+  const [sessionGcEnabled, setSessionGcEnabled] = useState(config?.session_gc_enabled ?? false)
+  const [sessionRetentionDays, setSessionRetentionDays] = useState<number>(config?.session_retention_days ?? 0)
+
+  useEffect(() => {
+    setSessionGcEnabled(config?.session_gc_enabled ?? false)
+  }, [config?.session_gc_enabled])
+
+  useEffect(() => {
+    setSessionRetentionDays(config?.session_retention_days ?? 0)
+  }, [config?.session_retention_days])
+
   const handleToggle = async (key: string, value: boolean, setter: (v: boolean) => void) => {
     setter(value)
     try {
@@ -149,6 +163,22 @@ export default function AdvancedSettings() {
       await api.openReleasePage(updateInfo.releaseUrl)
     } catch (e) {
       toastError(t('settings.advanced.updateOpenFailed'), e)
+    }
+  }
+
+  // 卡A GC: persist the retention gear. `0` (永不) is written literally —
+  // the backend maps it to "never auto-delete" — so the value the user
+  // picked is exactly the value stored.
+  const handleRetentionChange = async (next: string) => {
+    const days = Number(next)
+    if (!Number.isInteger(days) || days < 0) return
+    setSessionRetentionDays(days)
+    try {
+      await api.configure({ key: 'session_retention_days', value: String(days) })
+      await refreshConfig()
+      toast.success(t('settings.advanced.sessionGc.saved'))
+    } catch (e) {
+      toastError(t('settings.advanced.updateFailed'), e)
     }
   }
 
@@ -234,6 +264,46 @@ export default function AdvancedSettings() {
               <div className="font-label-sm text-[12px] text-on-surface-variant leading-tight">{t('settings.dream.distillEnabledDesc')}</div>
             </div>
             <Switch checked={dreamSkillDistillEnabled} onCheckedChange={v => handleToggle('dream_skill_distill_enabled', v, setDreamSkillDistillEnabled)} className="shrink-0" />
+          </div>
+        </div>
+
+        {/* 卡A GC — 会话存储管理: auto-clean for **archived** sessions only,
+            parked next to the Dream/Skill cards. The description carries the
+            informed-consent copy the review required: 仅清理已归档会话；按
+            最后活跃时间计时；默认永不自动删除. */}
+        <div className="bg-surface-container-lowest p-lg rounded-xl shadow-sm border border-outline-variant/30 group hover:shadow-md transition-shadow" data-testid="session-gc-card">
+          <div className="flex items-center gap-md mb-md">
+            <div className="p-2 bg-primary/10 rounded-lg text-primary flex items-center justify-center">
+              <span className="material-symbols-outlined">auto_delete</span>
+            </div>
+            <h3 className="font-headline-md text-[24px] font-bold text-on-surface">{t('settings.advanced.sessionGc.title')}</h3>
+          </div>
+          <p className="text-on-surface-variant text-body-sm mb-lg">{t('settings.advanced.sessionGc.desc')}</p>
+          <div className="flex items-center justify-between gap-md">
+            <div>
+              <div className="font-label-md text-[14px] text-on-surface font-semibold mb-1">{t('settings.advanced.sessionGc.enabled')}</div>
+              <div className="font-label-sm text-[12px] text-on-surface-variant leading-tight">{t('settings.advanced.sessionGc.enabledDesc')}</div>
+            </div>
+            <Switch checked={sessionGcEnabled} onCheckedChange={v => handleToggle('session_gc_enabled', v, setSessionGcEnabled)} className="shrink-0" />
+          </div>
+          <div className="mt-md">
+            <label className="block font-label-sm text-[12px] text-on-surface-variant mb-1" htmlFor="session-retention-select">
+              {t('settings.advanced.sessionGc.retention')}
+            </label>
+            {/* Native select (the settings modals' pattern) — the wire value
+                is the plain day count, `0` = 永不 (never auto-delete). */}
+            <select
+              id="session-retention-select"
+              className="w-full px-md py-sm bg-surface text-on-surface border border-outline-variant/50 rounded-lg outline-none focus:ring-2 focus:ring-primary font-body-sm cursor-pointer"
+              value={String(sessionRetentionDays)}
+              onChange={e => void handleRetentionChange(e.target.value)}
+              aria-label={t('settings.advanced.sessionGc.retention')}
+            >
+              <option value="0">{t('settings.advanced.sessionGc.retention.never')}</option>
+              <option value="30">{t('settings.advanced.sessionGc.retention.30')}</option>
+              <option value="90">{t('settings.advanced.sessionGc.retention.90')}</option>
+            </select>
+            <p className="font-label-sm text-[11px] text-on-surface-variant mt-1">{t('settings.advanced.sessionGc.retentionDesc')}</p>
           </div>
         </div>
 

@@ -258,6 +258,10 @@ vi.mock('@/lib/tauri-api', () => ({
   newSession: vi.fn().mockResolvedValue('session-1'),
   listSessions: vi.fn().mockResolvedValue([]),
   searchSessions: vi.fn().mockResolvedValue([]),
+  // 卡A archive: the rail's 已归档 lens + archive/restore actions.
+  listArchivedSessions: vi.fn().mockResolvedValue([]),
+  archiveSession: vi.fn().mockResolvedValue(true),
+  unarchiveSession: vi.fn().mockResolvedValue(true),
   loadSession: vi.fn().mockResolvedValue([]),
   switchSession: vi.fn().mockResolvedValue([]),
   setSessionWorkingDir: vi.fn().mockResolvedValue(undefined),

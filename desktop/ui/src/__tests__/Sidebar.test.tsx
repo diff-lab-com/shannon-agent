@@ -703,6 +703,63 @@ describe('Sidebar — zero-session guide card (U7)', () => {
   })
 })
 
+// 卡A 收尾 — archiving the last active session must not orphan the 已归档
+// section behind the onboarding EmptyState: with an empty active list and
+// archived sessions present, the rail renders with a light active-empty
+// hint and the archived section auto-expanded (restore is one click away).
+describe('Sidebar — all-archived rail (卡A 收尾)', () => {
+  beforeEach(() => {
+    window.localStorage.clear()
+    vi.clearAllMocks()
+  })
+
+  it('shows the rail (hint + auto-expanded archived section) instead of onboarding when only archived sessions exist', async () => {
+    const api = await import('@/lib/tauri-api')
+    vi.mocked(api.listSessions).mockResolvedValue([] as any)
+    vi.mocked(api.listArchivedSessions).mockResolvedValue([
+      { id: 'arch-1', title: 'Old project chat', updated_at: Date.now() - 3600_000 },
+    ] as any)
+    render(wrap(<Sidebar />))
+    // The rail (not the onboarding EmptyState) once the archived lens lands.
+    const toggle = await screen.findByTestId('sidebar-archived-toggle')
+    expect(screen.queryByText('Start your first chat')).not.toBeInTheDocument()
+    // The light active-area hint via the new i18n key.
+    expect(screen.getByTestId('sidebar-active-empty-hint')).toBeInTheDocument()
+    // The 已归档 section defaults to expanded in this scenario only.
+    expect(toggle).toHaveAttribute('aria-expanded', 'true')
+    expect(screen.getByTestId('archived-row-arch-1')).toBeInTheDocument()
+    // The collapse interaction still works (aria-expanded flips).
+    fireEvent.click(toggle)
+    expect(toggle).toHaveAttribute('aria-expanded', 'false')
+    expect(screen.queryByTestId('archived-row-arch-1')).not.toBeInTheDocument()
+  })
+
+  it('keeps the onboarding EmptyState when both the active and archived lists are empty', async () => {
+    const api = await import('@/lib/tauri-api')
+    vi.mocked(api.listSessions).mockResolvedValue([] as any)
+    vi.mocked(api.listArchivedSessions).mockResolvedValue([] as any)
+    render(wrap(<Sidebar />))
+    expect(await screen.findByText('Start your first chat')).toBeInTheDocument()
+    expect(screen.queryByTestId('sidebar-archived-section')).not.toBeInTheDocument()
+    expect(screen.queryByTestId('sidebar-active-empty-hint')).not.toBeInTheDocument()
+  })
+
+  it('keeps the archived section collapsed by default when active sessions exist', async () => {
+    const api = await import('@/lib/tauri-api')
+    vi.mocked(api.listSessions).mockResolvedValue([
+      { id: 's1', title: 'Alpha Chat', created_at: Date.now(), message_count: 0 },
+    ] as any)
+    vi.mocked(api.listArchivedSessions).mockResolvedValue([
+      { id: 'arch-1', title: 'Old project chat', updated_at: Date.now() - 3600_000 },
+    ] as any)
+    render(wrap(<Sidebar />))
+    const toggle = await screen.findByTestId('sidebar-archived-toggle')
+    expect(toggle).toHaveAttribute('aria-expanded', 'false')
+    expect(screen.queryByTestId('sidebar-active-empty-hint')).not.toBeInTheDocument()
+    expect(screen.queryByText('Start your first chat')).not.toBeInTheDocument()
+  })
+})
+
 describe('Sidebar — icon semantics (U8)', () => {
   beforeEach(() => {
     window.localStorage.clear()
