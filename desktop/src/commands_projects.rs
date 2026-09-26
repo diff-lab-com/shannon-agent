@@ -95,10 +95,7 @@ pub async fn register_project(
     state: tauri::State<'_, AppState>,
     path: String,
 ) -> Result<ProjectRecord, String> {
-    let path = normalize_path(&path).to_string();
-    if path.is_empty() {
-        return Err("project path is empty".into());
-    }
+    let path = normalized_path_or_err(&path)?;
     let registry = state.project_registry();
     let candidate = ProjectAdoptCandidate {
         path: path.clone(),
@@ -121,9 +118,10 @@ pub async fn rename_project(
     path: String,
     name: Option<String>,
 ) -> Result<ProjectRecord, String> {
+    let path = normalized_path_or_err(&path)?;
     state
         .project_registry()
-        .rename(normalize_path(&path), name)
+        .rename(&path, name)
         .map_err(|e| e.to_string())
 }
 
@@ -136,9 +134,10 @@ pub async fn set_project_appearance(
     icon: Option<String>,
     color: Option<String>,
 ) -> Result<ProjectRecord, String> {
+    let path = normalized_path_or_err(&path)?;
     state
         .project_registry()
-        .set_appearance(normalize_path(&path), icon, color)
+        .set_appearance(&path, icon, color)
         .map_err(|e| e.to_string())
 }
 
@@ -149,9 +148,10 @@ pub async fn archive_project(
     state: tauri::State<'_, AppState>,
     path: String,
 ) -> Result<ProjectRecord, String> {
+    let path = normalized_path_or_err(&path)?;
     state
         .project_registry()
-        .set_archived(normalize_path(&path), true)
+        .set_archived(&path, true)
         .map_err(|e| e.to_string())
 }
 
@@ -162,9 +162,10 @@ pub async fn unarchive_project(
     state: tauri::State<'_, AppState>,
     path: String,
 ) -> Result<ProjectRecord, String> {
+    let path = normalized_path_or_err(&path)?;
     state
         .project_registry()
-        .set_archived(normalize_path(&path), false)
+        .set_archived(&path, false)
         .map_err(|e| e.to_string())
 }
 
@@ -263,6 +264,19 @@ fn push_candidate(
 /// persistence (P-E1) stores the same normalized key the registry adopts.
 pub(crate) fn normalize_path(path: &str) -> &str {
     path.trim().trim_end_matches(['/', '\\'])
+}
+
+/// The command-entry guard every registry-writing command shares
+/// (M6 review fix): normalize, then reject a path that reduces to nothing.
+/// The core registry's upsert semantics auto-create unknown keys, so a
+/// blank `path` arriving here would silently materialize a phantom `""`
+/// row — an Err is the honest answer instead.
+fn normalized_path_or_err(path: &str) -> Result<String, String> {
+    let path = normalize_path(path).to_string();
+    if path.is_empty() {
+        return Err("project path is empty".into());
+    }
+    Ok(path)
 }
 
 /// Routine working dirs feeding project adoption (collector source b, P-E1).
@@ -488,6 +502,47 @@ mod tests {
     // adoption step is exercised through the runtime-generic
     // `adopt_working_dir` helper the command calls (same extraction
     // pattern as the budget-enforcement tests).
+    // M6 review fix: every registry-writing command rejects a path that
+    // normalizes to nothing — the core upsert would otherwise auto-create
+    // a phantom `""` row (register_project already guarded; now the
+    // curation commands do too).
+    #[tokio::test]
+    async fn curation_commands_reject_empty_normalized_paths_without_auto_creating() {
+        let tmp = tempfile::tempdir().unwrap();
+        let app = tauri::test::mock_app();
+        app.manage(project_state(tmp.path()));
+        let state = app.state::<AppState>();
+
+        for path in ["", "   ", "/", "///", "  \\"] {
+            let rename = rename_project(app.state::<AppState>(), path.into(), Some("X".into()))
+                .await
+                .map(|_| ())
+                .unwrap_err();
+            assert!(rename.contains("empty"), "{path:?} → {rename}");
+            let appearance =
+                set_project_appearance(app.state::<AppState>(), path.into(), None, Some("red".into()))
+                    .await
+                    .map(|_| ())
+                    .unwrap_err();
+            assert!(appearance.contains("empty"), "{path:?} → {appearance}");
+            let archive = archive_project(app.state::<AppState>(), path.into())
+                .await
+                .map(|_| ())
+                .unwrap_err();
+            assert!(archive.contains("empty"), "{path:?} → {archive}");
+            let unarchive = unarchive_project(app.state::<AppState>(), path.into())
+                .await
+                .map(|_| ())
+                .unwrap_err();
+            assert!(unarchive.contains("empty"), "{path:?} → {unarchive}");
+        }
+        assert_eq!(
+            paths(&state.project_registry().list(true).unwrap()),
+            [] as [String; 0],
+            "no phantom row may be auto-created"
+        );
+    }
+
     #[tokio::test]
     async fn curation_commands_target_the_existing_row_despite_trailing_separator() {
         let tmp = tempfile::tempdir().unwrap();
