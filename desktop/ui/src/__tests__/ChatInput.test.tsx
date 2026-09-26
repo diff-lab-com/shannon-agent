@@ -452,34 +452,40 @@ describe('ChatInput — slash-command menu', () => {
   })
 })
 
-// B2 P2-9: the slash autocomplete previously had zero combobox a11y — the
-// textarea now exposes aria-expanded/aria-controls/aria-activedescendant and
-// the options carry ids so selection changes are announced.
-describe('ChatInput — slash combobox a11y', () => {
-  it('wires the textarea as a combobox pointing at the slash listbox', () => {
+// B2 P2-9, revised after integration review: a permanent `role="combobox"`
+// on the textarea mislabels the plain multi-line composer for assistive tech
+// and broke the `getByRole('textbox', { name: 'Message' })` E2E contract.
+// The composer keeps its implicit textbox role; menu state (open / count /
+// selection) is announced through a polite status region instead.
+describe('ChatInput — slash autocomplete a11y', () => {
+  it('keeps the textarea a plain textbox while the slash menu is open', () => {
     const { container } = renderChatInput({ value: '/' })
     const textarea = container.querySelector('textarea')!
-    expect(textarea).toHaveAttribute('role', 'combobox')
-    expect(textarea).toHaveAttribute('aria-expanded', 'true')
-    expect(textarea).toHaveAttribute('aria-autocomplete', 'list')
+    expect(textarea).not.toHaveAttribute('role')
+    expect(textarea).not.toHaveAttribute('aria-expanded')
+    expect(textarea).not.toHaveAttribute('aria-activedescendant')
+    // The listbox itself is still exposed with usable option ids.
     const listbox = screen.getByRole('listbox', { name: 'Slash commands' })
-    expect(textarea.getAttribute('aria-controls')).toBe(listbox.id)
     const optionIds = Array.from(listbox.querySelectorAll('[role="option"]')).map(o => o.id)
     optionIds.forEach(id => expect(id).toBeTruthy())
-    // The active descendant points at the highlighted option.
-    expect(textarea.getAttribute('aria-activedescendant')).toBe(optionIds[0])
-    fireEvent.keyDown(textarea, { key: 'ArrowDown' })
-    expect(textarea.getAttribute('aria-activedescendant')).toBe(optionIds[1])
   })
 
-  it('reflects the closed state after Escape', () => {
+  it('announces menu state and selection through the status region', () => {
+    const { container } = renderChatInput({ value: '/' })
+    const status = screen.getByRole('status')
+    expect(status).toHaveTextContent(/selected \/context/i)
+    const textarea = container.querySelector('textarea')!
+    fireEvent.keyDown(textarea, { key: 'ArrowDown' })
+    expect(status).not.toHaveTextContent('/context')
+  })
+
+  it('removes the status region once the menu closes', () => {
     const { container } = renderChatInput({ value: '/' })
     const textarea = container.querySelector('textarea')!
+    expect(screen.getByRole('status')).toBeInTheDocument()
     fireEvent.keyDown(textarea, { key: 'Escape' })
     expect(screen.queryByRole('listbox', { name: 'Slash commands' })).toBeNull()
-    expect(textarea).toHaveAttribute('aria-expanded', 'false')
-    expect(textarea.getAttribute('aria-controls')).toBeNull()
-    expect(textarea.getAttribute('aria-activedescendant')).toBeNull()
+    expect(screen.queryByRole('status')).toBeNull()
   })
 
   it('drops the per-keystroke live announcements from the char counter', () => {

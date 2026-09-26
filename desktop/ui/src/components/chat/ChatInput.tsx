@@ -451,6 +451,21 @@ export default function ChatInput({
         </div>
       )}
 
+      {/* P2-9, revised after integration review: the composer keeps its
+          implicit multi-line `textbox` role — a permanent `role="combobox"`
+          mislabels the 99%-of-the-time plain text area for assistive tech
+          (and broke the `getByRole('textbox', { name: 'Message' })` E2E
+          contract). Menu state is announced through this polite status
+          region instead: open/count/selection updates are all render-driven. */}
+      {slashOpen && (
+        <span role="status" className="sr-only">
+          {intl.formatMessage(
+            { id: 'chat.input.slashMenu.status' },
+            { count: slashMatches.length, current: `/${slashMatches[slashActive]?.name ?? ''}` },
+          )}
+        </span>
+      )}
+
       {isDragging && (
         <div className="absolute inset-0 z-raised flex items-center justify-center bg-primary/10 rounded-2xl backdrop-blur-sm pointer-events-none">
           <div className="flex flex-col items-center gap-sm text-primary">
@@ -515,14 +530,6 @@ export default function ChatInput({
                   : t('chat.input.placeholder.empty')
             }
             aria-label={t('chat.input.ariaLabel')}
-            // P2-9: combobox a11y for the slash autocomplete — the listbox
-            // exists only while the menu is open; selection is reflected via
-            // aria-activedescendant pointing at the highlighted option.
-            role="combobox"
-            aria-expanded={slashOpen}
-            aria-controls={slashOpen ? slashListboxId : undefined}
-            aria-activedescendant={slashOpen ? slashOptionId(slashMatches[slashActive]?.name ?? '') : undefined}
-            aria-autocomplete="list"
             value={value}
             onChange={e => onChange(e.target.value)}
             onKeyDown={handleKeyDown}

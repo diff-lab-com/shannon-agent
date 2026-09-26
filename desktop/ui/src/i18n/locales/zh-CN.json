@@ -1668,6 +1668,7 @@
   "chat.input.attach.failed": "添加附件失败",
   "chat.input.ariaLabel": "消息",
   "chat.input.charCount.hint": "过长消息可能超出模型上下文限制。",
+  "chat.input.slashMenu.status": "斜杠命令菜单：共 {count} 条，当前选中 {current}",
   "chat.input.attach.dropHint": "拖放文件以添加附件",
   "chat.input.attach.detachAll": "全部移除",
   "chat.input.attach.remove": "移除 {name}",

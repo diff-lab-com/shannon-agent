@@ -1657,6 +1657,7 @@
   "chat.input.plus.aria": "Attachments and tools",
   "chat.input.attach.failed": "Failed to attach file",
   "chat.input.ariaLabel": "Message",
+  "chat.input.slashMenu.status": "Slash command menu: {count} commands, selected {current}",
   "chat.input.charCount.hint": "Very long messages may exceed the model context limit.",
   "chat.input.attach.dropHint": "Drop files to attach",
   "chat.input.attach.detachAll": "Detach all",
