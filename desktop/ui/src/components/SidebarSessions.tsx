@@ -15,6 +15,12 @@
 //   shannon-sessions-order    — Record<sessionId, index> written on drag reorder
 //   shannon-sessions-pinned   — string[] of pinned session ids
 //   shannon-sessions-grouping — 'project' | 'time'
+//   shannon-sessions-folded   — string[] of folded project keys (full paths)
+//
+// P-U2 (2026-09): project names/appearance/archive moved to the engine
+// registry (projects.db via list/rename/set_project_appearance/archive/
+// unarchive_project). The old localStorage `shannon-projects` registry is
+// read once on mount, migrated through rename_project, then removed.
 
 import { useState, useCallback, useEffect, useMemo, useRef, Fragment } from 'react'
 import { useNavigate } from 'react-router-dom'
@@ -31,6 +37,7 @@ import { toastError } from '@/lib/errorToast'
 import type {
   ArchivedSessionRow,
   GoalRunDto,
+  ProjectRecord,
   ScheduledRoutine,
   SessionActivity,
   SessionInfo,
@@ -42,19 +49,48 @@ const SESSIONS_ORDER_KEY = 'shannon-sessions-order'
 const SESSIONS_PINNED_KEY = 'shannon-sessions-pinned'
 const SESSIONS_GROUPING_KEY = 'shannon-sessions-grouping'
 const SESSIONS_FOLDED_KEY = 'shannon-sessions-folded'
-// Batch F2: project registry — display names for derived project folders
-// (the first slice of "projects as entities"; deeper registries need engine
-// support). dirname → display name.
+// P-U2: legacy localStorage project-name registry (dirname → display name).
+// The engine registry (projects.db, P-E3) replaced it; this key is only
+// read once on mount to migrate custom names into the registry, then
+// removed. Never written again.
 const PROJECTS_KEY = 'shannon-projects'
 
-type ProjectRegistry = Record<string, string>
+/** P-U2 color palette for the project ⋯ menu's swatch popover. Values are
+ *  theme token references (the chart series palette) stored in the registry
+ *  row's `color` — they adapt to the active theme and dodge the design-token
+ *  guardrails; the icon field stays API-only (no icon UI by ruling). */
+const PROJECT_COLORS = [
+  'var(--chart-series-4)', // red
+  'var(--chart-series-3)', // amber
+  'var(--chart-series-2)', // green
+  'var(--chart-series-1)', // blue
+  'var(--chart-series-5)', // purple
+  'var(--chart-series-6)', // pink
+]
 
-function readProjectRegistry(): ProjectRegistry {
-  if (typeof window === 'undefined') return {}
-  try {
-    const raw = window.localStorage.getItem(PROJECTS_KEY)
-    return raw ? JSON.parse(raw) : {}
-  } catch { return {} }
+/** Normalize a working-dir/project path into a stable group key: trimmed,
+ *  trailing separators stripped (the P-U1 upgrade — the key is the FULL
+ *  path, so /a/x and /b/x are different projects even though they share a
+ *  tail segment). */
+function normalizePathKey(dir: string | null | undefined): string | null {
+  const d = dir?.trim()
+  if (!d) return null
+  const stripped = d.replace(/[\\/]+$/, '')
+  return stripped || '/'
+}
+
+/** Tail segment of a path for default display labels (slash or backslash
+ *  separated — the engine canonicalizes, but never assume the separator). */
+function pathTail(dir: string): string {
+  const parts = dir.split(/[\\/]/).filter(Boolean)
+  return parts.length > 0 ? parts[parts.length - 1] : dir
+}
+
+/** Invoke a tauri-api wrapper defensively: partial test mocks (and engines
+ *  without a command) throw synchronously on the missing property — turn
+ *  that into a rejection so callers can share one catch path. */
+function callSafe<T>(fn: () => Promise<T>): Promise<T> {
+  try { return fn() } catch (e) { return Promise.reject(e) }
 }
 
 // IA (2026-09 review): two grouping modes — by project (folders nest
@@ -150,13 +186,61 @@ export function projectOf(s: { working_dir?: string | null }): string | null {
   return parts.length > 0 ? parts[parts.length - 1] : null
 }
 
+/** P-U1 grouping key: the FULL working dir (trailing separators stripped),
+ *  not its tail segment — /w/x and /h/x are different projects even though
+ *  both render as "x". Kept alongside the untouched `projectOf` (the dock's
+ *  breadcrumb only needs the tail). null = session has no working dir. */
+export function projectKeyOf(s: { working_dir?: string | null }): string | null {
+  return normalizePathKey(s.working_dir)
+}
+
 interface SessionGroup {
   key: string
   icon: string
   label: string
   sessions: SessionInfo[]
+  /** P-U1: enabled routines whose working_dir maps to this project; they
+   *  render interleaved with the sessions (recency = next_fire_at). */
+  routines?: ScheduledRoutine[]
+  /** P-U1: merged session/routine render order for project groups. */
+  rows?: GroupRow[]
+  /** P-U2: registry appearance + emptiness (registry-only placeholder). */
+  color?: string | null
+  isEmpty?: boolean
   /** Project groups render as collapsible folder rows (ZCode 项目 tree). */
   isProject?: boolean
+}
+
+/** One renderable row inside a project group: a session or a nested routine. */
+type GroupRow =
+  | { kind: 'session'; session: SessionInfo }
+  | { kind: 'routine'; routine: ScheduledRoutine }
+
+/** Group-internal sort timestamp: sessions by last activity, routines by
+ *  their next fire (the plan's "例行用 next_fire_at"). */
+function rowTime(row: GroupRow): number {
+  if (row.kind === 'routine') return row.routine.next_fire_at ?? 0
+  return row.session.updated_at ?? row.session.created_at ?? 0
+}
+
+/** Merge routines into a project's session list by recent activity. Sessions
+ *  keep the rail's own order (pins → drag order → recency, i.e. the incoming
+ *  `sessions` order is preserved — drag/pin semantics stay intact); each
+ *  routine slots in before the first session that is strictly less recent
+ *  than its next_fire_at. */
+function mergeGroupRows(sessions: SessionInfo[], routines: ScheduledRoutine[]): GroupRow[] {
+  const rows: GroupRow[] = sessions.map(session => ({ kind: 'session' as const, session }))
+  const sorted = [...routines]
+    .sort((a, b) => (b.next_fire_at ?? 0) - (a.next_fire_at ?? 0))
+    .map(routine => ({ kind: 'routine' as const, routine }))
+  const merged: GroupRow[] = []
+  let ri = 0
+  for (const row of rows) {
+    while (ri < sorted.length && rowTime(sorted[ri]) >= rowTime(row)) merged.push(sorted[ri++])
+    merged.push(row)
+  }
+  while (ri < sorted.length) merged.push(sorted[ri++])
+  return merged
 }
 
 interface SessionsSectionProps {
@@ -188,14 +272,25 @@ export function SessionsSection({ sessions, sessionActivity, goalRunsBySession =
   // ZCode 项目 tree: folded project folders persist; the active session's
   // project always auto-expands so the current conversation stays visible.
   const [foldedProjects, setFoldedProjects] = useState<ReadonlySet<string>>(readFolded)
-  // Batch F2: project display-name registry (localStorage) + inline rename.
-  const [projectNames, setProjectNames] = useState<ProjectRegistry>(readProjectRegistry)
+  // P-U2: the engine project registry (~/.shannon/projects.db) is the single
+  // source of project names/appearance/archive state. Loaded at mount and
+  // refreshed whenever the active list changes (sessions-updated) or after a
+  // local mutation; the old localStorage registry is migrated once (below).
+  const [projects, setProjects] = useState<ProjectRecord[]>([])
+  // Bumps the registry load when the one-time localStorage migration lands —
+  // renames committed after the initial fetch would otherwise be invisible
+  // until the next sessions-updated.
+  const [projectsReload, setProjectsReload] = useState(0)
   const [editingProject, setEditingProject] = useState<string | null>(null)
   const [projectNameDraft, setProjectNameDraft] = useState('')
+  // P-U2: the project header's ⋯ menu (mirrors the session-row menu) and its
+  // color-swatch popover (only one open at a time).
+  const [projectMenuFor, setProjectMenuFor] = useState<string | null>(null)
+  const [colorPickerFor, setColorPickerFor] = useState<string | null>(null)
   // Batch F1-v1: enabled scheduled routines surface as an 自动化 section on
-  // the rail (clock icon + next fire). Nesting them under projects needs the
-  // engine to expose working_dir on routines — deferred until that contract
-  // exists.
+  // the rail. P-U1: routines WITH a working_dir nest into their project
+  // group in project mode; the standalone section below lists only the
+  // unhoused ones (no working_dir) and hides entirely when empty.
   const [routines, setRoutines] = useState<ScheduledRoutine[]>([])
   // 卡A archive: the collapsed 已归档 section at the bottom of the rail.
   // Rows come from the backend's archived lens; the load refires whenever
@@ -209,10 +304,13 @@ export function SessionsSection({ sessions, sessionActivity, goalRunsBySession =
   // default; the existing collapse interaction and aria-expanded stay.
   const [archivedOpenOverride, setArchivedOpen] = useState<boolean | null>(null)
   const archivedOpen = archivedOpenOverride ?? sessions.length === 0
+  // P-U2: 已归档项目 section — same collapsed lens as the sessions' one, but
+  // always collapsed by default (a project has no "open" action to lose).
+  const [archivedProjectsOpen, setArchivedProjectsOpen] = useState(false)
   // Wall-clock tick that drives the elapsed badges while anything runs.
   const [nowTick, setNowTick] = useState(() => Date.now())
   // U5: touch long-press (500ms) opens the ⋯ menu; the click that follows a
-  // completed long-press must not also switch the session.
+  // completed long-press must not also switch the session / fold the project.
   const longPressTimer = useRef<number | null>(null)
   const suppressClickRef = useRef(false)
 
@@ -253,8 +351,9 @@ export function SessionsSection({ sessions, sessionActivity, goalRunsBySession =
 
   // The active session's project folder always stays expanded — switching to
   // a conversation in a folded project reveals it instead of hiding the row.
+  // (Keys are full paths since P-U1 — same keys the fold set persists.)
   const activeProject = currentSessionId
-    ? projectOf(sessions.find(s => s.id === currentSessionId) ?? {})
+    ? projectKeyOf(sessions.find(s => s.id === currentSessionId) ?? {})
     : null
   useEffect(() => {
     if (!activeProject) return
@@ -273,11 +372,12 @@ export function SessionsSection({ sessions, sessionActivity, goalRunsBySession =
     }
   }, [])
   useEffect(() => clearLongPress, [clearLongPress])
-  const startLongPress = useCallback((id: string) => {
+  const startLongPress = useCallback((id: string, kind: 'session' | 'project') => {
     clearLongPress()
     longPressTimer.current = window.setTimeout(() => {
       suppressClickRef.current = true
-      setMenuFor(id)
+      if (kind === 'project') setProjectMenuFor(id)
+      else setMenuFor(id)
     }, 500)
   }, [clearLongPress])
 
@@ -303,6 +403,70 @@ export function SessionsSection({ sessions, sessionActivity, goalRunsBySession =
       cancelled = true
       window.clearInterval(id)
     }
+  }, [])
+
+  // P-U2: load the engine project registry — archived rows included (the
+  // 已归档项目 section reads them). Fully defensive: engines without the
+  // command or partial test mocks just leave the registry empty (name falls
+  // back to the path tail). Refires with the active list (sessions-updated
+  // fires around session mutations) and after the localStorage migration.
+  useEffect(() => {
+    let cancelled = false
+    const load = () => {
+      try {
+        api.listProjects(true)
+          .then(rows => { if (!cancelled) setProjects(Array.isArray(rows) ? rows : []) })
+          .catch(() => { if (!cancelled) setProjects([]) })
+      } catch { /* registry stays empty */ }
+    }
+    load()
+    return () => { cancelled = true }
+  }, [sessions, projectsReload])
+
+  // P-U2: one-time migration of the legacy localStorage project registry
+  // (`shannon-projects`: Record<dir, name>) into the engine registry — each
+  // custom name is committed via rename_project (skipped when the registry
+  // already carries that name), then the localStorage key is removed so
+  // group names come only from the registry from here on. Best-effort per
+  // entry: a failed rename never blocks the retirement of the key.
+  const migratedProjectsRef = useRef(false)
+  useEffect(() => {
+    if (migratedProjectsRef.current) return
+    migratedProjectsRef.current = true
+    let raw: string | null = null
+    try { raw = window.localStorage.getItem(PROJECTS_KEY) } catch { raw = null }
+    if (raw === null) return
+    let legacy: Record<string, unknown> = {}
+    try { legacy = raw ? JSON.parse(raw) : {} } catch { legacy = {} }
+    const entries = Object.entries(legacy).filter(
+      (entry): entry is [string, string] => typeof entry[1] === 'string' && entry[1].trim().length > 0,
+    )
+    void (async () => {
+      let known: ProjectRecord[] = []
+      try {
+        const rows = await callSafe(() => api.listProjects(true))
+        if (Array.isArray(rows)) known = rows
+      } catch { /* treat as empty — every entry just gets renamed */ }
+      // Legacy F2 keys were path TAILS (the old projectOf grouping), not
+      // full dirs. Absolute keys migrate verbatim; a tail key resolves
+      // against the registry only when it names exactly one project —
+      // anything else is skipped rather than registered as a junk path.
+      const looksAbsolute = (p: string) => p.startsWith('/') || /^[a-zA-Z]:[\\/]/.test(p)
+      for (const [dir, name] of entries) {
+        if (known.some(p => p.path === dir && p.name === name)) continue
+        let target: string | null = looksAbsolute(dir) ? dir : null
+        if (!target) {
+          const matches = known.filter(p => pathTail(normalizePathKey(p.path) ?? p.path) === dir)
+          if (matches.length === 1) target = matches[0].path
+        }
+        if (!target) continue
+        try { await callSafe(() => api.renameProject(target, name)) } catch { /* best-effort */ }
+      }
+      // The localStorage registry is retired unconditionally once read —
+      // valid entries were migrated, malformed ones held nothing of value.
+      try { window.localStorage.removeItem(PROJECTS_KEY) } catch { /* noop */ }
+      if (entries.length > 0) setProjectsReload(n => n + 1)
+    })()
   }, [])
 
   // 卡A: refresh the archived lens alongside the active list — the backend
@@ -368,9 +532,43 @@ export function SessionsSection({ sessions, sessionActivity, goalRunsBySession =
     return [...sorted.filter(s => hitIds.has(s.id)), ...backendHits.filter(h => !known.has(h.id))]
   }, [sorted, query, backendHits, sessions])
 
+  // P-U2 derived registry views: name/appearance lookups by normalized path,
+  // plus the active/archived splits for the tree and the 已归档项目 section.
+  const registryByKey = useMemo(() => {
+    const m = new Map<string, ProjectRecord>()
+    for (const p of projects) {
+      const key = normalizePathKey(p.path)
+      if (key) m.set(key, p)
+    }
+    return m
+  }, [projects])
+  const activeRegistryProjects = useMemo(
+    () => projects.filter(p => !p.archivedAtMs && normalizePathKey(p.path)),
+    [projects],
+  )
+  const archivedRegistryProjects = useMemo(
+    () => projects.filter(p => p.archivedAtMs && normalizePathKey(p.path)),
+    [projects],
+  )
+  // P-U1: housed routines (working_dir set) nest into their project group;
+  // unhoused ones keep the standalone 自动化 section.
+  const housedRoutines = useMemo(
+    () => routines.filter(r => !!normalizePathKey(r.working_dir)),
+    [routines],
+  )
+  const unhousedRoutines = useMemo(
+    () => routines.filter(r => !normalizePathKey(r.working_dir)),
+    [routines],
+  )
+
   // Grouping (P0-④). null = render flat. While searching the list stays
   // flat (matches hit ranking); project mode stays flat while there is at
   // most one project (small lists stay uncluttered).
+  //
+  // P-U1/P-U2 (2026-09): the tree also engages when there is anything
+  // tree-worthy beyond sessions — enabled routines with a working_dir, or
+  // registry projects (which may be empty). Only a rail of sessions in a
+  // single project (and nothing else) stays flat, exactly as before.
   //
   // Session mode (2026-09): a single flat list sorted by recency — no
   // today/yesterday/this-week/earlier buckets. The buckets read as
@@ -399,25 +597,61 @@ export function SessionsSection({ sessions, sessionActivity, goalRunsBySession =
       return out.length > 0 ? out : null
     }
     if (grouping === 'project') {
-      const distinct = new Set(filtered.map(projectOf))
-      if (distinct.size <= 1) return null
+      // P-U1: the group key is the FULL working dir (trailing separators
+      // normalized away) — no more collapsing /w/x and /h/x into one "x".
+      const keyOf = (s: SessionInfo) => projectKeyOf(s) ?? ''
+      const distinct = new Set(filtered.map(keyOf))
+      const routineKeyOf = (r: ScheduledRoutine) => normalizePathKey(r.working_dir)
+      // Tree-worthiness: >1 session groups, or any nested automation, or any
+      // registry project — otherwise today's flat rendering stands.
+      if (distinct.size <= 1 && housedRoutines.length === 0 && activeRegistryProjects.length === 0) return null
       const buckets = new Map<string, SessionInfo[]>()
       for (const s of filtered) {
-        const key = projectOf(s) ?? ''
+        const key = keyOf(s)
         if (!buckets.has(key)) buckets.set(key, [])
         buckets.get(key)!.push(s)
       }
-      return [...buckets.entries()].map(([key, list]) => ({
-        key,
-        icon: 'folder',
-        label: key === '' ? t('sidebar.sessions.project.untitled') : (projectNames[key] ?? key),
-        sessions: list,
-        isProject: true,
-      }))
+      const routinesByKey = new Map<string, ScheduledRoutine[]>()
+      for (const r of housedRoutines) {
+        const key = routineKeyOf(r)!
+        if (!routinesByKey.has(key)) routinesByKey.set(key, [])
+        routinesByKey.get(key)!.push(r)
+      }
+      const labelOf = (key: string) =>
+        key === '' ? t('sidebar.sessions.project.untitled') : (registryByKey.get(key)?.name ?? pathTail(key))
+      const out: SessionGroup[] = []
+      const seen = new Set<string>()
+      const pushGroup = (key: string, list: SessionInfo[], rs: ScheduledRoutine[]) => {
+        seen.add(key)
+        const isEmpty = list.length === 0 && rs.length === 0
+        out.push({
+          key,
+          icon: 'folder',
+          label: labelOf(key),
+          sessions: list,
+          routines: rs,
+          rows: isEmpty ? [] : mergeGroupRows(list, rs),
+          color: registryByKey.get(key)?.color ?? null,
+          isEmpty,
+          isProject: true,
+        })
+      }
+      // Session-derived groups first (rail order), routines mixed in.
+      for (const [key, list] of buckets) pushGroup(key, list, routinesByKey.get(key) ?? [])
+      // Routines whose project has no sessions yet (registry row optional).
+      for (const [key, rs] of routinesByKey) {
+        if (!seen.has(key)) pushGroup(key, [], rs)
+      }
+      // Registry-only projects (P-U2): empty placeholder group.
+      for (const p of activeRegistryProjects) {
+        const key = normalizePathKey(p.path)!
+        if (!seen.has(key)) pushGroup(key, [], [])
+      }
+      return out
     }
     // Session mode — flat, no headers. The list itself is the order.
     return null
-  }, [filtered, grouping, query, t, sessionActivity, projectNames])
+  }, [filtered, grouping, query, t, sessionActivity, registryByKey, housedRoutines, activeRegistryProjects])
 
   const persistOrder = useCallback((next: Record<string, number>) => {
     setOrderOverride(next)
@@ -474,17 +708,82 @@ export function SessionsSection({ sessions, sessionActivity, goalRunsBySession =
     })
   }, [])
 
-  // Batch F2: persist a project display name (rename via double-click).
+  // Apply a registry record returned by a mutation (rename/appearance/
+  // archive/unarchive) to local state so the UI reflects it instantly; the
+  // next registry fetch will agree with it.
+  const applyProjectRecord = useCallback((rec: ProjectRecord) => {
+    setProjects(prev => {
+      const key = normalizePathKey(rec.path)
+      const idx = prev.findIndex(p => normalizePathKey(p.path) === key)
+      if (idx === -1) return [...prev, rec]
+      const next = [...prev]
+      next[idx] = rec
+      return next
+    })
+  }, [])
+
+  // P-U2: commit a project rename (double-click or ⋯ menu) through the
+  // engine registry — the localStorage registry is gone; the returned record
+  // updates local state immediately (the backend also persists it).
   const commitProjectRename = useCallback((dirKey: string) => {
     const next = projectNameDraft.trim()
     setEditingProject(null)
     if (!next || !dirKey) return
-    setProjectNames(prev => {
-      const reg = { ...prev, [dirKey]: next }
-      persist(PROJECTS_KEY, reg)
-      return reg
-    })
-  }, [projectNameDraft])
+    callSafe(() => api.renameProject(dirKey, next))
+      .then(applyProjectRecord)
+      .catch(e => toastError(t('sidebar.projects.rename.failed'), e))
+  }, [projectNameDraft, applyProjectRecord, t])
+
+  // P-U2 menu action: new session rooted in this project — create, stamp the
+  // working dir (the backend adopts the project into the registry), open it
+  // in /chat. new_session emits sessions-updated, so the rail refills (and
+  // the registry load refires with it).
+  const handleNewSessionInProject = useCallback((path: string) => {
+    callSafe(() => api.newSession())
+      .then(id => callSafe(() => api.setSessionWorkingDir(id, path)).then(() => id))
+      .then(id => switchSession(id))
+      .then(() => {
+        navigate('/chat')
+        closeMobile?.()
+      })
+      .catch(e => toastError(t('sidebar.projects.newSession.failed'), e))
+  }, [switchSession, navigate, closeMobile, t])
+
+  // P-U2 menu action: reveal the project directory. The backend's
+  // reveal_in_folder applies a path-scope check ($HOME/**, $TEMP/** +
+  // canonicalized must-exist); a project that passes that check but still
+  // fails to reveal falls back to opening the directory, and only when both
+  // openers reject does the user see an error toast.
+  const handleOpenProjectDir = useCallback((path: string) => {
+    callSafe(() => api.revealInFolder(path))
+      .catch(() => callSafe(() => api.openWithDefaultApp(path)))
+      .catch(e => toastError(t('sidebar.projects.open.failed'), e))
+  }, [t])
+
+  // P-U2 menu actions: archive from the header ⋯ menu, restore from the
+  // 已归档项目 section — same toast/lens language as the session 卡A.
+  const handleArchiveProject = useCallback((path: string) => {
+    callSafe(() => api.archiveProject(path))
+      .then(rec => { applyProjectRecord(rec); toast.success(t('sidebar.projects.archive.toast')) })
+      .catch(e => toastError(t('sidebar.projects.archive.failed'), e))
+  }, [applyProjectRecord, t])
+
+  const handleRestoreProject = useCallback((path: string) => {
+    callSafe(() => api.unarchiveProject(path))
+      .then(rec => { applyProjectRecord(rec); toast.success(t('sidebar.projects.restore.toast')) })
+      .catch(e => toastError(t('sidebar.projects.restore.failed'), e))
+  }, [applyProjectRecord, t])
+
+  // P-U2 color swatch popover: write the picked color through
+  // set_project_appearance (icon stays null — no icon UI by ruling); the
+  // default swatch clears the color (null).
+  const handleSetProjectColor = useCallback((path: string, color: string | null) => {
+    setColorPickerFor(null)
+    const icon = projects.find(p => normalizePathKey(p.path) === normalizePathKey(path))?.icon ?? null
+    callSafe(() => api.setProjectAppearance(path, icon, color))
+      .then(applyProjectRecord)
+      .catch(e => toastError(t('sidebar.projects.color.failed'), e))
+  }, [projects, applyProjectRecord, t])
 
   const startRename = useCallback((session: SessionInfo) => {
     setEditingId(session.id)
@@ -539,12 +838,47 @@ export function SessionsSection({ sessions, sessionActivity, goalRunsBySession =
     ]
   }, [pinnedIds, t, sessions, startRename, togglePin, navigate, handleArchive])
 
+  // P-U2: the project header's ⋯ menu. `path` is the group key (full, trail-
+  // normalized working dir) — the registry's unique key.
+  const projectMenuItems = useCallback((group: SessionGroup): DropdownMenuItem[] => {
+    const path = group.key
+    return [
+      { id: 'new-session', label: t('sidebar.projects.newSessionHere'), icon: 'chat_bubble', onSelect: () => handleNewSessionInProject(path) },
+      { id: 'new-routine', label: t('sidebar.projects.newRoutine'), icon: 'event_repeat', onSelect: () => { navigate('/tasks'); closeMobile?.() } },
+      { id: 'open-folder', label: t('sidebar.projects.openFolder'), icon: 'folder_open', onSelect: () => handleOpenProjectDir(path) },
+      { id: 'rename', label: t('sidebar.projects.rename'), icon: 'edit', onSelect: () => { setEditingProject(path); setProjectNameDraft(group.label) } },
+      { id: 'color', label: t('sidebar.projects.color'), icon: 'palette', onSelect: () => setColorPickerFor(path) },
+      { id: 'archive', label: t('sidebar.projects.archive'), icon: 'archive', onSelect: () => handleArchiveProject(path) },
+    ]
+  }, [t, navigate, closeMobile, handleNewSessionInProject, handleOpenProjectDir, handleArchiveProject])
+
+  // P-U2 color popover dismissal: Escape or any outside pointer press closes
+  // it (the popover is nested in the header wrapper, so a closest() probe is
+  // enough to tell inside from outside).
+  useEffect(() => {
+    if (!colorPickerFor) return
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') setColorPickerFor(null)
+    }
+    const onPointer = (e: MouseEvent) => {
+      const el = e.target as Element | null
+      if (!el?.closest?.('[data-testid="project-color-popover"]')) setColorPickerFor(null)
+    }
+    document.addEventListener('keydown', onKey)
+    document.addEventListener('mousedown', onPointer)
+    return () => {
+      document.removeEventListener('keydown', onKey)
+      document.removeEventListener('mousedown', onPointer)
+    }
+  }, [colorPickerFor])
+
   const renderGroupHeader = (group: SessionGroup) => {
     if (group.isProject) {
       // ZCode 项目 tree row: a folder button (chevron + name + count) that
       // folds/unfolds its conversations. The active session's project is
-      // force-expanded by the effect above. Batch F2: double-click renames
-      // the project in place (localStorage registry).
+      // force-expanded by the effect above. P-U2: double-click (or the ⋯
+      // menu) renames the project in place through the engine registry, and
+      // a hover ⋯ + touch long-press opens the project actions menu.
       const isFolded = foldedProjects.has(group.key)
       if (editingProject === group.key) {
         return (
@@ -562,31 +896,118 @@ export function SessionsSection({ sessions, sessionActivity, goalRunsBySession =
           />
         )
       }
+      const isMenuOpen = projectMenuFor === group.key
+      const itemCount = group.sessions.length + (group.routines?.length ?? 0)
+      const currentColor = registryByKey.get(group.key)?.color ?? null
       return (
-        <button
-          type="button"
-          role="presentation"
-          aria-expanded={!isFolded}
-          title={group.label}
-          onClick={() => toggleFold(group.key)}
-          onDoubleClick={() => {
-            if (!group.key) return
-            setEditingProject(group.key)
-            setProjectNameDraft(group.label)
-          }}
-          className="w-full flex items-center gap-1.5 px-3 pt-2 pb-1 font-label-sm text-[11px] font-bold text-on-surface-variant/90 hover:text-primary transition-colors min-w-0 cursor-pointer"
+        <div
+          role="group"
+          aria-label={group.label}
+          className="group relative flex items-center min-w-0"
+          data-testid={`project-header-${group.key}`}
+          onTouchStart={() => startLongPress(group.key, 'project')}
+          onTouchEnd={clearLongPress}
+          onTouchMove={clearLongPress}
+          onTouchCancel={clearLongPress}
         >
-          <span
-            className="material-symbols-outlined text-[14px] shrink-0 transition-transform duration-150"
-            style={{ transform: isFolded ? 'rotate(-90deg)' : 'rotate(0deg)' }}
-            aria-hidden="true"
+          <button
+            type="button"
+            role="presentation"
+            aria-expanded={!isFolded}
+            title={group.label}
+            onClick={() => {
+              // U5: a completed long-press opened the menu — the click that
+              // follows must not also fold the project.
+              if (suppressClickRef.current) { suppressClickRef.current = false; return }
+              toggleFold(group.key)
+            }}
+            onDoubleClick={() => {
+              if (!group.key) return
+              setEditingProject(group.key)
+              setProjectNameDraft(group.label)
+            }}
+            className="flex-1 min-w-0 flex items-center gap-1.5 px-3 pt-2 pb-1 font-label-sm text-[11px] font-bold text-on-surface-variant/90 hover:text-primary transition-colors cursor-pointer"
           >
-            expand_more
-          </span>
-          <span className="material-symbols-outlined text-[13px] shrink-0" aria-hidden="true">{group.icon}</span>
-          <span className="truncate flex-1 min-w-0 text-left">{group.label}</span>
-          <span className="font-mono text-[10px] tabular-nums text-on-surface-variant/70 shrink-0">{group.sessions.length}</span>
-        </button>
+            <span
+              className="material-symbols-outlined text-[14px] shrink-0 transition-transform duration-150"
+              style={{ transform: isFolded ? 'rotate(-90deg)' : 'rotate(0deg)' }}
+              aria-hidden="true"
+            >
+              expand_more
+            </span>
+            <span className="material-symbols-outlined text-[13px] shrink-0" aria-hidden="true">{group.icon}</span>
+            {group.color && (
+              <span className="w-2 h-2 rounded-full shrink-0" style={{ backgroundColor: group.color }} aria-hidden="true" />
+            )}
+            <span className="truncate flex-1 min-w-0 text-left">{group.label}</span>
+            {itemCount > 0 && (
+              <span className="font-mono text-[10px] tabular-nums text-on-surface-variant/70 shrink-0">{itemCount}</span>
+            )}
+          </button>
+          <div className="relative shrink-0">
+            <Button
+              variant="ghost"
+              size="icon-xs"
+              aria-label={t('sidebar.projects.menu.aria', { name: group.label })}
+              className={cn(
+                'rounded hover:bg-surface-container text-on-surface-variant hover:text-primary transition-opacity focus-visible:ring-2 focus-visible:ring-primary/30 focus-visible:outline-none',
+                isMenuOpen || colorPickerFor === group.key ? 'opacity-100' : 'opacity-0 group-hover:opacity-100 focus-visible:opacity-100',
+              )}
+              onClick={e => {
+                e.stopPropagation()
+                setColorPickerFor(null)
+                setProjectMenuFor(isMenuOpen ? null : group.key)
+              }}
+            >
+              <span className="material-symbols-outlined text-[16px]">more_horiz</span>
+            </Button>
+            {isMenuOpen && (
+              <DropdownMenu
+                open
+                onClose={() => setProjectMenuFor(null)}
+                items={projectMenuItems(group)}
+                align="end"
+                className="w-44 min-w-0"
+                ariaLabel={t('sidebar.projects.menu.aria', { name: group.label })}
+              />
+            )}
+            {colorPickerFor === group.key && (
+              <div
+                role="menu"
+                aria-label={t('sidebar.projects.color')}
+                data-testid="project-color-popover"
+                className="absolute right-0 top-full mt-sm z-modal flex items-center gap-1.5 px-sm py-sm rounded-xl border border-outline-variant/20 bg-surface-container-lowest/95 backdrop-blur-lg shadow-[var(--shadow-e3)]"
+              >
+                {PROJECT_COLORS.map((color, i) => (
+                  <button
+                    key={color}
+                    type="button"
+                    role="menuitemradio"
+                    aria-checked={currentColor === color}
+                    aria-label={t('sidebar.projects.colorSwatch.aria', { n: i + 1 })}
+                    title={t('sidebar.projects.colorSwatch.aria', { n: i + 1 })}
+                    className={cn(
+                      'w-4 h-4 rounded-full cursor-pointer transition-transform hover:scale-110 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/40',
+                      currentColor === color && 'ring-2 ring-on-surface/60 ring-offset-1 ring-offset-surface-container-lowest',
+                    )}
+                    style={{ backgroundColor: color }}
+                    onClick={() => handleSetProjectColor(group.key, color)}
+                  />
+                ))}
+                <span className="w-px h-4 bg-outline-variant/40 shrink-0" aria-hidden="true" />
+                <button
+                  type="button"
+                  role="menuitemradio"
+                  aria-checked={currentColor === null}
+                  aria-label={t('sidebar.projects.colorDefault')}
+                  title={t('sidebar.projects.colorDefault')}
+                  className="w-4 h-4 rounded-full border border-dashed border-on-surface-variant/60 cursor-pointer transition-transform hover:scale-110 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/40"
+                  onClick={() => handleSetProjectColor(group.key, null)}
+                />
+              </div>
+            )}
+          </div>
+        </div>
       )
     }
     return (
@@ -628,7 +1049,7 @@ export function SessionsSection({ sessions, sessionActivity, goalRunsBySession =
         onDragStart={() => setDraggedId(session.id)}
         onDragOver={e => e.preventDefault()}
         onDrop={() => handleDrop(session.id)}
-        onTouchStart={() => startLongPress(session.id)}
+        onTouchStart={() => startLongPress(session.id, 'session')}
         onTouchEnd={clearLongPress}
         onTouchMove={clearLongPress}
         onTouchCancel={clearLongPress}
@@ -787,6 +1208,59 @@ export function SessionsSection({ sessions, sessionActivity, goalRunsBySession =
     )
   }
 
+  // P-U1: a nested routine row inside its project group — clock icon + name
+  // + the 即将 badge when the next fire is imminent (the automations-row
+  // language), otherwise a short date for the scheduled fire. Clicking goes
+  // to /tasks where the routine lives.
+  const renderRoutineRow = (routine: ScheduledRoutine) => {
+    const soon = routine.next_fire_at != null && routine.next_fire_at - nowTick < 3600_000
+    let when = ''
+    if (!soon && routine.next_fire_at != null && routine.next_fire_at > 0) {
+      try {
+        when = new Intl.DateTimeFormat(undefined, { month: 'numeric', day: 'numeric' }).format(routine.next_fire_at)
+      } catch { when = '' }
+    }
+    return (
+      <button
+        key={routine.id}
+        type="button"
+        role="listitem"
+        data-testid={`sidebar-routine-row-${routine.id}`}
+        title={routine.name}
+        onClick={() => { navigate('/tasks'); closeMobile?.() }}
+        className="w-full flex items-center gap-2 px-3 py-1.5 rounded-lg font-label-md text-label-md text-on-surface-variant hover:bg-surface-container-low hover:text-primary transition-colors cursor-pointer min-w-0 select-none focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/30 whitespace-nowrap"
+      >
+        <span
+          className={cn('material-symbols-outlined text-[13px] shrink-0', soon ? 'text-warning' : 'text-on-surface-variant')}
+          aria-hidden="true"
+        >
+          schedule
+        </span>
+        <span className="truncate flex-1 min-w-0 text-left">{routine.name}</span>
+        {soon ? (
+          <span className="font-label-xs px-1 py-[1px] rounded bg-warning/15 text-warning shrink-0" role="img" aria-label={t('sidebar.automations.soon')}>
+            {t('sidebar.automations.soon')}
+          </span>
+        ) : when ? (
+          <span className="font-mono text-[10px] tabular-nums text-on-surface-variant shrink-0" aria-hidden="true">{when}</span>
+        ) : null}
+      </button>
+    )
+  }
+
+  // P-U2: the greyed, NON-interactive placeholder under a registry-only
+  // project (nothing to open yet — deliberately not a button, not focusable;
+  // role=listitem keeps the parent role="list" axe-clean).
+  const renderProjectEmptyRow = () => (
+    <div
+      role="listitem"
+      data-testid="project-empty-row"
+      className="px-3 py-1.5 font-label-sm text-label-sm text-on-surface-variant select-none"
+    >
+      {t('sidebar.projects.empty')}
+    </div>
+  )
+
   return (
     <div className="flex flex-col h-full min-h-0">
       <div className="flex items-center justify-between px-2 mb-xs shrink-0 gap-1 min-w-0">
@@ -835,17 +1309,18 @@ export function SessionsSection({ sessions, sessionActivity, goalRunsBySession =
         aria-label={t('sidebar.sessions.search.aria')}
         className="w-full mb-xs px-2 py-1 rounded-md bg-surface-container-lowest border border-outline-variant/30 font-label-md text-label-md text-on-surface placeholder:text-on-surface-variant/70 focus-visible:border-primary focus-visible:ring-2 focus-visible:ring-primary/30 shrink-0 min-w-0"
       />
-      {/* Batch F1-v1: the rail's 自动化 section — enabled scheduled routines
-          with their next fire. Project-nesting needs engine working_dir on
-          routines (see plan batch F). */}
-      {!query.trim() && routines.length > 0 && (
+      {/* P-U1: the rail's standalone 自动化 section now lists ONLY unhoused
+          routines (enabled, no working_dir). Routines with a project nest
+          into their project group above; when nothing is unhoused the whole
+          section hides. */}
+      {!query.trim() && unhousedRoutines.length > 0 && (
         <div className="mb-xs" data-testid="sidebar-automations">
           <div className="flex items-center gap-1.5 px-3 pt-1 pb-1 font-label-sm text-[11px] font-bold text-on-surface-variant/90 min-w-0">
             <span className="material-symbols-outlined text-[13px] shrink-0" aria-hidden="true">event_repeat</span>
             <span className="truncate flex-1 min-w-0">{t('sidebar.automations.title')}</span>
-            <span className="font-mono text-[10px] tabular-nums text-on-surface-variant shrink-0">{routines.length}</span>
+            <span className="font-mono text-[10px] tabular-nums text-on-surface-variant shrink-0">{unhousedRoutines.length}</span>
           </div>
-          {routines.slice(0, 3).map(r => {
+          {unhousedRoutines.slice(0, 3).map(r => {
             const soon = r.next_fire_at != null && r.next_fire_at - nowTick < 3600_000
             return (
               <button
@@ -865,13 +1340,13 @@ export function SessionsSection({ sessions, sessionActivity, goalRunsBySession =
               </button>
             )
           })}
-          {routines.length > 3 && (
+          {unhousedRoutines.length > 3 && (
             <button
               type="button"
               onClick={() => navigate('/tasks')}
               className="w-full px-3 py-1 text-left font-label-xs text-on-surface-variant hover:text-primary hover:underline cursor-pointer"
             >
-              {t('sidebar.automations.more', { n: routines.length - 3 })}
+              {t('sidebar.automations.more', { n: unhousedRoutines.length - 3 })}
             </button>
           )}
         </div>
@@ -898,13 +1373,34 @@ export function SessionsSection({ sessions, sessionActivity, goalRunsBySession =
           <div className="space-y-0.5 pr-1" role="list" aria-label={t('sidebar.sessions.list.aria')}>
             {groups.map(group => (
               <Fragment key={group.key}>
-                {renderGroupHeader(group)}
-                {/* Project conversations nest under their folder (ZCode
-                    项目 tree); folded projects collapse their rows. */}
-                {!(group.isProject && foldedProjects.has(group.key)) && (
-                  <div className={group.isProject ? 'pl-4' : undefined}>
-                    {group.sessions.map(renderRow)}
+                {group.isProject ? (
+                  // The project group is ONE list item of the rail's list:
+                  // its header (fold toggle + ⋯ menu) and its nested row
+                  // list all live inside it — role=listitem is the only
+                  // child role role="list" accepts, and the rows keep their
+                  // own nested role="list" so session-row listitem semantics
+                  // stay axe-clean.
+                  <div role="listitem" className="min-w-0">
+                    {renderGroupHeader(group)}
+                    {!foldedProjects.has(group.key) && (
+                      <div
+                        role="list"
+                        aria-label={group.label}
+                        className="pl-4"
+                      >
+                        {group.isEmpty
+                          ? renderProjectEmptyRow()
+                          : group.rows!.map(row =>
+                            row.kind === 'session' ? renderRow(row.session) : renderRoutineRow(row.routine),
+                          )}
+                      </div>
+                    )}
                   </div>
+                ) : (
+                  <>
+                    {renderGroupHeader(group)}
+                    <div>{group.sessions.map(renderRow)}</div>
+                  </>
                 )}
               </Fragment>
             ))}
@@ -965,6 +1461,64 @@ export function SessionsSection({ sessions, sessionActivity, goalRunsBySession =
                           'opacity-0 group-hover:opacity-100 focus-visible:opacity-100',
                         )}
                         onClick={() => handleRestore(row.id)}
+                      >
+                        <span className="material-symbols-outlined text-[16px]">undo</span>
+                      </Button>
+                    </div>
+                  )
+                })}
+              </div>
+            )}
+          </div>
+        )}
+        {/* P-U2 — the 已归档项目 section at the very bottom of the rail, in
+            the same collapsed lens as the sessions' one. Rows carry a 恢复
+            action (unarchive); the project then reappears in the tree (or
+            as the live registry entry it already was). Hidden while
+            searching and when nothing is archived. */}
+        {!query.trim() && archivedRegistryProjects.length > 0 && (
+          <div className="mt-2 border-t border-outline-variant/20 pt-1" data-testid="sidebar-archived-projects">
+            <button
+              type="button"
+              aria-expanded={archivedProjectsOpen}
+              data-testid="sidebar-archived-projects-toggle"
+              onClick={() => setArchivedProjectsOpen(!archivedProjectsOpen)}
+              className="w-full flex items-center gap-1.5 px-3 pt-2 pb-1 font-label-sm text-[11px] font-bold text-on-surface-variant/90 hover:text-primary transition-colors min-w-0 cursor-pointer focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/30 rounded"
+            >
+              <span
+                className="material-symbols-outlined text-[14px] shrink-0 transition-transform duration-150"
+                style={{ transform: archivedProjectsOpen ? 'rotate(0deg)' : 'rotate(-90deg)' }}
+                aria-hidden="true"
+              >
+                expand_more
+              </span>
+              <span className="material-symbols-outlined text-[13px] shrink-0" aria-hidden="true">folder_off</span>
+              <span className="truncate flex-1 min-w-0 text-left">{t('sidebar.projects.archived.title')}</span>
+              <span className="font-mono text-[10px] tabular-nums text-on-surface-variant/70 shrink-0">{archivedRegistryProjects.length}</span>
+            </button>
+            {archivedProjectsOpen && (
+              <div className="pl-4 space-y-0.5" role="list" aria-label={t('sidebar.projects.archived.aria')}>
+                {archivedRegistryProjects.map(row => {
+                  const label = row.name ?? pathTail(normalizePathKey(row.path) ?? row.path)
+                  return (
+                    <div key={row.path} role="listitem" className="group flex items-center gap-1" data-testid={`archived-project-row-${row.path}`}>
+                      <div className="flex-1 min-w-0 px-3 py-1.5 font-label-md text-label-md text-on-surface-variant/80 flex items-center gap-2 whitespace-nowrap">
+                        {row.color && (
+                          <span className="w-2 h-2 rounded-full shrink-0" style={{ backgroundColor: row.color }} aria-hidden="true" />
+                        )}
+                        <span className="truncate">{label}</span>
+                      </div>
+                      <Button
+                        variant="ghost"
+                        size="icon-xs"
+                        data-testid={`archived-project-restore-${row.path}`}
+                        aria-label={t('sidebar.projects.archived.restore.aria', { name: label })}
+                        title={t('sidebar.sessions.archived.restore')}
+                        className={cn(
+                          'rounded hover:bg-surface-container text-on-surface-variant hover:text-primary transition-opacity focus-visible:ring-2 focus-visible:ring-primary/30 focus-visible:outline-none shrink-0',
+                          'opacity-0 group-hover:opacity-100 focus-visible:opacity-100',
+                        )}
+                        onClick={() => handleRestoreProject(row.path)}
                       >
                         <span className="material-symbols-outlined text-[16px]">undo</span>
                       </Button>
