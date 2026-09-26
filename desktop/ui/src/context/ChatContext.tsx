@@ -38,12 +38,17 @@ export interface ChatContextValue {
    * `options.budgetBypass` is the "continue (ignore once)" choice from the
    * budget-exceeded banner — it exempts exactly that send's pre-turn
    * budget check (the mid-turn cap stays enforced backend-side).
+   *
+   * Resolves `false` when the backend rejected the send before recording
+   * it (budget guard, concurrent-query guard, goal-owned guard) — callers
+   * that hand off state to the send (edit commit, queue drain) branch on
+   * it instead of assuming success.
    */
   sendMessage: (
     message: string,
     filePaths?: string[],
     options?: { budgetBypass?: boolean },
-  ) => Promise<void>
+  ) => Promise<boolean>
   cancelQuery: () => Promise<void>
   /** B1 §4-9: this session's FIFO of prompts queued while streaming. */
   promptQueue: PromptQueueItem[]

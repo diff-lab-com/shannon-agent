@@ -347,8 +347,10 @@ export default function ChatInput({
       // `/` focuses the composer — unless the keystroke already sits inside
       // any editable surface (search boxes, command palette, selects,
       // contentEditable), which the old TEXTAREA-only check let be hijacked.
-      // Same guard shape as hooks/useKeyboardShortcuts.ts.
-      if (e.key === '/' && !isQuerying) {
+      // Same guard shape as hooks/useKeyboardShortcuts.ts. No isQuerying
+      // gate: while a run streams is exactly when focusing the composer to
+      // queue a prompt is most useful (B1 §4-9).
+      if (e.key === '/') {
         const el = e.target as HTMLElement | null
         const inEditable =
           el != null &&

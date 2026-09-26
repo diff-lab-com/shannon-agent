@@ -34,21 +34,33 @@ export function useArtifactZoom(): ArtifactZoom {
   const reset = useCallback(() => setZoom(1), [])
 
   const elRef = useRef<HTMLDivElement | null>(null)
+  const onWheelRef = useRef<((e: WheelEvent) => void) | null>(null)
+  // Attach in the ref callback, not a mount effect: MermaidRenderer mounts
+  // its content wrapper only after the async diagram render, so a
+  // mount-time effect would read a null ref and never re-run.
   const containerRef = useCallback((el: HTMLDivElement | null) => {
+    if (elRef.current && onWheelRef.current) {
+      elRef.current.removeEventListener('wheel', onWheelRef.current)
+    }
     elRef.current = el
+    if (!el) return
+    if (!onWheelRef.current) {
+      onWheelRef.current = (e: WheelEvent) => {
+        if (!e.ctrlKey) return
+        e.preventDefault()
+        const factor = e.deltaY < 0 ? 1 + ZOOM_STEP : 1 - ZOOM_STEP
+        setZoom(z => clampZoom(Math.round(z * factor * 100) / 100))
+      }
+    }
+    el.addEventListener('wheel', onWheelRef.current, { passive: false })
   }, [])
 
-  useEffect(() => {
-    const el = elRef.current
-    if (!el) return
-    const onWheel = (e: WheelEvent) => {
-      if (!e.ctrlKey) return
-      e.preventDefault()
-      const factor = e.deltaY < 0 ? 1 + ZOOM_STEP : 1 - ZOOM_STEP
-      setZoom(z => clampZoom(Math.round(z * factor * 100) / 100))
+  // Belt-and-braces unmount cleanup (React normally calls the ref with
+  // null first, which already detaches).
+  useEffect(() => () => {
+    if (elRef.current && onWheelRef.current) {
+      elRef.current.removeEventListener('wheel', onWheelRef.current)
     }
-    el.addEventListener('wheel', onWheel, { passive: false })
-    return () => el.removeEventListener('wheel', onWheel)
   }, [])
 
   return { zoom, zoomIn, zoomOut, reset, containerRef }

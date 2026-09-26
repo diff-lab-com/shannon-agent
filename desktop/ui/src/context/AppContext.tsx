@@ -371,11 +371,11 @@ export function AppProvider({ children }: { children: ReactNode }) {
     message: string,
     filePaths?: string[],
     options?: { budgetBypass?: boolean },
-  ) => {
+  ): Promise<boolean> => {
     if (currentSessionId && goalOwnedSessionIds.includes(currentSessionId)) {
       setError(messageFor('goal.composer.blocked'))
       setSessionQuerying(windowSessionId ?? currentSessionId, false)
-      return
+      return false
     }
     setError(null)
     // §P2-18: a new turn resets its session's stream buckets, not just the
@@ -403,6 +403,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
         options?.budgetBypass,
         targetSessionId ?? undefined,
       )
+      return true
     } catch (e) {
       // P0-4 fix: the backend rejected the send BEFORE recording the user
       // message (budget-exceeded pre-turn guard, goal-owned guard,
@@ -421,6 +422,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
       })
       setError(String(e))
       setSessionQuerying(targetSessionId, false)
+      return false
     }
   }, [currentSessionId, goalOwnedSessionIds, windowSessionId, setSessionQuerying, cancelStreamFlush])
 
@@ -749,6 +751,9 @@ export function AppProvider({ children }: { children: ReactNode }) {
             }
             setStreamingText('')
             setThinkingText('')
+            // Review P2-4 (round 2): completed tool cards must not linger
+            // under the committed reply until the next send/switch.
+            setActiveToolCalls([])
             refreshStatus()
           }
         }),

@@ -151,11 +151,18 @@ export default function Chat() {
     const previousId = prevDraftSessionRef.current
     prevDraftSessionRef.current = visibleSessionId
     // Flush synchronously so the old session's last keystrokes survive.
-    if (previousId) writeDraft(previousId, input, attachedFiles)
+    // While an edit is in flight the composer holds the MESSAGE text, not
+    // the user's draft — flush the pre-edit draft instead, or the switch
+    // would permanently overwrite the draft with the edit prefill.
+    if (previousId) {
+      const prev = editing ? editing.draft : { text: input, attachments: attachedFiles }
+      writeDraft(previousId, prev.text, prev.attachments)
+    }
     const draft = visibleSessionId ? readDraft(visibleSessionId) : null
     setInput(draft?.text ?? '')
     setAttachedFiles(draft?.attachments ?? [])
     setEditing(null)
+    drainBlockedRef.current = false
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [visibleSessionId])
 
@@ -341,7 +348,16 @@ export default function Chat() {
       return
     }
     setEditing(null)
-    void sendMessage(newText, editing.attachmentPaths.length > 0 ? editing.attachmentPaths : undefined)
+    const ok = await sendMessage(newText, editing.attachmentPaths.length > 0 ? editing.attachmentPaths : undefined)
+    if (!ok) {
+      // The backend rejected the send AFTER the rewind landed (budget
+      // guard, concurrent-query guard, …) — the old turn is already gone,
+      // so keep the edited text (and its attachments) in the composer
+      // instead of discarding them; the debounced draft write persists it.
+      setInput(newText)
+      setAttachedFiles(editing.attachmentPaths)
+      return
+    }
     setInput('')
     setAttachedFiles([])
     if (visibleSessionId) clearDraft(visibleSessionId)
@@ -350,6 +366,8 @@ export default function Chat() {
   const handleSend = () => {
     const trimmed = input.trim()
     const hasAttachments = attachedFiles.length > 0
+    // Any manual send re-arms the queue drain after a rejected-send breaker.
+    drainBlockedRef.current = false
     // B0 P0-1: attachments-only sends are real. The backend accepts an empty
     // text alongside attachment paths (send_message never validated
     // emptiness; the engine turns the attachments into content blocks), so
@@ -399,9 +417,14 @@ export default function Chat() {
   // B1 §4-9: drain — when this session's run settles and prompts are still
   // queued, auto-send the head. Queued slash commands (if any land here)
   // execute locally like normal; the dequeue ref in AppContext keeps this
-  // single-shot even under StrictMode double-invocation.
+  // single-shot even under StrictMode double-invocation. A REJECTED send
+  // trips the drain breaker: without it every queued item would be dequeued
+  // and burned one after another against the same failing backend. A manual
+  // send (or a session switch) resets the breaker.
+  const drainBlockedRef = useRef(false)
   useEffect(() => {
     if (isQuerying || promptQueue.length === 0) return
+    if (drainBlockedRef.current) return
     const item = dequeuePrompt()
     if (!item) return
     const cmd = item.text.trim() ? parseSlashInput(item.text.trim()) : null
@@ -410,6 +433,7 @@ export default function Chat() {
       return
     }
     void sendMessage(item.text, item.attachments.length > 0 ? item.attachments : undefined)
+      .then(ok => { if (!ok) drainBlockedRef.current = true })
     // `promptQueue` re-triggers the drain for the next item once the new run
     // settles; sendMessage flips isQuerying synchronously during the send.
   }, [isQuerying, promptQueue, dequeuePrompt, executeSlash, sendMessage])

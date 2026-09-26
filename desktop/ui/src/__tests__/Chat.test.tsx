@@ -19,7 +19,7 @@ const ctx = vi.hoisted(() => ({
   error: null as string | null,
   config: null as any,
   status: null as any,
-  sendMessage: vi.fn(),
+  sendMessage: vi.fn().mockResolvedValue(true),
   cancelQuery: vi.fn(),
   checkpoints: [] as unknown[],
   rewindSession: vi.fn(),
@@ -59,7 +59,7 @@ function resetCtx() {
   ctx.error = null
   ctx.config = null
   ctx.status = null
-  ctx.sendMessage = vi.fn()
+  ctx.sendMessage = vi.fn().mockResolvedValue(true)
   ctx.cancelQuery = vi.fn()
   ctx.createSession = vi.fn()
   ctx.switchSession = vi.fn()
