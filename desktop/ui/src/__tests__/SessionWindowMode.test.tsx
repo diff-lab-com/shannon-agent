@@ -100,6 +100,23 @@ describe('Layout — window mode', () => {
     expect(screen.queryByTitle('This window is pinned to a single session')).toBeNull()
     expect(switchSession).not.toHaveBeenCalled()
   })
+
+  // B1-10 (P1-4/R1-2): Layout is the single writer of `--sidebar-w` — the
+  // desktop branch writes the Sidebar-reported width, and the mobile/window
+  // branches write 0px. This pins the desktop half (the mobile round-trip
+  // regression: the variable used to stay at 280px after crossing 767px).
+  it('desktop mode writes the sidebar-reported width to --sidebar-w', async () => {
+    window.localStorage.clear()
+    window.localStorage.setItem('shannon-sidebar-width', '320')
+    setUrlSearch('')
+    renderLayout()
+    await waitFor(() => {
+      expect(document.querySelector('[data-sidebar]')).not.toBeNull()
+    })
+    expect(
+      document.documentElement.style.getPropertyValue('--sidebar-w'),
+    ).toBe('320px')
+  })
 })
 
 describe('session rail —「Open in New Window」menu entry', () => {

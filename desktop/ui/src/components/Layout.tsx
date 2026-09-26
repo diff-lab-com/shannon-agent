@@ -1,8 +1,8 @@
-import { useState, useCallback, useEffect, createContext, useContext } from 'react';
-import { Outlet, useNavigate } from 'react-router-dom';
+import { useState, useCallback, useEffect, createContext, useContext, Suspense } from 'react';
+import { Outlet, useLocation, useNavigate } from 'react-router-dom';
 import { useIntl } from 'react-intl';
 import { getCurrentWindow } from '@tauri-apps/api/window';
-import { Sidebar } from './Sidebar';
+import { Sidebar, readStoredSidebarWidth } from './Sidebar';
 import { Header } from './Header';
 import { ErrorBoundary } from '@/components/ErrorBoundary'
 import { Banner } from '@/components/ui/banner';
@@ -21,16 +21,34 @@ interface SidebarContextValue {
   open: boolean
   toggle: () => void
   close: () => void
+  /** B1-10: the Sidebar reports its width here; Layout is the single
+      writer of the `--sidebar-w` CSS variable. */
+  reportWidth: (width: number) => void
 }
 
-const SidebarContext = createContext<SidebarContextValue>({ open: false, toggle: () => {}, close: () => {} })
+const SidebarContext = createContext<SidebarContextValue>({ open: false, toggle: () => {}, close: () => {}, reportWidth: () => {} })
 export const useSidebar = () => useContext(SidebarContext)
+
+/** B1-16: chunk-loading fallback for lazy routes. Lives at the Outlet (not
+ *  the app root) so the shell — sidebar, header, footer — stays mounted
+ *  while a page chunk loads instead of the whole skeleton flashing away. */
+export function PageLoader() {
+  return (
+    <div className="flex-1 flex items-center justify-center">
+      <span className="material-symbols-outlined icon-xl text-primary animate-spin">progress_activity</span>
+    </div>
+  )
+}
 
 export function Layout() {
   const { usage } = useChat();
   const { createSession, sessions, switchSession, windowSessionId } = useSessions();
   const { backgroundTasks, config, loading, initError, retryInit } = useCatalog();
   const navigate = useNavigate();
+  // B1-12 (review P1-7): remounts the route ErrorBoundary on navigation so a
+  // crashed page's fallback can never outlive its route — without the key,
+  // one crash covered every page visited afterwards.
+  const location = useLocation();
   const intl = useIntl();
   // P1-1 window mode: this window is pinned to one session — sidebar hidden
   // (lowest-cost slim chrome; nav lives in the main window), content spans
@@ -51,6 +69,15 @@ export function Layout() {
     mq.addEventListener('change', update)
     return () => mq.removeEventListener('change', update)
   }, [])
+  // B1-10 (review P1-4 / R1-2): Layout is the single writer of the
+  // `--sidebar-w` CSS variable. The Sidebar only reports its width through
+  // the context below. This closes the review's hole — the old split
+  // (Layout wrote 0px for window/mobile, the Sidebar wrote the desktop
+  // width) left the variable stuck at 280px after a desktop→mobile→desktop
+  // round-trip, because the Sidebar's own effect keyed on `[width]` never
+  // re-fired. The desktop branch now writes the reported width on EVERY
+  // mobileMode toggle.
+  const [sidebarWidth, setSidebarWidth] = useState(readStoredSidebarWidth);
   const togglePalette = useCallback(() => setPaletteOpen(p => !p), []);
   const toggleHelp = useCallback(() => setHelpOpen(p => !p), []);
   const toggleSidebar = useCallback(() => setSidebarOpen(p => !p), []);
@@ -78,15 +105,16 @@ export function Layout() {
     }
   }, [loading, config, navigate])
 
-  // P1-1 window mode: the sidebar normally owns `--sidebar-w`; without it,
-  // pin the variable to zero so Header/main/footer span the full width.
-  // Review 2026-09-16: mobile mode (drawer sidebar) must do the same — the
-  // drawer is an overlay, yet main kept a 280px margin and rendered as a
-  // 95px sliver on phones.
+  // B1-10: single `--sidebar-w` write point — 0px while the sidebar is a
+  // drawer (mobile) or absent (window mode), the Sidebar-reported width on
+  // desktop.
   useEffect(() => {
-    if (!isWindowMode && !mobileMode) return
-    document.documentElement.style.setProperty('--sidebar-w', '0px')
-  }, [isWindowMode, mobileMode])
+    if (isWindowMode || mobileMode) {
+      document.documentElement.style.setProperty('--sidebar-w', '0px')
+    } else {
+      document.documentElement.style.setProperty('--sidebar-w', `${sidebarWidth}px`)
+    }
+  }, [isWindowMode, mobileMode, sidebarWidth])
 
   // P1-1 window mode: keep the native window title in sync with the session
   // title (follows renames and Tier-1 auto-titling via the sessions list).
@@ -121,7 +149,7 @@ export function Layout() {
   const version = config?.version ?? ''
 
   return (
-    <SidebarContext.Provider value={{ open: sidebarOpen, toggle: toggleSidebar, close: closeSidebar }}>
+    <SidebarContext.Provider value={{ open: sidebarOpen, toggle: toggleSidebar, close: closeSidebar, reportWidth: setSidebarWidth }}>
       <div className="bg-background text-on-surface font-body-md overflow-hidden min-h-screen">
         {/* Mobile sidebar overlay */}
         {sidebarOpen && (
@@ -150,7 +178,13 @@ export function Layout() {
               </Button>
             </Banner>
           )}
-          <ErrorBoundary><Outlet /></ErrorBoundary>
+          {/* B1-16: Suspense at the Outlet level — lazy page chunks load
+              inside the shell, so only the content area shows the loader. */}
+          <ErrorBoundary key={location.pathname}>
+            <Suspense fallback={<PageLoader />}>
+              <Outlet />
+            </Suspense>
+          </ErrorBoundary>
         </main>
         <footer role="contentinfo" className="fixed bottom-0 right-0 h-footer bg-surface-container-low/90 backdrop-blur-sm border-t border-outline-variant/20 flex items-center justify-between px-lg z-header" style={{ left: 'var(--sidebar-w)' }}>
           {/* U2: footer carries runtime + usage only — tokens/cost, active

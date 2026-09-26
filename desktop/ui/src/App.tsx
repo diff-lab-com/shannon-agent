@@ -46,10 +46,6 @@ const PermissionsSettings = lazy(() => import('./components/settings/Permissions
 // Production routing never exposes this; gating happens at the route level
 // below via `import.meta.env.DEV`.
 
-function PageLoader() {
-  return <div className="flex-1 flex items-center justify-center"><span className="material-symbols-outlined icon-xl text-primary animate-spin">progress_activity</span></div>;
-}
-
 export default function App() {
   return (
     <I18nProvider>
@@ -64,7 +60,10 @@ export default function App() {
           <LinkContextMenuHost />
           {/* P0-B/P1-C/P1-E: links→web tabs, file chips→artifact tabs. */}
           <ArtifactLinkHost />
-          <Suspense fallback={<PageLoader />}>
+          {/* B1-16: the route-level Suspense lives in Layout (around the
+              Outlet) so lazy chunks no longer unmount the whole shell; this
+              top-level boundary only exists for /welcome and stays null. */}
+          <Suspense fallback={null}>
             <Routes>
               <Route path="/welcome" element={<Welcome />} />
               <Route element={<Layout />}>

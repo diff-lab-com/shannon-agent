@@ -62,9 +62,12 @@ describe('KeyboardShortcutsHelp', () => {
   it('filters shortcuts by query', () => {
     renderHelp()
     const input = screen.getByPlaceholderText('Search shortcuts') as HTMLInputElement
-    expect(screen.getByText('Toggle sidebar')).toBeInTheDocument()
+    // B1-16: Ctrl+/ is a real binding now and shares the「Show all
+    // shortcuts」label with `?`; the old「Toggle sidebar」label advertised a
+    // binding that never existed.
+    expect(screen.getAllByText('Show all shortcuts').length).toBeGreaterThan(0)
     fireEvent.change(input, { target: { value: 'plan' } })
-    expect(screen.queryByText('Toggle sidebar')).not.toBeInTheDocument()
+    expect(screen.queryByText('Show all shortcuts')).not.toBeInTheDocument()
     expect(screen.getByText('Toggle Plan mode')).toBeInTheDocument()
   })
 

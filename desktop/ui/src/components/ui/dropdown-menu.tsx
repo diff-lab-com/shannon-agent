@@ -73,13 +73,19 @@ export function DropdownMenu({
   React.useEffect(() => {
     if (!open) return
     const onKey = (e: KeyboardEvent) => {
+      // T5 (review P1-6): an open menu OWNS its keys — every handled branch
+      // stops propagation so the document-level handler here can't let the
+      // same keydown also reach window-level global shortcuts (previously
+      // Escape closed the menu AND cancelled a running query).
       if (e.key === "Escape") {
         e.preventDefault()
+        e.stopPropagation()
         onClose()
         return
       }
       if (e.key === "ArrowDown") {
         e.preventDefault()
+        e.stopPropagation()
         setFocusIndex((cur) => {
           for (let i = cur + 1; i < items.length; i++) {
             if (!items[i].disabled) return i
@@ -88,6 +94,7 @@ export function DropdownMenu({
         })
       } else if (e.key === "ArrowUp") {
         e.preventDefault()
+        e.stopPropagation()
         setFocusIndex((cur) => {
           for (let i = cur - 1; i >= 0; i--) {
             if (!items[i].disabled) return i
@@ -96,6 +103,7 @@ export function DropdownMenu({
         })
       } else if (e.key === "Enter" || e.key === " ") {
         e.preventDefault()
+        e.stopPropagation()
         const item = items[focusIndex]
         if (item && !item.disabled) {
           item.onSelect?.()
@@ -103,6 +111,7 @@ export function DropdownMenu({
         }
       } else if (e.key === "Tab") {
         e.preventDefault()
+        e.stopPropagation()
         onClose()
       }
     }

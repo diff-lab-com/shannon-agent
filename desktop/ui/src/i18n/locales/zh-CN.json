@@ -167,6 +167,7 @@
   "nav.resize.title": "拖动以调整侧边栏大小",
   "nav.newChat": "新对话",
   "nav.newChat.aria": "新建对话",
+  "nav.routeChanged.aria": "已切换到「{title}」",
   "nav.chat": "对话",
   "nav.connections": "网关",
   "nav.scheduled": "自动化",
