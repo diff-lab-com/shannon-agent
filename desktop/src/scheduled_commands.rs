@@ -2165,10 +2165,9 @@ mod tests {
             "empty string clears the sidecar"
         );
 
-        // Omitted working_dir leaves the (re-set) value untouched. Deliberately
-        // NOT renaming here: the store derives the task directory from the
-        // name slug, so a rename orphans the directory holding the sidecar
-        // (pre-existing store behavior, out of this task's scope).
+        // Omitted working_dir leaves the value untouched. A rename in the
+        // same update is non-orphaning: save() migrates the whole slug
+        // directory (sidecar included) to the new name.
         store
             .set_working_dir(&created.id, Some("/work/final"))
             .unwrap();
@@ -2176,8 +2175,8 @@ mod tests {
             app.state::<AppState>(),
             UpdateTaskPayload {
                 id: created.id.clone(),
-                name: None,
-                prompt: Some("new prompt".into()),
+                name: Some("Renamed Scope".into()),
+                prompt: None,
                 trigger_type: None,
                 interval_secs: None,
                 cron_expr: None,
@@ -2195,7 +2194,7 @@ mod tests {
         assert_eq!(
             store.working_dir_of(&created.id).unwrap().as_deref(),
             Some("/work/final"),
-            "omitted working_dir must not clobber the sidecar"
+            "omitted working_dir must not clobber the sidecar (survives the rename migration)"
         );
     }
 
@@ -2258,6 +2257,82 @@ mod tests {
             .find(|r| r.routine.id == unhoused.id)
             .expect("unhoused row listed");
         assert_eq!(unhoused_row.working_dir, None);
+    }
+
+    #[tokio::test]
+    async fn rename_scheduled_task_is_non_orphaning_for_working_dir() {
+        let tmp = tempfile::tempdir().unwrap();
+        let app = tauri::test::mock_app();
+        app.manage(task_state(tmp.path()));
+        let store = app.state::<AppState>().scheduled_task_store().clone();
+        let tasks_base = tmp.path().join("tasks");
+
+        let created = create_scheduled_task(
+            app.state::<AppState>(),
+            CreateTaskPayload {
+                name: "Old Scope".into(),
+                prompt: "p".into(),
+                trigger_type: None,
+                interval_secs: Some(60),
+                cron_expr: None,
+                timezone: None,
+                expires_at: None,
+                max_fires: None,
+                policy: None,
+                depends_on: None,
+                working_dir: Some("/work/renamed-proj".into()),
+            },
+        )
+        .await
+        .unwrap();
+
+        update_scheduled_task(
+            app.state::<AppState>(),
+            UpdateTaskPayload {
+                id: created.id.clone(),
+                name: Some("New Scope".into()),
+                prompt: None,
+                trigger_type: None,
+                interval_secs: None,
+                cron_expr: None,
+                timezone: None,
+                enabled: None,
+                expires_at: None,
+                max_fires: None,
+                policy: None,
+                depends_on: None,
+                working_dir: None,
+            },
+        )
+        .await
+        .unwrap();
+
+        // The sidecar survived the rename…
+        assert_eq!(
+            store.working_dir_of(&created.id).unwrap().as_deref(),
+            Some("/work/renamed-proj"),
+        );
+        // …no `<old-slug>-<id>` orphan remains — exactly one dir for the id.
+        let dir_names: Vec<String> = std::fs::read_dir(&tasks_base)
+            .unwrap()
+            .flatten()
+            .map(|e| e.file_name().to_string_lossy().into_owned())
+            .collect();
+        assert_eq!(dir_names.len(), 1, "one dir per id: {dir_names:?}");
+        assert!(
+            !dir_names.iter().any(|n| n.starts_with("old-scope-")),
+            "orphaned old-slug dir must be gone: {dir_names:?}"
+        );
+        // And the collector reports the moved (not stale) project exactly once.
+        assert_eq!(store.working_dirs(), ["/work/renamed-proj"]);
+
+        // The list shows ONE row (no duplicate from a stale task.json) with
+        // the new name and the intact project.
+        let rows = list_scheduled_tasks(app.state::<AppState>()).await.unwrap();
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].routine.id, created.id);
+        assert_eq!(rows[0].routine.name, "New Scope");
+        assert_eq!(rows[0].working_dir.as_deref(), Some("/work/renamed-proj"));
     }
 
     // ── P-E1: working_dir stamp on the run's session ─────────────────────
