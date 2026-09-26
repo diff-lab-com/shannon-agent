@@ -75,6 +75,34 @@ let nextTerminalSeq = 1
 // for ~/.shannon/desktop/workspace-layouts.json).
 const demoWorkspaceLayouts = new Map<string, WorkspaceLayout>()
 
+// P-E3/P-U2: in-memory stand-in for the engine project registry
+// (~/.shannon/projects.db). Same wire shape as the Rust ProjectRecord
+// (camelCase). Mutations update rows in place; archived rows leave the
+// active list but stay recoverable (unarchive clears the stamp).
+interface DemoProject {
+  path: string
+  name: string | null
+  icon: string | null
+  color: string | null
+  archivedAtMs: number | null
+  createdAtMs: number
+}
+const demoProjects: DemoProject[] = [
+  { path: '/home/demo/workspace/shannon', name: 'Shannon', icon: null, color: null, archivedAtMs: null, createdAtMs: Date.now() - 30 * 24 * 3600_000 },
+  { path: '/home/demo/workspace/website', name: null, icon: null, color: null, archivedAtMs: null, createdAtMs: Date.now() - 10 * 24 * 3600_000 },
+]
+function findDemoProject(path: string): DemoProject | undefined {
+  return demoProjects.find(p => p.path === path)
+}
+function ensureDemoProject(path: string): DemoProject {
+  let row = findDemoProject(path)
+  if (!row) {
+    row = { path, name: null, icon: null, color: null, archivedAtMs: null, createdAtMs: Date.now() }
+    demoProjects.push(row)
+  }
+  return row
+}
+
 // P2-1: mobile dispatch demo state — a minted pair token + the paired-device
 // registry the gateway would own (~/.shannon/mobile-devices.json).
 let demoPairToken: { token: string; expiresAt: number; lanEndpoint: string; qrDataUrl: string } | null = null
@@ -657,6 +685,42 @@ export const handlers: Record<string, MockHandler> = {
     const t = findTask(args.id)
     if (!t) throw new Error(`Task ${args.id} not found`)
     return clone(t)
+  },
+
+  // --- Projects (P-E3 registry, P-U2 rail) ---
+  async list_projects(args: { includeArchived?: boolean }) {
+    await delay()
+    const rows = demoProjects.filter(p => args.includeArchived || !p.archivedAtMs)
+    return clone(rows)
+  },
+  async register_project(args: { path: string }) {
+    await delay()
+    return clone(ensureDemoProject(args.path))
+  },
+  async rename_project(args: { path: string; name: string | null }) {
+    await delay()
+    const row = ensureDemoProject(args.path)
+    row.name = args.name ?? null
+    return clone(row)
+  },
+  async set_project_appearance(args: { path: string; icon: string | null; color: string | null }) {
+    await delay()
+    const row = ensureDemoProject(args.path)
+    row.icon = args.icon ?? null
+    row.color = args.color ?? null
+    return clone(row)
+  },
+  async archive_project(args: { path: string }) {
+    await delay()
+    const row = ensureDemoProject(args.path)
+    row.archivedAtMs = Date.now()
+    return clone(row)
+  },
+  async unarchive_project(args: { path: string }) {
+    await delay()
+    const row = ensureDemoProject(args.path)
+    row.archivedAtMs = null
+    return clone(row)
   },
 
   // --- Scheduled ---
