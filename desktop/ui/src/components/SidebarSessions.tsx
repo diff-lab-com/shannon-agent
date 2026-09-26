@@ -1035,6 +1035,40 @@ export function SessionsSection({ sessions, sessionActivity, goalRunsBySession =
       const isMenuOpen = projectMenuFor === group.key
       const itemCount = group.sessions.length + (group.routines?.length ?? 0)
       const currentColor = registryByKey.get(group.key)?.color ?? null
+      // A7 (keyboard a11y): the swatch popover is a menu — arrows rove focus
+      // across the swatches (wrapping), Enter/Space activate the focused one,
+      // and Escape closes while handing focus back to the ⋯ trigger. All
+      // handled on the container so jsdom (focus + keyDown) can drive it.
+      const onColorPopoverKeyDown = (e: React.KeyboardEvent<HTMLDivElement>) => {
+        const popover = e.currentTarget
+        const swatches = Array.from(
+          popover.querySelectorAll<HTMLButtonElement>('[role="menuitemradio"]'),
+        )
+        const idx = swatches.findIndex(s => s === document.activeElement)
+        const move = (delta: number) => {
+          e.preventDefault()
+          const next = swatches[(idx + delta + swatches.length) % swatches.length]
+          next?.focus()
+        }
+        if (e.key === 'ArrowDown' || e.key === 'ArrowRight') { move(1); return }
+        if (e.key === 'ArrowUp' || e.key === 'ArrowLeft') { move(-1); return }
+        if (e.key === 'Enter' || e.key === ' ') {
+          e.preventDefault()
+          const active = document.activeElement
+          if (active instanceof HTMLElement && active.getAttribute('role') === 'menuitemradio') {
+            active.click()
+          }
+          return
+        }
+        if (e.key === 'Escape') {
+          e.preventDefault()
+          const trigger = popover.parentElement?.querySelector<HTMLElement>(
+            `[data-testid="project-menu-trigger-${group.key}"]`,
+          )
+          trigger?.focus()
+          setColorPickerFor(null)
+        }
+      }
       return (
         <div
           role="group"
@@ -1085,6 +1119,7 @@ export function SessionsSection({ sessions, sessionActivity, goalRunsBySession =
               variant="ghost"
               size="icon-xs"
               aria-label={t('sidebar.projects.menu.aria', { name: group.label })}
+              data-testid={`project-menu-trigger-${group.key}`}
               className={cn(
                 'rounded hover:bg-surface-container text-on-surface-variant hover:text-primary transition-opacity focus-visible:ring-2 focus-visible:ring-primary/30 focus-visible:outline-none',
                 isMenuOpen || colorPickerFor === group.key ? 'opacity-100' : 'opacity-0 group-hover:opacity-100 focus-visible:opacity-100',
@@ -1112,6 +1147,7 @@ export function SessionsSection({ sessions, sessionActivity, goalRunsBySession =
                 role="menu"
                 aria-label={t('sidebar.projects.color')}
                 data-testid="project-color-popover"
+                onKeyDown={onColorPopoverKeyDown}
                 className="absolute right-0 top-full mt-sm z-modal flex items-center gap-1.5 px-sm py-sm rounded-xl border border-outline-variant/20 bg-surface-container-lowest/95 backdrop-blur-lg shadow-[var(--shadow-e3)]"
               >
                 {PROJECT_COLORS.map((color, i) => (
@@ -1122,6 +1158,7 @@ export function SessionsSection({ sessions, sessionActivity, goalRunsBySession =
                     aria-checked={currentColor === color}
                     aria-label={t('sidebar.projects.colorSwatch.aria', { n: i + 1 })}
                     title={t('sidebar.projects.colorSwatch.aria', { n: i + 1 })}
+                    autoFocus={i === 0}
                     className={cn(
                       'w-4 h-4 rounded-full cursor-pointer transition-transform hover:scale-110 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/40',
                       currentColor === color && 'ring-2 ring-on-surface/60 ring-offset-1 ring-offset-surface-container-lowest',

@@ -282,6 +282,59 @@ describe('P-U2 project actions menu', () => {
   })
 })
 
+// A7: the project color popover is a keyboard-operable menu — focus lands on
+// the first swatch when it opens, arrows rove (wrapping), Enter/Space
+// activate, and Escape closes while returning focus to the ⋯ trigger.
+describe('A7 color popover keyboard a11y', () => {
+  async function openColorPopover() {
+    renderProjectRail()
+    fireEvent.click(await screen.findByRole('button', { name: 'Project actions: alpha' }))
+    fireEvent.click(screen.getByRole('menuitem', { name: 'Project color' }))
+    return await screen.findByTestId('project-color-popover')
+  }
+
+  it('focuses the first swatch on open and roves focus with arrow keys (wrapping)', async () => {
+    const popover = await openColorPopover()
+    const swatches = within(popover).getAllByRole('menuitemradio')
+    expect(swatches).toHaveLength(7) // 6 palette swatches + default
+    expect(document.activeElement).toBe(swatches[0])
+
+    fireEvent.keyDown(popover, { key: 'ArrowRight' })
+    expect(document.activeElement).toBe(swatches[1])
+    fireEvent.keyDown(popover, { key: 'ArrowDown' })
+    expect(document.activeElement).toBe(swatches[2])
+    fireEvent.keyDown(popover, { key: 'ArrowUp' })
+    expect(document.activeElement).toBe(swatches[1])
+    fireEvent.keyDown(popover, { key: 'ArrowLeft' })
+    expect(document.activeElement).toBe(swatches[0])
+    // Wraps off both ends of the swatch strip.
+    fireEvent.keyDown(popover, { key: 'ArrowLeft' })
+    expect(document.activeElement).toBe(swatches[6])
+    fireEvent.keyDown(popover, { key: 'ArrowRight' })
+    expect(document.activeElement).toBe(swatches[0])
+  })
+
+  it('activates the focused swatch with Enter', async () => {
+    const popover = await openColorPopover()
+    const swatches = within(popover).getAllByRole('menuitemradio')
+    swatches[1].focus() // 「Color 2」
+    fireEvent.keyDown(popover, { key: 'Enter' })
+    await waitFor(() =>
+      expect(api.setProjectAppearance).toHaveBeenCalledWith('/w/alpha', null, 'var(--chart-series-3)'),
+    )
+    expect(screen.queryByTestId('project-color-popover')).not.toBeInTheDocument()
+  })
+
+  it('closes on Escape and returns focus to the project ⋯ trigger', async () => {
+    const popover = await openColorPopover()
+    fireEvent.keyDown(popover, { key: 'Escape' })
+    expect(screen.queryByTestId('project-color-popover')).not.toBeInTheDocument()
+    expect(document.activeElement).toBe(screen.getByTestId('project-menu-trigger-/w/alpha'))
+    // Escape alone never wrote an appearance.
+    expect(api.setProjectAppearance).not.toHaveBeenCalled()
+  })
+})
+
 describe('A3 registry refetch failure keeps the loaded/optimistic state', () => {
   it('keeps the previous projects when a refetch rejects (only the first load may land empty)', async () => {
     fixtures.registry = [
