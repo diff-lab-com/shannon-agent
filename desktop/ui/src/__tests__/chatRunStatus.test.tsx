@@ -99,3 +99,78 @@ describe('run status line (C3)', () => {
     await waitFor(() => expect(screen.getByTestId('run-status-line')).toBeInTheDocument())
   })
 })
+
+// P2-19: QUERY_TOOL_PROGRESS surfaces on the pill as a `· 45%` chip next to
+// the tool name plus the backend's progress_message (truncated, full text in
+// title). Absent progress renders exactly as before (the tests above).
+describe('run status line tool progress (P2-19)', () => {
+  it('shows a percentage chip and the progress message', () => {
+    render(wrap(
+      <RunStatusLine
+        startedAt={Date.now() - 10_000}
+        activeTool="bash"
+        toolProgress={{ progress: 45.4, message: 'Running unit tests' }}
+      />,
+    ))
+    const pill = screen.getByTestId('run-status-line')
+    expect(pill).toHaveTextContent('Running bash')
+    expect(screen.getByTestId('run-progress-pct')).toHaveTextContent('· 45%')
+    const msg = screen.getByTestId('run-progress-message')
+    expect(msg).toHaveTextContent('Running unit tests')
+    expect(msg).toHaveAttribute('title', 'Running unit tests')
+  })
+
+  it('renders the message without a percentage when only text arrives', () => {
+    render(wrap(
+      <RunStatusLine
+        startedAt={null}
+        activeTool="edit_file"
+        toolProgress={{ message: 'Rewriting src/main.rs' }}
+      />,
+    ))
+    expect(screen.queryByTestId('run-progress-pct')).not.toBeInTheDocument()
+    expect(screen.getByTestId('run-progress-message')).toHaveTextContent('Rewriting src/main.rs')
+  })
+
+  it('ignores an out-of-range percentage', () => {
+    render(wrap(
+      <RunStatusLine
+        startedAt={null}
+        activeTool="bash"
+        toolProgress={{ progress: 120, message: 'x' }}
+      />,
+    ))
+    expect(screen.queryByTestId('run-progress-pct')).not.toBeInTheDocument()
+  })
+
+  it('ignores a non-finite percentage', () => {
+    render(wrap(
+      <RunStatusLine
+        startedAt={null}
+        activeTool="bash"
+        toolProgress={{ progress: Number.NaN, message: 'x' }}
+      />,
+    ))
+    expect(screen.queryByTestId('run-progress-pct')).not.toBeInTheDocument()
+  })
+
+  it('caps the title attribute at 200 chars while the label truncates', () => {
+    const long = 'x'.repeat(300)
+    render(wrap(
+      <RunStatusLine
+        startedAt={null}
+        activeTool="bash"
+        toolProgress={{ progress: 10, message: long }}
+      />,
+    ))
+    const msg = screen.getByTestId('run-progress-message')
+    expect(msg).toHaveAttribute('title', 'x'.repeat(200))
+  })
+
+  it('renders exactly as before when no progress is present', () => {
+    render(wrap(<RunStatusLine startedAt={Date.now() - 5_000} activeTool="bash" toolProgress={null} />))
+    expect(screen.queryByTestId('run-progress-pct')).not.toBeInTheDocument()
+    expect(screen.queryByTestId('run-progress-message')).not.toBeInTheDocument()
+    expect(screen.getByTestId('run-status-line')).toHaveTextContent('Running bash')
+  })
+})

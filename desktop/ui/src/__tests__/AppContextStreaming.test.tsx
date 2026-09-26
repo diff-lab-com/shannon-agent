@@ -209,3 +209,140 @@ describe('AppContext — B0 P1-2 ghost-bubble cleanup on fail/cancel', () => {
     expect(result.current.thinkingText).toBe('')
   })
 })
+
+// P2-19 — the dedicated visible-session toolProgress slot feeds the
+// RunStatusLine pill. QUERY_TOOL_PROGRESS updates it live for the visible
+// session only; it clears on run settle (completed/failed/cancelled), on a
+// new send and on session switch — never leaking across sessions or runs.
+describe('AppContext — P2-19 tool progress lifecycle', () => {
+  async function setupStreamingSession() {
+    const { result } = renderHook(() => useApp(), { wrapper })
+    await waitFor(() => expect(result.current.loading).toBe(false))
+    await flushUntilRegistered()
+    await act(async () => { await result.current.createSession() })
+    await act(async () => { await result.current.sendMessage('Hello') })
+    act(() => {
+      flush(EVENT_NAMES.QUERY_TOOL_START, {
+        tool_use_id: 'tc-1', tool_name: 'bash', tool_input: {}, session_id: SESSION_A,
+      })
+    })
+    expect(result.current.isQuerying).toBe(true)
+    expect(result.current.toolProgress).toBeNull()
+    return result
+  }
+
+  it('QUERY_TOOL_PROGRESS sets and updates the visible progress', async () => {
+    const result = await setupStreamingSession()
+
+    // The backend sends a 0..=1 fraction (agent_loop.rs); the context
+    // normalizes it to the 0..=100 percent the pill renders.
+    act(() => {
+      flush(EVENT_NAMES.QUERY_TOOL_PROGRESS, { tool_use_id: 'tc-1', progress: 0.3, message: 'Compiling', session_id: SESSION_A })
+    })
+    expect(result.current.toolProgress).toEqual({ progress: 30, message: 'Compiling' })
+
+    act(() => {
+      flush(EVENT_NAMES.QUERY_TOOL_PROGRESS, { tool_use_id: 'tc-1', progress: 0.62, message: 'Linking', session_id: SESSION_A })
+    })
+    expect(result.current.toolProgress).toEqual({ progress: 62, message: 'Linking' })
+  })
+
+  it('indeterminate (−1) and out-of-scale progress drops the percentage but keeps the message', async () => {
+    const result = await setupStreamingSession()
+
+    act(() => {
+      flush(EVENT_NAMES.QUERY_TOOL_PROGRESS, { tool_use_id: 'tc-1', progress: -1, message: 'streaming output…', session_id: SESSION_A })
+    })
+    expect(result.current.toolProgress).toEqual({ progress: undefined, message: 'streaming output…' })
+
+    act(() => {
+      flush(EVENT_NAMES.QUERY_TOOL_PROGRESS, { tool_use_id: 'tc-1', progress: 45, message: 'scale mismatch', session_id: SESSION_A })
+    })
+    expect(result.current.toolProgress).toEqual({ progress: undefined, message: 'scale mismatch' })
+  })
+
+  it('progress from a background session never reaches the visible state', async () => {
+    const result = await setupStreamingSession()
+
+    act(() => {
+      flush(EVENT_NAMES.QUERY_TOOL_PROGRESS, { tool_use_id: 'tc-bg', progress: 0.99, message: 'background', session_id: SESSION_B })
+    })
+    expect(result.current.toolProgress).toBeNull()
+  })
+
+  it('clears on QUERY_COMPLETED', async () => {
+    const result = await setupStreamingSession()
+    act(() => {
+      flush(EVENT_NAMES.QUERY_TOOL_PROGRESS, { tool_use_id: 'tc-1', progress: 0.45, message: 'halfway', session_id: SESSION_A })
+    })
+    expect(result.current.toolProgress).toEqual({ progress: 45, message: 'halfway' })
+
+    // Async act: draining microtasks also absorbs the post-settle
+    // checkpoints/status refreshes the context fires when isQuerying falls.
+    await act(async () => { flush(EVENT_NAMES.QUERY_COMPLETED, { session_id: SESSION_A }) })
+    expect(result.current.toolProgress).toBeNull()
+    expect(result.current.isQuerying).toBe(false)
+  })
+
+  it('clears on QUERY_FAILED', async () => {
+    const result = await setupStreamingSession()
+    act(() => {
+      flush(EVENT_NAMES.QUERY_TOOL_PROGRESS, { tool_use_id: 'tc-1', progress: 0.1, message: 'soon broken', session_id: SESSION_A })
+    })
+
+    await act(async () => { flush(EVENT_NAMES.QUERY_FAILED, { error: 'boom', session_id: SESSION_A }) })
+    expect(result.current.toolProgress).toBeNull()
+  })
+
+  it('clears on QUERY_CANCELLED', async () => {
+    const result = await setupStreamingSession()
+    act(() => {
+      flush(EVENT_NAMES.QUERY_TOOL_PROGRESS, { tool_use_id: 'tc-1', progress: 80, message: 'almost', session_id: SESSION_A })
+    })
+
+    await act(async () => { flush(EVENT_NAMES.QUERY_CANCELLED, { session_id: SESSION_A }) })
+    expect(result.current.toolProgress).toBeNull()
+  })
+
+  it('clears when a new tool starts (no stale % on the next tool)', async () => {
+    const result = await setupStreamingSession()
+    act(() => {
+      flush(EVENT_NAMES.QUERY_TOOL_PROGRESS, { tool_use_id: 'tc-1', progress: 0.45, message: 'halfway', session_id: SESSION_A })
+    })
+    expect(result.current.toolProgress).toEqual({ progress: 45, message: 'halfway' })
+
+    act(() => {
+      flush(EVENT_NAMES.QUERY_TOOL_START, { tool_use_id: 'tc-2', tool_name: 'edit_file', tool_input: {}, session_id: SESSION_A })
+    })
+    expect(result.current.toolProgress).toBeNull()
+  })
+
+  it('clears on a new send', async () => {
+    const result = await setupStreamingSession()
+    act(() => {
+      flush(EVENT_NAMES.QUERY_TOOL_PROGRESS, { tool_use_id: 'tc-1', progress: 0.45, message: 'halfway', session_id: SESSION_A })
+    })
+    expect(result.current.toolProgress).toEqual({ progress: 45, message: 'halfway' })
+
+    await act(async () => { await result.current.sendMessage('again') })
+    expect(result.current.toolProgress).toBeNull()
+  })
+
+  it('clears on session switch and does not capture the invisible session afterwards', async () => {
+    const result = await setupStreamingSession()
+    act(() => {
+      flush(EVENT_NAMES.QUERY_TOOL_PROGRESS, { tool_use_id: 'tc-1', progress: 0.45, message: 'halfway', session_id: SESSION_A })
+    })
+    expect(result.current.toolProgress).toEqual({ progress: 45, message: 'halfway' })
+
+    await act(async () => { await result.current.switchSession(SESSION_B) })
+    expect(result.current.toolProgress).toBeNull()
+
+    // A keeps running in the background — its progress must not appear in
+    // the B view.
+    act(() => {
+      flush(EVENT_NAMES.QUERY_TOOL_PROGRESS, { tool_use_id: 'tc-1', progress: 90, message: 'later', session_id: SESSION_A })
+    })
+    expect(result.current.toolProgress).toBeNull()
+  })
+})

@@ -580,6 +580,21 @@ function ArtifactDocBody({ artifact, workingDir }: { artifact: ArtifactItem; wor
   const filePath = artifact.path ?? (artifact.kind === 'image' || artifact.kind === 'other' ? artifact.source : null)
   const lineCount = useMemo(() => (hasText ? artifact.source.split('\n').length : 0), [artifact.source, hasText])
 
+  // 2026-09-26 round2 §5-1 A — chat-fence HTML (no backing file, never
+  // disk-provenance) runs interactive through the artifact:// custom
+  // protocol; disk files keep the static preview. Discriminator note: the
+  // dock's `origin` field is only ever set to 'disk' (ArtifactLinkHost);
+  // chat-fence artifacts carry no path, so `!filePath && origin !== 'disk'`
+  // is exactly the chat-fence set — the same test the static hint below
+  // has always used.
+  const interactiveHtml = artifact.kind === 'html' && !filePath && artifact.origin !== 'disk'
+  // When the interactive registration fails (web dev, oversize artifact…)
+  // HtmlRenderer silently falls back to static — surface the hint again.
+  const [htmlInteractiveFailed, setHtmlInteractiveFailed] = useState(false)
+  useEffect(() => {
+    setHtmlInteractiveFailed(false)
+  }, [artifact.id, artifact.source])
+
   const handleCopy = async () => {
     try {
       await navigator.clipboard.writeText(artifact.source)
@@ -697,17 +712,20 @@ function ArtifactDocBody({ artifact, workingDir }: { artifact: ArtifactItem; wor
           </Button>
         )}
       </div>
-      {/* §P1-9 honest-static posture: chat-fence HTML (no backing file) can
-          never run scripts in the panel — say so, and put the OS escape
-          hatch one click away instead of a silently dead interactive page. */}
-      {artifact.kind === 'html' && !filePath && (
+      {/* §P1-9 / §5-1 A: the static hint covers exactly the HTML that still
+          renders statically — disk files (expected static, informative
+          copy), and a chat artifact whose interactive registration failed
+          (a distinct honest-fallback copy, per the round-2 review). */}
+      {artifact.kind === 'html' && (!interactiveHtml || htmlInteractiveFailed) && (
         <div
           role="note"
           data-testid="artifact-html-static-hint"
           className="flex items-center gap-xs px-sm py-xs mb-sm rounded-lg bg-surface-container-high/50 text-on-surface-variant shrink-0"
         >
           <span className="material-symbols-outlined icon-sm shrink-0" aria-hidden="true">info</span>
-          <p className="font-label-xs flex-1 min-w-0">{t('chat.dock.html.staticHint')}</p>
+          <p className="font-label-xs flex-1 min-w-0">
+            {t(htmlInteractiveFailed ? 'chat.dock.html.staticHint.fallback' : 'chat.dock.html.staticHint')}
+          </p>
           <Button type="button" variant="default" size="sm" onClick={openExternally} className="shrink-0">
             <span className="material-symbols-outlined icon-sm align-middle" aria-hidden="true">open_in_new</span>
             <span className="align-middle ml-xs">{t('chat.artifact.openSystem')}</span>
@@ -720,7 +738,14 @@ function ArtifactDocBody({ artifact, workingDir }: { artifact: ArtifactItem; wor
             <pre className="h-full overflow-auto font-mono text-[12px] whitespace-pre-wrap break-words text-on-surface p-sm bg-surface-container-low/50 rounded-lg">
               {artifact.source}
             </pre>
-          ) : artifact.kind === 'html' ? <HtmlRenderer source={artifact.source} title={artifact.title} />
+          ) : artifact.kind === 'html' ? (
+            <HtmlRenderer
+              source={artifact.source}
+              title={artifact.title}
+              interactive={interactiveHtml}
+              onRegistrationFailed={() => setHtmlInteractiveFailed(true)}
+            />
+          )
             : artifact.kind === 'web' ? <WebRenderer url={artifact.source} />
               : artifact.kind === 'image' ? <ImageDocBody src={convertFileSrc(artifact.source)} alt={displayTitle} />
                 : artifact.kind === 'other' ? (

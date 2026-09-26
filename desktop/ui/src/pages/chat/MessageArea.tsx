@@ -172,7 +172,7 @@ export default function MessageArea({
   searchFlashIndex,
   onEditMessage,
 }: MessageAreaProps) {
-  const { messages, streamingText, thinkingText, activeToolCalls, checkpoints, rewindSession, isQuerying } = useChat()
+  const { messages, streamingText, thinkingText, activeToolCalls, toolProgress, checkpoints, rewindSession, isQuerying } = useChat()
   const { currentSessionId, sessionActivity, switchingSession } = useSessions()
   const durationLookup = useToolDurationLookup(currentSessionId)
   const checkpointTurns = useMemo(() => checkpoints.map(c => c.turn_index), [checkpoints])
@@ -286,7 +286,7 @@ export default function MessageArea({
       {/* Batch C3 (ZCode「已工作 3 分 34 秒」): wall-clock status pill pinned
           to the flow bottom while a run is live — time awareness without
           expanding tool cards. */}
-      {isQuerying && <RunStatusLine startedAt={currentSessionId ? sessionActivity[currentSessionId]?.startedAt ?? null : null} activeTool={currentSessionId ? sessionActivity[currentSessionId]?.activeTool ?? null : null} />}
+      {isQuerying && <RunStatusLine startedAt={currentSessionId ? sessionActivity[currentSessionId]?.startedAt ?? null : null} activeTool={currentSessionId ? sessionActivity[currentSessionId]?.activeTool ?? null : null} toolProgress={toolProgress} />}
 
       {error && (
         <Banner
@@ -346,8 +346,14 @@ function ComposerWelcome() {
  * Batch C3: sticky status pill for a live run —「已工作 3分34秒 · 正在 bash」.
  * The startedAt/activeTool pair comes from the same SessionActivity the
  * sidebar rail consumes; a 1s tick drives the elapsed label while mounted.
+ * P2-19: when the backend streams QUERY_TOOL_PROGRESS, the pill grows a
+ * compact percentage chip (`· 45%`) next to the tool name and the backend's
+ * progress_message, truncated with the full text in `title`. Both are raw
+ * backend data (not UI chrome) — no new i18n keys; announcements ride the
+ * existing role="status" region. Additive only: the pre-existing roles/
+ * testids/aria structure is unchanged.
  */
-export function RunStatusLine({ startedAt, activeTool }: { startedAt: number | null; activeTool: string | null }) {
+export function RunStatusLine({ startedAt, activeTool, toolProgress }: { startedAt: number | null; activeTool: string | null; toolProgress?: { progress?: number; message?: string } | null }) {
   const t = useT()
   const [now, setNow] = useState(() => Date.now())
   useEffect(() => {
@@ -355,18 +361,42 @@ export function RunStatusLine({ startedAt, activeTool }: { startedAt: number | n
     return () => window.clearInterval(id)
   }, [])
   const elapsed = startedAt != null ? formatWorked(Math.max(0, now - startedAt)) : null
+  // Only a sane 0..=100 percentage renders — out-of-range/NaN payloads are
+  // ignored instead of shown as garbage next to the tool name.
+  const pct = toolProgress?.progress
+  const pctText = typeof pct === 'number' && Number.isFinite(pct) && pct >= 0 && pct <= 100
+    ? `${Math.round(pct)}%`
+    : null
+  const progressMsg = toolProgress?.message?.trim() ?? ''
   return (
     <div
       role="status"
       aria-live="polite"
       data-testid="run-status-line"
-      className="sticky bottom-0 mt-md mx-auto w-fit flex items-center gap-xs px-md py-xs rounded-full bg-surface-container-lowest/95 backdrop-blur-md border border-outline-variant/30 shadow-sm"
+      className="sticky bottom-0 mt-md mx-auto w-fit max-w-full flex items-center gap-xs px-md py-xs rounded-full bg-surface-container-lowest/95 backdrop-blur-md border border-outline-variant/30 shadow-sm"
     >
       <span className="size-1.5 rounded-full bg-secondary animate-pulse shrink-0" aria-hidden="true" />
       <span className="font-label-sm text-on-surface-variant whitespace-nowrap">
         {elapsed != null && t('chat.status.worked', { time: elapsed })}
         {activeTool && t('chat.status.tool', { tool: activeTool })}
       </span>
+      {pctText && (
+        <span
+          data-testid="run-progress-pct"
+          className="font-label-sm text-on-surface-variant tabular-nums whitespace-nowrap shrink-0"
+        >
+          · {pctText}
+        </span>
+      )}
+      {progressMsg && (
+        <span
+          data-testid="run-progress-message"
+          title={progressMsg.slice(0, 200)}
+          className="font-label-sm text-on-surface-variant truncate max-w-[16rem]"
+        >
+          {progressMsg}
+        </span>
+      )}
     </div>
   )
 }

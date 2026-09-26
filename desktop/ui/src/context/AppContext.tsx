@@ -80,6 +80,16 @@ export function AppProvider({ children }: { children: ReactNode }) {
   // entry, so gating/stop/error UI all key off the session on screen.
   const [queryingSessions, setQueryingSessions] = useState<Record<string, true>>({})
   const [activeToolCalls, setActiveToolCalls] = useState<ToolCall[]>([])
+  // P2-19: live progress of the VISIBLE session's currently-running tool
+  // (QUERY_TOOL_PROGRESS {progress, progress_message}). The raw fields also
+  // land on the matching activeToolCalls card; this dedicated slot feeds the
+  // RunStatusLine pill. Single visible-session value, like the streaming
+  // projections: progress for a background session is dropped (its pill is
+  // not on screen), and switching sessions clears it rather than projecting
+  // per-session buckets. Cleared everywhere activeToolCalls is cleared, on
+  // every new tool start (stale % from the previous tool must not label the
+  // next one), and on new sends.
+  const [toolProgress, setToolProgress] = useState<{ progress?: number; message?: string } | null>(null)
   const [usage, setUsage] = useState<UsagePayload | null>(null)
   // B2: live registry state of the currently running sub-agent, from the
   // subagent:start / subagent:stop bridge. Single slot — one live spawn per
@@ -388,6 +398,8 @@ export function AppProvider({ children }: { children: ReactNode }) {
     setStreamingText('')
     setThinkingText('')
     setActiveToolCalls([])
+    // P2-19: a new turn starts with no progress chip (fresh run, fresh tool).
+    setToolProgress(null)
     // B1 P1-5: the run is tracked on ITS session — other sessions keep a
     // usable composer while this one streams.
     setSessionQuerying(targetSessionId, true)
@@ -448,6 +460,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
       setStreamingText('')
       setThinkingText('')
       setActiveToolCalls([])
+      setToolProgress(null)
       await refreshSessions()
     } catch (e) { setError(String(e)) }
   }, [refreshSessions])
@@ -464,6 +477,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
       setStreamingText('')
       setThinkingText('')
       setActiveToolCalls([])
+      setToolProgress(null)
       await refreshSessions()
     } catch (e) {
       setError(String(e))
@@ -494,6 +508,9 @@ export function AppProvider({ children }: { children: ReactNode }) {
       setStreamingText(streamingBucketsRef.current.get(id) ?? '')
       setThinkingText(thinkingBucketsRef.current.get(id) ?? '')
       setActiveToolCalls([])
+      // P2-19: single visible-session value — switching drops the previous
+      // session's pill (background progress was never captured anyway).
+      setToolProgress(null)
       // Batch B2: opening the session marks a prior failure as seen.
       const prev = sessionActivityRef.current.get(id)
       if (prev?.failed) {
@@ -597,6 +614,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
       setStreamingText('')
       setThinkingText('')
       setActiveToolCalls([])
+      setToolProgress(null)
       await refreshSessions()
       await refreshCheckpoints()
     } catch (e) {
@@ -615,6 +633,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
       setStreamingText('')
       setThinkingText('')
       setActiveToolCalls([])
+      setToolProgress(null)
       await refreshSessions()
       await refreshCheckpoints()
       return result
@@ -663,6 +682,10 @@ export function AppProvider({ children }: { children: ReactNode }) {
           const visibleKey = visibleSessionIdRef.current ?? ''
           const key = p.session_id ?? visibleKey
           if (key !== visibleKey) return
+          // P2-19: a new tool starts from a clean slate — the previous
+          // tool's last percentage/message must not label this one until it
+          // reports its own progress.
+          setToolProgress(null)
           setActiveToolCalls(prev => [...prev, {
             tool_use_id: p.tool_use_id,
             tool_name: p.tool_name,
@@ -697,6 +720,18 @@ export function AppProvider({ children }: { children: ReactNode }) {
               ? { ...tc, progress: p.progress, progress_message: p.message }
               : tc
           ))
+          // P2-19: same visible-only slot for the RunStatusLine pill. The
+          // backend sends a FRACTION (−1 indeterminate, 0..=1 determinate —
+          // agent_loop.rs); normalize to the 0..=100 percent the pill
+          // renders here, so the wire contract lives in exactly one place.
+          const frac = p.progress
+          setToolProgress({
+            progress:
+              typeof frac === 'number' && frac >= 0 && frac <= 1
+                ? Math.round(frac * 100)
+                : undefined,
+            message: p.message,
+          })
         }),
         listen(EVENT_NAMES.SUBAGENT_START, (e) => {
           const p = e.payload as SubAgentLive
@@ -754,6 +789,8 @@ export function AppProvider({ children }: { children: ReactNode }) {
             // Review P2-4 (round 2): completed tool cards must not linger
             // under the committed reply until the next send/switch.
             setActiveToolCalls([])
+            // P2-19: the run ended — no progress chip may outlive it.
+            setToolProgress(null)
             refreshStatus()
           }
         }),
@@ -780,6 +817,8 @@ export function AppProvider({ children }: { children: ReactNode }) {
             setStreamingText('')
             setThinkingText('')
             setActiveToolCalls([])
+            // P2-19: run failed — clear the progress pill with the cards.
+            setToolProgress(null)
           }
         }),
         listen(EVENT_NAMES.QUERY_CANCELLED, (e) => {
@@ -798,6 +837,8 @@ export function AppProvider({ children }: { children: ReactNode }) {
             setStreamingText('')
             setThinkingText('')
             setActiveToolCalls([])
+            // P2-19: run cancelled — clear the progress pill with the cards.
+            setToolProgress(null)
           }
         }),
         listen(EVENT_NAMES.PERMISSION_REQUEST, (e) => {
@@ -892,14 +933,14 @@ export function AppProvider({ children }: { children: ReactNode }) {
 
   const visibleKey = windowSessionId ?? currentSessionId ?? ''
   const chatValue = useMemo<ChatContextValue>(() => ({
-    messages, streamingText, thinkingText, isQuerying, activeToolCalls, usage,
+    messages, streamingText, thinkingText, isQuerying, activeToolCalls, toolProgress, usage,
     sendMessage, cancelQuery,
     promptQueue: promptQueues[visibleKey] ?? [],
     enqueuePrompt, dequeuePrompt, removeQueuedPrompt,
     contextPanelOpen, toggleContextPanel, setContextPanelOpen: updateContextPanelOpen,
     checkpoints, rewindSession: rewindSessionAction, compactSession: compactSessionAction,
     feedback, recordFeedback: recordFeedbackAction,
-  }), [messages, streamingText, thinkingText, isQuerying, activeToolCalls, usage, sendMessage, cancelQuery,
+  }), [messages, streamingText, thinkingText, isQuerying, activeToolCalls, toolProgress, usage, sendMessage, cancelQuery,
     promptQueues, visibleKey, enqueuePrompt, dequeuePrompt, removeQueuedPrompt,
     contextPanelOpen, toggleContextPanel, updateContextPanelOpen, checkpoints, rewindSessionAction, compactSessionAction, feedback, recordFeedbackAction])
 

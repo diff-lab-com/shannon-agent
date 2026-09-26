@@ -663,6 +663,35 @@ export async function openArtifactExternally(title: string, source: string, ext:
   return invoke('open_artifact_externally', { title, source, ext })
 }
 
+// --- 2026-09-26 round2 §5-1 A — artifact:// interactive HTML (design doc
+// docs/plans/2026-09-26-desktop-chat-ui-round2-design.md) ---
+
+/** Result of registering an interactive HTML artifact with the Rust-side
+ * registry: the id (pass to {@link unregisterInteractiveArtifact}) and the
+ * ready-to-load iframe URL (platform-shaped, computed Rust-side). */
+export interface ArtifactRegistration {
+  id: string
+  url: string
+}
+
+/**
+ * Store an interactive HTML artifact in the Rust-side registry and get back
+ * the `artifact://` (or `http://artifact.localhost/` on Windows) URL to load
+ * in a sandboxed iframe. The response carries its own strict CSP and the
+ * document runs in an opaque origin — that is what unlocks real scripts
+ * where srcdoc iframes could never have them.
+ */
+export async function registerInteractiveHtml(html: string): Promise<ArtifactRegistration> {
+  return invoke('register_interactive_artifact', { html })
+}
+
+/** Remove a previously registered artifact (unknown/expired ids are a
+ * silent no-op Rust-side). */
+export async function unregisterInteractiveArtifact(id: string): Promise<void> {
+  await invoke('unregister_interactive_artifact', { id })
+}
+
+
 export interface FrameProbe {
   frameable: boolean
   status: number
