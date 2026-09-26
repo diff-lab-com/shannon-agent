@@ -114,10 +114,30 @@ export default function Chat() {
       : undefined,
   })
 
+  // B0 P1-1: stream auto-follow is now conditional. A passive scroll
+  // listener tracks whether the user is at/near the bottom; streaming
+  // updates only pull the viewport down while they are. Scrolling back to
+  // the bottom re-arms following; MessageArea's "scroll to latest" FAB is
+  // the explicit way back. The listener also sees our own programmatic
+  // scrolls — they always end at distance 0, so following re-arms itself.
+  const stickToBottomRef = useRef(true)
+  useEffect(() => {
+    const el = scrollParentRef.current
+    if (!el) return
+    const NEAR_BOTTOM_PX = 80
+    const onScroll = () => {
+      stickToBottomRef.current = el.scrollHeight - el.scrollTop - el.clientHeight <= NEAR_BOTTOM_PX
+    }
+    el.addEventListener('scroll', onScroll, { passive: true })
+    return () => el.removeEventListener('scroll', onScroll)
+  }, [])
+
   useEffect(() => {
     // Review 2026-09-16: scrollIntoView raced the virtualizer (the end sentinel
     // is measured before it mounts), leaving the new user bubble mid-viewport.
     // Scroll the virtualized parent directly instead.
+    // B0 P1-1: only while the user hasn't scrolled away to read.
+    if (!stickToBottomRef.current) return
     const el = scrollParentRef.current
     if (el) el.scrollTo({ top: el.scrollHeight, behavior: 'smooth' })
     else messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' })
@@ -125,6 +145,12 @@ export default function Chat() {
 
   const [slashResult, setSlashResult] = useState<SlashResult | null>(null)
   const dismissSlashResult = useCallback(() => setSlashResult(null), [])
+
+  // B0 P2-2: a slash result card (/cost, /context …) is diagnostics about
+  // the session it ran in — don't let it follow the user into the next one.
+  useEffect(() => {
+    setSlashResult(null)
+  }, [currentSessionId])
 
   const executeSlash = useCallback((cmd: SlashCommand) => {
     void cmd.run({
@@ -144,18 +170,26 @@ export default function Chat() {
 
   const handleSend = () => {
     const trimmed = input.trim()
-    if (!trimmed || isQuerying) return
-    // Slash commands never reach the model: a bare `/name` runs locally
-    // (the desktop's counterpart of the REPL command line), and anything
-    // else starting with `/` — typically a pasted absolute path — is sent
-    // as plain text.
-    const slashCommand = parseSlashInput(trimmed)
-    if (slashCommand) {
-      executeSlash(slashCommand)
-      setInput('')
-      return
+    const hasAttachments = attachedFiles.length > 0
+    // B0 P0-1: attachments-only sends are real. The backend accepts an empty
+    // text alongside attachment paths (send_message never validated
+    // emptiness; the engine turns the attachments into content blocks), so
+    // an empty text with files now goes through instead of silently
+    // no-oping behind an enabled send button.
+    if ((!trimmed && !hasAttachments) || isQuerying) return
+    if (trimmed) {
+      // Slash commands never reach the model: a bare `/name` runs locally
+      // (the desktop's counterpart of the REPL command line), and anything
+      // else starting with `/` — typically a pasted absolute path — is sent
+      // as plain text.
+      const slashCommand = parseSlashInput(trimmed)
+      if (slashCommand) {
+        executeSlash(slashCommand)
+        setInput('')
+        return
+      }
     }
-    const filePaths = attachedFiles.length > 0 ? attachedFiles : undefined
+    const filePaths = hasAttachments ? attachedFiles : undefined
     sendMessage(trimmed, filePaths)
     setInput('')
     setAttachedFiles([])

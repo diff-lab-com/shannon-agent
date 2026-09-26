@@ -307,7 +307,12 @@ export function AppProvider({ children }: { children: ReactNode }) {
     const targetSessionId = windowSessionId ?? currentSessionId
     try {
       await api.cancelQuery(targetSessionId ?? undefined)
-    } catch (e) { toastError('Failed to cancel query', e) }
+    } catch (e) {
+      // B0 P2-11: messageFor works outside IntlProvider (the provider may
+      // not wrap this context's call sites) — same helper SESSION_AUTO_
+      // UNARCHIVED uses.
+      toastError(messageFor('chat.error.cancelFailed'), e)
+    }
   }, [windowSessionId, currentSessionId])
 
   const createSession = useCallback(async () => {
@@ -603,21 +608,39 @@ export function AppProvider({ children }: { children: ReactNode }) {
           // visible session — a background run failing must not overwrite
           // the on-screen session's composer/error state (its failure is
           // still surfaced by the rail's red dot via noteSessionActivity).
+          // B0 P1-2: a failed run leaves no ghost bubble — drop the run's
+          // buckets AND the visible projections. Persisting the partial
+          // text needs a backend commit path (none exists yet), so clearing
+          // is the approved behavior for this batch.
           const visibleKey = visibleSessionIdRef.current ?? ''
-          if ((p.session_id ?? visibleKey) === visibleKey) {
+          const key = p.session_id ?? visibleKey
+          streamingBucketsRef.current.set(key, '')
+          thinkingBucketsRef.current.set(key, '')
+          if (key === visibleKey) {
             setError(p.error)
             setIsQuerying(false)
             setCurrentQueryId(null)
+            setStreamingText('')
+            setThinkingText('')
+            setActiveToolCalls([])
           }
         }),
         listen(EVENT_NAMES.QUERY_CANCELLED, (e) => {
           const sid = (e.payload as { session_id?: string }).session_id
           if (!isEventForCurrentWindow(sid, windowSessionId)) return
           noteSessionActivity(sid, 'end')
+          // B0 P1-2: same ghost-bubble cleanup as QUERY_FAILED — the
+          // cancelled session's buckets and, when visible, the projections.
           const visibleKey = visibleSessionIdRef.current ?? ''
-          if ((sid ?? visibleKey) === visibleKey) {
+          const key = sid ?? visibleKey
+          streamingBucketsRef.current.set(key, '')
+          thinkingBucketsRef.current.set(key, '')
+          if (key === visibleKey) {
             setIsQuerying(false)
             setCurrentQueryId(null)
+            setStreamingText('')
+            setThinkingText('')
+            setActiveToolCalls([])
           }
         }),
         listen(EVENT_NAMES.PERMISSION_REQUEST, (e) => {

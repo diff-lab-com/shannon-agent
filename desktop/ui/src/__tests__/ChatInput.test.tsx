@@ -1,10 +1,11 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
-import { render, screen, fireEvent, waitFor } from '@testing-library/react'
+import { render, screen, fireEvent, waitFor, act } from '@testing-library/react'
 import { I18nProvider } from '@/i18n'
 import ChatInput from '@/components/chat/ChatInput'
 import * as api from '@/lib/tauri-api'
 import { toast } from 'sonner'
 import type * as ReactRouterDom from 'react-router-dom'
+import type { WebviewFileDropEvent } from '@/lib/tauri-api'
 
 vi.mock('sonner', () => ({
   toast: { success: vi.fn(), error: vi.fn(), warning: vi.fn(), info: vi.fn(), message: vi.fn() },
@@ -18,6 +19,13 @@ vi.mock('react-router-dom', async () => {
     useNavigate: () => () => {},
   }
 })
+
+// B0 P0-2: capture the webview drag-drop handler ChatInput registers so
+// tests can drive the Tauri v2 event stream (HTML5 DnD is dead while
+// dragDropEnabled is on — there is nothing else to simulate).
+const { dragDrop } = vi.hoisted(() => ({
+  dragDrop: { handler: null as null | ((e: unknown) => void) },
+}))
 
 // Mock useApp hook
 const mockRefreshConfig = vi.fn()
@@ -66,6 +74,10 @@ vi.mock('@/lib/tauri-api', async () => {
     }),
     getSessionUsage: vi.fn().mockResolvedValue({ cost_usd: 0 }),
     getSessionBudget: vi.fn().mockResolvedValue(null),
+    onWebviewFileDrop: vi.fn((handler: (e: unknown) => void) => {
+      dragDrop.handler = handler
+      return Promise.resolve(() => { dragDrop.handler = null })
+    }),
   }
 })
 
@@ -90,6 +102,7 @@ function renderChatInput(props: Partial<React.ComponentProps<typeof ChatInput>> 
 describe('ChatInput', () => {
   beforeEach(() => {
     vi.clearAllMocks()
+    dragDrop.handler = null
     mockRefreshConfig.mockReset()
     mockRefreshStatus.mockReset()
     vi.mocked(api.configure).mockReset()
@@ -443,5 +456,110 @@ describe('ChatInput — session usage entry', () => {
     fireEvent.click(btn)
     // 弹框标题(chat.input.usage.title 的 en 文案)
     expect(await screen.findByText('Session usage')).toBeInTheDocument()
+  })
+})
+
+// B0 P0-3 — IME composition guard: Enter/Tab while a CJK conversion is in
+// flight confirm the candidate; they must never send or run a slash
+// command.
+describe('ChatInput — IME composition guard', () => {
+  const textareaOf = (container: HTMLElement) => container.querySelector('textarea')!
+
+  it('does not send the Enter that confirms an active composition', () => {
+    const onSend = vi.fn()
+    const { container } = renderChatInput({ value: 'nihao', onSend })
+    const textarea = textareaOf(container)
+
+    fireEvent.compositionStart(textarea)
+    // Chrome ordering: keydown carries isComposing=true before compositionend.
+    fireEvent.keyDown(textarea, { key: 'Enter', isComposing: true })
+    expect(onSend).not.toHaveBeenCalled()
+
+    fireEvent.compositionEnd(textarea)
+    // Right after compositionend the Enter still lands in the grace window
+    // (it may be Safari/Firefox's confirm keydown) — also swallowed.
+    fireEvent.keyDown(textarea, { key: 'Enter' })
+    expect(onSend).not.toHaveBeenCalled()
+  })
+
+  it('sends again once the composition grace window has passed', async () => {
+    const onSend = vi.fn()
+    const { container } = renderChatInput({ value: 'nihao', onSend })
+    const textarea = textareaOf(container)
+
+    fireEvent.compositionStart(textarea)
+    fireEvent.compositionEnd(textarea)
+    // Cross the 100ms guard window, then Enter is a real send again.
+    await act(async () => { await new Promise(resolve => setTimeout(resolve, 120)) })
+    fireEvent.keyDown(textarea, { key: 'Enter' })
+    expect(onSend).toHaveBeenCalledTimes(1)
+  })
+
+  it('does not send on Ctrl+Enter during composition', () => {
+    const onSend = vi.fn()
+    const { container } = renderChatInput({ value: 'nihao', onSend })
+    const textarea = textareaOf(container)
+    fireEvent.compositionStart(textarea)
+    fireEvent.keyDown(textarea, { key: 'Enter', ctrlKey: true, isComposing: true })
+    expect(onSend).not.toHaveBeenCalled()
+  })
+
+  it('covers the Safari/Firefox ordering where compositionend precedes the keydown', () => {
+    const onSend = vi.fn()
+    const { container } = renderChatInput({ value: 'nihao', onSend })
+    const textarea = textareaOf(container)
+    fireEvent.compositionStart(textarea)
+    // Safari/Firefox: compositionend fires FIRST, so the confirming keydown
+    // arrives with isComposing already false — the just-ended grace window
+    // is what swallows it.
+    fireEvent.compositionEnd(textarea)
+    fireEvent.keyDown(textarea, { key: 'Enter' })
+    expect(onSend).not.toHaveBeenCalled()
+  })
+})
+
+// B0 P0-2 — drag-drop is driven by the Tauri v2 webview events (HTML5 DnD
+// never fires while the webview's dragDropEnabled is on).
+describe('ChatInput — Tauri v2 file drag-drop', () => {
+  const drop = (payload: WebviewFileDropEvent) =>
+    act(() => { dragDrop.handler?.(payload) })
+
+  function renderWithSubscription(props: Partial<React.ComponentProps<typeof ChatInput>> = {}) {
+    const view = renderChatInput(props)
+    // The registration is async (Promise<unlisten>) — flush it.
+    return { view, ready: waitFor(() => expect(dragDrop.handler).toBeTruthy()) }
+  }
+
+  it('registers a drag-drop listener on mount', async () => {
+    const { ready } = renderWithSubscription()
+    await ready
+  })
+
+  it('shows the overlay on enter/over, hides it on leave, and attaches dropped paths', async () => {
+    const onAttach = vi.fn()
+    const { ready } = renderWithSubscription({ onAttach })
+    await ready
+
+    drop({ type: 'enter', paths: [] })
+    expect(screen.getByText('Drop files to attach')).toBeInTheDocument()
+
+    drop({ type: 'over' })
+    expect(screen.getByText('Drop files to attach')).toBeInTheDocument()
+
+    drop({ type: 'leave' })
+    expect(screen.queryByText('Drop files to attach')).not.toBeInTheDocument()
+
+    drop({ type: 'enter', paths: [] })
+    drop({ type: 'drop', paths: ['/tmp/a.png', '/tmp/b.pdf'] })
+    expect(screen.queryByText('Drop files to attach')).not.toBeInTheDocument()
+    await waitFor(() => expect(onAttach).toHaveBeenCalledWith(['/tmp/a.png', '/tmp/b.pdf']))
+  })
+
+  it('ignores a drop that carries no paths instead of clearing the overlay silently', async () => {
+    const onAttach = vi.fn()
+    const { ready } = renderWithSubscription({ onAttach })
+    await ready
+    drop({ type: 'drop', paths: [] })
+    expect(onAttach).not.toHaveBeenCalled()
   })
 })

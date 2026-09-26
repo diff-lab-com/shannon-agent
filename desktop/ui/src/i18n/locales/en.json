@@ -1637,6 +1637,7 @@
   "chat.streaming.jumpToBottom": "Jump to latest",
   "chat.streaming.thinking": "Thinking",
   "chat.error.retry": "Retry",
+  "chat.error.cancelFailed": "Failed to cancel query",
   "chat.input.attach.aria": "Attach file",
   "chat.input.plus.aria": "Attachments and tools",
   "chat.input.attach.failed": "Failed to attach file",

@@ -248,14 +248,26 @@ function formatWorked(ms: number): string {
   return `${Math.floor(min / 60)}h${min % 60}m`
 }
 
+// B0 P1-3: the composer is cleared on send, so a retry gated on composer
+// text was a guaranteed no-op. Retry now resends the LAST USER MESSAGE of
+// the conversation — the same mechanism as the budget banner's "continue
+// once". With no previous user message there is nothing to resend, so the
+// button hides entirely.
 function ComposerRetryButton() {
-  const { input, handleSend } = useComposer()
+  const { messages, sendMessage } = useChat()
   const t = useT()
+  const lastUser = useMemo(() => {
+    for (let i = messages.length - 1; i >= 0; i--) {
+      if (messages[i]?.role === 'user') return messages[i]
+    }
+    return null
+  }, [messages])
+  if (!lastUser) return null
   return (
     <Button
       variant="ghost"
       className="mt-sm text-error hover:bg-error/10 text-label-md cursor-pointer"
-      onClick={() => { if (input.trim()) handleSend() }}
+      onClick={() => void sendMessage(lastUser.content)}
     >
       {t('chat.error.retry')}
     </Button>

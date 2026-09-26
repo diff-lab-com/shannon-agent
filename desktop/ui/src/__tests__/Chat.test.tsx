@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
-import { render, screen, fireEvent, waitFor } from '@testing-library/react'
+import { render, screen, fireEvent, waitFor, act } from '@testing-library/react'
 import { MemoryRouter } from 'react-router-dom'
 import * as dialog from '@tauri-apps/plugin-dialog'
 import { I18nProvider } from '@/i18n'
@@ -112,6 +112,27 @@ describe('Chat page', () => {
     expect(ctx.sendMessage).not.toHaveBeenCalled()
   })
 
+  // B0 P0-1 — attachments-only sends are real: the backend's send_message
+  // accepts an empty text alongside attachment paths (the engine turns the
+  // attachments into content blocks), so Enter/Submit with files and no
+  // text goes through instead of silently no-oping.
+  it('sends attachments-only (empty text) instead of silently no-oping', async () => {
+    resetCtx()
+    ctx.currentSessionId = 'sess-1'
+    // No working_dir on the session — keeps the default composer placeholder
+    // this file's queries match against.
+    ctx.sessions = [{ id: 'sess-1', title: 'S' }]
+    vi.mocked(dialog.open).mockResolvedValueOnce('/home/alice/Downloads/report.pdf')
+    renderChat()
+    fireEvent.click(screen.getByLabelText('Attachments and tools'))
+    fireEvent.click(screen.getByRole('menuitem', { name: 'Attach file' }))
+    await screen.findByText('report.pdf')
+
+    const input = screen.getByPlaceholderText(/Try: "Explain this repo"/)
+    fireEvent.keyDown(input, { key: 'Enter' })
+    expect(ctx.sendMessage).toHaveBeenCalledWith('', ['/home/alice/Downloads/report.pdf'])
+  })
+
   it('does not send when querying', () => {
     resetCtx()
     ctx.isQuerying = true
@@ -203,6 +224,59 @@ describe('Chat page', () => {
     ctx.error = 'Something went wrong'
     renderChat()
     expect(screen.getByText(/Something went wrong/)).toBeInTheDocument()
+  })
+
+  // B0 P1-3 — the error banner's Retry resends the LAST USER MESSAGE (the
+  // composer was cleared on send, so the old text-gated retry never fired).
+  it('retry resends the last user message', () => {
+    resetCtx()
+    ctx.error = 'engine exploded'
+    ctx.messages = [
+      { id: '1', role: 'user', content: 'first question', timestamp: 1 },
+      { id: '2', role: 'assistant', content: 'answer', timestamp: 2 },
+      { id: '3', role: 'user', content: 'failing question', timestamp: 3 },
+    ]
+    renderChat()
+    fireEvent.click(screen.getByText('Retry'))
+    expect(ctx.sendMessage).toHaveBeenCalledTimes(1)
+    expect(ctx.sendMessage).toHaveBeenCalledWith('failing question')
+  })
+
+  it('retry is hidden when there is no previous user message to resend', () => {
+    resetCtx()
+    ctx.error = 'engine exploded'
+    ctx.messages = []
+    renderChat()
+    expect(screen.queryByText('Retry')).not.toBeInTheDocument()
+  })
+
+  // B0 P2-2 — a slash result card is session-scoped: switching sessions
+  // clears it instead of letting /cost follow the user into the next one.
+  it('clears the slash result card when the session changes', async () => {
+    resetCtx()
+    ctx.currentSessionId = 'sess-a'
+    ctx.sessions = [{ id: 'sess-a', title: 'A' }]
+    const view = renderChat()
+    const input = screen.getByPlaceholderText(/Try: "Explain this repo"/)
+    fireEvent.change(input, { target: { value: '/cost' } })
+    fireEvent.keyDown(input, { key: 'Enter' })
+    // /cost runs and pins its card (cost line from the mocked usage) above
+    // the composer.
+    expect(await screen.findByText('$0.01')).toBeInTheDocument()
+
+    ctx.currentSessionId = 'sess-b'
+    await act(async () => {
+      view.rerender(
+        <I18nProvider>
+          <MemoryRouter>
+            <ArtifactProvider>
+              <Chat />
+            </ArtifactProvider>
+          </MemoryRouter>
+        </I18nProvider>,
+      )
+    })
+    expect(screen.queryByText('$0.01')).not.toBeInTheDocument()
   })
 
   it('renders assistant message with tool calls', () => {

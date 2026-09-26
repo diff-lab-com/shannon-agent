@@ -1,4 +1,5 @@
 import { invoke } from '@tauri-apps/api/core'
+import { getCurrentWebview } from '@tauri-apps/api/webview'
 import type {
   ChatMessage,
   StatusResponse,
@@ -121,6 +122,34 @@ export async function getConversation(): Promise<ChatMessage[]> {
 
 export async function cancelQuery(sessionId?: string): Promise<void> {
   await invoke('cancel_query', { sessionId: sessionId ?? null })
+}
+
+// --- Webview file drag-drop (Tauri v2) ---
+//
+// B0 P0-2: with the webview's `dragDropEnabled` (default on), HTML5
+// dragover/drop events never reach the page and `File.path` — the Tauri v1
+// injection the composer used to read — no longer exists, so the old drop
+// handler silently produced zero paths. The only live signal is the
+// webview's own onDragDropEvent, so the composer consumes it through this
+// normalized wrapper. Note the @tauri-apps/api DragDropEvent union gives
+// `over` a position only — paths ride on `enter` and `drop`.
+
+export type WebviewFileDropEvent =
+  | { type: 'enter'; paths: string[] }
+  | { type: 'over' }
+  | { type: 'drop'; paths: string[] }
+  | { type: 'leave' }
+
+export async function onWebviewFileDrop(
+  handler: (event: WebviewFileDropEvent) => void,
+): Promise<() => void> {
+  const unlisten = await getCurrentWebview().onDragDropEvent((event) => {
+    const p = event.payload
+    if (p.type === 'enter' || p.type === 'drop') handler({ type: p.type, paths: p.paths })
+    else if (p.type === 'over') handler({ type: 'over' })
+    else handler({ type: 'leave' })
+  })
+  return unlisten
 }
 
 // --- Config ---

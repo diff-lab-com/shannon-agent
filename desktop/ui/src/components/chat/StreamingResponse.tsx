@@ -1,9 +1,8 @@
-import { useEffect, useRef, useState, useCallback, type ReactNode } from 'react'
 import { useIntl } from 'react-intl'
 import { Markdown } from '@/components/chat/Markdown'
 import { SubagentBlock, ToolCallDisplay } from '@/components/chat/MessageBubble'
 import { Reasoning } from '@/components/ai-elements'
-import { Button } from '@/components/ui/button'
+import type { ReactNode } from 'react'
 import type { ToolCall } from '@/types'
 
 interface StreamingResponseProps {
@@ -16,10 +15,11 @@ interface StreamingResponseProps {
   headerSlot?: ReactNode
 }
 
-/* Threshold below which auto-scroll keeps the bubble glued to the
- * bottom of the viewport. Above the threshold the user is treated as
- * having scrolled away and the "scroll-to-bottom" button is shown. */
-const SCROLL_AWAY_THRESHOLD_PX = 80
+/* B0 P1-1: the old near-bottom auto-scroll guard here was dead code — this
+ * component's inner div has no height constraint and never scrolls; the
+ * scroll parent is Chat.tsx's message container, which now owns near-bottom
+ * tracking itself. Only the visuals remain (bubble, tool cards, typing
+ * cursor); "back to live output" is MessageArea's scroll-to-latest FAB. */
 
 export default function StreamingResponse({
   streamingText,
@@ -31,67 +31,11 @@ export default function StreamingResponse({
   const intl = useIntl()
   const t = (id: string) => intl.formatMessage({ id })
 
-  const scrollRef = useRef<HTMLDivElement>(null)
-  const [showJumpToBottom, setShowJumpToBottom] = useState(false)
-
-  // The first user-driven scroll up after a stream begins should keep
-  // position stable (don't jerk the viewport). We track this with a
-  // ref to avoid re-renders on every wheel event.
-  const programmaticScrollRef = useRef(false)
-  const lastContentRef = useRef('')
-
-  const scrollToBottom = useCallback((smooth = false) => {
-    const el = scrollRef.current
-    if (!el) return
-    programmaticScrollRef.current = true
-    el.scrollTo({
-      top: el.scrollHeight,
-      behavior: smooth ? 'smooth' : 'auto',
-    })
-    // Reset the flag after the scroll settles
-    requestAnimationFrame(() => {
-      programmaticScrollRef.current = false
-    })
-  }, [])
-
-  // Auto-scroll while streaming — but only if the user is already near
-  // the bottom. If they scrolled away, leave them alone.
-  useEffect(() => {
-    const el = scrollRef.current
-    if (!el) return
-
-    // On the very first content arrival, jump to bottom unconditionally
-    // so the user actually sees the response (in case the viewport
-    // scrolled because of a previous long response).
-    const isFirstContent = lastContentRef.current === '' && (streamingText || thinkingText)
-    lastContentRef.current = streamingText + thinkingText
-
-    if (isFirstContent) {
-      scrollToBottom(false)
-      return
-    }
-
-    // Subsequent updates: only auto-scroll if near bottom
-    const distanceFromBottom = el.scrollHeight - el.scrollTop - el.clientHeight
-    if (distanceFromBottom < SCROLL_AWAY_THRESHOLD_PX) {
-      scrollToBottom(true)
-    }
-  }, [streamingText, thinkingText, scrollToBottom])
-
-  const handleScroll = () => {
-    const el = scrollRef.current
-    if (!el || programmaticScrollRef.current) return
-    const distanceFromBottom = el.scrollHeight - el.scrollTop - el.clientHeight
-    setShowJumpToBottom(distanceFromBottom > SCROLL_AWAY_THRESHOLD_PX)
-  }
-
   return (
     <div className="relative" role="presentation">
       {headerSlot}
       <div
-        ref={scrollRef}
-        onScroll={handleScroll}
-        className="flex gap-md max-w-[90%] pt-lg overflow-y-auto"
+        className="flex gap-md max-w-[90%] pt-lg"
         aria-live="polite"
         aria-label={t('chat.streaming.aria')}
         role="log"
@@ -129,20 +73,6 @@ export default function StreamingResponse({
           )}
         </div>
       </div>
-
-      {/* Smart jump-to-bottom — appears only when the user scrolled away. */}
-      {showJumpToBottom && (
-        <Button
-          variant="outline"
-          size="sm"
-          onClick={() => scrollToBottom(true)}
-          aria-label={t('chat.streaming.jumpToBottom')}
-          className="absolute bottom-xs right-sm gap-xs px-sm py-xs rounded-full bg-surface-container-high border-outline-variant/30 text-on-surface-variant hover:text-primary shadow-e3 h-auto"
-        >
-          <span className="material-symbols-outlined icon-sm">arrow_downward</span>
-          <span className="text-label-sm">{t('chat.streaming.jumpToBottom')}</span>
-        </Button>
-      )}
     </div>
   )
 }

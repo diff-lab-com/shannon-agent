@@ -1637,6 +1637,7 @@
   "chat.streaming.jumpToBottom": "跳到最新",
   "chat.streaming.thinking": "思考中",
   "chat.error.retry": "重试",
+  "chat.error.cancelFailed": "取消查询失败",
   "chat.input.attach.aria": "添加附件",
   "chat.input.plus.aria": "附件与工具",
   "chat.input.attach.failed": "添加附件失败",

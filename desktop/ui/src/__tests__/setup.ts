@@ -140,6 +140,9 @@ vi.mock('@/lib/tauri-api', () => ({
   sendMessage: vi.fn().mockResolvedValue({ message_id: '1', status: 'sent' }),
   getConversation: vi.fn().mockResolvedValue([]),
   cancelQuery: vi.fn().mockResolvedValue(undefined),
+  // B0 P0-2 — webview file drag-drop. Default: registration resolves with a
+  // no-op unlisten and no events ever fire; drag-flow tests override it.
+  onWebviewFileDrop: vi.fn().mockResolvedValue(() => {}),
   getConfig: vi.fn().mockResolvedValue({
     provider: 'anthropic',
     model: 'claude-sonnet-4-6',

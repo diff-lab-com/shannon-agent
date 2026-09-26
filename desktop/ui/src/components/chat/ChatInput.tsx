@@ -120,12 +120,9 @@ export default function ChatInput({
   })
 
   const handleModeChange = async (mode: string | null) => {
-    console.log('[dbg] handleModeChange', mode)
     if (!mode) return
     try {
-      console.log('[dbg] calling api.configure')
       await api.configure({ key: 'approval_mode', value: mode })
-      console.log('[dbg] configure resolved')
       await refreshConfig()
     } catch (err) {
       toastError(t('chat.input.mode.failed'), err)
@@ -169,16 +166,6 @@ export default function ChatInput({
     }
   }
 
-  const handleDragOver = (e: React.DragEvent) => {
-    e.preventDefault()
-    setIsDragging(true)
-  }
-
-  const handleDragLeave = (e: React.DragEvent) => {
-    e.preventDefault()
-    setIsDragging(false)
-  }
-
   const mergePaths = (paths: string[]) => {
     const merged = [...new Set([...attachedFiles, ...paths])]
     if (merged.length > api.MAX_ATTACHMENT_COUNT) {
@@ -191,28 +178,70 @@ export default function ChatInput({
     }
     onAttach(merged)
   }
+  // B0 P0-2: the drag-drop subscription outlives single renders, so it
+  // dispatches through a latest-ref instead of re-subscribing on every
+  // attachments change.
+  const mergePathsRef = useRef(mergePaths)
+  useEffect(() => {
+    mergePathsRef.current = mergePaths
+  })
 
-  const handleDrop = async (e: React.DragEvent) => {
-    e.preventDefault()
-    setIsDragging(false)
-
-    const files: FileList = e.dataTransfer.files
-    if (!files || files.length === 0) return
-
-    const paths: string[] = []
-    for (let i = 0; i < files.length; i++) {
-      const file = files[i]
-      if ('path' in file && typeof file.path === 'string') {
-        paths.push(file.path)
+  // B0 P0-2 — file drag-drop via the webview's own Tauri v2 events. With
+  // `dragDropEnabled` (the default) HTML5 dragover/drop never fire and
+  // `File.path` no longer exists, so the overlay + attachment list are
+  // driven entirely by onDragDropEvent (enter/over → show, out/leave →
+  // hide, drop → attach the real absolute paths). In mock/demo mode the
+  // registration resolves and nothing fires — acceptable.
+  useEffect(() => {
+    let unlisten: (() => void) | null = null
+    let cancelled = false
+    void api.onWebviewFileDrop(event => {
+      if (event.type === 'enter' || event.type === 'over') {
+        setIsDragging(true)
+      } else if (event.type === 'leave') {
+        setIsDragging(false)
+      } else {
+        // drop — attach the real absolute paths.
+        setIsDragging(false)
+        if (event.paths.length > 0) mergePathsRef.current(event.paths)
       }
+    }).then(fn => {
+      if (cancelled) fn?.()
+      else unlisten = fn ?? null
+    }).catch(() => {
+      // Outside a Tauri webview (plain-browser dev) registration fails —
+      // nothing fires, which is the acceptable mock/demo behavior.
+    })
+    return () => {
+      cancelled = true
+      unlisten?.()
     }
+  }, [])
 
-    if (paths.length > 0) {
-      mergePaths(paths)
-    }
-  }
+  // B0 P0-3 — IME composition guard. While a CJK conversion is in flight,
+  // the Enter/Tab keydown belongs to the IME (it confirms the candidate);
+  // sending it would post half-converted pinyin. Two browser orderings need
+  // covering:
+  //   - Chrome fires keydown(isComposing=true) BEFORE compositionend —
+  //     caught by the ref and by nativeEvent.isComposing;
+  //   - Safari/Firefox fire compositionend BEFORE the confirming keydown,
+  //     so that keydown arrives with every flag already false — caught by
+  //     the just-ended timestamp window.
+  const COMPOSITION_END_GRACE_MS = 100
+  const isComposingRef = useRef(false)
+  const compositionEndedAtRef = useRef(0)
+  const isCompositionKey = (e: React.KeyboardEvent): boolean =>
+    isComposingRef.current ||
+    (e.nativeEvent as KeyboardEvent).isComposing ||
+    Date.now() - compositionEndedAtRef.current < COMPOSITION_END_GRACE_MS
 
   const handleKeyDown = (e: React.KeyboardEvent) => {
+    // IME guard first: swallow only the send/execute keys so the candidate
+    // window keeps them; navigation keys pass through untouched.
+    if (isCompositionKey(e)) {
+      if (e.key === 'Enter' || e.key === 'Tab') e.preventDefault()
+      return
+    }
     // Slash menu captures the navigation keys while it is open.
     if (slashMatches.length > 0) {
       if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
@@ -287,10 +316,19 @@ export default function ChatInput({
         e.preventDefault()
         void handlePlanToggle()
       }
-      // `/` focuses the composer (when not already typing in an input)
-      if (e.key === '/' && !isQuerying && document.activeElement?.tagName !== 'TEXTAREA') {
-        e.preventDefault()
-        textareaRef.current?.focus()
+      // `/` focuses the composer — unless the keystroke already sits inside
+      // any editable surface (search boxes, command palette, selects,
+      // contentEditable), which the old TEXTAREA-only check let be hijacked.
+      // Same guard shape as hooks/useKeyboardShortcuts.ts.
+      if (e.key === '/' && !isQuerying) {
+        const el = e.target as HTMLElement | null
+        const inEditable =
+          el != null &&
+          (el.tagName === 'INPUT' || el.tagName === 'TEXTAREA' || el.tagName === 'SELECT' || el.isContentEditable)
+        if (!inEditable) {
+          e.preventDefault()
+          textareaRef.current?.focus()
+        }
       }
     }
     window.addEventListener('keydown', onKey)
@@ -345,9 +383,6 @@ export default function ChatInput({
   return (
     <div
       className={cn('relative group transition-all', isDragging ? 'ring-2 ring-primary/50 rounded-2xl' : '')}
-      onDragOver={handleDragOver}
-      onDragLeave={handleDragLeave}
-      onDrop={handleDrop}
       role="region"
       aria-label={t('chat.input.ariaLabel')}
     >
@@ -451,6 +486,16 @@ export default function ChatInput({
             value={value}
             onChange={e => onChange(e.target.value)}
             onKeyDown={handleKeyDown}
+            onCompositionStart={() => {
+              isComposingRef.current = true
+              compositionEndedAtRef.current = 0
+            }}
+            onCompositionEnd={() => {
+              isComposingRef.current = false
+              // Stamps the grace window that covers the Safari/Firefox
+              // ordering, where the confirming keydown lands afterwards.
+              compositionEndedAtRef.current = Date.now()
+            }}
             rows={1}
             disabled={disabled}
           />

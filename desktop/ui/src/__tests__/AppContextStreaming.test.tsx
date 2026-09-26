@@ -143,3 +143,65 @@ describe('AppContext — §P2-18 per-session streaming buckets', () => {
     expect(result.current.streamingText).toBe('A1 A2')
   })
 })
+
+// B0 P1-2 — a failed/cancelled run leaves no ghost streaming bubble: the
+// run's buckets are dropped and, for the visible session, the projections
+// (streamingText / thinkingText / activeToolCalls) reset along with
+// isQuerying. Persisting the partial text needs a backend commit path, so
+// clearing is the approved behavior.
+describe('AppContext — B0 P1-2 ghost-bubble cleanup on fail/cancel', () => {
+  async function setupStreamingSession() {
+    const { result } = renderHook(() => useApp(), { wrapper })
+    await waitFor(() => expect(result.current.loading).toBe(false))
+    await flushUntilRegistered()
+    await act(async () => { await result.current.createSession() })
+    await act(async () => { await result.current.sendMessage('Hello') })
+    act(() => {
+      flush(EVENT_NAMES.QUERY_TEXT, { content: 'partial answer', session_id: SESSION_A })
+      flush(EVENT_NAMES.QUERY_THINKING, { content: 'partial thought ', session_id: SESSION_A })
+      flush(EVENT_NAMES.QUERY_TOOL_START, {
+        tool_use_id: 'tc-1', tool_name: 'bash', tool_input: {}, session_id: SESSION_A,
+      })
+    })
+    expect(result.current.streamingText).toBe('partial answer')
+    expect(result.current.thinkingText).toBe('partial thought ')
+    expect(result.current.activeToolCalls).toHaveLength(1)
+    expect(result.current.isQuerying).toBe(true)
+    return result
+  }
+
+  it('QUERY_FAILED clears streaming/thinking/tool calls and the buckets', async () => {
+    const result = await setupStreamingSession()
+
+    act(() => { flush(EVENT_NAMES.QUERY_FAILED, { error: 'engine exploded', session_id: SESSION_A }) })
+
+    expect(result.current.error).toBe('engine exploded')
+    expect(result.current.isQuerying).toBe(false)
+    expect(result.current.streamingText).toBe('')
+    expect(result.current.thinkingText).toBe('')
+    expect(result.current.activeToolCalls).toHaveLength(0)
+    // No ghost assistant bubble is committed, and the failure did not leave
+    // residue in the session's bucket (switching away and back stays clean).
+    expect(result.current.messages.filter(m => m.role === 'assistant')).toHaveLength(0)
+    await act(async () => { await result.current.switchSession(SESSION_B) })
+    await act(async () => { await result.current.switchSession(SESSION_A) })
+    expect(result.current.streamingText).toBe('')
+    expect(result.current.thinkingText).toBe('')
+  })
+
+  it('QUERY_CANCELLED drops the ghost bubble and its bucket too', async () => {
+    const result = await setupStreamingSession()
+
+    act(() => { flush(EVENT_NAMES.QUERY_CANCELLED, { session_id: SESSION_A }) })
+
+    expect(result.current.isQuerying).toBe(false)
+    expect(result.current.streamingText).toBe('')
+    expect(result.current.thinkingText).toBe('')
+    expect(result.current.activeToolCalls).toHaveLength(0)
+    expect(result.current.messages.filter(m => m.role === 'assistant')).toHaveLength(0)
+    await act(async () => { await result.current.switchSession(SESSION_B) })
+    await act(async () => { await result.current.switchSession(SESSION_A) })
+    expect(result.current.streamingText).toBe('')
+    expect(result.current.thinkingText).toBe('')
+  })
+})

@@ -112,7 +112,10 @@ describe('StreamingResponse', () => {
     expect(container.querySelector('[role="log"]')).not.toBeNull()
   })
 
-  it('hides the jump-to-bottom button by default', () => {
+  // B0 P1-1 — the dead inner scroll guard (and its conditional
+  // jump-to-bottom button) was removed: this component's inner div never
+  // scrolls, so scroll-back belongs to MessageArea's scroll-to-latest FAB.
+  it('renders no inner jump-to-bottom control (the scroll parent owns it)', () => {
     const { container } = render(
       <StreamingResponse
         streamingText="x"
@@ -121,8 +124,6 @@ describe('StreamingResponse', () => {
         onViewDiff={vi.fn()}
       />,
     )
-    // The button should only be rendered when scrolled away; in jsdom
-    // we never get a real scroll, so it's hidden by default.
     expect(container.querySelector('button[aria-label*="Jump" i]')).toBeNull()
   })
 })
