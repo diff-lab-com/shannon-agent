@@ -21,7 +21,10 @@ const GOAL_TEMPLATES = [
 interface NewGoalDialogProps {
   open: boolean
   onClose: () => void
-  onStart: (input: { title: string; objective: string; maxTurns?: number; budgetUsd?: number }) => Promise<unknown>
+  /** B3 (P2 顺带): resolves to truthy only when the run actually started —
+   *  a falsy result (e.g. useGoalRuns().start returns null on failure, with
+   *  the error already toasted) keeps the dialog open with the form intact. */
+  onStart: (input: { title: string; objective: string; maxTurns?: number; budgetUsd?: number }) => Promise<boolean | null>
 }
 
 /**
@@ -50,14 +53,18 @@ export default function NewGoalDialog({ open, onClose, onStart }: NewGoalDialogP
   const handleSubmit = form.handleSubmit(async values => {
     setSubmitting(true)
     try {
-      await onStart({
+      const started = await onStart({
         title: values.title,
         objective: values.objective,
         maxTurns: values.maxTurns != null ? Number(values.maxTurns) : undefined,
         budgetUsd: values.budgetUsd != null ? Number(values.budgetUsd) : undefined,
       })
-      form.reset()
-      onClose()
+      // Only clear + close on a confirmed start — a failed launch (toast
+      // already shown by the hook) used to wipe the user's objective text.
+      if (started) {
+        form.reset()
+        onClose()
+      }
     } finally {
       setSubmitting(false)
     }

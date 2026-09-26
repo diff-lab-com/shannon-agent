@@ -15,6 +15,7 @@ import { useIntl } from 'react-intl'
 import { toast } from 'sonner'
 import { Button } from '@/components/ui/button'
 import * as api from '@/lib/tauri-api'
+import { DEFAULT_POLICY } from './shared'
 import type { ExecutionPolicy, ExecutionWindow, ScheduledRoutine, TaskExecution } from '@/types'
 
 interface OffpeakWindowEditorProps {
@@ -79,14 +80,13 @@ export default function OffpeakWindowEditor({ routine, onUpdated }: OffpeakWindo
         ? { start_hour: clampHour(startHour), end_hour: clampHour(endHour), timezone: timezone.trim() || null }
         : null
       // `update_scheduled_task` replaces the policy wholesale — send the
-      // full object with only execution_window changed.
+      // full object with only execution_window changed. The fallback object
+      // for a routine with no stored policy is the shared DEFAULT_POLICY
+      // (B3 顺带): the previous inline defaults (max_retries 0, auto-archive
+      // on, notify off) silently made the routine harsher than the create
+      // form's promised defaults the moment the window was saved.
       const policy: ExecutionPolicy = {
-        max_retries: 0,
-        timeout_secs: 0,
-        worktree: null,
-        notify_on_failure: false,
-        budget_usd: null,
-        auto_archive_when_empty: true,
+        ...DEFAULT_POLICY,
         ...routine.policy,
         execution_window,
       }
