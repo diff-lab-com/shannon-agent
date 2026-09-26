@@ -6,7 +6,6 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { render, screen, fireEvent, waitFor } from '@testing-library/react'
 import { MemoryRouter, createMemoryRouter, RouterProvider } from 'react-router-dom'
-import { MemoryRouter, createMemoryRouter, RouterProvider } from 'react-router-dom'
 import type * as TauriApi from '@/lib/tauri-api'
 import { I18nProvider } from '@/i18n'
 import { open as openDialog } from '@tauri-apps/plugin-dialog'
@@ -16,6 +15,8 @@ const readSourceFile = vi.hoisted(() => vi.fn())
 const runFileDiagnostics = vi.hoisted(() => vi.fn())
 const defaultDiagnosticsServer = vi.hoisted(() => vi.fn())
 const saveTextFile = vi.hoisted(() => vi.fn())
+const lspCodeActions = vi.hoisted(() => vi.fn())
+const applyCodeAction = vi.hoisted(() => vi.fn())
 
 vi.mock('@/lib/tauri-api', async () => {
   const actual = await vi.importActual<typeof TauriApi>(
@@ -28,6 +29,8 @@ vi.mock('@/lib/tauri-api', async () => {
     defaultDiagnosticsServer: (...args: unknown[]) =>
       defaultDiagnosticsServer(...args),
     saveTextFile: (...args: unknown[]) => saveTextFile(...args),
+    lspCodeActions: (...args: unknown[]) => lspCodeActions(...args),
+    applyCodeAction: (...args: unknown[]) => applyCodeAction(...args),
   }
 })
 
@@ -76,6 +79,10 @@ beforeEach(() => {
   runFileDiagnostics.mockReset()
   defaultDiagnosticsServer.mockReset()
   saveTextFile.mockReset()
+  lspCodeActions.mockReset()
+  applyCodeAction.mockReset()
+  lspCodeActions.mockResolvedValue({ actions: [] })
+  applyCodeAction.mockResolvedValue(0)
   vi.mocked(openDialog).mockReset()
   vi.mocked(openDialog).mockResolvedValue(null)
   // Most tests load rust files; default to a working server config.
@@ -387,5 +394,187 @@ describe('Editor page — Phase E1 v2', () => {
     expect(router.state.location.state).toEqual({
       prefill: expect.stringContaining('unused variable: x'),
     })
+  })
+})
+
+// ─── B5 additions ─────────────────────────────────────────────────────────
+
+// Deferred helper so tests control IPC resolution order explicitly.
+function deferred<T>() {
+  let resolve!: (v: T) => void
+  let reject!: (e: unknown) => void
+  const promise = new Promise<T>((res, rej) => {
+    resolve = res
+    reject = rej
+  })
+  return { promise, resolve, reject }
+}
+
+const STALE_DIAG = {
+  start_line: 0, start_character: 0, end_line: 0, end_character: 4,
+  message: 'stale diagnostic', severity: 'warning', source: 'rustc',
+}
+const FRESH_DIAG = {
+  start_line: 1, start_character: 0, end_line: 1, end_character: 4,
+  message: 'fresh diagnostic', severity: 'error', source: 'rustc',
+}
+
+describe('Editor — diagnostics race guard (B5-34)', () => {
+  it('discards a stale diagnostics response that resolves after a newer one', async () => {
+    readSourceFile
+      .mockResolvedValueOnce({
+        path: '/tmp/race-a.rs',
+        content: 'fn a() {}\n',
+        language_id: 'rust',
+      })
+      .mockResolvedValueOnce({
+        path: '/tmp/race-b.rs',
+        content: 'fn b() {}\n',
+        language_id: 'rust',
+      })
+    // Two overlapping fetches: the auto-fetch on load, then another load
+    // while the first is still in flight (the toolbar re-run button is
+    // disabled while loading, so a file switch is the realistic overlap).
+    const first = deferred<{ diagnostics: unknown[]; timed_out: boolean }>()
+    const second = deferred<{ diagnostics: unknown[]; timed_out: boolean }>()
+    runFileDiagnostics
+      .mockImplementationOnce(() => first.promise)
+      .mockImplementationOnce(() => second.promise)
+
+    renderEditor()
+    fireEvent.change(screen.getByPlaceholderText(/abs\/path/i), {
+      target: { value: '/tmp/race-a.rs' },
+    })
+    fireEvent.click(screen.getByRole('button', { name: /load file/i }))
+    await waitFor(() => expect(runFileDiagnostics).toHaveBeenCalledTimes(1))
+    fireEvent.change(screen.getByPlaceholderText(/abs\/path/i), {
+      target: { value: '/tmp/race-b.rs' },
+    })
+    fireEvent.click(screen.getByRole('button', { name: /load file/i }))
+    await waitFor(() => expect(runFileDiagnostics).toHaveBeenCalledTimes(2))
+
+    // The newer response lands first.
+    second.resolve({ diagnostics: [FRESH_DIAG], timed_out: false })
+    expect(await screen.findByText(/fresh diagnostic/)).toBeInTheDocument()
+
+    // The older response resolves last — it must NOT overwrite the fresh one.
+    first.resolve({ diagnostics: [STALE_DIAG], timed_out: false })
+    await new Promise((r) => setTimeout(r, 20))
+    expect(screen.queryByText(/stale diagnostic/)).not.toBeInTheDocument()
+    expect(screen.getByText(/fresh diagnostic/)).toBeInTheDocument()
+    // The loading flag belongs to the winning request only.
+    expect(screen.queryByText(/running/i)).not.toBeInTheDocument()
+  })
+
+  it('keeps the fresh error state when a stale request fails afterwards', async () => {
+    readSourceFile.mockResolvedValue({
+      path: '/tmp/race2.rs',
+      content: 'fn a() {}\n',
+      language_id: 'rust',
+    })
+    // (mockResolvedValue keeps serving the same file for both loads)
+    const first = deferred<{ diagnostics: unknown[]; timed_out: boolean }>()
+    runFileDiagnostics
+      .mockImplementationOnce(() => first.promise)
+      .mockResolvedValueOnce({ diagnostics: [], timed_out: false })
+
+    renderEditor()
+    fireEvent.change(screen.getByPlaceholderText(/abs\/path/i), {
+      target: { value: '/tmp/race2.rs' },
+    })
+    fireEvent.click(screen.getByRole('button', { name: /load file/i }))
+    await waitFor(() => expect(runFileDiagnostics).toHaveBeenCalledTimes(1))
+    // Same file again → second loadPath → superseding request.
+    fireEvent.click(screen.getByRole('button', { name: /load file/i }))
+    await waitFor(() => expect(runFileDiagnostics).toHaveBeenCalledTimes(2))
+    await new Promise((r) => setTimeout(r, 10))
+
+    // Stale failure after a successful newer run must not flash an error.
+    first.reject('stale server crashed')
+    await new Promise((r) => setTimeout(r, 20))
+    expect(screen.queryByText(/Diagnostics failed/i)).not.toBeInTheDocument()
+  })
+})
+
+describe('Editor — quick fix applies reload the file (P1-35)', () => {
+  async function openDrawerWithFix(dirty = false) {
+    readSourceFile.mockResolvedValue({
+      path: '/tmp/fixme.rs',
+      content: 'let x = 1;\n',
+      language_id: 'rust',
+    })
+    lspCodeActions.mockResolvedValue({
+      actions: [
+        { title: 'Borrow fix', kind: 'quickfix.fix', is_preferred: true, edit: { changes: {} } },
+      ],
+    })
+    applyCodeAction.mockResolvedValue(1)
+
+    renderEditor()
+    fireEvent.change(screen.getByPlaceholderText(/abs\/path/i), {
+      target: { value: '/tmp/fixme.rs' },
+    })
+    fireEvent.click(screen.getByRole('button', { name: /load file/i }))
+    await screen.findByText('rust')
+    if (dirty) {
+      // Enter edit mode and type so `draft !== file.content` — done BEFORE
+      // the drawer opens (the overlay hides background content from the
+      // accessibility tree, so the toolbar isn't reachable afterwards).
+      fireEvent.click(screen.getByRole('button', { name: /^edit$/i }))
+      fireEvent.change(screen.getByTestId('cm-mock'), {
+        target: { value: 'let x = 1; // my unfinished edit\n' },
+      })
+    }
+    // Manual squiggle so the drawer can be opened deterministically.
+    fireEvent.change(screen.getByPlaceholderText(/unused variable/i), {
+      target: { value: 'unused x' },
+    })
+    fireEvent.click(screen.getByRole('button', { name: /add squiggle/i }))
+    fireEvent.click(await screen.findByRole('button', { name: /unused x/ }))
+    await screen.findByRole('dialog', { name: /quick fix drawer/i })
+    fireEvent.click(await screen.findByRole('button', { name: /Borrow fix/ }))
+    await screen.findByText(/Applied/i)
+  }
+
+  it('re-reads the file from disk after a fix is applied', async () => {
+    // Second read (post-fix) returns the fixed content.
+    readSourceFile.mockResolvedValueOnce({
+      path: '/tmp/fixme.rs',
+      content: 'let x = 1;\n',
+      language_id: 'rust',
+    }).mockResolvedValueOnce({
+      path: '/tmp/fixme.rs',
+      content: 'let y = 2;\n',
+      language_id: 'rust',
+    })
+    await openDrawerWithFix()
+
+    // The editor re-loaded the file: a second read happened and the fresh
+    // content replaced the draft (so a later save cannot clobber the fix).
+    await waitFor(() => expect(readSourceFile).toHaveBeenCalledTimes(2))
+    await waitFor(() => {
+      expect((screen.getByTestId('cm-mock') as HTMLTextAreaElement).value).toBe('let y = 2;\n')
+    })
+  })
+
+  it('warns before replacing an unsaved draft with the fixed disk file', async () => {
+    const { toast } = await import('sonner')
+    const infoSpy = vi.spyOn(toast, 'info')
+    readSourceFile.mockResolvedValueOnce({
+      path: '/tmp/fixme.rs',
+      content: 'let x = 1;\n',
+      language_id: 'rust',
+    }).mockResolvedValueOnce({
+      path: '/tmp/fixme.rs',
+      content: 'let y = 2;\n',
+      language_id: 'rust',
+    })
+    await openDrawerWithFix(true)
+    // The disk content wins over the dirty draft, and the user is told.
+    await waitFor(() => expect(infoSpy).toHaveBeenCalled())
+    await waitFor(() => {
+      expect((screen.getByTestId('cm-mock') as HTMLTextAreaElement).value).toBe('let y = 2;\n')
+    })
+    await waitFor(() => expect(readSourceFile).toHaveBeenCalledTimes(2))
   })
 })

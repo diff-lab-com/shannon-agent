@@ -21,6 +21,9 @@ import { python } from '@codemirror/lang-python'
 import { go } from '@codemirror/lang-go'
 import type { Extension } from '@codemirror/state'
 import type { Diagnostic as CMDiagnostic } from '@codemirror/lint'
+import { useResolvedThemeAttr } from '@/hooks/useResolvedThemeAttr'
+import { themeModeOf } from '@/context/ThemeContext'
+import { cmThemeFor } from './cmTheme'
 
 export interface EditorDiagnostic {
   start_line: number
@@ -71,6 +74,29 @@ export default function CodeEditor({
   readOnly = false,
 }: CodeEditorProps) {
   const langExt = useMemo(() => languageExtension(language), [language])
+
+  // P1-34: follow the app theme (`<html data-theme>`) instead of the old
+  // hardcoded light theme — see ./cmTheme for the mapping strategy.
+  const resolvedTheme = useResolvedThemeAttr()
+  const themeExt = useMemo(() => cmThemeFor(resolvedTheme), [resolvedTheme])
+  // basicSetup layers `defaultHighlightStyle` (a light-tuned token palette)
+  // on top of any theme; on dark surfaces its colors are unreadable. The
+  // token layer is a light-only nicety until a dark HighlightStyle palette
+  // can ship (see cmTheme.ts header note).
+  const dark = themeModeOf(resolvedTheme as Parameters<typeof themeModeOf>[0]) === 'dark'
+  const basicSetup = useMemo(
+    () => ({
+      lineNumbers: true,
+      foldGutter: true,
+      highlightActiveLine: true,
+      bracketMatching: true,
+      closeBrackets: true,
+      autocompletion: false,
+      searchKeymap: true,
+      syntaxHighlighting: !dark,
+    }),
+    [dark],
+  )
 
   // Build a linter that reads current diagnostics and computes offsets
   // from the live document.
@@ -138,16 +164,8 @@ export default function CodeEditor({
         onChange={onValueChange}
         extensions={extensions}
         readOnly={readOnly}
-        basicSetup={{
-          lineNumbers: true,
-          foldGutter: true,
-          highlightActiveLine: true,
-          bracketMatching: true,
-          closeBrackets: true,
-          autocompletion: false,
-          searchKeymap: true,
-        }}
-        theme="light"
+        basicSetup={basicSetup}
+        theme={themeExt}
         height="60vh"
       />
     </div>

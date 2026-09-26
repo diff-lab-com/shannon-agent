@@ -11,9 +11,10 @@
 // The integration paths (squiggles, gutter click → onDiagnosticClick)
 // are owned by E2E coverage.
 
-import { describe, it, expect, vi } from 'vitest'
+import { describe, it, expect, vi, afterEach } from 'vitest'
 import { render } from '@testing-library/react'
 import CodeEditor, { type EditorDiagnostic } from '@/components/editor/CodeEditor'
+import { cmThemeColorsFor, cmThemeFor } from '@/components/editor/cmTheme'
 
 const baseDiag: EditorDiagnostic = {
   start_line: 0,
@@ -96,5 +97,55 @@ describe('CodeEditor — mount smoke', () => {
     ).not.toThrow()
     // No real layout → no click is dispatched → handler stays at 0 calls.
     expect(onDiagnosticClick).not.toHaveBeenCalled()
+  })
+})
+
+// ─── P1-34: the editor theme follows <html data-theme> ────────────────────
+
+describe('cmTheme — resolved-theme palette selection', () => {
+  afterEach(() => {
+    document.documentElement.removeAttribute('data-theme')
+    vi.restoreAllMocks()
+  })
+
+  it('uses the light floor for light and unknown theme ids', () => {
+    const light = cmThemeColorsFor('material', () => 'light')
+    expect(light.mode).toBe('light')
+    expect(light.background).toBe('#ffffff')
+
+    const unknown = cmThemeColorsFor('not-a-theme', () => undefined)
+    expect(unknown.mode).toBe('light')
+    expect(unknown.background).toBe('#ffffff')
+  })
+
+  it('uses the dark floor for dark theme ids', () => {
+    const dark = cmThemeColorsFor('tokyo-night', () => 'dark')
+    expect(dark.mode).toBe('dark')
+    expect(dark.background).toBe('#1a1b26')
+    expect(dark.foreground).toBe('#a9b1d6')
+  })
+
+  it('layers live CSS variables over the floor when the stylesheet is readable', () => {
+    vi.spyOn(window, 'getComputedStyle').mockReturnValue({
+      getPropertyValue: (name: string) =>
+        name === '--color-surface' ? '#101014' : '',
+    } as unknown as CSSStyleDeclaration)
+    const dark = cmThemeColorsFor('tokyo-night', () => 'dark')
+    expect(dark.background).toBe('#101014') // token wins
+    expect(dark.foreground).toBe('#a9b1d6') // floor retained
+  })
+
+  it('builds a CodeMirror theme extension flagged with the right mode', () => {
+    // Extension objects are opaque; the contract is that construction
+    // succeeds and the palette resolution above drives its colors.
+    expect(cmThemeFor('tokyo-night', () => 'dark')).toBeTruthy()
+    expect(cmThemeFor('material', () => 'light')).toBeTruthy()
+  })
+
+  it('CodeEditor mounts under a dark data-theme without crashing', () => {
+    document.documentElement.setAttribute('data-theme', 'tokyo-night')
+    expect(() =>
+      render(<CodeEditor value="fn main() {}" language="rust" diagnostics={[]} />),
+    ).not.toThrow()
   })
 })

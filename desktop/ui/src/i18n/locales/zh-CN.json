@@ -2153,6 +2153,7 @@
   "editor.saving": "保存中",
   "editor.diagnosticsList": "诊断列表",
   "editor.quickFixDrawer": "快速修复抽屉",
+  "editor.quickFix.reloadDirty": "快速修复已修改磁盘上的文件——未保存的编辑已被修复后的文件内容替换。",
   "editor.closeDrawer": "关闭抽屉背景",
   "goals.searchTasks": "搜索任务……",
   "goals.noTasks": "无任务",

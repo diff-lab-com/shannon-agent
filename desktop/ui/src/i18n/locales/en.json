@@ -2153,6 +2153,7 @@
   "editor.saving": "Saving",
   "editor.diagnosticsList": "Diagnostics",
   "editor.quickFixDrawer": "Quick fix drawer",
+  "editor.quickFix.reloadDirty": "A quick fix changed the file on disk — your unsaved edits were replaced by the fixed file.",
   "editor.closeDrawer": "Close drawer backdrop",
   "goals.searchTasks": "Search tasks...",
   "goals.noTasks": "No tasks",

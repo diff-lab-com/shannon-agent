@@ -8,7 +8,7 @@
 // Orchestrator-only: all sub-components live under ./editor/. State and
 // callbacks stay here so the page is a single source of truth.
 
-import { useCallback, useEffect, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { useT } from '@/i18n'
 import { open as openDialog } from '@tauri-apps/plugin-dialog'
@@ -69,7 +69,13 @@ export default function Editor({ initialPath, onDirtyChange }: EditorProps) {
   // Side drawer for quick-fix
   const [drawer, setDrawer] = useState<DrawerDiag | null>(null)
 
+  // 34: race guard for diagnostics responses — `loadPath` may fire a second
+  // fetch (or the user re-runs) before the first resolves; the stale
+  // response must not overwrite the fresh one.
+  const diagRequestIdRef = useRef(0)
+
   const fetchDiagnostics = useCallback(async (sourceFile: SourceFile) => {
+    const requestId = ++diagRequestIdRef.current
     const server = api.defaultDiagnosticsServer(sourceFile.language_id)
     if (!server.cmd) {
       setAutoDiags([])
@@ -88,6 +94,7 @@ export default function Editor({ initialPath, onDirtyChange }: EditorProps) {
         language_id: sourceFile.language_id,
         content: sourceFile.content,
       })
+      if (diagRequestIdRef.current !== requestId) return // superseded
       setAutoDiags(
         resp.diagnostics.map<AutoDiagnostic>((d) => ({
           kind: 'auto',
@@ -103,10 +110,11 @@ export default function Editor({ initialPath, onDirtyChange }: EditorProps) {
       )
       setDiagTimedOut(resp.timed_out)
     } catch (err) {
+      if (diagRequestIdRef.current !== requestId) return // superseded
       setAutoDiags([])
       setDiagError(String(err))
     } finally {
-      setDiagLoading(false)
+      if (diagRequestIdRef.current === requestId) setDiagLoading(false)
     }
   }, [])
 
@@ -249,6 +257,18 @@ export default function Editor({ initialPath, onDirtyChange }: EditorProps) {
     })
   }
 
+  // P1-35: a quick fix rewrites the file on disk. If the editor kept its
+  // (now stale) draft, the next save would clobber the fix — so re-read the
+  // file as soon as a fix applies. When the draft was dirty, the disk
+  // content wins and the user is told their unsaved edits were replaced.
+  const onQuickFixApplied = useCallback(() => {
+    if (!file) return
+    if (draft !== file.content) {
+      toast.info(t('editor.quickFix.reloadDirty'))
+    }
+    void loadPath(file.path)
+  }, [file, draft, loadPath, t])
+
   const diags: MixedDiagnostic[] = [...autoDiags, ...manualDiags]
   const diagCount = diags.length
 
@@ -325,7 +345,12 @@ export default function Editor({ initialPath, onDirtyChange }: EditorProps) {
       ) : null}
 
       {drawer ? (
-        <QuickFixDrawer t={t} drawer={drawer} onClose={() => setDrawer(null)} />
+        <QuickFixDrawer
+          t={t}
+          drawer={drawer}
+          onApplied={onQuickFixApplied}
+          onClose={() => setDrawer(null)}
+        />
       ) : null}
 
       <ConfirmDialog
