@@ -152,7 +152,13 @@ fn source_session_of(store: &MemoryStore, memory_id: &str) -> Option<String> {
 pub async fn list_memory_projects(
     state: tauri::State<'_, AppState>,
 ) -> Result<Vec<String>, String> {
-    let store = &state.memory_store;
+    memory_project_labels(&state.memory_store)
+}
+
+/// Distinct project labels that have at least one memory entry, sorted —
+/// the shared enumeration behind `list_memory_projects` and the project
+/// registry's first-seed adoption (P-E3, `commands_projects`).
+pub(crate) fn memory_project_labels(store: &SharedMemoryStore) -> Result<Vec<String>, String> {
     refresh_shared_store(store);
     let guard = store.read().map_err(|e| e.to_string())?;
     let mut projects: Vec<String> = all_entries(&guard)

@@ -27,6 +27,9 @@ export const MOCK_SCHEDULED_ROUTINES: ScheduledRoutine[] = [
       auto_archive_when_empty: false,
       result_routing: ['slack:#ops'],
     },
+    // P-U1/P-U3 demo: housed into a demoProjects registry project so the
+    // rail tree nests it and /tasks?project= filters it.
+    working_dir: '/home/demo/workspace/shannon',
   } as unknown as ScheduledRoutine,
   {
     id: 'sched-002',
@@ -67,6 +70,7 @@ export const MOCK_SCHEDULED_ROUTINES: ScheduledRoutine[] = [
       auto_archive_when_empty: true,
       result_routing: ['slack:#eng'],
     },
+    working_dir: '/home/demo/workspace/website',
   } as unknown as ScheduledRoutine,
   {
     id: 'sched-004',

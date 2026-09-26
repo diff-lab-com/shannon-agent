@@ -77,6 +77,10 @@ pub(crate) struct TriggerState<R: tauri::Runtime = tauri::Wry> {
     pub(crate) tools: Arc<ToolRegistry>,
     /// Shared memory store handle (P2-4b) for the runner's engine.
     pub(crate) memory_store: crate::commands_memory::SharedMemoryStore,
+    /// Base sessions directory for the run's engine (P-E1), resolved through
+    /// `effective_log_container` so the working-dir stamp and the engine's
+    /// L0 tee agree on one container.
+    pub(crate) sessions_dir: std::path::PathBuf,
     /// `[notifications.webhook] secret` resolved once at spawn time.
     /// `None` disables the endpoint (403) — safe default.
     pub(crate) secret: Option<String>,
@@ -96,6 +100,7 @@ impl<R: tauri::Runtime> Clone for TriggerState<R> {
             desktop_config: self.desktop_config.clone(),
             tools: self.tools.clone(),
             memory_store: self.memory_store.clone(),
+            sessions_dir: self.sessions_dir.clone(),
             secret: self.secret.clone(),
         }
     }
@@ -118,6 +123,9 @@ impl<R: tauri::Runtime> TriggerState<R> {
             desktop_config: state.desktop_config.clone(),
             tools: state.tools.clone(),
             memory_store: state.memory_store.clone(),
+            sessions_dir: shannon_core::session_log::effective_log_container(
+                state.state_manager.sessions_dir(),
+            ),
             secret,
         }
     }
@@ -131,6 +139,8 @@ impl<R: tauri::Runtime> TriggerState<R> {
             desktop_config: self.desktop_config.clone(),
             tools: self.tools.clone(),
             memory_store: self.memory_store.clone(),
+            scheduled_tasks: self.task_store.clone(),
+            sessions_dir: self.sessions_dir.clone(),
         }
     }
 }
@@ -463,6 +473,7 @@ mod tests {
             desktop_config: Arc::new(RwLock::new(DesktopConfig::default())),
             tools: Arc::new(ToolRegistry::new()),
             memory_store: crate::commands_memory::open_shared_store_at(tmp.join("memories")),
+            sessions_dir: tmp.join("sessions"),
             secret,
         }
     }

@@ -4,11 +4,12 @@
 // polling. Hidden entirely when there is nothing to show — the entry point
 // is the composer's /goal slash command, which surfaces runs here.
 
-import { useState } from 'react'
+import { useMemo, useState } from 'react'
 import { useIntl } from 'react-intl'
 import { Button } from '@/components/ui/button'
 import { cn } from '@/lib/utils'
 import { useGoalRuns } from '@/hooks/goalRuns'
+import { projectKeyOf } from '@/components/SidebarSessions'
 import NewGoalDialog from './NewGoalDialog'
 import type { GoalRunDto, GoalRunStatus } from '@/types'
 
@@ -223,10 +224,19 @@ export function GoalRunCard({ run, onPause, onResume, onStop, onUpdateObjective,
   )
 }
 
-function GoalRunPanelImpl({ onViewSession }: { onViewSession: (id: string) => void }) {
+function GoalRunPanelImpl({ onViewSession, projectDir }: { onViewSession: (id: string) => void; projectDir?: string | null }) {
   const intl = useIntl()
   const { runs, pause, resume, stop, updateObjective, start } = useGoalRuns()
   const [creating, setCreating] = useState(false)
+  // P-U3: /tasks?project= — only runs rooted in that project (normalized
+  // workingDir match, the same key the rail's project tree groups by).
+  // Runs with no workingDir drop out while the filter is active.
+  const visibleRuns = useMemo(
+    () => (projectDir
+      ? runs.filter(r => projectKeyOf({ working_dir: r.workingDir }) === projectDir)
+      : runs),
+    [runs, projectDir],
+  )
 
   return (
     <section aria-labelledby="goal-runs-heading" className="mb-lg" data-testid="goal-run-panel">
@@ -246,13 +256,13 @@ function GoalRunPanelImpl({ onViewSession }: { onViewSession: (id: string) => vo
           {intl.formatMessage({ id: 'goal.new.button' })}
         </Button>
       </div>
-      {runs.length === 0 ? (
+      {visibleRuns.length === 0 ? (
         <p className="font-body-sm text-on-surface-variant px-sm py-md rounded-xl border border-outline-variant/30 bg-surface-container-lowest/60">
           {intl.formatMessage({ id: 'goal.empty.description' })}
         </p>
       ) : (
         <div className="space-y-sm">
-          {runs.map(run => (
+          {visibleRuns.map(run => (
             <GoalRunCard
               key={run.sessionId}
               run={run}
@@ -270,6 +280,6 @@ function GoalRunPanelImpl({ onViewSession }: { onViewSession: (id: string) => vo
   )
 }
 
-export default function GoalRunPanel({ onViewSession }: { onViewSession: (id: string) => void }) {
-  return <GoalRunPanelImpl onViewSession={onViewSession} />
+export default function GoalRunPanel({ onViewSession, projectDir }: { onViewSession: (id: string) => void; projectDir?: string | null }) {
+  return <GoalRunPanelImpl onViewSession={onViewSession} projectDir={projectDir} />
 }

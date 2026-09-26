@@ -4,11 +4,26 @@
 // not model (MCP tool lists, runtime permission categories) must NOT be
 // invented — the after-install fallback line covers them instead.
 
-import { describe, it, expect, vi } from 'vitest'
+import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { render, screen } from '@testing-library/react'
 import { MemoryRouter } from 'react-router-dom'
 import InstallDialog from '@/components/extensions/InstallDialog'
 import type { CatalogEntry } from '@/types'
+import type * as api from '@/lib/tauri-api'
+// Hoisted static import of the mocked fns (vi.mock lifts the factory above
+// imports, so these are the mock doubles).
+import { inspectPluginSource, installPluginFromGit } from '@/lib/tauri-api'
+
+// X5 bundle-preview tests control `inspectPluginSource` directly; everything
+// else keeps hitting the globally-mocked invoke via the real wrappers.
+vi.mock('@/lib/tauri-api', async importOriginal => {
+  const actual = await importOriginal<typeof api>()
+  return {
+    ...actual,
+    inspectPluginSource: vi.fn(),
+    installPluginFromGit: vi.fn(),
+  }
+})
 
 const entry = (overrides: Partial<CatalogEntry> = {}): CatalogEntry => ({
   id: 'gh:test/plugin',
@@ -35,6 +50,112 @@ function renderDialog(spec: CatalogEntry) {
     </MemoryRouter>,
   )
 }
+
+describe('InstallDialog — X5 plugin bundle preview', () => {
+  beforeEach(() => {
+    vi.mocked(inspectPluginSource).mockReset()
+    vi.mocked(installPluginFromGit).mockReset()
+  })
+
+  const pluginEntry = entry({
+    kind: 'plugin',
+    name: 'Starter Pack',
+    description: 'A full plugin bundle.',
+    source: { type: 'git_hub_repo', repo: 'shannon-agent/shannon-starter', ref_: 'main' },
+    metadata: { marketplace_manifest: 'https://github.com/shannon-agent/shannon-starter/raw/main/.claude-plugin/marketplace.json' },
+  })
+
+  it('fetches inspect_plugin_source and renders the bundle checklist before install', async () => {
+    vi.mocked(inspectPluginSource).mockResolvedValue({
+      name: 'shannon-starter',
+      source_format: 'claude-json',
+      skills: ['brainstorm', 'tdd'],
+      agents: ['reviewer.md'],
+      commands: ['ship.md'],
+      mcp_servers: ['filesystem'],
+    })
+    const { fireEvent, waitFor } = await import('@testing-library/react')
+    renderDialog(pluginEntry)
+
+    // the inspect call carries the git URL derived from the card source
+    await waitFor(() =>
+      expect(inspectPluginSource).toHaveBeenCalledWith('https://github.com/shannon-agent/shannon-starter.git'),
+    )
+    await waitFor(() => expect(screen.getByTestId('plugin-bundle-card')).toBeInTheDocument())
+    expect(screen.getByTestId('bundle-skills')).toHaveTextContent('2 skills: brainstorm, tdd')
+    expect(screen.getByTestId('bundle-agents')).toHaveTextContent('1 agents: reviewer.md')
+    expect(screen.getByTestId('bundle-commands')).toHaveTextContent('1 commands: ship.md')
+    expect(screen.getByTestId('bundle-mcp')).toHaveTextContent('MCP servers: filesystem')
+
+    // confirm still goes through installPluginFromGit with the default
+    // (no opt-in) consent
+    expect(screen.getByRole('button', { name: /Install & authorize/ })).toBeEnabled()
+    fireEvent.click(screen.getByRole('button', { name: /Install & authorize/ }))
+    await waitFor(() =>
+      expect(installPluginFromGit).toHaveBeenCalledWith(
+        'https://github.com/shannon-agent/shannon-starter.git',
+        false,
+      ),
+    )
+  })
+
+  it('disables install while the preview is loading and on preview failure', async () => {
+    vi.mocked(inspectPluginSource).mockRejectedValue(new Error('clone boom'))
+    renderDialog(pluginEntry)
+    const { waitFor } = await import('@testing-library/react')
+    await waitFor(() => expect(screen.getByTestId('bundle-error')).toBeInTheDocument())
+    expect(screen.getByRole('button', { name: /Install & authorize/ })).toBeDisabled()
+    expect(inspectPluginSource).toHaveBeenCalled()
+  })
+
+  it('offers the explicit unverified opt-in after an SEC-1 refusal', async () => {
+    vi.mocked(inspectPluginSource).mockResolvedValue({
+      name: 'shady',
+      source_format: 'claude-json',
+      skills: [],
+      agents: [],
+      commands: [],
+      mcp_servers: [],
+    })
+    vi.mocked(installPluginFromGit).mockRejectedValue(
+      new Error('remote plugin "shady" declares no permissions; pass allow_unverified to install anyway'),
+    )
+    const { fireEvent, waitFor } = await import('@testing-library/react')
+    renderDialog(pluginEntry)
+    const installBtn = await waitFor(() => {
+      const btn = screen.getByRole('button', { name: /Install & authorize/ })
+      expect(btn).toBeEnabled()
+      return btn
+    })
+    fireEvent.click(installBtn)
+    const anyway = await screen.findByTestId('install-unverified')
+    expect(screen.getByTestId('unverified-warning')).toBeInTheDocument()
+
+    // the explicit opt-in retries with allowUnverified: true
+    vi.mocked(installPluginFromGit).mockResolvedValue({ name: 'shady', warnings: [] })
+    fireEvent.click(anyway)
+    await waitFor(() =>
+      expect(installPluginFromGit).toHaveBeenLastCalledWith(
+        'https://github.com/shannon-agent/shannon-starter.git',
+        true,
+      ),
+    )
+  })
+
+  it('shows the empty-bundle note when the source carries nothing', async () => {
+    vi.mocked(inspectPluginSource).mockResolvedValue({
+      name: 'empty',
+      source_format: 'shannon-toml',
+      skills: [],
+      agents: [],
+      commands: [],
+      mcp_servers: [],
+    })
+    renderDialog(pluginEntry)
+    const { waitFor } = await import('@testing-library/react')
+    await waitFor(() => expect(screen.getByTestId('bundle-empty')).toBeInTheDocument())
+  })
+})
 
 describe('InstallDialog — X2 trust card', () => {
   it('shows the will-be-enabled card with registry source + local-command capability for an mcp_registry entry', () => {

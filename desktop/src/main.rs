@@ -23,6 +23,7 @@ fn main() {
     use shannon_desktop::commands_onboarding;
     use shannon_desktop::commands_permissions;
     use shannon_desktop::commands_plugins;
+    use shannon_desktop::commands_projects;
     use shannon_desktop::commands_remote;
     use shannon_desktop::commands_rewind;
     use shannon_desktop::commands_routine_templates;
@@ -178,6 +179,13 @@ fn main() {
             commands_sessions::list_archived_sessions,
             // §4.14 — Turn Timeline panel data source
             commands_sessions::trace_timeline,
+            // P-E3 — project registry (adopt-not-migrate)
+            commands_projects::list_projects,
+            commands_projects::register_project,
+            commands_projects::rename_project,
+            commands_projects::set_project_appearance,
+            commands_projects::archive_project,
+            commands_projects::unarchive_project,
             // E2 skill loop — task evaluation and skill proposal management
             commands_skill_loop::skill_loop_evaluate,
             commands_skill_loop::skill_loop_generate,
@@ -271,6 +279,8 @@ fn main() {
             commands_plugins::update_plugin,
             commands_plugins::list_plugin_marketplace,
             commands_plugins::list_catalog_upstreams,
+            // X5 trust preview — inspect a plugin source before install
+            commands_plugins::inspect_plugin_source,
             commands::start_background_task,
             commands::get_background_tasks,
             commands::cancel_background_task,
@@ -341,6 +351,8 @@ fn main() {
             shannon_desktop::cost_commands::get_session_budget,
             shannon_desktop::cost_commands::get_session_context_breakdown,
             shannon_desktop::cost_commands::get_usage_by_session,
+            // X7 — per-extension (skill / MCP tool) invocation + token stats
+            shannon_desktop::cost_commands::get_extension_stats,
             // P1-1 — session multi-window (frozen contract)
             session_window_commands::open_session_window,
             session_window_commands::list_session_windows,

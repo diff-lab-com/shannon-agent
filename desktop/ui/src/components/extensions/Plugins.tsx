@@ -1,19 +1,28 @@
-import { useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { FormattedMessage, useIntl } from "react-intl";
 import { useOutletContext } from "react-router-dom";
+import { open as openDialog } from "@tauri-apps/plugin-dialog";
+import { toast } from "sonner";
 import * as api from "@/lib/tauri-api";
-import type { CatalogUpstream } from "@/lib/tauri-api";
+import type { CatalogUpstream, PluginInfo } from "@/lib/tauri-api";
 import { CardSkeleton } from "@/components/SkeletonLoader";
 import ErrorState from "@/components/ui/error-state";
 import EmptyState from "@/components/ui/empty-state";
-import type { CatalogEntry, CatalogSource, TrustLevel } from "@/types";
+import LoadingState from "@/components/ui/loading-state";
+import type { CatalogEntry, CatalogSource, PluginBundleSummary, TrustLevel } from "@/types";
 import InstallDialog from "./InstallDialog";
+import AddPluginGitDialog from "./AddPluginGitDialog";
 import { Button } from "@/components/ui/button";
+import { DropdownMenu, type DropdownMenuItem } from "@/components/ui/dropdown-menu";
+import { Modal, ModalBody, ModalFooter } from "@/components/ui/modal";
+import { Switch } from "@/components/ui/switch";
+import { safeErrorMessage } from "@/lib/packageValidation";
 import { cn } from "@/lib/utils";
 
 type SortMode = "trust" | "stars" | "name" | "recent";
 type TrustFilter = TrustLevel | "all";
 type SourceFilter = CatalogSource["type"] | "all";
+type PluginSource = PluginInfo["source"];
 
 const TRUST_FILTER_ORDER: TrustFilter[] = ["all", "verified", "official", "community", "unknown"];
 const SOURCE_FILTERS: SourceFilter[] = ["all", "git_hub_repo", "featured_vendor", "native", "mcp_registry", "custom"];
@@ -46,6 +55,13 @@ const TRUST_ORDER: Record<TrustLevel, number> = {
   unknown: 3,
 };
 
+// X6 source badge (derived desktop-side by plugin_source_for_path).
+const SOURCE_BADGE: Record<PluginSource, { icon: string; class: string }> = {
+  git: { icon: "sync", class: "bg-secondary/15 text-secondary" },
+  local: { icon: "folder_open", class: "bg-surface-container-high text-on-surface-variant" },
+  migration: { icon: "move_to_inbox", class: "bg-tertiary/20 text-tertiary" },
+};
+
 function sourceLabel(src: CatalogSource): string {
   switch (src.type) {
     case "mcp_registry":
@@ -63,7 +79,7 @@ function sourceLabel(src: CatalogSource): string {
 
 export default function Plugins() {
   const intl = useIntl();
-  const t = (id: string) => intl.formatMessage({ id });
+  const t = (id: string, values?: Record<string, string | number>) => intl.formatMessage({ id }, values);
   const { search } = useOutletContext<{ search: string }>();
 
   const [entries, setEntries] = useState<CatalogEntry[]>([]);
@@ -74,6 +90,20 @@ export default function Plugins() {
   const [sortMode, setSortMode] = useState<SortMode>("trust");
   const [installTarget, setInstallTarget] = useState<CatalogEntry | null>(null);
   const [upstreams, setUpstreams] = useState<CatalogUpstream[]>([]);
+
+  // --- X6 installed management state ---
+  const [installed, setInstalled] = useState<PluginInfo[]>([]);
+  const [installedLoading, setInstalledLoading] = useState(true);
+  const [installedError, setInstalledError] = useState(false);
+  const [addMenuOpen, setAddMenuOpen] = useState(false);
+  const [gitDialogOpen, setGitDialogOpen] = useState(false);
+  // Name of the installed row whose lifecycle op is in flight (switch/update).
+  const [busyName, setBusyName] = useState<string | null>(null);
+  // Uninstall confirm: the row plus its inspected bundle preview.
+  const [confirmTarget, setConfirmTarget] = useState<PluginInfo | null>(null);
+  const [confirmSummary, setConfirmSummary] = useState<PluginBundleSummary | null>(null);
+  const [confirmInspectFailed, setConfirmInspectFailed] = useState(false);
+  const [uninstalling, setUninstalling] = useState(false);
 
   // NOTE: deps intentionally empty — this fetches once on mount. `t` is
   // recreated every render (intl.formatMessage closure), so including it
@@ -102,6 +132,200 @@ export default function Plugins() {
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
+
+  const refreshInstalled = useCallback(() => {
+    api
+      .listPlugins()
+      .then((rows) => {
+        setInstalled(rows);
+        setInstalledError(false);
+      })
+      .catch((e) => {
+        console.warn("listPlugins error:", e);
+        setInstalledError(true);
+      })
+      .finally(() => setInstalledLoading(false));
+  }, []);
+
+  useEffect(() => {
+    refreshInstalled();
+  }, [refreshInstalled]);
+
+  // Stay in sync with installs started elsewhere (e.g. the market grid's
+  // InstallDialog dispatches `shannon:extension-installed` on success).
+  useEffect(() => {
+    const handler = () => refreshInstalled();
+    window.addEventListener("shannon:extension-installed", handler);
+    return () => window.removeEventListener("shannon:extension-installed", handler);
+  }, [refreshInstalled]);
+
+  // Announce an install from this page's own add-flows so the other
+  // extension tabs (Installed, Featured, …) refresh too — the same contract
+  // InstallDialog honors.
+  const dispatchInstalled = (name: string) => {
+    window.dispatchEvent(
+      new CustomEvent("shannon:extension-installed", {
+        detail: { kind: "plugin", name },
+      }),
+    );
+    refreshInstalled();
+  };
+
+  const runInstall = async (install: () => Promise<api.PluginInstallResult>) => {
+    try {
+      const result = await install();
+      toast.success(t("extensions.plugins.installSuccess", { name: result.name }));
+      if (result.warnings.length > 0) {
+        toast.warning(result.warnings.join("\n"));
+      }
+      dispatchInstalled(result.name);
+    } catch (e) {
+      console.error("Plugin install error:", e);
+      toast.error(
+        t("extensions.plugins.installError", { error: safeErrorMessage(e, "install failed") }),
+      );
+    }
+  };
+
+  const handleAddLocal = async () => {
+    try {
+      const selected = await openDialog({
+        directory: true,
+        multiple: false,
+        title: t("extensions.plugins.addLocal.dialogTitle"),
+      });
+      if (typeof selected !== "string" || !selected) return;
+      await runInstall(() => api.installPlugin(selected));
+    } catch (e) {
+      console.warn("plugin directory picker error:", e);
+    }
+  };
+
+  const handleAddArchive = async () => {
+    try {
+      const selected = await openDialog({
+        multiple: false,
+        title: t("extensions.plugins.addArchive.dialogTitle"),
+        filters: [
+          {
+            name: t("extensions.plugins.addArchive.filterName"),
+            extensions: ["dxt", "mcpb", "zip"],
+          },
+        ],
+      });
+      if (typeof selected !== "string" || !selected) return;
+      await runInstall(() => api.installPlugin(selected));
+    } catch (e) {
+      console.warn("plugin archive picker error:", e);
+    }
+  };
+
+  const handleToggle = async (plugin: PluginInfo, next: boolean) => {
+    setBusyName(plugin.name);
+    try {
+      const result = next
+        ? await api.enablePlugin(plugin.name)
+        : await api.disablePlugin(plugin.name);
+      toast.success(
+        t(next ? "extensions.plugins.enabledToast" : "extensions.plugins.disabledToast", {
+          name: plugin.name,
+        }),
+      );
+      if (result.warnings.length > 0) {
+        toast.warning(result.warnings.join("\n"));
+      }
+      refreshInstalled();
+    } catch (e) {
+      console.error("plugin enable/disable error:", e);
+      toast.error(t("extensions.plugins.actionError", { error: safeErrorMessage(e, "action failed") }));
+    } finally {
+      setBusyName(null);
+    }
+  };
+
+  const handleUpdate = async (plugin: PluginInfo) => {
+    setBusyName(plugin.name);
+    try {
+      const result = await api.updatePlugin(plugin.name);
+      toast.success(t("extensions.plugins.updatedToast", { name: plugin.name }));
+      if (result.warnings.length > 0) {
+        toast.warning(result.warnings.join("\n"));
+      }
+      refreshInstalled();
+    } catch (e) {
+      console.error("plugin update error:", e);
+      toast.error(t("extensions.plugins.actionError", { error: safeErrorMessage(e, "action failed") }));
+    } finally {
+      setBusyName(null);
+    }
+  };
+
+  const requestUninstall = (plugin: PluginInfo) => {
+    setConfirmSummary(null);
+    setConfirmInspectFailed(false);
+    setConfirmTarget(plugin);
+  };
+
+  // Preview what the uninstall will remove by inspecting the plugin's own
+  // directory. Failure is not fatal — the confirm dialog then says honestly
+  // that only the registry entry will be removed.
+  useEffect(() => {
+    if (!confirmTarget) return;
+    let cancelled = false;
+    api
+      .inspectPluginSource(confirmTarget.path)
+      .then((summary) => {
+        if (!cancelled) setConfirmSummary(summary);
+      })
+      .catch((e) => {
+        console.warn("inspect for uninstall failed:", e);
+        if (!cancelled) setConfirmInspectFailed(true);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [confirmTarget]);
+
+  const handleUninstall = async () => {
+    if (!confirmTarget) return;
+    const name = confirmTarget.name;
+    setUninstalling(true);
+    try {
+      const result = await api.uninstallPlugin(name);
+      toast.success(t("extensions.plugins.uninstalledToast", { name }));
+      if (result.warnings.length > 0) {
+        toast.warning(result.warnings.join("\n"));
+      }
+      setConfirmTarget(null);
+      refreshInstalled();
+    } catch (e) {
+      console.error("plugin uninstall error:", e);
+      toast.error(t("extensions.plugins.actionError", { error: safeErrorMessage(e, "uninstall failed") }));
+    } finally {
+      setUninstalling(false);
+    }
+  };
+
+  const addMenuItems: DropdownMenuItem[] = [
+    {
+      id: "add-plugin-git",
+      label: t("extensions.plugins.add.git"),
+      icon: "cloud_download",
+      onSelect: () => setGitDialogOpen(true),
+    },
+    {
+      id: "add-plugin-local",
+      label: t("extensions.plugins.add.local"),
+      icon: "folder_open",
+      onSelect: handleAddLocal,
+    },
+    {
+      id: "add-plugin-archive",
+      label: t("extensions.plugins.add.archive"),
+      icon: "archive",
+      onSelect: handleAddArchive,
+    },
+  ];
 
   useEffect(() => {
     let cancelled = false;
@@ -184,6 +408,126 @@ export default function Plugins() {
     // All install flows route through the InstallDialog so the user can see
     // the source-provided config before committing.
     setInstallTarget(entry);
+  };
+
+  // Bundle checklist rows for the uninstall confirm, reusing the X5 bundle
+  // preview strings (they are removal-neutral: "{count} skills: {names}").
+  const confirmRows = confirmSummary
+    ? [
+        {
+          testid: "uninstall-skills",
+          id: "extensions.installDialog.bundle.skills",
+          count: confirmSummary.skills.length,
+          names: confirmSummary.skills.join(", "),
+        },
+        {
+          testid: "uninstall-agents",
+          id: "extensions.installDialog.bundle.agents",
+          count: confirmSummary.agents.length,
+          names: confirmSummary.agents.join(", "),
+        },
+        {
+          testid: "uninstall-commands",
+          id: "extensions.installDialog.bundle.commands",
+          count: confirmSummary.commands.length,
+          names: confirmSummary.commands.join(", "),
+        },
+        {
+          testid: "uninstall-mcp",
+          id: "extensions.installDialog.bundle.mcp",
+          count: confirmSummary.mcp_servers.length,
+          names: confirmSummary.mcp_servers.join(", "),
+        },
+      ].filter((r) => r.count > 0)
+    : [];
+
+  const renderInstalledRow = (plugin: PluginInfo) => {
+    const badge = SOURCE_BADGE[plugin.source];
+    const migration = plugin.migration_imported;
+    const busy = busyName === plugin.name;
+    const migrationTooltip = t("extensions.plugins.installed.migrationTooltip");
+    return (
+      <li
+        key={plugin.name}
+        data-testid={`installed-row-${plugin.name}`}
+        className="border border-outline-variant/40 rounded-xl px-md py-sm bg-surface-container-lowest flex items-center gap-md"
+      >
+        <div className="w-8 h-8 rounded-lg bg-primary/10 text-primary flex items-center justify-center shrink-0">
+          <span className="material-symbols-outlined icon-sm">workspaces</span>
+        </div>
+        <div className="min-w-0 flex-1">
+          <div className="flex items-center gap-xs flex-wrap">
+            <span className="font-bold text-label-md text-on-surface truncate">{plugin.name}</span>
+            {plugin.version && (
+              <span className="text-label-xs text-on-surface-variant">{plugin.version}</span>
+            )}
+            <span
+              className={cn(
+                "inline-flex items-center gap-[2px] px-xs py-[1px] rounded-full text-label-xs font-bold",
+                badge.class,
+              )}
+            >
+              <span className="material-symbols-outlined icon-xs">{badge.icon}</span>
+              {t(`extensions.plugins.installed.source.${plugin.source}`)}
+            </span>
+            <span
+              className="inline-flex items-center px-xs py-[1px] rounded bg-surface-container-high text-label-xs font-mono text-on-surface-variant"
+              title={t("extensions.plugins.installed.sourceFormat", { format: plugin.source_format })}
+            >
+              {plugin.source_format}
+            </span>
+          </div>
+          {plugin.description && (
+            <p className="text-label-sm text-on-surface-variant truncate">{plugin.description}</p>
+          )}
+        </div>
+
+        {/* Migration records are informational: their imported originals
+            live in the per-type tabs, so uninstall/enable/disable must not
+            be offered here. */}
+        <span title={migration ? migrationTooltip : undefined} className="inline-flex">
+          <Switch
+            size="sm"
+            checked={plugin.enabled}
+            disabled={migration || busy}
+            onCheckedChange={(next) => handleToggle(plugin, next === true)}
+            aria-label={t("extensions.plugins.installed.toggleAria", { name: plugin.name })}
+            data-testid={`installed-toggle-${plugin.name}`}
+          />
+        </span>
+
+        {/* 更新 is a git pull under the hood — only meaningful for git-sourced
+            plugins (exactly the rows the backend's `.git` check accepts). */}
+        {plugin.source === "git" && (
+          <Button
+            variant="secondary"
+            size="sm"
+            disabled={busy}
+            onClick={() => handleUpdate(plugin)}
+            aria-label={t("extensions.plugins.installed.updateAria", { name: plugin.name })}
+            data-testid={`installed-update-${plugin.name}`}
+            className="px-sm py-xs rounded-lg cursor-pointer"
+          >
+            <span className="material-symbols-outlined text-[14px]">sync</span>
+            {t("extensions.plugins.installed.update")}
+          </Button>
+        )}
+
+        <span title={migration ? migrationTooltip : undefined} className="inline-flex">
+          <Button
+            variant="ghost"
+            size="sm"
+            disabled={migration || busy}
+            onClick={() => requestUninstall(plugin)}
+            aria-label={t("extensions.plugins.installed.uninstallAria", { name: plugin.name })}
+            data-testid={`installed-uninstall-${plugin.name}`}
+            className="px-sm py-xs rounded-lg text-on-surface-variant hover:text-error hover:bg-error/10 cursor-pointer"
+          >
+            <span className="material-symbols-outlined text-[16px]">delete</span>
+          </Button>
+        </span>
+      </li>
+    );
   };
 
   const renderCard = (entry: CatalogEntry) => {
@@ -282,6 +626,66 @@ export default function Plugins() {
           <FormattedMessage id="extensions.plugins.descriptionLive" />
         </p>
       </div>
+
+      {/* --- X6 installed management --- */}
+      <section
+        data-testid="plugins-installed-section"
+        aria-label={t("extensions.plugins.installed.section")}
+        className="mb-xl"
+      >
+        <div className="flex items-center justify-between gap-md mb-md flex-wrap">
+          <div className="flex items-baseline gap-sm min-w-0">
+            <h3 className="text-label-sm font-bold text-on-surface-variant uppercase tracking-widest">
+              {t("extensions.plugins.installed.section")}
+            </h3>
+            {!installedLoading && !installedError && installed.length > 0 && (
+              <span className="text-label-xs text-on-surface-variant">
+                {t("extensions.plugins.installed.count", { count: installed.length })}
+              </span>
+            )}
+          </div>
+          <span className="relative inline-flex">
+            <Button
+              onClick={() => setAddMenuOpen((open) => !open)}
+              aria-haspopup="menu"
+              aria-expanded={addMenuOpen}
+              aria-label={t("extensions.plugins.add.aria")}
+              data-testid="add-plugin-button"
+              className="px-md py-xs rounded-lg hover:bg-primary/90 cursor-pointer focus-visible:ring-2 focus-visible:ring-primary/30"
+            >
+              <span className="material-symbols-outlined text-[14px]">add</span>
+              {t("extensions.plugins.add.label")}
+            </Button>
+            <DropdownMenu
+              open={addMenuOpen}
+              onClose={() => setAddMenuOpen(false)}
+              items={addMenuItems}
+              ariaLabel={t("extensions.plugins.add.aria")}
+            />
+          </span>
+        </div>
+
+        {installedLoading ? (
+          <LoadingState size="sm" label={t("extensions.plugins.installed.loading")} />
+        ) : installedError ? (
+          <ErrorState
+            icon="cloud_off"
+            title={t("extensions.plugins.loadFailed")}
+            description={t("extensions.plugins.installed.loadError")}
+          />
+        ) : installed.length === 0 ? (
+          <EmptyState
+            compact
+            icon="package_2"
+            title={t("extensions.plugins.installed.empty")}
+            description={t("extensions.plugins.installed.emptyHint")}
+          />
+        ) : (
+          <ul className="flex flex-col gap-sm">
+            {installed.map(renderInstalledRow)}
+          </ul>
+        )}
+      </section>
 
       {upstreams.length > 0 && (
         <div className="mb-lg">
@@ -409,10 +813,98 @@ export default function Plugins() {
         open={!!installTarget}
         onClose={() => setInstallTarget(null)}
         onInstalled={() => {
-          // The dialog already emits `shannon:extension-installed`; this
-          // callback is a hook for future parent-side refresh logic.
+          // The dialog already emits `shannon:extension-installed`; the
+          // listener above refreshes the installed section on it.
+          refreshInstalled();
         }}
       />
+
+      <AddPluginGitDialog
+        open={gitDialogOpen}
+        onClose={() => setGitDialogOpen(false)}
+        onInstalled={(result) => dispatchInstalled(result.name)}
+      />
+
+      {/* X6 uninstall confirm — consent via listing. The dialog previews the
+          bundle by inspecting the plugin's directory; when the inspection
+          fails it says honestly that only the registry entry will be
+          removed instead of inventing a list. */}
+      <Modal
+        open={!!confirmTarget}
+        onClose={() => {
+          if (!uninstalling) setConfirmTarget(null);
+        }}
+        size="sm"
+        role="alertdialog"
+        title={t("extensions.plugins.uninstallConfirm.title", { name: confirmTarget?.name ?? "" })}
+        busy={uninstalling}
+        showCloseButton={false}
+        testId="uninstall-plugin-dialog"
+      >
+        <ModalBody className="flex flex-col gap-sm">
+          <div className="flex items-start gap-sm">
+            <span className="material-symbols-outlined icon-lg text-error mt-[2px]" aria-hidden="true">
+              warning
+            </span>
+            <p className="text-body-md text-on-surface-variant">
+              {t("extensions.plugins.uninstallConfirm.message")}
+            </p>
+          </div>
+          {confirmInspectFailed ? (
+            <p
+              data-testid="uninstall-inspect-failed"
+              className="text-label-sm text-on-warning-container bg-warning-container/40 rounded-md px-sm py-xs"
+            >
+              {t("extensions.plugins.uninstallConfirm.inspectFailed")}
+            </p>
+          ) : confirmSummary ? (
+            <div
+              data-testid="uninstall-list"
+              className="rounded-xl border border-outline-variant/30 bg-surface-container-low/60 p-md flex flex-col gap-xs"
+            >
+              {confirmRows.length === 0 ? (
+                <p data-testid="uninstall-list-empty" className="text-label-sm text-on-surface-variant">
+                  {t("extensions.plugins.uninstallConfirm.empty")}
+                </p>
+              ) : (
+                confirmRows.map((row) => (
+                  <div key={row.id} data-testid={row.testid} className="flex items-start gap-xs text-label-sm text-on-surface-variant">
+                    <span className="material-symbols-outlined text-[14px] mt-[2px]" aria-hidden="true">
+                      remove_circle
+                    </span>
+                    <span>{intl.formatMessage({ id: row.id }, { count: row.count, names: row.names })}</span>
+                  </div>
+                ))
+              )}
+              <p className="text-label-xs text-on-surface-variant">
+                {t("extensions.plugins.uninstallConfirm.dirNote")}
+              </p>
+            </div>
+          ) : (
+            <p data-testid="uninstall-inspecting" className="text-label-sm text-on-surface-variant">
+              <FormattedMessage id="extensions.installDialog.bundle.inspecting" />
+            </p>
+          )}
+        </ModalBody>
+        <ModalFooter className="pt-0">
+          <Button
+            variant="ghost"
+            disabled={uninstalling}
+            onClick={() => setConfirmTarget(null)}
+            className="px-md py-sm rounded-xl text-on-surface-variant hover:bg-surface-container cursor-pointer"
+          >
+            {t("extensions.plugins.uninstallConfirm.cancel")}
+          </Button>
+          <Button
+            data-testid="uninstall-confirm-button"
+            disabled={uninstalling || (!confirmInspectFailed && confirmSummary === null)}
+            onClick={handleUninstall}
+            className="px-md py-sm rounded-xl bg-error hover:bg-error/90 text-on-error cursor-pointer disabled:opacity-50"
+          >
+            {t("extensions.plugins.uninstallConfirm.confirm")}
+          </Button>
+        </ModalFooter>
+      </Modal>
     </div>
   );
 }

@@ -24,7 +24,10 @@ import { CardSkeleton } from '@/components/SkeletonLoader'
 import { Button } from '@/components/ui/button'
 import { DropdownMenu, type DropdownMenuItem } from '@/components/ui/dropdown-menu'
 import { useInboxItems, useInboxStats } from '@/hooks/inbox'
+import { useProjectDeepLink } from '@/hooks/projectDeepLink'
+import ProjectFilterChip from '@/components/ProjectFilterChip'
 import { useSessions } from '@/context/SessionContext'
+import { projectKeyOf } from '@/components/SidebarSessions'
 import type { InboxItem, InboxItemStatus, InboxSource } from '@/types'
 import * as api from '@/lib/tauri-api'
 import { cn } from '@/lib/utils'
@@ -286,7 +289,14 @@ export default function Triage() {
   const t = (id: string, values?: Record<string, PrimitiveType>) => intl.formatMessage({ id }, values)
   const navigate = useNavigate()
   const location = useLocation()
-  const { switchSession } = useSessions()
+  // P-U3: the session list doubles as the project join — an inbox item's
+  // project is the working_dir of the session it came from (items carry no
+  // project of their own by design; the inbox table was left untouched).
+  const { switchSession, sessions = [] } = useSessions()
+  // P-U3: /triage?project=<encoded path> — hide items whose session's
+  // working_dir doesn't map to the project (items with no session drop out
+  // too). The chip removes the param.
+  const { projectKey, projectLabel, clearProject } = useProjectDeepLink()
 
   const [statusFilter, setStatusFilter] = useState<StatusFilter>(undefined)
   const [sourceFilter, setSourceFilter] = useState<SourceFilter>(undefined)
@@ -331,7 +341,20 @@ export default function Triage() {
     listRef.current?.querySelector('[data-highlight="true"]')?.scrollIntoView({ block: 'center' })
   }, [highlightId, loading])
 
+  // P-U3: session_id → working_dir map for the project join (normalized to
+  // the same trailing-slash-free key the rail's project tree uses).
+  const dirBySessionId = useMemo(() => {
+    const m = new Map<string, string | null>()
+    for (const s of sessions) m.set(s.id, projectKeyOf(s))
+    return m
+  }, [sessions])
+
   const visibleItems = useMemo(() => {
+    // P-U3: project scope first — only items whose linked session lives in
+    // the deep-linked project survive it.
+    const scoped = projectKey
+      ? items.filter(i => i.sessionId != null && dirBySessionId.get(i.sessionId) === projectKey)
+      : items
     // IA T6: pending (unread) items float to the top — the inbox answers
     // "what needs me" first. Within each band the time sort stays stable,
     // so the toggle below only reorders inside a band.
@@ -340,7 +363,7 @@ export default function Triage() {
     // to `createdAtMs` for rows without one) — a same-session failure that
     // re-fails floats back to the top of its band instead of staying buried
     // under newer entries.
-    const sorted = [...items].sort((a, b) => {
+    const sorted = [...scoped].sort((a, b) => {
       const aPending = a.status === 'pending' ? 0 : 1
       const bPending = b.status === 'pending' ? 0 : 1
       if (aPending !== bPending) return aPending - bPending
@@ -348,7 +371,7 @@ export default function Triage() {
       return sortOrder === 'newest' ? -diff : diff
     })
     return sorted
-  }, [items, sortOrder])
+  }, [items, sortOrder, projectKey, dirBySessionId])
 
   // Drop selections that no longer match the visible list.
   const effectiveSelected = useMemo(() => {
@@ -489,6 +512,12 @@ export default function Triage() {
             </div>
           </div>
         </div>
+
+        {/* P-U3: project deep-link chip — × strips ?project= and the full
+            inbox comes back. */}
+        {projectKey && projectLabel && (
+          <ProjectFilterChip label={projectLabel} onRemove={clearProject} />
+        )}
 
         {/* Filter bar: status */}
         <div className="flex items-center gap-sm mb-sm flex-wrap">

@@ -842,6 +842,36 @@ export interface BudgetStatusPayload {
   budgetUsd: number
 }
 
+// --- X7 Extension Stats Types ---
+//
+// Field names mirror the Rust DTOs in shannon-desktop/src/cost_commands.rs
+// exactly (serde camelCase on the wire).
+
+/** One tool's invocation stats within the stats window. */
+export interface ExtensionToolStatRow {
+  name: string
+  calls: number
+  totalTokens: number
+}
+
+/** Per-server MCP rollup: server totals plus the per-tool detail. */
+export interface ExtensionMcpServerStats {
+  server: string
+  calls: number
+  totalTokens: number
+  tools: ExtensionToolStatRow[]
+}
+
+/** Per-extension stats bucketed by engine tool name (skills / MCP / other). */
+export interface ExtensionStats {
+  days: number
+  /** Skill ids with the `skill_` prefix stripped. */
+  skills: ExtensionToolStatRow[]
+  mcpServers: ExtensionMcpServerStats[]
+  /** Non-extension tools keep the raw engine tool name. */
+  other: ExtensionToolStatRow[]
+}
+
 // --- Usage Stats Types ---
 //
 // Field names mirror the Rust DTOs in shannon-desktop/src/commands_usage.rs
@@ -924,6 +954,10 @@ export interface ScheduledRoutine {
   last_error?: string | null
   /// IDs of routines that must succeed before this one fires.
   depends_on?: string[]
+  /// P-E1: project directory the routine belongs to (persisted as the task's
+  /// `working_dir` sidecar, flattened onto this shape by the desktop
+  /// `RoutineDto`). null/undefined = no project.
+  working_dir?: string | null
 }
 
 /// Payload for `create_scheduled_task`.
@@ -937,6 +971,8 @@ export interface CreateTaskPayload {
   expires_at?: number
   max_fires?: number
   policy?: ExecutionPolicy
+  /// P-E1: project directory; stored as the routine's working_dir sidecar.
+  working_dir?: string | null
 }
 
 /// Payload for `update_scheduled_task`. All fields optional except `id`.
@@ -954,6 +990,9 @@ export interface UpdateTaskPayload {
   policy?: ExecutionPolicy
   /// Replaces dependency list. Send the full list (add or remove); empty clears.
   depends_on?: string[]
+  /// P-E1: non-empty replaces the routine's project, empty string clears it,
+  /// omitted leaves it unchanged.
+  working_dir?: string | null
 }
 
 /// Result of `preview_cron`.
@@ -1174,6 +1213,10 @@ export interface GoalRunDto {
   lastError: string | null
   startedAtMs: number
   updatedAtMs: number
+  /// P-E2: project directory inherited from the originating session.
+  /// null on interrupted (restart-reconciled) cards — the sidecar cannot
+  /// round-trip a working dir.
+  workingDir: string | null
 }
 
 // --- Batch runs (P1-2 desktop best-of-N; serde contract is camelCase) ---
@@ -1413,4 +1456,30 @@ export interface RemoteHealth {
   workspaceExists: boolean
   latencyMs: number
   error: string | null
+}
+
+/** A registered project (P-E3 project registry, `~/.shannon/projects.db`).
+ *  `path` is the unique key (canonical working dir). `name`/`icon`/`color`
+ *  are curation layers — `null` means the UI renders the default (the
+ *  path's tail segment). Wire shape mirrors the Rust `ProjectRecord`
+ *  (camelCase serde). */
+export interface ProjectRecord {
+  path: string
+  name: string | null
+  icon: string | null
+  color: string | null
+  archivedAtMs: number | null
+  createdAtMs: number
+}
+
+/** X5 trust preview — wire shape of `inspect_plugin_source`'s
+ *  `PluginBundleSummary`. Everything a plugin bundle will enable, read
+ *  from its manifest + directories BEFORE the user confirms an install. */
+export interface PluginBundleSummary {
+  name: string
+  source_format: 'shannon-toml' | 'claude-json' | 'unknown'
+  skills: string[]
+  agents: string[]
+  commands: string[]
+  mcp_servers: string[]
 }

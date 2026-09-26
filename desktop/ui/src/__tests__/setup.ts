@@ -265,6 +265,14 @@ vi.mock('@/lib/tauri-api', () => ({
   listArchivedSessions: vi.fn().mockResolvedValue([]),
   archiveSession: vi.fn().mockResolvedValue(true),
   unarchiveSession: vi.fn().mockResolvedValue(true),
+  // P-E3/P-U3 project registry — default empty so pages degrade to path-tail
+  // labels without per-test mocking (the rail tree and the deep-link chips).
+  listProjects: vi.fn().mockResolvedValue([]),
+  registerProject: vi.fn().mockResolvedValue(null),
+  renameProject: vi.fn().mockResolvedValue(null),
+  setProjectAppearance: vi.fn().mockResolvedValue(null),
+  archiveProject: vi.fn().mockResolvedValue(null),
+  unarchiveProject: vi.fn().mockResolvedValue(null),
   loadSession: vi.fn().mockResolvedValue([]),
   switchSession: vi.fn().mockResolvedValue([]),
   setSessionWorkingDir: vi.fn().mockResolvedValue(undefined),
@@ -357,6 +365,24 @@ vi.mock('@/lib/tauri-api', () => ({
   saveCustomProfile: vi.fn().mockResolvedValue({ name: 'p', description: '', auto_approve: [], confirm: [], deny: [] }),
   deleteCustomProfile: vi.fn().mockResolvedValue([]),
   listHookEvents: vi.fn().mockResolvedValue([]),
+  // X6 plugins page — installed management + add-from-three-sources.
+  // Defaults keep the installed section quiet; plugin tests override via
+  // vi.mocked(...).
+  listPlugins: vi.fn().mockResolvedValue([]),
+  installPlugin: vi.fn().mockResolvedValue({ name: 'plugin-x', warnings: [] }),
+  installPluginFromGit: vi.fn().mockResolvedValue({ name: 'plugin-git', warnings: [] }),
+  uninstallPlugin: vi.fn().mockResolvedValue({ warnings: [] }),
+  enablePlugin: vi.fn().mockResolvedValue({ warnings: [] }),
+  disablePlugin: vi.fn().mockResolvedValue({ warnings: [] }),
+  updatePlugin: vi.fn().mockResolvedValue({ warnings: [] }),
+  inspectPluginSource: vi.fn().mockResolvedValue({
+    name: 'preview-plugin',
+    source_format: 'claude-json',
+    skills: [],
+    agents: [],
+    commands: [],
+    mcp_servers: [],
+  }),
   listPluginMarketplace: vi.fn().mockResolvedValue([]),
   listCatalogUpstreams: vi.fn().mockResolvedValue([]),
   installSkillFromRepo: vi.fn().mockResolvedValue({ id: 'skill-1', name: 'Test Skill', install_path: '/path/to/skill' }),
@@ -425,6 +451,10 @@ vi.mock('@/lib/tauri-api', () => ({
   // Tasks page (useScheduledTasks) — default empty so the page and the
   // sidebar automations section render without per-test mocking.
   listScheduledTasks: vi.fn().mockResolvedValue([]),
+  // I2 create-schedule path — resolves to a minimal routine so
+  // handleCreateSchedule's `created` toast branch works out of the box;
+  // tests assert on the CALL args (e.g. the working_dir default).
+  createScheduledTask: vi.fn().mockResolvedValue({ id: 'r-mock', name: 'Mock routine', trigger_type: 'interval' }),
   updateScheduledTask: vi.fn().mockResolvedValue(null),
   stopGoalRun: vi.fn().mockResolvedValue(undefined),
   pauseGoalRun: vi.fn().mockResolvedValue(undefined),

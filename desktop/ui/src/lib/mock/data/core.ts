@@ -357,14 +357,18 @@ export const MOCK_AGENT_DEFINITIONS = [
 export const MOCK_SESSIONS: SessionInfo[] = [
   // P0 sidebar telemetry demo: updated_at mirrors created spread; sess-002
   // poses as a live run so the rail shows the running dot + elapsed badge.
-  { id: 'sess-001', title: 'Q3 roadmap brainstorm', created_at: now - 2 * 3600_000, message_count: 14, updated_at: now - 30 * 60_000 },
-  { id: 'sess-002', title: 'Fix billing webhook timeout', created_at: now - 5 * 3600_000, message_count: 28, updated_at: now - 60_000, running: true },
-  { id: 'sess-003', title: 'Pricing page copy review', created_at: now - dayMs, message_count: 9, updated_at: now - dayMs + 3600_000 },
+  // P-U3 demo: working_dir values align with the demoProjects registry rows
+  // in handlers.ts ('/home/demo/workspace/{shannon,website}') so the rail
+  // tree and the /tasks,/triage?project= deep links resolve end-to-end;
+  // some sessions stay unhoused (no dir) on purpose.
+  { id: 'sess-001', title: 'Q3 roadmap brainstorm', created_at: now - 2 * 3600_000, message_count: 14, updated_at: now - 30 * 60_000, working_dir: '/home/demo/workspace/shannon' },
+  { id: 'sess-002', title: 'Fix billing webhook timeout', created_at: now - 5 * 3600_000, message_count: 28, updated_at: now - 60_000, running: true, working_dir: '/home/demo/workspace/shannon' },
+  { id: 'sess-003', title: 'Pricing page copy review', created_at: now - dayMs, message_count: 9, updated_at: now - dayMs + 3600_000, working_dir: '/home/demo/workspace/website' },
   { id: 'sess-004', title: 'Customer feedback synthesis', created_at: now - 2 * dayMs, message_count: 22, updated_at: now - 2 * dayMs + 2 * 3600_000 },
-  { id: 'sess-005', title: 'Investor update draft', created_at: now - 3 * dayMs, message_count: 7, updated_at: now - 3 * dayMs + 3600_000 },
-  { id: 'sess-006', title: 'A/B test analysis — onboarding', created_at: now - 4 * dayMs, message_count: 31, updated_at: now - 4 * dayMs + 2 * 3600_000 },
+  { id: 'sess-005', title: 'Investor update draft', created_at: now - 3 * dayMs, message_count: 7, updated_at: now - 3 * dayMs + 3600_000, working_dir: '/home/demo/workspace/shannon' },
+  { id: 'sess-006', title: 'A/B test analysis — onboarding', created_at: now - 4 * dayMs, message_count: 31, updated_at: now - 4 * dayMs + 2 * 3600_000, working_dir: '/home/demo/workspace/website' },
   { id: 'sess-007', title: 'SOC2 questionnaire — Acme Corp', created_at: now - 5 * dayMs, message_count: 18, updated_at: now - 5 * dayMs + 3600_000 },
-  { id: 'sess-008', title: 'Refactor: extract billing service', created_at: now - 6 * dayMs, message_count: 45, updated_at: now - 6 * dayMs + 3 * 3600_000 },
+  { id: 'sess-008', title: 'Refactor: extract billing service', created_at: now - 6 * dayMs, message_count: 45, updated_at: now - 6 * dayMs + 3 * 3600_000, working_dir: '/home/demo/workspace/shannon' },
 ]
 
 export const MOCK_MESSAGES: ChatMessage[] = [
@@ -519,6 +523,8 @@ export const MOCK_PLUGINS: PluginInfo[] = [
     enabled: true,
     path: '~/.shannon/plugins/web-clip',
     source_format: 'shannon-toml',
+    source: 'local',
+    migration_imported: false,
   },
   {
     name: 'gmail-triage',
@@ -529,6 +535,8 @@ export const MOCK_PLUGINS: PluginInfo[] = [
     enabled: true,
     path: '~/.shannon/plugins/gmail-triage',
     source_format: 'shannon-toml',
+    source: 'git',
+    migration_imported: false,
   },
   {
     name: 'gcal-brief',
@@ -539,6 +547,21 @@ export const MOCK_PLUGINS: PluginInfo[] = [
     enabled: false,
     path: '~/.shannon/plugins/gcal-brief',
     source_format: 'claude-json',
+    source: 'local',
+    migration_imported: false,
+  },
+  {
+    // X5 thin migration record — UI suppresses uninstall/enable/disable.
+    name: 'imported-claude-code',
+    version: '1.0.0',
+    description: 'Migration import from claude-code — 3 skills, 2 MCP servers, 5 commands.',
+    author: 'migration',
+    plugin_type: 'command',
+    enabled: true,
+    path: '~/.config/shannon/plugins/imported-claude-code',
+    source_format: 'claude-json',
+    source: 'migration',
+    migration_imported: true,
   },
 ]
 

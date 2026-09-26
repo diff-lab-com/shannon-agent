@@ -230,14 +230,144 @@ pub async fn migration_preview(
 /// the source side is executed. Idempotent: re-importing an unchanged source
 /// surfaces as `skipped` (content-identity conflict handling), never as a
 /// duplicated copy.
+///
+/// X5 thin plugin registration: when at least one skill/mcp/command asset
+/// was imported, a record plugin `imported-<source>` is written into the
+/// plugin registry dir (a Claude-dialect manifest truthfully listing the
+/// imports, keyword-marked `shannon:migration-import`) so the Extensions
+/// UI can show where the imported assets came from. Registration is
+/// best-effort: a failure is logged and never fails the migration itself.
 #[tauri::command]
 pub async fn migration_apply(
+    state: tauri::State<'_, crate::commands::AppState>,
     source: String,
     items: Vec<MigrationItemInput>,
 ) -> Result<MigrationApplyReport, String> {
     let source = MigrationSource::parse(&source)?;
     let roots = Roots::from_env()?;
-    apply_core(source, &items, &roots)
+    let (report, applied) = apply_core(source, &items, &roots)?;
+    if !applied.is_empty() {
+        let mut registry = state.plugin_registry.write().await;
+        if let Err(e) = register_migration_import(&mut registry, source, &applied, &roots).await {
+            tracing::warn!(target: "migration", "thin imported-plugin registration failed: {e}");
+        }
+    }
+    Ok(report)
+}
+
+/// Directory name prefix of the thin migration-import plugin record.
+pub(crate) const IMPORTED_PLUGIN_PREFIX: &str = "imported-";
+
+/// Write the thin `imported-<source>` plugin record and pick it up in the
+/// registry. The record is a directory under the registry's own plugins
+/// dir carrying a `.claude-plugin/plugin.json` that survives app restarts
+/// (every `load_all` rescan re-registers it):
+///
+/// - `description` truthfully counts the imported skills/mcp/commands and
+///   notes the migration origin;
+/// - `keywords` carries `shannon:migration-import` — the discoverable
+///   marker `PluginInfo.migration_imported` derives from (desktop wire,
+///   Task 6 UI suppresses uninstall/enable/disable on it);
+/// - `mcpServers` lists the imported stdio servers (exact name matches in
+///   the destination store) so the manifest reflects the registration.
+///
+/// Nothing is materialized for this record: its "artifacts" were imported
+/// directly by the migration, so no `materialized.json` sidecar exists and
+/// any lifecycle op degrades to registry-only (with a warning).
+async fn register_migration_import(
+    registry: &mut shannon_core::plugin::PluginRegistry,
+    source: MigrationSource,
+    applied: &AppliedImports,
+    roots: &Roots,
+) -> Result<(), String> {
+    if applied.is_empty() {
+        return Ok(());
+    }
+    let name = format!("{IMPORTED_PLUGIN_PREFIX}{}", source.as_str());
+    let dir = registry.plugins_dir().join(&name);
+    let claude_dir = dir.join(".claude-plugin");
+    std::fs::create_dir_all(&claude_dir)
+        .map_err(|e| format!("create {}: {e}", claude_dir.display()))?;
+
+    // Truthful mcp listing: exact-name stdio matches in the destination
+    // store (rename-conflict imports stay in the description counts). The
+    // store lives under the same `Roots.home` the apply just used.
+    let store: Vec<crate::config::McpServerConfig> = std::fs::read_to_string(mcp_store_path(roots))
+        .ok()
+        .and_then(|text| serde_json::from_str(&text).ok())
+        .unwrap_or_default();
+    let mut mcp_servers = serde_json::Map::new();
+    for server_name in &applied.mcp {
+        if let Some(cfg) = store
+            .iter()
+            .find(|s| &s.name == server_name && !s.command.is_empty())
+        {
+            mcp_servers.insert(
+                cfg.name.clone(),
+                serde_json::json!({"command": cfg.command, "args": cfg.args}),
+            );
+        }
+    }
+
+    let description = format!(
+        "Migration import from {} — {} skills, {} MCP servers, {} commands imported into Shannon stores. Managed by Shannon migration (uninstall/enable/disable are disabled for this record).",
+        source.as_str(),
+        applied.skills.len(),
+        applied.mcp.len(),
+        applied.commands.len(),
+    );
+    let mut manifest = serde_json::Map::new();
+    manifest.insert("name".into(), serde_json::json!(name));
+    manifest.insert("version".into(), serde_json::json!("1.0.0"));
+    manifest.insert("description".into(), serde_json::json!(description));
+    manifest.insert("type".into(), serde_json::json!("command"));
+    manifest.insert("entry".into(), serde_json::json!(""));
+    manifest.insert("command_name".into(), serde_json::json!(name));
+    manifest.insert(
+        "command_description".into(),
+        serde_json::json!("Migration-imported bundle record"),
+    );
+    // Declares the faces a command-shaped record implies so loading stays
+    // warning-quiet (v1 dialect: gaps would only warn, but quiet is kind).
+    manifest.insert(
+        "permissions".into(),
+        serde_json::json!(["read_files", "llm_api", "execute_commands", "mcp_tools"]),
+    );
+    manifest.insert(
+        "keywords".into(),
+        serde_json::json!([
+            "migration",
+            crate::commands_plugins::MIGRATION_IMPORT_MARKER
+        ]),
+    );
+    if !mcp_servers.is_empty() {
+        manifest.insert("mcpServers".into(), serde_json::Value::Object(mcp_servers));
+    }
+    // Additive, truth-telling listing (ignored by the core parser, visible
+    // to any human or tool reading the file).
+    manifest.insert(
+        "shannon:imported".into(),
+        serde_json::json!({
+            "source": source.as_str(),
+            "skills": applied.skills,
+            "mcp": applied.mcp,
+            "commands": applied.commands,
+        }),
+    );
+
+    let path = claude_dir.join("plugin.json");
+    let bytes = serde_json::to_vec_pretty(&serde_json::Value::Object(manifest))
+        .map_err(|e| format!("serialize {path:?}: {e}"))?;
+    std::fs::write(&path, bytes).map_err(|e| format!("write {}: {e}", path.display()))?;
+    crate::file_permissions::restrict_to_owner(&path);
+
+    // Pick the record up in the running registry. Errors here (e.g. an
+    // unrelated broken sibling manifest) are fine — the next rescan tries
+    // again — but a clean load makes the record visible immediately.
+    registry
+        .load_all()
+        .await
+        .map_err(|e| format!("reload plugin registry: {e}"))
 }
 
 // ─── Destination paths (Shannon stores) ─────────────────────────────────────
@@ -879,17 +1009,45 @@ fn source_chars(asset: &MigrationAsset) -> usize {
 
 // ─── Apply ──────────────────────────────────────────────────────────────────
 
+/// Names of the assets a migration run actually imported, by kind. Feeds
+/// the thin `imported-<source>` plugin registration (X5) — the record's
+/// manifest must list what was imported truthfully. The frozen
+/// `MigrationApplyReport` wire shape is untouched; this travels alongside
+/// it inside the process only.
+#[derive(Debug, Default, Clone)]
+pub(crate) struct AppliedImports {
+    pub skills: Vec<String>,
+    pub mcp: Vec<String>,
+    pub commands: Vec<String>,
+}
+
+impl AppliedImports {
+    fn is_empty(&self) -> bool {
+        self.skills.is_empty() && self.mcp.is_empty() && self.commands.is_empty()
+    }
+
+    fn push(&mut self, kind: &str, name: &str) {
+        match kind {
+            "skill" => self.skills.push(name.to_string()),
+            "mcp" => self.mcp.push(name.to_string()),
+            "command" => self.commands.push(name.to_string()),
+            _ => {} // memories / settings-rules are not plugin-bundle kinds
+        }
+    }
+}
+
 fn apply_core(
     source: MigrationSource,
     items: &[MigrationItemInput],
     roots: &Roots,
-) -> Result<MigrationApplyReport, String> {
+) -> Result<(MigrationApplyReport, AppliedImports), String> {
     let scan = scan_core(source, roots);
     let mut report = MigrationApplyReport {
         imported: 0,
         skipped: 0,
         failed: Vec::new(),
     };
+    let mut applied = AppliedImports::default();
     for requested in items {
         if requested.action != "import" && requested.action != "skip" {
             report.failed.push(MigrationApplyFailure {
@@ -924,25 +1082,38 @@ fn apply_core(
         };
         let outcome = import_asset(asset, source, conflict_choice, roots);
         match outcome {
-            Ok(true) => report.imported += 1,
-            Ok(false) => report.skipped += 1,
+            Ok(AssetOutcome::Imported { final_name }) => {
+                report.imported += 1;
+                applied.push(&asset.kind, &final_name);
+            }
+            Ok(AssetOutcome::Skipped) => report.skipped += 1,
             Err(e) => report.failed.push(MigrationApplyFailure {
                 id: requested.id.clone(),
                 error: e,
             }),
         }
     }
-    Ok(report)
+    Ok((report, applied))
 }
 
-/// Import one asset. `Ok(true)` = imported, `Ok(false)` = skipped (conflict
-/// handling), `Err` = this item failed (never aborts the batch).
+/// Result of importing one asset. `Skipped` = conflict-handled no-op;
+/// `Imported { final_name }` = written to the destination, reporting the
+/// **final store name**: rename-conflict imports land as `<name>-imported`,
+/// so the thin plugin record (X5) can list the config this import actually
+/// wrote instead of colliding with a pre-existing entry of the source name.
+enum AssetOutcome {
+    Skipped,
+    Imported { final_name: String },
+}
+
+/// Import one asset. `Imported` carries the final store name, `Skipped` is
+/// conflict handling, `Err` = this item failed (never aborts the batch).
 fn import_asset(
     asset: &MigrationAsset,
     source: MigrationSource,
     conflict_choice: &str,
     roots: &Roots,
-) -> Result<bool, String> {
+) -> Result<AssetOutcome, String> {
     match asset.kind.as_str() {
         "mcp" => import_mcp(asset, conflict_choice, roots),
         "skill" => import_skill(asset, conflict_choice, roots),
@@ -957,14 +1128,14 @@ fn import_mcp(
     asset: &MigrationAsset,
     conflict_choice: &str,
     roots: &Roots,
-) -> Result<bool, String> {
+) -> Result<AssetOutcome, String> {
     let spec = read_source_mcp_spec(asset)?;
     let mut store = load_mcp_store(roots);
     let existing = store.iter_mut().find(|s| s.name == asset.name);
     match existing {
         Some(cur) => {
             if cur.command == spec.command && cur.args == spec.args && cur.env == spec.env {
-                return Ok(false); // identical — idempotent no-op
+                return Ok(AssetOutcome::Skipped); // identical — idempotent no-op
             }
             match conflict_choice {
                 "overwrite" => {
@@ -973,26 +1144,33 @@ fn import_mcp(
                 "rename" => {
                     let renamed = format!("{}-imported", asset.name);
                     if store.iter().any(|s| s.name == renamed) {
-                        return Ok(false); // renamed slot already populated — skip
+                        return Ok(AssetOutcome::Skipped); // renamed slot already populated — skip
                     }
                     store.push(McpServerConfig {
-                        name: renamed,
+                        name: renamed.clone(),
                         ..spec
                     });
+                    save_mcp_store(roots, &store)?;
+                    return Ok(AssetOutcome::Imported {
+                        final_name: renamed,
+                    });
                 }
-                _ => return Ok(false), // "skip"
+                _ => return Ok(AssetOutcome::Skipped), // "skip"
             }
         }
         None => store.push(spec),
     }
-    save_mcp_store(roots, &store)
+    save_mcp_store(roots, &store)?;
+    Ok(AssetOutcome::Imported {
+        final_name: asset.name.clone(),
+    })
 }
 
 fn import_skill(
     asset: &MigrationAsset,
     conflict_choice: &str,
     roots: &Roots,
-) -> Result<bool, String> {
+) -> Result<AssetOutcome, String> {
     let src = PathBuf::from(&asset.source_path);
     let skills_dir = shannon_skills_dir(roots);
     let mut target_name = asset.name.clone();
@@ -1000,7 +1178,7 @@ fn import_skill(
         let incoming = std::fs::read_to_string(src.join("SKILL.md"))
             .map_err(|e| format!("read source SKILL.md: {e}"))?;
         if existing_md == incoming {
-            return Ok(false); // identical — idempotent no-op
+            return Ok(AssetOutcome::Skipped); // identical — idempotent no-op
         }
         match conflict_choice {
             "overwrite" => {}
@@ -1010,52 +1188,60 @@ fn import_skill(
                     target_variant(&skills_dir.join(&target_name).join("SKILL.md"))
                 {
                     if renamed_md == incoming {
-                        return Ok(false); // already imported under the renamed slot
+                        return Ok(AssetOutcome::Skipped); // already imported under the renamed slot
                     }
                     return Err(format!(
                         "renamed target '{target_name}' also exists with different content"
                     ));
                 }
             }
-            _ => return Ok(false), // "skip"
+            _ => return Ok(AssetOutcome::Skipped), // "skip"
         }
     }
     let target = skills_dir.join(&target_name);
     copy_dir_recursive(&src, &target)?;
-    Ok(true)
+    Ok(AssetOutcome::Imported {
+        final_name: target_name,
+    })
 }
 
 fn import_command(
     asset: &MigrationAsset,
     conflict_choice: &str,
     roots: &Roots,
-) -> Result<bool, String> {
+) -> Result<AssetOutcome, String> {
     let src = PathBuf::from(&asset.source_path);
     let incoming = std::fs::read_to_string(&src).map_err(|e| format!("read source: {e}"))?;
     let commands_dir = shannon_commands_dir(roots);
     let rel = format!("{}.md", asset.name);
     let mut target = commands_dir.join(&rel);
+    // The store name this import actually wrote — `<name>`, or
+    // `<name>-imported` when a rename-conflict import took the side slot
+    // (M10 review fix: the rename branch used to keep reporting the source
+    // name, so the thin plugin record listed a store entry it never wrote).
+    let mut final_name = asset.name.clone();
     if let Some(existing) = target_variant(&target) {
         if existing == incoming {
-            return Ok(false); // identical — idempotent no-op
+            return Ok(AssetOutcome::Skipped); // identical — idempotent no-op
         }
         match conflict_choice {
             "overwrite" => {}
             "rename" => {
-                let renamed = format!("{}-imported.md", asset.name);
-                target = commands_dir.join(&renamed);
+                let renamed = format!("{}-imported", asset.name);
+                target = commands_dir.join(format!("{renamed}.md"));
                 if target_variant(&target).is_some() {
-                    return Ok(false); // renamed slot already populated — skip
+                    return Ok(AssetOutcome::Skipped); // renamed slot already populated — skip
                 }
+                final_name = renamed;
             }
-            _ => return Ok(false), // "skip"
+            _ => return Ok(AssetOutcome::Skipped), // "skip"
         }
     }
     if let Some(parent) = target.parent() {
         std::fs::create_dir_all(parent).map_err(|e| format!("create {}: {e}", parent.display()))?;
     }
     std::fs::write(&target, incoming).map_err(|e| format!("write {}: {e}", target.display()))?;
-    Ok(true)
+    Ok(AssetOutcome::Imported { final_name })
 }
 
 /// CLAUDE.md / AGENTS.md → one `MemoryStore` entry (category `context`,
@@ -1066,12 +1252,12 @@ fn import_memory(
     asset: &MigrationAsset,
     source: MigrationSource,
     roots: &Roots,
-) -> Result<bool, String> {
+) -> Result<AssetOutcome, String> {
     let content = std::fs::read_to_string(PathBuf::from(&asset.source_path))
         .map_err(|e| format!("read source: {e}"))?;
     let project = roots.project.display().to_string();
     if memory_entry_exists(&content, &project, roots) {
-        return Ok(false); // identical entry already present — idempotent no-op
+        return Ok(AssetOutcome::Skipped); // identical entry already present — idempotent no-op
     }
     let mut store = MemoryStore::new(shannon_memories_dir(roots));
     store.load().map_err(|e| e.to_string())?;
@@ -1094,7 +1280,9 @@ fn import_memory(
     // similar, same project + category), so re-imports never duplicate rows;
     // exact duplicates were already short-circuited above.
     store.add_or_update(entry).map_err(|e| e.to_string())?;
-    Ok(true)
+    Ok(AssetOutcome::Imported {
+        final_name: asset.name.clone(),
+    })
 }
 
 fn import_settings_rules(
@@ -1102,7 +1290,7 @@ fn import_settings_rules(
     source: MigrationSource,
     conflict_choice: &str,
     roots: &Roots,
-) -> Result<bool, String> {
+) -> Result<AssetOutcome, String> {
     let rules = {
         let mut result = MigrationScanResult::empty(source);
         read_settings_allow_rules(Path::new(&asset.source_path), &mut result)
@@ -1116,23 +1304,25 @@ fn import_settings_rules(
     let mut file_name = format!("{profile_name}.toml");
     if let Ok(existing) = std::fs::read_to_string(dir.join(&file_name)) {
         if existing == rendered {
-            return Ok(false); // identical — idempotent no-op
+            return Ok(AssetOutcome::Skipped); // identical — idempotent no-op
         }
         match conflict_choice {
             "overwrite" => {}
             "rename" => {
                 file_name = format!("{profile_name}-imported.toml");
                 if std::fs::read_to_string(dir.join(&file_name)).is_ok() {
-                    return Ok(false); // renamed slot already populated — skip
+                    return Ok(AssetOutcome::Skipped); // renamed slot already populated — skip
                 }
             }
-            _ => return Ok(false), // "skip"
+            _ => return Ok(AssetOutcome::Skipped), // "skip"
         }
     }
     std::fs::create_dir_all(&dir).map_err(|e| format!("create {}: {e}", dir.display()))?;
     let target = dir.join(&file_name);
     std::fs::write(&target, rendered).map_err(|e| format!("write {}: {e}", target.display()))?;
-    Ok(true)
+    Ok(AssetOutcome::Imported {
+        final_name: asset.name.clone(),
+    })
 }
 
 // ─── Shared helpers ─────────────────────────────────────────────────────────
@@ -1584,7 +1774,8 @@ mod tests {
             action: "import".into(),
             conflict: None,
         }];
-        let report = apply_core(MigrationSource::ClaudeCode, &items, &roots).expect("apply");
+        let (report, _applied) =
+            apply_core(MigrationSource::ClaudeCode, &items, &roots).expect("apply");
         assert_eq!(report.imported, 0, "{report:?}");
         assert_eq!(report.failed.len(), 1);
         assert!(report.failed[0].id == "claude-code:skill:commit");
@@ -1979,7 +2170,8 @@ mod tests {
             })
             .collect();
 
-        let first = apply_core(MigrationSource::ClaudeCode, &items, &roots).expect("apply 1");
+        let (first, _first_applied) =
+            apply_core(MigrationSource::ClaudeCode, &items, &roots).expect("apply 1");
         assert_eq!(
             first.imported,
             scan.items.len(),
@@ -2012,7 +2204,8 @@ mod tests {
 
         // Re-entry: every item now resolves through conflict handling as a
         // skip — no duplicates, no failures.
-        let second = apply_core(MigrationSource::ClaudeCode, &items, &roots).expect("apply 2");
+        let (second, _second_applied) =
+            apply_core(MigrationSource::ClaudeCode, &items, &roots).expect("apply 2");
         assert_eq!(
             second.imported, 0,
             "re-import must not duplicate: {second:?}"
@@ -2046,7 +2239,8 @@ mod tests {
                 conflict: None,
             })
             .collect();
-        let report = apply_core(MigrationSource::ClaudeCode, &items, &roots).expect("apply");
+        let (report, _applied) =
+            apply_core(MigrationSource::ClaudeCode, &items, &roots).expect("apply");
         assert_eq!(report.imported, scan.items.len() - 2);
         assert_eq!(report.skipped, 2);
         assert!(!shannon_skills_dir(&roots).join("commit").exists());
@@ -2066,7 +2260,8 @@ mod tests {
                 action: "import".into(),
                 conflict: Some(choice.into()),
             }];
-            let report = apply_core(MigrationSource::ClaudeCode, &items, &roots).expect("apply");
+            let (report, _applied) =
+                apply_core(MigrationSource::ClaudeCode, &items, &roots).expect("apply");
             let original =
                 std::fs::read_to_string(shannon_skills_dir(&roots).join("review/SKILL.md"))
                     .expect("read target");
@@ -2104,7 +2299,8 @@ mod tests {
             action: "import".into(),
             conflict: Some("rename".into()),
         }];
-        let report = apply_core(MigrationSource::ClaudeCode, &items, &roots).expect("apply");
+        let (report, _applied) =
+            apply_core(MigrationSource::ClaudeCode, &items, &roots).expect("apply");
         assert_eq!(report.imported, 1);
         let store = load_mcp_store(&roots);
         assert_eq!(store.len(), 2);
@@ -2121,6 +2317,49 @@ mod tests {
         );
     }
 
+    // M10 review fix: a rename-conflict COMMAND import lands on disk as
+    // `<name>-imported.md`, and `AppliedImports` (which feeds the thin
+    // plugin record's manifest) must report that final store name — not
+    // the pre-existing source-name entry it never wrote.
+    #[test]
+    fn apply_command_conflict_rename_reports_the_imported_store_name() {
+        let (_dir, roots) = temp_roots("apply-command-conflict");
+        seed_claude_code(&roots);
+        // The destination already ships its own deploy.md with other content.
+        write(
+            &shannon_commands_dir(&roots).join("deploy.md"),
+            "local edit\n",
+        );
+
+        let items = vec![MigrationItemInput {
+            id: "claude-code:command:deploy".into(),
+            action: "import".into(),
+            conflict: Some("rename".into()),
+        }];
+        let (report, applied) =
+            apply_core(MigrationSource::ClaudeCode, &items, &roots).expect("apply");
+        assert_eq!(report.imported, 1);
+
+        // The renamed copy carries the incoming content; the local edit wins
+        // the original slot.
+        assert_eq!(
+            std::fs::read_to_string(shannon_commands_dir(&roots).join("deploy.md")).unwrap(),
+            "local edit\n"
+        );
+        assert_eq!(
+            std::fs::read_to_string(shannon_commands_dir(&roots).join("deploy-imported.md"))
+                .unwrap(),
+            "Deploy the service.\n"
+        );
+        // …and `applied` reports the FINAL store name (no `.md` suffix),
+        // exactly the name the plugin record's manifest will list.
+        assert_eq!(
+            applied.commands,
+            vec!["deploy-imported".to_string()],
+            "{applied:?}"
+        );
+    }
+
     #[test]
     fn apply_settings_rules_profile_parses_with_registry() {
         let (_dir, roots) = temp_roots("apply-profile");
@@ -2130,7 +2369,8 @@ mod tests {
             action: "import".into(),
             conflict: None,
         }];
-        let report = apply_core(MigrationSource::ClaudeCode, &items, &roots).expect("apply");
+        let (report, _applied) =
+            apply_core(MigrationSource::ClaudeCode, &items, &roots).expect("apply");
         assert_eq!(report.imported, 1);
 
         let path = shannon_profiles_dir(&roots).join("claude-code-imported.toml");
@@ -2146,7 +2386,8 @@ mod tests {
         );
 
         // Idempotent re-apply: identical profile → skipped.
-        let second = apply_core(MigrationSource::ClaudeCode, &items, &roots).expect("apply 2");
+        let (second, _second_applied) =
+            apply_core(MigrationSource::ClaudeCode, &items, &roots).expect("apply 2");
         assert_eq!(second.imported, 0);
         assert_eq!(second.skipped, 1);
     }
@@ -2165,7 +2406,8 @@ mod tests {
             action: "import".into(),
             conflict: None,
         }];
-        let first = apply_core(MigrationSource::ClaudeCode, &items, &roots).expect("apply");
+        let (first, _first_applied) =
+            apply_core(MigrationSource::ClaudeCode, &items, &roots).expect("apply");
         assert_eq!(first.imported, 1);
         // Scan now reports the identical entry as skip-existing.
         let rescan = scan_core(MigrationSource::ClaudeCode, &roots);
@@ -2173,7 +2415,8 @@ mod tests {
             find(&rescan, "claude-code:memory:project-memory").conflict,
             "skip-existing"
         );
-        let second = apply_core(MigrationSource::ClaudeCode, &items, &roots).expect("apply 2");
+        let (second, _second_applied) =
+            apply_core(MigrationSource::ClaudeCode, &items, &roots).expect("apply 2");
         assert_eq!(second.imported, 0);
         assert_eq!(second.skipped, 1);
     }
@@ -2199,7 +2442,8 @@ mod tests {
                 conflict: None,
             },
         ];
-        let report = apply_core(MigrationSource::ClaudeCode, &items, &roots).expect("apply");
+        let (report, _applied) =
+            apply_core(MigrationSource::ClaudeCode, &items, &roots).expect("apply");
         assert_eq!(report.imported, 0);
         assert_eq!(report.failed.len(), 3);
         assert!(report.failed[0].error.contains("invalid action"));
@@ -2224,7 +2468,7 @@ mod tests {
                 conflict: None,
             })
             .collect();
-        let report = apply_core(MigrationSource::ZCode, &items, &roots).expect("apply");
+        let (report, _applied) = apply_core(MigrationSource::ZCode, &items, &roots).expect("apply");
         assert_eq!(report.imported, 2);
         let mut mem = MemoryStore::new(shannon_memories_dir(&roots));
         mem.load().expect("load");
@@ -2258,7 +2502,8 @@ mod tests {
             })
             .collect();
         assert_eq!(items.len(), 1);
-        let report = apply_core(MigrationSource::ClaudeCode, &items, &roots).expect("apply");
+        let (report, _applied) =
+            apply_core(MigrationSource::ClaudeCode, &items, &roots).expect("apply");
         assert_eq!(report.imported, 1);
         let mut mem = MemoryStore::new(shannon_memories_dir(&roots));
         mem.load().expect("load");
@@ -2369,5 +2614,169 @@ mod tests {
             serde_json::from_str(r#"{"id": "a", "action": "import", "conflict": "rename"}"#)
                 .expect("additive conflict field");
         assert_eq!(additive.conflict.as_deref(), Some("rename"));
+    }
+
+    // ─── X5 thin imported-plugin registration ───────────────────────────
+
+    /// Seed the destination stores with one skill and one stdio MCP server
+    /// as if `apply_core` had just imported them.
+    fn seed_destinations(roots: &Roots) {
+        let skills = roots.home.join(".shannon").join("skills").join("alpha");
+        std::fs::create_dir_all(&skills).unwrap();
+        std::fs::write(skills.join("SKILL.md"), "imported").unwrap();
+        let store_path = mcp_store_path(roots);
+        std::fs::create_dir_all(store_path.parent().unwrap()).unwrap();
+        std::fs::write(
+            &store_path,
+            r#"[{"name":"srv","command":"npx","args":["-y","srv"],"env":{},"enabled":true}]"#,
+        )
+        .unwrap();
+    }
+
+    #[tokio::test]
+    async fn register_migration_import_writes_truthful_record_and_survives_rescan() {
+        let tmp = tempfile::tempdir().unwrap();
+        let roots = Roots {
+            home: tmp.path().to_path_buf(),
+            project: tmp.path().to_path_buf(),
+        };
+        seed_destinations(&roots);
+
+        let plugins_dir = tmp.path().join("plugins");
+        let mut registry = shannon_core::plugin::PluginRegistry::new(plugins_dir);
+        let applied = AppliedImports {
+            skills: vec!["alpha".into()],
+            mcp: vec!["srv".into()],
+            commands: vec!["ship.md".into()],
+        };
+        register_migration_import(&mut registry, MigrationSource::ClaudeCode, &applied, &roots)
+            .await
+            .expect("registration succeeds");
+
+        // picked up in the running registry, truthfully marked + described
+        assert!(registry.contains("imported-claude-code"));
+        let record = registry.get("imported-claude-code").unwrap();
+        assert!(
+            record
+                .manifest
+                .keywords
+                .iter()
+                .any(|k| k == crate::commands_plugins::MIGRATION_IMPORT_MARKER),
+            "marker keyword present: {:?}",
+            record.manifest.keywords
+        );
+        assert_eq!(record.manifest.mcp.len(), 1, "imported stdio server listed");
+        assert_eq!(record.manifest.mcp[0].name, "srv");
+        assert!(record.manifest.description.contains("1 skills"));
+        assert!(record.manifest.description.contains("1 MCP servers"));
+        assert!(record.manifest.description.contains("1 commands"));
+
+        // the on-disk manifest carries the additive truthful listing
+        let raw = std::fs::read_to_string(
+            tmp.path()
+                .join("plugins")
+                .join("imported-claude-code")
+                .join(".claude-plugin")
+                .join("plugin.json"),
+        )
+        .unwrap();
+        assert!(raw.contains("\"shannon:imported\""), "{raw}");
+        assert!(raw.contains("ship.md"), "{raw}");
+
+        // and a fresh registry re-registers it from disk (restart durability)
+        let mut fresh = shannon_core::plugin::PluginRegistry::new(tmp.path().join("plugins"));
+        fresh.load_all().await.unwrap();
+        assert!(fresh.contains("imported-claude-code"));
+    }
+
+    #[tokio::test]
+    async fn register_migration_import_skips_when_nothing_imported() {
+        let tmp = tempfile::tempdir().unwrap();
+        let roots = Roots {
+            home: tmp.path().to_path_buf(),
+            project: tmp.path().to_path_buf(),
+        };
+        let mut registry = shannon_core::plugin::PluginRegistry::new(tmp.path().join("plugins"));
+        register_migration_import(
+            &mut registry,
+            MigrationSource::ZCode,
+            &AppliedImports::default(),
+            &roots,
+        )
+        .await
+        .unwrap();
+        assert!(registry.is_empty(), "no record without imported assets");
+        assert!(!tmp.path().join("plugins").join("imported-zcode").exists());
+    }
+
+    /// Review-fix regression (X5 truthfulness): a rename-conflict MCP
+    /// import lands in the store as `<name>-imported`, and the thin plugin
+    /// record must list THAT entry's config — the config this import
+    /// actually wrote — never the pre-existing server of the source name.
+    #[tokio::test]
+    async fn register_migration_import_lists_renamed_mcp_config_not_the_preexisting_one() {
+        let (_dir, roots) = temp_roots("imported-rename-mcp");
+        // destination store already has a DIFFERENT server named "srv"
+        write(
+            &mcp_store_path(&roots),
+            r#"[{"name":"srv","command":"old-cmd","args":["old"],"env":{},"enabled":true}]"#,
+        );
+        // source project .mcp.json exports its own "srv" with a new config
+        write(
+            &roots.project.join(".mcp.json"),
+            r#"{"mcpServers":{"srv":{"command":"npx","args":["-y","new-thing"]}}}"#,
+        );
+
+        let scan = scan_core(MigrationSource::ClaudeCode, &roots);
+        let items: Vec<MigrationItemInput> = scan
+            .items
+            .iter()
+            .filter(|a| a.kind == "mcp")
+            .map(|a| MigrationItemInput {
+                id: a.id.clone(),
+                action: "import".into(),
+                conflict: Some("rename".into()),
+            })
+            .collect();
+        let (_report, applied) =
+            apply_core(MigrationSource::ClaudeCode, &items, &roots).expect("apply");
+
+        // the store gained srv-imported (new config); srv itself untouched
+        let store = std::fs::read_to_string(mcp_store_path(&roots)).unwrap();
+        assert!(store.contains("\"srv-imported\""), "{store}");
+        assert!(store.contains("old-cmd"), "{store}");
+        // and applied reports the FINAL store name, not the source name
+        assert_eq!(applied.mcp, vec!["srv-imported".to_string()], "{applied:?}");
+
+        // the registered record embeds the imported config, keyed by the
+        // final name — never the pre-existing "old-cmd" entry
+        let mut registry = shannon_core::plugin::PluginRegistry::new(roots.home.join("plugins"));
+        register_migration_import(&mut registry, MigrationSource::ClaudeCode, &applied, &roots)
+            .await
+            .expect("register");
+        let record = registry.get("imported-claude-code").unwrap();
+        assert_eq!(record.manifest.mcp.len(), 1);
+        assert_eq!(record.manifest.mcp[0].name, "srv-imported");
+        assert_eq!(record.manifest.mcp[0].command.as_deref(), Some("npx"));
+        assert!(
+            record.manifest.mcp[0]
+                .args
+                .contains(&"new-thing".to_string())
+        );
+    }
+
+    #[tokio::test]
+    async fn apply_core_reports_applied_imports_for_the_plugin_record() {
+        // the tuple return feeds register_migration_import; memory and
+        // settings-rules assets must not appear in its plugin kinds.
+        let mut applied = AppliedImports::default();
+        applied.push("skill", "s1");
+        applied.push("memory", "m1");
+        applied.push("mcp", "srv");
+        applied.push("command", "c1");
+        applied.push("settings-rules", "r1");
+        assert_eq!(applied.skills, vec!["s1".to_string()]);
+        assert_eq!(applied.mcp, vec!["srv".to_string()]);
+        assert_eq!(applied.commands, vec!["c1".to_string()]);
     }
 }

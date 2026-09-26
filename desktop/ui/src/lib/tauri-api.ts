@@ -44,8 +44,10 @@ import type {
   TerminalInfo,
   WorkingDirInfo,
   CatalogEntry,
+  PluginBundleSummary,
   DataSourceResult,
   MobileTlsStatus,
+  ProjectRecord,
 } from '@/types'
 import type {
   ScheduledRoutine,
@@ -70,6 +72,7 @@ import type {
   UsageStats,
   SessionUsageRow,
   ContextBreakdown,
+  ExtensionStats,
   HookEventInfo,
   ProfilesList,
   ActiveProfileStatus,
@@ -1283,34 +1286,70 @@ export interface PluginInfo {
   enabled: boolean
   path: string
   source_format: 'shannon-toml' | 'claude-json' | 'unknown'
+  /** Install origin for the X6 source badge, derived desktop-side:
+   *  - `migration` — thin `imported-<source>` record (`migration_imported`);
+   *  - `git` — the plugin directory carries a `.git` checkout (exactly the
+   *    condition `update` needs, so 更新 is offered only for these);
+   *  - `local` — copied in from a local directory / .dxt/.mcpb/.zip archive.
+   *  There is no `registry` origin: marketplace plugin bundles are git
+   *  clones and badge as `git`. */
+  source: 'git' | 'local' | 'migration'
+  /** Thin `imported-<source>` migration record (X5): the UI suppresses
+   *  uninstall/enable/disable on it. */
+  migration_imported: boolean
 }
 
 export async function listPlugins(): Promise<PluginInfo[]> {
   return invoke('list_plugins')
 }
 
-export async function installPlugin(sourcePath: string): Promise<string> {
+/** Result of a plugin install: the registered name plus best-effort
+ *  materialization warnings (X5). */
+export interface PluginInstallResult {
+  name: string
+  warnings: string[]
+}
+
+/** Result of a plugin lifecycle op (uninstall/enable/disable/update):
+ *  per-artifact warnings from (reverse-)materialization. Empty = clean. */
+export interface PluginLifecycleResult {
+  warnings: string[]
+}
+
+export async function installPlugin(sourcePath: string): Promise<PluginInstallResult> {
   return invoke('install_plugin', { sourcePath })
 }
 
-export async function installPluginFromGit(repoUrl: string): Promise<string> {
-  return invoke('install_plugin_from_git', { repoUrl })
+/** `allowUnverified` is the SEC-1 opt-in — pass `true` only after the user
+ *  explicitly confirmed installing a plugin whose manifest declares no
+ *  permissions. */
+export async function installPluginFromGit(
+  repoUrl: string,
+  allowUnverified?: boolean,
+): Promise<PluginInstallResult> {
+  return invoke('install_plugin_from_git', { repoUrl, allowUnverified: allowUnverified ?? false })
 }
 
-export async function uninstallPlugin(name: string): Promise<void> {
-  await invoke('uninstall_plugin', { name })
+export async function uninstallPlugin(name: string): Promise<PluginLifecycleResult> {
+  return invoke('uninstall_plugin', { name })
 }
 
-export async function enablePlugin(name: string): Promise<void> {
-  await invoke('enable_plugin', { name })
+export async function enablePlugin(name: string): Promise<PluginLifecycleResult> {
+  return invoke('enable_plugin', { name })
 }
 
-export async function disablePlugin(name: string): Promise<void> {
-  await invoke('disable_plugin', { name })
+export async function disablePlugin(name: string): Promise<PluginLifecycleResult> {
+  return invoke('disable_plugin', { name })
 }
 
-export async function updatePlugin(name: string): Promise<void> {
-  await invoke('update_plugin', { name })
+export async function updatePlugin(name: string): Promise<PluginLifecycleResult> {
+  return invoke('update_plugin', { name })
+}
+
+/** X5 trust preview: inspect a plugin source (local dir, .dxt/.mcpb/.zip
+ *  archive, or git URL) and return its bundle summary BEFORE install. */
+export async function inspectPluginSource(path: string): Promise<PluginBundleSummary> {
+  return invoke('inspect_plugin_source', { path })
 }
 
 export async function listPluginMarketplace(): Promise<CatalogEntry[]> {
@@ -1427,6 +1466,11 @@ export async function getSessionContextBreakdown(sessionId: string): Promise<Con
 /** Per-session usage aggregation for the last `days` days (recency order). */
 export async function getUsageBySession(days: number): Promise<SessionUsageRow[]> {
   return invoke('get_usage_by_session', { days })
+}
+
+/** X7 per-extension (skill / MCP tool) invocation + token stats. */
+export async function getExtensionStats(days: number): Promise<ExtensionStats> {
+  return invoke('get_extension_stats', { days })
 }
 
 // --- Scheduled Tasks (Sprint 2) ---
@@ -2518,3 +2562,44 @@ export async function terminalList(): Promise<TerminalInfo[]> {
 // workspace_get_layout / workspace_set_layout Tauri commands and their
 // types still live on disk but are no longer wired into the chat page.
 // Keep the mock layer aware so existing data files don't trip type-check.
+// --- P-E3 project registry (projects.db, adopt-not-migrate) ---
+
+/** Every registered project, path-ascending. Archived rows are included
+ *  only with `includeArchived`. The registry is back-filled from session
+ *  working dirs (and, on first seed, memory project labels) before the
+ *  read, so a fresh install already knows its projects. */
+export async function listProjects(includeArchived?: boolean): Promise<ProjectRecord[]> {
+  return invoke('list_projects', { includeArchived: includeArchived ?? false })
+}
+
+/** Register a project path. Idempotent: an already-registered path (any
+ *  name, archived or not) is returned unchanged — registration never
+ *  overwrites an existing row. */
+export async function registerProject(path: string): Promise<ProjectRecord> {
+  return invoke('register_project', { path })
+}
+
+/** Set a project's custom display name (`null` clears it, falling back to
+ *  the path's tail segment in the UI). */
+export async function renameProject(path: string, name: string | null): Promise<ProjectRecord> {
+  return invoke('rename_project', { path, name })
+}
+
+/** Set a project's custom icon and color (`null` clears a field). */
+export async function setProjectAppearance(
+  path: string,
+  icon: string | null,
+  color: string | null,
+): Promise<ProjectRecord> {
+  return invoke('set_project_appearance', { path, icon, color })
+}
+
+/** Archive a project (stamps archivedAtMs; hidden from the default list). */
+export async function archiveProject(path: string): Promise<ProjectRecord> {
+  return invoke('archive_project', { path })
+}
+
+/** Unarchive a project (clears archivedAtMs). */
+export async function unarchiveProject(path: string): Promise<ProjectRecord> {
+  return invoke('unarchive_project', { path })
+}

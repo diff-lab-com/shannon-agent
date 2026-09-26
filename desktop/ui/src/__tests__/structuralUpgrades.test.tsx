@@ -11,6 +11,7 @@ import { MemoryRouter } from 'react-router-dom'
 import { I18nProvider } from '@/i18n'
 import { SessionsSection } from '@/components/SidebarSessions'
 import { DocumentRenderer } from '@/components/artifact/DocumentRenderer'
+import * as api from '@/lib/tauri-api'
 import type { ScheduledRoutine, SessionActivity, SessionInfo } from '@/types'
 
 const NOW = Date.now()
@@ -19,9 +20,27 @@ const routines = vi.hoisted(() => ({
   list: [] as ScheduledRoutine[],
 }))
 
+const projects = vi.hoisted(() => ({
+  registry: [] as Array<{
+    path: string
+    name: string | null
+    icon: string | null
+    color: string | null
+    archivedAtMs: number | null
+    createdAtMs: number
+  }>,
+}))
+
 vi.mock('@/lib/tauri-api', () => ({
   listScheduledTasks: vi.fn(async () => routines.list),
   searchSessions: vi.fn(async () => []),
+  // P-U2: the engine project registry backs the rail's project names.
+  listProjects: vi.fn(async () => projects.registry),
+  renameProject: vi.fn(async (path: string, name: string | null) => {
+    const record = { path, name, icon: null, color: null, archivedAtMs: null, createdAtMs: 0 }
+    projects.registry = projects.registry.filter(p => p.path !== path).concat(record)
+    return record
+  }),
 }))
 
 function session(id: string, over: Partial<SessionInfo> = {}): SessionInfo {
@@ -74,10 +93,14 @@ describe('smart grouping (F6)', () => {
   })
 })
 
-describe('project rename (F2)', () => {
-  beforeEach(() => window.localStorage.clear())
+describe('project rename (F2, now registry-backed — P-U2)', () => {
+  beforeEach(() => {
+    window.localStorage.clear()
+    projects.registry = []
+    vi.clearAllMocks()
+  })
 
-  it('renames a project folder via double-click and persists it', async () => {
+  it('renames a project folder via double-click and commits through the engine registry', async () => {
     const user = userEvent.setup()
     // Two projects so project grouping engages (>1 distinct).
     renderRail([session('s1'), session('s2', { working_dir: '/repo/proj-b' })], {}, 'project')
@@ -86,8 +109,14 @@ describe('project rename (F2)', () => {
     const input = await screen.findByRole('textbox')
     fireEvent.change(input, { target: { value: 'My Project' } })
     fireEvent.keyDown(input, { key: 'Enter' })
-    expect(JSON.parse(window.localStorage.getItem('shannon-projects') ?? '{}')).toMatchObject({ 'proj-a': 'My Project' })
-    expect(screen.getByText('My Project')).toBeInTheDocument()
+    // P-U2: the rename commits via rename_project (the localStorage
+    // `shannon-projects` registry was retired), and the label updates from
+    // the returned registry record.
+    await vi.waitFor(() => {
+      expect(api.renameProject).toHaveBeenCalledWith('/repo/proj-a', 'My Project')
+    })
+    expect(await screen.findByText('My Project')).toBeInTheDocument()
+    expect(window.localStorage.getItem('shannon-projects')).toBeNull()
   })
 })
 
@@ -95,6 +124,7 @@ describe('automations rail section (F1-v1)', () => {
   beforeEach(() => {
     window.localStorage.clear()
     routines.list = []
+    projects.registry = []
   })
 
   it('lists enabled routines with the soon badge when next fire is imminent', async () => {
