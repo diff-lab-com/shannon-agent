@@ -495,6 +495,14 @@ export interface DesktopConfig {
   /** Dream pass L3: refine freshly detected skill candidates inside a
    *  dream pass. Default off; review remains the only write path. */
   dream_skill_distill_enabled?: boolean
+  /** 卡A session GC: master switch for auto-cleaning **archived** sessions.
+   *  Default off — nothing is ever auto-deleted until opted in, and an
+   *  enabled GC still never touches active sessions. */
+  session_gc_enabled?: boolean
+  /** 卡A session GC: retention window in days, counted from each session's
+   *  last activity. `null`/undefined = 永不 (never auto-delete), the
+   *  standing default. */
+  session_retention_days?: number | null
   stt?: SttConfig
   /** P2-5e local-only STT (whisper-rs). Independent of `stt`
    *  so a user can keep a cloud key for fallback while local
