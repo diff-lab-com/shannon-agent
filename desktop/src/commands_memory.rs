@@ -292,7 +292,7 @@ pub(crate) fn apply_memory_update(
 /// Only fields supplied as `Some(...)` are updated; `None` leaves the existing
 /// value intact. Returns the updated entry or an error if the ID is unknown.
 /// Decision 3-A (B3-24): `project` is honored — editing a memory from the UI
-/// can move it between projects (see [`apply_memory_update`] for why a move
+/// can move it between projects (see `apply_memory_update` for why a move
 /// is delete + re-add).
 #[tauri::command]
 pub async fn update_memory(
