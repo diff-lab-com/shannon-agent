@@ -3329,5 +3329,9 @@
   "opcTask.approveConfirm.ownership": "Pending request from session «{session}».",
   "opcTask.approveConfirm.ownershipMismatch": "This request belongs to session «{session}», which is not an agent-run session of this task. Review and answer it in its own conversation instead.",
   "opcTask.approveConfirm.ownershipUnknown": "The pending request has no owner session, so it cannot be verified as belonging to this task.",
-  "opcTask.respondFailed": "Failed to submit the decision"
+  "opcTask.respondFailed": "Failed to submit the decision",
+  "diff.dialog.binaryFile": "Binary file — text diff review is not available for this file.",
+  "diff.dialog.conflict": "File changed since the diff was loaded",
+  "diff.dialog.conflict.desc": "The file was modified while you were reviewing (mtime mismatch). Close and re-open the diff to review the latest content before applying.",
+  "diff.review.deleteWarning": "This change deletes all file content while the original file is not empty. Apply is disabled to protect the existing file."
 }

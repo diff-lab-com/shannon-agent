@@ -3329,5 +3329,9 @@
   "opcTask.approveConfirm.ownership": "待审请求来自会话「{session}」。",
   "opcTask.approveConfirm.ownershipMismatch": "该请求属于会话「{session}」，并非本任务的智能体运行会话。请回到对应会话中处理。",
   "opcTask.approveConfirm.ownershipUnknown": "待审请求没有归属会话，无法确认它属于本任务。",
-  "opcTask.respondFailed": "提交决定失败"
+  "opcTask.respondFailed": "提交决定失败",
+  "diff.dialog.binaryFile": "二进制文件——无法对该文件进行文本差异评审。",
+  "diff.dialog.conflict": "文件在加载差异后已被修改",
+  "diff.dialog.conflict.desc": "评审期间文件发生了变更（mtime 不一致）。请关闭并重新打开差异，确认最新内容后再应用。",
+  "diff.review.deleteWarning": "此变更会删除文件的全部内容，而原文件并非为空。为防止数据丢失，已禁用「应用」。"
 }

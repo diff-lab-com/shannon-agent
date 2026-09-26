@@ -204,14 +204,20 @@ pub async fn read_attachments(
 /// Write a text file. The target must resolve to a path inside the active
 /// working directory — a compromised frontend cannot write `~/.bashrc`,
 /// `~/.ssh/authorized_keys`, or any startup hook (review §P0-3).
+///
+/// B0 P0-3: when `expected_mtime` is provided it must still match the file
+/// on disk, otherwise the content that was reviewed (and merged) is stale
+/// and writing it would clobber concurrent edits. The check is opt-in, so
+/// existing callers are unaffected.
 #[tauri::command]
 pub async fn save_text_file(
     state: tauri::State<'_, AppState>,
     path: String,
     content: String,
-) -> Result<(), String> {
+    expected_mtime: Option<String>,
+) -> Result<(), FileCommandError> {
     let working_dir = resolve_working_dir(&state).await;
-    save_text_file_inner(&working_dir, &path, &content).await
+    save_text_file_inner(&working_dir, &path, &content, expected_mtime.as_deref()).await
 }
 
 /// Internal helper for [`save_text_file`]. Splits out so tests can exercise
@@ -220,17 +226,37 @@ pub(crate) async fn save_text_file_inner(
     working_dir: &Path,
     path: &str,
     content: &str,
-) -> Result<(), String> {
+    expected_mtime: Option<&str>,
+) -> Result<(), FileCommandError> {
     let target = resolve_write_target_in_working_dir(path, working_dir)?;
+    if let Some(expected) = expected_mtime.filter(|m| !m.is_empty()) {
+        let conflict = |current: Option<String>| {
+            FileCommandError::Conflict(SaveConflictError {
+                code: "mtime_conflict",
+                message: format!(
+                    "file changed since it was read (expected mtime {expected}); re-read before writing: {path}"
+                ),
+                current_mtime: current,
+            })
+        };
+        match std::fs::metadata(&target)
+            .ok()
+            .and_then(|m| mtime_rfc3339(&m))
+        {
+            Some(actual) if actual == expected => {}
+            actual => return Err(conflict(actual)),
+        }
+    }
     if let Some(parent) = target.parent() {
         // Only create intermediate directories that are themselves inside
         // the working directory — `resolve_write_target_in_working_dir` has
         // already canonicalized the parent, so this stays safe.
-        std::fs::create_dir_all(parent)
-            .map_err(|e| format!("Failed to create {}: {e}", parent.display()))?;
+        std::fs::create_dir_all(parent).map_err(|e| {
+            FileCommandError::Plain(format!("Failed to create {}: {e}", parent.display()))
+        })?;
     }
     std::fs::write(&target, content)
-        .map_err(|e| format!("Failed to write {}: {e}", target.display()))
+        .map_err(|e| FileCommandError::Plain(format!("Failed to write {}: {e}", target.display())))
 }
 
 // ---------------------------------------------------------------------------
@@ -302,6 +328,46 @@ impl ReadTextFileError {
     }
 }
 
+/// Wire error for `get_file_diff` / `save_text_file` (B0 P0-3). Only the
+/// machine-readable failures (binary file, mtime conflict) are structured —
+/// the frontend branches on `code` — while every pre-existing failure keeps
+/// its plain-string wire shape, so older call sites see no difference.
+#[derive(Debug, Serialize)]
+#[serde(untagged)]
+pub enum FileCommandError {
+    Structured(ReadTextFileError),
+    Conflict(SaveConflictError),
+    Plain(String),
+}
+
+impl From<String> for FileCommandError {
+    fn from(message: String) -> Self {
+        Self::Plain(message)
+    }
+}
+
+/// Emitted by `save_text_file` when `expected_mtime` no longer matches the
+/// file on disk: the content that was diffed has changed under the review.
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SaveConflictError {
+    pub code: &'static str, // "mtime_conflict"
+    pub message: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub current_mtime: Option<String>,
+}
+
+/// RFC3339 (UTC) rendering of a file's mtime. `get_file_diff` stamps the
+/// `FileDiff` with it and `save_text_file` compares the same rendering, so
+/// the two can never drift apart on formatting.
+fn mtime_rfc3339(metadata: &std::fs::Metadata) -> Option<String> {
+    use chrono::DateTime;
+    metadata
+        .modified()
+        .ok()
+        .map(|t| DateTime::<chrono::Utc>::from(t).to_rfc3339())
+}
+
 /// Capped, scope-checked text read backing the dock's manual open tab and
 /// auto-docked disk artifacts (P1-C / P1-D). Binary and oversized files
 /// return structured errors instead of content.
@@ -352,13 +418,18 @@ pub async fn read_text_file(
     })
 }
 
-/// File diff result for the diff viewer.
+/// File diff result for the diff viewer. `mtime` records the on-disk state
+/// at fetch time — the review UI passes it back to `save_text_file` as
+/// `expected_mtime` so an Apply racing a concurrent modification fails
+/// instead of clobbering (B0 P0-3).
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct FileDiff {
     pub old_content: String,
     pub new_content: String,
     pub file_name: String,
     pub language: String,
+    #[serde(default)]
+    pub mtime: String,
 }
 
 /// A node in the file tree.
@@ -495,11 +566,15 @@ pub struct WorkingDirInfo {
 }
 
 /// Get the diff for a file (working tree vs last committed, or old vs new content).
+///
+/// B0 P0-3: binary (or otherwise non-UTF-8) files return a structured error
+/// instead of an empty string — the old `unwrap_or_default` turned a binary
+/// read failure into a whole-file-deletion diff whose Apply blanked the file.
 #[tauri::command]
 pub async fn get_file_diff(
     state: tauri::State<'_, AppState>,
     path: String,
-) -> Result<FileDiff, String> {
+) -> Result<FileDiff, FileCommandError> {
     // §P2-20: validate against the session working directory, not the
     // process CWD — a GUI launched from the Dock runs with CWD `/`, which
     // made every legitimate workspace file report "Path outside workspace".
@@ -512,7 +587,7 @@ pub async fn get_file_diff(
 pub(crate) async fn get_file_diff_inner(
     working_dir: &Path,
     path: &str,
-) -> Result<FileDiff, String> {
+) -> Result<FileDiff, FileCommandError> {
     use std::process::Command;
 
     // Resolve relative paths against the session working directory,
@@ -532,6 +607,30 @@ pub(crate) async fn get_file_diff_inner(
         .map(|e| e.to_string_lossy().to_string())
         .unwrap_or_else(|| "plaintext".to_string());
 
+    // Read the working-tree side once, up front, with binary/non-UTF-8
+    // guards. A failure here is an error — never an empty string that the
+    // review UI would render as "file deleted".
+    let bytes = std::fs::read(&canonical)
+        .map_err(|e| FileCommandError::Plain(format!("Cannot read file: {e}")))?;
+    if sniffs_as_binary(&bytes) {
+        return Err(FileCommandError::Structured(ReadTextFileError::new(
+            ReadTextFileErrorCode::BinaryFile,
+            format!("binary file (NUL byte in the first 8 KiB): {path}"),
+        )));
+    }
+    let new_content = String::from_utf8(bytes).map_err(|_| {
+        FileCommandError::Structured(ReadTextFileError::new(
+            ReadTextFileErrorCode::NotUtf8,
+            format!("file is not valid UTF-8 text: {path}"),
+        ))
+    })?;
+
+    // Record the fetch-time mtime for the Apply-time conflict check.
+    let mtime = std::fs::metadata(&canonical)
+        .ok()
+        .and_then(|m| mtime_rfc3339(&m))
+        .unwrap_or_default();
+
     // Try git diff first
     let dir = canonical
         .parent()
@@ -542,25 +641,22 @@ pub(crate) async fn get_file_diff_inner(
         .current_dir(&dir)
         .output();
 
-    let (old_content, new_content) = match git_output {
+    let old_content = match git_output {
         Ok(output) if output.status.success() && !output.stdout.is_empty() => {
-            // Parse unified diff - for simplicity, just read current file as new
-            // and reconstruct old from git show
-            let new = std::fs::read_to_string(&canonical).unwrap_or_default();
+            // Reconstruct the committed side via `git show`; the current
+            // file content was already read above.
             let old_output = Command::new("git")
                 .args(["show", &format!("HEAD:{path}")])
                 .current_dir(&dir)
                 .output();
-            let old = match old_output {
+            match old_output {
                 Ok(o) if o.status.success() => String::from_utf8_lossy(&o.stdout).to_string(),
                 _ => String::new(),
-            };
-            (old, new)
+            }
         }
         _ => {
-            // Not a git repo or no changes - read file as new, empty old
-            let content = std::fs::read_to_string(&canonical).unwrap_or_default();
-            (String::new(), content)
+            // Not a git repo or no changes - current content vs empty old
+            String::new()
         }
     };
 
@@ -569,6 +665,7 @@ pub(crate) async fn get_file_diff_inner(
         new_content,
         file_name,
         language,
+        mtime,
     })
 }
 
@@ -896,6 +993,7 @@ mod tests {
             new_content: "new text".to_string(),
             file_name: "test.rs".to_string(),
             language: "rust".to_string(),
+            mtime: "2026-09-26T00:00:00+00:00".to_string(),
         };
         let json = serde_json::to_string(&diff).unwrap();
         let back: FileDiff = serde_json::from_str(&json).unwrap();
@@ -903,6 +1001,7 @@ mod tests {
         assert_eq!(back.new_content, diff.new_content);
         assert_eq!(back.file_name, diff.file_name);
         assert_eq!(back.language, diff.language);
+        assert_eq!(back.mtime, diff.mtime);
     }
 
     // ---- review §P0-3: out-of-tree attachment / write attempts ----
@@ -942,12 +1041,16 @@ mod tests {
             .join("shannon_outside_write_target.txt");
         let _ = std::fs::remove_file(&outside); // ensure parent dir exists
 
-        let err = save_text_file_inner(workdir.path(), &outside.to_string_lossy(), "pwned")
+        let err = save_text_file_inner(workdir.path(), &outside.to_string_lossy(), "pwned", None)
             .await
             .expect_err("must reject out-of-tree write");
+        let msg = match err {
+            FileCommandError::Plain(msg) => msg,
+            other => panic!("expected plain error, got {other:?}"),
+        };
         assert!(
-            err.contains("outside") || err.contains("not found"),
-            "expected 'outside' rejection, got: {err}"
+            msg.contains("outside") || msg.contains("not found"),
+            "expected 'outside' rejection, got: {msg}"
         );
 
         // The target file must not exist on disk.
@@ -959,7 +1062,7 @@ mod tests {
     async fn save_text_file_inner_accepts_path_inside_working_dir() {
         let workdir = tempfile::tempdir().expect("tempdir");
         let target = workdir.path().join("subdir/note.txt");
-        save_text_file_inner(workdir.path(), "subdir/note.txt", "hello")
+        save_text_file_inner(workdir.path(), "subdir/note.txt", "hello", None)
             .await
             .expect("in-tree write should succeed");
         assert_eq!(std::fs::read_to_string(&target).unwrap(), "hello");
@@ -1038,7 +1141,12 @@ mod tests {
         let err = get_file_diff_inner(workdir.path(), &outside.to_string_lossy())
             .await
             .expect_err("out-of-tree diff must be rejected");
-        assert!(err.contains("outside"), "got: {err}");
+        match err {
+            FileCommandError::Plain(msg) => {
+                assert!(msg.contains("outside"), "got: {msg}");
+            }
+            other => panic!("expected plain outside rejection, got {other:?}"),
+        }
 
         let _ = std::fs::remove_file(&outside);
     }
@@ -1058,6 +1166,111 @@ mod tests {
         assert_eq!(diff.file_name, "note.md");
         assert_eq!(diff.new_content, "hello diff");
         assert_eq!(diff.old_content, "");
+        // B0 P0-3: the fetch-time mtime is stamped for the Apply-time
+        // conflict check.
+        assert!(!diff.mtime.is_empty(), "mtime must be recorded");
+    }
+
+    // ---- B0 P0-3: binary / non-UTF-8 diffs must fail, never render as a
+    // whole-file deletion, and save_text_file must detect stale writes ----
+
+    #[tokio::test]
+    async fn file_diff_rejects_binary_file_with_structured_error() {
+        let workdir = tempfile::tempdir().expect("tempdir");
+        std::fs::write(workdir.path().join("img.png"), b"\x89PNG\x00\x01\x02").unwrap();
+
+        let err = get_file_diff_inner(workdir.path(), "img.png")
+            .await
+            .expect_err("binary diff must be rejected");
+        match err {
+            FileCommandError::Structured(e) => {
+                assert_eq!(e.code, ReadTextFileErrorCode::BinaryFile);
+                assert!(e.message.contains("binary file"), "got: {}", e.message);
+            }
+            other => panic!("expected structured binary_file error, got {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn file_diff_rejects_non_utf8_without_nul_with_not_utf8_code() {
+        let workdir = tempfile::tempdir().expect("tempdir");
+        std::fs::write(workdir.path().join("latin1.txt"), [0xCA, 0xFE, 0xBA, 0xBE]).unwrap();
+
+        let err = get_file_diff_inner(workdir.path(), "latin1.txt")
+            .await
+            .expect_err("non-UTF-8 diff must be rejected");
+        match err {
+            FileCommandError::Structured(e) => {
+                assert_eq!(e.code, ReadTextFileErrorCode::NotUtf8);
+            }
+            other => panic!("expected structured not_utf8 error, got {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn save_text_file_inner_detects_stale_mtime() {
+        let workdir = tempfile::tempdir().expect("tempdir");
+        let target = workdir.path().join("note.txt");
+        std::fs::write(&target, "v1").unwrap();
+        let expected = std::fs::metadata(&target)
+            .ok()
+            .and_then(|m| mtime_rfc3339(&m))
+            .expect("mtime");
+
+        // Matching stamp → write goes through.
+        save_text_file_inner(workdir.path(), "note.txt", "v2", Some(&expected))
+            .await
+            .expect("write with fresh mtime must succeed");
+        assert_eq!(std::fs::read_to_string(&target).unwrap(), "v2");
+
+        // Stale stamp → structured conflict, no write.
+        let err = save_text_file_inner(
+            workdir.path(),
+            "note.txt",
+            "v3",
+            Some("2000-01-01T00:00:00+00:00"),
+        )
+        .await
+        .expect_err("stale mtime must conflict");
+        match err {
+            FileCommandError::Conflict(c) => {
+                assert_eq!(c.code, "mtime_conflict");
+                assert!(c.current_mtime.is_some());
+            }
+            other => panic!("expected mtime conflict, got {other:?}"),
+        }
+        assert_eq!(std::fs::read_to_string(&target).unwrap(), "v2");
+    }
+
+    #[tokio::test]
+    async fn save_text_file_inner_conflicts_when_file_vanished() {
+        let workdir = tempfile::tempdir().expect("tempdir");
+        // The path never existed — an expected_mtime cannot be satisfied.
+        let err = save_text_file_inner(
+            workdir.path(),
+            "ghost.txt",
+            "x",
+            Some("2026-01-01T00:00:00+00:00"),
+        )
+        .await
+        .expect_err("vanished file must conflict");
+        match err {
+            FileCommandError::Conflict(c) => {
+                assert_eq!(c.code, "mtime_conflict");
+                assert!(c.current_mtime.is_none());
+            }
+            other => panic!("expected mtime conflict, got {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn save_text_file_inner_treats_empty_expected_mtime_as_no_check() {
+        let workdir = tempfile::tempdir().expect("tempdir");
+        let target = workdir.path().join("note.txt");
+        save_text_file_inner(workdir.path(), "note.txt", "hello", Some(""))
+            .await
+            .expect("empty expected_mtime must skip the conflict check");
+        assert_eq!(std::fs::read_to_string(&target).unwrap(), "hello");
     }
 
     #[test]
