@@ -17,11 +17,17 @@ import { ComboboxSelect } from '@/components/ui/combobox-select'
 export default function ModelsSettings() {
   const intl = useIntl()
   const t = (id: string) => intl.formatMessage({ id })
-  const { models, status, config, refreshModels, refreshStatus } = useCatalog()
+  const { models, status, config, refreshConfig, refreshModels, refreshStatus } = useCatalog()
   const [switching, setSwitching] = useState<string | null>(null)
   const [strategy, setStrategyState] = useState<'speed' | 'balanced' | 'high-quality'>(
     (config?.performance_strategy as 'speed' | 'balanced' | 'high-quality') ?? 'high-quality'
   )
+
+  // P1-10: the strategy pills follow the persisted config so a failed write
+  // (or an external change) snaps the selection back to what is on disk.
+  useEffect(() => {
+    setStrategyState((config?.performance_strategy as 'speed' | 'balanced' | 'high-quality') ?? 'high-quality')
+  }, [config?.performance_strategy])
 
   // Managed providers (Models P2). Loaded once on mount; mutations update
   // local state from each command's returned (masked) file.
@@ -42,7 +48,13 @@ export default function ModelsSettings() {
 
   const setStrategy = (s: 'speed' | 'balanced' | 'high-quality') => {
     setStrategyState(s)
-    api.configure({ key: 'performance_strategy', value: s }).then(() => toast.success(intl.formatMessage({ id: 'settings.models.strategySet' }, { strategy: s }))).catch((e) => { toastError(t('settings.models.strategyFailed'), e) })
+    api.configure({ key: 'performance_strategy', value: s })
+      .then(() => toast.success(intl.formatMessage({ id: 'settings.models.strategySet' }, { strategy: s })))
+      .catch(async (e) => {
+        toastError(t('settings.models.strategyFailed'), e)
+        // Revert the optimistic flip by re-reading the persisted config.
+        await refreshConfig()
+      })
   }
 
   const handleModelSwitch = async (modelId: string) => {
