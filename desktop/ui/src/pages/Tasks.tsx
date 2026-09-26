@@ -18,7 +18,7 @@
 // legacy background-task / agent data still comes from useCatalog().
 
 import { useMemo, useState, useEffect } from 'react'
-import { useLocation, useNavigate } from 'react-router-dom'
+import { useLocation, useNavigate, useSearchParams } from 'react-router-dom'
 import { toast } from 'sonner'
 import { Button } from '@/components/ui/button'
 import { cn } from '@/lib/utils'
@@ -90,6 +90,12 @@ export default function Tasks() {
   // goal-run cards (dto.workingDir) and the execution history (joined
   // through its routine's working_dir).
   const { projectKey, projectLabel, clearProject } = useProjectDeepLink()
+  // I2 (review fix): the project menu's 新建例行 deep-links here with
+  // ?project=…&new=routine — distinct from 查看自动化's plain URL. The
+  // marker opens the create-schedule form, then is drained (replace
+  // navigation) so a refresh doesn't re-open it.
+  const [searchParams, setSearchParams] = useSearchParams()
+  const newRoutineMarker = searchParams.get('new') === 'routine'
   const intl = useIntl()
   const t = (id: string) => intl.formatMessage({ id })
 
@@ -198,10 +204,26 @@ export default function Tasks() {
     } catch (e) { setErrorMsg(e instanceof Error ? e.message : t('tasks.error.create')); toastError(t('tasks.toast.failed.create'), e) }
   }
 
+  // I2: 新建例行 marker → open the create form, drain the marker param.
+  useEffect(() => {
+    if (!newRoutineMarker) return
+    setShowSchedule(true)
+    const next = new URLSearchParams(searchParams)
+    next.delete('new')
+    setSearchParams(next, { replace: true })
+  }, [newRoutineMarker, searchParams, setSearchParams])
+
   const handleCreateSchedule = async (payload: CreateTaskPayload) => {
     try {
       setErrorMsg(null)
-      const created = await createScheduled(payload)
+      // I2 (review fix): a routine created from a project deep link must
+      // land HOUSED in that project — default working_dir to the active
+      // ?project= key when the form didn't set one. Without it the routine
+      // is unhoused and instantly vanishes from the scopedRoutines view.
+      const created = await createScheduled({
+        ...payload,
+        working_dir: payload.working_dir ?? projectKey ?? undefined,
+      })
       if (created) {
         if (created.trigger_type === 'webhook') {
           toast.success(t('tasks.toast.webhookReady'))

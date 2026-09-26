@@ -321,9 +321,55 @@ describe('deep-link key contract (rail ↔ pages)', () => {
     fireEvent.click(screen.getByRole('menuitem', { name: 'View automations' }))
     expect(screen.getByTestId('search-probe').getAttribute('data-search')).toBe('?project=%2Fw%2Falpha')
 
+    // I2 review fix: 新建例行 no longer navigates to the byte-identical URL
+    // — it carries the &new=routine create marker.
+    fireEvent.click(await screen.findByRole('button', { name: 'Project actions: Alpha Reg' }))
+    fireEvent.click(screen.getByRole('menuitem', { name: 'New routine' }))
+    expect(screen.getByTestId('search-probe').getAttribute('data-pathname')).toBe('/tasks')
+    expect(screen.getByTestId('search-probe').getAttribute('data-search')).toBe('?project=%2Fw%2Falpha&new=routine')
+
     fireEvent.click(await screen.findByRole('button', { name: 'Project actions: Alpha Reg' }))
     fireEvent.click(screen.getByRole('menuitem', { name: 'View in inbox' }))
     expect(screen.getByTestId('search-probe').getAttribute('data-pathname')).toBe('/triage')
     expect(screen.getByTestId('search-probe').getAttribute('data-search')).toBe('?project=%2Fw%2Falpha')
+  })
+})
+
+describe('/tasks &new=routine marker (I2 review fix)', () => {
+  it('opens the create-schedule form and drains the marker param', async () => {
+    renderAppPage(<Tasks />, '/tasks?project=%2Fw%2Falpha&new=routine')
+    // The form opens without any extra click…
+    expect(await screen.findByText('Create Scheduled Routine')).toBeInTheDocument()
+    // …and the one-shot marker is drained (replace navigation), leaving the
+    // project scope intact so a refresh doesn't re-open the form.
+    await waitFor(() =>
+      expect(screen.getByTestId('search-probe').getAttribute('data-search')).toBe('?project=%2Fw%2Falpha'),
+    )
+    expect(screen.getByTestId('project-filter-chip')).toBeInTheDocument()
+  })
+
+  it('leaves the form closed on the plain 查看自动化 URL', async () => {
+    renderAppPage(<Tasks />, '/tasks?project=%2Fw%2Falpha')
+    await screen.findByTestId('goal-run-panel')
+    expect(screen.queryByText('Create Scheduled Routine')).not.toBeInTheDocument()
+  })
+
+  it('defaults a created routine’s working_dir to the active project key', async () => {
+    renderAppPage(<Tasks />, '/tasks?project=%2Fw%2Falpha&new=routine')
+    fireEvent.change(await screen.findByRole('textbox', { name: 'Name *' }), {
+      target: { value: 'Project sweep' },
+    })
+    fireEvent.change(screen.getByRole('textbox', { name: 'Prompt *' }), {
+      target: { value: 'Do the sweep' },
+    })
+    fireEvent.click(screen.getByRole('button', { name: 'Create Routine' }))
+    await waitFor(() => expect(api.createScheduledTask).toHaveBeenCalledTimes(1))
+    // The form sets no working_dir; the page defaults it to the normalized
+    // ?project= key — the routine lands housed instead of vanishing from
+    // the scoped view.
+    expect(vi.mocked(api.createScheduledTask).mock.calls[0][0]).toMatchObject({
+      name: 'Project sweep',
+      working_dir: '/w/alpha',
+    })
   })
 })

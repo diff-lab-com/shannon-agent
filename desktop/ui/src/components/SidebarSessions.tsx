@@ -849,7 +849,10 @@ export function SessionsSection({ sessions, sessionActivity, goalRunsBySession =
     const projectHref = (pathname: string) => `${pathname}?project=${encodeURIComponent(path)}`
     return [
       { id: 'new-session', label: t('sidebar.projects.newSessionHere'), icon: 'chat_bubble', onSelect: () => handleNewSessionInProject(path) },
-      { id: 'new-routine', label: t('sidebar.projects.newRoutine'), icon: 'event_repeat', onSelect: () => { navigate(projectHref('/tasks')); closeMobile?.() } },
+      // I2 (review fix): 新建例行 carries a &new=routine marker so it lands
+      // distinct from 查看自动化 (byte-identical URLs deduped to one menu
+      // entry before) — /tasks opens the create-schedule form when present.
+      { id: 'new-routine', label: t('sidebar.projects.newRoutine'), icon: 'event_repeat', onSelect: () => { navigate(`${projectHref('/tasks')}&new=routine`); closeMobile?.() } },
       { id: 'view-automations', label: t('sidebar.projects.viewAutomations'), icon: 'schedule', onSelect: () => { navigate(projectHref('/tasks')); closeMobile?.() } },
       { id: 'view-inbox', label: t('sidebar.projects.viewInbox'), icon: 'inbox', onSelect: () => { navigate(projectHref('/triage')); closeMobile?.() } },
       { id: 'open-folder', label: t('sidebar.projects.openFolder'), icon: 'folder_open', onSelect: () => handleOpenProjectDir(path) },
