@@ -282,6 +282,71 @@ describe('P-U2 project actions menu', () => {
   })
 })
 
+describe('A3 registry refetch failure keeps the loaded/optimistic state', () => {
+  it('keeps the previous projects when a refetch rejects (only the first load may land empty)', async () => {
+    fixtures.registry = [
+      projectRecord('/w/alpha', { name: 'Alpha Custom' }),
+      projectRecord('/w/beta'),
+    ]
+    const view = renderRail([session('s1')])
+    expect(await screen.findByText('Alpha Custom')).toBeInTheDocument()
+
+    // The next registry fetch fails — the rail must keep rendering exactly
+    // the rows it had (name and tree), not wipe to the empty default.
+    // (rerender nests I18nProvider exactly like renderRail so the rail
+    // subtree reconciles in place instead of remounting and resetting state.)
+    vi.mocked(api.listProjects).mockRejectedValueOnce(new Error('registry down'))
+    view.rerender(
+      <I18nProvider>
+        <MemoryRouter>
+          <SessionsSection
+            sessions={[session('s1'), session('s2', { working_dir: '/w/beta' })]}
+            sessionActivity={{}}
+            currentSessionId={null}
+            switchSession={vi.fn(async () => {})}
+            renameSession={vi.fn(async () => {})}
+            deleteSession={vi.fn(async () => {})}
+          />
+        </MemoryRouter>
+      </I18nProvider>,
+    )
+    await waitFor(() => expect(api.listProjects).toHaveBeenCalledTimes(2))
+
+    // Same two project headers with the same labels as before the failure.
+    expect(screen.getByTestId('project-header-/w/alpha')).toBeInTheDocument()
+    expect(screen.getByTestId('project-header-/w/beta')).toBeInTheDocument()
+    expect(screen.getByText('Alpha Custom')).toBeInTheDocument()
+    expect(screen.getByTestId('desktop-session-row-s2')).toBeInTheDocument()
+  })
+
+  it('still lands the empty default when the FIRST load fails, then recovers on success', async () => {
+    vi.mocked(api.listProjects)
+      .mockRejectedValueOnce(new Error('registry down'))
+      .mockResolvedValueOnce([projectRecord('/w/alpha', { name: 'Late Name' })])
+    const view = renderRail([session('s1')])
+    await waitFor(() => expect(api.listProjects).toHaveBeenCalledTimes(1))
+    // First load failed → no registry name (path-tail fallback), no crash.
+    expect(screen.queryByText('Late Name')).not.toBeInTheDocument()
+
+    // A later successful load populates the registry normally.
+    view.rerender(
+      <I18nProvider>
+        <MemoryRouter>
+          <SessionsSection
+            sessions={[session('s1'), session('s2', { working_dir: '/w/alpha' })]}
+            sessionActivity={{}}
+            currentSessionId={null}
+            switchSession={vi.fn(async () => {})}
+            renameSession={vi.fn(async () => {})}
+            deleteSession={vi.fn(async () => {})}
+          />
+        </MemoryRouter>
+      </I18nProvider>,
+    )
+    expect(await screen.findByText('Late Name')).toBeInTheDocument()
+  })
+})
+
 describe('P-U2 archived projects section', () => {
   it('collapses at the rail bottom and restores via unarchive', async () => {
     const { toast } = await import('sonner')

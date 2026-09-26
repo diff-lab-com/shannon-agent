@@ -433,13 +433,27 @@ export function SessionsSection({ sessions, sessionActivity, goalRunsBySession =
   // command or partial test mocks just leave the registry empty (name falls
   // back to the path tail). Refires with the active list (sessions-updated
   // fires around session mutations) and after the localStorage migration.
+  //
+  // A3 polish: a FAILED refetch keeps the previous registry rows — wiping
+  // projects to [] on a transient rejection would erase the optimistic
+  // rename/appearance/archive updates applied on top of them. Only the
+  // first load (never succeeded) may land the empty default.
+  const projectsLoadedRef = useRef(false)
   useEffect(() => {
     let cancelled = false
     const load = () => {
       try {
         api.listProjects(true)
-          .then(rows => { if (!cancelled) setProjects(Array.isArray(rows) ? rows : []) })
-          .catch(() => { if (!cancelled) setProjects([]) })
+          .then(rows => {
+            if (cancelled) return
+            projectsLoadedRef.current = true
+            setProjects(Array.isArray(rows) ? rows : [])
+          })
+          .catch(() => {
+            // Keep whatever we have — the empty default only sticks when no
+            // successful load ever landed.
+            if (!cancelled && !projectsLoadedRef.current) setProjects([])
+          })
       } catch { /* registry stays empty */ }
     }
     load()
