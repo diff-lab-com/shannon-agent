@@ -43,6 +43,7 @@ import type {
   TerminalInfo,
   WorkingDirInfo,
   CatalogEntry,
+  PluginBundleSummary,
   DataSourceResult,
   MobileTlsStatus,
   ProjectRecord,
@@ -1184,34 +1185,62 @@ export interface PluginInfo {
   enabled: boolean
   path: string
   source_format: 'shannon-toml' | 'claude-json' | 'unknown'
+  /** Thin `imported-<source>` migration record (X5): the UI suppresses
+   *  uninstall/enable/disable on it. */
+  migration_imported: boolean
 }
 
 export async function listPlugins(): Promise<PluginInfo[]> {
   return invoke('list_plugins')
 }
 
-export async function installPlugin(sourcePath: string): Promise<string> {
+/** Result of a plugin install: the registered name plus best-effort
+ *  materialization warnings (X5). */
+export interface PluginInstallResult {
+  name: string
+  warnings: string[]
+}
+
+/** Result of a plugin lifecycle op (uninstall/enable/disable/update):
+ *  per-artifact warnings from (reverse-)materialization. Empty = clean. */
+export interface PluginLifecycleResult {
+  warnings: string[]
+}
+
+export async function installPlugin(sourcePath: string): Promise<PluginInstallResult> {
   return invoke('install_plugin', { sourcePath })
 }
 
-export async function installPluginFromGit(repoUrl: string): Promise<string> {
-  return invoke('install_plugin_from_git', { repoUrl })
+/** `allowUnverified` is the SEC-1 opt-in — pass `true` only after the user
+ *  explicitly confirmed installing a plugin whose manifest declares no
+ *  permissions. */
+export async function installPluginFromGit(
+  repoUrl: string,
+  allowUnverified?: boolean,
+): Promise<PluginInstallResult> {
+  return invoke('install_plugin_from_git', { repoUrl, allowUnverified: allowUnverified ?? false })
 }
 
-export async function uninstallPlugin(name: string): Promise<void> {
-  await invoke('uninstall_plugin', { name })
+export async function uninstallPlugin(name: string): Promise<PluginLifecycleResult> {
+  return invoke('uninstall_plugin', { name })
 }
 
-export async function enablePlugin(name: string): Promise<void> {
-  await invoke('enable_plugin', { name })
+export async function enablePlugin(name: string): Promise<PluginLifecycleResult> {
+  return invoke('enable_plugin', { name })
 }
 
-export async function disablePlugin(name: string): Promise<void> {
-  await invoke('disable_plugin', { name })
+export async function disablePlugin(name: string): Promise<PluginLifecycleResult> {
+  return invoke('disable_plugin', { name })
 }
 
-export async function updatePlugin(name: string): Promise<void> {
-  await invoke('update_plugin', { name })
+export async function updatePlugin(name: string): Promise<PluginLifecycleResult> {
+  return invoke('update_plugin', { name })
+}
+
+/** X5 trust preview: inspect a plugin source (local dir, .dxt/.mcpb/.zip
+ *  archive, or git URL) and return its bundle summary BEFORE install. */
+export async function inspectPluginSource(path: string): Promise<PluginBundleSummary> {
+  return invoke('inspect_plugin_source', { path })
 }
 
 export async function listPluginMarketplace(): Promise<CatalogEntry[]> {

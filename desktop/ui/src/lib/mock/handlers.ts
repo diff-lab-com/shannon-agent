@@ -633,12 +633,24 @@ export const handlers: Record<string, MockHandler> = {
 
   // --- Plugins ---
   async list_plugins() { await delay(); return clone(MOCK_PLUGINS) },
-  async install_plugin() { await delay(800); return 'plugin-installed' },
-  async install_plugin_from_git() { await delay(1200); return 'plugin-installed-git' },
-  async uninstall_plugin() { await delay() },
-  async enable_plugin() { await delay() },
-  async disable_plugin() { await delay() },
-  async update_plugin() { await delay() },
+  async install_plugin() { await delay(800); return { name: 'plugin-installed', warnings: [] } },
+  async install_plugin_from_git() { await delay(1200); return { name: 'plugin-installed-git', warnings: [] } },
+  async uninstall_plugin() { await delay(); return { warnings: [] } },
+  async enable_plugin() { await delay(); return { warnings: [] } },
+  async disable_plugin() { await delay(); return { warnings: [] } },
+  async update_plugin() { await delay(); return { warnings: [] } },
+  // X5 trust preview — a demo bundle for the install dialog checklist.
+  async inspect_plugin_source() {
+    await delay()
+    return {
+      name: 'shannon-starter',
+      source_format: 'claude-json',
+      skills: ['brainstorm', 'tdd'],
+      agents: ['reviewer.md'],
+      commands: ['ship.md', 'triage.md'],
+      mcp_servers: ['filesystem'],
+    }
+  },
   async list_plugin_marketplace() { await delay(); return [] },
 
   // --- Background Tasks ---

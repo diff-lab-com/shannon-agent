@@ -523,6 +523,7 @@ export const MOCK_PLUGINS: PluginInfo[] = [
     enabled: true,
     path: '~/.shannon/plugins/web-clip',
     source_format: 'shannon-toml',
+    migration_imported: false,
   },
   {
     name: 'gmail-triage',
@@ -533,6 +534,7 @@ export const MOCK_PLUGINS: PluginInfo[] = [
     enabled: true,
     path: '~/.shannon/plugins/gmail-triage',
     source_format: 'shannon-toml',
+    migration_imported: false,
   },
   {
     name: 'gcal-brief',
@@ -543,6 +545,19 @@ export const MOCK_PLUGINS: PluginInfo[] = [
     enabled: false,
     path: '~/.shannon/plugins/gcal-brief',
     source_format: 'claude-json',
+    migration_imported: false,
+  },
+  {
+    // X5 thin migration record — UI suppresses uninstall/enable/disable.
+    name: 'imported-claude-code',
+    version: '1.0.0',
+    description: 'Migration import from claude-code — 3 skills, 2 MCP servers, 5 commands.',
+    author: 'migration',
+    plugin_type: 'command',
+    enabled: true,
+    path: '~/.config/shannon/plugins/imported-claude-code',
+    source_format: 'claude-json',
+    migration_imported: true,
   },
 ]
 

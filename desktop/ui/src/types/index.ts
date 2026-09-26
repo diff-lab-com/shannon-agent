@@ -1441,3 +1441,15 @@ export interface ProjectRecord {
   archivedAtMs: number | null
   createdAtMs: number
 }
+
+/** X5 trust preview — wire shape of `inspect_plugin_source`'s
+ *  `PluginBundleSummary`. Everything a plugin bundle will enable, read
+ *  from its manifest + directories BEFORE the user confirms an install. */
+export interface PluginBundleSummary {
+  name: string
+  source_format: 'shannon-toml' | 'claude-json' | 'unknown'
+  skills: string[]
+  agents: string[]
+  commands: string[]
+  mcp_servers: string[]
+}

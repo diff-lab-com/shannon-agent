@@ -28,6 +28,7 @@ import { FallbackBody } from './install-dialog/FallbackBody'
 import { GitHubBody } from './install-dialog/GitHubBody'
 import { MetadataTable } from './install-dialog/MetadataTable'
 import { OAuthBody } from './install-dialog/OAuthBody'
+import { PluginBundleBody } from './install-dialog/PluginBundleBody'
 import { StdioBody } from './install-dialog/StdioBody'
 import { TrustCard } from './install-dialog/TrustCard'
 import { KIND_ROUTE, buildStdioSpec, readMeta } from './install-dialog/types'
@@ -51,10 +52,16 @@ export default function InstallDialog({
     intl.formatMessage({ id }, values)
 
   const [installing, setInstalling] = useState(false)
+  // SEC-1: flipped when the backend refuses a permissions-less remote
+  // manifest — the body then offers the explicit "install unverified" opt-in.
+  const [needsUnverifiedConsent, setNeedsUnverifiedConsent] = useState(false)
 
   // Reset local state each time the dialog opens.
   useEffect(() => {
-    if (open) setInstalling(false)
+    if (open) {
+      setInstalling(false)
+      setNeedsUnverifiedConsent(false)
+    }
   }, [open])
 
   // Compute render-time data only when we have an entry. Modal also
@@ -110,6 +117,45 @@ export default function InstallDialog({
     }
   }
 
+  // X5: plugin-kind git entries install via installPluginFromGit. The
+  // bundle summary is fetched by PluginBundleBody (inspect_plugin_source)
+  // so the user confirms against the real checklist. A refusal for an
+  // unverified (permissions-less) manifest enables the explicit opt-in.
+  const handlePluginInstall = async (allowUnverified: boolean) => {
+    const url = pluginSourceUrl(entry)
+    if (!url) return
+    setInstalling(true)
+    try {
+      const result = await api.installPluginFromGit(url, allowUnverified)
+      toast.success(
+        intl.formatMessage(
+          { id: 'extensions.plugins.installSuccess' },
+          { name: result.name },
+        ),
+      )
+      if (result.warnings.length > 0) {
+        toast.warning(result.warnings.join('\n'))
+      }
+      dispatchInstalled()
+      onClose()
+    } catch (e) {
+      console.error('Plugin install error:', e)
+      const message = safeErrorMessage(e, 'install failed')
+      if (!allowUnverified && /allow_unverified|unverified/i.test(message)) {
+        setNeedsUnverifiedConsent(true)
+        return
+      }
+      toast.error(
+        intl.formatMessage(
+          { id: 'extensions.plugins.installError' },
+          { error: message },
+        ),
+      )
+    } finally {
+      setInstalling(false)
+    }
+  }
+
   const handleStdioInstall = async () => {
     const spec = buildStdioSpec(meta.package?.type, meta.package?.name)
     if (!spec) return
@@ -156,6 +202,15 @@ export default function InstallDialog({
     }
   }
 
+  /** Clone URL for a plugin-kind entry, or null when the entry carries no
+   *  git source. Used by both the inspect preview and the install call. */
+  const pluginSourceUrl = (e: CatalogEntry): string | null => {
+    if (e.source.type === 'git_hub_repo' && e.source.repo) {
+      return `https://github.com/${e.source.repo}.git`
+    }
+    return null
+  }
+
   // ---- Body selection ---------------------------------------------------
 
   const renderBody = () => {
@@ -176,6 +231,21 @@ export default function InstallDialog({
         )
       }
       case 'git_hub_repo': {
+        // X5: plugin bundles take the trust-preview body — inspect the
+        // real source and list what will materialize before confirming.
+        if (entry.kind === 'plugin') {
+          const url = pluginSourceUrl(entry)
+          if (url) {
+            return (
+              <PluginBundleBody
+                url={url}
+                installing={installing}
+                needsUnverifiedConsent={needsUnverifiedConsent}
+                onInstall={handlePluginInstall}
+              />
+            )
+          }
+        }
         const ref_ = entry.source.ref_ || 'main'
         return (
           <GitHubBody
