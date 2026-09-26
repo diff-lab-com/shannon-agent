@@ -287,6 +287,35 @@ describe('P-U2 archived projects section', () => {
   })
 })
 
+describe('P-U4 grouping-lens persistence', () => {
+  it('restores the smart lens from localStorage across an unmount/remount', () => {
+    const first = renderRail([session('s1')], 'project')
+    expect(screen.getByRole('button', { name: 'Smart' })).toHaveAttribute('aria-pressed', 'false')
+    // Switch to the smart lens — persistGrouping writes the raw value.
+    fireEvent.click(screen.getByRole('button', { name: 'Smart' }))
+    expect(screen.getByRole('button', { name: 'Smart' })).toHaveAttribute('aria-pressed', 'true')
+    first.unmount()
+
+    // Remount WITHOUT re-seeding localStorage: readGrouping must restore
+    // 'smart' from the persisted key on its own.
+    render(
+      <I18nProvider>
+        <MemoryRouter>
+          <SessionsSection
+            sessions={[session('s1')]}
+            sessionActivity={{}}
+            currentSessionId={null}
+            switchSession={vi.fn(async () => {})}
+            renameSession={vi.fn(async () => {})}
+            deleteSession={vi.fn(async () => {})}
+          />
+        </MemoryRouter>
+      </I18nProvider>,
+    )
+    expect(screen.getByRole('button', { name: 'Smart' })).toHaveAttribute('aria-pressed', 'true')
+  })
+})
+
 describe('localStorage migration (P-U2 retirement)', () => {
   it('migrates legacy names through rename_project and removes the key', async () => {
     fixtures.registry = [projectRecord('/w/alpha')]
