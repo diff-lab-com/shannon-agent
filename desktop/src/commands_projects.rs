@@ -124,7 +124,7 @@ pub async fn rename_project(
 ) -> Result<ProjectRecord, String> {
     state
         .project_registry()
-        .rename(&path, name)
+        .rename(normalize_path(&path), name)
         .map_err(|e| e.to_string())
 }
 
@@ -139,7 +139,7 @@ pub async fn set_project_appearance(
 ) -> Result<ProjectRecord, String> {
     state
         .project_registry()
-        .set_appearance(&path, icon, color)
+        .set_appearance(normalize_path(&path), icon, color)
         .map_err(|e| e.to_string())
 }
 
@@ -152,7 +152,7 @@ pub async fn archive_project(
 ) -> Result<ProjectRecord, String> {
     state
         .project_registry()
-        .set_archived(&path, true)
+        .set_archived(normalize_path(&path), true)
         .map_err(|e| e.to_string())
 }
 
@@ -165,7 +165,7 @@ pub async fn unarchive_project(
 ) -> Result<ProjectRecord, String> {
     state
         .project_registry()
-        .set_archived(&path, false)
+        .set_archived(normalize_path(&path), false)
         .map_err(|e| e.to_string())
 }
 
@@ -255,7 +255,10 @@ fn push_candidate(
 
 /// Registry-key normalization: trim whitespace and trailing separators so
 /// `/x` and `/x/` land on one project row (the UI groups sessions by the
-/// de-slashed working-dir key, so the registry must agree).
+/// de-slashed working-dir key, so the registry must agree). Every command
+/// entry point runs its `path` argument through this before touching the
+/// store — the core registry stays mechanical (raw keys, auto-create) and
+/// would otherwise grow a phantom duplicate row for a separator variant.
 fn normalize_path(path: &str) -> &str {
     path.trim().trim_end_matches(['/', '\\'])
 }
@@ -483,6 +486,69 @@ mod tests {
     // adoption step is exercised through the runtime-generic
     // `adopt_working_dir` helper the command calls (same extraction
     // pattern as the budget-enforcement tests).
+    #[tokio::test]
+    async fn curation_commands_target_the_existing_row_despite_trailing_separator() {
+        let tmp = tempfile::tempdir().unwrap();
+        let app = tauri::test::mock_app();
+        app.manage(project_state(tmp.path()));
+        let state = app.state::<AppState>();
+
+        register_project(app.state::<AppState>(), "/work/proj".into())
+            .await
+            .unwrap();
+        assert_eq!(
+            state.project_registry().list(true).unwrap().len(),
+            1,
+            "one row before the separator-variant mutations"
+        );
+
+        // Every curation command with a trailing-separator variant of the
+        // registered path must mutate the EXISTING row — never auto-create
+        // a phantom second row (core auto-creates unknown raw keys).
+        let renamed = rename_project(
+            app.state::<AppState>(),
+            "/work/proj/".into(),
+            Some("Custom".into()),
+        )
+        .await
+        .unwrap();
+        assert_eq!(renamed.path, "/work/proj", "existing row mutated");
+        assert_eq!(renamed.name.as_deref(), Some("Custom"));
+
+        let styled = set_project_appearance(
+            app.state::<AppState>(),
+            "/work/proj/".into(),
+            Some("folder".into()),
+            Some("teal".into()),
+        )
+        .await
+        .unwrap();
+        assert_eq!(styled.path, "/work/proj");
+        assert_eq!(styled.color.as_deref(), Some("teal"));
+
+        let archived = archive_project(app.state::<AppState>(), "/work/proj///".into())
+            .await
+            .unwrap();
+        assert_eq!(archived.path, "/work/proj");
+        assert!(archived.archived_at_ms.is_some());
+        assert_eq!(
+            archived.name.as_deref(),
+            Some("Custom"),
+            "the curated row is the one archived"
+        );
+
+        let unarchived = unarchive_project(app.state::<AppState>(), "/work/proj/".into())
+            .await
+            .unwrap();
+        assert_eq!(unarchived.path, "/work/proj");
+        assert_eq!(unarchived.archived_at_ms, None);
+
+        let rows = state.project_registry().list(true).unwrap();
+        assert_eq!(rows.len(), 1, "no phantom duplicate row may appear");
+        assert_eq!(paths(&rows), ["/work/proj"]);
+        assert_eq!(rows[0].name.as_deref(), Some("Custom"));
+    }
+
     #[tokio::test]
     async fn adopt_working_dir_learns_the_new_dir_idempotently() {
         let tmp = tempfile::tempdir().unwrap();
