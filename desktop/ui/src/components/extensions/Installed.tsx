@@ -2,10 +2,13 @@ import { useEffect, useState } from "react";
 import LoadingState from "@/components/ui/loading-state";
 import { useNavigate, useOutletContext } from "react-router-dom";
 import { useIntl } from "react-intl";
-import { listInstalledAddons } from "@/lib/tauri-api";
-import type { InstalledAddonSummary, AddonKind } from "@/types";
+import { getExtensionStats, listInstalledAddons } from "@/lib/tauri-api";
+import type { InstalledAddonSummary, AddonKind, ExtensionStats, ExtensionToolStatRow } from "@/types";
 import EmptyState from "@/components/ui/empty-state";
 import { cn } from "@/lib/utils";
+
+/** Stats look-back window (days) — one sane default, fetched once per mount. */
+const STATS_WINDOW_DAYS = 30;
 
 /**
  * Installed tab — P1's only fully-wired view.
@@ -14,6 +17,10 @@ import { cn } from "@/lib/utils";
  * - MCP servers from `~/.shannon/settings.json` and `.mcp.json`
  * - Skills from `~/.shannon/skills/` and `.claude/commands/`
  * - Agents from `~/.shannon/agents/` and `.claude/agents/`
+ *
+ * Each matching row also carries an X7 usage subtext (calls + token cost
+ * within {@link STATS_WINDOW_DAYS}, from `get_extension_stats`). Rows with
+ * no stats render exactly as before.
  *
  * No write path in P1 — uninstall/remove still happens on the Skills tab
  * (for skills) and Settings page (for MCP servers).
@@ -26,6 +33,7 @@ export default function Installed() {
   const [addons, setAddons] = useState<InstalledAddonSummary[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [stats, setStats] = useState<ExtensionStats | null>(null);
 
   useEffect(() => {
     let cancelled = false;
@@ -42,6 +50,22 @@ export default function Installed() {
       })
       .finally(() => {
         if (!cancelled) setLoading(false);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  // X7 stats are advisory: fetched once per mount, and a failure simply
+  // leaves the rows without their usage subtext.
+  useEffect(() => {
+    let cancelled = false;
+    getExtensionStats(STATS_WINDOW_DAYS)
+      .then((s) => {
+        if (!cancelled) setStats(s);
+      })
+      .catch(() => {
+        if (!cancelled) setStats(null);
       });
     return () => {
       cancelled = true;
@@ -171,7 +195,13 @@ export default function Installed() {
               </h2>
               <div className="border border-outline-variant/30 rounded-2xl overflow-hidden bg-surface-container-lowest/50">
                 {rows.map((row, i) => (
-                  <InstalledRow key={row.id} row={row} isLast={i === rows.length - 1} />
+                  <InstalledRow
+                    key={row.id}
+                    row={row}
+                    isLast={i === rows.length - 1}
+                    stat={statFor(stats, row)}
+                    days={STATS_WINDOW_DAYS}
+                  />
                 ))}
               </div>
             </section>
@@ -198,7 +228,36 @@ const KIND_TO_MANAGE_TAB: Record<AddonKind, string> = {
   plugin: 'extensions.plugins',
 };
 
-function InstalledRow({ row, isLast }: { row: InstalledAddonSummary; isLast: boolean }) {
+/**
+ * X7: the usage stats matching one Installed row, if any. Skill rows match
+ * by skill id (the `skill_` engine prefix is stripped server-side), MCP
+ * rows by server name; every other kind has no engine tool name to match.
+ */
+function statFor(
+  stats: ExtensionStats | null,
+  row: InstalledAddonSummary
+): ExtensionToolStatRow | undefined {
+  if (!stats) return undefined;
+  if (row.kind === 'skill') return stats.skills.find((s) => s.name === row.name);
+  if (row.kind === 'mcp') {
+    const server = stats.mcpServers.find((s) => s.server === row.name);
+    return server ? { name: server.server, calls: server.calls, totalTokens: server.totalTokens } : undefined;
+  }
+  return undefined;
+}
+
+function InstalledRow({
+  row,
+  isLast,
+  stat,
+  days,
+}: {
+  row: InstalledAddonSummary
+  isLast: boolean
+  /** Row-matched usage stats; `undefined` renders no subtext. */
+  stat?: ExtensionToolStatRow
+  days: number
+}) {
   const intl = useIntl();
   const t = (id: string) => intl.formatMessage({ id });
   const navigate = useNavigate();
@@ -223,6 +282,13 @@ function InstalledRow({ row, isLast }: { row: InstalledAddonSummary; isLast: boo
             </span>
           )}
         </div>
+        {stat && stat.calls > 0 && (
+          <p className="text-label-xs text-on-surface-variant mt-[2px]" data-testid="installed-row-stats">
+            {intl.formatMessage({ id: 'extensions.installed.statsCalls' }, { calls: stat.calls, days })}
+            {stat.totalTokens > 0 &&
+              ' · ' + intl.formatMessage({ id: 'extensions.installed.statsTokens' }, { tokens: stat.totalTokens })}
+          </p>
+        )}
         {row.install_path && (
           <p className="text-label-xs text-on-surface-variant font-mono truncate mt-[2px]">
             {row.install_path}

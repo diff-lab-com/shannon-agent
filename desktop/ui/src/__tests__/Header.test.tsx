@@ -63,7 +63,9 @@ describe('Header component', () => {
       { id: 'gpt-4o', name: 'GPT-4o', provider: 'openai', context_window: 128000 },
     ]
     mockCtx.permissionRequest = null
-    mockCtx.respondPermission = vi.fn()
+    // Header fires respondPermission without awaiting (B0 P0-1 made the
+    // real action re-throw on failure), so the mock must return a promise.
+    mockCtx.respondPermission = vi.fn().mockResolvedValue(undefined)
     mockCtx.refreshConfig = vi.fn()
     mockCtx.refreshStatus = vi.fn()
     mockCtx.config = { active_permission_profile: 'balanced', approval_mode: 'suggest', sandbox: { mode: 'off' } }

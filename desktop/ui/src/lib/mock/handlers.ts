@@ -75,6 +75,34 @@ let nextTerminalSeq = 1
 // for ~/.shannon/desktop/workspace-layouts.json).
 const demoWorkspaceLayouts = new Map<string, WorkspaceLayout>()
 
+// P-E3/P-U2: in-memory stand-in for the engine project registry
+// (~/.shannon/projects.db). Same wire shape as the Rust ProjectRecord
+// (camelCase). Mutations update rows in place; archived rows leave the
+// active list but stay recoverable (unarchive clears the stamp).
+interface DemoProject {
+  path: string
+  name: string | null
+  icon: string | null
+  color: string | null
+  archivedAtMs: number | null
+  createdAtMs: number
+}
+const demoProjects: DemoProject[] = [
+  { path: '/home/demo/workspace/shannon', name: 'Shannon', icon: null, color: null, archivedAtMs: null, createdAtMs: Date.now() - 30 * 24 * 3600_000 },
+  { path: '/home/demo/workspace/website', name: null, icon: null, color: null, archivedAtMs: null, createdAtMs: Date.now() - 10 * 24 * 3600_000 },
+]
+function findDemoProject(path: string): DemoProject | undefined {
+  return demoProjects.find(p => p.path === path)
+}
+function ensureDemoProject(path: string): DemoProject {
+  let row = findDemoProject(path)
+  if (!row) {
+    row = { path, name: null, icon: null, color: null, archivedAtMs: null, createdAtMs: Date.now() }
+    demoProjects.push(row)
+  }
+  return row
+}
+
 // P2-1: mobile dispatch demo state — a minted pair token + the paired-device
 // registry the gateway would own (~/.shannon/mobile-devices.json).
 let demoPairToken: { token: string; expiresAt: number; lanEndpoint: string; qrDataUrl: string } | null = null
@@ -196,6 +224,9 @@ const goalRuns = [
     lastError: null,
     startedAtMs: Date.now() - 26 * 60_000,
     updatedAtMs: Date.now() - 2 * 60_000,
+    // P-E2: inherited from the originating session. P-U3: aligned with the
+    // demoProjects registry row so /tasks?project= resolves the run.
+    workingDir: '/home/demo/workspace/shannon',
   },
   {
     sessionId: '0196aaaa-0000-7000-8000-000000000002',
@@ -210,6 +241,7 @@ const goalRuns = [
     lastError: null,
     startedAtMs: Date.now() - 27 * 60 * 60_000,
     updatedAtMs: Date.now() - 26.5 * 60 * 60_000,
+    workingDir: null,
   },
 ] as Array<Record<string, unknown> & { sessionId: string; status: string }>
 
@@ -601,12 +633,24 @@ export const handlers: Record<string, MockHandler> = {
 
   // --- Plugins ---
   async list_plugins() { await delay(); return clone(MOCK_PLUGINS) },
-  async install_plugin() { await delay(800); return 'plugin-installed' },
-  async install_plugin_from_git() { await delay(1200); return 'plugin-installed-git' },
-  async uninstall_plugin() { await delay() },
-  async enable_plugin() { await delay() },
-  async disable_plugin() { await delay() },
-  async update_plugin() { await delay() },
+  async install_plugin() { await delay(800); return { name: 'plugin-installed', warnings: [] } },
+  async install_plugin_from_git() { await delay(1200); return { name: 'plugin-installed-git', warnings: [] } },
+  async uninstall_plugin() { await delay(); return { warnings: [] } },
+  async enable_plugin() { await delay(); return { warnings: [] } },
+  async disable_plugin() { await delay(); return { warnings: [] } },
+  async update_plugin() { await delay(); return { warnings: [] } },
+  // X5 trust preview — a demo bundle for the install dialog checklist.
+  async inspect_plugin_source() {
+    await delay()
+    return {
+      name: 'shannon-starter',
+      source_format: 'claude-json',
+      skills: ['brainstorm', 'tdd'],
+      agents: ['reviewer.md'],
+      commands: ['ship.md', 'triage.md'],
+      mcp_servers: ['filesystem'],
+    }
+  },
   async list_plugin_marketplace() { await delay(); return [] },
 
   // --- Background Tasks ---
@@ -654,6 +698,42 @@ export const handlers: Record<string, MockHandler> = {
     const t = findTask(args.id)
     if (!t) throw new Error(`Task ${args.id} not found`)
     return clone(t)
+  },
+
+  // --- Projects (P-E3 registry, P-U2 rail) ---
+  async list_projects(args: { includeArchived?: boolean }) {
+    await delay()
+    const rows = demoProjects.filter(p => args.includeArchived || !p.archivedAtMs)
+    return clone(rows)
+  },
+  async register_project(args: { path: string }) {
+    await delay()
+    return clone(ensureDemoProject(args.path))
+  },
+  async rename_project(args: { path: string; name: string | null }) {
+    await delay()
+    const row = ensureDemoProject(args.path)
+    row.name = args.name ?? null
+    return clone(row)
+  },
+  async set_project_appearance(args: { path: string; icon: string | null; color: string | null }) {
+    await delay()
+    const row = ensureDemoProject(args.path)
+    row.icon = args.icon ?? null
+    row.color = args.color ?? null
+    return clone(row)
+  },
+  async archive_project(args: { path: string }) {
+    await delay()
+    const row = ensureDemoProject(args.path)
+    row.archivedAtMs = Date.now()
+    return clone(row)
+  },
+  async unarchive_project(args: { path: string }) {
+    await delay()
+    const row = ensureDemoProject(args.path)
+    row.archivedAtMs = null
+    return clone(row)
   },
 
   // --- Scheduled ---
@@ -827,6 +907,7 @@ export const handlers: Record<string, MockHandler> = {
       lastError: null,
       startedAtMs: Date.now(),
       updatedAtMs: Date.now(),
+      workingDir: null,
     })
     return { sessionId }
   },

@@ -554,7 +554,13 @@ export function AppProvider({ children }: { children: ReactNode }) {
       setPermissionRequest(null)
       // Batch B2: resolve the rail's amber dot for the prompt's session.
       if (permissionRequest?.session_id) noteSessionApproval(permissionRequest.session_id, false)
-    } catch (e) { setError(String(e)) }
+    } catch (e) {
+      setError(String(e))
+      // B0 P0-1: re-throw so awaiting callers (OPC task page) can toast the
+      // failure instead of reporting success. Fire-and-forget callers
+      // (Header) attach a no-op catch of their own.
+      throw e
+    }
   }, [permissionRequest, noteSessionApproval])
 
   const refreshCheckpoints = useCallback(async () => {

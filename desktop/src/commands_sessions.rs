@@ -1138,6 +1138,13 @@ pub async fn set_session_working_dir(
         }
     }
 
+    // P-E3 adopt-not-migrate: the session just gained a working dir, so the
+    // project registry learns it (idempotent — an existing row, archived or
+    // not, is never overwritten). Best-effort.
+    if let Some(dir) = &wd {
+        crate::commands_projects::adopt_working_dir(&state, dir);
+    }
+
     // If this is the current session, switch process cwd + desktop config
     let current = state.registry.active_key();
     let is_current = current == Some(SessionKey(session_uuid));

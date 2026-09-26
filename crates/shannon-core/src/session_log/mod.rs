@@ -36,7 +36,7 @@ pub use projections::{
 pub use reader::{SessionEventIter, SessionLogReader};
 pub use redaction::{REDACTED, RedactionPolicy};
 pub use session_index::{SessionIndex, SessionIndexAccumulator};
-pub use session_query::{SessionQuery, SessionRef, SessionToolCall};
+pub use session_query::{SessionQuery, SessionRef, SessionToolCall, ToolCallStat};
 pub use session_store::{
     DEFAULT_SEARCH_LIMIT, SessionCuration, SessionSearchHit, SessionSearchOutcome, SessionSidecar,
     SessionStore, SessionStoreError, StoredGoal, StoredLoop, StoredRalph, StoredSession,

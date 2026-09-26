@@ -23,6 +23,16 @@ import { cn } from "@/lib/utils";
 
 const CATALOG_PAGE_SIZE = 24;
 
+// B0 P0-6: catalog names come from upstream HTTP — enforce the same shape
+// the backend sanitizes to before an install can be attempted.
+const SAFE_NAME_RE = /^[a-z0-9][a-z0-9._-]*$/;
+
+/** P1-22: a catalog description with newlines could inject extra YAML
+ *  frontmatter fields — collapse it to a single line before interpolating. */
+function singleLine(text: string): string {
+  return text.replace(/\s+/g, ' ').trim();
+}
+
 /**
  * P3 Skills tab — federated catalog + install/remove.
  *
@@ -113,12 +123,17 @@ export default function Skills() {
   }, []);
 
   async function handleInstall(entry: SkillCatalogEntry) {
+    if (!SAFE_NAME_RE.test(entry.name)) {
+      setFeedback({ id: entry.id, msg: t('extensions.skills.invalidName', { name: entry.name }), ok: false });
+      return;
+    }
     setBusyId(entry.id);
     setFeedback(null);
     try {
       if (entry.source.type === 'native') {
         // Built-in skill — write a stub SKILL.md using its description.
-        const body = `---\nname: ${entry.name}\ndescription: ${entry.description}\n---\n# ${entry.name}\n\n${entry.description}\n`;
+        const description = singleLine(entry.description);
+        const body = `---\nname: ${entry.name}\ndescription: ${description}\n---\n# ${entry.name}\n\n${entry.description}\n`;
         await installNativeSkill(entry.name, body);
       } else if (entry.source.type === 'git_hub_repo') {
         const repo = entry.source.repo;

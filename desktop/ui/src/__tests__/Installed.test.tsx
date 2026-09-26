@@ -3,10 +3,15 @@ import { render, screen, waitFor, fireEvent } from '@testing-library/react'
 import { MemoryRouter, Routes, Route, Outlet } from 'react-router-dom'
 import * as api from '@/lib/tauri-api'
 import Installed from '@/components/extensions/Installed'
+import type { ExtensionStats } from '@/types'
 
 vi.mock('@/lib/tauri-api', () => ({
   listInstalledAddons: vi.fn(),
+  getExtensionStats: vi.fn(),
 }))
+
+/** Stats payload with no data anywhere — the "no subtext" default. */
+const emptyStats: ExtensionStats = { days: 30, skills: [], mcpServers: [], other: [] }
 
 /// Wraps Installed in the same Outlet context shape the Extensions page
 /// provides (`<Outlet context={{ search }} />`). Without this, `useOutletContext`
@@ -41,6 +46,9 @@ function renderInstalled() {
 describe('Installed extensions tab', () => {
   beforeEach(() => {
     vi.clearAllMocks()
+    // X7 stats default to "no data" so the row layout stays untouched
+    // unless a test opts in.
+    vi.mocked(api.getExtensionStats).mockResolvedValue(emptyStats)
   })
 
   it('shows loading state initially', async () => {
@@ -170,6 +178,74 @@ describe('Installed extensions tab', () => {
         expect(screen.getByText('notion')).toBeInTheDocument()
       })
       expect(screen.queryByTestId('installed-jump-nav')).not.toBeInTheDocument()
+    })
+  })
+
+  // X7 — per-extension usage subtext (「30 天调用 N 次 · ~X tokens」).
+  describe('X7 usage stats subtext', () => {
+    const statsWithData: ExtensionStats = {
+      days: 30,
+      skills: [{ name: 'deploy', calls: 12, totalTokens: 3500 }],
+      mcpServers: [
+        { server: 'notion', calls: 7, totalTokens: 1200, tools: [{ name: 'search', calls: 7, totalTokens: 1200 }] },
+        { server: 'disabled', calls: 0, totalTokens: 0, tools: [] },
+      ],
+      other: [],
+    }
+
+    it('fetches stats once per mount with the 30-day default window', async () => {
+      vi.mocked(api.listInstalledAddons).mockResolvedValueOnce(sampleRows)
+      vi.mocked(api.getExtensionStats).mockResolvedValueOnce(statsWithData)
+      renderInstalled()
+      await waitFor(() => {
+        expect(api.getExtensionStats).toHaveBeenCalledTimes(1)
+      })
+      expect(api.getExtensionStats).toHaveBeenCalledWith(30)
+    })
+
+    it('renders the subtext for matching skill and mcp rows', async () => {
+      vi.mocked(api.listInstalledAddons).mockResolvedValueOnce(sampleRows)
+      vi.mocked(api.getExtensionStats).mockResolvedValueOnce(statsWithData)
+      renderInstalled()
+      await waitFor(() => {
+        expect(screen.getAllByTestId('installed-row-stats')).toHaveLength(2)
+      })
+      // Skill row matches by name; MCP row matches by server name.
+      expect(screen.getByText('12 calls in 30 days · ~3500 tokens')).toBeInTheDocument()
+      expect(screen.getByText('7 calls in 30 days · ~1200 tokens')).toBeInTheDocument()
+    })
+
+    it('renders the tokens segment only when tokens are present', async () => {
+      vi.mocked(api.listInstalledAddons).mockResolvedValueOnce(sampleRows)
+      vi.mocked(api.getExtensionStats).mockResolvedValueOnce({
+        ...statsWithData,
+        skills: [{ name: 'deploy', calls: 3, totalTokens: 0 }],
+      })
+      renderInstalled()
+      await waitFor(() => {
+        expect(screen.getByText('3 calls in 30 days')).toBeInTheDocument()
+      })
+      expect(screen.getByText('3 calls in 30 days').textContent).not.toContain('tokens')
+    })
+
+    it('renders no subtext when stats carry no data', async () => {
+      vi.mocked(api.listInstalledAddons).mockResolvedValueOnce(sampleRows)
+      vi.mocked(api.getExtensionStats).mockResolvedValueOnce(emptyStats)
+      renderInstalled()
+      await waitFor(() => {
+        expect(screen.getByText('deploy')).toBeInTheDocument()
+      })
+      expect(screen.queryByTestId('installed-row-stats')).not.toBeInTheDocument()
+    })
+
+    it('renders no subtext when the stats fetch fails', async () => {
+      vi.mocked(api.listInstalledAddons).mockResolvedValueOnce(sampleRows)
+      vi.mocked(api.getExtensionStats).mockRejectedValueOnce(new Error('stats down'))
+      renderInstalled()
+      await waitFor(() => {
+        expect(screen.getByText('deploy')).toBeInTheDocument()
+      })
+      expect(screen.queryByTestId('installed-row-stats')).not.toBeInTheDocument()
     })
   })
 })

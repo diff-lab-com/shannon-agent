@@ -173,6 +173,11 @@ pub struct AppState {
     /// first use so a failing on-disk open degrades to an in-memory store
     /// (with a warning) instead of poisoning every inbox command.
     pub(crate) inbox_store: std::sync::OnceLock<Arc<shannon_core::inbox_store::InboxStore>>,
+    /// Project registry (`~/.shannon/projects.db`, P-E3). Lazily opened on
+    /// first use so a failing on-disk open degrades to an in-memory store
+    /// (with a warning) instead of poisoning every project command.
+    pub(crate) project_registry:
+        std::sync::OnceLock<Arc<shannon_core::project_registry::ProjectRegistry>>,
     /// Usage ledger (`~/.shannon/usage.jsonl`) — append-only token/cache/cost.
     pub(crate) usage_store: Arc<crate::commands_usage::UsageStore>,
     /// Shared memory store (`~/.shannon/memories/`, P2-4b). One instance per
@@ -510,6 +515,7 @@ impl AppState {
             preview,
             terminals: Arc::new(crate::terminal_commands::TerminalManager::new()),
             inbox_store: std::sync::OnceLock::new(),
+            project_registry: std::sync::OnceLock::new(),
             usage_store: Arc::new(crate::commands_usage::UsageStore::new()),
             memory_store: crate::commands_memory::open_shared_store(),
             routine_overrides: Arc::new(crate::scheduled_commands::RoutineOverrideStore::new()),

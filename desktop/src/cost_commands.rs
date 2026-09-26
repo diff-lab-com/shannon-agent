@@ -359,6 +359,172 @@ pub async fn get_usage_by_session(
     Ok(aggregate_by_session(&records, &titles))
 }
 
+// ── X7 — extension stats (per skill/MCP-tool calls + token cost) ─────────
+
+/// Engine tool-name prefix under which skills ride the ToolRegistry
+/// (`skill_<id>`; shannon-engine `context_breakdown::SKILL_TOOL_PREFIX`).
+const SKILL_TOOL_PREFIX: &str = "skill_";
+
+/// Engine tool-name prefix (and delimiters) of pooled MCP tools
+/// (`mcp__<server>__<tool>`; shannon-mcp `process_pool::adapter`).
+const MCP_TOOL_PREFIX: &str = "mcp__";
+
+/// One tool's invocation stats (tool name, call count, token sum).
+#[derive(Debug, Clone, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ExtensionToolStatRow {
+    pub name: String,
+    pub calls: u64,
+    pub total_tokens: u64,
+}
+
+/// Per-server MCP rollup: server totals plus the per-tool detail under it.
+#[derive(Debug, Clone, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ExtensionMcpServerStats {
+    pub server: String,
+    pub calls: u64,
+    pub total_tokens: u64,
+    /// Remote tool names (the `mcp__<server>__` prefix stripped), most
+    /// called first.
+    pub tools: Vec<ExtensionToolStatRow>,
+}
+
+/// X7 stats for the Extensions page's Installed rows: skills, MCP servers
+/// (with per-tool detail) and everything else, bucketed by tool name.
+#[derive(Debug, Clone, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ExtensionStatsDto {
+    pub days: u32,
+    /// Skills bucket — `name` is the skill id (`skill_` prefix stripped, so
+    /// the UI matches Installed rows by name).
+    pub skills: Vec<ExtensionToolStatRow>,
+    pub mcp_servers: Vec<ExtensionMcpServerStats>,
+    /// Everything that is neither `skill_*` nor `mcp__*` (built-ins like
+    /// `Bash`) — `name` is the raw tool name.
+    pub other: Vec<ExtensionToolStatRow>,
+}
+
+/// The extension bucket one raw engine tool name resolves to.
+enum Bucket {
+    /// `skill_<id>` — carries the id with the prefix stripped.
+    Skill(String),
+    /// `mcp__<server>__<tool>` — carries both halves unprefixed.
+    Mcp { server: String, tool: String },
+}
+
+/// Split one raw engine tool name into its extension bucket. `None` for
+/// anything that is neither `skill_<id>` nor `mcp__<server>__<tool>` (the
+/// caller keeps those in `other`, raw name); a bare `skill_` or an
+/// `mcp__` name without both delimiters stays in `other` too rather than
+/// inventing a bucket entry it cannot attribute.
+fn bucket_of(raw: &str) -> Option<Bucket> {
+    if let Some(rest) = raw.strip_prefix(SKILL_TOOL_PREFIX) {
+        if rest.is_empty() {
+            return None;
+        }
+        return Some(Bucket::Skill(rest.to_string()));
+    }
+    if let Some(rest) = raw.strip_prefix(MCP_TOOL_PREFIX) {
+        if let Some((server, tool)) = rest.split_once("__") {
+            if !server.is_empty() && !tool.is_empty() {
+                return Some(Bucket::Mcp {
+                    server: server.to_string(),
+                    tool: tool.to_string(),
+                });
+            }
+        }
+    }
+    None
+}
+
+/// Pure bucketing of the core adapter's per-tool stats (unit-tested).
+///
+/// Ordering is deterministic everywhere: skills/other most-called first
+/// (ties by name), MCP servers most-called first (ties by server name) with
+/// their tools sorted the same way.
+fn bucket_extension_stats(
+    days: u32,
+    stats: &[shannon_core::session_log::ToolCallStat],
+) -> ExtensionStatsDto {
+    let mut skills: Vec<ExtensionToolStatRow> = Vec::new();
+    let mut mcp: std::collections::HashMap<String, ExtensionMcpServerStats> =
+        std::collections::HashMap::new();
+    let mut other: Vec<ExtensionToolStatRow> = Vec::new();
+
+    for stat in stats {
+        match bucket_of(&stat.name) {
+            Some(Bucket::Skill(id)) => skills.push(ExtensionToolStatRow {
+                name: id,
+                calls: stat.calls,
+                total_tokens: stat.total_tokens,
+            }),
+            Some(Bucket::Mcp { server, tool }) => {
+                let entry = mcp
+                    .entry(server)
+                    .or_insert_with(|| ExtensionMcpServerStats {
+                        server: String::new(),
+                        calls: 0,
+                        total_tokens: 0,
+                        tools: Vec::new(),
+                    });
+                entry.calls += stat.calls;
+                entry.total_tokens += stat.total_tokens;
+                entry.tools.push(ExtensionToolStatRow {
+                    name: tool,
+                    calls: stat.calls,
+                    total_tokens: stat.total_tokens,
+                });
+            }
+            None => other.push(ExtensionToolStatRow {
+                name: stat.name.clone(),
+                calls: stat.calls,
+                total_tokens: stat.total_tokens,
+            }),
+        }
+    }
+
+    let by_calls_desc = |a: &ExtensionToolStatRow, b: &ExtensionToolStatRow| {
+        b.calls.cmp(&a.calls).then_with(|| a.name.cmp(&b.name))
+    };
+    skills.sort_by(by_calls_desc);
+    other.sort_by(by_calls_desc);
+
+    let mut servers: Vec<ExtensionMcpServerStats> = mcp
+        .into_iter()
+        .map(|(server, mut entry)| {
+            entry.server = server;
+            entry.tools.sort_by(by_calls_desc);
+            entry
+        })
+        .collect();
+    servers.sort_by(|a, b| b.calls.cmp(&a.calls).then_with(|| a.server.cmp(&b.server)));
+
+    ExtensionStatsDto {
+        days,
+        skills,
+        mcp_servers: servers,
+        other,
+    }
+}
+
+/// Per-extension invocation stats over the last `days` days (clamped to
+/// `[1, 365]`), derived from the session logs — no write-path involvement.
+#[tauri::command]
+pub async fn get_extension_stats(
+    state: tauri::State<'_, AppState>,
+    days: u32,
+) -> Result<ExtensionStatsDto, String> {
+    let days = days.clamp(1, 365);
+    // Same sessions container the L0 store reads (the app's sessions dir).
+    let query =
+        shannon_core::session_log::SessionQuery::new(state.l0_store().container().to_path_buf());
+    let stats = query
+        .tool_call_stats(u64::from(days))
+        .map_err(|e| e.to_string())?;
+    Ok(bucket_extension_stats(days, &stats))
+}
+
 #[cfg(test)]
 #[allow(clippy::unwrap_used)]
 mod tests {
@@ -615,5 +781,172 @@ mod tests {
         ] {
             assert!(json.get(key).is_some(), "missing {key} in {json}");
         }
+    }
+
+    // ── X7 — extension stats bucketing ───────────────────────────────────
+
+    fn stat(name: &str, calls: u64, total_tokens: u64) -> shannon_core::session_log::ToolCallStat {
+        shannon_core::session_log::ToolCallStat {
+            name: name.into(),
+            calls,
+            total_tokens,
+        }
+    }
+
+    #[test]
+    fn extension_stats_bucket_skill_mcp_and_other() {
+        let dto = bucket_extension_stats(
+            30,
+            &[
+                stat("Bash", 40, 0),
+                stat("skill_deploy", 12, 3_500),
+                stat("skill_commit", 5, 900),
+                stat("mcp__notion__search", 7, 1_200),
+                stat("mcp__notion__write", 2, 300),
+                stat("mcp__github__pr", 9, 2_000),
+            ],
+        );
+        assert_eq!(dto.days, 30);
+
+        // Skills carry the id with the prefix stripped, most-called first.
+        assert_eq!(
+            dto.skills,
+            vec![
+                ExtensionToolStatRow {
+                    name: "deploy".into(),
+                    calls: 12,
+                    total_tokens: 3_500
+                },
+                ExtensionToolStatRow {
+                    name: "commit".into(),
+                    calls: 5,
+                    total_tokens: 900
+                },
+            ]
+        );
+
+        // MCP: per-server totals plus per-tool detail (remote tool names).
+        assert_eq!(dto.mcp_servers.len(), 2);
+        assert_eq!(dto.mcp_servers[0].server, "github");
+        assert_eq!(dto.mcp_servers[0].calls, 9);
+        assert_eq!(dto.mcp_servers[0].total_tokens, 2_000);
+        assert_eq!(
+            dto.mcp_servers[0].tools,
+            vec![ExtensionToolStatRow {
+                name: "pr".into(),
+                calls: 9,
+                total_tokens: 2_000
+            }]
+        );
+        assert_eq!(dto.mcp_servers[1].server, "notion");
+        assert_eq!(
+            dto.mcp_servers[1].calls,
+            7 + 2,
+            "server total sums its tools"
+        );
+        assert_eq!(dto.mcp_servers[1].total_tokens, 1_500);
+        assert_eq!(
+            dto.mcp_servers[1].tools,
+            vec![
+                ExtensionToolStatRow {
+                    name: "search".into(),
+                    calls: 7,
+                    total_tokens: 1_200
+                },
+                ExtensionToolStatRow {
+                    name: "write".into(),
+                    calls: 2,
+                    total_tokens: 300
+                },
+            ]
+        );
+
+        // Everything else keeps the raw tool name.
+        assert_eq!(
+            dto.other,
+            vec![ExtensionToolStatRow {
+                name: "Bash".into(),
+                calls: 40,
+                total_tokens: 0
+            }]
+        );
+    }
+
+    #[test]
+    fn extension_stats_keeps_unattributable_names_in_other() {
+        // Malformed prefixes must not invent bucket entries they cannot
+        // attribute: bare `skill_`, an `mcp__` name without both
+        // delimiters, and an empty tool segment all stay in `other`.
+        let dto = bucket_extension_stats(
+            7,
+            &[
+                stat("skill_", 1, 0),
+                stat("mcp__lonely", 2, 0),
+                stat("mcp__srv__", 3, 0),
+                stat("mcp__ok__tool", 4, 10),
+            ],
+        );
+        assert!(dto.skills.is_empty());
+        assert_eq!(dto.mcp_servers.len(), 1);
+        assert_eq!(dto.mcp_servers[0].server, "ok");
+        let mut other_names: Vec<&str> = dto.other.iter().map(|r| r.name.as_str()).collect();
+        other_names.sort();
+        assert_eq!(other_names, vec!["mcp__lonely", "mcp__srv__", "skill_"]);
+    }
+
+    #[test]
+    fn extension_stats_dto_is_frozen_camel_case() {
+        let dto = bucket_extension_stats(30, &[stat("skill_x", 1, 2), stat("mcp__s__t", 3, 4)]);
+        let json = serde_json::to_value(&dto).unwrap();
+        assert!(json.get("days").is_some(), "{json}");
+        assert!(json.get("skills").is_some());
+        assert!(
+            json.get("mcpServers").is_some(),
+            "camelCase on the wire: {json}"
+        );
+        assert!(json.get("other").is_some());
+        let server = &json["mcpServers"][0];
+        assert!(server.get("totalTokens").is_some(), "{server}");
+        assert!(server["tools"][0].get("totalTokens").is_some());
+    }
+
+    #[test]
+    fn extension_stats_follows_the_real_core_adapter_over_fixture_logs() {
+        // End-to-end through the real seam: logs written by the real
+        // SessionLogWriter into a tempdir container (never HOME), read back
+        // through SessionQuery::tool_call_stats, then bucketed.
+        use shannon_core::session_log::{SessionLogWriter, SessionQuery};
+        use shannon_types::session_event::{SessionEventBody, ToolCallPayload};
+
+        let tmp = tempfile::tempdir().unwrap();
+        let container = tmp.path().join("sessions");
+        let id = uuid::Uuid::new_v4();
+        let mut w = SessionLogWriter::open_layout(&container, &id.to_string()).unwrap();
+        w.record(SessionEventBody::ToolCall(ToolCallPayload {
+            tool_use_id: "u1".into(),
+            tool_name: "skill_deploy".into(),
+            arguments: "{}".into(),
+        }));
+        w.record(SessionEventBody::ToolCall(ToolCallPayload {
+            tool_use_id: "u2".into(),
+            tool_name: "mcp__notion__search".into(),
+            arguments: "{}".into(),
+        }));
+        w.close().unwrap();
+
+        let query = SessionQuery::new(container);
+        let stats = query.tool_call_stats(30).unwrap();
+        let dto = bucket_extension_stats(30, &stats);
+        assert_eq!(
+            dto.skills,
+            vec![ExtensionToolStatRow {
+                name: "deploy".into(),
+                calls: 1,
+                total_tokens: 0
+            }]
+        );
+        assert_eq!(dto.mcp_servers.len(), 1);
+        assert_eq!(dto.mcp_servers[0].server, "notion");
+        assert_eq!(dto.mcp_servers[0].tools[0].name, "search");
     }
 }

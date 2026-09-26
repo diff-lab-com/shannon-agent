@@ -8,7 +8,7 @@
 // unmounts. Apply computes merged content client-side via mergeFile, writes
 // via save_text_file, toasts success/failure, and calls onClose on success.
 
-import { useEffect, useState, useMemo } from 'react'
+import { useEffect, useState, useMemo, useRef } from 'react'
 import { useIntl } from 'react-intl'
 import { toast } from 'sonner'
 import { Spinner } from '@/components/ui/loading-state'
@@ -34,6 +34,19 @@ function cycleDecision(d: HunkDecision): HunkDecision {
   }
 }
 
+/** B0 P0-3: binary / non-UTF-8 reads arrive as `{ code, message }`. */
+interface StructuredIpcError {
+  code?: string
+  message?: string
+}
+
+function asStructuredError(e: unknown): StructuredIpcError | null {
+  if (e && typeof e === 'object' && typeof (e as StructuredIpcError).code === 'string') {
+    return e as StructuredIpcError
+  }
+  return null
+}
+
 export default function DiffReviewBody({ filePath, onClose, active }: DiffReviewBodyProps) {
   const intl = useIntl()
   const t = (id: string, values?: Record<string, string | number>) =>
@@ -41,27 +54,48 @@ export default function DiffReviewBody({ filePath, onClose, active }: DiffReview
   const [diff, setDiff] = useState<FileDiff | null>(null)
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
+  // B0 P0-3: set when the fetch failed with a structured binary/UTF-8 error
+  // so the message renders through i18n instead of the raw IPC string.
+  const [errorCode, setErrorCode] = useState<'binary' | 'utf8' | null>(null)
   const [decisions, setDecisions] = useState<Map<string, HunkDecision>>(new Map())
   const [applying, setApplying] = useState(false)
+  // B0 P0-4 [R4-1]: same-tick double invocations (Enter twice before React
+  // re-renders) share the stale `applying` state — the ref closes that hole.
+  const applyingRef = useRef(false)
+  // B0 P0-4: keyboard shortcuts only fire while focus is inside this node.
+  const containerRef = useRef<HTMLDivElement | null>(null)
 
   useEffect(() => {
     if (!active || !filePath) {
       setDiff(null)
       setError(null)
+      setErrorCode(null)
       setLoading(false)
       setDecisions(new Map())
       setApplying(false)
+      applyingRef.current = false
       return
     }
     let cancelled = false
     setLoading(true)
     setError(null)
+    setErrorCode(null)
     setDiff(null)
     setDecisions(new Map())
     setApplying(false)
+    applyingRef.current = false
     api.getFileDiff(filePath)
       .then(d => { if (!cancelled) setDiff(d) })
-      .catch(e => { if (!cancelled) setError(e instanceof Error ? e.message : String(e)) })
+      .catch(e => {
+        if (cancelled) return
+        const structured = asStructuredError(e)
+        // B0 P0-3: binary / non-UTF-8 reads arrive as `{ code, message }`.
+        if (structured?.code === 'binary_file' || structured?.code === 'not_utf8') {
+          setErrorCode(structured.code === 'binary_file' ? 'binary' : 'utf8')
+        } else {
+          setError(e instanceof Error ? e.message : String(e))
+        }
+      })
       .finally(() => { if (!cancelled) setLoading(false) })
     return () => { cancelled = true }
   }, [active, filePath])
@@ -77,6 +111,11 @@ export default function DiffReviewBody({ filePath, onClose, active }: DiffReview
     [decisions],
   )
   const hasHunks = hunks.length > 0
+  // B0 P0-3: accepting this diff would blank a non-empty file. Block Apply
+  // (the backend binary guard already refuses to produce such a diff).
+  const wholeFileDeletion = !!diff
+    && diff.old_content.trim().length > 0
+    && diff.new_content.trim().length === 0
 
   const handleToggleHunk = (hunkId: string) => {
     setDecisions(prev => {
@@ -117,20 +156,34 @@ export default function DiffReviewBody({ filePath, onClose, active }: DiffReview
   }
 
   const handleApply = async () => {
-    if (!diff || !filePath) return
+    // B0 P0-4 [R4-1]: re-entry guard of last resort — the keyboard layer
+    // dedupes too, but Apply must never run twice even if invoked directly
+    // (double-click within one render tick, double Enter, …).
+    if (applyingRef.current) return
+    if (!diff || !filePath || wholeFileDeletion) return
+    applyingRef.current = true
     setApplying(true)
     try {
       const merged = mergeFile(diff.old_content, diff.new_content, decisions)
-      await api.saveTextFile(filePath, merged)
+      // B0 P0-3: send the fetch-time mtime — the backend rejects the write
+      // with `{ code: 'mtime_conflict' }` if the file changed meanwhile.
+      await api.saveTextFile(filePath, merged, diff.mtime)
       toast.success(
         t('diff.dialog.applied'),
         { description: t('diff.dialog.applied.desc') },
       )
       onClose()
     } catch (e) {
-      const msg = e instanceof Error ? e.message : String(e)
-      toast.error(t('diff.dialog.applyFailed'), { description: msg })
+      if (asStructuredError(e)?.code === 'mtime_conflict') {
+        toast.error(t('diff.dialog.conflict'), {
+          description: t('diff.dialog.conflict.desc'),
+        })
+      } else {
+        const msg = e instanceof Error ? e.message : String(e)
+        toast.error(t('diff.dialog.applyFailed'), { description: msg })
+      }
     } finally {
+      applyingRef.current = false
       setApplying(false)
     }
   }
@@ -138,13 +191,15 @@ export default function DiffReviewBody({ filePath, onClose, active }: DiffReview
   const { currentHunkId } = useDiffKeyboard({
     enabled: active && !!diff,
     hunks,
+    containerRef,
+    applying,
     onToggleDecision: handleSetDecision,
-    onApply: acceptedCount > 0 ? handleApply : undefined,
+    onApply: acceptedCount > 0 && !wholeFileDeletion ? handleApply : undefined,
   })
   void currentHunkId
 
   return (
-    <div className="flex flex-col flex-1 min-h-0">
+    <div ref={containerRef} className="flex flex-col flex-1 min-h-0">
       {diff && hasHunks && (
         <div className="flex flex-wrap items-center gap-md px-lg py-sm border-b border-outline-variant/30 bg-surface-container-low">
           <div className="flex-1 min-w-0">
@@ -188,20 +243,35 @@ export default function DiffReviewBody({ filePath, onClose, active }: DiffReview
             <Spinner className="text-primary" />
             <span className="ml-md text-body-sm text-on-surface-variant">{t('diff.dialog.loading')}</span>
           </div>
-        ) : error ? (
+        ) : error || errorCode ? (
           <div className="flex items-start gap-sm p-md bg-error/10 border border-error/20 rounded-xl text-error">
             <span className="material-symbols-outlined text-[18px] mt-[2px]" aria-hidden="true">error</span>
             <div>
               <p className="font-label-md">{t('diff.dialog.loadFailed')}</p>
-              <p className="font-body-sm mt-xs opacity-80">{error}</p>
+              <p className="font-body-sm mt-xs opacity-80">
+                {errorCode === 'binary' || errorCode === 'utf8'
+                  ? t('diff.dialog.binaryFile')
+                  : error}
+              </p>
             </div>
           </div>
         ) : diff ? (
-          <DiffViewer
-            diff={diff}
-            decisions={decisions}
-            onToggleHunk={handleToggleHunk}
-          />
+          <>
+            {wholeFileDeletion && (
+              <div
+                role="alert"
+                className="flex items-start gap-sm p-md mb-md bg-error/10 border border-error/30 rounded-xl text-error"
+              >
+                <span className="material-symbols-outlined text-[18px] mt-[2px]" aria-hidden="true">warning</span>
+                <p className="font-label-md">{t('diff.review.deleteWarning')}</p>
+              </div>
+            )}
+            <DiffViewer
+              diff={diff}
+              decisions={decisions}
+              onToggleHunk={handleToggleHunk}
+            />
+          </>
         ) : null}
       </div>
 
@@ -219,7 +289,7 @@ export default function DiffReviewBody({ filePath, onClose, active }: DiffReview
           <Button
             size="sm"
             onClick={handleApply}
-            disabled={applying || acceptedCount === 0}
+            disabled={applying || acceptedCount === 0 || wholeFileDeletion}
             className="h-auto px-md py-xs rounded-lg font-label-md bg-primary text-on-primary hover:bg-primary/90"
             aria-label={t('diff.dialog.apply.aria')}
           >

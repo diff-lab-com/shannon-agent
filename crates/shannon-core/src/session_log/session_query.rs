@@ -21,11 +21,13 @@
 //! - [`SessionQuery::user_texts`]: the user-prompt texts the dream excerpts
 //!   redact and size-cap on top.
 
+use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
 use chrono::{DateTime, Utc};
 use uuid::Uuid;
 
+use serde::{Deserialize, Serialize};
 use shannon_types::session_event::{SessionEventBody, UserMessagePayload};
 
 use super::SessionStore;
@@ -52,6 +54,20 @@ pub struct SessionToolCall {
     /// signatures built from these keys must never carry file paths, tokens,
     /// or other user secrets into candidates or hashes.
     pub arg_keys: Vec<String>,
+}
+
+/// Aggregate per-tool invocation stats across the recent-session window
+/// ([`SessionQuery::tool_call_stats`]).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ToolCallStat {
+    /// Tool name exactly as the log carries it (`Bash`, `skill_<id>`,
+    /// `mcp__<server>__<tool>`, …) — bucketing is the caller's policy.
+    pub name: String,
+    /// Number of `tool/call` events seen for the tool.
+    pub calls: u64,
+    /// Sum of the per-call `tokens_used` attribution over the tool's events
+    /// (0 while no event carries the field — see [`SessionQuery::tool_call_stats`]).
+    pub total_tokens: u64,
 }
 
 /// Read-only query adapter over one sessions container (the single source
@@ -100,7 +116,12 @@ impl SessionQuery {
         days_back: u32,
         include_archived: bool,
     ) -> Result<Vec<SessionRef>, super::SessionStoreError> {
-        let cutoff = Utc::now() - chrono::Duration::days(i64::from(days_back));
+        // Checked: a window wide enough to underflow the representable date
+        // range means "everything", so the cutoff clamps to the minimum
+        // instead of panicking in the subtraction.
+        let cutoff = Utc::now()
+            .checked_sub_signed(chrono::Duration::days(i64::from(days_back)))
+            .unwrap_or(DateTime::<Utc>::MIN_UTC);
         let listed = match self.store.list() {
             Ok(infos) => infos
                 .into_iter()
@@ -185,6 +206,62 @@ impl SessionQuery {
             .collect())
     }
 
+    /// Aggregate per-tool invocation stats over the recent sessions
+    /// (X7: the Extensions page's "30 天调用 N 次 · ~X tokens" subtext).
+    ///
+    /// The scan is read-only over the logs the adapter already owns:
+    ///
+    /// - Sessions enter via [`SessionQuery::list_recent`] with
+    ///   `include_archived = false` — the same window + archive policy
+    ///   every other consumer here rides, bounded by `days_back`;
+    /// - **per-event window**: a long-lived session must not drag its whole
+    ///   history into "recent", so a tool event only counts when its own
+    ///   `ts_ns` is at or after the same cutoff `list_recent` computes;
+    /// - calls are counted from `tool/call` events (the same rows
+    ///   [`SessionQuery::tool_calls`] projects), keyed by tool name only —
+    ///   arguments are never read;
+    /// - token cost sums the per-tool `tokens_used` attribution
+    ///   (`shannon-types` `events::ToolResultPayload`) wherever a tool event
+    ///   carries it. The L0 writer does not persist that field today, so
+    ///   sums read 0 until a writer emits it — this aggregation is already
+    ///   shaped for it and must not change when one does.
+    ///
+    /// Error/degradation policy (deliberately softer than
+    /// [`SessionQuery::tool_calls`], which fails a session on any malformed
+    /// line): stats are advisory, so a malformed line is **skipped and
+    /// warned about** (once per session, with the skipped-line count) and an
+    /// unreadable or vanished log costs only that session's contribution —
+    /// one bad file can never zero the whole aggregation. The `Err` arm is
+    /// reserved for the listing itself.
+    ///
+    /// Deterministic order: most-called first, ties broken by name.
+    pub fn tool_call_stats(
+        &self,
+        days_back: u64,
+    ) -> Result<Vec<ToolCallStat>, super::SessionStoreError> {
+        // `list_recent` windows on u32 days; a wider u64 ask simply means
+        // "everything", so saturate instead of erroring. The cutoff is
+        // computed with checked arithmetic: a window so wide that
+        // `now - window` underflows the representable range (or whose
+        // cutoff sits before the epoch, where a naive `as u64` would wrap
+        // and filter everything out) degenerates to `cutoff_ns = 0` —
+        // every logged event counts, exactly what "everything" means.
+        let window_days = u32::try_from(days_back).unwrap_or(u32::MAX);
+        let cutoff_ns = Utc::now()
+            .checked_sub_signed(chrono::Duration::days(i64::from(window_days)))
+            .and_then(|cutoff| cutoff.timestamp_nanos_opt())
+            .map(|ns| ns.max(0) as u64)
+            .unwrap_or(0);
+
+        let mut stats: BTreeMap<String, ToolCallStat> = BTreeMap::new();
+        for session in self.list_recent(window_days, false)? {
+            scan_session_tool_rows(&session.dir.join("events.jsonl"), cutoff_ns, &mut stats);
+        }
+        let mut rows: Vec<ToolCallStat> = stats.into_values().collect();
+        rows.sort_by(|a, b| b.calls.cmp(&a.calls).then_with(|| a.name.cmp(&b.name)));
+        Ok(rows)
+    }
+
     /// The session's user-prompt texts in log order (only events whose
     /// source is [`UserMessagePayload::SOURCE_USER`]; tool results are their
     /// own events and never appear here). Whitespace-only prompts are
@@ -239,6 +316,92 @@ fn sorted_arg_keys(arguments: &str) -> Vec<String> {
         }
         _ => Vec::new(),
     }
+}
+
+/// Fold one session log's tool rows into `stats` (the raw half of
+/// [`SessionQuery::tool_call_stats`]).
+///
+/// Lines are parsed leniently (`serde_json::Value`, not the typed reader):
+/// stats must also survive rows the typed schema will only grow into
+/// (extra fields such as `tokens_used`) and rows a truncated/corrupted
+/// write left behind — those are skipped, never fatal. Only two row kinds
+/// are touched, and only three fields of each: `kind`, `ts_ns`,
+/// `tool_name` (plus the optional `tokens_used` summand). Anything else in
+/// the line — argument values, outputs — is never surfaced.
+fn scan_session_tool_rows(log: &Path, cutoff_ns: u64, stats: &mut BTreeMap<String, ToolCallStat>) {
+    let Ok(file) = std::fs::File::open(log) else {
+        // A vanished log costs only this session's contribution.
+        return;
+    };
+    let mut skipped = 0u64;
+    for line in std::io::BufRead::lines(std::io::BufReader::new(file)) {
+        let Ok(line) = line else {
+            skipped += 1;
+            continue;
+        };
+        let trimmed = line.trim();
+        if trimmed.is_empty() {
+            continue;
+        }
+        let Ok(row) = serde_json::from_str::<serde_json::Value>(trimmed) else {
+            skipped += 1;
+            continue;
+        };
+        // Window: without a usable event timestamp the row cannot be
+        // attributed to the window, so it does not count (logged with the
+        // rest of the skipped tally below).
+        let Some(ts_ns) = row.get("ts_ns").and_then(serde_json::Value::as_u64) else {
+            skipped += 1;
+            continue;
+        };
+        if ts_ns < cutoff_ns {
+            continue;
+        }
+        match row.get("kind").and_then(serde_json::Value::as_str) {
+            Some("tool/call") => {
+                if let Some(name) = tool_row_name(&row) {
+                    stats
+                        .entry(name.clone())
+                        .or_insert_with(|| ToolCallStat {
+                            name,
+                            calls: 0,
+                            total_tokens: 0,
+                        })
+                        .calls += 1;
+                }
+            }
+            Some("tool/result") => {
+                if let Some(tokens) = row.get("tokens_used").and_then(serde_json::Value::as_u64) {
+                    if let Some(name) = tool_row_name(&row) {
+                        stats
+                            .entry(name.clone())
+                            .or_insert_with(|| ToolCallStat {
+                                name,
+                                calls: 0,
+                                total_tokens: 0,
+                            })
+                            .total_tokens += tokens;
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
+    if skipped > 0 {
+        tracing::warn!(
+            skipped,
+            log = %log.display(),
+            "tool_call_stats: skipped unreadable rows in session log"
+        );
+    }
+}
+
+/// The `tool_name` of a raw tool row, cloned out as an owned String.
+fn tool_row_name(row: &serde_json::Value) -> Option<String> {
+    row.get("tool_name")
+        .and_then(serde_json::Value::as_str)
+        .filter(|name| !name.is_empty())
+        .map(str::to_string)
 }
 
 // ============================================================================
@@ -507,5 +670,225 @@ mod tests {
         // empty rather than an error.
         assert!(!query.tool_calls(&healthy).unwrap().is_empty());
         assert!(query.tool_calls(&corrupt).is_err());
+    }
+
+    // ── X7: per-tool invocation stats ────────────────────────────────────
+
+    use std::io::Write as _;
+
+    /// Append one raw (handcrafted) event line to a session's real log —
+    /// the same shape the writer emits, plus fields a future writer may
+    /// grow into (the typed payload cannot express `tokens_used` yet).
+    fn append_raw(query: &SessionQuery, id: &Uuid, raw: &str) {
+        let log = query.container().join(id.to_string()).join("events.jsonl");
+        let mut f = std::fs::OpenOptions::new().append(true).open(log).unwrap();
+        writeln!(f, "{raw}").unwrap();
+    }
+
+    /// One raw `tool/call` / `tool/result` row, "now" by default.
+    fn raw_tool_row(kind: &str, name: &str, ts_ns: u64, tokens: Option<u64>) -> String {
+        let tokens_field = tokens
+            .map(|t| format!(r#","tokens_used":{t}"#))
+            .unwrap_or_default();
+        format!(
+            r#"{{"seq":999,"ts_ns":{ts_ns},"session_id":"raw-appended","turn":1,"kind":"{kind}","tool_use_id":"raw-1","tool_name":"{name}","output":"","is_error":false,"meta":null{tokens_field}}}"#
+        )
+    }
+
+    fn now_ns() -> u64 {
+        Utc::now().timestamp_nanos_opt().unwrap() as u64
+    }
+
+    fn stats_by_name(stats: &[ToolCallStat]) -> std::collections::HashMap<String, ToolCallStat> {
+        stats.iter().cloned().map(|s| (s.name.clone(), s)).collect()
+    }
+
+    #[test]
+    fn tool_call_stats_counts_calls_and_sums_tokens_across_sessions() {
+        let tmp = tempfile::tempdir().unwrap();
+        let query = SessionQuery::new(tmp.path().join("sessions"));
+        let a = Uuid::new_v4();
+        let b = Uuid::new_v4();
+        // Each seeded session carries one Bash + one read_file tool/call.
+        seed_session(query.store(), &a, "a");
+        seed_session(query.store(), &b, "b");
+        let ts = now_ns();
+        append_raw(
+            &query,
+            &a,
+            &raw_tool_row("tool/call", "mcp__notion__search", ts, None),
+        );
+        append_raw(
+            &query,
+            &a,
+            &raw_tool_row("tool/result", "mcp__notion__search", ts, Some(42)),
+        );
+        append_raw(
+            &query,
+            &b,
+            &raw_tool_row("tool/call", "skill_deploy", ts, None),
+        );
+        append_raw(
+            &query,
+            &b,
+            &raw_tool_row("tool/result", "skill_deploy", ts, Some(7)),
+        );
+        // A result without the token field must not disturb the sums.
+        append_raw(
+            &query,
+            &b,
+            &raw_tool_row("tool/result", "skill_deploy", ts, None),
+        );
+
+        let by_name = stats_by_name(&query.tool_call_stats(7).unwrap());
+        assert_eq!(
+            by_name["Bash"],
+            ToolCallStat {
+                name: "Bash".into(),
+                calls: 2,
+                total_tokens: 0
+            }
+        );
+        assert_eq!(
+            by_name["read_file"],
+            ToolCallStat {
+                name: "read_file".into(),
+                calls: 2,
+                total_tokens: 0
+            }
+        );
+        assert_eq!(
+            by_name["mcp__notion__search"],
+            ToolCallStat {
+                name: "mcp__notion__search".into(),
+                calls: 1,
+                total_tokens: 42
+            }
+        );
+        assert_eq!(
+            by_name["skill_deploy"],
+            ToolCallStat {
+                name: "skill_deploy".into(),
+                calls: 1,
+                total_tokens: 7
+            }
+        );
+
+        // Deterministic order: most-called first, ties by name.
+        let rows = query.tool_call_stats(7).unwrap();
+        assert_eq!(rows[0].name, "Bash");
+        assert_eq!(rows[1].name, "read_file");
+
+        // Archived sessions fall out of the default view like everywhere
+        // else in this adapter.
+        query
+            .save_curation(&b, &SessionCuration { archived: true })
+            .unwrap();
+        let by_name = stats_by_name(&query.tool_call_stats(7).unwrap());
+        assert_eq!(by_name["Bash"].calls, 1, "only session a's Bash remains");
+        assert!(!by_name.contains_key("skill_deploy"));
+    }
+
+    #[test]
+    fn tool_call_stats_windows_by_event_timestamp() {
+        let tmp = tempfile::tempdir().unwrap();
+        let query = SessionQuery::new(tmp.path().join("sessions"));
+        let id = Uuid::new_v4();
+        seed_session(query.store(), &id, "fresh"); // Bash + read_file, recent
+        let old_ns = (Utc::now() - chrono::Duration::days(40))
+            .timestamp_nanos_opt()
+            .unwrap() as u64;
+        // Two 40-day-old tool rows share the log with the fresh ones.
+        append_raw(
+            &query,
+            &id,
+            &raw_tool_row("tool/call", "Bash", old_ns, None),
+        );
+        append_raw(
+            &query,
+            &id,
+            &raw_tool_row("tool/call", "skill_old", old_ns, None),
+        );
+
+        let by_name = stats_by_name(&query.tool_call_stats(7).unwrap());
+        assert_eq!(
+            by_name["Bash"].calls, 1,
+            "aged Bash row is outside the window"
+        );
+        assert!(!by_name.contains_key("skill_old"));
+
+        let by_name = stats_by_name(&query.tool_call_stats(90).unwrap());
+        assert_eq!(
+            by_name["Bash"].calls, 2,
+            "wider window re-admits the aged row"
+        );
+        assert_eq!(by_name["skill_old"].calls, 1);
+
+        // days_back = 0 puts the cutoff at "now": nothing counts.
+        assert!(query.tool_call_stats(0).unwrap().is_empty());
+    }
+
+    #[test]
+    fn tool_call_stats_survive_corrupt_rows_and_empty_containers() {
+        let tmp = tempfile::tempdir().unwrap();
+        let query = SessionQuery::new(tmp.path().join("sessions"));
+        // An empty container aggregates to an empty, non-error answer.
+        assert!(query.tool_call_stats(30).unwrap().is_empty());
+
+        let id = Uuid::new_v4();
+        seed_session(query.store(), &id, "go");
+        let log = query.container().join(id.to_string()).join("events.jsonl");
+        let mut raw = std::fs::read_to_string(&log).unwrap();
+        // Corrupted write + a well-formed row missing its timestamp: both
+        // must be skipped without failing (or zeroing) the aggregation.
+        raw.push_str("{not json\n");
+        raw.push_str(
+            r#"{"seq":998,"session_id":"x","turn":1,"kind":"tool/call","tool_use_id":"u","tool_name":"Bash"}"#,
+        );
+        raw.push('\n');
+        std::fs::write(&log, raw).unwrap();
+
+        let by_name = stats_by_name(&query.tool_call_stats(7).unwrap());
+        assert_eq!(
+            by_name["Bash"],
+            ToolCallStat {
+                name: "Bash".into(),
+                calls: 1,
+                total_tokens: 0
+            },
+            "the session's healthy rows still count"
+        );
+        assert_eq!(by_name["read_file"].calls, 1);
+    }
+
+    // M9 review fix: a `days_back` so wide that `now - window` underflows
+    // the representable date range must saturate to "scan everything",
+    // not panic in the subtraction (the "saturate instead of erroring"
+    // contract, now actually true).
+    #[test]
+    fn tool_call_stats_huge_days_back_degenerates_to_a_full_scan_without_panicking() {
+        let tmp = tempfile::tempdir().unwrap();
+        let query = SessionQuery::new(tmp.path().join("sessions"));
+        let id = Uuid::new_v4();
+        seed_session(query.store(), &id, "any age"); // Bash + read_file
+
+        // u64::MAX saturates to u32::MAX days ≈ 11.7M years — far outside
+        // DateTime's representable range, the exact panic trigger.
+        let by_name = stats_by_name(&query.tool_call_stats(u64::MAX).unwrap());
+        assert_eq!(by_name["Bash"].calls, 1, "full scan: every event counts");
+        assert_eq!(by_name["read_file"].calls, 1);
+
+        // Same for the u32 edge itself and for a value that survives the
+        // subtraction but lands before the epoch (where a naive `as u64`
+        // cutoff would wrap and silently filter everything out).
+        let by_name = stats_by_name(&query.tool_call_stats(u64::from(u32::MAX)).unwrap());
+        assert_eq!(by_name["Bash"].calls, 1);
+        let by_name = stats_by_name(&query.tool_call_stats(60 * 365).unwrap())
+            .remove("Bash")
+            .unwrap();
+        assert_eq!(
+            by_name.calls, 1,
+            "pre-epoch cutoffs still count every event"
+        );
     }
 }

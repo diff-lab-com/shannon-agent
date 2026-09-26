@@ -16,6 +16,7 @@ import { toast } from 'sonner'
 import CodeEditor, {
   type EditorDiagnostic,
 } from '@/components/editor/CodeEditor'
+import { ConfirmDialog } from '@/components/ui/confirm-dialog'
 import * as api from '@/lib/tauri-api'
 import type { SourceFile } from '@/lib/tauri-api'
 import {
@@ -32,9 +33,11 @@ import type { AutoDiagnostic, DrawerDiag, ManualDiagnostic, MixedDiagnostic } fr
 type EditorProps = {
   /** P0-B: pre-load this file (chat file-ref chips deep-link into the editor). */
   initialPath?: string | null
+  /** B0 P0-5: report `draft !== file.content` so the host can guard closing. */
+  onDirtyChange?: (dirty: boolean) => void
 }
 
-export default function Editor({ initialPath }: EditorProps) {
+export default function Editor({ initialPath, onDirtyChange }: EditorProps) {
   const t = useT()
   const navigate = useNavigate()
   const [filePath, setFilePath] = useState('')
@@ -59,6 +62,9 @@ export default function Editor({ initialPath }: EditorProps) {
   const [editMode, setEditMode] = useState(false)
   const [draft, setDraft] = useState('')
   const [saving, setSaving] = useState(false)
+
+  // B0 P0-5: switching files with unsaved edits asks before discarding.
+  const [pendingLoadPath, setPendingLoadPath] = useState<string | null>(null)
 
   // Side drawer for quick-fix
   const [drawer, setDrawer] = useState<DrawerDiag | null>(null)
@@ -131,9 +137,16 @@ export default function Editor({ initialPath }: EditorProps) {
   const onLoad = useCallback(
     async (e: React.FormEvent) => {
       e.preventDefault()
-      await loadPath(filePath)
+      const target = filePath.trim()
+      if (!target) return
+      // B0 P0-5: dirty draft → confirm the discard before loading another file.
+      if (file != null && draft !== file.content) {
+        setPendingLoadPath(target)
+        return
+      }
+      await loadPath(target)
     },
-    [filePath, loadPath],
+    [filePath, file, draft, loadPath],
   )
 
   // P0-B: deep-link support — load the chip's file once on mount (and when
@@ -143,6 +156,14 @@ export default function Editor({ initialPath }: EditorProps) {
     setFilePath(initialPath)
     void loadPath(initialPath)
   }, [initialPath, loadPath])
+
+  // B0 P0-5: unsaved-edit detector. `draft` is reset whenever a file loads
+  // or a save lands, so `draft !== file.content` is exactly "the user typed
+  // something they have not saved yet". The host (Chat's inline panel modal)
+  // gates closing on this.
+  useEffect(() => {
+    onDirtyChange?.(file != null && draft !== file.content)
+  }, [file, draft, onDirtyChange])
 
   const onBrowse = useCallback(async () => {
     try {
@@ -306,6 +327,21 @@ export default function Editor({ initialPath }: EditorProps) {
       {drawer ? (
         <QuickFixDrawer t={t} drawer={drawer} onClose={() => setDrawer(null)} />
       ) : null}
+
+      <ConfirmDialog
+        open={pendingLoadPath !== null}
+        title={t('editor.discard.title')}
+        message={t('editor.discard.message')}
+        confirmLabel={t('editor.discard.confirm')}
+        cancelLabel={t('editor.discard.cancel')}
+        destructive
+        onConfirm={() => {
+          const target = pendingLoadPath
+          setPendingLoadPath(null)
+          if (target) void loadPath(target)
+        }}
+        onCancel={() => setPendingLoadPath(null)}
+      />
     </div>
   )
 }

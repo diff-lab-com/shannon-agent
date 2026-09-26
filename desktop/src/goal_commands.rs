@@ -106,6 +106,11 @@ pub struct GoalRunDto {
     pub last_error: Option<String>,
     pub started_at_ms: i64,
     pub updated_at_ms: i64,
+    /// Project directory the run inherited from its originating session
+    /// (P-E2). `None` when the session had none — and always `None` on
+    /// restart-reconciled `interrupted` cards (the session sidecar cannot
+    /// round-trip a working dir without a semver-major core change).
+    pub working_dir: Option<String>,
 }
 
 /// `start_goal_run` response — `{ sessionId }`.
@@ -134,6 +139,8 @@ pub(crate) struct GoalRunState {
     pub last_error: Option<String>,
     pub started_at_ms: i64,
     pub updated_at_ms: i64,
+    /// Project directory inherited from the originating session (P-E2).
+    pub working_dir: Option<String>,
 }
 
 impl GoalRunState {
@@ -151,6 +158,7 @@ impl GoalRunState {
             last_error: self.last_error.clone(),
             started_at_ms: self.started_at_ms,
             updated_at_ms: self.updated_at_ms,
+            working_dir: self.working_dir.clone(),
         }
     }
 
@@ -418,6 +426,12 @@ pub async fn start_goal_run(
         }
     };
 
+    // P-E2: inherit the originating session's project directory. The origin
+    // is the session the run targets; when a dedicated goal session is
+    // created instead, the ACTIVE session (where the user started the goal)
+    // donates its working dir so the new session joins the same project.
+    let inherited_working_dir = goal_inherited_working_dir(&state, session_id.as_deref()).await;
+
     // Resolve / create the session.
     let (session_uuid, created_session) = match session_id
         .as_deref()
@@ -429,7 +443,13 @@ pub async fn start_goal_run(
             false,
         ),
         None => (
-            create_goal_session(&state, &app_handle, &title).await?,
+            create_goal_session(
+                state.inner(),
+                &app_handle,
+                &title,
+                inherited_working_dir.clone(),
+            )
+            .await?,
             true,
         ),
     };
@@ -450,6 +470,7 @@ pub async fn start_goal_run(
         last_error: None,
         started_at_ms: started,
         updated_at_ms: started,
+        working_dir: inherited_working_dir,
     };
     let handle = Arc::new(GoalRunHandle::new(run_state));
     state
@@ -647,6 +668,10 @@ pub async fn resume_goal_run(
         last_error: None,
         started_at_ms: started,
         updated_at_ms: started,
+        // The sidecar cannot round-trip a working dir (no field — adding one
+        // to the non-`non_exhaustive` core struct is semver-major), so a
+        // restarted run reports no project until it re-earns one.
+        working_dir: None,
     };
     let handle = Arc::new(GoalRunHandle::new(run_state));
     state
@@ -729,12 +754,39 @@ pub async fn update_goal_objective(
 
 // ── Session creation (new-session branch of start_goal_run) ─────────────
 
+/// The working dir a goal run inherits (P-E2): the target session's
+/// `SessionMeta.working_dir`; when no target is given, the ACTIVE session's
+/// (where the user started the goal). Normalized to the project registry
+/// key; `None` when neither session has a project. Runtime-free over
+/// [`AppState`] so tests can drive it directly.
+pub(crate) async fn goal_inherited_working_dir(
+    state: &AppState,
+    origin: Option<&str>,
+) -> Option<String> {
+    let origin_id = origin
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .map(str::to_string)
+        .or_else(|| state.registry.active_key().map(|key| key.0.to_string()))?;
+    let sessions = state.sessions.lock().await;
+    sessions
+        .iter()
+        .find(|s| s.id == origin_id)
+        .and_then(|m| m.working_dir.as_deref())
+        .map(crate::commands_projects::normalize_path)
+        .filter(|dir| !dir.is_empty())
+        .map(str::to_string)
+}
+
 /// Create a fresh L0 session for a goal run, mirroring `new_session` but
-/// without stealing the user's active session.
-async fn create_goal_session(
-    state: &tauri::State<'_, AppState>,
-    app_handle: &tauri::AppHandle,
+/// without stealing the user's active session. `working_dir` is the
+/// originating session's project (P-E2) — stamped on the new rail row so
+/// the goal session joins that project.
+async fn create_goal_session<R: tauri::Runtime>(
+    state: &AppState,
+    app_handle: &tauri::AppHandle<R>,
     title: &str,
+    working_dir: Option<String>,
 ) -> Result<Uuid, String> {
     let id = Uuid::new_v4();
     let id_str = id.to_string();
@@ -757,7 +809,7 @@ async fn create_goal_session(
             title: title.to_string(),
             created_at: now,
             message_count: 0,
-            working_dir: None,
+            working_dir,
             parent_id: None,
             branch_point: None,
         });
@@ -877,6 +929,9 @@ fn interrupted_dto(
         last_error: None,
         started_at_ms: at_ms,
         updated_at_ms: at_ms,
+        // Same sidecar limit as resume: no working dir survives a restart,
+        // so interrupted cards report `None` (live DTO only, P-E2 scope).
+        working_dir: None,
     }
 }
 
@@ -1832,6 +1887,7 @@ mod tests {
             last_error: None,
             started_at_ms: 1_000,
             updated_at_ms: 2_000,
+            working_dir: Some("/work/goal-proj".into()),
         }))
     }
 
@@ -1866,6 +1922,122 @@ mod tests {
             assert!(json.get(key).is_some(), "missing frozen field {key}");
         }
         assert!(json.get("session_id").is_none(), "no snake_case leakage");
+        // P-E2 addition rides the camelCase contract.
+        assert_eq!(json["workingDir"], "/work/goal-proj");
+    }
+
+    // ── P-E2: working_dir inheritance ───────────────────────────────────
+
+    fn goal_app_state(dir: &std::path::Path) -> AppState {
+        let mut state = AppState::new();
+        state.state_manager = std::sync::Arc::new(
+            shannon_engine::state::StateManager::with_sessions_dir(dir.join("sessions"))
+                .expect("temp sessions dir"),
+        );
+        state
+    }
+
+    async fn rail_row(state: &AppState, id: Uuid, working_dir: Option<&str>) {
+        let now = crate::commands::chrono_timestamp();
+        state
+            .sessions
+            .lock()
+            .await
+            .push(crate::commands::SessionMeta {
+                id: id.to_string(),
+                title: "Origin".into(),
+                created_at: now,
+                message_count: 0,
+                working_dir: working_dir.map(str::to_string),
+                parent_id: None,
+                branch_point: None,
+            });
+    }
+
+    #[tokio::test]
+    async fn inherited_working_dir_follows_the_target_session() {
+        let tmp = tempfile::tempdir().unwrap();
+        let state = goal_app_state(tmp.path());
+        let with_dir = Uuid::new_v4();
+        let without = Uuid::new_v4();
+        rail_row(&state, with_dir, Some("/work/goal-origin/")).await;
+        rail_row(&state, without, None).await;
+
+        assert_eq!(
+            goal_inherited_working_dir(&state, Some(&with_dir.to_string())).await,
+            Some("/work/goal-origin".into()),
+            "target session's dir wins"
+        );
+        assert_eq!(
+            goal_inherited_working_dir(&state, Some(&without.to_string())).await,
+            None,
+            "session without a project donates none"
+        );
+        assert_eq!(
+            goal_inherited_working_dir(&state, Some("   ")).await,
+            None,
+            "blank session id is no origin"
+        );
+        assert_eq!(
+            goal_inherited_working_dir(&state, Some(&Uuid::new_v4().to_string())).await,
+            None,
+            "unknown session donates none"
+        );
+    }
+
+    #[tokio::test]
+    async fn created_goal_session_inherits_active_session_working_dir() {
+        let tmp = tempfile::tempdir().unwrap();
+        let app = tauri::test::mock_app();
+        let state = goal_app_state(tmp.path());
+
+        // The active session carries a project — the donation source when
+        // the goal creates its own dedicated session.
+        let active = Uuid::new_v4();
+        rail_row(&state, active, Some("/work/active-proj")).await;
+        state.registry.insert(active);
+        state
+            .registry
+            .set_active(crate::session_registry::SessionKey(active));
+
+        let inherited = goal_inherited_working_dir(&state, None).await;
+        assert_eq!(
+            inherited.as_deref(),
+            Some("/work/active-proj"),
+            "no target → the active session donates its dir"
+        );
+
+        let created = create_goal_session(&state, &app.handle().clone(), "Goal session", inherited)
+            .await
+            .unwrap();
+        let sessions = state.sessions.lock().await;
+        let meta = sessions
+            .iter()
+            .find(|s| s.id == created.to_string())
+            .expect("created session on the rail");
+        assert_eq!(
+            meta.working_dir.as_deref(),
+            Some("/work/active-proj"),
+            "SessionMeta.working_dir stamped (was a hardcoded None)"
+        );
+    }
+
+    #[tokio::test]
+    async fn created_goal_session_without_an_origin_keeps_none() {
+        let tmp = tempfile::tempdir().unwrap();
+        let app = tauri::test::mock_app();
+        let state = goal_app_state(tmp.path());
+        // No active session → no donation source.
+
+        let created = create_goal_session(&state, &app.handle().clone(), "Goal", None)
+            .await
+            .unwrap();
+        let sessions = state.sessions.lock().await;
+        let meta = sessions
+            .iter()
+            .find(|s| s.id == created.to_string())
+            .expect("created session on the rail");
+        assert_eq!(meta.working_dir, None);
     }
 
     // ── finalize: decision → terminal → sidecar + inbox ─────────────────
@@ -2199,6 +2371,7 @@ mod tests {
             last_error: None,
             started_at_ms: 1_000,
             updated_at_ms: 2_000,
+            working_dir: None,
         }))
     }
 
