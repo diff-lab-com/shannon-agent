@@ -578,6 +578,15 @@
       }
     },
     {
+      "identifier": "allow-get-extension-stats",
+      "description": "Enables the get_extension_stats command without any pre-configured scope.",
+      "commands": {
+        "allow": [
+          "get_extension_stats"
+        ]
+      }
+    },
+    {
       "identifier": "allow-get-file-diff",
       "description": "Enables the get_file_diff command without any pre-configured scope.",
       "commands": {
@@ -2704,6 +2713,7 @@
         "allow-disable-plugin",
         "allow-enable-plugin",
         "allow-featured-vendor-to-entry",
+        "allow-get-extension-stats",
         "allow-get-mcp-server-config",
         "allow-get-skill-detail",
         "allow-install-agent-from-repo",

@@ -346,6 +346,8 @@ fn main() {
             shannon_desktop::cost_commands::get_session_budget,
             shannon_desktop::cost_commands::get_session_context_breakdown,
             shannon_desktop::cost_commands::get_usage_by_session,
+            // X7 — per-extension (skill / MCP tool) invocation + token stats
+            shannon_desktop::cost_commands::get_extension_stats,
             // P1-1 — session multi-window (frozen contract)
             session_window_commands::open_session_window,
             session_window_commands::list_session_windows,
