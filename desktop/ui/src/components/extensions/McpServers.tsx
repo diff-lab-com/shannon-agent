@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 import EmptyState from '@/components/ui/empty-state'
+import ErrorState from '@/components/ui/error-state'
 import { useNavigate, useOutletContext } from "react-router-dom";
 import { useIntl } from "react-intl";
 import { toast } from "sonner";
@@ -80,13 +81,21 @@ export default function McpServers() {
 
   const [installed, setInstalled] = useState<McpServerInfo[]>([]);
   const [installedLoading, setInstalledLoading] = useState(true);
+  // B3 P1-17: a failed list read must not render as "nothing installed".
+  const [installedError, setInstalledError] = useState<string | null>(null);
   const [busyId, setBusyId] = useState<string | null>(null);
   const [dialogOpen, setDialogOpen] = useState(false);
   const [removeTarget, setRemoveTarget] = useState<string | null>(null);
 
   const refreshInstalled = () => {
     listMcpServers()
-      .then((rows) => setInstalled(rows))
+      .then((rows) => {
+        setInstalled(rows);
+        setInstalledError(null);
+      })
+      .catch((err) => {
+        setInstalledError(err instanceof Error ? err.message : String(err));
+      })
       .finally(() => setInstalledLoading(false));
   };
 
@@ -102,9 +111,11 @@ export default function McpServers() {
       toast.success(t("extensions.mcp.removed", { name }));
       refreshInstalled();
     } catch (err) {
+      // B3 (P2 顺带): uninstall failures get their own message — reusing the
+      // "install failed" copy told users the opposite of what happened.
       toast.error(
         intl.formatMessage(
-          { id: "extensions.mcp.oneClick.installFailed" },
+          { id: "extensions.mcp.uninstallFailed" },
           { error: safeErrorMessage(err, "uninstall failed") },
         ),
       );
@@ -131,6 +142,8 @@ export default function McpServers() {
       <InstalledSection
         servers={installed}
         loading={installedLoading}
+        error={installedError}
+        onRetry={refreshInstalled}
         busyId={busyId}
         onUninstall={(name) => setRemoveTarget(name)}
         onOpenPermissions={(name) =>
@@ -184,12 +197,18 @@ export default function McpServers() {
 function InstalledSection({
   servers,
   loading,
+  error,
+  onRetry,
   busyId,
   onUninstall,
   onOpenPermissions,
 }: {
   servers: McpServerInfo[];
   loading: boolean;
+  /** B3 P1-17: load failure — rendered as a distinct error state, never as
+   *  the empty state. */
+  error: string | null;
+  onRetry: () => void;
   busyId: string | null;
   onUninstall: (name: string) => void;
   onOpenPermissions: (name: string) => void;
@@ -205,6 +224,15 @@ function InstalledSection({
       </h3>
       {loading ? (
         <LoadingState size="sm" label={t("extensions.mcp.loading")} />
+      ) : error ? (
+        <div className="border border-outline-variant/30 rounded-2xl bg-surface-container-lowest/50">
+          <ErrorState
+            icon="dns"
+            title={t("extensions.mcp.loadFailed")}
+            description={error}
+            action={{ label: t("common.retry"), onClick: onRetry }}
+          />
+        </div>
       ) : servers.length === 0 ? (
         <div className="border border-dashed border-outline-variant/40 rounded-2xl bg-surface-container-low/30">
           <EmptyState

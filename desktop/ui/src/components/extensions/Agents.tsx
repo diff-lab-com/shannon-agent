@@ -13,6 +13,7 @@ import {
 } from "@/lib/tauri-api";
 import { SecurityBadge } from "./SecurityBadge";
 import { ConfirmDialog } from "@/components/ui/confirm-dialog";
+import ErrorState from "@/components/ui/error-state";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
 
@@ -47,6 +48,8 @@ export default function Agents() {
 
   const [installed, setInstalled] = useState<InstalledAgent[]>([]);
   const [installedLoading, setInstalledLoading] = useState(true);
+  // B3 P1-17: a failed read must not render as "nothing installed".
+  const [installedError, setInstalledError] = useState<string | null>(null);
 
   const [busyId, setBusyId] = useState<string | null>(null);
   const [feedback, setFeedback] = useState<{ id: string; msg: string; ok: boolean } | null>(null);
@@ -75,7 +78,13 @@ export default function Agents() {
 
   const refreshInstalled = () => {
     listInstalledAgentPlugins()
-      .then(setInstalled)
+      .then((rows) => {
+        setInstalled(rows);
+        setInstalledError(null);
+      })
+      .catch((err) => {
+        setInstalledError(err instanceof Error ? err.message : String(err));
+      })
       .finally(() => setInstalledLoading(false));
   };
 
@@ -193,6 +202,15 @@ export default function Agents() {
         </h3>
         {installedLoading ? (
           <div className="text-center py-md text-on-surface-variant text-label-sm">{t('extensions.agents.loadingInstalled')}</div>
+        ) : installedError ? (
+          <div className="border border-outline-variant/30 rounded-2xl bg-surface-container-lowest/50">
+            <ErrorState
+              icon="smart_toy"
+              title={t('extensions.agents.installedLoadFailed')}
+              description={installedError}
+              action={{ label: t('common.retry'), onClick: refreshInstalled }}
+            />
+          </div>
         ) : installed.length === 0 ? (
           <div className="text-center py-md text-on-surface-variant text-label-sm">
             {t('extensions.agents.noInstalled')}
