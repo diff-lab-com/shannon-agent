@@ -33,6 +33,15 @@ export interface ChatContextValue {
    */
   isQuerying: boolean
   activeToolCalls: ToolCall[]
+  /**
+   * P2-19: live progress of the visible session's currently-running tool,
+   * from QUERY_TOOL_PROGRESS — `progress` (0..=100 when the backend sends a
+   * percentage) and/or `progress_message` (backend-authored text). Null
+   * before the first progress event of a run, on every new tool start, when
+   * the run settles (completed/failed/cancelled), on new sends and on
+   * session switches. Mirrors what RunStatusLine's pill shows.
+   */
+  toolProgress: { progress?: number; message?: string } | null
   usage: UsagePayload | null
   /**
    * `options.budgetBypass` is the "continue (ignore once)" choice from the
