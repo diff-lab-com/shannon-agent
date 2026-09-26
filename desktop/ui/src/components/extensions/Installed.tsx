@@ -7,7 +7,10 @@ import type { InstalledAddonSummary, AddonKind, ExtensionStats, ExtensionToolSta
 import EmptyState from "@/components/ui/empty-state";
 import { cn } from "@/lib/utils";
 
-/** Stats look-back window (days) — one sane default, fetched once per mount. */
+/** Stats look-back window (days) — the REQUEST default. The row subtext
+ *  displays the server-echoed `ExtensionStats.days` (falling back to this
+ *  constant only while stats are absent), so the wording never claims a
+ *  window the backend did not use. */
 const STATS_WINDOW_DAYS = 30;
 
 /**
@@ -200,7 +203,7 @@ export default function Installed() {
                     row={row}
                     isLast={i === rows.length - 1}
                     stat={statFor(stats, row)}
-                    days={STATS_WINDOW_DAYS}
+                    days={stats?.days ?? STATS_WINDOW_DAYS}
                   />
                 ))}
               </div>
@@ -286,7 +289,7 @@ function InstalledRow({
           <p className="text-label-xs text-on-surface-variant mt-[2px]" data-testid="installed-row-stats">
             {intl.formatMessage({ id: 'extensions.installed.statsCalls' }, { calls: stat.calls, days })}
             {stat.totalTokens > 0 &&
-              ' · ' + intl.formatMessage({ id: 'extensions.installed.statsTokens' }, { tokens: stat.totalTokens })}
+              intl.formatMessage({ id: 'extensions.installed.statsTokens' }, { tokens: stat.totalTokens })}
           </p>
         )}
         {row.install_path && (

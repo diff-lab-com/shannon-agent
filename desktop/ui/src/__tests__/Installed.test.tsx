@@ -211,8 +211,22 @@ describe('Installed extensions tab', () => {
         expect(screen.getAllByTestId('installed-row-stats')).toHaveLength(2)
       })
       // Skill row matches by name; MCP row matches by server name.
+      // A13: the「 · 」separator rides inside the tokens ICU message, so the
+      // rendered row is one localized string.
       expect(screen.getByText('12 calls in 30 days · ~3500 tokens')).toBeInTheDocument()
       expect(screen.getByText('7 calls in 30 days · ~1200 tokens')).toBeInTheDocument()
+    })
+
+    // A13: the subtext must display the server-echoed window, not the local
+    // 30-day request constant — a 7-day backend window must not read "30".
+    it('renders the server-echoed days window instead of the local constant', async () => {
+      vi.mocked(api.listInstalledAddons).mockResolvedValueOnce(sampleRows)
+      vi.mocked(api.getExtensionStats).mockResolvedValueOnce({ ...statsWithData, days: 7 })
+      renderInstalled()
+      await waitFor(() => {
+        expect(screen.getByText('12 calls in 7 days · ~3500 tokens')).toBeInTheDocument()
+      })
+      expect(screen.queryByText('12 calls in 30 days')).not.toBeInTheDocument()
     })
 
     it('renders the tokens segment only when tokens are present', async () => {

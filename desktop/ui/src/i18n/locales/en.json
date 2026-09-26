@@ -842,7 +842,7 @@
   "extensions.installed.disabled": "Disabled",
   "extensions.installed.installedAt": "installed {date}",
   "extensions.installed.statsCalls": "{calls} calls in {days} days",
-  "extensions.installed.statsTokens": "~{tokens} tokens",
+  "extensions.installed.statsTokens": " · ~{tokens} tokens",
   "extensions.installed.mcpServers": "MCP Servers",
   "extensions.installed.skills": "Skills",
   "extensions.installed.agents": "Agents",
