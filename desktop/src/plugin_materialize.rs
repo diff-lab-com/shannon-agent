@@ -10,10 +10,19 @@
 //!
 //! | bundle artifact          | Shannon destination                              |
 //! |--------------------------|--------------------------------------------------|
-//! | `skills/<n>/SKILL.md`    | `<skills_root>/<plugin>/<n>/` (recursive copy)   |
+//! | `skills/<n>/SKILL.md`    | `<skills_root>/<plugin>-<n>/` (flattened copy)   |
 //! | `agents/<f>`             | `<agents_root>/<plugin>/<f>`                     |
 //! | `commands/<f>.md`        | `<commands_root>/<f>`                            |
 //! | manifest `mcpServers`    | `mcp-servers.json` entry keyed `<plugin>-<server>` |
+//!
+//! The skills destination is deliberately **flat** (`<plugin>-<n>`, one
+//! level under the root — the same layout the migration importer writes).
+//! Every runtime consumer scans at most one level under the skills root
+//! (`shannon-skills` loader + registry walk with `max_depth(2)`;
+//! `extensions::skill_installers::list_installed_skills` and the
+//! aggregator's `read_dir` scan), so a nested `<plugin>/<n>/SKILL.md`
+//! sits below their depth floor and never registers. Both segments are
+//! sanitized single components, so the `-` join is collision-free.
 //!
 //! Every created target is recorded in a `materialized.json` sidecar
 //! written **inside the plugin's own install directory** (never into core
@@ -261,7 +270,8 @@ pub fn materialize_plugin(
         warnings: Vec::new(),
     };
 
-    // skills/<n>/ → <skills_root>/<plugin>/<n>/
+    // skills/<n>/ → <skills_root>/<plugin>-<n>/ (flattened — depth 2 is the
+    // deepest layout every runtime consumer scans; see the module docs).
     for skill in &contents.skills {
         let name = match sanitize_component(skill) {
             Ok(n) => n,
@@ -272,7 +282,7 @@ pub fn materialize_plugin(
                 continue;
             }
         };
-        let dst = homes.skills_root.join(&plugin).join(&name);
+        let dst = homes.skills_root.join(format!("{plugin}-{name}"));
         match copy_dir_recursive(&plugin_dir.join("skills").join(skill), &dst) {
             Ok(()) => outcome.record.skills.push(dst.display().to_string()),
             Err(e) => outcome.warnings.push(format!("skills/{skill}: {e}")),
@@ -388,16 +398,16 @@ pub fn reverse_materialize(record: &MaterializedRecord, homes: &PluginHomes) -> 
         }
     }
 
-    // Drop the now-empty per-plugin homes directories (skills/agents are
-    // namespaced under <plugin>; commands are flat and stay).
+    // Drop the now-empty per-plugin agents directory (agents are the only
+    // artifact still namespaced under `<plugin>`; skills are flattened to
+    // `<plugin>-<n>` and commands stay flat — their exact dirs are removed
+    // via the recorded targets above).
     let plugin = sanitize_component(&record.plugin).ok();
     if let Some(plugin) = plugin {
-        for root in [&homes.skills_root, &homes.agents_root] {
-            let dir = root.join(&plugin);
-            if dir.is_dir() {
-                // remove_dir only succeeds when empty — leftover user files win.
-                let _ = std::fs::remove_dir(&dir);
-            }
+        let dir = homes.agents_root.join(&plugin);
+        if dir.is_dir() {
+            // remove_dir only succeeds when empty — leftover user files win.
+            let _ = std::fs::remove_dir(&dir);
         }
     }
 
@@ -761,8 +771,10 @@ mod tests {
         let outcome = materialize_plugin(&plugin_dir, &manifest, &homes).unwrap();
         assert!(outcome.warnings.is_empty(), "{:?}", outcome.warnings);
 
-        let skill = homes.skills_root.join("demo").join("greet").join("SKILL.md");
+        // Flattened layout: <skills_root>/<plugin>-<skill>/SKILL.md (depth 2).
+        let skill = homes.skills_root.join("demo-greet").join("SKILL.md");
         assert!(skill.is_file(), "{} missing", skill.display());
+        assert!(!homes.skills_root.join("demo").exists(), "no nested <plugin> dir");
         let agent = homes.agents_root.join("demo").join("reviewer.md");
         assert!(agent.is_file());
         let command = homes.commands_root.join("ship.md");
@@ -784,6 +796,39 @@ mod tests {
         assert!(!homes.skills_root.join(MATERIALIZED_SIDECAR).exists());
     }
 
+    // C1 integration regression: the materialized skill must register
+    // through the REAL runtime loader — `shannon_skills::loader::
+    // load_skills_from_directory`, the exact scan (`min_depth(1)` /
+    // `max_depth(2)`) the engine and the bridge run over `~/.shannon/
+    // skills`. A nested `<plugin>/<n>/SKILL.md` used to fall below that
+    // depth floor, so installed plugin skills were runtime-inert.
+    #[test]
+    fn materialized_skills_register_through_the_real_runtime_loader() {
+        let tmp = tempfile::tempdir().unwrap();
+        let homes = home(tmp.path());
+        let plugin_dir = tmp.path().join("src").join("demo");
+        write_claude_plugin(&plugin_dir, stdio_mcp());
+        let manifest = read_manifest_from_dir(&plugin_dir).unwrap().0;
+
+        let outcome = materialize_plugin(&plugin_dir, &manifest, &homes).unwrap();
+        assert!(outcome.warnings.is_empty(), "{:?}", outcome.warnings);
+
+        let loaded = shannon_skills::loader::load_skills_from_directory(
+            &homes.skills_root,
+            shannon_skills::SkillSource::User,
+        )
+        .unwrap();
+        assert!(
+            loaded.iter().any(|s| s.name == "greet"),
+            "the plugin skill must register via the real loader; got {:?}",
+            loaded.iter().map(|s| s.name.clone()).collect::<Vec<_>>()
+        );
+
+        // The runtime-visible identity is the flattened dir name, so the
+        // Installed row and the loader agree on one name per skill.
+        assert!(homes.skills_root.join("demo-greet").join("SKILL.md").is_file());
+    }
+
     #[test]
     fn reverse_materialize_removes_exactly_the_recorded_targets() {
         let tmp = tempfile::tempdir().unwrap();
@@ -799,7 +844,10 @@ mod tests {
 
         let warnings = reverse_materialize(&outcome.record, &homes);
         assert!(warnings.is_empty(), "{warnings:?}");
-        assert!(!homes.skills_root.join("demo").exists(), "plugin skills dir should be cleaned");
+        assert!(
+            !homes.skills_root.join("demo-greet").exists(),
+            "flattened plugin skill dir should be cleaned"
+        );
         assert!(!homes.agents_root.join("demo").exists());
         assert!(!homes.commands_root.join("ship.md").exists());
         assert!(foreign.is_file(), "foreign command must survive");
@@ -813,7 +861,7 @@ mod tests {
         let homes = home(tmp.path());
         let record = MaterializedRecord {
             plugin: "ghost".into(),
-            skills: vec![homes.skills_root.join("ghost").join("s").display().to_string()],
+            skills: vec![homes.skills_root.join("ghost-s").display().to_string()],
             agents: vec![],
             commands: vec![],
             mcp_servers: vec!["ghost-srv".into()],
@@ -851,19 +899,19 @@ mod tests {
 
         // install → materialize
         let installed = materialize_plugin(&plugin_dir, &manifest, &homes).unwrap();
-        assert!(homes.skills_root.join("demo").join("greet").is_dir());
+        assert!(homes.skills_root.join("demo-greet").is_dir());
 
         // disable = reverse but keep plugin dir + sidecar
         let warnings = reverse_materialize(&installed.record, &homes);
         assert!(warnings.is_empty(), "{warnings:?}");
-        assert!(!homes.skills_root.join("demo").exists());
+        assert!(!homes.skills_root.join("demo-greet").exists());
         assert!(plugin_dir.join("skills").join("greet").join("SKILL.md").is_file());
         assert!(plugin_dir.join(MATERIALIZED_SIDECAR).is_file());
 
         // enable = re-materialize from the manifest
         let re_enabled = materialize_plugin(&plugin_dir, &manifest, &homes).unwrap();
         assert!(re_enabled.warnings.is_empty(), "{:?}", re_enabled.warnings);
-        assert!(homes.skills_root.join("demo").join("greet").join("SKILL.md").is_file());
+        assert!(homes.skills_root.join("demo-greet").join("SKILL.md").is_file());
         assert!(homes.commands_root.join("ship.md").is_file());
     }
 

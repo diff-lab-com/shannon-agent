@@ -715,17 +715,13 @@ mod lifecycle_tests {
         let mut registry = PluginRegistry::new(tmp.path().join("plugins"));
         let name = registry.install_from_path(&source).await.unwrap();
 
-        // install tail: materialize + sidecar
+        // install tail: materialize + sidecar (C1: flattened skill layout —
+        // <skills_root>/<plugin>-<skill>/SKILL.md, depth 2).
         let installed = finish_install_with_materialize(&mut registry, &name, &homes).unwrap();
         assert!(installed.warnings.is_empty(), "{:?}", installed.warnings);
         let plugin_dir = registry.get("bundle").unwrap().path.clone();
         assert!(
-            homes
-                .skills_root
-                .join("bundle")
-                .join("main")
-                .join("SKILL.md")
-                .is_file()
+            homes.skills_root.join("bundle-main").join("SKILL.md").is_file()
         );
         assert!(homes.commands_root.join("go.md").is_file());
         let store =
@@ -739,7 +735,7 @@ mod lifecycle_tests {
             PluginLifecycleResult { warnings }
         };
         expect_clean(&disabled);
-        assert!(!homes.skills_root.join("bundle").exists());
+        assert!(!homes.skills_root.join("bundle-main").exists());
         assert!(!homes.commands_root.join("go.md").exists());
         assert!(
             plugin_dir.join(plugin_materialize::MATERIALIZED_SIDECAR).is_file(),
@@ -754,12 +750,7 @@ mod lifecycle_tests {
         let enabled = rematerialize_from_manifest(&mut registry, "bundle", &homes).unwrap();
         expect_clean(&enabled);
         assert!(
-            homes
-                .skills_root
-                .join("bundle")
-                .join("main")
-                .join("SKILL.md")
-                .is_file()
+            homes.skills_root.join("bundle-main").join("SKILL.md").is_file()
         );
         assert!(homes.commands_root.join("go.md").is_file());
 
@@ -832,12 +823,7 @@ mod lifecycle_tests {
         // the dropped command is not re-materialized; skill + mcp are back
         assert!(!homes.commands_root.join("go.md").exists());
         assert!(
-            homes
-                .skills_root
-                .join("upd")
-                .join("main")
-                .join("SKILL.md")
-                .is_file()
+            homes.skills_root.join("upd-main").join("SKILL.md").is_file()
         );
     }
 
