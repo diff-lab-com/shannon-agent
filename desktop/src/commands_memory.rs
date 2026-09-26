@@ -239,10 +239,61 @@ pub async fn create_memory(
     Ok(stored)
 }
 
-/// Update an existing memory entry's mutable fields (content, tags, category).
+/// Apply a partial update to one memory entry (pure store logic — unit-tested).
+///
+/// `content` / `tags` / `category` are updated in place. A `project` change is
+/// a **move**, not a field write: persistence is per-project JSONL
+/// (`{project_hash}.jsonl`), so mutating `entry.project` through `get_mut`
+/// would leave the stale original line in the old project's file and the
+/// entry would resurrect there on the next `load()` (file read order decides
+/// the winner). Moves go through [`MemoryStore::move_entry`], which rewrites
+/// the old project's file and appends the entry to the new one while keeping
+/// the id stable.
+pub(crate) fn apply_memory_update(
+    store: &mut MemoryStore,
+    id: &str,
+    content: Option<String>,
+    tags: Option<Vec<String>>,
+    category: Option<MemoryCategory>,
+    project: Option<String>,
+) -> Result<MemoryEntry, String> {
+    let existing = store
+        .get(id)
+        .ok_or_else(|| format!("memory {id} not found"))?
+        .clone();
+
+    if matches!(&project, Some(p) if *p != existing.project) {
+        // Move first (rewrites the old project file, appends under the new
+        // one), then fall through to the in-place field edits below — the
+        // entry is now under the new project in memory and on disk.
+        let target = project.as_deref().unwrap_or(existing.project.as_str());
+        store.move_entry(id, target).map_err(|e| e.to_string())?;
+        return apply_memory_update(store, id, content, tags, category, None);
+    }
+
+    let entry = store
+        .get_mut(id)
+        .ok_or_else(|| format!("memory {id} not found"))?;
+    if let Some(c) = content {
+        entry.content = c;
+    }
+    if let Some(t) = tags {
+        entry.tags = t;
+    }
+    if let Some(c) = category {
+        entry.category = c;
+    }
+    Ok(entry.clone())
+}
+
+/// Update an existing memory entry's mutable fields (content, tags, category,
+/// project).
 ///
 /// Only fields supplied as `Some(...)` are updated; `None` leaves the existing
 /// value intact. Returns the updated entry or an error if the ID is unknown.
+/// Decision 3-A (B3-24): `project` is honored — editing a memory from the UI
+/// can move it between projects (see [`apply_memory_update`] for why a move
+/// is delete + re-add).
 #[tauri::command]
 pub async fn update_memory(
     state: tauri::State<'_, AppState>,
@@ -250,29 +301,17 @@ pub async fn update_memory(
     content: Option<String>,
     tags: Option<Vec<String>>,
     category: Option<String>,
+    project: Option<String>,
 ) -> Result<MemoryEntryDto, String> {
     let store = &state.memory_store;
     // Reload from disk first: without this, entries written by the CLI (or a
     // migration) after app start report "not found" until restart.
     refresh_shared_store(store);
     let mut guard = store.write().map_err(|e| e.to_string())?;
-    {
-        let entry = guard
-            .get_mut(&id)
-            .ok_or_else(|| format!("memory {id} not found"))?;
-        if let Some(c) = content {
-            entry.content = c;
-        }
-        if let Some(t) = tags {
-            entry.tags = t;
-        }
-        if let Some(c) = category {
-            entry.category = parse_category(&c);
-        }
-        let updated = entry.clone();
-        guard.save().map_err(|e| e.to_string())?;
-        Ok(updated)
-    }
+    let category = category.map(|c| parse_category(&c));
+    let updated = apply_memory_update(&mut guard, &id, content, tags, category, project)?;
+    guard.save().map_err(|e| e.to_string())?;
+    Ok(updated)
 }
 
 /// Delete a memory by ID. Returns `true` if the entry existed.
@@ -971,5 +1010,130 @@ mod tests {
         assert!(out.contains("# Title"));
         assert!(out.contains("## Memories"));
         assert!(out.contains("- fact"));
+    }
+
+    // --- apply_memory_update (B3-24: update_memory supports `project`) ---
+
+    fn store_with_seeded_entry(dir: &tempfile::TempDir) -> (MemoryStore, String) {
+        let mut store = MemoryStore::new(dir.path().to_path_buf());
+        let mut e = entry("proj-a", MemoryCategory::Context, "moveable fact");
+        e.tags = vec!["alpha".to_string()];
+        store.add(e).unwrap();
+        let id = store.project_memories_all("proj-a")[0].id.clone();
+        (store, id)
+    }
+
+    #[test]
+    fn apply_memory_update_partial_fields_in_place() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let (mut store, id) = store_with_seeded_entry(&dir);
+
+        let updated = apply_memory_update(
+            &mut store,
+            &id,
+            Some("edited fact".to_string()),
+            Some(vec!["beta".to_string()]),
+            Some(MemoryCategory::Decision),
+            None,
+        )
+        .unwrap();
+        assert_eq!(updated.content, "edited fact");
+        assert_eq!(updated.tags, vec!["beta".to_string()]);
+        assert_eq!(updated.category, MemoryCategory::Decision);
+        assert_eq!(updated.project, "proj-a", "project untouched without Some");
+        assert_eq!(store.get(&id).unwrap().content, "edited fact");
+    }
+
+    #[test]
+    fn apply_memory_update_none_fields_leave_entry_intact() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let (mut store, id) = store_with_seeded_entry(&dir);
+
+        let updated = apply_memory_update(&mut store, &id, None, None, None, None).unwrap();
+        assert_eq!(updated.content, "moveable fact");
+        assert_eq!(updated.project, "proj-a");
+    }
+
+    #[test]
+    fn apply_memory_update_unknown_id_errors() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let (mut store, _) = store_with_seeded_entry(&dir);
+        let err = apply_memory_update(&mut store, "missing", None, None, None, None);
+        assert!(err.is_err(), "unknown id must error, not silently no-op");
+    }
+
+    #[test]
+    fn apply_memory_update_moves_entry_between_projects() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let (mut store, id) = store_with_seeded_entry(&dir);
+
+        let moved = apply_memory_update(
+            &mut store,
+            &id,
+            None,
+            None,
+            None,
+            Some("proj-b".to_string()),
+        )
+        .unwrap();
+        assert_eq!(moved.project, "proj-b");
+        assert_eq!(moved.id, id, "the entry keeps its identity across a move");
+        assert!(
+            store.project_memories_all("proj-a").is_empty(),
+            "old project no longer holds the entry"
+        );
+        assert_eq!(store.project_memories_all("proj-b").len(), 1);
+    }
+
+    #[test]
+    fn apply_memory_update_project_move_is_durable_across_reload() {
+        // The regression this guards against: an in-place project write would
+        // leave the original JSONL line behind, and the next load() (which
+        // streams every project file) could resurrect the entry under the
+        // old project. The move must go through delete + re-add.
+        let dir = tempfile::TempDir::new().unwrap();
+        let (mut store, id) = store_with_seeded_entry(&dir);
+        apply_memory_update(
+            &mut store,
+            &id,
+            None,
+            None,
+            None,
+            Some("proj-b".to_string()),
+        )
+        .unwrap();
+
+        let mut reloaded = MemoryStore::new(dir.path().to_path_buf());
+        reloaded.load().unwrap();
+        assert!(
+            reloaded.project_memories_all("proj-a").is_empty(),
+            "stale proj-a line must not survive a reload"
+        );
+        let proj_b = reloaded.project_memories_all("proj-b");
+        assert_eq!(proj_b.len(), 1);
+        assert_eq!(proj_b[0].id, id);
+        assert_eq!(proj_b[0].content, "moveable fact");
+        assert_eq!(proj_b[0].tags, vec!["alpha".to_string()]);
+    }
+
+    #[test]
+    fn apply_memory_update_move_with_field_edits_applies_both() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let (mut store, id) = store_with_seeded_entry(&dir);
+
+        let moved = apply_memory_update(
+            &mut store,
+            &id,
+            Some("moved + edited".to_string()),
+            None,
+            Some(MemoryCategory::Decision),
+            Some("proj-b".to_string()),
+        )
+        .unwrap();
+        assert_eq!(moved.project, "proj-b");
+        assert_eq!(moved.content, "moved + edited");
+        assert_eq!(moved.category, MemoryCategory::Decision);
+        assert_eq!(store.project_memories_all("proj-a").len(), 0);
+        assert_eq!(store.project_memories_all("proj-b").len(), 1);
     }
 }

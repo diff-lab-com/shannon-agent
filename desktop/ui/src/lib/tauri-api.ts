@@ -2154,8 +2154,14 @@ export async function updateMemory(input: {
   content?: string | null
   tags?: string[] | null
   category?: string | null
+  /** B3-24 (decision 3-A): moving an entry between projects is a real
+   *  backend move now — omit/null keeps the current project. */
+  project?: string | null
 }): Promise<MemoryEntry> {
-  return invoke('update_memory', input)
+  return invoke('update_memory', {
+    ...input,
+    project: input.project ?? null,
+  })
 }
 
 export async function deleteMemory(id: string): Promise<boolean> {
