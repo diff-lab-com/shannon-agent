@@ -6,6 +6,7 @@
 // budget-bypass flag), raise the budget (opens BudgetDialog), stop.
 
 import { useState } from 'react'
+import { useIntl } from 'react-intl'
 import { Banner } from '@/components/ui/banner'
 import { Button } from '@/components/ui/button'
 import BudgetDialog from '@/components/chat/BudgetDialog'
@@ -31,9 +32,13 @@ export default function BudgetBanner({
   sessionId,
 }: BudgetBannerProps) {
   const t = useT()
+  const intl = useIntl()
   const [raiseOpen, setRaiseOpen] = useState(false)
 
-  const fmt = (n: number) => `$${n.toFixed(2)}`
+  // B4 P2-11: USD via Intl (same approach as SlashResultCard) — localized
+  // grouping/decimal separators instead of a hardcoded `$x.xx`.
+  const fmt = (n: number) =>
+    new Intl.NumberFormat(intl.locale, { style: 'currency', currency: 'USD' }).format(n)
 
   return (
     <>

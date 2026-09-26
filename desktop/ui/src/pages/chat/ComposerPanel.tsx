@@ -72,7 +72,9 @@ export default function ComposerPanel({ setQuickFixOpen, setEditorOpen }: Compos
             usageTick={usage}
           />
         </div>
-        <div className="mt-xs flex items-center justify-between gap-md px-sm text-label-sm text-on-surface-variant">
+        {/* Single-child row — plain start alignment (the old justify-between
+            implied a second trailing slot that no longer exists). */}
+        <div className="mt-xs flex items-center gap-md px-sm text-label-sm text-on-surface-variant">
           <Button
             type="button"
             variant="ghost"

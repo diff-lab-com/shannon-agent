@@ -76,8 +76,6 @@ describe('useVoice hook (stub fallback without MediaRecorder)', () => {
         <div data-testid="supported">{v.supported ? 'yes' : 'no'}</div>
         <button onClick={() => void v.startRecording()}>start</button>
         <button onClick={() => void v.stopRecording()}>stop</button>
-        <button onClick={() => void v.speak('hi')}>speak</button>
-        <button onClick={() => v.stopSpeaking()}>stopSpeak</button>
         <button onClick={() => v.reset()}>reset</button>
       </div>
     )
@@ -114,19 +112,9 @@ describe('useVoice hook (stub fallback without MediaRecorder)', () => {
     expect(onTranscript).toHaveBeenCalledWith('This is a stub transcript. Real STT backend not configured.')
   })
 
-  it('speak sets state to speaking', async () => {
-    renderWithI18n(<VoiceProbe />)
-    fireEvent.click(screen.getByText('speak'))
-    expect(screen.getByTestId('state')).toHaveTextContent('speaking')
-  })
-
-  it('stopSpeaking returns to idle', async () => {
-    renderWithI18n(<VoiceProbe />)
-    fireEvent.click(screen.getByText('speak'))
-    fireEvent.click(screen.getByText('stopSpeak'))
-    expect(screen.getByTestId('state')).toHaveTextContent('idle')
-  })
-
+  // B4 P2-5: the TTS surface (speak/stopSpeaking + the 'speaking' state) was
+  // removed — the hook is speech-to-text only, so only STT transitions are
+  // observable.
   it('reset clears state', async () => {
     renderWithI18n(<VoiceProbe />)
     fireEvent.click(screen.getByText('start'))
@@ -226,11 +214,5 @@ describe('VoiceOrb', () => {
     const { container } = renderWithI18n(<VoiceOrb state="recording" />)
     const orb = container.querySelector('[role="presentation"]')
     expect(orb?.className).toContain('bg-error')
-  })
-
-  it('applies primary styling for speaking state', () => {
-    const { container } = renderWithI18n(<VoiceOrb state="speaking" />)
-    const orb = container.querySelector('[role="presentation"]')
-    expect(orb?.className).toContain('bg-primary')
   })
 })

@@ -7,6 +7,7 @@ import { useChat } from '@/context/ChatContext'
 import { useCatalog } from '@/context/CatalogContext'
 import { useSessions } from '@/context/SessionContext'
 import { parseSlashInput, type SlashCommand, type SlashResult } from '@/lib/slash/commands'
+import { clearDiffStatsCache } from '@/components/chat/diffStats'
 import { toastError } from '@/lib/errorToast'
 import { setActiveWorkingDir } from '@/lib/fileRefs'
 import { useDiskArtifacts } from '@/hooks/useDiskArtifacts'
@@ -306,6 +307,9 @@ export default function Chat() {
     if (prevArtifactSessionRef.current === currentSessionId) return
     prevArtifactSessionRef.current = currentSessionId
     closeChatArtifacts()
+    // B4 P2-20: diff "+x −y" counts are per-path snapshots of THIS session's
+    // review state — drop them so the next session re-fetches fresh stats.
+    clearDiffStatsCache()
   }, [currentSessionId, closeChatArtifacts])
 
   const executeSlash = useCallback((cmd: SlashCommand) => {

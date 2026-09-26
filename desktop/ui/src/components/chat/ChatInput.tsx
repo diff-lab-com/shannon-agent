@@ -681,12 +681,17 @@ export default function ChatInput({
           </div>
 
           <div className="flex items-center gap-xs shrink-0">
-            <MicButton
-              state={voice.state}
-              disabled={isQuerying}
-              onStart={() => void voice.startRecording()}
-              onStop={() => void voice.stopRecording()}
-            />
+            {/* B4 P2-5: no STT provider (no MediaRecorder/getUserMedia) → no
+                mic button; a control that only opens a doomed recording is
+                worse than none. */}
+            {voice.supported && (
+              <MicButton
+                state={voice.state}
+                disabled={isQuerying}
+                onStart={() => void voice.startRecording()}
+                onStop={() => void voice.stopRecording()}
+              />
+            )}
 
             {showCharCount && (
               <>
