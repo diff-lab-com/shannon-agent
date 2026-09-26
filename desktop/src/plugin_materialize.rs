@@ -599,12 +599,11 @@ pub fn summarize_archive(path: &Path) -> Result<PluginBundleSummary, String> {
             .to_string();
         let name = name.trim_end_matches('/');
         if let Some(rest) = name.strip_prefix("skills/") {
-            // skills/<n>/SKILL.md — the skill's name is the first segment.
-            let mut segs = rest.split('/');
-            if let (Some(dir), Some(file)) = (segs.next(), segs.next_back()) {
-                if file == "SKILL.md" && !dir.is_empty() {
-                    skills.push(dir.to_string());
-                }
+            // skills/<n>/SKILL.md — the skill's name is the first segment;
+            // a bare skills/SKILL.md is not a skill directory.
+            let segs: Vec<&str> = rest.split('/').collect();
+            if segs.len() >= 2 && segs[segs.len() - 1] == "SKILL.md" && !segs[0].is_empty() {
+                skills.push(segs[0].to_string());
             }
         } else if let Some(rest) = name.strip_prefix("agents/") {
             if !rest.is_empty() && !rest.contains('/') {
