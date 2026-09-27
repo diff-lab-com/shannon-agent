@@ -727,7 +727,36 @@ Terminology, onboarding, visual system and workflow gaps from
   + Grafana (:3300) stack for accepting the span tree visually; usage in
   the telemetry module docs.
 
-## [Unreleased] — §4.10 W3-2 · manifest v2 + install-time validation + `--dump-config` + ecosystem conventions
+### Release productization hardening (2026-09-27)
+
+Findings from the 2026-09-27 release/productization audit, batch 1+2 fixes.
+
+**Security**
+
+- `GET /api/ws` now rejects cross-site browser `Origin`s with 403 before upgrading. A visited web page could previously complete a `ws://127.0.0.1:33420/api/ws` handshake (WebSocket handshakes are not subject to CORS) and drive the local engine with the user's full tool permissions. Non-browser clients (the gateway's ws client, scripts — which send no `Origin`) and local/webview origins (`tauri://localhost`, `http(s)://tauri.localhost`, loopback on any port) are unaffected.
+- `SECURITY.md`: replaced the placeholder contact address with GitHub private vulnerability reporting, and corrected the claim that secrets are stored "in the OS keyring" — LLM provider credentials are `0600` files under `~/.shannon/credentials/`; only IM channel credentials use the keyring.
+
+**Changed — defaults & claims**
+
+- `secret-guard` now installs in `audit` mode when neither `$SHANNON_SECRET_GUARD` nor `[secret_guard] mode` is set (previously: off) — and only when no other outbound context transform is already installed, so a plugin-provided transform is never clobbered by the built-in guard. Explicit `"off"` in either source still disables it entirely; `redact` is unchanged. Audit mode only logs secret-shaped hits — outgoing prompts are untouched.
+- The CLI REPL background update check: points at the correct repository (`diff-lab-com/shannon-agent` — it queried the nonexistent `shannon-code/shannon`), is gated by the new `update_check` feature flag (`SHANNON_FEATURE_UPDATE_CHECK=0` / `settings.json` `features.update_check`), and persists its last-check timestamp to `~/.shannon/update-check.json` so the 24h throttle actually survives restarts instead of hitting GitHub on every launch.
+- README (EN/zh-CN) claims aligned with reality: the desktop "auto-update" feature is described as an update checker (the Tauri updater remains unconfigured — no signed auto-update channel ships yet); the keyring claim is scoped to IM credentials; the telemetry bullet now discloses the release-availability check; "8 themes" corrected to 12; the two broken quickstart commands (`shannon <path>` treating a path as a prompt, and the nonexistent `--budget` CLI flag) fixed; the comparison table no longer claims default outbound redaction.
+- Desktop packaging: `beforeBuildCommand`/`beforeDevCommand` in `tauri.conf.json` fixed to `pnpm --dir ui build|dev` — the previous `pnpm build` ran from `desktop/`, where no such script exists, breaking monorepo-local `tauri build`.
+- `desktop/ui/package.json` version realigned to the workspace (0.6.0 → 0.11.0) and added as a fifth source in `just release-prep` and the release.yml version guard.
+- Removed the never-wired `packaging/` manifests (winget/homebrew/scoop/AUR): all pinned 0.7.0 with placeholder checksums, none were referenced by CI or published upstream (the documented Homebrew tap never received a commit). Documented in CONTRIBUTING.md that third-party channels are not published.
+- Website: `astro.config.mjs` `site`/`base` now match the actual deployment target (`diff-lab-com.github.io/shannon-agent/`); getting-started docs no longer reference the nonexistent Homebrew tap or the misnamed Windows asset, and the `cargo install --git` line now selects the `shannon-cli` member.
+
+**Fixed — release engineering**
+
+- `release.yml` publish job now waits for the tag's full `ci.yml` run to conclude successfully before flipping the draft to published (previously only the build jobs gated it — a red test/clippy/semver gate still shipped the release). Manual dispatches skip the wait.
+- `SHA256SUMS` now covers `install.sh`/`install.ps1` (previously attached after the manifest was generated — the scripts people `curl | sh` were checksummed by nothing), and both installer scripts hard-fail when no checksum source is reachable instead of "skipping verification".
+- Release assets get SLSA build provenance via `actions/attest-build-provenance` (verify at the repo's attestations page).
+- CLI release matrix gained `aarch64-unknown-linux-gnu` (native arm64 runner); `install.sh` maps Linux/arm64 to the new CLI archive instead of silently skipping the CLI.
+- Gateway release builds now install dependencies with pnpm from the committed `pnpm-lock.yaml` (Bun cannot read a pnpm lockfile, so `bun install --frozen-lockfile` resolved at build time and the binary was not reproducible). Bun remains the bundler.
+- Publish smoke-test asserts the full matrix (18 assets incl. rpm, AppImage, aarch64 dmg, arm64 CLI/gateway) instead of 10.
+- `CHANGELOG.md`: the three stacked `## [Unreleased]` sections are consolidated under one; `install.sh`'s broken `releases/latest` fallback URL fixed.
+
+### §4.10 W3-2 · manifest v2 + install-time validation + `--dump-config` + ecosystem conventions
 
 ### Added
 
@@ -769,7 +798,7 @@ Terminology, onboarding, visual system and workflow gaps from
 - MCP references accept `stdio` transport rows without an explicit
   `type = "stdio"` (inferred default), matching hand-written shorthand.
 
-## [Unreleased] — §4.6 W1-P1 · L0 becomes the only authoritative session record (breaking, DP4)
+### §4.6 W1-P1 · L0 becomes the only authoritative session record (breaking, DP4)
 
 ### ⚠️ Breaking changes
 

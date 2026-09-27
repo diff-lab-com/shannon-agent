@@ -35,11 +35,11 @@ Two commitments shape every design decision:
 
 ### 2. Keys never leave your machine
 
-- **Your API keys talk directly to the provider you choose** — no middleman server, no cloud-side credential pool. IM channel credentials live only in the OS keyring.
-- **Outbound secret redaction** — the `secret-guard` plugin (built on the `shannon-plugin-api` content-transform contract) redacts secrets from outgoing messages before they reach the model, and restores them for local execution. Transforms are byte-stable, so your prompt cache keeps hitting.
+- **Your API keys talk directly to the provider you choose** — no middleman server, no cloud-side credential pool. LLM credentials stay in `0600` files under `~/.shannon/credentials/` on your machine; IM channel credentials live in the OS keyring.
+- **Outbound secret scanning** — the built-in `secret-guard` (audit mode by default, `redact` opt-in; on the `shannon-plugin-api` content-transform contract) scans outgoing messages for secret-shaped content and logs or rewrites them before they reach the model. Rewrites are byte-stable, so your prompt cache keeps hitting.
 - **OS-level sandboxing** — Landlock (Linux), macOS Seatbelt, and bubblewrap providers, plus a rule-based + LLM-assisted permission system with strict/balanced/permissive/custom profiles and per-action confirmation for high-risk tools.
 - **Prompt-injection scanning and signature verification** for skills and MCP servers; webhook events are HMAC-SHA256 signed.
-- **No telemetry by default** — and local voice input (whisper.rs) that never sends audio anywhere.
+- **No telemetry by default** — there is no telemetry pipeline at all. The one automatic outbound call besides your provider is a release-availability check (at most once per 24h; disable with `SHANNON_FEATURE_UPDATE_CHECK=0`). Local voice input (whisper.rs) never sends audio anywhere.
 
 **How Shannon compares** (as of 2026-09; sources in [docs/competitive-research-2026-09.md](docs/competitive-research-2026-09.md)):
 
@@ -47,7 +47,7 @@ Two commitments shape every design decision:
 |---|---|---|---|
 | License | Apache-2.0, fully open | Proprietary | Open source |
 | Execution | Local-first, your machine | Cloud VMs / sandboxes | Local |
-| Key & secret handling | OS keyring + outbound secret redaction + injection scanning | Vendor-managed cloud credential stores | Varies |
+| Key & secret handling | Outbound secret scanning + injection scanning; credentials stay on-machine | Vendor-managed cloud credential stores | Varies |
 | LLM providers | Any (BYOK) | Single vendor | Multi / any |
 | Cost model | Pay-per-use + budget caps + visible breakdown | Subscription quotas / credits | BYOK |
 | Auditability | Event-sourced sessions, `trace` replay/diff | Varies, often black box | Varies |
@@ -85,7 +85,7 @@ A native desktop workspace built on **Tauri 2 + React 19 — not Electron**. Two
 - **Simple mode** — for everyone: chat with inline tool calls you can approve or revoke one by one, drag-and-drop attachments, voice input (cloud or fully local), scheduled tasks with calendar and dependency views, and a triage inbox for everything your agents did while you were away.
 - **Advanced mode** — for developers: Connectors (MCP servers, skills, agents), multi-panel workspace with integrated terminal, git worktree management, memory graph, and Mission Control multi-agent orchestration.
 
-Plus: mobile pairing (scan a QR code to dispatch and approve tasks from your phone), IM channels (Telegram / Discord / Slack / 飞书 / 钉钉), system tray, global shortcuts, auto-update, and 8 themes.
+Plus: mobile pairing (scan a QR code to dispatch and approve tasks from your phone), IM channels (Telegram / Discord / Slack / 飞书 / 钉钉), system tray, global shortcuts, an update checker that points you at the latest installer, and 12 themes.
 
 ---
 
@@ -328,7 +328,7 @@ def verify(raw_body: bytes, sig_header: str, secret: str) -> bool:
 
 ```bash
 shannon                          # Interactive REPL
-shannon /path/to/project         # Open in a project directory
+cd /path/to/project && shannon   # Open in a project directory
 shannon --resume                  # Resume last session
 shannon desktop                   # Or launch the desktop app
 ```
@@ -344,7 +344,7 @@ shannon --prompt "List TODOs" --schema schema.json  # Structured JSON output
 echo "fix this bug" | shannon --pipe           # Pipe mode
 shannon --prompt "refactor" --allowed-tools Read,Edit,Bash,Grep --max-turns 10  # CI
 shannon --prompt "fix lint" --diff-only         # Only output diff
-shannon --goal "make CI green" --budget 5       # Autonomous goal with spending cap
+shannon --goal "make CI green"                  # Autonomous goal (spending cap: /goal "..." --budget N inside the REPL)
 ```
 
 </details>
