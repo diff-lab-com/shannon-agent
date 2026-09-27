@@ -20,7 +20,7 @@
 //! an in-app "export diagnostics" button is a possible follow-up.
 
 use shannon_core::session_log::redaction::redact_string;
-use std::io::Write as _;
+use std::io::Write;
 use std::path::Path;
 
 /// Delete rotated `shannon-desktop.log.<date>` files older than `keep_days`

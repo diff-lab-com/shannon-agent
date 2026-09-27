@@ -87,16 +87,21 @@ fn main() {
     let stderr_layer = tracing_subscriber::fmt::layer()
         .with_target(true)
         .with_span_events(tracing_subscriber::fmt::format::FmtSpan::CLOSE);
-    let stderr_layer = if log_format.eq_ignore_ascii_case("json") {
-        stderr_layer.json()
-    } else {
-        stderr_layer
-    };
     use tracing_subscriber::prelude::*;
-    tracing_subscriber::registry()
-        .with(stderr_layer.with_filter(env_filter))
-        .with(file_layer)
-        .init();
+    // `.json()` returns a different concrete type than the text layer and
+    // stacked filtered layers turn the registry generic concrete — box each
+    // layer so both branches share one assembly.
+    if log_format.eq_ignore_ascii_case("json") {
+        tracing_subscriber::registry()
+            .with(stderr_layer.json().with_filter(env_filter.clone()).boxed())
+            .with(file_layer.boxed())
+            .init();
+    } else {
+        tracing_subscriber::registry()
+            .with(stderr_layer.with_filter(env_filter).boxed())
+            .with(file_layer.boxed())
+            .init();
+    }
 
     // Data-version gate (Phase 1, advisory here): a data directory written
     // by a NEWER build is logged loudly but does not block startup — the
