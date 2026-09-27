@@ -282,6 +282,124 @@ describe('P-U2 project actions menu', () => {
   })
 })
 
+// A7: the project color popover is a keyboard-operable menu — focus lands on
+// the first swatch when it opens, arrows rove (wrapping), Enter/Space
+// activate, and Escape closes while returning focus to the ⋯ trigger.
+describe('A7 color popover keyboard a11y', () => {
+  async function openColorPopover() {
+    renderProjectRail()
+    fireEvent.click(await screen.findByRole('button', { name: 'Project actions: alpha' }))
+    fireEvent.click(screen.getByRole('menuitem', { name: 'Project color' }))
+    return await screen.findByTestId('project-color-popover')
+  }
+
+  it('focuses the first swatch on open and roves focus with arrow keys (wrapping)', async () => {
+    const popover = await openColorPopover()
+    const swatches = within(popover).getAllByRole('menuitemradio')
+    expect(swatches).toHaveLength(7) // 6 palette swatches + default
+    expect(document.activeElement).toBe(swatches[0])
+
+    fireEvent.keyDown(popover, { key: 'ArrowRight' })
+    expect(document.activeElement).toBe(swatches[1])
+    fireEvent.keyDown(popover, { key: 'ArrowDown' })
+    expect(document.activeElement).toBe(swatches[2])
+    fireEvent.keyDown(popover, { key: 'ArrowUp' })
+    expect(document.activeElement).toBe(swatches[1])
+    fireEvent.keyDown(popover, { key: 'ArrowLeft' })
+    expect(document.activeElement).toBe(swatches[0])
+    // Wraps off both ends of the swatch strip.
+    fireEvent.keyDown(popover, { key: 'ArrowLeft' })
+    expect(document.activeElement).toBe(swatches[6])
+    fireEvent.keyDown(popover, { key: 'ArrowRight' })
+    expect(document.activeElement).toBe(swatches[0])
+  })
+
+  it('activates the focused swatch with Enter', async () => {
+    const popover = await openColorPopover()
+    const swatches = within(popover).getAllByRole('menuitemradio')
+    swatches[1].focus() // 「Color 2」
+    fireEvent.keyDown(popover, { key: 'Enter' })
+    await waitFor(() =>
+      expect(api.setProjectAppearance).toHaveBeenCalledWith('/w/alpha', null, 'var(--chart-series-3)'),
+    )
+    expect(screen.queryByTestId('project-color-popover')).not.toBeInTheDocument()
+  })
+
+  it('closes on Escape and returns focus to the project ⋯ trigger', async () => {
+    const popover = await openColorPopover()
+    fireEvent.keyDown(popover, { key: 'Escape' })
+    expect(screen.queryByTestId('project-color-popover')).not.toBeInTheDocument()
+    expect(document.activeElement).toBe(screen.getByTestId('project-menu-trigger-/w/alpha'))
+    // Escape alone never wrote an appearance.
+    expect(api.setProjectAppearance).not.toHaveBeenCalled()
+  })
+})
+
+describe('A3 registry refetch failure keeps the loaded/optimistic state', () => {
+  it('keeps the previous projects when a refetch rejects (only the first load may land empty)', async () => {
+    fixtures.registry = [
+      projectRecord('/w/alpha', { name: 'Alpha Custom' }),
+      projectRecord('/w/beta'),
+    ]
+    const view = renderRail([session('s1')])
+    expect(await screen.findByText('Alpha Custom')).toBeInTheDocument()
+
+    // The next registry fetch fails — the rail must keep rendering exactly
+    // the rows it had (name and tree), not wipe to the empty default.
+    // (rerender nests I18nProvider exactly like renderRail so the rail
+    // subtree reconciles in place instead of remounting and resetting state.)
+    vi.mocked(api.listProjects).mockRejectedValueOnce(new Error('registry down'))
+    view.rerender(
+      <I18nProvider>
+        <MemoryRouter>
+          <SessionsSection
+            sessions={[session('s1'), session('s2', { working_dir: '/w/beta' })]}
+            sessionActivity={{}}
+            currentSessionId={null}
+            switchSession={vi.fn(async () => {})}
+            renameSession={vi.fn(async () => {})}
+            deleteSession={vi.fn(async () => {})}
+          />
+        </MemoryRouter>
+      </I18nProvider>,
+    )
+    await waitFor(() => expect(api.listProjects).toHaveBeenCalledTimes(2))
+
+    // Same two project headers with the same labels as before the failure.
+    expect(screen.getByTestId('project-header-/w/alpha')).toBeInTheDocument()
+    expect(screen.getByTestId('project-header-/w/beta')).toBeInTheDocument()
+    expect(screen.getByText('Alpha Custom')).toBeInTheDocument()
+    expect(screen.getByTestId('desktop-session-row-s2')).toBeInTheDocument()
+  })
+
+  it('still lands the empty default when the FIRST load fails, then recovers on success', async () => {
+    vi.mocked(api.listProjects)
+      .mockRejectedValueOnce(new Error('registry down'))
+      .mockResolvedValueOnce([projectRecord('/w/alpha', { name: 'Late Name' })])
+    const view = renderRail([session('s1')])
+    await waitFor(() => expect(api.listProjects).toHaveBeenCalledTimes(1))
+    // First load failed → no registry name (path-tail fallback), no crash.
+    expect(screen.queryByText('Late Name')).not.toBeInTheDocument()
+
+    // A later successful load populates the registry normally.
+    view.rerender(
+      <I18nProvider>
+        <MemoryRouter>
+          <SessionsSection
+            sessions={[session('s1'), session('s2', { working_dir: '/w/alpha' })]}
+            sessionActivity={{}}
+            currentSessionId={null}
+            switchSession={vi.fn(async () => {})}
+            renameSession={vi.fn(async () => {})}
+            deleteSession={vi.fn(async () => {})}
+          />
+        </MemoryRouter>
+      </I18nProvider>,
+    )
+    expect(await screen.findByText('Late Name')).toBeInTheDocument()
+  })
+})
+
 describe('P-U2 archived projects section', () => {
   it('collapses at the rail bottom and restores via unarchive', async () => {
     const { toast } = await import('sonner')

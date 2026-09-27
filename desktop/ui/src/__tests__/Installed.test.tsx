@@ -66,6 +66,32 @@ describe('Installed extensions tab', () => {
     })
   })
 
+  // A2 polish: the error state is no longer a dead end — 重试 refetches BOTH
+  // the addons list and the usage stats, and a clean refetch recovers the tab.
+  it('offers a Retry that refetches both addons and stats', async () => {
+    vi.mocked(api.listInstalledAddons)
+      .mockRejectedValueOnce(new Error('disk corruption'))
+      .mockResolvedValueOnce(sampleRows)
+    vi.mocked(api.getExtensionStats)
+      .mockRejectedValueOnce(new Error('stats down'))
+      .mockResolvedValueOnce(emptyStats)
+    renderInstalled()
+    await waitFor(() => {
+      expect(screen.getByText('Failed to load installed addons')).toBeInTheDocument()
+    })
+    expect(api.listInstalledAddons).toHaveBeenCalledTimes(1)
+    expect(api.getExtensionStats).toHaveBeenCalledTimes(1)
+
+    fireEvent.click(screen.getByTestId('installed-retry'))
+    await waitFor(() => {
+      expect(api.listInstalledAddons).toHaveBeenCalledTimes(2)
+      expect(api.getExtensionStats).toHaveBeenCalledTimes(2)
+    })
+    // The tab recovered into the populated list.
+    expect(await screen.findByText('notion')).toBeInTheDocument()
+    expect(screen.queryByText('Failed to load installed addons')).not.toBeInTheDocument()
+  })
+
   it('shows empty state when no addons installed', async () => {
     vi.mocked(api.listInstalledAddons).mockResolvedValueOnce([])
     renderInstalled()
@@ -211,8 +237,22 @@ describe('Installed extensions tab', () => {
         expect(screen.getAllByTestId('installed-row-stats')).toHaveLength(2)
       })
       // Skill row matches by name; MCP row matches by server name.
+      // A13: the「 · 」separator rides inside the tokens ICU message, so the
+      // rendered row is one localized string.
       expect(screen.getByText('12 calls in 30 days · ~3500 tokens')).toBeInTheDocument()
       expect(screen.getByText('7 calls in 30 days · ~1200 tokens')).toBeInTheDocument()
+    })
+
+    // A13: the subtext must display the server-echoed window, not the local
+    // 30-day request constant — a 7-day backend window must not read "30".
+    it('renders the server-echoed days window instead of the local constant', async () => {
+      vi.mocked(api.listInstalledAddons).mockResolvedValueOnce(sampleRows)
+      vi.mocked(api.getExtensionStats).mockResolvedValueOnce({ ...statsWithData, days: 7 })
+      renderInstalled()
+      await waitFor(() => {
+        expect(screen.getByText('12 calls in 7 days · ~3500 tokens')).toBeInTheDocument()
+      })
+      expect(screen.queryByText('12 calls in 30 days')).not.toBeInTheDocument()
     })
 
     it('renders the tokens segment only when tokens are present', async () => {

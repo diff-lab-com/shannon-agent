@@ -121,10 +121,23 @@ describe('Plugins — installed section (X6)', () => {
     await waitFor(() => expect(screen.getByText('Nothing installed yet')).toBeInTheDocument())
   })
 
-  it('shows an error state when listPlugins rejects', async () => {
-    vi.mocked(api.listPlugins).mockRejectedValue(new Error('boom'))
+  // A2 polish: the installed section no longer borrows the CATALOG error
+  // title (「Could not load catalog」) — it has its own title, and 重试
+  // re-runs the installed-list fetch.
+  it('shows a dedicated error title with a working Retry when listPlugins rejects', async () => {
+    vi.mocked(api.listPlugins).mockRejectedValueOnce(new Error('boom')).mockResolvedValueOnce([])
     renderPlugins()
-    await waitFor(() => expect(screen.getByText('Could not load installed plugins.')).toBeInTheDocument())
+    await waitFor(() =>
+      expect(screen.getByText('Could not load your installed plugins')).toBeInTheDocument(),
+    )
+    expect(screen.getByText('Could not load installed plugins.')).toBeInTheDocument()
+    // The catalog title must not leak into the installed section.
+    expect(screen.queryByText('Could not load catalog')).not.toBeInTheDocument()
+
+    fireEvent.click(screen.getByRole('button', { name: 'Retry' }))
+    await waitFor(() => expect(api.listPlugins).toHaveBeenCalledTimes(2))
+    // The retry recovered into the empty state.
+    expect(await screen.findByText('Nothing installed yet')).toBeInTheDocument()
   })
 
   it('refreshes the installed list when shannon:extension-installed fires', async () => {
@@ -207,6 +220,10 @@ describe('Plugins — installed section (X6)', () => {
     await waitFor(() => expect(api.listPlugins).toHaveBeenCalledTimes(2))
   })
 
+  // A4 polish: the honest fallback copy — a failed PREVIEW does not mean a
+  // registry-only uninstall. The backend reverse-materializes from the
+  // sidecar, so sidecar-recorded artifacts still go; only an unusable
+  // sidecar limits the removal to the registry entry.
   it('says removal is registry-only when the bundle preview fails', async () => {
     vi.mocked(api.inspectPluginSource).mockRejectedValue(new Error('unreadable'))
     vi.mocked(api.listPlugins).mockResolvedValue([plugin()])
@@ -215,9 +232,11 @@ describe('Plugins — installed section (X6)', () => {
 
     fireEvent.click(screen.getByTestId('installed-uninstall-web-plugin'))
     await waitFor(() => expect(screen.getByTestId('uninstall-inspect-failed')).toBeInTheDocument())
-    expect(screen.getByTestId('uninstall-inspect-failed')).toHaveTextContent(
-      'Only the registry entry will be removed',
-    )
+    const note = screen.getByTestId('uninstall-inspect-failed')
+    expect(note.textContent).toContain('materialization sidecar')
+    expect(note.textContent).toContain('registry entry')
+    // The dishonest claim must stay gone.
+    expect(note.textContent).not.toContain('stays as-is')
 
     // consent stays possible — honest, not blocking
     fireEvent.click(screen.getByTestId('uninstall-confirm-button'))
@@ -259,6 +278,30 @@ describe('Plugins — migration rows suppress destructive actions (X6)', () => {
     // nothing destructive can be invoked from the row
     expect(api.disablePlugin).not.toHaveBeenCalled()
     expect(api.uninstallPlugin).not.toHaveBeenCalled()
+  })
+
+  // A8 (a11y): the suppression explanation must not live only in a `title` —
+  // it renders as a visible in-row note and the disabled controls reference
+  // it via aria-describedby (screen-reader/keyboard reachable).
+  it('exposes the migration explanation through aria-describedby to a visible note', async () => {
+    vi.mocked(api.listPlugins).mockResolvedValue([migrationRow])
+    renderPlugins()
+    const note = await screen.findByTestId('migration-note-imported-claude-code')
+    // The note is real visible text (not a title-only tooltip)…
+    expect(note).toBeVisible()
+    expect(note).toHaveTextContent('Migration import record')
+    // …and BOTH disabled controls point at it.
+    const toggle = screen.getByLabelText('Enable or disable imported-claude-code')
+    expect(toggle).toHaveAttribute('aria-describedby', 'migration-note-imported-claude-code')
+    const uninstall = screen.getByTestId('installed-uninstall-imported-claude-code')
+    expect(uninstall).toHaveAttribute('aria-describedby', 'migration-note-imported-claude-code')
+
+    // Non-migration rows carry no note and no describedby.
+    vi.mocked(api.listPlugins).mockResolvedValue([plugin()])
+    renderPlugins()
+    await waitFor(() => expect(screen.getByTestId('installed-row-web-plugin')).toBeInTheDocument())
+    expect(screen.queryByTestId('migration-note-web-plugin')).not.toBeInTheDocument()
+    expect(screen.getByTestId('installed-toggle-web-plugin')).not.toHaveAttribute('aria-describedby')
   })
 })
 
@@ -409,5 +452,33 @@ describe('Plugins — add plugin from three sources (X6)', () => {
     fireEvent.click(screen.getByRole('menuitem', { name: 'From local folder…' }))
 
     await waitFor(() => expect(toast.warning).toHaveBeenCalledWith('sse-only mcp server skipped'))
+  })
+
+  // A10 (picker busy gate): while an install is in flight the「+ 添加插件」
+  // trigger is disabled — picker installs cannot stack.
+  it('disables the add-plugin trigger while an install is in flight', async () => {
+    vi.mocked(api.listPlugins).mockResolvedValue([])
+    let resolveInstall: (v: api.PluginInstallResult) => void = () => {}
+    vi.mocked(api.installPlugin).mockImplementation(
+      () =>
+        new Promise<api.PluginInstallResult>((resolve) => {
+          resolveInstall = resolve
+        }),
+    )
+    vi.mocked(openDialog).mockResolvedValue('/home/u/my-plugin')
+    renderPlugins()
+    await openAddMenu()
+
+    fireEvent.click(screen.getByRole('menuitem', { name: 'From local folder…' }))
+    await waitFor(() => expect(api.installPlugin).toHaveBeenCalledWith('/home/u/my-plugin'))
+
+    const trigger = screen.getByTestId('add-plugin-button')
+    expect(trigger).toBeDisabled()
+    expect(trigger).toHaveAttribute('aria-busy', 'true')
+
+    resolveInstall({ name: 'plugin-x', warnings: [] })
+    await waitFor(() => expect(trigger).not.toBeDisabled())
+    expect(trigger).toHaveAttribute('aria-busy', 'false')
+    expect(toast.success).toHaveBeenCalledWith('Installed plugin-x.')
   })
 })

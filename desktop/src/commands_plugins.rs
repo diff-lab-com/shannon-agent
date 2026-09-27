@@ -232,6 +232,85 @@ fn finish_install_with_materialize(
     }
 }
 
+/// Fold already-collected (reverse-)materialization warnings into a
+/// registry-call failure (A5 polish). The UI toasts the `Err` string, so the
+/// notices gathered BEFORE the registry call — a missing/unreadable sidecar
+/// (registry-only lifecycle) or per-artifact removal failures — must survive
+/// into it; dropping them would make the toast read as a clean no-op while
+/// the sidecar-driven reverse pass already did (or failed) its work.
+///
+/// Message format: `<registry error> — <warning 1>; <warning 2>` (warnings
+/// joined with `"; "`; the whole suffix, including the ` — ` hinge, is
+/// omitted when there are no warnings).
+fn err_with_warnings(err: String, warnings: &[String]) -> String {
+    if warnings.is_empty() {
+        return err;
+    }
+    format!("{err} — {}", warnings.join("; "))
+}
+
+/// Shared uninstall tail: reverse-materialize from the sidecar first, then
+/// uninstall from the registry. A registry failure keeps the collected
+/// warnings (see [`err_with_warnings`]).
+async fn uninstall_tail(
+    registry: &mut shannon_core::plugin::PluginRegistry,
+    name: &str,
+    homes: &PluginHomes,
+) -> Result<PluginLifecycleResult, String> {
+    let warnings = reverse_from_sidecar(registry.get(name), homes);
+    registry
+        .uninstall(name)
+        .await
+        .map_err(|e| err_with_warnings(e.to_string(), &warnings))?;
+    Ok(PluginLifecycleResult { warnings })
+}
+
+/// Shared enable tail: flip the registry flag, then re-materialize from the
+/// manifest (nothing is collected before the registry call, so there is no
+/// warning-folding concern on the failure path here).
+async fn enable_tail(
+    registry: &mut shannon_core::plugin::PluginRegistry,
+    name: &str,
+    homes: &PluginHomes,
+) -> Result<PluginLifecycleResult, String> {
+    registry.enable(name).map_err(|e| e.to_string())?;
+    rematerialize_from_manifest(registry, name, homes)
+}
+
+/// Shared disable tail: reverse-materialize but keep the plugin directory
+/// and its sidecar, then flip the registry flag. A registry failure keeps
+/// the collected warnings (see [`err_with_warnings`]).
+fn disable_tail(
+    registry: &mut shannon_core::plugin::PluginRegistry,
+    name: &str,
+    homes: &PluginHomes,
+) -> Result<PluginLifecycleResult, String> {
+    let warnings = reverse_from_sidecar(registry.get(name), homes);
+    registry
+        .disable(name)
+        .map_err(|e| err_with_warnings(e.to_string(), &warnings))?;
+    Ok(PluginLifecycleResult { warnings })
+}
+
+/// Shared update tail: reverse-materialize, re-pull, re-materialize. Both
+/// failure paths keep the collected warnings: a registry (re-pull) failure
+/// and a post-pull re-materialization failure both fold them into the `Err`.
+async fn update_tail(
+    registry: &mut shannon_core::plugin::PluginRegistry,
+    name: &str,
+    homes: &PluginHomes,
+) -> Result<PluginLifecycleResult, String> {
+    let mut warnings = reverse_from_sidecar(registry.get(name), homes);
+    registry
+        .update(name)
+        .await
+        .map_err(|e| err_with_warnings(e.to_string(), &warnings))?;
+    let rematerialized = rematerialize_from_manifest(registry, name, homes)
+        .map_err(|e| err_with_warnings(e, &warnings))?;
+    warnings.extend(rematerialized.warnings);
+    Ok(PluginLifecycleResult { warnings })
+}
+
 /// Uninstall a plugin by name. Removes the directory.
 ///
 /// X5 semantics: first reverse-materialize strictly from the
@@ -244,10 +323,7 @@ pub async fn uninstall_plugin(
 ) -> Result<PluginLifecycleResult, String> {
     let homes = PluginHomes::detect();
     let mut registry = state.plugin_registry.write().await;
-
-    let warnings = reverse_from_sidecar(registry.get(&name), &homes);
-    registry.uninstall(&name).await.map_err(|e| e.to_string())?;
-    Ok(PluginLifecycleResult { warnings })
+    uninstall_tail(&mut registry, &name, &homes).await
 }
 
 /// Enable a previously installed plugin: re-materialize its bundle from
@@ -259,8 +335,7 @@ pub async fn enable_plugin(
 ) -> Result<PluginLifecycleResult, String> {
     let homes = PluginHomes::detect();
     let mut registry = state.plugin_registry.write().await;
-    registry.enable(&name).map_err(|e| e.to_string())?;
-    rematerialize_from_manifest(&mut registry, &name, &homes)
+    enable_tail(&mut registry, &name, &homes).await
 }
 
 /// Disable a plugin (without removing it): reverse-materialize the bundle
@@ -273,9 +348,7 @@ pub async fn disable_plugin(
 ) -> Result<PluginLifecycleResult, String> {
     let homes = PluginHomes::detect();
     let mut registry = state.plugin_registry.write().await;
-    let warnings = reverse_from_sidecar(registry.get(&name), &homes);
-    registry.disable(&name).map_err(|e| e.to_string())?;
-    Ok(PluginLifecycleResult { warnings })
+    disable_tail(&mut registry, &name, &homes)
 }
 
 /// Pull updates for a git-installed plugin: reverse-materialize first, then
@@ -287,11 +360,7 @@ pub async fn update_plugin(
 ) -> Result<PluginLifecycleResult, String> {
     let homes = PluginHomes::detect();
     let mut registry = state.plugin_registry.write().await;
-    let mut warnings = reverse_from_sidecar(registry.get(&name), &homes);
-    registry.update(&name).await.map_err(|e| e.to_string())?;
-    let rematerialized = rematerialize_from_manifest(&mut registry, &name, &homes)?;
-    warnings.extend(rematerialized.warnings);
-    Ok(PluginLifecycleResult { warnings })
+    update_tail(&mut registry, &name, &homes).await
 }
 
 /// Reverse-materialize from the installed plugin's sidecar. Missing or
@@ -735,12 +804,8 @@ mod lifecycle_tests {
         let store = std::fs::read_to_string(&homes.mcp_store_path).expect("mcp store materialized");
         assert!(store.contains("bundle-relay"), "{store}");
 
-        // disable: reverse-materialize, keep plugin dir + sidecar
-        let disabled = {
-            let warnings = reverse_from_sidecar(registry.get("bundle"), &homes);
-            registry.disable("bundle").unwrap();
-            PluginLifecycleResult { warnings }
-        };
+        // disable: reverse-materialize, keep plugin dir + sidecar (shared tail)
+        let disabled = disable_tail(&mut registry, "bundle", &homes).unwrap();
         expect_clean(&disabled);
         assert!(!homes.skills_root.join("bundle-main").exists());
         assert!(!homes.commands_root.join("go.md").exists());
@@ -759,8 +824,8 @@ mod lifecycle_tests {
             "plugin dir must survive disable"
         );
 
-        // enable: re-materialize from the manifest
-        let enabled = rematerialize_from_manifest(&mut registry, "bundle", &homes).unwrap();
+        // enable: re-materialize from the manifest (shared tail)
+        let enabled = enable_tail(&mut registry, "bundle", &homes).await.unwrap();
         expect_clean(&enabled);
         assert!(
             homes
@@ -771,12 +836,10 @@ mod lifecycle_tests {
         );
         assert!(homes.commands_root.join("go.md").is_file());
 
-        // uninstall: reverse from sidecar + registry uninstall
-        let removed = {
-            let warnings = reverse_from_sidecar(registry.get("bundle"), &homes);
-            registry.uninstall("bundle").await.unwrap();
-            PluginLifecycleResult { warnings }
-        };
+        // uninstall: reverse from sidecar + registry uninstall (shared tail)
+        let removed = uninstall_tail(&mut registry, "bundle", &homes)
+            .await
+            .unwrap();
         expect_clean(&removed);
         assert!(registry.is_empty());
         assert!(!plugin_dir.exists(), "registry uninstall removes the dir");
@@ -797,11 +860,9 @@ mod lifecycle_tests {
         registry.load_all().await.unwrap();
         assert!(registry.contains("legacy"));
 
-        let result = {
-            let warnings = reverse_from_sidecar(registry.get("legacy"), &homes);
-            registry.uninstall("legacy").await.unwrap();
-            PluginLifecycleResult { warnings }
-        };
+        let result = uninstall_tail(&mut registry, "legacy", &homes)
+            .await
+            .unwrap();
         assert_eq!(result.warnings.len(), 1);
         assert!(
             result.warnings[0].contains("registry-only"),
@@ -809,6 +870,85 @@ mod lifecycle_tests {
             result.warnings
         );
         assert!(registry.is_empty());
+    }
+
+    /// A5 (update path): the registry call fails AFTER the reverse pass ran —
+    /// here a corrupt sidecar collected the registry-only warning and the
+    /// non-git plugin then fails the re-pull. The `Err` the UI toasts must
+    /// carry BOTH the registry error and the collected warning (format documented
+    /// on `err_with_warnings`), not silently drop the sidecar story.
+    #[tokio::test]
+    async fn update_failure_err_carries_the_reverse_materialization_warnings() {
+        let tmp = TempDir::new().unwrap();
+        let homes = PluginHomes::from_home(tmp.path());
+        let plugins_dir = tmp.path().join("plugins");
+        let plugin_dir = plugins_dir.join("nogit");
+        write_bundle_plugin(&plugin_dir, "nogit");
+        // Corrupt sidecar → the reverse pass collects its registry-only warning.
+        std::fs::write(
+            plugin_dir.join(plugin_materialize::MATERIALIZED_SIDECAR),
+            "{not json",
+        )
+        .unwrap();
+
+        let mut registry = PluginRegistry::new(plugins_dir);
+        registry.load_all().await.unwrap();
+        assert!(registry.contains("nogit"));
+
+        // No `.git` checkout → registry.update fails.
+        let err = update_tail(&mut registry, "nogit", &homes)
+            .await
+            .unwrap_err();
+        assert!(err.contains("not a git repository"), "{err}");
+        assert!(
+            err.contains("unreadable materialization sidecar"),
+            "collected warning lost from Err: {err}"
+        );
+        // The failed lifecycle left the plugin registered.
+        assert!(registry.contains("nogit"));
+    }
+
+    /// A5 (uninstall path): the directory vanished behind the registry's
+    /// back — the reverse pass collects the no-sidecar (registry-only)
+    /// notice, then the registry uninstall fails on the missing directory.
+    /// The `Err` must still carry the notice about the materialized
+    /// artifacts instead of reading as a bare io error.
+    #[tokio::test]
+    async fn uninstall_failure_err_carries_the_registry_only_notice() {
+        let tmp = TempDir::new().unwrap();
+        let homes = PluginHomes::from_home(tmp.path());
+        let plugins_dir = tmp.path().join("plugins");
+        let plugin_dir = plugins_dir.join("ghosted");
+        write_bundle_plugin(&plugin_dir, "ghosted");
+
+        let mut registry = PluginRegistry::new(plugins_dir);
+        registry.load_all().await.unwrap();
+        std::fs::remove_dir_all(&plugin_dir).unwrap();
+
+        let err = uninstall_tail(&mut registry, "ghosted", &homes)
+            .await
+            .unwrap_err();
+        assert!(
+            err.contains("registry-only"),
+            "registry-only notice lost from Err: {err}"
+        );
+        // The honest failure: the registry still lists the plugin.
+        assert!(registry.contains("ghosted"));
+    }
+
+    /// A5: no warnings → the Err is the plain registry error (no dangling
+    /// hinge), so the fold never pollutes clean failures.
+    #[test]
+    fn err_with_warnings_leaves_clean_errors_untouched() {
+        assert_eq!(err_with_warnings("boom".into(), &[]), "boom");
+        let folded = err_with_warnings(
+            "boom".into(),
+            &[
+                "no sidecar — registry-only".to_string(),
+                "skill 'x': gone".to_string(),
+            ],
+        );
+        assert_eq!(folded, "boom — no sidecar — registry-only; skill 'x': gone");
     }
 
     /// update = reverse + re-materialize: a command the upstream dropped is

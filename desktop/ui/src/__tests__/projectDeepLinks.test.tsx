@@ -12,7 +12,7 @@
 // and every surface returns to the unscoped view.
 
 import { describe, it, expect, vi, beforeEach } from 'vitest'
-import { render, screen, fireEvent, waitFor } from '@testing-library/react'
+import { render, screen, fireEvent, waitFor, within } from '@testing-library/react'
 import { MemoryRouter, useLocation } from 'react-router-dom'
 import { I18nProvider } from '@/i18n'
 import { AppProvider } from '@/context/AppContext'
@@ -157,6 +157,17 @@ describe('/tasks?project= (P-U3)', () => {
     renderAppPage(<Tasks />, '/tasks')
     await screen.findByTestId('goal-run-panel')
     expect(screen.queryByTestId('project-filter-chip')).not.toBeInTheDocument()
+  })
+
+  // A9 (a11y): the chip container carries valid semantics — role="group"
+  // with an aria-label (a bare div ignores aria-label), and the × control
+  // stays reachable inside the named group.
+  it('exposes the chip as a named group with the remove control inside', async () => {
+    renderAppPage(<Tasks />, '/tasks?project=%2Fw%2Falpha')
+    const group = await screen.findByRole('group', { name: 'Filtered by project: Alpha Reg' })
+    expect(group).toHaveAttribute('data-testid', 'project-filter-chip')
+    expect(within(group).getByText('Alpha Reg')).toBeInTheDocument()
+    expect(within(group).getByRole('button', { name: 'Remove project filter' })).toBeInTheDocument()
   })
 
   it('filters goal-run cards by dto.workingDir', async () => {

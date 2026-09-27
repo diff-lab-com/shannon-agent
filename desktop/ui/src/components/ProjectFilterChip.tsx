@@ -9,6 +9,10 @@ export default function ProjectFilterChip({ label, onRemove }: { label: string; 
   return (
     <div
       data-testid="project-filter-chip"
+      // A9 (a11y): a bare div ignores aria-label — give the container valid
+      // group semantics so the name is actually announced; the visible label
+      // and the × control stay inside it.
+      role="group"
       aria-label={intl.formatMessage({ id: 'project.filter.chip.aria' }, { name: label })}
       title={intl.formatMessage({ id: 'project.filter.chip.aria' }, { name: label })}
       className="inline-flex items-center gap-xs px-sm py-xs rounded-full bg-primary/10 border border-primary/20 text-primary font-label-sm mb-md max-w-full"

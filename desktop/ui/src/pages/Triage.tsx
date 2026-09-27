@@ -728,7 +728,11 @@ export default function Triage() {
           </div>
         ) : null}
 
-        {/* List */}
+        {/* List. Emptiness is judged on the VISIBLE list (P-U3 polish): a
+            project deep-link that filters every item out must land on the
+            guided empty state — not on a select-all row reading 「shown 0
+            of N」. The scoped variant names the filter and offers the
+            清除筛选 escape hatch; the plain one keeps the refresh CTA. */}
         {loading ? (
           <div className="space-y-md">
             {Array.from({ length: 3 }).map((_, i) => <CardSkeleton key={i} />)}
@@ -742,13 +746,22 @@ export default function Triage() {
             description={t('inbox.errorState.description')}
             action={{ label: t('inbox.errorState.retry'), onClick: () => void refresh() }}
           />
-        ) : items.length === 0 ? (
-          <EmptyState
-            icon="inbox"
-            title={t('inbox.empty.title')}
-            description={t('inbox.empty.description')}
-            action={{ label: t('inbox.empty.cta'), onClick: () => void refresh() }}
-          />
+        ) : visibleItems.length === 0 ? (
+          projectKey ? (
+            <EmptyState
+              icon="folder_off"
+              title={t('inbox.empty.project.title')}
+              description={t('inbox.empty.project.description')}
+              action={{ label: t('inbox.empty.project.cta'), onClick: clearProject }}
+            />
+          ) : (
+            <EmptyState
+              icon="inbox"
+              title={t('inbox.empty.title')}
+              description={t('inbox.empty.description')}
+              action={{ label: t('inbox.empty.cta'), onClick: () => void refresh() }}
+            />
+          )
         ) : (
           <>
             {/* Stale-rows banner: the last refresh failed but older items are

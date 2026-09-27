@@ -2407,9 +2407,19 @@ mod tests {
 
     #[tokio::test]
     async fn routine_run_without_working_dir_keeps_the_default_session_start() {
+        // The assert below pins the tee's default (process cwd) — the
+        // cwd-mutating bucket tests serialize through CWD_LOCK, and this
+        // test must hold it too so no concurrent test moves the cwd under
+        // the run.
+        let _guard = CWD_LOCK.lock().unwrap();
         let app = tauri::test::mock_app();
         let tmp = tempfile::tempdir().unwrap();
         let (deps, tasks, runs, _inbox) = scheduler_fixture(tmp.path());
+
+        // The engine tee writes session/start with the process cwd —
+        // snapshot the expectation BEFORE the run (A12 polish: the old
+        // assert_ne against a never-written sentinel was vacuously true).
+        let expected_cwd = std::env::current_dir().unwrap().display().to_string();
 
         let routine = ScheduledRoutine::new("unhoused run".into(), "p".into(), 60);
         tasks.save(&routine).unwrap();
@@ -2423,10 +2433,10 @@ mod tests {
         // session/start (process cwd), exactly the pre-P-E1 behavior.
         let container = tmp.path().join("sessions");
         let start = wait_for_session_start(&container).await;
-        assert_ne!(
+        assert_eq!(
             start.cwd.as_deref(),
-            Some("/work/unhoused-project"),
-            "no stamp may appear for a routine without a working dir"
+            Some(expected_cwd.as_str()),
+            "without a routine working_dir the tee's own session/start (process cwd) stands"
         );
     }
 

@@ -22,7 +22,12 @@
 //! `extensions::skill_installers::list_installed_skills` and the
 //! aggregator's `read_dir` scan), so a nested `<plugin>/<n>/SKILL.md`
 //! sits below their depth floor and never registers. Both segments are
-//! sanitized single components, so the `-` join is collision-free.
+//! sanitized single components; the `-` join is only collision-free when
+//! the names themselves carry no `-` (plugin `a-b` + skill `c` and plugin
+//! `a` + skill `b-c` both flatten to `a-b-c`). The flat name is therefore
+//! a preview/display convention, not a hard uniqueness guarantee — the
+//! sidecar records each plugin's exact destinations, so removal stays
+//! precise regardless.
 //!
 //! Every created target is recorded in a `materialized.json` sidecar
 //! written **inside the plugin's own install directory** (never into core
@@ -604,10 +609,13 @@ pub fn summarize_archive(path: &Path) -> Result<PluginBundleSummary, String> {
             .to_string();
         let name = name.trim_end_matches('/');
         if let Some(rest) = name.strip_prefix("skills/") {
-            // skills/<n>/SKILL.md — the skill's name is the first segment;
-            // a bare skills/SKILL.md is not a skill directory.
+            // skills/<n>/SKILL.md — EXACTLY two segments: the skill directory
+            // must be a DIRECT child of skills/, the same rule
+            // `scan_bundle_dir` (and therefore materialization) applies. A
+            // nested `skills/a/b/SKILL.md` would never materialize, so the
+            // trust preview must not advertise it as a skill (A6 polish).
             let segs: Vec<&str> = rest.split('/').collect();
-            if segs.len() >= 2 && segs[segs.len() - 1] == "SKILL.md" && !segs[0].is_empty() {
+            if segs.len() == 2 && segs[1] == "SKILL.md" && !segs[0].is_empty() {
                 skills.push(segs[0].to_string());
             }
         } else if let Some(rest) = name.strip_prefix("agents/") {
@@ -1264,6 +1272,33 @@ mod tests {
         std::fs::write(&path, &bytes).unwrap();
         let err = summarize_archive(&path).unwrap_err();
         assert!(err.contains("no manifest"), "{err}");
+    }
+
+    // A6 polish: the archive preview must agree with the directory scanner —
+    // only `skills/<n>/SKILL.md` DIRECT children are skills. A nested
+    // `skills/a/b/SKILL.md` never materializes (scan_bundle_dir reads one
+    // level), so the trust card must not advertise it.
+    #[test]
+    fn summarize_archive_ignores_nested_skill_layouts() {
+        let bytes = build_zip(&[
+            (
+                ".claude-plugin/plugin.json",
+                br#"{"name":"nested","version":"1.0.0","description":"d","type":"skill","entry":"t.md","trigger":"/n","template":"t"}"#,
+            ),
+            ("skills/alpha/SKILL.md", b"a"),
+            ("skills/nested/deep/SKILL.md", b"n"),
+            ("skills/bare.md", b"bare file, not a skill dir"),
+        ]);
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("nested.mcpb");
+        std::fs::write(&path, &bytes).unwrap();
+        let summary = summarize_archive(&path).unwrap();
+        assert_eq!(summary.skills, vec!["alpha".to_string()]);
+        assert!(
+            !summary.skills.iter().any(|s| s == "nested"),
+            "nested layout must not be previewed as a skill: {:?}",
+            summary.skills
+        );
     }
 
     // ── git source detection ────────────────────────────────────────────
