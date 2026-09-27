@@ -563,6 +563,8 @@ export interface FileDiff {
   new_content: string
   file_name: string
   language: string
+  /** B0 P0-3: fetch-time mtime (RFC3339) for the Apply-time conflict check. Optional so test fixtures can omit it. */
+  mtime?: string
 }
 
 export interface DiffFileInfo {

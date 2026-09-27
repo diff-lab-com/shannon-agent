@@ -14,7 +14,7 @@ use std::fs::{self, OpenOptions};
 use std::io::Write;
 use std::path::{Path, PathBuf};
 
-use chrono::{DateTime, Duration, Utc};
+use chrono::{DateTime, Duration, Local, TimeZone, Utc};
 use serde::{Deserialize, Serialize};
 
 use shannon_core::scheduled_runs::{ScheduledRun, ScheduledRunsStore};
@@ -265,8 +265,14 @@ pub struct UsageStats {
     pub by_day: Vec<BucketTotals>,
 }
 
+/// P1-14: bucket by the **local** calendar day, matching the per-row local
+/// timestamps the Usage page renders next to the chart. UTC labelling made
+/// e.g. UTC+8 spend between 00:00 and 08:00 land on "yesterday", so daily
+/// reconciliation never added up.
 fn day_label(ms: u64) -> String {
-    DateTime::<Utc>::from_timestamp_millis(ms as i64)
+    Local
+        .timestamp_millis_opt(ms as i64)
+        .single()
         .map(|dt| dt.format("%Y-%m-%d").to_string())
         .unwrap_or_else(|| ms.to_string())
 }
@@ -556,9 +562,23 @@ mod tests {
     }
 
     #[test]
-    fn day_label_is_utc_date() {
-        // 2024-01-02T03:04:05Z = 1704169445000 ms.
-        assert_eq!(day_label(1_704_169_445_000), "2024-01-02");
+    fn day_label_uses_local_date() {
+        // P1-14: buckets follow the machine's local calendar day (the same
+        // day the Usage page's local-time column shows), not UTC. The
+        // expectation is derived through chrono itself so the test stays
+        // correct in every CI timezone.
+        let ms: i64 = 1_704_169_445_000; // 2024-01-02T03:04:05Z
+        let expected = Local
+            .timestamp_millis_opt(ms)
+            .single()
+            .expect("valid local timestamp")
+            .format("%Y-%m-%d")
+            .to_string();
+        assert_eq!(day_label(ms as u64), expected);
+        // Out-of-range input (year ~824k, past chrono's ±262143 ceiling)
+        // degrades to the raw millis rather than lying.
+        let beyond_chrono = 26_000_000_000_000_000u64;
+        assert_eq!(day_label(beyond_chrono), beyond_chrono.to_string());
     }
 
     #[test]

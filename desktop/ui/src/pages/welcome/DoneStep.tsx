@@ -14,7 +14,9 @@ interface SkillState {
 interface DoneStepProps {
   task: TaskId
   provider: string
-  enabledToolCount: number
+  /** B5-33 (decision 4-B): recommendations, not activations — tool config
+   *  lives in Settings, so the summary must not claim "enabled". */
+  recommendedToolCount: number
   pickedDir: string | null
   fallbackWorkingDir: string | null
   devMode: boolean
@@ -32,7 +34,7 @@ interface DoneStepProps {
 export function DoneStep({
   task,
   provider,
-  enabledToolCount,
+  recommendedToolCount,
   pickedDir,
   fallbackWorkingDir,
   devMode,
@@ -79,7 +81,7 @@ export function DoneStep({
           </li>
           <li className="flex items-center gap-sm">
             <span className="material-symbols-outlined text-[18px] text-primary">build</span>
-            <span>{intl.formatMessage({ id: 'welcome.done.setup.tools' }, { count: enabledToolCount })}</span>
+            <span>{intl.formatMessage({ id: 'welcome.done.setup.tools' }, { count: recommendedToolCount })}</span>
           </li>
         </ul>
       </div>

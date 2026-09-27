@@ -7,6 +7,7 @@ import {
 } from "@/lib/tauri-api";
 import type { DataSourceResult, DataSourceItem } from "@/types";
 import LoadingState from "@/components/ui/loading-state";
+import ErrorState from "@/components/ui/error-state";
 import { Button } from "@/components/ui/button";
 
 /**
@@ -19,17 +20,29 @@ export default function DataSourcesQuery({ onSwitchToAdapters }: { onSwitchToAda
 
   const [installed, setInstalled] = useState<InstalledDataSource[]>([]);
   const [installedLoading, setInstalledLoading] = useState(true);
+  // B3 P1-17: a failed read must not render as "no data sources installed".
+  const [installedError, setInstalledError] = useState<string | null>(null);
   const [selectedSlug, setSelectedSlug] = useState<string>("");
   const [query, setQuery] = useState("");
   const [results, setResults] = useState<DataSourceResult | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
+  const refreshInstalled = () => {
+    listInstalledDataSources()
+      .then((rows) => {
+        setInstalled(rows);
+        setInstalledError(null);
+      })
+      .catch((err) => {
+        setInstalledError(err instanceof Error ? err.message : String(err));
+      })
+      .finally(() => setInstalledLoading(false));
+  };
+
   // Load installed data sources on mount
   useEffect(() => {
-    listInstalledDataSources()
-      .then(setInstalled)
-      .finally(() => setInstalledLoading(false));
+    refreshInstalled();
   }, []);
 
   async function handleSearch(e: React.FormEvent) {
@@ -54,6 +67,19 @@ export default function DataSourcesQuery({ onSwitchToAdapters }: { onSwitchToAda
     return (
       <div className="p-lg max-w-5xl mx-auto">
         <LoadingState size="sm" label={t('extensions.datasources.loadingInstalled')} />
+      </div>
+    );
+  }
+
+  if (installedError) {
+    return (
+      <div className="p-lg max-w-5xl mx-auto">
+        <ErrorState
+          icon="database"
+          title={t('extensions.datasources.installedLoadFailed')}
+          description={installedError}
+          action={{ label: t('common.retry'), onClick: refreshInstalled }}
+        />
       </div>
     );
   }

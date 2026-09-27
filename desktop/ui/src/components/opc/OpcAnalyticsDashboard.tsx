@@ -46,6 +46,11 @@ function toneFor(status: string): string {
 export default function OpcAnalyticsDashboard() {
   const intl = useIntl()
   const t = (id: string) => intl.formatMessage({ id })
+  // B3 P1-27: status/priority codes come straight from task JSON, so the
+  // dynamic `status.*` key can be absent for a value this build doesn't
+  // know — fall back to the raw code instead of rendering the key itself.
+  const label = (code: string) =>
+    intl.formatMessage({ id: `status.${code.toLowerCase()}`, defaultMessage: code })
   const [metrics, setMetrics] = useState<OpcMetrics | null>(null)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
@@ -208,7 +213,7 @@ export default function OpcAnalyticsDashboard() {
               {metrics.by_status.map(s => (
                 <li key={s.status} className="flex items-center gap-sm">
                   <span className={cn("inline-flex items-center px-xs py-1 rounded-full border font-label-sm text-[10px] font-bold tracking-wide w-32 justify-center", toneFor(s.status))}>
-                    {t(`status.${s.status.toLowerCase()}`)}
+                    {label(s.status)}
                   </span>
                   <div className="flex-1 bg-surface-container-low rounded-full h-2 overflow-hidden">
                     <div
@@ -234,7 +239,7 @@ export default function OpcAnalyticsDashboard() {
             <ul className="flex flex-col gap-xs">
               {metrics.by_priority.map(p => (
                 <li key={p.priority} className="flex items-center gap-sm">
-                  <span className="font-label-sm text-on-surface-variant w-24">{t(`status.${p.priority.toLowerCase()}`)}</span>
+                  <span className="font-label-sm text-on-surface-variant w-24">{label(p.priority)}</span>
                   <div className="flex-1 bg-surface-container-low rounded-full h-2 overflow-hidden">
                     <div
                       className="h-full bg-tertiary/60"

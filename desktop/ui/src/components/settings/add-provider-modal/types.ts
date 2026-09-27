@@ -1,25 +1,16 @@
 // Add/Edit Provider modal — shared types, lookup tables, and pure helpers.
 // Extracted from AddProviderModal.tsx (T3.1). Kept as a separate dir
 // (add-provider-modal/) so the orchestrator and its sub-components can be
-// imported in isolation, and so the modal's KIND_INFO does not collide with
-// the ModelsSettings KIND_INFO copy under models-settings/.
-import type { useIntl } from 'react-intl'
+// imported in isolation.
+//
+// KIND_INFO / kindLabel live in models-settings/types.ts as the single copy
+// (P2: the duplicate here had drifted — it was missing `gemini`, so the
+// kind dropdown mislabelled gemini connections on edit). Re-exported for
+// this module's existing import paths.
 import type { ProviderConnection, ProviderKind } from '@/types'
 
-export interface KindInfo {
-  labelKey: string
-  icon: string
-  baseUrlRequired: boolean
-  needsKey: boolean
-}
-
-export const KIND_INFO: Record<string, KindInfo> = {
-  anthropic: { labelKey: 'settings.models.providers.kinds.anthropic', icon: 'auto_awesome', baseUrlRequired: false, needsKey: true },
-  openai: { labelKey: 'settings.models.providers.kinds.openai', icon: 'bolt', baseUrlRequired: false, needsKey: true },
-  deepseek: { labelKey: 'settings.models.providers.kinds.deepseek', icon: 'psychology', baseUrlRequired: false, needsKey: true },
-  ollama: { labelKey: 'settings.models.providers.kinds.ollama', icon: 'dns', baseUrlRequired: false, needsKey: false },
-  'openai-compatible': { labelKey: 'settings.models.providers.kinds.openaiCompatible', icon: 'hub', baseUrlRequired: true, needsKey: true },
-}
+export { KIND_INFO, kindLabel } from '../models-settings/types'
+export type { KindInfo } from '../models-settings/types'
 
 export interface QuickFill {
   id: string
@@ -43,10 +34,6 @@ export const QUICK_FILL: QuickFill[] = [
   { id: 'ollama', label: 'Ollama (local)', icon: 'dns', kind: 'ollama', baseUrl: 'http://localhost:11434', model: 'llama3.2' },
   { id: 'custom', label: 'settings.models.providers.customOpenAI', icon: 'hub', kind: 'openai-compatible' },
 ]
-
-export function kindLabel(intl: ReturnType<typeof useIntl>, kind: string): string {
-  return intl.formatMessage({ id: KIND_INFO[kind]?.labelKey ?? 'settings.models.providers.kinds.openaiCompatible' })
-}
 
 /// Key/value pair for the `extra_headers` advanced row. An empty `key` row
 /// is silently dropped at submit time so the engine never sees `""`.

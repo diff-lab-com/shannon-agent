@@ -14,6 +14,7 @@ import { useDiskArtifacts } from '@/hooks/useDiskArtifacts'
 import { useArtifact } from '@/components/artifact/ArtifactContext'
 import { useBudgetGuard } from '@/hooks/useBudgetGuard'
 import BudgetBanner from '@/components/chat/BudgetBanner'
+import { ConfirmDialog } from '@/components/ui/confirm-dialog'
 import { TerminalPanel } from '@/components/terminal/TerminalPanel'
 import RightDock from './chat/RightDock'
 import {
@@ -498,6 +499,19 @@ export default function Chat() {
     return () => window.removeEventListener('shannon:open-code-file', open)
   }, [])
 
+  // B0 P0-5: the editor keeps unsaved edits in component state only — the
+  // modal's close paths (Esc / close button / backdrop) must confirm before
+  // discarding them. Editor reports dirtiness through the ref (no re-render
+  // churn); the path reset stops a later open from pre-loading a stale file.
+  const editorDirtyRef = useRef(false)
+  const [confirmDiscardEditor, setConfirmDiscardEditor] = useState(false)
+  const closeEditor = useCallback(() => {
+    setEditorOpen(false)
+    setConfirmDiscardEditor(false)
+    editorDirtyRef.current = false
+    setEditorInitialPath(null)
+  }, [])
+
   return (
     <ComposerContext.Provider value={composerValue}>
         <div className="flex-1 flex w-full h-full relative">
@@ -559,10 +573,17 @@ export default function Chat() {
 
           <InlinePanelModal
             open={editorOpen}
-            onClose={() => setEditorOpen(false)}
+            onClose={() => {
+              // B0 P0-5: dirty draft → confirm before discarding.
+              if (editorDirtyRef.current) {
+                setConfirmDiscardEditor(true)
+                return
+              }
+              closeEditor()
+            }}
             title={t('nav.editor')}
             panel={EditorPanel}
-            panelProps={editorInitialPath ? { initialPath: editorInitialPath } : undefined}
+            panelProps={{ initialPath: editorInitialPath, onDirtyChange: (dirty: boolean) => { editorDirtyRef.current = dirty } }}
             size="2xl"
             modalClassName="max-w-5xl h-[90vh] flex flex-col"
             bodyClassName="flex-1 overflow-hidden"
@@ -580,6 +601,18 @@ export default function Chat() {
             onCloseDiff={() => setDiffPath(null)}
           />
           <DiffDialogMulti open={diffPaths !== null} filePaths={diffPaths ?? []} onClose={() => setDiffPaths(null)} />
+
+          {/* B0 P0-5: discard confirmation for unsaved editor edits. */}
+          <ConfirmDialog
+            open={confirmDiscardEditor}
+            title={t('editor.discard.title')}
+            message={t('editor.discard.message')}
+            confirmLabel={t('editor.discard.confirm')}
+            cancelLabel={t('editor.discard.cancel')}
+            destructive
+            onConfirm={closeEditor}
+            onCancel={() => setConfirmDiscardEditor(false)}
+          />
         </div>
     </ComposerContext.Provider>
   )

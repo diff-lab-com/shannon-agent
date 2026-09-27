@@ -9,16 +9,36 @@ import { listSkillCandidates, type SkillCandidate } from '@/lib/tauri-api'
 // reach a plain browser).
 const FALLBACK_POLL_MS = 5 * 60_000
 
-export function usePendingSkillCandidates(): { candidates: SkillCandidate[]; loading: boolean; refetch: () => void } {
+export function usePendingSkillCandidates(): {
+  candidates: SkillCandidate[]
+  loading: boolean
+  /** B3 P1-17: last load failure, so the UI can tell "nothing pending"
+   *  apart from "the queue could not be read". Null on success. */
+  error: string | null
+  refetch: () => void
+} {
   const [candidates, setCandidates] = useState<SkillCandidate[]>([])
   const [loading, setLoading] = useState(true)
+  const [error, setError] = useState<string | null>(null)
   const cancelledRef = useRef(false)
 
   const refetch = useCallback(() => {
     listSkillCandidates()
-      .then((rows) => { if (!cancelledRef.current) setCandidates(Array.isArray(rows) ? rows : []) })
-      .catch(() => { if (!cancelledRef.current) setCandidates([]) })
-      .finally(() => { if (!cancelledRef.current) setLoading(false) })
+      .then((rows) => {
+        if (!cancelledRef.current) {
+          setCandidates(Array.isArray(rows) ? rows : [])
+          setError(null)
+        }
+      })
+      .catch((err) => {
+        if (!cancelledRef.current) {
+          setCandidates([])
+          setError(err instanceof Error ? err.message : String(err))
+        }
+      })
+      .finally(() => {
+        if (!cancelledRef.current) setLoading(false)
+      })
   }, [])
 
   useEffect(() => {
@@ -39,5 +59,5 @@ export function usePendingSkillCandidates(): { candidates: SkillCandidate[]; loa
     }
   }, [refetch])
 
-  return { candidates, loading, refetch }
+  return { candidates, loading, error, refetch }
 }

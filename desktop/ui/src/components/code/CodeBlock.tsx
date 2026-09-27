@@ -55,6 +55,7 @@ export function CodeBlock({
   const intl = useIntl()
   const t = (id: string) => intl.formatMessage({ id })
   const [copied, setCopied] = useState(false)
+  const [copyFailed, setCopyFailed] = useState(false)
   const [showLines, setShowLines] = useState(false)
   const preRef = useRef<HTMLPreElement>(null)
 
@@ -98,8 +99,14 @@ export function CodeBlock({
   const handleCopy = () => {
     navigator.clipboard.writeText(code).then(() => {
       setCopied(true)
+      setCopyFailed(false)
       setTimeout(() => setCopied(false), 1500)
-    }).catch(() => {})
+    }).catch(() => {
+      // Review §5: clipboard failures used to vanish silently — show a
+      // brief failure state on the button instead.
+      setCopyFailed(true)
+      setTimeout(() => setCopyFailed(false), 1500)
+    })
   }
 
   return (
@@ -127,10 +134,17 @@ export function CodeBlock({
               size="sm"
               onClick={handleCopy}
               aria-label={t('code.copy.aria')}
-              className="h-auto px-xs py-[2px] gap-xs text-on-surface-variant hover:text-primary"
+              className={cn(
+                'h-auto px-xs py-[2px] gap-xs text-on-surface-variant hover:text-primary',
+                copyFailed && 'text-error hover:text-error',
+              )}
             >
-              <span className="material-symbols-outlined text-[14px]">{copied ? 'check' : 'content_copy'}</span>
-              <span>{copied ? t('code.copy.copied') : t('code.copy.copy')}</span>
+              <span className="material-symbols-outlined text-[14px]">
+                {copied ? 'check' : copyFailed ? 'error' : 'content_copy'}
+              </span>
+              <span>
+                {copied ? t('code.copy.copied') : copyFailed ? t('code.copy.failed') : t('code.copy.copy')}
+              </span>
             </Button>
           </div>
         </div>

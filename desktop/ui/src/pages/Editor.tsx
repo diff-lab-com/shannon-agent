@@ -8,7 +8,7 @@
 // Orchestrator-only: all sub-components live under ./editor/. State and
 // callbacks stay here so the page is a single source of truth.
 
-import { useCallback, useEffect, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { useT } from '@/i18n'
 import { open as openDialog } from '@tauri-apps/plugin-dialog'
@@ -16,6 +16,7 @@ import { toast } from 'sonner'
 import CodeEditor, {
   type EditorDiagnostic,
 } from '@/components/editor/CodeEditor'
+import { ConfirmDialog } from '@/components/ui/confirm-dialog'
 import * as api from '@/lib/tauri-api'
 import type { SourceFile } from '@/lib/tauri-api'
 import {
@@ -32,9 +33,11 @@ import type { AutoDiagnostic, DrawerDiag, ManualDiagnostic, MixedDiagnostic } fr
 type EditorProps = {
   /** P0-B: pre-load this file (chat file-ref chips deep-link into the editor). */
   initialPath?: string | null
+  /** B0 P0-5: report `draft !== file.content` so the host can guard closing. */
+  onDirtyChange?: (dirty: boolean) => void
 }
 
-export default function Editor({ initialPath }: EditorProps) {
+export default function Editor({ initialPath, onDirtyChange }: EditorProps) {
   const t = useT()
   const navigate = useNavigate()
   const [filePath, setFilePath] = useState('')
@@ -60,10 +63,19 @@ export default function Editor({ initialPath }: EditorProps) {
   const [draft, setDraft] = useState('')
   const [saving, setSaving] = useState(false)
 
+  // B0 P0-5: switching files with unsaved edits asks before discarding.
+  const [pendingLoadPath, setPendingLoadPath] = useState<string | null>(null)
+
   // Side drawer for quick-fix
   const [drawer, setDrawer] = useState<DrawerDiag | null>(null)
 
+  // 34: race guard for diagnostics responses — `loadPath` may fire a second
+  // fetch (or the user re-runs) before the first resolves; the stale
+  // response must not overwrite the fresh one.
+  const diagRequestIdRef = useRef(0)
+
   const fetchDiagnostics = useCallback(async (sourceFile: SourceFile) => {
+    const requestId = ++diagRequestIdRef.current
     const server = api.defaultDiagnosticsServer(sourceFile.language_id)
     if (!server.cmd) {
       setAutoDiags([])
@@ -82,6 +94,7 @@ export default function Editor({ initialPath }: EditorProps) {
         language_id: sourceFile.language_id,
         content: sourceFile.content,
       })
+      if (diagRequestIdRef.current !== requestId) return // superseded
       setAutoDiags(
         resp.diagnostics.map<AutoDiagnostic>((d) => ({
           kind: 'auto',
@@ -97,10 +110,11 @@ export default function Editor({ initialPath }: EditorProps) {
       )
       setDiagTimedOut(resp.timed_out)
     } catch (err) {
+      if (diagRequestIdRef.current !== requestId) return // superseded
       setAutoDiags([])
       setDiagError(String(err))
     } finally {
-      setDiagLoading(false)
+      if (diagRequestIdRef.current === requestId) setDiagLoading(false)
     }
   }, [])
 
@@ -131,9 +145,16 @@ export default function Editor({ initialPath }: EditorProps) {
   const onLoad = useCallback(
     async (e: React.FormEvent) => {
       e.preventDefault()
-      await loadPath(filePath)
+      const target = filePath.trim()
+      if (!target) return
+      // B0 P0-5: dirty draft → confirm the discard before loading another file.
+      if (file != null && draft !== file.content) {
+        setPendingLoadPath(target)
+        return
+      }
+      await loadPath(target)
     },
-    [filePath, loadPath],
+    [filePath, file, draft, loadPath],
   )
 
   // P0-B: deep-link support — load the chip's file once on mount (and when
@@ -143,6 +164,14 @@ export default function Editor({ initialPath }: EditorProps) {
     setFilePath(initialPath)
     void loadPath(initialPath)
   }, [initialPath, loadPath])
+
+  // B0 P0-5: unsaved-edit detector. `draft` is reset whenever a file loads
+  // or a save lands, so `draft !== file.content` is exactly "the user typed
+  // something they have not saved yet". The host (Chat's inline panel modal)
+  // gates closing on this.
+  useEffect(() => {
+    onDirtyChange?.(file != null && draft !== file.content)
+  }, [file, draft, onDirtyChange])
 
   const onBrowse = useCallback(async () => {
     try {
@@ -228,6 +257,18 @@ export default function Editor({ initialPath }: EditorProps) {
     })
   }
 
+  // P1-35: a quick fix rewrites the file on disk. If the editor kept its
+  // (now stale) draft, the next save would clobber the fix — so re-read the
+  // file as soon as a fix applies. When the draft was dirty, the disk
+  // content wins and the user is told their unsaved edits were replaced.
+  const onQuickFixApplied = useCallback(() => {
+    if (!file) return
+    if (draft !== file.content) {
+      toast.info(t('editor.quickFix.reloadDirty'))
+    }
+    void loadPath(file.path)
+  }, [file, draft, loadPath, t])
+
   const diags: MixedDiagnostic[] = [...autoDiags, ...manualDiags]
   const diagCount = diags.length
 
@@ -304,8 +345,28 @@ export default function Editor({ initialPath }: EditorProps) {
       ) : null}
 
       {drawer ? (
-        <QuickFixDrawer t={t} drawer={drawer} onClose={() => setDrawer(null)} />
+        <QuickFixDrawer
+          t={t}
+          drawer={drawer}
+          onApplied={onQuickFixApplied}
+          onClose={() => setDrawer(null)}
+        />
       ) : null}
+
+      <ConfirmDialog
+        open={pendingLoadPath !== null}
+        title={t('editor.discard.title')}
+        message={t('editor.discard.message')}
+        confirmLabel={t('editor.discard.confirm')}
+        cancelLabel={t('editor.discard.cancel')}
+        destructive
+        onConfirm={() => {
+          const target = pendingLoadPath
+          setPendingLoadPath(null)
+          if (target) void loadPath(target)
+        }}
+        onCancel={() => setPendingLoadPath(null)}
+      />
     </div>
   )
 }

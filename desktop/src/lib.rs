@@ -9,6 +9,8 @@ use std::path::{Path, PathBuf};
 
 pub mod agent_teams;
 pub mod config;
+/// Local file logging, log retention, and the panic hook (audit batch 3, B).
+pub mod desktop_logging;
 pub mod events;
 pub mod extensions;
 pub mod file_permissions;
@@ -112,6 +114,11 @@ pub mod commands_billing;
 pub mod commands_config;
 #[cfg(feature = "tauri")]
 pub mod commands_connections;
+/// Export-diagnostics: local logs + crash reports + a fresh doctor report
+/// bundled into one zip (batch-3 follow-up). Pure bundle logic lives here
+/// and is unit-tested without Tauri.
+#[cfg(feature = "tauri")]
+pub mod commands_diagnostics;
 #[cfg(feature = "tauri")]
 pub mod commands_mobile_pairing;
 pub mod commands_remote;

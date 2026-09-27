@@ -169,7 +169,7 @@ describe('NotificationsSettings — webhook loading', () => {
 })
 
 describe('NotificationsSettings — webhook save validation', () => {
-  it('disables the save button until a valid URL is entered', async () => {
+  it('disables the save button until a valid URL and (for Custom) a body are entered', async () => {
     render(<NotificationsSettings />)
     await waitForWebhookLoaded()
     const section = getWebhookSection()
@@ -180,6 +180,12 @@ describe('NotificationsSettings — webhook save validation', () => {
     expect(save).toBeDisabled()
     expect(within(section).getByText('Invalid URL')).toBeInTheDocument()
     fireEvent.change(urlInput, { target: { value: 'https://hooks.slack.com/services/T/B/X' } })
+    // Default preset is Custom — an empty body keeps the save blocked.
+    await waitFor(() => expect(within(section).getByText('Valid URL')).toBeInTheDocument())
+    expect(save).toBeDisabled()
+    fireEvent.change(within(section).getByLabelText(/Custom template body/), {
+      target: { value: '{"text": "{title}: {body}"}' },
+    })
     await waitFor(() => expect(save).not.toBeDisabled())
     expect(within(section).getByText('Valid URL')).toBeInTheDocument()
   })
@@ -209,14 +215,61 @@ describe('NotificationsSettings — webhook save validation', () => {
     const section = getWebhookSection()
     const urlInput = within(section).getByLabelText(/Webhook URL/) as HTMLInputElement
     fireEvent.change(urlInput, { target: { value: 'https://hooks.slack.com/services/T/B/X' } })
+    // Default preset is Custom — a body is required before the save fires.
+    fireEvent.change(within(section).getByLabelText(/Custom template body/), {
+      target: { value: '{"text": "{title}: {body}"}' },
+    })
     fireEvent.click(within(section).getByRole('button', { name: /^Save$/ }))
     await waitFor(() => expect(saveWebhookConfig).toHaveBeenCalledTimes(1))
     const dto = saveWebhookConfig.mock.calls[0]![0]
     expect(dto.url).toBe('https://hooks.slack.com/services/T/B/X')
-    expect(dto.template.startsWith('custom')).toBe(true)
+    expect(dto.template).toBe('custom:{"text": "{title}: {body}"}')
     expect(dto.timeout_ms).toBe(5000)
     expect(dto.include_body).toBe(false)
     expect(dto.secret).toBeNull()
+  })
+
+  it('seeds and saves the HMAC secret (P1-15: it had no input at all)', async () => {
+    getWebhookConfig.mockResolvedValue({
+      url: 'https://example.com/hook',
+      template: 'slack',
+      secret: 'stored-secret',
+      timeout_ms: 5000,
+      include_body: false,
+    })
+    render(<NotificationsSettings />)
+    await waitForWebhookLoaded()
+    const section = getWebhookSection()
+    const secretInput = within(section).getByLabelText(/HMAC signing secret/) as HTMLInputElement
+    expect(secretInput.type).toBe('password')
+    expect(secretInput.value).toBe('stored-secret')
+    fireEvent.change(secretInput, { target: { value: 'rotated-secret' } })
+    fireEvent.click(within(section).getByRole('button', { name: /^Save$/ }))
+    await waitFor(() => expect(saveWebhookConfig).toHaveBeenCalledTimes(1))
+    expect(saveWebhookConfig.mock.calls[0]![0].secret).toBe('rotated-secret')
+  })
+
+  it('blocks the save when the Custom body is cleared (no template wipe)', async () => {
+    const { toast } = await import('sonner')
+    getWebhookConfig.mockResolvedValue({
+      url: 'https://example.com/hook',
+      template: 'custom:{"text":"hi"}',
+      secret: null,
+      timeout_ms: 5000,
+      include_body: false,
+    })
+    render(<NotificationsSettings />)
+    await waitForWebhookLoaded()
+    const section = getWebhookSection()
+    // The stored custom body is decoded back into the textarea.
+    const body = within(section).getByLabelText(/Custom template body/) as HTMLTextAreaElement
+    expect(body.value).toBe('{"text":"hi"}')
+    // Clearing it disables the save; a programmatic save attempt only toasts.
+    fireEvent.change(body, { target: { value: '' } })
+    expect(within(section).getByRole('button', { name: /^Save$/ })).toBeDisabled()
+    // saveWebhookConfig must not have been called — the stored template stays.
+    expect(saveWebhookConfig).not.toHaveBeenCalled()
+    expect(toast.error).not.toHaveBeenCalled()
   })
 
   it('shows the saving label while save is in flight', async () => {
@@ -227,6 +280,10 @@ describe('NotificationsSettings — webhook save validation', () => {
     const section = getWebhookSection()
     const urlInput = within(section).getByLabelText(/Webhook URL/) as HTMLInputElement
     fireEvent.change(urlInput, { target: { value: 'https://hooks.slack.com/services/T/B/X' } })
+    // Default preset is Custom — the save needs a body to fire.
+    fireEvent.change(within(section).getByLabelText(/Custom template body/), {
+      target: { value: '{"text": "x"}' },
+    })
     fireEvent.click(within(section).getByRole('button', { name: /^Save$/ }))
     await waitFor(() =>
       expect(within(section).getByRole('button', { name: /Saving/ })).toBeInTheDocument(),
@@ -245,6 +302,9 @@ describe('NotificationsSettings — webhook save validation', () => {
     const section = getWebhookSection()
     const urlInput = within(section).getByLabelText(/Webhook URL/) as HTMLInputElement
     fireEvent.change(urlInput, { target: { value: 'https://hooks.slack.com/services/T/B/X' } })
+    fireEvent.change(within(section).getByLabelText(/Custom template body/), {
+      target: { value: '{"text": "x"}' },
+    })
     fireEvent.click(within(section).getByRole('button', { name: /^Save$/ }))
     await waitFor(() => expect(toast.error).toHaveBeenCalled())
   })

@@ -99,7 +99,13 @@ export default function CommandPalette({ open, onClose }: { open: boolean; onClo
     }))
     const modelItems: PaletteItem[] = models.map(m => ({
       id: `m-${m.id}`, label: m.name, icon: 'neurology', category: t('palette.category.switchModel'), action: () => {
+        // Decision 1 (review P1-2 / B1-8): write the catalog id and pin the
+        // model's OWN provider. `configure('model')` targets the currently
+        // active provider, so switching to another provider's model without
+        // the provider write would nail the foreign id onto the wrong
+        // provider (the exact bug the review caught on this path).
         api.configure({ key: 'model', value: m.id })
+          .then(() => api.configure({ key: 'provider', value: m.provider }))
           .then(async () => {
             await refreshConfig()
             toast.success(intl.formatMessage({ id: 'palette.toast.switched' }, { name: m.name }))

@@ -10,6 +10,8 @@ const ctx = vi.hoisted(() => ({
   usage: { input_tokens: 100, output_tokens: 50, cost_usd: 0.05 },
   permissionRequest: null as any,
   respondPermission: vi.fn(),
+  sessions: [] as any[],
+  goalRunsBySession: {} as Record<string, any>,
 }))
 
 vi.mock('@/context/ChatContext', () => ({
@@ -17,6 +19,9 @@ vi.mock('@/context/ChatContext', () => ({
 }))
 vi.mock('@/context/CatalogContext', () => ({
   useCatalog: () => ctx,
+}))
+vi.mock('@/context/SessionContext', () => ({
+  useSessions: () => ctx,
 }))
 
 function renderOPCTask(path = '/opc/task') {
@@ -37,6 +42,14 @@ function resetCtx() {
   ctx.agents = []
   ctx.permissionRequest = null
   ctx.respondPermission = vi.fn()
+  ctx.sessions = []
+  ctx.goalRunsBySession = {}
+}
+
+/** A pending request owned by an OPC agent-run session — approvable here. */
+function agentRunPermission() {
+  ctx.sessions = [{ id: 's1', title: 'Agent run session', is_agent_run: true }]
+  ctx.permissionRequest = { request_id: 'r1', tool: 'bash', input: {}, risk: 'medium', session_id: 's1' }
 }
 
 describe('OPCTask', () => {
@@ -121,26 +134,71 @@ describe('OPCTask', () => {
     expect(screen.getByText(/Priority: high/)).toBeInTheDocument()
   })
 
-  it('calls respondPermission on Approve click', () => {
+  it('sends the pending request_id (not the task id) on Approve click', () => {
     resetCtx()
     ctx.tasks = [{ id: '1', title: 'Test', status: 'running' }]
-    ctx.permissionRequest = { request_id: 'r1', tool: 'bash', input: {}, risk: 'medium' }
+    agentRunPermission()
     renderOPCTask()
     fireEvent.click(screen.getByText('Approve Final Merge'))
     const dialog = screen.getByRole('alertdialog', { name: /Approve final merge\?/i })
     fireEvent.click(within(dialog).getByRole('button', { name: /^Approve merge$/ }))
-    expect(ctx.respondPermission).toHaveBeenCalledWith('1', true)
+    expect(ctx.respondPermission).toHaveBeenCalledWith('r1', true, undefined)
   })
 
-  it('calls respondPermission on Rollback click', () => {
+  it('sends the pending request_id (not the task id) on Rollback click', () => {
     resetCtx()
     ctx.tasks = [{ id: '1', title: 'Test', status: 'running' }]
-    ctx.permissionRequest = { request_id: 'r1', tool: 'bash', input: {}, risk: 'medium' }
+    agentRunPermission()
     renderOPCTask()
     fireEvent.click(screen.getByText('Rollback'))
     const dialog = screen.getByRole('alertdialog', { name: /Rollback task\?/i })
     fireEvent.click(within(dialog).getByRole('button', { name: /^Rollback$/ }))
-    expect(ctx.respondPermission).toHaveBeenCalledWith('1', false)
+    expect(ctx.respondPermission).toHaveBeenCalledWith('r1', false, undefined)
+  })
+
+  it('shows the owning session title in the confirm dialog', () => {
+    resetCtx()
+    ctx.tasks = [{ id: '1', title: 'Test', status: 'running' }]
+    agentRunPermission()
+    renderOPCTask()
+    fireEvent.click(screen.getByText('Approve Final Merge'))
+    const dialog = screen.getByRole('alertdialog', { name: /Approve final merge\?/i })
+    expect(within(dialog).getByText(/Agent run session/)).toBeInTheDocument()
+  })
+
+  it('disables approval when the request belongs to a plain chat session', () => {
+    resetCtx()
+    ctx.tasks = [{ id: '1', title: 'Test', status: 'running' }]
+    ctx.sessions = [{ id: 'chat1', title: 'My chat', is_agent_run: false }]
+    ctx.permissionRequest = { request_id: 'r2', tool: 'bash', input: {}, risk: 'high', session_id: 'chat1' }
+    renderOPCTask()
+    fireEvent.click(screen.getByText('Approve Final Merge'))
+    const dialog = screen.getByRole('alertdialog', { name: /Approve final merge\?/i })
+    const confirm = within(dialog).getByRole('button', { name: /^Approve merge$/ })
+    expect(confirm).toBeDisabled()
+    fireEvent.click(confirm)
+    expect(ctx.respondPermission).not.toHaveBeenCalled()
+  })
+
+  it('disables approval when the pending request has no owner session', () => {
+    resetCtx()
+    ctx.tasks = [{ id: '1', title: 'Test', status: 'running' }]
+    ctx.permissionRequest = { request_id: 'r3', tool: 'bash', input: {}, risk: 'medium' }
+    renderOPCTask()
+    fireEvent.click(screen.getByText('Approve Final Merge'))
+    const dialog = screen.getByRole('alertdialog', { name: /Approve final merge\?/i })
+    expect(within(dialog).getByRole('button', { name: /^Approve merge$/ })).toBeDisabled()
+  })
+
+  it('allows approval when the request belongs to a goal-run session', () => {
+    resetCtx()
+    ctx.tasks = [{ id: '1', title: 'Test', status: 'running' }]
+    ctx.goalRunsBySession = { goal1: { id: 'g1' } }
+    ctx.permissionRequest = { request_id: 'r4', tool: 'bash', input: {}, risk: 'medium', session_id: 'goal1' }
+    renderOPCTask()
+    fireEvent.click(screen.getByText('Approve Final Merge'))
+    const dialog = screen.getByRole('alertdialog', { name: /Approve final merge\?/i })
+    expect(within(dialog).getByRole('button', { name: /^Approve merge$/ })).not.toBeDisabled()
   })
 
   it('shows revision input on Request Revision click', () => {

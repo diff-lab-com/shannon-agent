@@ -11,6 +11,7 @@ import { useIntl } from 'react-intl'
 import { Button } from '@/components/ui/button'
 import { Modal, ModalBody } from '@/components/ui/modal'
 import { Spinner } from '@/components/ui/loading-state'
+import ErrorState from '@/components/ui/error-state'
 import * as api from '@/lib/tauri-api'
 import type {
   MigrationAsset,
@@ -60,6 +61,9 @@ export default function MigrationWizard({ open, onClose, apiOverride }: Migratio
   // Per-item choice for existing, differing targets (rename is the safe default).
   const [conflictChoices, setConflictChoices] = useState<Record<string, 'overwrite' | 'rename' | 'skip'>>({})
   const [report, setReport] = useState<api.MigrationApplyReport | null>(null)
+  // P1-37: a failed scan used to be rendered as "nothing to import" — keep
+  // it distinct from the genuine empty state and offer a retry.
+  const [scanError, setScanError] = useState<string | null>(null)
 
   const requestIdRef = useRef(0)
 
@@ -69,6 +73,7 @@ export default function MigrationWizard({ open, onClose, apiOverride }: Migratio
       setPhase('source')
       setSource(null)
       setScan(null)
+      setScanError(null)
       setPreviews({})
       setSelected({})
       setExpanded({})
@@ -81,6 +86,7 @@ export default function MigrationWizard({ open, onClose, apiOverride }: Migratio
     async (src: MigrationSourceId) => {
       const requestId = ++requestIdRef.current
       setSource(src)
+      setScanError(null)
       setPhase('scanning')
       try {
         const result = await backend.migrationScan(src)
@@ -112,8 +118,11 @@ export default function MigrationWizard({ open, onClose, apiOverride }: Migratio
         setPhase('review')
       } catch (e) {
         if (requestIdRef.current !== requestId) return
+        // P1-37: an IPC failure is not "nothing to import" — surface the
+        // error with a retry instead of faking an empty review list.
         console.error('migrationScan failed:', e)
-        setScan({ source: src, items: [], notFound: [], errors: [] })
+        setScan(null)
+        setScanError(e instanceof Error ? e.message : String(e))
         setPhase('review')
       }
     },
@@ -216,7 +225,22 @@ export default function MigrationWizard({ open, onClose, apiOverride }: Migratio
             </div>
           )}
 
-          {phase === 'review' && scan && (
+          {phase === 'review' && scanError && (
+            <div data-testid="migration-scan-error">
+              <ErrorState
+                title={t('welcome.migration.scan.failed.title')}
+                description={t('welcome.migration.scan.failed.desc', { error: scanError, source: source ?? '' })}
+                action={{
+                  label: t('welcome.migration.scan.retry'),
+                  onClick: () => {
+                    if (source) void runScan(source)
+                  },
+                }}
+              />
+            </div>
+          )}
+
+          {phase === 'review' && scan && !scanError && (
             <div data-testid="migration-review">
               {scan.items.length === 0 ? (
                 <p className="font-body-md text-on-surface-variant py-xl text-center">

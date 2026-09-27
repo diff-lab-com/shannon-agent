@@ -4,6 +4,82 @@ All notable changes to Shannon Code are documented here. Entries are grouped by 
 
 ## [Unreleased] — §4.14 W1-P2 · OTLP bridge + full RedactionPolicy + desktop Turn Timeline
 
+### Export diagnostics bundle (desktop Settings) (2026-09-27)
+
+Batch-3 follow-up: an in-app way to hand support the data that batch 3
+started keeping.
+
+- **Settings → Advanced → Developer options** gains an "Export diagnostics…"
+  button next to "Open log directory". A save dialog picks the destination
+  (`shannon-diagnostics-<date>.zip`); the backend bundles:
+  - everything in `~/.shannon/logs/` (rotated desktop logs + crash reports,
+    capped at 20 MB — truncation is reported in the manifest and summary),
+  - a fresh `shannon doctor --json --deep` report from the bundled CLI
+    (best-effort: if the sidecar is missing or times out after 4 minutes,
+    the manifest says so and names the command to run by hand),
+  - a `manifest.txt` with versions, platform, counts, and the privacy note.
+- **Privacy contract**: sessions/conversation transcripts, provider config
+  and credentials are never included; log lines and the doctor report pass
+  the session-log redaction policy (doctor output can embed `*_URL`s from
+  the environment). Nothing uploads — attaching the zip is a manual user
+  act.
+- Wiring: `commands_diagnostics::export_diagnostics` command (ACL entry +
+  `app-platform` set membership; the coverage test guards the pairing),
+  `api.exportDiagnostics` wrapper, en/zh-CN strings plus the 8 other
+  locales the i18n-check gate requires.
+- Bundle logic (`build_bundle`) is a pure fn over explicit paths — 3 unit
+  tests cover the happy path, the size cap/truncation, and a missing logs
+  dir — and was compile-verified against the real `shannon-core` and `zip`
+  in a standalone crate (the desktop crate itself still needs system
+  WebKit/PipeWire headers this audit machine lacks).
+
+### Batch 3 — data version gate (Phase 1) + desktop local logging (2026-09-27)
+
+Implements the two approved items from the 2026-09-27 release/productization
+audit's batch 3.
+
+**Added — data directory version marker & downgrade gate (Phase 1)**
+
+- New `~/.shannon/meta.json` marker (`shannon_core::data_meta`) recording the
+  version that last wrote the data directory plus a per-store schema map
+  (seeded with `events`). The stamp never moves backwards: a downgrade does
+  not clobber a newer marker, so the gate keeps protecting across a
+  downgrade + re-upgrade cycle.
+- CLI and `shannon serve` now **refuse to run** when the marker was written
+  by a newer version (clear error, `SHANNON_ALLOW_DOWNGRADE=1` overrides).
+  `doctor` and `update` are exempt on purpose — they are the tools you reach
+  for on a gated install. The desktop logs the mismatch loudly (tracing
+  error) and continues; the marker still records the running version only
+  when it is not a downgrade.
+- Comparison rules: `(major, minor, patch)` triples, with release-data vs
+  prerelease-binary of the same triple counted as a downgrade; unparseable
+  versions never gate (an unknown scheme must not brick an install).
+- `backup_before_migration`: copies store files/dirs into
+  `~/.shannon/backups/<from>-to-<to>-<ts>/`. No migration calls it yet — it
+  exists so the first schema migration wires a backup instead of inventing
+  one. **Wiring the marker into any future breaking store change is now a
+  release requirement.**
+- `shannon doctor --deep`: sweeps data-directory integrity — meta.json
+  state (with downgrade detection), a line-by-line JSON parse of every
+  session's `events.jsonl` (capped at 2000 files, cap reported), and
+  inbox.db `PRAGMA integrity_check` (new `InboxStore::integrity_check`).
+  Reported in both the human and `--json` output; `deep` is only present in
+  JSON when requested.
+
+**Added — desktop local file logging + panic hook**
+
+- The desktop now writes a daily-rotated `~/.shannon/logs/shannon-desktop.log`
+  (WARN and above) in addition to stderr — `shannon desktop` detaches from
+  its terminal, so stderr alone meant production runs left nothing behind
+  for support. Every line passes through the session-log redaction policy
+  before touching disk; rotated files older than 7 days are pruned on
+  startup (crash reports: 30 days).
+- A global panic hook writes a redacted
+  `~/.shannon/logs/crash-<ts>-<pid>.log` (version, platform, panic message,
+  forced backtrace) before delegating to the previous hook. Everything
+  stays local; nothing is uploaded — sharing a log or crash file with
+  support remains an explicit user action.
+
 ### Memory / docs / retrieval hardening (2026-09-25)
 
 Follow-ups from the 2026-09-25 memory / document-management / retrieval
@@ -727,7 +803,36 @@ Terminology, onboarding, visual system and workflow gaps from
   + Grafana (:3300) stack for accepting the span tree visually; usage in
   the telemetry module docs.
 
-## [Unreleased] — §4.10 W3-2 · manifest v2 + install-time validation + `--dump-config` + ecosystem conventions
+### Release productization hardening (2026-09-27)
+
+Findings from the 2026-09-27 release/productization audit, batch 1+2 fixes.
+
+**Security**
+
+- `GET /api/ws` now rejects cross-site browser `Origin`s with 403 before upgrading. A visited web page could previously complete a `ws://127.0.0.1:33420/api/ws` handshake (WebSocket handshakes are not subject to CORS) and drive the local engine with the user's full tool permissions. Non-browser clients (the gateway's ws client, scripts — which send no `Origin`) and local/webview origins (`tauri://localhost`, `http(s)://tauri.localhost`, loopback on any port) are unaffected.
+- `SECURITY.md`: replaced the placeholder contact address with GitHub private vulnerability reporting, and corrected the claim that secrets are stored "in the OS keyring" — LLM provider credentials are `0600` files under `~/.shannon/credentials/`; only IM channel credentials use the keyring.
+
+**Changed — defaults & claims**
+
+- `secret-guard` now installs in `audit` mode when neither `$SHANNON_SECRET_GUARD` nor `[secret_guard] mode` is set (previously: off) — and only when no other outbound context transform is already installed, so a plugin-provided transform is never clobbered by the built-in guard. Explicit `"off"` in either source still disables it entirely; `redact` is unchanged. Audit mode only logs secret-shaped hits — outgoing prompts are untouched.
+- The CLI REPL background update check: points at the correct repository (`diff-lab-com/shannon-agent` — it queried the nonexistent `shannon-code/shannon`), is gated by the new `update_check` feature flag (`SHANNON_FEATURE_UPDATE_CHECK=0` / `settings.json` `features.update_check`), and persists its last-check timestamp to `~/.shannon/update-check.json` so the 24h throttle actually survives restarts instead of hitting GitHub on every launch.
+- README (EN/zh-CN) claims aligned with reality: the desktop "auto-update" feature is described as an update checker (the Tauri updater remains unconfigured — no signed auto-update channel ships yet); the keyring claim is scoped to IM credentials; the telemetry bullet now discloses the release-availability check; "8 themes" corrected to 12; the two broken quickstart commands (`shannon <path>` treating a path as a prompt, and the nonexistent `--budget` CLI flag) fixed; the comparison table no longer claims default outbound redaction.
+- Desktop packaging: `beforeBuildCommand`/`beforeDevCommand` in `tauri.conf.json` fixed to `pnpm --dir ui build|dev` — the previous `pnpm build` ran from `desktop/`, where no such script exists, breaking monorepo-local `tauri build`.
+- `desktop/ui/package.json` version realigned to the workspace (0.6.0 → 0.11.0) and added as a fifth source in `just release-prep` and the release.yml version guard.
+- Removed the never-wired `packaging/` manifests (winget/homebrew/scoop/AUR): all pinned 0.7.0 with placeholder checksums, none were referenced by CI or published upstream (the documented Homebrew tap never received a commit). Documented in CONTRIBUTING.md that third-party channels are not published.
+- Website: `astro.config.mjs` `site`/`base` now match the actual deployment target (`diff-lab-com.github.io/shannon-agent/`); getting-started docs no longer reference the nonexistent Homebrew tap or the misnamed Windows asset, and the `cargo install --git` line now selects the `shannon-cli` member.
+
+**Fixed — release engineering**
+
+- `release.yml` publish job now waits for the tag's full `ci.yml` run to conclude successfully before flipping the draft to published (previously only the build jobs gated it — a red test/clippy/semver gate still shipped the release). Manual dispatches skip the wait.
+- `SHA256SUMS` now covers `install.sh`/`install.ps1` (previously attached after the manifest was generated — the scripts people `curl | sh` were checksummed by nothing), and both installer scripts hard-fail when no checksum source is reachable instead of "skipping verification".
+- Release assets get SLSA build provenance via `actions/attest-build-provenance` (verify at the repo's attestations page).
+- CLI release matrix gained `aarch64-unknown-linux-gnu` (native arm64 runner); `install.sh` maps Linux/arm64 to the new CLI archive instead of silently skipping the CLI.
+- Gateway release builds now install dependencies with pnpm from the committed `pnpm-lock.yaml` (Bun cannot read a pnpm lockfile, so `bun install --frozen-lockfile` resolved at build time and the binary was not reproducible). Bun remains the bundler.
+- Publish smoke-test asserts the full matrix (18 assets incl. rpm, AppImage, aarch64 dmg, arm64 CLI/gateway) instead of 10.
+- `CHANGELOG.md`: the three stacked `## [Unreleased]` sections are consolidated under one; `install.sh`'s broken `releases/latest` fallback URL fixed.
+
+### §4.10 W3-2 · manifest v2 + install-time validation + `--dump-config` + ecosystem conventions
 
 ### Added
 
@@ -769,7 +874,7 @@ Terminology, onboarding, visual system and workflow gaps from
 - MCP references accept `stdio` transport rows without an explicit
   `type = "stdio"` (inferred default), matching hand-written shorthand.
 
-## [Unreleased] — §4.6 W1-P1 · L0 becomes the only authoritative session record (breaking, DP4)
+### §4.6 W1-P1 · L0 becomes the only authoritative session record (breaking, DP4)
 
 ### ⚠️ Breaking changes
 

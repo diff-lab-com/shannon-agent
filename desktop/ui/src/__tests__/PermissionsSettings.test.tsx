@@ -212,6 +212,59 @@ describe('PermissionsSettings — custom profile CRUD', () => {
       expect(deleteCustomProfile).toHaveBeenCalledWith('research-mode')
     })
   })
+
+  it('renames via save + delete of the old file (P1-12)', async () => {
+    await renderLoaded()
+    fireEvent.click(within(screen.getByText('research-mode').closest('li') as HTMLElement)
+      .getByRole('button', { name: 'Edit profile' }))
+    const dialog = await screen.findByRole('dialog')
+    const nameInput = within(dialog).getByLabelText('Profile name') as HTMLInputElement
+    fireEvent.change(nameInput, { target: { value: 'renamed-mode' } })
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Save profile' }))
+    await waitFor(() => {
+      // The new file is written first, then the stale one removed.
+      expect(saveCustomProfile).toHaveBeenCalledWith(
+        expect.objectContaining({ name: 'renamed-mode' }),
+      )
+      expect(deleteCustomProfile).toHaveBeenCalledWith('research-mode')
+    })
+    // The rename is not an activation — no profile switch is dispatched.
+    expect(activatePermissionProfile).not.toHaveBeenCalled()
+    await waitFor(() => expect(listPermissionProfiles.mock.calls.length).toBeGreaterThan(1))
+  })
+
+  it('renames the active profile without leaving a stale active pointer (P1-12)', async () => {
+    mockCatalog.config = { ...mockCatalog.config, active_permission_profile: 'research-mode' }
+    await renderLoaded()
+    fireEvent.click(within(screen.getByText('research-mode').closest('li') as HTMLElement)
+      .getByRole('button', { name: 'Edit profile' }))
+    const dialog = await screen.findByRole('dialog')
+    const nameInput = within(dialog).getByLabelText('Profile name') as HTMLInputElement
+    fireEvent.change(nameInput, { target: { value: 'renamed-mode' } })
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Save profile' }))
+    await waitFor(() => {
+      // Deactivated before the old file is deleted, re-activated under the
+      // new name afterwards.
+      expect(activatePermissionProfile).toHaveBeenNthCalledWith(1, null)
+      expect(deleteCustomProfile).toHaveBeenCalledWith('research-mode')
+      expect(activatePermissionProfile).toHaveBeenNthCalledWith(2, 'renamed-mode')
+    })
+    expect(mockCatalog.refreshConfig).toHaveBeenCalled()
+  })
+
+  it('renders an error state with retry when the profile list fails to load (P1-13)', async () => {
+    listPermissionProfiles.mockRejectedValue(new Error('ipc down'))
+    renderWithRoute()
+    const alert = await screen.findByRole('alert')
+    expect(within(alert).getByText("Couldn't load permission profiles")).toBeInTheDocument()
+    // The builtin tiers are NOT rendered as an empty list.
+    expect(screen.queryByText('strict')).not.toBeInTheDocument()
+    expect(screen.queryByText('research-mode')).not.toBeInTheDocument()
+    // Retry re-issues the load and recovers.
+    listPermissionProfiles.mockResolvedValue(PROFILES)
+    fireEvent.click(within(alert).getByRole('button', { name: 'Retry' }))
+    await waitFor(() => expect(screen.getByText('strict')).toBeInTheDocument())
+  })
 })
 
 describe('PermissionsSettings — command sandbox block', () => {

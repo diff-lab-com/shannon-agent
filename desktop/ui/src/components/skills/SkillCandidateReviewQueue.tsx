@@ -17,6 +17,7 @@ import { useEffect, useRef, useState } from 'react'
 import { useIntl, type PrimitiveType } from 'react-intl'
 import { toast } from 'sonner'
 import { Button } from '@/components/ui/button'
+import ErrorState from '@/components/ui/error-state'
 import { CardSkeleton } from '@/components/SkeletonLoader'
 import { usePendingSkillCandidates } from '@/hooks/usePendingSkillCandidates'
 import { rejectSkillCandidate } from '@/lib/tauri-api'
@@ -31,7 +32,7 @@ export default function SkillCandidateReviewQueue({ focusCandidateId }: {
 }) {
   const intl = useIntl()
   const t = (id: string, values?: Record<string, PrimitiveType>) => intl.formatMessage({ id }, values)
-  const { candidates, loading, refetch } = usePendingSkillCandidates()
+  const { candidates, loading, error, refetch } = usePendingSkillCandidates()
   const [approveTarget, setApproveTarget] = useState<SkillCandidate | null>(null)
   const [rejectingId, setRejectingId] = useState<string | null>(null)
   const listRef = useRef<HTMLDivElement>(null)
@@ -68,6 +69,20 @@ export default function SkillCandidateReviewQueue({ focusCandidateId }: {
     return (
       <div className="space-y-md" aria-busy="true">
         {Array.from({ length: 2 }).map((_, i) => <CardSkeleton key={i} />)}
+      </div>
+    )
+  }
+
+  if (error) {
+    // B3 P1-17: a failed queue read used to render as "nothing pending".
+    // Surface the failure (with a retry) so the two states stay distinct.
+    return (
+      <div className="rounded-xl border border-outline-variant/30 bg-surface-container-lowest/60">
+        <ErrorState
+          title={t('extensions.pending.loadFailed')}
+          description={error}
+          action={{ label: t('common.retry'), onClick: refetch }}
+        />
       </div>
     )
   }

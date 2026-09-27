@@ -389,6 +389,15 @@
       }
     },
     {
+      "identifier": "allow-export-diagnostics",
+      "description": "Enables the export_diagnostics command without any pre-configured scope.",
+      "commands": {
+        "allow": [
+          "export_diagnostics"
+        ]
+      }
+    },
+    {
       "identifier": "allow-export-session",
       "description": "Enables the export_session command without any pre-configured scope.",
       "commands": {
@@ -2634,7 +2643,8 @@
         "allow-probe-url-frameable",
         "allow-register-interactive-artifact",
         "allow-reveal-in-folder",
-        "allow-unregister-interactive-artifact"
+        "allow-unregister-interactive-artifact",
+        "allow-export-diagnostics"
       ]
     },
     {

@@ -67,6 +67,54 @@ impl From<anyhow::Error> for InstallError {
     }
 }
 
+/// Sanitize a catalog-provided plugin name before it is joined onto an
+/// install root (B0 P0-6).
+///
+/// `Path::join` escapes the base for absolute paths and `..` components, and
+/// the skill/agent catalogs come from upstream HTTP — so a polluted entry
+/// could otherwise write SKILL.md anywhere on disk. Unsafe shapes are
+/// rejected loudly; everything else is slugified (lowercase, `[a-z0-9._-]`,
+/// other chars collapsed to `-`) in line with the frontend whitelist
+/// `^[a-z0-9][a-z0-9._-]*$` and the candidate-approval `slugify`.
+pub(crate) fn safe_plugin_name(name: &str) -> Result<String, InstallError> {
+    let trimmed = name.trim();
+    if trimmed.is_empty()
+        || trimmed.starts_with('~')
+        || trimmed.starts_with('/')
+        || trimmed.starts_with('\\')
+        || trimmed.contains('/')
+        || trimmed.contains('\\')
+        || trimmed.contains("..")
+    {
+        return Err(InstallError::Format(format!(
+            "refusing unsafe plugin name: {name:?}"
+        )));
+    }
+    let mut slug = String::with_capacity(trimmed.len());
+    let mut prev_sep = true; // suppress leading separators
+    for ch in trimmed.chars() {
+        if ch.is_ascii_alphanumeric() {
+            slug.push(ch.to_ascii_lowercase());
+            prev_sep = false;
+        } else if matches!(ch, '.' | '-' | '_') && !prev_sep {
+            slug.push(ch);
+            prev_sep = true;
+        } else if !prev_sep {
+            slug.push('-');
+            prev_sep = true;
+        }
+    }
+    while slug.ends_with('.') || slug.ends_with('-') {
+        slug.pop();
+    }
+    if slug.is_empty() {
+        return Err(InstallError::Format(format!(
+            "plugin name has no usable characters: {name:?}"
+        )));
+    }
+    Ok(slug)
+}
+
 /// Per-kind install adapter. Implementations:
 /// - `McpRegistryInstaller` (P2) — dispatches to one of the four MCP installers
 /// - `OAuthRemoteMcpInstaller` (P2) — vendor-hosted remote MCP
@@ -108,6 +156,37 @@ pub trait AddonInstaller: Send + Sync {
 mod tests {
     use super::*;
     use crate::extensions::types::{AddonKind, CatalogSource, TrustLevel};
+
+    #[test]
+    fn safe_plugin_name_rejects_unsafe_shapes() {
+        for name in [
+            "../pwned",
+            "/etc/passwd",
+            "C:\\Windows",
+            "~/pwned",
+            "a/b",
+            "a\\b",
+            "..",
+            ".",
+            "",
+            "   ",
+        ] {
+            assert!(safe_plugin_name(name).is_err(), "must reject {name:?}");
+        }
+    }
+
+    #[test]
+    fn safe_plugin_name_slugs_to_frontend_whitelist() {
+        // The slug must satisfy the UI-side ^[a-z0-9][a-z0-9._-]*$ whitelist.
+        assert_eq!(safe_plugin_name("My Skill v2!").unwrap(), "my-skill-v2");
+        assert_eq!(safe_plugin_name("code.review").unwrap(), "code.review");
+        assert_eq!(safe_plugin_name("  spaced  out  ").unwrap(), "spaced-out");
+        assert_eq!(safe_plugin_name(".hidden").unwrap(), "hidden");
+        for slug in ["my-skill-v2", "code.review", "spaced-out", "hidden"] {
+            let re = regex::Regex::new(r"^[a-z0-9][a-z0-9._-]*$").unwrap();
+            assert!(re.is_match(slug), "{slug} must match the whitelist");
+        }
+    }
 
     #[test]
     fn install_error_display_is_human_readable() {

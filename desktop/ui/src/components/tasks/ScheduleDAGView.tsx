@@ -191,7 +191,17 @@ export default function ScheduleDAGView({ routines, onSelectRoutine, queuedTaskI
                 onClick={() => onSelectRoutine?.(n.routine.id)}
                 className={onSelectRoutine ? 'cursor-pointer' : ''}
                 role="button"
+                // B6-37 (§5 任务): role="button" without focus/keys was inert
+                // for keyboard users — make the node reachable and activable.
+                tabIndex={onSelectRoutine ? 0 : undefined}
                 aria-label={t('tasks.scheduleDAGView.nodeAria', { name: n.routine.name })}
+                onKeyDown={(e) => {
+                  if (!onSelectRoutine) return
+                  if (e.key === 'Enter' || e.key === ' ') {
+                    e.preventDefault()
+                    onSelectRoutine(n.routine.id)
+                  }
+                }}
               >
                 <rect
                   width={NODE_W}

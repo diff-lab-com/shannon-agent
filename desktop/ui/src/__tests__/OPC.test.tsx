@@ -259,7 +259,7 @@ describe('OPC page', () => {
     resetCtx()
     ctx.agents = [{ id: 'a1', name: 'Bot', status: 'running' }]
     renderOPC()
-    const card = screen.getByRole('button', { name: /Bot — running/ })
+    const card = screen.getByRole('button', { name: /Bot — Running/ })
     expect(card).toHaveAttribute('tabindex', '0')
   })
 

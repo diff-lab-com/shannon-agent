@@ -1515,38 +1515,53 @@ impl Repl {
             engine.mark_session_start_emitted();
         }
 
-        // Check for updates in background to avoid blocking startup
+        // Check for updates in background to avoid blocking startup.
+        // Gated by the `update_check` feature flag (SHANNON_FEATURE_UPDATE_CHECK
+        // / settings.json `features.update_check`, default on) and throttled
+        // across restarts via ~/.shannon/update-check.json — without the state
+        // file every REPL launch hit the GitHub API once. Set
+        // SHANNON_FEATURE_UPDATE_CHECK=0 to keep Shannon fully offline.
         {
-            let (tx, rx) = std::sync::mpsc::channel::<String>();
-            self.update_check_rx = Some(std::sync::Mutex::new(rx));
-            let config = shannon_core::updater::UpdaterConfig {
-                repo: "shannon-code/shannon".to_string(),
-                check_interval: std::time::Duration::from_secs(86400),
-                enabled: true,
-                include_prereleases: false,
-            };
-            std::thread::spawn(move || {
-                let mut updater = shannon_core::updater::AutoUpdater::new(config);
-                let rt = tokio::runtime::Builder::new_current_thread()
-                    .enable_all()
-                    .build()
-                    .ok();
-                let status = rt
-                    .as_ref()
-                    .map(|rt| rt.block_on(updater.check_for_update()));
-                if let Some(shannon_core::updater::UpdateStatus::UpdateAvailable {
-                    current,
-                    latest,
-                    release,
-                }) = status
-                {
-                    let msg = format!(
-                        "Update available: {} → {} ({}). Download: {}",
-                        current, latest, release.tag_name, release.html_url
-                    );
-                    let _ = tx.send(msg);
-                }
-            });
+            let update_check_enabled = shannon_core::feature_flags::FeatureFlagManager::new()
+                .is_enabled(&shannon_core::feature_flags::flags::UPDATE_CHECK);
+            let interval = std::time::Duration::from_secs(86400);
+            if update_check_enabled
+                && shannon_core::updater::UpdateCheckState::should_check(interval)
+            {
+                let (tx, rx) = std::sync::mpsc::channel::<String>();
+                self.update_check_rx = Some(std::sync::Mutex::new(rx));
+                let config = shannon_core::updater::UpdaterConfig {
+                    repo: "diff-lab-com/shannon-agent".to_string(),
+                    check_interval: interval,
+                    enabled: true,
+                    include_prereleases: false,
+                };
+                std::thread::spawn(move || {
+                    let mut updater = shannon_core::updater::AutoUpdater::new(config);
+                    let rt = tokio::runtime::Builder::new_current_thread()
+                        .enable_all()
+                        .build()
+                        .ok();
+                    let status = rt
+                        .as_ref()
+                        .map(|rt| rt.block_on(updater.check_for_update()));
+                    // Record the attempt regardless of outcome so the
+                    // next launch within the interval stays silent.
+                    shannon_core::updater::UpdateCheckState::store_now();
+                    if let Some(shannon_core::updater::UpdateStatus::UpdateAvailable {
+                        current,
+                        latest,
+                        release,
+                    }) = status
+                    {
+                        let msg = format!(
+                            "Update available: {} → {} ({}). Download: {}",
+                            current, latest, release.tag_name, release.html_url
+                        );
+                        let _ = tx.send(msg);
+                    }
+                });
+            }
         }
 
         // Auto-restore the most recent session if it was active within the last 2 hours.

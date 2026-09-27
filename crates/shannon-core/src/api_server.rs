@@ -283,7 +283,10 @@ impl ShannonApiServer {
                 get(query_stream_handler).post(query_stream_post_handler),
             )
             .route("/api/tools/list", post(tools_list_handler))
-            .route("/api/ws", get(ws_handler))
+            .route(
+                "/api/ws",
+                get(ws_handler).layer(axum::middleware::from_fn(ws_origin_guard)),
+            )
             .route("/api/approval/respond", post(approval_respond_handler));
         for extra in &self.extra_routes {
             // `with_state(())` re-types an already state-applied router so it
@@ -912,6 +915,78 @@ async fn approval_respond_handler(
 // (recv counter resets)".
 async fn ws_handler(ws: WebSocketUpgrade, State(state): State<AppState>) -> impl IntoResponse {
     ws.on_upgrade(move |socket| handle_ws_socket(socket, state))
+}
+
+/// Router-level guard for `/api/ws`: reject cross-site browser origins before
+/// the WebSocket upgrade is attempted.
+///
+/// Browsers attach an unforgable `Origin` to every cross-site WebSocket
+/// handshake, and WebSocket handshakes are not subject to CORS — so without
+/// this check any web page the user visits could drive the local engine
+/// (`ws://127.0.0.1:33420/api/ws`) with the user's full tool permissions.
+/// This runs as route middleware (not inside the handler) so it rejects
+/// before axum's `WebSocketUpgrade` extractor touches the request. It sits
+/// *inside* the router-level `auth_middleware`, so a configured token is
+/// still enforced first.
+async fn ws_origin_guard(
+    req: axum::extract::Request,
+    next: axum::middleware::Next,
+) -> axum::response::Response {
+    let origin = req
+        .headers()
+        .get(axum::http::header::ORIGIN)
+        .and_then(|v| v.to_str().ok());
+    if !ws_origin_allowed(origin) {
+        tracing::warn!(
+            origin = origin.unwrap_or(""),
+            "rejected WebSocket upgrade: cross-site Origin is not allowed on /api/ws"
+        );
+        return StatusCode::FORBIDDEN.into_response();
+    }
+    next.run(req).await
+}
+
+/// Decide whether a WebSocket upgrade to `/api/ws` may proceed based on its
+/// `Origin` header.
+///
+/// Allowed:
+/// - header absent (non-browser clients: the gateway's ws client, curl,
+///   tests — they never send `Origin`), or
+/// - a Shannon webview origin (`tauri://localhost`, `http(s)://tauri.localhost`
+///   — the Tauri WebView2/WKWebView/WebKitGTK defaults), or
+/// - a loopback host on any port (`localhost`, `127.0.0.1`, `[::1]`, and the
+///   `::ffff:127.0.0.1` IPv4-mapped form) — the desktop dev server and local
+///   tooling.
+///
+/// Anything else (any public host, or `Origin: null` from a sandboxed iframe)
+/// is rejected with 403 before the upgrade.
+fn ws_origin_allowed(origin: Option<&str>) -> bool {
+    let Some(origin) = origin else {
+        return true;
+    };
+    let origin = origin.trim();
+    if matches!(
+        origin,
+        "tauri://localhost" | "http://tauri.localhost" | "https://tauri.localhost"
+    ) {
+        return true;
+    }
+    // `scheme://host[:port]/…` — take the authority, then strip the port to
+    // compare the bare host.
+    let Some((_scheme, authority)) = origin.split_once("://") else {
+        return false;
+    };
+    let authority = authority.split(['/', '?', '#']).next().unwrap_or("");
+    let host = authority
+        .strip_prefix('[')
+        .and_then(|h| h.split_once(']'))
+        .map(|(v6, _)| v6) // bracketed IPv6 literal → inner address
+        .unwrap_or_else(|| authority.split(':').next().unwrap_or(""));
+    let host = host.trim_start_matches("[::ffff:").trim_end_matches(']');
+    matches!(
+        host.to_ascii_lowercase().as_str(),
+        "localhost" | "127.0.0.1" | "::1" | "::ffff:127.0.0.1"
+    )
 }
 
 async fn handle_ws_socket(socket: WebSocket, state: AppState) {
@@ -2605,6 +2680,93 @@ mod tests {
 
         let response = app.oneshot(req).await.unwrap();
         assert_eq!(response.status(), StatusCode::METHOD_NOT_ALLOWED);
+    }
+
+    /// Build a GET /api/ws request that satisfies the WebSocketUpgrade
+    /// extractor, optionally with an `Origin` header.
+    fn ws_upgrade_request(origin: Option<&str>) -> axum::extract::Request {
+        let mut builder = Request::builder()
+            .uri("/api/ws")
+            .header("connection", "upgrade")
+            .header("upgrade", "websocket")
+            .header("sec-websocket-version", "13")
+            .header("sec-websocket-key", "dGhlIHNhbXBsZSBub25jZQ==");
+        if let Some(origin) = origin {
+            builder = builder.header("origin", origin);
+        }
+        builder.body(Body::empty()).unwrap()
+    }
+
+    #[tokio::test]
+    async fn test_ws_cross_site_origin_rejected() {
+        let app = test_app();
+        // A browser page at a public host must not be able to drive the
+        // local engine via ws://127.0.0.1:33420 (WS handshakes bypass CORS).
+        // The guard short-circuits before the WebSocketUpgrade extractor.
+        let req = ws_upgrade_request(Some("https://evil.example"));
+        let response = app.oneshot(req).await.unwrap();
+        assert_eq!(response.status(), StatusCode::FORBIDDEN);
+    }
+
+    #[tokio::test]
+    async fn test_ws_null_origin_rejected() {
+        let app = test_app();
+        // `Origin: null` (sandboxed iframes) is a browser origin — reject.
+        let req = ws_upgrade_request(Some("null"));
+        let response = app.oneshot(req).await.unwrap();
+        assert_eq!(response.status(), StatusCode::FORBIDDEN);
+    }
+
+    #[tokio::test]
+    async fn test_ws_loopback_and_webview_origins_pass_guard() {
+        for origin in [
+            "http://localhost:1420",  // desktop dev server
+            "http://127.0.0.1:5173",  // local tooling
+            "ws://[::1]:33420",       // bracketed IPv6 loopback
+            "tauri://localhost",      // Tauri WKWebView / WebKitGTK
+            "http://tauri.localhost", // Tauri WebView2 (Windows)
+        ] {
+            let app = test_app();
+            let req = ws_upgrade_request(Some(origin));
+            let response = app.oneshot(req).await.unwrap();
+            // Under `oneshot` the guard passes and the WebSocketUpgrade
+            // extractor then fails with 426 (no hyper upgrade state) — the
+            // point is that the guard did NOT reject with 403.
+            assert_eq!(
+                response.status(),
+                StatusCode::UPGRADE_REQUIRED,
+                "origin {origin} should pass the WS origin guard"
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn test_ws_no_origin_header_passes_guard() {
+        let app = test_app();
+        // Non-browser clients (gateway ws client, tests) send no Origin.
+        let req = ws_upgrade_request(None);
+        let response = app.oneshot(req).await.unwrap();
+        assert_eq!(response.status(), StatusCode::UPGRADE_REQUIRED);
+    }
+
+    #[test]
+    fn ws_origin_allowed_host_parsing() {
+        assert!(ws_origin_allowed(None));
+        assert!(ws_origin_allowed(Some("tauri://localhost")));
+        assert!(ws_origin_allowed(Some("http://tauri.localhost")));
+        assert!(ws_origin_allowed(Some("https://tauri.localhost")));
+        assert!(ws_origin_allowed(Some("http://localhost:1420")));
+        assert!(ws_origin_allowed(Some("http://127.0.0.1:33420")));
+        assert!(ws_origin_allowed(Some("ws://[::1]:33420")));
+        assert!(ws_origin_allowed(Some("http://[::ffff:127.0.0.1]:8080")));
+        assert!(ws_origin_allowed(Some("http://LOCALHOST:1420")));
+
+        assert!(!ws_origin_allowed(Some("https://evil.example")));
+        assert!(!ws_origin_allowed(Some("http://127.0.0.1.evil.example"))); // suffix spoof
+        assert!(!ws_origin_allowed(Some("http://0.0.0.0:33420")));
+        assert!(!ws_origin_allowed(Some("null")));
+        assert!(!ws_origin_allowed(Some("garbage"))); // no scheme
+        assert!(!ws_origin_allowed(Some("https://example.com/127.0.0.1")));
     }
 
     // ══════════════════════════════════════════════════════════════════════

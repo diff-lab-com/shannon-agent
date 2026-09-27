@@ -11,7 +11,7 @@ use async_trait::async_trait;
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 
-use super::installer::{AddonInstaller, InstallError};
+use super::installer::{AddonInstaller, InstallError, safe_plugin_name};
 use super::types::{
     AddonKind, CatalogEntry, CatalogSource, ConfirmationLevel, InstallTarget, InstalledAddon,
     ProgressSink, TrustLevel,
@@ -72,7 +72,11 @@ impl AddonInstaller for AgentRepoInstaller {
             })
             .await;
 
-        let target_dir = resolve_agents_root(self.root_override.as_deref()).join(&self.plugin_name);
+        // B0 P0-6: the name comes from the upstream catalog — sanitize it
+        // before it touches the filesystem (Path::join escapes the root for
+        // absolute paths / `..`).
+        let plugin = safe_plugin_name(&self.plugin_name)?;
+        let target_dir = resolve_agents_root(self.root_override.as_deref()).join(&plugin);
         if target_dir.exists() {
             return Err(InstallError::Io(format!(
                 "{} already exists at {}",
@@ -132,7 +136,7 @@ impl AddonInstaller for AgentRepoInstaller {
         Ok(InstalledAddon {
             id: entry.id.clone(),
             kind: entry.kind,
-            name: self.plugin_name.clone(),
+            name: plugin.clone(),
             install_path: Some(target_dir.display().to_string()),
             installed_at: Some(Utc::now()),
             version: entry.version.clone(),
@@ -223,7 +227,10 @@ impl AddonInstaller for AgentMarkdownInstaller {
             })
             .await;
 
-        let dir = resolve_agents_root(self.root_override.as_deref()).join(&self.plugin_name);
+        // B0 P0-6: same sanitization as the repo installer — a polluted
+        // native entry must not escape the agents root either.
+        let plugin = safe_plugin_name(&self.plugin_name)?;
+        let dir = resolve_agents_root(self.root_override.as_deref()).join(&plugin);
         std::fs::create_dir_all(&dir)?;
         let agent_md = dir.join("agent.md");
         std::fs::write(&agent_md, &self.body)?;
@@ -233,7 +240,7 @@ impl AddonInstaller for AgentMarkdownInstaller {
         Ok(InstalledAddon {
             id: entry.id.clone(),
             kind: entry.kind,
-            name: self.plugin_name.clone(),
+            name: plugin.clone(),
             install_path: Some(agent_md.display().to_string()),
             installed_at: Some(Utc::now()),
             version: entry.version.clone(),
@@ -438,5 +445,95 @@ mod tests {
         std::fs::create_dir_all(&agent_dir).unwrap();
         remove_installed_agent_in(&root, "beta").expect("remove");
         assert!(!agent_dir.exists());
+    }
+
+    // ---- B0 P0-6: path traversal / absolute-path injection ----
+
+    #[tokio::test]
+    async fn markdown_installer_rejects_traversal_and_absolute_names() {
+        let tmp = tempfile::tempdir().expect("tmp");
+        let root = tmp.path().join(".shannon").join("agents");
+        let outside = tmp.path().join("pwned");
+
+        for name in [
+            "../pwned",
+            "..\\pwned",
+            "/etc/passwd",
+            "C:\\Windows",
+            "~/pwned",
+            "a/../../pwned",
+            "..",
+            ".",
+        ] {
+            let installer = AgentMarkdownInstaller {
+                plugin_name: name.into(),
+                body: "---\nname: x\n---\n".into(),
+                root_override: Some(root.clone()),
+            };
+            let entry = fixture_entry();
+            installer
+                .install(
+                    &entry,
+                    &InstallTarget::ShannonAgentsDir { plugin: "t".into() },
+                    &ProgressSink::null(),
+                )
+                .await
+                .expect_err(&format!("must reject unsafe name: {name}"));
+        }
+
+        // Nothing landed outside the agents root…
+        assert!(
+            !outside.exists(),
+            "traversal must not write outside the root"
+        );
+        // …and nothing at all was created under the root either.
+        assert!(!root.exists() || std::fs::read_dir(&root).unwrap().next().is_none());
+    }
+
+    #[tokio::test]
+    async fn repo_installer_rejects_traversal_name_before_clone() {
+        let tmp = tempfile::tempdir().expect("tmp");
+        let root = tmp.path().join(".shannon").join("agents");
+
+        let installer = AgentRepoInstaller {
+            plugin_name: "../escape".into(),
+            repo: "example/none".into(),
+            ref_: "main".into(),
+            root_override: Some(root.clone()),
+        };
+        let entry = fixture_entry();
+        let err = installer
+            .install(
+                &entry,
+                &InstallTarget::ShannonAgentsDir { plugin: "t".into() },
+                &ProgressSink::null(),
+            )
+            .await
+            .expect_err("traversal name must be rejected before any clone");
+        assert!(err.to_string().contains("unsafe"), "got: {err}");
+        assert!(!root.exists());
+    }
+
+    #[tokio::test]
+    async fn markdown_installer_slugs_unsafe_characters() {
+        let tmp = tempfile::tempdir().expect("tmp");
+        let root = tmp.path().join(".shannon").join("agents");
+
+        let installer = AgentMarkdownInstaller {
+            plugin_name: "My Agent v2!".into(),
+            body: "---\nname: x\n---\n".into(),
+            root_override: Some(root.clone()),
+        };
+        let entry = fixture_entry();
+        let installed = installer
+            .install(
+                &entry,
+                &InstallTarget::ShannonAgentsDir { plugin: "t".into() },
+                &ProgressSink::null(),
+            )
+            .await
+            .expect("safe name must install");
+        assert_eq!(installed.name, "my-agent-v2");
+        assert!(root.join("my-agent-v2").join("agent.md").exists());
     }
 }

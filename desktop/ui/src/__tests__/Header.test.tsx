@@ -63,7 +63,9 @@ describe('Header component', () => {
       { id: 'gpt-4o', name: 'GPT-4o', provider: 'openai', context_window: 128000 },
     ]
     mockCtx.permissionRequest = null
-    mockCtx.respondPermission = vi.fn()
+    // Header fires respondPermission without awaiting (B0 P0-1 made the
+    // real action re-throw on failure), so the mock must return a promise.
+    mockCtx.respondPermission = vi.fn().mockResolvedValue(undefined)
     mockCtx.refreshConfig = vi.fn()
     mockCtx.refreshStatus = vi.fn()
     mockCtx.config = { active_permission_profile: 'balanced', approval_mode: 'suggest', sandbox: { mode: 'off' } }
@@ -139,8 +141,8 @@ describe('Header component', () => {
     })
   })
 
-  // U2 — Header absorbed ChatInput's dual-write: it configures the model
-  // NAME plus the model's provider (not just the catalog id).
+  // Decision 1 (B1-8) — the config's `model` key stores the catalog ID:
+  // Header writes the id plus the model's provider (never the name).
   it('switches model when option is clicked', async () => {
     const api = await import('@/lib/tauri-api')
     render(wrap(<Header />, { route: '/tasks' }))
@@ -150,7 +152,7 @@ describe('Header component', () => {
     })
     fireEvent.click(screen.getByText('GPT-4o'))
     await waitFor(() => {
-      expect(api.configure).toHaveBeenCalledWith({ key: 'model', value: 'GPT-4o' })
+      expect(api.configure).toHaveBeenCalledWith({ key: 'model', value: 'gpt-4o' })
       expect(api.configure).toHaveBeenCalledWith({ key: 'provider', value: 'openai' })
     })
   })

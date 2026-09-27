@@ -5,6 +5,17 @@ import { MemoryRouter, useLocation } from 'react-router-dom'
 import AdvancedSettings from '@/components/settings/AdvancedSettings'
 import * as api from '@/lib/tauri-api'
 
+// B2: the「open log directory」entry resolves $HOME/.shannon through the
+// core path API (granted via capabilities) and opens it with the existing
+// reveal command. Mock the path module so the test controls the result.
+vi.mock('@tauri-apps/api/path', () => ({
+  homeDir: vi.fn().mockResolvedValue('/home/tester'),
+  join: vi.fn().mockResolvedValue('/home/tester/.shannon'),
+}))
+vi.mock('@tauri-apps/api/app', () => ({
+  getVersion: vi.fn().mockResolvedValue('0.11.0'),
+}))
+
 function wrap(ui: React.ReactElement) {
   return (
     <AppProvider>
@@ -51,9 +62,19 @@ describe('AdvancedSettings', () => {
     expect(screen.getByText('Reset to Factory Settings')).toBeInTheDocument()
   })
 
-  it('renders view system logs link', () => {
+  it('renders the open log directory entry with the real version badge', async () => {
     render(wrap(<AdvancedSettings />))
-    expect(screen.getByText('View System Logs')).toBeInTheDocument()
+    expect(screen.getByText('Open log directory')).toBeInTheDocument()
+    // B2: the version comes from getVersion() — the old fake logs modal
+    // hardcoded "v0.1.0".
+    await waitFor(() => expect(screen.getByText('v0.11.0')).toBeInTheDocument())
+  })
+
+  it('opens the Shannon log directory via openWithDefaultApp', async () => {
+    const spy = vi.mocked(api.openWithDefaultApp).mockClear()
+    render(wrap(<AdvancedSettings />))
+    fireEvent.click(screen.getByText('Open log directory'))
+    await waitFor(() => expect(spy).toHaveBeenCalledWith('/home/tester/.shannon'))
   })
 
   it('renders manage api keys link', () => {
@@ -105,24 +126,6 @@ describe('AdvancedSettings', () => {
         'https://github.com/diff-lab-com/shannon-agent/releases/tag/v0.12.0'
       )
     )
-  })
-
-  // US-SET-04: System Logs modal
-  it('opens system logs modal on View System Logs click', () => {
-    render(wrap(<AdvancedSettings />))
-    fireEvent.click(screen.getByText('View System Logs'))
-    expect(screen.getByText('System Logs')).toBeInTheDocument()
-    expect(screen.getByText('Shannon Desktop v0.1.0')).toBeInTheDocument()
-  })
-
-  it('closes system logs modal via close button', () => {
-    render(wrap(<AdvancedSettings />))
-    fireEvent.click(screen.getByText('View System Logs'))
-    expect(screen.getByText('System Logs')).toBeInTheDocument()
-    // Click the close button inside the modal
-    const modal = screen.getByText('System Logs').closest('.fixed')!
-    const closeBtn = modal.querySelector('button')
-    if (closeBtn) fireEvent.click(closeBtn)
   })
 
   // US-SET-04: API Keys modal

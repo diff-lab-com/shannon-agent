@@ -20,6 +20,7 @@ import {
 import { openFileRef } from '@/lib/openFileRef'
 import { openWithDefaultApp, pathExists, revealInFolder } from '@/lib/tauri-api'
 import { toastError } from '@/lib/errorToast'
+import { focusFirstMenuItem, handleMenuKeyDown } from './menuKeyboard'
 
 const INLINE_CODE_FALLBACK_CLASS =
   'font-mono text-[0.92em] px-[5px] py-[1px] rounded-md bg-surface-container text-primary border border-outline-variant/15'
@@ -68,7 +69,9 @@ export function FileRefChip({ raw, className }: FileRefChipProps) {
 
   // Close on outside mousedown / Escape — document listeners instead of a
   // full-screen backdrop, per the overlay audit (check-overlays.sh keeps
-  // full-viewport layers in the ui primitives only).
+  // full-viewport layers in the ui primitives only). When focus is inside
+  // the menu, the container-level handler in menuKeyboard.ts closes with
+  // stopPropagation first, so global Escape handlers don't double-fire.
   useEffect(() => {
     if (!menu) return
     const onPointerDown = (e: MouseEvent) => {
@@ -83,6 +86,12 @@ export function FileRefChip({ raw, className }: FileRefChipProps) {
       document.removeEventListener('mousedown', onPointerDown)
       document.removeEventListener('keydown', onKeyDown)
     }
+  }, [menu])
+
+  // Menu keyboard semantics (review §5): focus the first item on open.
+  useEffect(() => {
+    if (!menu) return
+    focusFirstMenuItem(menuRef.current)
   }, [menu])
 
   if (!absPath || exists === false) {
@@ -134,6 +143,7 @@ export function FileRefChip({ raw, className }: FileRefChipProps) {
           ref={menuRef}
           role="menu"
           aria-label={t('link.fileRef.menu.aria', { path: baseName })}
+          onKeyDown={(e) => handleMenuKeyDown(e, menuRef.current, () => setMenu(null))}
           className="fixed z-modal min-w-44 rounded-lg border border-outline-variant/20 bg-surface-container-high p-xs shadow-lg animate-in fade-in zoom-in-95"
           style={{
             left: Math.max(4, Math.min(menu.x, window.innerWidth - 200)),

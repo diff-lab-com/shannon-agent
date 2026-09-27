@@ -162,7 +162,7 @@ export default function Installed() {
     );
   }
 
-  if (filtered.length === 0) {
+  if (addons.length === 0) {
     return (
       <div className="p-lg max-w-7xl mx-auto">
         <EmptyState
@@ -170,6 +170,20 @@ export default function Installed() {
           title={t('extensions.installed.nothingInstalled')}
           description={t('extensions.installed.nothingDesc')}
           action={{ label: t('extensions.installed.cta'), onClick: () => navigate('/extensions/skills') }}
+        />
+      </div>
+    );
+  }
+
+  // B3 (P2 顺带): with a query active, zero rows means "no match" — the
+  // "you haven't installed anything" state was a false alarm.
+  if (filtered.length === 0) {
+    return (
+      <div className="p-lg max-w-7xl mx-auto">
+        <EmptyState
+          icon="search_off"
+          title={intl.formatMessage({ id: 'extensions.installed.noMatches' }, { search })}
+          description={t('extensions.installed.noMatchesDesc')}
         />
       </div>
     );
@@ -333,7 +347,7 @@ function InstalledRow({
         )}
         {row.installed_at && (
           <p className="text-label-xs text-on-surface-variant mt-[2px]">
-            {intl.formatMessage({ id: 'extensions.installed.installedAt' }, { date: formatDate(row.installed_at) })}
+            {intl.formatMessage({ id: 'extensions.installed.installedAt' }, { date: formatDate(row.installed_at, intl.locale) })}
           </p>
         )}
         {/* Disabled entries have no in-row toggle (no write Tauri command yet),
@@ -394,10 +408,12 @@ function groupByKind(rows: InstalledAddonSummary[]): Record<AddonKind, Installed
   return out;
 }
 
-function formatDate(iso: string): string {
+/** B6-36: was `toLocaleDateString(undefined, …)` — followed the OS locale;
+ *  format in the app locale instead. */
+function formatDate(iso: string, locale: string): string {
   try {
     const d = new Date(iso);
-    return d.toLocaleDateString(undefined, { year: "numeric", month: "short", day: "numeric" });
+    return new Intl.DateTimeFormat(locale, { year: "numeric", month: "short", day: "numeric" }).format(d);
   } catch {
     return iso;
   }

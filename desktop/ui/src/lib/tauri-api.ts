@@ -250,6 +250,27 @@ export async function openReleasePage(url: string): Promise<void> {
   return invoke('open_release_page', { url })
 }
 
+// ── Batch-3 follow-up — export diagnostics bundle ────────────────────
+
+/** Summary of a written diagnostics zip (logs + crash reports + doctor). */
+export interface ExportDiagnosticsResult {
+  path: string
+  log_files: number
+  log_bytes: number
+  doctor_ok: boolean
+  truncated: boolean
+}
+
+/**
+ * Bundle local logs, crash reports and a fresh `shannon doctor --json --deep`
+ * report into the zip at `dest` (an absolute path from the save dialog).
+ * Sessions/provider config/credentials are never included.
+ */
+export async function exportDiagnostics(dest: string): Promise<ExportDiagnosticsResult> {
+  return invoke('export_diagnostics', { dest })
+}
+
+
 export async function mobileGeneratePairToken(): Promise<MobilePairToken> {
   return invoke('mobile_generate_pair_token')
 }
@@ -639,8 +660,11 @@ export async function exportSession(id: string, format: 'markdown' | 'json'): Pr
 
 // Save a UTF-8 text payload (e.g. an exported Markdown blob) to an absolute
 // path chosen by the user via @tauri-apps/plugin-dialog's save().
-export async function saveTextFile(path: string, content: string): Promise<void> {
-  await invoke('save_text_file', { path, content })
+// B0 P0-3: `expectedMtime` opts into a stale-write conflict check — the
+// command rejects with `{ code: 'mtime_conflict' }` when the file changed
+// since it was read.
+export async function saveTextFile(path: string, content: string, expectedMtime?: string): Promise<void> {
+  await invoke('save_text_file', { path, content, expectedMtime })
 }
 
 // --- 2026-09-25 open pipeline (docs/plans/2026-09-25-desktop-chat-ui-
@@ -2151,8 +2175,14 @@ export async function updateMemory(input: {
   content?: string | null
   tags?: string[] | null
   category?: string | null
+  /** B3-24 (decision 3-A): moving an entry between projects is a real
+   *  backend move now — omit/null keeps the current project. */
+  project?: string | null
 }): Promise<MemoryEntry> {
-  return invoke('update_memory', input)
+  return invoke('update_memory', {
+    ...input,
+    project: input.project ?? null,
+  })
 }
 
 export async function deleteMemory(id: string): Promise<boolean> {
@@ -2433,8 +2463,18 @@ export async function transcribeAudioLocalBase64(
 
 // --- Remote targets (SSH hosts / Docker containers) ---
 
-/** List saved remote targets from ~/.shannon/remotes.toml. */
-export async function remoteListTargets(): Promise<RemoteTargetListItem[]> {
+/**
+ * Response of `remote_list_targets`: the saved targets plus the persisted
+ * default (P1-16 — the UI reads it back instead of treating reloads as a
+ * no-op).
+ */
+export interface RemoteTargetsList {
+  targets: RemoteTargetListItem[]
+  defaultTarget: string | null
+}
+
+/** List saved remote targets (and the default) from ~/.shannon/remotes.toml. */
+export async function remoteListTargets(): Promise<RemoteTargetsList> {
   return invoke('remote_list_targets')
 }
 

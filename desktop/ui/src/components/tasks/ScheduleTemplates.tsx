@@ -10,9 +10,13 @@ import type { TriggerType } from '@/types'
 
 export interface ScheduleTemplate {
   id: string
-  name: string
+  /** i18n key stem under `tasks.scheduleTemplates.*` — B6-36: the chip label
+   *  and tooltip used to be hardcoded English. */
+  idKey: string
   icon: string
-  description: string
+  /** Prefill payload for ScheduleForm. Deliberately not localized: the
+   *  routine name/prompt are agent instructions, shipped in English on
+   *  purpose (same policy as the built-in routine templates). */
   fields: {
     name?: string
     prompt?: string
@@ -25,9 +29,8 @@ export interface ScheduleTemplate {
 export const SCHEDULE_TEMPLATES: ScheduleTemplate[] = [
   {
     id: 'daily-standup',
-    name: 'Daily Standup Summary',
+    idKey: 'dailyStandup',
     icon: 'groups',
-    description: 'Aggregate yesterday\'s commits + open PRs into a standup digest.',
     fields: {
       name: 'Daily Standup',
       prompt: 'Summarize yesterday\'s commits across all branches, list open PRs needing review, and flag any blockers from in-progress tasks.',
@@ -37,9 +40,8 @@ export const SCHEDULE_TEMPLATES: ScheduleTemplate[] = [
   },
   {
     id: 'weekly-deps',
-    name: 'Weekly Dependency Scan',
+    idKey: 'weeklyDeps',
     icon: 'security',
-    description: 'Run cargo audit + npm audit and route findings to triage.',
     fields: {
       name: 'Weekly Dependency Scan',
       prompt: 'Run cargo audit and npm audit. Triage any vulnerabilities by severity and open issues for critical findings.',
@@ -49,9 +51,8 @@ export const SCHEDULE_TEMPLATES: ScheduleTemplate[] = [
   },
   {
     id: 'pr-auto-review',
-    name: 'PR Auto-Review',
+    idKey: 'prAutoReview',
     icon: 'rate_review',
-    description: 'Sweep open PRs and post a first-pass review comment.',
     fields: {
       name: 'PR Auto-Review',
       prompt: 'For every open PR updated in the last 24h, post a review comment covering style, tests, and risk.',
@@ -61,9 +62,8 @@ export const SCHEDULE_TEMPLATES: ScheduleTemplate[] = [
   },
   {
     id: 'changelog',
-    name: 'Changelog Generator',
+    idKey: 'changelog',
     icon: 'change_history',
-    description: 'Generate a weekly changelog from merged PRs.',
     fields: {
       name: 'Weekly Changelog',
       prompt: 'Collect all PRs merged since last Monday, group by category (feature/fix/chore), and draft a Markdown changelog.',
@@ -73,9 +73,8 @@ export const SCHEDULE_TEMPLATES: ScheduleTemplate[] = [
   },
   {
     id: 'nightly-tests',
-    name: 'Nightly Test Suite',
+    idKey: 'nightlyTests',
     icon: 'science',
-    description: 'Run the full test suite in a clean worktree.',
     fields: {
       name: 'Nightly Tests',
       prompt: 'Run `just ci` in an isolated worktree. Report failures with logs and open issues for any regression.',
@@ -99,18 +98,18 @@ export default function ScheduleTemplates({ onApply }: ScheduleTemplatesProps) {
         {t('tasks.scheduleTemplates.title')}
       </div>
       <div className="flex flex-wrap gap-xs">
-        {SCHEDULE_TEMPLATES.map(t => (
+        {SCHEDULE_TEMPLATES.map(tpl => (
           <Button
-            key={t.id}
+            key={tpl.id}
             type="button"
             variant="outline"
             size="sm"
-            title={t.description}
-            onClick={() => onApply(t)}
+            title={t(`tasks.scheduleTemplates.${tpl.idKey}.description`)}
+            onClick={() => onApply(tpl)}
             className="rounded-full border-outline-variant/30 bg-surface-container-low hover:bg-primary/10 hover:border-primary/40 text-on-surface-variant hover:text-primary font-label-sm text-[12px]"
           >
-            <span className="material-symbols-outlined text-[14px]">{t.icon}</span>
-            {t.name}
+            <span className="material-symbols-outlined text-[14px]">{tpl.icon}</span>
+            {t(`tasks.scheduleTemplates.${tpl.idKey}.name`)}
           </Button>
         ))}
       </div>

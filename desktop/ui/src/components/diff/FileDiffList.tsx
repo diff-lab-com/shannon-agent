@@ -2,7 +2,7 @@ import { useMemo } from 'react'
 import { useIntl } from 'react-intl'
 import { Button } from '@/components/ui/button'
 import { cn } from '@/lib/utils'
-import { computeHunks, type HunkDecision } from '@/lib/diff-merge'
+import { computeDiffStats, type HunkDecision } from '@/lib/diff-merge'
 import type { FileDiff } from '@/types'
 
 export type FileFilter = 'all' | 'unreviewed' | 'partial' | 'accepted'
@@ -42,7 +42,9 @@ function fileStatus(
       badgeStyle: 'bg-surface-container-high text-on-surface-variant',
     }
   }
-  const hunks = computeHunks(diff.old_content, diff.new_content)
+  // B4 P1-32: hunks come from the per-diff WeakMap cache — this used to be
+  // a full computeHunks per call, 3x per file per render.
+  const { hunks } = computeDiffStats(diff)
   const fileDecisions = decisions.get(path) ?? new Map<string, HunkDecision>()
   let accepted = 0
   let rejected = 0
@@ -85,10 +87,19 @@ export default function FileDiffList({
 }: FileDiffListProps) {
   const intl = useIntl()
 
+  // B4 P1-32: one status computation per file per (diffs/decisions) change,
+  // shared by the filter pass and the row rendering instead of being run
+  // twice per render.
+  const statuses = useMemo(() => {
+    const m = new Map<string, FileStatus>()
+    for (const path of files) m.set(path, fileStatus(path, diffs.get(path), decisions, intl))
+    return m
+  }, [files, diffs, decisions, intl])
+
   const visibleFiles = useMemo(() => {
     return files.filter(path => {
       if (filter === 'all') return true
-      const status = fileStatus(path, diffs.get(path), decisions, intl)
+      const status = statuses.get(path)!
       if (filter === 'unreviewed') return status.accepted === 0 && status.rejected === 0
       if (filter === 'partial') {
         const decided = status.accepted + status.rejected
@@ -97,7 +108,7 @@ export default function FileDiffList({
       if (filter === 'accepted') return status.accepted > 0
       return true
     })
-  }, [files, filter, diffs, decisions, intl])
+  }, [files, filter, statuses])
 
   return (
     <aside className="w-64 shrink-0 border-r border-outline-variant/30 bg-surface-container-low flex flex-col">
@@ -129,10 +140,12 @@ export default function FileDiffList({
         ) : (
           visibleFiles.map(path => {
             const diff = diffs.get(path)
-            const status = fileStatus(path, diff, decisions, intl)
+            const status = statuses.get(path)!
             const isActive = path === currentPath
-            const adds = diff ? computeAddedCount(diff) : 0
-            const dels = diff ? computeRemovedCount(diff) : 0
+            // B4 P1-32: counts ride on the same cached stats object — this
+            // used to re-run computeHunks twice per visible file per render.
+            const adds = diff ? computeDiffStats(diff).added : 0
+            const dels = diff ? computeDiffStats(diff).removed : 0
             return (
               <li key={path}>
                 <Button
@@ -170,26 +183,4 @@ export default function FileDiffList({
       </ul>
     </aside>
   )
-}
-
-function computeAddedCount(diff: FileDiff): number {
-  const hunks = computeHunks(diff.old_content, diff.new_content)
-  let count = 0
-  for (const h of hunks) {
-    for (const line of h.lines) {
-      if (line.type === 'added') count += 1
-    }
-  }
-  return count
-}
-
-function computeRemovedCount(diff: FileDiff): number {
-  const hunks = computeHunks(diff.old_content, diff.new_content)
-  let count = 0
-  for (const h of hunks) {
-    for (const line of h.lines) {
-      if (line.type === 'removed') count += 1
-    }
-  }
-  return count
 }

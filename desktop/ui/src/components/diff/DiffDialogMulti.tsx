@@ -13,7 +13,7 @@
 // Modal children; Modal handles dialog role, aria-modal, focus trap,
 // Escape-to-close, and body scroll lock.
 
-import { useEffect, useState, useMemo, useCallback } from 'react'
+import { useEffect, useState, useMemo, useCallback, useRef } from 'react'
 import { Spinner } from '@/components/ui/loading-state'
 import { useIntl } from 'react-intl'
 import { toast } from 'sonner'
@@ -21,7 +21,7 @@ import { Button } from '@/components/ui/button'
 import { Modal } from '@/components/ui/modal'
 import DiffViewer from '@/components/diff/DiffViewer'
 import FileDiffList, { type FileFilter } from '@/components/diff/FileDiffList'
-import { computeHunks, mergeFile, type HunkDecision } from '@/lib/diff-merge'
+import { computeDiffStats, mergeFile, type HunkDecision } from '@/lib/diff-merge'
 import * as api from '@/lib/tauri-api'
 import type { FileDiff } from '@/types'
 
@@ -39,6 +39,19 @@ function cycleDecision(d: HunkDecision): HunkDecision {
   }
 }
 
+/** B0 P0-3: binary / mtime-conflict rejections arrive as `{ code, message }`. */
+interface StructuredIpcError {
+  code?: string
+  message?: string
+}
+
+function asStructuredError(e: unknown): StructuredIpcError | null {
+  if (e && typeof e === 'object' && typeof (e as StructuredIpcError).code === 'string') {
+    return e as StructuredIpcError
+  }
+  return null
+}
+
 export default function DiffDialogMulti({ open, filePaths, onClose }: DiffDialogMultiProps) {
   const intl = useIntl()
   const t = (id: string, values?: Record<string, string | number>) =>
@@ -50,6 +63,9 @@ export default function DiffDialogMulti({ open, filePaths, onClose }: DiffDialog
   const [decisions, setDecisions] = useState<Map<string, Map<string, HunkDecision>>>(new Map())
   const [filter, setFilter] = useState<FileFilter>('all')
   const [applying, setApplying] = useState(false)
+  // B4 P1-31: same-tick double invocations share the stale `applying` state
+  // — the ref closes the double-write hole the disabled button can't.
+  const applyingRef = useRef(false)
 
   useEffect(() => {
     if (!open || filePaths.length === 0) {
@@ -60,6 +76,7 @@ export default function DiffDialogMulti({ open, filePaths, onClose }: DiffDialog
       setDecisions(new Map())
       setFilter('all')
       setApplying(false)
+      applyingRef.current = false
       return
     }
     setCurrentPath(filePaths[0] ?? null)
@@ -96,7 +113,7 @@ export default function DiffDialogMulti({ open, filePaths, onClose }: DiffDialog
   const currentDecisions = currentPath ? (decisions.get(currentPath) ?? new Map<string, HunkDecision>()) : new Map<string, HunkDecision>()
 
   const currentHunks = useMemo(
-    () => currentDiff ? computeHunks(currentDiff.old_content, currentDiff.new_content) : [],
+    () => currentDiff ? computeDiffStats(currentDiff).hunks : [],
     [currentDiff],
   )
 
@@ -107,7 +124,9 @@ export default function DiffDialogMulti({ open, filePaths, onClose }: DiffDialog
     for (const path of filePaths) {
       const diff = diffs.get(path)
       if (!diff) continue
-      const hunks = computeHunks(diff.old_content, diff.new_content)
+      // B4 P1-32: hunks come from the per-diff cache — this loop used to
+      // re-diff every file on every decision toggle.
+      const { hunks } = computeDiffStats(diff)
       const fileDecisions = decisions.get(path) ?? new Map<string, HunkDecision>()
       for (const h of hunks) {
         const d = fileDecisions.get(h.id) ?? 'pending'
@@ -118,6 +137,15 @@ export default function DiffDialogMulti({ open, filePaths, onClose }: DiffDialog
     }
     return { totalAccepted, totalRejected, totalPending }
   }, [filePaths, diffs, decisions])
+
+  // B4 P0-3 guard, extended to the batch path (P1-31): a diff that would
+  // blank a non-empty file is blocked from Apply-all entirely — one stray
+  // accept must not be able to empty a file the user never inspected.
+  const deletionBlockedPaths = useMemo(() => filePaths.filter(path => {
+    const diff = diffs.get(path)
+    if (!diff) return false
+    return diff.old_content.trim().length > 0 && diff.new_content.trim().length === 0
+  }), [filePaths, diffs])
 
   const filesWithAccepts = useMemo(() => {
     const out: string[] = []
@@ -155,7 +183,7 @@ export default function DiffDialogMulti({ open, filePaths, onClose }: DiffDialog
     if (!currentPath || !currentDiff) return
     setDecisions(prev => {
       const next = new Map(prev)
-      const hunks = computeHunks(currentDiff.old_content, currentDiff.new_content)
+      const hunks = computeDiffStats(currentDiff).hunks
       if (decision === 'pending') {
         next.set(currentPath, new Map())
       } else {
@@ -170,9 +198,14 @@ export default function DiffDialogMulti({ open, filePaths, onClose }: DiffDialog
   const handleReset = useCallback(() => setAllForCurrent('pending'), [setAllForCurrent])
 
   const handleApplyAll = async () => {
+    // B4 P1-31: re-entry guard of last resort (double-click within one
+    // render tick, before the disabled prop lands).
+    if (applyingRef.current) return
+    if (deletionBlockedPaths.length > 0) return
+    applyingRef.current = true
     setApplying(true)
-    let succeeded = 0
-    let firstError: string | null = null
+    const succeededPaths: string[] = []
+    const failures: Array<{ path: string; error: unknown }> = []
     try {
       for (const path of filesWithAccepts) {
         const diff = diffs.get(path)
@@ -180,30 +213,52 @@ export default function DiffDialogMulti({ open, filePaths, onClose }: DiffDialog
         const fileDecisions = decisions.get(path) ?? new Map<string, HunkDecision>()
         try {
           const merged = mergeFile(diff.old_content, diff.new_content, fileDecisions)
-          await api.saveTextFile(path, merged)
-          succeeded += 1
+          // B4 P1-31: send the fetch-time mtime — the backend rejects the
+          // write with `{ code: 'mtime_conflict' }` if the file changed
+          // while the batch was being reviewed (agent still running, second
+          // window, …), instead of silently overwriting the newer content.
+          await api.saveTextFile(path, merged, diff.mtime)
+          succeededPaths.push(path)
         } catch (e) {
-          if (!firstError) firstError = e instanceof Error ? e.message : String(e)
+          failures.push({ path, error: e })
         }
       }
-      if (firstError) {
-        toast.error(
-          t('diff.dialog.applyFailed'),
-          { description: firstError },
-        )
-      } else {
+      if (failures.length === 0) {
         toast.success(
-          t('diff.multi.applied', { count: succeeded }),
+          t('diff.multi.applied', { count: succeededPaths.length }),
           {
             description: t('diff.multi.applied.desc', {
-              accepted: succeeded,
+              accepted: succeededPaths.length,
               total: filesWithAccepts.length,
             }),
           },
         )
         onClose()
+        return
+      }
+      // B4 P1-31: partial failure must be reported truthfully — written x/y
+      // plus the failed file names — instead of a single opaque error line.
+      const failedList = failures.map(f => f.path).join(', ')
+      const allConflict = failures.every(f => asStructuredError(f.error)?.code === 'mtime_conflict')
+      const description = allConflict
+        ? t('diff.dialog.conflict.desc')
+        : t('diff.multi.applyFailedFiles', { paths: failedList })
+      if (succeededPaths.length > 0) {
+        toast.error(
+          t('diff.multi.applyPartialFailure', {
+            written: succeededPaths.length,
+            total: filesWithAccepts.length,
+            failed: failures.length,
+          }),
+          { description },
+        )
+      } else if (allConflict) {
+        toast.error(t('diff.dialog.conflict'), { description })
+      } else {
+        toast.error(t('diff.dialog.applyFailed'), { description })
       }
     } finally {
+      applyingRef.current = false
       setApplying(false)
     }
   }
@@ -330,6 +385,23 @@ export default function DiffDialogMulti({ open, filePaths, onClose }: DiffDialog
         </div>
       </div>
 
+      {/* B4 P1-31: whole-file-deletion guard — name the offending files and
+          disable Apply-all rather than letting one accepted hunk blank them. */}
+      {deletionBlockedPaths.length > 0 && (
+        <div
+          role="alert"
+          className="mx-lg mb-md flex items-start gap-sm p-md bg-error/10 border border-error/30 rounded-xl text-error"
+        >
+          <span className="material-symbols-outlined text-[18px] mt-[2px]" aria-hidden="true">warning</span>
+          <div className="min-w-0">
+            <p className="font-label-md">{t('diff.multi.deleteWarning')}</p>
+            <p className="font-body-sm mt-xs opacity-80 break-words">
+              {t('diff.multi.deleteWarning.files', { paths: deletionBlockedPaths.join(', ') })}
+            </p>
+          </div>
+        </div>
+      )}
+
       <footer className="flex items-center justify-end gap-sm px-lg py-md border-t border-outline-variant/30 bg-surface-container-low">
         <Button
           variant="secondary"
@@ -343,7 +415,7 @@ export default function DiffDialogMulti({ open, filePaths, onClose }: DiffDialog
         <Button
           size="sm"
           onClick={handleApplyAll}
-          disabled={applying || filesWithAccepts.length === 0}
+          disabled={applying || filesWithAccepts.length === 0 || deletionBlockedPaths.length > 0}
           className="h-auto px-md py-xs rounded-lg font-label-md bg-primary text-on-primary hover:bg-primary/90"
           aria-label={t('diff.dialog.apply.aria')}
         >

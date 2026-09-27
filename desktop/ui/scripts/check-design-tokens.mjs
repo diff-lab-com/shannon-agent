@@ -30,6 +30,7 @@ const ALLOWLIST = [
   'i18n/',                  // locale strings
   'index.css',              // the @theme token source — hex lives here by definition
   'components/terminal/',   // xterm.js API consumes raw hex palettes by contract
+  'components/editor/cmTheme.ts', // same contract: CodeMirror's theme extension needs literal palette floors (mirrors xtermTheme)
   'components/artifact/MermaidRenderer.tsx', // hex lives inside a standalone iframe document — parent vars cannot cross
   'components/CommandPalette.tsx', // synonyms field preserves retired terms during the migration window (audit §6.1)
   'lib/mock/',              // demo-mode runtime cssText (not part of the design system)

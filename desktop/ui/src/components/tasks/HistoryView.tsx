@@ -6,7 +6,7 @@
 //
 // P2.2 deliverable from OPC-SCHEDULED-GAP-ANALYSIS.md §2.6 Phase 2.
 
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import { useIntl } from 'react-intl'
 import { useNavigate } from 'react-router-dom'
 import { useT } from '@/i18n'
@@ -98,15 +98,21 @@ export default function HistoryView({
       .finally(() => setLoading(false))
   }
 
+  // B3 (P2 顺带): rapid row A → row B expansion used to let A's slow detail
+  // response land after B's, showing A's prompt/error under B's row. The
+  // monotonic request id discards stale responses.
+  const detailRequestRef = useRef(0)
   const openDetail = async (id: string) => {
     if (expandedId === id) { setExpandedId(null); setDetail(null); return }
+    const request = ++detailRequestRef.current
     setExpandedId(id); setDetail(null); setDetailLoading(true)
     try {
-      setDetail(await api.getExecutionDetail(id))
+      const d = await api.getExecutionDetail(id)
+      if (request === detailRequestRef.current) setDetail(d)
     } catch (e) {
       console.warn('Failed to load execution detail:', e)
     } finally {
-      setDetailLoading(false)
+      if (request === detailRequestRef.current) setDetailLoading(false)
     }
   }
 

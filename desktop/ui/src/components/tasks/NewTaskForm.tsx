@@ -26,7 +26,7 @@ export function composePrompt(prompt: string, assignee?: string, priority?: Prio
 interface NewTaskFormProps {
   value: string
   onChange: (value: string) => void
-  onSubmit: (rich: { prompt: string; assignee: string; priority: Priority }) => void
+  onSubmit: (rich: { prompt: string; assignee: string; priority: Priority }) => void | Promise<unknown>
   onCancel: () => void
 }
 
@@ -37,15 +37,24 @@ export default function NewTaskForm({ value, onChange, onSubmit, onCancel }: New
   const [assignee, setAssignee] = useState('')
   const [priority, setPriority] = useState<Priority>('low')
   const [showMeta, setShowMeta] = useState(false)
+  // B3 P1-24: one submit in flight at a time — the create call is awaited
+  // before the busy flag drops so double clicks / Enter spam cannot start
+  // duplicate background tasks.
+  const [submitting, setSubmitting] = useState(false)
 
-  const submit = () => {
-    if (!value.trim()) return
-    onSubmit({ prompt: composePrompt(value, assignee, priority), assignee: assignee.trim(), priority })
+  const submit = async () => {
+    if (!value.trim() || submitting) return
+    setSubmitting(true)
+    try {
+      await onSubmit({ prompt: composePrompt(value, assignee, priority), assignee: assignee.trim(), priority })
+    } finally {
+      setSubmitting(false)
+    }
   }
 
   return (
     <Form
-      onSubmit={e => { e.preventDefault(); submit() }}
+      onSubmit={e => { e.preventDefault(); void submit() }}
       className="bg-surface-container-lowest border border-primary/30 rounded-xl p-lg mb-lg flex flex-col gap-md shadow-sm !space-y-md"
       data-testid="new-task-form"
     >
@@ -71,7 +80,7 @@ export default function NewTaskForm({ value, onChange, onSubmit, onCancel }: New
         placeholder={t('tasks.newTaskForm.placeholder')}
         value={value}
         onChange={e => onChange(e.target.value)}
-        onKeyDown={e => { if (e.key === 'Enter' && !e.shiftKey && value.trim()) { e.preventDefault(); submit() } }}
+        onKeyDown={e => { if (e.key === 'Enter' && !e.shiftKey && value.trim() && !submitting) { e.preventDefault(); void submit() } }}
         autoFocus
       />
       {showMeta ? (
@@ -104,10 +113,11 @@ export default function NewTaskForm({ value, onChange, onSubmit, onCancel }: New
         <div className="flex gap-sm">
           <Button
             type="submit"
-            className="px-md py-sm bg-primary text-on-primary rounded-lg font-label-md cursor-pointer disabled:opacity-50"
-            disabled={!value.trim()}
+            className="px-md py-sm bg-primary text-on-primary rounded-lg font-label-md cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed"
+            disabled={!value.trim() || submitting}
+            aria-busy={submitting || undefined}
           >
-            {t('tasks.newTaskForm.createTask')}
+            {submitting ? t('tasks.newTaskForm.creating') : t('tasks.newTaskForm.createTask')}
           </Button>
           <Button
             variant="ghost"

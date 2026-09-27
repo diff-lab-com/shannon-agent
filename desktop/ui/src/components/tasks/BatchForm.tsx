@@ -17,7 +17,7 @@ interface BatchFormProps {
   /** Current session id — passed as baseSessionId so the batch runs
    * against the session's working directory (the project). */
   sessionId: string | null
-  onSubmit: (input: { title: string; prompt: string; count: number; sessionId: string | null }) => void
+  onSubmit: (input: { title: string; prompt: string; count: number; sessionId: string | null }) => void | Promise<unknown>
   onCancel: () => void
 }
 
@@ -29,17 +29,26 @@ export default function BatchForm({ sessionId, onSubmit, onCancel }: BatchFormPr
   const [title, setTitle] = useState('')
   const [prompt, setPrompt] = useState('')
   const [count, setCount] = useState<number>(2)
+  // B3 P1-24: submit is awaited before the busy flag drops — a double click
+  // (or Enter spam) used to fire two best-of-N batches, i.e. up to 2N paid
+  // agent sessions from one intent.
+  const [submitting, setSubmitting] = useState(false)
 
-  const canSubmit = prompt.trim().length > 0
+  const canSubmit = prompt.trim().length > 0 && !submitting
 
-  const submit = () => {
-    if (!canSubmit) return
-    onSubmit({
-      title: title.trim(),
-      prompt: prompt.trim(),
-      count,
-      sessionId,
-    })
+  const submit = async () => {
+    if (!prompt.trim() || submitting) return
+    setSubmitting(true)
+    try {
+      await onSubmit({
+        title: title.trim(),
+        prompt: prompt.trim(),
+        count,
+        sessionId,
+      })
+    } finally {
+      setSubmitting(false)
+    }
   }
 
   return (
@@ -72,7 +81,7 @@ export default function BatchForm({ sessionId, onSubmit, onCancel }: BatchFormPr
         onKeyDown={e => {
           if (e.key === 'Enter' && !e.shiftKey && canSubmit) {
             e.preventDefault()
-            submit()
+            void submit()
           }
         }}
         autoFocus
@@ -109,14 +118,15 @@ export default function BatchForm({ sessionId, onSubmit, onCancel }: BatchFormPr
           {t('batch.form.cancel')}
         </Button>
         <Button
-          className="px-md py-sm bg-tertiary text-on-tertiary rounded-lg font-label-md cursor-pointer disabled:opacity-50"
-          onClick={submit}
+          className="px-md py-sm bg-tertiary text-on-tertiary rounded-lg font-label-md cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed"
+          onClick={() => void submit()}
           disabled={!canSubmit}
+          aria-busy={submitting || undefined}
         >
           <span className="material-symbols-outlined icon-md" aria-hidden="true">
-            call_split
+            {submitting ? 'hourglass_top' : 'call_split'}
           </span>
-          {t('batch.form.start', { count })}
+          {submitting ? t('batch.form.starting') : t('batch.form.start', { count })}
         </Button>
       </div>
     </div>

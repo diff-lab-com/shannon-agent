@@ -62,18 +62,21 @@ const SOURCE_BADGE: Record<PluginSource, { icon: string; class: string }> = {
   migration: { icon: "move_to_inbox", class: "bg-tertiary/20 text-tertiary" },
 };
 
-function sourceLabel(src: CatalogSource): string {
+// B6-36: the source line used to hardcode English ("Shannon Featured",
+// "Native"); the human phrases now resolve through the locale files, while
+// repo slugs and urls stay verbatim — they are identifiers.
+function sourceLabel(src: CatalogSource, intl: ReturnType<typeof useIntl>): string {
   switch (src.type) {
     case "mcp_registry":
-      return `MCP Registry · ${src.publisher}`;
+      return intl.formatMessage({ id: "extensions.plugins.source.mcpRegistry" }, { publisher: src.publisher });
     case "featured_vendor":
-      return "Shannon Featured";
+      return intl.formatMessage({ id: "extensions.plugins.source.shannonFeatured" });
     case "git_hub_repo":
       return `github.com/${src.repo}`;
     case "custom":
       return src.url;
     case "native":
-      return "Native";
+      return intl.formatMessage({ id: "extensions.plugins.filter.source.native" });
   }
 }
 
@@ -370,10 +373,10 @@ export default function Plugins() {
       if (trustFilter !== "all" && e.trust !== trustFilter) return false;
       if (sourceFilter !== "all" && e.source?.type !== sourceFilter) return false;
       if (!q) return true;
-      const hay = [e.name, e.description, e.author ?? "", (e.tags ?? []).join(" "), sourceLabel(e.source)].join(" ").toLowerCase();
+      const hay = [e.name, e.description, e.author ?? "", (e.tags ?? []).join(" "), sourceLabel(e.source, intl)].join(" ").toLowerCase();
       return hay.includes(q);
     });
-  }, [entries, trustFilter, sourceFilter, search]);
+  }, [entries, trustFilter, sourceFilter, search, intl]);
 
   const activeFilterCount =
     (trustFilter !== "all" ? 1 : 0) +
@@ -571,7 +574,7 @@ export default function Plugins() {
             </div>
             <div className="min-w-0">
               <h4 className="font-bold text-label-md text-on-surface truncate">{entry.name}</h4>
-              <p className="text-label-xs text-on-surface-variant truncate">{entry.author ?? sourceLabel(entry.source)}</p>
+              <p className="text-label-xs text-on-surface-variant truncate">{entry.author ?? sourceLabel(entry.source, intl)}</p>
             </div>
           </div>
           <span
@@ -606,9 +609,9 @@ export default function Plugins() {
               {entry.version}
             </span>
           )}
-          <span className="inline-flex items-center gap-[2px] truncate" title={sourceLabel(entry.source)}>
+          <span className="inline-flex items-center gap-[2px] truncate" title={sourceLabel(entry.source, intl)}>
             <span className="material-symbols-outlined icon-xs">link</span>
-            <span className="truncate">{sourceLabel(entry.source)}</span>
+            <span className="truncate">{sourceLabel(entry.source, intl)}</span>
           </span>
         </div>
 

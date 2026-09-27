@@ -140,6 +140,31 @@ describe('Featured (P2 wire-up)', () => {
     })
   })
 
+  // B3 P1-21: a successful install must broadcast `shannon:extension-installed`
+  // (InstallDialog's contract) so the Installed tab / icon row / personal tab
+  // refresh instead of showing stale inventories.
+  it('dispatches shannon:extension-installed after a successful stdio install', async () => {
+    listFeaturedVendors.mockResolvedValue([stdioVendor])
+    installMcpStdio.mockResolvedValue({ id: 'stdio:filesystem', name: 'filesystem', install_path: null })
+    const events: CustomEvent[] = []
+    const onEvent = (e: Event) => events.push(e as CustomEvent)
+    window.addEventListener('shannon:extension-installed', onEvent)
+    renderWithRouter()
+    await waitFor(() => {
+      expect(screen.getByText('Install')).toBeInTheDocument()
+    })
+    fireEvent.click(screen.getByText('Install'))
+    await waitFor(() => {
+      expect(installMcpStdio).toHaveBeenCalled()
+    })
+    await waitFor(() => {
+      const installed = events.filter(e => (e.detail as { name?: string }).name === 'filesystem')
+      expect(installed).toHaveLength(1)
+      expect(installed[0].detail).toMatchObject({ kind: 'mcp', name: 'filesystem' })
+    })
+    window.removeEventListener('shannon:extension-installed', onEvent)
+  })
+
   it('invokes installMcpOAuthLoopback when OAuth Connect clicked (success)', async () => {
     listFeaturedVendors.mockResolvedValue([oauthVendor])
     installMcpOAuthLoopback.mockResolvedValue({

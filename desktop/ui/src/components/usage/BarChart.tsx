@@ -7,6 +7,7 @@
 // view sits next to it for precise reconciliation.
 
 import { useMemo, useState } from 'react'
+import { useIntl } from 'react-intl'
 import { cn } from '@/lib/utils'
 
 export interface BarSeriesPoint {
@@ -37,6 +38,7 @@ interface BarChartProps {
 const FALLBACK_COLORS = ['bg-primary', 'bg-secondary', 'bg-tertiary', 'bg-warning']
 
 export function BarChart({ data, series, height = 220, formatValue, ariaLabel }: BarChartProps) {
+  const intl = useIntl()
   const [hover, setHover] = useState<{ idx: number; x: number; y: number } | null>(null)
   const fmt = formatValue ?? ((n: number) => n.toLocaleString())
 
@@ -79,7 +81,7 @@ export function BarChart({ data, series, height = 220, formatValue, ariaLabel }:
         className="w-full"
         style={{ height }}
         role="img"
-        aria-label={ariaLabel ?? 'Bar chart'}
+        aria-label={ariaLabel ?? intl.formatMessage({ id: 'usage.chart.bar.aria' })}
       >
         {/* Y-axis grid lines + tick labels (0%, 25%, 50%, 75%, 100%) */}
         {[0, 0.25, 0.5, 0.75, 1].map(t => (
@@ -138,7 +140,13 @@ export function BarChart({ data, series, height = 220, formatValue, ariaLabel }:
                       setHover({ idx, x: e.clientX - rect.left, y: e.clientY - rect.top })
                     }}
                     onMouseLeave={() => setHover(null)}
-                  />
+                  >
+                    {/* B6-37: keyboard/hover-readable value — the tooltip is
+                        mouse-only, so each segment carries an SVG <title>. */}
+                    <title>
+                      {`${point.label} · ${series[sIdx]?.label ?? seg.key}: ${fmt(seg.value)}`}
+                    </title>
+                  </rect>
                 )
               })}
               {/* X-axis label */}
@@ -189,7 +197,7 @@ export function BarChart({ data, series, height = 220, formatValue, ariaLabel }:
             </div>
           ))}
           <div className="border-t border-outline-variant/20 mt-0.5 pt-0.5 flex items-center justify-between">
-            <span className="font-label-xs uppercase tracking-wider text-on-surface-variant">Total</span>
+            <span className="font-label-xs uppercase tracking-wider text-on-surface-variant">{intl.formatMessage({ id: 'usage.chart.total' })}</span>
             <span className="font-mono font-bold tabular-nums">{fmt(totals[hover.idx])}</span>
           </div>
         </div>
@@ -210,6 +218,7 @@ export function DonutChart({
   centerLabel?: string
   size?: number
 }) {
+  const intl = useIntl()
   const safeTotal = total || 1
   const radius = size / 2 - 6
   const cx = size / 2
@@ -218,7 +227,7 @@ export function DonutChart({
   let offset = 0
   const defaultColors = ['bg-primary', 'bg-secondary', 'bg-tertiary', 'bg-warning', 'bg-error']
   return (
-    <svg viewBox={`0 0 ${size} ${size}`} width={size} height={size} role="img" aria-label={centerLabel ?? `Donut: ${segments.length} segments, total ${total}`}>
+    <svg viewBox={`0 0 ${size} ${size}`} width={size} height={size} role="img" aria-label={centerLabel ?? intl.formatMessage({ id: 'usage.chart.donut.aria' }, { count: segments.length, total })}>
       <circle cx={cx} cy={cy} r={radius} fill="none" className="stroke-surface-container" strokeWidth={14} />
       {segments.map((s, i) => {
         const len = (s.value / safeTotal) * C

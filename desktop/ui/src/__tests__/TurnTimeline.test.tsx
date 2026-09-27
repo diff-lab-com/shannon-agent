@@ -157,3 +157,58 @@ describe('TurnTimeline', () => {
     })
   })
 })
+
+// ─── B4 §7-28: reason badge tones, raw unknown reasons, app-locale times ───
+
+function fixtureWithReason(reason: string): TurnTimeline {
+  return {
+    ...FIXTURE,
+    cumulative: [],
+    turns: [{ ...FIXTURE.turns[0], reason }],
+  }
+}
+
+describe('TurnTimeline — reason badges and locale (B4 §7-28)', () => {
+  it('renders a genuine failure reason in the error tone', async () => {
+    getTraceTimeline.mockResolvedValue(fixtureWithReason('failed'))
+    renderAt()
+    const badge = await screen.findByText('Failed')
+    expect(badge.className).toContain('bg-error/10')
+  })
+
+  it('renders neutral stopping reasons (interrupted) without error styling', async () => {
+    getTraceTimeline.mockResolvedValue(fixtureWithReason('interrupted'))
+    renderAt()
+    const badge = await screen.findByText('Interrupted')
+    // Neutral chip — not red: interrupted is not a failure.
+    expect(badge.className).toContain('bg-surface-container-high')
+    expect(badge.className).not.toContain('bg-error')
+  })
+
+  it('renders an unknown reason as its raw text, not a literal i18n key', async () => {
+    getTraceTimeline.mockResolvedValue(fixtureWithReason('engine-restart'))
+    renderAt()
+    expect(await screen.findByText('engine-restart')).toBeInTheDocument()
+    expect(screen.queryByText('timeline.reason.engine-restart')).not.toBeInTheDocument()
+  })
+
+  it('formats timestamps in the app locale (zh-CN), not the system default', async () => {
+    window.localStorage.setItem('shannon.locale', 'zh-CN')
+    try {
+      getTraceTimeline.mockResolvedValue(fixtureWithReason('completed'))
+      const { container } = renderAt()
+      // zh-CN localizes the turn label — anchor on the testid instead.
+      await screen.findByTestId('timeline-turn-1')
+      const turn = FIXTURE.turns[0]
+      const opts: Intl.DateTimeFormatOptions = { hour: '2-digit', minute: '2-digit', second: '2-digit' }
+      const zhStart = new Intl.DateTimeFormat('zh-CN', opts).format(new Date(turn.start_ts_ns / 1e6))
+      const enStart = new Intl.DateTimeFormat('en', opts).format(new Date(turn.start_ts_ns / 1e6))
+      // The rendered time matches the zh-CN formatting…
+      expect(container.textContent).toContain(zhStart)
+      // …which must differ from what a system-default (en) render would show.
+      expect(zhStart).not.toBe(enStart)
+    } finally {
+      window.localStorage.removeItem('shannon.locale')
+    }
+  })
+})

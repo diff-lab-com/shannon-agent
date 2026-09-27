@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { useOutletContext } from "react-router-dom";
 import { useIntl } from 'react-intl'
 import { useNavigate } from 'react-router-dom'
@@ -14,6 +14,7 @@ import {
 import DataSourcesQuery from "./DataSourcesQuery";
 import { ConfirmDialog } from "@/components/ui/confirm-dialog";
 import LoadingState from "@/components/ui/loading-state";
+import ErrorState from "@/components/ui/error-state";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
 
@@ -62,9 +63,13 @@ export default function DataSources() {
 
   const [catalog, setCatalog] = useState<DataSourceCatalogEntry[]>([]);
   const [catalogLoading, setCatalogLoading] = useState(true);
+  // B3 P1-17: failed catalog/installed reads get their own error states —
+  // a dead IPC must not render as "no adapters" / "nothing installed".
+  const [catalogError, setCatalogError] = useState<string | null>(null);
 
   const [installed, setInstalled] = useState<InstalledDataSource[]>([]);
   const [installedLoading, setInstalledLoading] = useState(true);
+  const [installedError, setInstalledError] = useState<string | null>(null);
 
   const [installingSlug, setInstallingSlug] = useState<string | null>(null);
   const [installForm, setInstallForm] = useState<Record<string, string>>({});
@@ -72,12 +77,18 @@ export default function DataSources() {
   const [busySlug, setBusySlug] = useState<string | null>(null);
   const [removeTarget, setRemoveTarget] = useState<string | null>(null);
 
-  useEffect(() => {
+  const refreshCatalog = useCallback(() => {
     let cancelled = false;
     setCatalogLoading(true);
     listDataSourceCatalog()
       .then((rows) => {
-        if (!cancelled) setCatalog(rows);
+        if (!cancelled) {
+          setCatalog(rows);
+          setCatalogError(null);
+        }
+      })
+      .catch((err) => {
+        if (!cancelled) setCatalogError(err instanceof Error ? err.message : String(err));
       })
       .finally(() => {
         if (!cancelled) setCatalogLoading(false);
@@ -87,9 +98,17 @@ export default function DataSources() {
     };
   }, []);
 
+  useEffect(() => refreshCatalog(), [refreshCatalog]);
+
   const refreshInstalled = () => {
     listInstalledDataSources()
-      .then(setInstalled)
+      .then((rows) => {
+        setInstalled(rows);
+        setInstalledError(null);
+      })
+      .catch((err) => {
+        setInstalledError(err instanceof Error ? err.message : String(err));
+      })
       .finally(() => setInstalledLoading(false));
   };
 
@@ -99,9 +118,12 @@ export default function DataSources() {
 
   function startInstall(entry: DataSourceCatalogEntry) {
     const fields = entry.metadata.fields ?? [];
+    // B3 P1-19: start from EMPTY inputs — catalog placeholders are examples
+    // ("/home/user/MyVault"), not defaults. Seeding them let a bare "Save"
+    // pass required-validation with a sample string baked into the config.
     const initial: Record<string, string> = {};
     for (const field of fields) {
-      initial[field.key] = field.placeholder ?? "";
+      initial[field.key] = "";
     }
     setInstallForm(initial);
     setInstallingSlug(entry.id);
@@ -228,6 +250,15 @@ export default function DataSources() {
         <DataSourcesQuery onSwitchToAdapters={() => setActiveTab('adapters')} />
       ) : catalogLoading ? (
         <LoadingState size="sm" label={t('extensions.datasources.loading')} />
+      ) : catalogError ? (
+        <div className="border border-outline-variant/30 rounded-2xl bg-surface-container-lowest/50">
+          <ErrorState
+            icon="database"
+            title={t('extensions.datasources.catalogLoadFailed')}
+            description={catalogError}
+            action={{ label: t('common.retry'), onClick: refreshCatalog }}
+          />
+        </div>
       ) : (
         <section>
           <h3 className="text-label-lg font-bold text-on-surface-variant uppercase tracking-wide mb-sm">
@@ -284,6 +315,15 @@ export default function DataSources() {
         </h3>
         {installedLoading ? (
           <div className="text-center py-md text-on-surface-variant text-label-sm">{t('extensions.datasources.loadingInstalled')}</div>
+        ) : installedError ? (
+          <div className="border border-outline-variant/30 rounded-2xl bg-surface-container-lowest/50">
+            <ErrorState
+              icon="database"
+              title={t('extensions.datasources.installedLoadFailed')}
+              description={installedError}
+              action={{ label: t('common.retry'), onClick: refreshInstalled }}
+            />
+          </div>
         ) : installed.length === 0 ? (
           <div className="text-center py-md text-on-surface-variant text-label-sm">
             {t('extensions.datasources.noInstalled')}

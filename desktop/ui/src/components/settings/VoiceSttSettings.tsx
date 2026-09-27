@@ -42,6 +42,9 @@ export function VoiceSttSettings() {
   const [baseUrl, setBaseUrl] = useState('')
   const [keyConfigured, setKeyConfigured] = useState(false)
   const [saving, setSaving] = useState(false)
+  // B6-37: save failures used to be toast-only; an inline role="alert" makes
+  // them announced and persistent next to the form.
+  const [saveError, setSaveError] = useState<string | null>(null)
 
   useEffect(() => {
     let active = true
@@ -68,6 +71,7 @@ export function VoiceSttSettings() {
 
   const handleSave = async () => {
     setSaving(true)
+    setSaveError(null)
     try {
       const config: SttConfig = {
         provider,
@@ -81,6 +85,7 @@ export function VoiceSttSettings() {
       setApiKey('')
       toast.success(t('settings.voice.saved'))
     } catch (e) {
+      setSaveError(String(e))
       toastError(t('settings.voice.saveFailed'), e)
     }
     setSaving(false)
@@ -107,10 +112,12 @@ export function VoiceSttSettings() {
       <p className="text-on-surface-variant text-body-sm mb-lg">{t('settings.voice.description')}</p>
 
       <div className="space-y-md">
+        {/* B6-37: associate labels with their inputs (htmlFor/id) and render
+            save failures in a role="alert" region. */}
         <div>
-          <label className="block font-label-sm text-[12px] text-on-surface-variant mb-1">{t('settings.voice.provider')}</label>
+          <label className="block font-label-sm text-[12px] text-on-surface-variant mb-1" htmlFor="stt-provider-select">{t('settings.voice.provider')}</label>
           <Select value={provider} onValueChange={handleProviderChange}>
-            <SelectTrigger size="sm" className="w-full" aria-label={t('settings.voice.provider')}>
+            <SelectTrigger id="stt-provider-select" size="sm" className="w-full" aria-label={t('settings.voice.provider')}>
               <SelectValue />
             </SelectTrigger>
             <SelectContent>
@@ -122,8 +129,9 @@ export function VoiceSttSettings() {
         </div>
 
         <div>
-          <label className="block font-label-sm text-[12px] text-on-surface-variant mb-1">{t('settings.voice.apiKey')}</label>
+          <label className="block font-label-sm text-[12px] text-on-surface-variant mb-1" htmlFor="stt-api-key">{t('settings.voice.apiKey')}</label>
           <Input
+            id="stt-api-key"
             type="password"
             value={apiKey}
             onChange={(e) => setApiKey(e.target.value)}
@@ -133,8 +141,9 @@ export function VoiceSttSettings() {
         </div>
 
         <div>
-          <label className="block font-label-sm text-[12px] text-on-surface-variant mb-1">{t('settings.voice.model')}</label>
+          <label className="block font-label-sm text-[12px] text-on-surface-variant mb-1" htmlFor="stt-model">{t('settings.voice.model')}</label>
           <Input
+            id="stt-model"
             type="text"
             value={model}
             onChange={(e) => setModel(e.target.value)}
@@ -144,8 +153,9 @@ export function VoiceSttSettings() {
 
         {provider === 'custom' && (
           <div>
-            <label className="block font-label-sm text-[12px] text-on-surface-variant mb-1">{t('settings.voice.baseUrl')}</label>
+            <label className="block font-label-sm text-[12px] text-on-surface-variant mb-1" htmlFor="stt-base-url">{t('settings.voice.baseUrl')}</label>
             <Input
+              id="stt-base-url"
               type="text"
               value={baseUrl}
               onChange={(e) => setBaseUrl(e.target.value)}
@@ -155,6 +165,10 @@ export function VoiceSttSettings() {
         )}
 
         <p className="font-label-xs text-[11px] text-on-surface-variant">{t('settings.voice.help')}</p>
+
+        {saveError ? (
+          <p id="stt-save-error" role="alert" className="font-label-sm text-[12px] text-error break-words">{saveError}</p>
+        ) : null}
 
         <Button
           className="w-full py-md bg-primary text-on-primary rounded-xl font-label-md font-bold text-[14px] hover:bg-primary/90 cursor-pointer"

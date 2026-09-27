@@ -380,6 +380,23 @@ describe('ConnectionsSettings', () => {
     await screen.findByTestId('mobile-dispatch-loopback-note')
   })
 
+  it('advertises https for the page URL when TLS is enabled (B2)', async () => {
+    vi.spyOn(api, 'mobileTlsStatus').mockResolvedValue({
+      enabled: true,
+      fingerprint: 'aa'.repeat(32),
+    })
+    vi.spyOn(api, 'gatewayReadConfig').mockResolvedValue({
+      engine: { wsUrl: 'ws://x/ws', httpBaseUrl: 'http://x' },
+      adapters: [],
+      mobile: { enabled: true, host: '192.168.1.10', port: 33430 },
+    })
+    render(<ConnectionsSettings />)
+    const hint = await screen.findByTestId('mobile-dispatch-url-hint')
+    expect(hint).toHaveTextContent('https://192.168.1.10:33430/')
+    // The live fingerprint renders alongside.
+    expect(screen.getByTestId('mobile-tls-fingerprint')).toBeInTheDocument()
+  })
+
   it('describes the four dispatch actions in the card description', async () => {
     render(<ConnectionsSettings />)
     await waitFor(() =>

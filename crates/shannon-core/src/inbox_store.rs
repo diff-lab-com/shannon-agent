@@ -296,6 +296,15 @@ impl InboxStore {
         self.conn.lock().map_err(|_| InboxStoreError::Poisoned)
     }
 
+    /// `PRAGMA integrity_check` for diagnostics (`shannon doctor --deep`).
+    /// Returns the pragma's single-column verdict — `"ok"` when healthy,
+    /// otherwise SQLite's description of the corruption.
+    pub fn integrity_check(&self) -> Result<String, InboxStoreError> {
+        let conn = self.lock_conn()?;
+        conn.query_row("PRAGMA integrity_check", [], |row| row.get::<_, String>(0))
+            .map_err(InboxStoreError::from)
+    }
+
     /// Retry an inner closure until it succeeds or returns a non-busy error.
     ///
     /// `busy_timeout` (2s by default, set in [`Self::init`]) makes SQLite

@@ -26,9 +26,29 @@ import ErrorState from '@/components/ui/error-state'
 import { Icon } from '@/components/ui/icon'
 import { cn } from '@/lib/utils'
 import { useT } from '@/i18n'
+import { useIntl } from 'react-intl'
 
 /** Percentage span floor so sub-second calls stay clickable-looking. */
 const MIN_ROW_WIDTH_PCT = 2
+
+// §7-28 (P1-27 adjacent, timeline side): turn-end reasons split into three
+// visual tones. Only genuine failures read as errors — `interrupted` /
+// `max-turns` are neutral stopping conditions, not crashes.
+type ReasonTone = 'success' | 'neutral' | 'error'
+
+const REASON_TONES: Record<string, ReasonTone> = {
+  'completed': 'success',
+  'failed': 'error',
+  'timeout': 'error',
+  'budget-exceeded': 'error',
+  'interrupted': 'neutral',
+  'max-turns': 'neutral',
+  'unknown': 'neutral',
+}
+
+function reasonTone(reason: string): ReasonTone {
+  return REASON_TONES[reason] ?? 'neutral'
+}
 
 function formatDuration(ms: number | null | undefined): string {
   if (!ms || ms <= 0) return '—'
@@ -37,8 +57,10 @@ function formatDuration(ms: number | null | undefined): string {
   return `${s.toFixed(s < 10 ? 1 : 0)}s`
 }
 
-function formatTime(tsNs: number): string {
-  return new Date(tsNs / 1e6).toLocaleTimeString([], {
+// §7-28: timestamps format in the APP's locale (passed in by the render
+// tree), not whatever the OS happens to be set to.
+function formatTime(tsNs: number, locale: string): string {
+  return new Date(tsNs / 1e6).toLocaleTimeString(locale, {
     hour: '2-digit',
     minute: '2-digit',
     second: '2-digit',
@@ -238,6 +260,7 @@ function CumulativeCurve({
   cumulative: TimelineCumulativePoint[]
 }) {
   const t = useT()
+  const intl = useIntl()
   const W = 560
   const H = 96
   const xs = cumulative.map(p => p.ts_ns)
@@ -285,7 +308,7 @@ function CumulativeCurve({
         )}
       </svg>
       <figcaption className="mt-1 flex items-center justify-between font-label-xs text-xs text-on-surface-variant">
-        <span>{formatTime(cumulative[0]?.ts_ns ?? 0)}</span>
+        <span>{formatTime(cumulative[0]?.ts_ns ?? 0, intl.locale)}</span>
         <span>
           {t('timeline.curve.tokens', { count: yMax })}
           <span aria-hidden="true" className="mx-1">·</span>
@@ -297,7 +320,7 @@ function CumulativeCurve({
             </>
           )}
         </span>
-        <span>{formatTime(x1)}</span>
+        <span>{formatTime(x1, intl.locale)}</span>
       </figcaption>
     </figure>
   )
@@ -313,9 +336,17 @@ function TurnCard({
   spanNs: number
 }) {
   const t = useT()
-  const reasonKey = `timeline.reason.${turn.reason ?? 'unknown'}`
-  // Reason labels are enumerated in i18n; fall back to the raw reason.
-  const reasonLabel = turn.reason ? t(reasonKey, {}) : ''
+  const intl = useIntl()
+  // §7-28: enumerated reasons resolve through i18n; anything the backend
+  // adds later renders as its raw reason text instead of a literal i18n key
+  // like "timeline.reason.new-thing".
+  const reasonKnown = turn.reason != null && turn.reason in REASON_TONES
+  const reasonLabel = turn.reason
+    ? reasonKnown
+      ? t(`timeline.reason.${turn.reason}`)
+      : turn.reason
+    : ''
+  const tone = turn.reason ? reasonTone(turn.reason) : null
 
   return (
     <Card data-testid={`timeline-turn-${turn.turn}`}>
@@ -328,17 +359,16 @@ function TurnCard({
             <span
               className={cn(
                 'inline-flex items-center gap-1 rounded-full px-2 py-0.5 font-label-xs text-xs border',
-                turn.reason === 'completed' &&
-                  'bg-primary/10 text-primary border-primary/30',
-                turn.reason !== 'completed' &&
-                  'bg-error/10 text-error border-error/30',
+                tone === 'success' && 'bg-primary/10 text-primary border-primary/30',
+                tone === 'error' && 'bg-error/10 text-error border-error/30',
+                tone === 'neutral' && 'bg-surface-container-high text-on-surface-variant border-outline-variant/30',
               )}
             >
               {reasonLabel}
             </span>
           )}
           <span className="ml-auto font-label-xs text-xs text-on-surface-variant">
-            {formatTime(turn.start_ts_ns)} → {formatTime(turn.end_ts_ns)}
+            {formatTime(turn.start_ts_ns, intl.locale)} → {formatTime(turn.end_ts_ns, intl.locale)}
           </span>
         </div>
         <div className="flex items-center gap-3 font-label-xs text-xs text-on-surface-variant pt-1">

@@ -275,7 +275,14 @@ function GoalRunPanelImpl({ onViewSession, projectDir }: { onViewSession: (id: s
           ))}
         </div>
       )}
-      <NewGoalDialog open={creating} onClose={() => setCreating(false)} onStart={start} />
+      {/* B3 (P2 顺带): start resolves to a boolean so the dialog can tell a
+          confirmed start from a failed one (hook toasts the failure) and
+          keep the form when the launch didn't take. */}
+      <NewGoalDialog
+        open={creating}
+        onClose={() => setCreating(false)}
+        onStart={async input => (await start(input)) !== null}
+      />
     </section>
   )
 }

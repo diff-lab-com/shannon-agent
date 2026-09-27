@@ -604,7 +604,10 @@ describe('Sidebar — resize handle (U5)', () => {
     handle().focus()
     await userEvent.setup().keyboard('{ArrowRight}')
     await waitFor(() => expect(handle()).toHaveAttribute('aria-valuenow', '296'))
-    expect(document.documentElement.style.getPropertyValue('--sidebar-w')).toBe('296px')
+    // B1-10: the Sidebar only persists its width — writing `--sidebar-w`
+    // moved to Layout (single writer, mobile/window 0px overrides). The
+    // reported-width contract is exercised through Layout in
+    // SessionWindowMode.test.tsx.
     expect(window.localStorage.getItem('shannon-sidebar-width')).toBe('296')
     // Clamped at the max.
     await userEvent.keyboard('{ArrowLeft>20}')

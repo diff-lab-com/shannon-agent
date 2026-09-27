@@ -94,11 +94,13 @@ export default function GeneralSettings() {
   }, [config])
 
   const handleModeChange = async (idx: number) => {
-    setApprovalMode(idx)
     setSaving(true)
     try {
       await api.configure({ key: 'approval_mode', value: APPROVAL_MODE_KEYS[idx].value })
       await refreshConfig()
+      // Approval mode is a safety switch — the UI only moves after the
+      // write has actually landed (P1-10: no optimistic update here).
+      setApprovalMode(idx)
       toast.success(intl.formatMessage({ id: 'settings.general.approvalMode.updated' }, { label: t(APPROVAL_MODE_KEYS[idx].labelKey) }))
     } catch (e) { toastError(t('settings.general.approvalMode.updateFailed'), e) }
     setSaving(false)

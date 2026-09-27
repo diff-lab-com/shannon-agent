@@ -113,6 +113,11 @@ export function AppProvider({ children }: { children: ReactNode }) {
   const queueItemIdRef = useRef(0)
   // B1 P2-3: transient flag while a session-switch IPC is in flight.
   const [switchingSession, setSwitchingSession] = useState(false)
+  // Review P1-3 (B1-9): monotonic token for session switches. Rapid clicks
+  // race the awaited `switch_session` IPC — without the token, an older
+  // response can land after a newer one and clobber
+  // `currentSessionId`/`messages` with the session the user LEFT.
+  const switchTokenRef = useRef(0)
   const [sessions, setSessions] = useState<SessionInfo[]>([])
   // P0 sidebar telemetry: live per-session activity (running / elapsed /
   // active tool) for the session rail. Derived from the same query:* events
@@ -494,11 +499,18 @@ export function AppProvider({ children }: { children: ReactNode }) {
   // B1 P2-3: a session switch now carries a transient loading flag for the
   // message area's skeleton. Same-session calls (and Chat remounts that
   // re-run against the same id) never set it — no skeleton flash.
+  //
+  // Review P1-3 (B1-9): every call takes a monotonic token BEFORE the await;
+  // only the latest token may land state. A slower earlier response (or its
+  // error) is dropped on arrival, and its `finally` leaves the skeleton flag
+  // to the newer request that superseded it.
   const switchToSession = useCallback(async (id: string) => {
+    const token = ++switchTokenRef.current
     const isSwitch = id !== visibleSessionIdRef.current
     if (isSwitch) setSwitchingSession(true)
     try {
       const msgs = await api.switchSession(id)
+      if (token !== switchTokenRef.current) return
       setCurrentSessionId(id)
       setMessages(msgs)
       // §P2-18: project the switched-to session's own stream buckets — a
@@ -517,8 +529,13 @@ export function AppProvider({ children }: { children: ReactNode }) {
         sessionActivityRef.current.set(id, { ...prev, failed: false })
         setSessionActivity(Object.fromEntries(sessionActivityRef.current))
       }
-    } catch (e) { setError(String(e)) }
-    finally { if (isSwitch) setSwitchingSession(false) }
+    } catch (e) {
+      if (token !== switchTokenRef.current) return
+      setError(String(e))
+    } finally {
+      // A superseded request must not clear the newer request's skeleton.
+      if (isSwitch && token === switchTokenRef.current) setSwitchingSession(false)
+    }
   }, [cancelStreamFlush])
 
   const deleteSessionAction = useCallback(async (id: string) => {
@@ -554,7 +571,13 @@ export function AppProvider({ children }: { children: ReactNode }) {
       setPermissionRequest(null)
       // Batch B2: resolve the rail's amber dot for the prompt's session.
       if (permissionRequest?.session_id) noteSessionApproval(permissionRequest.session_id, false)
-    } catch (e) { setError(String(e)) }
+    } catch (e) {
+      setError(String(e))
+      // B0 P0-1: re-throw so awaiting callers (OPC task page) can toast the
+      // failure instead of reporting success. Fire-and-forget callers
+      // (Header) attach a no-op catch of their own.
+      throw e
+    }
   }, [permissionRequest, noteSessionApproval])
 
   const refreshCheckpoints = useCallback(async () => {
@@ -757,6 +780,12 @@ export function AppProvider({ children }: { children: ReactNode }) {
           const p = e.payload as UsagePayload
           if (!isEventForCurrentWindow(p.session_id, windowSessionId)) return
           noteSessionActivity(p.session_id, 'event')
+          // B1-16 (review §5 骨架): the footer's token/cost line is a
+          // visible-session readout — a background session's usage must not
+          // overwrite it (same visibleKey projection as QUERY_TEXT).
+          const visibleKey = visibleSessionIdRef.current ?? ''
+          const key = p.session_id ?? visibleKey
+          if (key !== visibleKey) return
           setUsage(p)
         }),
         listen(EVENT_NAMES.QUERY_COMPLETED, (e) => {
@@ -864,7 +893,13 @@ export function AppProvider({ children }: { children: ReactNode }) {
           )
         }),
         listen(EVENT_NAMES.CONFIG_UPDATED, () => { refreshConfig() }),
-        listen(EVENT_NAMES.BACKGROUND_TASKS_UPDATED, () => { refreshBackgroundTasks() }),
+        // B3 P1-25: a background-task change can also mean a new/finished
+        // agent run — refresh the agents inventory alongside the tasks so
+        // the OPC load/workflow views don't need an app restart to catch up.
+        listen(EVENT_NAMES.BACKGROUND_TASKS_UPDATED, () => {
+          refreshBackgroundTasks()
+          void refreshAgents()
+        }),
         // P0-2: track which sessions a goal run owns, so the composer can
         // block manual sends while a run is driving the conversation.
         listen(EVENT_NAMES.GOAL_UPDATED, () => {

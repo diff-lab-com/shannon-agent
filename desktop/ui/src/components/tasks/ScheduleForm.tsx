@@ -9,7 +9,7 @@ import { useIntl } from 'react-intl'
 import { Button } from '@/components/ui/button'
 import ResultRoutingEditor from './ResultRoutingEditor'
 import ScheduleTemplates from './ScheduleTemplates'
-import { weekdayName } from './shared'
+import { weekdayName, DEFAULT_POLICY } from './shared'
 import { parseNlCron, type CronDescription } from '@/lib/nl-cron'
 import * as api from '@/lib/tauri-api'
 import { cn } from '@/lib/utils'
@@ -21,35 +21,25 @@ import type {
 } from '@/types'
 
 interface ScheduleFormProps {
-  onSubmit: (payload: CreateTaskPayload) => void
+  onSubmit: (payload: CreateTaskPayload) => void | Promise<unknown>
   onCancel: () => void
 }
 
 type TriggerOption = {
   value: TriggerType
-  label: string
   icon: string
-  hint: string
 }
 
 const clampHour = (v: number): number => Math.min(23, Math.max(0, Math.round(v) || 0))
 
+// B6-36: labels/hints used to be hardcoded English; resolve them per trigger
+// type through the locale files at render time instead.
 const TRIGGER_OPTIONS: TriggerOption[] = [
-  { value: 'interval', label: 'Interval', icon: 'timer', hint: 'Run every N seconds' },
-  { value: 'cron', label: 'Cron', icon: 'schedule', hint: 'Unix cron expression' },
-  { value: 'webhook', label: 'Webhook', icon: 'webhook', hint: 'Triggered by HTTP POST' },
-  { value: 'event', label: 'Event', icon: 'bolt', hint: 'Triggered by another task' },
+  { value: 'interval', icon: 'timer' },
+  { value: 'cron', icon: 'schedule' },
+  { value: 'webhook', icon: 'webhook' },
+  { value: 'event', icon: 'bolt' },
 ]
-
-const DEFAULT_POLICY: ExecutionPolicy = {
-  max_retries: 2,
-  timeout_secs: 600,
-  worktree: null,
-  notify_on_failure: true,
-  budget_usd: null,
-  auto_archive_when_empty: false,
-  result_routing: [],
-}
 
 export default function ScheduleForm({ onSubmit, onCancel }: ScheduleFormProps) {
   const intl = useIntl()
@@ -78,6 +68,10 @@ export default function ScheduleForm({ onSubmit, onCancel }: ScheduleFormProps) 
   const [nlInput, setNlInput] = useState('')
   const [nlError, setNlError] = useState<string | null>(null)
   const [nlMatch, setNlMatch] = useState<CronDescription | null>(null)
+  // B3 P1-24: create is awaited before the busy flag drops — double clicking
+  // used to schedule the same routine twice (and routines re-fire on their
+  // cadence, so a duplicate is a recurring cost, not a one-off).
+  const [submitting, setSubmitting] = useState(false)
 
   // Live cron preview (debounced via requestIdleCallback-free simple effect)
   useEffect(() => {
@@ -116,7 +110,8 @@ export default function ScheduleForm({ onSubmit, onCancel }: ScheduleFormProps) 
       : null,
   })
 
-  const submit = () => {
+  const submit = async () => {
+    if (submitting) return
     if (!valid) {
       setError(t('tasks.scheduleForm.requiredFields'))
       return
@@ -131,7 +126,12 @@ export default function ScheduleForm({ onSubmit, onCancel }: ScheduleFormProps) 
       ...(maxFires !== '' ? { max_fires: maxFires } : {}),
       policy: buildPolicy(),
     }
-    onSubmit(payload)
+    setSubmitting(true)
+    try {
+      await onSubmit(payload)
+    } finally {
+      setSubmitting(false)
+    }
   }
 
   const applyTemplate = (t: { fields: { name?: string; prompt?: string; trigger_type?: TriggerType; interval_secs?: number; cron_expr?: string } }) => {
@@ -265,9 +265,9 @@ export default function ScheduleForm({ onSubmit, onCancel }: ScheduleFormProps) 
               >
                 <span className="flex items-center gap-xs">
                   <span className="material-symbols-outlined icon-sm">{opt.icon}</span>
-                  <span className="font-label-md font-bold">{opt.label}</span>
+                  <span className="font-label-md font-bold">{t(`tasks.scheduleForm.type.${opt.value}`)}</span>
                 </span>
-                <span className="font-label-sm text-[11px] text-on-surface-variant">{opt.hint}</span>
+                <span className="font-label-sm text-[11px] text-on-surface-variant">{t(`tasks.scheduleForm.typeHint.${opt.value}`)}</span>
               </Button>
             )
           })}
@@ -509,11 +509,12 @@ export default function ScheduleForm({ onSubmit, onCancel }: ScheduleFormProps) 
           {t('tasks.scheduleForm.cancel')}
         </Button>
         <Button
-          className="px-md py-sm bg-primary text-on-primary rounded-lg font-label-md cursor-pointer disabled:opacity-50"
-          onClick={submit}
-          disabled={!valid}
+          className="px-md py-sm bg-primary text-on-primary rounded-lg font-label-md cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed"
+          onClick={() => void submit()}
+          disabled={!valid || submitting}
+          aria-busy={submitting || undefined}
         >
-          {t('tasks.scheduleForm.createRoutine')}
+          {submitting ? t('tasks.scheduleForm.creating') : t('tasks.scheduleForm.createRoutine')}
         </Button>
       </div>
     </div>

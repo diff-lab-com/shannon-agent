@@ -70,7 +70,6 @@ function WebhookSection({ onSaved }: { onSaved?: () => void } = {}) {
   const [saving, setSaving] = useState(false)
   const [clearing, setClearing] = useState(false)
   const [url, setUrl] = useState('')
-  const [template, setTemplate] = useState('raw')
   const [preset, setPreset] = useState<WebhookPreset>('custom')
   const [customBody, setCustomBody] = useState('')
   const [secret, setSecret] = useState('')
@@ -84,7 +83,6 @@ function WebhookSection({ onSaved }: { onSaved?: () => void } = {}) {
       .then((dto) => {
         if (cancelled || !dto) return
         setUrl(dto.url)
-        setTemplate(dto.template || 'raw')
         setPreset(presetFromTemplate(dto.template))
         if (dto.template?.startsWith('custom:')) setCustomBody(dto.template.slice('custom:'.length))
         setSecret(dto.secret ?? '')
@@ -123,16 +121,18 @@ function WebhookSection({ onSaved }: { onSaved?: () => void } = {}) {
       toast.error(t(key))
       return
     }
+    // P1-15: a Custom preset without a body would persist an empty payload
+    // and silently wipe the stored template — block the save outright.
+    if (preset === 'custom' && customBody.trim() === '') {
+      toast.error(t('settings.notifications.error.customBodyRequired'))
+      return
+    }
     setSaving(true)
     try {
-      // Encode the selected preset as the template discriminator. Preserves the
-      // legacy `custom:<body>` shape for the Custom preset.
-      const encodedTemplate =
-        preset === 'custom'
-          ? template.startsWith('custom:')
-            ? template
-            : `custom:${customBody}`
-          : preset
+      // Encode the selected preset as the template discriminator. The custom
+      // body now comes from its textarea (the guard above guarantees a
+      // non-empty body, so saving can no longer wipe the stored template).
+      const encodedTemplate = preset === 'custom' ? `custom:${customBody}` : preset
       await api.saveWebhookConfig({
         url: url.trim(),
         template: encodedTemplate,
@@ -153,7 +153,6 @@ function WebhookSection({ onSaved }: { onSaved?: () => void } = {}) {
     try {
       await api.clearWebhookConfig()
       setUrl('')
-      setTemplate('raw')
       setPreset('custom')
       setCustomBody('')
       setSecret('')
@@ -255,8 +254,50 @@ function WebhookSection({ onSaved }: { onSaved?: () => void } = {}) {
         </div>
       </div>
 
+      <div>
+        <label htmlFor="webhook-secret" className="block font-label-lg text-on-surface mb-sm">
+          {t('settings.notifications.secret')}
+        </label>
+        {/* P1-15: the HMAC secret had state but no control, so it could never
+            be set from the UI. Kept password-masked and never re-displayed in
+            clear text. */}
+        <input
+          id="webhook-secret"
+          type="password"
+          value={secret}
+          onChange={(e) => setSecret(e.target.value)}
+          placeholder={t('settings.notifications.secretPlaceholder')}
+          autoComplete="off"
+          className="w-full px-md py-sm rounded-md border border-outline bg-surface text-on-surface focus-visible:border-primary focus-visible:ring-2 focus-visible:ring-primary/30 font-mono"
+        />
+        <p className="mt-xs text-on-surface-variant font-body-sm">{t('settings.notifications.secretHint')}</p>
+      </div>
+
+      {preset === 'custom' && (
+        <div>
+          <label htmlFor="webhook-custom-body" className="block font-label-lg text-on-surface mb-sm">
+            {t('settings.notifications.customBody')}
+          </label>
+          <textarea
+            id="webhook-custom-body"
+            value={customBody}
+            onChange={(e) => setCustomBody(e.target.value)}
+            placeholder={'{"text": "{title}: {body}"}'}
+            rows={4}
+            className="w-full px-md py-sm rounded-md border border-outline bg-surface text-on-surface focus-visible:border-primary focus-visible:ring-2 focus-visible:ring-primary/30 font-mono font-body-sm"
+          />
+          <p className="mt-xs text-on-surface-variant font-body-sm">{t('settings.notifications.customBodyHint')}</p>
+        </div>
+      )}
+
       <div className="flex gap-sm pt-md">
-        <Button onClick={handleSave} disabled={saving || !url.trim() || !validateWebhookUrl(url.trim()).ok}>
+        {/* P1-15: saving the Custom preset with an empty body would overwrite
+            whatever template is currently stored with an empty payload — the
+            save is blocked until a body is provided. */}
+        <Button
+          onClick={handleSave}
+          disabled={saving || !url.trim() || !validateWebhookUrl(url.trim()).ok || (preset === 'custom' && customBody.trim() === '')}
+        >
           {saving ? t('settings.notifications.saving') : t('settings.notifications.save')}
         </Button>
       </div>

@@ -52,6 +52,20 @@ export function Header() {
   const [modelOpen, setModelOpen] = useState(false);
   const modelRef = useRef<HTMLDivElement>(null);
   const [modelFocus, setModelFocus] = useState(-1);
+  // B1-13 (review P1-8): after a route change, focus moves to the page
+  // title (tabIndex=-1 below) and an aria-live region announces it, so
+  // screen-reader users learn the page switched.
+  const titleRef = useRef<HTMLHeadingElement>(null);
+  const [routeAnnouncement, setRouteAnnouncement] = useState('');
+  const prevPathRef = useRef(location.pathname);
+  useEffect(() => {
+    if (prevPathRef.current === location.pathname) return
+    prevPathRef.current = location.pathname
+    const el = titleRef.current
+    if (!el) return
+    el.focus()
+    setRouteAnnouncement(el.textContent?.trim() ?? '')
+  }, [location.pathname]);
 
   // IA T3 (审批面收敛): the bell keeps surfacing the pending skill-candidate
   // count, but it no longer hijacks the click into an approval dialog —
@@ -89,14 +103,20 @@ export function Header() {
     return () => document.removeEventListener('mousedown', handleClick)
   }, [modelOpen])
 
-  // U2: absorbed ChatInput's dual-write — configure the model NAME plus its
-  // provider (the config's `model` key holds a name, not the catalog id).
-  // Header is now the only model switcher in the app.
+  // Decision 1 (review P1-2 / B1-8): the config's `model` key stores the
+  // catalog ID. The old "U2 config stores the name" convention is retired —
+  // `provider_resolver` passes the stored string through as the API `model`
+  // parameter verbatim and display_name ≠ id for most catalog models, so the
+  // name-writing path failed for every such model. Legacy display_name
+  // values already on disk are normalized back to the id inside
+  // `configure('model')` (commands_config.rs `normalize_model_id`).
+  // Header remains the only model switcher outside /chat; the composer chip
+  // owns /chat.
   const handleModelSwitch = async (modelId: string) => {
     const model = models.find(m => m.id === modelId)
     if (!model) return
     try {
-      await api.configure({ key: 'model', value: model.name })
+      await api.configure({ key: 'model', value: model.id })
       await api.configure({ key: 'provider', value: model.provider })
       await refreshConfig()
       await refreshStatus()
@@ -130,10 +150,12 @@ export function Header() {
           {isOpcTask ? (
             <div className="flex items-center gap-2">
               <span className="material-symbols-outlined text-primary text-[28px]">auto_awesome</span>
-              <h2 className="font-headline-md text-[24px] font-extrabold text-primary whitespace-nowrap">{title}</h2>
+              {/* B1-13: programmatic focus target on route change (no visible
+                  ring — the aria-live announcement below carries the signal). */}
+              <h2 ref={titleRef} tabIndex={-1} className="font-headline-md text-[24px] font-extrabold text-primary whitespace-nowrap outline-none">{title}</h2>
             </div>
           ) : (
-            <h2 className="font-headline-md text-[24px] font-extrabold text-on-surface whitespace-nowrap">{title}</h2>
+            <h2 ref={titleRef} tabIndex={-1} className="font-headline-md text-[24px] font-extrabold text-on-surface whitespace-nowrap outline-none">{title}</h2>
           )}
 
           {isOpcTask && (
@@ -242,8 +264,20 @@ export function Header() {
                 <div className="absolute right-0 top-full mt-sm w-[280px] bg-surface-container-lowest/95 backdrop-blur-lg rounded-xl border border-outline-variant/20 shadow-xl z-modal py-sm" role="listbox" onKeyDown={e => {
                   if (e.key === 'ArrowDown') { e.preventDefault(); setModelFocus(f => Math.min(f + 1, models.length - 1)) }
                   else if (e.key === 'ArrowUp') { e.preventDefault(); setModelFocus(f => Math.max(f - 1, 0)) }
-                  else if (e.key === 'Enter' && modelFocus >= 0) { handleModelSwitch(models[modelFocus].id) }
-                  else if (e.key === 'Escape') { setModelOpen(false) }
+                  // B6-37: only handle Enter when the keydown originated on the
+                  // container itself. An option Button is natively focusable —
+                  // its own click handler fires on Enter, and the old
+                  // unguarded branch switched twice (and to a different model
+                  // whenever Tab focus and modelFocus had diverged).
+                  else if (e.key === 'Enter' && modelFocus >= 0 && e.target === e.currentTarget) { handleModelSwitch(models[modelFocus].id) }
+                  else if (e.key === 'Escape') {
+                    // T5 (review P1-6): this listbox owns Escape while open —
+                    // don't let the same keydown also hit the window-level
+                    // shortcuts (query cancel).
+                    e.preventDefault()
+                    e.stopPropagation()
+                    setModelOpen(false)
+                  }
                 }}>
                   {models.map((m, i) => (
                     <Button
@@ -257,6 +291,9 @@ export function Header() {
                       )}
                       onClick={() => handleModelSwitch(m.id)}
                       onMouseEnter={() => setModelFocus(i)}
+                      // B6-37: keep the highlight in sync with real focus, so
+                      // Tab-through and the arrow-key index can't disagree.
+                      onFocus={() => setModelFocus(i)}
                     >
                       <span className="font-mono font-label-md truncate">{m.name}</span>
                       <span className="text-label-sm text-on-surface-variant">{m.context_window > 0 ? `${(m.context_window / 1000).toFixed(0)}k` : ''}</span>
@@ -296,12 +333,17 @@ export function Header() {
           </Button>
         </div>
       </header>
+      {/* B1-13: route-change announcement — the visually hidden live region
+          fires after focus landed on the page title above. */}
+      <div aria-live="polite" role="status" className="sr-only">
+        {routeAnnouncement ? t('nav.routeChanged.aria', { title: routeAnnouncement }) : ''}
+      </div>
 
       {/* Permission Modal — alertdialog because it demands immediate attention */}
       {permissionRequest && (
       <Modal
         open
-        onClose={() => respondPermission(permissionRequest.request_id, false)}
+        onClose={() => respondPermission(permissionRequest.request_id, false).catch(() => {})}
         size="md"
         role="alertdialog"
         showCloseButton={false}
@@ -363,13 +405,13 @@ export function Header() {
                 settings.json permissions.allow). The engine's rule checker
                 consumes those rules (Deny > Ask > Allow). */}
             <div className="flex gap-md">
-              <Button autoFocus className="flex-1 py-sm bg-surface-container text-on-surface rounded-xl hover:bg-surface-container-high transition-all font-label-md" onClick={() => respondPermission(permissionRequest.request_id, false)}>
+              <Button autoFocus className="flex-1 py-sm bg-surface-container text-on-surface rounded-xl hover:bg-surface-container-high transition-all font-label-md" onClick={() => respondPermission(permissionRequest.request_id, false).catch(() => {})}>
                 {t('header.permRequest.deny')}
               </Button>
-              <Button className="flex-1 py-sm border border-primary/40 bg-transparent text-primary rounded-xl hover:bg-primary/10 transition-all font-label-md" onClick={() => respondPermission(permissionRequest.request_id, true, { scope: 'always_tool' })}>
+              <Button className="flex-1 py-sm border border-primary/40 bg-transparent text-primary rounded-xl hover:bg-primary/10 transition-all font-label-md" onClick={() => respondPermission(permissionRequest.request_id, true, { scope: 'always_tool' }).catch(() => {})}>
                 {t('header.permRequest.allowAlways')}
               </Button>
-              <Button className="flex-1 py-sm bg-primary text-on-primary rounded-xl hover:shadow-md hover:shadow-primary/30 active:scale-95 transition-all font-label-md" onClick={() => respondPermission(permissionRequest.request_id, true)}>
+              <Button className="flex-1 py-sm bg-primary text-on-primary rounded-xl hover:shadow-md hover:shadow-primary/30 active:scale-95 transition-all font-label-md" onClick={() => respondPermission(permissionRequest.request_id, true).catch(() => {})}>
                 {t('header.permRequest.allowOnce')}
               </Button>
             </div>

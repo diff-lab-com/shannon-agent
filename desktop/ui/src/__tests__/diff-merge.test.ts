@@ -1,9 +1,9 @@
 import { describe, it, expect } from 'vitest'
-import { computeHunks, mergeFile, type HunkDecision } from '@/lib/diff-merge'
+import { computeHunks, computeDiffStats, mergeFile, type HunkDecision } from '@/lib/diff-merge'
 
-// All fixtures use explicit \n line endings; the merge output always ends
-// with a trailing \n to match how `save_text_file` round-trips through
-// fs::write.
+// All fixtures use explicit \n line endings. Trailing-newline semantics:
+// all-accept → new content verbatim, none accepted → old content verbatim,
+// mixed → the old file's trailing-newline convention.
 
 describe('computeHunks', () => {
   it('returns no hunks when contents are identical', () => {
@@ -150,5 +150,140 @@ describe('mergeFile', () => {
     const hunks = computeHunks('x\n', 'y\n')
     for (const h of hunks) decisions.set(h.id, 'accept')
     expect(mergeFile('x\n', 'y\n', decisions)).toBe('y\n')
+  })
+
+  // ---- B0 P0-2: identical repeated changes must not share a decision ----
+
+  it('applies independent decisions to two identical changes (one accept, one reject)', () => {
+    // The node-reproduced P0-2 case: two `dup→DUP` edits, first rejected,
+    // second accepted. The old content-equality lookup always resolved the
+    // second hunk to the first hunk's (missing) decision and wrote both.
+    const oldC = 'dup\nmid\ndup\n'
+    const newC = 'DUP\nmid\nDUP\n'
+    const hunks = computeHunks(oldC, newC)
+    expect(hunks).toHaveLength(2)
+    // Position-addressed ids — the two identical edits can never collide.
+    expect(hunks[0].id).not.toBe(hunks[1].id)
+    const decisions = new Map<string, HunkDecision>([
+      [hunks[0].id, 'reject'],
+      [hunks[1].id, 'accept'],
+    ])
+    expect(mergeFile(oldC, newC, decisions)).toBe('dup\nmid\nDUP\n')
+  })
+
+  it('applies independent decisions in the reverse order too', () => {
+    const oldC = 'dup\nmid\ndup\n'
+    const newC = 'DUP\nmid\nDUP\n'
+    const hunks = computeHunks(oldC, newC)
+    const decisions = new Map<string, HunkDecision>([
+      [hunks[0].id, 'accept'],
+      [hunks[1].id, 'reject'],
+    ])
+    expect(mergeFile(oldC, newC, decisions)).toBe('DUP\nmid\ndup\n')
+  })
+
+  it('handles adjacent identical double hunks separated by one context line', () => {
+    const oldC = 'dup\nctx\ndup\ntail\n'
+    const newC = 'NEW\nctx\nNEW\ntail\n'
+    const hunks = computeHunks(oldC, newC)
+    expect(hunks).toHaveLength(2)
+    const decisions = new Map<string, HunkDecision>([
+      [hunks[0].id, 'accept'],
+      [hunks[1].id, 'reject'],
+    ])
+    expect(mergeFile(oldC, newC, decisions)).toBe('NEW\nctx\ndup\ntail\n')
+  })
+
+  it('treats missing decisions as reject even when a later identical hunk is accepted', () => {
+    const oldC = 'dup\nmid\ndup\n'
+    const newC = 'DUP\nmid\nDUP\n'
+    const hunks = computeHunks(oldC, newC)
+    const decisions = new Map<string, HunkDecision>([[hunks[1].id, 'accept']])
+    expect(mergeFile(oldC, newC, decisions)).toBe('dup\nmid\nDUP\n')
+  })
+
+  // ---- B0 P0-2: trailing-newline semantics (three cases) ----
+
+  it('all-accept keeps the new content verbatim, with trailing newline', () => {
+    const hunks = computeHunks('x\ny\n', 'x\nY\n')
+    const decisions = new Map<string, HunkDecision>([[hunks[0].id, 'accept']])
+    expect(mergeFile('x\ny\n', 'x\nY\n', decisions)).toBe('x\nY\n')
+  })
+
+  it('all-accept keeps the new content verbatim, without trailing newline', () => {
+    const oldC = 'x\ny\n'
+    const newC = 'x\nY' // real edit + proposal drops the final newline
+    const hunks = computeHunks(oldC, newC)
+    expect(hunks).toHaveLength(1)
+    const decisions = new Map<string, HunkDecision>([[hunks[0].id, 'accept']])
+    expect(mergeFile(oldC, newC, decisions)).toBe('x\nY')
+  })
+
+  it('no hunks (trailing-newline-only difference) returns the old content exactly', () => {
+    expect(mergeFile('a\nb\n', 'a\nb', new Map())).toBe('a\nb\n')
+    expect(mergeFile('a\nb', 'a\nb\n', new Map())).toBe('a\nb')
+  })
+
+  it('none-accepted returns the old content exactly, preserving a missing trailing newline', () => {
+    const hunks = computeHunks('a\nb', 'a\nB\n')
+    const decisions = new Map<string, HunkDecision>([[hunks[0].id, 'reject']])
+    expect(mergeFile('a\nb', 'a\nB\n', decisions)).toBe('a\nb')
+  })
+
+  it('mixed decisions keep the old file trailing-newline convention', () => {
+    const oldC = 'a\nk\nx\nb\n'
+    const newC = 'A\nk\nX\nb\n'
+    const hunks = computeHunks(oldC, newC)
+    expect(hunks).toHaveLength(2)
+    const decisions = new Map<string, HunkDecision>([
+      [hunks[0].id, 'accept'],
+      [hunks[1].id, 'reject'],
+    ])
+    expect(mergeFile(oldC, newC, decisions)).toBe('A\nk\nx\nb\n')
+  })
+
+  it('mixed decisions over an old file without trailing newline never add one', () => {
+    const oldC = 'a\nk\nx\nb'
+    const newC = 'A\nk\nX\nb\n'
+    const hunks = computeHunks(oldC, newC)
+    expect(hunks).toHaveLength(2)
+    const decisions = new Map<string, HunkDecision>([
+      [hunks[0].id, 'accept'],
+      [hunks[1].id, 'reject'],
+    ])
+    expect(mergeFile(oldC, newC, decisions)).toBe('A\nk\nx\nb')
+  })
+})
+
+// ─── B4 P1-32: per-diff-object memoized stats ──────────────────────────────
+
+describe('computeDiffStats', () => {
+  it('returns hunks plus added/removed line counts', () => {
+    const diff = { old_content: 'a\nb\nc', new_content: 'a\nB\nc\nd' }
+    const stats = computeDiffStats(diff)
+    expect(stats.hunks).toEqual(computeHunks(diff.old_content, diff.new_content))
+    expect(stats.added).toBe(2) // 'B' replaces 'b', 'd' is new
+    expect(stats.removed).toBe(1) // 'b'
+  })
+
+  it('caches per object identity — same object returns the same arrays', () => {
+    const diff = { old_content: 'x', new_content: 'x\ny' }
+    const first = computeDiffStats(diff)
+    const second = computeDiffStats(diff)
+    expect(second).toBe(first)
+    expect(second.hunks).toBe(first.hunks)
+  })
+
+  it('distinct objects get distinct stats even with equal content', () => {
+    const a = { old_content: 'x', new_content: 'x\ny' }
+    const b = { old_content: 'x', new_content: 'x\ny' }
+    expect(computeDiffStats(a)).not.toBe(computeDiffStats(b))
+  })
+
+  it('identical content yields zero hunks and zero counts', () => {
+    const stats = computeDiffStats({ old_content: 'same', new_content: 'same' })
+    expect(stats.hunks).toHaveLength(0)
+    expect(stats.added).toBe(0)
+    expect(stats.removed).toBe(0)
   })
 })

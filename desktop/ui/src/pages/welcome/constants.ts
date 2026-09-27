@@ -63,14 +63,6 @@ export const PROVIDERS = [
   { id: 'deepseek', label: 'DeepSeek', descKey: 'welcome.model.deepseek.desc' },
 ] as const
 
-export const TOOL_CATALOG: Record<string, { labelKey: string; icon: string; descKey: string }> = {
-  filesystem: { labelKey: 'welcome.tools.filesystem.label', icon: 'folder', descKey: 'welcome.tools.filesystem.desc' },
-  git: { labelKey: 'welcome.tools.git.label', icon: 'commit', descKey: 'welcome.tools.git.desc' },
-  playwright: { labelKey: 'welcome.tools.playwright.label', icon: 'web', descKey: 'welcome.tools.playwright.desc' },
-  web_search: { labelKey: 'welcome.tools.webSearch.label', icon: 'travel_explore', descKey: 'welcome.tools.webSearch.desc' },
-  tavily: { labelKey: 'welcome.tools.tavily.label', icon: 'menu_book', descKey: 'welcome.tools.tavily.desc' },
-}
-
 export const SHORTCUT_ROWS = [
   { keys: () => `${formatShortcut('K')}`, actionKey: 'shortcuts.openPalette' },
   { keys: () => `${formatShortcut('N')}`, actionKey: 'shortcuts.newChat' },

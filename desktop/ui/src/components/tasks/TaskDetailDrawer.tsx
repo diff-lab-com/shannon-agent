@@ -32,9 +32,9 @@ interface TaskDetailDrawerProps {
 const PRIORITIES = ['low', 'normal', 'medium', 'high', 'critical'] as const
 const STATUSES = ['pending', 'in_progress', 'running', 'completed', 'failed', 'blocked'] as const
 
-function getTitle(task: TaskLike): string {
+function getTitle(task: TaskLike, fallback: string): string {
   if ('title' in task) return task.title
-  return task.prompt?.slice(0, 80) ?? 'Background Task'
+  return task.prompt?.slice(0, 80) ?? fallback
 }
 
 function isTaskItem(t: TaskLike): t is TaskItem {
@@ -97,6 +97,15 @@ export default function TaskDetailDrawer({ task, onClose, onUpdated }: TaskDetai
 
   const editable = isTaskItem(task)
   const closeAria = t('tasks.taskDetailDrawer.closeAria')
+  // B6-36: the fallback title used to be the hardcoded "Background Task".
+  const title = getTitle(task, t('tasks.taskDetailDrawer.backgroundTask'))
+  // B6-36: raw status/priority codes are translated via the shared `status.*`
+  // keys (B3 introduced them); unknown codes fall back to the raw code so a
+  // newer backend value never renders as an empty chip.
+  const statusLabel = (code: string) =>
+    code ? intl.formatMessage({ id: `status.${code.toLowerCase()}`, defaultMessage: code }) : code
+  const priorityLabel = (code: string) =>
+    code ? intl.formatMessage({ id: `status.${normalizePriority(code).toLowerCase()}`, defaultMessage: code }) : code
 
   const handleSave = async () => {
     if (!editable) return
@@ -137,7 +146,7 @@ export default function TaskDetailDrawer({ task, onClose, onUpdated }: TaskDetai
         <div className="space-y-md">
           <div>
             <span className="text-label-sm text-on-surface-variant">{t('tasks.taskDetailDrawer.titleLabel')}</span>
-            <p className="font-body-lg text-on-surface font-bold mt-xs">{getTitle(task)}</p>
+            <p className="font-body-lg text-on-surface font-bold mt-xs">{title}</p>
           </div>
 
           {/* Status */}
@@ -151,11 +160,11 @@ export default function TaskDetailDrawer({ task, onClose, onUpdated }: TaskDetai
                 className="mt-xs w-full px-md py-xs rounded-lg border border-outline-variant/50 bg-surface-container-lowest font-body-md text-on-surface focus-visible:border-primary focus-visible:ring-2 focus-visible:ring-primary/30"
               >
                 {STATUSES.map(s => (
-                  <option key={s} value={s}>{s}</option>
+                  <option key={s} value={s}>{statusLabel(s)}</option>
                 ))}
               </select>
             ) : (
-              <p className="font-body-md text-on-surface mt-xs capitalize">{task.status}</p>
+              <p className="font-body-md text-on-surface mt-xs capitalize">{statusLabel(task.status ?? '')}</p>
             )}
           </div>
 
@@ -179,12 +188,12 @@ export default function TaskDetailDrawer({ task, onClose, onUpdated }: TaskDetai
                 >
                   <option value="">{t('tasks.taskDetailDrawer.none')}</option>
                   {PRIORITIES.map(p => (
-                    <option key={p} value={p}>{p}</option>
+                    <option key={p} value={p}>{priorityLabel(p)}</option>
                   ))}
                 </select>
               ) : (
                 <p className="font-body-md text-on-surface mt-xs capitalize">
-                  {(task.priority && normalizePriority(task.priority)) ?? t('tasks.taskDetailDrawer.none')}
+                  {task.priority ? priorityLabel(task.priority) : t('tasks.taskDetailDrawer.none')}
                 </p>
               )}
             </div>

@@ -1,9 +1,11 @@
 import { useEffect, useState } from 'react'
 import { useIntl } from 'react-intl'
+import { toast } from 'sonner'
 import * as api from '@/lib/tauri-api'
 import type { ContextBreakdown } from '@/types'
 import { useSessions } from '@/context/SessionContext'
 import { useT } from '@/i18n'
+import { toastError } from '@/lib/errorToast'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 
@@ -39,7 +41,12 @@ export default function CurrentSessionCostPanel() {
       .then(b => { if (alive) setBreakdown(b) })
       .catch(e => console.warn('context breakdown failed:', e))
     api.getSessionBudget(currentSessionId)
-      .then(b => { if (alive && b != null) setBudget(String(b)) })
+      .then(b => {
+        if (!alive) return
+        // A session without a budget must clear the input — carrying the
+        // previous session's cap over would let one click write it here.
+        setBudget(b != null ? String(b) : '')
+      })
       .catch(e => console.warn('session budget read failed:', e))
     return () => { alive = false }
   }, [currentSessionId])
@@ -52,10 +59,21 @@ export default function CurrentSessionCostPanel() {
 
   const saveBudget = async () => {
     if (!currentSessionId) return
+    const trimmed = budget.trim()
+    const n = trimmed === '' ? null : Number(trimmed)
+    if (n != null && (!Number.isFinite(n) || n <= 0)) {
+      toast.error(t('usage.ctx.budgetInvalid'))
+      return
+    }
     setSaving(true)
     try {
-      const n = budget.trim() === '' ? null : Number(budget)
-      if (n == null || Number.isFinite(n)) await api.setSessionBudget(currentSessionId, n)
+      await api.setSessionBudget(currentSessionId, n)
+      if (n == null) setBudget('')
+      toast.success(t('usage.ctx.budgetSaved'))
+    } catch (e) {
+      // The backend rejects non-positive amounts — surface it instead of
+      // dying silently in the finally block.
+      toastError(t('usage.ctx.budgetSaveFailed'), e)
     } finally {
       setSaving(false)
     }

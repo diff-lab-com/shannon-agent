@@ -58,10 +58,10 @@ export interface SessionsPanelProps {
  */
 export function SessionsPanel({ className, titleId }: SessionsPanelProps) {
   const intl = useIntl()
-  const title = intl.formatMessage({
-    id: titleId ?? 'sessionsPanel.title',
-    defaultMessage: 'Threads',
-  })
+  // B6-36: `sessionsPanel.title`/`sessionsPanel.messageCount` were missing
+  // from every locale pack, so these always rendered the English
+  // defaultMessage. Keys now exist; no inline default needed.
+  const title = intl.formatMessage({ id: titleId ?? 'sessionsPanel.title' })
 
   const sessions = useSessions().sessions
   const currentSessionId = useSessions().currentSessionId
@@ -202,7 +202,7 @@ function SessionRow({ id, title, messageCount, active, onSelect }: SessionRowPro
         </span>
         <span className="block text-xs text-on-surface-variant">
           {intl.formatMessage(
-            { id: 'sessionsPanel.messageCount', defaultMessage: '{count, plural, =0 {No messages} one {# message} other {# messages}}' },
+            { id: 'sessionsPanel.messageCount' },
             { count: messageCount },
           )}
         </span>

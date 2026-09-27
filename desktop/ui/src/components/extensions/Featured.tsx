@@ -16,6 +16,18 @@ import { CardSkeleton } from '@/components/SkeletonLoader'
 import { cn } from "@/lib/utils";
 import InstalledIconRow from '@/components/extensions/InstalledIconRow'
 
+// Batch E4/B3 P1-21 contract: any successful install from this page must
+// dispatch `shannon:extension-installed` (same shape InstallDialog uses) so
+// the other extension tabs (Installed, InstalledIconRow, the personal tab
+// below) refresh immediately instead of showing stale inventories.
+function announceInstalled(name: string) {
+  window.dispatchEvent(
+    new CustomEvent('shannon:extension-installed', {
+      detail: { kind: 'mcp', name },
+    }),
+  )
+}
+
 /**
  * Featured tab — curated list of verified MCP vendors Shannon ships with.
  *
@@ -96,6 +108,7 @@ export default function Featured() {
     try {
       if (vendor.install_kind.type === "oauth_remote") {
         await installMcpOAuthLoopback(vendor.slug);
+        announceInstalled(vendor.slug);
         setFeedback({ slug: vendor.slug, msg: t('extensions.featured.connected'), ok: true });
       } else {
         // stdio featured vendor — install directly.
@@ -107,6 +120,7 @@ export default function Featured() {
           args: vendor.install_kind.args,
           env: Object.entries(env),
         });
+        announceInstalled(vendor.slug);
         setFeedback({ slug: vendor.slug, msg: t('extensions.featured.installed'), ok: true });
       }
     } catch (err) {
@@ -127,6 +141,7 @@ export default function Featured() {
     setBusy(vendor.slug);
     try {
       await installMcpOAuthComplete(vendor.slug, token);
+      announceInstalled(vendor.slug);
       setFeedback({ slug: vendor.slug, msg: t('extensions.featured.connected'), ok: true });
       setTokenPrompt(null);
     } catch (err) {
@@ -215,9 +230,22 @@ export default function Featured() {
       {marketTab === 'personal' ? (
         personalFiltered.length === 0 ? (
           <div className="border border-dashed border-outline-variant/40 rounded-2xl p-xl text-center">
-            <span className="material-symbols-outlined icon-md text-on-surface-variant/60" aria-hidden="true">folder_off</span>
-            <p className="font-label-md text-on-surface-variant mt-xs">{t('extensions.market.personalEmpty')}</p>
-            <p className="font-label-sm text-on-surface-variant/70 mt-xs">{t('extensions.market.personalEmptyHint')}</p>
+            {search ? (
+              // B3 (P2 顺带): a no-match search must not read as "nothing
+              // installed" — same distinction the public tab makes.
+              <>
+                <span className="material-symbols-outlined icon-md text-on-surface-variant/60" aria-hidden="true">search_off</span>
+                <p className="font-label-md text-on-surface-variant mt-xs">
+                  {intl.formatMessage({ id: 'extensions.market.personalNoMatches' }, { search })}
+                </p>
+              </>
+            ) : (
+              <>
+                <span className="material-symbols-outlined icon-md text-on-surface-variant/60" aria-hidden="true">folder_off</span>
+                <p className="font-label-md text-on-surface-variant mt-xs">{t('extensions.market.personalEmpty')}</p>
+                <p className="font-label-sm text-on-surface-variant/70 mt-xs">{t('extensions.market.personalEmptyHint')}</p>
+              </>
+            )}
           </div>
         ) : (
           <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-lg">

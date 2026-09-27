@@ -13,6 +13,7 @@ fn main() {
     use shannon_desktop::commands_chat;
     use shannon_desktop::commands_config;
     use shannon_desktop::commands_connections;
+    use shannon_desktop::commands_diagnostics;
     use shannon_desktop::commands_dream;
     use shannon_desktop::commands_feedback;
     use shannon_desktop::commands_files;
@@ -36,6 +37,7 @@ fn main() {
     use shannon_desktop::commands_usage;
     use shannon_desktop::commands_voice;
     use shannon_desktop::commands_voice_models;
+    use shannon_desktop::desktop_logging;
     use shannon_desktop::engine_discovery;
     use shannon_desktop::engine_discovery_commands as commands_engine_discovery;
     use shannon_desktop::extensions_commands;
@@ -52,33 +54,80 @@ fn main() {
         menu::{MenuBuilder, MenuItemBuilder},
         tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent},
     };
-    use tauri_plugin_updater::UpdaterExt;
 
     // E5: tracing-subscriber with JSON exporter for offline performance
     // analysis. SHANNON_LOG_FORMAT=json → newline-delimited JSON to stderr;
     // any other value (or unset) → pretty human-readable output.
+    //
+    // Batch 3 B: a rolling redacted file sink keeps logs at
+    // ~/.shannon/logs/ — `shannon desktop` detaches from its terminal, so
+    // stderr alone meant production runs left nothing behind for support.
     let log_format = std::env::var("SHANNON_LOG_FORMAT").unwrap_or_default();
     let env_filter = tracing_subscriber::EnvFilter::try_from_default_env()
         .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new("info,shannon_desktop=debug"));
+
+    let log_dir = shannon_core::data_meta::home().join("logs");
+    let _ = std::fs::create_dir_all(&log_dir);
+    desktop_logging::cleanup_retention(&log_dir, 7);
+    desktop_logging::install_panic_hook(&log_dir);
+    let (non_blocking, log_guard) = tracing_appender::non_blocking(
+        tracing_appender::rolling::daily(&log_dir, "shannon-desktop.log"),
+    );
+    // Held for the process lifetime: dropping the guard detaches the file
+    // worker and loses still-buffered lines.
+    let _log_guard = log_guard;
+
+    // File sink: WARN and above (stderr stays the verbose surface). Every
+    // line is redacted through the session-log policy before hitting disk.
+    let file_layer = tracing_subscriber::fmt::layer()
+        .with_writer(desktop_logging::RedactingMakeWriter::new(non_blocking))
+        .with_ansi(false)
+        .with_target(true)
+        .with_filter(tracing_subscriber::EnvFilter::new("warn"));
+
+    let stderr_layer = tracing_subscriber::fmt::layer()
+        .with_target(true)
+        .with_span_events(tracing_subscriber::fmt::format::FmtSpan::CLOSE);
+    use tracing_subscriber::prelude::*;
+    // `.json()` returns a different concrete type than the text layer and
+    // stacked filtered layers turn the registry generic concrete — box each
+    // layer so both branches share one assembly.
     if log_format.eq_ignore_ascii_case("json") {
-        tracing_subscriber::fmt()
-            .with_env_filter(env_filter)
-            .json()
-            .with_target(true)
-            .with_span_events(tracing_subscriber::fmt::format::FmtSpan::CLOSE)
+        tracing_subscriber::registry()
+            .with(stderr_layer.json().with_filter(env_filter.clone()).boxed())
+            .with(file_layer.boxed())
             .init();
     } else {
-        tracing_subscriber::fmt()
-            .with_env_filter(env_filter)
-            .with_target(true)
-            .with_span_events(tracing_subscriber::fmt::format::FmtSpan::CLOSE)
+        tracing_subscriber::registry()
+            .with(stderr_layer.with_filter(env_filter).boxed())
+            .with(file_layer.boxed())
             .init();
     }
+
+    // Data-version gate (Phase 1, advisory here): a data directory written
+    // by a NEWER build is logged loudly but does not block startup — the
+    // desktop ships its own CLI sidecar, self-downgrades are rare, and a
+    // window that refuses to open with no UI affordance beats a silent one.
+    // The CLI/serve entrypoints hard-refuse instead; see data_meta. The
+    // marker itself never moves backwards, so this path cannot downgrade
+    // the record that the gate keys off.
+    match shannon_core::data_meta::check() {
+        shannon_core::data_meta::Compatibility::Downgrade { data_version }
+            if std::env::var_os("SHANNON_ALLOW_DOWNGRADE").is_none() =>
+        {
+            tracing::error!(
+                data_version = %data_version,
+                running = env!("CARGO_PKG_VERSION"),
+                "Shannon data directory was written by a newer version — continuing in advisory mode (set SHANNON_ALLOW_DOWNGRADE=1 to silence)"
+            );
+        }
+        _ => {}
+    }
+    shannon_core::data_meta::record_current_version();
 
     tauri::Builder::default()
         .plugin(tauri_plugin_shell::init())
         .plugin(tauri_plugin_opener::init())
-        .plugin(tauri_plugin_updater::Builder::new().build())
         .plugin(tauri_plugin_global_shortcut::Builder::new().build())
         .plugin(tauri_plugin_window_state::Builder::new().build())
         .plugin(tauri_plugin_dialog::init())
@@ -127,6 +176,9 @@ fn main() {
             // C1① — semi-automatic update check (GitHub latest → open page)
             commands_surface::check_app_update,
             commands_surface::open_release_page,
+            // Batch-3 follow-up — export-diagnostics bundle (local logs +
+            // crash reports + bundled `shannon doctor --json --deep` zip).
+            commands_diagnostics::export_diagnostics,
             // 2026-09-25 open pipeline (docs/plans/2026-09-25-desktop-chat-ui-
             // open-and-artifact-design.md §4 P0-A / P1-D / P1-E)
             commands_surface::open_external,
@@ -453,6 +505,10 @@ fn main() {
                     preview_commands::shutdown_on_exit(&state);
                     // P1-5 D — PTY process trees must never outlive the app.
                     terminal_commands::shutdown_on_exit(&state);
+                    // Audit P1-5 — the supervised gateway must not outlive
+                    // the app either (stop() is idempotent; the tray Quit
+                    // path may already have stopped it).
+                    commands_connections::shutdown_gateway_on_exit(&state);
                 }
                 // 主窗口关闭 = 退出应用 (existing semantic, P1-1): persist the
                 // open-session list for next-launch restore, then close the
@@ -654,22 +710,11 @@ fn main() {
                     let _ = app.emit("focus-input", ());
                 });
 
-            // Listen for check-updates events from frontend
-            let handle = app.handle().clone();
-            let _ = app.listen("check-updates", move |_event| {
-                let handle = handle.clone();
-                tauri::async_runtime::spawn(async move {
-                    if let Ok(Some(update_info)) = handle.updater()?.check().await {
-                        let payload = serde_json::json!({
-                            "version": update_info.version,
-                            "date": update_info.date.map(|d| d.to_string()),
-                            "body": update_info.body
-                        });
-                        let _ = handle.emit("update-available", payload);
-                    }
-                    Ok::<(), tauri_plugin_updater::Error>(())
-                });
-            });
+            // B1-15 (review decision 6): the updater plugin and its
+            // check-updates wiring are removed — the placeholder pubkey +
+            // third-party endpoint were a half-enabled state that could
+            // never deliver a verified update. Reintroduce with the release
+            // pipeline when it exists.
 
             // System tray configuration.
             //
@@ -682,21 +727,13 @@ fn main() {
             let show_item = MenuItemBuilder::with_id("show", "Show Shannon").build(app)?;
             let new_session_item =
                 MenuItemBuilder::with_id("new-session", "New Session").build(app)?;
-            let check_updates_item =
-                MenuItemBuilder::with_id("check-updates", "Check for Updates").build(app)?;
             let status_item = MenuItemBuilder::with_id("status", initial_label.clone())
                 .enabled(false)
                 .build(app)?;
             let quit_item = MenuItemBuilder::with_id("quit", "Quit").build(app)?;
 
             let menu = MenuBuilder::new(app)
-                .items(&[
-                    &status_item,
-                    &show_item,
-                    &new_session_item,
-                    &check_updates_item,
-                    &quit_item,
-                ])
+                .items(&[&status_item, &show_item, &new_session_item, &quit_item])
                 .build()?;
 
             let _tray = TrayIconBuilder::with_id(TRAY_ID)
@@ -714,11 +751,12 @@ fn main() {
                         // Trigger new session via event
                         let _ = app.emit("new-session", ());
                     }
-                    "check-updates" => {
-                        // Trigger update check via event
-                        let _ = app.emit("check-updates", ());
-                    }
                     "quit" => {
+                        // Audit P1-5: a tray Quit must also stop the managed
+                        // gateway — `app.exit(0)` alone orphaned the child.
+                        if let Some(state) = app.try_state::<commands::AppState>() {
+                            commands_connections::shutdown_gateway_on_exit(&state);
+                        }
                         app.exit(0);
                     }
                     _ => (),
@@ -756,57 +794,9 @@ fn main() {
                 },
             );
 
-            // Auto-update check on startup (review §P1-12). The tauri.conf.json
-            // `updater.pubkey` is a placeholder until the release pipeline
-            // injects the real `tauri signer generate` output; while it is a
-            // placeholder every signed-update check fails verification. We
-            // detect the placeholder at startup and surface it loudly so the
-            // tray "Check for updates" action and the auto-update check both
-            // report the configuration gap rather than silently no-op.
-            const PLACEHOLDER_PUBKEY: &str =
-                "UPDATER_PUBKEY_PLACEHOLDER_REPLACE_WITH_TAURI_SIGNER_GENERATE_OUTPUT";
-            let configured_pubkey = app
-                .config()
-                .plugins
-                .0
-                .get("updater")
-                .and_then(|p| p.get("pubkey"))
-                .and_then(|v| v.as_str())
-                .unwrap_or_default();
-            let pubkey_is_placeholder =
-                configured_pubkey == PLACEHOLDER_PUBKEY || configured_pubkey.is_empty();
-            if pubkey_is_placeholder {
-                tracing::error!(
-                    "updater.pubkey is unconfigured (placeholder string or empty); \
-                     auto-update will not work. Generate one with `tauri signer \
-                     generate` and inject it into the release pipeline before \
-                     shipping to users."
-                );
-                let payload = serde_json::json!({
-                    "version": "0.0.0-unconfigured",
-                    "date": None::<String>,
-                    "body": "Auto-update is not configured for this build. \
-                             Run `tauri signer generate` and inject the public \
-                             key into the release pipeline.",
-                });
-                let _ = app.handle().emit("update-available", payload);
-                return Ok(());
-            }
-            let handle = app.handle().clone();
-            tauri::async_runtime::spawn(async move {
-                if let Ok(Some(update_info)) = handle.updater()?.check().await {
-                    // Emit update-available event for frontend
-                    let payload = serde_json::json!({
-                        "version": update_info.version,
-                        "date": update_info.date.map(|d| d.to_string()),
-                        "body": update_info.body
-                    });
-                    let _ = handle.emit("update-available", payload);
-                } else {
-                    tracing::info!("No updates available or update check failed");
-                }
-                Ok::<(), tauri_plugin_updater::Error>(())
-            });
+            // B1-15: the startup auto-update check went away with the
+            // updater plugin (decision 6 — placeholder pubkey made every
+            // signed-update check fail verification anyway).
 
             Ok(())
         })
@@ -875,21 +865,13 @@ fn rebuild_tray_menu(
 
     let show_item = MenuItemBuilder::with_id("show", "Show Shannon").build(app)?;
     let new_session_item = MenuItemBuilder::with_id("new-session", "New Session").build(app)?;
-    let check_updates_item =
-        MenuItemBuilder::with_id("check-updates", "Check for Updates").build(app)?;
     let status_item = MenuItemBuilder::with_id("status", label)
         .enabled(false)
         .build(app)?;
     let quit_item = MenuItemBuilder::with_id("quit", "Quit").build(app)?;
 
     let menu = MenuBuilder::new(app)
-        .items(&[
-            &status_item,
-            &show_item,
-            &new_session_item,
-            &check_updates_item,
-            &quit_item,
-        ])
+        .items(&[&status_item, &show_item, &new_session_item, &quit_item])
         .build()?;
 
     tray.set_menu(Some(menu))?;

@@ -21,7 +21,7 @@
 //!
 //! 1. if `capabilities/*.json` exists, build **minimal** ACL manifests for
 //!    the core plugins those capabilities reference (currently
-//!    `core:event` + `core:window`),
+//!    `core:event` + `core:window` + `core:app` + `core:path`),
 //! 2. validate the capabilities against those manifests (fail-fast, same
 //!    semantics as `tauri-build`'s `validate_capabilities`),
 //! 3. write `acl-manifests.json` + `capabilities.json` into `OUT_DIR`,
@@ -208,6 +208,77 @@ mod shannon_desktop_build {
         m
     }
 
+    /// Minimal manifest for the `core:app` plugin: only `allow-version`
+    /// (the Advanced settings card shows the real app version — the old fake
+    /// logs modal hardcoded one). The IPC command is `plugin:app|version`.
+    fn core_app_manifest() -> Manifest {
+        let mut m = Manifest {
+            default_permission: None,
+            permissions: BTreeMap::new(),
+            permission_sets: BTreeMap::new(),
+            global_scope_schema: None,
+        };
+        m.permissions.insert(
+            "allow-version".to_string(),
+            Permission {
+                version: None,
+                identifier: "allow-version".to_string(),
+                description: Some(
+                    "This permission allows reading the app's version string.".to_string(),
+                ),
+                commands: Commands {
+                    allow: vec!["version".to_string()],
+                    deny: vec![],
+                },
+                scope: Default::default(),
+                platforms: None,
+            },
+        );
+        m
+    }
+
+    /// Minimal manifest for the `core:path` plugin: only the two verbs the
+    /// frontend needs to locate the Shannon state directory for the
+    /// 「open log directory」entry — `allow-home-dir` (`plugin:path|homedir`)
+    /// and `allow-join` (`plugin:path|join`). Read-only path helpers with no
+    /// filesystem access of their own.
+    fn core_path_manifest() -> Manifest {
+        let mut m = Manifest {
+            default_permission: None,
+            permissions: BTreeMap::new(),
+            permission_sets: BTreeMap::new(),
+            global_scope_schema: None,
+        };
+        for (name, cmd, desc) in [
+            (
+                "allow-home-dir",
+                "homedir",
+                "This permission allows reading the user's home directory path.",
+            ),
+            (
+                "allow-join",
+                "join",
+                "This permission allows joining path segments.",
+            ),
+        ] {
+            m.permissions.insert(
+                name.to_string(),
+                Permission {
+                    version: None,
+                    identifier: name.to_string(),
+                    description: Some(desc.to_string()),
+                    commands: Commands {
+                        allow: vec![cmd.to_string()],
+                        deny: vec![],
+                    },
+                    scope: Default::default(),
+                    platforms: None,
+                },
+            );
+        }
+        m
+    }
+
     /// Loads the application-level ACL manifest (review §P2-21) from
     /// `acl/app-permissions.json`. The file uses tauri-utils'
     /// [`PermissionFile`] layout (the same shape the tauri CLI's
@@ -264,6 +335,8 @@ mod shannon_desktop_build {
         let mut manifests: BTreeMap<String, Manifest> = BTreeMap::new();
         manifests.insert("core:event".into(), core_event_manifest());
         manifests.insert("core:window".into(), core_window_manifest());
+        manifests.insert("core:app".into(), core_app_manifest());
+        manifests.insert("core:path".into(), core_path_manifest());
         manifests.insert("dialog".into(), dialog_manifest());
         // review §P2-21 — the application manifest. Once this key exists in
         // the emitted acl-manifests.json, `generate_context!` bakes

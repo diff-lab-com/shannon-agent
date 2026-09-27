@@ -47,6 +47,9 @@ pub mod compact;
 pub mod config_dump;
 pub mod config_persist;
 pub mod config_watcher;
+/// Data-directory version marker + downgrade gate (Phase 1) — meta.json,
+/// startup compatibility check, and the migration-backup primitive.
+pub mod data_meta;
 pub mod diagnostics;
 pub mod extract_memories;
 pub mod git_operation_tracking;

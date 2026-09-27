@@ -38,7 +38,7 @@ describe('TaskDetailDrawer edit mode', () => {
   it('renders read-only fields by default', () => {
     render(<TaskDetailDrawer task={baseTask} onClose={() => {}} />)
     expect(screen.getByText('Test Task')).toBeInTheDocument()
-    expect(screen.getByText('normal')).toBeInTheDocument() // priority
+    expect(screen.getByText('Normal')).toBeInTheDocument() // priority — B6-36: via status.*
     expect(screen.getByText('lead')).toBeInTheDocument() // assignee
     expect(screen.getByText('Blocked by:')).toBeInTheDocument()
     expect(screen.getByText('t0')).toBeInTheDocument()
@@ -92,8 +92,9 @@ describe('TaskDetailDrawer edit mode', () => {
     fireEvent.click(screen.getByText('Edit'))
     fireEvent.change(screen.getByLabelText('Priority'), { target: { value: 'critical' } })
     fireEvent.click(screen.getByText('Cancel'))
-    // Back to read-only; priority text should show original 'normal'
-    expect(screen.getByText('normal')).toBeInTheDocument()
+    // Back to read-only; priority text should show the original translated
+    // 'Normal' (status.normal)
+    expect(screen.getByText('Normal')).toBeInTheDocument()
     expect(screen.queryByText('Save')).not.toBeInTheDocument()
   })
 

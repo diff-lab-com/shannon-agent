@@ -94,8 +94,9 @@ describe('DiffDialog — Apply flow (Day 4-5)', () => {
     await waitFor(() => expect(api.saveTextFile).toHaveBeenCalledTimes(1))
     const [path, content] = vi.mocked(api.saveTextFile).mock.calls[0]
     expect(path).toBe('src/app.ts')
-    // All-accept → merged content equals new_content (plus trailing newline).
-    expect(content).toBe(sampleDiff.new_content + '\n')
+    // All-accept → merged content equals new_content verbatim (B0 P0-2:
+    // trailing-newline semantics follow the new side, no forced \n).
+    expect(content).toBe(sampleDiff.new_content)
     expect(onClose).toHaveBeenCalledTimes(1)
   })
 

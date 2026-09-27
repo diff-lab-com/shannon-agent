@@ -21,8 +21,9 @@ import type { ProvidersFile } from '@/types'
 export const WELCOME_SEEN_KEY = 'shannon.hasSeenWelcome'
 
 // Two-step onboarding (UI audit §3.1: competitors onboard in 2 screens).
-// Screen 1 combines task + model; tools use the task's recommended defaults
-// (prefilled on advance — ToolsStep remains available from Settings).
+// Screen 1 combines task + model; the task's recommended tools are shown
+// on the Done step as honest copy (B5-33, decision 4-B: Welcome never
+// flips tool config — that stays in Settings).
 const WELCOME_STEP_LABELS = ['welcome.step.task', 'welcome.step.done']
 
 export function shouldShowWelcome(loading: boolean, hasProvider: boolean): boolean {
@@ -47,7 +48,6 @@ export default function Welcome() {
   const [provider, setProvider] = useState<string>('anthropic')
   const [saving, setSaving] = useState(false)
   const [pickedDir, setPickedDir] = useState<string | null>(null)
-  const [enabledTools, setEnabledTools] = useState<Record<string, boolean>>({})
   const [devMode, setDevMode] = useState(false)
   // True once a usable provider was detected from the environment (API key
   // present, or a local engine like Ollama that needs no key).
@@ -70,7 +70,9 @@ export default function Welcome() {
   // gate (previously this dead-ended env-key users on non-recommended
   // providers and forced manual API-key entry).
   const canAdvanceFromModel = providerSaved || envProviderReady
-  const enabledToolCount = Object.values(enabledTools).filter(Boolean).length
+  // Decision 4-B: the summary states a recommendation, not a fact — tools
+  // are enabled in Settings, never from the Welcome flow.
+  const recommendedToolCount = currentTask.tools.length
 
   // On mount, probe the shell for a pre-configured provider so the user can
   // skip the API-key entry step. Only fires once — the ref guards against
@@ -108,10 +110,6 @@ export default function Welcome() {
       if (active) {
         setProvider(active.kind)
       }
-      // Pre-check tools recommended for this task so the user can opt in/out.
-      const initial: Record<string, boolean> = {}
-      for (const t of currentTask.tools) initial[t] = true
-      setEnabledTools(prev => ({ ...initial, ...prev }))
       setShowAddProviderModal(false)
       setProviderSaved(true)
       setStep(1)
@@ -157,11 +155,6 @@ export default function Welcome() {
 
   const advanceFromModel = () => {
     if (!canAdvanceFromModel) return
-    // Pre-check tools recommended for this task so the user can opt in/out
-    // later from Settings — the dedicated tools screen is gone (2-step flow).
-    const initial: Record<string, boolean> = {}
-    for (const t of currentTask.tools) initial[t] = true
-    setEnabledTools(prev => ({ ...initial, ...prev }))
     setStep(1)
   }
 
@@ -252,7 +245,7 @@ export default function Welcome() {
             <DoneStep
               task={task}
               provider={provider}
-              enabledToolCount={enabledToolCount}
+              recommendedToolCount={recommendedToolCount}
               pickedDir={pickedDir}
               fallbackWorkingDir={config?.working_dir ?? null}
               devMode={devMode}

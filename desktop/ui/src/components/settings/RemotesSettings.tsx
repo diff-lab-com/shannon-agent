@@ -45,10 +45,12 @@ function RemotesSettings(): React.JSX.Element {
 
   async function reload(): Promise<void> {
     try {
+      // P1-16: the list response now carries the persisted default target,
+      // so a reload reflects reality instead of the previous explicit no-op
+      // (`setDefaultTarget((prev) => prev ?? null)`).
       const list = await api.remoteListTargets()
-      setTargets(list)
-      // The default is stored in remotes.toml; surface it if present.
-      setDefaultTarget((prev) => prev ?? null)
+      setTargets(list.targets)
+      setDefaultTarget(list.defaultTarget)
       setLoaded(true)
     } catch (e) {
       toastError('remotes: load failed', e)
@@ -273,6 +275,18 @@ function AddRemoteDialog({ open, onClose, onAdded }: AddRemoteDialogProps): Reac
   const [detail, setDetail] = useState('')
   const [workspaceDir, setWorkspaceDir] = useState('')
   const [busy, setBusy] = useState(false)
+  // P2: typed edits must not vanish on a stray Esc / backdrop click —
+  // once anything is filled in, closing goes through a discard confirm.
+  const dirty = name.trim() !== '' || detail.trim() !== '' || workspaceDir.trim() !== ''
+  const [confirmDiscard, setConfirmDiscard] = useState(false)
+
+  function requestClose(): void {
+    if (dirty) {
+      setConfirmDiscard(true)
+      return
+    }
+    onClose()
+  }
 
   function reset(): void {
     setName('')
@@ -310,7 +324,9 @@ function AddRemoteDialog({ open, onClose, onAdded }: AddRemoteDialogProps): Reac
   return (
     <Modal
       open={open}
-      onClose={onClose}
+      onClose={requestClose}
+      closeOnEscape={!dirty}
+      closeOnBackdrop={!dirty}
       title={t('settings.remotes.dialogTitle')}
       description={t('settings.remotes.dialogDescription')}
     >
@@ -358,13 +374,24 @@ function AddRemoteDialog({ open, onClose, onAdded }: AddRemoteDialogProps): Reac
         </label>
       </ModalBody>
       <ModalFooter>
-        <Button variant="ghost" onClick={onClose}>
+        <Button variant="ghost" onClick={requestClose}>
           {t('settings.remotes.cancel')}
         </Button>
         <Button disabled={!valid || busy} onClick={() => void submit()} data-testid="remotes-dialog-submit">
           {busy ? t('settings.remotes.saving') : t('settings.remotes.save')}
         </Button>
       </ModalFooter>
+
+      <ConfirmDialog
+        open={confirmDiscard}
+        onCancel={() => setConfirmDiscard(false)}
+        onConfirm={onClose}
+        title={t('ui.modal.discard.title')}
+        message={t('ui.modal.discard.message')}
+        confirmLabel={t('ui.modal.discard.confirm')}
+        cancelLabel={t('ui.modal.discard.cancel')}
+        destructive
+      />
     </Modal>
   )
 }
