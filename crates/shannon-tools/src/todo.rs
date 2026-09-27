@@ -26,10 +26,21 @@ pub enum TodoStatus {
     Completed,
 }
 
+/// Serde default for [`TodoItem::task_id`] — an id-less item still gets a
+/// stable identity for the upsert-by-id store.
+fn generate_task_id() -> String {
+    Uuid::new_v4().to_string()
+}
+
 /// Enhanced Todo item with task management capabilities
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct TodoItem {
-    /// Unique ID (UUID)
+    /// Unique ID (UUID). The declared input schema requires `id`, while the
+    /// field here is `task_id` — accept both spellings and default to a fresh
+    /// UUID when a model omits it, instead of rejecting the whole write with
+    /// `missing field task_id` (which dead-ended MiniMax-M3's turns in
+    /// DeepSWE mm3-smoke01).
+    #[serde(alias = "id", default = "generate_task_id")]
     pub task_id: String,
 
     /// Todo content/description
@@ -1588,5 +1599,39 @@ mod tests {
         assert!(block.contains("## Current Task List"));
         assert!(block.contains("First task"));
         assert!(block.contains("Second task"));
+    }
+
+    /// Regression (DeepSWE mm3-smoke01, 2026-09-27): the declared input
+    /// schema requires `id` on each todo item, but the struct field is
+    /// `task_id` with no alias — a schema-compliant model (MiniMax-M3)
+    /// sent `id` and every write failed with `missing field task_id`.
+    /// Deserialization must accept the schema-declared `id`, the legacy
+    /// `task_id`, and their absence (fresh UUID), never dead-ending the
+    /// model's turn.
+    #[tokio::test]
+    async fn todowrite_accepts_schema_declared_id_and_missing_task_id() {
+        let store: TaskStore = Arc::new(RwLock::new(HashMap::new()));
+        let tool = todowrite_on(store.clone());
+
+        // Exactly what the declared schema advertises (`id`), plus an item
+        // with no id at all.
+        let input = json!({
+            "todos": [
+                {"id": "1", "content": "explore repo", "status": "pending"},
+                {"content": "write tests", "status": "in_progress"}
+            ]
+        });
+        let output = tool
+            .execute(input)
+            .await
+            .expect("schema-declared `id` and missing task_id must both parse");
+
+        assert!(!output.is_error);
+        let ids = store_ids(&store);
+        assert_eq!(ids.len(), 2, "both items must be stored");
+        assert!(
+            ids.contains(&"1".to_string()),
+            "the schema-declared id must be preserved for upserts"
+        );
     }
 }

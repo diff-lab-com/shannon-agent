@@ -2071,3 +2071,76 @@ async fn secret_guard_system_prompt_redacted_on_wire() {
         "system block structure (cache breakpoints) must be preserved: {body}"
     );
 }
+
+/// Regression (DeepSWE mm3-smoke01 `abs-module-cache-flags`, 2026-09-27):
+/// MiniMax-M3 streamed a stray `</think>` close tag as visible text, then
+/// narration text, then a tool_call whose arguments never arrived (empty raw
+/// input at ContentBlockStop → `Failed to parse tool arguments: EOF …`). The
+/// parse-error recovery gates originally required empty assistant text, so
+/// the tag/noise and the narration masqueraded as a final answer: the query
+/// ended "successfully" after one turn (turns_used=0, exit 0) and the task
+/// was abandoned — empty patch, reward 0. The loop must instead persist the
+/// assistant(text? + tool_use {}) → user(tool_result, is_error) pairing and
+/// issue a second request so the model can retry with corrected JSON — a
+/// pending tool request outranks any accompanying narration.
+#[tokio::test]
+async fn parse_error_recovery_survives_stray_think_close_tag_noise() {
+    let responder = std::sync::Arc::new(|request_index: usize| -> String {
+        if request_index == 0 {
+            // Turn 1: a text block carrying the stray close tag plus real
+            // narration (the smoke02 live shape), then a tool_use block with
+            // no input_json_delta at all.
+            let sse = [
+                    r#"event: message_start"#,
+                    r#"data: {"type":"message_start","message":{"id":"msg_mm3_t1","role":"assistant","content":[],"model":"test-model","stop_reason":null,"usage":{"input_tokens":10,"output_tokens":1}}}"#,
+                    r#"event: content_block_start"#,
+                    r#"data: {"type":"content_block_start","index":0,"content_block":{"type":"text","text":""}}"#,
+                    r#"event: content_block_delta"#,
+                    "data: {\"type\":\"content_block_delta\",\"index\":0,\"delta\":{\"type\":\"text_delta\",\"text\":\"</think>\\n\\n\"}}",
+                    r#"event: content_block_delta"#,
+                    "data: {\"type\":\"content_block_delta\",\"index\":0,\"delta\":{\"type\":\"text_delta\",\"text\":\"I'll start by exploring the repository structure to understand the codebase.\"}}",
+                    r#"event: content_block_stop"#,
+                    r#"data: {"type":"content_block_stop","index":0}"#,
+                    r#"event: content_block_start"#,
+                    r#"data: {"type":"content_block_start","index":1,"content_block":{"type":"tool_use","id":"toolu_mm3_1","name":"no_such_tool","input":{}}}"#,
+                    r#"event: content_block_stop"#,
+                    r#"data: {"type":"content_block_stop","index":1}"#,
+                    r#"event: message_delta"#,
+                    r#"data: {"type":"message_delta","delta":{"stop_reason":"tool_use"},"usage":{"input_tokens":10,"output_tokens":5}}"#,
+                    r#"event: message_stop"#,
+                    r#"data: {"type":"message_stop"}"#,
+                ]
+                .join("\n\n");
+            a8_http_response("200 OK", "text/event-stream", &sse)
+        } else {
+            a8_text_sse("recovered")
+        }
+    });
+    let server = TurnRetryMockServer::start(responder);
+    let (completed, failed_error, _progress, _warnings, _history) = a8_run_query(&server).await;
+    assert!(
+        failed_error.is_empty(),
+        "query failed instead of recovering: {failed_error}"
+    );
+    assert!(completed, "query must complete after the model retries");
+    let bodies = server.bodies();
+    assert_eq!(
+        bodies.len(),
+        2,
+        "expected a second request after the malformed tool call, got {}",
+        bodies.len()
+    );
+    let second = &bodies[1];
+    assert!(
+        second.contains("exploring the repository structure"),
+        "second request must preserve the assistant narration next to the tool_use: {second}"
+    );
+    assert!(
+        second.contains(r#""input":{}"#),
+        "second request must carry the synthetic {{}}-input tool_use: {second}"
+    );
+    assert!(
+        second.contains("Malformed tool input"),
+        "second request must carry the error tool_result so the model can retry: {second}"
+    );
+}

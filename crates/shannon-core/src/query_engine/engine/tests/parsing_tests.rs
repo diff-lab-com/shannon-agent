@@ -502,3 +502,38 @@ fn token_budget_nudge_fires_across_three_turns() {
         "must report the third turn's cumulative total; got: {text}"
     );
 }
+
+/// Regression (DeepSWE mm3-smoke01, 2026-09-27): MiniMax-M3 streams its
+/// reasoning via a separate channel and still emits the literal `</think>`
+/// in the content stream. An unmatched close tag must be swallowed —
+/// leaking it into the visible answer poisoned `assistant_text` and
+/// defeated both parse-error recovery gates (the query ended after one
+/// turn with the task abandoned).
+#[test]
+fn stream_splitter_swallows_stray_close_tag_outside_think_block() {
+    // The exact production payload: close tag as the whole visible stream.
+    let mut s = ThinkStreamSplitter::default();
+    let (thinking, visible) = feed_all(&mut s, &["</think>\n\n"]);
+    assert!(thinking.is_empty());
+    assert!(
+        visible.trim().is_empty(),
+        "stray close tag must not leak as substantive visible text: {visible:?}"
+    );
+
+    // Mixed: noise tag plus a real answer in one chunk.
+    let mut s = ThinkStreamSplitter::default();
+    let (_, visible) = feed_all(&mut s, &["a </think> b"]);
+    assert_eq!(visible, "a  b");
+
+    // Close tag split across the chunk boundary.
+    let mut s = ThinkStreamSplitter::default();
+    let (_, visible) = feed_all(&mut s, &["hello </thi", "nk> world"]);
+    assert_eq!(visible, "hello  world");
+
+    // A dangling close-tag fragment at stream end is dropped too; real
+    // text before it is kept.
+    let mut s = ThinkStreamSplitter::default();
+    let (thinking, visible) = feed_all(&mut s, &["answer </thi"]);
+    assert!(thinking.is_empty());
+    assert_eq!(visible, "answer ");
+}
