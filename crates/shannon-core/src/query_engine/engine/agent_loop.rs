@@ -2013,7 +2013,9 @@ impl QueryEngine {
                                                         tool_results.push(ToolResultEntry {
                                                             tool_use_id: id.clone(),
                                                             content: format!(
-                                                                "Malformed tool input: {e}"
+                                                                "Malformed tool input: {e}. \
+                                                                 Re-emit the tool call with a \
+                                                                 complete JSON arguments object."
                                                             ),
                                                             is_error: true,
                                                             metadata: Default::default(),
@@ -2264,7 +2266,9 @@ impl QueryEngine {
                                                         tool_results.push(ToolResultEntry {
                                                             tool_use_id: id.clone(),
                                                             content: format!(
-                                                                "Malformed tool input: {e}"
+                                                                "Malformed tool input: {e}. \
+                                                                 Re-emit the tool call with a \
+                                                                 complete JSON arguments object."
                                                             ),
                                                             is_error: true,
                                                             metadata: Default::default(),
@@ -3474,23 +3478,47 @@ impl QueryEngine {
                                                 break;
                                             } else {
                                                 // Parse-error recovery: model emitted a malformed
-                                                // tool_call (no text content, no parsed tool inputs,
-                                                // but a synthetic tool_result was queued and a
-                                                // null-input ToolUse block with the real tool_use_id
-                                                // was captured). Save the assistant message so the
-                                                // next API call has the required
-                                                // assistant(tool_use) → user(tool_result) sequence;
-                                                // the agent loop drains tool_results on the next
-                                                // iteration and the model retries with corrected JSON.
+                                                // tool_call — no parsed tool inputs, but a
+                                                // synthetic tool_result was queued and a
+                                                // null-input ToolUse block with the real
+                                                // tool_use_id was captured. Save the assistant
+                                                // message so the next API call has the required
+                                                // assistant(tool_use) → user(tool_result)
+                                                // sequence; the agent loop drains tool_results
+                                                // on the next iteration and the model retries
+                                                // with corrected JSON.
+                                                //
+                                                // The gate does NOT consult the accompanying
+                                                // text: narration next to a tool request is not
+                                                // a final answer, so any queued synthetic
+                                                // tool_result outranks it. Gating on text
+                                                // emptiness/substance let a stray think close
+                                                // tag plus narration (MiniMax-M3, DeepSWE
+                                                // mm3-smoke01/smoke02) masquerade as a final
+                                                // answer and abandon the task after one turn.
+                                                // Output-token TRUNCATIONS are the one exception:
+                                                // there the truncation machinery owns the
+                                                // continuation (it pairs the flushed results
+                                                // with its own continuation prompt), so this
+                                                // recovery must not steal it.
                                                 //
                                                 // This was the silent-task-loss root cause for 3/50
                                                 // SWE-bench batch-3 tasks (matplotlib-23314,
                                                 // sympy-12481, django-10914, all minimax provider).
-                                                if assistant_text.is_empty()
-                                                    && !assistant_tool_uses.is_empty()
+                                                if !assistant_tool_uses.is_empty()
                                                     && !tool_results.is_empty()
+                                                    && !is_truncation_stop(
+                                                        assistant_stop_reason.as_deref(),
+                                                    )
                                                 {
                                                     let mut blocks: Vec<ContentBlock> = Vec::new();
+                                                    if !assistant_text.is_empty() {
+                                                        blocks.push(ContentBlock::Text {
+                                                            text: std::mem::take(
+                                                                &mut assistant_text,
+                                                            ),
+                                                        });
+                                                    }
                                                     blocks.append(&mut assistant_tool_uses);
                                                     conversation.messages.push(Message {
                                                         role: "assistant".to_string(),
@@ -4130,26 +4158,39 @@ impl QueryEngine {
                         recovery::clear_stream_idle_override(&client);
 
                         // Parse-error recovery: when the model emitted a malformed
-                        // tool_call (no text content, no successfully-parsed tool
-                        // inputs, but a synthetic tool_result was queued and a
+                        // tool_call (no substantive text content, no successfully-parsed
+                        // tool inputs, but a synthetic tool_result was queued and a
                         // null-input ToolUse block with the real tool_use_id was
                         // captured), persist the assistant message so the next API
                         // call has the required assistant(tool_use) →
                         // user(tool_result) sequence. The agent loop drains
                         // tool_results on the next iteration, the model sees
                         // "Malformed tool input" as a tool_result, and retries
-                        // with corrected JSON.
+                        // with corrected JSON. The gate does NOT consult the
+                        // accompanying text: narration next to a tool request is
+                        // not a final answer, and any TextDelta sets
+                        // `has_content` anyway — both a stray think close tag and
+                        // real narration (MiniMax-M3, DeepSWE mm3-smoke01/smoke02)
+                        // defeated the old emptiness gates and the task was
+                        // abandoned after one turn.
                         //
                         // This was the silent-task-loss root cause for 3/50
                         // SWE-bench batch-3 tasks (matplotlib-23314, sympy-12481,
-                        // django-10914, all minimax provider).
-                        if !has_content
-                            && tool_inputs.is_empty()
+                        // django-10914, all minimax provider). Output-token
+                        // truncations are excluded — the truncation machinery
+                        // owns their continuation.
+                        if tool_inputs.is_empty()
                             && !assistant_tool_uses.is_empty()
                             && !tool_results.is_empty()
                             && phase != StreamingPhase::Finalized
+                            && !is_truncation_stop(assistant_stop_reason.as_deref())
                         {
                             let mut blocks: Vec<ContentBlock> = Vec::new();
+                            if !assistant_text.is_empty() {
+                                blocks.push(ContentBlock::Text {
+                                    text: std::mem::take(&mut assistant_text),
+                                });
+                            }
                             blocks.append(&mut assistant_tool_uses);
                             conversation.messages.push(Message {
                                 role: "assistant".to_string(),
