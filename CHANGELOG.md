@@ -4,6 +4,53 @@ All notable changes to Shannon Code are documented here. Entries are grouped by 
 
 ## [Unreleased] — §4.14 W1-P2 · OTLP bridge + full RedactionPolicy + desktop Turn Timeline
 
+### Batch 3 — data version gate (Phase 1) + desktop local logging (2026-09-27)
+
+Implements the two approved items from the 2026-09-27 release/productization
+audit's batch 3.
+
+**Added — data directory version marker & downgrade gate (Phase 1)**
+
+- New `~/.shannon/meta.json` marker (`shannon_core::data_meta`) recording the
+  version that last wrote the data directory plus a per-store schema map
+  (seeded with `events`). The stamp never moves backwards: a downgrade does
+  not clobber a newer marker, so the gate keeps protecting across a
+  downgrade + re-upgrade cycle.
+- CLI and `shannon serve` now **refuse to run** when the marker was written
+  by a newer version (clear error, `SHANNON_ALLOW_DOWNGRADE=1` overrides).
+  `doctor` and `update` are exempt on purpose — they are the tools you reach
+  for on a gated install. The desktop logs the mismatch loudly (tracing
+  error) and continues; the marker still records the running version only
+  when it is not a downgrade.
+- Comparison rules: `(major, minor, patch)` triples, with release-data vs
+  prerelease-binary of the same triple counted as a downgrade; unparseable
+  versions never gate (an unknown scheme must not brick an install).
+- `backup_before_migration`: copies store files/dirs into
+  `~/.shannon/backups/<from>-to-<to>-<ts>/`. No migration calls it yet — it
+  exists so the first schema migration wires a backup instead of inventing
+  one. **Wiring the marker into any future breaking store change is now a
+  release requirement.**
+- `shannon doctor --deep`: sweeps data-directory integrity — meta.json
+  state (with downgrade detection), a line-by-line JSON parse of every
+  session's `events.jsonl` (capped at 2000 files, cap reported), and
+  inbox.db `PRAGMA integrity_check` (new `InboxStore::integrity_check`).
+  Reported in both the human and `--json` output; `deep` is only present in
+  JSON when requested.
+
+**Added — desktop local file logging + panic hook**
+
+- The desktop now writes a daily-rotated `~/.shannon/logs/shannon-desktop.log`
+  (WARN and above) in addition to stderr — `shannon desktop` detaches from
+  its terminal, so stderr alone meant production runs left nothing behind
+  for support. Every line passes through the session-log redaction policy
+  before touching disk; rotated files older than 7 days are pruned on
+  startup (crash reports: 30 days).
+- A global panic hook writes a redacted
+  `~/.shannon/logs/crash-<ts>-<pid>.log` (version, platform, panic message,
+  forced backtrace) before delegating to the previous hook. Everything
+  stays local; nothing is uploaded — sharing a log or crash file with
+  support remains an explicit user action.
+
 ### Memory / docs / retrieval hardening (2026-09-25)
 
 Follow-ups from the 2026-09-25 memory / document-management / retrieval
