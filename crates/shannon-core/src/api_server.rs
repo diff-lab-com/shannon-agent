@@ -2386,6 +2386,7 @@ mod tests {
             });
             tee.record_query_event(&QueryEvent::Completed {
                 query_id: Uuid::new_v4(),
+                outcome: Default::default(),
             });
             tee.close();
         }

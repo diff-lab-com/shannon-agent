@@ -866,7 +866,15 @@ impl QueryEngine {
                         }
                     );
                     publish_stop_trigger(&session_bus, tool_results.len());
-                    send_event!(tx, QueryEvent::Completed { query_id });
+                    // Turn budget exhausted — reported honestly so headless
+                    // consumers can distinguish it from a real answer.
+                    send_event!(
+                        tx,
+                        QueryEvent::Completed {
+                            query_id,
+                            outcome: QueryOutcome::TurnBudgetExhausted,
+                        }
+                    );
 
                     break;
                 }
@@ -3531,6 +3539,24 @@ impl QueryEngine {
                                                 {
                                                     consecutive_malformed_tool_calls +=
                                                         assistant_tool_uses.len() as u32;
+                                                    // Turn bookkeeping must cover recovery
+                                                    // rounds: the headless driver counts
+                                                    // turns from TurnCompleted events, and
+                                                    // without this a recovery exit reported
+                                                    // turns_used=0 (work done was invisible).
+                                                    // Same argument shape as the tool path
+                                                    // above: turn_number is the completed
+                                                    // round, tokens are this turn's usage.
+                                                    send_event!(
+                                                        tx,
+                                                        QueryEvent::TurnCompleted {
+                                                            query_id,
+                                                            turn_number: turn + 1,
+                                                            tokens_used: (usage.input_tokens
+                                                                as u64)
+                                                                + (usage.output_tokens as u64),
+                                                        }
+                                                    );
                                                     if consecutive_malformed_tool_calls
                                                         < max_consecutive_malformed_calls
                                                     {
@@ -3614,7 +3640,10 @@ impl QueryEngine {
                                                     );
                                                     send_event!(
                                                         tx,
-                                                        QueryEvent::Completed { query_id }
+                                                        QueryEvent::Completed {
+                                                            query_id,
+                                                            outcome: QueryOutcome::NoProgress,
+                                                        }
                                                     );
                                                     return;
                                                 }
@@ -3864,7 +3893,10 @@ impl QueryEngine {
                                                     tool_results.len(),
                                                 );
                                                 let _ = tx
-                                                    .send(Ok(QueryEvent::Completed { query_id }))
+                                                    .send(Ok(QueryEvent::Completed {
+                                                        query_id,
+                                                        outcome: QueryOutcome::Completed,
+                                                    }))
                                                     .await;
 
                                                 return;
@@ -4038,7 +4070,13 @@ impl QueryEngine {
                                             }
                                         );
                                         publish_stop_trigger(&session_bus, tool_results.len());
-                                        send_event!(tx, QueryEvent::Completed { query_id });
+                                        send_event!(
+                                            tx,
+                                            QueryEvent::Completed {
+                                                query_id,
+                                                outcome: QueryOutcome::Completed,
+                                            }
+                                        );
 
                                         return;
                                     }
@@ -4165,7 +4203,13 @@ impl QueryEngine {
                                                     &session_bus,
                                                     tool_results.len(),
                                                 );
-                                                send_event!(tx, QueryEvent::Completed { query_id });
+                                                send_event!(
+                                                    tx,
+                                                    QueryEvent::Completed {
+                                                        query_id,
+                                                        outcome: QueryOutcome::Completed,
+                                                    }
+                                                );
 
                                                 return;
                                             }
@@ -4269,6 +4313,20 @@ impl QueryEngine {
                             && !is_truncation_stop(assistant_stop_reason.as_deref())
                         {
                             consecutive_malformed_tool_calls += assistant_tool_uses.len() as u32;
+                            // Turn bookkeeping must cover recovery rounds (same
+                            // rationale as the finalize-path gate): without a
+                            // TurnCompleted here the headless ledger reported
+                            // turns_used=0 on recovery exits. Post-stream there is
+                            // no per-request usage frame left, so the query
+                            // cumulative totals stand in for tokens_used.
+                            send_event!(
+                                tx,
+                                QueryEvent::TurnCompleted {
+                                    query_id,
+                                    turn_number: turn + 1,
+                                    tokens_used: total_input_tokens + total_output_tokens,
+                                }
+                            );
                             if consecutive_malformed_tool_calls < max_consecutive_malformed_calls {
                                 let mut blocks: Vec<ContentBlock> = Vec::new();
                                 if !assistant_text.is_empty() {
@@ -4337,7 +4395,13 @@ impl QueryEngine {
                                 }
                             );
                             publish_stop_trigger(&session_bus, tool_results.len());
-                            send_event!(tx, QueryEvent::Completed { query_id });
+                            send_event!(
+                                tx,
+                                QueryEvent::Completed {
+                                    query_id,
+                                    outcome: QueryOutcome::NoProgress,
+                                }
+                            );
 
                             return;
                         }
@@ -4416,7 +4480,16 @@ impl QueryEngine {
                                 }
                             );
                             publish_stop_trigger(&session_bus, tool_results.len());
-                            send_event!(tx, QueryEvent::Completed { query_id });
+                            // Nothing usable was produced — this is a no-progress
+                            // outcome, not a success (headless used to exit 0 here
+                            // with an empty patch).
+                            send_event!(
+                                tx,
+                                QueryEvent::Completed {
+                                    query_id,
+                                    outcome: QueryOutcome::NoProgress,
+                                }
+                            );
 
                             return;
                         }
@@ -4578,7 +4651,13 @@ impl QueryEngine {
                                 }
                             );
                             publish_stop_trigger(&session_bus, tool_results.len());
-                            send_event!(tx, QueryEvent::Completed { query_id });
+                            send_event!(
+                                tx,
+                                QueryEvent::Completed {
+                                    query_id,
+                                    outcome: QueryOutcome::Completed,
+                                }
+                            );
 
                             return;
                         }
@@ -4726,7 +4805,10 @@ impl QueryEngine {
                                                         );
                                                         send_event!(
                                                             tx,
-                                                            QueryEvent::Completed { query_id }
+                                                            QueryEvent::Completed {
+                                                                query_id,
+                                                                outcome: QueryOutcome::Completed,
+                                                            }
                                                         );
                                                     }
                                                 }
@@ -4780,7 +4862,13 @@ impl QueryEngine {
                                             }
                                         );
                                         publish_stop_trigger(&session_bus, tool_results.len());
-                                        send_event!(tx, QueryEvent::Completed { query_id });
+                                        send_event!(
+                                            tx,
+                                            QueryEvent::Completed {
+                                                query_id,
+                                                outcome: QueryOutcome::Completed,
+                                            }
+                                        );
                                         return;
                                     }
                                     Err(retry_err) => {
@@ -4917,7 +5005,13 @@ impl QueryEngine {
                                         }
                                     );
                                     publish_stop_trigger(&session_bus, tool_results.len());
-                                    send_event!(tx, QueryEvent::Completed { query_id });
+                                    send_event!(
+                                        tx,
+                                        QueryEvent::Completed {
+                                            query_id,
+                                            outcome: QueryOutcome::Completed,
+                                        }
+                                    );
 
                                     return;
                                 }

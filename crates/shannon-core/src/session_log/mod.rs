@@ -551,7 +551,8 @@ mod tests {
     fn test_mapping_unmapped_variants_return_none() {
         assert!(
             query_event_to_session_body(&QueryEvent::Completed {
-                query_id: query_id()
+                query_id: query_id(),
+                outcome: Default::default(),
             })
             .is_none()
         );

@@ -899,6 +899,7 @@ mod tests {
             });
             tee.record_query_event(&QueryEvent::Completed {
                 query_id: query_id(),
+                outcome: Default::default(),
             });
             tee.close();
         }
@@ -943,6 +944,7 @@ mod tests {
             });
             tee.record_query_event(&QueryEvent::Completed {
                 query_id: query_id(),
+                outcome: Default::default(),
             });
             tee.close();
         }

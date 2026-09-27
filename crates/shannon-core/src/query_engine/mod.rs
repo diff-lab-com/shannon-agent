@@ -32,7 +32,7 @@ pub use types::{
     CompressionStrategy, ConversationStats, CostEstimate, CostTracker, EffortLevel,
     GOAL_BLOCKED_MARKER, GOAL_COMPLETE_MARKER, GoalSpec, PERMISSION_REQUEST_CHANNEL_CAPACITY,
     PermissionRequest, QueryContext, QueryEngineConfig, QueryError, QueryEvent, QueryMetadata,
-    QueryStream, pricing_for_model_opt,
+    QueryOutcome, QueryStream, pricing_for_model_opt,
 };
 
 #[cfg(test)]
@@ -483,8 +483,46 @@ mod tests {
     #[test]
     fn test_query_event_completed() {
         let id = Uuid::new_v4();
-        let event = QueryEvent::Completed { query_id: id };
-        assert!(matches!(event, QueryEvent::Completed { query_id: _ }));
+        let event = QueryEvent::Completed {
+            query_id: id,
+            outcome: QueryOutcome::Completed,
+        };
+        assert!(matches!(event, QueryEvent::Completed { query_id: _, .. }));
+    }
+
+    /// The `outcome` field on `Completed` is an additive NDJSON/SSE change:
+    /// serde-defaulted so historical JSON without the field still
+    /// deserializes (as the historical `Completed` meaning), and new
+    /// outcomes serialize in snake_case wire form.
+    #[test]
+    fn test_completed_outcome_serde_default_and_wire_form() {
+        let id = Uuid::new_v4();
+        let old = format!(r#"{{"Completed":{{"query_id":"{id}"}}}}"#);
+        let event: QueryEvent = serde_json::from_str(&old).unwrap();
+        match event {
+            QueryEvent::Completed { query_id, outcome } => {
+                assert_eq!(query_id, id);
+                assert_eq!(outcome, QueryOutcome::Completed);
+            }
+            other => panic!("Expected Completed variant, got {other:?}"),
+        }
+        for (outcome, wire) in [
+            (QueryOutcome::Completed, "completed"),
+            (QueryOutcome::NoProgress, "no_progress"),
+            (QueryOutcome::TurnBudgetExhausted, "turn_budget_exhausted"),
+        ] {
+            let json = serde_json::to_string(&QueryEvent::Completed {
+                query_id: id,
+                outcome,
+            })
+            .unwrap();
+            let parsed: serde_json::Value = serde_json::from_str(&json).unwrap();
+            assert_eq!(
+                parsed["Completed"]["outcome"].as_str().unwrap(),
+                wire,
+                "wire form mismatch for {outcome:?}: {json}"
+            );
+        }
     }
 
     #[test]

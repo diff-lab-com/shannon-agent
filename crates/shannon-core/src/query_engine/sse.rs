@@ -14,7 +14,7 @@
 use shannon_api_protocol::SseEventName;
 use uuid::Uuid;
 
-use super::types::QueryEvent;
+use super::types::{QueryEvent, QueryOutcome};
 
 /// Map a [`QueryEvent`] to its canonical SSE event name.
 ///
@@ -113,7 +113,10 @@ pub fn representative_events() -> Vec<QueryEvent> {
             turn_number: 1,
             tokens_used: 42,
         },
-        QueryEvent::Completed { query_id: qid },
+        QueryEvent::Completed {
+            query_id: qid,
+            outcome: QueryOutcome::Completed,
+        },
         QueryEvent::Failed {
             query_id: qid,
             error: "boom".to_string(),

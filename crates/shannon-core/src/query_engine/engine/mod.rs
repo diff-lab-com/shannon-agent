@@ -84,7 +84,7 @@ use crate::compact as p2_compact;
 use crate::query_engine::streaming::ConversationState;
 use crate::query_engine::types::{
     ConversationStats, CostTracker, EffortLevel, GOAL_BLOCKED_MARKER, GOAL_COMPLETE_MARKER,
-    GoalSpec, QueryContext, QueryEngineConfig, QueryError, QueryEvent, QueryStream,
+    GoalSpec, QueryContext, QueryEngineConfig, QueryError, QueryEvent, QueryOutcome, QueryStream,
 };
 use crate::tools::ToolRegistry;
 use shannon_engine::api::{

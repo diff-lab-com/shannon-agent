@@ -2191,13 +2191,20 @@ fn malformed_tool_call_sse(request_index: usize) -> String {
 
 /// Drive one full `process_query` against the mock and return (completed,
 /// failed_error, warnings, TurnCompleted (turn_number, tokens_used) pairs,
-/// final_history). The stop-loss and turn-bookkeeping tests need the
-/// warning/turn visibility that `a8_run_query` discards.
+/// final_history, completed_outcome). The stop-loss, turn-bookkeeping and
+/// outcome tests need the visibility that `a8_run_query` discards.
 #[allow(clippy::type_complexity)]
 async fn run_query_with_recovery_bookkeeping(
     server: &TurnRetryMockServer,
     max_turns: usize,
-) -> (bool, String, Vec<String>, Vec<(usize, u64)>, Vec<Message>) {
+) -> (
+    bool,
+    String,
+    Vec<String>,
+    Vec<(usize, u64)>,
+    Vec<Message>,
+    Option<QueryOutcome>,
+) {
     use futures::StreamExt as _;
     let config = LlmClientConfig {
         api_key: "test-key".to_string(),
@@ -2237,10 +2244,14 @@ async fn run_query_with_recovery_bookkeeping(
     let mut warnings: Vec<String> = Vec::new();
     let mut turns: Vec<(usize, u64)> = Vec::new();
     let mut history: Vec<Message> = Vec::new();
+    let mut outcome: Option<QueryOutcome> = None;
     while let Some(ev) = stream.next().await {
         match ev {
-            Ok(QueryEvent::Completed { .. }) => {
+            Ok(QueryEvent::Completed {
+                outcome: reported, ..
+            }) => {
                 completed = true;
+                outcome = Some(reported);
                 break;
             }
             Ok(QueryEvent::Failed { error, .. }) => {
@@ -2267,7 +2278,7 @@ async fn run_query_with_recovery_bookkeeping(
             _ => {}
         }
     }
-    (completed, failed, warnings, turns, history)
+    (completed, failed, warnings, turns, history, outcome)
 }
 
 /// Stop-loss: every request comes back malformed. The query must end after
@@ -2278,7 +2289,7 @@ async fn consecutive_malformed_tool_calls_stop_loss_ends_query() {
     let responder =
         std::sync::Arc::new(|request_index: usize| malformed_tool_call_sse(request_index));
     let server = TurnRetryMockServer::start(responder);
-    let (completed, failed_error, warnings, _turns, _history) =
+    let (completed, failed_error, warnings, _turns, _history, _outcome) =
         run_query_with_recovery_bookkeeping(&server, 20).await;
     assert!(
         failed_error.is_empty(),
@@ -2316,7 +2327,7 @@ async fn malformed_call_streak_resets_after_parsed_tool_execution() {
         }
     });
     let server = TurnRetryMockServer::start(responder);
-    let (completed, failed_error, warnings, _turns, _history) =
+    let (completed, failed_error, warnings, _turns, _history, _outcome) =
         run_query_with_recovery_bookkeeping(&server, 20).await;
     assert!(
         failed_error.is_empty(),
@@ -2352,7 +2363,7 @@ async fn malformed_call_streak_env_override_lowers_the_cap() {
     let responder =
         std::sync::Arc::new(|request_index: usize| malformed_tool_call_sse(request_index));
     let server = TurnRetryMockServer::start(responder);
-    let (completed, failed_error, warnings, _turns, _history) =
+    let (completed, failed_error, warnings, _turns, _history, _outcome) =
         run_query_with_recovery_bookkeeping(&server, 20).await;
 
     match saved {
@@ -2411,4 +2422,152 @@ fn malformed_call_streak_env_parse_contract() {
         Some(v) => unsafe { env::set_var("SHANNON_MAX_CONSECUTIVE_MALFORMED_CALLS", v) },
         None => unsafe { env::remove_var("SHANNON_MAX_CONSECUTIVE_MALFORMED_CALLS") },
     }
+}
+
+/// Turn bookkeeping (accounting follow-up): the recovery gates do
+/// `turn += 1` and loop again WITHOUT emitting TurnCompleted, so the
+/// headless driver — which counts turns from TurnCompleted events —
+/// reported turns_used=0 on recovery exits: work actually done was
+/// invisible in the NDJSON ledger. Every recovery round must emit
+/// TurnCompleted before continuing.
+#[tokio::test]
+async fn parse_error_recovery_rounds_emit_turn_completed() {
+    let responder = std::sync::Arc::new(|request_index: usize| {
+        if request_index == 0 {
+            malformed_tool_call_sse(0)
+        } else {
+            a8_text_sse("recovered")
+        }
+    });
+    let server = TurnRetryMockServer::start(responder);
+    let (completed, failed_error, _warnings, turns, _history, _outcome) =
+        run_query_with_recovery_bookkeeping(&server, 20).await;
+    assert!(
+        failed_error.is_empty(),
+        "query failed instead of recovering: {failed_error}"
+    );
+    assert!(completed, "query must complete after the model retries");
+    assert!(
+        turns.iter().any(|(turn_number, _)| *turn_number == 1),
+        "the recovery round (turn 1) must emit TurnCompleted, got {turns:?}"
+    );
+}
+
+/// A well-formed tool call for an unregistered tool: parses, executes
+/// (error result), advances the turn. Ids are unique per request — the
+/// P3-10 query-scope dedup would otherwise drop the repeats.
+fn parsed_tool_call_sse(request_index: usize) -> String {
+    let sse = [
+        r#"event: message_start"#,
+        r#"data: {"type":"message_start","message":{"id":"msg_parsed","role":"assistant","content":[],"model":"test-model","stop_reason":null,"usage":{"input_tokens":10,"output_tokens":1}}}"#,
+        r#"event: content_block_start"#,
+        &format!(
+            "data: {{\"type\":\"content_block_start\",\"index\":0,\"content_block\":{{\"type\":\"tool_use\",\"id\":\"toolu_parsed_{request_index}\",\"name\":\"no_such_tool\",\"input\":{{}}}}}}"
+        ),
+        r#"event: content_block_delta"#,
+        r#"data: {"type":"content_block_delta","index":0,"delta":{"type":"input_json_delta","partial_json":"{}"}}"#,
+        r#"event: content_block_stop"#,
+        r#"data: {"type":"content_block_stop","index":0}"#,
+        r#"event: message_delta"#,
+        r#"data: {"type":"message_delta","delta":{"stop_reason":"tool_use"},"usage":{"input_tokens":10,"output_tokens":5}}"#,
+        r#"event: message_stop"#,
+        r#"data: {"type":"message_stop"}"#,
+    ]
+    .join("\n\n");
+    a8_http_response("200 OK", "text/event-stream", &sse)
+}
+
+/// An EMPTY completion whose MessageDelta carries the sentinel zero-usage
+/// frame: the finalize defers, the stream ends unfinalized, and the
+/// post-loop bail-out region runs (no text, no tool calls).
+fn empty_completion_zero_usage_sse() -> String {
+    let sse = [
+        r#"event: message_start"#,
+        r#"data: {"type":"message_start","message":{"id":"msg_empty","role":"assistant","content":[],"model":"test-model","stop_reason":null,"usage":{"input_tokens":10,"output_tokens":0}}}"#,
+        r#"event: content_block_start"#,
+        r#"data: {"type":"content_block_start","index":0,"content_block":{"type":"text","text":""}}"#,
+        r#"event: content_block_stop"#,
+        r#"data: {"type":"content_block_stop","index":0}"#,
+        r#"event: message_delta"#,
+        r#"data: {"type":"message_delta","delta":{"stop_reason":"end_turn"},"usage":{"input_tokens":0,"output_tokens":0}}"#,
+        r#"event: message_stop"#,
+        r#"data: {"type":"message_stop"}"#,
+    ]
+    .join("\n\n");
+    a8_http_response("200 OK", "text/event-stream", &sse)
+}
+
+/// Outcome: the stop-loss ending is a NO-PROGRESS completion — headless
+/// maps it to a non-zero exit so CI stops booking pure churn as success.
+#[tokio::test]
+async fn stop_loss_completes_with_no_progress_outcome() {
+    let responder =
+        std::sync::Arc::new(|request_index: usize| malformed_tool_call_sse(request_index));
+    let server = TurnRetryMockServer::start(responder);
+    let (completed, failed_error, _warnings, _turns, _history, outcome) =
+        run_query_with_recovery_bookkeeping(&server, 20).await;
+    assert!(
+        failed_error.is_empty(),
+        "stop-loss must complete, not fail: {failed_error}"
+    );
+    assert!(completed, "stop-loss must complete the query");
+    assert_eq!(
+        outcome,
+        Some(QueryOutcome::NoProgress),
+        "stop-loss must report outcome=no_progress"
+    );
+}
+
+/// Outcome: the A1 bail-out (nudge budget exhausted, model produced
+/// NOTHING usable) is a NO-PROGRESS completion, not a plain success.
+#[tokio::test]
+async fn bail_out_after_exhausted_nudges_reports_no_progress() {
+    let responder = std::sync::Arc::new(|_request_index: usize| empty_completion_zero_usage_sse());
+    let server = TurnRetryMockServer::start(responder);
+    let (completed, failed_error, warnings, _turns, _history, outcome) =
+        run_query_with_recovery_bookkeeping(&server, 20).await;
+    assert!(
+        failed_error.is_empty(),
+        "bail-out must complete, not fail: {failed_error}"
+    );
+    assert!(completed, "bail-out must complete the query");
+    // Two empty-completion nudges (default budget), then the third
+    // empty response exhausts the budget and bails out.
+    assert_eq!(
+        server.bodies().len(),
+        3,
+        "two nudged retries + the bail-out"
+    );
+    assert_eq!(warnings.len(), 2, "two nudge warnings: {warnings:?}");
+    assert_eq!(
+        outcome,
+        Some(QueryOutcome::NoProgress),
+        "bail-out must report outcome=no_progress"
+    );
+}
+
+/// Outcome: max-turns exhaustion reports turn_budget_exhausted instead of
+/// an indistinguishable plain success.
+#[tokio::test]
+async fn max_turns_exhaustion_reports_turn_budget_exhausted() {
+    let responder = std::sync::Arc::new(|request_index: usize| parsed_tool_call_sse(request_index));
+    let server = TurnRetryMockServer::start(responder);
+    let (completed, failed_error, _warnings, _turns, _history, outcome) =
+        run_query_with_recovery_bookkeeping(&server, 3).await;
+    assert!(
+        failed_error.is_empty(),
+        "query failed unexpectedly: {failed_error}"
+    );
+    assert!(completed, "query must complete at the turn budget");
+    assert_eq!(
+        server.bodies().len(),
+        3,
+        "the budget (3 turns) bounds the request count, got {}",
+        server.bodies().len()
+    );
+    assert_eq!(
+        outcome,
+        Some(QueryOutcome::TurnBudgetExhausted),
+        "max-turns exhaustion must report outcome=turn_budget_exhausted"
+    );
 }
