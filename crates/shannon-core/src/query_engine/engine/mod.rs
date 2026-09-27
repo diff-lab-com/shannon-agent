@@ -69,8 +69,9 @@ use super::env_config::DEFAULT_THINK_ONLY_MIN_ANSWER_CHARS;
 // DEFAULT_MAX_TOOL_RESULT_CHARS/env_num_override: test-only in this module
 use super::env_config::{
     DEFAULT_MAX_TOOL_RESULT_CHARS, MICRO_PRUNE_THRESHOLD, THINK_ONLY_NUDGE_PROMPT,
-    TRUNCATION_CONTINUATION_PROMPT, cap_tool_result, env_num_override, think_only_min_answer_chars,
-    think_only_nudge_max, token_budget_limit, token_budget_nudge_for,
+    TRUNCATION_CONTINUATION_PROMPT, cap_tool_result, env_num_override,
+    max_consecutive_malformed_calls, think_only_min_answer_chars, think_only_nudge_max,
+    token_budget_limit, token_budget_nudge_for,
 };
 #[allow(unused_imports)] // split_think_content: used by tests in this module
 use super::parsers::{

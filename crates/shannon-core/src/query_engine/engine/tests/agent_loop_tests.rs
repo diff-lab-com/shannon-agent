@@ -2144,3 +2144,271 @@ async fn parse_error_recovery_survives_stray_think_close_tag_noise() {
         "second request must carry the error tool_result so the model can retry: {second}"
     );
 }
+
+// ---- malformed-tool-call stop-loss (#140 follow-up) -------------------
+//
+// Removing the text condition from the recovery gates made recovery
+// unconditional — which a model emitting ONLY malformed calls exploits:
+// recovery → recovery → … until max_turns (observed: 90 API requests /
+// 55k tokens of churn on one query). The loop must keep a query-scoped
+// streak of consecutive malformed calls, reset it when a tool call parses
+// and executes, and end the query with a warning once the cap is hit.
+
+/// Serializes tests that mutate `SHANNON_MAX_CONSECUTIVE_MALFORMED_CALLS`
+/// (plain `cargo test` runs them on shared threads; nextest isolates per
+/// process).
+static MALFORMED_STREAK_ENV_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+/// The mm3 malformed shape: narration text (after a stray think close tag)
+/// plus a tool_use block with no input at all — parse error at
+/// ContentBlockStop → synthetic error tool_result + null-input ToolUse.
+/// Ids are unique per request: the P3-10 query-scope tool_use_id dedup
+/// would otherwise drop the repeats.
+fn malformed_tool_call_sse(request_index: usize) -> String {
+    let sse = [
+        r#"event: message_start"#,
+        r#"data: {"type":"message_start","message":{"id":"msg_malformed","role":"assistant","content":[],"model":"test-model","stop_reason":null,"usage":{"input_tokens":10,"output_tokens":1}}}"#,
+        r#"event: content_block_start"#,
+        r#"data: {"type":"content_block_start","index":0,"content_block":{"type":"text","text":""}}"#,
+        r#"event: content_block_delta"#,
+        "data: {\"type\":\"content_block_delta\",\"index\":0,\"delta\":{\"type\":\"text_delta\",\"text\":\"Working on it.\"}}",
+        r#"event: content_block_stop"#,
+        r#"data: {"type":"content_block_stop","index":0}"#,
+        r#"event: content_block_start"#,
+        &format!(
+            "data: {{\"type\":\"content_block_start\",\"index\":1,\"content_block\":{{\"type\":\"tool_use\",\"id\":\"toolu_malformed_{request_index}\",\"name\":\"no_such_tool\",\"input\":{{}}}}}}"
+        ),
+        r#"event: content_block_stop"#,
+        r#"data: {"type":"content_block_stop","index":1}"#,
+        r#"event: message_delta"#,
+        r#"data: {"type":"message_delta","delta":{"stop_reason":"tool_use"},"usage":{"input_tokens":10,"output_tokens":5}}"#,
+        r#"event: message_stop"#,
+        r#"data: {"type":"message_stop"}"#,
+    ]
+    .join("\n\n");
+    a8_http_response("200 OK", "text/event-stream", &sse)
+}
+
+/// Drive one full `process_query` against the mock and return (completed,
+/// failed_error, warnings, TurnCompleted (turn_number, tokens_used) pairs,
+/// final_history). The stop-loss and turn-bookkeeping tests need the
+/// warning/turn visibility that `a8_run_query` discards.
+#[allow(clippy::type_complexity)]
+async fn run_query_with_recovery_bookkeeping(
+    server: &TurnRetryMockServer,
+    max_turns: usize,
+) -> (bool, String, Vec<String>, Vec<(usize, u64)>, Vec<Message>) {
+    use futures::StreamExt as _;
+    let config = LlmClientConfig {
+        api_key: "test-key".to_string(),
+        base_url: server.base_url.clone(),
+        model: "test-model".to_string(),
+        provider: shannon_engine::api::LlmProvider::Anthropic,
+        ..Default::default()
+    };
+    let client = LlmClient::new(config);
+    let engine = QueryEngine::new(
+        client,
+        ToolRegistry::new(),
+        PermissionManager::new(),
+        StateManager::new(),
+        QueryEngineConfig {
+            max_turns,
+            ..Default::default()
+        },
+    );
+    let context = QueryContext {
+        query_id: uuid::Uuid::new_v4(),
+        session_id: uuid::Uuid::new_v4(),
+        user_message: "original user task".to_string(),
+        attachments: Vec::new(),
+        metadata: QueryMetadata {
+            timestamp: chrono::Utc::now(),
+            tools_allowed: false,
+            max_tokens: None,
+            model: "test-model".to_string(),
+            temperature: None,
+            top_p: None,
+        },
+    };
+    let mut stream = engine.process_query(context, None).await;
+    let mut completed = false;
+    let mut failed = String::new();
+    let mut warnings: Vec<String> = Vec::new();
+    let mut turns: Vec<(usize, u64)> = Vec::new();
+    let mut history: Vec<Message> = Vec::new();
+    while let Some(ev) = stream.next().await {
+        match ev {
+            Ok(QueryEvent::Completed { .. }) => {
+                completed = true;
+                break;
+            }
+            Ok(QueryEvent::Failed { error, .. }) => {
+                failed = error;
+                break;
+            }
+            Ok(QueryEvent::Warning { message, .. }) => {
+                warnings.push(message);
+            }
+            Ok(QueryEvent::TurnCompleted {
+                turn_number,
+                tokens_used,
+                ..
+            }) => {
+                turns.push((turn_number, tokens_used));
+            }
+            Ok(QueryEvent::ConversationUpdate { messages, .. }) => {
+                history = messages;
+            }
+            Err(e) => {
+                failed = e.to_string();
+                break;
+            }
+            _ => {}
+        }
+    }
+    (completed, failed, warnings, turns, history)
+}
+
+/// Stop-loss: every request comes back malformed. The query must end after
+/// the default cap (3 consecutive malformed calls) with a stop-loss
+/// warning — NOT after 20 requests of churn to max_turns.
+#[tokio::test]
+async fn consecutive_malformed_tool_calls_stop_loss_ends_query() {
+    let responder =
+        std::sync::Arc::new(|request_index: usize| malformed_tool_call_sse(request_index));
+    let server = TurnRetryMockServer::start(responder);
+    let (completed, failed_error, warnings, _turns, _history) =
+        run_query_with_recovery_bookkeeping(&server, 20).await;
+    assert!(
+        failed_error.is_empty(),
+        "stop-loss must complete, not fail: {failed_error}"
+    );
+    assert!(completed, "stop-loss must complete the query");
+    assert_eq!(
+        server.bodies().len(),
+        3,
+        "query must stop at the malformed-call cap, got {} requests",
+        server.bodies().len()
+    );
+    assert_eq!(
+        warnings.len(),
+        1,
+        "exactly one stop-loss warning expected: {warnings:?}"
+    );
+    assert!(
+        warnings[0].contains("malformed tool calls"),
+        "warning must name the stop-loss reason: {}",
+        warnings[0]
+    );
+}
+
+/// The streak counts *consecutive* malformed calls: a parsed + executed
+/// tool call resets it, so only the fresh tail reaches the cap.
+#[tokio::test]
+async fn malformed_call_streak_resets_after_parsed_tool_execution() {
+    // malformed → parsed tool call (streak resets) → malformed ×3.
+    let responder = std::sync::Arc::new(|request_index: usize| {
+        if request_index == 1 {
+            a8_tool_call_sse()
+        } else {
+            malformed_tool_call_sse(request_index)
+        }
+    });
+    let server = TurnRetryMockServer::start(responder);
+    let (completed, failed_error, warnings, _turns, _history) =
+        run_query_with_recovery_bookkeeping(&server, 20).await;
+    assert!(
+        failed_error.is_empty(),
+        "query failed instead of recovering: {failed_error}"
+    );
+    assert!(completed, "query must complete");
+    // 1 (malformed) + 1 (parsed call resets the streak) + 3 (fresh streak
+    // reaches the cap) = 5. A non-resetting counter would have stopped at
+    // request 3 (1 + 2).
+    assert_eq!(
+        server.bodies().len(),
+        5,
+        "streak must reset after a parsed tool call, got {} requests",
+        server.bodies().len()
+    );
+    assert_eq!(
+        warnings.len(),
+        1,
+        "exactly one stop-loss warning expected: {warnings:?}"
+    );
+}
+
+/// `SHANNON_MAX_CONSECUTIVE_MALFORMED_CALLS` overrides the cap: =2 stops
+/// the same all-malformed query after two rounds instead of three.
+#[tokio::test]
+async fn malformed_call_streak_env_override_lowers_the_cap() {
+    let _guard = MALFORMED_STREAK_ENV_LOCK
+        .lock()
+        .unwrap_or_else(|e| e.into_inner());
+    let saved = env::var("SHANNON_MAX_CONSECUTIVE_MALFORMED_CALLS").ok();
+    unsafe { env::set_var("SHANNON_MAX_CONSECUTIVE_MALFORMED_CALLS", "2") };
+
+    let responder =
+        std::sync::Arc::new(|request_index: usize| malformed_tool_call_sse(request_index));
+    let server = TurnRetryMockServer::start(responder);
+    let (completed, failed_error, warnings, _turns, _history) =
+        run_query_with_recovery_bookkeeping(&server, 20).await;
+
+    match saved {
+        Some(v) => unsafe { env::set_var("SHANNON_MAX_CONSECUTIVE_MALFORMED_CALLS", v) },
+        None => unsafe { env::remove_var("SHANNON_MAX_CONSECUTIVE_MALFORMED_CALLS") },
+    }
+    assert!(
+        failed_error.is_empty(),
+        "stop-loss must complete, not fail: {failed_error}"
+    );
+    assert!(completed, "stop-loss must complete the query");
+    assert_eq!(
+        server.bodies().len(),
+        2,
+        "SHANNON_MAX_CONSECUTIVE_MALFORMED_CALLS=2 must stop after two \
+         malformed rounds, got {} requests",
+        server.bodies().len()
+    );
+    assert_eq!(
+        warnings.len(),
+        1,
+        "exactly one stop-loss warning expected: {warnings:?}"
+    );
+}
+
+/// Env contract (mirrors `a8_turn_retries_env_parse_contract`): default 3;
+/// unset falls back to the default; whitespace-trimmed values parse
+/// (" 4 " → 4); unparseable and negative values fall back to the default
+/// (same `env_num_override` conventions as every other engine knob).
+#[test]
+fn malformed_call_streak_env_parse_contract() {
+    let _guard = MALFORMED_STREAK_ENV_LOCK
+        .lock()
+        .unwrap_or_else(|e| e.into_inner());
+    let saved = env::var("SHANNON_MAX_CONSECUTIVE_MALFORMED_CALLS").ok();
+
+    unsafe { env::remove_var("SHANNON_MAX_CONSECUTIVE_MALFORMED_CALLS") };
+    assert_eq!(
+        crate::query_engine::env_config::max_consecutive_malformed_calls(),
+        3,
+        "unset must yield the default of 3"
+    );
+
+    for garbage in ["0", "abc", "-1", " 4 "] {
+        unsafe { env::set_var("SHANNON_MAX_CONSECUTIVE_MALFORMED_CALLS", garbage) };
+        let expected = garbage.trim().parse::<u32>().unwrap_or(3);
+        assert_eq!(
+            crate::query_engine::env_config::max_consecutive_malformed_calls(),
+            expected,
+            "SHANNON_MAX_CONSECUTIVE_MALFORMED_CALLS={garbage:?} must parse \
+             like SHANNON_TURN_RETRIES"
+        );
+    }
+
+    match saved {
+        Some(v) => unsafe { env::set_var("SHANNON_MAX_CONSECUTIVE_MALFORMED_CALLS", v) },
+        None => unsafe { env::remove_var("SHANNON_MAX_CONSECUTIVE_MALFORMED_CALLS") },
+    }
+}

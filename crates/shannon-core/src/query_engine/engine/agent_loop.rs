@@ -794,6 +794,19 @@ impl QueryEngine {
             let max_think_only_nudges = think_only_nudge_max();
             let think_only_min_chars = think_only_min_answer_chars();
 
+            // Malformed-tool-call stop-loss (#140 follow-up): the parse-error
+            // recovery gates below continue the loop whenever a synthetic
+            // tool_result is pending — regardless of narration — so a model
+            // that keeps emitting malformed calls would loop until
+            // max_turns (observed: 90 API requests, 55k tokens of churn on
+            // one query). Count consecutive malformed synthetic calls across
+            // the query; reaching the cap ends the query with a warning and
+            // an honest completion instead of churning. A successfully
+            // parsed + executed tool call resets the streak, so genuinely
+            // productive turns are never interrupted.
+            let mut consecutive_malformed_tool_calls: u32 = 0;
+            let max_consecutive_malformed_calls = max_consecutive_malformed_calls();
+
             // Auto-test loop state (P1-5). Initialized lazily inside the loop body
             // because `AutoLoopState` is only needed when `config.auto_test` is `Some`.
             // We keep the struct default-constructible so this declaration is cheap.
@@ -3470,6 +3483,11 @@ impl QueryEngine {
                                                 // nudge budget so only *consecutive* think-only
                                                 // responses exhaust it.
                                                 think_only_nudges = 0;
+                                                // A well-formed tool call parsed and executed —
+                                                // the malformed-call streak is broken (the
+                                                // stop-loss counts *consecutive* malformed
+                                                // calls only).
+                                                consecutive_malformed_tool_calls = 0;
                                                 // Break from the streaming while-let loop so
                                                 // tool results are processed on the next turn
                                                 // iteration instead of consuming more events
@@ -3511,19 +3529,78 @@ impl QueryEngine {
                                                         assistant_stop_reason.as_deref(),
                                                     )
                                                 {
-                                                    let mut blocks: Vec<ContentBlock> = Vec::new();
+                                                    consecutive_malformed_tool_calls +=
+                                                        assistant_tool_uses.len() as u32;
+                                                    if consecutive_malformed_tool_calls
+                                                        < max_consecutive_malformed_calls
+                                                    {
+                                                        let mut blocks: Vec<ContentBlock> =
+                                                            Vec::new();
+                                                        if !assistant_text.is_empty() {
+                                                            blocks.push(ContentBlock::Text {
+                                                                text: std::mem::take(
+                                                                    &mut assistant_text,
+                                                                ),
+                                                            });
+                                                        }
+                                                        blocks.append(&mut assistant_tool_uses);
+                                                        conversation.messages.push(Message {
+                                                            role: "assistant".to_string(),
+                                                            content: MessageContent::Blocks(blocks),
+                                                        });
+                                                        send_event!(
+                                                            tx,
+                                                            QueryEvent::ConversationUpdate {
+                                                                query_id,
+                                                                messages: conversation
+                                                                    .messages
+                                                                    .clone(),
+                                                            }
+                                                        );
+                                                        turn += 1;
+                                                        phase = StreamingPhase::Finalized;
+                                                        break;
+                                                    }
+                                                    // Stop-loss reached: a model stuck in a
+                                                    // malformed-call loop gets a bounded number
+                                                    // of recovery rounds, then the query ends
+                                                    // honestly instead of churning to max_turns
+                                                    // (90 requests / 55k tokens observed).
+                                                    send_event!(
+                                                        tx,
+                                                        QueryEvent::Warning {
+                                                            query_id,
+                                                            message: format!(
+                                                                "Model produced \
+                                                                 {consecutive_malformed_tool_calls} \
+                                                                 consecutive malformed tool calls \
+                                                                 — ending the query as no-progress \
+                                                                 instead of retrying again."
+                                                            ),
+                                                        }
+                                                    );
                                                     if !assistant_text.is_empty() {
-                                                        blocks.push(ContentBlock::Text {
-                                                            text: std::mem::take(
-                                                                &mut assistant_text,
+                                                        conversation.messages.push(Message {
+                                                            role: "assistant".to_string(),
+                                                            content: MessageContent::Text(
+                                                                std::mem::take(&mut assistant_text),
                                                             ),
                                                         });
                                                     }
-                                                    blocks.append(&mut assistant_tool_uses);
-                                                    conversation.messages.push(Message {
-                                                        role: "assistant".to_string(),
-                                                        content: MessageContent::Blocks(blocks),
-                                                    });
+                                                    let total_cost = CostTracker::calculate_cost(
+                                                        &client_model,
+                                                        total_input_tokens,
+                                                        total_output_tokens,
+                                                    );
+                                                    send_event!(
+                                                        tx,
+                                                        QueryEvent::Cost {
+                                                            query_id,
+                                                            total_cost_usd: total_cost,
+                                                            input_tokens: total_input_tokens,
+                                                            output_tokens: total_output_tokens,
+                                                        }
+                                                    );
                                                     send_event!(
                                                         tx,
                                                         QueryEvent::ConversationUpdate {
@@ -3531,9 +3608,15 @@ impl QueryEngine {
                                                             messages: conversation.messages.clone(),
                                                         }
                                                     );
-                                                    turn += 1;
-                                                    phase = StreamingPhase::Finalized;
-                                                    break;
+                                                    publish_stop_trigger(
+                                                        &session_bus,
+                                                        tool_results.len(),
+                                                    );
+                                                    send_event!(
+                                                        tx,
+                                                        QueryEvent::Completed { query_id }
+                                                    );
+                                                    return;
                                                 }
 
                                                 // No tool uses — save assistant text to conversation
@@ -4185,17 +4268,67 @@ impl QueryEngine {
                             && phase != StreamingPhase::Finalized
                             && !is_truncation_stop(assistant_stop_reason.as_deref())
                         {
-                            let mut blocks: Vec<ContentBlock> = Vec::new();
+                            consecutive_malformed_tool_calls += assistant_tool_uses.len() as u32;
+                            if consecutive_malformed_tool_calls < max_consecutive_malformed_calls {
+                                let mut blocks: Vec<ContentBlock> = Vec::new();
+                                if !assistant_text.is_empty() {
+                                    blocks.push(ContentBlock::Text {
+                                        text: std::mem::take(&mut assistant_text),
+                                    });
+                                }
+                                blocks.append(&mut assistant_tool_uses);
+                                conversation.messages.push(Message {
+                                    role: "assistant".to_string(),
+                                    content: MessageContent::Blocks(blocks),
+                                });
+                                send_event!(
+                                    tx,
+                                    QueryEvent::ConversationUpdate {
+                                        query_id,
+                                        messages: conversation.messages.clone(),
+                                    }
+                                );
+                                turn += 1;
+                                continue;
+                            }
+                            // Stop-loss reached (same rationale and ending as the
+                            // finalize-path gate above): end the query honestly
+                            // instead of looping to max_turns.
+                            send_event!(
+                                tx,
+                                QueryEvent::Warning {
+                                    query_id,
+                                    message: format!(
+                                        "Model produced \
+                                         {consecutive_malformed_tool_calls} \
+                                         consecutive malformed tool calls \
+                                         — ending the query as no-progress \
+                                         instead of retrying again."
+                                    ),
+                                }
+                            );
                             if !assistant_text.is_empty() {
-                                blocks.push(ContentBlock::Text {
-                                    text: std::mem::take(&mut assistant_text),
+                                conversation.messages.push(Message {
+                                    role: "assistant".to_string(),
+                                    content: MessageContent::Text(std::mem::take(
+                                        &mut assistant_text,
+                                    )),
                                 });
                             }
-                            blocks.append(&mut assistant_tool_uses);
-                            conversation.messages.push(Message {
-                                role: "assistant".to_string(),
-                                content: MessageContent::Blocks(blocks),
-                            });
+                            let total_cost = CostTracker::calculate_cost(
+                                &client_model,
+                                total_input_tokens,
+                                total_output_tokens,
+                            );
+                            send_event!(
+                                tx,
+                                QueryEvent::Cost {
+                                    query_id,
+                                    total_cost_usd: total_cost,
+                                    input_tokens: total_input_tokens,
+                                    output_tokens: total_output_tokens,
+                                }
+                            );
                             send_event!(
                                 tx,
                                 QueryEvent::ConversationUpdate {
@@ -4203,8 +4336,10 @@ impl QueryEngine {
                                     messages: conversation.messages.clone(),
                                 }
                             );
-                            turn += 1;
-                            continue;
+                            publish_stop_trigger(&session_bus, tool_results.len());
+                            send_event!(tx, QueryEvent::Completed { query_id });
+
+                            return;
                         }
 
                         // Think-only nudge (A1): the stream produced no tool
