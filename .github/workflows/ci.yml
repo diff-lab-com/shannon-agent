@@ -1017,7 +1017,13 @@ jobs:
       # and the retired shannon-commands builtin /memory dead structs.
       # Intentional minor-cycle breaks per the memory review; new TAG NAME
       # so the baseline-rustdoc cache invalidates.
-      SEMVER_BASELINE: semver-baseline-2026-09-15
+      # Sixteenth move (2026-09-27, PR #142 honest-accounting followup):
+      # QueryEvent::Completed gained a serde-defaulted `outcome` field
+      # (QueryOutcome) — new pub field on an exhaustively-constructible enum
+      # variant, intentional minor-cycle break. Workspace version bumps
+      # 0.11.0 -> 0.12.0 in the same PR (the break's required major slot).
+      # New TAG NAME so the baseline-rustdoc cache invalidates.
+      SEMVER_BASELINE: semver-baseline-2026-09-17
     steps:
       - uses: actions/checkout@f548e57e544e1ff5a4c46bf1e1b8685f8e4a348a
         with:

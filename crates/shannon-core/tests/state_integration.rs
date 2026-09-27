@@ -77,6 +77,7 @@ fn seed_two_turn_session(store: &SessionStore, id: &Uuid) {
     });
     tee.record_query_event(&shannon_core::QueryEvent::Completed {
         query_id: Uuid::new_v4(),
+        outcome: Default::default(),
     });
 
     // Turn 2 (plain prompt)
@@ -96,6 +97,7 @@ fn seed_two_turn_session(store: &SessionStore, id: &Uuid) {
     });
     tee.record_query_event(&shannon_core::QueryEvent::Completed {
         query_id: Uuid::new_v4(),
+        outcome: Default::default(),
     });
     tee.close();
 

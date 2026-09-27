@@ -183,7 +183,7 @@ pub use oauth::{OAuthClient, OAuthError, OAuthService, OAuthToken, TokenEncrypti
 pub use output_format::{OutputEvent, StructuredOutputConfig, StructuredOutputError};
 pub use policy_limits::{PolicyCheckResult, PolicyError, PolicyLimits, PolicyLimitsManager};
 pub use query_engine::{
-    ProviderHealth, ProviderHealthStatus, QueryContext, QueryEngine, QueryEvent,
+    ProviderHealth, ProviderHealthStatus, QueryContext, QueryEngine, QueryEvent, QueryOutcome,
     browser_control_prompt, teammate_instructions,
 };
 pub use rate_limit::{

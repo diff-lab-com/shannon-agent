@@ -17,7 +17,7 @@ use shannon_core::{
     i18n,
     model_registry::resolve_model,
     provider_resolver::{resolve_model_ref, synthesize_default_profile},
-    query_engine::{QueryContext, QueryEngine, QueryEvent, QueryMetadata},
+    query_engine::{QueryContext, QueryEngine, QueryEvent, QueryMetadata, QueryOutcome},
     tools::ToolRegistry,
     unified_config::{ConfigBuilder, ShannonConfig},
 };
@@ -74,6 +74,13 @@ enum HeadlessExitCode {
     ContextOverflow = 5,
     /// 6 - a required permission was denied in non-interactive mode.
     PermissionDenied = 6,
+    /// 7 - the engine ended the query with NO usable progress (A1 bail-out
+    /// or the malformed-tool-call stop-loss). Deliberately distinct from the
+    /// other classes: 2 is TurnLimit, 3 Timeout, 4 RateLimited, 5
+    /// ContextOverflow, 6 PermissionDenied; run-batch scripts reserve 3 for
+    /// budget. A model-failure class must not collide with infra rc values
+    /// harnesses already branch on.
+    NoProgress = 7,
 }
 
 impl From<HeadlessExitCode> for i32 {
@@ -143,6 +150,22 @@ fn classify_headless_failure(error: &str) -> HeadlessExitCode {
         HeadlessExitCode::PermissionDenied
     } else {
         HeadlessExitCode::Error
+    }
+}
+
+/// Map an engine-reported `QueryEvent::Completed` outcome onto the headless
+/// exit code. `None` keeps the Success default (the historical behavior for
+/// a plain completion). `NoProgress` — the engine ended the query without
+/// usable model output (A1 bail-out / malformed-call stop-loss) — must NOT
+/// exit 0: CI would book pure churn as a successful run with an empty patch
+/// (the accounting lie this follow-up fixes), so it maps to the fresh rc=7.
+/// `TurnBudgetExhausted` reuses the existing TurnLimit rc=2 semantics
+/// ("maximum turns reached before completion").
+fn completed_outcome_exit_code(outcome: QueryOutcome) -> Option<HeadlessExitCode> {
+    match outcome {
+        QueryOutcome::Completed => None,
+        QueryOutcome::NoProgress => Some(HeadlessExitCode::NoProgress),
+        QueryOutcome::TurnBudgetExhausted => Some(HeadlessExitCode::TurnLimit),
     }
 }
 
@@ -2499,7 +2522,13 @@ fn run_headless_query(
                         // case a provider emits more than one.
                         engine_usage = Some((input_tokens, output_tokens));
                     }
-                    Ok(QueryEvent::Completed { .. }) => {
+                    Ok(QueryEvent::Completed { outcome, .. }) => {
+                        // Honest accounting: an engine-reported no-progress or
+                        // budget-exhausted outcome downgrades the exit code so
+                        // CI stops treating churn as success (rc=7 / rc=2).
+                        if let Some(code) = completed_outcome_exit_code(outcome) {
+                            exit_code = code;
+                        }
                         if output_format == OutputFormat::Text && !response_text.is_empty() {
                             // Text was already streamed; just ensure newline
                             println!();
@@ -2775,6 +2804,11 @@ fn fire_headless_completion_notification(exit_code: HeadlessExitCode, prompt: &s
             "Shannon — rate limited",
             "API provider returned 429; retry later.".to_string(),
             NotificationLevel::Error,
+        ),
+        HeadlessExitCode::NoProgress => (
+            "Shannon — no progress",
+            "The engine ended the query without usable model output.".to_string(),
+            NotificationLevel::Warning,
         ),
         HeadlessExitCode::ContextOverflow => (
             "Shannon — context overflow",
@@ -7323,6 +7357,26 @@ profile_routes = []
         assert_eq!(HeadlessExitCode::RateLimited as i32, 4);
         assert_eq!(HeadlessExitCode::ContextOverflow as i32, 5);
         assert_eq!(HeadlessExitCode::PermissionDenied as i32, 6);
+        assert_eq!(HeadlessExitCode::NoProgress as i32, 7);
+    }
+
+    #[test]
+    fn test_completed_outcome_maps_to_distinct_exit_codes() {
+        use shannon_core::query_engine::QueryOutcome;
+        // Normal completion keeps the historical rc=0.
+        assert_eq!(completed_outcome_exit_code(QueryOutcome::Completed), None);
+        // No-progress must NOT exit 0 — that is the accounting lie this
+        // follow-up fixes (churn/empty output booked as CI success).
+        assert_eq!(
+            completed_outcome_exit_code(QueryOutcome::NoProgress),
+            Some(HeadlessExitCode::NoProgress)
+        );
+        assert_eq!(i32::from(HeadlessExitCode::NoProgress), 7);
+        // Budget exhaustion reuses the existing TurnLimit rc=2 semantics.
+        assert_eq!(
+            completed_outcome_exit_code(QueryOutcome::TurnBudgetExhausted),
+            Some(HeadlessExitCode::TurnLimit)
+        );
     }
 
     #[test]

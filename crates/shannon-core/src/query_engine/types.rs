@@ -1053,6 +1053,34 @@ impl Default for QueryEngineConfig {
     }
 }
 
+/// Why a query ended, carried on [`QueryEvent::Completed`].
+///
+/// Additive wire change: the field is `#[serde(default)]`-ed so NDJSON/SSE
+/// consumers and session logs written before it existed deserialize
+/// unchanged, and [`QueryOutcome::Completed`] is the default — a missing
+/// field means the historical "ended with usable output" semantics.
+///
+/// Motivation (malformed-call-recovery follow-up): the engine's recovery
+/// machinery can end a query without the model ever producing anything
+/// usable (A1 bail-out, malformed-call stop-loss) or with the turn budget
+/// spent — those used to complete identically to a real answer, and
+/// headless runs exited 0 with an empty patch (the accounting lie CI
+/// booked as success).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum QueryOutcome {
+    /// The query ended with usable output (a final answer, or content the
+    /// engine preserved). Default for old JSON without the field.
+    #[default]
+    Completed,
+    /// The engine ended the query because it made no usable progress: the
+    /// model produced nothing usable (A1 bail-out) or kept emitting
+    /// malformed tool calls past the consecutive-failure stop-loss.
+    NoProgress,
+    /// The turn budget (`max_turns`) was exhausted before a final answer.
+    TurnBudgetExhausted,
+}
+
 /// Events emitted during query processing
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum QueryEvent {
@@ -1094,7 +1122,13 @@ pub enum QueryEvent {
     },
 
     /// Query completed successfully
-    Completed { query_id: Uuid },
+    Completed {
+        query_id: Uuid,
+        /// Why the query ended. serde-defaulted: old JSON without the field
+        /// reads as [`QueryOutcome::Completed`].
+        #[serde(default)]
+        outcome: QueryOutcome,
+    },
 
     /// Query failed with error
     Failed { query_id: Uuid, error: String },

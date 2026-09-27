@@ -74,6 +74,30 @@ pub(super) fn think_only_min_answer_chars() -> usize {
     ) as usize
 }
 
+// ── Malformed-tool-call stop-loss (#140 follow-up) ────────────────────
+//
+// The parse-error recovery gates continue the loop whenever a synthetic
+// tool_result is pending, regardless of narration — so a model that keeps
+// emitting malformed calls would loop until max_turns (observed: 90 API
+// requests / 55k tokens of pure churn on one query). The agent loop counts
+// consecutive malformed calls and ends the query as no-progress once the
+// streak reaches this cap; a successfully parsed + executed tool call
+// resets the streak.
+
+/// Default cap on consecutive malformed tool calls per query. Override
+/// with `SHANNON_MAX_CONSECUTIVE_MALFORMED_CALLS`.
+pub(super) const DEFAULT_MAX_CONSECUTIVE_MALFORMED_CALLS: u32 = 3;
+
+/// Consecutive-malformed-call cap for this query
+/// (`SHANNON_MAX_CONSECUTIVE_MALFORMED_CALLS`, default
+/// [`DEFAULT_MAX_CONSECUTIVE_MALFORMED_CALLS`]).
+pub(super) fn max_consecutive_malformed_calls() -> u32 {
+    env_num_override(
+        "SHANNON_MAX_CONSECUTIVE_MALFORMED_CALLS",
+        DEFAULT_MAX_CONSECUTIVE_MALFORMED_CALLS,
+    )
+}
+
 // ── Tool-result cap ────────────────────────────────────────────────────────
 // A single tool result is capped before it enters model context. Claude Code
 // caps tool outputs (~25k tokens); without a cap one noisy Bash call (e.g.

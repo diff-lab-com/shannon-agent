@@ -130,6 +130,7 @@ fn test_save_and_restore_session_roundtrips_through_l0() {
         });
         tee.record_query_event(&QueryEvent::Completed {
             query_id: Uuid::new_v4(),
+            outcome: Default::default(),
         });
         tee.close();
     }
