@@ -78,6 +78,12 @@ fn shannon_on_path() -> Option<std::path::PathBuf> {
         .find(|p| p.is_file())
 }
 
+/// The bundled sidecar CLI, else the first `shannon` on PATH — for commands
+/// that shell out to the engine CLI (diagnostics export).
+pub(crate) fn resolve_cli() -> Option<std::path::PathBuf> {
+    bundled_cli_path().or_else(shannon_on_path)
+}
+
 /// First whitespace-separated token that starts with a digit —
 /// `shannon 0.11.0` → `0.11.0`.
 fn probe_version(binary: &std::path::Path) -> Option<String> {

@@ -114,6 +114,11 @@ pub mod commands_billing;
 pub mod commands_config;
 #[cfg(feature = "tauri")]
 pub mod commands_connections;
+/// Export-diagnostics: local logs + crash reports + a fresh doctor report
+/// bundled into one zip (batch-3 follow-up). Pure bundle logic lives here
+/// and is unit-tested without Tauri.
+#[cfg(feature = "tauri")]
+pub mod commands_diagnostics;
 #[cfg(feature = "tauri")]
 pub mod commands_mobile_pairing;
 pub mod commands_remote;
