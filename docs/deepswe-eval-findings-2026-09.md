@@ -441,3 +441,22 @@ w4 发车 ~4.5h：11 启动 / 8 判分 / 3 在跑（健康：pier 存活、网�
 4. **未决——M3 空参数 wire RCA**：smoke03 中 90/90 次调用 arguments 为空、每次响应仅 ~4 output token（截断签名）。判据基建已落 `fix/streaming-wire-trace`（adapter 归一化层 trace 级「组装后原始 arguments」日志，`RUST_LOG=shannon_engine=trace` opt-in；空组装串 = API 未发，非空 = 引擎组装丢）。待抓包复跑 abs-module-cache-flags 定分 API/模型侧 vs 引擎侧；若 API 侧凭 request_ids 报 MiniMax，若引擎侧出修复 PR。
 5. **未决——两处审查发现的相邻瑕疵**（backlog §建议排队）：`has_content` 在 splitter 之前对原始 TextDelta 置位（纯标签响应漏过 A1 网）；既有文本级 expansion 规则对 `'$(x | sh)'` 单引号外观判 Critical（与 #143 分段器语义不一致）。另：run-batch.sh 退出码台账需认识 rc=7。
 6. **证据**：`~/.shannon/eval/deepswe/jobs/deepswe-mm3-smoke0{1,2,3}-*/`（NDJSON 轨迹/session events/verifier 可回放）；PR #140/#142/#143。
+
+### F14 §7（wire 抓包首战结果，2026-09-27 深夜）
+1. **空参数定分：会话级随机的 API/模型侧行为，非引擎侧**。同任务（abs-module-cache-flags）
+   五轮对照：smoke01 首调用即死（1/1 空参）、smoke02 3/3、smoke03 ~90/90 全部发生；
+   wire04（218 次调用）与 wire06（167 次调用，trace 判据全量核对）**零空参数**。wire06
+   的 167 条「组装后原始 arguments」判据行全部非空（含完整 JSON 命令），证明引擎流式
+   组装路径完好；故障按会话聚类（早期窗口 21:10-21:56 三连发，其后两轮全无），疑与
+   API 服务端状态相关。下次复现时 `RUST_LOG=shannon_engine=trace` 自动留证。
+2. **判据基建实战验证**：trace 行在真实流中稳定输出（167/167）；过程中发现并修复
+   headless 路径无 tracing subscriber 的缺口（#146——评测模式下 trace 从未生效的根因）。
+3. **意外正结果**：wire06 M3 在该任务 **F2P 18/20、P2P 3/3（partial 0.913）**，
+   正常 commit（37KB patch），exit=0、167 轮、11.97M in / 39K out tokens——
+   minimax 在此任务迄今最佳，距全解仅 2 个测试。锚能力存在；瓶颈是会话级稳定性
+   （空参数窗口）+ commit 行为方差（wire04 同任务 218 次调用 0 commit）。
+   对照口径：smoke01/02/03 均 reward 0。
+4. **基建插曲归档**：docker registry 拉取曾大面积卡死，根因 = daemon.json 的
+   socks5 代理（v2rayA）上游闪断（所有 registry TLS 握手超时；用户态直连 ECR/
+   archive 正常）。绕行：regctl/crane 用户态直连 ECR 导出 + `docker load` 注入
+   三个 base 镜像。若复发，先探 `curl -x socks5h://127.0.0.1:20170` 再重启 v2rayA。
