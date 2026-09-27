@@ -219,10 +219,13 @@ impl RepoMapCache {
     /// engine injects under a labelled section.
     ///
     /// The budget is enforced on per-symbol tokens (signatures + recursive
-    /// children). Markdown rendering adds small per-file headers and a
-    /// top-level "# Repo Map: \<root\>" line — those are structural and not
-    /// counted against the budget. Callers that need a hard cap on the
-    /// rendered output should set the budget ~80% of their actual ceiling.
+    /// children). The rendered markdown is bounded overall, not just on
+    /// symbols: the top-level "# Repo Map: \<root\>" header, one section per
+    /// file that still has symbols after the trim, and a single trailing
+    /// section that folds every symbol-less file into a comma-separated path
+    /// list hard-capped at 4096 bytes (`… and N more (trimmed)` once it
+    /// overflows). Output therefore grows with the symbol budget and the
+    /// number of *surviving* symbols — never with the number of walked files.
     pub fn pack(&mut self, budget_tokens: usize) -> String {
         let mut map = SymbolMap {
             root: self.root.clone(),
@@ -502,22 +505,26 @@ fn disk_cache_matches_fs(root: &Path, disk: &DiskCache) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::path::PathBuf;
 
-    fn tmp_root(label: &str) -> PathBuf {
-        let mut p = std::env::temp_dir();
-        p.push(format!(
-            "shannon_repomap_cache_test_{label}_{}",
-            std::process::id()
-        ));
-        let _ = fs::remove_dir_all(&p);
-        fs::create_dir_all(&p).unwrap();
-        p
+    /// RAII temp root: the directory is removed when the guard drops, so a
+    /// failing test no longer litters `/tmp` with `shannon_repomap_cache_test_*`
+    /// directories (one machine had accumulated hundreds of these).
+    struct TempRoot(tempfile::TempDir);
+
+    impl std::ops::Deref for TempRoot {
+        type Target = std::path::Path;
+        fn deref(&self) -> &Self::Target {
+            self.0.path()
+        }
+    }
+
+    fn tmp_root() -> TempRoot {
+        TempRoot(tempfile::tempdir_in(std::env::temp_dir()).expect("create temp root"))
     }
 
     #[test]
     fn update_file_inserts_then_replaces() {
-        let root = tmp_root("insert_replace");
+        let root = tmp_root();
         fs::write(root.join("a.rs"), "pub fn a() {}\n").unwrap();
         let mut cache = RepoMapCache::ephemeral(&root).unwrap();
         assert_eq!(cache.file_count(), 1);
@@ -547,7 +554,7 @@ mod tests {
 
     #[test]
     fn update_file_removes_when_missing() {
-        let root = tmp_root("remove_missing");
+        let root = tmp_root();
         fs::write(root.join("c.rs"), "pub fn c() {}\n").unwrap();
         let mut cache = RepoMapCache::ephemeral(&root).unwrap();
         assert_eq!(cache.file_count(), 1);
@@ -559,7 +566,7 @@ mod tests {
 
     #[test]
     fn flush_and_reload_round_trip() {
-        let root = tmp_root("round_trip");
+        let root = tmp_root();
         fs::write(root.join("d.rs"), "pub fn d() {}\n").unwrap();
         {
             let cache = RepoMapCache::ephemeral(&root).unwrap();
@@ -574,7 +581,7 @@ mod tests {
 
     #[test]
     fn pack_returns_markdown_under_budget() {
-        let root = tmp_root("pack_budget");
+        let root = tmp_root();
         for i in 0..8 {
             fs::write(
                 root.join(format!("f{i}.rs")),
