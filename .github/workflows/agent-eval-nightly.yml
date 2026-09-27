@@ -1,11 +1,10 @@
 name: Agent Eval (nightly)
 
 # T2.3 — nightly real-model L1 eval. Catches capability regressions the
-# mock-only PR smoke (pr-smoke-test.yml) and the dry-run gate (ci.yml's
-# eval-dry-run job) can't see — both of those exercise the harness
-# without a real model. This workflow runs the cheapest tier subset
-# (read/edit/search) against the live API and uploads the report as a
-# workflow artifact for human review.
+# dry-run gate (ci.yml's eval-dry-run job) can't see — that gate
+# exercises the harness without a real model. This workflow runs the
+# cheapest tier subset (read/edit/search) against the live API and
+# uploads the report as a workflow artifact for human review.
 #
 # Cost guard: tier subset (3 of 5 tiers), single run per cron. ~$1-2 per
 # execution. Failures here do NOT block PRs (this is a scheduled workflow);
@@ -92,6 +91,13 @@ jobs:
         env:
           REPORT: ${{ steps.locate.outputs.report }}
         run: |
+          # `if: always()` runs us even when eval/locate failed; locate
+          # exits 2 when report.json is missing, leaving REPORT empty.
+          # Bail with a notice instead of crashing on an empty path.
+          if [ -z "$REPORT" ] || [ ! -f "$REPORT" ]; then
+            echo "::notice::no report.json to summarize — the eval step failed before producing one"
+            exit 0
+          fi
           python3 - "$REPORT" <<'PYEOF'
           """One-page summary: pass rate, per-tier breakdown, run anchor."""
           import json, sys
@@ -117,7 +123,8 @@ jobs:
 
       - name: Upload run artifacts
         if: always()
-        uses: actions/upload-artifact@50769540e7f4bd5e21e526ee35c689e35e0d6874
+        # Align with the repo-wide pin used by ci.yml/benchmarks/vendor — one action, one SHA.
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
         with:
           name: agent-eval-${{ github.run_id }}
           path: |

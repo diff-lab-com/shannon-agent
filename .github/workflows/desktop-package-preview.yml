@@ -20,7 +20,10 @@ concurrency:
 jobs:
   deb-preview:
     name: Build deb bundle (preview)
-    runs-on: ubuntu-latest
+    # release.yml builds the deb legs on ubuntu-22.04 (glibc 2.35 floor for
+    # the shipped bundle), so the preview must build on the same image or it
+    # can pass while the release fails.
+    runs-on: ubuntu-22.04
     timeout-minutes: 60
     steps:
       - uses: actions/checkout@f548e57e544e1ff5a4c46bf1e1b8685f8e4a348a

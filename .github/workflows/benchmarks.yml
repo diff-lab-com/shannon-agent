@@ -17,10 +17,16 @@ env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
 
 jobs:
-  save-baseline:
-    name: Save Baseline
+  bench:
+    # Single job (was save-baseline + compare-baseline, each running the full
+    # criterion suite weekly — double runner cost, and compare silently
+    # degraded to a first-run save whenever the previous week's artifact was
+    # missing). Compare runs against the downloaded `shannon-main` baseline
+    # first; the unconditional save afterwards refreshes that named baseline
+    # so the uploaded artifact is always next week's comparison point.
+    name: Benchmarks (compare vs last week, then save baseline)
     runs-on: ubuntu-latest
-    timeout-minutes: 60
+    timeout-minutes: 90
     steps:
       - uses: actions/checkout@f548e57e544e1ff5a4c46bf1e1b8685f8e4a348a
         with:
@@ -35,7 +41,36 @@ jobs:
           chmod +x scripts/test-regression.sh
           ./scripts/test-regression.sh --skip-perf
 
+      - name: Download previous baseline
+        # Last week's target/criterion snapshot (holds the named
+        # `shannon-main` baselines). A criterion regression fails the job —
+        # a real gate now. The download keeps its own continue-on-error: a
+        # missing baseline is the legitimate first-run condition (handled by
+        # saving an initial one below).
+        uses: dawidd6/action-download-artifact@bf251b5aa9c2f7eeb574a96ee720e24f801b7c11
+        continue-on-error: true
+        with:
+          name: bench-baseline
+          path: target/criterion
+          if_no_artifact_found: warn
+
+      - name: Compare against previous baseline (or save initial)
+        run: |
+          if [ -d "target/criterion" ] && [ "$(ls -A target/criterion 2>/dev/null)" ]; then
+            bash scripts/bench-regression.sh compare
+          else
+            echo "No previous baseline found — saving initial baseline"
+            bash scripts/bench-regression.sh save
+          fi
+
       - name: Save benchmark baseline
+        # Runs AFTER compare so the fresh baseline never clobbers the one
+        # being compared against: criterion named baselines live under
+        # target/criterion/<bench>/<name>/ — `--baseline shannon-main`
+        # (compare) only reads them and writes the current run to new/base,
+        # while `--save-baseline` (save) rewrites <name>/ in place. Save
+        # first would overwrite last week's numbers and compare would then
+        # always pass (comparing against itself).
         run: bash scripts/bench-regression.sh save
 
       - name: Upload baseline artifact
@@ -52,39 +87,6 @@ jobs:
           name: regression-timing
           path: /tmp/shannon-regression-timing.log
           retention-days: 7
-
-  compare-baseline:
-    name: Compare Against Previous Baseline
-    # A real gate now: a criterion regression fails this job. The artifact
-    # download step keeps its own continue-on-error — a missing baseline is
-    # the legitimate first-run condition (handled by saving an initial one).
-    runs-on: ubuntu-latest
-    timeout-minutes: 60
-    steps:
-      - uses: actions/checkout@f548e57e544e1ff5a4c46bf1e1b8685f8e4a348a
-        with:
-          fetch-depth: 0
-      - uses: dtolnay/rust-toolchain@2c7215f132e9ebf062739d9130488b56d53c060c
-        with:
-          toolchain: "1.88"
-      - uses: Swatinem/rust-cache@72d126e709cad40056a62344eee609d696d62d33
-
-      - name: Download previous baseline
-        uses: dawidd6/action-download-artifact@bf251b5aa9c2f7eeb574a96ee720e24f801b7c11
-        continue-on-error: true
-        with:
-          name: bench-baseline
-          path: target/criterion
-          if_no_artifact_found: warn
-
-      - name: Compare benchmarks
-        run: |
-          if [ -d "target/criterion" ] && [ "$(ls -A target/criterion 2>/dev/null)" ]; then
-            bash scripts/bench-regression.sh compare
-          else
-            echo "No previous baseline found — saving initial baseline"
-            bash scripts/bench-regression.sh save
-          fi
 
       - name: Upload comparison results
         if: always()

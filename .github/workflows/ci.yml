@@ -2,9 +2,11 @@ name: CI
 on:
   push:
     branches: [main, dev]
-    # Release tags must pass the full CI gate too — release.yml itself only
-    # typechecks/tests the gateway, so without this a tag on an un-CI'd
-    # commit ships straight to production.
+    # Release tags must pass the full CI gate too — and since 2026-09-27 that
+    # gate is MECHANICALLY enforced: release.yml's publish job polls for this
+    # tag-triggered run and refuses to flip the release draft until it is
+    # green (before then the check existed on the tag but nothing made the
+    # release wait for it).
     tags:
       - 'v[0-9]+.[0-9]+.[0-9]+*'
   pull_request:
@@ -39,19 +41,94 @@ env:
 # release tag's commit). Never use a moving tag like `@v4` for these —
 # always pin to an exact commit.
 jobs:
+  # PR path triage: the heavy Rust/UI/gateway jobs below are skipped when the
+  # PR cannot possibly have touched them (docs-only / website-only PRs used to
+  # burn ~4-6 runner-hours each). This is done with JOB-level `if:` conditions
+  # and NOT workflow-level `paths:` on purpose: a skipped job reports check
+  # conclusion "skipped", which branch protection treats as satisfied, while
+  # workflow-level path filters leave required checks "Pending" forever and
+  # wedge merging. Pushes and tags always run the full suite (this job is
+  # PR-only), so what lands on dev/main is never under-tested.
+  # Fail-open semantics: if this triage job itself errors, every downstream
+  # `needs.changes.result != 'success'` clause goes true and the full suite
+  # runs — a broken triage must never silently widen the skip window.
+  changes:
+    name: PR path triage
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    outputs:
+      rust: ${{ steps.filter.outputs.rust }}
+      desktop-ui: ${{ steps.filter.outputs.desktop_ui }}
+      gateway: ${{ steps.filter.outputs.gateway }}
+      website: ${{ steps.filter.outputs.website }}
+      ci: ${{ steps.filter.outputs.ci }}
+    steps:
+      - uses: actions/checkout@f548e57e544e1ff5a4c46bf1e1b8685f8e4a348a
+      - name: Classify changed paths
+        id: filter
+        # dorny/paths-filter v3.0.x — pinned per the policy above.
+        uses: dorny/paths-filter@15192bc058cc28a13dbf6cde61f19e18988b7af6
+        with:
+          filters: |
+            rust:
+              - 'crates/**'
+              - 'desktop/**'
+              - '!desktop/ui/**'
+              - 'Cargo.toml'
+              - 'Cargo.lock'
+              - 'rust-toolchain.toml'
+              - 'deny.toml'
+              - '.cargo/**'
+              - '.config/**'
+              - 'justfile'
+              - 'scripts/**'
+              - 'tests/**'
+              - 'locales/**'
+            desktop_ui:
+              - 'desktop/ui/**'
+            gateway:
+              - 'gateway/**'
+            website:
+              - 'website/**'
+            ci:
+              - '.github/workflows/**'
   facade-facts:
     name: Facade facts & hygiene
     runs-on: ubuntu-latest
     timeout-minutes: 15
+    needs: changes
+    if: github.event_name != 'pull_request' || needs.changes.result != 'success' || needs.changes.outputs.rust == 'true' || needs.changes.outputs.ci == 'true'
     steps:
       - uses: actions/checkout@f548e57e544e1ff5a4c46bf1e1b8685f8e4a348a
       - name: Generated facade facts are fresh
         run: node scripts/gen-facts.mjs --check
       - name: No stale/banned phrases in facade surfaces
         run: bash scripts/check-facade.sh
+      - name: Rust toolchain pin matches rust-toolchain.toml
+        # Single source of truth for the toolchain channel is
+        # rust-toolchain.toml; every workflow repeats the same channel in its
+        # dtolnay/rust-toolchain step (the action at our pinned SHA has no
+        # rust-toolchain-file fallback — the `toolchain` input is required).
+        # That is ~15 hand-maintained copies; this tripwire fails the moment
+        # any of them drifts (e.g. a toolchain bump that missed one file).
+        # Note: the guard only recognises numeric pins (`toolchain: "1.88"`);
+        # never introduce a channel name like `toolchain: stable` — it would
+        # be silently unmonitored here.
+        run: |
+          expected="$(awk -F'"' '/^channel/{print $2; exit}' rust-toolchain.toml)"
+          actual="$(grep -hE '^[[:space:]]*toolchain:[[:space:]]*"?[0-9]+\.' .github/workflows/*.yml \
+            | grep -oE '[0-9]+\.[0-9]+' | sort -u | paste -sd, -)"
+          if [ "$actual" != "$expected" ]; then
+            echo "::error::toolchain pin drift: workflows pin [$actual], rust-toolchain.toml says [$expected]"
+            exit 1
+          fi
+          echo "toolchain pins consistent: $actual"
   test:
     name: Test
     runs-on: ubuntu-latest
+    needs: changes
+    if: github.event_name != 'pull_request' || needs.changes.result != 'success' || needs.changes.outputs.rust == 'true' || needs.changes.outputs.ci == 'true'
     # review §P3-E2: hang-on-build job would burn 6 hours of runner quota
     # without a hard cap. 60 min is generous for our 11.7k-test suite.
     timeout-minutes: 60
@@ -62,10 +139,15 @@ jobs:
           toolchain: "1.88"
       - uses: Swatinem/rust-cache@72d126e709cad40056a62344eee609d696d62d33
         with:
-          # Bump to invalidate caches that predate the feature-isolated
-          # target dir (a stale cache carried feature-ON shannon-tools test
-          # binaries into the feature-OFF workspace run).
-          prefix-key: ci-v2
+          # One cache entry shared across the workspace-compile family (this
+          # job, test-features, clippy, doc, metrics, eval-dry-run — see each
+          # job's rust-cache step). rust-cache's default key is per-JOB, which
+          # fragmented GitHub's 10 GB repo cache budget into ~8 near-duplicate
+          # entries; heavy eviction under that budget was the likely root
+          # cause of the "GHA cold-cache stall" flakes noted on eval-dry-run.
+          # Bump to ci-v3 to invalidate every pre-split cache (ci-v2's
+          # feature-isolation rationale, see git history).
+          shared-key: ci-v3
       - name: Install Tauri system deps
         if: runner.os == 'Linux'
         run: |
@@ -115,11 +197,49 @@ jobs:
             find . -path ./target -prune -o -name '*.snap.new' -print
             exit 1
           fi
-      # Feature-gated builds/tests (downscale_dims, click_spec, key combos,
-      # libei backend). Runs AFTER the main gate, in an ISOLATED target dir:
-      # sharing `target/` with feature-OFF steps leaked the enabled feature
-      # into the workspace nextest build (the `computer` stub tests took the
-      # real-execution path on the displayless runner).
+
+  # Feature-gated builds/tests (downscale_dims, click_spec, key combos,
+  # libei backend, live browser tools) plus doctests. Split out of the Test
+  # job (2026-09-27 review, P2): they ran SERIALLY after the full suite and
+  # were the tail of the longest critical path in the gate. As a parallel
+  # job they no longer add to Test's wall clock; `needs:` coupling is
+  # deliberately avoided so a flake here can be retried in isolation.
+  test-features:
+    name: Feature Matrix & Doctests
+    runs-on: ubuntu-latest
+    needs: changes
+    if: github.event_name != 'pull_request' || needs.changes.result != 'success' || needs.changes.outputs.rust == 'true' || needs.changes.outputs.ci == 'true'
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@f548e57e544e1ff5a4c46bf1e1b8685f8e4a348a
+      - uses: dtolnay/rust-toolchain@2c7215f132e9ebf062739d9130488b56d53c060c
+        with:
+          toolchain: "1.88"
+      - uses: Swatinem/rust-cache@72d126e709cad40056a62344eee609d696d62d33
+        with:
+          # Same shared cache as the Test job (see the comment there).
+          shared-key: ci-v3
+      - name: Install Tauri system deps
+        # The doctests below compile every workspace lib (shannon-desktop
+        # needs the webkit/gtk headers); the feature legs need the xcap
+        # capture-stack headers (gbm/drm/pipewire) and libxdo (enigo).
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            libwebkit2gtk-4.1-dev libgtk-3-dev libayatana-appindicator3-dev \
+            librsvg2-dev libssl-dev libxdo-dev libgbm-dev libdrm-dev libpipewire-0.3-dev patchelf
+      - name: Doctests
+        # nextest does not execute doctests, so a doctest-only regression
+        # (e.g. an example that relies on opt-in configuration) stays green
+        # in the Test job and only fails here. Runs FIRST in this job: it
+        # compiles the workspace into the shared target cache, warming it
+        # for the feature legs below.
+        run: cargo test --workspace --doc
+      # Feature-isolated target dir: sharing `target/` with feature-OFF
+      # steps leaked the enabled feature into the workspace nextest build
+      # (the `computer` stub tests took the real-execution path on the
+      # displayless runner).
       - name: Build with computer-use feature
         run: |
           CARGO_TARGET_DIR=target-feature cargo build -p shannon-tools --features computer-use
@@ -152,12 +272,6 @@ jobs:
           # most. `--no-sandbox` is set by the session layer.
           CARGO_TARGET_DIR=target-feature cargo test -p shannon-tools \
             --features local-browser --test browser_e2e -- --nocapture
-      - name: Doctests
-        # nextest does not execute doctests, so a doctest-only regression
-        # (e.g. an example that relies on opt-in configuration) stays green
-        # in `Test` and only fails here. Lib targets are already compiled by
-        # the steps above; this only builds the doctest binaries.
-        run: cargo test --workspace --doc
 
   eval-dry-run:
     # W1 §7① PR quick gate (design: docs/plans/2026-08-28-eval-system-design.md):
@@ -171,6 +285,8 @@ jobs:
     # isolation without re-running the rest of CI.
     name: Eval Dry-Run Gate
     runs-on: ubuntu-latest
+    needs: changes
+    if: github.event_name != 'pull_request' || needs.changes.result != 'success' || needs.changes.outputs.rust == 'true' || needs.changes.outputs.ci == 'true'
     timeout-minutes: 20
     steps:
       - uses: actions/checkout@f548e57e544e1ff5a4c46bf1e1b8685f8e4a348a
@@ -178,6 +294,9 @@ jobs:
         with:
           toolchain: "1.88"
       - uses: Swatinem/rust-cache@72d126e709cad40056a62344eee609d696d62d33
+        with:
+          # Shared workspace-compile cache — see the rationale on the Test job.
+          shared-key: ci-v3
       - name: Install just
         uses: taiki-e/install-action@67729d5c413db75907f0ad1e39bb04b9c868ff60
         with:
@@ -204,6 +323,8 @@ jobs:
   desktop-e2e:
     name: Desktop E2E
     runs-on: ubuntu-latest
+    needs: changes
+    if: github.event_name != 'pull_request' || needs.changes.result != 'success' || needs.changes.outputs.rust == 'true' || needs.changes.outputs['desktop-ui'] == 'true' || needs.changes.outputs.ci == 'true'
     timeout-minutes: 20
     steps:
       - uses: actions/checkout@f548e57e544e1ff5a4c46bf1e1b8685f8e4a348a
@@ -232,6 +353,8 @@ jobs:
   desktop-visual-audit:
     name: Desktop Visual Audit (walkthrough)
     runs-on: ubuntu-latest
+    needs: changes
+    if: github.event_name != 'pull_request' || needs.changes.result != 'success' || needs.changes.outputs.rust == 'true' || needs.changes.outputs['desktop-ui'] == 'true' || needs.changes.outputs.ci == 'true'
     timeout-minutes: 20
     steps:
       - uses: actions/checkout@f548e57e544e1ff5a4c46bf1e1b8685f8e4a348a
@@ -267,6 +390,8 @@ jobs:
   desktop-unit:
     name: Desktop Unit Tests
     runs-on: ubuntu-latest
+    needs: changes
+    if: github.event_name != 'pull_request' || needs.changes.result != 'success' || needs.changes.outputs.rust == 'true' || needs.changes.outputs['desktop-ui'] == 'true' || needs.changes.outputs.ci == 'true'
     timeout-minutes: 20
     steps:
       - uses: actions/checkout@f548e57e544e1ff5a4c46bf1e1b8685f8e4a348a
@@ -325,6 +450,8 @@ jobs:
   clippy:
     name: Clippy
     runs-on: ubuntu-latest
+    needs: changes
+    if: github.event_name != 'pull_request' || needs.changes.result != 'success' || needs.changes.outputs.rust == 'true' || needs.changes.outputs.ci == 'true'
     timeout-minutes: 30
     steps:
       - uses: actions/checkout@f548e57e544e1ff5a4c46bf1e1b8685f8e4a348a
@@ -333,6 +460,9 @@ jobs:
           toolchain: "1.88"
           components: clippy
       - uses: Swatinem/rust-cache@72d126e709cad40056a62344eee609d696d62d33
+        with:
+          # Shared workspace-compile cache — see the rationale on the Test job.
+          shared-key: ci-v3
       - name: Install Tauri system deps
         if: runner.os == 'Linux'
         run: |
@@ -361,6 +491,8 @@ jobs:
   gateway:
     name: Gateway (TS typecheck + vitest)
     runs-on: ubuntu-latest
+    needs: changes
+    if: github.event_name != 'pull_request' || needs.changes.result != 'success' || needs.changes.outputs.rust == 'true' || needs.changes.outputs.gateway == 'true' || needs.changes.outputs.ci == 'true'
     timeout-minutes: 15
     steps:
       - uses: actions/checkout@f548e57e544e1ff5a4c46bf1e1b8685f8e4a348a
@@ -380,9 +512,37 @@ jobs:
         working-directory: gateway
         run: pnpm test
 
+  # PR gate for the marketing site. Previously website/ was only built AFTER
+  # merging to main (deploy-website.yml), so a broken Astro build shipped
+  # straight to GitHub Pages with zero pre-merge signal. Same frozen install
+  # + build as the deploy workflow; pnpm/SHA pins kept identical to it.
+  website:
+    name: Website Build
+    runs-on: ubuntu-latest
+    needs: changes
+    if: github.event_name != 'pull_request' || needs.changes.result != 'success' || needs.changes.outputs.website == 'true' || needs.changes.outputs.ci == 'true'
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@f548e57e544e1ff5a4c46bf1e1b8685f8e4a348a
+      - uses: pnpm/action-setup@ff378ebe6b225b0680b81c1ad4498ae0d1d3a5e3
+        with:
+          version: 10
+      - uses: actions/setup-node@e51e5fe84fc33b4c73ebe40526b2694712b5b858
+        with:
+          node-version: 24
+          cache: pnpm
+          cache-dependency-path: website/pnpm-lock.yaml
+      - name: Build (frozen install)
+        working-directory: website
+        run: |
+          pnpm install --frozen-lockfile
+          pnpm build
+
   fmt:
     name: Format
     runs-on: ubuntu-latest
+    needs: changes
+    if: github.event_name != 'pull_request' || needs.changes.result != 'success' || needs.changes.outputs.rust == 'true' || needs.changes.outputs.ci == 'true'
     timeout-minutes: 15
     steps:
       - uses: actions/checkout@f548e57e544e1ff5a4c46bf1e1b8685f8e4a348a
@@ -399,6 +559,8 @@ jobs:
   guard-headless:
     name: Headless purity (ADR-0011)
     runs-on: ubuntu-latest
+    needs: changes
+    if: github.event_name != 'pull_request' || needs.changes.result != 'success' || needs.changes.outputs.rust == 'true' || needs.changes.outputs.ci == 'true'
     timeout-minutes: 15
     steps:
       - uses: actions/checkout@f548e57e544e1ff5a4c46bf1e1b8685f8e4a348a
@@ -414,6 +576,8 @@ jobs:
     # license allowlist + curated advisory ignores for transitive crates
     # whose upstream fix is blocked on Tauri / plist / syntax ecosystem.
     runs-on: ubuntu-latest
+    needs: changes
+    if: github.event_name != 'pull_request' || needs.changes.result != 'success' || needs.changes.outputs.rust == 'true' || needs.changes.outputs.ci == 'true'
     timeout-minutes: 15
     steps:
       - uses: actions/checkout@f548e57e544e1ff5a4c46bf1e1b8685f8e4a348a
@@ -437,6 +601,8 @@ jobs:
     # gated the merge — no surprise upgrades mid-run.
     name: RustSec Advisory Audit
     runs-on: ubuntu-latest
+    needs: changes
+    if: github.event_name != 'pull_request' || needs.changes.result != 'success' || needs.changes.outputs.rust == 'true' || needs.changes.outputs.ci == 'true'
     timeout-minutes: 20
     steps:
       - uses: actions/checkout@f548e57e544e1ff5a4c46bf1e1b8685f8e4a348a
@@ -465,6 +631,8 @@ jobs:
     # ship to docs.rs.
     name: Doc Build
     runs-on: ubuntu-latest
+    needs: changes
+    if: github.event_name != 'pull_request' || needs.changes.result != 'success' || needs.changes.outputs.rust == 'true' || needs.changes.outputs.ci == 'true'
     timeout-minutes: 20
     steps:
       - uses: actions/checkout@f548e57e544e1ff5a4c46bf1e1b8685f8e4a348a
@@ -472,6 +640,9 @@ jobs:
         with:
           toolchain: "1.88"
       - uses: Swatinem/rust-cache@72d126e709cad40056a62344eee609d696d62d33
+        with:
+          # Shared workspace-compile cache — see the rationale on the Test job.
+          shared-key: ci-v3
       - name: Install Tauri system deps
         if: runner.os == 'Linux'
         run: |
@@ -490,6 +661,8 @@ jobs:
   metrics:
     name: Generate Metrics
     runs-on: ubuntu-latest
+    needs: changes
+    if: github.event_name != 'pull_request' || needs.changes.result != 'success' || needs.changes.outputs.rust == 'true' || needs.changes.outputs.ci == 'true'
     timeout-minutes: 30
     # Report generation, NOT a merge gate (the exact-count README gate was
     # removed in PR #116). Starts immediately in parallel: clippy/audit are
@@ -502,6 +675,9 @@ jobs:
         with:
           toolchain: "1.88"
       - uses: Swatinem/rust-cache@72d126e709cad40056a62344eee609d696d62d33
+        with:
+          # Shared workspace-compile cache — see the rationale on the Test job.
+          shared-key: ci-v3
       - name: Install Tauri + libdbus system deps
         if: runner.os == 'Linux'
         # `cargo test --workspace --no-run` (next step) compiles every
@@ -544,6 +720,8 @@ jobs:
     # already run in release.yml — so the cost stays bounded.
     name: Cross-platform Check
     runs-on: ${{ matrix.os }}
+    needs: changes
+    if: github.event_name != 'pull_request' || needs.changes.result != 'success' || needs.changes.outputs.rust == 'true' || needs.changes.outputs.ci == 'true'
     timeout-minutes: 40
     strategy:
       fail-fast: false
@@ -555,6 +733,11 @@ jobs:
         with:
           toolchain: "1.88"
       - uses: Swatinem/rust-cache@72d126e709cad40056a62344eee609d696d62d33
+        with:
+          # Shared-key joins the ci-v3 cache family; rust-cache automatically
+          # appends matrix values to the key, so each OS leg keeps its own
+          # entry (no cross-OS pollution).
+          shared-key: ci-v3
       # shannon-desktop is excluded below, but shannon-mcp-saas still
       # pulls in `keyring` → `dbus-secret-service` → `dbus` →
       # `libdbus-sys`, whose build.rs runs `pkg-config --libs dbus-1`.
@@ -683,6 +866,8 @@ jobs:
     # are blocked upstream — see shannon-desktop exclude below.
     name: Linux musl Check
     runs-on: ubuntu-latest
+    needs: changes
+    if: github.event_name != 'pull_request' || needs.changes.result != 'success' || needs.changes.outputs.rust == 'true' || needs.changes.outputs.ci == 'true'
     timeout-minutes: 40
     continue-on-error: true
     steps:
@@ -695,6 +880,9 @@ jobs:
       - name: Install musl cross-compiler
         run: sudo apt-get update && sudo apt-get install -y musl-tools
       - uses: Swatinem/rust-cache@72d126e709cad40056a62344eee609d696d62d33
+        with:
+          # Shared workspace-compile cache — see the rationale on the Test job.
+          shared-key: ci-v3
       - name: Install Tauri system deps (musl)
         if: runner.os == 'Linux'
         run: |
@@ -713,6 +901,8 @@ jobs:
   semver-check:
     name: Semver Check
     runs-on: ubuntu-latest
+    needs: changes
+    if: github.event_name != 'pull_request' || needs.changes.result != 'success' || needs.changes.outputs.rust == 'true' || needs.changes.outputs.ci == 'true'
     timeout-minutes: 20
     # Semver is a required gate (flipped from advisory in the v0.8.0 cycle).
     # Previously advisory because breaking changes are routine before 1.0 — they
