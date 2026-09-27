@@ -250,6 +250,27 @@ export async function openReleasePage(url: string): Promise<void> {
   return invoke('open_release_page', { url })
 }
 
+// ── Batch-3 follow-up — export diagnostics bundle ────────────────────
+
+/** Summary of a written diagnostics zip (logs + crash reports + doctor). */
+export interface ExportDiagnosticsResult {
+  path: string
+  log_files: number
+  log_bytes: number
+  doctor_ok: boolean
+  truncated: boolean
+}
+
+/**
+ * Bundle local logs, crash reports and a fresh `shannon doctor --json --deep`
+ * report into the zip at `dest` (an absolute path from the save dialog).
+ * Sessions/provider config/credentials are never included.
+ */
+export async function exportDiagnostics(dest: string): Promise<ExportDiagnosticsResult> {
+  return invoke('export_diagnostics', { dest })
+}
+
+
 export async function mobileGeneratePairToken(): Promise<MobilePairToken> {
   return invoke('mobile_generate_pair_token')
 }
