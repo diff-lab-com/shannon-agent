@@ -5118,6 +5118,20 @@ fn run_with_cli(cli: Cli) -> Result<()> {
         // Parse --schema: load from file or parse inline JSON
         let schema_config = cli.schema.as_deref().map(load_schema).transpose()?;
 
+        // Headless runs never hit the debug-gated subscriber init below (that
+        // branch only covers the interactive paths), so tracing events were
+        // silently dropped in exactly the mode the eval harness uses. Install
+        // a subscriber when RUST_LOG is present — zero cost by default, and
+        // `RUST_LOG=shannon_engine=trace` turns on the wire-level RCA logs
+        // (M3 empty-arguments discriminator, PR #144).
+        if std::env::var("RUST_LOG").is_ok() {
+            tracing_subscriber::fmt()
+                .with_writer(std::io::stderr)
+                .with_env_filter(tracing_subscriber::EnvFilter::from_default_env())
+                .try_init()
+                .ok();
+        }
+
         return run_headless_query(
             headless_prompt,
             &config,
