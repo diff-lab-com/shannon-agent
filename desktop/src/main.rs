@@ -13,6 +13,7 @@ fn main() {
     use shannon_desktop::commands_chat;
     use shannon_desktop::commands_config;
     use shannon_desktop::commands_connections;
+    use shannon_desktop::commands_diagnostics;
     use shannon_desktop::commands_dream;
     use shannon_desktop::commands_feedback;
     use shannon_desktop::commands_files;
@@ -175,6 +176,9 @@ fn main() {
             // C1① — semi-automatic update check (GitHub latest → open page)
             commands_surface::check_app_update,
             commands_surface::open_release_page,
+            // Batch-3 follow-up — export-diagnostics bundle (local logs +
+            // crash reports + bundled `shannon doctor --json --deep` zip).
+            commands_diagnostics::export_diagnostics,
             // 2026-09-25 open pipeline (docs/plans/2026-09-25-desktop-chat-ui-
             // open-and-artifact-design.md §4 P0-A / P1-D / P1-E)
             commands_surface::open_external,

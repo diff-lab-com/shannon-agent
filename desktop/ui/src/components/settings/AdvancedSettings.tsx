@@ -10,6 +10,7 @@ import { Switch } from '@/components/ui/switch'
 import { Modal } from '@/components/ui/modal'
 import { ConfirmDialog } from '@/components/ui/confirm-dialog'
 import { useCatalog } from '@/context/CatalogContext'
+import { save as saveDialog } from '@tauri-apps/plugin-dialog'
 import { VoiceSttSettings } from '@/components/settings/VoiceSttSettings'
 import { VoiceLocalSettings } from '@/components/settings/VoiceLocalSettings'
 import * as api from '@/lib/tauri-api'
@@ -224,6 +225,37 @@ export default function AdvancedSettings() {
     } catch (e) {
       toastError(t('settings.advanced.openLogsDirFailed'), e)
     }
+  }
+
+  // Batch-3 follow-up: bundle local logs + crash reports + a fresh
+  // `shannon doctor --json --deep` into one zip (save dialog picks the
+  // destination; nothing is uploaded). Companion to handleOpenLogsDir.
+  const [exportingDiagnostics, setExportingDiagnostics] = useState(false)
+  const handleExportDiagnostics = async () => {
+    let target: string | null = null
+    try {
+      target = await saveDialog({
+        defaultPath: `shannon-diagnostics-${new Date().toISOString().slice(0, 10)}.zip`,
+        filters: [{ name: 'Zip', extensions: ['zip'] }],
+      })
+    } catch (e) {
+      toastError(t('settings.advanced.exportDiagnosticsFailed'), e)
+      return
+    }
+    if (!target) return // user cancelled
+    setExportingDiagnostics(true)
+    try {
+      const result = await api.exportDiagnostics(target)
+      toast.success(
+        intl.formatMessage(
+          { id: 'settings.advanced.exportDiagnosticsDone' },
+          { path: result.path },
+        ),
+      )
+    } catch (e) {
+      toastError(t('settings.advanced.exportDiagnosticsFailed'), e)
+    }
+    setExportingDiagnostics(false)
   }
 
   // 卡A GC: persist the retention gear. `0` (永不) is written literally —
@@ -595,6 +627,11 @@ export default function AdvancedSettings() {
                 <Button variant="ghost" className="flex items-center gap-xs text-link font-label-md text-[14px] hover:underline cursor-pointer" onClick={() => void handleOpenLogsDir()}>
                   <span className="material-symbols-outlined icon-sm">folder_open</span>
                   {t('settings.advanced.openLogsDir')}
+                </Button>
+                <span className="text-outline-variant">|</span>
+                <Button variant="ghost" disabled={exportingDiagnostics} className="flex items-center gap-xs text-link font-label-md text-[14px] hover:underline cursor-pointer" onClick={() => void handleExportDiagnostics()}>
+                  <span className="material-symbols-outlined icon-sm">package_2</span>
+                  {exportingDiagnostics ? t('settings.advanced.exportDiagnosticsWorking') : t('settings.advanced.exportDiagnostics')}
                 </Button>
                 <span className="text-outline-variant">|</span>
                 <Button variant="ghost" className="flex items-center gap-xs text-link font-label-md text-[14px] hover:underline cursor-pointer" onClick={() => setShowApiKeys(true)}>
