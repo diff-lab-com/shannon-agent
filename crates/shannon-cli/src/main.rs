@@ -918,10 +918,18 @@ enum Commands {
     ///
     /// With `--json`, emit machine-readable diagnostics: surface identity,
     /// checks, and dual-install detection (scripting / telemetry / support).
+    /// With `--deep`, also sweep the data directory: meta.json version
+    /// marker (downgrade detection), every session's events.jsonl parse
+    /// check, and the inbox.db SQLite integrity check. Exempt from the
+    /// data-version gate on purpose.
     Doctor {
         /// Emit JSON instead of the human-readable report.
         #[arg(long)]
         json: bool,
+        /// Sweep data-directory integrity (meta marker, session logs,
+        /// inbox.db) in addition to the environment checks.
+        #[arg(long)]
+        deep: bool,
     },
 
     /// List provider profiles configured in `~/.shannon/providers.toml`.
@@ -4541,15 +4549,250 @@ fn resolve_shannon_installations() -> Vec<ShannonInstallation> {
     installs
 }
 
+// ── doctor --deep: data-directory integrity sweep (Phase 1 gate companion) ──
+
+/// Upper bound on session files swept so a multi-GB history can't turn one
+/// doctor run into a multi-minute one. Reported when hit — a capped sweep
+/// must never read as a clean full sweep.
+const DEEP_SWEEP_MAX_SESSION_FILES: usize = 2000;
+
+/// Result of the `events.jsonl` parse sweep.
+#[derive(Default)]
+struct DeepSessionsSweep {
+    files_seen: usize,
+    files_capped: bool,
+    lines_checked: u64,
+    /// `(session dir name, first parse error)` per failing file.
+    bad_files: Vec<(String, String)>,
+}
+
+impl DeepSessionsSweep {
+    fn healthy(&self) -> bool {
+        self.bad_files.is_empty()
+    }
+}
+
+/// Parse-check every session's `events.jsonl` under the sessions container
+/// (`SHANNON_SESSIONS_DIR` → `$SHANNON_HOME/sessions` → `~/.shannon/sessions`).
+/// Stops reading a file at its first bad line; continues with other files.
+fn deep_sweep_sessions() -> DeepSessionsSweep {
+    let mut sweep = DeepSessionsSweep::default();
+    let container = sessions_container_from_env();
+    let Ok(entries) = std::fs::read_dir(&container) else {
+        return sweep; // no sessions yet — vacuously healthy
+    };
+    let mut session_dirs: Vec<std::fs::DirEntry> = entries.flatten().collect();
+    session_dirs.sort_by_key(|e| e.file_name());
+    for entry in session_dirs {
+        if sweep.files_seen >= DEEP_SWEEP_MAX_SESSION_FILES {
+            sweep.files_capped = true;
+            break;
+        }
+        let events = entry.path().join("events.jsonl");
+        if !events.is_file() {
+            continue;
+        }
+        sweep.files_seen += 1;
+        let file = match std::fs::File::open(&events) {
+            Ok(f) => f,
+            Err(e) => {
+                sweep.bad_files.push((
+                    entry.file_name().to_string_lossy().into_owned(),
+                    e.to_string(),
+                ));
+                continue;
+            }
+        };
+        let reader = std::io::BufReader::new(file);
+        let mut line_no = 0u64;
+        let mut bad_line: Option<String> = None;
+        for line in std::io::BufRead::split(reader, b'\n') {
+            line_no += 1;
+            let Ok(raw) = line else {
+                bad_line = Some(format!("line {line_no}: I/O error reading events.jsonl"));
+                break;
+            };
+            if raw.iter().all(|b| b.is_ascii_whitespace()) {
+                continue; // tolerate trailing blank lines
+            }
+            if let Err(e) = serde_json::from_slice::<serde_json::Value>(&raw) {
+                bad_line = Some(format!("line {line_no}: {e}"));
+                break;
+            }
+            sweep.lines_checked += 1;
+        }
+        if let Some(err) = bad_line {
+            sweep
+                .bad_files
+                .push((entry.file_name().to_string_lossy().into_owned(), err));
+        }
+    }
+    sweep
+}
+
+/// The three `--deep` checks, as a JSON-ready value so both renderings share
+/// one source of truth.
+fn run_deep_checks() -> serde_json::Value {
+    let running = current_version();
+    // 1. Version marker.
+    let meta_json = match shannon_core::data_meta::read() {
+        Some(meta) => {
+            let downgrade = shannon_core::data_meta::is_downgrade(&meta.app_version, &running);
+            serde_json::json!({
+                "status": "present",
+                "app_version": meta.app_version,
+                "running_version": running,
+                "downgrade": downgrade,
+            })
+        }
+        None => serde_json::json!({
+            "status": "absent",
+            "note": "no meta.json yet — written on first run of a gate-aware build",
+            "running_version": running,
+        }),
+    };
+
+    // 2. Session event-log sweep.
+    let sweep = deep_sweep_sessions();
+    let sessions_json = serde_json::json!({
+        "container": sessions_container_from_env().display().to_string(),
+        "files_checked": sweep.files_seen,
+        "files_capped_at": if sweep.files_capped { Some(DEEP_SWEEP_MAX_SESSION_FILES) } else { None },
+        "lines_parsed": sweep.lines_checked,
+        "healthy": sweep.healthy(),
+        "bad_files": sweep.bad_files.iter().map(|(s, e)| serde_json::json!({
+            "session": s, "error": e,
+        })).collect::<Vec<_>>(),
+    });
+
+    // 3. inbox.db integrity. `InboxStore::open` applies the schema on open —
+    // acceptable here (doctor owns the same store the app uses); an
+    // unopenable DB is itself the finding.
+    let inbox_json = {
+        let path = shannon_core::inbox_store::default_db_path();
+        if !path.exists() {
+            serde_json::json!({
+                "path": path.display().to_string(),
+                "status": "absent",
+                "note": "created on first use",
+            })
+        } else {
+            match shannon_core::inbox_store::InboxStore::open_default() {
+                Ok(store) => match store.integrity_check() {
+                    Ok(verdict) => serde_json::json!({
+                        "path": path.display().to_string(),
+                        "status": if verdict == "ok" { "ok" } else { "corrupt" },
+                        "sqlite_integrity_check": verdict,
+                    }),
+                    Err(e) => serde_json::json!({
+                        "path": path.display().to_string(),
+                        "status": "error",
+                        "error": e.to_string(),
+                    }),
+                },
+                Err(e) => serde_json::json!({
+                    "path": path.display().to_string(),
+                    "status": "error",
+                    "error": e.to_string(),
+                }),
+            }
+        }
+    };
+
+    serde_json::json!({
+        "meta": meta_json,
+        "sessions": sessions_json,
+        "inbox_db": inbox_json,
+    })
+}
+
+/// Render the `--deep` section into the human-readable report.
+fn print_deep_report(deep: &serde_json::Value) {
+    println!();
+    println!("Data directory (deep):");
+
+    let meta = &deep["meta"];
+    match meta["status"].as_str() {
+        Some("present") => {
+            let (data, running, downgrade) = (
+                meta["app_version"].as_str().unwrap_or("?"),
+                meta["running_version"].as_str().unwrap_or("?"),
+                meta["downgrade"].as_bool().unwrap_or(false),
+            );
+            if downgrade {
+                println!(
+                    "[WARN]  meta.json: data written by {data}, running {running} (downgrade — see SHANNON_ALLOW_DOWNGRADE)"
+                );
+            } else {
+                println!("[OK]    meta.json: data version {data} (running {running})");
+            }
+        }
+        _ => println!("[INFO]  meta.json: no marker yet (written on first run)"),
+    }
+
+    let sessions = &deep["sessions"];
+    let (checked, parsed) = (
+        sessions["files_checked"].as_u64().unwrap_or(0),
+        sessions["lines_parsed"].as_u64().unwrap_or(0),
+    );
+    let capped = sessions["files_capped_at"].is_u64();
+    if sessions["healthy"].as_bool().unwrap_or(false) {
+        println!(
+            "[OK]    session logs: {checked} files, {parsed} events parse cleanly{}",
+            if capped { " (sweep capped)" } else { "" }
+        );
+    } else {
+        println!(
+            "[WARN]  session logs: {checked} files swept, {} with unparseable events{}",
+            sessions["bad_files"]
+                .as_array()
+                .map(|a| a.len())
+                .unwrap_or(0),
+            if capped { " (sweep capped)" } else { "" }
+        );
+        for bad in sessions["bad_files"].as_array().unwrap_or(&vec![]) {
+            println!(
+                "        - {}: {}",
+                bad["session"].as_str().unwrap_or("?"),
+                bad["error"].as_str().unwrap_or("?")
+            );
+        }
+    }
+
+    let inbox = &deep["inbox_db"];
+    match inbox["status"].as_str() {
+        Some("ok") => println!(
+            "[OK]    inbox.db: integrity_check ok ({})",
+            inbox["path"].as_str().unwrap_or("?")
+        ),
+        Some("absent") => println!("[INFO]  inbox.db: not created yet"),
+        Some(other) => println!(
+            "[WARN]  inbox.db: {other} — {}",
+            inbox["sqlite_integrity_check"]
+                .as_str()
+                .or(inbox["error"].as_str())
+                .unwrap_or("see sqlite docs")
+        ),
+        _ => println!("[WARN]  inbox.db: unknown state"),
+    }
+}
+
 /// Run diagnostics: toolchain, ports, services, and config.
 ///
 /// Never blocks — every check reports OK/WARN/INFO and continues.
 /// With `--json` the report is machine-readable (surface identity + checks +
 /// dual-install detection; ADR-0011 Phase B B7).
-fn run_doctor_command(json: bool) -> Result<()> {
+///
+/// `--deep` additionally sweeps data-directory integrity (Phase 1 gate
+/// companion): the meta.json version marker (downgrade detection), a
+/// line-by-line JSON parse of every session's `events.jsonl`, and the
+/// inbox.db `PRAGMA integrity_check`. Deliberately exempt from the
+/// data-version gate — it must run on a gated install.
+fn run_doctor_command(json: bool, deep: bool) -> Result<()> {
     // ── Identity (every surface self-identifies — routing/telemetry/support)
     let surface = "cli";
     let version = current_version();
+    let deep_report = if deep { Some(run_deep_checks()) } else { None };
 
     // Toolchain probes (direct PATH walk — see find_on_path).
     let tools = ["cargo", "rustc", "node", "bun"];
@@ -4602,6 +4845,12 @@ fn run_doctor_command(json: bool) -> Result<()> {
                 "rule": "PATH wins",
             },
         });
+        // `deep` is only present when requested, so scripts can distinguish
+        // "not asked" from an empty report.
+        let mut report = report;
+        if let Some(deep) = deep_report.as_ref() {
+            report["deep"] = deep.clone();
+        }
         println!("{}", serde_json::to_string_pretty(&report)?);
         return Ok(());
     }
@@ -4684,6 +4933,9 @@ fn run_doctor_command(json: bool) -> Result<()> {
         }
     }
 
+    if let Some(deep) = deep_report.as_ref() {
+        print_deep_report(deep);
+    }
     println!("Doctor finished.");
     Ok(())
 }
@@ -4727,6 +4979,20 @@ fn run_with_cli(cli: Cli) -> Result<()> {
     } else {
         let detected = i18n::detect_system_locale();
         i18n::set_locale(&detected);
+    }
+
+    // ── Data-version gate (Phase 1) ─────────────────────────────────────────
+    // Refuse to run an older binary against a data directory a newer one
+    // wrote (see `shannon_core::data_meta`), then stamp the marker with the
+    // running version. `doctor` and `update` stay exempt — they are exactly
+    // the tools you reach for on a gated install, and doctor must be able to
+    // inspect a downgraded directory. `SHANNON_ALLOW_DOWNGRADE=1` overrides.
+    let gate_exempt = matches!(
+        cli.command,
+        Some(Commands::Doctor { .. }) | Some(Commands::Update)
+    );
+    if !gate_exempt {
+        shannon_core::data_meta::check_and_record().map_err(anyhow::Error::msg)?;
     }
 
     // ── --dump-config: explainable config ladder (§4.10 W3-2) ──
@@ -5342,8 +5608,8 @@ fn run_with_cli(cli: Cli) -> Result<()> {
         Some(Commands::Update) => {
             run_update_command()?;
         }
-        Some(Commands::Doctor { json }) => {
-            run_doctor_command(json)?;
+        Some(Commands::Doctor { json, deep }) => {
+            run_doctor_command(json, deep)?;
         }
         Some(Commands::ListProviders { json }) => {
             // Engine store reads from `~/.shannon/providers.toml`. The CLI

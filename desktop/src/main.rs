@@ -36,6 +36,7 @@ fn main() {
     use shannon_desktop::commands_usage;
     use shannon_desktop::commands_voice;
     use shannon_desktop::commands_voice_models;
+    use shannon_desktop::desktop_logging;
     use shannon_desktop::engine_discovery;
     use shannon_desktop::engine_discovery_commands as commands_engine_discovery;
     use shannon_desktop::extensions_commands;
@@ -56,23 +57,72 @@ fn main() {
     // E5: tracing-subscriber with JSON exporter for offline performance
     // analysis. SHANNON_LOG_FORMAT=json → newline-delimited JSON to stderr;
     // any other value (or unset) → pretty human-readable output.
+    //
+    // Batch 3 B: a rolling redacted file sink keeps logs at
+    // ~/.shannon/logs/ — `shannon desktop` detaches from its terminal, so
+    // stderr alone meant production runs left nothing behind for support.
     let log_format = std::env::var("SHANNON_LOG_FORMAT").unwrap_or_default();
     let env_filter = tracing_subscriber::EnvFilter::try_from_default_env()
         .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new("info,shannon_desktop=debug"));
+
+    let log_dir = shannon_core::data_meta::home().join("logs");
+    let _ = std::fs::create_dir_all(&log_dir);
+    desktop_logging::cleanup_retention(&log_dir, 7);
+    desktop_logging::install_panic_hook(&log_dir);
+    let (non_blocking, log_guard) = tracing_appender::non_blocking(
+        tracing_appender::rolling::daily(&log_dir, "shannon-desktop.log"),
+    );
+    // Held for the process lifetime: dropping the guard detaches the file
+    // worker and loses still-buffered lines.
+    let _log_guard = log_guard;
+
+    // File sink: WARN and above (stderr stays the verbose surface). Every
+    // line is redacted through the session-log policy before hitting disk.
+    let file_layer = tracing_subscriber::fmt::layer()
+        .with_writer(desktop_logging::RedactingMakeWriter::new(non_blocking))
+        .with_ansi(false)
+        .with_target(true)
+        .with_filter(tracing_subscriber::EnvFilter::new("warn"));
+
+    let stderr_layer = tracing_subscriber::fmt::layer()
+        .with_target(true)
+        .with_span_events(tracing_subscriber::fmt::format::FmtSpan::CLOSE);
+    use tracing_subscriber::prelude::*;
+    // `.json()` returns a different concrete type than the text layer and
+    // stacked filtered layers turn the registry generic concrete — box each
+    // layer so both branches share one assembly.
     if log_format.eq_ignore_ascii_case("json") {
-        tracing_subscriber::fmt()
-            .with_env_filter(env_filter)
-            .json()
-            .with_target(true)
-            .with_span_events(tracing_subscriber::fmt::format::FmtSpan::CLOSE)
+        tracing_subscriber::registry()
+            .with(stderr_layer.json().with_filter(env_filter.clone()).boxed())
+            .with(file_layer.boxed())
             .init();
     } else {
-        tracing_subscriber::fmt()
-            .with_env_filter(env_filter)
-            .with_target(true)
-            .with_span_events(tracing_subscriber::fmt::format::FmtSpan::CLOSE)
+        tracing_subscriber::registry()
+            .with(stderr_layer.with_filter(env_filter).boxed())
+            .with(file_layer.boxed())
             .init();
     }
+
+    // Data-version gate (Phase 1, advisory here): a data directory written
+    // by a NEWER build is logged loudly but does not block startup — the
+    // desktop ships its own CLI sidecar, self-downgrades are rare, and a
+    // window that refuses to open with no UI affordance beats a silent one.
+    // The CLI/serve entrypoints hard-refuse instead; see data_meta. The
+    // marker itself never moves backwards, so this path cannot downgrade
+    // the record that the gate keys off.
+    match shannon_core::data_meta::check() {
+        shannon_core::data_meta::Compatibility::Downgrade { data_version }
+            if std::env::var_os("SHANNON_ALLOW_DOWNGRADE").is_none() =>
+        {
+            tracing::error!(
+                data_version = %data_version,
+                running = env!("CARGO_PKG_VERSION"),
+                "Shannon data directory was written by a newer version — continuing in advisory mode (set SHANNON_ALLOW_DOWNGRADE=1 to silence)"
+            );
+        }
+        _ => {}
+    }
+    shannon_core::data_meta::record_current_version();
 
     tauri::Builder::default()
         .plugin(tauri_plugin_shell::init())
