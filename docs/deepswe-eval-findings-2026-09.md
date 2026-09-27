@@ -433,3 +433,11 @@ w4 发车 ~4.5h：11 启动 / 8 判分 / 3 在跑（健康：pier 存活、网�
 | A9 | stderr turn 计数非单调核对 | 观测性 | 候选（F3） |
 | – | 轮次经济学遥测（per-turn 时长/token/工具分布）支撑 P3 效率归因 | 观测性 | ✅ `turn_economics.py` + adapter 上传 sessions 事件日志 |
 | – | （P2 失败分析后按证据扩充；每项过「真实用户受益」+ L4 两道闸） | | |
+
+### F14（mm3 冒烟三缺陷修复 + 对抗性审查跟进 + 遗留项，2026-09-27）
+1. **锚恢复**：F13 的 Token Plan 配额耗尽已解除——`deepswe-mm3-smoke01`（abs-* 2 任务并发 2，worktree 构建 02214380 锚点，272K in-tokens，零 429/零 infra 失败）顺利跑通。minimax 锚重新可用。
+2. **P0 缺陷（任务静默丢失）**：abs-module-cache-flags 首轮即死——M3 正文泄漏字面量 `</think>`（reasoning 走独立通道），Bash 调用 arguments 为空串；两处解析失败恢复闸以「文本为空」为前置，噪声/叙述被当最终答案，查询 exit=0、turns_used=0「成功」收场，空 patch 判 0。smoke02 证明恢复闸触发后叙述文本（"I'll start by exploring..."）再次击穿同一闸。**修复（PR #140，3 commits）**：splitter 吞杂散闭合标签、恢复闸待回喂 tool_result 优先于叙述、截断流让回 A13 机制；TodoWrite `#[serde(alias="id", default)]`（schema 要求 `id` 而 struct 要 `task_id` 的自相矛盾契约）；护栏管道分段引号/转义感知（grep 备选竖线误判 Critical）。TDD 全程先红后绿。
+3. **对抗性审查 5 发现 → 跟进（PR #142/#143）**：吞标签收紧至前导区（代码围栏内的合法字面量不再被吞）；畸形调用连击止损（`consecutive_malformed_tool_calls` 阈值 3，`SHANNON_MAX_CONSECUTIVE_MALFORMED_CALLS` 可覆盖——smoke03 实测无止损时空转 90 次请求/55K tokens）；`QueryEvent::Completed` 增加 `outcome`（NoProgress→headless rc=7、TurnBudgetExhausted→rc=2），恢复轮补发 TurnCompleted；护栏补替换上下文（`$()`/反引号内真管道恢复检测）；恢复后消息的 OpenAI wire 形状契约钉测。workspace 0.12.0 + `semver-baseline-2026-09-17`（第十六次前移）。
+4. **未决——M3 空参数 wire RCA**：smoke03 中 90/90 次调用 arguments 为空、每次响应仅 ~4 output token（截断签名）。判据基建已落 `fix/streaming-wire-trace`（adapter 归一化层 trace 级「组装后原始 arguments」日志，`RUST_LOG=shannon_engine=trace` opt-in；空组装串 = API 未发，非空 = 引擎组装丢）。待抓包复跑 abs-module-cache-flags 定分 API/模型侧 vs 引擎侧；若 API 侧凭 request_ids 报 MiniMax，若引擎侧出修复 PR。
+5. **未决——两处审查发现的相邻瑕疵**（backlog §建议排队）：`has_content` 在 splitter 之前对原始 TextDelta 置位（纯标签响应漏过 A1 网）；既有文本级 expansion 规则对 `'$(x | sh)'` 单引号外观判 Critical（与 #143 分段器语义不一致）。另：run-batch.sh 退出码台账需认识 rc=7。
+6. **证据**：`~/.shannon/eval/deepswe/jobs/deepswe-mm3-smoke0{1,2,3}-*/`（NDJSON 轨迹/session events/verifier 可回放）；PR #140/#142/#143。
