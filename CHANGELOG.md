@@ -4,6 +4,35 @@ All notable changes to Shannon Code are documented here. Entries are grouped by 
 
 ## [Unreleased] — §4.14 W1-P2 · OTLP bridge + full RedactionPolicy + desktop Turn Timeline
 
+### Export diagnostics bundle (desktop Settings) (2026-09-27)
+
+Batch-3 follow-up: an in-app way to hand support the data that batch 3
+started keeping.
+
+- **Settings → Advanced → Developer options** gains an "Export diagnostics…"
+  button next to "Open log directory". A save dialog picks the destination
+  (`shannon-diagnostics-<date>.zip`); the backend bundles:
+  - everything in `~/.shannon/logs/` (rotated desktop logs + crash reports,
+    capped at 20 MB — truncation is reported in the manifest and summary),
+  - a fresh `shannon doctor --json --deep` report from the bundled CLI
+    (best-effort: if the sidecar is missing or times out after 4 minutes,
+    the manifest says so and names the command to run by hand),
+  - a `manifest.txt` with versions, platform, counts, and the privacy note.
+- **Privacy contract**: sessions/conversation transcripts, provider config
+  and credentials are never included; log lines and the doctor report pass
+  the session-log redaction policy (doctor output can embed `*_URL`s from
+  the environment). Nothing uploads — attaching the zip is a manual user
+  act.
+- Wiring: `commands_diagnostics::export_diagnostics` command (ACL entry +
+  `app-platform` set membership; the coverage test guards the pairing),
+  `api.exportDiagnostics` wrapper, en/zh-CN strings plus the 8 other
+  locales the i18n-check gate requires.
+- Bundle logic (`build_bundle`) is a pure fn over explicit paths — 3 unit
+  tests cover the happy path, the size cap/truncation, and a missing logs
+  dir — and was compile-verified against the real `shannon-core` and `zip`
+  in a standalone crate (the desktop crate itself still needs system
+  WebKit/PipeWire headers this audit machine lacks).
+
 ### Batch 3 — data version gate (Phase 1) + desktop local logging (2026-09-27)
 
 Implements the two approved items from the 2026-09-27 release/productization
