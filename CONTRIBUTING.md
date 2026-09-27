@@ -4,7 +4,12 @@ Thanks for your interest. This monorepo ships three products that share one Rust
 
 ## Development setup
 
-Prerequisites: Rust 1.88+, pnpm 10+, bun latest. On Linux also: `libwebkit2gtk-4.1-dev libgtk-3-dev libayatana-appindicator3-dev librsvg2-dev libxdo-dev patchelf`.
+Prerequisites: Rust 1.88+, pnpm 10+, bun latest. On Linux also: `libwebkit2gtk-4.1-dev libgtk-3-dev libayatana-appindicator3-dev librsvg2-dev libxdo-dev libgbm-dev libdrm-dev libpipewire-0.3-dev patchelf`.
+
+The three capture-related packages (`libgbm-dev libdrm-dev libpipewire-0.3-dev`) only affect compiling the `shannon-desktop` crate (via xcap → pipewire → libspa) and the `shannon-tools --features computer-use` / libei legs — the rest of the workspace builds and tests without them. Verified matrix:
+
+- Ubuntu 24.04: works (PipeWire 1.0.x headers — same as CI).
+- Ubuntu 22.04: does not work. The distro's `libspa-0.2-dev 0.3.48` is too old; the build fails with seven `libspa` errors (E0425 `spa_meta_region_is_valid`/`spa_meta_first` missing, E0560/E0609 on `spa_video_info_raw.flags`, E0308). No version floor is claimed beyond these two data points.
 
 ```bash
 git clone https://github.com/diff-lab-com/shannon-agent.git

@@ -81,10 +81,10 @@ lint:
 dev:
     cargo check --workspace
     cargo clippy --workspace
-    cargo nextest run --workspace || cargo test --workspace -- --test-threads=1
+    @cargo nextest run --workspace || (echo "✗ tests failed — reproduce CI behavior with: just test-ci (retries=2, fail-fast=false)" && exit 1)
 
-# 完整测试(nextest + doctests)
-test-all: test-rust
+# 完整测试(CI 同参 + doctests)
+test-all: test-ci
     cargo test --workspace --doc
 
 # 微基准
@@ -119,8 +119,13 @@ eval-diff a b:
 
 # ---------- Test ----------
 
+# 快路径:默认 profile(fail-fast,无重试)— 开发者日常快速反馈。
 test-rust:
-    cargo nextest run --workspace || cargo test --workspace -- --test-threads=1
+    @cargo nextest run --workspace || (echo "✗ tests failed — reproduce CI behavior with: just test-ci (retries=2, fail-fast=false)" && exit 1)
+
+# CI 同参复现（retries=2、fail-fast=false、core/commands 串行组，见 .config/nextest.toml）
+test-ci:
+    cargo nextest run --workspace --profile ci
 
 test-ui:
     cd desktop/ui && pnpm test:ci
