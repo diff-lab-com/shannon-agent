@@ -300,13 +300,16 @@ kpi-clean-build:
 # ---------- Release prep: bump every version source, commit, tag ----------
 # Usage: just release-prep 0.7.0
 #   then: git push && git push origin v0.7.0   (triggers release.yml)
-# Bumps the 4 independent version sources so tauri + gateway
-# + `shannon --version` all agree with the tag:
+# Bumps the 5 version sources the release.yml guard checks, so tauri
+# + gateway + the desktop UI + `shannon --version` all agree with the tag:
 #   1) Cargo.toml workspace.package.version  (crates with version.workspace=true inherit)
-#   2) desktop/tauri.conf.json  "version"  (Tauri does NOT read the cargo workspace)
-#   3) gateway/package.json        "version"
-#   4) `shannon --version` display value is tied to the workspace version
-#      automatically via clap::crate_version!() in shannon-cli (see task C).
+#   2) desktop/Cargo.toml       [package] version (NOT workspace-inherited)
+#   3) desktop/tauri.conf.json  "version"  (Tauri does NOT read the cargo workspace)
+#   4) gateway/package.json     "version"
+#   5) desktop/ui/package.json  "version"  (left at 0.6.0 from 0.8→0.10 —
+#      now guarded by release.yml's prep job, so keep it in lockstep here)
+#   `shannon --version` itself is tied to the workspace version automatically
+#   via clap::crate_version!() in shannon-cli (see task C).
 release-prep version:
     #!/usr/bin/env bash
     set -euo pipefail
@@ -326,9 +329,11 @@ release-prep version:
     sed -i 's/^    "version": ".*"/    "version": "{{version}}"/' desktop/tauri.conf.json
     # 4) gateway (independent TS package)
     sed -i 's/^  "version": ".*"/  "version": "{{version}}"/' gateway/package.json
+    # 5) desktop UI (independent TS package; guarded by release.yml since 2026-09)
+    sed -i 's/^  "version": ".*"/  "version": "{{version}}"/' desktop/ui/package.json
     # `shannon --version` is tied to the workspace version automatically via
     # env!("CARGO_PKG_VERSION") in shannon-cli (version.workspace=true) — no sed.
-    git add Cargo.toml desktop/Cargo.toml desktop/tauri.conf.json gateway/package.json
+    git add Cargo.toml desktop/Cargo.toml desktop/tauri.conf.json gateway/package.json desktop/ui/package.json
     git commit -m "chore(release): v{{version}}"
     git tag v{{version}}
     echo "✅ tagged v{{version}} — run: git push origin dev && git push origin v{{version}}"

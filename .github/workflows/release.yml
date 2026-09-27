@@ -88,9 +88,10 @@ jobs:
           echo "version=$VERSION" >> "$GITHUB_OUTPUT"
           echo "Tag:      $TAG"
           echo "Expected: $VERSION"
-          # Guard ALL FOUR version sources against tag drift (v0.7.0-rc1
+          # Guard ALL FIVE version sources against tag drift (v0.7.0-rc1
           # root cause: only the root Cargo.toml was checked, so the desktop
-          # and gateway manifests drifted silently).
+          # and gateway manifests drifted silently; desktop/ui joined after
+          # being left at 0.6.0 across the 0.8–0.11 releases).
           fail() { echo "::error::$1 ($2) does not match tag ($VERSION)"; exit 1; }
           v_cargo() { grep -m1 '^version' "$1" | sed -E 's/.*"([^"]+)".*/\1/'; }
           v_json()  { grep -m1 '"version"' "$1" | sed -E 's/.*"version"[[:space:]]*:[[:space:]]*"([^"]+)".*/\1/'; }
@@ -98,7 +99,8 @@ jobs:
           V="$(v_cargo desktop/Cargo.toml)";     echo "desktop/Cargo.toml:    $V"; [ "$V" = "$VERSION" ] || fail "desktop package version" "$V"
           V="$(v_json desktop/tauri.conf.json)"; echo "tauri.conf.json:       $V"; [ "$V" = "$VERSION" ] || fail "tauri.conf.json version" "$V"
           V="$(v_json gateway/package.json)";    echo "gateway/package.json:  $V"; [ "$V" = "$VERSION" ] || fail "gateway package.json version" "$V"
-          echo "Version guard passed: $VERSION (4/4 sources)"
+          V="$(v_json desktop/ui/package.json)"; echo "desktop/ui/package.json: $V"; [ "$V" = "$VERSION" ] || fail "desktop ui package.json version" "$V"
+          echo "Version guard passed: $VERSION (5/5 sources)"
 
   # ──────────────────────────── Create draft release ───────────────────────
   # The SINGLE owner of the release. Idempotently guarantees exactly one
@@ -160,6 +162,10 @@ jobs:
         include:
           - target: x86_64-unknown-linux-gnu
             os: ubuntu-22.04
+          # Native arm64 runner (public-repo hosted runner) — closes the gap
+          # where install.sh silently skipped the CLI on Linux/arm64.
+          - target: aarch64-unknown-linux-gnu
+            os: ubuntu-24.04-arm
           - target: x86_64-apple-darwin
             os: macos-14
           - target: aarch64-apple-darwin
@@ -395,9 +401,9 @@ jobs:
       # Release hardening (WP-15 follow-up): the deb hard-links pipewire/spa/
       # gbm/EGL/wayland since preview-capture shipped; a package that installs
       # but dies at launch must not reach users. Runs after upload on purpose —
-      # the artifact only lands in a DRAFT here, and the draft is flipped to
-      # published manually after CI is green, so a red gate still blocks the
-      # release.
+      # the artifact only lands in a DRAFT here, and the publish job flips the
+      # draft only after the tag CI gate is green, so a red gate still blocks
+      # the release.
       - name: Runtime dependency gate (deb @ ubuntu:22.04 floor)
         if: runner.os == 'Linux' && matrix.ext == 'deb'
         run: |
@@ -454,9 +460,21 @@ jobs:
         with:
           bun-version: latest
 
-      - name: Install deps
+      # The repo pins gateway dependencies in pnpm-lock.yaml. Bun cannot read
+      # a pnpm lockfile, so the previous `bun install --frozen-lockfile`
+      # resolved versions at build time — the compiled gateway binary was not
+      # reproducible. Install with pnpm (locked), keep Bun as the bundler only.
+      - name: Setup Node + pnpm
+        uses: actions/setup-node@e51e5fe84fc33b4c73ebe40526b2694712b5b858
+        with:
+          node-version: 24
+      - uses: pnpm/action-setup@ff378ebe6b225b0680b81c1ad4498ae0d1d3a5e3
+        with:
+          version: 10
+
+      - name: Install deps (pnpm, locked)
         working-directory: gateway
-        run: bun install --frozen-lockfile
+        run: pnpm install --frozen-lockfile
 
       - name: Typecheck
         working-directory: gateway
@@ -497,22 +515,78 @@ jobs:
           fail_on_unmatched_files: false
 
   # ───────────────────────────── Publish release ───────────────────────────
-  # The ONLY job that flips the release from draft -> published. Generates a
-  # SHA256SUMS over all binary/installer assets (excluding the per-asset
-  # .sha256 sidecars), attaches install.sh/install.ps1 + SHA256SUMS, then
-  # mirrors everything to Cloudflare R2 (guarded by vars.R2_BUCKET). With
-  # create-release guaranteeing a single release, the publish flip can no
-  # longer hit the `already_exists` collision that aborted rc2.
+  # The ONLY job that flips the release from draft -> published. It waits for
+  # the full CI gate (ci.yml runs on the tag in parallel with this workflow)
+  # to complete successfully before publishing. Then it generates a
+  # SHA256SUMS over ALL assets (binary/installer assets AND the
+  # install.sh/install.ps1 bootstrap scripts, so the scripts people
+  # curl|sh are checksummed too), generates build provenance
+  # (actions/attest-build-provenance), and mirrors everything to Cloudflare
+  # R2 (guarded by vars.R2_BUCKET). With create-release guaranteeing a single
+  # release, the publish flip can no longer hit the `already_exists`
+  # collision that aborted rc2.
   publish:
     name: publish release ${{ github.ref_name }}
     needs: [cli, desktop, gateway]
     if: success()
     runs-on: ubuntu-22.04
-    timeout-minutes: 20
+    # The CI-gate wait dominates: ci.yml's tag run (desktop matrix included)
+    # can take well over an hour; the poller gives it 2h.
+    timeout-minutes: 150
+    permissions:
+      contents: write
+      id-token: write # actions/attest-build-provenance (OIDC)
+      attestations: write
     env:
       GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
     steps:
       - uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8
+
+      # Quality gate: ci.yml fires on v* tags in parallel with this workflow
+      # and owns the full test/clippy/semver matrix. Publishing must not
+      # flip the draft while that gate is red or still running — previously
+      # this job only waited on the release builds themselves. Manual
+      # dispatches (workflow_dispatch) skip the wait: running it by hand on
+      # a non-tag ref is a deliberate override.
+      - name: Wait for tag CI gate (full ci.yml run) to pass
+        if: github.event_name == 'push'
+        shell: bash
+        run: |
+          set -euo pipefail
+          SHA="$(git rev-parse HEAD)"
+          echo "waiting for the CI workflow on $SHA"
+          deadline=$(( $(date +%s) + 2*60*60 ))
+          grace_deadline=$(( $(date +%s) + 10*60 )) # CI run registration lag
+          while :; do
+            NOW=$(date +%s)
+            [ "$NOW" -lt "$deadline" ] || {
+              echo "::error::CI gate did not finish within 2h — draft left unpublished for manual inspection"
+              exit 1; }
+            ROW="$(gh api "repos/$GITHUB_REPOSITORY/actions/runs?head_sha=$SHA" \
+              --paginate --jq '.workflow_runs[] | select(.name == "CI") | "\(.id) \(.status) \(.conclusion // "pending")"' | head -1 || true)"
+            if [ -z "$ROW" ]; then
+              [ "$NOW" -lt "$grace_deadline" ] || {
+                echo "::error::no CI workflow run registered on $SHA within 10min — refusing to publish unverified"
+                exit 1; }
+              echo "CI run not visible yet ($(date -u +%T)) — retrying"
+            else
+              read -r RUN_ID STATUS CONCLUSION <<<"$ROW"
+              echo "CI run $RUN_ID: status=$STATUS conclusion=$CONCLUSION"
+              case "$STATUS" in
+                completed)
+                  if [ "$CONCLUSION" != "success" ]; then
+                    echo "::error::CI gate on the tag concluded '$CONCLUSION' — draft left unpublished"
+                    gh release edit "${{ github.ref_name }}" --repo "$GITHUB_REPOSITORY" \
+                      --add-notes "⚠️ Automated publish withheld: the tag CI gate concluded '$CONCLUSION'." || true
+                    exit 1
+                  fi
+                  echo "CI gate green — proceeding to publish"
+                  break
+                  ;;
+              esac
+            fi
+            sleep 60
+          done
 
       - name: Download all release assets
         shell: bash
@@ -520,6 +594,17 @@ jobs:
           mkdir -p release-assets
           gh release download "${{ github.ref_name }}" -D release-assets --repo "$GITHUB_REPOSITORY"
           ls -la release-assets
+
+      # Stage the bootstrap scripts BEFORE the checksum manifest is generated
+      # so `curl … | sh` users get a verifiable SHA256SUMS entry for the very
+      # script they downloaded (previously the scripts were attached after
+      # the manifest and covered by nothing).
+      - name: Stage installer scripts into asset dir
+        shell: bash
+        run: |
+          cp scripts/install.sh release-assets/install.sh
+          cp scripts/install.ps1 release-assets/install.ps1
+          chmod +x release-assets/install.sh
 
       - name: Smoke-test release assets
         shell: bash
@@ -531,21 +616,30 @@ jobs:
           CORE="${VERSION%%-*}"
           # Build success ≠ shippable assets. Assert the load-bearing assets
           # exist with the expected (versioned) names, then run what can run
-          # natively on this runner.
+          # natively on this runner. Names verified against the v0.10.0
+          # release; extended to the full matrix (was 10, missing rpm,
+          # AppImage, aarch64 dmg, arm64 CLI/gateway).
           for a in \
             shannon-x86_64-unknown-linux-gnu.tar.gz \
+            shannon-aarch64-unknown-linux-gnu.tar.gz \
             shannon-x86_64-pc-windows-msvc.zip \
             shannon-x86_64-apple-darwin.tar.gz \
             shannon-aarch64-apple-darwin.tar.gz \
             shannon-gateway-linux-x64 \
+            shannon-gateway-linux-arm64 \
+            shannon-gateway-darwin-x64 \
             shannon-gateway-darwin-arm64 \
             shannon-gateway-windows-x64.exe \
             "shannon-desktop_${CORE}_amd64.deb" \
+            "shannon-desktop-${CORE}-1.x86_64.rpm" \
+            "shannon-desktop_${CORE}_amd64.AppImage" \
+            "shannon-desktop_${CORE}_x64.dmg" \
+            "shannon-desktop_${CORE}_aarch64.dmg" \
             "shannon-desktop_${CORE}_x64-setup.exe" \
-            "shannon-desktop_${CORE}_x64.dmg"; do
+            install.sh install.ps1 SHA256SUMS; do
             [ -f "release-assets/$a" ] || { echo "::error::missing expected asset: $a"; exit 1; }
           done
-          echo "asset presence: OK (10/10)"
+          echo "asset presence: OK"
           # CLI: the linux-x64 tarball runs natively here.
           mkdir -p /tmp/smoke
           tar -C /tmp/smoke -xzf release-assets/shannon-x86_64-unknown-linux-gnu.tar.gz
@@ -560,12 +654,23 @@ jobs:
             echo "::error::deb reports wrong version (want $CORE)"; exit 1; }
           echo "smoke tests passed"
 
+      # SLSA-style build provenance for the distributable assets (public,
+      # verifiable at https://github.com/<repo>/attestations). Deliberately
+      # placed BEFORE the publish flip so a provenance failure blocks the
+      # release, and before SHA256SUMS exists so subjects are exactly the
+      # distributables (the manifest itself isn't a build product).
+      - name: Attest build provenance
+        uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
+        with:
+          subject-path: release-assets/**
+
       - name: Generate SHA256SUMS
         shell: bash
         run: |
           cd release-assets
-          # Every binary/installer asset, but not the per-asset .sha256
-          # sidecars (checksums-of-checksums add no value) nor this file.
+          # Every distributable (now including install.sh/ps1), but not the
+          # per-asset .sha256 sidecars (checksums-of-checksums add no value)
+          # nor this file.
           find . -type f ! -name '*.sha256' -print0 \
             | sort -z | xargs -0 sha256sum \
             | sed 's| \./| |' > SHA256SUMS
@@ -577,10 +682,12 @@ jobs:
           set -euo pipefail
           TAG="${GITHUB_REF_NAME}"
           REPO="$GITHUB_REPOSITORY"
-          # Attach the unified installer scripts + checksum manifest to the
-          # existing draft (created by create-release).
+          # Attach the installer scripts + checksum manifest to the existing
+          # draft (created by create-release). The scripts and SHA256SUMS are
+          # uploaded from release-assets — the exact bytes the manifest
+          # covers — with --clobber for re-run idempotency.
           gh release upload "$TAG" \
-            scripts/install.sh scripts/install.ps1 release-assets/SHA256SUMS \
+            release-assets/install.sh release-assets/install.ps1 release-assets/SHA256SUMS \
             --clobber --repo "$REPO"
           # Flip the existing draft -> published, IN PLACE. softprops
           # action-gh-release@v2 with draft:false instead CREATES a second
