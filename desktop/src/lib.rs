@@ -9,6 +9,8 @@ use std::path::{Path, PathBuf};
 
 pub mod agent_teams;
 pub mod config;
+/// Local file logging, log retention, and the panic hook (audit batch 3, B).
+pub mod desktop_logging;
 pub mod events;
 pub mod extensions;
 pub mod file_permissions;
