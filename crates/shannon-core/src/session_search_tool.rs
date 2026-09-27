@@ -162,17 +162,15 @@ impl Tool for SessionSearchTool {
 mod tests {
     use super::*;
 
-    fn temp_container() -> PathBuf {
-        let dir = std::env::temp_dir()
-            .join("shannon-session-search-test")
-            .join(uuid::Uuid::new_v4().to_string());
-        std::fs::create_dir_all(&dir).unwrap();
-        dir
+    // RAII temp root: removed automatically when the guard drops.
+    fn temp_container() -> tempfile::TempDir {
+        tempfile::tempdir().unwrap()
     }
 
     #[tokio::test]
     async fn search_empty_container_reports_zero() {
-        let tool = SessionSearchTool::new(temp_container());
+        let container = temp_container();
+        let tool = SessionSearchTool::new(container.path().to_path_buf());
         let out = tool.execute(json!({ "query": "postgres" })).await.unwrap();
         assert!(!out.is_error);
         assert!(
@@ -180,26 +178,25 @@ mod tests {
             "{}",
             out.content
         );
-        let _ = std::fs::remove_dir_all(tool.container);
     }
 
     #[tokio::test]
     async fn search_requires_query() {
-        let tool = SessionSearchTool::new(temp_container());
+        let container = temp_container();
+        let tool = SessionSearchTool::new(container.path().to_path_buf());
         assert!(tool.execute(json!({})).await.is_err());
         assert!(tool.execute(json!({ "query": "  " })).await.is_err());
-        let _ = std::fs::remove_dir_all(tool.container);
     }
 
     #[tokio::test]
     async fn search_clamps_limit() {
         // limit > 25 must not error — it clamps.
-        let tool = SessionSearchTool::new(temp_container());
+        let container = temp_container();
+        let tool = SessionSearchTool::new(container.path().to_path_buf());
         let out = tool
             .execute(json!({ "query": "x", "limit": 1000 }))
             .await
             .unwrap();
         assert!(!out.is_error);
-        let _ = std::fs::remove_dir_all(tool.container);
     }
 }

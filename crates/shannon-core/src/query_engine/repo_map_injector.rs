@@ -105,6 +105,23 @@ impl RepoMapInjector {
         if md.trim().is_empty() {
             return None;
         }
+        // Guardrail, not a truncation: the renderer already bounds its own
+        // output (symbol-token budget per file plus a 4 KiB cap on the folded
+        // symbol-less-file list). If the render ever blows past the expected
+        // envelope (~tokens * 4 chars/token with slack for markdown headers),
+        // warn loudly so a regression in the renderer's bounds shows up in
+        // logs instead of silently eating the context window. We still return
+        // the markdown untouched.
+        let max_bytes = self.inner.budget_tokens.saturating_mul(32);
+        if md.len() > max_bytes {
+            tracing::warn!(
+                bytes = md.len(),
+                max_bytes,
+                root = %root.display(),
+                "repo map render exceeded expected size envelope (budget_tokens * 32); \
+                 renderer size bounds may have regressed"
+            );
+        }
         Some(md)
     }
 
@@ -175,26 +192,16 @@ mod tests {
     use super::*;
     use std::fs;
 
-    fn tmp_root(label: &str) -> PathBuf {
-        let mut p = std::env::temp_dir();
-        p.push(format!(
-            "shannon_repomap_injector_{label}_{}_{}",
-            std::process::id(),
-            std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .map(|d| d.as_nanos())
-                .unwrap_or(0)
-        ));
-        let _ = fs::remove_dir_all(&p);
-        fs::create_dir_all(&p).unwrap();
-        p
+    // RAII temp root: removed automatically when the guard drops.
+    fn tmp_root() -> tempfile::TempDir {
+        tempfile::tempdir().unwrap()
     }
 
     #[test]
     fn build_returns_none_for_empty_root() {
-        let root = tmp_root("empty");
+        let root = tmp_root();
         // Empty directory → no parseable files → map is empty → None.
-        let inj = RepoMapInjector::new(Some(&root), 2_000);
+        let inj = RepoMapInjector::new(Some(root.path()), 2_000);
         // Empty dir: walk succeeds but produces no entries. The markdown is
         // just the header line, which we treat as empty (whitespace only).
         let out = inj.build();
@@ -208,13 +215,13 @@ mod tests {
 
     #[test]
     fn build_returns_markdown_for_populated_root() {
-        let root = tmp_root("populated");
+        let root = tmp_root();
         fs::write(
-            root.join("hello.rs"),
+            root.path().join("hello.rs"),
             "pub fn greet(name: &str) -> String { format!(\"hi {name}\") }\n",
         )
         .unwrap();
-        let inj = RepoMapInjector::new(Some(&root), 2_000);
+        let inj = RepoMapInjector::new(Some(root.path()), 2_000);
         let md = inj.build().expect("markdown for populated root");
         assert!(md.contains("Repo Map:"));
         assert!(md.contains("greet"));
@@ -222,23 +229,23 @@ mod tests {
 
     #[test]
     fn notify_file_changed_updates_cache() {
-        let root = tmp_root("notify");
-        fs::write(root.join("a.rs"), "pub fn a() {}\n").unwrap();
-        let inj = RepoMapInjector::new(Some(&root), 2_000);
+        let root = tmp_root();
+        fs::write(root.path().join("a.rs"), "pub fn a() {}\n").unwrap();
+        let inj = RepoMapInjector::new(Some(root.path()), 2_000);
         // Warm the cache.
         let _ = inj.build();
         // Add a new file and notify — next build should surface it.
-        fs::write(root.join("b.rs"), "pub fn freshly_added() {}\n").unwrap();
-        let _ = inj.notify_file_changed(&root.join("b.rs")).unwrap();
+        fs::write(root.path().join("b.rs"), "pub fn freshly_added() {}\n").unwrap();
+        let _ = inj.notify_file_changed(&root.path().join("b.rs")).unwrap();
         let md = inj.build().expect("markdown after notify");
         assert!(md.contains("freshly_added"));
     }
 
     #[test]
     fn invalidating_forces_fresh_walk() {
-        let root = tmp_root("invalidate");
-        fs::write(root.join("a.rs"), "pub fn a() {}\n").unwrap();
-        let inj = RepoMapInjector::new(Some(&root), 2_000);
+        let root = tmp_root();
+        fs::write(root.path().join("a.rs"), "pub fn a() {}\n").unwrap();
+        let inj = RepoMapInjector::new(Some(root.path()), 2_000);
         let _ = inj.build();
         inj.invalidate();
         // No panic, no broken state.

@@ -1,5 +1,7 @@
 # Rust 编译产物
 /target/
+# CI feature-leg builds use CARGO_TARGET_DIR=target-feature (see ci.yml test-features)
+/target-feature/
 **/*.rs.bk
 *.pdb
 

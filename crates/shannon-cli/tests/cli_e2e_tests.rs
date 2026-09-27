@@ -7,18 +7,64 @@
 //! Coverage: Ollama, Anthropic, OpenAI, DeepSeek, Groq, Mistral (OpenAI-compatible),
 //! multi-turn tool use, context preservation, compact, streaming formats, error recovery.
 //!
-//! Run with: cargo test --test cli_e2e_tests -- --test-threads=1
+//! Run with: cargo nextest run -p shannon-cli
+//!
+//! nextest gives every test its own process, so the `#[serial]` attributes
+//! below are no-ops there (they only matter for plain `cargo test`, where
+//! they keep the runs single-threaded). Every CLI invocation runs in a
+//! per-test sandbox cwd ([`SandboxCmd`]), so results do not depend on the
+//! machine's directory state (e.g. a polluted /tmp).
 
 use assert_cmd::Command;
 use mockito::{Matcher, Mock, ServerGuard};
 use predicates::prelude::*;
 use serial_test::serial;
-use std::sync::atomic::{AtomicU32, Ordering};
+use std::ops::{Deref, DerefMut};
 
 const BIN: &str = "shannon";
 
-fn shannon() -> Command {
-    Command::cargo_bin(BIN).unwrap()
+/// A shannon CLI invocation pinned to a fresh, empty sandbox cwd.
+///
+/// The engine's repo-map injector cold-builds a tree-sitter symbol map of
+/// the CWD on startup. These tests used to pin the CWD to the machine's temp
+/// directory, so on a host with a polluted /tmp (thousands of leftover
+/// directories) every invocation burned tens of seconds of CPU walking it
+/// and was killed by the test's timeout with empty stdout. Each command now
+/// owns an empty `TempDir` instead: the walk stays O(1), the repomap disk
+/// cache (`$HOME/.shannon/repomap/`, keyed by CWD) is always cold, and the
+/// tests are hermetic with respect to machine state.
+///
+/// `Deref`/`DerefMut` to [`Command`] forward the usual builder chain
+/// (`env`, `args`, `timeout`, `current_dir`, `assert`, `output`, ...) so
+/// call sites read exactly like plain `assert_cmd` code. Tests that
+/// explicitly `current_dir()` elsewhere (session and offline suites) simply
+/// override the sandbox and leave its directory unused; the directory is
+/// kept alive by this handle until the assert on the chain result is done.
+struct SandboxCmd {
+    cmd: Command,
+    _cwd: tempfile::TempDir,
+}
+
+impl Deref for SandboxCmd {
+    type Target = Command;
+
+    fn deref(&self) -> &Command {
+        &self.cmd
+    }
+}
+
+impl DerefMut for SandboxCmd {
+    fn deref_mut(&mut self) -> &mut Command {
+        &mut self.cmd
+    }
+}
+
+/// Build the compiled `shannon` binary running in a fresh, empty sandbox cwd.
+fn shannon() -> SandboxCmd {
+    SandboxCmd {
+        cmd: Command::cargo_bin(BIN).unwrap(),
+        _cwd: tempfile::TempDir::new().expect("create per-test sandbox cwd"),
+    }
 }
 
 // ── Mock Response Builders ─────────────────────────────────────────────
@@ -117,16 +163,18 @@ fn mock_groq_streaming(server: &mut ServerGuard, text: &str) -> Mock {
 // ── Common Helpers ─────────────────────────────────────────────────────
 
 /// Build a shannon command with clean env vars pointing to mock server.
-fn shannon_with_mock(provider: &str, server_url: &str) -> Command {
-    let mut cmd = shannon();
-    cmd.env("SHANNON_BASE_URL", server_url)
+///
+/// The cwd is the per-test sandbox directory created by [`shannon`].
+fn shannon_with_mock(provider: &str, server_url: &str) -> SandboxCmd {
+    let mut sandbox = shannon();
+    sandbox
+        .env("SHANNON_BASE_URL", server_url)
         .env("SHANNON_PROVIDER", provider)
         .env("SHANNON_MODEL", "test-model")
         .env_remove("ANTHROPIC_API_KEY")
         .env_remove("OPENAI_API_KEY")
-        .env_remove("SHANNON_API_KEY")
-        .current_dir(std::env::temp_dir());
-    cmd
+        .env_remove("SHANNON_API_KEY");
+    sandbox
 }
 
 /// Extract owned stdout from an Assert result.
@@ -860,6 +908,21 @@ async fn test_rate_limit_exit_code() {
 /// like a silent stall: stderr notes each API retry (attempt/total + wait),
 /// json-stream emits a progress event, and the exhausted run still
 /// classifies as rate_limited (exit 4) — not a generic error.
+///
+/// Two independent retry layers are at play, and only one is tunable here:
+/// - API layer (the asserted `API retry N/4` lines): the engine retries the
+///   HTTP request per `RetryConfig::default()`
+///   (crates/shannon-engine/src/api/retry.rs) — 3 retries on top of the
+///   initial call, with a 1s/2s/4s backoff ladder. Hard-coded defaults; no
+///   env var reaches them.
+/// - Run layer (crates/shannon-cli/src/main.rs): after the API layer gives
+///   up, headless mode may restart the whole query (`SHANNON_RUN_RETRIES`,
+///   default 2), sleeping `SHANNON_RUN_RETRY_BACKOFF_BASE_MS` per attempt
+///   (default 20s, capped at 60s). The 50ms base set below only shrinks
+///   THIS layer so the exhausted-run path fits inside the 60s subprocess
+///   timeout and the terminal `"exit_code":4` stays reachable — removing it
+///   would not speed up the asserted API retries, it would push the
+///   run-level backoffs past the timeout.
 #[serial]
 #[tokio::test]
 #[serial]
@@ -875,8 +938,11 @@ async fn test_rate_limit_retries_are_visible_in_headless() {
 
     let result = shannon_with_mock("openai", &server.url())
         .env("SHANNON_API_KEY", "test-key")
-        // N2 backoff base: keep the 429 retry ladder fast (20s/40s sleeps
-        // would exceed the test timeout); the ladder order is what's asserted.
+        // Run-layer backoff base (main.rs run-retry sleep, default 20s per
+        // attempt, cap 60s): shrink it so the run-level restarts fit inside
+        // the 60s subprocess timeout. The asserted `API retry N/4` ladder
+        // comes from the API layer's RetryConfig::default() (1s/2s/4s) and
+        // is NOT affected by this env var.
         .env("SHANNON_RUN_RETRY_BACKOFF_BASE_MS", "50")
         .args([
             "--prompt",
@@ -1614,32 +1680,47 @@ async fn test_openai_still_sends_tools_by_default() {
 // Section: Multi-turn conversation tests (mockito, no API key needed)
 // ════════════════════════════════════════════════════════════════════════
 
-static SESSION_TEST_COUNTER: AtomicU32 = AtomicU32::new(0);
+/// RAII temp HOME: the directory is removed when the guard drops, so a
+/// failing session test no longer litters `/tmp` with `shannon-test-multiturn`
+/// subdirectories. Deref to `Path` so existing `&home` call sites are
+/// unchanged.
+struct TempHome(tempfile::TempDir);
+
+impl std::ops::Deref for TempHome {
+    type Target = std::path::Path;
+    fn deref(&self) -> &Self::Target {
+        self.0.path()
+    }
+}
 
 /// Create an isolated temp HOME directory for session tests.
-fn session_home_dir() -> std::path::PathBuf {
-    let n = SESSION_TEST_COUNTER.fetch_add(1, Ordering::SeqCst);
-    let dir = std::env::temp_dir()
-        .join("shannon-test-multiturn")
-        .join(format!("test-{n}-{}", std::process::id()));
-    std::fs::create_dir_all(&dir).unwrap();
-    dir
+fn session_home_dir() -> TempHome {
+    TempHome(tempfile::tempdir_in(std::env::temp_dir()).expect("create session home"))
 }
 
 /// Build a shannon command with isolated HOME for session testing.
 ///
-/// The child's project dir (CWD) is pinned to the isolated home dir: the
-/// engine's repo-map injector cold-builds a tree-sitter symbol map of the CWD
-/// on startup, and its disk cache (`$HOME/.shannon/repomap/`) is keyed by CWD
-/// — always cold here because HOME is per-test. With the default /tmp CWD
-/// that walk parses every source file in the machine's temp directory and can
+/// HOME is pinned to a per-test directory so sessions one test writes under
+/// `~/.shannon/sessions/` never leak into another, and the repomap disk
+/// cache stays cold. The CWD is also pinned to that same directory (this
+/// overrides [`shannon`]'s sandbox cwd, which then simply goes unused): the
+/// resume guard matches sessions by their recorded `cwd`, and the fixtures
+/// below seed sessions with `cwd = home`, so the child process must run
+/// from `home` for `-c` selection and the cross-directory rejection to be
+/// exercised deterministically. An empty per-test CWD also keeps the
+/// startup repo-map walk O(1) — with the historical default /tmp CWD that
+/// walk parsed every source file in the machine's temp directory and could
 /// burn tens of seconds of CPU per invocation, blowing past the test
-/// timeouts. An empty CWD keeps the walk O(1) and makes the tests hermetic.
-fn shannon_with_sessions(provider: &str, server_url: &str, home_dir: &std::path::Path) -> Command {
-    let mut cmd = shannon_with_mock(provider, server_url);
-    cmd.env("HOME", home_dir.to_string_lossy().to_string());
-    cmd.current_dir(home_dir);
-    cmd
+/// timeouts.
+fn shannon_with_sessions(
+    provider: &str,
+    server_url: &str,
+    home_dir: &std::path::Path,
+) -> SandboxCmd {
+    let mut sandbox = shannon_with_mock(provider, server_url);
+    sandbox.env("HOME", home_dir.to_string_lossy().to_string());
+    sandbox.cmd.current_dir(home_dir);
+    sandbox
 }
 
 /// Seed an L0 session log directly into the isolated sessions directory

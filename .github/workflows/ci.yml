@@ -163,6 +163,12 @@ jobs:
         run: cargo build --workspace
       - name: Compile tests
         run: cargo test --workspace --no-run
+      - name: Snapshot /tmp leak counters
+        # Baseline for the post-test leak check below: test fixtures once
+        # accumulated ~3k uncleaned /tmp entries, slowing every product-side
+        # temp-dir scan. Any growth across the suite means a producer is
+        # missing its tempfile::TempDir RAII cleanup.
+        run: ./scripts/check-tmp-leaks.sh --snapshot /tmp/tmp-leak-snapshot.txt
       - name: Test
         # `--profile ci` activates the `.config/nextest.toml` [profile.ci]
         # settings: per-test retries (2, exponential backoff) so known
@@ -197,6 +203,11 @@ jobs:
             find . -path ./target -prune -o -name '*.snap.new' -print
             exit 1
           fi
+      - name: Check /tmp test leaks
+        if: always()
+        # Runs even when the suite above fails, so a leaked fixture producer
+        # surfaces alongside the test failure instead of hiding behind it.
+        run: ./scripts/check-tmp-leaks.sh --check /tmp/tmp-leak-snapshot.txt
 
   # Feature-gated builds/tests (downscale_dims, click_spec, key combos,
   # libei backend, live browser tools) plus doctests. Split out of the Test
