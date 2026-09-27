@@ -904,19 +904,27 @@ Another instruction"#;
 
     #[test]
     fn test_load_merged_finds_claude_paths() {
-        let tmp = std::env::temp_dir().join(format!("shannon-test-{}", uuid::Uuid::new_v4()));
-        let claude_dir = tmp.join(".claude");
+        let tmp = tempfile::tempdir().unwrap();
+        let claude_dir = tmp.path().join(".claude");
         fs::create_dir_all(&claude_dir).unwrap();
-        fs::write(tmp.join("CLAUDE.md"), "Root CLAUDE.md instructions").unwrap();
+        fs::write(tmp.path().join("CLAUDE.md"), "Root CLAUDE.md instructions").unwrap();
         fs::write(
             claude_dir.join("CLAUDE.md"),
             "Hidden claude dir instructions",
         )
         .unwrap();
-        fs::write(tmp.join("CLAUDE.local.md"), "Local gitignored instructions").unwrap();
-        fs::write(tmp.join("SHANNON.md"), "Shannon project instructions").unwrap();
+        fs::write(
+            tmp.path().join("CLAUDE.local.md"),
+            "Local gitignored instructions",
+        )
+        .unwrap();
+        fs::write(
+            tmp.path().join("SHANNON.md"),
+            "Shannon project instructions",
+        )
+        .unwrap();
 
-        let manager = ProjectMemoryManager::new(tmp.clone());
+        let manager = ProjectMemoryManager::new(tmp.path().to_path_buf());
         let result = manager.load_merged().unwrap();
 
         assert!(
@@ -939,42 +947,38 @@ Another instruction"#;
             result.instructions.contains("Shannon project"),
             "Should contain SHANNON.md"
         );
-
-        let _ = fs::remove_dir_all(&tmp);
     }
 
     #[test]
     fn test_load_memory_index() {
-        let tmp = std::env::temp_dir().join(format!("shannon-test-{}", uuid::Uuid::new_v4()));
-        fs::create_dir_all(&tmp).unwrap();
+        let tmp = tempfile::tempdir().unwrap();
+        fs::create_dir_all(tmp.path()).unwrap();
 
         // No MEMORY.md → returns None
-        assert!(load_memory_index(&tmp).is_none());
+        assert!(load_memory_index(tmp.path()).is_none());
 
         // With MEMORY.md
         let content: Vec<String> = (0..300).map(|i| format!("Line {i}")).collect();
-        fs::write(tmp.join("MEMORY.md"), content.join("\n")).unwrap();
+        fs::write(tmp.path().join("MEMORY.md"), content.join("\n")).unwrap();
 
-        let result = load_memory_index(&tmp);
+        let result = load_memory_index(tmp.path());
         assert!(result.is_some(), "Should find MEMORY.md");
         let text = result.unwrap();
         assert!(text.contains("=== Memory Index"), "Should have header");
         // Should be truncated to ~200 lines
         assert!(!text.contains("Line 250"), "Should not contain line 250+");
-
-        let _ = fs::remove_dir_all(&tmp);
     }
 
     #[test]
     fn test_resolve_imports() {
-        let tmp = std::env::temp_dir().join(format!("shannon-test-{}", uuid::Uuid::new_v4()));
-        fs::create_dir_all(tmp.join("docs")).unwrap();
-        fs::write(tmp.join("README.md"), "# Readme content").unwrap();
-        fs::write(tmp.join("docs").join("guide.md"), "# Guide content").unwrap();
+        let tmp = tempfile::tempdir().unwrap();
+        fs::create_dir_all(tmp.path().join("docs")).unwrap();
+        fs::write(tmp.path().join("README.md"), "# Readme content").unwrap();
+        fs::write(tmp.path().join("docs").join("guide.md"), "# Guide content").unwrap();
 
         // Test @import resolution
         let content = "Header line\n@README\nMiddle line\n@docs/guide.md\nFooter";
-        let result = resolve_imports(content, &tmp);
+        let result = resolve_imports(content, tmp.path());
 
         assert!(
             result.contains("Header line"),
@@ -991,24 +995,20 @@ Another instruction"#;
             !result.contains("@README"),
             "Should not contain @README after resolution"
         );
-
-        let _ = fs::remove_dir_all(&tmp);
     }
 
     #[test]
     fn test_resolve_imports_unresolved() {
-        let tmp = std::env::temp_dir().join(format!("shannon-test-{}", uuid::Uuid::new_v4()));
-        fs::create_dir_all(&tmp).unwrap();
+        let tmp = tempfile::tempdir().unwrap();
+        fs::create_dir_all(tmp.path()).unwrap();
 
         // @nonexistent should be kept as-is
         let content = "Line one\n@nonexistent_file_xyz\nLine two";
-        let result = resolve_imports(content, &tmp);
+        let result = resolve_imports(content, tmp.path());
         assert!(
             result.contains("@nonexistent_file_xyz"),
             "Unresolved imports kept as-is"
         );
-
-        let _ = fs::remove_dir_all(&tmp);
     }
 
     #[test]
@@ -1024,20 +1024,18 @@ Another instruction"#;
 
     #[test]
     fn test_try_load_source() {
-        let tmp = std::env::temp_dir().join(format!("shannon-test-{}", uuid::Uuid::new_v4()));
-        fs::create_dir_all(&tmp).unwrap();
+        let tmp = tempfile::tempdir().unwrap();
+        fs::create_dir_all(tmp.path()).unwrap();
 
         // Nonexistent file
-        assert!(try_load_source(&tmp.join("nonexistent.md")).is_none());
+        assert!(try_load_source(&tmp.path().join("nonexistent.md")).is_none());
 
         // Valid file
-        fs::write(tmp.join("test.md"), "Test content").unwrap();
-        let result = try_load_source(&tmp.join("test.md"));
+        fs::write(tmp.path().join("test.md"), "Test content").unwrap();
+        let result = try_load_source(&tmp.path().join("test.md"));
         assert!(result.is_some(), "Should load valid file");
         let source = result.unwrap();
         assert!(source.config.content.contains("Test content"));
-
-        let _ = fs::remove_dir_all(&tmp);
     }
 
     // ── Path-scoped rules tests ──────────────────────────────────

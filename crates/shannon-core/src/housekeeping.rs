@@ -1105,17 +1105,17 @@ mod tests {
     use super::*;
     use std::fs;
 
-    fn temp_dir() -> PathBuf {
-        let dir = std::env::temp_dir()
-            .join("shannon-test-housekeeping")
-            .join(uuid::Uuid::new_v4().to_string());
-        let _ = fs::create_dir_all(&dir);
-        dir
+    /// RAII temp root: removed automatically when the returned guard drops.
+    fn temp_dir() -> tempfile::TempDir {
+        tempfile::tempdir().unwrap()
     }
 
-    fn housekeeper() -> Housekeeper {
+    fn housekeeper() -> (Housekeeper, tempfile::TempDir) {
         let dir = temp_dir();
-        Housekeeper::with_base_dir(dir, HousekeepingConfig::default()).unwrap()
+        let keeper =
+            Housekeeper::with_base_dir(dir.path().to_path_buf(), HousekeepingConfig::default())
+                .unwrap();
+        (keeper, dir)
     }
 
     // -----------------------------------------------------------------------
@@ -1155,7 +1155,7 @@ mod tests {
     fn test_temp_cleanup_task_execute_no_dir() {
         let task = TempFileCleanupTask;
         let dir = temp_dir();
-        let (msg, count) = task.execute(&dir).unwrap();
+        let (msg, count) = task.execute(dir.path()).unwrap();
         assert_eq!(count, Some(0));
         assert!(msg.contains("No temp directory"));
     }
@@ -1164,14 +1164,14 @@ mod tests {
     fn test_temp_cleanup_task_execute() {
         let task = TempFileCleanupTask;
         let dir = temp_dir();
-        let tmp_dir = dir.join("tmp");
+        let tmp_dir = dir.path().join("tmp");
         fs::create_dir_all(&tmp_dir).unwrap();
 
         // Create a file (recent, should not be removed).
         fs::write(tmp_dir.join("recent.txt"), "data").unwrap();
 
         // All files are recent, so nothing should be removed.
-        let (_msg, count) = task.execute(&dir).unwrap();
+        let (_msg, count) = task.execute(dir.path()).unwrap();
         assert_eq!(count, Some(0));
         assert!(tmp_dir.join("recent.txt").exists());
     }
@@ -1180,11 +1180,11 @@ mod tests {
     fn test_cache_refresh_task() {
         let task = CacheRefreshTask;
         let dir = temp_dir();
-        let cache_dir = dir.join("cache");
+        let cache_dir = dir.path().join("cache");
         fs::create_dir_all(&cache_dir).unwrap();
         fs::write(cache_dir.join("item1.dat"), "cache1").unwrap();
 
-        let (msg, count) = task.execute(&dir).unwrap();
+        let (msg, count) = task.execute(dir.path()).unwrap();
         assert_eq!(count, Some(2)); // item1.dat + .last_refresh
         assert!(msg.contains("refreshed"));
         assert!(cache_dir.join(".last_refresh").exists());
@@ -1445,7 +1445,7 @@ mod tests {
     fn test_log_rotation_task_no_dir() {
         let task = LogRotationTask;
         let dir = temp_dir();
-        let (_msg, count) = task.execute(&dir).unwrap();
+        let (_msg, count) = task.execute(dir.path()).unwrap();
         assert_eq!(count, Some(0));
     }
 
@@ -1453,7 +1453,7 @@ mod tests {
     fn test_log_rotation_task() {
         let task = LogRotationTask;
         let dir = temp_dir();
-        let logs_dir = dir.join("logs");
+        let logs_dir = dir.path().join("logs");
         fs::create_dir_all(&logs_dir).unwrap();
 
         // Create a small log file (should not be rotated).
@@ -1463,7 +1463,7 @@ mod tests {
         let large_log = logs_dir.join("large.log");
         fs::write(&large_log, "x".repeat(11 * 1024 * 1024)).unwrap();
 
-        let (_msg, count) = task.execute(&dir).unwrap();
+        let (_msg, count) = task.execute(dir.path()).unwrap();
         assert_eq!(count, Some(1));
         assert!(logs_dir.join("small.log").exists());
         assert!(!large_log.exists());
@@ -1478,21 +1478,22 @@ mod tests {
     fn test_housekeeper_creation() {
         let dir = temp_dir();
         let keeper =
-            Housekeeper::with_base_dir(dir.clone(), HousekeepingConfig::default()).unwrap();
+            Housekeeper::with_base_dir(dir.path().to_path_buf(), HousekeepingConfig::default())
+                .unwrap();
         assert_eq!(keeper.task_count(), 0);
-        assert!(dir.exists());
+        assert!(dir.path().exists());
     }
 
     #[test]
     fn test_register_builtin_tasks() {
-        let mut keeper = housekeeper();
+        let (mut keeper, _guard) = housekeeper();
         keeper.register_builtin_tasks();
         assert_eq!(keeper.task_count(), 5);
     }
 
     #[test]
     fn test_register_custom_task() {
-        let mut keeper = housekeeper();
+        let (mut keeper, _guard) = housekeeper();
 
         struct CustomTask;
         impl HousekeepingTask for CustomTask {
@@ -1517,14 +1518,14 @@ mod tests {
 
     #[test]
     fn test_should_run_never_run() {
-        let mut keeper = housekeeper();
+        let (mut keeper, _guard) = housekeeper();
         keeper.register_builtin_tasks();
         assert!(keeper.should_run("temp_file_cleanup").unwrap());
     }
 
     #[test]
     fn test_should_run_not_yet_due() {
-        let mut keeper = housekeeper();
+        let (mut keeper, _guard) = housekeeper();
         keeper.register_builtin_tasks();
 
         // Run the task.
@@ -1535,14 +1536,14 @@ mod tests {
 
     #[test]
     fn test_should_run_nonexistent() {
-        let keeper = housekeeper();
+        let (keeper, _guard) = housekeeper();
         let result = keeper.should_run("nonexistent");
         assert!(result.is_err());
     }
 
     #[test]
     fn test_run_task() {
-        let mut keeper = housekeeper();
+        let (mut keeper, _guard) = housekeeper();
         keeper.register_builtin_tasks();
 
         let result = keeper.run_task("temp_file_cleanup").unwrap();
@@ -1552,14 +1553,14 @@ mod tests {
 
     #[test]
     fn test_run_task_nonexistent() {
-        let mut keeper = housekeeper();
+        let (mut keeper, _guard) = housekeeper();
         let result = keeper.run_task("nonexistent");
         assert!(result.is_err());
     }
 
     #[test]
     fn test_run_all() {
-        let mut keeper = housekeeper();
+        let (mut keeper, _guard) = housekeeper();
         keeper.register_builtin_tasks();
 
         let results = keeper.run_all();
@@ -1571,7 +1572,7 @@ mod tests {
 
     #[test]
     fn test_run_all_skips_not_due() {
-        let mut keeper = housekeeper();
+        let (mut keeper, _guard) = housekeeper();
         keeper.register_builtin_tasks();
 
         // First run.
@@ -1585,7 +1586,7 @@ mod tests {
 
     #[test]
     fn test_run_all_forced() {
-        let mut keeper = housekeeper();
+        let (mut keeper, _guard) = housekeeper();
         keeper.register_builtin_tasks();
 
         keeper.run_all();
@@ -1595,7 +1596,7 @@ mod tests {
 
     #[test]
     fn test_due_tasks() {
-        let mut keeper = housekeeper();
+        let (mut keeper, _guard) = housekeeper();
         keeper.register_builtin_tasks();
 
         let due = keeper.due_tasks();
@@ -1608,7 +1609,7 @@ mod tests {
 
     #[test]
     fn test_list_tasks() {
-        let mut keeper = housekeeper();
+        let (mut keeper, _guard) = housekeeper();
         keeper.register_builtin_tasks();
         let tasks = keeper.list_tasks();
         assert!(tasks.contains(&"temp_file_cleanup"));

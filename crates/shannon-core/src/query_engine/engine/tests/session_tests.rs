@@ -99,10 +99,9 @@ fn test_query_engine_with_session_id() {
 fn test_save_and_restore_session_roundtrips_through_l0() {
     // §4.6: the restore roundtrip runs through the L0 event log only —
     // a live-looking session is written by the tee, then projected back.
-    let temp_dir = env::temp_dir()
-        .join("shannon-session-test")
-        .join(Uuid::new_v4().to_string());
-    fs::create_dir_all(&temp_dir).unwrap();
+    // RAII temp root: removed automatically when the guard drops.
+    let temp_root = tempfile::tempdir().unwrap();
+    let temp_dir = temp_root.path().to_path_buf();
 
     let state = Arc::new(StateManager::with_sessions_dir(temp_dir.clone()).unwrap());
     let session_id = Uuid::new_v4();

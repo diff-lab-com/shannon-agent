@@ -751,15 +751,6 @@ mod tests {
     };
     use std::collections::HashMap;
 
-    /// A unique temp path so parallel nextest processes never collide.
-    fn tmp_path() -> std::path::PathBuf {
-        let nanos = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .unwrap_or_default()
-            .as_nanos();
-        std::env::temp_dir().join(format!("shannon_pcs_{}_{}.toml", std::process::id(), nanos))
-    }
-
     fn anthropic_connect_config() -> ProviderModelConfig {
         let profile = ProviderProfile {
             id: "anthropic".to_string(),
@@ -800,7 +791,8 @@ mod tests {
 
     #[test]
     fn save_then_load_round_trips_store_credential() {
-        let path = tmp_path();
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("providers.toml");
         let original = anthropic_connect_config();
 
         save(&original, Some(&path)).unwrap();
@@ -826,7 +818,8 @@ mod tests {
 
     #[test]
     fn save_sets_owner_only_permissions_on_unix() {
-        let path = tmp_path();
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("providers.toml");
         save(&anthropic_connect_config(), Some(&path)).unwrap();
         #[cfg(unix)]
         {
@@ -842,7 +835,8 @@ mod tests {
 
     #[test]
     fn load_returns_none_when_file_absent() {
-        let path = tmp_path();
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("providers.toml");
         assert!(load(Some(&path)).is_none());
     }
 
@@ -850,7 +844,8 @@ mod tests {
     fn load_returns_none_and_logs_on_corrupt_file() {
         // A corrupt file must never block launch — load degrades to None so
         // the engine falls back to synthesis.
-        let path = tmp_path();
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("providers.toml");
         fs::write(&path, "this is = not = valid toml").unwrap();
         assert!(load(Some(&path)).is_none());
         let _ = fs::remove_file(&path);
@@ -858,18 +853,11 @@ mod tests {
 
     #[test]
     fn save_creates_parent_directory() {
-        let dir = std::env::temp_dir().join(format!(
-            "shannon_pcs_dir_{}_{}",
-            std::process::id(),
-            std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .unwrap_or_default()
-                .as_nanos()
-        ));
-        let path = dir.join("nested/providers.toml");
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("nested/providers.toml");
         save(&anthropic_connect_config(), Some(&path)).unwrap();
         assert!(path.exists());
-        let _ = fs::remove_dir_all(&dir);
+        let _ = fs::remove_dir_all(dir.path());
     }
 
     #[test]
@@ -951,7 +939,8 @@ mod tests {
     #[test]
     fn store_save_then_load_round_trips_tier_override() {
         use shannon_types::provider_config::TierName as ProviderTier;
-        let path = tmp_path();
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("providers.toml");
 
         let mut store = ProviderConfigStore::load_or_default();
         store.set_tier(
@@ -1014,7 +1003,8 @@ mod tests {
         // End-to-end "survives restart": persist → reload → resolve_active_target
         // returns the set_active model.
         use crate::provider_resolver::resolve_active_target;
-        let path = tmp_path();
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("providers.toml");
         let mut store = ProviderConfigStore::load_or_default();
         store.set_active(&LlmProvider::OpenAI, "gpt-4o");
         store.save_at(&path).unwrap();
@@ -1060,7 +1050,8 @@ mod tests {
         // The save/load cycle must round-trip default_max_tokens — same
         // contract as the other mutators. Without this the REPL `/model
         // --max-tokens N --save` change is silently lost on restart.
-        let path = tmp_path();
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("providers.toml");
         let mut store = ProviderConfigStore::load_or_default();
         store.set_default_max_tokens(&LlmProvider::OpenAI, Some(16384));
         store.save_at(&path).unwrap();
@@ -1221,7 +1212,8 @@ mod tests {
 
     #[test]
     fn upsert_profile_survives_save_load_cycle() {
-        let path = tmp_path();
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("providers.toml");
         let mut store = ProviderConfigStore::default();
         store.upsert_profile(
             sample_profile(
@@ -1332,17 +1324,9 @@ mod tests {
     /// `NotFound` error escapes.
     #[test]
     fn load_or_default_does_not_panic_when_lockfile_missing() {
-        let dir = std::env::temp_dir().join(format!(
-            "shannon_pcs_lockmiss_{}_{}",
-            std::process::id(),
-            std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .unwrap_or_default()
-                .as_nanos()
-        ));
-        fs::create_dir_all(&dir).unwrap();
-        let path = dir.join("providers.toml");
-        let lock_path = dir.join("providers.toml.lock");
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("providers.toml");
+        let lock_path = dir.path().join("providers.toml.lock");
         assert!(!lock_path.exists(), "lockfile must not pre-exist");
 
         // save() is the production entry point that touches the flock —
@@ -1380,7 +1364,7 @@ mod tests {
         );
         store.save().expect("second save on same path must succeed");
 
-        let _ = fs::remove_dir_all(&dir);
+        let _ = fs::remove_dir_all(dir.path());
     }
 
     /// Two consecutive `save()` calls in the same process must both
@@ -1389,16 +1373,8 @@ mod tests {
     /// "save_acquires_and_releases_flock" contract.
     #[test]
     fn save_acquires_and_releases_flock() {
-        let dir = std::env::temp_dir().join(format!(
-            "shannon_pcs_lockrel_{}_{}",
-            std::process::id(),
-            std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .unwrap_or_default()
-                .as_nanos()
-        ));
-        fs::create_dir_all(&dir).unwrap();
-        let path = dir.join("providers.toml");
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("providers.toml");
 
         let mut store = ProviderConfigStore::load_or_default_at(&path);
         store.upsert_profile(
@@ -1432,7 +1408,7 @@ mod tests {
         assert!(ids.contains(&"anthropic"));
         assert!(ids.contains(&"openai"));
 
-        let _ = fs::remove_dir_all(&dir);
+        let _ = fs::remove_dir_all(dir.path());
     }
 
     /// Two threads, each doing the canonical load-mutate-save sequence
@@ -1450,16 +1426,8 @@ mod tests {
         use std::sync::Arc;
         use std::thread;
 
-        let dir = std::env::temp_dir().join(format!(
-            "shannon_pcs_lock2t_{}_{}",
-            std::process::id(),
-            std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .unwrap_or_default()
-                .as_nanos()
-        ));
-        fs::create_dir_all(&dir).unwrap();
-        let path = Arc::new(dir.join("providers.toml"));
+        let dir = tempfile::tempdir().unwrap();
+        let path = Arc::new(dir.path().join("providers.toml"));
 
         // Seed the file so both threads start from the same baseline.
         {
@@ -1530,7 +1498,7 @@ mod tests {
             );
         }
 
-        let _ = fs::remove_dir_all(&dir);
+        let _ = fs::remove_dir_all(dir.path());
     }
 
     // ---- Hand-appended block preservation (providers.toml data integrity) ----
@@ -1638,16 +1606,8 @@ service = "glm-plan"
     /// minimax slot and the hand-appended glm-plan slot.
     #[test]
     fn semantic_write_preserves_valid_hand_appended_block_after_gateway() {
-        let dir = std::env::temp_dir().join(format!(
-            "shannon_pcs_handok_{}_{}",
-            std::process::id(),
-            std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .unwrap_or_default()
-                .as_nanos()
-        ));
-        fs::create_dir_all(&dir).unwrap();
-        let path = dir.join("providers.toml");
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("providers.toml");
         fs::write(&path, HAND_APPENDED_VALID).unwrap();
 
         // The append must load cleanly (the layout itself is legal for the
@@ -1683,7 +1643,7 @@ service = "glm-plan"
             "hand-appended glm-plan must survive a semantic write; got {ids:?}"
         );
 
-        let _ = fs::remove_dir_all(&dir);
+        let _ = fs::remove_dir_all(dir.path());
     }
 
     /// The defect: one schema-invalid detail in the hand block (here: an
@@ -1696,16 +1656,8 @@ service = "glm-plan"
     /// returned, the on-disk bytes are left byte-identical.
     #[test]
     fn semantic_write_refuses_to_destroy_unparseable_file() {
-        let dir = std::env::temp_dir().join(format!(
-            "shannon_pcs_handbad_{}_{}",
-            std::process::id(),
-            std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .unwrap_or_default()
-                .as_nanos()
-        ));
-        fs::create_dir_all(&dir).unwrap();
-        let path = dir.join("providers.toml");
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("providers.toml");
         fs::write(&path, HAND_APPENDED_UNKNOWN_FIELD).unwrap();
 
         // Read side: graceful degradation (the whole file is ignored —
@@ -1747,40 +1699,32 @@ service = "glm-plan"
             "a refused write must leave the file byte-identical"
         );
 
-        let _ = fs::remove_dir_all(&dir);
+        let _ = fs::remove_dir_all(dir.path());
     }
 
     /// No false positives: a save over an ABSENT, EMPTY, or VALID existing
     /// file must proceed exactly as before.
     #[test]
     fn save_still_allows_overwrite_of_absent_empty_or_valid_file() {
-        let dir = std::env::temp_dir().join(format!(
-            "shannon_pcs_handok3_{}_{}",
-            std::process::id(),
-            std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .unwrap_or_default()
-                .as_nanos()
-        ));
-        fs::create_dir_all(&dir).unwrap();
+        let dir = tempfile::tempdir().unwrap();
 
         // Absent target.
-        let absent = dir.join("absent.toml");
+        let absent = dir.path().join("absent.toml");
         save(&anthropic_connect_config(), Some(&absent)).expect("save to absent path");
         assert!(absent.exists());
 
         // Empty (degenerate) target — nothing to destroy.
-        let empty = dir.join("empty.toml");
+        let empty = dir.path().join("empty.toml");
         fs::write(&empty, "").unwrap();
         save(&anthropic_connect_config(), Some(&empty)).expect("save over empty file");
 
         // Valid target (the normal load-mutate-save flow).
-        let valid = dir.join("valid.toml");
+        let valid = dir.path().join("valid.toml");
         fs::write(&valid, HAND_APPENDED_VALID).unwrap();
         save(&anthropic_connect_config(), Some(&valid))
             .expect("save over a parseable file must proceed");
 
-        let _ = fs::remove_dir_all(&dir);
+        let _ = fs::remove_dir_all(dir.path());
     }
 
     /// `save_locked` from inside an outer `acquire_exclusive_lock` scope
@@ -1791,16 +1735,8 @@ service = "glm-plan"
     /// re-lock the same fd.
     #[test]
     fn save_locked_does_not_deadlock_inside_outer_lock() {
-        let dir = std::env::temp_dir().join(format!(
-            "shannon_pcs_locked_{}_{}",
-            std::process::id(),
-            std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .unwrap_or_default()
-                .as_nanos()
-        ));
-        fs::create_dir_all(&dir).unwrap();
-        let path = dir.join("providers.toml");
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("providers.toml");
 
         let mut store = ProviderConfigStore::load_or_default_at(&path);
         store.upsert_profile(
@@ -1832,6 +1768,6 @@ service = "glm-plan"
                 .any(|p| p.id == "anthropic")
         );
 
-        let _ = fs::remove_dir_all(&dir);
+        let _ = fs::remove_dir_all(dir.path());
     }
 }

@@ -16,7 +16,7 @@ use mockito::Matcher;
 use serde_json::json;
 use serial_test::serial;
 use std::fs;
-use std::path::PathBuf;
+use std::path::Path;
 
 const BIN: &str = "shannon";
 
@@ -230,7 +230,7 @@ fn ollama_tool_use_ndjson(tool_name: &str, tool_input: serde_json::Value) -> Str
 // ── Mock Server Setup ──────────────────────────────────────────────────
 
 /// Build a shannon command pointing to the mock server with Anthropic provider.
-fn shannon_with_mock(server_url: &str, workspace: &PathBuf) -> Command {
+fn shannon_with_mock(server_url: &str, workspace: &Path) -> Command {
     let mut cmd = shannon();
     cmd.env("SHANNON_BASE_URL", server_url)
         .env("SHANNON_PROVIDER", "anthropic")
@@ -242,7 +242,7 @@ fn shannon_with_mock(server_url: &str, workspace: &PathBuf) -> Command {
     cmd
 }
 
-fn shannon_openai(server_url: &str, workspace: &PathBuf) -> Command {
+fn shannon_openai(server_url: &str, workspace: &Path) -> Command {
     let mut cmd = shannon();
     cmd.env("SHANNON_BASE_URL", server_url)
         .env("SHANNON_PROVIDER", "openai")
@@ -254,7 +254,7 @@ fn shannon_openai(server_url: &str, workspace: &PathBuf) -> Command {
     cmd
 }
 
-fn shannon_ollama(server_url: &str, workspace: &PathBuf) -> Command {
+fn shannon_ollama(server_url: &str, workspace: &Path) -> Command {
     let mut cmd = shannon();
     cmd.env("SHANNON_BASE_URL", server_url)
         .env("SHANNON_PROVIDER", "ollama")
@@ -277,15 +277,9 @@ fn parse_json_output(stdout: &str) -> serde_json::Value {
 
 // ── Helper: Create isolated workspace ──────────────────────────────────
 
-fn create_workspace(name: &str) -> PathBuf {
-    let dir = std::env::temp_dir().join(format!("shannon-test-{name}-{}", std::process::id()));
-    let _ = fs::remove_dir_all(&dir);
-    fs::create_dir_all(&dir).expect("create workspace dir");
-    dir
-}
-
-fn cleanup_workspace(dir: &PathBuf) {
-    let _ = fs::remove_dir_all(dir);
+/// RAII temp workspace: removed automatically when the guard drops.
+fn create_workspace() -> tempfile::TempDir {
+    tempfile::tempdir().expect("create workspace dir")
 }
 
 // ── Mock helpers for multi-turn responses ───────────────────────────────
@@ -366,8 +360,8 @@ fn mount_final_text(server: &mut mockito::ServerGuard, text: &str) -> mockito::M
 #[serial]
 #[tokio::test]
 async fn test_task_write_file() {
-    let workspace = create_workspace("write");
-    let file_path = workspace.join("hello.txt");
+    let workspace = create_workspace();
+    let file_path = workspace.path().join("hello.txt");
 
     // Pre-create empty file so the path sandbox's canonicalize succeeds.
     // The Write tool will overwrite it with actual content.
@@ -385,7 +379,7 @@ async fn test_task_write_file() {
     let _m1 = mount_tool_use(&mut server, "toolu_1", "Write", tool_input);
     let _m2 = mount_text_after_tool(&mut server, "File created successfully.");
 
-    let result = shannon_with_mock(&server.url(), &workspace)
+    let result = shannon_with_mock(&server.url(), workspace.path())
         .args([
             "--prompt",
             "Create a file called hello.txt with content hello world",
@@ -411,8 +405,6 @@ async fn test_task_write_file() {
         .as_array()
         .expect("tool_calls should be array");
     assert!(!tool_calls.is_empty(), "Should have tool calls");
-
-    cleanup_workspace(&workspace);
 }
 
 // ── Test: Bash tool — execute a command ───────────────────────────────
@@ -420,7 +412,7 @@ async fn test_task_write_file() {
 #[serial]
 #[tokio::test]
 async fn test_task_bash_command() {
-    let workspace = create_workspace("bash");
+    let workspace = create_workspace();
 
     let mut server = mockito::Server::new_async().await;
 
@@ -431,7 +423,7 @@ async fn test_task_bash_command() {
     let _m1 = mount_tool_use(&mut server, "toolu_1", "Bash", tool_input);
     let _m2 = mount_text_after_tool(&mut server, "Command executed.");
 
-    let result = shannon_with_mock(&server.url(), &workspace)
+    let result = shannon_with_mock(&server.url(), workspace.path())
         .args([
             "--prompt",
             "Run the command echo task-test-output",
@@ -450,8 +442,6 @@ async fn test_task_bash_command() {
         stdout.contains("task-test-output"),
         "Output should contain tool execution result, got: {stdout}"
     );
-
-    cleanup_workspace(&workspace);
 }
 
 // ── Test: Edit tool — modify an existing file ─────────────────────────
@@ -459,8 +449,8 @@ async fn test_task_bash_command() {
 #[serial]
 #[tokio::test]
 async fn test_task_edit_file() {
-    let workspace = create_workspace("edit");
-    let file_path = workspace.join("config.toml");
+    let workspace = create_workspace();
+    let file_path = workspace.path().join("config.toml");
 
     // Pre-create file with initial content
     fs::write(&file_path, "version = \"1.0\"\nname = \"test\"\n").unwrap();
@@ -476,7 +466,7 @@ async fn test_task_edit_file() {
     let _m1 = mount_tool_use(&mut server, "toolu_1", "Edit", edit_input);
     let _m2 = mount_text_after_tool(&mut server, "Version updated to 2.0.");
 
-    let result = shannon_with_mock(&server.url(), &workspace)
+    let result = shannon_with_mock(&server.url(), workspace.path())
         .args([
             "--prompt",
             "Change the version from 1.0 to 2.0 in config.toml",
@@ -500,8 +490,6 @@ async fn test_task_edit_file() {
     let stdout = stdout_string(&result);
     let json = parse_json_output(&stdout);
     assert_eq!(json["exit_code"], "success");
-
-    cleanup_workspace(&workspace);
 }
 
 // ── Test: Multi-step — Edit then verify with Bash ─────────────────────
@@ -509,8 +497,8 @@ async fn test_task_edit_file() {
 #[serial]
 #[tokio::test]
 async fn test_task_edit_then_verify_multi_step() {
-    let workspace = create_workspace("multi");
-    let file_path = workspace.join("config.toml");
+    let workspace = create_workspace();
+    let file_path = workspace.path().join("config.toml");
 
     // Pre-create file
     fs::write(&file_path, "version = \"1.0\"\n").unwrap();
@@ -528,7 +516,7 @@ async fn test_task_edit_then_verify_multi_step() {
     // Turn 2: text confirmation after edit
     let _m2 = mount_text_after_tool(&mut server, "Version updated to 2.0.");
 
-    let result = shannon_with_mock(&server.url(), &workspace)
+    let result = shannon_with_mock(&server.url(), workspace.path())
         .args([
             "--prompt",
             "Change version from 1.0 to 2.0 in config.toml",
@@ -555,8 +543,6 @@ async fn test_task_edit_then_verify_multi_step() {
         tool_calls.iter().any(|tc| tc["tool"] == "Edit"),
         "Should have an Edit tool call"
     );
-
-    cleanup_workspace(&workspace);
 }
 
 // ── Test: Write + Bash in one session ─────────────────────────────────
@@ -564,8 +550,8 @@ async fn test_task_edit_then_verify_multi_step() {
 #[serial]
 #[tokio::test]
 async fn test_task_write_then_verify() {
-    let workspace = create_workspace("write_verify");
-    let file_path = workspace.join("output.txt");
+    let workspace = create_workspace();
+    let file_path = workspace.path().join("output.txt");
 
     // Pre-create empty file so the path sandbox's canonicalize succeeds.
     fs::write(&file_path, "").unwrap();
@@ -612,7 +598,7 @@ async fn test_task_write_then_verify() {
         .expect(1)
         .create();
 
-    let result = shannon_with_mock(&server.url(), &workspace)
+    let result = shannon_with_mock(&server.url(), workspace.path())
         .args([
             "--prompt",
             "Create output.txt with content status ok then verify it with cat",
@@ -638,8 +624,6 @@ async fn test_task_write_then_verify() {
         !tool_calls.is_empty(),
         "Should have at least 1 tool call, got: {tool_calls:?}"
     );
-
-    cleanup_workspace(&workspace);
 }
 
 // ── Test: Done-event token accounting accumulates every request ────────
@@ -656,9 +640,9 @@ async fn test_task_write_then_verify() {
 #[serial]
 #[tokio::test]
 async fn test_done_event_tokens_accumulate_across_requests() {
-    let workspace = create_workspace("token_accum");
+    let workspace = create_workspace();
 
-    let file_path = workspace.join("output.txt");
+    let file_path = workspace.path().join("output.txt");
     fs::write(&file_path, "").unwrap();
 
     let mut server = mockito::Server::new_async().await;
@@ -701,7 +685,7 @@ async fn test_done_event_tokens_accumulate_across_requests() {
         .expect(1)
         .create();
 
-    let result = shannon_with_mock(&server.url(), &workspace)
+    let result = shannon_with_mock(&server.url(), workspace.path())
         .args([
             "--prompt",
             "write hi then verify",
@@ -745,8 +729,6 @@ async fn test_done_event_tokens_accumulate_across_requests() {
         "tokens_used must equal in+out, got {}",
         done["tokens_used"]
     );
-
-    cleanup_workspace(&workspace);
 }
 
 // ── Test: Tool error handling — Bash command that fails ───────────────
@@ -754,7 +736,7 @@ async fn test_done_event_tokens_accumulate_across_requests() {
 #[serial]
 #[tokio::test]
 async fn test_task_bash_error_recovery() {
-    let workspace = create_workspace("bash_error");
+    let workspace = create_workspace();
 
     let mut server = mockito::Server::new_async().await;
 
@@ -768,7 +750,7 @@ async fn test_task_bash_error_recovery() {
         "The directory does not exist. That's expected.",
     );
 
-    let result = shannon_with_mock(&server.url(), &workspace)
+    let result = shannon_with_mock(&server.url(), workspace.path())
         .args([
             "--prompt",
             "List files in /nonexistent_directory_xyz_12345",
@@ -782,8 +764,6 @@ async fn test_task_bash_error_recovery() {
     let json = parse_json_output(&stdout);
     // Should still succeed — tool error is handled gracefully
     assert_eq!(json["exit_code"], "success");
-
-    cleanup_workspace(&workspace);
 }
 
 // ── Test: Text-only response — no tool use ────────────────────────────
@@ -791,7 +771,7 @@ async fn test_task_bash_error_recovery() {
 #[serial]
 #[tokio::test]
 async fn test_task_text_only_no_tools() {
-    let workspace = create_workspace("text_only");
+    let workspace = create_workspace();
 
     let mut server = mockito::Server::new_async().await;
 
@@ -804,7 +784,7 @@ async fn test_task_text_only_no_tools() {
         .expect(1)
         .create();
 
-    let result = shannon_with_mock(&server.url(), &workspace)
+    let result = shannon_with_mock(&server.url(), workspace.path())
         .args([
             "--prompt",
             "What is the meaning of life?",
@@ -826,8 +806,6 @@ async fn test_task_text_only_no_tools() {
         tool_calls.is_empty(),
         "Should have no tool calls for text-only response"
     );
-
-    cleanup_workspace(&workspace);
 }
 
 // ── Test: Multi-step — Read then Edit (3 turns) ──────────────────────
@@ -835,8 +813,8 @@ async fn test_task_text_only_no_tools() {
 #[serial]
 #[tokio::test]
 async fn test_task_read_then_edit() {
-    let workspace = create_workspace("read_edit");
-    let file_path = workspace.join("app.rs");
+    let workspace = create_workspace();
+    let file_path = workspace.path().join("app.rs");
 
     // Pre-create file with initial content
     fs::write(&file_path, "fn main() {\n    println!(\"hello\");\n}\n").unwrap();
@@ -871,7 +849,7 @@ async fn test_task_read_then_edit() {
     // Turn 3: text confirmation
     let _m3 = mount_final_text(&mut server, "File updated successfully.");
 
-    let result = shannon_with_mock(&server.url(), &workspace)
+    let result = shannon_with_mock(&server.url(), workspace.path())
         .args([
             "--prompt",
             "Read app.rs, then change hello to world",
@@ -902,8 +880,6 @@ async fn test_task_read_then_edit() {
         tool_calls.iter().any(|tc| tc["tool"] == "Edit"),
         "Should have an Edit tool call"
     );
-
-    cleanup_workspace(&workspace);
 }
 
 // ── Test: Glob tool — find files by pattern ───────────────────────────
@@ -911,12 +887,12 @@ async fn test_task_read_then_edit() {
 #[serial]
 #[tokio::test]
 async fn test_task_glob_files() {
-    let workspace = create_workspace("glob");
+    let workspace = create_workspace();
 
     // Create mixed files
-    fs::write(workspace.join("main.rs"), "fn main() {}").unwrap();
-    fs::write(workspace.join("lib.rs"), "pub fn lib() {}").unwrap();
-    fs::write(workspace.join("cargo.toml"), "[package]").unwrap();
+    fs::write(workspace.path().join("main.rs"), "fn main() {}").unwrap();
+    fs::write(workspace.path().join("lib.rs"), "pub fn lib() {}").unwrap();
+    fs::write(workspace.path().join("cargo.toml"), "[package]").unwrap();
 
     let mut server = mockito::Server::new_async().await;
 
@@ -926,7 +902,7 @@ async fn test_task_glob_files() {
     let _m1 = mount_tool_use(&mut server, "toolu_1", "Glob", glob_input);
     let _m2 = mount_text_after_tool(&mut server, "Found 2 Rust source files.");
 
-    let result = shannon_with_mock(&server.url(), &workspace)
+    let result = shannon_with_mock(&server.url(), workspace.path())
         .args([
             "--prompt",
             "Find all .rs files in the workspace",
@@ -944,8 +920,6 @@ async fn test_task_glob_files() {
         tool_calls.iter().any(|tc| tc["tool"] == "Glob"),
         "Should have a Glob tool call"
     );
-
-    cleanup_workspace(&workspace);
 }
 
 // ── Test: Grep tool — search for pattern in files ─────────────────────
@@ -953,14 +927,14 @@ async fn test_task_glob_files() {
 #[serial]
 #[tokio::test]
 async fn test_task_grep_search() {
-    let workspace = create_workspace("grep");
+    let workspace = create_workspace();
 
     fs::write(
-        workspace.join("code.rs"),
+        workspace.path().join("code.rs"),
         "fn process_data() {}\nfn handle_request() {}\n",
     )
     .unwrap();
-    fs::write(workspace.join("other.rs"), "fn compute() {}\n").unwrap();
+    fs::write(workspace.path().join("other.rs"), "fn compute() {}\n").unwrap();
 
     let mut server = mockito::Server::new_async().await;
 
@@ -970,7 +944,7 @@ async fn test_task_grep_search() {
     let _m1 = mount_tool_use(&mut server, "toolu_1", "Grep", grep_input);
     let _m2 = mount_text_after_tool(&mut server, "Found process_data function in code.rs.");
 
-    let result = shannon_with_mock(&server.url(), &workspace)
+    let result = shannon_with_mock(&server.url(), workspace.path())
         .args([
             "--prompt",
             "Search for 'fn process' in the codebase",
@@ -988,8 +962,6 @@ async fn test_task_grep_search() {
         tool_calls.iter().any(|tc| tc["tool"] == "Grep"),
         "Should have a Grep tool call"
     );
-
-    cleanup_workspace(&workspace);
 }
 
 // ── Test: Multi-step — Grep then Read (3 turns) ──────────────────────
@@ -997,10 +969,10 @@ async fn test_task_grep_search() {
 #[serial]
 #[tokio::test]
 async fn test_task_grep_then_read() {
-    let workspace = create_workspace("grep_read");
+    let workspace = create_workspace();
 
     fs::write(
-        workspace.join("mod.rs"),
+        workspace.path().join("mod.rs"),
         "pub fn calculate(x: i32) -> i32 {\n    x * 2\n}\n",
     )
     .unwrap();
@@ -1031,7 +1003,7 @@ async fn test_task_grep_then_read() {
     // Turn 3: text summary
     let _m3 = mount_final_text(&mut server, "The calculate function multiplies by 2.");
 
-    let result = shannon_with_mock(&server.url(), &workspace)
+    let result = shannon_with_mock(&server.url(), workspace.path())
         .args([
             "--prompt",
             "Search for 'calculate', then read the file containing it",
@@ -1055,8 +1027,6 @@ async fn test_task_grep_then_read() {
         tool_calls.iter().any(|tc| tc["tool"] == "Read"),
         "Should have a Read tool call"
     );
-
-    cleanup_workspace(&workspace);
 }
 
 // ── Test: Multi-step — Edit two files sequentially (3 turns) ──────────
@@ -1064,10 +1034,10 @@ async fn test_task_grep_then_read() {
 #[serial]
 #[tokio::test]
 async fn test_task_multi_file_edit() {
-    let workspace = create_workspace("multi_edit");
+    let workspace = create_workspace();
 
-    fs::write(workspace.join("a.txt"), "alpha = 1\n").unwrap();
-    fs::write(workspace.join("b.txt"), "beta = 1\n").unwrap();
+    fs::write(workspace.path().join("a.txt"), "alpha = 1\n").unwrap();
+    fs::write(workspace.path().join("b.txt"), "beta = 1\n").unwrap();
 
     let mut server = mockito::Server::new_async().await;
 
@@ -1103,7 +1073,7 @@ async fn test_task_multi_file_edit() {
     // Turn 3: text confirmation
     let _m3 = mount_final_text(&mut server, "Both files updated.");
 
-    let result = shannon_with_mock(&server.url(), &workspace)
+    let result = shannon_with_mock(&server.url(), workspace.path())
         .args([
             "--prompt",
             "Change alpha to 2 in a.txt and beta to 2 in b.txt",
@@ -1116,16 +1086,14 @@ async fn test_task_multi_file_edit() {
         .assert();
 
     // Verify both files edited
-    let a = fs::read_to_string(workspace.join("a.txt")).expect("read a.txt");
+    let a = fs::read_to_string(workspace.path().join("a.txt")).expect("read a.txt");
     assert!(a.contains("alpha = 2"), "a.txt should be updated, got: {a}");
-    let b = fs::read_to_string(workspace.join("b.txt")).expect("read b.txt");
+    let b = fs::read_to_string(workspace.path().join("b.txt")).expect("read b.txt");
     assert!(b.contains("beta = 2"), "b.txt should be updated, got: {b}");
 
     let stdout = stdout_string(&result);
     let json = parse_json_output(&stdout);
     assert_eq!(json["exit_code"], "success");
-
-    cleanup_workspace(&workspace);
 }
 
 // ════════════════════════════════════════════════════════════════════════
@@ -1139,7 +1107,7 @@ async fn test_task_multi_file_edit() {
 #[serial]
 #[tokio::test]
 async fn scenario_anthropic_text_only() {
-    let workspace = create_workspace("prov_a_text");
+    let workspace = create_workspace();
     let mut server = mockito::Server::new_async().await;
 
     let _m = server
@@ -1151,7 +1119,7 @@ async fn scenario_anthropic_text_only() {
         .expect(1)
         .create();
 
-    let result = shannon_with_mock(&server.url(), &workspace)
+    let result = shannon_with_mock(&server.url(), workspace.path())
         .args(["--prompt", "Say hello", "--output-format", "json"])
         .timeout(std::time::Duration::from_secs(30))
         .assert();
@@ -1166,14 +1134,12 @@ async fn scenario_anthropic_text_only() {
             .contains("Anthropic"),
         "Response should contain 'Anthropic'"
     );
-
-    cleanup_workspace(&workspace);
 }
 
 #[serial]
 #[tokio::test]
 async fn scenario_openai_text_only() {
-    let workspace = create_workspace("prov_o_text");
+    let workspace = create_workspace();
     let mut server = mockito::Server::new_async().await;
 
     let _m = server
@@ -1184,7 +1150,7 @@ async fn scenario_openai_text_only() {
         .expect(1)
         .create();
 
-    let result = shannon_openai(&server.url(), &workspace)
+    let result = shannon_openai(&server.url(), workspace.path())
         .args(["--prompt", "Say hello", "--output-format", "json"])
         .timeout(std::time::Duration::from_secs(30))
         .assert();
@@ -1196,14 +1162,12 @@ async fn scenario_openai_text_only() {
         json["response"].as_str().unwrap_or("").contains("OpenAI"),
         "Response should contain 'OpenAI'"
     );
-
-    cleanup_workspace(&workspace);
 }
 
 #[serial]
 #[tokio::test]
 async fn scenario_ollama_text_only() {
-    let workspace = create_workspace("prov_ol_text");
+    let workspace = create_workspace();
     let mut server = mockito::Server::new_async().await;
 
     let _m = server
@@ -1214,7 +1178,7 @@ async fn scenario_ollama_text_only() {
         .expect(1)
         .create();
 
-    let result = shannon_ollama(&server.url(), &workspace)
+    let result = shannon_ollama(&server.url(), workspace.path())
         .args(["--prompt", "Say hello", "--output-format", "json"])
         .timeout(std::time::Duration::from_secs(30))
         .assert();
@@ -1226,8 +1190,6 @@ async fn scenario_ollama_text_only() {
         json["response"].as_str().unwrap_or("").contains("Ollama"),
         "Response should contain 'Ollama'"
     );
-
-    cleanup_workspace(&workspace);
 }
 
 // ════════════════════════════════════════════════════════════════════════
@@ -1237,8 +1199,8 @@ async fn scenario_ollama_text_only() {
 #[serial]
 #[tokio::test]
 async fn scenario_anthropic_write_tool() {
-    let workspace = create_workspace("prov_a_write");
-    let file_path = workspace.join("out.txt");
+    let workspace = create_workspace();
+    let file_path = workspace.path().join("out.txt");
     fs::write(&file_path, "").unwrap();
 
     let mut server = mockito::Server::new_async().await;
@@ -1264,7 +1226,7 @@ async fn scenario_anthropic_write_tool() {
         .expect(1)
         .create();
 
-    let result = shannon_with_mock(&server.url(), &workspace)
+    let result = shannon_with_mock(&server.url(), workspace.path())
         .args([
             "--prompt",
             "Write 'hello anthropic' to out.txt",
@@ -1280,15 +1242,13 @@ async fn scenario_anthropic_write_tool() {
     let stdout = stdout_string(&result);
     let json = parse_json_output(&stdout);
     assert_eq!(json["exit_code"], "success");
-
-    cleanup_workspace(&workspace);
 }
 
 #[serial]
 #[tokio::test]
 async fn scenario_openai_write_tool() {
-    let workspace = create_workspace("prov_o_write");
-    let file_path = workspace.join("out.txt");
+    let workspace = create_workspace();
+    let file_path = workspace.path().join("out.txt");
     fs::write(&file_path, "").unwrap();
 
     let mut server = mockito::Server::new_async().await;
@@ -1314,7 +1274,7 @@ async fn scenario_openai_write_tool() {
         .expect(1)
         .create();
 
-    let result = shannon_openai(&server.url(), &workspace)
+    let result = shannon_openai(&server.url(), workspace.path())
         .args([
             "--prompt",
             "Write 'hello openai' to out.txt",
@@ -1330,15 +1290,13 @@ async fn scenario_openai_write_tool() {
     let stdout = stdout_string(&result);
     let json = parse_json_output(&stdout);
     assert_eq!(json["exit_code"], "success");
-
-    cleanup_workspace(&workspace);
 }
 
 #[serial]
 #[tokio::test]
 async fn scenario_ollama_write_tool() {
-    let workspace = create_workspace("prov_ol_write");
-    let file_path = workspace.join("out.txt");
+    let workspace = create_workspace();
+    let file_path = workspace.path().join("out.txt");
     fs::write(&file_path, "").unwrap();
 
     let mut server = mockito::Server::new_async().await;
@@ -1364,7 +1322,7 @@ async fn scenario_ollama_write_tool() {
         .expect(1)
         .create();
 
-    let result = shannon_ollama(&server.url(), &workspace)
+    let result = shannon_ollama(&server.url(), workspace.path())
         .args([
             "--prompt",
             "Write 'hello ollama' to out.txt",
@@ -1380,8 +1338,6 @@ async fn scenario_ollama_write_tool() {
     let stdout = stdout_string(&result);
     let json = parse_json_output(&stdout);
     assert_eq!(json["exit_code"], "success");
-
-    cleanup_workspace(&workspace);
 }
 
 // ════════════════════════════════════════════════════════════════════════
@@ -1391,7 +1347,7 @@ async fn scenario_ollama_write_tool() {
 #[serial]
 #[tokio::test]
 async fn scenario_anthropic_bash_tool() {
-    let workspace = create_workspace("prov_a_bash");
+    let workspace = create_workspace();
     let mut server = mockito::Server::new_async().await;
 
     let bash_input = json!({"command": "echo scenario_anthropic"});
@@ -1415,7 +1371,7 @@ async fn scenario_anthropic_bash_tool() {
         .expect(1)
         .create();
 
-    let result = shannon_with_mock(&server.url(), &workspace)
+    let result = shannon_with_mock(&server.url(), workspace.path())
         .args([
             "--prompt",
             "Run echo scenario_anthropic",
@@ -1433,14 +1389,12 @@ async fn scenario_anthropic_bash_tool() {
         tool_calls.iter().any(|tc| tc["tool"] == "Bash"),
         "Should have a Bash tool call"
     );
-
-    cleanup_workspace(&workspace);
 }
 
 #[serial]
 #[tokio::test]
 async fn scenario_openai_bash_tool() {
-    let workspace = create_workspace("prov_o_bash");
+    let workspace = create_workspace();
     let mut server = mockito::Server::new_async().await;
 
     let bash_input = json!({"command": "echo scenario_openai"});
@@ -1462,7 +1416,7 @@ async fn scenario_openai_bash_tool() {
         .expect(1)
         .create();
 
-    let result = shannon_openai(&server.url(), &workspace)
+    let result = shannon_openai(&server.url(), workspace.path())
         .args([
             "--prompt",
             "Run echo scenario_openai",
@@ -1480,14 +1434,12 @@ async fn scenario_openai_bash_tool() {
         tool_calls.iter().any(|tc| tc["tool"] == "Bash"),
         "Should have a Bash tool call"
     );
-
-    cleanup_workspace(&workspace);
 }
 
 #[serial]
 #[tokio::test]
 async fn scenario_ollama_bash_tool() {
-    let workspace = create_workspace("prov_ol_bash");
+    let workspace = create_workspace();
     let mut server = mockito::Server::new_async().await;
 
     let bash_input = json!({"command": "echo scenario_ollama"});
@@ -1509,7 +1461,7 @@ async fn scenario_ollama_bash_tool() {
         .expect(1)
         .create();
 
-    let result = shannon_ollama(&server.url(), &workspace)
+    let result = shannon_ollama(&server.url(), workspace.path())
         .args([
             "--prompt",
             "Run echo scenario_ollama",
@@ -1527,8 +1479,6 @@ async fn scenario_ollama_bash_tool() {
         tool_calls.iter().any(|tc| tc["tool"] == "Bash"),
         "Should have a Bash tool call"
     );
-
-    cleanup_workspace(&workspace);
 }
 
 // ════════════════════════════════════════════════════════════════════════
@@ -1538,8 +1488,8 @@ async fn scenario_ollama_bash_tool() {
 #[serial]
 #[tokio::test]
 async fn scenario_anthropic_read_file() {
-    let workspace = create_workspace("prov_a_read");
-    let file_path = workspace.join("src.rs");
+    let workspace = create_workspace();
+    let file_path = workspace.path().join("src.rs");
     fs::write(&file_path, "fn main() { println!(\"hello\"); }").unwrap();
 
     let mut server = mockito::Server::new_async().await;
@@ -1565,7 +1515,7 @@ async fn scenario_anthropic_read_file() {
         .expect(1)
         .create();
 
-    let result = shannon_with_mock(&server.url(), &workspace)
+    let result = shannon_with_mock(&server.url(), workspace.path())
         .args([
             "--prompt",
             "Read src.rs and describe it",
@@ -1585,15 +1535,13 @@ async fn scenario_anthropic_read_file() {
             .contains("main function"),
         "Response should describe the file content"
     );
-
-    cleanup_workspace(&workspace);
 }
 
 #[serial]
 #[tokio::test]
 async fn scenario_openai_read_file() {
-    let workspace = create_workspace("prov_o_read");
-    let file_path = workspace.join("src.rs");
+    let workspace = create_workspace();
+    let file_path = workspace.path().join("src.rs");
     fs::write(&file_path, "fn main() { println!(\"hello\"); }").unwrap();
 
     let mut server = mockito::Server::new_async().await;
@@ -1617,7 +1565,7 @@ async fn scenario_openai_read_file() {
         .expect(1)
         .create();
 
-    let result = shannon_openai(&server.url(), &workspace)
+    let result = shannon_openai(&server.url(), workspace.path())
         .args([
             "--prompt",
             "Read src.rs and describe it",
@@ -1636,15 +1584,13 @@ async fn scenario_openai_read_file() {
             .unwrap_or("")
             .contains("main function")
     );
-
-    cleanup_workspace(&workspace);
 }
 
 #[serial]
 #[tokio::test]
 async fn scenario_ollama_read_file() {
-    let workspace = create_workspace("prov_ol_read");
-    let file_path = workspace.join("src.rs");
+    let workspace = create_workspace();
+    let file_path = workspace.path().join("src.rs");
     fs::write(&file_path, "fn main() { println!(\"hello\"); }").unwrap();
 
     let mut server = mockito::Server::new_async().await;
@@ -1668,7 +1614,7 @@ async fn scenario_ollama_read_file() {
         .expect(1)
         .create();
 
-    let result = shannon_ollama(&server.url(), &workspace)
+    let result = shannon_ollama(&server.url(), workspace.path())
         .args([
             "--prompt",
             "Read src.rs and describe it",
@@ -1687,8 +1633,6 @@ async fn scenario_ollama_read_file() {
             .unwrap_or("")
             .contains("main function")
     );
-
-    cleanup_workspace(&workspace);
 }
 
 // ════════════════════════════════════════════════════════════════════════
@@ -1698,8 +1642,8 @@ async fn scenario_ollama_read_file() {
 #[serial]
 #[tokio::test]
 async fn scenario_anthropic_multi_tool() {
-    let workspace = create_workspace("prov_a_multi");
-    let file_path = workspace.join("out.txt");
+    let workspace = create_workspace();
+    let file_path = workspace.path().join("out.txt");
     fs::write(&file_path, "").unwrap();
 
     let mut server = mockito::Server::new_async().await;
@@ -1733,7 +1677,7 @@ async fn scenario_anthropic_multi_tool() {
         .expect(1)
         .create();
 
-    let result = shannon_with_mock(&server.url(), &workspace)
+    let result = shannon_with_mock(&server.url(), workspace.path())
         .args([
             "--prompt",
             "Write 'multi-tool works' to out.txt and run echo parallel",
@@ -1758,8 +1702,6 @@ async fn scenario_anthropic_multi_tool() {
         tool_calls.iter().any(|tc| tc["tool"] == "Bash"),
         "Should have a Bash tool call"
     );
-
-    cleanup_workspace(&workspace);
 }
 
 // ════════════════════════════════════════════════════════════════════════
@@ -1862,8 +1804,8 @@ const ANSWER_SCHEMA: &str =
 #[serial]
 #[tokio::test]
 async fn schema_minimax_think_close_on_tool_chunk_validates() {
-    let workspace = create_workspace("schema_think_close");
-    fs::write(workspace.join("data.txt"), "42").unwrap();
+    let workspace = create_workspace();
+    fs::write(workspace.path().join("data.txt"), "42").unwrap();
 
     let mut server = mockito::Server::new_async().await;
     let read_input = json!({"file_path": "data.txt"});
@@ -1890,7 +1832,7 @@ async fn schema_minimax_think_close_on_tool_chunk_validates() {
         .expect(1)
         .create();
 
-    let result = shannon_openai(&server.url(), &workspace)
+    let result = shannon_openai(&server.url(), workspace.path())
         .args([
             "--prompt",
             "Read data.txt and report the number as JSON",
@@ -1920,8 +1862,6 @@ async fn schema_minimax_think_close_on_tool_chunk_validates() {
         serde_json::from_str::<serde_json::Value>(json["response"].as_str().unwrap_or(""))
             .expect("response should be the schema-validated JSON object");
     assert_eq!(validated["answer"], 42);
-
-    cleanup_workspace(&workspace);
 }
 
 /// Regression (same dogfood run, second half): headless `--schema`
@@ -1932,8 +1872,8 @@ async fn schema_minimax_think_close_on_tool_chunk_validates() {
 #[serial]
 #[tokio::test]
 async fn schema_validation_targets_final_turn_not_transcript() {
-    let workspace = create_workspace("schema_final_turn");
-    fs::write(workspace.join("data.txt"), "42").unwrap();
+    let workspace = create_workspace();
+    fs::write(workspace.path().join("data.txt"), "42").unwrap();
 
     let mut server = mockito::Server::new_async().await;
     let read_input = json!({"file_path": "data.txt"});
@@ -1960,7 +1900,7 @@ async fn schema_validation_targets_final_turn_not_transcript() {
         .expect(1)
         .create();
 
-    let result = shannon_openai(&server.url(), &workspace)
+    let result = shannon_openai(&server.url(), workspace.path())
         .args([
             "--prompt",
             "Read data.txt and report the number as JSON",
@@ -1993,6 +1933,4 @@ async fn schema_validation_targets_final_turn_not_transcript() {
     let validated =
         serde_json::from_str::<serde_json::Value>(response).expect("validated final answer");
     assert_eq!(validated["answer"], 42);
-
-    cleanup_workspace(&workspace);
 }

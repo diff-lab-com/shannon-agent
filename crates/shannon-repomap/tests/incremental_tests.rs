@@ -32,21 +32,13 @@ fn multi_lang_root() -> PathBuf {
 /// module, and one Go module — 6 supported files in total.
 const EXPECTED_FILE_COUNT: usize = 6;
 
-/// Snapshot the multi-language fixture into a private temp directory so
-/// tests can mutate it freely without racing each other. Returns the
-/// snapshot root.
-fn snapshot_multi_lang(label: &str) -> PathBuf {
+/// Snapshot the multi-language fixture into a private RAII temp directory
+/// so tests can mutate it freely without racing each other. Returns the
+/// snapshot guard; the copy is removed when it drops.
+fn snapshot_multi_lang() -> tempfile::TempDir {
     let src = multi_lang_root();
-    let dst = std::env::temp_dir().join(format!(
-        "shannon_repomap_test_{label}_{}_{}",
-        std::process::id(),
-        std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .map(|d| d.as_nanos())
-            .unwrap_or(0)
-    ));
-    let _ = std::fs::remove_dir_all(&dst);
-    copy_tree(&src, &dst);
+    let dst = tempfile::tempdir().expect("create snapshot dir");
+    copy_tree(&src, dst.path());
     dst
 }
 
@@ -108,15 +100,15 @@ fn multi_lang_fixture_loads_all_languages() {
 
 #[test]
 fn incremental_update_handles_single_file_change() {
-    let root = snapshot_multi_lang("single_change");
-    let mut cache = RepoMapCache::ephemeral(&root).expect("ephemeral cache");
+    let root = snapshot_multi_lang();
+    let mut cache = RepoMapCache::ephemeral(root.path()).expect("ephemeral cache");
     let initial = cache.file_count();
     assert_eq!(initial, EXPECTED_FILE_COUNT);
 
     // Touch a single file: re-write the auth module with two extra functions
     // and an extra impl. Using a totally different symbol set guarantees
     // the parsed symbol list differs from the snapshot.
-    let auth_path = root.join("src/auth.rs");
+    let auth_path = root.path().join("src/auth.rs");
     let updated = "\
 pub trait Authenticator {\n    fn authenticate(&self, token: &str) -> bool;\n    fn rotate(&mut self, new_secret: &str);\n}\n\
 pub struct TokenAuth {\n    pub secret: String,\n}\n\
@@ -151,11 +143,11 @@ pub fn second_helper_v2() -> usize { 42 }\n";
 
 #[test]
 fn incremental_update_handles_removed_file() {
-    let root = snapshot_multi_lang("removed");
-    let mut cache = RepoMapCache::ephemeral(&root).expect("ephemeral cache");
+    let root = snapshot_multi_lang();
+    let mut cache = RepoMapCache::ephemeral(root.path()).expect("ephemeral cache");
     assert_eq!(cache.file_count(), EXPECTED_FILE_COUNT);
 
-    let go_path = root.join("pkg/server.go");
+    let go_path = root.path().join("pkg/server.go");
     std::fs::remove_file(&go_path).expect("remove go file");
     let changed = cache
         .update_file(&go_path)
@@ -174,13 +166,13 @@ fn update_file_skips_reparse_when_mtime_unchanged() {
     const T_OLD: u64 = 1_700_000_000;
     const T_NEW: u64 = T_OLD + 3_600;
 
-    let root = snapshot_multi_lang("mtime_fast_path");
-    let mut cache = RepoMapCache::ephemeral(&root).expect("ephemeral cache");
+    let root = snapshot_multi_lang();
+    let mut cache = RepoMapCache::ephemeral(root.path()).expect("ephemeral cache");
     assert_eq!(cache.file_count(), EXPECTED_FILE_COUNT);
 
     // Write a brand-new file and record it: an insert always parses and
     // must report a change.
-    let probe = root.join("fast_path_probe.rs");
+    let probe = root.path().join("fast_path_probe.rs");
     std::fs::write(&probe, "pub fn probe_v1() -> u8 { 1 }\n").expect("write probe");
     set_mtime_seconds(&probe, T_OLD);
     assert!(
@@ -229,8 +221,8 @@ fn update_file_skips_reparse_when_mtime_unchanged() {
 
 #[test]
 fn pack_respects_token_budget() {
-    let root = snapshot_multi_lang("pack_budget");
-    let mut cache = RepoMapCache::ephemeral(&root).expect("ephemeral cache");
+    let root = snapshot_multi_lang();
+    let mut cache = RepoMapCache::ephemeral(root.path()).expect("ephemeral cache");
     let big_budget = total_tokens(&cache.map());
     let small_budget = 200usize;
 
@@ -268,13 +260,11 @@ fn pack_respects_token_budget() {
 fn incremental_update_is_much_faster_than_full_reparse() {
     // Build a synthetic fixture large enough that the full-reparse cost is
     // dominated by N file parses, while incremental only pays for one.
-    let tmp = std::env::temp_dir().join(format!("shannon_repomap_speedup_{}", std::process::id()));
-    let _ = std::fs::remove_dir_all(&tmp);
-    std::fs::create_dir_all(&tmp).expect("create tmp dir");
+    let tmp = tempfile::tempdir().expect("create tmp dir");
 
     // Create 60 trivial Rust source files, each with a handful of symbols.
     for i in 0..60 {
-        let path = tmp.join(format!("mod_{i:03}.rs"));
+        let path = tmp.path().join(format!("mod_{i:03}.rs"));
         std::fs::write(
             &path,
             format!(
@@ -286,13 +276,13 @@ fn incremental_update_is_much_faster_than_full_reparse() {
         .expect("write fixture file");
     }
     // The single file we'll edit during the timed runs.
-    let target = tmp.join("mod_007.rs");
+    let target = tmp.path().join("mod_007.rs");
     let original = std::fs::read_to_string(&target).expect("read target");
     let edited = format!("{original}\npub fn extra_after_edit() {{}}\n");
 
     // Warm up the disk cache and the tree-sitter runtime so the timed runs
     // aren't dominated by first-use costs.
-    let _ = RepoMapCache::ephemeral(&tmp).expect("warmup cache");
+    let _ = RepoMapCache::ephemeral(tmp.path()).expect("warmup cache");
 
     // Build a per-sample full+incremental pair, take the best ratio across
     // samples. Using best-of rather than median prevents a single noisy
@@ -302,7 +292,7 @@ fn incremental_update_is_much_faster_than_full_reparse() {
     let mut best_full = std::time::Duration::ZERO;
     for _ in 0..10 {
         std::fs::write(&target, &edited).expect("write edit");
-        let mut cache = RepoMapCache::ephemeral(&tmp).expect("ephemeral");
+        let mut cache = RepoMapCache::ephemeral(tmp.path()).expect("ephemeral");
 
         // The walk above recorded the target's current whole-second mtime;
         // pin a distinctly different one so the timed update_file actually
@@ -313,7 +303,7 @@ fn incremental_update_is_much_faster_than_full_reparse() {
         cache.update_file(&target).expect("incremental update_file");
         let inc = t_inc.elapsed();
 
-        let mut cache = RepoMapCache::ephemeral(&tmp).expect("ephemeral");
+        let mut cache = RepoMapCache::ephemeral(tmp.path()).expect("ephemeral");
         let t_full = Instant::now();
         cache.full_reparse().expect("full reparse");
         let full = t_full.elapsed();
@@ -340,10 +330,10 @@ fn incremental_update_is_much_faster_than_full_reparse() {
 
 #[test]
 fn cache_round_trips_through_disk() {
-    let root = snapshot_multi_lang("disk_round_trip");
+    let root = snapshot_multi_lang();
     // Sanity: building via `new` (which would try to load from disk) works
     // even when there is no prior cache.
-    let cache = RepoMapCache::new(&root).expect("new cache");
+    let cache = RepoMapCache::new(root.path()).expect("new cache");
     assert_eq!(cache.file_count(), EXPECTED_FILE_COUNT);
 }
 
@@ -354,11 +344,11 @@ fn disk_cache_invalidated_when_tracked_file_modified() {
     // whole-second mtime granularity without any sleeps.
     const T0: u64 = 1_700_100_000;
 
-    let root = snapshot_multi_lang("load_stale_modified");
-    let auth_path = root.join("src/auth.rs");
+    let root = snapshot_multi_lang();
+    let auth_path = root.path().join("src/auth.rs");
     set_mtime_seconds(&auth_path, T0);
     {
-        let cache = RepoMapCache::new(&root).expect("cold cache");
+        let cache = RepoMapCache::new(root.path()).expect("cold cache");
         assert_eq!(cache.file_count(), EXPECTED_FILE_COUNT);
         cache.flush().expect("flush cold cache");
     }
@@ -370,7 +360,7 @@ fn disk_cache_invalidated_when_tracked_file_modified() {
         .expect("rewrite auth.rs");
     set_mtime_seconds(&auth_path, T0 + 3_600);
 
-    let cache = RepoMapCache::new(&root).expect("reload cache");
+    let cache = RepoMapCache::new(root.path()).expect("reload cache");
     let names = collect_names(&cache.map());
     assert!(
         names.iter().any(|n| n == "fresh_after_restart"),
@@ -381,16 +371,16 @@ fn disk_cache_invalidated_when_tracked_file_modified() {
 
 #[test]
 fn disk_cache_invalidated_when_tracked_file_deleted() {
-    let root = snapshot_multi_lang("load_stale_deleted");
+    let root = snapshot_multi_lang();
     {
-        let cache = RepoMapCache::new(&root).expect("cold cache");
+        let cache = RepoMapCache::new(root.path()).expect("cold cache");
         assert_eq!(cache.file_count(), EXPECTED_FILE_COUNT);
         cache.flush().expect("flush cold cache");
     }
 
-    std::fs::remove_file(root.join("pkg/server.go")).expect("remove go file");
+    std::fs::remove_file(root.path().join("pkg/server.go")).expect("remove go file");
 
-    let cache = RepoMapCache::new(&root).expect("reload cache");
+    let cache = RepoMapCache::new(root.path()).expect("reload cache");
     let tracked: Vec<PathBuf> = cache.tracked_files();
     assert!(
         !tracked.iter().any(|p| p.ends_with("server.go")),
@@ -402,18 +392,18 @@ fn disk_cache_invalidated_when_tracked_file_deleted() {
 
 #[test]
 fn disk_cache_invalidated_when_new_file_added() {
-    let root = snapshot_multi_lang("load_stale_added");
+    let root = snapshot_multi_lang();
     {
-        let cache = RepoMapCache::new(&root).expect("cold cache");
+        let cache = RepoMapCache::new(root.path()).expect("cold cache");
         assert_eq!(cache.file_count(), EXPECTED_FILE_COUNT);
         cache.flush().expect("flush cold cache");
     }
 
-    let added = root.join("src/late_addition.rs");
+    let added = root.path().join("src/late_addition.rs");
     std::fs::write(&added, "pub fn late_to_the_party() -> bool { true }\n")
         .expect("write new file");
 
-    let cache = RepoMapCache::new(&root).expect("reload cache");
+    let cache = RepoMapCache::new(root.path()).expect("reload cache");
     assert!(
         cache
             .tracked_files()
@@ -434,8 +424,8 @@ fn markdown_for_multi_lang_is_self_contained() {
     // Spot-check that the rendered markdown references symbols from every
     // language. This guards against a future refactor that accidentally
     // drops one of the per-language extractors.
-    let root = snapshot_multi_lang("markdown_check");
-    let cache = RepoMapCache::ephemeral(&root).expect("ephemeral cache");
+    let root = snapshot_multi_lang();
+    let cache = RepoMapCache::ephemeral(root.path()).expect("ephemeral cache");
     let map = cache.map();
     let mut repo = RepoMap { map };
     repo.trim_to_budget(4_000);
