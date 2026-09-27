@@ -451,6 +451,10 @@ fn main() {
                     preview_commands::shutdown_on_exit(&state);
                     // P1-5 D — PTY process trees must never outlive the app.
                     terminal_commands::shutdown_on_exit(&state);
+                    // Audit P1-5 — the supervised gateway must not outlive
+                    // the app either (stop() is idempotent; the tray Quit
+                    // path may already have stopped it).
+                    commands_connections::shutdown_gateway_on_exit(&state);
                 }
                 // 主窗口关闭 = 退出应用 (existing semantic, P1-1): persist the
                 // open-session list for next-launch restore, then close the
@@ -694,6 +698,11 @@ fn main() {
                         let _ = app.emit("new-session", ());
                     }
                     "quit" => {
+                        // Audit P1-5: a tray Quit must also stop the managed
+                        // gateway — `app.exit(0)` alone orphaned the child.
+                        if let Some(state) = app.try_state::<commands::AppState>() {
+                            commands_connections::shutdown_gateway_on_exit(&state);
+                        }
                         app.exit(0);
                     }
                     _ => (),

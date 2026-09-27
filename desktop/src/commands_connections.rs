@@ -431,6 +431,21 @@ pub async fn bootstrap_gateway_supervisor(
     tracing::info!("gateway supervisor auto-started: {status:?}");
 }
 
+/// Kill + reap the supervised gateway during app teardown (tray Quit, main
+/// window destroyed). `GatewaySupervisor::Drop` intentionally does nothing,
+/// so an exit path that skips `stop().await` used to leave a managed
+/// `shannon-gateway` running as an orphan — still holding the port and any
+/// IM-channel connections. Safe to call from sync contexts on the main
+/// thread; bounded by `stop()`'s internal 3s wait.
+pub fn shutdown_gateway_on_exit(state: &tauri::State<'_, AppState>) {
+    tauri::async_runtime::block_on(async move {
+        let mut guard = state.gateway_supervisor.lock().await;
+        if let Some(supervisor) = guard.as_mut() {
+            supervisor.stop().await;
+        }
+    });
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
