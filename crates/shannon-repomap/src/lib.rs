@@ -199,7 +199,7 @@ impl RepoMap {
     /// … and 42 more (trimmed)
     /// ```
     ///
-    /// The folded list is hard-capped at [`TRIMMED_FILES_CAP_BYTES`] so the
+    /// The folded list is hard-capped at `TRIMMED_FILES_CAP_BYTES` so the
     /// rendered output stays bounded: symbol budget on the sections plus a
     /// few KiB for the path list, regardless of how many files were walked.
     pub fn to_system_prompt_markdown(&self) -> String {
