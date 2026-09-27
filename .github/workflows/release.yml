@@ -563,7 +563,8 @@ jobs:
               echo "::error::CI gate did not finish within 2h — draft left unpublished for manual inspection"
               exit 1; }
             ROW="$(gh api "repos/$GITHUB_REPOSITORY/actions/runs?head_sha=$SHA" \
-              --paginate --jq '.workflow_runs[] | select(.name == "CI") | "\(.id) \(.status) \(.conclusion // "pending")"' | head -1 || true)"
+              --paginate --jq '.workflow_runs[] | select(.name == "CI") | "\(.id) \(.status) \(.conclusion // "pending")"' \
+              | sort -nr | head -1 || true)" # highest run id = latest attempt
             if [ -z "$ROW" ]; then
               [ "$NOW" -lt "$grace_deadline" ] || {
                 echo "::error::no CI workflow run registered on $SHA within 10min — refusing to publish unverified"
