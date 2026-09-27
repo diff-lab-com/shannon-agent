@@ -1,5 +1,8 @@
 version: 2
 updates:
+  # NOTE: no `labels:` blocks anywhere below — dependabot fails the whole update
+  # when a configured label doesn't exist on the repo (see metrics-update.yml's
+  # PR #43 note). Re-add labels only after the labels exist in the repo settings.
   - package-ecosystem: "cargo"
     directory: "/"
     schedule:
@@ -7,9 +10,6 @@ updates:
     open-pull-requests-limit: 5
     commit-message:
       prefix: "deps"
-    labels:
-      - "dependencies"
-      - "rust"
 
   - package-ecosystem: "npm"
     directory: "/desktop/ui"
@@ -18,9 +18,6 @@ updates:
     open-pull-requests-limit: 5
     commit-message:
       prefix: "deps(ui)"
-    labels:
-      - "dependencies"
-      - "typescript"
 
   - package-ecosystem: "npm"
     directory: "/gateway"
@@ -29,9 +26,23 @@ updates:
     open-pull-requests-limit: 5
     commit-message:
       prefix: "deps(gateway)"
-    labels:
-      - "dependencies"
-      - "typescript"
+
+  # website and the root tooling package.json were previously unmonitored.
+  - package-ecosystem: "npm"
+    directory: "/website"
+    schedule:
+      interval: "weekly"
+    open-pull-requests-limit: 3
+    commit-message:
+      prefix: "deps(website)"
+
+  - package-ecosystem: "npm"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+    open-pull-requests-limit: 3
+    commit-message:
+      prefix: "deps(root)"
 
   - package-ecosystem: "github-actions"
     directory: "/"
@@ -43,6 +54,3 @@ updates:
     groups:
       actions:
         applies-to: version-updates
-    labels:
-      - "dependencies"
-      - "ci"

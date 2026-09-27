@@ -36,6 +36,12 @@ jobs:
     if: ${{ !contains(github.ref_name, '-') }}
     name: cargo publish shannon-api-protocol
     runs-on: ubuntu-22.04
+    # Referencing the environment auto-creates `cratesio` in the repo
+    # settings; a repo admin should add required reviewers at
+    # https://github.com/diff-lab-com/shannon-agent/settings/environments
+    # so tag -> crates.io publishes get a human confirmation gate
+    # (mirrors the release publish gating).
+    environment: cratesio
     timeout-minutes: 15
     steps:
       - uses: actions/checkout@f548e57e544e1ff5a4c46bf1e1b8685f8e4a348a
