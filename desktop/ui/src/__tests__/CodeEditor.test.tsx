@@ -14,7 +14,13 @@
 import { describe, it, expect, vi, afterEach } from 'vitest'
 import { render } from '@testing-library/react'
 import CodeEditor, { type EditorDiagnostic } from '@/components/editor/CodeEditor'
-import { cmThemeColorsFor, cmThemeFor } from '@/components/editor/cmTheme'
+import {
+  cmSyntaxHighlightFor,
+  cmSyntaxPaletteFor,
+  cmThemeColorsFor,
+  cmThemeFor,
+  type CmSyntaxPalette,
+} from '@/components/editor/cmTheme'
 
 const baseDiag: EditorDiagnostic = {
   start_line: 0,
@@ -137,7 +143,9 @@ describe('cmTheme — resolved-theme palette selection', () => {
 
   it('builds a CodeMirror theme extension flagged with the right mode', () => {
     // Extension objects are opaque; the contract is that construction
-    // succeeds and the palette resolution above drives its colors.
+    // succeeds and the palette resolution above drives its colors. The
+    // highlight-extension wiring is asserted in the B6b block below via
+    // cmSyntaxHighlightFor (the function cmThemeFor's dark branch embeds).
     expect(cmThemeFor('tokyo-night', () => 'dark')).toBeTruthy()
     expect(cmThemeFor('material', () => 'light')).toBeTruthy()
   })
@@ -147,5 +155,70 @@ describe('cmTheme — resolved-theme palette selection', () => {
     expect(() =>
       render(<CodeEditor value="fn main() {}" language="rust" diagnostics={[]} />),
     ).not.toThrow()
+  })
+})
+
+// ─── B6b: dark mode mounts a syntax HighlightStyle instead of going mono ───
+//
+// Pre-B6b the dark path had NO token coloring (basicSetup's light-tuned
+// defaultHighlightStyle was disabled and nothing replaced it). The contract
+// now: dark mode's extension stack includes a dark HighlightStyle; light
+// mode stays exactly as before (basicSetup's defaultHighlightStyle, see
+// CodeEditor.tsx's `syntaxHighlighting: !dark` — cmSyntaxHighlightFor
+// returning `null` there is the testable "light path unchanged" assertion).
+
+describe('cmTheme — dark syntax highlighting (B6b)', () => {
+  afterEach(() => {
+    document.documentElement.removeAttribute('data-theme')
+    vi.restoreAllMocks()
+  })
+
+  it('dark mode mounts a syntax-highlight extension, light mode does not', () => {
+    const darkHl = cmSyntaxHighlightFor('dark')
+    expect(darkHl).toBeTruthy()
+    // Light keeps basicSetup's defaultHighlightStyle — no second highlighter.
+    expect(cmSyntaxHighlightFor('light')).toBeNull()
+  })
+
+  it('dark palette falls back to the fixed AA floor when tokens are unreadable (jsdom)', () => {
+    const palette = cmSyntaxPaletteFor('dark') as CmSyntaxPalette
+    expect(palette.keyword).toBe('#7aa2f7') // primary family, 6.79:1 on #1a1b26
+    expect(palette.string).toBe('#e0af68') // 8.55:1
+    expect(palette.comment).toBe('#a9b1d6') // 8.10:1, italic applied at style level
+    expect(palette.constant).toBe('#9d7cd8') // 5.13:1
+    expect(palette.tag).toBe('#f7768e') // 6.46:1
+    expect(palette.attribute).toBe('#7aa2f7') // shares the keyword family
+    expect(palette.heading).toBe('#a9b1d6') // on-surface, bold applied at style level
+  })
+
+  it('dark palette prefers the live theme tokens when the stylesheet is readable', () => {
+    const tokens: Record<string, string> = {
+      '--color-primary': '#aabb00',
+      '--color-tertiary': '#112233',
+      '--color-on-surface-variant': '#445566',
+      '--color-secondary': '#778899',
+      '--color-error': '#ff0000',
+      '--color-on-surface': '#c0caf5',
+    }
+    vi.spyOn(window, 'getComputedStyle').mockReturnValue({
+      getPropertyValue: (name: string) => tokens[name] ?? '',
+    } as unknown as CSSStyleDeclaration)
+    const palette = cmSyntaxPaletteFor('dark') as CmSyntaxPalette
+    expect(palette.keyword).toBe('#aabb00') // token wins
+    expect(palette.attribute).toBe('#aabb00') // follows the keyword family
+    expect(palette.string).toBe('#112233')
+    expect(palette.comment).toBe('#445566')
+    expect(palette.constant).toBe('#778899')
+    expect(palette.tag).toBe('#ff0000')
+    expect(palette.heading).toBe('#c0caf5')
+  })
+
+  it('falls back per-role when only some tokens are readable', () => {
+    vi.spyOn(window, 'getComputedStyle').mockReturnValue({
+      getPropertyValue: (name: string) => (name === '--color-primary' ? '#aabb00' : ''),
+    } as unknown as CSSStyleDeclaration)
+    const palette = cmSyntaxPaletteFor('dark') as CmSyntaxPalette
+    expect(palette.keyword).toBe('#aabb00') // token wins
+    expect(palette.string).toBe('#e0af68') // floor retained
   })
 })

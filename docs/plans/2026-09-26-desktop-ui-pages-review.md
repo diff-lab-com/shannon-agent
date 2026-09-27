@@ -304,10 +304,11 @@
 | B1 骨架 | #130 | 模型统一写 id + 后端 normalize_model_id 存量迁移；switchToSession 单调 token；--sidebar-w 所有权收归 Layout；Escape 治理（stopPropagation + overlayOwnsEscape）；ErrorBoundary key；IntlProvider en 兜底；**updater 全链路摘除（决策 6）** |
 | B5 编辑器 | #131 | cmTheme 零依赖主题跟随；quick fix 应用后重读；终端主题/多行粘贴确认/spawn catch；Migration 错误态；Welcome 诚实文案（决策 4-B）；FileRefChip/LinkContextMenu 菜单键盘 |
 | B3 扩展/任务 | #132 | 6 处列表错误态；usePagedVisible 依赖 length 治本；core MemoryStore.move_entry（墓碑非确定复活 bug，决策 3-A）；BACKGROUND_TASKS_UPDATED 刷 agents；日历按日过滤；25 个状态键 |
+| B6b 追加（2026-09-27） | #135 | cmTheme 暗色语法着色（@uiw/codemirror-themes + @lezer/highlight 精确锁定树内单例；暗色调色板 WCAG AA ≥4.5:1，CSS 变量优先）；i18n 副本率报告（决策 5 进度工具，exit 0 不进门禁） |
 | B6 i18n/a11y | #133 | i18n-check.mjs 挂入 lint（缺键/多键即红）；补 174 键 ×8 locale；硬编码清单七领域清尾（含 footer Intl 货币）；a11y 批量（Switch 命名/表单关联/aria-live/长按复位/listbox 双触发） |
 
 **过程数据**：7 PR 全部 20/20 CI 绿后合并；前端测试 1897 → 2050+；桌面 Rust 测试 1039 → 1116+。两次 CI 拦截并修复：#132 的 rustdoc 私有 intra-doc 链接与 E2E 标题子串冲突；#133 的 walkthrough axe 门禁抓住 TaskCard nested-interactive（容器 role=button 含真按钮），改为标题真按钮的标准可访问卡片模式。
 
 **决策落地对账**：决策 1（B1/#130，含 R1-4 存量迁移）、2（B2/#126，remoteListTargets 带出）、3-A（B3/#132，含 move_entry）、4-B（B5/#131）、5（B1 provider 兜底 + B6 CI 门禁）、6（B1/#130，updater 摘除）——全部按拍板执行。
 
-**明确 deferred**：CSP frame-src / assetProtocol scope 收敛（需与网页 tab/文件引用共同决策）；8 locale 约 3.1k 键的 en 副本值翻译（决策 5 分档策略，en 兜底覆盖）；cmTheme 暗色语法着色（待引入 @uiw/codemirror-themes）；跨窗口权限弹层 resolved 广播事件。
+**明确 deferred**：CSP frame-src / assetProtocol scope 收敛（需与网页 tab/文件引用共同决策）；8 locale 约 3.1k 键的 en 副本值翻译（决策 5 分档策略，en 兜底覆盖；**进度跟踪**：`pnpm check:i18n:report` 副本率报告，当前 es 90.9% … zh-CN 1.8%）；跨窗口权限弹层 resolved 广播事件。
