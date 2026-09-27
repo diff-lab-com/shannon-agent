@@ -15,7 +15,8 @@
     "test:ci": "CI=1 vitest --run",
     "lint": "tsc --noEmit && eslint src --max-warnings 0 && node scripts/check-design-tokens.mjs && node scripts/i18n-check.mjs",
     "check:tokens": "node scripts/check-design-tokens.mjs",
-    "check:i18n": "node scripts/i18n-check.mjs"
+    "check:i18n": "node scripts/i18n-check.mjs",
+    "check:i18n:report": "node scripts/i18n-check.mjs --report"
   },
   "dependencies": {
     "@assistant-ui/react": "^0.15.19",

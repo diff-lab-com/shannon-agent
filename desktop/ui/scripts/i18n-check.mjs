@@ -15,10 +15,18 @@
 // Usage:
 //   node scripts/i18n-check.mjs                    # real locales, exit 0/1
 //   node scripts/i18n-check.mjs --dir <localesDir> # alternate dir (tests)
+//   node scripts/i18n-check.mjs --report           # copy-rate report, exit 0
 //
-// Scope note: values are NOT compared — locales legitimately carry en text
-// as the in-place fallback (decision 5: fill by frequency of use). Only the
-// key SET is gated here.
+// `--report` is the B6b progress-tracking tool for decision 5 (tiered
+// translation): it prints, per locale, how many values are still identical
+// to the `en` baseline (the "en copy rate"). It is a pure report — it never
+// evaluates key drift and always exits 0 (only a missing en.json baseline is
+// an input error). The lint chain keeps running the gate mode unchanged.
+//
+// Scope note: values are NOT compared in gate mode — locales legitimately
+// carry en text as the in-place fallback (decision 5: fill by frequency of
+// use). Only the key SET is gated there; --report reads the values purely to
+// surface how much tiered translation work remains.
 
 import fs from 'node:fs'
 import path from 'node:path'
@@ -26,11 +34,13 @@ import path from 'node:path'
 const SCRIPT_DIR = path.dirname(new URL(import.meta.url).pathname)
 
 function parseArgs(argv) {
-  const args = { dir: null }
+  const args = { dir: null, report: false }
   for (let i = 0; i < argv.length; i++) {
     if (argv[i] === '--dir') {
       args.dir = argv[i + 1]
       i++
+    } else if (argv[i] === '--report') {
+      args.report = true
     }
   }
   return args
@@ -56,8 +66,57 @@ export function checkKeySets(messages) {
   return { ok, missing, extra }
 }
 
+/**
+ * Pure core for `--report`, exported for tests: per-locale en-copy-rate rows
+ * (decision 5 progress tracking — not a gate). `total` is the en baseline
+ * size; `same` counts keys whose value is strictly identical to en's (the
+ * in-place fallback). Rows are sorted by copy rate descending (most en
+ * copies — most remaining translation work — first, ties by locale name).
+ */
+export function copyRates(messages) {
+  const base = messages.en
+  if (!base) return { error: 'no `en` baseline found', rows: [] }
+  const baseEntries = Object.entries(base)
+  const total = baseEntries.length
+  const rows = []
+  for (const [locale, data] of Object.entries(messages)) {
+    if (locale === 'en') continue
+    let same = 0
+    for (const [key, value] of baseEntries) {
+      if (key in data && data[key] === value) same++
+    }
+    const rate = total === 0 ? 0 : Math.round((same / total) * 1000) / 10
+    rows.push({ locale, total, same, rate })
+  }
+  rows.sort((a, b) => b.rate - a.rate || a.locale.localeCompare(b.locale))
+  return { error: null, rows }
+}
+
+// The fixed explanatory line required at the top of every --report output:
+// en copies are the sanctioned in-place fallback (provider-level en merge
+// since B1-14), not a bug, and translation proceeds tier-by-tier (decision 5).
+const REPORT_NOTE =
+  '说明：这些键经 B1-14 的 provider 层 en 兜底，运行时显示英文，功能无损；按决策 5 分档推进人工翻译（防止后来者误判为 bug）。'
+
+function printReport(messages) {
+  const { error, rows } = copyRates(messages)
+  if (error) {
+    console.error(`i18n-report: ${error}`)
+    return 1
+  }
+  const width = Math.max('locale', ...rows.map(r => r.locale.length)).length
+  console.log(`i18n-report: en-copy rate per locale (sorted by copy rate, highest first)`)
+  console.log(REPORT_NOTE)
+  console.log(`${'locale'.padEnd(width)}  same/total  copy-rate`)
+  for (const { locale, total, same, rate } of rows) {
+    console.log(`${locale.padEnd(width)}  ${`${same}/${total}`.padEnd(10)}  ${rate.toFixed(1)}%`)
+  }
+  console.log('i18n-report: pure progress report — never a gate (always exit 0).')
+  return 0
+}
+
 export function main(argv = process.argv.slice(2)) {
-  const { dir } = parseArgs(argv)
+  const { dir, report } = parseArgs(argv)
   const localesDir = dir ?? path.resolve(SCRIPT_DIR, '../src/i18n/locales')
 
   const files = fs.readdirSync(localesDir).filter(f => f.endsWith('.json')).sort()
@@ -70,6 +129,9 @@ export function main(argv = process.argv.slice(2)) {
   for (const file of files) {
     messages[path.basename(file, '.json')] = JSON.parse(fs.readFileSync(path.join(localesDir, file), 'utf8'))
   }
+
+  // Report mode never evaluates key drift and never gates (always exit 0).
+  if (report) return printReport(messages)
 
   const { ok, missing, extra, error } = checkKeySets(messages)
   const baseCount = Object.keys(messages.en).length
