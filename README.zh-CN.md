@@ -35,11 +35,11 @@ Shannon 是完全开源（Apache-2.0）、基于 Rust 的 **AI agent 工作台**
 
 ### 2. 密钥不出门
 
-- **API 密钥直连你选择的提供商** —— 没有中间服务器，没有云端凭据池。IM 渠道凭据只存 OS keyring。
-- **出站 secret 脱敏** —— `secret-guard` 插件（基于 `shannon-plugin-api` 内容变换契约）在消息发往模型前脱敏 secret，本地执行时再还原；变换字节稳定，prompt 缓存照常命中。
+- **API 密钥直连你选择的提供商** —— 没有中间服务器，没有云端凭据池。LLM 凭据只存在本机 `~/.shannon/credentials/` 下的 `0600` 文件里；IM 渠道凭据存 OS keyring。
+- **出站 secret 扫描** —— 内置 `secret-guard`（默认 audit 只记录，`redact` 一键开启；基于 `shannon-plugin-api` 内容变换契约）在消息发往模型前扫描 secret 形态的内容并记录或改写；改写字节稳定，prompt 缓存照常命中。
 - **OS 级沙箱** —— Landlock（Linux）、macOS Seatbelt、bubblewrap；规则 + LLM 辅助的权限系统，严格/均衡/宽松/自定义配置，高危工具逐动作确认。
 - **提示注入扫描 + 签名校验** 覆盖 skills 与 MCP 服务器；webhook 事件 HMAC-SHA256 签名。
-- **默认零遥测** —— 本地语音输入（whisper.rs）永不外发音频。
+- **默认零遥测** —— 没有任何遥测管道。除你选择的提供商外，唯一的自动外呼是新版本可用性检查（至多每 24 小时一次；`SHANNON_FEATURE_UPDATE_CHECK=0` 可完全关闭）。本地语音输入（whisper.rs）永不外发音频。
 
 **Shannon 与竞品的对比**（截至 2026-09；来源见 [docs/competitive-research-2026-09.md](docs/competitive-research-2026-09.md)）：
 
@@ -47,7 +47,7 @@ Shannon 是完全开源（Apache-2.0）、基于 Rust 的 **AI agent 工作台**
 |---|---|---|---|
 | 许可 | Apache-2.0 完全开源 | 闭源 | 开源 |
 | 执行位置 | 本地优先，你自己的电脑 | 云 VM / 云沙箱 | 本地 |
-| 密钥与 secret 处理 | OS keyring + 出站脱敏 + 注入扫描 | 厂商托管云凭据，各不相同 | 各不相同 |
+| 密钥与 secret 处理 | 出站 secret 扫描 + 注入扫描；凭据只留本机 | 厂商托管云凭据，各不相同 | 各不相同 |
 | LLM 提供商 | 任意（BYOK） | 单一供应商 | 多家 / 任意 |
 | 成本模型 | 按量付费 + 预算上限 + 拆解可见 | 订阅额度 / credits | BYOK |
 | 可审计性 | 事件溯源会话，`trace` 回放/diff | 各不相同，多为黑盒 | 各不相同 |
@@ -85,7 +85,7 @@ Shannon 是完全开源（Apache-2.0）、基于 Rust 的 **AI agent 工作台**
 - **Simple 模式** —— 面向所有人：聊天中的工具调用内联可见、可逐个批准或撤销；拖拽附件；语音输入（云端或完全本地）；任务带日历视图与依赖图；收件箱汇总你不在时 agent 干的所有活。
 - **Advanced 模式** —— 面向开发者：连接（MCP 服务器、skills、agents）、可拖拽多面板工作区 + 集成终端、git worktree 管理、记忆图谱、指挥台多 agent 编排。
 
-还有：手机配对（扫码派发与审批）、IM 渠道（Telegram / Discord / Slack / 飞书 / 钉钉）、系统托盘、全局快捷键、自动更新、8 套主题。
+还有：手机配对（扫码派发与审批）、IM 渠道（Telegram / Discord / Slack / 飞书 / 钉钉）、系统托盘、全局快捷键、新版本检查（提示并跳转最新安装包）、12 套主题。
 
 ---
 
@@ -291,7 +291,7 @@ export SHANNON_MODEL="llama3"
 
 ```bash
 shannon                          # 交互式 REPL
-shannon /path/to/project         # 在项目目录打开
+cd /path/to/project && shannon   # 在项目目录打开
 shannon --resume                  # 恢复上次会话
 shannon desktop                   # 或启动桌面应用
 ```
@@ -307,7 +307,7 @@ shannon --prompt "列出TODO" --schema schema.json  # 结构化 JSON 输出
 echo "修复这个bug" | shannon --pipe          # 管道模式
 shannon --prompt "重构" --allowed-tools Read,Edit,Bash,Grep --max-turns 10  # CI
 shannon --prompt "修复lint" --diff-only       # 仅输出 diff
-shannon --goal "让 CI 变绿" --budget 5        # 自主目标 + 花费上限
+shannon --goal "让 CI 变绿"                   # 自主目标（REPL 内 /goal "..." --budget N 可设花费上限）
 ```
 
 </details>

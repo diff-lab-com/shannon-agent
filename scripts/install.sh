@@ -17,7 +17,8 @@
 
 set -e
 
-# R2 mirror (default) falls back to the GitHub release "latest" download.
+# Download source (default: the GitHub release "latest" download; point
+# SHANNON_CDN_URL at the R2 mirror when configured).
 CDN_BASE="${SHANNON_CDN_URL:-https://github.com/diff-lab-com/shannon-agent/releases/latest/download}"
 REPO_URL="https://github.com/diff-lab-com/shannon-agent"
 
@@ -51,9 +52,7 @@ ARCH="$(uname -m)"
 case "$OS-$ARCH" in
   Linux-x86_64|Linux-amd64)     CLI="shannon-x86_64-unknown-linux-gnu.tar.gz"
                                 GATEWAY="shannon-gateway-linux-x64" ;;
-  Linux-aarch64|Linux-arm64)    # release.yml's cli matrix has no aarch64-linux
-                                # target — see B0 in the Phase B plan.
-                                CLI=""
+  Linux-aarch64|Linux-arm64)    CLI="shannon-aarch64-unknown-linux-gnu.tar.gz"
                                 GATEWAY="shannon-gateway-linux-arm64" ;;
   Darwin-x86_64|Darwin-amd64)  CLI="shannon-x86_64-apple-darwin.tar.gz"
                                 GATEWAY="shannon-gateway-darwin-x64" ;;
@@ -89,7 +88,10 @@ if command -v curl >/dev/null 2>&1; then
   VERSION="$(curl -fSsL "https://api.github.com/repos/diff-lab-com/shannon-agent/releases/latest" 2>/dev/null \
     | grep -m1 '"tag_name"' | sed -E 's/.*"tag_name": *"v?([^"]+)".*/\1/')"
   if [ -z "$VERSION" ]; then
-    VERSION="$(curl -fSsL -o /dev/null -w '%{url_effective}' "${CDN_BASE}/../tag/latest" 2>/dev/null \
+    # Fall back to scraping the redirect target of releases/latest
+    # (.../releases/tag/vX.Y.Z). The previous form appended ../tag/latest to
+    # the download base, which produced a nonexistent URL.
+    VERSION="$(curl -fSsL -o /dev/null -w '%{url_effective}' "${REPO_URL}/releases/latest" 2>/dev/null \
       | sed -E 's#.*/tag/v?##')"
   fi
 fi
@@ -129,7 +131,10 @@ download_verify() {
         actual="$(sha256sum "$dst" | awk '{print $1}')"
         [ "$actual" = "$expected" ] || err "Checksum mismatch: $1"
       else
-        info "Checksum not available for $1, skipping verification"
+        # The release pipeline always ships SHA256SUMS (release.yml) — a
+        # missing manifest means the download path is broken or tampered
+        # with. Refuse to install rather than proceed unverified.
+        err "No checksum available for $1 (neither a .sha256 sidecar nor SHA256SUMS was reachable). Download path may be broken or intercepted — refusing to install. If GitHub is down, retry later."
       fi
     fi
   fi

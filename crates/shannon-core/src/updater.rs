@@ -13,7 +13,7 @@
 //! # #[tokio::main]
 //! # async fn main() {
 //! let config = UpdaterConfig {
-//!     repo: "shannon-code/shannon".to_string(),
+//!     repo: "diff-lab-com/shannon-agent".to_string(),
 //!     check_interval: Duration::from_secs(86400),
 //!     enabled: true,
 //!     include_prereleases: false,
@@ -135,10 +135,72 @@ where
 impl Default for UpdaterConfig {
     fn default() -> Self {
         Self {
-            repo: "shannon-code/shannon".to_string(),
+            repo: "diff-lab-com/shannon-agent".to_string(),
             check_interval: Duration::from_secs(86400), // 24 hours
             enabled: true,
             include_prereleases: false,
+        }
+    }
+}
+
+/// On-disk record of the most recent automatic update check.
+///
+/// [`AutoUpdater`]'s `last_check` is in-memory only, so a REPL that starts
+/// once per session re-checked GitHub on every launch. This state file makes
+/// the `check_interval` throttle survive process restarts. Stored at
+/// `~/.shannon/update-check.json`; a missing, corrupt, or unwritable file
+/// degrades to "check allowed" — the check is a single unauthenticated GET,
+/// never a blocker.
+#[derive(Debug, Clone, Copy, Default, Serialize, Deserialize)]
+pub struct UpdateCheckState {
+    /// Unix timestamp (seconds) of the last completed check attempt.
+    pub last_check_unix_secs: u64,
+}
+
+impl UpdateCheckState {
+    /// Default path: `~/.shannon/update-check.json`. `None` when the home
+    /// directory cannot be resolved — callers then skip persistence.
+    pub fn path() -> Option<std::path::PathBuf> {
+        dirs::home_dir().map(|h| h.join(".shannon").join("update-check.json"))
+    }
+
+    /// Load the recorded state; `None` if absent or unreadable.
+    pub fn load() -> Option<Self> {
+        let bytes = std::fs::read(Self::path()?).ok()?;
+        serde_json::from_slice(&bytes).ok()
+    }
+
+    /// Record a completed check attempt (best-effort; failures are ignored).
+    pub fn store_now() {
+        let Some(path) = Self::path() else {
+            return;
+        };
+        let state = Self {
+            last_check_unix_secs: std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|d| d.as_secs())
+                .unwrap_or(0),
+        };
+        if let Some(parent) = path.parent() {
+            let _ = std::fs::create_dir_all(parent);
+        }
+        if let Ok(json) = serde_json::to_vec_pretty(&state) {
+            let _ = std::fs::write(&path, json);
+        }
+    }
+
+    /// Whether enough time has elapsed since the last recorded check.
+    /// Missing state → check allowed (first run checks immediately).
+    pub fn should_check(interval: Duration) -> bool {
+        match Self::load() {
+            None => true,
+            Some(state) => {
+                let now = std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .map(|d| d.as_secs())
+                    .unwrap_or(0);
+                now.saturating_sub(state.last_check_unix_secs) >= interval.as_secs()
+            }
         }
     }
 }
@@ -155,7 +217,7 @@ impl AutoUpdater {
     /// Create a new updater with the given configuration.
     pub fn new(config: UpdaterConfig) -> Self {
         let client = reqwest::Client::builder()
-            .user_agent(format!("shannon-code/{CURRENT_VERSION}"))
+            .user_agent(format!("shannon/{CURRENT_VERSION}"))
             .timeout(Duration::from_secs(10))
             .build()
             .unwrap_or_else(|e| {
@@ -495,7 +557,7 @@ mod tests {
     #[test]
     fn default_config_values() {
         let config = UpdaterConfig::default();
-        assert_eq!(config.repo, "shannon-code/shannon");
+        assert_eq!(config.repo, "diff-lab-com/shannon-agent");
         assert_eq!(config.check_interval, Duration::from_secs(86400));
         assert!(config.enabled);
         assert!(!config.include_prereleases);

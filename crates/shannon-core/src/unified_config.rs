@@ -87,7 +87,8 @@ pub struct ShannonConfig {
 /// `[secret_guard]` config section (blueprint artifact c, Phase 2).
 #[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq)]
 pub struct SecretGuardSection {
-    /// `"off"` (default) | `"audit"` | `"redact"`.
+    /// `"audit"` (default since v0.11.0 when unset) | `"redact"` | `"off"`
+    /// to disable entirely.
     #[serde(default)]
     pub mode: Option<String>,
     /// Plugin failure behavior — reserved for Phase 3: `"open"` (default) |

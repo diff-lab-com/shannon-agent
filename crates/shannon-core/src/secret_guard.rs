@@ -672,6 +672,29 @@ fn resolve_mode(env_raw: Option<&str>, section_mode: Option<&str>) -> Option<Sec
     }
 }
 
+/// [`resolve_mode`] plus the release default: when neither env nor config
+/// expresses a preference, the guard installs in `audit` mode (detect and
+/// log secret-shaped content in outbound context — zero behavior change to
+/// prompts). An explicit `"off"` in either source still disables entirely;
+/// this helper never overrides a decision `resolve_mode` already made.
+fn resolve_mode_with_default(
+    env_raw: Option<&str>,
+    section_mode: Option<&str>,
+) -> Option<SecretGuardMode> {
+    // An explicit opt-out (env or, when env is absent, config) wins.
+    let explicit_off = match env_raw {
+        Some(raw) => SecretGuardMode::parse(raw).is_none(),
+        None => section_mode
+            .map(|m| SecretGuardMode::parse(m).is_none())
+            .unwrap_or(false),
+    };
+    match resolve_mode(env_raw, section_mode) {
+        Some(mode) => Some(mode),
+        None if explicit_off => None,
+        None => Some(SecretGuardMode::Audit),
+    }
+}
+
 fn install_mode(mode: SecretGuardMode) -> Option<SecretGuardMode> {
     if let Some(existing) = ENABLED.get() {
         return Some(*existing);
@@ -714,14 +737,30 @@ pub fn init_from_env() -> Option<SecretGuardMode> {
 /// Resolve enablement from env first, config section second, then install
 /// (one-shot per process). Called from the engine's query entry so every
 /// host (CLI / desktop / server) picks up `[secret_guard]` automatically.
+///
+/// Since v0.11.0 the unset default is `audit`: outbound context is scanned
+/// and secret-shaped hits are logged, but nothing is rewritten. The implicit
+/// default is vacuum-only: when neither source expresses a decision AND a
+/// context transform is already installed (e.g. by a host or plugin), that
+/// transform is left untouched rather than replaced by the built-in guard.
+/// An explicit `$SHANNON_SECRET_GUARD` or `[secret_guard] mode` always
+/// decides — `"off"` disables entirely, `"redact"` enables rewriting.
 pub fn init_from_env_or_config() -> Option<SecretGuardMode> {
     if let Some(existing) = ENABLED.get() {
         return Some(*existing);
     }
     let env_raw = std::env::var("SHANNON_SECRET_GUARD").ok();
     let section_mode = crate::unified_config::SecretGuardSection::load().mode;
-    let mode = resolve_mode(env_raw.as_deref(), section_mode.as_deref())?;
-    install_mode(mode)
+    if env_raw.is_some() || section_mode.is_some() {
+        // Explicit decision from env or config — install/replace as decided.
+        return resolve_mode_with_default(env_raw.as_deref(), section_mode.as_deref())
+            .and_then(install_mode);
+    }
+    // Implicit default: only fill the vacuum.
+    if context_transform().is_some() {
+        return None;
+    }
+    install_mode(SecretGuardMode::Audit)
 }
 
 #[cfg(test)]
@@ -1403,6 +1442,34 @@ mod tests {
         );
         assert_eq!(resolve_mode(None, None), None);
         assert_eq!(resolve_mode(None, Some("bogus")), None);
+    }
+
+    #[test]
+    fn resolve_mode_with_default_unset_is_audit_and_off_still_opts_out() {
+        // Unset on both sources → release default: audit.
+        assert_eq!(
+            resolve_mode_with_default(None, None),
+            Some(SecretGuardMode::Audit)
+        );
+        // Explicit modes pass through unchanged.
+        assert_eq!(
+            resolve_mode_with_default(Some("redact"), None),
+            Some(SecretGuardMode::Redact)
+        );
+        assert_eq!(
+            resolve_mode_with_default(None, Some("redact")),
+            Some(SecretGuardMode::Redact)
+        );
+        // Explicit opt-outs still win — env beats config, config beats default.
+        assert_eq!(resolve_mode_with_default(Some("off"), Some("redact")), None);
+        assert_eq!(resolve_mode_with_default(Some(""), Some("redact")), None);
+        assert_eq!(resolve_mode_with_default(None, Some("off")), None);
+        assert_eq!(resolve_mode_with_default(None, Some("bogus")), None);
+        // Env decides even when it says nothing useful.
+        assert_eq!(
+            resolve_mode_with_default(Some("bogus"), Some("redact")),
+            None
+        );
     }
 
     // ---- T3: registry rebuild from restored raw history --------------------

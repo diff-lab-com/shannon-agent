@@ -92,6 +92,11 @@ static FLAG_DEFINITIONS: &[FlagDef] = &[
         default: false,
         description: "OpenTelemetry protocol telemetry export",
     },
+    FlagDef {
+        name: "update_check",
+        default: true,
+        description: "Background check for newer releases (at most once per 24h; disable to go fully offline)",
+    },
 ];
 
 fn find_def(name: &str) -> Option<&'static FlagDef> {
@@ -163,6 +168,7 @@ pub mod flags {
     pub const VOICE_MODE: FeatureFlag = FeatureFlag::new("voice_mode");
     pub const AUTO_MEMORY: FeatureFlag = FeatureFlag::new("auto_memory");
     pub const OTLP_TELEMETRY: FeatureFlag = FeatureFlag::new("otlp_telemetry");
+    pub const UPDATE_CHECK: FeatureFlag = FeatureFlag::new("update_check");
 }
 
 // ---------------------------------------------------------------------------
@@ -832,14 +838,17 @@ mod tests {
     fn test_all_flags_includes_source() {
         let (manager, _dir) = manager_with_temp();
         let statuses = manager.all_flags();
+        // Every registered flag must resolve to its declared default from a
+        // clean settings.json (generic so future default-enabled flags don't
+        // need to be special-cased here).
         for status in &statuses {
-            if status.name == "auto_memory" {
-                assert!(status.enabled);
-                assert_eq!(status.source, FlagSource::Default);
-            } else {
-                assert!(!status.enabled);
-                assert_eq!(status.source, FlagSource::Default);
-            }
+            assert_eq!(
+                status.enabled,
+                default_value(&status.name),
+                "flag {} default mismatch",
+                status.name
+            );
+            assert_eq!(status.source, FlagSource::Default);
         }
     }
 

@@ -103,7 +103,12 @@ function Download-Verify {
             }
         } catch { }
         if (-not $Verified) {
-            Write-Host "[info] Checksum not available for $Asset, skipping verification" -ForegroundColor Yellow
+            # The release pipeline always ships SHA256SUMS (release.yml) — a
+            # missing manifest means the download path is broken or tampered
+            # with. Refuse to install rather than proceed unverified.
+            Write-Host "[error] No checksum available for $Asset (neither a .sha256 sidecar nor SHA256SUMS was reachable). Download path may be broken or intercepted — refusing to install." -ForegroundColor Red
+            Remove-Item $Dest -Force -ErrorAction SilentlyContinue
+            return $null
         }
     }
     return $Dest
