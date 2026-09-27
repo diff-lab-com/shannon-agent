@@ -4763,6 +4763,92 @@ mod tests {
         );
     }
 
+    /// Wire-level guard-review pin (2026-09-27): the malformed-turn recovery
+    /// path persists assistant messages mixing a narration Text block with
+    /// an empty-input `{}` tool_use. The production failure was on the
+    /// OpenAI-compatible (minimax) wire, but #140 only pinned the Anthropic
+    /// mock. Contract pin — this test passed on first run (no defect found);
+    /// it exists so the recovered-message wire shape cannot regress: text
+    /// content preserved non-empty, exactly one tool_call with the JSON
+    /// object literal `"{}"` arguments (never `"null"`), and a legal
+    /// sequence (the call answered by exactly one tool message).
+    #[test]
+    fn serialize_openai_keeps_recovered_assistant_text_with_empty_object_arguments() {
+        let request = MessageRequest {
+            model: "test-model".to_string(),
+            max_tokens: 100,
+            system: None,
+            system_blocks: None,
+            messages: vec![
+                text_msg("task"),
+                Message {
+                    role: "assistant".to_string(),
+                    content: MessageContent::Blocks(vec![
+                        ContentBlock::Text {
+                            text: "Recovered narration before the tool call.".to_string(),
+                        },
+                        ContentBlock::ToolUse {
+                            id: "toolu_rec".to_string(),
+                            name: "Bash".to_string(),
+                            input: serde_json::json!({}),
+                        },
+                    ]),
+                },
+                tool_result_msg("toolu_rec"),
+            ],
+            tools: None,
+            stream: Some(false),
+            temperature: None,
+            top_p: None,
+            top_k: None,
+            stop_sequences: None,
+            budget_tokens: None,
+            thinking_budget: None,
+            reasoning_effort: None,
+        };
+        let json = serialize_openai_request(&request);
+        let wire = serde_json::to_string(&json).unwrap();
+
+        let assistant = json["messages"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|m| m["role"] == "assistant")
+            .expect("assistant message on the wire");
+        // Narration text survives — never collapsed to null.
+        assert_eq!(
+            assistant["content"].as_str(),
+            Some("Recovered narration before the tool call."),
+            "assistant text content must be preserved: {wire}"
+        );
+        // Exactly one tool call, with `{}` (JSON object literal) arguments.
+        let calls = assistant["tool_calls"]
+            .as_array()
+            .expect("tool_calls array");
+        assert_eq!(calls.len(), 1, "exactly one tool_call: {wire}");
+        assert_eq!(calls[0]["id"], "toolu_rec", "wire: {wire}");
+        assert_eq!(calls[0]["function"]["name"], "Bash", "wire: {wire}");
+        assert_eq!(
+            calls[0]["function"]["arguments"].as_str(),
+            Some("{}"),
+            "arguments must be the JSON object literal string: {wire}"
+        );
+        assert!(
+            !wire.contains("\"arguments\":\"null\""),
+            "arguments must never be the null literal minimax rejects: {wire}"
+        );
+        // Sequence stays legal: the call is answered by exactly one tool
+        // message.
+        let tool_msgs: Vec<&serde_json::Value> = json["messages"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter(|m| m["role"] == "tool")
+            .collect();
+        assert_eq!(tool_msgs.len(), 1, "exactly one tool message: {wire}");
+        assert_eq!(tool_msgs[0]["tool_call_id"], "toolu_rec", "wire: {wire}");
+    }
+
     #[test]
     fn serialize_openai_request_sanitizes_orphans() {
         let request = MessageRequest {
