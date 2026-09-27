@@ -17,7 +17,7 @@
 //!   to open with no UI affordance is worse than a warned one). The CLI
 //!   exempt `doctor` and `update` from the gate — they are exactly the
 //!   tools needed to inspect or fix a gated install.
-//! - **Backup primitive**: [`backup_before_migration`] copies store files
+//! - **Backup primitive**: `backup_before_migration_in` copies store files
 //!   into `<home>/backups/<from>-to-<to>-<ts>/`. No migration calls it yet;
 //!   it exists so the first migration wires it instead of inventing one.
 //!
