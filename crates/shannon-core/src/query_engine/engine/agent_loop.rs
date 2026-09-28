@@ -678,7 +678,6 @@ impl QueryEngine {
                     client_max_tokens
                 };
                 let mut cfg = shannon_engine::api::LlmClientConfig {
-                    thinking_type: None,
                     api_key: client_api_key,
                     base_url: client_base_url,
                     model: client_model.clone(),

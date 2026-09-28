@@ -308,7 +308,32 @@ fn serialize_request_inner(
 
             val
         }
-        WireFormat::OpenAI => serialize_openai_request(request),
+        WireFormat::OpenAI => {
+            let mut body = serialize_openai_request(request);
+            // Explicit thinking toggle: zhipu/GLM only (`thinking: {"type":
+            // "enabled"|"disabled"}`). Other OpenAI-compatible providers never
+            // asked for this field and several reject unknown bodies with a
+            // 400, so the toggle is stripped everywhere else — SHANNON_THINKING
+            // stays a global env knob without leaking the field to non-GLM
+            // endpoints. Precedence: an explicit toggle wins over
+            // reasoning_effort on this wire (effort=high asks for MORE
+            // thinking; the toggle says less).
+            if let Some(ref t) = request.thinking_type {
+                if matches!(
+                    provider,
+                    LlmProvider::Zhipu
+                        | LlmProvider::ZhipuInternational
+                        | LlmProvider::ZhipuCoding
+                        | LlmProvider::ZhipuCodingPlan
+                ) {
+                    body["thinking"] = json!({ "type": t });
+                    if let Some(obj) = body.as_object_mut() {
+                        obj.remove("reasoning_effort");
+                    }
+                }
+            }
+            body
+        }
         WireFormat::Ollama => serialize_ollama_request(request),
         WireFormat::Gemini => serialize_gemini_request(request),
     }
@@ -442,13 +467,6 @@ fn serialize_openai_request(request: &MessageRequest) -> Value {
     // Pass through reasoning_effort for OpenAI-compatible providers
     if let Some(ref effort) = request.reasoning_effort {
         body["reasoning_effort"] = json!(effort.to_openai_effort());
-    }
-
-    // Explicit thinking toggle for GLM-style OpenAI-compatible providers
-    // (zhipu: `thinking: {"type": "enabled"|"disabled"}`); absent → the
-    // provider default applies.
-    if let Some(ref t) = request.thinking_type {
-        body["thinking"] = json!({ "type": t });
     }
 
     body
@@ -2078,11 +2096,22 @@ mod tests {
     // -- zhipu/GLM thinking toggle --
 
     #[test]
-    fn test_openai_serialize_thinking_toggle_present() {
+    fn test_openai_serialize_thinking_toggle_present_on_zhipu() {
+        let mut req = make_request();
+        req.thinking_type = Some("disabled".into());
+        req.reasoning_effort = Some(crate::api::types::ReasoningEffort::High);
+        let val = serialize_request(&req, &LlmProvider::ZhipuCodingPlan);
+        assert_eq!(val["thinking"]["type"], "disabled");
+        // explicit toggle wins: reasoning_effort is dropped on this wire
+        assert!(val.get("reasoning_effort").is_none());
+    }
+
+    #[test]
+    fn test_openai_serialize_thinking_stripped_off_zhipu() {
         let mut req = make_request();
         req.thinking_type = Some("disabled".into());
         let val = serialize_request(&req, &LlmProvider::OpenAI);
-        assert_eq!(val["thinking"]["type"], "disabled");
+        assert!(val.get("thinking").is_none());
     }
 
     #[test]
