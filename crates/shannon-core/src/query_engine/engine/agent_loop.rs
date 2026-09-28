@@ -4005,7 +4005,11 @@ impl QueryEngine {
                                                 query_id,
                                                 message: format!(
                                                     "Turn LLM call interrupted (upstream cutoff: class={}, err={e}); continuing turn {turn_retries_used}/{max_turn_retries}",
-                                                if e.is_timeout_class() { "timeout" } else { "stream_interrupted" }
+                                                    if e.is_timeout_class() {
+                                                        "timeout"
+                                                    } else {
+                                                        "stream_interrupted"
+                                                    }
                                                 ),
                                             }
                                         );
@@ -4684,7 +4688,11 @@ impl QueryEngine {
                                     query_id,
                                     message: format!(
                                         "Turn LLM call interrupted (upstream cutoff: class={}, err={e}); continuing turn {turn_retries_used}/{max_turn_retries}",
-                                    if e.is_timeout_class() { "timeout" } else { "stream_interrupted" }
+                                        if e.is_timeout_class() {
+                                            "timeout"
+                                        } else {
+                                            "stream_interrupted"
+                                        }
                                     ),
                                 }
                             );

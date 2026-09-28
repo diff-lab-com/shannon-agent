@@ -716,7 +716,7 @@ pub fn build_client_from_resolved(
         budget_tokens: None,
         reasoning_effort: None,
         enable_anthropic_toolsets: shannon_engine::api::toolsets::anthropic_toolsets_from_env(),
-            thinking_type: shannon_engine::api::types::thinking_type_from_env(),
+        thinking_type: shannon_engine::api::types::thinking_type_from_env(),
     }
 }
 

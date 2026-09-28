@@ -2123,10 +2123,22 @@ mod tests {
 
     #[test]
     fn test_normalize_thinking_type() {
-        assert_eq!(crate::api::types::normalize_thinking_type("disabled"), Some("disabled".into()));
-        assert_eq!(crate::api::types::normalize_thinking_type(" ON "), Some("enabled".into()));
-        assert_eq!(crate::api::types::normalize_thinking_type("True"), Some("enabled".into()));
-        assert_eq!(crate::api::types::normalize_thinking_type("0"), Some("disabled".into()));
+        assert_eq!(
+            crate::api::types::normalize_thinking_type("disabled"),
+            Some("disabled".into())
+        );
+        assert_eq!(
+            crate::api::types::normalize_thinking_type(" ON "),
+            Some("enabled".into())
+        );
+        assert_eq!(
+            crate::api::types::normalize_thinking_type("True"),
+            Some("enabled".into())
+        );
+        assert_eq!(
+            crate::api::types::normalize_thinking_type("0"),
+            Some("disabled".into())
+        );
         assert_eq!(crate::api::types::normalize_thinking_type("whatever"), None);
         assert_eq!(crate::api::types::normalize_thinking_type(""), None);
     }
