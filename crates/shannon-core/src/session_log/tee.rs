@@ -1202,4 +1202,91 @@ mod tests {
         });
         tee.close();
     }
+
+    // ---- T6: durable boundary flush completes through the new path ---------
+    //
+    // Turn boundaries reach the writer through the synchronous bus dispatch
+    // on executor threads; the `sync_data` half of the durable flush runs
+    // off that thread (blocking pool inside a runtime, inline otherwise).
+    // These tests pin both halves of the contract: the event bytes are
+    // visible in events.jsonl immediately after the boundary (the
+    // page-cache drain stays synchronous under the tee lock), and the
+    // durability step actually completes.
+
+    /// Boundary through the bus-input path without a runtime: the sync ran
+    /// inline, so the counter has already landed when the call returns.
+    #[test]
+    fn test_boundary_bus_input_flushes_durable_inline() {
+        let dir = TempDir::new().expect("tempdir");
+        let mut tee = open_tee(&dir);
+        tee.record_turn_start(None);
+        tee.record_bus_input(&crate::bus::BusInput::Coalesce(
+            crate::bus::CoalesceInput::TurnBoundary {
+                reason: TurnEndPayload::REASON_COMPLETED.into(),
+                error: None,
+            },
+        ));
+        let path = super::super::session_events_path(dir.path(), "sess-tee");
+        let raw = std::fs::read_to_string(&path).expect("read events");
+        assert!(
+            raw.contains("\"kind\":\"turn/end\""),
+            "boundary event must be visible on disk synchronously"
+        );
+        assert_eq!(
+            tee.writer.as_ref().map(|w| w.durable_syncs()),
+            Some(1),
+            "turn boundary is a durable sync point"
+        );
+        tee.close();
+    }
+
+    /// Boundary inside a tokio runtime: the executor thread must not be
+    /// stalled by the fdatasync (it is offloaded to the blocking pool), the
+    /// bytes still land synchronously, and the offloaded sync completes.
+    #[test]
+    fn test_boundary_flush_offloads_sync_inside_runtime() {
+        let dir = TempDir::new().expect("tempdir");
+        let rt = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .expect("test runtime");
+        let handle = TeeHandle::open_in_dir(dir.path(), "sess-tee-async", "m", None);
+        rt.block_on(async {
+            handle.record_turn_start(None);
+            handle.record_bus_input(&crate::bus::BusInput::Coalesce(
+                crate::bus::CoalesceInput::TurnBoundary {
+                    reason: TurnEndPayload::REASON_COMPLETED.into(),
+                    error: None,
+                },
+            ));
+        });
+        let path = super::super::session_events_path(dir.path(), "sess-tee-async");
+        let raw = std::fs::read_to_string(&path).expect("read events");
+        assert!(
+            raw.contains("\"kind\":\"turn/end\""),
+            "boundary event must be visible on disk synchronously"
+        );
+
+        // The fdatasync runs on the blocking pool: poll the shared counter
+        // through the tee's writer until the task lands (the lock is never
+        // held across the syscall, so this cannot deadlock).
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+        let mut syncs = 0;
+        while std::time::Instant::now() < deadline {
+            syncs = handle
+                .tee
+                .lock()
+                .expect("tee lock")
+                .writer
+                .as_ref()
+                .map(|w| w.durable_syncs())
+                .unwrap_or(0);
+            if syncs >= 1 {
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(5));
+        }
+        assert_eq!(syncs, 1, "offloaded boundary sync must complete");
+        handle.close();
+    }
 }

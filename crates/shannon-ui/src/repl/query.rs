@@ -1717,6 +1717,25 @@ pub fn handle_query(repl: &mut Repl, input: &str, terminal: &mut Option<&mut Ter
         );
     }
 
+    // T5: one-time redaction opt-in notice. The built-in secret-guard runs
+    // audit-only by default, so detected secret values are forwarded to the
+    // provider and logged; when this turn's outbound requests contained
+    // secret-shaped content, tell the user (exactly once, non-blocking chat
+    // note — never a prompt) how to switch redaction on. Headless hosts get
+    // the same hint via the `tracing::warn!` in
+    // `shannon_core::secret_guard::take_redaction_suggestion`.
+    if shannon_core::secret_guard::take_redaction_suggestion() {
+        repl.chat.add_message(
+            ChatRole::System,
+            "\u{26A0} Secret-guard detected secret-shaped content in outbound \
+             requests (audit-only mode: values were forwarded to the provider \
+             and written to the session log). Enable redaction with \
+             `[secret_guard] mode = \"redact\"` in .shannon.toml (or \
+             ~/.shannon/config.toml), or `SHANNON_SECRET_GUARD=redact`."
+                .to_string(),
+        );
+    }
+
     Ok(())
 }
 
