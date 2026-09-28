@@ -369,7 +369,11 @@ impl std::fmt::Display for LlmProvider {
 // ============================================================================
 
 /// Configuration for the LLM API client
-#[derive(Debug, Clone)]
+///
+/// `Debug` is implemented manually (F19): the derived impl used to render
+/// the plaintext `api_key` into every log line, tracing record, or panic
+/// message that happened to print a `LlmClientConfig`.
+#[derive(Clone)]
 pub struct LlmClientConfig {
     pub api_key: String,
     pub base_url: String,
@@ -478,6 +482,41 @@ impl Default for LlmClientConfig {
 // PR-A documented. Rust permits a trait impl in either the type's crate or
 // the trait's crate; since `LlmClientConfig` is re-exported back into
 // `shannon-core` via the backward-compat shim, the impl lives there now.
+
+/// Mask an API key for `Debug` output (F19): keep only the last 4 chars so
+/// the key stays recognizable across config logs without being recoverable.
+/// Keys of 4 chars or fewer are masked entirely — a short "tail" would be
+/// the whole key.
+fn masked_api_key(key: &str) -> String {
+    let chars: Vec<char> = key.chars().collect();
+    if chars.len() <= 4 {
+        return "…".to_string();
+    }
+    let tail: String = chars[chars.len() - 4..].iter().collect();
+    format!("…{tail}")
+}
+
+impl std::fmt::Debug for LlmClientConfig {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("LlmClientConfig")
+            .field("api_key", &masked_api_key(&self.api_key))
+            .field("base_url", &self.base_url)
+            .field("model", &self.model)
+            .field("max_tokens", &self.max_tokens)
+            .field("timeout_seconds", &self.timeout_seconds)
+            .field("api_version", &self.api_version)
+            .field("provider", &self.provider)
+            .field("extra_headers", &self.extra_headers)
+            .field("retry_config", &self.retry_config)
+            .field("fallback_provider", &self.fallback_provider)
+            .field("fallback_base_url", &self.fallback_base_url)
+            .field("max_stream_reconnects", &self.max_stream_reconnects)
+            .field("enable_anthropic_toolsets", &self.enable_anthropic_toolsets)
+            .field("budget_tokens", &self.budget_tokens)
+            .field("reasoning_effort", &self.reasoning_effort)
+            .finish()
+    }
+}
 
 impl LlmClientConfig {
     /// Validate that the configuration has the minimum required fields.
@@ -1171,6 +1210,36 @@ mod tests {
             LlmProvider::Zhipu
         );
         assert_eq!(provider.canonical_api_key_env(), Some("ZHIPU_API_KEY"));
+    }
+
+    #[test]
+    fn test_debug_output_masks_api_key() {
+        // F19 regression: the derived Debug used to render the plaintext
+        // api_key into every log/tracing line that printed the config.
+        let mut config = LlmClientConfig::default();
+        config.api_key = "sk-ant-api11-supersecret-value-9f8e7d6c".to_string();
+        let rendered = format!("{config:?}");
+
+        assert!(
+            !rendered.contains("sk-ant-api11-supersecret-value-9f8e7d6c"),
+            "Debug output must never contain the full key: {rendered}"
+        );
+        assert!(
+            !rendered.contains("supersecret"),
+            "no interior fragment of the key may leak: {rendered}"
+        );
+        assert!(
+            rendered.contains("…7d6c"),
+            "exactly the last 4 chars stay visible: {rendered}"
+        );
+
+        // Short keys are masked entirely — a short "tail" would BE the key.
+        config.api_key = "abc".to_string();
+        let rendered = format!("{config:?}");
+        assert!(
+            !rendered.contains("abc"),
+            "short key must be masked: {rendered}"
+        );
     }
 
     #[test]

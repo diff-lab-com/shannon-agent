@@ -271,7 +271,14 @@ impl CompactEngine {
 
     fn do_compact(&self, messages: &mut Vec<Message>) -> Result<CompactResult, CompactError> {
         let keep_count = self.config.keep_recent_count;
-        let split_point = messages.len().saturating_sub(keep_count);
+        // F4a: the raw boundary (`len - keep_recent_count`) can land between
+        // an assistant tool_use and its matching user tool_result — the older
+        // half gets summarized away and the recent half reaches the wire with
+        // an orphaned result (or vice versa), which strict providers reject
+        // with a 400. Align the split with [`safe_split_point`] so a pair is
+        // always summarized (or kept) together.
+        let raw_split = messages.len().saturating_sub(keep_count);
+        let split_point = super::safe_split_point(messages, raw_split).min(messages.len());
 
         // Prune stale tool results from older messages before summarizing
         let mut old_messages: Vec<Message> = messages[..split_point].to_vec();

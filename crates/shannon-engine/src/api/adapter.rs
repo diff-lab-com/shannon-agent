@@ -199,11 +199,21 @@ fn serialize_request_inner(
 ) -> Value {
     match provider.wire_format() {
         WireFormat::Anthropic => {
+            // A13 backstop (F4c): run the same tool-sequence sanitizer the
+            // OpenAI branch uses. Its assumptions are wire-safe here: it
+            // operates on the unified `Message` shape, drops user
+            // `tool_result` blocks with no declaring assistant call
+            // (Anthropic 400s on unknown `tool_use_id`), and settles
+            // dangling calls with synthetic `tool_result` blocks carried in
+            // user messages (Anthropic's required carrier role; consecutive
+            // user messages are combined into one turn by the API).
+            // Fail-closed: legal sequences pass through unchanged.
+            let mut req = request.clone();
+            req.messages = sanitize_tool_sequence(&req.messages);
             // Anthropic API only accepts `user` and `assistant` roles in the
             // messages array.  Compression / context-reinjection may inject
             // `role: "system"` messages.  Extract them and merge into the
             // top-level `system` field instead.
-            let mut req = request.clone();
             let mut system_texts: Vec<String> = Vec::new();
             req.messages.retain(|msg| {
                 if msg.role == "system" {
@@ -2083,32 +2093,53 @@ mod tests {
             max_tokens: 1024,
             system: None,
             system_blocks: None,
-            messages: vec![Message {
-                role: "user".to_string(),
-                content: crate::api::types::MessageContent::Blocks(vec![
-                    ContentBlock::ToolResult {
-                        tool_use_id: "batch_1".to_string(),
-                        content: Some(crate::api::types::ToolResultContent::Multiple(vec![
-                            ContentBlock::Text {
-                                text: "Batch of 2 images follows".to_string(),
-                            },
-                            ContentBlock::Text {
-                                text: "## /tmp/a.png".to_string(),
-                            },
-                            ContentBlock::Image {
-                                source: crate::api::types::ImageSource::base64("image/png", "AAAA"),
-                            },
-                            ContentBlock::Text {
-                                text: "## /tmp/b.png".to_string(),
-                            },
-                            ContentBlock::Image {
-                                source: crate::api::types::ImageSource::base64("image/png", "BBBB"),
-                            },
-                        ])),
-                        is_error: Some(false),
-                    },
-                ]),
-            }],
+            messages: vec![
+                // A13/F4c: the sequence must be wire-legal — the assistant
+                // declaring the tool call precedes its result (otherwise the
+                // sanitizer drops the result as orphaned).
+                Message {
+                    role: "assistant".to_string(),
+                    content: crate::api::types::MessageContent::Blocks(vec![
+                        ContentBlock::ToolUse {
+                            id: "batch_1".to_string(),
+                            name: "read_image".to_string(),
+                            input: serde_json::json!({}),
+                        },
+                    ]),
+                },
+                Message {
+                    role: "user".to_string(),
+                    content: crate::api::types::MessageContent::Blocks(vec![
+                        ContentBlock::ToolResult {
+                            tool_use_id: "batch_1".to_string(),
+                            content: Some(crate::api::types::ToolResultContent::Multiple(vec![
+                                ContentBlock::Text {
+                                    text: "Batch of 2 images follows".to_string(),
+                                },
+                                ContentBlock::Text {
+                                    text: "## /tmp/a.png".to_string(),
+                                },
+                                ContentBlock::Image {
+                                    source: crate::api::types::ImageSource::base64(
+                                        "image/png",
+                                        "AAAA",
+                                    ),
+                                },
+                                ContentBlock::Text {
+                                    text: "## /tmp/b.png".to_string(),
+                                },
+                                ContentBlock::Image {
+                                    source: crate::api::types::ImageSource::base64(
+                                        "image/png",
+                                        "BBBB",
+                                    ),
+                                },
+                            ])),
+                            is_error: Some(false),
+                        },
+                    ]),
+                },
+            ],
             tools: None,
             stream: Some(false),
             temperature: None,
@@ -2121,9 +2152,9 @@ mod tests {
         };
 
         let val = serialize_request(&req, &LlmProvider::Anthropic);
-        // messages[0].content[0] is the tool_result block; its own "content"
+        // messages[1].content[0] is the tool_result block; its own "content"
         // is the array of per-image text/image parts sent in this one request.
-        let content = &val["messages"][0]["content"][0]["content"];
+        let content = &val["messages"][1]["content"][0]["content"];
         assert!(content.is_array(), "tool_result content should be an array");
         let image_parts: Vec<&Value> = content
             .as_array()
@@ -4537,6 +4568,10 @@ mod tests {
     #[test]
     fn test_anthropic_cache_skips_tool_result() {
         use crate::api::types::MessageContent;
+        // The tool_result must be DECLARED by a preceding assistant tool_use
+        // (F4c): the A13 sanitizer now drops orphaned results from the
+        // Anthropic branch too, so an undeclared fixture would be sanitized
+        // away before the cache-injection logic runs.
         let req = MessageRequest {
             model: "claude-sonnet-4-20250514".to_string(),
             max_tokens: 4096,
@@ -4546,6 +4581,14 @@ mod tests {
                 Message {
                     role: "user".to_string(),
                     content: MessageContent::Text("First".to_string()),
+                },
+                Message {
+                    role: "assistant".to_string(),
+                    content: MessageContent::Blocks(vec![ContentBlock::ToolUse {
+                        id: "tool_123".to_string(),
+                        name: "Bash".to_string(),
+                        input: serde_json::json!({}),
+                    }]),
                 },
                 Message {
                     role: "user".to_string(),
@@ -4575,7 +4618,7 @@ mod tests {
         };
 
         let val = serialize_request(&req, &LlmProvider::Anthropic);
-        let blocks = val["messages"].as_array().unwrap()[1]["content"]
+        let blocks = val["messages"].as_array().unwrap()[2]["content"]
             .as_array()
             .unwrap();
         assert_eq!(blocks[0]["cache_control"]["type"], "ephemeral");
@@ -5250,6 +5293,56 @@ mod tests {
         assert_eq!(
             tool_msgs, 1,
             "the real result must be the only tool message; wire: {wire}"
+        );
+        assert!(wire.contains("(interrupted)"), "wire: {wire}");
+    }
+
+    /// F4c: the Anthropic branch runs the A13 sanitizer too (fail-closed
+    /// backstop) — a dangling tool call must be settled on the Anthropic
+    /// wire exactly like on the OpenAI wire, since Anthropic 400s on
+    /// `tool_use` blocks without a matching `tool_result`.
+    #[test]
+    fn serialize_anthropic_request_sanitizes_orphans() {
+        let request = MessageRequest {
+            model: "test-model".to_string(),
+            max_tokens: 100,
+            system: None,
+            system_blocks: None,
+            messages: vec![
+                text_msg("task"),
+                tool_use_msg("toolu_w", "Edit"),
+                text_msg("continuation"),
+                tool_result_msg("toolu_w"),
+            ],
+            tools: None,
+            stream: Some(true),
+            temperature: None,
+            top_p: None,
+            top_k: None,
+            stop_sequences: None,
+            budget_tokens: None,
+            thinking_budget: None,
+            reasoning_effort: None,
+        };
+        let json = serialize_request(&request, &LlmProvider::Anthropic);
+        let wire = serde_json::to_string(&json).unwrap();
+
+        let tool_results: Vec<&Value> = json["messages"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter_map(|m| m["content"].as_array())
+            .flat_map(|blocks| blocks.iter())
+            .filter(|b| b["type"] == "tool_result")
+            .collect();
+        assert_eq!(
+            tool_results.len(),
+            1,
+            "exactly the synthetic result may reach the Anthropic wire: {wire}"
+        );
+        assert!(
+            tool_results[0]["tool_use_id"] == "toolu_w",
+            "the synthetic result must answer the dangling call: {wire}"
         );
         assert!(wire.contains("(interrupted)"), "wire: {wire}");
     }
