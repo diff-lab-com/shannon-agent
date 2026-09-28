@@ -213,6 +213,7 @@ fn seed_messages_session(
                 );
                 w.record(shannon_types::session_event::SessionEventBody::TurnEnd(
                     TurnEndPayload {
+                        llm_steps: None,
                         reason: TurnEndPayload::REASON_COMPLETED.into(),
                         usage: None,
                         error: None,
