@@ -164,7 +164,7 @@ ci: fmt lint deny gen-protocol test
 # CI regenerates this as an artifact on every run (ci.yml `Generate Metrics`);
 # this recipe refreshes the *committed* snapshot locally — e.g. before a
 # test-count-changing PR or a release. See .github/workflows/metrics-update.yml
-# for the (opt-in) automated weekly refresh.
+# for the automated weekly refresh (cron fires from `main`; PRs the result).
 metrics:
     bash scripts/gen-metrics.sh
 

@@ -233,8 +233,24 @@ pub async fn post_message(
         // End-of-stream flush: emits nothing on the wire; it only performs
         // the retained write-back (F45) after the last event.
         .chain(restore_flush_stream(engine_for_flush, pending_restore));
-    Ok(Sse::new(stream).keep_alive(KeepAlive::default()))
+    // T4: the response body cannot outlive the server — it ends with a
+    // terminal `error` frame on shutdown (SIGINT/SIGTERM drain) or when the
+    // overall stream duration cap expires (a wedged query can no longer
+    // hold the connection and its keepalive pings open forever). Scoped to
+    // this SSE body stream only; there is deliberately no per-request
+    // middleware timeout that could kill a long legitimate turn.
+    let guarded =
+        sse::with_shutdown_and_cap(stream, state.shutdown.clone(), SSE_STREAM_MAX_DURATION);
+    Ok(Sse::new(guarded).keep_alive(KeepAlive::default()))
 }
+
+/// Overall cap on one SSE response stream (T4), measured from stream start.
+/// Exists so a wedged query cannot hold an SSE connection open forever; at
+/// 30 minutes it is orders of magnitude above any legitimate turn, so it is
+/// not a per-request timeout. On expiry the stream ends with the terminal
+/// `error` event (`sse::with_shutdown_and_cap`).
+pub(crate) const SSE_STREAM_MAX_DURATION: std::time::Duration =
+    std::time::Duration::from_secs(30 * 60);
 
 // ── ConversationUpdate write-back (review F45) ──────────────────────────
 
