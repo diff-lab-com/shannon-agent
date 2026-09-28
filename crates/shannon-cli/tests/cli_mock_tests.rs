@@ -400,7 +400,7 @@ async fn test_task_write_file() {
     // Verify JSON output
     let stdout = stdout_string(&result);
     let json = parse_json_output(&stdout);
-    assert_eq!(json["exit_code"], "success");
+    assert_eq!(json["exit_code"], 0);
     let tool_calls = json["tool_calls"]
         .as_array()
         .expect("tool_calls should be array");
@@ -435,7 +435,7 @@ async fn test_task_bash_command() {
 
     let stdout = stdout_string(&result);
     let json = parse_json_output(&stdout);
-    assert_eq!(json["exit_code"], "success");
+    assert_eq!(json["exit_code"], 0);
 
     // Tool result should contain the echo output somewhere in the response
     assert!(
@@ -489,7 +489,7 @@ async fn test_task_edit_file() {
 
     let stdout = stdout_string(&result);
     let json = parse_json_output(&stdout);
-    assert_eq!(json["exit_code"], "success");
+    assert_eq!(json["exit_code"], 0);
 }
 
 // ── Test: Multi-step — Edit then verify with Bash ─────────────────────
@@ -537,7 +537,7 @@ async fn test_task_edit_then_verify_multi_step() {
 
     let stdout = stdout_string(&result);
     let json = parse_json_output(&stdout);
-    assert_eq!(json["exit_code"], "success");
+    assert_eq!(json["exit_code"], 0);
     let tool_calls = json["tool_calls"].as_array().expect("tool_calls array");
     assert!(
         tool_calls.iter().any(|tc| tc["tool"] == "Edit"),
@@ -617,7 +617,7 @@ async fn test_task_write_then_verify() {
 
     let stdout = stdout_string(&result);
     let json = parse_json_output(&stdout);
-    assert_eq!(json["exit_code"], "success");
+    assert_eq!(json["exit_code"], 0);
 
     let tool_calls = json["tool_calls"].as_array().expect("tool_calls array");
     assert!(
@@ -763,7 +763,7 @@ async fn test_task_bash_error_recovery() {
     let stdout = stdout_string(&result);
     let json = parse_json_output(&stdout);
     // Should still succeed — tool error is handled gracefully
-    assert_eq!(json["exit_code"], "success");
+    assert_eq!(json["exit_code"], 0);
 }
 
 // ── Test: Text-only response — no tool use ────────────────────────────
@@ -796,7 +796,7 @@ async fn test_task_text_only_no_tools() {
 
     let stdout = stdout_string(&result);
     let json = parse_json_output(&stdout);
-    assert_eq!(json["exit_code"], "success");
+    assert_eq!(json["exit_code"], 0);
     assert!(
         json["response"].as_str().unwrap_or("").contains("42"),
         "Response should contain the answer"
@@ -870,7 +870,7 @@ async fn test_task_read_then_edit() {
 
     let stdout = stdout_string(&result);
     let json = parse_json_output(&stdout);
-    assert_eq!(json["exit_code"], "success");
+    assert_eq!(json["exit_code"], 0);
     let tool_calls = json["tool_calls"].as_array().expect("tool_calls array");
     assert!(
         tool_calls.iter().any(|tc| tc["tool"] == "Read"),
@@ -914,7 +914,7 @@ async fn test_task_glob_files() {
 
     let stdout = stdout_string(&result);
     let json = parse_json_output(&stdout);
-    assert_eq!(json["exit_code"], "success");
+    assert_eq!(json["exit_code"], 0);
     let tool_calls = json["tool_calls"].as_array().expect("tool_calls array");
     assert!(
         tool_calls.iter().any(|tc| tc["tool"] == "Glob"),
@@ -956,7 +956,7 @@ async fn test_task_grep_search() {
 
     let stdout = stdout_string(&result);
     let json = parse_json_output(&stdout);
-    assert_eq!(json["exit_code"], "success");
+    assert_eq!(json["exit_code"], 0);
     let tool_calls = json["tool_calls"].as_array().expect("tool_calls array");
     assert!(
         tool_calls.iter().any(|tc| tc["tool"] == "Grep"),
@@ -1017,7 +1017,7 @@ async fn test_task_grep_then_read() {
 
     let stdout = stdout_string(&result);
     let json = parse_json_output(&stdout);
-    assert_eq!(json["exit_code"], "success");
+    assert_eq!(json["exit_code"], 0);
     let tool_calls = json["tool_calls"].as_array().expect("tool_calls array");
     assert!(
         tool_calls.iter().any(|tc| tc["tool"] == "Grep"),
@@ -1093,7 +1093,7 @@ async fn test_task_multi_file_edit() {
 
     let stdout = stdout_string(&result);
     let json = parse_json_output(&stdout);
-    assert_eq!(json["exit_code"], "success");
+    assert_eq!(json["exit_code"], 0);
 }
 
 // ════════════════════════════════════════════════════════════════════════
@@ -1126,7 +1126,7 @@ async fn scenario_anthropic_text_only() {
 
     let stdout = stdout_string(&result);
     let json = parse_json_output(&stdout);
-    assert_eq!(json["exit_code"], "success");
+    assert_eq!(json["exit_code"], 0);
     assert!(
         json["response"]
             .as_str()
@@ -1157,7 +1157,7 @@ async fn scenario_openai_text_only() {
 
     let stdout = stdout_string(&result);
     let json = parse_json_output(&stdout);
-    assert_eq!(json["exit_code"], "success");
+    assert_eq!(json["exit_code"], 0);
     assert!(
         json["response"].as_str().unwrap_or("").contains("OpenAI"),
         "Response should contain 'OpenAI'"
@@ -1185,7 +1185,7 @@ async fn scenario_ollama_text_only() {
 
     let stdout = stdout_string(&result);
     let json = parse_json_output(&stdout);
-    assert_eq!(json["exit_code"], "success");
+    assert_eq!(json["exit_code"], 0);
     assert!(
         json["response"].as_str().unwrap_or("").contains("Ollama"),
         "Response should contain 'Ollama'"
@@ -1241,7 +1241,7 @@ async fn scenario_anthropic_write_tool() {
 
     let stdout = stdout_string(&result);
     let json = parse_json_output(&stdout);
-    assert_eq!(json["exit_code"], "success");
+    assert_eq!(json["exit_code"], 0);
 }
 
 #[serial]
@@ -1289,7 +1289,7 @@ async fn scenario_openai_write_tool() {
 
     let stdout = stdout_string(&result);
     let json = parse_json_output(&stdout);
-    assert_eq!(json["exit_code"], "success");
+    assert_eq!(json["exit_code"], 0);
 }
 
 #[serial]
@@ -1337,7 +1337,7 @@ async fn scenario_ollama_write_tool() {
 
     let stdout = stdout_string(&result);
     let json = parse_json_output(&stdout);
-    assert_eq!(json["exit_code"], "success");
+    assert_eq!(json["exit_code"], 0);
 }
 
 // ════════════════════════════════════════════════════════════════════════
@@ -1383,7 +1383,7 @@ async fn scenario_anthropic_bash_tool() {
 
     let stdout = stdout_string(&result);
     let json = parse_json_output(&stdout);
-    assert_eq!(json["exit_code"], "success");
+    assert_eq!(json["exit_code"], 0);
     let tool_calls = json["tool_calls"].as_array().expect("tool_calls array");
     assert!(
         tool_calls.iter().any(|tc| tc["tool"] == "Bash"),
@@ -1428,7 +1428,7 @@ async fn scenario_openai_bash_tool() {
 
     let stdout = stdout_string(&result);
     let json = parse_json_output(&stdout);
-    assert_eq!(json["exit_code"], "success");
+    assert_eq!(json["exit_code"], 0);
     let tool_calls = json["tool_calls"].as_array().expect("tool_calls array");
     assert!(
         tool_calls.iter().any(|tc| tc["tool"] == "Bash"),
@@ -1473,7 +1473,7 @@ async fn scenario_ollama_bash_tool() {
 
     let stdout = stdout_string(&result);
     let json = parse_json_output(&stdout);
-    assert_eq!(json["exit_code"], "success");
+    assert_eq!(json["exit_code"], 0);
     let tool_calls = json["tool_calls"].as_array().expect("tool_calls array");
     assert!(
         tool_calls.iter().any(|tc| tc["tool"] == "Bash"),
@@ -1527,7 +1527,7 @@ async fn scenario_anthropic_read_file() {
 
     let stdout = stdout_string(&result);
     let json = parse_json_output(&stdout);
-    assert_eq!(json["exit_code"], "success");
+    assert_eq!(json["exit_code"], 0);
     assert!(
         json["response"]
             .as_str()
@@ -1577,7 +1577,7 @@ async fn scenario_openai_read_file() {
 
     let stdout = stdout_string(&result);
     let json = parse_json_output(&stdout);
-    assert_eq!(json["exit_code"], "success");
+    assert_eq!(json["exit_code"], 0);
     assert!(
         json["response"]
             .as_str()
@@ -1626,7 +1626,7 @@ async fn scenario_ollama_read_file() {
 
     let stdout = stdout_string(&result);
     let json = parse_json_output(&stdout);
-    assert_eq!(json["exit_code"], "success");
+    assert_eq!(json["exit_code"], 0);
     assert!(
         json["response"]
             .as_str()
@@ -1692,7 +1692,7 @@ async fn scenario_anthropic_multi_tool() {
 
     let stdout = stdout_string(&result);
     let json = parse_json_output(&stdout);
-    assert_eq!(json["exit_code"], "success");
+    assert_eq!(json["exit_code"], 0);
     let tool_calls = json["tool_calls"].as_array().expect("tool_calls array");
     assert!(
         tool_calls.iter().any(|tc| tc["tool"] == "Write"),
@@ -1852,10 +1852,7 @@ async fn schema_minimax_think_close_on_tool_chunk_validates() {
 
     let stdout = stdout_string(&result);
     let json = parse_json_output(&stdout);
-    assert_eq!(
-        json["exit_code"], "success",
-        "stdout: {stdout}\nstderr: {stderr}"
-    );
+    assert_eq!(json["exit_code"], 0, "stdout: {stdout}\nstderr: {stderr}");
 
     // `response` is the validated JSON object, not the raw transcript.
     let validated =
@@ -1920,10 +1917,7 @@ async fn schema_validation_targets_final_turn_not_transcript() {
 
     let stdout = stdout_string(&result);
     let json = parse_json_output(&stdout);
-    assert_eq!(
-        json["exit_code"], "success",
-        "stdout: {stdout}\nstderr: {stderr}"
-    );
+    assert_eq!(json["exit_code"], 0, "stdout: {stdout}\nstderr: {stderr}");
 
     let response = json["response"].as_str().unwrap_or("");
     assert!(

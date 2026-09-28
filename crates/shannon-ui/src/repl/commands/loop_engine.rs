@@ -486,7 +486,7 @@ fn default_keybindings() -> Vec<(&'static str, &'static str)> {
         ("Home/End", "Move to start/end of line"),
         ("Ctrl+U", "Clear input line"),
         ("Ctrl+W", "Delete word backward"),
-        ("Ctrl+A", "Move to start of line"),
+        ("Ctrl+A", "Toggle agents panel"),
         ("Ctrl+E", "Move to end of line"),
         ("Ctrl+K", "Delete to end of line"),
         ("Esc", "Cancel / dismiss dialog"),

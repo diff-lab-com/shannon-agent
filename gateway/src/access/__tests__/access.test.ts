@@ -5,9 +5,13 @@ import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { type ChannelAdapter, type NormalizedInbound, type ReplyTarget } from "../../adapters/types.js";
-import { Allowlist } from "../allowlist.js";
+import {
+  Allowlist,
+  defaultAllowlistPath,
+  resolveAllowlistPath,
+} from "../allowlist.js";
 import { PairingStore } from "../pairing.js";
-import { AllowlistGuard, createGuardedInbound } from "../guard.js";
+import { AllowlistGuard, createGuardedInbound, pairingChallengeMessage } from "../guard.js";
 
 const tempFiles: string[] = [];
 afterEach(() => {
@@ -120,6 +124,120 @@ describe("AllowlistGuard", () => {
     const decision = guard.check(inbound({ senderId: "U3", isDirect: false }));
     expect(decision.decision).toBe("deny");
     expect(pairing.pendingCount).toBe(0); // no code leaked for a group message
+  });
+});
+
+// ── review F42: a pairing approval path that actually works ──────────────
+
+describe("AllowlistGuard.approve (review F42)", () => {
+  it("a paired sender approves a pending code → requester allowlisted + persisted", () => {
+    const al = new Allowlist(tempPath());
+    al.allow("slack", "admin");
+    const pairing = new PairingStore();
+    const guard = new AllowlistGuard(al, pairing);
+    const code = pairing.issue(inbound({ senderId: "stranger", isDirect: true })).code;
+
+    const outcome = guard.approve(inbound({ senderId: "admin" }), code);
+    expect(outcome.ok).toBe(true);
+    if (outcome.ok) {
+      expect(outcome.record.senderId).toBe("stranger");
+    }
+    expect(al.isAllowed("slack", "stranger")).toBe(true);
+    // Single-use: second approval of the same code fails.
+    expect(guard.approve(inbound({ senderId: "admin" }), code)).toMatchObject({ ok: false });
+  });
+
+  it("rejects self-approval (the challenged sender cannot approve their own code)", () => {
+    const al = new Allowlist();
+    const pairing = new PairingStore();
+    const guard = new AllowlistGuard(al, pairing);
+    // The approver is allowlisted but ALSO carries a pending code (e.g. they
+    // were revoked and re-challenged earlier) — they must not approve it.
+    al.allow("slack", "admin");
+    const ownCode = pairing.issue(inbound({ senderId: "admin", isDirect: true })).code;
+
+    const outcome = guard.approve(inbound({ senderId: "admin" }), ownCode);
+    expect(outcome).toMatchObject({ ok: false });
+    if (!outcome.ok) expect(outcome.reason).toMatch(/self-approved/i);
+    expect(pairing.pendingCount).toBe(1); // code NOT burned by the failed attempt
+    expect(al.isAllowed("slack", "admin")).toBe(true); // allowlist untouched
+  });
+
+  it("rejects an unapproved (non-allowlisted) approver", () => {
+    const al = new Allowlist();
+    const pairing = new PairingStore();
+    const guard = new AllowlistGuard(al, pairing);
+    const code = pairing.issue(inbound({ senderId: "stranger", isDirect: true })).code;
+
+    const outcome = guard.approve(inbound({ senderId: "intruder" }), code);
+    expect(outcome).toMatchObject({ ok: false });
+    expect(al.size).toBe(0);
+    expect(pairing.pendingCount).toBe(1); // code survives for a legit approver
+  });
+
+  it("rejects an unknown/expired code", () => {
+    const al = new Allowlist();
+    al.allow("slack", "admin");
+    const guard = new AllowlistGuard(al, new PairingStore());
+    expect(guard.approve(inbound({ senderId: "admin" }), "000000")).toMatchObject({
+      ok: false,
+    });
+  });
+
+  it("rejects an expired code without allowing anyone", () => {
+    let clock = 1000;
+    const al = new Allowlist();
+    al.allow("slack", "admin");
+    const pairing = new PairingStore(5_000, () => clock);
+    const guard = new AllowlistGuard(al, pairing);
+    const code = pairing.issue(inbound({ senderId: "stranger", isDirect: true })).code;
+    clock = 7_000; // past TTL
+
+    expect(guard.approve(inbound({ senderId: "admin" }), code)).toMatchObject({ ok: false });
+    expect(al.isAllowed("slack", "stranger")).toBe(false);
+  });
+});
+
+describe("pairingChallengeMessage (review F42)", () => {
+  it("states the real approval channels (approve command + allowlist file)", () => {
+    const msg = pairingChallengeMessage("123456", "/tmp/allowlist.json");
+    expect(msg).toMatch(/Pairing required/);
+    expect(msg).toContain('approve 123456');
+    expect(msg).toContain("/tmp/allowlist.json");
+    expect(msg).not.toMatch(/desktop app/i);
+  });
+
+  it("falls back to the default allowlist path", () => {
+    expect(pairingChallengeMessage("654321")).toContain(defaultAllowlistPath());
+  });
+});
+
+describe("resolveAllowlistPath (review F42)", () => {
+  const ENV_KEY = "SHANNON_GATEWAY_ALLOWLIST";
+  const saved = process.env[ENV_KEY];
+  afterEach(() => {
+    if (saved === undefined) delete process.env[ENV_KEY];
+    else process.env[ENV_KEY] = saved;
+  });
+
+  it("explicit path wins", () => {
+    process.env[ENV_KEY] = "/from/env.json";
+    expect(resolveAllowlistPath("/explicit.json")).toBe("/explicit.json");
+  });
+
+  it("null forces the in-memory store even with env set", () => {
+    process.env[ENV_KEY] = "/from/env.json";
+    expect(resolveAllowlistPath(null)).toBeUndefined();
+  });
+
+  it("env override comes before the default", () => {
+    process.env[ENV_KEY] = "/from/env.json";
+    expect(resolveAllowlistPath()).toBe("/from/env.json");
+  });
+
+  it("defaults to ~/.shannon/gateway/allowlist.json", () => {
+    delete process.env[ENV_KEY];
+    expect(resolveAllowlistPath()).toBe(defaultAllowlistPath());
   });
 });
 

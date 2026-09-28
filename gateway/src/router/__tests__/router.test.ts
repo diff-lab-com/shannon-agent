@@ -136,6 +136,34 @@ describe("SessionLane", () => {
     expect(a).toBe(b);
     expect(factory).toHaveBeenCalledTimes(1);
   });
+
+  // review F41: a failed connect must not poison the lane — the memoized
+  // promise is cleared so the next turn dials again instead of replaying the
+  // stale rejection forever.
+  it("clears a rejected connect memo so the next getClient() retries", async () => {
+    let connects = 0;
+    let fail = true;
+    const factory = (): EngineWsClient =>
+      ({
+        connect: async () => {
+          connects += 1;
+          if (fail) throw new Error("engine down");
+        },
+        close: async () => {},
+      }) as unknown as EngineWsClient;
+    const lane = new SessionLane("k", factory, noopLogger);
+
+    await expect(lane.getClient()).rejects.toThrow("engine down");
+    expect(connects).toBe(1);
+
+    // Next call must attempt a fresh connect (connect called twice), which
+    // now succeeds and is re-memoized.
+    fail = false;
+    const client = await lane.getClient();
+    expect(connects).toBe(2);
+    expect(await lane.getClient()).toBe(client);
+    expect(connects).toBe(2);
+  });
 });
 
 describe("SessionRouter", () => {

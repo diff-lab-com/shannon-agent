@@ -235,8 +235,10 @@ curl -fsSL https://github.com/diff-lab-com/shannon-agent/releases/latest/downloa
 # Server / headless — CLI only, no sudo
 curl -fsSL https://github.com/diff-lab-com/shannon-agent/releases/latest/download/install.sh | SHANNON_COMPONENTS=cli sh
 
-# Or with cargo (requires Rust 1.88+)
-cargo install --git https://github.com/diff-lab-com/shannon-agent.git
+# Or with cargo (requires Rust 1.88+) — the repo is a virtual Cargo
+# workspace, so a bare `cargo install --git` has no root binary to build;
+# pin the tag and pick the CLI binary explicitly.
+cargo install --git https://github.com/diff-lab-com/shannon-agent.git --tag v0.12.0 --locked --bin shannon
 ```
 
 <details>

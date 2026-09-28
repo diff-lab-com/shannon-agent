@@ -20,6 +20,14 @@ on:
     tags:
       - 'v[0-9]+.[0-9]+.[0-9]+*'
 
+# Same group scheme as ci.yml. A crates.io publish must NEVER be cancelled
+# mid-flight (a killed `cargo publish` can leave a stale index entry), so
+# cancel-in-progress stays off; the group only serializes re-tagged pushes
+# (review F57).
+concurrency:
+  group: publish-crates-${{ github.ref }}
+  cancel-in-progress: false
+
 permissions:
   contents: read
 

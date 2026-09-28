@@ -56,6 +56,66 @@ pub(crate) fn truncate_bytes(output: &[u8], cap: usize) -> Vec<u8> {
     out
 }
 
+/// review F14: bounded accumulator for the STREAMING bash path.
+///
+/// `execute_streaming_inner` used to push every line into an unbounded
+/// `String`, so minutes of chatty output (`yes | head -c 100G`, a runaway
+/// build log) grew RSS until the OOM killer arrived. This mirrors the
+/// captured path's `truncate_bytes` semantics: keep the FIRST `cap` bytes,
+/// stop accumulating past the cap (lines are still read through — and still
+/// streamed as progress — so the process finishes normally), count everything
+/// dropped, and append the same `[truncated by harness — N bytes dropped]`
+/// marker when the buffer is finalized.
+struct BoundedStreamBuffer {
+    buf: String,
+    dropped: usize,
+    cap: usize,
+}
+
+impl BoundedStreamBuffer {
+    fn new(cap: usize) -> Self {
+        Self {
+            buf: String::new(),
+            dropped: 0,
+            cap,
+        }
+    }
+
+    /// Append one line (a newline is re-added, matching the previous
+    /// `push_str(line); push('\n')` behavior).
+    fn push_line(&mut self, line: &str) {
+        if self.buf.len() >= self.cap {
+            self.dropped += line.len() + 1;
+            return;
+        }
+        let remaining = self.cap - self.buf.len();
+        if line.len() < remaining {
+            self.buf.push_str(line);
+            self.buf.push('\n');
+            return;
+        }
+        // Partial fit: take the largest char-boundary prefix, drop the rest.
+        let mut take = remaining.saturating_sub(1);
+        while take > 0 && !line.is_char_boundary(take) {
+            take -= 1;
+        }
+        self.buf.push_str(&line[..take]);
+        self.buf.push('\n');
+        self.dropped += line.len() - take + 1;
+    }
+
+    /// Finalize: append the truncation marker when anything was dropped.
+    fn finish(mut self) -> String {
+        if self.dropped > 0 {
+            self.buf.push_str(&format!(
+                "\n[truncated by harness — {} bytes dropped]",
+                self.dropped
+            ));
+        }
+        self.buf
+    }
+}
+
 /// Timeout-resolution core: an explicit `timeout` wins, then the
 /// `SHANNON_BASH_TIMEOUT_MS` env override, then the default — clamped to the
 /// hard cap. Split from [`resolve_timeout_ms`] so the env lookup can be
@@ -1830,8 +1890,11 @@ impl BashTool {
         let mut stdout_lines = BufReader::new(stdout).lines();
         let mut stderr_lines = BufReader::new(stderr).lines();
 
-        let mut stdout_buf = String::new();
-        let mut stderr_buf = String::new();
+        // review F14: bounded buffers — the streaming path used to
+        // accumulate output without limit and could OOM on a runaway
+        // command. Same cap (and marker) as the captured path.
+        let mut stdout_buf = BoundedStreamBuffer::new(MAX_CAPTURED_BYTES);
+        let mut stderr_buf = BoundedStreamBuffer::new(MAX_CAPTURED_BYTES);
 
         // Buffer streaming lines before sending progress events.
         // This avoids flicker for fast commands — if the process finishes
@@ -1848,7 +1911,7 @@ impl BashTool {
             if let Some(ref flag) = cancel_flag {
                 if flag.load(std::sync::atomic::Ordering::Relaxed) {
                     let _ = child.kill().await;
-                    stderr_buf.push_str("Command cancelled by user\n");
+                    stderr_buf.push_line("Command cancelled by user");
                     break;
                 }
             }
@@ -1857,8 +1920,7 @@ impl BashTool {
                     match line {
                         Ok(Some(line)) => {
                             let cleaned = strip_ansi(&line);
-                            stdout_buf.push_str(&cleaned);
-                            stdout_buf.push('\n');
+                            stdout_buf.push_line(&cleaned);
 
                             if !streaming_active {
                                 buffered_lines.push(cleaned.clone());
@@ -1875,7 +1937,7 @@ impl BashTool {
                         }
                         Ok(None) => break,
                         Err(e) => {
-                            stderr_buf.push_str(&format!("stdout read error: {e}\n"));
+                            stderr_buf.push_line(&format!("stdout read error: {e}"));
                             break;
                         }
                     }
@@ -1884,8 +1946,7 @@ impl BashTool {
                     match line {
                         Ok(Some(line)) => {
                             let cleaned = strip_ansi(&line);
-                            stderr_buf.push_str(&cleaned);
-                            stderr_buf.push('\n');
+                            stderr_buf.push_line(&cleaned);
                             let tagged = format!("⚠ {cleaned}");
                             if !streaming_active {
                                 buffered_lines.push(tagged);
@@ -1909,8 +1970,7 @@ impl BashTool {
 
         // Drain remaining stderr
         while let Ok(Some(line)) = stderr_lines.next_line().await {
-            stderr_buf.push_str(&line);
-            stderr_buf.push('\n');
+            stderr_buf.push_line(&line);
         }
 
         let status = child
@@ -1920,6 +1980,11 @@ impl BashTool {
 
         let exit_code = status.code.unwrap_or(-1);
         let success = status.success;
+
+        // review F14: finalize the bounded buffers (appends the truncation
+        // marker when output was dropped).
+        let stdout_buf = stdout_buf.finish();
+        let stderr_buf = stderr_buf.finish();
 
         let sandbox_off_warning = self.sandbox_content_warning();
         let content = if success {
@@ -2892,6 +2957,104 @@ async fn test_streaming_security_rejection_includes_remediation_hint() {
         "streaming rejection must carry a remediation hint, got: {}",
         result.content
     );
+}
+
+// ── review F14: bounded streaming buffers ────────────────────────────────
+
+#[test]
+fn test_bounded_stream_buffer_keeps_prefix_and_counts_dropped() {
+    // Under the cap: passthrough.
+    let mut b = BoundedStreamBuffer::new(16);
+    b.push_line("short");
+    assert_eq!(b.finish(), "short\n");
+
+    // Partial fit: largest char-boundary prefix is kept, the rest counted.
+    let mut b = BoundedStreamBuffer::new(16);
+    b.push_line("0123456789");
+    b.push_line("abcdefghijk");
+    assert_eq!(
+        b.finish(),
+        "0123456789\nabcd\n\n[truncated by harness — 8 bytes dropped]"
+    );
+
+    // Multi-byte characters are never split mid-codepoint.
+    let mut b = BoundedStreamBuffer::new(10);
+    b.push_line("aaaa");
+    b.push_line("ééé"); // 6 bytes; only 5 remain → 2 chars fit
+    assert_eq!(
+        b.finish(),
+        "aaaa\néé\n\n[truncated by harness — 3 bytes dropped]"
+    );
+
+    // Saturated buffer drops everything further.
+    let mut b = BoundedStreamBuffer::new(4);
+    b.push_line("abcd"); // partial fit: "abc\n", 1 byte + newline dropped
+    b.push_line("more"); // saturated: whole line dropped
+    assert_eq!(
+        b.finish(),
+        "abc\n\n[truncated by harness — 7 bytes dropped]"
+    );
+}
+
+#[tokio::test]
+async fn test_streaming_output_is_bounded_under_capture_cap() {
+    let tool = BashTool::new();
+    let sender = std::sync::Arc::new(CollectSender {
+        lines: std::sync::Mutex::new(Vec::new()),
+    });
+    // ~3.4 MiB of stdout through the streaming path (> the 2 MiB cap): the
+    // buffer must stay bounded, the marker appended, and the command must
+    // still complete normally.
+    let result = tool
+        .execute_streaming(
+            json!({"command": "yes 0123456789abcdef | head -n 200000"}),
+            sender,
+        )
+        .await
+        .unwrap();
+    assert!(
+        !result.is_error,
+        "capped command must complete, got: {}",
+        &result.content[result.content.len().saturating_sub(200)..]
+    );
+    assert_eq!(result.metadata.get("exit_code"), Some(&json!(0)));
+    let marker = "[truncated by harness — 999999999 bytes dropped]";
+    let keep = MAX_CAPTURED_BYTES + marker.len() + 8;
+    assert!(
+        result.content.len() <= keep,
+        "streamed output must be capped: {} > {keep}",
+        result.content.len()
+    );
+    assert!(
+        result.content.contains("[truncated by harness —"),
+        "truncation marker must be appended"
+    );
+}
+
+#[tokio::test]
+async fn test_streaming_single_oversized_line_is_clipped() {
+    let tool = BashTool::new();
+    let sender = std::sync::Arc::new(CollectSender {
+        lines: std::sync::Mutex::new(Vec::new()),
+    });
+    // One ~6.9 MiB line (no newline until EOF) — the reader must clip it to
+    // the cap instead of holding the whole line (and every future one) in
+    // memory.
+    let result = tool
+        .execute_streaming(json!({"command": "seq 1 1200000 | tr '\\n' ' '"}), sender)
+        .await
+        .unwrap();
+    assert!(!result.is_error);
+    // Medium-risk pipes append a fixed security-warning description to the
+    // content; allow a generous constant for it. The property under test is
+    // that ~6.9 MiB of single-line output is clipped to ~cap, not held whole.
+    let marker = "[truncated by harness — 999999999 bytes dropped]";
+    assert!(
+        result.content.len() <= MAX_CAPTURED_BYTES + marker.len() + 1024,
+        "single oversized line must be clipped: {}",
+        result.content.len()
+    );
+    assert!(result.content.contains("[truncated by harness —"));
 }
 
 #[test]

@@ -176,7 +176,11 @@ impl HookManager {
                     // For non-blocking hooks, spawn and detach
                     match &hook_def.r#type {
                         HookType::Command => {
-                            self.spawn_hook(&hook_def.command, &event_json)?;
+                            self.spawn_hook(
+                                &hook_def.command,
+                                hook_def.timeout_duration(),
+                                &event_json,
+                            )?;
                         }
                         HookType::Http => {
                             self.spawn_http_hook(hook_def, &event_json)?;
@@ -265,6 +269,10 @@ impl HookManager {
                 .stdin(std::process::Stdio::piped())
                 .stdout(std::process::Stdio::piped())
                 .stderr(std::process::Stdio::piped())
+                // F22: when the enclosing `timeout` elapses it drops this
+                // future — without `kill_on_drop` the spawned hook process
+                // survived as an orphan still holding its pipes.
+                .kill_on_drop(true)
                 .spawn()?;
 
             // Write event data to stdin
@@ -320,7 +328,18 @@ impl HookManager {
     }
 
     /// Spawn a non-blocking hook (fire and forget)
-    fn spawn_hook(&self, command: &str, stdin_data: &[u8]) -> Result<(), HookError> {
+    ///
+    /// F22: the spawned task is still bounded by the hook's configured
+    /// timeout — `spawn_hook` previously had NO deadline, so a hung hook
+    /// leaked both the detached task and an unkillable-at-close zombie
+    /// process. On expiry the future is dropped and `kill_on_drop` reaps
+    /// the child.
+    fn spawn_hook(
+        &self,
+        command: &str,
+        timeout: Duration,
+        stdin_data: &[u8],
+    ) -> Result<(), HookError> {
         let stdin_data = stdin_data.to_vec();
         let command = command.to_string();
 
@@ -331,17 +350,36 @@ impl HookManager {
                 .stdin(std::process::Stdio::piped())
                 .stdout(std::process::Stdio::null())
                 .stderr(std::process::Stdio::null())
+                // F22: kill the child when the enclosing future is dropped —
+                // a timeout expiry (or task cancel) must not orphan the
+                // hook process.
+                .kill_on_drop(true)
                 .spawn()
             {
                 Ok(mut child) => {
-                    if let Some(mut stdin) = child.stdin.take() {
-                        use tokio::io::AsyncWriteExt;
-                        if let Err(e) = stdin.write_all(&stdin_data).await {
-                            tracing::debug!("Failed to write to hook stdin: {e}");
+                    let run = async {
+                        if let Some(mut stdin) = child.stdin.take() {
+                            use tokio::io::AsyncWriteExt;
+                            if let Err(e) = stdin.write_all(&stdin_data).await {
+                                tracing::debug!("Failed to write to hook stdin: {e}");
+                            }
                         }
-                    }
-                    if let Err(e) = child.wait().await {
-                        tracing::warn!(command = %command, error = %e, "Non-blocking hook process failed");
+                        if let Err(e) = child.wait().await {
+                            tracing::warn!(
+                                command = %command,
+                                error = %e,
+                                "Non-blocking hook process failed"
+                            );
+                        }
+                    };
+                    if tokio::time::timeout(timeout, run).await.is_err() {
+                        tracing::warn!(
+                            command = %command,
+                            timeout_secs = timeout.as_secs(),
+                            "Non-blocking hook exceeded its timeout — killing process"
+                        );
+                        // `child` drops here at task end; `kill_on_drop`
+                        // reaps it instead of leaving a zombie.
                     }
                 }
                 Err(e) => {
@@ -517,6 +555,9 @@ impl HookManager {
                 .stdin(std::process::Stdio::piped())
                 .stdout(std::process::Stdio::piped())
                 .stderr(std::process::Stdio::piped())
+                // F22: same leak as `execute_hook` — a timed-out prompt
+                // hook's process must be killed when the future is dropped.
+                .kill_on_drop(true)
                 .spawn()?;
 
             if let Some(mut stdin) = child.stdin.take() {
@@ -980,5 +1021,85 @@ mod tests {
     fn test_send_sync() {
         fn assert_send_sync<T: Send + Sync>() {}
         assert_send_sync::<HookManager>();
+    }
+
+    // ── F22: hook process leaks ───────────────────────────────────────────
+
+    /// Unique marker path so parallel test runs cannot collide.
+    fn f22_marker(name: &str) -> PathBuf {
+        std::env::temp_dir().join(format!("f22-{}-{}.marker", name, std::process::id()))
+    }
+
+    /// A blocking hook that blows its deadline must (a) return
+    /// [`HookError::Timeout`] promptly and (b) leave a DEAD process behind:
+    /// with `kill_on_drop(true)` (F22) the timed-out future's drop reaps the
+    /// child, so the script's trailing statement never runs. Pre-fix, the
+    /// process survived the timeout and executed it.
+    #[tokio::test]
+    async fn execute_hook_timeout_kills_child() {
+        let mgr = HookManager::with_paths(
+            PathBuf::from("/tmp/f22-user-hooks.json"),
+            PathBuf::from("/tmp/f22-proj-hooks.json"),
+        );
+        let marker = f22_marker("exec");
+        let _ = std::fs::remove_file(&marker);
+
+        let started = std::time::Instant::now();
+        let result = mgr
+            .execute_hook(
+                &format!("sleep 2; touch {}", marker.display()),
+                Duration::from_millis(150),
+                b"{}",
+            )
+            .await;
+        assert!(
+            started.elapsed() < Duration::from_secs(1),
+            "timeout must fire promptly, took {:?}",
+            started.elapsed()
+        );
+        match result {
+            Err(HookError::Timeout { .. }) => {}
+            other => panic!("expected HookError::Timeout, got {other:?}"),
+        }
+
+        // The un-killed script would `touch` the marker after its 2s sleep;
+        // wait past that point and assert the kill actually happened.
+        tokio::time::sleep(Duration::from_millis(2500)).await;
+        assert!(
+            !marker.exists(),
+            "timed-out hook process was not killed — its trailing statement ran"
+        );
+        let _ = std::fs::remove_file(&marker);
+    }
+
+    /// A non-blocking (fire-and-forget) hook is ALSO bounded by the hook's
+    /// configured timeout (F22): `spawn_hook` previously had no deadline at
+    /// all, so a hung hook leaked the detached task plus a zombie. The
+    /// bounded task must kill the child on expiry — its trailing statement
+    /// must never run.
+    #[tokio::test]
+    async fn spawn_hook_is_bounded_by_timeout() {
+        let mgr = HookManager::with_paths(
+            PathBuf::from("/tmp/f22-user-hooks.json"),
+            PathBuf::from("/tmp/f22-proj-hooks.json"),
+        );
+        let marker = f22_marker("spawn");
+        let _ = std::fs::remove_file(&marker);
+
+        mgr.spawn_hook(
+            &format!("sleep 2; touch {}", marker.display()),
+            Duration::from_millis(150),
+            b"{}",
+        )
+        .expect("spawn_hook is fire-and-forget and returns Ok");
+
+        // Long enough for the 150ms deadline to fire AND for the un-killed
+        // counterfactual (touch at ~2s) to have happened.
+        tokio::time::sleep(Duration::from_millis(3000)).await;
+        assert!(
+            !marker.exists(),
+            "spawned hook process outlived its timeout — trailing statement ran"
+        );
+        let _ = std::fs::remove_file(&marker);
     }
 }

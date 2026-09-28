@@ -7105,7 +7105,7 @@ dependencies = [
 
 [[package]]
 name = "shannon-desktop"
-version = "0.11.0"
+version = "0.12.0"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -7262,7 +7262,7 @@ dependencies = [
 
 [[package]]
 name = "shannon-plugin-api"
-version = "0.11.0"
+version = "0.12.0"
 dependencies = [
  "serde_json",
 ]

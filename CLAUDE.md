@@ -48,6 +48,8 @@ Install: `cargo install just cargo-nextest`. Config in `.config/nextest.toml` ha
 | `shannon-server` | axum-based HTTP API server exposing Shannon sessions (REST + SSE) | [metrics.md](./docs/metrics.md) |
 | `shannon-stability-attr` | Proc-macro `#[stable_api]` / `#[unstable_api]` attribute markers feeding `docs/STABILITY.md` | n/a |
 | `shannon-remote` | Remote execution worlds: SSH hosts (system ssh + SFTP) and Docker containers (`docker exec`) as `ProcessProvider`/`FileSystemProvider` implementations; `DynamicWorld` hot-swap; `/remote` TUI command, `--target` CLI flag, Settings→Remotes desktop page | [design](./docs/plans/2026-09-04-remote-connections-design.md) |
+| `shannon-browser` | System-browser detection, browser providers, and the shared chromiumoxide session behind the `local-browser` feature — used by browser tools and remote worlds | n/a |
+| `shannon-plugin-api` | Content-transform middleware contract between the engine and plugins (secret-guard); version-locked to releases, not workspace-inherited | n/a |
 
 ### First-Screen UX
 

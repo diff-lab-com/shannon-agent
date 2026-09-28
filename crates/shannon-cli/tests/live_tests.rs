@@ -378,7 +378,7 @@ fn test_live_ollama_simple_query() {
         .unwrap_or_else(|e| panic!("Invalid JSON output:\n{stdout}\nParse error: {e}"));
 
     assert_eq!(
-        json["exit_code"], "success",
+        json["exit_code"], 0,
         "Expected success exit code, got: {json}"
     );
     let response = json["response"].as_str().unwrap_or("");
@@ -620,10 +620,7 @@ fn test_live_deepseek_simple_query() {
     let json: serde_json::Value =
         serde_json::from_str(&stdout).unwrap_or_else(|e| panic!("Invalid JSON:\n{stdout}\n{e}"));
 
-    assert_eq!(
-        json["exit_code"], "success",
-        "Expected success, got: {json}"
-    );
+    assert_eq!(json["exit_code"], 0, "Expected success, got: {json}");
     assert!(!json["response"].as_str().unwrap_or("").is_empty());
 }
 

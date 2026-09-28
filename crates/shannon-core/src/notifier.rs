@@ -709,11 +709,21 @@ impl DesktopNotifier {
         Ok(())
     }
 
+    /// Escape `text` for a double-quoted AppleScript string literal.
+    ///
+    /// Backslashes must be escaped FIRST: escaping quotes alone left raw `\`
+    /// characters untouched, so a body ending in `\` turned the closing
+    /// `\"` into an escaped quote and broke the `osascript` compile.
+    #[allow(dead_code)] // KEEP: cross-platform stub (only called from macOS path)
+    fn escape_applescript(text: &str) -> String {
+        text.replace('\\', "\\\\").replace('"', "\\\"")
+    }
+
     #[allow(dead_code)] // KEEP: cross-platform stub
     fn send_macos(&self, notification: &Notification) -> Result<(), NotifierError> {
-        // Escape double quotes in body for AppleScript
-        let escaped_body = notification.body.replace('"', "\\\"");
-        let escaped_title = notification.title.replace('"', "\\\"");
+        // Escape backslashes then double quotes for AppleScript.
+        let escaped_body = Self::escape_applescript(&notification.body);
+        let escaped_title = Self::escape_applescript(&notification.title);
         let script =
             format!("display notification \"{escaped_body}\" with title \"{escaped_title}\"");
         std::process::Command::new("osascript")
@@ -2127,5 +2137,26 @@ template = "slack"
         assert!(cfg.webhook.is_some());
         let wh = cfg.webhook.unwrap();
         assert_eq!(wh.url, "https://hooks.slack.com/services/abc");
+    }
+
+    // -- DesktopNotifier AppleScript escaping --------------------------------
+
+    /// A trailing backslash in a title/body used to escape the closing `\"`
+    /// of the generated AppleScript and break the `osascript` compile:
+    /// backslashes must be doubled BEFORE quotes are escaped, for both
+    /// title and body.
+    #[test]
+    fn test_applescript_escaping_escapes_backslashes_before_quotes() {
+        let escape = DesktopNotifier::escape_applescript;
+
+        // Trailing backslash: the exact crash input from the finding.
+        assert_eq!(escape("done \\"), "done \\\\");
+        // Quotes alone.
+        assert_eq!(escape("say \"hi\""), "say \\\"hi\\\"");
+        // Backslash+quote must compose (escaped backslash, then escaped quote)
+        // — the old order produced a doubly-escaped quote instead.
+        assert_eq!(escape("a\\\"b"), "a\\\\\\\"b");
+        // Plain text passes through.
+        assert_eq!(escape("plain"), "plain");
     }
 }

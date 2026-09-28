@@ -168,7 +168,20 @@ panic = "abort"
 
 [profile.dev]
 opt-level = 0
-debug = true
+# Moved from .cargo/config.toml (2026-09-28): cargo silently IGNORES
+# [profile.*] tables in config files — profiles only load from the workspace
+# root manifest — so the memory cap below never actually applied from there.
+# codegen-units=2 + "line-tables-only" pairs with [build] jobs=4 in
+# .cargo/config.toml to cap peak build memory at ~8Gi (4 parallel jobs x
+# ~1.5Gi); line tables preserve panic backtraces without full variable data.
+codegen-units = 2
+debug = "line-tables-only"
+
+# Mirrors [profile.dev] (test inherits dev by default, but keep the table so
+# the memory cap survives future dev-profile edits). Same config.toml origin.
+[profile.test]
+codegen-units = 2
+debug = "line-tables-only"
 
 [profile.dist]
 inherits = "release"

@@ -56,26 +56,19 @@ pub fn trim_to_budget(map: &mut SymbolMap, token_budget: usize) {
     // we fit. We do per-file trimming in reverse source order so each file's
     // entry-point symbols (functions/types near the top) survive.
     //
-    // We snapshot the file count up front so we can release the mutable
-    // borrow on `map.files` between pop iterations and let `total_tokens`
-    // re-scan immutably each time. This keeps the borrow checker happy and
-    // keeps the loop body simple.
+    // F33: keep a running token total and subtract each popped symbol's
+    // tokens instead of re-running the full recursive `total_tokens` scan
+    // after every pop (which made trimming O(n²) on large maps).
+    let mut total = total_tokens(map);
     let file_count = map.files.len();
     for i in 0..file_count {
-        loop {
-            let needs_trim = {
-                let syms = &map.files[i].1;
-                if syms.is_empty() {
-                    break;
-                }
-                total_tokens(map) > token_budget
-            };
-            if !needs_trim {
-                break;
+        while !map.files[i].1.is_empty() && total > token_budget {
+            let popped = map.files[i].1.pop();
+            if let Some(node) = popped {
+                total = total.saturating_sub(node_tokens(&node));
             }
-            map.files[i].1.pop();
         }
-        if total_tokens(map) <= token_budget {
+        if total <= token_budget {
             break;
         }
     }
@@ -172,5 +165,74 @@ mod tests {
         assert_eq!(file.len(), 1);
         assert_eq!(file[0].name, "outer");
         assert!(file[0].children.is_empty());
+    }
+
+    /// F33: the running-total trim must stay consistent with a full
+    /// recursive recount — the reported total equals the sum of the parts
+    /// (signatures, recursively) after trimming, and respects the budget.
+    #[test]
+    fn total_tokens_matches_sum_of_parts_after_trimming() {
+        let sym = |name: &str, sig_len: usize| SymbolNode {
+            kind: crate::symbol_tree::SymbolKind::Function,
+            name: name.into(),
+            span: crate::symbol_tree::Span {
+                start_line: 0,
+                start_col: 0,
+                end_line: 0,
+                end_col: 0,
+            },
+            signature: "x".repeat(sig_len),
+            children: vec![],
+        };
+
+        let mut map = SymbolMap {
+            root: std::path::PathBuf::from("/"),
+            files: vec![
+                (
+                    std::path::PathBuf::from("/a.rs"),
+                    vec![sym("a1", 97), sym("a2", 41), sym("a3", 63)],
+                ),
+                (
+                    std::path::PathBuf::from("/b.rs"),
+                    vec![sym("b1", 120), sym("b2", 8)],
+                ),
+                (std::path::PathBuf::from("/c.rs"), vec![sym("c1", 200)]),
+            ],
+        };
+
+        trim_to_budget(&mut map, 80);
+
+        // Totals: a = 25+11+16 = 52, b = 30+2 = 32, c = 50 → 134.
+        // File a is emptied (−52 → 82), then b's tail `b2` is popped
+        // (−2 → 80 ≤ 80): entry points `b1` and `c1` survive.
+        let reported = total_tokens(&map);
+        let sum_of_parts: usize = map
+            .files
+            .iter()
+            .flat_map(|(_, syms)| syms.iter())
+            .map(|n| estimate_tokens(&n.signature))
+            .sum();
+        assert_eq!(
+            reported, sum_of_parts,
+            "running total must equal a fresh recursive recount"
+        );
+        assert!(reported <= 80, "budget must be respected");
+        assert!(map.files[0].1.is_empty());
+        assert_eq!(
+            map.files[1]
+                .1
+                .iter()
+                .map(|s| s.name.as_str())
+                .collect::<Vec<_>>(),
+            vec!["b1"]
+        );
+        assert_eq!(
+            map.files[2]
+                .1
+                .iter()
+                .map(|s| s.name.as_str())
+                .collect::<Vec<_>>(),
+            vec!["c1"]
+        );
     }
 }

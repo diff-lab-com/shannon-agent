@@ -720,6 +720,7 @@ mod tests {
             github_secret.map(str::to_string),
             routines,
             inbox.clone(),
+            Some(crate::auth::HostGuardConfig::default()),
         );
         TestApp { app, inbox }
     }
@@ -850,6 +851,7 @@ mod tests {
                 Some("opened"),
             )],
             inbox.clone(),
+            Some(crate::auth::HostGuardConfig::default()),
         );
         let payload = issues_opened();
         let req = Request::builder()

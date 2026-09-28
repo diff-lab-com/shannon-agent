@@ -126,7 +126,15 @@ fn looks_like_complete_json(s: &str) -> bool {
 /// Tracks the last SSE `id:` field for reconnection support.
 pub struct SseStream {
     chunks: ByteChunkStream,
-    buffer: String,
+    /// Raw (not yet decoded) bytes of the incomplete trailing line.
+    ///
+    /// Kept as bytes, not a `String`: HTTP chunk boundaries can split a
+    /// multi-byte UTF-8 character (CJK, emoji) in half, and decoding each
+    /// chunk independently with `from_utf8_lossy` corrupted the split
+    /// character into U+FFFD replacement chars (F3). Complete lines are
+    /// decoded one at a time in [`Self::drain_buffer`]; a trailing partial
+    /// sequence stays byte-buffered until its continuation arrives.
+    buffer: Vec<u8>,
     pending_events: std::collections::VecDeque<Result<StreamEvent, ApiError>>,
     done: bool,
     provider: LlmProvider,
@@ -185,7 +193,7 @@ impl SseStream {
         let mapped = Box::pin(byte_stream.map(|result| result.map(|b| b.to_vec())));
         Self {
             chunks: mapped,
-            buffer: String::new(),
+            buffer: Vec::new(),
             pending_events: std::collections::VecDeque::new(),
             done: false,
             provider,
@@ -222,24 +230,32 @@ impl SseStream {
     }
 
     /// Parse all complete SSE lines from the buffer, queuing parsed events.
-    /// Incomplete lines remain in the buffer for the next chunk.
+    /// Incomplete lines remain in the (byte) buffer for the next chunk.
     /// For Ollama NDJSON, validates JSON brace balance before parsing to
     /// handle chunks split across TCP packet boundaries.
+    ///
+    /// Decoding happens per complete line: a UTF-8 newline (0x0A) is a valid
+    /// char boundary in any UTF-8 stream, so a partial multi-byte character
+    /// at the buffer tail can never precede a newline — it simply stays
+    /// byte-buffered until the chunk carrying its continuation arrives (F3).
     fn drain_buffer(&mut self) {
-        while let Some(newline_pos) = self.buffer.find('\n') {
-            let line = self.buffer[..newline_pos].to_string();
-            self.buffer = self.buffer[newline_pos + 1..].to_string();
+        loop {
+            let Some(newline_pos) = self.buffer.iter().position(|&b| b == b'\n') else {
+                break;
+            };
+            let line = String::from_utf8_lossy(&self.buffer[..newline_pos]).into_owned();
 
             // For Ollama NDJSON: validate JSON completeness before parsing
             if matches!(self.provider, LlmProvider::Ollama)
                 && line.trim_start().starts_with('{')
                 && !looks_like_complete_json(&line)
             {
-                // Incomplete JSON — put back and wait for more data
-                self.buffer = format!("{}\n{}", line, self.buffer);
+                // Incomplete JSON — leave the line (and its newline) in the
+                // buffer and wait for more data.
                 break;
             }
 
+            self.buffer.drain(..=newline_pos);
             let events = self.parse_sse_line(&line);
             self.pending_events.extend(events);
         }
@@ -317,8 +333,10 @@ impl Stream for SseStream {
         loop {
             match self.chunks.as_mut().poll_next(cx) {
                 Poll::Ready(Some(Ok(data))) => {
-                    let text = String::from_utf8_lossy(&data);
-                    self.buffer.push_str(&text);
+                    // Append raw bytes; decode complete lines only (F3). A
+                    // multi-byte char split at the chunk boundary stays in
+                    // the byte buffer until its continuation arrives.
+                    self.buffer.extend_from_slice(&data);
                     self.drain_buffer();
 
                     if !self.pending_events.is_empty() {
@@ -355,18 +373,24 @@ impl Stream for SseStream {
                     self.premature_eof = !self.saw_terminal_frame;
                     // Process any remaining data in buffer first — a final
                     // line without a trailing newline still carries content.
-                    if !self.buffer.trim().is_empty() {
+                    // Nothing more will arrive, so a (truncated) trailing
+                    // partial sequence is decoded lossily here.
+                    if !self.buffer.is_empty() {
                         let remaining = std::mem::take(&mut self.buffer);
-                        let events = self.parse_sse_line(&remaining);
-                        self.pending_events.extend(events);
-                        if !self.pending_events.is_empty() {
-                            let event = self.pending_events.pop_front().expect("checked non-empty");
-                            if let Ok(event) = &event {
-                                self.note_content(event);
-                                self.note_terminal_frame(event);
+                        let remaining = String::from_utf8_lossy(&remaining).into_owned();
+                        if !remaining.trim().is_empty() {
+                            let events = self.parse_sse_line(&remaining);
+                            self.pending_events.extend(events);
+                            if !self.pending_events.is_empty() {
+                                let event =
+                                    self.pending_events.pop_front().expect("checked non-empty");
+                                if let Ok(event) = &event {
+                                    self.note_content(event);
+                                    self.note_terminal_frame(event);
+                                }
+                                self.done = true;
+                                return Poll::Ready(Some(event));
                             }
-                            self.done = true;
-                            return Poll::Ready(Some(event));
                         }
                     }
                     self.done = true;
@@ -474,7 +498,7 @@ pub fn sse_stream_from_response_resumable(
         reconnects_remaining: max_reconnects,
         initial_reconnects: max_reconnects,
         reconnecting: false,
-        saw_message_stop: false,
+        saw_terminal_frame: false,
         pending_reconnect: None,
         saw_error_event: false,
     };
@@ -483,9 +507,11 @@ pub fn sse_stream_from_response_resumable(
 
 /// Wrapper around a `MessageStream` that handles automatic reconnection.
 ///
-/// When the inner stream ends without a `MessageStop` event (indicating
-/// an unexpected connection drop), this wrapper reconnects using the
-/// tracked `Last-Event-ID` so the provider can replay missed events.
+/// When the inner stream ends without a terminal frame (see
+/// [`is_terminal_frame`]: no `MessageStop`, no stop-reason `MessageDelta`,
+/// no error event — indicating an unexpected connection drop), this wrapper
+/// reconnects using the tracked `Last-Event-ID` so the provider can replay
+/// missed events.
 struct ResumableSseStream {
     inner: MessageStream,
     last_event_id: LastEventId,
@@ -496,7 +522,13 @@ struct ResumableSseStream {
     reconnects_remaining: u32,
     initial_reconnects: u32,
     reconnecting: bool,
-    saw_message_stop: bool,
+    /// Set once a terminal frame passed through — same predicate the inner
+    /// stream uses ([`is_terminal_frame`]): `MessageStop`, OR a
+    /// `MessageDelta` carrying a stop reason, OR an error event. Ollama and
+    /// Gemini never send `MessageStop`, so tracking only `MessageStop` here
+    /// made every clean completion look like a premature EOF and replayed
+    /// the whole request up to `max_reconnects` extra times.
+    saw_terminal_frame: bool,
     pending_reconnect: Option<tokio::sync::oneshot::Receiver<Result<MessageStream, ApiError>>>,
     /// Set once a [`StreamEvent::Error`] passed through. A provider error
     /// event IS the provider's answer — it terminates the stream by design,
@@ -539,8 +571,11 @@ impl Stream for ResumableSseStream {
         // Poll inner stream (every branch returns, so no actual looping)
         match self.inner.as_mut().poll_next(cx) {
             Poll::Ready(Some(Ok(event))) => {
-                if matches!(event, StreamEvent::MessageStop) {
-                    self.saw_message_stop = true;
+                // Same terminal predicate the inner stream uses — a clean
+                // Ollama/Gemini completion ends with a stop-reason
+                // MessageDelta, never MessageStop (F2).
+                if is_terminal_frame(&event) {
+                    self.saw_terminal_frame = true;
                 }
                 if matches!(event, StreamEvent::Error { .. }) {
                     self.saw_error_event = true;
@@ -571,7 +606,8 @@ impl Stream for ResumableSseStream {
             }
             Poll::Ready(None) => {
                 // Stream ended
-                if self.saw_message_stop || self.saw_error_event || self.reconnects_remaining == 0 {
+                if self.saw_terminal_frame || self.saw_error_event || self.reconnects_remaining == 0
+                {
                     Poll::Ready(None)
                 } else {
                     // Premature end — reconnect
@@ -624,7 +660,6 @@ impl ResumableSseStream {
         };
 
         let (tx, rx) = tokio::sync::oneshot::channel();
-        let config = self.client.config().clone();
         let messages = self.messages.clone();
         let tools = self.tools.clone();
         let system = self.system.clone();
@@ -632,7 +667,10 @@ impl ResumableSseStream {
         tokio::spawn(async move {
             notify_client.notify_retry(notice).await;
             tokio::time::sleep(std::time::Duration::from_secs(backoff_secs)).await;
-            let reconnect_client = super::client::LlmClient::new(config);
+            // F11: build the reconnect client from the WRAPPER's client (not
+            // bare from config) so the request tee, retry observer,
+            // stream-idle override, and reasoning_effort survive the replay.
+            let reconnect_client = notify_client.reconnect_clone();
             let result = reconnect_client
                 .send_message_stream_resumable(messages, tools, system, eid)
                 .await;
@@ -654,7 +692,7 @@ impl ResumableSseStream {
 mod tests {
     use super::*;
     use crate::api::adapter::OpenaiStreamState;
-    use crate::api::types::{ContentDelta, StreamEvent};
+    use crate::api::types::{ContentDelta, StreamEvent, Usage};
 
     /// Helper to parse SSE lines into events
     fn parse_sse_lines(
@@ -1221,7 +1259,7 @@ mod tests {
         let mut sse = SseStream::for_test(last_event_id.clone());
 
         // Simulate SSE lines with id: fields
-        sse.buffer = "id: evt_001\ndata: {\"type\":\"ping\"}\n\n".to_string();
+        sse.buffer = b"id: evt_001\ndata: {\"type\":\"ping\"}\n\n".to_vec();
         sse.drain_buffer();
         assert_eq!(
             last_event_id.lock().unwrap().as_deref(),
@@ -1230,7 +1268,7 @@ mod tests {
         );
 
         // Update with a new id
-        sse.buffer = "id: evt_002\ndata: {\"type\":\"ping\"}\n\n".to_string();
+        sse.buffer = b"id: evt_002\ndata: {\"type\":\"ping\"}\n\n".to_vec();
         sse.drain_buffer();
         assert_eq!(
             last_event_id.lock().unwrap().as_deref(),
@@ -1248,7 +1286,7 @@ mod tests {
         *last_event_id.lock().unwrap() = Some("evt_100".to_string());
 
         // Empty id line should not clear the existing value
-        sse.buffer = "id:\ndata: {\"type\":\"ping\"}\n\n".to_string();
+        sse.buffer = b"id:\ndata: {\"type\":\"ping\"}\n\n".to_vec();
         sse.drain_buffer();
         assert_eq!(
             last_event_id.lock().unwrap().as_deref(),
@@ -1444,7 +1482,7 @@ mod tests {
             let byte_stream = Box::pin(futures::stream::empty());
             Self {
                 chunks: byte_stream,
-                buffer: String::new(),
+                buffer: Vec::new(),
                 pending_events: std::collections::VecDeque::new(),
                 done: false,
                 provider: LlmProvider::Anthropic,
@@ -1466,7 +1504,7 @@ mod tests {
         ) -> Self {
             Self {
                 chunks,
-                buffer: String::new(),
+                buffer: Vec::new(),
                 pending_events: std::collections::VecDeque::new(),
                 done: false,
                 provider,
@@ -1713,6 +1751,110 @@ mod tests {
         assert_eq!(none_v.or(None), None);
     }
 
+    // ── UTF-8 across HTTP chunk boundaries (F3) ─────────────────────────
+
+    /// F3 regression: a multi-byte character split exactly at an HTTP chunk
+    /// boundary must survive intact. Decoding each chunk independently with
+    /// `from_utf8_lossy` used to replace the split character with U+FFFD.
+    #[tokio::test]
+    async fn utf8_char_split_across_chunks_is_not_corrupted() {
+        use futures::StreamExt;
+
+        // Ends with a terminal frame (A8b): without one the stream surfaces
+        // its premature-EOF error, which would mask the UTF-8 behavior under
+        // test here.
+        let payload = format!(
+            "data: {{\"type\":\"content_block_delta\",\"index\":0,\"delta\":{{\"type\":\"text_delta\",\"text\":\"你好{}🦀\"}}}}\n\ndata: {{\"type\":\"message_stop\"}}\n\n",
+            "middle-ascii"
+        );
+        let bytes = payload.clone().into_bytes();
+        // Split inside the 3-byte encoding of 好 (its second byte) AND inside
+        // the 4-byte emoji (its third byte), exercising both split widths.
+        let split1 = bytes
+            .windows(3)
+            .position(|w| w == "好".as_bytes())
+            .expect("好 present")
+            + 1; // mid-character
+        let split2 = bytes
+            .windows(4)
+            .position(|w| w == "🦀".as_bytes())
+            .expect("crab emoji present")
+            + 2; // mid-character
+        assert!(split1 < split2);
+        // String and Vec<u8> byte offsets coincide — verify both splits land
+        // mid-character.
+        assert!(
+            !payload.is_char_boundary(split1),
+            "split1 must land mid-character"
+        );
+        assert!(
+            !payload.is_char_boundary(split2),
+            "split2 must land mid-character"
+        );
+
+        let chunks: ByteChunkStream = Box::pin(futures::stream::iter(vec![
+            Ok(bytes[..split1].to_vec()),
+            Ok(bytes[split1..split2].to_vec()),
+            Ok(bytes[split2..].to_vec()),
+        ]));
+        let mut sse = SseStream::for_test_with_chunks(chunks, LlmProvider::Anthropic, None);
+
+        let mut text = String::new();
+        while let Some(event) = sse.next().await {
+            match event.expect("no stream errors expected") {
+                StreamEvent::ContentBlockDelta {
+                    delta: ContentDelta::TextDelta { text: t },
+                    ..
+                } => text.push_str(&t),
+                StreamEvent::MessageStop => {}
+                other => panic!("unexpected event: {other:?}"),
+            }
+        }
+
+        assert_eq!(
+            text, "你好middle-ascii🦀",
+            "the split characters must survive chunk boundaries exactly"
+        );
+        assert!(
+            !text.contains('\u{FFFD}'),
+            "no U+FFFD replacement chars may appear: {text:?}"
+        );
+    }
+
+    /// A partial multi-byte sequence at the END of the byte stream (no more
+    /// chunks coming) is decoded lossily once at stream end — the stream
+    /// must still terminate cleanly and deliver the intact content.
+    #[tokio::test]
+    async fn trailing_partial_utf8_at_stream_end_terminates_cleanly() {
+        use futures::StreamExt;
+
+        let mut line_bytes = data_line("complete");
+        // Terminal frame (A8b) so the stream ends cleanly — the point here is
+        // the truncated tail, not the premature-EOF path.
+        line_bytes.extend_from_slice(b"data: {\"type\":\"message_stop\"}\n\n");
+        // Half of a 3-byte CJK char, without a trailing newline, appended
+        // after the complete stream.
+        line_bytes.extend_from_slice(&[0xE4, 0xBD]); // truncated 你
+        let chunks: ByteChunkStream = Box::pin(futures::stream::iter(vec![Ok(line_bytes)]));
+        let mut sse = SseStream::for_test_with_chunks(chunks, LlmProvider::Anthropic, None);
+
+        let mut text = String::new();
+        let mut ended = false;
+        while let Some(event) = sse.next().await {
+            match event {
+                Ok(StreamEvent::ContentBlockDelta {
+                    delta: ContentDelta::TextDelta { text: t },
+                    ..
+                }) => text.push_str(&t),
+                Ok(_) => {}
+                Err(e) => panic!("truncated tail must not error the stream: {e:?}"),
+            }
+            ended = true;
+        }
+        assert!(ended, "stream must terminate");
+        assert_eq!(text, "complete", "the intact line must be delivered");
+    }
+
     /// A delivered `StreamEvent::Error` is the provider's answer: the
     /// resumable wrapper must pass it through and then end the stream
     /// WITHOUT attempting a reconnect, even though no `MessageStop` was
@@ -1735,7 +1877,7 @@ mod tests {
             reconnects_remaining: 3,
             initial_reconnects: 3,
             reconnecting: false,
-            saw_message_stop: false,
+            saw_terminal_frame: false,
             pending_reconnect: None,
             saw_error_event: false,
         };
@@ -1766,6 +1908,88 @@ mod tests {
             started.elapsed() < Duration::from_millis(400),
             "ending must be immediate, not a reconnect backoff: {:?}",
             started.elapsed()
+        );
+    }
+
+    /// F2 regression: Ollama/Gemini NEVER send `MessageStop` — their done
+    /// chunk normalizes to a `MessageDelta` carrying a stop reason
+    /// (adapter.rs `normalize_ollama_event`). A clean completion must end
+    /// the resumable stream immediately; tracking only `MessageStop` made
+    /// every such completion look like a premature EOF and replayed the
+    /// full request up to `max_reconnects` extra times.
+    #[tokio::test]
+    async fn resumable_stream_does_not_reconnect_after_stop_reason_delta() {
+        use std::time::Instant;
+
+        let events: Vec<Result<StreamEvent, ApiError>> = vec![
+            Ok(StreamEvent::MessageStart {
+                message: crate::api::types::MessageResponse {
+                    id: "msg_ollama".to_string(),
+                    role: "assistant".to_string(),
+                    content: Vec::new(),
+                    model: "llama3".to_string(),
+                    stop_reason: None,
+                    usage: Usage::default(),
+                },
+            }),
+            Ok(StreamEvent::ContentBlockDelta {
+                index: 0,
+                delta: ContentDelta::TextDelta {
+                    text: "the complete answer".to_string(),
+                },
+            }),
+            // Ollama's done:true chunk: terminal WITHOUT MessageStop.
+            Ok(StreamEvent::MessageDelta {
+                delta: crate::api::types::MessageDeltaDelta {
+                    stop_reason: Some("end_turn".to_string()),
+                    stop_sequence: None,
+                },
+                usage: Usage::default(),
+            }),
+        ];
+        let inner: MessageStream = Box::pin(futures::stream::iter(events));
+        let mut s = ResumableSseStream {
+            inner,
+            last_event_id: Arc::new(Mutex::new(None)),
+            client: crate::api::client::LlmClient::new(crate::api::LlmClientConfig::default()),
+            messages: Vec::new(),
+            tools: None,
+            system: None,
+            reconnects_remaining: 3,
+            initial_reconnects: 3,
+            reconnecting: false,
+            saw_terminal_frame: false,
+            pending_reconnect: None,
+            saw_error_event: false,
+        };
+
+        // Drain everything with a bounded timeout: a regressed reconnect
+        // would stall for the reconnect backoff instead of ending.
+        let started = Instant::now();
+        let collected: Vec<_> = tokio::time::timeout(
+            Duration::from_millis(500),
+            futures::StreamExt::by_ref(&mut s).collect::<Vec<_>>(),
+        )
+        .await
+        .expect("stream must end after the stop-reason delta, not reconnect");
+        assert!(
+            started.elapsed() < Duration::from_millis(400),
+            "clean completion must end immediately, not after reconnect backoff: {:?}",
+            started.elapsed()
+        );
+
+        assert_eq!(collected.len(), 3, "every event delivered exactly once");
+        assert!(
+            matches!(collected.last(), Some(Ok(StreamEvent::MessageDelta { delta, .. })) if delta.stop_reason.as_deref() == Some("end_turn")),
+            "the terminal delta must be the last event: {collected:?}"
+        );
+        assert!(
+            !s.reconnecting && s.pending_reconnect.is_none(),
+            "no reconnect may start after a clean completion"
+        );
+        assert!(
+            s.saw_terminal_frame,
+            "the stop-reason delta must count as a terminal frame"
         );
     }
 }

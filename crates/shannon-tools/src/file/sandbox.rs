@@ -661,20 +661,29 @@ impl PathSandbox {
     /// This provides a more descriptive error message. Even if this check
     /// passes, canonicalization may still detect a traversal that resolves
     /// outside allowed roots.
+    ///
+    /// Both separators count: on Windows `\..\..\` is a traversal just as
+    /// much as `/../..`, so components are counted over a normalized form
+    /// where `\` is treated as a separator (matching `Path::components`
+    /// semantics on Windows). Forward-only traversal keeps the historical
+    /// behavior and message.
     fn check_raw_traversal(&self, path_str: &str) -> Result<(), SandboxError> {
         // Count `..` components to detect potential traversal
-        let components: Vec<&str> = path_str.split('/').collect();
+        let normalized = path_str.replace('\\', "/");
         let mut depth = 0i32;
-        for comp in &components {
-            if *comp == ".." {
-                depth -= 1;
-                if depth < 0 {
-                    return Err(SandboxError::PathTraversal(format!(
-                        "Path '{path_str}' contains '..' that escapes the root directory"
-                    )));
+        for comp in Path::new(&normalized).components() {
+            match comp {
+                std::path::Component::ParentDir => {
+                    depth -= 1;
+                    if depth < 0 {
+                        return Err(SandboxError::PathTraversal(format!(
+                            "Path '{path_str}' contains '..' that escapes the root directory"
+                        )));
+                    }
                 }
-            } else if *comp != "." && !comp.is_empty() {
-                depth += 1;
+                std::path::Component::Normal(_) => depth += 1,
+                // RootDir / CurDir / Prefix never change traversal depth.
+                _ => {}
             }
         }
         Ok(())
@@ -776,8 +785,9 @@ impl PathSandbox {
             // under a home directory that isn't ours
             let canonical_str = canonical.to_string_lossy().to_string();
 
-            // Only check if the path is under /home/ or a typical home root
-            let home_roots = ["/home/", "C:\\Users\\"];
+            // Only check if the path is under a typical home root: Linux
+            // `/home/`, macOS `/Users/`, root's `/root/`, Windows profiles.
+            let home_roots = ["/home/", "C:\\Users\\", "/Users/", "/root/"];
             let is_under_home_root = home_roots.iter().any(|hr| canonical_str.starts_with(hr));
 
             if is_under_home_root {
@@ -1681,6 +1691,115 @@ mod tests {
                     "Expected home boundary or resolution error, got: {err_str}"
                 );
             }
+        }
+    }
+
+    /// The home-boundary roots must cover the macOS (`/Users/`) and root
+    /// (`/root/`) home layouts, not just `/home/` and `C:\Users\` — a path
+    /// under another user's area there used to slip the check entirely.
+    #[test]
+    fn home_boundary_recognizes_users_and_root_roots() {
+        let mut sandbox = PathSandbox::with_config(SandboxConfig {
+            allowed_roots: vec![],
+            denied_patterns: vec![],
+            strict_mode: false,
+        });
+
+        // macOS layout: own area allowed, other users and root denied.
+        sandbox.home_dir = Some(PathBuf::from("/Users/alice"));
+        assert!(
+            sandbox
+                .check_home_boundary(Path::new("/Users/alice/work/file.txt"))
+                .is_ok()
+        );
+        assert!(
+            sandbox
+                .check_home_boundary(Path::new("/Users/bob/work/file.txt"))
+                .is_err(),
+            "another macOS user's home must be denied"
+        );
+        assert!(
+            sandbox
+                .check_home_boundary(Path::new("/root/.bashrc"))
+                .is_err(),
+            "root's home must be denied for a /Users home"
+        );
+
+        // Root layout: /root allowed, everything else denied.
+        sandbox.home_dir = Some(PathBuf::from("/root"));
+        assert!(sandbox.check_home_boundary(Path::new("/root/x")).is_ok());
+        assert!(
+            sandbox
+                .check_home_boundary(Path::new("/Users/alice/x"))
+                .is_err()
+        );
+        assert!(
+            sandbox
+                .check_home_boundary(Path::new("/home/alice/x"))
+                .is_err()
+        );
+
+        // Paths outside any home root are untouched by this check.
+        assert!(sandbox.check_home_boundary(Path::new("/tmp/x")).is_ok());
+        assert!(sandbox.check_home_boundary(Path::new("/etc/x")).is_ok());
+    }
+
+    // --- Raw traversal normalization (both separators) ---
+
+    /// `\..\..\` must hit the descriptive traversal check exactly like
+    /// `/../..`: on Windows the backslash is a separator, and the old
+    /// '/'-only split counted the whole string as one normal component.
+    #[test]
+    fn raw_traversal_rejects_backslash_form() {
+        let sandbox = PathSandbox::new();
+        let err = sandbox
+            .check_raw_traversal("C:\\..\\..\\Windows\\System32")
+            .unwrap_err();
+        assert!(
+            err.to_string()
+                .contains("contains '..' that escapes the root directory"),
+            "unexpected error: {err}"
+        );
+        assert!(matches!(
+            sandbox.check_raw_traversal("foo\\..\\..\\secret"),
+            Err(SandboxError::PathTraversal(_))
+        ));
+    }
+
+    #[test]
+    fn raw_traversal_allows_inside_root_with_backslashes() {
+        let sandbox = PathSandbox::new();
+        // Forward-only backslash traversal stays inside the root.
+        assert!(sandbox.check_raw_traversal("subdir\\..\\file.txt").is_ok());
+        assert!(sandbox.check_raw_traversal("a\\b\\c.txt").is_ok());
+    }
+
+    /// Forward-slash behavior and messages are unchanged by the
+    /// normalization.
+    #[test]
+    fn raw_traversal_forward_forms_unchanged() {
+        let sandbox = PathSandbox::new();
+        assert!(matches!(
+            sandbox.check_raw_traversal("../../etc/passwd"),
+            Err(SandboxError::PathTraversal(_))
+        ));
+        assert!(matches!(
+            sandbox.check_raw_traversal("a/../../c.txt"),
+            Err(SandboxError::PathTraversal(_))
+        ));
+        // Net-zero traversal stays inside the root.
+        assert!(sandbox.check_raw_traversal("a/b/../../c.txt").is_ok());
+        assert!(sandbox.check_raw_traversal("a/b/../c.txt").is_ok());
+        assert!(sandbox.check_raw_traversal("plain/path.txt").is_ok());
+        // The error keeps the original (un-normalized) spelling.
+        match sandbox.check_raw_traversal("../escape") {
+            Err(SandboxError::PathTraversal(msg)) => {
+                assert!(
+                    msg.contains("'../escape'"),
+                    "message lost the original path: {msg}"
+                );
+            }
+            other => panic!("expected PathTraversal, got {other:?}"),
         }
     }
 

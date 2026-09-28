@@ -473,9 +473,19 @@ impl TaskBoard {
         false
     }
 
-    /// Get next available task for an agent
+    /// Get next available task for an agent (peek — does not claim).
+    ///
+    /// F37: candidates are ordered by (priority descending, creation time
+    /// ascending) instead of HashMap iteration order, so the highest
+    /// priority, longest-waiting task wins deterministically. This does NOT
+    /// flip ownership; see [`Self::claim_next`] for an atomic claim.
     pub async fn get_next_task(&self, agent: &str) -> Option<AgentTask> {
-        let ready_tasks = self.list_ready_tasks().await;
+        let mut candidates = self.list_ready_tasks().await;
+        candidates.sort_by(|a, b| {
+            b.priority
+                .cmp(&a.priority)
+                .then_with(|| a.created_at.cmp(&b.created_at))
+        });
 
         // Get tasks already assigned to this agent
         let assignments = self.assignments.read().await;
@@ -483,10 +493,76 @@ impl TaskBoard {
 
         // Return first ready task if under limit
         if assigned_count < 3 {
-            ready_tasks.into_iter().next()
+            candidates.into_iter().next()
         } else {
             None
         }
+    }
+
+    /// Atomically claim the next available task for an agent (F37).
+    ///
+    /// `get_next_task` + `assign_task` used together is racy: two agents
+    /// polling concurrently both receive the same task and the second
+    /// `assign_task` fails with `InvalidTaskState`. This method selects the
+    /// best candidate — (priority descending, creation time ascending), the
+    /// same order as [`Self::get_next_task`] — and flips owner + status to
+    /// `InProgress` under a single write lock, so every concurrent caller
+    /// gets a distinct task.
+    ///
+    /// Returns the claimed task, or `None` when nothing is available or the
+    /// agent is at the same 3-task capacity `get_next_task` enforces.
+    pub async fn claim_next(&self, agent: &str) -> Option<AgentTask> {
+        let mut tasks = self.tasks.write().await;
+
+        // Capacity check mirrors get_next_task.
+        {
+            let assignments = self.assignments.read().await;
+            let assigned_count = assignments.values().filter(|a| a.agent == agent).count();
+            if assigned_count >= 3 {
+                return None;
+            }
+        }
+
+        // Pick the best candidate: highest priority, then oldest.
+        let mut best: Option<(TaskPriority, chrono::DateTime<chrono::Utc>, Uuid)> = None;
+        for task in tasks.values() {
+            if !task.is_ready() {
+                continue;
+            }
+            let better = match best {
+                None => true,
+                Some((best_priority, best_created, _)) => {
+                    task.priority > best_priority
+                        || (task.priority == best_priority && task.created_at < best_created)
+                }
+            };
+            if better {
+                best = Some((task.priority, task.created_at, task.id));
+            }
+        }
+        let (_, _, task_id) = best?;
+
+        let task = tasks.get_mut(&task_id)?;
+        task.assign_to(agent.to_string());
+        let claimed = task.clone();
+
+        let assignment = TaskAssignment {
+            task: claimed.clone(),
+            agent: agent.to_string(),
+            assigned_at: chrono::Utc::now(),
+        };
+        self.assignments.write().await.insert(task_id, assignment);
+
+        if let Err(e) = self.event_sender.send(TaskBoardEvent::TaskAssigned {
+            task_id,
+            agent: agent.to_string(),
+        }) {
+            tracing::debug!("Failed to send TaskAssigned event: {e}");
+        }
+
+        tracing::debug!(task_id = %task_id, agent = %agent, "Task claimed atomically");
+
+        Some(claimed)
     }
 
     /// Get all tasks assigned to a specific agent
@@ -1062,5 +1138,65 @@ mod tests {
         let t3_data = board.get_task(t3_id).await.unwrap();
         assert!(t3_data.blocked_by.is_empty());
         assert!(t3_data.is_ready());
+    }
+
+    // ── F37: priority ordering + atomic claim ────────────────────────────
+
+    #[tokio::test]
+    async fn claim_next_returns_distinct_tasks_for_sequential_claims() {
+        let board = TaskBoard::new();
+        let t1 = AgentTask::new("one".into(), "d".into(), TaskPriority::Medium);
+        let t2 = AgentTask::new("two".into(), "d".into(), TaskPriority::Medium);
+        board.add_task(t1).await.unwrap();
+        board.add_task(t2).await.unwrap();
+
+        let first = board.claim_next("agent-a").await.expect("first claim");
+        let second = board.claim_next("agent-b").await.expect("second claim");
+        assert_ne!(first.id, second.id, "each claim must get a distinct task");
+        assert_eq!(first.owner.as_deref(), Some("agent-a"));
+        assert_eq!(first.status, TaskStatus::InProgress);
+        assert_eq!(second.owner.as_deref(), Some("agent-b"));
+
+        // Everything claimed — nothing left to hand out.
+        assert!(board.claim_next("agent-c").await.is_none());
+    }
+
+    #[tokio::test]
+    async fn claim_next_respects_priority_order() {
+        let board = TaskBoard::new();
+        let mut low = AgentTask::new("low".into(), "d".into(), TaskPriority::Low);
+        let mut high = AgentTask::new("high".into(), "d".into(), TaskPriority::Critical);
+        // Make the low-priority task the oldest so priority must beat age.
+        low.created_at = chrono::Utc::now() - chrono::Duration::seconds(60);
+        high.created_at = chrono::Utc::now();
+        board.add_task(low).await.unwrap();
+        board.add_task(high).await.unwrap();
+
+        let first = board.claim_next("a").await.unwrap();
+        assert_eq!(
+            first.subject, "high",
+            "highest priority wins even when the low task is older"
+        );
+        let second = board.claim_next("b").await.unwrap();
+        assert_eq!(second.subject, "low");
+    }
+
+    #[tokio::test]
+    async fn get_next_task_orders_by_priority_and_stays_a_peek() {
+        let board = TaskBoard::new();
+        let mut low = AgentTask::new("low".into(), "d".into(), TaskPriority::Low);
+        let high = AgentTask::new("high".into(), "d".into(), TaskPriority::High);
+        low.created_at = chrono::Utc::now() - chrono::Duration::seconds(30);
+        board.add_task(low).await.unwrap();
+        board.add_task(high).await.unwrap();
+
+        let peek1 = board.get_next_task("a").await.unwrap();
+        assert_eq!(peek1.subject, "high");
+        // Peeking twice returns the same task — ownership unchanged.
+        let peek2 = board.get_next_task("a").await.unwrap();
+        assert_eq!(peek2.id, peek1.id);
+
+        let claimed = board.claim_next("a").await.unwrap();
+        assert_eq!(claimed.subject, "high");
     }
 }

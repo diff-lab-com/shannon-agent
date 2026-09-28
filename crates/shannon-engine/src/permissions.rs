@@ -1063,6 +1063,13 @@ pub struct PermissionManager {
     /// These always require user confirmation, even in auto-approve modes.
     destructive_tools: HashSet<String>,
 
+    /// Registered tool read-only metadata, keyed by tool name (review F17).
+    /// Plugin/MCP tools may register under any manifest-chosen name —
+    /// including names that collide with built-in read-only tools — so the
+    /// name fast-path must defer to the registered trait flags when they are
+    /// known: a KNOWN mutating tool is never auto-approved by name.
+    known_read_only: HashMap<String, bool>,
+
     /// Rule checker for deny > ask > allow priority from settings.
     rule_checker: PermissionRuleChecker,
 
@@ -1084,6 +1091,7 @@ impl PermissionManager {
             approval_mode: ApprovalMode::default(),
             plan_approved_sessions: HashSet::new(),
             destructive_tools: HashSet::new(),
+            known_read_only: HashMap::new(),
             rule_checker: PermissionRuleChecker::default(),
             active_profile: None,
         };
@@ -1285,6 +1293,40 @@ impl PermissionManager {
     /// Destructive tools always require user confirmation.
     pub fn register_destructive_tool(&mut self, tool_name: String) {
         self.destructive_tools.insert(tool_name);
+    }
+
+    /// Record a tool's read-only trait value from the owning registry
+    /// (review F17).
+    ///
+    /// Plugin tools register under manifest-chosen names, so a plugin can
+    /// occupy a built-in read-only name ("file_info", "ls", "read_file", …)
+    /// while actually mutating state. When a tool is KNOWN here, the
+    /// `is_read_only_tool_name` fast-path defers to this flag:
+    /// `false` (or a destructive registration) disables the auto-approve and
+    /// the call falls through to normal classification. Genuine built-ins
+    /// never need to register here — their names are all truly read-only.
+    pub fn register_tool_read_only(&mut self, tool_name: String, is_read_only: bool) {
+        self.known_read_only.insert(tool_name, is_read_only);
+    }
+
+    /// Whether the read-only NAME fast-path may auto-approve this tool
+    /// (review F17).
+    ///
+    /// The name list is only trustworthy for genuine built-ins. Registered
+    /// metadata overrides it: a known-mutating tool (`register_tool_read_only`
+    /// with `false`) or a registered-destructive tool never passes the fast
+    /// path, regardless of its name.
+    fn read_only_fast_path_allows(&self, tool_name: &str) -> bool {
+        if !is_read_only_tool_name(tool_name) {
+            return false;
+        }
+        if self.is_tool_destructive(tool_name) {
+            return false;
+        }
+        match self.known_read_only.get(tool_name) {
+            Some(read_only) => *read_only,
+            None => true,
+        }
     }
 
     /// Check whether a tool is flagged as destructive.
@@ -1846,8 +1888,9 @@ impl PermissionManager {
                 return Ok(None);
             }
             ApprovalMode::Readonly => {
-                // Only allow read-only tools
-                if is_read_only_tool_name(tool_name) {
+                // Only allow read-only tools (review F17: registered tool
+                // metadata can veto the name fast-path)
+                if self.read_only_fast_path_allows(tool_name) {
                     return Ok(None);
                 }
                 return Err(PermissionError::Denied(format!(
@@ -1857,7 +1900,7 @@ impl PermissionManager {
             ApprovalMode::PlanReadonly => {
                 // Only allow read-only tools (Read, Grep, Glob, List operations)
                 // Deny all tool execution - this is analysis-only mode
-                if is_read_only_tool_name(tool_name) {
+                if self.read_only_fast_path_allows(tool_name) {
                     return Ok(None);
                 }
                 return Err(PermissionError::Denied(format!(
@@ -1915,8 +1958,12 @@ impl PermissionManager {
                     return Ok(None);
                 }
                 // Auto-approve read-only tools (matching Claude Code behavior:
-                // Read, Glob, Grep, etc. don't need confirmation)
-                if is_read_only_tool_name(tool_name) {
+                // Read, Glob, Grep, etc. don't need confirmation).
+                // review F17: the name fast-path is vetoed by registered tool
+                // metadata — a plugin occupying a built-in read-only name with
+                // mutating flags falls through to the classifier/destructive
+                // checks instead of being auto-approved.
+                if self.read_only_fast_path_allows(tool_name) {
                     return Ok(None);
                 }
                 // Destructive tools always require confirmation
@@ -2900,6 +2947,79 @@ mod tests {
         // Write tools should be denied
         let result = mgr.classify_and_check(sid, "bash", &serde_json::json!({"command": "ls"}));
         assert!(result.is_err());
+    }
+
+    // --- review F17: name fast-path defers to registered tool metadata ---
+
+    #[test]
+    fn test_plugin_read_only_name_with_mutating_flags_is_not_auto_approved() {
+        // A plugin registering under the built-in read-only name "file_info"
+        // with mutating trait flags must NOT slip through the name fast-path:
+        // Suggest mode prompts, Readonly/PlanReadonly refuse.
+        let mut mgr = PermissionManager::new();
+        mgr.register_tool_read_only("file_info".to_string(), false);
+        let sid = Uuid::new_v4();
+
+        mgr.set_approval_mode(ApprovalMode::Suggest);
+        let result = mgr.classify_and_check(sid, "file_info", &serde_json::json!({}));
+        assert!(
+            matches!(result, Ok(Some(_))),
+            "known-mutating 'file_info' must require confirmation, got {result:?}"
+        );
+
+        mgr.set_approval_mode(ApprovalMode::Readonly);
+        assert!(
+            mgr.classify_and_check(sid, "file_info", &serde_json::json!({}))
+                .is_err(),
+            "known-mutating 'file_info' must be denied in Readonly mode"
+        );
+
+        mgr.set_approval_mode(ApprovalMode::PlanReadonly);
+        assert!(
+            mgr.classify_and_check(sid, "file_info", &serde_json::json!({}))
+                .is_err(),
+            "known-mutating 'file_info' must be denied in PlanReadonly mode"
+        );
+    }
+
+    #[test]
+    fn test_destructive_registration_vetoes_read_only_fast_path() {
+        // MCP `annotations.destructiveHint` on a tool named "ls" must block
+        // the name fast-path even without read-only metadata.
+        let mut mgr = PermissionManager::new();
+        mgr.register_destructive_tool("ls".to_string());
+        let sid = Uuid::new_v4();
+        mgr.set_approval_mode(ApprovalMode::Suggest);
+        let result = mgr.classify_and_check(sid, "ls", &serde_json::json!({}));
+        assert!(
+            matches!(result, Ok(Some(_))),
+            "destructive-flagged 'ls' must require confirmation, got {result:?}"
+        );
+    }
+
+    #[test]
+    fn test_builtin_read_tools_keep_fast_path() {
+        // Genuine built-ins never register metadata: the fast path applies.
+        let mut mgr = PermissionManager::new();
+        let sid = Uuid::new_v4();
+
+        mgr.set_approval_mode(ApprovalMode::Suggest);
+        for tool in ["Read", "read_file", "Grep", "file_info"] {
+            let result = mgr.classify_and_check(sid, tool, &serde_json::json!({}));
+            assert!(
+                matches!(&result, Ok(None)),
+                "built-in '{tool}' must stay auto-approved in Suggest mode, got {result:?}"
+            );
+        }
+
+        // A tool REGISTERED as genuinely read-only also keeps the fast path.
+        mgr.register_tool_read_only("file_info".to_string(), true);
+        mgr.set_approval_mode(ApprovalMode::Readonly);
+        let result = mgr.classify_and_check(sid, "file_info", &serde_json::json!({}));
+        assert!(
+            matches!(&result, Ok(None)),
+            "registered read-only 'file_info' must keep the fast path, got {result:?}"
+        );
     }
 
     // --- New permission mode tests ---

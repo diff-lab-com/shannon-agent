@@ -293,7 +293,7 @@ impl ShannonApiServer {
             // can merge with the (not yet state-applied) core router.
             router = router.merge(extra.clone().with_state(()));
         }
-        router
+        let router = router
             .layer(
                 // axum 0.7 defaults to a 2 MiB request body limit, which
                 // 413'd any real multimodal request before attachment
@@ -306,15 +306,30 @@ impl ShannonApiServer {
                 self.auth_token.clone(),
                 auth_middleware,
             ))
-            .layer(cors)
-            .with_state(AppState {
-                client_config: self.client_config.clone(),
-                tools: self.tools.clone(),
-                ws_sessions: Arc::new(RwLock::new(HashMap::new())),
-                approval_registry: Arc::new(Mutex::new(HashMap::new())),
-                query_budget: self.query_budget,
-                session_locks: Arc::new(dashmap::DashMap::new()),
-            })
+            .layer(cors);
+        // Review F15: on a loopback bind (the default) a browser page can
+        // drive this server via DNS rebinding regardless of the CORS policy
+        // (a rebinding page is same-origin by construction). Install the
+        // Host guard with the loopback allowlist plus the literal bound host
+        // (covers e.g. `127.0.0.2`). Non-loopback binds are skipped: they
+        // already require `auth_token`, and the client-facing hostname is
+        // unknowable here.
+        if is_loopback_host(&self.host) {
+            router.layer(axum::middleware::from_fn_with_state(
+                vec![self.host.clone()],
+                host_guard_middleware,
+            ))
+        } else {
+            router
+        }
+        .with_state(AppState {
+            client_config: self.client_config.clone(),
+            tools: self.tools.clone(),
+            ws_sessions: Arc::new(RwLock::new(HashMap::new())),
+            approval_registry: Arc::new(Mutex::new(HashMap::new())),
+            query_budget: self.query_budget,
+            session_locks: Arc::new(dashmap::DashMap::new()),
+        })
     }
 
     /// Start the server and block until shutdown.
@@ -386,6 +401,73 @@ fn build_cors_layer(origins: &[String]) -> CorsLayer {
         cors = cors.allow_origin(parsed);
     }
     cors
+}
+
+// ── Host-header guard (review F15: DNS-rebinding) ──────────────────────
+
+/// Is this `Host` header value acceptable for a loopback-bound server?
+///
+/// Shared by the desktop-embedded server ([`ShannonApiServer`]) and
+/// `shannon-server` (review F15): a page that DNS-rebinds an attacker domain
+/// to `127.0.0.1` sends `Host: attacker.com:<port>`, so any Host outside the
+/// loopback names — plus `extra_allowed` (the literal bound host, or future
+/// operator-configured names) — is rejected. Comparison is case-insensitive
+/// and accepts both the bare (`localhost`) and `host:port`
+/// (`localhost:8080`) forms.
+pub fn host_header_allowed(host_header: &str, extra_allowed: &[String]) -> bool {
+    let host = host_header.trim();
+    let bare = strip_host_port(host).to_ascii_lowercase();
+    if matches!(bare.as_str(), "127.0.0.1" | "localhost" | "::1") {
+        return true;
+    }
+    extra_allowed.iter().any(|allowed| {
+        let allowed = allowed.trim();
+        bare == strip_host_port(allowed).to_ascii_lowercase() || host.eq_ignore_ascii_case(allowed)
+    })
+}
+
+/// Strip a trailing `:port` from a `Host` header value, handling bracketed
+/// IPv6 literals (`[::1]:8080` → `::1`). Bare IPv6 and malformed values are
+/// returned unchanged.
+fn strip_host_port(host: &str) -> &str {
+    if let Some(rest) = host.strip_prefix('[') {
+        return rest.split_once(']').map_or(host, |(v6, _)| v6);
+    }
+    match host.rsplit_once(':') {
+        Some((h, port))
+            if !h.contains(':') && !port.is_empty() && port.bytes().all(|b| b.is_ascii_digit()) =>
+        {
+            h
+        }
+        _ => host,
+    }
+}
+
+/// Router-level Host guard for loopback binds (review F15). State is the
+/// extra allowed Host list (the bound host). Requests without a Host header
+/// pass: no browser ever omits it, so the rebinding vector is fully covered
+/// while HTTP/1.0 tooling and in-process probes keep working.
+async fn host_guard_middleware(
+    State(extra): State<Vec<String>>,
+    req: axum::extract::Request,
+    next: axum::middleware::Next,
+) -> Result<axum::response::Response, StatusCode> {
+    let Some(host) = req
+        .headers()
+        .get(axum::http::header::HOST)
+        .and_then(|v| v.to_str().ok())
+    else {
+        return Ok(next.run(req).await);
+    };
+    if host_header_allowed(host, &extra) {
+        Ok(next.run(req).await)
+    } else {
+        tracing::warn!(
+            host,
+            "rejected request: Host header is outside the loopback allowlist (possible DNS rebinding)"
+        );
+        Err(StatusCode::FORBIDDEN)
+    }
 }
 
 /// Axum middleware enforcing the optional bearer-token auth policy.
@@ -1543,6 +1625,126 @@ mod tests {
             .allow_nonloopback(true)
             .auth_token("secret");
         assert!(server.validate_bind().is_ok());
+    }
+
+    // ══════════════════════════════════════════════════════════════════════
+    // Host-header guard (F15) — loopback DNS-rebinding defense
+    // ══════════════════════════════════════════════════════════════════════
+
+    #[test]
+    fn host_header_allows_loopback_forms_case_insensitively() {
+        for host in [
+            "127.0.0.1",
+            "127.0.0.1:8080",
+            "localhost",
+            "LOCALHOST:3000",
+            "LocalHost",
+            "::1",
+            "[::1]",
+            "[::1]:9000",
+        ] {
+            assert!(
+                host_header_allowed(host, &[]),
+                "loopback Host '{host}' must be allowed"
+            );
+        }
+    }
+
+    #[test]
+    fn host_header_rejects_rebound_names() {
+        for host in [
+            "evil.com",
+            "evil.com:8080",
+            "127.0.0.1.evil.com",
+            "localhost.evil.com",
+            "sub.localhost",
+            "metadata.google.internal",
+            // Look-alikes that are not the loopback literals.
+            "127.0.0.256",
+            "localhost:",
+            "::11211",
+        ] {
+            assert!(
+                !host_header_allowed(host, &[]),
+                "rebound Host '{host}' must be rejected"
+            );
+        }
+    }
+
+    #[test]
+    fn host_header_extra_allows_are_matched_bare_and_with_port() {
+        let extra = vec!["127.0.0.2".to_string(), "myhost.local:8443".to_string()];
+        for host in [
+            "127.0.0.2",
+            "127.0.0.2:9999",
+            "myhost.local",
+            "MYHOST.LOCAL:8443",
+        ] {
+            assert!(
+                host_header_allowed(host, &extra),
+                "extra allowlist must accept '{host}'"
+            );
+        }
+        assert!(!host_header_allowed("myhost.local.evil.com", &extra));
+        assert!(!host_header_allowed("evil.com", &extra));
+    }
+
+    #[tokio::test]
+    async fn host_guard_rejects_rebinding_browser_but_keeps_loopback_clients() {
+        // Default bind host (127.0.0.1) installs the guard: a rebound Host
+        // gets 403 before any handler runs, while loopback addressing and
+        // Host-less probes reach the route (404 = unknown session route
+        // would 405/404; /api/models 200 = handler ran).
+        let app = test_app();
+
+        let rebound = Request::builder()
+            .uri("/api/models")
+            .header("host", "evil.com:8080")
+            .body(Body::empty())
+            .unwrap();
+        let response = app.clone().oneshot(rebound).await.unwrap();
+        assert_eq!(response.status(), StatusCode::FORBIDDEN);
+
+        let lookalike = Request::builder()
+            .uri("/api/models")
+            .header("host", "127.0.0.1.evil.com")
+            .body(Body::empty())
+            .unwrap();
+        let response = app.clone().oneshot(lookalike).await.unwrap();
+        assert_eq!(response.status(), StatusCode::FORBIDDEN);
+
+        for host in ["127.0.0.1:33420", "localhost", "[::1]:1"] {
+            let req = Request::builder()
+                .uri("/api/models")
+                .header("host", host)
+                .body(Body::empty())
+                .unwrap();
+            let response = app.clone().oneshot(req).await.unwrap();
+            assert_eq!(response.status(), StatusCode::OK, "Host '{host}' passes");
+        }
+
+        let hostless = Request::builder()
+            .uri("/api/models")
+            .body(Body::empty())
+            .unwrap();
+        let response = app.oneshot(hostless).await.unwrap();
+        assert_eq!(response.status(), StatusCode::OK, "Host-less probe passes");
+    }
+
+    #[tokio::test]
+    async fn host_guard_accepts_the_literal_bound_host() {
+        // A non-default loopback bind address is allowed through its literal
+        // form (the router passes the bound host as the guard's extra list).
+        let app = ShannonApiServer::new(test_config())
+            .host("127.0.0.2")
+            .build_router();
+        let req = Request::builder()
+            .uri("/api/models")
+            .header("host", "127.0.0.2:8080")
+            .body(Body::empty())
+            .unwrap();
+        let response = app.oneshot(req).await.unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
     }
 
     // ══════════════════════════════════════════════════════════════════════

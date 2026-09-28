@@ -33,7 +33,9 @@ pub(crate) fn handle_mcp(repl: &mut Repl, args: &str) -> Result<()> {
         if let Ok(p) = std::env::var("SHANNON_MCP_APPROVALS") {
             return PathBuf::from(p);
         }
-        PathBuf::from(".shannon/mcp_approvals.json")
+        // review F6: approvals live in the user domain — a project-relative
+        // file would be refused by the loader on next startup.
+        shannon_core::McpApprovalManager::default_state_path()
     }
 
     fn load_config() -> McpConfig {
@@ -702,6 +704,13 @@ pub(crate) fn handle_agents(repl: &mut Repl, args: &str) -> Result<()> {
             repl.agent_registry = Some(std::sync::Arc::new(SubAgentRegistry::new(
                 std::sync::Arc::new(coordinator),
             )));
+        }
+        // F28: agents are initialized — sweep agent worktrees left behind by
+        // earlier sessions whose WorktreeManager (and its in-memory session
+        // registry) is gone.
+        if let Some(summary) = sweep_orphaned_agent_worktrees(repl) {
+            repl.chat
+                .add_message(crate::widgets::ChatRole::System, summary);
         }
     }
 
@@ -1489,9 +1498,49 @@ fn create_agent_worktree(
         .runtime
         .block_on(WorktreeManager::new(config))
         .map_err(|e| format!("{e}"))?;
+    // F28: the manager below is intentionally throwaway — the session it
+    // creates records a manifest on disk and gets a unique branch suffix, so
+    // the next session's orphan sweep (see sweep_orphaned_agent_worktrees)
+    // can find and clean it up, and re-adding the same agent name never
+    // collides on `git worktree add -b`.
     let session = repl
         .runtime
         .block_on(manager.create_agent_session(agent_name, None))
         .map_err(|e| format!("{e}"))?;
     Ok(session.path)
+}
+
+/// F28: remove agent worktrees whose session no longer exists (left behind
+/// by earlier sessions whose WorktreeManager was dropped without cleanup).
+/// Returns a short chat summary, or None when there was nothing to clean.
+fn sweep_orphaned_agent_worktrees(repl: &Repl) -> Option<String> {
+    use shannon_agents::{WorktreeConfig, WorktreeManager};
+    // Same config the create path uses, so the sweep looks exactly where
+    // creation writes. Skip entirely when the dir was never created.
+    let config = WorktreeConfig::default();
+    if !config.base_dir.exists() {
+        return None;
+    }
+    let manager = repl.runtime.block_on(WorktreeManager::new(config)).ok()?;
+    let report = repl
+        .runtime
+        .block_on(manager.sweep_orphaned_sessions())
+        .ok()?;
+    if report.removed.is_empty() && report.failed.is_empty() {
+        return None;
+    }
+    let mut msg = format!(
+        "Agent worktree sweep: {} orphaned worktree(s) removed.",
+        report.removed.len()
+    );
+    for path in &report.removed {
+        msg.push_str(&format!("\n  removed: {}", path.display()));
+    }
+    for (path, reason) in &report.failed {
+        msg.push_str(&format!(
+            "\n  kept: {} ({reason}) — has real changes, remove manually if unwanted",
+            path.display()
+        ));
+    }
+    Some(msg)
 }

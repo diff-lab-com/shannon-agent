@@ -235,8 +235,9 @@ curl -fsSL https://github.com/diff-lab-com/shannon-agent/releases/latest/downloa
 # 服务器 / 无头环境 —— 只装 CLI，不需要 sudo
 curl -fsSL https://github.com/diff-lab-com/shannon-agent/releases/latest/download/install.sh | SHANNON_COMPONENTS=cli sh
 
-# 或使用 cargo（需要 Rust 1.88+）
-cargo install --git https://github.com/diff-lab-com/shannon-agent.git
+# 或使用 cargo（需要 Rust 1.88+）——本仓库是虚拟 Cargo workspace，
+# 裸 `cargo install --git` 没有根二进制可装；请固定 tag 并显式选择 CLI 二进制。
+cargo install --git https://github.com/diff-lab-com/shannon-agent.git --tag v0.12.0 --locked --bin shannon
 ```
 
 <details>

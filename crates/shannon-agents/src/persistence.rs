@@ -21,6 +21,10 @@ use std::io::{BufRead, Write};
 use std::path::{Path, PathBuf};
 use uuid::Uuid;
 
+/// Maximum number of unparseable inbox lines retained in the `.failed`
+/// dead-letter file (F29) — bounds disk growth from repeated corruption.
+const MAX_DEAD_LETTER_LINES: usize = 100;
+
 /// Reject path components that could enable directory traversal.
 fn sanitize_path_component(name: &str, label: &str) -> Result<(), AgentError> {
     if name.is_empty() || name == "." || name == ".." || name.chars().all(|c| c == '.') {
@@ -519,19 +523,48 @@ impl FilePersistence {
             let reader = std::io::BufReader::new(file);
 
             let mut messages = Vec::new();
+            let mut dead_letters: Vec<String> = Vec::new();
             for line in reader.lines() {
                 let line = line.map_err(AgentError::Io)?;
                 let trimmed = line.trim();
                 if trimmed.is_empty() {
                     continue;
                 }
-                if let Ok(msg) = serde_json::from_str::<InboxMessage>(trimmed) {
-                    messages.push(msg);
+                match serde_json::from_str::<InboxMessage>(trimmed) {
+                    Ok(msg) => messages.push(msg),
+                    // F29: malformed / partial / schema-drifted lines are
+                    // preserved in a dead-letter file below instead of being
+                    // destroyed by the post-read clear.
+                    Err(_) => dead_letters.push(trimmed.to_string()),
                 }
             }
 
             // Clear the inbox after reading
             std::fs::write(&inbox_path, "").map_err(AgentError::Io)?;
+
+            // F29: append unparseable lines to a sibling `.failed` file so
+            // they survive the clear. The file is capped at the last
+            // MAX_DEAD_LETTER_LINES lines to bound growth.
+            if !dead_letters.is_empty() {
+                let failed_path = inbox_dir.join(format!("{agent_name}.jsonl.failed"));
+                let mut combined: Vec<String> = std::fs::read_to_string(&failed_path)
+                    .unwrap_or_default()
+                    .lines()
+                    .filter(|l| !l.trim().is_empty())
+                    .map(String::from)
+                    .collect();
+                combined.extend(dead_letters);
+                let start = combined.len().saturating_sub(MAX_DEAD_LETTER_LINES);
+                let mut body = combined[start..].join("\n");
+                body.push('\n');
+                if let Err(e) = std::fs::write(&failed_path, body) {
+                    tracing::warn!(
+                        agent = %agent_name,
+                        error = %e,
+                        "Failed to write inbox dead-letter file"
+                    );
+                }
+            }
 
             Ok(messages)
         })();
@@ -966,6 +999,86 @@ mod tests {
         // Inbox should be cleared after reading
         let empty = persist.read_inbox("team", "agent-1").unwrap();
         assert!(empty.is_empty());
+    }
+
+    /// F29 regression: a line that fails to parse must survive the read in
+    /// the `.failed` dead-letter file instead of being destroyed by the
+    /// post-read clear.
+    #[test]
+    fn read_inbox_preserves_unparseable_lines_in_dead_letter() {
+        let dir = tmp_dir();
+        let persist = FilePersistence::with_base_dir(dir.clone());
+
+        let valid = InboxMessage {
+            id: "msg-ok".into(),
+            from: "lead".into(),
+            content: "parseable".into(),
+            timestamp: "2026-01-01T00:00:00Z".into(),
+            read: false,
+        };
+        let valid_line = serde_json::to_string(&valid).unwrap();
+        let corrupt_line = r#"{"id": "half-written", not json"#;
+
+        let inbox_dir = persist.team_dir("team").unwrap().join("inboxes");
+        std::fs::create_dir_all(&inbox_dir).unwrap();
+        let inbox_path = inbox_dir.join("agent-1.jsonl");
+        std::fs::write(&inbox_path, format!("{valid_line}\n{corrupt_line}\n\n")).unwrap();
+
+        let messages = persist.read_inbox("team", "agent-1").unwrap();
+        assert_eq!(messages.len(), 1, "valid message must be delivered");
+
+        let failed_path = inbox_dir.join("agent-1.jsonl.failed");
+        let dead = std::fs::read_to_string(&failed_path).unwrap();
+        assert!(
+            dead.contains(corrupt_line),
+            "corrupt line must survive in the dead-letter file"
+        );
+
+        // Second read: inbox is empty and the dead-letter file persists.
+        assert!(persist.read_inbox("team", "agent-1").unwrap().is_empty());
+        assert!(failed_path.exists());
+    }
+
+    /// F29: the dead-letter file is capped at the last
+    /// MAX_DEAD_LETTER_LINES lines so repeated corruption cannot grow it
+    /// without bound.
+    #[test]
+    fn read_inbox_dead_letter_is_capped() {
+        let dir = tmp_dir();
+        let persist = FilePersistence::with_base_dir(dir.clone());
+
+        let valid = InboxMessage {
+            id: "msg-ok".into(),
+            from: "lead".into(),
+            content: "parseable".into(),
+            timestamp: "2026-01-01T00:00:00Z".into(),
+            read: false,
+        };
+        let valid_line = serde_json::to_string(&valid).unwrap();
+
+        let inbox_dir = persist.team_dir("team").unwrap().join("inboxes");
+        std::fs::create_dir_all(&inbox_dir).unwrap();
+        let inbox_path = inbox_dir.join("agent-1.jsonl");
+        let mut body = String::new();
+        for i in 0..150 {
+            body.push_str(&format!("{{\"corrupt-{i}\": nope\n"));
+        }
+        body.push_str(&valid_line);
+        body.push('\n');
+        std::fs::write(&inbox_path, body).unwrap();
+
+        let messages = persist.read_inbox("team", "agent-1").unwrap();
+        assert_eq!(messages.len(), 1);
+
+        let dead = std::fs::read_to_string(inbox_dir.join("agent-1.jsonl.failed")).unwrap();
+        let dead_lines = dead.lines().count();
+        assert!(
+            dead_lines <= MAX_DEAD_LETTER_LINES,
+            "dead-letter file must be capped, got {dead_lines} lines"
+        );
+        // The most recent corruption survived the cap.
+        assert!(dead.contains("corrupt-149"));
+        assert!(!dead.contains("corrupt-0\n"), "oldest lines dropped first");
     }
 
     #[test]

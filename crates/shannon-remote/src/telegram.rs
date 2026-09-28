@@ -98,6 +98,9 @@ pub struct TelegramTrigger {
     http: Client,
     cfg: TelegramConfig,
     handler: Arc<dyn Fn(&str) + Send + Sync>,
+    /// Bot API base. Defaults to [`DEFAULT_API_BASE`]; overridable so tests
+    /// can exercise transport-error paths against a closed local port.
+    api_base: String,
 }
 
 impl TelegramTrigger {
@@ -106,30 +109,89 @@ impl TelegramTrigger {
             http: Client::new(),
             cfg,
             handler,
+            api_base: DEFAULT_API_BASE.to_string(),
         }
+    }
+
+    /// Override the Bot API base (test seam for offline transport errors).
+    pub fn with_api_base(mut self, base: impl Into<String>) -> Self {
+        self.api_base = base.into();
+        self
     }
 
     fn updates_url(&self, offset: Option<i64>) -> String {
         format!(
             "{}/bot{}/getUpdates?timeout={}&allowed_updates=[\"message\"]{}",
-            DEFAULT_API_BASE,
+            self.api_base,
             self.cfg.bot_token,
             self.cfg.poll_timeout_secs,
             offset.map(|o| format!("&offset={o}")).unwrap_or_default(),
         )
     }
 
+    /// Replace the bot token with a placeholder (no-op for an empty token —
+    /// replacing an empty needle would mangle the whole string).
+    fn redact_token(&self, text: &str) -> String {
+        if self.cfg.bot_token.is_empty() {
+            text.to_string()
+        } else {
+            text.replace(&self.cfg.bot_token, "<redacted>")
+        }
+    }
+
+    /// Map a transport error to a token-free message (review F21).
+    ///
+    /// `reqwest::Error`'s Display embeds the full request URL — and the URL
+    /// carries the credential (`/bot<token>/getUpdates`) — so raw errors
+    /// must never flow into anyhow results, `tracing` payloads or
+    /// notifications. Full detail goes to the debug log with the token
+    /// redacted; the returned error carries only the endpoint name, the
+    /// error kind and the HTTP status.
+    fn sanitize_transport_error(&self, endpoint: &str, err: reqwest::Error) -> anyhow::Error {
+        tracing::debug!(
+            target: "telegram",
+            endpoint,
+            detail = %self.redact_token(&err.to_string()),
+            "telegram transport error (full detail, token redacted)"
+        );
+        let kind = if err.is_timeout() {
+            "timeout"
+        } else if err.is_connect() {
+            "connect"
+        } else if err.is_body() {
+            "body"
+        } else if err.is_decode() {
+            "decode"
+        } else if err.is_status() {
+            "status"
+        } else {
+            "request"
+        };
+        let status = err
+            .status()
+            .map(|s| format!(" (HTTP {s})"))
+            .unwrap_or_default();
+        anyhow::anyhow!("telegram {endpoint} failed: {kind}{status}")
+    }
+
     /// One long-poll round. Returns the next offset to resume from.
+    ///
+    /// Transport failures are sanitized: the bot token never leaves this
+    /// method inside an error message (review F21).
     pub async fn poll_once(&self, offset: Option<i64>) -> anyhow::Result<Option<i64>> {
-        let body = self
+        let response = self
             .http
             .get(self.updates_url(offset))
             .timeout(Duration::from_secs(self.cfg.poll_timeout_secs + 10))
             .send()
-            .await?
-            .error_for_status()?
+            .await
+            .map_err(|e| self.sanitize_transport_error("getUpdates", e))?
+            .error_for_status()
+            .map_err(|e| self.sanitize_transport_error("getUpdates", e))?;
+        let body = response
             .text()
-            .await?;
+            .await
+            .map_err(|e| self.sanitize_transport_error("getUpdates", e))?;
         let (messages, next) = parse_updates(&body, &self.cfg.allowed_chat_ids);
         for m in &messages {
             (self.handler)(&m.text);
@@ -201,5 +263,59 @@ mod tests {
         assert!(trig.updates_url(Some(7)).contains("offset=7"));
         assert!(trig.updates_url(Some(7)).contains("timeout=25"));
         assert!(trig.updates_url(None).contains("botT/getUpdates"));
+    }
+
+    #[test]
+    fn redacts_token_but_leaves_other_text_alone() {
+        let cfg = TelegramConfig {
+            bot_token: "123:ABC".into(),
+            allowed_chat_ids: vec![42],
+            poll_timeout_secs: 25,
+        };
+        let trig = TelegramTrigger::new(cfg, Arc::new(|_| {}));
+        assert_eq!(
+            trig.redact_token("GET https://api.telegram.org/bot123:ABC/getUpdates failed"),
+            "GET https://api.telegram.org/bot<redacted>/getUpdates failed"
+        );
+        // Empty token: no replacement (an empty needle would mangle text).
+        let anon = TelegramTrigger::new(TelegramConfig::default(), Arc::new(|_| {}));
+        assert_eq!(anon.redact_token("plain error"), "plain error");
+    }
+
+    #[tokio::test]
+    async fn transport_error_does_not_leak_the_bot_token() {
+        // F21: reqwest's error Display embeds the full request URL, and the
+        // URL carries the bot token. A refused connection must surface a
+        // sanitized error that names the endpoint — never the token.
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("bind ephemeral port");
+        let port = listener.local_addr().unwrap().port();
+        drop(listener); // the port now refuses connections
+
+        const TOKEN: &str = "123456:SECRET-TOKEN";
+        let cfg = TelegramConfig {
+            bot_token: TOKEN.into(),
+            allowed_chat_ids: vec![42],
+            poll_timeout_secs: 25,
+        };
+        let trig = TelegramTrigger::new(cfg, Arc::new(|_| {}))
+            .with_api_base(format!("http://127.0.0.1:{port}"));
+
+        let err = trig
+            .poll_once(Some(3))
+            .await
+            .expect_err("refused connection must error");
+        let rendered = format!("{err:#}");
+        assert!(
+            !rendered.contains(TOKEN),
+            "error rendering must not contain the bot token: {rendered}"
+        );
+        assert!(
+            rendered.contains("getUpdates"),
+            "sanitized error names the endpoint: {rendered}"
+        );
+        assert!(
+            rendered.contains("connect"),
+            "sanitized error names the error kind: {rendered}"
+        );
     }
 }

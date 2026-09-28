@@ -78,7 +78,7 @@ lint:
 # scenarios  - YAML 声明式场景测试
 
 # 提交前快路径(跳过 doctest,跳过 release lint)
-dev:
+dev: version-check
     cargo check --workspace
     cargo clippy --workspace
     @cargo nextest run --workspace || (echo "✗ tests failed — reproduce CI behavior with: just test-ci (retries=2, fail-fast=false)" && exit 1)
@@ -136,6 +136,14 @@ test-gateway:
 test: test-rust test-ui test-gateway
 
 # ---------- Supply chain ----------
+
+# Version lockstep guard (review F48): the six release-version sources (root
+# Cargo.toml + desktop/Cargo.toml + tauri.conf.json + gateway/package.json +
+# desktop/ui/package.json + shannon-plugin-api) must agree with the workspace
+# version. Wired into `just dev`; ci.yml's facade-facts job runs the same
+# script so drift can never reach release.yml's prep guard again.
+version-check:
+    @bash scripts/check-version-lockstep.sh
 
 deny:
     cargo deny check
