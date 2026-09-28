@@ -804,11 +804,24 @@ impl SessionStore {
     ///
     /// Returns `Ok(false)` when nothing existed. Only UUID-shaped direct
     /// children are touched, so sibling name snapshots (*.toml) stay safe.
+    ///
+    /// Fails with [`SessionStoreError::Log`] (`AlreadyLocked`) when a live
+    /// [`SessionLogWriter`] holds the log: removing the directory would
+    /// unlink the events file out from under the writer, whose further
+    /// appends would vanish into the unlinked inode.
     pub fn delete(&self, session_id: &Uuid) -> Result<bool, SessionStoreError> {
         let dir = self.container.join(session_id.to_string());
         if !dir.exists() {
             return Ok(false);
         }
+        // Hold the writer's flock while unlinking so a live writer fails us
+        // loudly instead of losing events. No log file (sidecars only) —
+        // nothing to orphan.
+        let log = self.log_path(session_id);
+        let _lock = log
+            .exists()
+            .then(|| ExclusiveLogLock::acquire(&log))
+            .transpose()?;
         std::fs::remove_dir_all(dir)?;
         Ok(true)
     }
@@ -826,6 +839,12 @@ impl SessionStore {
     /// Returns `Ok(None)` when no log exists, otherwise `Ok(Some(dropped))`
     /// with the number of event lines removed. `keep_turns` past the end of
     /// the session is a no-op returning `Some(0)`.
+    ///
+    /// The rewrite takes the same exclusive `flock` a live
+    /// [`SessionLogWriter`] holds; when the lock is held the truncate fails
+    /// with `AlreadyLocked` instead of racing the writer (whose appends would
+    /// otherwise keep landing in the unlinked inode). Callers treat failures
+    /// as warn-only, so the rewrite simply does not happen.
     pub fn truncate_to_turn(
         &self,
         session_id: &Uuid,
@@ -835,6 +854,8 @@ impl SessionStore {
         if !path.exists() {
             return Ok(None);
         }
+        // Raw rewrite under the writer's flock — see the doc comment.
+        let _lock = ExclusiveLogLock::acquire(&path)?;
         let raw = std::fs::read_to_string(&path)?;
 
         let mut kept_lines = String::with_capacity(raw.len());
@@ -885,8 +906,9 @@ impl SessionStore {
             return Ok(Some(0));
         }
 
-        // Atomic-ish rewrite: temp file in the same directory, then rename.
-        let tmp = path.with_extension("jsonl.rewind-tmp");
+        // Atomic-ish rewrite: uniquely-named temp file in the same directory,
+        // then rename.
+        let tmp = unique_tmp_path(&path, "rewind-tmp");
         let dropped = total_lines - kept_lines.lines().count();
         std::fs::write(&tmp, &kept_lines)?;
         std::fs::rename(&tmp, &path)?;
@@ -903,6 +925,10 @@ impl SessionStore {
     /// is fully replaced via the same temp-file + rename rewrite as
     /// [`SessionStore::truncate_to_turn`], with seq restarting at 0 — the
     /// file contract (`SessionLogWriter` resumes from the last seq) holds.
+    ///
+    /// Like [`SessionStore::truncate_to_turn`], the rewrite takes the
+    /// writer's exclusive flock first and fails with `AlreadyLocked` when a
+    /// live writer holds the log.
     ///
     /// Returns the number of event lines written.
     pub fn rewrite_with_conversation(
@@ -968,11 +994,13 @@ impl SessionStore {
             }))?;
         }
 
-        // Atomic-ish rewrite: temp file in the same directory, then rename.
+        // Atomic-ish rewrite under the writer's flock: uniquely-named temp
+        // file in the same directory, then rename.
         if let Some(dir) = path.parent() {
             std::fs::create_dir_all(dir)?;
         }
-        let tmp = path.with_extension("jsonl.compact-tmp");
+        let _lock = ExclusiveLogLock::acquire(&path)?;
+        let tmp = unique_tmp_path(&path, "compact-tmp");
         std::fs::write(&tmp, &out)?;
         std::fs::rename(&tmp, &path)?;
         // The raw rewrite bypasses the writer's index accumulator: drop the
@@ -980,6 +1008,56 @@ impl SessionStore {
         let _ = std::fs::remove_file(index_path_for(&path));
         Ok(seq as usize)
     }
+}
+
+/// Exclusive advisory lock over one session's event log for raw rewrites.
+///
+/// Raw rewrites (`truncate_to_turn` / `rewrite_with_conversation` / `delete`)
+/// replace or unlink the log file; without the writer's flock a live
+/// [`SessionLogWriter`] would keep appending into the unlinked inode and the
+/// events would be silently lost (`failures == 0`). This guard takes the same
+/// `try_lock_exclusive` the writer uses at open, so a live writer makes the
+/// rewrite fail loudly with `SessionLogError::AlreadyLocked` instead.
+struct ExclusiveLogLock {
+    // The lock lives as long as this handle; dropping it releases.
+    _file: std::fs::File,
+}
+
+impl ExclusiveLogLock {
+    fn acquire(path: &Path) -> Result<Self, SessionStoreError> {
+        // Mirror the writer's open mode (read+append+create) so a missing log
+        // is created and the lock targets the same inode a writer would take.
+        let file = std::fs::OpenOptions::new()
+            .read(true)
+            .append(true)
+            .create(true)
+            .open(path)?;
+        use fs2::FileExt;
+        file.try_lock_exclusive().map_err(|source| {
+            SessionStoreError::Log(super::SessionLogError::AlreadyLocked {
+                path: path.to_path_buf(),
+                source,
+            })
+        })?;
+        Ok(Self { _file: file })
+    }
+}
+
+/// A collision-free temp name next to `path`: `<file>.<tag>-<pid>-<nanos>`.
+///
+/// The old fixed names (`events.jsonl.rewind-tmp`) made two racing rewrites
+/// of the same session clobber each other's temp file.
+fn unique_tmp_path(path: &Path, tag: &str) -> PathBuf {
+    let nanos = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_nanos())
+        .unwrap_or(0);
+    let mut name = path
+        .file_name()
+        .map(|s| s.to_os_string())
+        .unwrap_or_default();
+    name.push(format!(".{tag}-{}-{}", std::process::id(), nanos));
+    path.with_file_name(name)
 }
 
 /// Convenience: an shared handle rooted at the default container.
@@ -2219,5 +2297,116 @@ mod tests {
 
         strip_index_files(&store);
         assert_eq!(store.list().unwrap(), via_index);
+    }
+
+    // ── Raw-rewrite locking (flock) + unique tmp names ──────────────────────
+
+    /// A raw rewrite while a live writer holds the log must fail loudly with
+    /// `AlreadyLocked` instead of racing it: the old lock-free rewrite would
+    /// rename over the writer's file and every later append would vanish
+    /// into the unlinked inode with `failures == 0`.
+    #[test]
+    fn truncate_to_turn_fails_loudly_while_writer_holds_the_log() {
+        let tmp = tempfile::tempdir().unwrap();
+        let store = store(&tmp);
+        let id = Uuid::new_v4();
+        seed_three_turn_session(&store, &id);
+
+        let live = SessionLogWriter::open_layout(store.container(), &id.to_string()).unwrap();
+        let err = store.truncate_to_turn(&id, 1).unwrap_err();
+        assert!(
+            matches!(
+                err,
+                SessionStoreError::Log(crate::session_log::SessionLogError::AlreadyLocked { .. })
+            ),
+            "expected AlreadyLocked, got: {err:?}"
+        );
+        // The log is untouched while the writer holds it.
+        let loaded = store.load(&id).unwrap().expect("session survives");
+        assert_eq!(loaded.metadata.turn_count, 3);
+        drop(live);
+
+        // Once the writer is gone the truncate proceeds cleanly.
+        let dropped = store.truncate_to_turn(&id, 2).unwrap().expect("log exists");
+        assert!(dropped > 0);
+        let loaded = store.load(&id).unwrap().expect("session survives");
+        assert_eq!(loaded.metadata.turn_count, 2);
+    }
+
+    /// The compact rewrite honors the same flock — a second concurrent
+    /// rewrite (the live writer here stands in for any lock holder) must
+    /// error, never interleave two tmp+rename cycles on the same log.
+    #[test]
+    fn rewrite_with_conversation_fails_loudly_while_log_is_locked() {
+        let tmp = tempfile::tempdir().unwrap();
+        let store = store(&tmp);
+        let id = Uuid::new_v4();
+        seed_three_turn_session(&store, &id);
+
+        let live = SessionLogWriter::open_layout(store.container(), &id.to_string()).unwrap();
+        let err = store
+            .rewrite_with_conversation(&id, &[("sum q".into(), "sum a".into())])
+            .unwrap_err();
+        assert!(
+            matches!(
+                err,
+                SessionStoreError::Log(crate::session_log::SessionLogError::AlreadyLocked { .. })
+            ),
+            "expected AlreadyLocked, got: {err:?}"
+        );
+        let loaded = store.load(&id).unwrap().expect("session survives");
+        assert_eq!(loaded.metadata.turn_count, 3, "log must be untouched");
+        drop(live);
+
+        let written = store
+            .rewrite_with_conversation(&id, &[("sum q".into(), "sum a".into())])
+            .unwrap();
+        assert_eq!(written, 5); // one framed turn = 5 events
+        let loaded = store.load(&id).unwrap().expect("session survives");
+        assert_eq!(loaded.metadata.turn_count, 1);
+    }
+
+    /// `delete` must not unlink a live writer's log out from under it.
+    #[test]
+    fn delete_fails_while_writer_holds_the_log() {
+        let tmp = tempfile::tempdir().unwrap();
+        let store = store(&tmp);
+        let id = Uuid::new_v4();
+        seed_three_turn_session(&store, &id);
+
+        let live = SessionLogWriter::open_layout(store.container(), &id.to_string()).unwrap();
+        let err = store.delete(&id).unwrap_err();
+        assert!(
+            matches!(
+                err,
+                SessionStoreError::Log(crate::session_log::SessionLogError::AlreadyLocked { .. })
+            ),
+            "expected AlreadyLocked, got: {err:?}"
+        );
+        assert!(store.container.join(id.to_string()).exists());
+        drop(live);
+
+        assert!(store.delete(&id).unwrap());
+        assert!(!store.container.join(id.to_string()).exists());
+    }
+
+    /// Temp names must be collision-free: two racing rewrites of the same
+    /// session used to share one fixed `events.jsonl.rewind-tmp` name.
+    #[test]
+    fn unique_tmp_paths_never_collide() {
+        let tmp = tempfile::tempdir().unwrap();
+        let log = tmp.path().join("events.jsonl");
+        let a = unique_tmp_path(&log, "rewind-tmp");
+        let b = unique_tmp_path(&log, "rewind-tmp");
+        assert_ne!(a, b);
+        assert_eq!(a.parent(), log.parent(), "tmp must stay in the same dir");
+        assert!(
+            a.file_name()
+                .unwrap()
+                .to_string_lossy()
+                .starts_with("events.jsonl.rewind-tmp-"),
+            "unexpected tmp name: {}",
+            a.display()
+        );
     }
 }
