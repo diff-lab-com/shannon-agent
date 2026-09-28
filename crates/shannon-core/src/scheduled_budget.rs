@@ -251,13 +251,13 @@ mod tests {
 
     fn midnight_utc(year: i32, month: u32) -> DateTime<Utc> {
         use chrono::NaiveDate;
-        let date = NaiveDate::from_ymd_opt(year, month, 1).unwrap();
-        Utc.from_utc_datetime(&date.and_hms_opt(0, 0, 0).unwrap())
+        let date = NaiveDate::from_ymd_opt(year, month, 1).expect("valid date");
+        Utc.from_utc_datetime(&date.and_hms_opt(0, 0, 0).expect("valid time"))
     }
 
     #[test]
     fn no_cap_allows_fire() {
-        let tmp = tempfile::tempdir().unwrap();
+        let tmp = tempfile::tempdir().expect("tempdir");
         let mut enforcer = BudgetEnforcer::with_base(tmp.path().to_path_buf());
         enforcer.register_cap("t1", None);
         assert_eq!(enforcer.check("t1"), BudgetVerdict::NoBudget);
@@ -265,7 +265,7 @@ mod tests {
 
     #[test]
     fn under_cap_allows_with_remaining() {
-        let tmp = tempfile::tempdir().unwrap();
+        let tmp = tempfile::tempdir().expect("tempdir");
         let mut enforcer = BudgetEnforcer::with_base(tmp.path().to_path_buf());
         enforcer.register_cap("t1", Some(10.0));
         enforcer.record_spend("t1", 3.5);
@@ -273,13 +273,13 @@ mod tests {
             BudgetVerdict::Allow { remaining_usd } => {
                 assert_eq!(remaining_usd, Some(6.5));
             }
-            other => panic!("expected Allow, got {:?}", other),
+            other => panic!("expected Allow, got {other:?}"),
         }
     }
 
     #[test]
     fn at_or_over_cap_denies() {
-        let tmp = tempfile::tempdir().unwrap();
+        let tmp = tempfile::tempdir().expect("tempdir");
         let mut enforcer = BudgetEnforcer::with_base(tmp.path().to_path_buf());
         enforcer.register_cap("t1", Some(5.0));
         enforcer.record_spend("t1", 5.0);
@@ -290,13 +290,13 @@ mod tests {
                 assert_eq!(spent_usd, 5.0);
                 assert_eq!(cap_usd, 5.0);
             }
-            other => panic!("expected Deny, got {:?}", other),
+            other => panic!("expected Deny, got {other:?}"),
         }
     }
 
     #[test]
     fn roll_over_resets_spend() {
-        let tmp = tempfile::tempdir().unwrap();
+        let tmp = tempfile::tempdir().expect("tempdir");
         let mut enforcer = BudgetEnforcer::with_base(tmp.path().to_path_buf());
         enforcer.register_cap("t1", Some(2.0));
         // Manually backdate the entry to last month.
@@ -325,31 +325,37 @@ mod tests {
 
     #[test]
     fn refresh_rebuilds_totals_from_runs() {
-        let tmp = tempfile::tempdir().unwrap();
+        let tmp = tempfile::tempdir().expect("tempdir");
         let store = ScheduledRunsStore::with_base(tmp.path().to_path_buf());
 
         let mut run = ScheduledRun::start("task-1", "A");
         run.cost_usd = Some(0.42);
         run.finish(RunStatus::Succeeded, None);
-        store.record(&run).unwrap();
+        store.record(&run).expect("record run");
 
         let mut run2 = ScheduledRun::start("task-1", "A");
         run2.cost_usd = Some(0.58);
         run2.finish(RunStatus::Failed, None);
-        store.record(&run2).unwrap();
+        store.record(&run2).expect("record run");
 
         let mut enforcer = BudgetEnforcer::new(store);
         enforcer.register_cap("task-1", Some(5.0));
-        assert_eq!(enforcer.snapshot("task-1").unwrap().spent_usd, 1.00);
+        assert_eq!(
+            enforcer
+                .snapshot("task-1")
+                .expect("snapshot present")
+                .spent_usd,
+            1.00
+        );
     }
 
     #[test]
     fn running_runs_are_excluded_from_total() {
-        let tmp = tempfile::tempdir().unwrap();
+        let tmp = tempfile::tempdir().expect("tempdir");
         let store = ScheduledRunsStore::with_base(tmp.path().to_path_buf());
         let mut run = ScheduledRun::start("task-1", "A");
         run.cost_usd = Some(1.23); // status still Running
-        store.record(&run).unwrap();
+        store.record(&run).expect("record run");
 
         let mut enforcer = BudgetEnforcer::new(store);
         enforcer.register_cap("task-1", Some(5.0));
@@ -360,13 +366,19 @@ mod tests {
 
     #[test]
     fn disable_count_increments() {
-        let tmp = tempfile::tempdir().unwrap();
+        let tmp = tempfile::tempdir().expect("tempdir");
         let mut enforcer = BudgetEnforcer::with_base(tmp.path().to_path_buf());
         enforcer.register_cap("t1", Some(1.0));
         enforcer.record_spend("t1", 1.0);
         let _ = enforcer.check("t1");
         enforcer.mark_disabled("t1");
         enforcer.mark_disabled("t1");
-        assert_eq!(enforcer.snapshot("t1").unwrap().disable_count, 2);
+        assert_eq!(
+            enforcer
+                .snapshot("t1")
+                .expect("snapshot present")
+                .disable_count,
+            2
+        );
     }
 }

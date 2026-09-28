@@ -1266,7 +1266,7 @@ mod tests {
         assert_eq!(value["content"][0]["input"], serde_json::Value::Null);
         assert_eq!(value["content"].as_array().unwrap().len(), 1);
         // Thinking chunk contributed nothing.
-        assert!(serde_json::to_string(&value).unwrap().find("hmm").is_none());
+        assert!(!serde_json::to_string(&value).unwrap().contains("hmm"));
     }
 
     #[test]
@@ -1463,7 +1463,7 @@ mod tests {
         let read = view.tools.get("Read").expect("read aggregate");
         assert_eq!((read.calls, read.successes), (1, 1));
         assert_eq!(view.file_operations.get("read"), Some(&1));
-        assert!(view.file_operations.get("write").is_none());
+        assert!(!view.file_operations.contains_key("write"));
         assert_eq!(view.permission_requests_total, 1);
         assert_eq!(view.permission_requests_approved, 1);
         assert_eq!(view.errors.get("rate_limit"), Some(&1));

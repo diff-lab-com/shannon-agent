@@ -8,7 +8,6 @@ use super::*;
 use crate::query_engine::QueryMetadata;
 use crate::query_engine::recovery;
 use crate::tools::ToolRegistry;
-use shannon_engine::api::ImageSource;
 use shannon_engine::api::{LlmClient, LlmClientConfig, MessageContent};
 use shannon_engine::permissions::PermissionManager;
 use std::env;

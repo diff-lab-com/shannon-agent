@@ -31,6 +31,9 @@ use shannon_types::session_event::{SessionEvent, SessionEventBody};
 /// Precedence mirrors the persistence stack: `--dir` wins, then
 /// `SHANNON_SESSIONS_DIR`, then `SHANNON_HOME/sessions`, else
 /// `~/.shannon/sessions`.
+// KEEP: only the bin target calls this; dead when tests/trace_commands.rs
+// compiles this file via `#[path]`, so allow it there (not in the bin).
+#[cfg_attr(test, allow(dead_code))]
 pub fn resolve_container(dir: Option<&Path>) -> PathBuf {
     if let Some(d) = dir {
         return d.to_path_buf();
@@ -671,7 +674,7 @@ mod tests {
             },
         ));
         folded.close().unwrap();
-        let more = SessionLogReader::open(&session_log_container_path(&container, "second"))
+        let more = SessionLogReader::open(session_log_container_path(&container, "second"))
             .and_then(|r| r.read_events(true))
             .unwrap();
 

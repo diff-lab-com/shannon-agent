@@ -1473,7 +1473,6 @@ mod tests {
     #[tokio::test]
     async fn slow_stream_survives_past_legacy_total_timeout() {
         use futures::StreamExt;
-        use std::io::Write as _;
         use std::sync::Arc;
         use std::time::Instant;
 
@@ -1550,7 +1549,6 @@ mod tests {
     #[tokio::test]
     async fn stalled_stream_is_cut_by_read_idle_timeout() {
         use futures::StreamExt;
-        use std::io::Write as _;
         use std::time::{Duration, Instant};
 
         let mut server = mockito::Server::new_async().await;

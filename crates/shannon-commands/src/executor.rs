@@ -201,7 +201,7 @@ mod tests {
     // flavor.
     #[tokio::test(flavor = "multi_thread")]
     async fn shared_executor_exposes_the_registry() {
-        let mut registry = CommandRegistry::new();
+        let registry = CommandRegistry::new();
         registry.register_sync(prompt_command("shared", Some("v: {args}")));
         let shared = SharedExecutor::new(CommandExecutor::new(registry));
 

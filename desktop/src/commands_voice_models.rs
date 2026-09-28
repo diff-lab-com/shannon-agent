@@ -530,14 +530,11 @@ mod tests {
         // already-missing model — the test asserts that path
         // explicitly without affecting any real model file.
         let result = delete_model(WhisperModel::TinyEn).await;
-        match result {
-            // Real model was on disk: nothing to assert (test is
-            // best-effort in non-isolated environments).
-            Ok(_) => {}
-            // A delete failure is also acceptable; the test only
-            // cares that the call doesn't panic.
-            Err(_) => {}
-        }
+        // Ok (real model was on disk — nothing to assert, the test is
+        // best-effort in non-isolated environments) and Err (a delete
+        // failure is also acceptable) are both fine; the test only
+        // cares that the call doesn't panic.
+        let _ = result;
     }
 }
 

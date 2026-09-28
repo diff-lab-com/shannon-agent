@@ -223,7 +223,7 @@ fn replay_rendering_matches_live_broadcast_content_and_snaps() {
         // low-risk `echo` tool executes.
         let mut permissions = PermissionManager::new();
         permissions.set_approval_mode(shannon_engine::permissions::ApprovalMode::FullAuto);
-        let mut engine = shannon_core::query_engine::QueryEngine::with_session_id(
+        let engine = shannon_core::query_engine::QueryEngine::with_session_id(
             shannon_engine::api::LlmClient::new(client_cfg),
             registry,
             permissions,

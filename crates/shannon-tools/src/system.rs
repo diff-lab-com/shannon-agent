@@ -2546,7 +2546,7 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(output.metadata["sandbox"], "on");
-        assert!(output.metadata.get("sandbox_warning").is_none());
+        assert!(!output.metadata.contains_key("sandbox_warning"));
         assert!(!output.content.contains("Sandbox: OFF"));
     }
 
@@ -2557,7 +2557,7 @@ mod tests {
         let output = Tool::execute(&tool, json!({ "command": "echo hi" }))
             .await
             .unwrap();
-        assert!(output.metadata.get("sandbox").is_none());
+        assert!(!output.metadata.contains_key("sandbox"));
     }
 
     #[test]

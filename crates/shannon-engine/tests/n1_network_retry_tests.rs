@@ -37,8 +37,7 @@ async fn kind_request_error() -> reqwest::Error {
         .timeout(Duration::from_secs(5))
         .send()
         .await
-        .err()
-        .expect("client should fail against a closing listener")
+        .expect_err("client should fail against a closing listener")
 }
 
 #[tokio::test]
@@ -93,8 +92,7 @@ async fn kind_request_retry_policy_survives_rst_variant_too() {
         .timeout(Duration::from_secs(5))
         .send()
         .await
-        .err()
-        .expect("RST listener should produce an error");
+        .expect_err("RST listener should produce an error");
 
     let policy = RetryPolicy::default();
     assert!(
@@ -122,8 +120,6 @@ mod support {
     /// Connections to fail with a FIN before any response (Kind::Request
     /// per the probe: is_request=true, is_connect=false).
     pub const INJECTED_FAILURES: usize = 2;
-
-    pub static CONN_COUNT: AtomicUsize = AtomicUsize::new(0);
 
     pub fn spawn_injecting_server() -> std::net::SocketAddr {
         let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
@@ -158,13 +154,6 @@ mod support {
         });
         let _ = s;
         addr
-    }
-
-    pub fn served_count() -> usize {
-        // The server thread owns the counter; approximate via the listener
-        // port's connection count is not exposed, so tests assert on
-        // send_message outcomes instead. Kept for symmetry.
-        0
     }
 }
 

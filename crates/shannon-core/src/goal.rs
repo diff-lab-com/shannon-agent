@@ -583,7 +583,10 @@ mod tests {
         assert!(api.status().is_none());
         let g = api.set("ship it", 25, None, 0.0);
         assert_eq!(g.objective, "ship it");
-        assert_eq!(api.status().unwrap().status, GoalStatus::Active);
+        assert_eq!(
+            api.status().expect("goal present").status,
+            GoalStatus::Active
+        );
         assert!(api.clear());
         assert!(api.status().is_none());
     }
@@ -593,9 +596,12 @@ mod tests {
         let api = GoalApi::new();
         api.set("ship it", 0, Some(5.0), 1.0);
         api.pause();
-        assert_eq!(api.status().unwrap().status, GoalStatus::Paused);
+        assert_eq!(
+            api.status().expect("goal present").status,
+            GoalStatus::Paused
+        );
         api.resume(4.0);
-        let g = api.status().unwrap();
+        let g = api.status().expect("goal present");
         assert_eq!(g.status, GoalStatus::Active);
         assert_eq!(g.iterations, 0, "resume re-arms iteration budget");
         assert!(
@@ -617,14 +623,22 @@ mod tests {
         match api.evaluate(Some("thinking"), facts) {
             GoalContinuation::Continue { next, .. } => {
                 assert_eq!(next.consecutive_no_tool_turns, 1);
-                assert_eq!(api.status().unwrap().consecutive_no_tool_turns, 1);
+                assert_eq!(
+                    api.status()
+                        .expect("goal present")
+                        .consecutive_no_tool_turns,
+                    1
+                );
             }
             other => panic!("turn 1 should continue, got {other:?}"),
         }
         match api.evaluate(Some("still thinking"), facts) {
             GoalContinuation::PausedNoProgress { next, .. } => {
                 assert_eq!(next.status, GoalStatus::Paused);
-                assert_eq!(api.status().unwrap().status, GoalStatus::Paused);
+                assert_eq!(
+                    api.status().expect("goal present").status,
+                    GoalStatus::Paused
+                );
             }
             other => panic!("turn 2 should pause, got {other:?}"),
         }
@@ -650,6 +664,9 @@ mod tests {
             }
             other => panic!("expected BudgetLimited, got {other:?}"),
         }
-        assert_eq!(api.status().unwrap().status, GoalStatus::Paused);
+        assert_eq!(
+            api.status().expect("goal present").status,
+            GoalStatus::Paused
+        );
     }
 }

@@ -3171,7 +3171,7 @@ mod tests {
                 .unwrap()
                 .is_empty()
         );
-        assert!(read_report_in(&empty.path(), None).is_err());
+        assert!(read_report_in(empty.path(), None).is_err());
     }
 
     #[test]
@@ -3716,7 +3716,7 @@ mod tests {
     fn apply_lands_merge_remove_and_add_with_dream_provenance() {
         let dir = tempdir().unwrap();
         let mut store = MemoryStore::new(dir.path().to_path_buf());
-        let mut kept = dream_entry("proj", "use rust for tooling", 0.9);
+        let kept = dream_entry("proj", "use rust for tooling", 0.9);
         let dropped_dup = dream_entry("proj", "prefer rust tooling", 0.5);
         let stale = dream_entry("proj", "retire the old script", 0.7);
         for e in [&kept, &dropped_dup, &stale] {

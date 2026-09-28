@@ -1703,8 +1703,10 @@ mod tests {
         );
 
         // Round-trip a policy that carries a window.
-        let mut p2 = ExecutionPolicy::default();
-        p2.execution_window = Some(window(22, 6, Some("Asia/Shanghai")));
+        let p2 = ExecutionPolicy {
+            execution_window: Some(window(22, 6, Some("Asia/Shanghai"))),
+            ..ExecutionPolicy::default()
+        };
         let s = serde_json::to_string(&p2).unwrap();
         assert!(s.contains("\"start_hour\":22"));
         assert!(s.contains("\"timezone\":\"Asia/Shanghai\""));

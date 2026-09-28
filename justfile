@@ -54,13 +54,12 @@ gen-protocol:
 fmt:
     cargo fmt --all
 
-# Note: clippy runs against the workspace library + bin targets only (matches
-# the original shannon-code CI gate). Test targets are intentionally NOT
-# linted here -- the upstream test code uses `unwrap()` extensively and was
-# never subject to `clippy --all-targets` in the original justfile; re-linting
-# it would block CI for pre-existing patterns the migration does not own.
+# Clippy runs against EVERY target (lib, bins, tests, benches, examples) via
+# --all-targets, matching the CI Clippy job. All targets are clippy-clean —
+# including the shannon-core `unwrap_used` warn (tests use expect()/expect_err()
+# with reasons) — so any regression in any target fails this gate.
 lint:
-    cargo clippy --workspace -- -D warnings
+    cargo clippy --workspace --all-targets -- -D warnings
     cd desktop/ui && pnpm lint
     cd gateway && pnpm typecheck
 
@@ -80,7 +79,7 @@ lint:
 # 提交前快路径(跳过 doctest,跳过 release lint)
 dev: version-check
     cargo check --workspace
-    cargo clippy --workspace
+    cargo clippy --workspace --all-targets
     @cargo nextest run --workspace || (echo "✗ tests failed — reproduce CI behavior with: just test-ci (retries=2, fail-fast=false)" && exit 1)
 
 # 完整测试(CI 同参 + doctests)

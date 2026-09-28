@@ -2407,22 +2407,18 @@ mod tests {
         let session_id = Uuid::new_v4();
 
         // Raw-TCP POST /api/query; returns the JSON response body.
-        let post_query = |prompt: &'static str| {
-            let addr = addr;
-            let session_id = session_id;
-            async move {
-                let mut sock = tokio::net::TcpStream::connect(addr).await.unwrap();
-                let body = format!(r#"{{"prompt":"{prompt}","session_id":"{session_id}"}}"#);
-                let req = format!(
-                    "POST /api/query HTTP/1.1\r\nHost: {addr}\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
-                    body.len()
-                );
-                sock.write_all(req.as_bytes()).await.unwrap();
-                sock.flush().await.unwrap();
-                let mut raw = Vec::new();
-                sock.read_to_end(&mut raw).await.unwrap();
-                String::from_utf8_lossy(&raw).to_string()
-            }
+        let post_query = |prompt: &'static str| async move {
+            let mut sock = tokio::net::TcpStream::connect(addr).await.unwrap();
+            let body = format!(r#"{{"prompt":"{prompt}","session_id":"{session_id}"}}"#);
+            let req = format!(
+                "POST /api/query HTTP/1.1\r\nHost: {addr}\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+                body.len()
+            );
+            sock.write_all(req.as_bytes()).await.unwrap();
+            sock.flush().await.unwrap();
+            let mut raw = Vec::new();
+            sock.read_to_end(&mut raw).await.unwrap();
+            String::from_utf8_lossy(&raw).to_string()
         };
 
         // A goes first and parks inside the provider call.

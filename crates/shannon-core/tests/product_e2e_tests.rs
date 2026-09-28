@@ -261,46 +261,6 @@ fn anthropic_sse_text(msg_id: &str, text: &str) -> String {
     )
 }
 
-/// Build an SSE body for Anthropic with a single tool use followed by text.
-fn anthropic_sse_tool_then_text(
-    msg_id: &str,
-    tool_name: &str,
-    tool_id: &str,
-    tool_input: &str,
-    _final_text: &str,
-) -> String {
-    format!(
-        concat!(
-            "data: {{\"type\":\"message_start\",\"message\":{{\"id\":\"{mid}\",\"role\":\"assistant\",\"content\":[],\"model\":\"test-model\",\"stop_reason\":null,\"usage\":{{\"input_tokens\":15,\"output_tokens\":0}}}}}}\n\n",
-            "data: {{\"type\":\"content_block_start\",\"index\":0,\"content_block\":{{\"type\":\"tool_use\",\"id\":\"{tid}\",\"name\":\"{tname}\",\"input\":{{}}}}}}\n\n",
-            "data: {{\"type\":\"content_block_delta\",\"index\":0,\"delta\":{{\"type\":\"input_json_delta\",\"partial_json\":\"{tinput}\"}}}}\n\n",
-            "data: {{\"type\":\"content_block_stop\",\"index\":0}}\n\n",
-            "data: {{\"type\":\"message_delta\",\"delta\":{{\"stop_reason\":\"tool_use\"}},\"usage\":{{\"input_tokens\":15,\"output_tokens\":10}}}}\n\n",
-            "data: {{\"type\":\"message_stop\"}}\n\n",
-        ),
-        mid = msg_id,
-        tid = tool_id,
-        tname = tool_name,
-        tinput = tool_input,
-    )
-}
-
-/// Build final text response after tool result.
-fn anthropic_sse_final_text(msg_id: &str, text: &str) -> String {
-    format!(
-        concat!(
-            "data: {{\"type\":\"message_start\",\"message\":{{\"id\":\"{mid}\",\"role\":\"assistant\",\"content\":[],\"model\":\"test-model\",\"stop_reason\":null,\"usage\":{{\"input_tokens\":25,\"output_tokens\":0}}}}}}\n\n",
-            "data: {{\"type\":\"content_block_start\",\"index\":0,\"content_block\":{{\"type\":\"text\",\"text\":\"\"}}}}\n\n",
-            "data: {{\"type\":\"content_block_delta\",\"index\":0,\"delta\":{{\"type\":\"text_delta\",\"text\":\"{txt}\"}}}}\n\n",
-            "data: {{\"type\":\"content_block_stop\",\"index\":0}}\n\n",
-            "data: {{\"type\":\"message_delta\",\"delta\":{{\"stop_reason\":\"end_turn\"}},\"usage\":{{\"input_tokens\":25,\"output_tokens\":10}}}}\n\n",
-            "data: {{\"type\":\"message_stop\"}}\n\n",
-        ),
-        mid = msg_id,
-        txt = text,
-    )
-}
-
 // ============================================================================
 // E2E Test: Simple text query pipeline
 // ============================================================================

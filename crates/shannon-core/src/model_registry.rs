@@ -616,10 +616,10 @@ mod tests {
     // the function; the tests below pin each branch. They save/restore
     // the env vars because `parse_provider_slugs_env` is process-global.
 
-    /// RAII guard that snapshots `SHANNON_ENABLED_PROVIDERS` /
-    /// `SHANNON_DISABLED_PROVIDERS` on construction and restores them on
-    /// drop — keeps the env-mutating tests from leaking state into
-    /// siblings.
+    // RAII guard that snapshots `SHANNON_ENABLED_PROVIDERS` /
+    // `SHANNON_DISABLED_PROVIDERS` on construction and restores them on
+    // drop — keeps the env-mutating tests from leaking state into
+    // siblings.
 
     /// Serializes the env-mutating allowlist tests: set_var/remove_var are
     /// process-global and parallel siblings race otherwise.
@@ -906,8 +906,10 @@ mod tests {
     fn resolve_auto_tier_respects_profile_override() {
         // A pinned providers.toml override for `standard` wins for auto too,
         // since auto delegates through resolve_tier.
-        let mut tiers = ProviderTiers::default();
-        tiers.standard = Some("claude-opus-4-20250115".to_string());
+        let tiers = ProviderTiers {
+            standard: Some("claude-opus-4-20250115".to_string()),
+            ..ProviderTiers::default()
+        };
         let (tier, id) =
             resolve_auto_tier(&LlmProvider::Anthropic, &tiers).expect("resolves via override");
         assert_eq!(tier, TierName::Standard);

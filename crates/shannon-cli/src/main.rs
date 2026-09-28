@@ -6369,7 +6369,6 @@ def456  shannon-x86_64-unknown-linux-gnu.tar.gz
     }
 
     #[test]
-    #[test]
     fn test_cli_parse_serve_defaults() {
         let cli = Cli::try_parse_from(["shannon", "serve"]).unwrap();
         match cli.command {

@@ -1216,8 +1216,10 @@ mod tests {
     fn test_debug_output_masks_api_key() {
         // F19 regression: the derived Debug used to render the plaintext
         // api_key into every log/tracing line that printed the config.
-        let mut config = LlmClientConfig::default();
-        config.api_key = "sk-ant-api11-supersecret-value-9f8e7d6c".to_string();
+        let mut config = LlmClientConfig {
+            api_key: "sk-ant-api11-supersecret-value-9f8e7d6c".to_string(),
+            ..LlmClientConfig::default()
+        };
         let rendered = format!("{config:?}");
 
         assert!(

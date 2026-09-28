@@ -549,7 +549,7 @@ mod tests {
         };
         let result = execute(input).await.expect("execute should succeed");
         assert!(
-            result.metadata.get("type").is_none(),
+            !result.metadata.contains_key("type"),
             "NUL-free text must not be flagged binary"
         );
         assert!(result.content.contains("just"));

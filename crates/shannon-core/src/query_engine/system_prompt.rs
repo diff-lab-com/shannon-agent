@@ -282,7 +282,6 @@ mod tests {
     use crate::query_engine::types::QueryEngineConfig;
     use crate::tools::ToolRegistry;
     use shannon_engine::api::LlmProvider;
-    use shannon_engine::api::types::SystemContentBlock;
 
     fn tools_empty() -> ToolRegistry {
         ToolRegistry::new()
@@ -333,7 +332,7 @@ mod tests {
         let blocks = out.blocks.expect("non-empty");
         let cached_count = blocks.iter().filter(|b| b.cache_control.is_some()).count();
         assert!(
-            cached_count >= 1 && cached_count <= 2,
+            (1..=2).contains(&cached_count),
             "expected 1-2 cache breakpoints depending on stable-zone length, got {cached_count}"
         );
     }

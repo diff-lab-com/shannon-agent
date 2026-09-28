@@ -1042,14 +1042,14 @@ mod tests {
             fn register(&self, surrogate: &str, secret: &str) {
                 self.0
                     .lock()
-                    .unwrap()
+                    .expect("store lock")
                     .push((surrogate.to_string(), secret.to_string()));
             }
             fn pairs(&self) -> Vec<(String, String)> {
-                self.0.lock().unwrap().clone()
+                self.0.lock().expect("store lock").clone()
             }
             fn len(&self) -> usize {
-                self.0.lock().unwrap().len()
+                self.0.lock().expect("store lock").len()
             }
         }
 
@@ -1316,7 +1316,7 @@ mod tests {
         struct RecordSources(Arc<std::sync::Mutex<Vec<IngestSource>>>);
         impl ContextTransform for RecordSources {
             fn transform_ingest(&self, block: &mut IngestBlock) -> TransformAction {
-                self.0.lock().unwrap().push(block.source.clone());
+                self.0.lock().expect("seen lock").push(block.source.clone());
                 TransformAction::Passthrough
             }
             fn restore_tool_args(
@@ -1343,7 +1343,7 @@ mod tests {
         let _ = transform_outgoing_messages(messages);
         set_context_transform(None);
         assert_eq!(
-            *seen.lock().unwrap(),
+            *seen.lock().expect("seen lock"),
             vec![IngestSource::UserMessage],
             "Text blocks of a user message must carry UserMessage provenance"
         );
@@ -1484,14 +1484,14 @@ mod tests {
         fn register(&self, surrogate: &str, secret: &str) {
             self.0
                 .lock()
-                .unwrap()
+                .expect("store lock")
                 .push((surrogate.to_string(), secret.to_string()));
         }
         fn pairs(&self) -> Vec<(String, String)> {
-            self.0.lock().unwrap().clone()
+            self.0.lock().expect("store lock").clone()
         }
         fn len(&self) -> usize {
-            self.0.lock().unwrap().len()
+            self.0.lock().expect("store lock").len()
         }
     }
 
@@ -1612,7 +1612,7 @@ mod tests {
             vec![UNMAPPED_TOKEN.to_string()],
             "the unmapped token must be reported"
         );
-        let content = args["content"].as_str().unwrap();
+        let content = args["content"].as_str().expect("content is a string");
         assert!(content.contains(secret), "mapped value restored: {content}");
         assert!(
             content.contains(UNMAPPED_TOKEN),

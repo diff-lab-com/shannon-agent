@@ -78,14 +78,20 @@ struct PermissionJson {
 struct CommandsJson {
     #[serde(default)]
     allow: Vec<String>,
+    // KEEP: deserialized to consume the ACL JSON; allow-list is the only
+    // side the assertions inspect.
     #[serde(default)]
+    #[allow(dead_code)]
     deny: Vec<String>,
 }
 
 #[derive(Deserialize)]
 struct PermissionSetJson {
     identifier: String,
+    // KEEP: deserialized to consume the permission-set JSON; only the
+    // identifier and permissions lists are asserted on.
     #[serde(default)]
+    #[allow(dead_code)]
     description: String,
     #[serde(default)]
     permissions: Vec<String>,

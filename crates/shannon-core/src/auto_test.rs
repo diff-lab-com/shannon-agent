@@ -641,8 +641,10 @@ mod tests {
 
         // Eval harness came in with explicit zero strikes — the headless
         // auto-enable must flip it back to the default 3.
-        let mut cfg = AutoTestConfig::default();
-        cfg.no_progress_strikes = 0;
+        let mut cfg = AutoTestConfig {
+            no_progress_strikes: 0,
+            ..AutoTestConfig::default()
+        };
         ensure_headless_auto_test_strikes(&mut cfg);
         assert_eq!(
             cfg.no_progress_strikes, 3,
@@ -651,8 +653,10 @@ mod tests {
 
         // Already configured values are preserved (caller wins when they
         // asked for something specific).
-        let mut cfg = AutoTestConfig::default();
-        cfg.no_progress_strikes = 5;
+        let mut cfg = AutoTestConfig {
+            no_progress_strikes: 5,
+            ..AutoTestConfig::default()
+        };
         ensure_headless_auto_test_strikes(&mut cfg);
         assert_eq!(
             cfg.no_progress_strikes, 5,
@@ -686,8 +690,10 @@ mod tests {
         }
         assert!(!headless_auto_test_strikes_enabled());
 
-        let mut cfg = AutoTestConfig::default();
-        cfg.no_progress_strikes = 0;
+        let mut cfg = AutoTestConfig {
+            no_progress_strikes: 0,
+            ..AutoTestConfig::default()
+        };
         ensure_headless_auto_test_strikes(&mut cfg);
         assert_eq!(
             cfg.no_progress_strikes, 0,
@@ -712,8 +718,10 @@ mod tests {
         }
         assert!(!headless_auto_test_strikes_enabled());
 
-        let mut cfg = AutoTestConfig::default();
-        cfg.no_progress_strikes = 0;
+        let mut cfg = AutoTestConfig {
+            no_progress_strikes: 0,
+            ..AutoTestConfig::default()
+        };
         ensure_headless_auto_test_strikes(&mut cfg);
         assert_eq!(cfg.no_progress_strikes, 0);
 
