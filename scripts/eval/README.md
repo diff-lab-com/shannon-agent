@@ -66,6 +66,12 @@ full rebuild; runner binaries likewise via `--eval-runner` /
    a give-up list needs an automated second-chance sweep. Git network ops
    (fetch/ls-remote/worktree add) MUST run under a timeout — bare git hangs
    indefinitely on bad egress and one hung slot stalls the pipeline (D5–D8).
+8. **Benchmarks verify no-regression; they do not select product behavior.**
+   An A/B on an eval pool may validate that a knob causes no harm, but a
+   behavior default (e.g. thinking on/off) needs a user-scenario rationale —
+   score deltas within run-to-run variance are not evidence (P2-1 postmortem:
+   +10pp was inside the ±4-task round variance; the gate passed on wall-clock,
+   not on quality).
 
 ## Lite100 hardening package (2026-09-28, feat/eval-hardening-thinking-knob)
 
@@ -90,5 +96,16 @@ Full evidence chain: `~/.shannon/eval/lite100-glm-dev/{FINDINGS,REPORT}.md`.
 - Engine (P1-1/P1-2): `turn/end.llm_steps` now counts LLM calls folded into
   each turn (per-call efficiency denominator; turn/end itself remains one
   per user-visible round by design); `SHANNON_THINKING` env knob maps to
-  the GLM `thinking.type` request field; cutoff Progress events carry the
-  error class (`class=timeout|stream_interrupted, err=…`).
+  the GLM `thinking.type` request field (Zhipu-family providers only; an
+  explicit toggle overrides reasoning_effort); cutoff Progress events carry
+  the error class (`class=timeout|stream_interrupted, err=…`).
+- Thinking-toggle guidance (user-facing tradeoff, NOT a default change):
+  disabling thinking trades solution depth for wall-clock — measured on the
+  10-task regression pool: wall −9%, tokens −6%, resolved +10pp (within
+  round variance). Reasonable for latency-sensitive interactive runs on
+  small/mechanical tasks; keep thinking ON for hard multi-step work and
+  generous budgets. Default remains the provider default (thinking on).
+- Flaky-test note: the two malformed-call agent_loop tests serialize on
+  `MALFORMED_STREAK_ENV_LOCK` — they read `SHANNON_MAX_CONSECUTIVE_MALFORMED_CALLS`,
+  which another test mutates process-globally (3→2 mid-run caused false
+  stop-loss failures under full-suite parallelism).

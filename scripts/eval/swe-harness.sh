@@ -239,14 +239,17 @@ ensure_local() {
   fi
   say "deepening $REPO_PATH from origin (depth=$depth)"
   local br
-  br="$(git -C "$REPO_PATH" ls-remote --symref origin HEAD 2>/dev/null \
+  # lite100 fix: every git network op runs under a hard timeout. Bare
+  # ls-remote/fetch negotiate over the network and hang indefinitely on
+  # bad egress — one hung call stalled a whole wave for >1h (D5/D7).
+  br="$(timeout 60 git -C "$REPO_PATH" ls-remote --symref origin HEAD 2>/dev/null \
         | awk '/^ref:/ {print $2}' | sed -e 's|refs/heads/||' -e 's|\tHEAD||')"
   br="${br:-main}"
-  if ! git -C "$REPO_PATH" fetch --depth 10000 origin \
+  if ! timeout 120 git -C "$REPO_PATH" fetch --depth 10000 origin \
        "+refs/heads/${br}:refs/remotes/origin/${br}" \
        >>"$ws/worktree.log" 2>&1; then
     say "depth-10000 fetch on $br failed; trying --unshallow"
-    git -C "$REPO_PATH" fetch --unshallow origin "$br" \
+    timeout 120 git -C "$REPO_PATH" fetch --unshallow origin "$br" \
       >>"$ws/worktree.log" 2>&1 \
       || { say "WARN: both fetches failed (network?); worktree add will retry"; return 0; }
   fi

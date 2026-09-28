@@ -2293,6 +2293,11 @@ async fn run_query_with_recovery_bookkeeping(
 /// warning — NOT after 20 requests of churn to max_turns.
 #[tokio::test]
 async fn consecutive_malformed_tool_calls_stop_loss_ends_query() {
+    // Reader of SHANNON_MAX_CONSECUTIVE_MALFORMED_CALLS: serialize against
+    // the test that mutates it (cap drops to 2 process-globally mid-run).
+    let _env_lock = MALFORMED_STREAK_ENV_LOCK
+        .lock()
+        .unwrap_or_else(|e| e.into_inner());
     let responder =
         std::sync::Arc::new(|request_index: usize| malformed_tool_call_sse(request_index));
     let server = TurnRetryMockServer::start(responder);
@@ -2325,6 +2330,11 @@ async fn consecutive_malformed_tool_calls_stop_loss_ends_query() {
 /// tool call resets it, so only the fresh tail reaches the cap.
 #[tokio::test]
 async fn malformed_call_streak_resets_after_parsed_tool_execution() {
+    // Reader of SHANNON_MAX_CONSECUTIVE_MALFORMED_CALLS: serialize against
+    // the test that mutates it (cap drops to 2 process-globally mid-run).
+    let _env_lock = MALFORMED_STREAK_ENV_LOCK
+        .lock()
+        .unwrap_or_else(|e| e.into_inner());
     // malformed → parsed tool call (streak resets) → malformed ×3.
     let responder = std::sync::Arc::new(|request_index: usize| {
         if request_index == 1 {

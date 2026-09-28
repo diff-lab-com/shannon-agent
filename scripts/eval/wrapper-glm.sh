@@ -35,6 +35,15 @@
 # SHANNON_BASE_URL are unset too — ambient exports would otherwise fight the
 # wrapper's --provider/--model flags depending on config layering.
 #
+# Thinking toggle (P1-2, GLM/Zhipu providers only):
+#   SHANNON_THINKING=disabled  -> wire carries thinking.type=disabled
+#   SHANNON_THINKING=enabled   -> wire carries thinking.type=enabled
+#   unset                      -> provider default (GLM-5.x: thinking on)
+# Tradeoff (measured, 10-task regression pool x3): disabling cuts wall ~9%
+# and tokens ~6% at unchanged resolved rate — reasonable for latency-
+# sensitive interactive runs on small/mechanical tasks; keep thinking for
+# hard multi-step work. Ignored on non-Zhipu providers (field is stripped).
+
 # Binary override: SHANNON_BIN (default: main checkout's target/debug/shannon).
 set -u
 KEY_FILE="${HOME}/.shannon/credentials/zhipu.json"
