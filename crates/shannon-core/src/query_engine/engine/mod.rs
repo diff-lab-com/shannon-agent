@@ -863,7 +863,8 @@ impl QueryEngine {
 
     /// Rewind the conversation by removing the last `n` user turns.
     ///
-    /// A turn starts with a real user prompt ([`is_turn_opener`]) and includes
+    /// A turn starts with a real user prompt (see the private
+    /// `is_turn_opener` predicate) and includes
     /// all subsequent messages until the next turn opener — tool results and
     /// synthetic reminders travel as user-role messages but never open a turn.
     /// The cut is additionally moved back past any trailing assistant
