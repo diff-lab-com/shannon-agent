@@ -2357,6 +2357,7 @@ mod tests {
                 arguments: serde_json::Value::Object(input).to_string(),
             }));
             w.record(SessionEventBody::TurnEnd(TurnEndPayload {
+                llm_steps: None,
                 reason: TurnEndPayload::REASON_COMPLETED.into(),
                 usage: None,
                 error: None,
