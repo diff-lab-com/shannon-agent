@@ -32,10 +32,12 @@ use thiserror::Error;
 /// arguments, or swapping its URL therefore invalidates the stored approval
 /// and re-triggers the approval policy on the next startup.
 ///
-/// Note: the config registry (`mcp_advanced::McpServerRegistry`) does not
-/// track which file a server was loaded from, so the source path cannot
-/// participate in the binding yet — the command/args hash is the load-bearing
-/// half (a renamed command is exactly the re-approval trigger F6 asks for).
+/// The command/args hash is the load-bearing half of the binding (a renamed
+/// command is exactly the re-approval trigger F6 asks for). Config provenance
+/// is a *separate*, optional axis: `mcp_advanced::McpServerRegistry` records
+/// which file each server was loaded from (`source_of`), and requests can
+/// carry it via [`McpServerApprovalRequest::with_source_path`] — see that
+/// method for the matching semantics.
 pub fn mcp_server_fingerprint(server_name: &str, command_or_url: &str, args: &[String]) -> String {
     let mut hasher = Sha256::new();
     hasher.update(server_name.as_bytes());
@@ -63,19 +65,39 @@ pub struct McpApprovalEntry {
     /// legacy name-only record.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub fingerprint: Option<String>,
+    /// Config file the approved server was loaded from (T11 provenance
+    /// binding). `None` marks a record with no source binding — including
+    /// every pre-T11 record, which keep matching purely on name/fingerprint.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub source_path: Option<String>,
 }
 
 impl McpApprovalEntry {
-    /// Whether this record admits the given identity fingerprint.
+    /// Whether this record admits the given identity fingerprint and config
+    /// provenance.
     ///
-    /// Bound records match only their recorded fingerprint. Legacy records
-    /// match by name (with a deprecation warning logged at load time). A
-    /// bound record consulted without a fingerprint is fail-closed: no match.
-    fn matches(&self, fingerprint: Option<&str>) -> bool {
+    /// - Fingerprint (F6): bound records match only their recorded
+    ///   fingerprint; legacy records match by name (with a deprecation
+    ///   warning logged at load time); a bound record consulted without a
+    ///   fingerprint is fail-closed: no match.
+    /// - Source path (T11): an ADDITIONAL requirement only when BOTH sides
+    ///   carry a source — a record bound to `"/repo/.mcp.json"` does not
+    ///   admit the same command loaded from `"~/.claude/settings.json"`.
+    ///   Either side missing → fingerprint-only behavior, so existing
+    ///   records and callers that don't track provenance are unaffected.
+    fn matches(&self, fingerprint: Option<&str>, source_path: Option<&str>) -> bool {
         match (&self.fingerprint, fingerprint) {
+            (Some(stored), Some(current)) => {
+                if stored != current {
+                    return false;
+                }
+            }
+            (None, _) => {}
+            (Some(_), None) => return false,
+        }
+        match (&self.source_path, source_path) {
             (Some(stored), Some(current)) => stored == current,
-            (None, _) => true,
-            (Some(_), None) => false,
+            _ => true,
         }
     }
 }
@@ -96,6 +118,7 @@ impl From<ApprovalEntryRepr> for Option<McpApprovalEntry> {
             ApprovalEntryRepr::Legacy(name) => Some(McpApprovalEntry {
                 name,
                 fingerprint: None,
+                source_path: None,
             }),
         }
     }
@@ -218,6 +241,23 @@ impl Default for RiskAssessment {
 // ============================================================================
 
 /// A request to approve an MCP server connection.
+///
+/// # Identity binding (F6 / T11)
+///
+/// A request can carry up to two optional bindings, and a stored approval
+/// record must satisfy every binding BOTH sides carry:
+///
+/// - `command_fingerprint` — [`mcp_server_fingerprint`] of the exact
+///   `(name, command/URL, args)` definition. Attach with
+///   [`Self::with_fingerprint`]. A request without it cannot match a bound
+///   record (fail-closed).
+/// - `source_path` — the config file the server definition was loaded from
+///   (provenance, from `mcp_advanced::McpServerRegistry::source_of`). Attach
+///   with [`Self::with_source_path`]. Unlike the fingerprint it is
+///   advisory-only: when BOTH the stored record and the request carry a
+///   source they must match ("same command, different source file" re-triggers
+///   approval), but a request without a source keeps the pre-T11 behavior, so
+///   callers that don't track provenance need no changes.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct McpServerApprovalRequest {
     /// Human-readable name of the MCP server.
@@ -237,6 +277,10 @@ pub struct McpServerApprovalRequest {
     /// approval records — fail-closed).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub command_fingerprint: Option<String>,
+    /// Config provenance of the server definition behind this request (T11).
+    /// See the type-level documentation for the matching semantics.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub source_path: Option<String>,
     /// Pre-computed risk assessment.
     pub risk_assessment: RiskAssessment,
 }
@@ -251,6 +295,7 @@ impl McpServerApprovalRequest {
             capabilities: Vec::new(),
             requested_permissions: Vec::new(),
             command_fingerprint: None,
+            source_path: None,
             risk_assessment: RiskAssessment::default(),
         }
     }
@@ -264,6 +309,7 @@ impl McpServerApprovalRequest {
             capabilities: Vec::new(),
             requested_permissions: Vec::new(),
             command_fingerprint: None,
+            source_path: None,
             risk_assessment: RiskAssessment::default(),
         }
     }
@@ -275,6 +321,17 @@ impl McpServerApprovalRequest {
             command_or_url,
             args,
         ));
+        self
+    }
+
+    /// Attach the config-file provenance of the server definition (T11).
+    ///
+    /// Pass the path reported by `mcp_advanced::McpServerRegistry::source_of`
+    /// for this server. When the stored approval record also carries a source
+    /// path, the two must be equal for the approval to apply; when either
+    /// side lacks one, this binding is inert (fingerprint-only matching).
+    pub fn with_source_path(mut self, source_path: &str) -> Self {
+        self.source_path = Some(source_path.to_string());
         self
     }
 
@@ -398,8 +455,10 @@ pub struct McpApprovalManager {
     /// Policy used for auto-approval decisions.
     policy: McpApprovalPolicy,
     /// Approved servers keyed by name. Each entry carries its identity
-    /// binding (F6): bound records only admit the exact approved command/URL
-    /// + args; legacy name-only records admit any identity of that name.
+    /// binding (F6) and, optionally, its config provenance (T11): bound
+    /// records only admit the exact approved command/URL + args (and, when
+    /// both sides carry one, the same source file); legacy name-only records
+    /// admit any identity of that name.
     approved_servers: HashMap<String, McpApprovalEntry>,
     /// Set of denied server names.
     denied_servers: HashSet<String>,
@@ -439,8 +498,14 @@ impl McpApprovalManager {
         let name = request.server_name.clone();
 
         // Check already-approved (F6: identity-bound — a changed command or
-        // argument set no longer short-circuits the policy).
-        if self.is_identity_approved(&name, request.command_fingerprint.as_deref()) {
+        // argument set no longer short-circuits the policy; T11: a record
+        // bound to a different config source doesn't either, when both sides
+        // carry a source path).
+        if self.is_identity_approved_with_source(
+            &name,
+            request.command_fingerprint.as_deref(),
+            request.source_path.as_deref(),
+        ) {
             return Ok(ApprovalDecision::Approve);
         }
 
@@ -459,6 +524,7 @@ impl McpApprovalManager {
                 McpApprovalEntry {
                     name: name.clone(),
                     fingerprint: request.command_fingerprint.clone(),
+                    source_path: request.source_path.clone(),
                 },
             );
             return Ok(ApprovalDecision::Approve);
@@ -471,6 +537,7 @@ impl McpApprovalManager {
                 McpApprovalEntry {
                     name: name.clone(),
                     fingerprint: request.command_fingerprint.clone(),
+                    source_path: request.source_path.clone(),
                 },
             );
             return Ok(ApprovalDecision::Approve);
@@ -584,11 +651,28 @@ impl McpApprovalManager {
     /// A `Some(fingerprint)` record only admits the exact approved server
     /// definition; `None` keeps legacy name-only semantics.
     pub fn approve_server_identity(&mut self, server_name: &str, fingerprint: Option<String>) {
+        self.approve_server_identity_with_source(server_name, fingerprint, None);
+    }
+
+    /// Explicitly approve a server with its identity AND config provenance
+    /// bindings (T11).
+    ///
+    /// `Some(source_path)` stores the config file the approved server came
+    /// from; a later request for the same command from a DIFFERENT source
+    /// file then re-triggers approval — but only while the requesting side
+    /// also carries a source path. `None` keeps fingerprint-only semantics.
+    pub fn approve_server_identity_with_source(
+        &mut self,
+        server_name: &str,
+        fingerprint: Option<String>,
+        source_path: Option<String>,
+    ) {
         self.approved_servers.insert(
             server_name.to_string(),
             McpApprovalEntry {
                 name: server_name.to_string(),
                 fingerprint,
+                source_path,
             },
         );
         self.denied_servers.remove(server_name);
@@ -625,10 +709,27 @@ impl McpApprovalManager {
     ///   load time by [`Self::load_user_domain`]).
     /// - A bound record consulted without a fingerprint does NOT match
     ///   (fail-closed).
+    ///
+    /// Source-path agnostic: consult [`Self::is_identity_approved_with_source`]
+    /// when the caller knows the config provenance.
     pub fn is_identity_approved(&self, server_name: &str, fingerprint: Option<&str>) -> bool {
+        self.is_identity_approved_with_source(server_name, fingerprint, None)
+    }
+
+    /// [`Self::is_identity_approved`] plus the T11 config-provenance binding.
+    ///
+    /// A stored record bound to a source path additionally requires the
+    /// request to carry the SAME source path; when either side has none, the
+    /// check reduces to the fingerprint/name behavior above.
+    pub fn is_identity_approved_with_source(
+        &self,
+        server_name: &str,
+        fingerprint: Option<&str>,
+        source_path: Option<&str>,
+    ) -> bool {
         self.approved_servers
             .get(server_name)
-            .is_some_and(|entry| entry.matches(fingerprint))
+            .is_some_and(|entry| entry.matches(fingerprint, source_path))
     }
 
     /// Check whether a server is denied.
@@ -1332,6 +1433,169 @@ mod tests {
         assert!(!is_project_scoped(
             &std::env::temp_dir().join("elsewhere/approvals.json")
         ));
+    }
+
+    // ---------------------------------------------------------------------------
+    // Source-path binding (T11)
+    // ---------------------------------------------------------------------------
+
+    /// T11: a record bound to a config source admits only the same command
+    /// identity FROM THE SAME source. A request carrying a different source
+    /// path must re-trigger approval even with an identical fingerprint.
+    #[test]
+    fn test_source_bound_approval_matches_only_its_source() {
+        let mut mgr = make_manager();
+        let fp = mcp_server_fingerprint("srv", "uvx", &["server".to_string()]);
+        mgr.approve_server_identity_with_source(
+            "srv",
+            Some(fp.clone()),
+            Some("/repo/.mcp.json".to_string()),
+        );
+
+        // Same identity + same source → approved.
+        assert!(mgr.is_identity_approved_with_source("srv", Some(&fp), Some("/repo/.mcp.json")));
+        // Same identity, different source file → NOT approved (the gap T11
+        // closes: the approval decided for one source must not be inherited
+        // by another).
+        assert!(!mgr.is_identity_approved_with_source(
+            "srv",
+            Some(&fp),
+            Some("/home/u/.claude/settings.json")
+        ));
+
+        // End-to-end through the policy, same-fingerprint/different-source:
+        // bind a network-transport identity (auto-approve-proof, same trick
+        // as test_changed_command_retriggers_policy) to one source, then ask
+        // again from another source — the policy must demand a fresh
+        // decision instead of short-circuiting.
+        let net_fp = mcp_server_fingerprint("net", "https://example.com/mcp", &[]);
+        mgr.approve_server_identity_with_source(
+            "net",
+            Some(net_fp.clone()),
+            Some("/repo/.mcp.json".to_string()),
+        );
+        let request = McpServerApprovalRequest::with_url(
+            "net",
+            McpTransportType::StreamableHttp,
+            "https://example.com/mcp",
+        )
+        .with_fingerprint("https://example.com/mcp", &[])
+        .with_source_path("/home/u/.claude/settings.json");
+        match mgr.request_approval(request).unwrap() {
+            ApprovalDecision::ApproveWithRestrictions { .. } => {}
+            other => panic!("different source must re-trigger approval: {other:?}"),
+        }
+
+        // …while the exact bound (identity, source) pair short-circuits.
+        let same = McpServerApprovalRequest::with_url(
+            "net",
+            McpTransportType::StreamableHttp,
+            "https://example.com/mcp",
+        )
+        .with_fingerprint("https://example.com/mcp", &[])
+        .with_source_path("/repo/.mcp.json");
+        assert_eq!(
+            mgr.request_approval(same).unwrap(),
+            ApprovalDecision::Approve
+        );
+    }
+
+    /// T11: the binding is ADDITIVE only. A record with a source consulted
+    /// by a request without one falls back to fingerprint-only matching, so
+    /// pre-T11 callers (which never attach a source) keep working unchanged.
+    #[test]
+    fn test_request_without_source_falls_back_to_fingerprint_behavior() {
+        let mut mgr = make_manager();
+        let fp = mcp_server_fingerprint("srv", "uvx", &["server".to_string()]);
+        mgr.approve_server_identity_with_source(
+            "srv",
+            Some(fp.clone()),
+            Some("/repo/.mcp.json".to_string()),
+        );
+
+        // No source on the request + matching fingerprint → approved.
+        assert!(mgr.is_identity_approved_with_source("srv", Some(&fp), None));
+        let request = McpServerApprovalRequest::new("srv", McpTransportType::Stdio)
+            .with_fingerprint("uvx", &["server".to_string()]);
+        assert_eq!(
+            mgr.request_approval(request).unwrap(),
+            ApprovalDecision::Approve
+        );
+        // …and a bound record without a fingerprint still fails closed.
+        assert!(!mgr.is_identity_approved_with_source("srv", None, None));
+    }
+
+    /// T11: the inverse direction — an entry without a source bound (legacy
+    /// record or `approve_server_identity`) is unaffected by a request that
+    /// carries one; only the fingerprint decides.
+    #[test]
+    fn test_entry_without_source_ignores_request_source() {
+        let mut mgr = make_manager();
+        let fp = mcp_server_fingerprint("srv", "uvx", &["server".to_string()]);
+        mgr.approve_server_identity("srv", Some(fp.clone()));
+
+        assert!(mgr.is_identity_approved_with_source("srv", Some(&fp), Some("/any/file.json")));
+        let request = McpServerApprovalRequest::new("srv", McpTransportType::Stdio)
+            .with_fingerprint("uvx", &["server".to_string()])
+            .with_source_path("/any/file.json");
+        assert_eq!(
+            mgr.request_approval(request).unwrap(),
+            ApprovalDecision::Approve
+        );
+    }
+
+    /// T11: provenance persists through the user-domain store and old files
+    /// (entries without a source_path key) still load.
+    #[test]
+    fn test_source_binding_roundtrips_through_file() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("mcp_approvals.json");
+        let fp = mcp_server_fingerprint("srv", "uvx", &["server".to_string()]);
+        let mut mgr = make_manager();
+        mgr.approve_server_identity_with_source(
+            "srv",
+            Some(fp.clone()),
+            Some("/repo/.mcp.json".to_string()),
+        );
+        mgr.save_to_file(&path).unwrap();
+
+        let mut reloaded = make_manager();
+        reloaded.load_from_file(&path).unwrap();
+        assert!(reloaded.is_identity_approved_with_source(
+            "srv",
+            Some(&fp),
+            Some("/repo/.mcp.json")
+        ));
+        assert!(!reloaded.is_identity_approved_with_source("srv", Some(&fp), Some("/other.json")));
+
+        // Pre-T11 file (no source_path key): loads, matches by fingerprint.
+        let legacy_path = dir.path().join("legacy.json");
+        std::fs::write(
+            &legacy_path,
+            format!(r#"{{"approved": [{{"name": "old", "fingerprint": "{fp}"}}], "denied": []}}"#),
+        )
+        .unwrap();
+        let mut legacy_mgr = make_manager();
+        legacy_mgr.load_from_file(&legacy_path).unwrap();
+        assert!(legacy_mgr.is_identity_approved_with_source("old", Some(&fp), None));
+    }
+
+    /// T11: the builder attaches the field and serde keeps it; requests
+    /// without one serialize exactly as before (field omitted).
+    #[test]
+    fn test_request_source_path_builder_and_serde() {
+        let req = McpServerApprovalRequest::new("srv", McpTransportType::Stdio);
+        assert!(req.source_path.is_none());
+        let json = serde_json::to_string(&req).unwrap();
+        assert!(!json.contains("source_path"));
+
+        let bound = McpServerApprovalRequest::new("srv", McpTransportType::Stdio)
+            .with_source_path("/repo/.mcp.json");
+        assert_eq!(bound.source_path.as_deref(), Some("/repo/.mcp.json"));
+        let json = serde_json::to_string(&bound).unwrap();
+        assert!(json.contains("source_path"));
+        let parsed: McpServerApprovalRequest = serde_json::from_str(&json).unwrap();
+        assert_eq!(parsed.source_path.as_deref(), Some("/repo/.mcp.json"));
     }
 
     // ---------------------------------------------------------------------------

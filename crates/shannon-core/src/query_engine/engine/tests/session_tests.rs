@@ -403,6 +403,89 @@ fn synthetic_reminder_pins_match_producer_prompts() {
     assert!(is_turn_opener(&prompt));
 }
 
+/// T15b: the runtime `user_notices` messages (denial soft-limit warning and
+/// auto-test outcomes) travel as user-role TEXT with variable content, but
+/// each producer's text is pinned here against `agent_loop.rs` /
+/// `auto_test.rs`. If a producer rewording breaks one of these pins, /rewind
+/// would treat the notice as a turn opener again — fix the pin AND the
+/// producer together.
+#[test]
+fn synthetic_reminder_pins_cover_runtime_user_notices() {
+    use crate::auto_test::TestOutcome;
+
+    // Denial soft-limit warning (agent_loop.rs): fixed sentence around the
+    // variable denial count.
+    assert!(is_synthetic_reminder(
+        "The user has denied 2 consecutive tool calls. Stop retrying the same or \
+         similar operations. Ask the user for clarification or try a completely \
+         different approach."
+    ));
+
+    // Auto-test outcomes (auto_test::TestOutcome::describe) — every variant.
+    assert!(is_synthetic_reminder("All tests passed."));
+    assert!(is_synthetic_reminder(
+        &TestOutcome::Failed {
+            summary: "test result: FAILED. 3 passed; 1 failed".to_string(),
+        }
+        .describe()
+    ));
+    assert!(is_synthetic_reminder(&TestOutcome::TimedOut.describe()));
+    assert!(is_synthetic_reminder(
+        &TestOutcome::SpawnError("cargo: not found".to_string()).describe()
+    ));
+
+    // Joined batches drain as ONE message (join("\n\n")): a batch is
+    // recognized through its FIRST notice, including when that notice is an
+    // exact-match one.
+    assert!(is_synthetic_reminder(
+        "All tests passed.\n\nThe user has denied 3 consecutive tool calls. \
+         Stop retrying the same or similar operations. Ask the user for \
+         clarification or try a completely different approach."
+    ));
+    assert!(is_synthetic_reminder(
+        "The user has denied 1 consecutive tool calls. Stop retrying the same or \
+         similar operations. Ask the user for clarification or try a completely \
+         different approach.\n\nAll tests passed."
+    ));
+
+    // A real prompt is never mistaken for a notice.
+    assert!(!is_synthetic_reminder(
+        "All tests passed; now summarize what changed"
+    ));
+    assert!(!is_synthetic_reminder("Run the test suite"));
+}
+
+/// T15b end-to-end: a drained user notice between turns must not open a
+/// rewind turn — rewinding past it removes the whole exchange including the
+/// notice, exactly like the other synthetic reminders.
+#[test]
+fn rewind_conversation_ignores_user_notices_as_turn_openers() {
+    let mut engine = create_test_engine();
+    engine.add_user_message("Fix the failing test".to_string());
+    engine.add_assistant_message(vec![shannon_engine::api::ContentBlock::Text {
+        text: "Working on it".to_string(),
+    }]);
+    // Auto-test failure notice: drained as a user-role TEXT message after
+    // the tool results (agent_loop.rs user_notices).
+    engine.conversation.messages.push(Message {
+        role: "user".to_string(),
+        content: MessageContent::Text(
+            "Tests failed:\n```\ntest result: FAILED. 0 passed; 1 failed\n```".to_string(),
+        ),
+    });
+    engine.add_assistant_message(vec![shannon_engine::api::ContentBlock::Text {
+        text: "Fixed it".to_string(),
+    }]);
+    assert_eq!(engine.conversation.messages.len(), 4);
+
+    // The notice must not count as a turn opener: rewinding 1 turn removes
+    // the whole exchange (prompt, answer, notice, answer).
+    let removed = engine.rewind_conversation(1);
+    assert_eq!(removed, 4);
+    assert!(engine.conversation.messages.is_empty());
+    assert_eq!(engine.conversation_turn_count(), 0);
+}
+
 #[test]
 fn rewind_never_leaves_a_dangling_assistant_tool_use() {
     // Interrupted turn: user A → assistant tool_use (never answered), then a
