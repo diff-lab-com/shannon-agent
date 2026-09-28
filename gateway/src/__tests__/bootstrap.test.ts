@@ -1,4 +1,4 @@
-import { mkdtempSync, rmSync } from "node:fs";
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -324,7 +324,10 @@ describe("bootstrap", () => {
       factories: new Map([["slack", () => adapter]]),
       engineClientFactory: () => client,
       logger: noopLogger,
-      // Use the production AllowlistGuard with empty state — no one paired yet.
+      // Production AllowlistGuard, in-memory + empty — no one paired yet.
+      // (allowlistPath: null keeps the test hermetic; the default would read
+      // the developer's real ~/.shannon/gateway/allowlist.json.)
+      allowlistPath: null,
     });
     adapter.pushInbound({
       platform: "slack",
@@ -350,6 +353,7 @@ describe("bootstrap", () => {
       factories: new Map([["slack", () => adapter]]),
       engineClientFactory: () => client,
       logger: noopLogger,
+      allowlistPath: null, // hermetic: in-memory, empty
     });
     adapter.pushInbound({
       platform: "slack",
@@ -364,6 +368,161 @@ describe("bootstrap", () => {
     // No engine call; sender gets the deny hint.
     expect(adapter.sent.find((s) => s.text.includes("answer"))).toBeUndefined();
     expect(adapter.sent[0]?.text).toMatch(/not paired|DM/i);
+    await handle.stop();
+  });
+
+  // ── review F42: the pairing loop must have a working approval path ──────
+
+  it("challenge → `approve <code>` from a paired sender → requester allowlisted (F42)", async () => {
+    // Pre-seed the persisted allowlist with one admin — also proves the file
+    // is LOADED on start.
+    const dir = mkdtempSync(join(tmpdir(), "gw-access-"));
+    const allowlistPath = join(dir, "allowlist.json");
+    writeFileSync(
+      allowlistPath,
+      JSON.stringify({
+        entries: [{ platform: "slack", senderId: "admin", addedAt: 1 }],
+      }),
+    );
+
+    const adapter = mockAdapter();
+    const client = mockEngineClient([
+      { type: "text", content: "hello stranger" },
+      { type: "completed", model: "mock" },
+    ]);
+    const handle = await bootstrap(baseConfig, {
+      factories: new Map([["slack", () => adapter]]),
+      engineClientFactory: () => client,
+      logger: noopLogger,
+      allowlistPath,
+    });
+
+    const dm = (senderId: string, text: string): void =>
+      adapter.pushInbound({
+        platform: "slack",
+        chatId: "C1",
+        senderId,
+        senderName: senderId,
+        text,
+        timestamp: Date.now(),
+        isDirect: true,
+      });
+
+    // 1) Stranger DMs → pairing challenge naming the code + real channels.
+    dm("stranger", "let me in");
+    await vi.waitFor(() => expect(adapter.sent.length).toBeGreaterThan(0));
+    const challenge = adapter.sent[0]?.text ?? "";
+    expect(challenge).toMatch(/Pairing required/);
+    expect(challenge).toMatch(/approve \d{6}/);
+    expect(challenge).toContain(allowlistPath);
+    const code = challenge.match(/approve (\d{6})/)?.[1];
+    expect(code).toBeDefined();
+
+    // 2) The paired admin replies `approve <code>` — intercepted before the
+    // trigger gate, never reaches the engine.
+    dm("admin", `approve ${code}`);
+    await vi.waitFor(() => expect(adapter.sent.length).toBeGreaterThan(1));
+    expect(adapter.sent[1]?.text).toMatch(/Paired/);
+
+    // 3) Approval persisted to the allowlist file.
+    const persisted = JSON.parse(readFileSync(allowlistPath, "utf8")) as {
+      entries: Array<{ platform: string; senderId: string }>;
+    };
+    expect(persisted.entries).toContainEqual({
+      platform: "slack",
+      senderId: "stranger",
+      addedAt: expect.any(Number),
+    });
+
+    // 4) The stranger can now drive the agent.
+    dm("stranger", "hi again");
+    await vi.waitFor(() =>
+      expect(adapter.sent.some((s) => s.text === "hello stranger")).toBe(true),
+    );
+
+    await handle.stop();
+    rmSync(dir, { recursive: true, force: true });
+  });
+
+  it("rejects `approve <code>` from an unpaired sender (F42, no self-approval)", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "gw-access-"));
+    const allowlistPath = join(dir, "allowlist.json");
+    const adapter = mockAdapter();
+    const handle = await bootstrap(baseConfig, {
+      factories: new Map([["slack", () => adapter]]),
+      engineClientFactory: () => mockEngineClient([]),
+      logger: noopLogger,
+      allowlistPath,
+    });
+    adapter.pushInbound({
+      platform: "slack",
+      chatId: "C1",
+      senderId: "stranger",
+      senderName: "Stranger",
+      text: "approve 123456",
+      timestamp: Date.now(),
+      isDirect: true,
+    });
+    await vi.waitFor(() => expect(adapter.sent.length).toBeGreaterThan(0));
+    // Not allowlisted → their "approve" is just another unpaired message: they
+    // get a fresh challenge, never an approval.
+    expect(adapter.sent[0]?.text).toMatch(/Pairing required/);
+    expect(adapter.sent[0]?.text).not.toContain("123456");
+    await handle.stop();
+    rmSync(dir, { recursive: true, force: true });
+  });
+
+  // ── review F40: a failed turn must not crash or wedge the gateway ───────
+
+  it("contains a failed turn and keeps serving later turns (F40)", async () => {
+    const adapter = mockAdapter();
+    let calls = 0;
+    const failingHandler = {
+      async handle(): Promise<void> {
+        calls += 1;
+        if (calls === 1) throw new Error("engine socket closed mid-stream");
+      },
+    };
+    const handle = await bootstrap(baseConfig, {
+      factories: new Map([["slack", () => adapter]]),
+      engineClientFactory: () => mockEngineClient([]),
+      turnHandler: failingHandler,
+      accessGuard: alwaysAllowGuard,
+      logger: noopLogger,
+    });
+
+    // Fail the FIRST turn via an unhandled-rejection tripwire: before the fix
+    // this rejection escaped `void router.handleInbound(...)` and crashed the
+    // process.
+    const rejections: unknown[] = [];
+    const onRejection = (reason: unknown): void => {
+      rejections.push(reason);
+    };
+    process.on("unhandledRejection", onRejection);
+    try {
+      const dm = (text: string): void =>
+        adapter.pushInbound({
+          platform: "slack",
+          chatId: "C1",
+          senderId: "U1",
+          senderName: "ed",
+          text,
+          timestamp: Date.now(),
+          isDirect: true,
+        });
+
+      dm("first");
+      await new Promise((r) => setTimeout(r, 30)); // let the rejection surface if it will
+      dm("second");
+      await vi.waitFor(() => expect(calls).toBe(2));
+
+      expect(rejections).toEqual([]);
+      // Both turns ran on the same lane — the failed one didn't wedge it and
+      // the process kept serving (calls === 2 is the whole point).
+      expect(calls).toBe(2);
+    } finally {
+      process.off("unhandledRejection", onRejection);
+    }
     await handle.stop();
   });
 });

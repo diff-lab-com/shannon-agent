@@ -81,8 +81,13 @@ function parseEngineEvent(raw: unknown): EngineEvent | null {
   return raw as EngineEvent;
 }
 
-/** Decode a `ws` RawData payload to parsed JSON. Returns null if unrecognized. */
-function parseFrame(data: RawData): unknown {
+/**
+ * Decode a `ws` RawData payload to parsed JSON. Returns null if unrecognized
+ * OR not valid JSON (review F44: a malformed frame must be dropped, never
+ * thrown — parseFrame runs inside the socket's "message" EventEmitter
+ * callback, where a throw would crash the whole gateway process).
+ */
+export function parseFrame(data: RawData): unknown {
   let text: string;
   if (typeof data === "string") {
     text = data;
@@ -98,7 +103,11 @@ function parseFrame(data: RawData): unknown {
   } else {
     return null;
   }
-  return JSON.parse(text);
+  try {
+    return JSON.parse(text);
+  } catch {
+    return null;
+  }
 }
 
 /** Leading major component of a semver-ish string (`"0.8.0"` → `0`). */
@@ -112,6 +121,8 @@ export class EngineWsClient {
   private activeQueue: PushQueue<EngineEvent> | null = null;
   private engineProtocolVersion: string | null = null;
   private versionObserved = false;
+  // review F44: malformed-frame accounting for the rate-limited warn below.
+  private malformedFrames = 0;
   private readonly url: string;
   private readonly defaultModel: string | null;
   private readonly defaultSessionId: string | null;
@@ -239,7 +250,14 @@ export class EngineWsClient {
   // ── frame routing ──────────────────────────────────────────────────
 
   private onMessage(data: RawData): void {
-    const parsed = parseEngineEvent(parseFrame(data));
+    const decoded = parseFrame(data);
+    if (decoded === null) {
+      // review F44: not decodable JSON — count + drop (rate-limited log) so a
+      // pathological/binary frame can neither crash the process nor spam it.
+      this.noteMalformedFrame();
+      return;
+    }
+    const parsed = parseEngineEvent(decoded);
     if (!parsed) return; // unknown / malformed — ignore for now
     // review §P2-24: the greeting (unsolicited `session_info`) used to be
     // dropped here because no query consumer is active yet. Consume its
@@ -282,6 +300,20 @@ export class EngineWsClient {
       console.warn(
         `[engine-ws] engine protocol major version mismatch: engine ${version} vs gateway ${PROTOCOL_VERSION}; continuing, wire compatibility is not guaranteed`,
       );
+    }
+  }
+
+  /**
+   * review F44: log undecodable frames sparingly — the first few (a real
+   * protocol mismatch needs visibility), then one line per hundred so a
+   * garbage-spewing peer can't flood the log. The frame payload is never
+   * logged (it can carry conversation content).
+   */
+  private noteMalformedFrame(): void {
+    this.malformedFrames += 1;
+    const n = this.malformedFrames;
+    if (n <= 5 || n % 100 === 0) {
+      console.warn(`[engine-ws] dropped malformed frame #${n} (not valid JSON)`);
     }
   }
 

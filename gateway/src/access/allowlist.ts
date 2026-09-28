@@ -4,7 +4,8 @@ import {
   renameSync,
   writeFileSync,
 } from "node:fs";
-import { dirname } from "node:path";
+import { homedir } from "node:os";
+import { dirname, join } from "node:path";
 
 import { type Platform } from "../adapters/types.js";
 
@@ -18,6 +19,24 @@ import { type Platform } from "../adapters/types.js";
  * The store is the gateway's source of truth; nothing reads credentials here
  * (those live in the OS keyring — see AdapterContext.getSecret).
  */
+
+/** Default persistence path (review F42): `~/.shannon/gateway/allowlist.json`. */
+export function defaultAllowlistPath(): string {
+  return join(homedir(), ".shannon", "gateway", "allowlist.json");
+}
+
+/**
+ * Resolve the allowlist file path (review F42): explicit argument (pass
+ * `null` to force the in-memory store, i.e. tests) >
+ * `$SHANNON_GATEWAY_ALLOWLIST` > `~/.shannon/gateway/allowlist.json`.
+ */
+export function resolveAllowlistPath(explicit?: string | null): string | undefined {
+  if (explicit === null) return undefined;
+  if (explicit !== undefined) return explicit;
+  const fromEnv = process.env.SHANNON_GATEWAY_ALLOWLIST;
+  if (fromEnv) return fromEnv;
+  return defaultAllowlistPath();
+}
 
 export interface AllowlistEntry {
   platform: Platform;
@@ -55,6 +74,11 @@ export class Allowlist {
 
   get size(): number {
     return this.entries.size;
+  }
+
+  /** Persistence path, or undefined for the in-memory (tests) store. */
+  get file(): string | undefined {
+    return this.filePath;
   }
 
   list(): AllowlistEntry[] {

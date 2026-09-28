@@ -2,7 +2,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import net from "node:net";
 import { type AddressInfo, WebSocketServer, type WebSocket } from "ws";
 
-import { EngineWsClient } from "../wsClient.js";
+import { EngineWsClient, parseFrame } from "../wsClient.js";
 import { type EngineEvent } from "../runtime.js";
 import { PROTOCOL_VERSION } from "../types.gen.js";
 
@@ -189,6 +189,51 @@ describe("EngineWsClient", () => {
     });
     const client = new EngineWsClient({ url: server.url });
     await expect(client.connect()).resolves.toBeUndefined();
+    await client.close();
+  });
+});
+
+// ── review F44: malformed frames must be dropped, never thrown ───────────
+
+describe("parseFrame (review F44)", () => {
+  it("returns null for non-JSON text instead of throwing", () => {
+    const garbage = Buffer.from("not json", "utf8");
+    expect(() => parseFrame(garbage)).not.toThrow();
+    expect(parseFrame(garbage)).toBeNull();
+  });
+
+  it("returns null for binary garbage and empty payloads", () => {
+    expect(parseFrame(Buffer.from([0xff, 0xfe, 0x00, 0x01]))).toBeNull();
+    expect(parseFrame(Buffer.from("", "utf8"))).toBeNull();
+    expect(parseFrame(Buffer.from("{\"type\": trunc", "utf8"))).toBeNull();
+  });
+
+  it("still parses valid JSON in all raw-data shapes", () => {
+    expect(parseFrame(Buffer.from('{"type":"text","content":"hi"}', "utf8"))).toEqual({
+      type: "text",
+      content: "hi",
+    });
+    expect(parseFrame(Buffer.from('{"type":"completed"}', "utf8"))).toEqual({
+      type: "completed",
+    });
+  });
+
+  it("keeps the connection usable after a malformed frame mid-query", async () => {
+    vi.spyOn(console, "warn").mockImplementation(() => {});
+    const server = await startMockServer((ws) => {
+      onQuery(ws, () => {
+        ws.send("<<binary garbage not json>>");
+        send(ws, { type: "text", content: "still alive" });
+        send(ws, { type: "completed", model: "gpt-test" });
+      });
+    });
+
+    const client = new EngineWsClient({ url: server.url });
+    await client.connect();
+    const types: string[] = [];
+    for await (const ev of client.runQuery("hi")) types.push(ev.type);
+
+    expect(types).toEqual(["text", "completed"]);
     await client.close();
   });
 });

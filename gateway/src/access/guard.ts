@@ -4,8 +4,8 @@ import {
   type NormalizedInbound,
   type ReplyTarget,
 } from "../adapters/types.js";
-import { Allowlist } from "./allowlist.js";
-import { PairingStore } from "./pairing.js";
+import { Allowlist, defaultAllowlistPath } from "./allowlist.js";
+import { type PairingRecord, PairingStore } from "./pairing.js";
 
 /**
  * Access-control decision for one inbound (F14). The host acts on the outcome
@@ -21,11 +21,27 @@ export interface InboundGuard {
 }
 
 /**
+ * The pairing-challenge copy shown to an unpaired DM sender (review F42).
+ * States the approval channels that ACTUALLY exist: a paired sender replying
+ * `approve <code>` in any chat, or the gateway owner adding the entry to the
+ * persisted allowlist file. Single source of truth so the bootstrap wiring
+ * and `createGuardedInbound` never drift.
+ */
+export function pairingChallengeMessage(code: string, allowlistFile?: string): string {
+  const file = allowlistFile ?? defaultAllowlistPath();
+  return (
+    `Pairing required — an already-paired user must reply "approve ${code}" ` +
+    `to this bot (any chat), or the gateway owner must add your id to ` +
+    `${file}. (expires in 5 min)`
+  );
+}
+
+/**
  * Pairing-based guard.
  *
  * - allowlisted sender → allow
- * - unallowlisted DM (isDirect) → challenge (issue a pairing code; the desktop
- *   app lists pending pairings and the user approves → Allowlist.write)
+ * - unallowlisted DM (isDirect) → challenge (issue a pairing code; a paired
+ *   sender approves it with `approve <code>` → Allowlist.allow, persisted)
  * - unallowlisted group mention → deny ("DM the bot to pair first")
  *
  * Groups never trigger a challenge: pairing only happens in a private context,
@@ -54,6 +70,46 @@ export class AllowlistGuard implements InboundGuard {
       decision: "deny",
       reason: "You're not paired with this agent yet — send it a direct message to pair.",
     };
+  }
+
+  /**
+   * Review F42: handle an `approve <code>` command from an already-allowed
+   * sender — consume the pending code, allowlist (and thereby persist) the
+   * requester. Self-approval is rejected: the sender who was challenged can
+   * never approve their own code. Never throws; the outcome becomes the
+   * channel reply.
+   */
+  approve(
+    inbound: NormalizedInbound,
+    code: string,
+  ): { ok: true; record: PairingRecord } | { ok: false; reason: string } {
+    if (!this.allowlist.isAllowed(inbound.platform, inbound.senderId)) {
+      return {
+        ok: false,
+        reason: "Only an already-paired sender can approve a pairing.",
+      };
+    }
+    const pending = this.pairing.peek(code);
+    if (!pending) {
+      return {
+        ok: false,
+        reason:
+          `Unknown or expired pairing code ${code} — ask the requester to DM ` +
+          "the bot again for a fresh one.",
+      };
+    }
+    if (pending.platform === inbound.platform && pending.senderId === inbound.senderId) {
+      return {
+        ok: false,
+        reason: "Pairing cannot be self-approved — a different paired sender must approve it.",
+      };
+    }
+    const consumed = this.pairing.consume(code);
+    if (!consumed) {
+      return { ok: false, reason: `Pairing code ${code} just expired — request a fresh one.` };
+    }
+    this.allowlist.allow(consumed.platform, consumed.senderId);
+    return { ok: true, record: consumed };
   }
 }
 
@@ -86,10 +142,7 @@ export function createGuardedInbound(opts: {
     };
     if (decision.decision === "challenge") {
       logger.info(`pairing challenge issued for ${inbound.platform}:${inbound.senderId}`);
-      await adapter.send(
-        replyTarget,
-        `Pairing required — approve code ${decision.code} in the Shannon desktop app. (expires in 5 min)`,
-      );
+      await adapter.send(replyTarget, pairingChallengeMessage(decision.code));
       return;
     }
     logger.info(`denied inbound from ${inbound.platform}:${inbound.senderId} (not paired, group)`);
