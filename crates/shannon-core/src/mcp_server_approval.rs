@@ -15,8 +15,91 @@
 //! - [`RiskAssessment`]: Risk evaluation for an MCP server
 
 use serde::{Deserialize, Serialize};
-use std::collections::HashSet;
+use sha2::{Digest, Sha256};
+use std::collections::{HashMap, HashSet};
 use thiserror::Error;
+
+// ============================================================================
+// Approval Identity Binding (review F6)
+// ============================================================================
+
+/// Compute the identity fingerprint that binds an approval record to the
+/// exact server definition the user approved.
+///
+/// Input is `(server_name, command_or_url, args)` joined with NUL separators
+/// (no field can bleed across a boundary), hashed with SHA-256 and
+/// hex-encoded. Re-pointing a server at a different command, changing its
+/// arguments, or swapping its URL therefore invalidates the stored approval
+/// and re-triggers the approval policy on the next startup.
+///
+/// Note: the config registry (`mcp_advanced::McpServerRegistry`) does not
+/// track which file a server was loaded from, so the source path cannot
+/// participate in the binding yet — the command/args hash is the load-bearing
+/// half (a renamed command is exactly the re-approval trigger F6 asks for).
+pub fn mcp_server_fingerprint(server_name: &str, command_or_url: &str, args: &[String]) -> String {
+    let mut hasher = Sha256::new();
+    hasher.update(server_name.as_bytes());
+    hasher.update([0u8]);
+    hasher.update(command_or_url.as_bytes());
+    hasher.update([0u8]);
+    for arg in args {
+        hasher.update(arg.as_bytes());
+        hasher.update([0u8]);
+    }
+    hex::encode(hasher.finalize())
+}
+
+/// One persisted approval record, bound to the server identity.
+///
+/// Legacy (pre-F6) files store plain name strings; those load as entries with
+/// `fingerprint: None` and keep matching by name alone — they can only ever
+/// originate from the user domain, because project-local approval files are
+/// refused at load time (see [`McpApprovalManager::load_user_domain`]).
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct McpApprovalEntry {
+    /// Server name this record applies to.
+    pub name: String,
+    /// [`mcp_server_fingerprint`] of the approved identity. `None` marks a
+    /// legacy name-only record.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub fingerprint: Option<String>,
+}
+
+impl McpApprovalEntry {
+    /// Whether this record admits the given identity fingerprint.
+    ///
+    /// Bound records match only their recorded fingerprint. Legacy records
+    /// match by name (with a deprecation warning logged at load time). A
+    /// bound record consulted without a fingerprint is fail-closed: no match.
+    fn matches(&self, fingerprint: Option<&str>) -> bool {
+        match (&self.fingerprint, fingerprint) {
+            (Some(stored), Some(current)) => stored == current,
+            (None, _) => true,
+            (Some(_), None) => false,
+        }
+    }
+}
+
+/// File-format wrapper accepting both the legacy `["name", …]` entry lists
+/// and the F6 `[{"name": …, "fingerprint": …}, …]` objects.
+#[derive(Debug, Serialize, Deserialize)]
+#[serde(untagged)]
+enum ApprovalEntryRepr {
+    Entry(McpApprovalEntry),
+    Legacy(String),
+}
+
+impl From<ApprovalEntryRepr> for Option<McpApprovalEntry> {
+    fn from(repr: ApprovalEntryRepr) -> Self {
+        match repr {
+            ApprovalEntryRepr::Entry(entry) => Some(entry),
+            ApprovalEntryRepr::Legacy(name) => Some(McpApprovalEntry {
+                name,
+                fingerprint: None,
+            }),
+        }
+    }
+}
 
 // ============================================================================
 // Error Types
@@ -148,6 +231,12 @@ pub struct McpServerApprovalRequest {
     pub capabilities: Vec<String>,
     /// Permissions requested by the server.
     pub requested_permissions: Vec<String>,
+    /// Identity binding ([`mcp_server_fingerprint`]) of the server definition
+    /// behind this request. `None` keeps legacy behavior for callers that
+    /// have no command/URL identity (requests then cannot match bound
+    /// approval records — fail-closed).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub command_fingerprint: Option<String>,
     /// Pre-computed risk assessment.
     pub risk_assessment: RiskAssessment,
 }
@@ -161,6 +250,7 @@ impl McpServerApprovalRequest {
             transport_type,
             capabilities: Vec::new(),
             requested_permissions: Vec::new(),
+            command_fingerprint: None,
             risk_assessment: RiskAssessment::default(),
         }
     }
@@ -173,8 +263,19 @@ impl McpServerApprovalRequest {
             transport_type,
             capabilities: Vec::new(),
             requested_permissions: Vec::new(),
+            command_fingerprint: None,
             risk_assessment: RiskAssessment::default(),
         }
+    }
+
+    /// Attach the identity fingerprint for `(name, command/URL, args)`.
+    pub fn with_fingerprint(mut self, command_or_url: &str, args: &[String]) -> Self {
+        self.command_fingerprint = Some(mcp_server_fingerprint(
+            &self.server_name,
+            command_or_url,
+            args,
+        ));
+        self
     }
 
     /// Check whether the server requests write permissions.
@@ -296,8 +397,10 @@ impl McpApprovalPolicy {
 pub struct McpApprovalManager {
     /// Policy used for auto-approval decisions.
     policy: McpApprovalPolicy,
-    /// Set of approved server names.
-    approved_servers: HashSet<String>,
+    /// Approved servers keyed by name. Each entry carries its identity
+    /// binding (F6): bound records only admit the exact approved command/URL
+    /// + args; legacy name-only records admit any identity of that name.
+    approved_servers: HashMap<String, McpApprovalEntry>,
     /// Set of denied server names.
     denied_servers: HashSet<String>,
     /// Pending approval requests awaiting user decision.
@@ -309,7 +412,7 @@ impl McpApprovalManager {
     pub fn new(policy: McpApprovalPolicy) -> Self {
         Self {
             policy,
-            approved_servers: HashSet::new(),
+            approved_servers: HashMap::new(),
             denied_servers: HashSet::new(),
             pending_approvals: Vec::new(),
         }
@@ -333,15 +436,16 @@ impl McpApprovalManager {
         &mut self,
         request: McpServerApprovalRequest,
     ) -> Result<ApprovalDecision, McpApprovalError> {
-        let name = &request.server_name;
+        let name = request.server_name.clone();
 
-        // Check already-approved
-        if self.is_approved(name) {
+        // Check already-approved (F6: identity-bound — a changed command or
+        // argument set no longer short-circuits the policy).
+        if self.is_identity_approved(&name, request.command_fingerprint.as_deref()) {
             return Ok(ApprovalDecision::Approve);
         }
 
         // Check already-denied
-        if self.is_denied(name) {
+        if self.is_denied(&name) {
             return Ok(ApprovalDecision::Deny);
         }
 
@@ -350,13 +454,25 @@ impl McpApprovalManager {
 
         // Check auto-approve based on policy
         if self.check_auto_approve(&request) {
-            self.approved_servers.insert(name.clone());
+            self.approved_servers.insert(
+                name.clone(),
+                McpApprovalEntry {
+                    name: name.clone(),
+                    fingerprint: request.command_fingerprint.clone(),
+                },
+            );
             return Ok(ApprovalDecision::Approve);
         }
 
         // If risk assessment says auto-approve and risk is low
         if risk.auto_approve && risk.level == McpRiskLevel::Low {
-            self.approved_servers.insert(name.clone());
+            self.approved_servers.insert(
+                name.clone(),
+                McpApprovalEntry {
+                    name: name.clone(),
+                    fingerprint: request.command_fingerprint.clone(),
+                },
+            );
             return Ok(ApprovalDecision::Approve);
         }
 
@@ -454,8 +570,27 @@ impl McpApprovalManager {
     ///
     /// Removes the server from the denied set (if present) and the pending
     /// queue, and adds it to the approved set.
+    ///
+    /// The record is stored WITHOUT an identity binding (legacy name-only
+    /// semantics). Prefer [`Self::approve_server_identity`] when the request
+    /// (and its fingerprint) is at hand, so a later command change re-triggers
+    /// approval.
     pub fn approve_server(&mut self, server_name: &str) {
-        self.approved_servers.insert(server_name.to_string());
+        self.approve_server_identity(server_name, None);
+    }
+
+    /// Explicitly approve a server together with its identity binding (F6).
+    ///
+    /// A `Some(fingerprint)` record only admits the exact approved server
+    /// definition; `None` keeps legacy name-only semantics.
+    pub fn approve_server_identity(&mut self, server_name: &str, fingerprint: Option<String>) {
+        self.approved_servers.insert(
+            server_name.to_string(),
+            McpApprovalEntry {
+                name: server_name.to_string(),
+                fingerprint,
+            },
+        );
         self.denied_servers.remove(server_name);
         self.pending_approvals
             .retain(|r| r.server_name != server_name);
@@ -473,8 +608,27 @@ impl McpApprovalManager {
     }
 
     /// Check whether a server is approved.
+    ///
+    /// Legacy name-only check: true when ANY approved record exists for the
+    /// name. Identity-aware callers (the approval policy, headless gating)
+    /// must use [`Self::is_identity_approved`] so a changed command re-triggers
+    /// approval.
     pub fn is_approved(&self, server_name: &str) -> bool {
-        self.approved_servers.contains(server_name)
+        self.approved_servers.contains_key(server_name)
+    }
+
+    /// Check whether the exact server identity is approved (F6).
+    ///
+    /// - A bound record matches only its recorded fingerprint.
+    /// - A legacy name-only record matches by name (it can only originate
+    ///   from the user domain — project-local approval files are refused at
+    ///   load time by [`Self::load_user_domain`]).
+    /// - A bound record consulted without a fingerprint does NOT match
+    ///   (fail-closed).
+    pub fn is_identity_approved(&self, server_name: &str, fingerprint: Option<&str>) -> bool {
+        self.approved_servers
+            .get(server_name)
+            .is_some_and(|entry| entry.matches(fingerprint))
     }
 
     /// Check whether a server is denied.
@@ -487,8 +641,8 @@ impl McpApprovalManager {
         &self.pending_approvals
     }
 
-    /// Get the set of approved server names.
-    pub fn approved_servers(&self) -> &HashSet<String> {
+    /// Get the set of approved server records, keyed by name.
+    pub fn approved_servers(&self) -> &HashMap<String, McpApprovalEntry> {
         &self.approved_servers
     }
 
@@ -514,22 +668,74 @@ impl McpApprovalManager {
         !request.requests_write_access() && !request.requests_network_access()
     }
 
+    /// Canonical user-domain approval state path (review F6).
+    ///
+    /// `$SHANNON_HOME/mcp_approvals.json` (i.e. `~/.shannon/mcp_approvals.json`
+    /// by default). Approvals are only honored from this store (or an explicit
+    /// `SHANNON_MCP_APPROVALS` override); approval files inside a repository /
+    /// project directory are refused by [`Self::load_user_domain`] — a
+    /// repo-supplied file must never be able to pre-seed "approved" servers.
+    pub fn default_state_path() -> std::path::PathBuf {
+        if let Ok(home) = crate::session_log::default_shannon_home() {
+            return home.join("mcp_approvals.json");
+        }
+        // No resolvable home directory (rare embedded/CI cases): keep a
+        // writable fallback so save/load still round-trips. load_user_domain
+        // refuses to LOAD it when it is project-scoped.
+        std::path::PathBuf::from(".shannon").join("mcp_approvals.json")
+    }
+
+    /// Load approval state from the user-domain store (review F6).
+    ///
+    /// Resolution order:
+    /// 1. `SHANNON_MCP_APPROVALS` env override (explicit; trusted wherever it
+    ///    points — this is how tests and multi-root setups relocate the store).
+    /// 2. [`Self::default_state_path`] (`~/.shannon/mcp_approvals.json`).
+    ///
+    /// When the override is absent and a project-local `.shannon/mcp_approvals.json`
+    /// exists, it is logged and IGNORED (trust-domain inversion: a repo must
+    /// not be able to ship pre-approved servers).
+    pub fn load_user_domain(&mut self) -> Result<(), std::io::Error> {
+        if let Ok(path) = std::env::var("SHANNON_MCP_APPROVALS") {
+            return self.load_from_file(std::path::Path::new(&path));
+        }
+        let cwd_file = std::path::Path::new(".shannon").join("mcp_approvals.json");
+        if cwd_file.exists() {
+            tracing::warn!(
+                "Ignoring project-local MCP approval file {} — approvals are only \
+                 honored from the user store {}; re-approve servers there if intended",
+                cwd_file.display(),
+                Self::default_state_path().display()
+            );
+        }
+        let path = Self::default_state_path();
+        if is_project_scoped(&path) {
+            tracing::warn!(
+                "Refusing to load MCP approvals from project-scoped path {}",
+                path.display()
+            );
+            return Ok(());
+        }
+        self.load_from_file(&path)
+    }
+
     /// Persist the current approval state to a file.
     ///
-    /// The file is written as JSON containing the approved and denied server
-    /// name sets. The path is caller-provided. Current callers (the REPL's
-    /// MCP extension command and plugin load) pass `.shannon/mcp_approvals.json`
-    /// resolved **against the process working directory** — so the state file
-    /// moves if Shannon is launched from another directory — unless the
-    /// `SHANNON_MCP_APPROVALS` env var overrides it (honored by
-    /// `repl/commands/extensions.rs`; see that file for the single source of
-    /// the default path).
+    /// Written as JSON: `{"approved": [{"name": …, "fingerprint": …}], "denied":
+    /// ["…"]}`. The path is caller-provided; startup readers only honor the
+    /// user-domain location (see [`Self::load_user_domain`]), so callers should
+    /// pass [`Self::default_state_path`] unless relocating explicitly.
     pub fn save_to_file(&self, path: &std::path::Path) -> Result<(), std::io::Error> {
         if let Some(parent) = path.parent() {
             std::fs::create_dir_all(parent)?;
         }
         let data = ApprovalStateFile {
-            approved: self.approved_servers.iter().cloned().collect(),
+            approved: self
+                .approved_servers
+                .values()
+                .cloned()
+                .map(ApprovalEntryRepr::Entry)
+                .collect(),
             denied: self.denied_servers.iter().cloned().collect(),
         };
         let json = serde_json::to_string_pretty(&data)?;
@@ -539,7 +745,8 @@ impl McpApprovalManager {
     /// Load approval state from a file previously written by `save_to_file`.
     ///
     /// Merges the file's state into the current manager. Returns `Ok(())` if
-    /// the file doesn't exist (no previously saved state).
+    /// the file doesn't exist (no previously saved state). Accepts both the
+    /// F6 object entry format and the legacy plain-string format.
     pub fn load_from_file(&mut self, path: &std::path::Path) -> Result<(), std::io::Error> {
         if !path.exists() {
             return Ok(());
@@ -547,8 +754,18 @@ impl McpApprovalManager {
         let content = std::fs::read_to_string(path)?;
         let data: ApprovalStateFile = serde_json::from_str(&content)
             .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e))?;
-        for name in data.approved {
-            self.approved_servers.insert(name);
+        for repr in data.approved {
+            if let Some(entry) = Option::<McpApprovalEntry>::from(repr) {
+                if entry.fingerprint.is_none() {
+                    tracing::warn!(
+                        "MCP approval for '{}' has no identity binding (legacy format); \
+                         it still matches by name but will not survive command changes — \
+                         re-approve to bind it",
+                        entry.name
+                    );
+                }
+                self.approved_servers.insert(entry.name.clone(), entry);
+            }
         }
         for name in data.denied {
             self.denied_servers.insert(name);
@@ -567,10 +784,34 @@ impl McpApprovalManager {
 }
 
 /// Serialization helper for persisting approval state.
+///
+/// `approved` entries may be either F6 objects (`{"name", "fingerprint"}`) or
+/// legacy plain strings; see [`ApprovalEntryRepr`].
 #[derive(Serialize, Deserialize)]
 struct ApprovalStateFile {
-    approved: Vec<String>,
+    #[serde(default)]
+    approved: Vec<ApprovalEntryRepr>,
+    #[serde(default)]
     denied: Vec<String>,
+}
+
+/// Whether `path` lives inside the current working directory (the project
+/// trust domain). Relative paths are project-scoped by definition; absolute
+/// paths are compared lexically, then canonically when both resolve.
+fn is_project_scoped(path: &std::path::Path) -> bool {
+    if path.is_relative() {
+        return true;
+    }
+    let Ok(cwd) = std::env::current_dir() else {
+        return false;
+    };
+    if path.starts_with(&cwd) {
+        return true;
+    }
+    match (path.canonicalize(), cwd.canonicalize()) {
+        (Ok(p), Ok(c)) => p.starts_with(c),
+        _ => false,
+    }
 }
 
 // ============================================================================
@@ -921,6 +1162,176 @@ mod tests {
         assert!(mgr.approved_servers().is_empty());
         assert!(mgr.denied_servers().is_empty());
         assert!(mgr.pending_requests().is_empty());
+    }
+
+    // ---------------------------------------------------------------------------
+    // Identity binding / user-domain store (review F6)
+    // ---------------------------------------------------------------------------
+
+    #[test]
+    fn test_fingerprint_is_stable_and_identity_sensitive() {
+        let base = mcp_server_fingerprint("srv", "uvx", &["mcp-server-x".to_string()]);
+        assert_eq!(
+            base,
+            mcp_server_fingerprint("srv", "uvx", &["mcp-server-x".to_string()])
+        );
+        // Any identity change (name, command, args) must change the hash —
+        // that is what re-triggers approval after a command rename.
+        assert_ne!(
+            base,
+            mcp_server_fingerprint("other", "uvx", &["mcp-server-x".to_string()])
+        );
+        assert_ne!(
+            base,
+            mcp_server_fingerprint("srv", "npx", &["mcp-server-x".to_string()])
+        );
+        assert_ne!(
+            base,
+            mcp_server_fingerprint("srv", "uvx", &["mcp-server-y".to_string()])
+        );
+        assert_ne!(
+            base,
+            mcp_server_fingerprint(
+                "srv",
+                "uvx",
+                &["mcp-server-x".to_string(), "extra".to_string()]
+            )
+        );
+    }
+
+    #[test]
+    fn test_bound_approval_matches_only_its_identity() {
+        let mut mgr = make_manager();
+        let fp = mcp_server_fingerprint("srv", "uvx", &["server".to_string()]);
+        mgr.approve_server_identity("srv", Some(fp.clone()));
+
+        // Same identity → approved; legacy name check also passes.
+        assert!(mgr.is_identity_approved("srv", Some(&fp)));
+        assert!(mgr.is_approved("srv"));
+        // Changed command → NOT approved (re-approval required).
+        let other = mcp_server_fingerprint("srv", "node", &["evil.js".to_string()]);
+        assert!(!mgr.is_identity_approved("srv", Some(&other)));
+        // Bound record without a fingerprint → fail-closed.
+        assert!(!mgr.is_identity_approved("srv", None));
+    }
+
+    #[test]
+    fn test_changed_command_retriggers_policy() {
+        let mut mgr = make_manager();
+        let fp = mcp_server_fingerprint("srv", "uvx", &["server".to_string()]);
+        mgr.approve_server_identity("srv", Some(fp));
+        // Same command as the bound identity short-circuits to Approve.
+        let same = McpServerApprovalRequest::new("srv", McpTransportType::Stdio)
+            .with_fingerprint("uvx", &["server".to_string()]);
+        assert_eq!(
+            mgr.request_approval(same).unwrap(),
+            ApprovalDecision::Approve
+        );
+        // A re-pointed command must NOT inherit the approval: with the default
+        // policy a read-only stdio server still auto-approves, so use a
+        // network request (requires user action) to observe the difference.
+        let changed = McpServerApprovalRequest::with_url(
+            "srv",
+            McpTransportType::StreamableHttp,
+            "https://evil.example/mcp",
+        )
+        .with_fingerprint("https://evil.example/mcp", &[]);
+        match mgr.request_approval(changed).unwrap() {
+            ApprovalDecision::ApproveWithRestrictions { .. } => {}
+            other => panic!("expected re-approval, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn test_save_roundtrip_preserves_binding() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("mcp_approvals.json");
+        let fp = mcp_server_fingerprint("srv", "uvx", &["server".to_string()]);
+        let mut mgr = make_manager();
+        mgr.approve_server_identity("srv", Some(fp.clone()));
+        mgr.deny_server("bad");
+        mgr.save_to_file(&path).unwrap();
+
+        let mut reloaded = make_manager();
+        reloaded.load_from_file(&path).unwrap();
+        assert!(reloaded.is_identity_approved("srv", Some(&fp)));
+        assert!(!reloaded.is_identity_approved("srv", None));
+        assert!(reloaded.is_denied("bad"));
+        // Serialized as objects carrying the fingerprint.
+        let json = std::fs::read_to_string(&path).unwrap();
+        assert!(json.contains("fingerprint"));
+    }
+
+    #[test]
+    fn test_load_legacy_plain_string_file_matches_by_name() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("mcp_approvals.json");
+        std::fs::write(
+            &path,
+            r#"{"approved": ["legacy-srv"], "denied": ["blocked-srv"]}"#,
+        )
+        .unwrap();
+
+        let mut mgr = make_manager();
+        mgr.load_from_file(&path).unwrap();
+        // Backward read compat: name-only records match by name…
+        assert!(mgr.is_approved("legacy-srv"));
+        assert!(mgr.is_denied("blocked-srv"));
+        // …including for requests without a fingerprint.
+        let decision = mgr
+            .request_approval(McpServerApprovalRequest::new(
+                "legacy-srv",
+                McpTransportType::Stdio,
+            ))
+            .unwrap();
+        assert_eq!(decision, ApprovalDecision::Approve);
+    }
+
+    #[test]
+    fn test_bound_record_does_not_admit_unbound_request() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("mcp_approvals.json");
+        let fp = mcp_server_fingerprint("srv", "uvx", &["server".to_string()]);
+        std::fs::write(
+            &path,
+            format!(r#"{{"approved": [{{"name": "srv", "fingerprint": "{fp}"}}], "denied": []}}"#),
+        )
+        .unwrap();
+        let mut mgr = make_manager();
+        mgr.load_from_file(&path).unwrap();
+        // A request without the matching fingerprint falls through to policy:
+        // a network request must land in the pending queue, not Approve.
+        let request = McpServerApprovalRequest::with_url(
+            "srv",
+            McpTransportType::StreamableHttp,
+            "https://example.com/mcp",
+        );
+        match mgr.request_approval(request).unwrap() {
+            ApprovalDecision::ApproveWithRestrictions { .. } => {}
+            other => panic!("bound record must not admit a different identity: {other:?}"),
+        }
+        // The exact bound identity is approved.
+        let request = McpServerApprovalRequest::new("srv", McpTransportType::Stdio)
+            .with_fingerprint("uvx", &["server".to_string()]);
+        assert_eq!(
+            mgr.request_approval(request).unwrap(),
+            ApprovalDecision::Approve
+        );
+    }
+
+    #[test]
+    fn test_project_scope_detection() {
+        // Relative paths are project-scoped by definition.
+        assert!(is_project_scoped(std::path::Path::new(
+            ".shannon/mcp_approvals.json"
+        )));
+        // Absolute path inside the CWD is project-scoped…
+        let cwd = std::env::current_dir().unwrap();
+        assert!(is_project_scoped(&cwd.join("sub").join("approvals.json")));
+        // …while an absolute path outside it is not.
+        assert!(!is_project_scoped(
+            &std::env::temp_dir().join("elsewhere/approvals.json")
+        ));
     }
 
     // ---------------------------------------------------------------------------

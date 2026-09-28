@@ -211,7 +211,7 @@ async fn test_ollama_text_response_headless() {
     let stdout = stdout_string(&result);
     let json = parse_json_output(&stdout);
 
-    assert_eq!(json["exit_code"], "success");
+    assert_eq!(json["exit_code"], 0);
     let response = json["response"].as_str().unwrap_or("");
     assert!(
         response.contains("Ollama"),
@@ -234,7 +234,7 @@ async fn test_openai_text_response_headless() {
     let stdout = stdout_string(&result);
     let json = parse_json_output(&stdout);
 
-    assert_eq!(json["exit_code"], "success");
+    assert_eq!(json["exit_code"], 0);
     let response = json["response"].as_str().unwrap_or("");
     assert!(
         response.contains("OpenAI"),
@@ -257,7 +257,7 @@ async fn test_anthropic_text_response_headless() {
     let stdout = stdout_string(&result);
     let json = parse_json_output(&stdout);
 
-    assert_eq!(json["exit_code"], "success");
+    assert_eq!(json["exit_code"], 0);
     let response = json["response"].as_str().unwrap_or("");
     assert!(
         response.contains("Anthropic"),
@@ -285,7 +285,7 @@ async fn test_deepseek_text_response_headless() {
     let stdout = stdout_string(&result);
     let json = parse_json_output(&stdout);
 
-    assert_eq!(json["exit_code"], "success");
+    assert_eq!(json["exit_code"], 0);
     let response = json["response"].as_str().unwrap_or("");
     assert!(
         response.contains("DeepSeek"),
@@ -324,7 +324,7 @@ async fn test_mistral_text_response_headless() {
     let stdout = stdout_string(&result);
     let json = parse_json_output(&stdout);
 
-    assert_eq!(json["exit_code"], "success");
+    assert_eq!(json["exit_code"], 0);
     let response = json["response"].as_str().unwrap_or("");
     assert!(
         response.contains("Mistral"),
@@ -348,7 +348,7 @@ async fn test_groq_text_response_headless() {
     let stdout = stdout_string(&result);
     let json = parse_json_output(&stdout);
 
-    assert_eq!(json["exit_code"], "success");
+    assert_eq!(json["exit_code"], 0);
     let response = json["response"].as_str().unwrap_or("");
     assert!(
         response.contains("Groq"),
@@ -373,10 +373,7 @@ async fn test_openai_compatible_providers_same_endpoint() {
 
         let stdout = stdout_string(&result);
         let json = parse_json_output(&stdout);
-        assert_eq!(
-            json["exit_code"], "success",
-            "Provider '{provider}' should succeed"
-        );
+        assert_eq!(json["exit_code"], 0, "Provider '{provider}' should succeed");
     }
 }
 
@@ -417,7 +414,7 @@ async fn test_ollama_malformed_retry() {
     let stdout = stdout_string(&result);
     let json = parse_json_output(&stdout);
 
-    assert_eq!(json["exit_code"], "success");
+    assert_eq!(json["exit_code"], 0);
     let response = json["response"].as_str().unwrap_or("");
     assert!(
         response.contains("Retry"),
@@ -452,7 +449,7 @@ async fn test_ollama_generic_500_retry() {
     let stdout = stdout_string(&result);
     let json = parse_json_output(&stdout);
 
-    assert_eq!(json["exit_code"], "success");
+    assert_eq!(json["exit_code"], 0);
     let response = json["response"].as_str().unwrap_or("");
     assert!(
         response.contains("Recovered"),
@@ -514,7 +511,7 @@ async fn test_anthropic_usage_tracking() {
     let stdout = stdout_string(&result);
     let json = parse_json_output(&stdout);
 
-    assert_eq!(json["exit_code"], "success");
+    assert_eq!(json["exit_code"], 0);
     let tokens = json["total_tokens"].as_u64().unwrap_or(0);
     assert!(
         tokens > 0,
@@ -538,7 +535,7 @@ async fn test_openai_streaming_json_output() {
     let stdout = stdout_string(&result);
     let json = parse_json_output(&stdout);
 
-    assert_eq!(json["exit_code"], "success");
+    assert_eq!(json["exit_code"], 0);
     assert!(
         json["response"]
             .as_str()
@@ -564,7 +561,7 @@ async fn test_deepseek_streaming_json_output() {
     let stdout = stdout_string(&result);
     let json = parse_json_output(&stdout);
 
-    assert_eq!(json["exit_code"], "success");
+    assert_eq!(json["exit_code"], 0);
     assert!(json["response"].as_str().unwrap_or("").contains("DeepSeek"));
     assert!(json["prompt"].as_str().unwrap_or("").contains("test query"));
 }
@@ -598,7 +595,7 @@ async fn test_context_preservation_prompt_in_output() {
         prompt.contains("meaning of 42"),
         "Prompt should be preserved in output, got: {prompt}"
     );
-    assert_eq!(json["exit_code"], "success");
+    assert_eq!(json["exit_code"], 0);
 }
 
 #[serial]
@@ -891,10 +888,12 @@ async fn test_rate_limit_exit_code() {
 
     let stdout = stdout_string(&result);
     if let Ok(json) = serde_json::from_str::<serde_json::Value>(&stdout) {
-        let code = json["exit_code"].as_str().unwrap_or("unknown");
+        // review F35: HeadlessOutput.exit_code serializes as an integer
+        // (4 = rate limited, 1 = error).
+        let code = json["exit_code"].as_i64().unwrap_or(-1);
         assert!(
-            code == "rate_limited" || code == "error",
-            "Expected rate_limited or error exit code, got: {code}"
+            code == 4 || code == 1,
+            "Expected rate_limited (4) or error (1) exit code, got: {code}"
         );
     } else {
         assert!(
@@ -1085,7 +1084,10 @@ async fn test_json_output_structure() {
         json["duration_ms"].is_number(),
         "duration_ms should be number"
     );
-    assert!(json["exit_code"].is_string(), "exit_code should be string");
+    assert!(
+        json["exit_code"].is_i64(),
+        "exit_code should be an integer 0-7 (review F35)"
+    );
 }
 
 #[serial]
@@ -1341,7 +1343,7 @@ async fn test_ollama_glm_unmarshal_retry() {
     let stdout = stdout_string(&result);
     let json = parse_json_output(&stdout);
 
-    assert_eq!(json["exit_code"], "success");
+    assert_eq!(json["exit_code"], 0);
     assert!(json["response"].as_str().unwrap_or("").contains("retry"));
 }
 
@@ -1376,7 +1378,7 @@ async fn test_ollama_invalid_json_retry() {
     let stdout = stdout_string(&result);
     let json = parse_json_output(&stdout);
 
-    assert_eq!(json["exit_code"], "success");
+    assert_eq!(json["exit_code"], 0);
 }
 
 #[serial]
@@ -1410,7 +1412,7 @@ async fn test_ollama_unexpected_token_retry() {
     let stdout = stdout_string(&result);
     let json = parse_json_output(&stdout);
 
-    assert_eq!(json["exit_code"], "success");
+    assert_eq!(json["exit_code"], 0);
 }
 
 #[serial]
@@ -1562,7 +1564,7 @@ async fn test_ollama_request_has_no_tools_field() {
 
     let stdout = stdout_string(&result);
     let json = parse_json_output(&stdout);
-    assert_eq!(json["exit_code"], "success");
+    assert_eq!(json["exit_code"], 0);
     let response = json["response"].as_str().unwrap_or("");
     assert!(
         response.contains("local model"),
@@ -1645,7 +1647,7 @@ async fn test_ollama_request_uses_short_system_prompt() {
 
     let stdout = stdout_string(&result);
     let json = parse_json_output(&stdout);
-    assert_eq!(json["exit_code"], "success");
+    assert_eq!(json["exit_code"], 0);
 }
 
 #[serial]
@@ -1673,7 +1675,7 @@ async fn test_openai_still_sends_tools_by_default() {
 
     let stdout = stdout_string(&result);
     let json = parse_json_output(&stdout);
-    assert_eq!(json["exit_code"], "success");
+    assert_eq!(json["exit_code"], 0);
 }
 
 // ════════════════════════════════════════════════════════════════════════
@@ -1860,10 +1862,7 @@ async fn test_continue_prefers_session_recorded_in_current_directory() {
         ])
         .timeout(std::time::Duration::from_secs(15))
         .assert();
-    assert_eq!(
-        parse_json_output(&stdout_string(&r))["exit_code"],
-        "success"
-    );
+    assert_eq!(parse_json_output(&stdout_string(&r))["exit_code"], 0);
     // The matching session produces no cross-directory warning.
     assert!(!stderr_string(&r).contains("WARNING: resuming session"));
 }
@@ -1951,10 +1950,7 @@ async fn test_headless_resume_without_recorded_cwd_warns_but_resumes() {
         ])
         .timeout(std::time::Duration::from_secs(15))
         .assert();
-    assert_eq!(
-        parse_json_output(&stdout_string(&r))["exit_code"],
-        "success"
-    );
+    assert_eq!(parse_json_output(&stdout_string(&r))["exit_code"], 0);
     assert!(stderr_string(&r).contains("NOTE: resuming session"));
 }
 
@@ -1996,10 +1992,7 @@ async fn test_multiturn_ollama_three_turns_accumulated_context() {
         ])
         .timeout(std::time::Duration::from_secs(15))
         .assert();
-    assert_eq!(
-        parse_json_output(&stdout_string(&r1))["exit_code"],
-        "success"
-    );
+    assert_eq!(parse_json_output(&stdout_string(&r1))["exit_code"], 0);
     assert!(
         find_latest_session_id(&home).is_some(),
         "Session saved after turn 1"
@@ -2018,10 +2011,7 @@ async fn test_multiturn_ollama_three_turns_accumulated_context() {
         ])
         .timeout(std::time::Duration::from_secs(15))
         .assert();
-    assert_eq!(
-        parse_json_output(&stdout_string(&r2))["exit_code"],
-        "success"
-    );
+    assert_eq!(parse_json_output(&stdout_string(&r2))["exit_code"], 0);
 
     // Turn 3: resume again — session persists across multiple turns
     let mut s3 = mockito::Server::new_async().await;
@@ -2037,7 +2027,7 @@ async fn test_multiturn_ollama_three_turns_accumulated_context() {
         .timeout(std::time::Duration::from_secs(15))
         .assert();
     let j3 = parse_json_output(&stdout_string(&r3));
-    assert_eq!(j3["exit_code"], "success");
+    assert_eq!(j3["exit_code"], 0);
 }
 
 #[serial]
@@ -2056,10 +2046,7 @@ async fn test_multiturn_openai_resume_preserves_context() {
         .args(["--prompt", "Tell me about Rust", "--output-format", "json"])
         .timeout(std::time::Duration::from_secs(15))
         .assert();
-    assert_eq!(
-        parse_json_output(&stdout_string(&r1))["exit_code"],
-        "success"
-    );
+    assert_eq!(parse_json_output(&stdout_string(&r1))["exit_code"], 0);
 
     let mut s2 = mockito::Server::new_async().await;
     let _m2 = s2
@@ -2083,10 +2070,7 @@ async fn test_multiturn_openai_resume_preserves_context() {
         ])
         .timeout(std::time::Duration::from_secs(15))
         .assert();
-    assert_eq!(
-        parse_json_output(&stdout_string(&r2))["exit_code"],
-        "success"
-    );
+    assert_eq!(parse_json_output(&stdout_string(&r2))["exit_code"], 0);
 }
 
 #[serial]
@@ -2105,10 +2089,7 @@ async fn test_multiturn_anthropic_resume_context() {
         .args(["--prompt", "What is Python?", "--output-format", "json"])
         .timeout(std::time::Duration::from_secs(15))
         .assert();
-    assert_eq!(
-        parse_json_output(&stdout_string(&r1))["exit_code"],
-        "success"
-    );
+    assert_eq!(parse_json_output(&stdout_string(&r1))["exit_code"], 0);
 
     // Turn 2: resume — session loaded, query succeeds
     let mut s2 = mockito::Server::new_async().await;
@@ -2127,10 +2108,7 @@ async fn test_multiturn_anthropic_resume_context() {
         ])
         .timeout(std::time::Duration::from_secs(15))
         .assert();
-    assert_eq!(
-        parse_json_output(&stdout_string(&r2))["exit_code"],
-        "success"
-    );
+    assert_eq!(parse_json_output(&stdout_string(&r2))["exit_code"], 0);
 }
 
 #[serial]
@@ -2151,10 +2129,7 @@ async fn test_multiturn_ollama_story_then_character_count() {
         ])
         .timeout(std::time::Duration::from_secs(15))
         .assert();
-    assert_eq!(
-        parse_json_output(&stdout_string(&r1))["exit_code"],
-        "success"
-    );
+    assert_eq!(parse_json_output(&stdout_string(&r1))["exit_code"], 0);
 
     // Turn 2: resume — session loaded, query succeeds
     let mut s2 = mockito::Server::new_async().await;
@@ -2173,7 +2148,7 @@ async fn test_multiturn_ollama_story_then_character_count() {
         .timeout(std::time::Duration::from_secs(15))
         .assert();
     let j2 = parse_json_output(&stdout_string(&r2));
-    assert_eq!(j2["exit_code"], "success");
+    assert_eq!(j2["exit_code"], 0);
 }
 
 #[serial]
@@ -2193,7 +2168,7 @@ async fn test_multiturn_resume_no_session_fails_gracefully() {
     // Verify it still works — just without prior context.
     let stdout = stdout_string(&result);
     let json = parse_json_output(&stdout);
-    assert_eq!(json["exit_code"], "success");
+    assert_eq!(json["exit_code"], 0);
 }
 
 #[serial]
@@ -2217,10 +2192,7 @@ async fn test_multiturn_deepseek_resume_context() {
         ])
         .timeout(std::time::Duration::from_secs(15))
         .assert();
-    assert_eq!(
-        parse_json_output(&stdout_string(&r1))["exit_code"],
-        "success"
-    );
+    assert_eq!(parse_json_output(&stdout_string(&r1))["exit_code"], 0);
 
     // Turn 2: resume — session loaded, query succeeds
     let mut s2 = mockito::Server::new_async().await;
@@ -2239,10 +2211,7 @@ async fn test_multiturn_deepseek_resume_context() {
         ])
         .timeout(std::time::Duration::from_secs(15))
         .assert();
-    assert_eq!(
-        parse_json_output(&stdout_string(&r2))["exit_code"],
-        "success"
-    );
+    assert_eq!(parse_json_output(&stdout_string(&r2))["exit_code"], 0);
 }
 
 // ════════════════════════════════════════════════════════════════════════
@@ -2276,10 +2245,7 @@ async fn run_long_conversation_test(n_turns: usize) {
 
     let stdout = stdout_string(&result);
     let json = parse_json_output(&stdout);
-    assert_eq!(
-        json["exit_code"], "success",
-        "Failed for {n_turns} turns: {stdout}"
-    );
+    assert_eq!(json["exit_code"], 0, "Failed for {n_turns} turns: {stdout}");
 }
 
 #[serial]
