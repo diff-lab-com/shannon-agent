@@ -1787,6 +1787,7 @@ fn write_session_file_with_cwd(
             reason: TurnEndPayload::REASON_COMPLETED.into(),
             usage: None,
             error: None,
+            llm_steps: None,
         }));
     }
 

@@ -241,6 +241,10 @@ pub struct SessionTee {
     /// start/end pairing: every opened turn is closed exactly once — on
     /// `Completed`, on `Failed`, or (cancellation) on drop as interrupted.
     turn_open: bool,
+    /// LLM calls folded into the open turn (one per `Usage`/`TurnCompleted`
+    /// event). Reported as `turn/end.llm_steps` so per-call efficiency
+    /// analysis has a denominator without per-step events.
+    turn_steps: u64,
     /// Whether this tee opened a fresh log (first header says "initial").
     fresh_log: bool,
     headers_written: u32,
@@ -370,6 +374,7 @@ impl SessionTee {
                     turn_usage: None,
                     bare_tokens: None,
                     turn_open: false,
+                    turn_steps: 0,
                     fresh_log: fresh,
                     headers_written: 0,
                 }
@@ -389,6 +394,7 @@ impl SessionTee {
             turn_usage: None,
             bare_tokens: None,
             turn_open: false,
+            turn_steps: 0,
             fresh_log: false,
             headers_written: 0,
         }
@@ -434,11 +440,13 @@ impl SessionTee {
     pub fn record_query_event(&mut self, event: &QueryEvent) {
         match event {
             QueryEvent::Usage { .. } => {
+                self.turn_steps += 1;
                 let usage = token_usage_from_event(event).expect("Usage maps to usage");
                 self.add_turn_usage(usage);
                 return;
             }
             QueryEvent::TurnCompleted { tokens_used, .. } => {
+                self.turn_steps += 1;
                 self.bare_tokens = Some(*tokens_used);
                 return;
             }
@@ -529,7 +537,9 @@ impl SessionTee {
             reason: reason.into(),
             usage,
             error,
+            llm_steps: Some(self.turn_steps),
         }));
+        self.turn_steps = 0;
     }
 
     /// Record a `request/header` built from the adapter's own serialized

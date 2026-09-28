@@ -1699,6 +1699,7 @@ pub fn handle_query(repl: &mut Repl, input: &str, terminal: &mut Option<&mut Ter
             budget_tokens: None,
             reasoning_effort: None,
             enable_anthropic_toolsets: shannon_engine::api::toolsets::anthropic_toolsets_from_env(),
+            thinking_type: shannon_engine::api::types::thinking_type_from_env(),
         };
         let client = shannon_engine::api::LlmClient::new(config);
         let tools = shannon_core::ToolRegistry::new();
@@ -1771,6 +1772,7 @@ mod tests {
             budget_tokens: None,
             reasoning_effort: None,
             enable_anthropic_toolsets: shannon_engine::api::toolsets::anthropic_toolsets_from_env(),
+            thinking_type: shannon_engine::api::types::thinking_type_from_env(),
         };
         let client = shannon_engine::api::LlmClient::new(config);
         let tools = ToolRegistry::new();

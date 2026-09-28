@@ -678,6 +678,7 @@ impl QueryEngine {
                     client_max_tokens
                 };
                 let mut cfg = shannon_engine::api::LlmClientConfig {
+                    thinking_type: None,
                     api_key: client_api_key,
                     base_url: client_base_url,
                     model: client_model.clone(),
@@ -4004,7 +4005,8 @@ impl QueryEngine {
                                             QueryEvent::Progress {
                                                 query_id,
                                                 message: format!(
-                                                    "Turn LLM call interrupted (upstream cutoff); continuing turn {turn_retries_used}/{max_turn_retries}"
+                                                    "Turn LLM call interrupted (upstream cutoff: class={}, err={e}); continuing turn {turn_retries_used}/{max_turn_retries}",
+                                                if e.is_timeout_class() { "timeout" } else { "stream_interrupted" }
                                                 ),
                                             }
                                         );
@@ -4682,7 +4684,8 @@ impl QueryEngine {
                                 QueryEvent::Progress {
                                     query_id,
                                     message: format!(
-                                        "Turn LLM call interrupted (upstream cutoff); continuing turn {turn_retries_used}/{max_turn_retries}"
+                                        "Turn LLM call interrupted (upstream cutoff: class={}, err={e}); continuing turn {turn_retries_used}/{max_turn_retries}",
+                                    if e.is_timeout_class() { "timeout" } else { "stream_interrupted" }
                                     ),
                                 }
                             );

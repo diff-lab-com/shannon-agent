@@ -445,6 +445,13 @@ pub struct TurnEndPayload {
     /// Error that ended the turn, when applicable.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub error: Option<String>,
+    /// Number of LLM steps (one per LLM call) folded into this turn. A
+    /// "vocabulary turn" is a whole user-visible round; the engine makes
+    /// many LLM calls inside it, and this count is the denominator for
+    /// per-call efficiency analysis. Absent on events written before this
+    /// field existed.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub llm_steps: Option<u64>,
 }
 
 impl TurnEndPayload {
@@ -779,6 +786,7 @@ mod tests {
                     cost_usd: None,
                 }),
                 error: None,
+                llm_steps: Some(1),
             }),
             SessionEventKind::TodoWrite => SessionEventBody::TodoWrite(TodoWritePayload {
                 todos: vec![TodoSnapshotEntry {

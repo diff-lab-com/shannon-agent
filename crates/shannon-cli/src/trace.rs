@@ -640,6 +640,7 @@ mod tests {
                 cost_usd: Some(0.01),
             }),
             error: None,
+            llm_steps: None,
         }));
         w.close().unwrap();
 

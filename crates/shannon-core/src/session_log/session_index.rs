@@ -421,6 +421,7 @@ mod tests {
         event(
             seq,
             SessionEventBody::TurnEnd(TurnEndPayload {
+                llm_steps: None,
                 reason: TurnEndPayload::REASON_COMPLETED.into(),
                 usage: Some(TokenUsage {
                     input_tokens: input,

@@ -10,6 +10,7 @@ async fn probe_active_health_errors_on_unreachable_endpoint_without_swapping_key
     // without fragile mockito path-matching. send_message (not the _with_retry
     // variant) is single-attempt, so there is no retry backoff to wait out.
     let config = LlmClientConfig {
+        thinking_type: None,
         api_key: "running-client-key".to_string(),
         base_url: "http://127.0.0.1:1".to_string(),
         model: "test-model".to_string(),
@@ -461,6 +462,7 @@ fn rewind_truncates_l0_log_to_surviving_turns() {
             );
             w.record(shannon_types::session_event::SessionEventBody::TurnEnd(
                 TurnEndPayload {
+                    llm_steps: None,
                     reason: TurnEndPayload::REASON_COMPLETED.into(),
                     usage: None,
                     error: None,
@@ -565,6 +567,7 @@ fn rewind_log_alignment_with_tool_heavy_last_turn() {
                 thinking: false,
             }));
             w.record(SessionEventBody::TurnEnd(TurnEndPayload {
+                llm_steps: None,
                 reason: TurnEndPayload::REASON_COMPLETED.into(),
                 usage: None,
                 error: None,

@@ -220,6 +220,7 @@ async fn test_query_engine_restore_reads_l0_only() {
     seed_two_turn_session(&store, &session_id);
 
     let client_cfg = LlmClientConfig {
+        thinking_type: None,
         api_key: "k".into(),
         base_url: "http://localhost".into(),
         model: "m".into(),

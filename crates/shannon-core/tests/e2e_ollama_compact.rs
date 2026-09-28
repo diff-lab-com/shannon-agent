@@ -23,6 +23,7 @@ fn ollama_client() -> Option<LlmClient> {
     }
     let model = std::env::var("OLLAMA_MODEL").unwrap_or_else(|_| "qwen3:4b".to_string());
     let config = LlmClientConfig {
+        thinking_type: None,
         api_key: String::new(),
         base_url: "http://localhost:11434".to_string(),
         model,

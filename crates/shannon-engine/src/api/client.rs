@@ -580,6 +580,7 @@ impl LlmClient {
 
         let request_body = MessageRequest {
             model: self.config.model.clone(),
+            thinking_type: self.config.thinking_type.clone(),
             max_tokens: self.config.max_tokens,
             system,
             system_blocks: None,
@@ -718,6 +719,7 @@ impl LlmClient {
     ) -> Result<MessageStream, ApiError> {
         let request_body = MessageRequest {
             model: self.config.model.clone(),
+            thinking_type: self.config.thinking_type.clone(),
             max_tokens: self.config.max_tokens,
             system: None,
             system_blocks: Some(system_blocks),
@@ -829,6 +831,7 @@ impl LlmClient {
     ) -> Result<MessageStream, ApiError> {
         let request_body = MessageRequest {
             model: self.config.model.clone(),
+            thinking_type: self.config.thinking_type.clone(),
             max_tokens: self.config.max_tokens,
             system,
             system_blocks: None,
@@ -923,6 +926,7 @@ impl LlmClient {
     ) -> Result<Vec<ContentBlock>, ApiError> {
         let request_body = MessageRequest {
             model: self.config.model.clone(),
+            thinking_type: self.config.thinking_type.clone(),
             max_tokens: self.config.max_tokens,
             system,
             system_blocks: None,
@@ -1393,6 +1397,7 @@ mod tests {
 
     fn test_config() -> LlmClientConfig {
         LlmClientConfig {
+            thinking_type: None,
             provider: LlmProvider::Anthropic,
             api_key: "test-key".to_string(),
             model: "claude-3-5-sonnet-20241022".to_string(),
@@ -1413,6 +1418,7 @@ mod tests {
 
     fn ollama_config() -> LlmClientConfig {
         LlmClientConfig {
+            thinking_type: None,
             provider: LlmProvider::Ollama,
             api_key: String::new(),
             model: "llama3".to_string(),
@@ -1440,6 +1446,7 @@ mod tests {
     /// so the timeout behavior is observed in isolation.
     fn slow_stream_config(base_url: String) -> LlmClientConfig {
         LlmClientConfig {
+            thinking_type: None,
             provider: LlmProvider::Anthropic,
             api_key: "test-key".to_string(),
             model: "claude-3-5-sonnet-20241022".to_string(),
@@ -1969,6 +1976,7 @@ mod tests {
     #[test]
     fn test_zhipu_auth_headers_use_jwt() {
         let config = LlmClientConfig {
+            thinking_type: None,
             provider: LlmProvider::Zhipu,
             api_key: "testid.testsecret".to_string(),
             model: "glm-4-flash".to_string(),

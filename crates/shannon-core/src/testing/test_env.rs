@@ -198,6 +198,7 @@ impl TestShannon {
         };
 
         LlmClientConfig {
+            thinking_type: None,
             api_key: "test-key".to_string(),
             base_url: server_url.to_string(),
             model: self.model.clone(),

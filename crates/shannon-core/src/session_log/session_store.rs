@@ -991,6 +991,7 @@ impl SessionStore {
                 reason: "compact".into(),
                 usage: None,
                 error: None,
+                llm_steps: None,
             }))?;
         }
 
@@ -1257,6 +1258,7 @@ mod tests {
             meta: serde_json::Value::Null,
         }));
         w.record(SessionEventBody::TurnEnd(TurnEndPayload {
+            llm_steps: None,
             reason: TurnEndPayload::REASON_COMPLETED.into(),
             usage: Some(TokenUsage {
                 input_tokens: 11,
@@ -1320,6 +1322,7 @@ mod tests {
                 thinking: false,
             }));
             w.record(SessionEventBody::TurnEnd(TurnEndPayload {
+                llm_steps: None,
                 reason: TurnEndPayload::REASON_COMPLETED.into(),
                 usage: None,
                 error: None,
@@ -1741,6 +1744,7 @@ mod tests {
             thinking: false,
         }));
         w.record(SessionEventBody::TurnEnd(TurnEndPayload {
+            llm_steps: None,
             reason: TurnEndPayload::REASON_COMPLETED.into(),
             usage: None,
             error: None,
@@ -2058,6 +2062,7 @@ mod tests {
             meta: serde_json::Value::Null,
         }));
         w.record(SessionEventBody::TurnEnd(TurnEndPayload {
+            llm_steps: None,
             reason: TurnEndPayload::REASON_COMPLETED.into(),
             usage: Some(shannon_types::session_event::TokenUsage {
                 input_tokens: 100,
@@ -2275,6 +2280,7 @@ mod tests {
                 attachment_count: 0,
             }));
             w.record(SessionEventBody::TurnEnd(TurnEndPayload {
+                llm_steps: None,
                 reason: TurnEndPayload::REASON_COMPLETED.into(),
                 usage: Some(shannon_types::session_event::TokenUsage {
                     input_tokens: 5,

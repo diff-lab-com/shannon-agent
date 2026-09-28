@@ -312,6 +312,7 @@ mod tests {
 
     fn test_config() -> LlmClientConfig {
         shannon_core::LlmClientConfig {
+            thinking_type: None,
             provider: shannon_engine::api::types::LlmProvider::Ollama,
             model: "test-model".into(),
             base_url: "http://127.0.0.1:1".into(),
