@@ -589,7 +589,15 @@ impl SkillRegistry {
                     // Rough estimate: truncate description to fit remaining tokens
                     let max_chars = remaining.saturating_sub(meta.name.len() / 4 + 2) * 4;
                     if max_chars > 10 {
-                        meta.description.truncate(max_chars.saturating_sub(3));
+                        // review F24: String::truncate panics if the cut index
+                        // is not a char boundary. Descriptions may contain
+                        // CJK / emoji, so walk back to the nearest boundary
+                        // before truncating (same fix as repomap parser).
+                        let mut cut = max_chars.saturating_sub(3);
+                        while cut > 0 && !meta.description.is_char_boundary(cut) {
+                            cut -= 1;
+                        }
+                        meta.description.truncate(cut);
                         meta.description.push_str("...");
                         result.push(meta);
                     }
@@ -709,6 +717,32 @@ mod tests {
         registry.register(skill.clone()).unwrap();
         assert_eq!(registry.len(), 1);
         assert!(registry.contains(&skill.id));
+    }
+
+    /// F24 regression: the token-budget truncation used a byte-offset
+    /// `String::truncate`, which panics when the cut lands mid-character.
+    /// A CJK description under a tight budget must truncate on a char
+    /// boundary instead of panicking.
+    #[test]
+    fn test_budget_truncation_handles_multibyte_description() {
+        let registry = SkillRegistry::new();
+        let mut skill = Skill::new(
+            "cjk".to_string(),
+            "cjk".to_string(),
+            "好".repeat(40), // 120 bytes of 3-byte chars
+            "Content".to_string(),
+        );
+        skill.source = SkillSource::User;
+        registry.register(skill).unwrap();
+
+        // Budget 10 forces the truncation branch with a cut index (29) that
+        // splits a 3-byte CJK char — the old code panicked here.
+        let meta = registry.available_skills_metadata_with_budget(10);
+        assert_eq!(meta.len(), 1, "truncated skill should still be listed");
+        let desc = &meta[0].description;
+        assert!(desc.is_char_boundary(desc.len()), "cut split a char");
+        assert!(desc.ends_with("..."), "truncation must be marked");
+        assert!(!desc.contains('\u{FFFD}'), "no replacement chars allowed");
     }
 
     #[test]

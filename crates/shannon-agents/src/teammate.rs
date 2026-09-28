@@ -870,6 +870,7 @@ impl Teammate {
         };
 
         // Step 3: Execute the task if executor is available
+        let mut execution_failure: Option<String> = None;
         if let Some(ref executor) = self.executor {
             let team_name = self.team_name().unwrap_or_default();
             let task_file = persistence.load_task(&team_name, &task_id.to_string()).ok();
@@ -908,15 +909,101 @@ impl Teammate {
                         error = %e,
                         "Task execution failed"
                     );
+                    execution_failure = Some(e);
                 }
             }
         }
 
-        // Step 4: Mark complete
+        // Step 4: Mark complete — in memory AND on disk (F27). The claim
+        // wrote `in_progress` + owner to the task file; without a terminal
+        // write the task would stay in_progress forever: never re-claimable,
+        // dependents never unblocked, board readers see it stuck.
+        let team_name = self.team_name().unwrap_or_default();
+        self.finish_claimed_task(persistence, &team_name, task_id, execution_failure);
         self.complete_task(task_id).await;
 
         // Step 5: Notify idle
         self.notify_idle().await
+    }
+
+    /// Write the terminal status of a claimed task to its on-disk task file
+    /// (F27) and unblock dependents, mirroring what the in-memory
+    /// `TaskBoard::complete_task` does.
+    ///
+    /// Success writes `completed`; an execution failure writes
+    /// `failed:<reason>` so the task is visibly failed instead of silently
+    /// marked complete.
+    fn finish_claimed_task(
+        &self,
+        persistence: &FilePersistence,
+        team_name: &str,
+        task_id: Uuid,
+        failure: Option<String>,
+    ) {
+        let task_id_str = task_id.to_string();
+
+        match persistence.load_task(team_name, &task_id_str) {
+            Ok(mut task) => {
+                task.status = match &failure {
+                    Some(reason) => format!("failed:{reason}"),
+                    None => "completed".to_string(),
+                };
+                task.updated_at = chrono::Utc::now().to_rfc3339();
+                if let Err(e) = persistence.save_task(team_name, &task) {
+                    tracing::warn!(
+                        agent = %self.name,
+                        task_id = %task_id,
+                        error = %e,
+                        "Failed to persist terminal task status"
+                    );
+                }
+            }
+            Err(e) => {
+                tracing::warn!(
+                    agent = %self.name,
+                    task_id = %task_id,
+                    error = %e,
+                    "Failed to reload claimed task for terminal status write"
+                );
+            }
+        }
+
+        // Clear `blocked_by` for dependents on disk the way
+        // `TaskBoard::complete_task` clears them in memory.
+        match persistence.load_tasks(team_name) {
+            Ok(tasks) => {
+                for mut dep in tasks {
+                    if !dep.blocked_by.contains(&task_id_str) {
+                        continue;
+                    }
+                    dep.blocked_by.retain(|id| *id != task_id_str);
+                    dep.updated_at = chrono::Utc::now().to_rfc3339();
+                    if let Err(e) = persistence.save_task(team_name, &dep) {
+                        tracing::warn!(
+                            agent = %self.name,
+                            task_id = %dep.id,
+                            error = %e,
+                            "Failed to unblock dependent task on disk"
+                        );
+                    }
+                }
+            }
+            Err(e) => {
+                tracing::warn!(
+                    agent = %self.name,
+                    task_id = %task_id,
+                    error = %e,
+                    "Failed to scan for dependents when finishing task"
+                );
+            }
+        }
+
+        tracing::debug!(
+            agent = %self.name,
+            task_id = %task_id,
+            failed = failure.is_some(),
+            "Terminal task status written to disk"
+        );
     }
 
     /// Spawn a background self-claim work loop that runs continuously.
@@ -1186,5 +1273,116 @@ mod tests {
         assert_send_sync::<TeammateConfig>();
         assert_send_sync::<TeammateStatus>();
         assert_send_sync::<TeammateState>();
+    }
+
+    // ── F27: self-claim work loop persists terminal task status ──────
+
+    /// Executor that always fails (for the failed-status path).
+    struct FailingExecutor;
+
+    #[async_trait::async_trait]
+    impl AgentExecutor for FailingExecutor {
+        async fn execute(
+            &self,
+            _system_prompt: &str,
+            _task: &str,
+            _model: Option<&str>,
+            _tools: Option<&[String]>,
+        ) -> Result<shannon_core::tools::ToolOutput, String> {
+            Err("boom".to_string())
+        }
+
+        async fn execute_with_history(
+            &self,
+            _system_prompt: &str,
+            _history: &[ChatTurn],
+            _task: &str,
+            _model: Option<&str>,
+            _tools: Option<&[String]>,
+        ) -> Result<shannon_core::tools::ToolOutput, String> {
+            Err("boom".to_string())
+        }
+    }
+
+    fn task_file(id: Uuid, status: &str) -> crate::persistence::TaskFile {
+        crate::persistence::TaskFile {
+            id: id.to_string(),
+            subject: "Do the thing".into(),
+            description: "A task".into(),
+            status: status.into(),
+            priority: "medium".into(),
+            owner: None,
+            blocked_by: Vec::new(),
+            blocks: Vec::new(),
+            active_form: None,
+            required_capabilities: Vec::new(),
+            metadata: serde_json::Value::Null,
+            created_at: "2026-01-01T00:00:00Z".into(),
+            updated_at: "2026-01-01T00:00:00Z".into(),
+        }
+    }
+
+    /// F27 regression: after `run_work_cycle` succeeds, the on-disk task
+    /// must be `completed` (not stuck `in_progress`) and dependents must be
+    /// unblocked on disk.
+    #[tokio::test]
+    async fn run_work_cycle_writes_completed_status_to_disk() {
+        let dir = tempfile::tempdir().unwrap();
+        let persistence = FilePersistence::with_base_dir(dir.path().to_path_buf());
+
+        let task_id = Uuid::new_v4();
+        let dep_id = Uuid::new_v4();
+        persistence
+            .save_task("team", &task_file(task_id, "pending"))
+            .unwrap();
+        let mut dependent = task_file(dep_id, "pending");
+        dependent.blocked_by = vec![task_id.to_string()];
+        persistence.save_task("team", &dependent).unwrap();
+
+        let agent = Teammate::new("worker".into(), TeammateConfig::default());
+        agent.set_team_name("team".into());
+
+        let notification = agent.run_work_cycle(&persistence).await;
+        assert!(notification.is_some(), "agent should go idle after work");
+
+        let done = persistence.load_task("team", &task_id.to_string()).unwrap();
+        assert_eq!(done.status, "completed", "on-disk task must be terminal");
+
+        let dep_after = persistence.load_task("team", &dep_id.to_string()).unwrap();
+        assert!(
+            dep_after.blocked_by.is_empty(),
+            "dependent must be unblocked on disk"
+        );
+    }
+
+    /// F27 regression: an executor error must persist `failed:<reason>` —
+    /// the old code logged a warning and still marked the task complete.
+    #[tokio::test]
+    async fn run_work_cycle_writes_failed_status_on_executor_error() {
+        let dir = tempfile::tempdir().unwrap();
+        let persistence = FilePersistence::with_base_dir(dir.path().to_path_buf());
+
+        let task_id = Uuid::new_v4();
+        persistence
+            .save_task("team", &task_file(task_id, "pending"))
+            .unwrap();
+
+        let agent = Teammate::with_executor(
+            "worker".into(),
+            TeammateConfig::default(),
+            Arc::new(FailingExecutor),
+        );
+        agent.set_team_name("team".into());
+
+        agent.run_work_cycle(&persistence).await;
+
+        let done = persistence.load_task("team", &task_id.to_string()).unwrap();
+        assert!(
+            done.status.starts_with("failed:"),
+            "expected failed:<reason>, got: {}",
+            done.status
+        );
+        assert!(done.status.contains("boom"), "reason must be recorded");
+        assert_ne!(done.status, "completed", "failures are not completions");
     }
 }
