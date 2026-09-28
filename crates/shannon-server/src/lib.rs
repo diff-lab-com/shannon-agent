@@ -61,14 +61,67 @@ pub struct AppState {
 pub struct ApiDoc;
 
 pub fn router(client_config: LlmClientConfig, token: Option<String>) -> Router {
+    full_router(client_config, token, Some(auth::HostGuardConfig::default()))
+}
+
+/// Production router builder shared by [`router`] and the `run` entry
+/// points: resolves the config-file secrets, the effective serve token and
+/// the shared inbox, then delegates to [`router_full`]. `host_guard` is
+/// `Some` for loopback binds (F15) and `None` for non-loopback opt-in binds,
+/// where a token is mandatory and the client-facing hostname is unknowable.
+fn full_router(
+    client_config: LlmClientConfig,
+    token: Option<String>,
+    host_guard: Option<auth::HostGuardConfig>,
+) -> Router {
     let secret = read_webhook_secret();
     let github_secret = github_secret_from_config();
     let routines = github::load_routines();
     let inbox = std::sync::Arc::new(github::open_inbox());
-    router_full(client_config, token, secret, github_secret, routines, inbox)
+    router_full(
+        client_config,
+        effective_serve_token(token),
+        secret,
+        github_secret,
+        routines,
+        inbox,
+        host_guard,
+    )
+}
+
+/// Effective bearer token: an explicit token wins, else `SHANNON_SERVE_TOKEN`.
+///
+/// Review F47: this single value must feed BOTH the bearer middleware and
+/// `AppState::auth_token` (the trigger endpoint's `bearer_ok` decision).
+/// Previously the middleware applied the env fallback while the state did
+/// not, so a server started with only `SHANNON_SERVE_TOKEN` enforced bearer
+/// auth yet refused an authenticated client on `POST /routines/:id/trigger`.
+///
+/// Kept a free function (not inlined into [`router_full`]) so the env read
+/// stays out of the test seam — tests inject the token explicitly.
+fn effective_serve_token(explicit: Option<String>) -> Option<String> {
+    explicit.or_else(|| std::env::var("SHANNON_SERVE_TOKEN").ok())
+}
+
+/// Host guard to install for a bind host: enforcing on loopback (the
+/// DNS-rebinding surface), absent for non-loopback binds (token-gated).
+/// The literal bound host joins the allowlist so e.g. `127.0.0.2` keeps
+/// working (F15).
+fn guard_for_bind(host: &str) -> Option<auth::HostGuardConfig> {
+    if is_loopback_host(host) {
+        Some(auth::HostGuardConfig::default().with_extra_hosts(vec![host.to_string()]))
+    } else {
+        None
+    }
 }
 
 /// [`router`] with all state injected (test seam for the GitHub hook).
+///
+/// `host_guard`: `Some` installs the F15 Host-header guard (use
+/// [`auth::HostGuardConfig::default`] for the production loopback policy),
+/// `None` skips it. The `token` is taken as-is — unlike the production
+/// builder it does NOT consult `SHANNON_SERVE_TOKEN`, but it does feed both
+/// the middleware and `AppState::auth_token` (F47 contract).
 #[doc(hidden)]
 pub fn router_full(
     client_config: LlmClientConfig,
@@ -77,18 +130,20 @@ pub fn router_full(
     github_secret: Option<String>,
     routines: Vec<shannon_core::scheduled_routines::ScheduledRoutine>,
     inbox: std::sync::Arc<shannon_core::inbox_store::InboxStore>,
+    host_guard: Option<auth::HostGuardConfig>,
 ) -> Router {
     let state = AppState {
         client_config,
         sessions: sessions::SessionRegistry::default(),
         webhook_secret,
+        // F47: the same effective token the middleware below enforces.
         auth_token: token.clone(),
         github_secret,
         github_deliveries: github::delivery_cache(),
         routines: std::sync::Arc::new(routines),
         inbox,
     };
-    Router::new()
+    let mut router = Router::new()
         .route("/v1/sessions", post(routes::create_session))
         .route("/v1/sessions/:id", get(routes::get_session))
         .route("/v1/sessions/:id/messages", post(routes::post_message))
@@ -104,18 +159,30 @@ pub fn router_full(
             // run. The shared rule (`shannon_core::attachments`) allows 8
             // attachments × 10 MiB decoded; base64 inflates that 4/3 to
             // ~107 MiB, and 128 MiB leaves JSON-encoding headroom on top.
+            // Review F15: this stays — it is the attachment contract, and
+            // the Host guard above is what closes the unauthenticated
+            // drive-by surface.
             axum::extract::DefaultBodyLimit::max(128 * 1024 * 1024),
-        )
-        .layer(middleware::from_fn_with_state(
-            auth::AuthConfig::new(token.or_else(|| std::env::var("SHANNON_SERVE_TOKEN").ok())),
-            auth::bearer_middleware,
-        ))
-        .with_state(state)
+        );
+    router = router.layer(middleware::from_fn_with_state(
+        auth::AuthConfig::new(token),
+        auth::bearer_middleware,
+    ));
+    // F15: outermost layer so a rebinding Host is rejected before any auth
+    // or body processing happens.
+    if let Some(guard) = host_guard {
+        router = router.layer(middleware::from_fn_with_state(
+            guard,
+            auth::host_guard_middleware,
+        ));
+    }
+    router.with_state(state)
 }
 
 /// [`router`] with only the legacy trigger-endpoint secret injected — the
 /// pre-P2-7 test seam, kept for the existing trigger tests. The GitHub hook
 /// is disabled (no secret) and backed by an in-memory inbox and no routines.
+/// Installs the production loopback Host guard (F15).
 #[doc(hidden)]
 pub fn router_with_secret(
     client_config: LlmClientConfig,
@@ -133,6 +200,7 @@ pub fn router_with_secret(
         None,
         Vec::new(),
         inbox,
+        Some(auth::HostGuardConfig::default()),
     )
 }
 
@@ -210,10 +278,7 @@ pub async fn run(
     // Default to NOT allowing non-loopback binds; the CLI passes through its
     // --allow-nonloopback flag explicitly. This means the library entry point
     // is safe-by-default even if a future caller forgets to thread the flag.
-    validate_serve_bind(host, false, token.as_deref())?;
-    let listener = tokio::net::TcpListener::bind((host, port)).await?;
-    axum::serve(listener, router(client_config, token)).await?;
-    Ok(())
+    run_with_allow_nonloopback(host, port, client_config, token, false).await
 }
 
 /// Run the server with explicit control over the non-loopback opt-in flag.
@@ -227,7 +292,14 @@ pub async fn run_with_allow_nonloopback(
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     validate_serve_bind(host, allow_nonloopback, token.as_deref())?;
     let listener = tokio::net::TcpListener::bind((host, port)).await?;
-    axum::serve(listener, router(client_config, token)).await?;
+    // F15: enforce the Host guard on loopback binds (the drive-by surface);
+    // non-loopback binds already require the token and get no guard, since
+    // clients may address the host by any of its DNS names.
+    axum::serve(
+        listener,
+        full_router(client_config, token, guard_for_bind(host)),
+    )
+    .await?;
     Ok(())
 }
 
@@ -435,5 +507,170 @@ mod tests {
                 "non-loopback host {host} with opt-in AND token must be allowed"
             );
         }
+    }
+
+    // -------------------------------------------------------------------
+    // review F15: Host-header guard (DNS-rebinding)
+    // -------------------------------------------------------------------
+
+    /// GET an unknown session and report the status. Any status other than
+    /// 403 proves the request got past the Host guard (404 = handler ran).
+    async fn get_session_status(app: Router, host: Option<&str>) -> StatusCode {
+        let mut req = Request::builder().uri("/v1/sessions/00000000-0000-0000-0000-000000000000");
+        if let Some(h) = host {
+            req = req.header("host", h);
+        }
+        let res = app
+            .oneshot(req.body(Body::empty()).expect("build request"))
+            .await
+            .expect("oneshot");
+        res.status()
+    }
+
+    #[tokio::test]
+    async fn host_guard_rejects_rebound_hostnames() {
+        let app = router_with_secret(test_config(), None, None);
+        for host in [
+            "evil.com",
+            "evil.com:8080",
+            "127.0.0.1.evil.com",
+            "localhost.evil.com",
+            "metadata.google.internal",
+        ] {
+            assert_eq!(
+                get_session_status(app.clone(), Some(host)).await,
+                StatusCode::FORBIDDEN,
+                "Host '{host}' must be rejected by the rebinding guard"
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn host_guard_allows_loopback_host_forms() {
+        let app = router_with_secret(test_config(), None, None);
+        for host in [
+            "127.0.0.1",
+            "127.0.0.1:3000",
+            "localhost",
+            "LOCALHOST:8080",
+            "::1",
+            "[::1]",
+            "[::1]:9000",
+        ] {
+            assert_eq!(
+                get_session_status(app.clone(), Some(host)).await,
+                StatusCode::NOT_FOUND,
+                "Host '{host}' must pass the guard (404 = unknown session, not 403)"
+            );
+        }
+        // No Host header at all (HTTP/1.0 tooling, in-process probes) passes:
+        // no browser ever omits it.
+        assert_eq!(
+            get_session_status(app.clone(), None).await,
+            StatusCode::NOT_FOUND
+        );
+    }
+
+    #[tokio::test]
+    async fn host_guard_allows_the_literal_bound_host() {
+        // A loopback bind that is not one of the well-known names (e.g.
+        // 127.0.0.2) must stay reachable through its literal form via
+        // extra_hosts — this is what `guard_for_bind` wires up.
+        let inbox = std::sync::Arc::new(
+            shannon_core::inbox_store::InboxStore::open_in_memory()
+                .expect("in-memory inbox always opens"),
+        );
+        let app = router_full(
+            test_config(),
+            None,
+            None,
+            None,
+            Vec::new(),
+            inbox,
+            Some(auth::HostGuardConfig::default().with_extra_hosts(vec!["127.0.0.2".to_string()])),
+        );
+        assert_eq!(
+            get_session_status(app.clone(), Some("127.0.0.2:9999")).await,
+            StatusCode::NOT_FOUND,
+            "the literal bound host must be allowed"
+        );
+        assert_eq!(
+            get_session_status(app.clone(), Some("evil.com")).await,
+            StatusCode::FORBIDDEN,
+            "everything else stays rejected"
+        );
+    }
+
+    // -------------------------------------------------------------------
+    // review F47: one effective token for middleware AND trigger endpoint
+    // -------------------------------------------------------------------
+
+    #[test]
+    fn effective_serve_token_env_fallback() {
+        // No explicit token → the env var is honored…
+        // SAFETY: this is the only place in this crate's tests that touches
+        // the process env; router_full and every other test path read the
+        // token exclusively from their arguments, so no sibling test can
+        // observe this mutation even when `cargo test` shares the process.
+        unsafe { std::env::set_var("SHANNON_SERVE_TOKEN", "env-only-token") };
+        assert_eq!(
+            effective_serve_token(None).as_deref(),
+            Some("env-only-token")
+        );
+        // …and an explicit token wins over it.
+        assert_eq!(
+            effective_serve_token(Some("explicit".into())).as_deref(),
+            Some("explicit")
+        );
+        unsafe { std::env::remove_var("SHANNON_SERVE_TOKEN") };
+        assert_eq!(effective_serve_token(None), None);
+    }
+
+    #[tokio::test]
+    async fn router_full_token_feeds_both_middleware_and_trigger() {
+        // The F47 contract: with a token configured (explicit or — in
+        // production — via effective_serve_token), the middleware rejects
+        // requests without the right bearer (401), and the trigger endpoint
+        // treats a valid bearer as pre-authenticated (501 serve limitation,
+        // not 403).
+        let app = router_with_secret(test_config(), Some("tok".into()), None);
+
+        for auth in [None, Some("Bearer wrong")] {
+            let mut req = Request::builder()
+                .method("POST")
+                .uri("/routines/r1/trigger")
+                .header("content-type", "application/json");
+            if let Some(a) = auth {
+                req = req.header("authorization", a);
+            }
+            let res = app
+                .clone()
+                .oneshot(req.body(Body::from("{}")).unwrap())
+                .await
+                .unwrap();
+            assert_eq!(
+                res.status(),
+                StatusCode::UNAUTHORIZED,
+                "missing/wrong bearer must be rejected by the middleware"
+            );
+        }
+
+        let res = app
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/routines/r1/trigger")
+                    .header("content-type", "application/json")
+                    .header("authorization", "Bearer tok")
+                    .body(Body::from("{}"))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(
+            res.status(),
+            StatusCode::NOT_IMPLEMENTED,
+            "valid bearer replaces HMAC at the trigger endpoint"
+        );
     }
 }
