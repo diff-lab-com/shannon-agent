@@ -5,6 +5,13 @@ on:
     - cron: '0 5 * * *'  # Daily 5am UTC
   workflow_dispatch:
 
+# Same group scheme as ci.yml. A nightly never preempts another run of
+# itself, so cancel-in-progress stays off (matching publish/release and the
+# schedule-triggered workflows; review F57).
+concurrency:
+  group: Nightly Coverage-${{ github.ref }}
+  cancel-in-progress: false
+
 permissions:
   contents: read
 

@@ -160,10 +160,10 @@ commands:
   notify:
     enabled: "桌面通知已启用。"
     disabled: "桌面通知已禁用。"
-    not_available: "Docker 不可用。沙盒模式需要 Docker。"
   sandbox:
     enabled: "沙盒模式已启用（Docker 隔离）。"
     disabled: "沙盒模式已禁用（直接执行）。"
+    not_available: "Docker 不可用。沙盒模式需要 Docker。"
 
 # ── Thinking Phrases ──────────────────────────────────────────────────────
 thinking:
@@ -319,6 +319,20 @@ ui:
     pressure_high: "高"
     pressure_normal: "正常"
     pressure_low: "低"
+  status_card:
+    title: " 状态 "
+    no_provider: "未连接任何提供商。运行 /connect 即可开始。"
+    active_label: "当前："
+    tier_label: "层级："
+    available_providers: "可用提供商（已连接 {connected} / 共支持 {total}）："
+    commands: "命令：/connect · /model · /provider · /profile · /help"
+  help_overlay:
+    title: " Shannon 帮助 — 按 Esc 关闭 "
+    categories: " 分类 "
+    commands: " 命令 "
+    footer: " j/k：切换分类 │ Enter：详情 │ /：搜索 │ Esc：关闭 │ 过滤：{filter} "
+  status_bar:
+    no_provider: "[未连接提供商]"
 
 # ── CLI Help ───────────────────────────────────────────────────────────────
 cli:
