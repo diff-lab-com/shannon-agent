@@ -33,7 +33,9 @@ pub(crate) fn handle_mcp(repl: &mut Repl, args: &str) -> Result<()> {
         if let Ok(p) = std::env::var("SHANNON_MCP_APPROVALS") {
             return PathBuf::from(p);
         }
-        PathBuf::from(".shannon/mcp_approvals.json")
+        // review F6: approvals live in the user domain — a project-relative
+        // file would be refused by the loader on next startup.
+        shannon_core::McpApprovalManager::default_state_path()
     }
 
     fn load_config() -> McpConfig {
