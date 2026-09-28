@@ -181,6 +181,11 @@ rm -rf "$WT"
 REPO_PATH="$REPOS/$repo_base"
 # prune stale registrations first: a deleted rep workspace leaves the path
 # "lost but registered" in the shared clone and would fail the add below.
+# lite100 fix: a SIGKILLed `worktree add` (e.g. git-watchdog) leaves a LOCKED
+# registration that `worktree prune` deliberately preserves — force-remove it
+# so retries can proceed. Scaffolding-only change; no scoring semantics.
+git -C "$REPO_PATH" worktree unlock "$WT" >/dev/null 2>&1
+git -C "$REPO_PATH" worktree remove --force "$WT" >/dev/null 2>&1
 git -C "$REPO_PATH" worktree prune
 
 # Ensure base_commit is locally reachable BEFORE worktree add.
@@ -202,6 +207,15 @@ git -C "$REPO_PATH" worktree prune
 #      then --unshallow if still shallow. This re-uses any blobs already
 #      present locally; on the runner we measured 1–20 s per repo.
 ensure_local() {
+  # Step 0 — object-existence short circuit (lite100 fix): a fetched-by-sha
+  # base_commit may not be an ancestor of HEAD (fetch-by-sha detaches it from
+  # main's lineage), but `worktree add --detach` only needs the OBJECT. Skip
+  # the network deepening path entirely when the commit exists locally — the
+  # deepening fetch hangs on bad egress and a watchdog kill wastes 600s/task.
+  if git -C "$REPO_PATH" cat-file -e "${base_commit}^{commit}" 2>/dev/null; then
+    say "base_commit $base_commit object exists locally (ancestor check skipped)"
+    return 0
+  fi
   # Step 1 — stale .git/shallow when HEAD is already deep.
   local depth revcount shallow_lines
   depth="$(git -C "$REPO_PATH" rev-list --count HEAD 2>/dev/null || echo 0)"

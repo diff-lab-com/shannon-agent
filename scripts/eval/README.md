@@ -56,3 +56,39 @@ full rebuild; runner binaries likewise via `--eval-runner` /
    response existence. (`-p - < file` assigns the literal "-" as prompt.)
 4. **No prompt wording changes from single-task evidence.**
    (docs/backlog.md §五 records the reverted counterexample.)
+5. **Batch drivers must hard-fail on zero tasks** — a silently empty task
+   list produces a green "completed" run with no data (lite100 S6).
+6. **Consistency checks on rebuilt datasets must cover ALL judgment-relevant
+   columns** (image, eval_script AND FAIL_TO_PASS/PASS_TO_PASS). pyarrow
+   coerces a JSON string into a per-character list against a list<string>
+   schema, corrupting every test ID silently (lite100 D1 — 7 false failures).
+7. **Batch prefetch base_commits + judgment images before launching waves**;
+   a give-up list needs an automated second-chance sweep. Git network ops
+   (fetch/ls-remote/worktree add) MUST run under a timeout — bare git hangs
+   indefinitely on bad egress and one hung slot stalls the pipeline (D5–D8).
+
+## Lite100 hardening package (2026-09-28, feat/eval-hardening-thinking-knob)
+
+Full evidence chain: `~/.shannon/eval/lite100-glm-dev/{FINDINGS,REPORT}.md`.
+
+- `swe-harness.sh` — two patches: (a) SIGKILLed `worktree add` leaves a
+  LOCKED registration that `worktree prune` preserves; unlock + remove
+  --force before prune so retries work. (b) `ensure_local` short-circuits on
+  `cat-file -e <base>^{commit}` — a fetched-by-sha commit is not an ancestor
+  of HEAD, and the old path paid a hung network fetch per task (D5/D8).
+- `swe-prefetch-bases.sh` — batch preflight: verify/fetch every
+  base_commit with a hard per-fetch timeout before the run.
+- `swe-image-assurance.sh` — parallel judgment-image pull with retries,
+  give-up report and a second-chance explicit-mirror sweep (S7/S9).
+- `make-swe-v5.py` — offline v5 parquet derivation via the swebench 3.0.8
+  generator + full-column validation (D1: check F2P/P2P too — pyarrow
+  coerces JSON strings to per-character lists against list<string> schemas).
+- `profile-zhipu-coding-plan.sh` — frozen channel profile: 3 workers /
+  15 s stagger / stream-idle 360 s (3-way had zero 429s over 100 tasks;
+  6-way tripped rate limits). Optional `SHANNON_THINKING=disabled` knob
+  (engine P1-2) to trade thinking latency for wall-clock, pending A/B.
+- Engine (P1-1/P1-2): `turn/end.llm_steps` now counts LLM calls folded into
+  each turn (per-call efficiency denominator; turn/end itself remains one
+  per user-visible round by design); `SHANNON_THINKING` env knob maps to
+  the GLM `thinking.type` request field; cutoff Progress events carry the
+  error class (`class=timeout|stream_interrupted, err=…`).
