@@ -193,7 +193,7 @@ function CodeBlock(props: { children?: ReactNode } & React.HTMLAttributes<HTMLPr
           title={runLabel}
           className="h-auto px-xs py-[2px] gap-xs text-on-surface-variant hover:text-primary"
         >
-          <span className="material-symbols-outlined text-[14px]" aria-hidden="true">terminal</span>
+          <span className="material-symbols-outlined icon-xs" aria-hidden="true">terminal</span>
         </Button>
       }
     >

@@ -97,12 +97,12 @@ export function TerminalSettings() {
   const fieldsDisabled = loading || loadFailed
 
   return (
-    <div className="bg-surface-container-lowest p-lg rounded-xl shadow-sm border border-outline-variant/30 lg:col-span-2 group hover:shadow-md transition-shadow" data-testid="terminal-settings-card">
+    <div className="bg-surface-container-lowest p-lg rounded-xl shadow-e1 border border-outline-variant/30 lg:col-span-2 group hover:shadow-e2 transition-shadow" data-testid="terminal-settings-card">
       <div className="flex items-center gap-md mb-md">
-        <div className="p-2 bg-primary/10 rounded-lg text-primary flex items-center justify-center">
+        <div className="p-2 bg-primary-container rounded-lg text-on-primary-container flex items-center justify-center">
           <span className="material-symbols-outlined">terminal</span>
         </div>
-        <h3 className="font-headline-md text-[24px] font-bold text-on-surface">{t('settings.terminal.title')}</h3>
+        <h3 className="font-headline-md text-headline-md font-bold text-on-surface">{t('settings.terminal.title')}</h3>
       </div>
       <p className="text-on-surface-variant text-body-sm mb-lg">{t('settings.terminal.description')}</p>
 
@@ -115,7 +115,7 @@ export function TerminalSettings() {
           <p className="text-body-sm text-on-surface-variant">{t('settings.terminal.loadFailedDesc')}</p>
           <Button
             variant="ghost"
-            className="flex items-center gap-xs text-link font-label-md text-[14px] hover:underline cursor-pointer shrink-0"
+            className="flex items-center gap-xs text-link font-label-md text-label-md hover:underline cursor-pointer shrink-0"
             onClick={load}
             aria-label={t('settings.terminal.loadRetry')}
           >
@@ -127,7 +127,7 @@ export function TerminalSettings() {
 
       <div className="grid grid-cols-1 md:grid-cols-2 gap-md">
         <label className="flex flex-col gap-xs md:col-span-2">
-          <span className="font-label-sm text-[12px] text-on-surface-variant">
+          <span className="font-label-sm text-label-sm text-on-surface-variant">
             {t('settings.terminal.shell')}
           </span>
           <input
@@ -138,13 +138,13 @@ export function TerminalSettings() {
             aria-label={t('settings.terminal.shell')}
             className="bg-surface-container-low rounded-lg border border-outline-variant/30 px-sm py-sm text-body-sm font-mono focus:outline-none focus:ring-2 focus:ring-primary/30 disabled:opacity-50"
           />
-          <span className="font-label-sm text-[11px] text-on-surface-variant">
+          <span className="font-label-sm text-label-sm text-on-surface-variant">
             {t('settings.terminal.shellHint')}
           </span>
         </label>
 
         <label className="flex flex-col gap-xs">
-          <span className="font-label-sm text-[12px] text-on-surface-variant">
+          <span className="font-label-sm text-label-sm text-on-surface-variant">
             {t('settings.terminal.fontSize')}
           </span>
           <input
@@ -160,7 +160,7 @@ export function TerminalSettings() {
         </label>
 
         <label className="flex flex-col gap-xs">
-          <span className="font-label-sm text-[12px] text-on-surface-variant">
+          <span className="font-label-sm text-label-sm text-on-surface-variant">
             {t('settings.terminal.scrollback')}
           </span>
           <input
@@ -176,7 +176,7 @@ export function TerminalSettings() {
         </label>
 
         <label className="flex flex-col gap-xs">
-          <span className="font-label-sm text-[12px] text-on-surface-variant">
+          <span className="font-label-sm text-label-sm text-on-surface-variant">
             {t('settings.terminal.drawerHeight')}
           </span>
           <input
@@ -193,10 +193,10 @@ export function TerminalSettings() {
 
         <div className="flex items-center justify-between gap-md">
           <div>
-            <div className="font-label-md text-[14px] text-on-surface font-semibold mb-1">
+            <div className="font-label-md text-label-md text-on-surface font-semibold mb-1">
               {t('settings.terminal.screenReaderMode')}
             </div>
-            <div className="font-label-sm text-[12px] text-on-surface-variant leading-tight">
+            <div className="font-label-sm text-label-sm text-on-surface-variant leading-tight">
               {t('settings.terminal.screenReaderModeDesc')}
             </div>
           </div>
@@ -212,7 +212,7 @@ export function TerminalSettings() {
 
       <div className="flex justify-end mt-md">
         <Button
-          className="px-xl py-md bg-primary text-on-primary rounded-lg font-label-md text-[14px] font-bold hover:bg-primary/90 shadow-sm active:scale-[0.98] transition-all cursor-pointer disabled:opacity-50"
+          className="px-xl py-md bg-primary text-on-primary rounded-lg font-label-md text-label-md font-bold hover:bg-primary/90 active:scale-[0.98] transition-all cursor-pointer disabled:opacity-50"
           onClick={() => void handleSave()}
           disabled={saving || loading || !loaded}
           aria-label={t('settings.terminal.saveAria')}
