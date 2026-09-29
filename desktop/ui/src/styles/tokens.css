@@ -1,151 +1,28 @@
-/* Shannon desktop — design tokens (canonical reference).
+/* Shannon desktop — token inventory pointer + app-wide behavior rules.
  *
- * This file is the single source of truth for token names. The actual
- * token VALUES still live in `src/index.css` under the `@theme { ... }`
- * block (Tailwind v4 syntax — Tailwind compiles those declarations into
- * real CSS custom properties + utility classes).
+ * UI review 2026-09-29 (T1/T3/T5): this file NO LONGER declares token
+ * values. It used to mirror the whole light palette / spacing / type /
+ * radius / shadow / duration scales under an unlayered `:root`, which made
+ * it a SECOND source of truth that silently out-prioritized index.css
+ * (unlayered rules beat @layer) and drifted — e.g.
+ * `.material-symbols-outlined.icon-xs` rendered 14px while index.css
+ * declared 12px, and the duration scale existed in three conflicting
+ * versions. The mirror is gone; the surviving blocks below are rules that
+ * have no duplicate anywhere.
  *
- * Why split the file like this?
- *   1. Tailwind v4 requires `@theme {}` to live in a `.css` file imported
- *      with `@import "tailwindcss"` — it can't be imported from JS.
- *   2. We still want a discoverable, single-page inventory of every
- *      token a developer can reach for. That's what this file is.
- *   3. If a future Tailwind migration changes `@theme` placement, the
- *      "what tokens exist" answer remains this README-style file.
+ * Where token VALUES live now (single source each):
+ *   - Shared scales (spacing / type / radius / shadow / duration /
+ *     easing / z-index): the `@theme {}` blocks in `src/index.css`.
+ *   - Theme COLOR tokens (+ per-theme `--radius`): GENERATED from
+ *     `scripts/theme-source.json` into `src/theme/generated/themes.css` —
+ *     edit the source, run `pnpm generate:themes` (`--check` gates CI).
  *
- * Each section below maps to a block in `@theme {}` (or `:root`) in
- * `index.css`. When adding a new token:
- *   1. Add the declaration to the matching `@theme { ... }` block in
- *      `index.css` (or create a new block).
- *   2. Document it here with one line describing the intent.
- *   3. Use it via the conventional utility (Tailwind auto-generates
- *      `bg-{name}`, `text-{name}`, etc.) or `style={{ color: 'var(--color-…)' }}`.
- *
- * Color values themselves come from the Material 3 color roles (light)
- * + a curated set of dark themes. Which scheme a theme renders as is
- * decided by the registry in `src/context/ThemeContext.tsx`
- * (THEME_SCHEMES) — ThemeProvider mirrors it onto
- * `<html data-theme-mode="light|dark">`, and Tailwind v4's
- * `@custom-variant dark` rule at the top of `index.css` keys off that
- * attribute. Adding a theme: one THEMES entry + one THEME_SCHEMES line
- * there, plus its token block below — no CSS selector list to maintain.
+ * To add a token: declare it in the matching `@theme {}` block in
+ * `index.css` (theme colors go in scripts/theme-source.json instead),
+ * document it in src/styles/README.md, and consume it via the generated
+ * Tailwind utility (`bg-primary`, `text-on-surface-variant`) or
+ * `var(--color-…)` in inline styles.
  */
-
-:root {
-  /* ───── Color (light, default) ───────────────────────────────── */
-  --color-primary: #6b38d4;             /* Brand purple — primary actions, focus ring */
-  --color-on-primary: #ffffff;          /* Text on primary background */
-  --color-primary-container: #8455ef;   /* Tinted primary — chips, avatar bg (assistant) */
-  --color-on-primary-container: #fffbff;
-  --color-primary-fixed: #e9ddff;       /* User message bubble */
-  --color-on-primary-fixed: #23005c;
-  --color-primary-fixed-dim: #d0bcff;
-  --color-on-primary-fixed-variant: #5516be;
-
-  --color-secondary: #0051d5;
-  --color-on-secondary: #ffffff;
-  --color-secondary-container: #316bf3;
-  --color-on-secondary-container: #fefcff;
-
-  --color-tertiary: #855000;            /* Warning / amber accent */
-  --color-on-tertiary: #ffffff;
-  --color-tertiary-container: #a76500;
-  --color-on-tertiary-container: #fffbff;
-  --color-tertiary-fixed: #ffdcbb;
-  --color-tertiary-fixed-dim: #ffb869;
-
-  --color-error: #ba1a1a;
-  --color-error-container: #ffdad6;
-  --color-on-error: #ffffff;
-  --color-on-error-container: #93000a;
-
-  --color-surface: #f7f9fb;             /* Default page surface */
-  --color-surface-dim: #d8dadc;
-  --color-surface-bright: #f7f9fb;
-  --color-surface-container-lowest: #ffffff;
-  --color-surface-container-low: #f2f4f6;
-  --color-surface-container: #eceef0;
-  --color-surface-container-high: #e6e8ea;
-  --color-surface-container-highest: #e0e3e5;
-
-  --color-on-surface: #191c1e;
-  --color-on-surface-variant: #494454;
-  --color-inverse-surface: #2d3133;
-  --color-inverse-on-surface: #eff1f3;
-  --color-outline: #7b7486;
-  --color-outline-variant: #cbc3d7;
-
-  --color-background: #f7f9fb;
-  --color-on-background: #191c1e;
-
-  /* ───── Spacing (4-pixel scale) ──────────────────────────────── */
-  --spacing-xs: 4px;
-  --spacing-sm: 8px;
-  --spacing-md: 16px;
-  --spacing-lg: 24px;
-  --spacing-xl: 32px;
-  --spacing-gutter: 24px;     /* App-level horizontal padding */
-  --spacing-sidebar-width: 280px;
-  --spacing-footer: 32px;
-  --spacing-max-content-width: 1200px;
-
-  /* ───── Typography ───────────────────────────────────────────── */
-  --font-body-sm: "Inter Variable", ui-sans-serif, system-ui, sans-serif;
-  --font-body-md: "Inter Variable", ui-sans-serif, system-ui, sans-serif;
-  --font-body-lg: "Inter Variable", ui-sans-serif, system-ui, sans-serif;
-  --font-label-sm: "Inter Variable", ui-sans-serif, system-ui, sans-serif;
-  --font-label-md: "Inter Variable", ui-sans-serif, system-ui, sans-serif;
-  --font-headline-sm: "Inter Variable", ui-sans-serif, system-ui, sans-serif;
-  --font-headline-md: "Inter Variable", ui-sans-serif, system-ui, sans-serif;
-  --font-headline-lg: "Inter Variable", ui-sans-serif, system-ui, sans-serif;
-  --font-display-lg: "Inter Variable", ui-sans-serif, system-ui, sans-serif;
-
-  --text-label-xs: 11px;
-  --text-label-sm: 12px;
-  --text-label-md: 14px;
-  --text-body-sm: 14px;
-  --text-body-md: 16px;
-  --text-body-lg: 18px;
-  --text-headline-sm: 20px;
-  --text-headline-md: 24px;
-  --text-headline-lg: 32px;
-  --text-display-lg: 48px;
-
-  /* ───── Radius (geometric) ───────────────────────────────────── */
-  --radius-sm: calc(var(--radius) * 0.6);   /* 6px */
-  --radius-md: calc(var(--radius) * 0.8);   /* 8px */
-  --radius-lg: var(--radius);               /* 10px default */
-  --radius-xl: calc(var(--radius) * 1.4);   /* 14px */
-  --radius-2xl: calc(var(--radius) * 1.8);  /* 18px — message bubbles */
-  --radius-3xl: calc(var(--radius) * 2.2);
-  --radius: 0.625rem;                       /* 10px — base unit */
-
-  /* ───── Shadow / elevation ───────────────────────────────────── */
-  --shadow-e1: 0 1px 2px 0 rgb(0 0 0 / 0.05);                   /* Focus ring halo */
-  --shadow-e2: 0 4px 6px -1px rgb(0 0 0 / 0.08), 0 2px 4px -2px rgb(0 0 0 / 0.05);
-  --shadow-e3: 0 10px 15px -3px rgb(0 0 0 / 0.10), 0 4px 6px -4px rgb(0 0 0 / 0.05);
-  --shadow-e4: 0 20px 25px -5px rgb(0 0 0 / 0.12), 0 8px 10px -6px rgb(0 0 0 / 0.05);
-  --shadow-e5: 0 25px 50px -12px rgb(0 0 0 / 0.25);            /* Modals */
-
-  /* ───── Animation durations ──────────────────────────────────── */
-  --duration-fast: 100ms;        /* Hover state changes */
-  --duration-normal: 160ms;      /* Default transition */
-  --duration-slow: 240ms;        /* Panel slides */
-  --duration-slower: 400ms;      /* Page transitions */
-
-  /* ───── Z-index scale ────────────────────────────────────────── */
-  /* Removed — the live scale now lives in index.css @theme as
-     --z-index-* keys (z-raised / z-subheader / z-header / z-modal /
-     z-scrim / z-drawer / z-flash utilities). This block had zero
-     references; keeping two scales was the drift trap. */
-}
-
-/* Inline icon sizing — short Tailwind utility helpers */
-.material-symbols-outlined.icon-xs { font-size: 14px; }
-.material-symbols-outlined.icon-sm { font-size: 16px; }
-.material-symbols-outlined.icon-md { font-size: 20px; }
-.material-symbols-outlined.icon-lg { font-size: 24px; }
-.material-symbols-outlined.icon-xl { font-size: 32px; }
 
 /* Reduce-motion — kill non-essential animations */
 @media (prefers-reduced-motion: reduce) {
@@ -159,7 +36,7 @@
   }
 }
 
-/* ───── Shared animation keyframes (used in tokens.css so they're
+/* ───── Shared animation keyframes (defined here so they're
  *       trivially overridable per theme) ───── */
 
 /* Typing cursor — a slim block that blinks. Used by StreamingResponse.

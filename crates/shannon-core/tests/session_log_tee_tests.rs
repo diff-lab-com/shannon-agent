@@ -15,6 +15,10 @@
 //!    reconstruction byte for byte.
 
 #![allow(clippy::unwrap_used)]
+// Every test below holds `global_state_lock()` across awaits: the guarded
+// `SHANNON_HOME` is read mid-run by the engine, and the lock is uncontended
+// per-process (nextest: one process per test), so it cannot deadlock.
+#![allow(clippy::await_holding_lock)]
 
 mod session_log_tee {
     use async_trait::async_trait;
@@ -113,6 +117,7 @@ mod session_log_tee {
 
     fn make_engine(mock_url: &str, session_id: Uuid) -> QueryEngine {
         let config = LlmClientConfig {
+            thinking_type: None,
             api_key: "test-key".to_string(),
             base_url: mock_url.to_string(),
             model: "claude-sonnet-4-20250514".to_string(),
@@ -471,6 +476,7 @@ mod session_log_tee {
             .create();
 
         let config = LlmClientConfig {
+            thinking_type: None,
             api_key: "test-key".to_string(),
             base_url: mock_url.clone(),
             model: "claude-sonnet-4-20250514".to_string(),

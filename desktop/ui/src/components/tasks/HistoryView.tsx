@@ -33,7 +33,7 @@ function StatusPill({ status }: { status: string }) {
   const intl = useIntl()
   const badge = statusBadge(status)
   return (
-    <span className={cn('inline-flex items-center gap-1 px-2 py-0.5 rounded-full border text-[11px] font-bold', badge.bg)}>
+    <span className={cn('inline-flex items-center gap-xs px-sm py-0.5 rounded-full border text-label-xs font-bold', badge.bg)}>
       <span className="material-symbols-outlined icon-xs">{badge.icon}</span>
       {intl.formatMessage({ id: badge.labelId }, badge.values)}
     </span>
@@ -168,8 +168,8 @@ export default function HistoryView({
   return (
     <div className="space-y-sm">
       <div className="flex items-center justify-between mb-md">
-        <h3 className="font-label-md text-[14px] font-bold text-on-surface-variant uppercase tracking-widest">{t('tasks.historyView.title')}</h3>
-        <span className="font-label-sm text-[11px] text-on-surface-variant">{intl.formatMessage({ id: 'tasks.historyView.runsCount' }, { count: visibleRows.length })}</span>
+        <h3 className="font-label-md text-body-sm font-bold text-on-surface-variant uppercase tracking-widest">{t('tasks.historyView.title')}</h3>
+        <span className="font-label-sm text-label-xs text-on-surface-variant">{intl.formatMessage({ id: 'tasks.historyView.runsCount' }, { count: visibleRows.length })}</span>
       </div>
       <div className="space-y-sm">
         {visibleRows.map(row => {
@@ -187,15 +187,15 @@ export default function HistoryView({
                   aria-expanded={isExpanded}
                 >
                   <StatusPill status={row.status} />
-                  <span className="font-label-md text-[13px] font-bold truncate flex-1">{row.task_name}</span>
-                  <span className="font-label-sm text-[11px] text-on-surface-variant whitespace-nowrap">{formatUnixDateTime(row.started_at)}</span>
-                  <span className="font-label-sm text-[11px] text-on-surface-variant whitespace-nowrap">{durationLabel(row.started_at, row.finished_at)}</span>
+                  <span className="font-label-md text-label-sm font-bold truncate flex-1">{row.task_name}</span>
+                  <span className="font-label-sm text-label-xs text-on-surface-variant whitespace-nowrap">{formatUnixDateTime(row.started_at)}</span>
+                  <span className="font-label-sm text-label-xs text-on-surface-variant whitespace-nowrap">{durationLabel(row.started_at, row.finished_at)}</span>
                   {row.cost_usd != null ? (
-                    <span className="font-label-sm text-[11px] text-on-surface-variant whitespace-nowrap">${row.cost_usd.toFixed(4)}</span>
-                  ) : <span className="font-label-sm text-[11px] text-on-surface-variant/60">—</span>}
+                    <span className="font-label-sm text-label-xs text-on-surface-variant whitespace-nowrap">${row.cost_usd.toFixed(4)}</span>
+                  ) : <span className="font-label-sm text-label-xs text-on-surface-variant/60">—</span>}
                   {row.token_usage != null ? (
-                    <span className="font-label-sm text-[11px] text-on-surface-variant whitespace-nowrap">{row.token_usage.toLocaleString()} tok</span>
-                  ) : <span className="font-label-sm text-[11px] text-on-surface-variant/60">—</span>}
+                    <span className="font-label-sm text-label-xs text-on-surface-variant whitespace-nowrap">{row.token_usage.toLocaleString()} tok</span>
+                  ) : <span className="font-label-sm text-label-xs text-on-surface-variant/60">—</span>}
                   <span className={cn('material-symbols-outlined icon-sm text-on-surface-variant transition-transform', isExpanded ? 'rotate-180' : '')}>expand_more</span>
                 </Button>
                 {/* IA T2: secondary action — the run's result card lives on
@@ -209,8 +209,8 @@ export default function HistoryView({
                   className="px-sm rounded-none border-l border-outline-variant/10 hover:bg-surface-container-low/40 text-on-surface-variant hover:text-primary whitespace-nowrap"
                   onClick={() => openInInbox(row)}
                 >
-                  <span className="material-symbols-outlined text-[16px]" aria-hidden="true">inbox</span>
-                  <span className="hidden md:inline font-label-sm text-[11px]">{t('tasks.historyView.viewInInbox')}</span>
+                  <span className="material-symbols-outlined icon-sm" aria-hidden="true">inbox</span>
+                  <span className="hidden md:inline font-label-sm text-label-xs">{t('tasks.historyView.viewInInbox')}</span>
                 </Button>
               </div>
               {isExpanded ? (
@@ -221,24 +221,24 @@ export default function HistoryView({
                     <div className="pt-md space-y-sm">
                       {detail.prompt ? (
                         <div>
-                          <div className="font-label-sm text-[11px] text-on-surface-variant uppercase tracking-wider mb-xs">{t('tasks.historyView.prompt')}</div>
-                          <pre className="font-mono text-[12px] bg-surface-container-low/60 rounded p-sm whitespace-pre-wrap break-words">{detail.prompt}</pre>
+                          <div className="font-label-sm text-label-xs text-on-surface-variant uppercase tracking-wider mb-xs">{t('tasks.historyView.prompt')}</div>
+                          <pre className="font-mono text-label-sm bg-surface-container-low/60 rounded-sm p-sm whitespace-pre-wrap break-words">{detail.prompt}</pre>
                         </div>
                       ) : null}
                       {detail.cron_expr ? (
-                        <div className="font-label-sm text-[12px] text-on-surface-variant">
+                        <div className="font-label-sm text-label-sm text-on-surface-variant">
                           <strong>{t('tasks.historyView.cron')}:</strong> <code className="font-mono">{detail.cron_expr}</code>
                         </div>
                       ) : null}
                       {detail.next_fire_at ? (
-                        <div className="font-label-sm text-[12px] text-on-surface-variant">
+                        <div className="font-label-sm text-label-sm text-on-surface-variant">
                           <strong>{t('tasks.historyView.nextFire')}:</strong> {formatUnixDateTime(detail.next_fire_at)}
                         </div>
                       ) : null}
                       {row.error_message ? (
                         <div>
-                          <div className="font-label-sm text-[11px] text-error uppercase tracking-wider mb-xs">{t('tasks.historyView.error')}</div>
-                          <pre className="font-mono text-[12px] bg-error/5 text-error border border-error/20 rounded p-sm whitespace-pre-wrap break-words">{row.error_message}</pre>
+                          <div className="font-label-sm text-label-xs text-error uppercase tracking-wider mb-xs">{t('tasks.historyView.error')}</div>
+                          <pre className="font-mono text-label-sm bg-error-container text-on-error-container border border-error/20 rounded-sm p-sm whitespace-pre-wrap break-words">{row.error_message}</pre>
                         </div>
                       ) : null}
                     </div>

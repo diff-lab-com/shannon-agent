@@ -76,7 +76,7 @@ export function LinkContextMenuHost() {
       aria-label={intl.formatMessage({ id: 'link.menu.aria' })}
       data-testid="link-context-menu"
       onKeyDown={(e) => handleMenuKeyDown(e, menuRef.current, () => setMenu(null))}
-      className="fixed z-modal min-w-52 rounded-lg border border-outline-variant/20 bg-surface-container-high p-xs shadow-lg animate-in fade-in zoom-in-95"
+      className="fixed z-modal min-w-52 rounded-lg border border-outline-variant/20 bg-surface-container-high p-xs shadow-e3 animate-in fade-in zoom-in-95"
       style={{
         left: Math.max(4, Math.min(menu.x, window.innerWidth - MENU_WIDTH - 8)),
         top: Math.max(4, Math.min(menu.y, window.innerHeight - MENU_HEIGHT_ESTIMATE - 8)),
@@ -84,11 +84,11 @@ export function LinkContextMenuHost() {
       onClick={() => setMenu(null)}
     >
       <button type="button" role="menuitem" className={itemClass} onClick={() => void openLink(menu.url, 'panel')}>
-        <span className="material-symbols-outlined text-[16px]" aria-hidden="true">right_panel_open</span>
+        <span className="material-symbols-outlined icon-sm" aria-hidden="true">right_panel_open</span>
         {intl.formatMessage({ id: 'link.menu.openPanel' })}
       </button>
       <button type="button" role="menuitem" className={itemClass} onClick={() => void openLink(menu.url, 'browser')}>
-        <span className="material-symbols-outlined text-[16px]" aria-hidden="true">open_in_new</span>
+        <span className="material-symbols-outlined icon-sm" aria-hidden="true">open_in_new</span>
         {intl.formatMessage({ id: 'link.menu.openBrowser' })}
       </button>
     </div>

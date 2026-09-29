@@ -197,7 +197,7 @@ export default function Skills() {
   const catalogPage = usePagedVisible(filtered, CATALOG_PAGE_SIZE);
 
   return (
-    <div className="p-lg max-w-6xl mx-auto space-y-xl">
+    <div className="p-lg max-w-medium mx-auto space-y-xl">
       <header>
         <h2 className="text-headline-md font-headline-md text-on-surface mb-xs">{t('extensions.skills.title')}</h2>
         <p className="text-body-md text-on-surface-variant">
@@ -283,7 +283,7 @@ export default function Skills() {
                 className={cn(
                   "px-sm py-xs rounded-full text-label-sm transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/30",
                   installedFilter === opt.id
-                    ? 'bg-primary/10 text-primary'
+                    ? 'bg-primary-container text-on-primary-container'
                     : 'text-on-surface-variant hover:bg-surface-container hover:text-on-surface',
                 )}
               >
@@ -329,7 +329,7 @@ export default function Skills() {
                   i !== filteredInstalled.length - 1 && "border-b border-outline-variant/15",
                 )}
                 >
-                  <span className="material-symbols-outlined text-primary text-[20px]">{isAgentAuthored ? 'auto_fix' : 'extension'}</span>
+                  <span className="material-symbols-outlined text-primary icon-md">{isAgentAuthored ? 'auto_fix' : 'extension'}</span>
                   <div className="flex-1 min-w-0">
                     <div className="flex items-center gap-xs">
                       <span className="font-bold text-label-md text-on-surface truncate">{skill.name}</span>

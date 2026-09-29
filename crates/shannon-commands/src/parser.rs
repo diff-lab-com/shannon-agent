@@ -167,6 +167,8 @@ fn parse_command(input: &str) -> IResult<&str, (&str, &str)> {
 ///
 /// Separators inside single- or double-quoted spans are literal text, so
 /// quoted argument values (`-m "fix; refactor"`) never split a command.
+/// Within a quoted span, a backslash before the *matching* quote character
+/// embeds that quote literally (`-m "say \"hi\"" `) instead of closing it.
 fn split_command_chain(input: &str) -> Vec<String> {
     let mut segments: Vec<String> = Vec::new();
     let mut current = String::new();
@@ -175,6 +177,11 @@ fn split_command_chain(input: &str) -> Vec<String> {
 
     while let Some(c) = chars.next() {
         if let Some(q) = quote {
+            if c == '\\' && chars.peek() == Some(&q) {
+                chars.next(); // consume the escaped quote, keep it literally
+                current.push(q);
+                continue;
+            }
             current.push(c);
             if c == q {
                 quote = None;
@@ -207,14 +214,21 @@ fn split_command_chain(input: &str) -> Vec<String> {
 
 /// Tokenize an args string on whitespace, keeping quoted spans as single
 /// tokens with their quotes stripped (`--text "hello -world"` → two tokens:
-/// `--text`, `hello -world`).
+/// `--text`, `hello -world`). Within a quoted span, a backslash before the
+/// matching quote embeds it literally (`-m "say \"hi\""` → `say "hi"`).
 fn split_args_tokens(input: &str) -> Vec<String> {
     let mut tokens: Vec<String> = Vec::new();
     let mut current = String::new();
     let mut quote: Option<char> = None;
+    let mut chars = input.chars().peekable();
 
-    for c in input.chars() {
+    while let Some(c) = chars.next() {
         if let Some(q) = quote {
+            if c == '\\' && chars.peek() == Some(&q) {
+                chars.next(); // consume the escaped quote, keep it literally
+                current.push(q);
+                continue;
+            }
             if c == q {
                 quote = None;
             } else {
@@ -627,6 +641,29 @@ mod tests {
         assert_eq!(result.len(), 2);
         assert!(result[0].args.contains("fix; refactor"));
         assert_eq!(result[1].name, "test");
+    }
+
+    #[test]
+    fn test_parse_multiple_chain_handles_escaped_quote_in_quoted_span() {
+        let parser = CommandParser::new();
+        // `\"` inside a double-quoted span is a literal quote: it neither
+        // closes the span nor leaks into the next chain segment (review F36).
+        let result = parser
+            .parse_multiple(r#"/commit -m "say \"hi\"" ; /test"#)
+            .unwrap();
+        assert_eq!(result.len(), 2);
+        assert!(result[0].args.contains(r#"say "hi""#));
+        assert!(!result[0].args.contains(';'));
+        assert_eq!(result[1].name, "test");
+    }
+
+    #[test]
+    fn test_split_args_tokens_keeps_escaped_quote_literal() {
+        // Tokenizer: `\"` inside a quoted span stays in the token as `"`.
+        let tokens = split_args_tokens(r#"-m "say \"hi\" now""#);
+        assert_eq!(tokens.len(), 2);
+        assert_eq!(tokens[0], "-m");
+        assert_eq!(tokens[1], r#"say "hi" now"#);
     }
 
     #[test]

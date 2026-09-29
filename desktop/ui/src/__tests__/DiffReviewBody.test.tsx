@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
-import { render, screen, fireEvent, waitFor, cleanup } from '@testing-library/react'
+import { render, screen, fireEvent, waitFor, cleanup, act } from '@testing-library/react'
 import DiffReviewBody from '@/components/diff/DiffReviewBody'
 import * as api from '@/lib/tauri-api'
 
@@ -44,6 +44,12 @@ describe('DiffReviewBody — apply guards (B0 P0-3 / P0-4)', () => {
     fireEvent.click(await screen.findByText('Accept all'))
 
     // Both Enters land inside the keyboard gate in the same tick.
+    // useDiffKeyboard registers its document keydown listener in a passive
+    // effect, which React flushes asynchronously — a findBy can observe the
+    // DOM commit before that flush runs (hit CI once on 2026-09-28). Flush
+    // effects deterministically so the listener is armed before any key
+    // dispatch; the two Enters below still land in the same tick.
+    await act(async () => {})
     const root = container.firstElementChild as HTMLElement
     fireEvent.keyDown(root, { key: 'Enter' })
     fireEvent.keyDown(root, { key: 'Enter' })
@@ -113,6 +119,13 @@ describe('DiffReviewBody — visible hunk focus (B4 P1-33)', () => {
     expect(first!.className).toContain('ring-2')
 
     // j advances the cursor — the anchor moves to the second hunk's header.
+    // The document keydown listener is attached in a passive effect, which
+    // React flushes asynchronously: findByText can resolve off the DOM
+    // commit before that flush runs, and a keyDown dispatched in that window
+    // is silently dropped (this exact race failed CI once, 2026-09-28).
+    // Flush effects deterministically — no sleeps — so the listener is
+    // guaranteed armed before the key event.
+    await act(async () => {})
     fireEvent.keyDown(container.firstElementChild as HTMLElement, { key: 'j' })
     await waitFor(() => {
       const anchors = container.querySelectorAll('[data-current-hunk="true"]')

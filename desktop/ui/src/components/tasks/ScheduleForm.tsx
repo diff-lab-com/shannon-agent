@@ -164,19 +164,19 @@ export default function ScheduleForm({ onSubmit, onCancel }: ScheduleFormProps) 
   }
 
   return (
-    <div className="bg-surface-container-lowest border border-primary/30 rounded-xl p-lg mb-lg flex flex-col gap-md shadow-sm">
+    <div className="bg-surface-container-lowest border border-primary/30 rounded-xl p-lg mb-lg flex flex-col gap-md shadow-e1">
       <div className="flex items-center justify-between">
         <h3 className="font-body-lg font-bold text-on-surface">{t('tasks.scheduleForm.title')}</h3>
         <Button
           variant="ghost"
           size="sm"
           type="button"
-          className="font-label-sm text-primary hover:bg-primary/10 rounded px-sm py-xs gap-1"
+          className="font-label-sm text-primary hover:bg-primary/10 rounded-sm px-sm py-xs gap-xs"
           onClick={() => setShowPolicy(!showPolicy)}
           aria-expanded={showPolicy}
           aria-controls="schedule-policy"
         >
-          <span className="material-symbols-outlined text-[14px]">{showPolicy ? 'remove' : 'settings'}</span>
+          <span className="material-symbols-outlined icon-sm">{showPolicy ? 'remove' : 'settings'}</span>
           {showPolicy ? t('tasks.scheduleForm.hidePolicy') : t('tasks.scheduleForm.policyOptions')}
         </Button>
       </div>
@@ -204,20 +204,20 @@ export default function ScheduleForm({ onSubmit, onCancel }: ScheduleFormProps) 
             type="button"
             onClick={tryParseNl}
             disabled={!nlInput.trim()}
-            className="px-md py-sm rounded-lg font-label-md text-[12px] hover:bg-primary/90"
+            className="px-md py-sm rounded-lg font-label-md text-label-sm hover:bg-primary/90"
           >
             {t('tasks.scheduleForm.parse')}
           </Button>
         </div>
         {nlError ? (
-          <div className="font-label-sm text-[11px] text-error flex items-center gap-xs">
-            <span className="material-symbols-outlined text-[14px]">error</span>
+          <div className="font-label-sm text-label-xs text-error flex items-center gap-xs">
+            <span className="material-symbols-outlined icon-sm">error</span>
             {nlError}
           </div>
         ) : null}
         {nlMatch ? (
-          <div className="font-label-sm text-[11px] text-tertiary flex items-center gap-xs">
-            <span className="material-symbols-outlined text-[14px]">check_circle</span>
+          <div className="font-label-sm text-label-xs text-tertiary flex items-center gap-xs">
+            <span className="material-symbols-outlined icon-sm">check_circle</span>
             {t('tasks.scheduleForm.parsed')} {renderCronDesc(nlMatch)}
           </div>
         ) : null}
@@ -267,7 +267,7 @@ export default function ScheduleForm({ onSubmit, onCancel }: ScheduleFormProps) 
                   <span className="material-symbols-outlined icon-sm">{opt.icon}</span>
                   <span className="font-label-md font-bold">{t(`tasks.scheduleForm.type.${opt.value}`)}</span>
                 </span>
-                <span className="font-label-sm text-[11px] text-on-surface-variant">{t(`tasks.scheduleForm.typeHint.${opt.value}`)}</span>
+                <span className="font-label-sm text-label-xs text-on-surface-variant">{t(`tasks.scheduleForm.typeHint.${opt.value}`)}</span>
               </Button>
             )
           })}
@@ -284,7 +284,7 @@ export default function ScheduleForm({ onSubmit, onCancel }: ScheduleFormProps) 
             onChange={e => setIntervalSecs(Math.max(1, Number(e.target.value) || 0))}
             className="bg-surface-container-low rounded-lg border border-outline-variant/30 px-sm py-sm text-body-sm focus:outline-none focus:ring-2 focus:ring-primary/30"
           />
-          <span className="font-label-sm text-[11px] text-on-surface-variant">
+          <span className="font-label-sm text-label-xs text-on-surface-variant">
             {intl.formatMessage({ id: 'tasks.scheduleForm.intervalHint' }, { mins: Math.round(intervalSecs / 60), hrs: Math.round(intervalSecs / 3600) })}
           </span>
         </label>
@@ -303,16 +303,16 @@ export default function ScheduleForm({ onSubmit, onCancel }: ScheduleFormProps) 
             />
           </label>
           {cronLoading ? (
-            <span className="font-label-sm text-[11px] text-on-surface-variant">{t('tasks.scheduleForm.checking')}</span>
+            <span className="font-label-sm text-label-xs text-on-surface-variant">{t('tasks.scheduleForm.checking')}</span>
           ) : cronPreview ? (
             cronPreview.valid ? (
-              <div className="font-label-sm text-[11px] text-on-surface-variant flex items-center gap-xs">
-                <span className="material-symbols-outlined text-[14px] text-primary">check_circle</span>
+              <div className="font-label-sm text-label-xs text-on-surface-variant flex items-center gap-xs">
+                <span className="material-symbols-outlined icon-sm text-primary">check_circle</span>
                 {t('tasks.scheduleForm.next')} {cronPreview.next_fires.slice(0, 3).map(n => new Date(n * 1000).toLocaleString()).join(' · ')}
               </div>
             ) : (
-              <div className="font-label-sm text-[11px] text-error flex items-center gap-xs">
-                <span className="material-symbols-outlined text-[14px]">error</span>
+              <div className="font-label-sm text-label-xs text-error flex items-center gap-xs">
+                <span className="material-symbols-outlined icon-sm">error</span>
                 {cronPreview.error ?? t('tasks.scheduleForm.invalidCron')}
               </div>
             )
@@ -322,8 +322,8 @@ export default function ScheduleForm({ onSubmit, onCancel }: ScheduleFormProps) 
 
       {triggerType === 'webhook' ? (
         <div className="bg-tertiary/10 border border-tertiary/30 rounded-lg p-md flex gap-sm items-start">
-          <span className="material-symbols-outlined text-[18px] text-on-tertiary">info</span>
-          <div className="font-label-sm text-[12px] text-on-surface-variant">
+          <span className="material-symbols-outlined icon-md text-on-tertiary">info</span>
+          <div className="font-label-sm text-label-sm text-on-surface-variant">
             {t('tasks.scheduleForm.webhookInfo')}
           </div>
         </div>
@@ -331,8 +331,8 @@ export default function ScheduleForm({ onSubmit, onCancel }: ScheduleFormProps) 
 
       {triggerType === 'event' ? (
         <div className="bg-secondary/10 border border-secondary/30 rounded-lg p-md flex gap-sm items-start">
-          <span className="material-symbols-outlined text-[18px] text-secondary">info</span>
-          <div className="font-label-sm text-[12px] text-on-surface-variant">
+          <span className="material-symbols-outlined icon-md text-secondary">info</span>
+          <div className="font-label-sm text-label-sm text-on-surface-variant">
             {t('tasks.scheduleForm.eventInfo')}
           </div>
         </div>
@@ -361,7 +361,7 @@ export default function ScheduleForm({ onSubmit, onCancel }: ScheduleFormProps) 
               onChange={e => setPolicy({ ...policy, max_retries: Math.max(0, Number(e.target.value) || 0) })}
               className="bg-surface-container-low rounded-lg border border-outline-variant/30 px-sm py-sm text-body-sm focus:outline-none focus:ring-2 focus:ring-primary/30"
             />
-            <span className="font-label-sm text-[11px] text-on-surface-variant">{t('tasks.scheduleForm.maxRetriesHint')}</span>
+            <span className="font-label-sm text-label-xs text-on-surface-variant">{t('tasks.scheduleForm.maxRetriesHint')}</span>
           </label>
           <label className="flex flex-col gap-xs">
             <span className="font-label-md text-on-surface-variant">{t('tasks.scheduleForm.timeout')}</span>
@@ -431,13 +431,13 @@ export default function ScheduleForm({ onSubmit, onCancel }: ScheduleFormProps) 
                 {t('tasks.scheduleForm.offpeak.toggle')}
               </span>
             </label>
-            <span className="font-label-sm text-[11px] text-on-surface-variant">
+            <span className="font-label-sm text-label-xs text-on-surface-variant">
               {t('tasks.scheduleForm.offpeak.hint')}
             </span>
             {offpeakEnabled ? (
               <div className="grid grid-cols-2 md:grid-cols-3 gap-sm mt-xs">
                 <label className="flex flex-col gap-xs">
-                  <span className="font-label-sm text-[11px] text-on-surface-variant">
+                  <span className="font-label-sm text-label-xs text-on-surface-variant">
                     {t('tasks.scheduleForm.offpeak.startHour')}
                   </span>
                   <input
@@ -451,7 +451,7 @@ export default function ScheduleForm({ onSubmit, onCancel }: ScheduleFormProps) 
                   />
                 </label>
                 <label className="flex flex-col gap-xs">
-                  <span className="font-label-sm text-[11px] text-on-surface-variant">
+                  <span className="font-label-sm text-label-xs text-on-surface-variant">
                     {t('tasks.scheduleForm.offpeak.endHour')}
                   </span>
                   <input
@@ -465,7 +465,7 @@ export default function ScheduleForm({ onSubmit, onCancel }: ScheduleFormProps) 
                   />
                 </label>
                 <label className="flex flex-col gap-xs md:col-span-2 md:grid-cols-0">
-                  <span className="font-label-sm text-[11px] text-on-surface-variant">
+                  <span className="font-label-sm text-label-xs text-on-surface-variant">
                     {t('tasks.scheduleForm.offpeak.timezone')}
                   </span>
                   <input
@@ -476,7 +476,7 @@ export default function ScheduleForm({ onSubmit, onCancel }: ScheduleFormProps) 
                     className="bg-surface-container-low rounded-lg border border-outline-variant/30 px-sm py-sm text-body-sm font-mono focus:outline-none focus:ring-2 focus:ring-primary/30"
                     aria-label={t('tasks.scheduleForm.offpeak.timezone')}
                   />
-                  <span className="font-label-sm text-[10px] text-on-surface-variant">
+                  <span className="font-label-sm text-label-2xs text-on-surface-variant">
                     {intl.formatMessage({ id: 'tasks.scheduleForm.offpeak.timezoneHint' }, { zone: localTimeZone })}
                   </span>
                 </label>

@@ -249,6 +249,7 @@ pub fn query_event_to_session_body(event: &QueryEvent) -> Option<SessionEventBod
         }),
         QueryEvent::TurnCompleted { tokens_used, .. } => {
             SessionEventBody::TurnEnd(TurnEndPayload {
+                llm_steps: Some(1),
                 reason: TurnEndPayload::REASON_COMPLETED.into(),
                 usage: Some(TokenUsage {
                     input_tokens: 0,
@@ -551,7 +552,8 @@ mod tests {
     fn test_mapping_unmapped_variants_return_none() {
         assert!(
             query_event_to_session_body(&QueryEvent::Completed {
-                query_id: query_id()
+                query_id: query_id(),
+                outcome: Default::default(),
             })
             .is_none()
         );

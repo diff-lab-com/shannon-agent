@@ -295,12 +295,12 @@ export default function AdvancedSettings() {
 
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-gutter">
         {/* Skill Extraction */}
-        <div className="bg-surface-container-lowest p-lg rounded-xl shadow-sm border border-outline-variant/30 group hover:shadow-md transition-shadow">
+        <div className="bg-surface-container-lowest p-lg rounded-xl shadow-e1 border border-outline-variant/30 group hover:shadow-e2 transition-shadow">
           <div className="flex items-center gap-md mb-md">
-            <div className="p-2 bg-tertiary/10 rounded-lg text-tertiary flex items-center justify-center">
+            <div className="p-sm bg-tertiary-container rounded-lg text-on-tertiary-container flex items-center justify-center">
               <span className="material-symbols-outlined">auto_awesome</span>
             </div>
-            <h3 className="font-headline-md text-[24px] font-bold text-on-surface">{t('settings.skillLoop.title')}</h3>
+            <h3 className="font-headline-md text-headline-md font-bold text-on-surface">{t('settings.skillLoop.title')}</h3>
             {candidates.length > 0 && (
               <span className="ml-auto px-sm py-[2px] rounded-full bg-tertiary-container text-on-tertiary-container text-label-xs font-bold">
                 {intl.formatMessage({ id: 'settings.skillLoop.pendingCount' }, { count: candidates.length })}
@@ -310,22 +310,22 @@ export default function AdvancedSettings() {
           <p className="text-on-surface-variant text-body-sm mb-lg">{t('settings.skillLoop.description')}</p>
           <div className="flex items-center justify-between gap-md">
             <div>
-              <div className="font-label-md text-[14px] text-on-surface font-semibold mb-1">{t('settings.skillLoop.enabled')}</div>
-              <div className="font-label-sm text-[12px] text-on-surface-variant leading-tight">{t('settings.skillLoop.enabledDesc')}</div>
+              <div className="font-label-md text-body-sm text-on-surface font-semibold mb-xs">{t('settings.skillLoop.enabled')}</div>
+              <div className="font-label-sm text-label-sm text-on-surface-variant leading-tight">{t('settings.skillLoop.enabledDesc')}</div>
             </div>
             <Switch checked={skillLoopEnabled} onCheckedChange={v => handleToggle('skill_loop_enabled', v, setSkillLoopEnabled)} className="shrink-0" aria-label={t('settings.skillLoop.enabled')} />
           </div>
           <div className="flex items-center justify-between gap-md mt-md">
             <div>
-              <div className="font-label-md text-[14px] text-on-surface font-semibold mb-1">{t('settings.skillLoop.detectionEnabled')}</div>
-              <div className="font-label-sm text-[12px] text-on-surface-variant leading-tight">{t('settings.skillLoop.detectionEnabledDesc')}</div>
+              <div className="font-label-md text-body-sm text-on-surface font-semibold mb-xs">{t('settings.skillLoop.detectionEnabled')}</div>
+              <div className="font-label-sm text-label-sm text-on-surface-variant leading-tight">{t('settings.skillLoop.detectionEnabledDesc')}</div>
             </div>
             <Switch checked={skillDetectionEnabled} onCheckedChange={v => handleToggle('skill_detection_enabled', v, setSkillDetectionEnabled)} className="shrink-0" aria-label={t('settings.skillLoop.detectionEnabled')} />
           </div>
           {candidates.length > 0 && (
             <Button
               variant="ghost"
-              className="w-full mt-md py-sm border border-tertiary/30 rounded-lg text-tertiary font-label-md font-bold text-[14px] hover:bg-tertiary-container/30 transition-colors cursor-pointer"
+              className="w-full mt-md py-sm border border-tertiary/30 rounded-lg text-tertiary font-label-md font-bold text-body-sm hover:bg-tertiary-container/30 transition-colors cursor-pointer"
               onClick={() => navigate('/extensions/pending')}
             >
               <span className="material-symbols-outlined icon-sm mr-xs">rate_review</span>
@@ -336,25 +336,25 @@ export default function AdvancedSettings() {
 
         {/* Dream distillation (梦境提炼) — nightly idle-time pass + its L3
             refine step, both default off, review-gated writes only. */}
-        <div className="bg-surface-container-lowest p-lg rounded-xl shadow-sm border border-outline-variant/30 group hover:shadow-md transition-shadow" data-testid="dream-card">
+        <div className="bg-surface-container-lowest p-lg rounded-xl shadow-e1 border border-outline-variant/30 group hover:shadow-e2 transition-shadow" data-testid="dream-card">
           <div className="flex items-center gap-md mb-md">
-            <div className="p-2 bg-primary/10 rounded-lg text-primary flex items-center justify-center">
+            <div className="p-sm bg-primary-container rounded-lg text-on-primary-container flex items-center justify-center">
               <span className="material-symbols-outlined">bedtime</span>
             </div>
-            <h3 className="font-headline-md text-[24px] font-bold text-on-surface">{t('settings.dream.title')}</h3>
+            <h3 className="font-headline-md text-headline-md font-bold text-on-surface">{t('settings.dream.title')}</h3>
           </div>
           <p className="text-on-surface-variant text-body-sm mb-lg">{t('settings.dream.description')}</p>
           <div className="flex items-center justify-between gap-md">
             <div>
-              <div className="font-label-md text-[14px] text-on-surface font-semibold mb-1">{t('settings.dream.enabled')}</div>
-              <div className="font-label-sm text-[12px] text-on-surface-variant leading-tight">{t('settings.dream.enabledDesc')}</div>
+              <div className="font-label-md text-body-sm text-on-surface font-semibold mb-xs">{t('settings.dream.enabled')}</div>
+              <div className="font-label-sm text-label-sm text-on-surface-variant leading-tight">{t('settings.dream.enabledDesc')}</div>
             </div>
             <Switch checked={dreamEnabled} onCheckedChange={v => handleToggle('dream_enabled', v, setDreamEnabled)} className="shrink-0" aria-label={t('settings.dream.enabled')} />
           </div>
           <div className="flex items-center justify-between gap-md mt-md">
             <div>
-              <div className="font-label-md text-[14px] text-on-surface font-semibold mb-1">{t('settings.dream.distillEnabled')}</div>
-              <div className="font-label-sm text-[12px] text-on-surface-variant leading-tight">{t('settings.dream.distillEnabledDesc')}</div>
+              <div className="font-label-md text-body-sm text-on-surface font-semibold mb-xs">{t('settings.dream.distillEnabled')}</div>
+              <div className="font-label-sm text-label-sm text-on-surface-variant leading-tight">{t('settings.dream.distillEnabledDesc')}</div>
             </div>
             <Switch checked={dreamSkillDistillEnabled} onCheckedChange={v => handleToggle('dream_skill_distill_enabled', v, setDreamSkillDistillEnabled)} className="shrink-0" aria-label={t('settings.dream.distillEnabled')} />
           </div>
@@ -364,23 +364,23 @@ export default function AdvancedSettings() {
             parked next to the Dream/Skill cards. The description carries the
             informed-consent copy the review required: 仅清理已归档会话；按
             最后活跃时间计时；默认永不自动删除. */}
-        <div className="bg-surface-container-lowest p-lg rounded-xl shadow-sm border border-outline-variant/30 group hover:shadow-md transition-shadow" data-testid="session-gc-card">
+        <div className="bg-surface-container-lowest p-lg rounded-xl shadow-e1 border border-outline-variant/30 group hover:shadow-e2 transition-shadow" data-testid="session-gc-card">
           <div className="flex items-center gap-md mb-md">
-            <div className="p-2 bg-primary/10 rounded-lg text-primary flex items-center justify-center">
+            <div className="p-sm bg-primary-container rounded-lg text-on-primary-container flex items-center justify-center">
               <span className="material-symbols-outlined">auto_delete</span>
             </div>
-            <h3 className="font-headline-md text-[24px] font-bold text-on-surface">{t('settings.advanced.sessionGc.title')}</h3>
+            <h3 className="font-headline-md text-headline-md font-bold text-on-surface">{t('settings.advanced.sessionGc.title')}</h3>
           </div>
           <p className="text-on-surface-variant text-body-sm mb-lg">{t('settings.advanced.sessionGc.desc')}</p>
           <div className="flex items-center justify-between gap-md">
             <div>
-              <div className="font-label-md text-[14px] text-on-surface font-semibold mb-1">{t('settings.advanced.sessionGc.enabled')}</div>
-              <div className="font-label-sm text-[12px] text-on-surface-variant leading-tight">{t('settings.advanced.sessionGc.enabledDesc')}</div>
+              <div className="font-label-md text-body-sm text-on-surface font-semibold mb-xs">{t('settings.advanced.sessionGc.enabled')}</div>
+              <div className="font-label-sm text-label-sm text-on-surface-variant leading-tight">{t('settings.advanced.sessionGc.enabledDesc')}</div>
             </div>
             <Switch checked={sessionGcEnabled} onCheckedChange={v => handleToggle('session_gc_enabled', v, setSessionGcEnabled)} className="shrink-0" aria-label={t('settings.advanced.sessionGc.enabled')} />
           </div>
           <div className="mt-md">
-            <label className="block font-label-sm text-[12px] text-on-surface-variant mb-1" htmlFor="session-retention-select">
+            <label className="block font-label-sm text-label-sm text-on-surface-variant mb-xs" htmlFor="session-retention-select">
               {t('settings.advanced.sessionGc.retention')}
             </label>
             {/* Native select (the settings modals' pattern) — the wire value
@@ -396,77 +396,77 @@ export default function AdvancedSettings() {
               <option value="30">{t('settings.advanced.sessionGc.retention.30')}</option>
               <option value="90">{t('settings.advanced.sessionGc.retention.90')}</option>
             </select>
-            <p className="font-label-sm text-[11px] text-on-surface-variant mt-1">{t('settings.advanced.sessionGc.retentionDesc')}</p>
+            <p className="font-label-sm text-label-xs text-on-surface-variant mt-xs">{t('settings.advanced.sessionGc.retentionDesc')}</p>
           </div>
         </div>
 
         {/* B2 — Agent teams (real sub-agent execution) */}
-        <div className="bg-surface-container-lowest p-lg rounded-xl shadow-sm border border-outline-variant/30 group hover:shadow-md transition-shadow" data-testid="agent-teams-card">
+        <div className="bg-surface-container-lowest p-lg rounded-xl shadow-e1 border border-outline-variant/30 group hover:shadow-e2 transition-shadow" data-testid="agent-teams-card">
           <div className="flex items-center gap-md mb-md">
-            <div className="p-2 bg-primary/10 rounded-lg text-primary flex items-center justify-center">
+            <div className="p-sm bg-primary-container rounded-lg text-on-primary-container flex items-center justify-center">
               <span className="material-symbols-outlined">account_tree</span>
             </div>
-            <h3 className="font-headline-md text-[24px] font-bold text-on-surface">{t('settings.advanced.agentTeamsTitle')}</h3>
+            <h3 className="font-headline-md text-headline-md font-bold text-on-surface">{t('settings.advanced.agentTeamsTitle')}</h3>
           </div>
           <p className="text-on-surface-variant text-body-sm mb-lg">{t('settings.advanced.agentTeamsDesc')}</p>
           <div className="flex items-center justify-between py-sm gap-md">
             <div>
-              <div className="font-label-md text-[14px] text-on-surface font-semibold mb-1">{t('settings.advanced.agentTeamsToggle')}</div>
-              <div className="font-label-sm text-[12px] text-on-surface-variant leading-tight">{t('settings.advanced.agentTeamsLive')}</div>
+              <div className="font-label-md text-body-sm text-on-surface font-semibold mb-xs">{t('settings.advanced.agentTeamsToggle')}</div>
+              <div className="font-label-sm text-label-sm text-on-surface-variant leading-tight">{t('settings.advanced.agentTeamsLive')}</div>
             </div>
             <Switch checked={agentTeamsEnabled} onCheckedChange={v => handleToggle('agent_teams_enabled', v, setAgentTeamsEnabled)} className="shrink-0" aria-label={t('settings.advanced.agentTeamsToggle')} />
           </div>
         </div>
 
         {/* Memory Management */}
-        <div className="bg-surface-container-lowest p-lg rounded-xl shadow-sm border border-outline-variant/30 group hover:shadow-md transition-shadow">
+        <div className="bg-surface-container-lowest p-lg rounded-xl shadow-e1 border border-outline-variant/30 group hover:shadow-e2 transition-shadow">
           <div className="flex items-center gap-md mb-md">
-            <div className="p-2 bg-primary/10 rounded-lg text-primary flex items-center justify-center">
+            <div className="p-sm bg-primary-container rounded-lg text-on-primary-container flex items-center justify-center">
               <span className="material-symbols-outlined">memory</span>
             </div>
-            <h3 className="font-headline-md text-[24px] font-bold text-on-surface">{t('settings.advanced.memoryTitle')}</h3>
+            <h3 className="font-headline-md text-headline-md font-bold text-on-surface">{t('settings.advanced.memoryTitle')}</h3>
           </div>
           <p className="text-on-surface-variant text-body-sm mb-lg">{t('settings.advanced.memoryDesc')}</p>
           <div className="space-y-md">
             <div className="flex items-center justify-between py-sm gap-md">
               <div>
-                <div className="font-label-md text-[14px] text-on-surface font-semibold mb-1">{t('settings.advanced.longTermMemory')}</div>
-                <div className="font-label-sm text-[12px] text-on-surface-variant leading-tight">{t('settings.advanced.longTermMemoryDesc')}</div>
+                <div className="font-label-md text-body-sm text-on-surface font-semibold mb-xs">{t('settings.advanced.longTermMemory')}</div>
+                <div className="font-label-sm text-label-sm text-on-surface-variant leading-tight">{t('settings.advanced.longTermMemoryDesc')}</div>
               </div>
               <Switch checked={memoryEnabled} onCheckedChange={v => handleToggle('memory_enabled', v, setMemoryEnabled)} className="shrink-0" aria-label={t('settings.advanced.longTermMemory')} />
             </div>
             <Button
-              className="w-full py-md border border-outline-variant/50 rounded-xl text-on-surface font-label-md font-bold text-[14px] hover:bg-surface-container-low transition-colors active:scale-[0.99] cursor-pointer"
+              className="w-full py-md border border-outline-variant/50 rounded-xl text-on-surface font-label-md font-bold text-body-sm hover:bg-surface-container-low transition-colors active:scale-[0.99] cursor-pointer"
               onClick={() => setShowClearConfirm(true)}
               disabled={clearing}
             >
-              {clearing ? <Spinner className="mr-sm text-[18px]" /> : null}
+              {clearing ? <Spinner className="mr-sm text-body-lg" /> : null}
               {clearing ? t('settings.advanced.clearing') : t('settings.advanced.clearSessionCache')}
             </Button>
           </div>
         </div>
 
         {/* Data Privacy */}
-        <div className="bg-surface-container-lowest p-lg rounded-xl shadow-sm border border-outline-variant/30 group hover:shadow-md transition-shadow">
+        <div className="bg-surface-container-lowest p-lg rounded-xl shadow-e1 border border-outline-variant/30 group hover:shadow-e2 transition-shadow">
           <div className="flex items-center gap-md mb-md">
-            <div className="p-2 bg-secondary/10 rounded-lg text-secondary flex items-center justify-center">
+            <div className="p-sm bg-secondary-container rounded-lg text-on-secondary-container flex items-center justify-center">
               <span className="material-symbols-outlined" style={{fontVariationSettings: "'FILL' 1"}}>security</span>
             </div>
-            <h3 className="font-headline-md text-[24px] font-bold text-on-surface">{t('settings.advanced.dataPrivacy')}</h3>
+            <h3 className="font-headline-md text-headline-md font-bold text-on-surface">{t('settings.advanced.dataPrivacy')}</h3>
           </div>
           <p className="text-on-surface-variant text-body-sm mb-lg">{t('settings.advanced.dataPrivacyDesc')}</p>
           <div className="space-y-lg mt-sm">
             <div className="flex items-center justify-between gap-md">
               <div>
-                <div className="font-label-md text-[14px] text-on-surface font-semibold mb-1">{t('settings.advanced.anonReporting')}</div>
-                <div className="font-label-sm text-[12px] text-on-surface-variant leading-tight">{t('settings.advanced.anonReportingDesc')}</div>
+                <div className="font-label-md text-body-sm text-on-surface font-semibold mb-xs">{t('settings.advanced.anonReporting')}</div>
+                <div className="font-label-sm text-label-sm text-on-surface-variant leading-tight">{t('settings.advanced.anonReportingDesc')}</div>
               </div>
               <Switch checked={telemetryEnabled} onCheckedChange={v => handleToggle('telemetry', v, setTelemetryEnabled)} className="shrink-0" aria-label={t('settings.advanced.anonReporting')} />
             </div>
             <div className="flex items-center justify-between gap-md">
               <div>
-                <div className="font-label-md text-[14px] text-on-surface font-semibold mb-1">{t('settings.advanced.encryption')}</div>
-                <div className="font-label-sm text-[12px] text-on-surface-variant leading-tight">{t('settings.advanced.encryptionDesc')}</div>
+                <div className="font-label-md text-body-sm text-on-surface font-semibold mb-xs">{t('settings.advanced.encryption')}</div>
+                <div className="font-label-sm text-label-sm text-on-surface-variant leading-tight">{t('settings.advanced.encryptionDesc')}</div>
               </div>
               <Switch checked={encryptionEnabled} onCheckedChange={v => handleToggle('encryption', v, setEncryptionEnabled)} className="shrink-0" aria-label={t('settings.advanced.encryption')} />
             </div>
@@ -474,17 +474,17 @@ export default function AdvancedSettings() {
         </div>
 
         {/* Off-peak model override (P2-5, frozen key `offpeak.model_override`) */}
-        <div className="bg-surface-container-lowest p-lg rounded-xl shadow-sm border border-outline-variant/30 group hover:shadow-md transition-shadow">
+        <div className="bg-surface-container-lowest p-lg rounded-xl shadow-e1 border border-outline-variant/30 group hover:shadow-e2 transition-shadow">
           <div className="flex items-center gap-md mb-md">
-            <div className="p-2 bg-secondary/10 rounded-lg text-secondary flex items-center justify-center">
+            <div className="p-sm bg-secondary-container rounded-lg text-on-secondary-container flex items-center justify-center">
               <span className="material-symbols-outlined">bedtime</span>
             </div>
-            <h3 className="font-headline-md text-[24px] font-bold text-on-surface">{t('settings.advanced.offpeak.title')}</h3>
+            <h3 className="font-headline-md text-headline-md font-bold text-on-surface">{t('settings.advanced.offpeak.title')}</h3>
           </div>
           <p className="text-on-surface-variant text-body-sm mb-lg">{t('settings.advanced.offpeak.desc')}</p>
           <div className="flex flex-col md:flex-row md:items-end gap-sm">
             <label className="flex flex-col gap-xs flex-1">
-              <span className="font-label-sm text-[12px] text-on-surface-variant">
+              <span className="font-label-sm text-label-sm text-on-surface-variant">
                 {t('settings.advanced.offpeak.inputLabel')}
               </span>
               <input
@@ -495,12 +495,12 @@ export default function AdvancedSettings() {
                 aria-label={t('settings.advanced.offpeak.inputLabel')}
                 className="bg-surface-container-low rounded-lg border border-outline-variant/30 px-sm py-sm text-body-sm font-mono focus:outline-none focus:ring-2 focus:ring-primary/30"
               />
-              <span className="font-label-sm text-[11px] text-on-surface-variant">
+              <span className="font-label-sm text-label-xs text-on-surface-variant">
                 {offpeakModel.trim() ? t('settings.advanced.offpeak.enabledHint') : t('settings.advanced.offpeak.disabledHint')}
               </span>
             </label>
             <Button
-              className="px-xl py-md bg-primary text-on-primary rounded-lg font-label-md text-[14px] font-bold hover:bg-primary/90 shadow-sm active:scale-[0.98] transition-all whitespace-nowrap cursor-pointer disabled:opacity-50"
+              className="px-xl py-md bg-primary text-on-primary rounded-lg font-label-md text-body-sm font-bold hover:bg-primary/90 shadow-e1 active:scale-[0.98] transition-all whitespace-nowrap cursor-pointer disabled:opacity-50"
               onClick={handleSaveOffpeakModel}
               disabled={savingOffpeak}
               aria-label={t('settings.advanced.offpeak.saveAria')}
@@ -520,18 +520,18 @@ export default function AdvancedSettings() {
         <TerminalSettings />
 
         {/* Command line — expose the bundled `shannon` CLI (ADR-0011 B3) */}
-        <div className="bg-surface-container-lowest p-lg rounded-xl shadow-sm border border-outline-variant/30 lg:col-span-2 group hover:shadow-md transition-shadow">
+        <div className="bg-surface-container-lowest p-lg rounded-xl shadow-e1 border border-outline-variant/30 lg:col-span-2 group hover:shadow-e2 transition-shadow">
           <div className="flex items-center gap-md mb-md">
-            <div className="p-2 bg-primary/10 rounded-lg text-primary flex items-center justify-center">
+            <div className="p-sm bg-primary-container rounded-lg text-on-primary-container flex items-center justify-center">
               <span className="material-symbols-outlined">terminal</span>
             </div>
-            <h3 className="font-headline-md text-[24px] font-bold text-on-surface">{t('settings.advanced.cliTitle')}</h3>
+            <h3 className="font-headline-md text-headline-md font-bold text-on-surface">{t('settings.advanced.cliTitle')}</h3>
             <span
               className={cn(
                 "ml-auto px-sm py-[2px] rounded-full text-label-xs font-bold whitespace-nowrap",
                 cliStatus?.onPath
                   ? 'bg-tertiary-container text-on-tertiary-container'
-                  : 'bg-error/10 text-error',
+                  : 'bg-error-container text-on-error-container',
               )}
             >
               {cliStatus?.onPath
@@ -547,7 +547,7 @@ export default function AdvancedSettings() {
               )}
             </div>
             <Button
-              className="px-xl py-md bg-primary text-on-primary rounded-xl font-label-md text-[14px] font-bold hover:bg-primary/90 shadow-md active:scale-[0.98] transition-all whitespace-nowrap cursor-pointer"
+              className="px-xl py-md bg-primary text-on-primary rounded-xl font-label-md text-body-sm font-bold hover:bg-primary/90 shadow-e2 active:scale-[0.98] transition-all whitespace-nowrap cursor-pointer"
               onClick={handleInstallCli}
               disabled={installingCli || !cliStatus || cliStatus.onPath}
             >
@@ -557,12 +557,12 @@ export default function AdvancedSettings() {
         </div>
 
         {/* Version & updates — semi-automatic update check (C1①) */}
-        <div className="bg-surface-container-lowest p-lg rounded-xl shadow-sm border border-outline-variant/30 lg:col-span-2 group hover:shadow-md transition-shadow">
+        <div className="bg-surface-container-lowest p-lg rounded-xl shadow-e1 border border-outline-variant/30 lg:col-span-2 group hover:shadow-e2 transition-shadow">
           <div className="flex items-center gap-md mb-md">
-            <div className="p-2 bg-primary/10 rounded-lg text-primary flex items-center justify-center">
+            <div className="p-sm bg-primary-container rounded-lg text-on-primary-container flex items-center justify-center">
               <span className="material-symbols-outlined">system_update_alt</span>
             </div>
-            <h3 className="font-headline-md text-[24px] font-bold text-on-surface">{t('settings.advanced.updateTitle')}</h3>
+            <h3 className="font-headline-md text-headline-md font-bold text-on-surface">{t('settings.advanced.updateTitle')}</h3>
             {updateInfo && (
               <span
                 className={cn(
@@ -596,7 +596,7 @@ export default function AdvancedSettings() {
               {updateInfo && !updateInfo.error && (
                 <Button
                   variant="ghost"
-                  className="flex items-center gap-xs text-link font-label-md text-[14px] hover:underline cursor-pointer"
+                  className="flex items-center gap-xs text-link font-label-md text-body-sm hover:underline cursor-pointer"
                   onClick={handleOpenReleasePage}
                 >
                   <span className="material-symbols-outlined icon-sm">open_in_new</span>
@@ -604,7 +604,7 @@ export default function AdvancedSettings() {
                 </Button>
               )}
               <Button
-                className="px-xl py-md bg-primary text-on-primary rounded-xl font-label-md text-[14px] font-bold hover:bg-primary/90 shadow-md active:scale-[0.98] transition-all whitespace-nowrap cursor-pointer"
+                className="px-xl py-md bg-primary text-on-primary rounded-xl font-label-md text-body-sm font-bold hover:bg-primary/90 shadow-e2 active:scale-[0.98] transition-all whitespace-nowrap cursor-pointer"
                 onClick={handleCheckUpdate}
                 disabled={checkingUpdate}
               >
@@ -615,12 +615,12 @@ export default function AdvancedSettings() {
         </div>
 
         {/* Developer Options */}
-        <div className="bg-surface-container-lowest p-lg rounded-xl shadow-sm border border-outline-variant/30 lg:col-span-2 group hover:shadow-md transition-shadow">
+        <div className="bg-surface-container-lowest p-lg rounded-xl shadow-e1 border border-outline-variant/30 lg:col-span-2 group hover:shadow-e2 transition-shadow">
           <div className="flex items-center gap-md mb-md">
-            <div className="p-2 bg-tertiary/10 rounded-lg text-tertiary flex items-center justify-center">
+            <div className="p-sm bg-tertiary-container rounded-lg text-on-tertiary-container flex items-center justify-center">
               <span className="material-symbols-outlined">terminal</span>
             </div>
-            <h3 className="font-headline-md text-[24px] font-bold text-on-surface">{t('settings.advanced.devOptions')}</h3>
+            <h3 className="font-headline-md text-headline-md font-bold text-on-surface">{t('settings.advanced.devOptions')}</h3>
           </div>
           <div className="flex flex-col md:flex-row md:items-center justify-between gap-lg">
             <div className="flex-1">
@@ -628,17 +628,17 @@ export default function AdvancedSettings() {
                 {t('settings.advanced.devOptionsDesc')}
               </p>
               <div className="flex items-center gap-md">
-                <Button variant="ghost" className="flex items-center gap-xs text-link font-label-md text-[14px] hover:underline cursor-pointer" onClick={() => void handleOpenLogsDir()}>
+                <Button variant="ghost" className="flex items-center gap-xs text-link font-label-md text-body-sm hover:underline cursor-pointer" onClick={() => void handleOpenLogsDir()}>
                   <span className="material-symbols-outlined icon-sm">folder_open</span>
                   {t('settings.advanced.openLogsDir')}
                 </Button>
                 <span className="text-outline-variant">|</span>
-                <Button variant="ghost" disabled={exportingDiagnostics} className="flex items-center gap-xs text-link font-label-md text-[14px] hover:underline cursor-pointer" onClick={() => void handleExportDiagnostics()}>
+                <Button variant="ghost" disabled={exportingDiagnostics} className="flex items-center gap-xs text-link font-label-md text-body-sm hover:underline cursor-pointer" onClick={() => void handleExportDiagnostics()}>
                   <span className="material-symbols-outlined icon-sm">package_2</span>
                   {exportingDiagnostics ? t('settings.advanced.exportDiagnosticsWorking') : t('settings.advanced.exportDiagnostics')}
                 </Button>
                 <span className="text-outline-variant">|</span>
-                <Button variant="ghost" className="flex items-center gap-xs text-link font-label-md text-[14px] hover:underline cursor-pointer" onClick={() => setShowApiKeys(true)}>
+                <Button variant="ghost" className="flex items-center gap-xs text-link font-label-md text-body-sm hover:underline cursor-pointer" onClick={() => setShowApiKeys(true)}>
                   <span className="material-symbols-outlined icon-sm">api</span>
                   {t('settings.advanced.manageApiKeys')}
                 </Button>
@@ -653,7 +653,7 @@ export default function AdvancedSettings() {
                   v{appVersion}
                 </span>
               )}
-              <span className="font-label-md text-[14px] text-on-surface">{t('settings.advanced.enableDebug')}</span>
+              <span className="font-label-md text-body-sm text-on-surface">{t('settings.advanced.enableDebug')}</span>
               <Switch checked={debugConsole} onCheckedChange={v => handleToggle('debug_console', v, setDebugConsole)} aria-label={t('settings.advanced.enableDebug')} />
             </div>
           </div>
@@ -663,16 +663,16 @@ export default function AdvancedSettings() {
         <div className="lg:col-span-2 border-2 border-error/20 bg-error/5 p-lg rounded-xl mt-sm relative overflow-hidden">
           <div className="flex flex-col md:flex-row items-start md:items-center justify-between gap-lg relative z-raised">
             <div className="flex items-start gap-md">
-              <div className="p-2 bg-error/10 rounded-lg text-error shrink-0 flex items-center justify-center">
+              <div className="p-sm bg-error-container rounded-lg text-on-error-container shrink-0 flex items-center justify-center">
                 <span className="material-symbols-outlined">warning</span>
               </div>
               <div>
-                <h3 className="font-headline-md text-[24px] font-bold text-error mb-1">{t('settings.advanced.resetTitle')}</h3>
+                <h3 className="font-headline-md text-headline-md font-bold text-error mb-xs">{t('settings.advanced.resetTitle')}</h3>
                 <p className="text-on-surface-variant text-body-sm">{t('settings.advanced.resetDesc')}</p>
               </div>
             </div>
             <Button
-              className="px-xl py-md bg-error text-on-error rounded-xl font-label-md text-[14px] font-bold hover:bg-error/90 shadow-md active:scale-[0.98] transition-all whitespace-nowrap cursor-pointer"
+              className="px-xl py-md bg-error text-on-error rounded-xl font-label-md text-body-sm font-bold hover:bg-error/90 shadow-e2 active:scale-[0.98] transition-all whitespace-nowrap cursor-pointer"
               onClick={() => setShowResetConfirm(true)}
               disabled={resetting}
             >

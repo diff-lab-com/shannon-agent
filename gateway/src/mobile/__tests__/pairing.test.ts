@@ -7,7 +7,9 @@ import { WebSocket } from "ws";
 import { createConsoleLogger } from "../../logger.js";
 import type { EngineEvent } from "../../engine/runtime.js";
 import {
+  approvalDecideTimestampWindowMs,
   approvalMessage,
+  approvalMessageV2,
   deviceIdFromPublicKey,
   generateEd25519KeyPair,
   pairPopMessage,
@@ -559,6 +561,87 @@ describe("createMobileHandlers (P1.2 pairing lifecycle)", () => {
       signature: signMessage(phone.privateKey, approvalMessage("r1", "allow")),
     });
     expect(ok.result).toEqual({ ok: true });
+    socket.close();
+  });
+
+  it("approval/decide v2: timestamped requests verify only the v2 shape within ±window (docs/approval-decide-signing.md §6)", async () => {
+    const tokens = new PairTokenStore();
+    const registry = new DeviceRegistry();
+    const fetchImpl = mockOk();
+    const { port } = await start(handlers({ tokens, registry, fetchImpl }));
+    const socket = await connect(port);
+    const phone = newPhone();
+
+    // pair first
+    const rec = tokens.issue();
+    await rpc(socket, "shannon/pair", {
+      pair_token: rec.token,
+      device_public_key: phone.publicKeyB64Url,
+      pop_signature: signMessage(phone.privateKey, pairPopMessage(rec.token, phone.publicKeyB64Url)),
+    });
+
+    // valid v2 (fresh timestamp) → POST + ok
+    const freshTs = Date.now() - 1000; // 1s of dispatch slack, well inside the window
+    const ok = await rpc(socket, "shannon/approval/decide", {
+      request_id: "r1",
+      choice: "allow",
+      signature: signMessage(phone.privateKey, approvalMessageV2("r1", "allow", freshTs)),
+      timestamp: freshTs,
+    });
+    expect(ok.result).toEqual({ ok: true });
+
+    // GUARD: a valid v1 signature attached to a timestamped request MUST be
+    // rejected — a v2→v1 fallback would make the replay window bypassable by
+    // stripping the freshness binding (docs/approval-decide-signing.md §6.6).
+    const downgrade = await rpc(socket, "shannon/approval/decide", {
+      request_id: "r2",
+      choice: "allow",
+      signature: signMessage(phone.privateKey, approvalMessage("r2", "allow")),
+      timestamp: Date.now(),
+    });
+    expect(downgrade.error?.code).toBe(ShannonError.BAD_PARAMS);
+
+    // stale timestamp (outside +window) → BAD_PARAMS with the window detail,
+    // NOT CLOCK_SKEW (−32003 is the resume clock semantics, not this window).
+    const staleTs = Date.now() - approvalDecideTimestampWindowMs - 60_000;
+    const stale = await rpc(socket, "shannon/approval/decide", {
+      request_id: "r3",
+      choice: "allow",
+      signature: signMessage(phone.privateKey, approvalMessageV2("r3", "allow", staleTs)),
+      timestamp: staleTs,
+    });
+    expect(stale.error?.code).toBe(ShannonError.BAD_PARAMS);
+    expect(stale.error?.code).not.toBe(ShannonError.CLOCK_SKEW);
+    expect(stale.error?.message).toContain("timestamp outside approval decide window");
+
+    // future timestamp (outside −window) → rejected
+    const futureTs = Date.now() + approvalDecideTimestampWindowMs + 60_000;
+    const future = await rpc(socket, "shannon/approval/decide", {
+      request_id: "r4",
+      choice: "allow",
+      signature: signMessage(phone.privateKey, approvalMessageV2("r4", "allow", futureTs)),
+      timestamp: futureTs,
+    });
+    expect(future.error?.code).toBe(ShannonError.BAD_PARAMS);
+
+    // non-integer timestamp → rejected before any signature work
+    const fractional = await rpc(socket, "shannon/approval/decide", {
+      request_id: "r5",
+      choice: "allow",
+      signature: signMessage(phone.privateKey, approvalMessageV2("r5", "allow", 1700000000000.5)),
+      timestamp: 1700000000000.5,
+    });
+    expect(fractional.error?.code).toBe(ShannonError.BAD_PARAMS);
+    expect(fractional.error?.message).toContain("integer");
+    expect(fractional.error?.data).toEqual({ timestamp: 1700000000000.5 });
+
+    // v1 request (no timestamp) still verifies the byte-identical v1 shape.
+    const legacy = await rpc(socket, "shannon/approval/decide", {
+      request_id: "r6",
+      choice: "allow",
+      signature: signMessage(phone.privateKey, approvalMessage("r6", "allow")),
+    });
+    expect(legacy.result).toEqual({ ok: true });
     socket.close();
   });
 

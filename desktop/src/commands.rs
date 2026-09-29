@@ -1438,11 +1438,11 @@ pub async fn send_message(
                     QueryEvent::Failed { error, .. } => {
                         let _ = app.emit(
                             event_names::QUERY_FAILED,
-                            events::QueryFailedPayload {
-                                query_id: qid_str.clone(),
-                                error: error.clone(),
-                                session_id: Some(session_id_str.clone()),
-                            },
+                            events::query_failed_payload(
+                                &qid_str,
+                                &error,
+                                Some(session_id_str.clone()),
+                            ),
                         );
                         route_event(crate::session_registry::SessionEvent::Status(
                             crate::session_registry::SessionEventStatus::Failed(error.clone()),
@@ -1470,11 +1470,11 @@ pub async fn send_message(
                     let err_string = e.to_string();
                     let _ = app.emit(
                         event_names::QUERY_FAILED,
-                        events::QueryFailedPayload {
-                            query_id: qid_str.clone(),
-                            error: err_string.clone(),
-                            session_id: Some(session_id_str.clone()),
-                        },
+                        events::query_failed_payload(
+                            &qid_str,
+                            &err_string,
+                            Some(session_id_str.clone()),
+                        ),
                     );
                     route_event(crate::session_registry::SessionEvent::Status(
                         crate::session_registry::SessionEventStatus::Failed(err_string.clone()),
@@ -1519,11 +1519,7 @@ pub async fn send_message(
             );
             let _ = app.emit(
                 event_names::QUERY_FAILED,
-                events::QueryFailedPayload {
-                    query_id: qid_str.clone(),
-                    error: panic_msg.clone(),
-                    session_id: Some(session_id_str.clone()),
-                },
+                events::query_failed_payload(&qid_str, &panic_msg, Some(session_id_str.clone())),
             );
             route_event(crate::session_registry::SessionEvent::Status(
                 crate::session_registry::SessionEventStatus::Failed(panic_msg.clone()),
@@ -1994,6 +1990,7 @@ mod tests {
                 );
                 w.record(shannon_types::session_event::SessionEventBody::TurnEnd(
                     TurnEndPayload {
+                        llm_steps: None,
                         reason: TurnEndPayload::REASON_COMPLETED.into(),
                         usage: None,
                         error: None,
@@ -2772,8 +2769,10 @@ mod build_client_config_tests {
         let mut profile = anthropic_profile("BCC_UNSET", "https://api.anthropic.com");
         profile.default_max_tokens = Some(8192);
         let store = store_with_active(profile, "claude-sonnet-4-6");
-        let mut cfg = ShannonConfig::default();
-        cfg.max_tokens = Some(1024);
+        let cfg = ShannonConfig {
+            max_tokens: Some(1024),
+            ..ShannonConfig::default()
+        };
 
         let out =
             AppState::build_client_config(&store, &cfg).expect("active target should resolve");

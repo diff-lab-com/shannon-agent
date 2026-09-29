@@ -100,7 +100,30 @@ export function resumeMessage(deviceId: string, timestampMs: number, nonce?: str
   return nonce === undefined ? `${deviceId}:${timestampMs}` : `${deviceId}:${timestampMs}:${nonce}`;
 }
 
-/** `shannon/approval/decide`: mandatory per-decision device signature. */
+/** `shannon/approval/decide`: mandatory per-decision device signature (v1). */
 export function approvalMessage(requestId: string, choice: "allow" | "deny"): string {
   return `${requestId}:${choice}`;
+}
+
+/**
+ * `shannon/approval/decide` v2 anti-replay window (±5 minutes), shared with the
+ * phone (`lib/src/protocol/methods.dart`) and the mock server — one value in
+ * three repos (docs/approval-decide-signing.md §3). Bounds a captured decision's
+ * replayability; v1 had no expiry at all.
+ */
+export const approvalDecideTimestampWindowMs = 300_000;
+
+/**
+ * `shannon/approval/decide` v2 (anti-replay): the decision is signed over the
+ * epoch-ms `timestamp` the phone attaches as a request param. The gateway
+ * rejects timestamps outside `approvalDecideTimestampWindowMs` BEFORE verifying,
+ * and never falls back to v1 verification for a timestamped request — the
+ * message bytes ARE the version (docs/approval-decide-signing.md §2/§6).
+ */
+export function approvalMessageV2(
+  requestId: string,
+  choice: "allow" | "deny",
+  timestampMs: number,
+): string {
+  return `${requestId}:${choice}:${timestampMs}`;
 }

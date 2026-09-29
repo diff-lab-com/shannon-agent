@@ -134,24 +134,16 @@ mod tests {
         LOCK.lock().unwrap_or_else(|poisoned| poisoned.into_inner())
     }
 
-    fn temp_dir() -> PathBuf {
-        let dir = std::env::temp_dir().join(format!(
-            "shannon-crash-hook-test-{}-{}",
-            std::process::id(),
-            SystemTime::now()
-                .duration_since(UNIX_EPOCH)
-                .expect("clock before epoch")
-                .as_nanos()
-        ));
-        fs::create_dir_all(&dir).expect("create temp dir");
-        dir
+    // RAII temp root: removed automatically when the guard drops.
+    fn temp_dir() -> tempfile::TempDir {
+        tempfile::tempdir().expect("create temp dir")
     }
 
     #[test]
     fn test_record_ring_caps_at_20_and_truncates_long_events() {
         let _guard = global_state_lock();
         let dir = temp_dir();
-        install_at(dir.clone());
+        install_at(dir.path().to_path_buf());
         for i in 0..30 {
             record(&format!(r#"{{"i":{i}}}"#));
         }
@@ -179,13 +171,13 @@ mod tests {
         // Silence the default hook for the duration of the test, then install.
         let original = std::panic::take_hook();
         std::panic::set_hook(Box::new(|_| {}));
-        install_at(dir.clone());
+        install_at(dir.path().to_path_buf());
         record(r#"{"type":"tool_result","name":"Edit"}"#);
 
         let result = std::panic::catch_unwind(|| panic!("boom-crash-hook-test"));
         assert!(result.is_err(), "test panic must be caught");
 
-        let entries: Vec<_> = fs::read_dir(&dir)
+        let entries: Vec<_> = fs::read_dir(dir.path())
             .expect("read crash dir")
             .filter_map(|e| e.ok())
             .filter(|e| {

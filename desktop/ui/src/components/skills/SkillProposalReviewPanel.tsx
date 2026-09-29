@@ -150,7 +150,7 @@ export default function SkillProposalReviewPanel({
     <div className="space-y-6">
       {/* Name */}
       <div>
-        <h3 className="text-sm font-medium text-on-surface-variant mb-1">
+        <h3 className="text-sm font-medium text-on-surface-variant mb-xs">
           {t('skillProposals.review.card.name')}
         </h3>
         <p className="text-lg font-semibold text-on-surface">
@@ -160,7 +160,7 @@ export default function SkillProposalReviewPanel({
 
       {/* Description */}
       <div>
-        <h3 className="text-sm font-medium text-on-surface-variant mb-1">
+        <h3 className="text-sm font-medium text-on-surface-variant mb-xs">
           {t('skillProposals.review.card.description')}
         </h3>
         <p className="text-on-surface">
@@ -170,14 +170,14 @@ export default function SkillProposalReviewPanel({
 
       {/* Trigger Patterns */}
       <div>
-        <h3 className="text-sm font-medium text-on-surface-variant mb-2">
+        <h3 className="text-sm font-medium text-on-surface-variant mb-sm">
           {t('skillProposals.review.card.triggers')}
         </h3>
-        <div className="flex flex-wrap gap-2">
+        <div className="flex flex-wrap gap-sm">
           {current.trigger_patterns.map((pattern, i) => (
             <span
               key={i}
-              className="px-2 py-1 bg-primary/10 text-primary text-xs rounded-md"
+              className="px-sm py-xs bg-primary-container text-on-primary-container text-xs rounded-md"
             >
               {pattern}
             </span>
@@ -187,10 +187,10 @@ export default function SkillProposalReviewPanel({
 
       {/* Example Workflow */}
       <div>
-        <h3 className="text-sm font-medium text-on-surface-variant mb-1">
+        <h3 className="text-sm font-medium text-on-surface-variant mb-xs">
           {t('skillProposals.review.card.example')}
         </h3>
-        <pre className="mt-1 p-3 bg-surface-container-low rounded text-sm text-on-surface whitespace-pre-wrap overflow-x-auto">
+        <pre className="mt-xs p-3 bg-surface-container-low rounded-sm text-sm text-on-surface whitespace-pre-wrap overflow-x-auto">
           {current.example_workflow}
         </pre>
       </div>
@@ -213,7 +213,7 @@ export default function SkillProposalReviewPanel({
     <>
       {/* Navigation */}
       {proposals.length > 1 && (
-        <div className="flex items-center justify-center gap-2 px-6 py-3 border-t border-outline-variant">
+        <div className="flex items-center justify-center gap-sm px-lg py-3 border-t border-outline-variant">
           <Button
             variant="ghost"
             size="sm"
@@ -237,7 +237,7 @@ export default function SkillProposalReviewPanel({
       )}
 
       {/* Actions */}
-      <div className="flex justify-end gap-3 p-6 border-t border-outline-variant">
+      <div className="flex justify-end gap-3 p-lg border-t border-outline-variant">
         <Button
           variant="ghost"
           onClick={handleReject}
@@ -278,7 +278,7 @@ export default function SkillProposalReviewPanel({
         className="rounded-xl border border-outline-variant/30 bg-surface-container-lowest/80 overflow-hidden"
       >
         <div className="flex items-center gap-sm px-md py-sm border-b border-outline-variant/30">
-          <span className="material-symbols-outlined text-[18px] text-primary" aria-hidden="true">lightbulb</span>
+          <span className="material-symbols-outlined icon-md text-primary" aria-hidden="true">lightbulb</span>
           <h3 className="font-body-md font-semibold text-on-surface">
             {t('skillProposals.review.title')}
           </h3>
@@ -298,7 +298,7 @@ export default function SkillProposalReviewPanel({
       className="max-h-[80vh] flex flex-col overflow-hidden"
     >
       {/* Header */}
-      <div className="flex items-center justify-between p-6 border-b border-outline-variant">
+      <div className="flex items-center justify-between p-lg border-b border-outline-variant">
           <h2 className="text-xl font-semibold text-on-surface">
             {t('skillProposals.review.title')}
           </h2>
@@ -314,7 +314,7 @@ export default function SkillProposalReviewPanel({
         </div>
 
         {/* Content */}
-        <div className="flex-1 overflow-y-auto p-6">
+        <div className="flex-1 overflow-y-auto p-lg">
           {loading ? (
             <LoadingState size="lg" />
           ) : !current ? (

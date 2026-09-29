@@ -1,4 +1,5 @@
 use crate::{Result, widgets::ChatRole};
+use rust_i18n::t;
 
 use super::super::Repl;
 
@@ -33,7 +34,9 @@ pub(crate) fn handle_mcp(repl: &mut Repl, args: &str) -> Result<()> {
         if let Ok(p) = std::env::var("SHANNON_MCP_APPROVALS") {
             return PathBuf::from(p);
         }
-        PathBuf::from(".shannon/mcp_approvals.json")
+        // review F6: approvals live in the user domain — a project-relative
+        // file would be refused by the loader on next startup.
+        shannon_core::McpApprovalManager::default_state_path()
     }
 
     fn load_config() -> McpConfig {
@@ -703,6 +706,13 @@ pub(crate) fn handle_agents(repl: &mut Repl, args: &str) -> Result<()> {
                 std::sync::Arc::new(coordinator),
             )));
         }
+        // F28: agents are initialized — sweep agent worktrees left behind by
+        // earlier sessions whose WorktreeManager (and its in-memory session
+        // registry) is gone.
+        if let Some(summary) = sweep_orphaned_agent_worktrees(repl) {
+            repl.chat
+                .add_message(crate::widgets::ChatRole::System, summary);
+        }
     }
 
     match subcommand {
@@ -958,21 +968,8 @@ pub(crate) fn handle_team(repl: &mut Repl, args: &str) -> Result<()> {
 
     match subcommand {
         "help" | "" => {
-            repl.chat.add_message(
-                ChatRole::System,
-                "\
-/team create <name> [description]  — Create a new agent team
-/team add <team> <agent-name>  — Add agent to team
-/team task <team> <subject>  — Add a task
-/team assign <team>  — Assign pending tasks to available agents
-/team status [team]  — Show team status
-/team list  — List all teams
-/team run  — Execute pending tasks in parallel
-/team shutdown  — Shutdown team
-/team disband <team>  — Disband team and clean up
-/team delegate  — Toggle delegate mode (lead only coordinates)"
-                    .to_string(),
-            );
+            repl.chat
+                .add_message(ChatRole::System, t!("commands.team.help").to_string());
         }
         "create" => {
             let name = parts.get(1).copied().unwrap_or("");
@@ -1427,11 +1424,35 @@ Patterns match against the start of your query. Examples:
     Ok(())
 }
 
+/// The `/credentials` help text. Direct-execution semantics (review P0-5):
+/// store/get/delete run locally via the CredentialManager — the plaintext
+/// value never reaches an LLM prompt and is never recorded in the session.
+fn credentials_help() -> String {
+    "Credential Management (executed locally — values are \
+     never sent to the model):\n\n\
+     /credentials list              - Show stored credentials\n\
+     /credentials store <svc> <val> - Store a credential directly (saved to \
+     ~/.shannon/credentials/<svc>.json, 0600; the value is never recorded in the \
+     conversation)\n\
+     /credentials get <service>     - Retrieve a credential (masked display)\n\
+     /credentials delete <service>  - Delete a credential\n\
+     /credentials count             - Show stored credential count\n"
+        .to_string()
+}
+
 pub(crate) fn handle_credentials(repl: &mut Repl, args: &str) -> Result<()> {
     use shannon_commands::credential_utils::{
         CredentialAction, format_credential_count, format_credential_delete, format_credential_get,
         format_credential_store, format_credentials_list, parse_credential_action,
     };
+
+    // No subcommand → the help text: it is the only output that describes the
+    // direct-execution semantics (`format_credentials_list` still carries the
+    // pre-P0-5 prompt-style usage block).
+    if args.trim().is_empty() {
+        repl.chat.add_message(ChatRole::System, credentials_help());
+        return Ok(());
+    }
 
     let parts: Vec<&str> = args.splitn(3, ' ').collect();
     let action_str = parts.first().copied().unwrap_or("");
@@ -1465,13 +1486,7 @@ pub(crate) fn handle_credentials(repl: &mut Repl, args: &str) -> Result<()> {
             }
         }
         CredentialAction::Count => format_credential_count(),
-        CredentialAction::Help => "Credential Management:\n\n\
-             /credentials list              - Show stored credentials\n\
-             /credentials store <svc> <val> - Store a credential\n\
-             /credentials get <service>     - Retrieve a credential (masked)\n\
-             /credentials delete <service>  - Delete a credential\n\
-             /credentials count             - Show stored credential count\n"
-            .to_string(),
+        CredentialAction::Help => credentials_help(),
     };
 
     repl.chat.add_message(ChatRole::System, output);
@@ -1489,9 +1504,75 @@ fn create_agent_worktree(
         .runtime
         .block_on(WorktreeManager::new(config))
         .map_err(|e| format!("{e}"))?;
+    // F28: the manager below is intentionally throwaway — the session it
+    // creates records a manifest on disk and gets a unique branch suffix, so
+    // the next session's orphan sweep (see sweep_orphaned_agent_worktrees)
+    // can find and clean it up, and re-adding the same agent name never
+    // collides on `git worktree add -b`.
     let session = repl
         .runtime
         .block_on(manager.create_agent_session(agent_name, None))
         .map_err(|e| format!("{e}"))?;
     Ok(session.path)
+}
+
+/// F28: remove agent worktrees whose session no longer exists (left behind
+/// by earlier sessions whose WorktreeManager was dropped without cleanup).
+/// Returns a short chat summary, or None when there was nothing to clean.
+fn sweep_orphaned_agent_worktrees(repl: &Repl) -> Option<String> {
+    use shannon_agents::{WorktreeConfig, WorktreeManager};
+    // Same config the create path uses, so the sweep looks exactly where
+    // creation writes. Skip entirely when the dir was never created.
+    let config = WorktreeConfig::default();
+    if !config.base_dir.exists() {
+        return None;
+    }
+    let manager = repl.runtime.block_on(WorktreeManager::new(config)).ok()?;
+    let report = repl
+        .runtime
+        .block_on(manager.sweep_orphaned_sessions())
+        .ok()?;
+    if report.removed.is_empty() && report.failed.is_empty() {
+        return None;
+    }
+    let mut msg = format!(
+        "Agent worktree sweep: {} orphaned worktree(s) removed.",
+        report.removed.len()
+    );
+    for path in &report.removed {
+        msg.push_str(&format!("\n  removed: {}", path.display()));
+    }
+    for (path, reason) in &report.failed {
+        msg.push_str(&format!(
+            "\n  kept: {} ({reason}) — has real changes, remove manually if unwanted",
+            path.display()
+        ));
+    }
+    Some(msg)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::repl::commands::submit_input;
+
+    /// Review P0-5: `/credentials` with no subcommand prints the
+    /// direct-execution help — the only text that describes the local-only
+    /// semantics (values never sent to the model) — not a prompt to the LLM.
+    #[test]
+    fn credentials_no_arg_prints_direct_execution_help() {
+        let mut repl = Repl::new().expect("repl should construct");
+        repl.prompt.set_input("/credentials".to_string());
+        submit_input(&mut repl, None).unwrap();
+
+        let last = &repl.chat.last_message().unwrap().content;
+        assert!(
+            last.contains("Credential Management"),
+            "no-arg /credentials should print help, got {last:?}"
+        );
+        assert!(
+            last.contains("executed locally"),
+            "help must state the direct-execution semantics, got {last:?}"
+        );
+    }
 }

@@ -38,10 +38,27 @@ const ROUTES: { path: string; name: string }[] = [
   { path: '/settings/theme', name: 'settings-theme' },
 ]
 
-const THEMES: { id: string; label: string }[] = [
+// Default pair keeps the historical default run (light material + one dark).
+// G7 (UI review 2026-09-29): any subset can be walked per theme via
+//   WALKTHROUGH_THEMES=material,ember,slate,solarized-light,gruvbox-light,...
+// (theme ids; label = id) — used for the light-theme glass legibility sweep.
+const ALL_THEMES: { id: string; label: string }[] = [
   { id: 'material', label: 'material' },
   { id: 'tokyo-night', label: 'dark-tokyo-night' },
+  { id: 'tokyo-night-light', label: 'tokyo-night-light' },
+  { id: 'catppuccin', label: 'catppuccin' },
+  { id: 'nord', label: 'nord' },
+  { id: 'ember', label: 'ember' },
+  { id: 'slate', label: 'slate' },
+  { id: 'solarized', label: 'solarized' },
+  { id: 'dracula', label: 'dracula' },
+  { id: 'gruvbox', label: 'gruvbox' },
+  { id: 'solarized-light', label: 'solarized-light' },
+  { id: 'gruvbox-light', label: 'gruvbox-light' },
 ]
+const THEMES = process.env.WALKTHROUGH_THEMES
+  ? ALL_THEMES.filter(t => process.env.WALKTHROUGH_THEMES!.split(',').includes(t.id))
+  : ALL_THEMES.slice(0, 2)
 
 const findings: string[] = []
 

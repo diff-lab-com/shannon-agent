@@ -79,12 +79,12 @@ export default function ModelsSettings() {
   const filteredModels = activeProvider ? models.filter(m => m.provider === activeProvider) : models
 
   return (
-    <div className="max-w-[1200px] pr-8 pb-10">
+    <div className="max-w-medium pr-xl pb-10">
       <p className="font-body-md text-on-surface-variant mb-md">{t('settings.models.subtitle')}</p>
 
       <div className="space-y-lg">
         {/* Performance Strategy */}
-        <section className="bg-surface-container-lowest border border-outline-variant/30 rounded-xl p-lg shadow-sm">
+        <section className="bg-surface-container-lowest border border-outline-variant/30 rounded-xl p-lg shadow-e1">
           <h3 className="font-headline-md text-on-surface mb-md">{t('settings.models.perfStrategy')}</h3>
           <div className="flex bg-surface-container-low p-xs rounded-xl gap-xs max-w-2xl">
             {(['balanced', 'speed', 'high-quality'] as const).map(s => (
@@ -95,7 +95,7 @@ export default function ModelsSettings() {
                 className={cn(
                   'flex-1 py-sm font-label-md rounded-lg transition-all cursor-pointer',
                   strategy === s
-                    ? 'bg-primary text-on-primary shadow-sm ring-1 ring-black/5 font-bold'
+                    ? 'bg-primary text-on-primary shadow-e1 ring-1 ring-black/5 font-bold'
                     : 'text-on-surface-variant hover:bg-surface-container-high',
                 )}
               >
@@ -110,7 +110,7 @@ export default function ModelsSettings() {
         </section>
 
         {/* Active Model */}
-        <section className="bg-surface-container-lowest border border-outline-variant/30 rounded-xl p-lg shadow-sm">
+        <section className="bg-surface-container-lowest border border-outline-variant/30 rounded-xl p-lg shadow-e1">
           <h3 className="font-headline-md text-on-surface mb-md">{t('settings.models.activeModel')}</h3>
           {currentModel ? (
             <div className="p-md rounded-xl border-2 border-primary bg-primary-container/5 flex items-center justify-between transition-all">
@@ -120,8 +120,8 @@ export default function ModelsSettings() {
                 </div>
                 <div>
                   <div className="flex items-center gap-xs">
-                    <span className="font-headline-md text-primary text-lg">{currentModel}</span>
-                    <span className="px-xs py-[2px] bg-primary text-on-primary rounded text-[10px] font-bold">{t('settings.models.activeBadge')}</span>
+                    <span className="font-headline-md text-link text-lg">{currentModel}</span>
+                    <span className="px-xs py-[2px] bg-primary text-on-primary rounded-sm text-label-2xs font-bold">{t('settings.models.activeBadge')}</span>
                   </div>
                   <p className="text-label-sm text-on-surface-variant">{intl.formatMessage({ id: 'settings.models.providerLabel' }, { provider: status?.provider })}</p>
                 </div>
@@ -160,7 +160,7 @@ export default function ModelsSettings() {
         />
 
         {/* Provider Tabs */}
-        <section className="bg-surface-container-lowest border border-outline-variant/30 rounded-xl shadow-sm overflow-hidden">
+        <section className="bg-surface-container-lowest border border-outline-variant/30 rounded-xl shadow-e1 overflow-hidden">
           <div className="border-b border-outline-variant/30 bg-surface-container-low/30 px-lg pt-md">
             <div className="flex gap-lg overflow-x-auto">
               <Button
@@ -168,7 +168,7 @@ export default function ModelsSettings() {
                 onClick={() => setActiveProvider(null)}
                 className={cn(
                   'h-auto pb-sm px-xs border-b-2 font-label-md whitespace-nowrap cursor-pointer transition-colors rounded-none',
-                  !activeProvider ? 'border-primary text-primary font-bold' : 'border-transparent text-on-surface-variant hover:text-primary',
+                  !activeProvider ? 'border-primary text-link font-bold' : 'border-transparent text-on-surface-variant hover:text-primary',
                 )}
               >{t('settings.models.tabAll')}</Button>
               {providers.map(p => (
@@ -178,7 +178,7 @@ export default function ModelsSettings() {
                   onClick={() => setActiveProvider(activeProvider === p ? null : p)}
                   className={cn(
                     'h-auto pb-sm px-xs border-b-2 font-label-md whitespace-nowrap cursor-pointer transition-colors rounded-none',
-                    activeProvider === p ? 'border-primary text-primary font-bold' : 'border-transparent text-on-surface-variant hover:text-primary',
+                    activeProvider === p ? 'border-primary text-link font-bold' : 'border-transparent text-on-surface-variant hover:text-primary',
                   )}
                 >{p}</Button>
               ))}
@@ -192,7 +192,7 @@ export default function ModelsSettings() {
                 <h3 className="font-headline-md text-on-surface">{t('settings.models.availableModels')}</h3>
                 <p className="text-body-sm text-on-surface-variant">{t('settings.models.availableDesc')}</p>
               </div>
-              <span className="inline-flex items-center px-sm py-1 bg-primary/10 text-primary rounded-full text-[10px] font-bold tracking-wider uppercase">
+              <span className="inline-flex items-center px-sm py-xs bg-primary-container text-on-primary-container rounded-full text-label-2xs font-bold tracking-wider uppercase">
                 {intl.formatMessage({ id: 'settings.models.count' }, { count: models.length })}
               </span>
             </div>
@@ -220,11 +220,11 @@ export default function ModelsSettings() {
                       </div>
                       <div>
                     <div className="flex items-center gap-xs">
-                      <span className={cn("font-headline-md text-lg", m.id === currentModel ? 'text-primary' : 'text-on-surface')}>{m.name}</span>
-                      {m.id === currentModel ? <span className="px-xs py-[2px] bg-primary text-on-primary rounded text-[10px] font-bold">{t('settings.models.defaultBadge')}</span> : null}
+                      <span className={cn("font-headline-md text-lg", m.id === currentModel ? 'text-link' : 'text-on-surface')}>{m.name}</span>
+                      {m.id === currentModel ? <span className="px-xs py-[2px] bg-primary text-on-primary rounded-sm text-label-2xs font-bold">{t('settings.models.defaultBadge')}</span> : null}
                       {m.tier ? (
                         <span
-                          className="px-xs py-[2px] bg-primary text-on-primary rounded text-[10px] font-bold uppercase tracking-wider"
+                          className="px-xs py-[2px] bg-primary text-on-primary rounded-sm text-label-2xs font-bold uppercase tracking-wider"
                           title={t('settings.models.tier')}
                         >
                           {t(`settings.models.tier${m.tier.charAt(0).toUpperCase()}${m.tier.slice(1)}` as 'settings.models.tierFast' | 'settings.models.tierStandard' | 'settings.models.tierPro')}
@@ -232,7 +232,7 @@ export default function ModelsSettings() {
                       ) : null}
                       {m.dynamic ? (
                         <span
-                          className="px-xs py-[2px] bg-tertiary-container text-on-tertiary-container rounded text-[10px] font-bold uppercase tracking-wider"
+                          className="px-xs py-[2px] bg-tertiary-container text-on-tertiary-container rounded-sm text-label-2xs font-bold uppercase tracking-wider"
                           title={t('models.modelsDev.title')}
                         >
                           {t('settings.models.dynamicBadge')}
@@ -258,7 +258,7 @@ export default function ModelsSettings() {
                   </div>
                     </div>
                     {switching === m.id ? (
-                      <Spinner className="text-primary text-[20px]" />
+                      <Spinner className="text-primary text-headline-sm" />
                     ) : null}
                   </Button>
                 ))}
@@ -268,7 +268,7 @@ export default function ModelsSettings() {
         </section>
 
         {/* Global Parameters */}
-        <section className="bg-surface-container-lowest border border-outline-variant/30 rounded-xl p-lg shadow-sm">
+        <section className="bg-surface-container-lowest border border-outline-variant/30 rounded-xl p-lg shadow-e1">
           <h3 className="font-headline-md text-on-surface mb-lg">{t('settings.models.globalParams')}</h3>
           <p className="text-body-sm text-on-surface-variant mb-xl -mt-md">{t('settings.models.globalParamsDesc')}</p>
           <div className="space-y-xl max-w-2xl">

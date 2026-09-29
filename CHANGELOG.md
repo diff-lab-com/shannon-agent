@@ -58,6 +58,31 @@ work):
 
 - The retired workspace-grid feature: panel variant, workspace layout
   commands + persistence, ACL entries, mocks, and 2 i18n keys.
+### Followups S1-S3 (2026-09-28)
+
+All 15 approved followup tasks from the comprehensive review roadmap landed:
+clippy `--all-targets` gate (180+21 warnings → 0, CI tightened), DiffReviewBody
+flaky test stabilized, graceful server shutdown with drain window + terminal
+SSE frame + 30-min stream cap, `SHANNON_SERVE_EXTRA_HOSTS`, one-time
+secret-guard redact suggestion, tee durable sync off the executor, cooldown
+bounds, MCP approval source-path binding, repomap render memoization, unified
+headless NDJSON envelope (legacy vocabulary behind `--emit-legacy-output-events`),
+gateway pairing approval from the desktop, 25 command strings migrated to i18n,
+all 10 locales at 100% key coverage, metrics weekly job fixed (missing system
+deps), libspa/pipewire environment docs + `just check` fallback. See
+[docs/plans/2026-09-28-followups-roadmap.md](docs/plans/2026-09-28-followups-roadmap.md).
+
+Note: workspace versions 0.11.0 and 0.12.0 were internal bumps — no `v0.11.0`
+tag/release exists (releases stop at v0.10.0), which is what allowed the
+five-source version drift fixed in PR #148; the v0.12.0 section below covers
+that whole cycle.
+
+### Comprehensive review hardening (2026-09-28)
+
+40+ fixes across engine streaming/compaction, session log integrity, MCP
+approval security, gateway reliability, and plugin containment — see
+[docs/plans/2026-09-28-comprehensive-review-and-hardening.md](docs/plans/2026-09-28-comprehensive-review-and-hardening.md)
+for the findings and the batched fix plan.
 
 ### Export diagnostics bundle (desktop Settings) (2026-09-27)
 
@@ -980,6 +1005,61 @@ Findings from the 2026-09-27 release/productization audit, batch 1+2 fixes.
 
 - Headless runs no longer checkpoint per-turn JSON snapshots; the continuous
   event log makes crash-window tail recovery the resumption mechanism.
+
+## v0.12.0 (2026-09-28) — cycle highlights (0.11.0 → 0.12.0)
+
+Curated highlights of the 0.11/0.12 cycle. The full, detailed record for
+everything below lives in the [Unreleased] section above (this release was
+cut from it without reordering that history).
+
+- **Unified `shannon` CLI.** The former `shannon-code` product identity is
+  retired in favor of a single `shannon` CLI/TUI across the binary, desktop
+  window title, installers, and docs (historical `shannon-code` references
+  in old release notes are intentional).
+- **Remote execution worlds (`shannon-remote`).** SSH hosts and Docker
+  containers as first-class targets — tools route through the provider seam;
+  `/remote` TUI command, `--target` CLI flag, and a Settings→Remotes desktop
+  page (design: `docs/plans/2026-09-04-remote-connections-design.md`).
+- **Single-source protocol codegen.** `shannon-api-protocol` is the one wire
+  contract for the REST/SSE/WS API surface — gateway TS types + OpenAPI are
+  generated from it (`just gen-protocol`, part of `just ci`), with gateway
+  protocol-schema tests pinning the drift guard.
+- **Memory / docs / retrieval hardening (PR #116).** Project-scoped
+  consolidation and cleanup (no more cross-project deletion), durable
+  JSONL tombstones for deletions, plus the retrieval-quality fixes from the
+  2026-09-25 memory review.
+- **Desktop projects/plugins polish (PR #129).** Plugin materialization and
+  command-plugin management reworked with regression coverage
+  (`Installed`/`Plugins`/`Triage` suites).
+- **Honest outcome accounting (PR #142).** `QueryEvent::Completed` carries a
+  serde-defaulted `outcome`; recovery turns re-emit `TurnCompleted`;
+  headless no-progress runs exit non-zero — the break that required the
+  0.11.0 → 0.12.0 minor bump.
+- **Malformed tool-call recovery hardening (PRs #140/#143/#144/#146).**
+  Stray `</think>` absorption tightened to the leading region, recovery-gate
+  consecutive-count cap, command-guard pipe detection made quote/escape-aware
+  (incl. `$(…)`/backtick segments), and wire-level streaming trace logs for
+  OpenAI-compatible providers.
+- **Release productization hardening.** `GET /api/ws` rejects cross-site
+  browser `Origin`s before upgrade; `secret-guard` defaults to audit mode;
+  release publishing waits for the tag's full CI run; SLSA build provenance
+  on release assets; `SHA256SUMS` covers the installer scripts (which now
+  hard-fail without a checksum source); native Linux arm64 CLI in the
+  release matrix.
+- **CI review P0–P2 (PR #139).** Dependabot config revived, workflow
+  hardening across ci/coverage/benchmarks/deploy (pinned actions, tightened
+  permissions), and the semver baseline procedure documented at the gate.
+- **Test-suite hygiene.** tempfile RAII stopped ~3k leaked `/tmp` dirs per
+  run and made `cli_e2e` hermetic; a CI tripwire now fails on fresh `/tmp`
+  leaks.
+- **OTLP telemetry bridge.** `shannon-core::telemetry` exports traces via
+  OTLP gRPC with batch processing, plus a one-command Jaeger/Grafana demo
+  stack (`scripts/otel-demo`).
+- **Desktop Turn Timeline + diagnostics export.** Turn-level activity view
+  and a Settings→Advanced "Export diagnostics…" bundle (logs + doctor
+  report, session-log redaction policy applied).
+- **Windows desktop-control bring-up.** Computer-use input backends extended
+  for Windows alongside the Linux X11/Wayland matrix.
 
 ## v0.10.0 (2026-08-13) — memory curated layer (ADR-0010), ADR-0005 provider tail closed
 

@@ -24,7 +24,7 @@ pub(crate) use goal::maybe_fire_check_in;
 // (repl/mod.rs) can refresh the first-screen StatusCard through the same
 // derivation used by every /connect, /model, /provider switch
 // (ADR-0008 Decision 1+2).
-pub(crate) use config::{apply_model_selection, sync_active_to_chat};
+pub(crate) use config::{apply_model_selection, provider_unconfigured, sync_active_to_chat};
 
 // Re-export public API
 #[allow(unused_imports)]
@@ -101,11 +101,17 @@ fn expand_pasted_texts(
 /// Redact inline secrets from a recorded command line so they are never
 /// persisted into the chat widget, command history, or session JSON.
 ///
-/// Currently redacts the API key from `/connect <provider> <key>`, replacing
-/// the key with `***`. The real key still reaches the command handler — this
-/// redaction only affects what is *recorded* (chat message + up-arrow history).
-/// Returns the input unchanged for any other command, free-text input, or a
-/// `/connect` invocation without an inline key.
+/// Currently redacts:
+/// - the API key from `/connect <provider> <key>`, and
+/// - the value from `/credentials store <service> <value>` (any alias, any
+///   store spelling — the REPL executes it directly via the CredentialManager,
+///   so a plaintext secret must never reach the *recorded* text either),
+///
+/// in both cases replacing the secret with `***`. The real argument still
+/// reaches the command handler — this redaction only affects what is
+/// *recorded* (chat message + up-arrow history). Returns the input unchanged
+/// for any other command, free-text input, or an invocation without an inline
+/// secret.
 ///
 /// Tokenization uses `split_whitespace`, matching how `parse_connect_args`
 /// splits the real command, so runs of whitespace (`/connect  minimax  k`) are
@@ -120,17 +126,39 @@ fn redact_secret_command(input: &str) -> String {
     };
     let mut tokens = rest.split_whitespace();
     let cmd = tokens.next().unwrap_or("");
-    if !cmd.eq_ignore_ascii_case("connect") {
-        return input.to_string();
+    if cmd.eq_ignore_ascii_case("connect") {
+        let provider = match tokens.next() {
+            Some(p) if !p.is_empty() => p,
+            _ => return input.to_string(),
+        };
+        return match tokens.next() {
+            Some(k) if !k.is_empty() => format!("{lead}/connect {provider} ***"),
+            _ => input.to_string(),
+        };
     }
-    let provider = match tokens.next() {
-        Some(p) if !p.is_empty() => p,
-        _ => return input.to_string(),
-    };
-    match tokens.next() {
-        Some(k) if !k.is_empty() => format!("{lead}/connect {provider} ***"),
-        _ => input.to_string(),
+    // `/credentials store <svc> <value>` (aliases /creds, /cred; store
+    // spellings store/add/set — all parsed to `CredentialAction::Store`).
+    // Recorded form is normalized to the canonical `/credentials store`.
+    if matches!(
+        cmd.to_ascii_lowercase().as_str(),
+        "credentials" | "creds" | "cred"
+    ) {
+        let sub = tokens.next().map(str::to_ascii_lowercase);
+        if !matches!(sub.as_deref(), Some("store" | "add" | "set")) {
+            return input.to_string();
+        }
+        let service = match tokens.next() {
+            Some(s) if !s.is_empty() => s,
+            _ => return input.to_string(),
+        };
+        // The handler takes everything after <service> as the value
+        // (`splitn(3, ' ')`), so any remaining text is part of the secret.
+        if tokens.next().is_none() {
+            return input.to_string();
+        }
+        return format!("{lead}/credentials store {service} ***");
     }
+    input.to_string()
 }
 
 // ── Inline `!shell` execution (P0-1) ────────────────────────────────────
@@ -849,17 +877,14 @@ pub fn handle_command(repl: &mut Repl, input: &str) -> Result<()> {
             "browse" | "files" => media::handle_browse(repl, args)?,
             "notools" => {
                 repl.state.tools_enabled = false;
-                repl.chat.add_message(
-                    ChatRole::System,
-                    "Tools disabled — model will respond as plain text. Use /tools to re-enable."
-                        .to_string(),
-                );
+                repl.chat
+                    .add_message(ChatRole::System, t!("repl.tools_disabled").to_string());
             }
             "select-tools" | "tools" => {
                 if !repl.state.tools_enabled {
                     repl.state.tools_enabled = true;
                     repl.chat
-                        .add_message(ChatRole::System, "Tools re-enabled.".to_string());
+                        .add_message(ChatRole::System, t!("repl.tools_enabled").to_string());
                 } else {
                     debug::handle_select_tools(repl)?;
                 }
@@ -872,7 +897,20 @@ pub fn handle_command(repl: &mut Repl, input: &str) -> Result<()> {
             "cost" => cost::handle_cost(repl, args)?,
             "billing" | "usage" => cost::handle_billing(repl, args)?,
             "suggest" => cost::handle_suggest(repl, args)?,
-            "permissions" | "perms" | "perm" => cost::handle_permissions(repl, args)?,
+            // R1-6 (decision ② step 1): /permissions is the first-class home
+            // of the permission-profile command — the same handler /profile
+            // resolves to. The tool allow/deny/status view keeps its short
+            // aliases /perms and /perm.
+            "permissions" => handle_permissions_profiles(repl, args)?,
+            "perms" | "perm" => cost::handle_permissions(repl, args)?,
+            // /profile keeps working during the naming transition (R1-6) but
+            // warns once per session that permission profiles now live at
+            // /permissions; in a future release it becomes the provider
+            // profile command (/profiles).
+            "profile" => {
+                maybe_profile_migration_hint(repl);
+                handle_other_command(repl, "profile", args)?;
+            }
             "plan" => session::handle_plan(repl, args)?,
             "team" => extensions::handle_team(repl, args)?,
             "agents" => extensions::handle_agents(repl, args)?,
@@ -982,6 +1020,31 @@ fn handle_clear(repl: &mut Repl) -> Result<()> {
 fn handle_quit(repl: &mut Repl) -> Result<()> {
     repl.running = false;
     Ok(())
+}
+
+/// `/permissions` — first-class alias of the `/profile` permission-profile
+/// command (R1-6, decision ② step 1: permission management lives at
+/// /permissions, matching the Claude Code ecosystem; in a future release
+/// /profile itself switches to the provider profiles command, /profiles).
+/// Dispatches through the same registry path as /profile. The tool
+/// allow/deny/status view that previously owned this name remains reachable
+/// via its aliases `/perms` and `/perm`.
+fn handle_permissions_profiles(repl: &mut Repl, args: &str) -> Result<()> {
+    handle_other_command(repl, "profile", args)
+}
+
+/// One-time `/profile` migration hint (R1-6): on the first `/profile` of a
+/// REPL session, print a note above the command's output that permission
+/// profiles moved to `/permissions`. Never repeated.
+fn maybe_profile_migration_hint(repl: &mut Repl) {
+    if repl.state.profile_migration_hint_shown {
+        return;
+    }
+    repl.state.profile_migration_hint_shown = true;
+    repl.chat.add_message(
+        ChatRole::System,
+        t!("commands.profile.migration_hint").to_string(),
+    );
 }
 
 fn handle_other_command(repl: &mut Repl, cmd_name: &str, args: &str) -> Result<()> {
@@ -1184,6 +1247,59 @@ mod tests {
         assert_eq!(
             redact_secret_command("/connect minimax "),
             "/connect minimax "
+        );
+    }
+
+    #[test]
+    fn redact_credentials_store_replaces_value_with_marker() {
+        // The plaintext value must never appear in the recorded form (review
+        // P0-5: /credentials used to echo the raw secret into chat, history,
+        // and session JSON).
+        let out = redact_secret_command("/credentials store anthropic sk-ant-secret-9");
+        assert_eq!(out, "/credentials store anthropic ***");
+        assert!(!out.contains("sk-ant-secret-9"));
+    }
+
+    #[test]
+    fn redact_credentials_aliases_normalize_and_redact() {
+        // Every alias resolves to Store in the handler, so all of them redact;
+        // the recorded form is the canonical `/credentials store`.
+        assert_eq!(
+            redact_secret_command("/creds store svc sk-123"),
+            "/credentials store svc ***"
+        );
+        assert_eq!(
+            redact_secret_command("/cred add svc sk-123"),
+            "/credentials store svc ***"
+        );
+        assert_eq!(
+            redact_secret_command("/CREDENTIALS set svc tok_abc"),
+            "/credentials store svc ***"
+        );
+    }
+
+    #[test]
+    fn redact_credentials_preserves_service_and_leading_whitespace() {
+        let out = redact_secret_command("   /credentials store GitHub ghp-XyZ123");
+        assert_eq!(out, "   /credentials store GitHub ***");
+        assert!(!out.contains("ghp-XyZ123"));
+    }
+
+    #[test]
+    fn redact_credentials_non_store_subcommands_unchanged() {
+        // get/list/delete/count carry no inline secret.
+        assert_eq!(
+            redact_secret_command("/credentials get svc"),
+            "/credentials get svc"
+        );
+        assert_eq!(
+            redact_secret_command("/credentials delete svc"),
+            "/credentials delete svc"
+        );
+        // `store` without a value has nothing to redact — no fabricated `***`.
+        assert_eq!(
+            redact_secret_command("/credentials store svc"),
+            "/credentials store svc"
         );
     }
 

@@ -102,14 +102,21 @@ export interface ApprovalDecideParams {
   /** `"allow" | "deny"` (maps to the engine `approval/respond` choice). */
   choice: "allow" | "deny";
   /**
-   * Ed25519 signature over `${request_id}:${choice}` (see `approvalMessage`).
-   * Required at runtime whenever the gateway runs with `requireSession` on
-   * (the live pairing-gated mode, WP-15 P2-7); the type is required to match
-   * that contract instead of hinting that unsigned decisions are acceptable.
-   * Open-mode dev gateways (`requireSession: false`) tolerate absence and
-   * only log a warning.
+   * Ed25519 signature over the decision message — v2 also binds `timestamp`
+   * (see below). Required at runtime whenever the gateway runs with
+   * `requireSession` on (the live pairing-gated mode, WP-15 P2-7); the type is
+   * required to match that contract instead of hinting that unsigned decisions
+   * are acceptable. Open-mode dev gateways (`requireSession: false`) tolerate
+   * absence and only log a warning.
    */
   signature: string;
+  /**
+   * v2 anti-replay (docs/approval-decide-signing.md): epoch-ms timestamp bound
+   * into the signed message (`approvalMessageV2`). Its presence switches the
+   * gateway to v2-only verification within ±approvalDecideTimestampWindowMs;
+   * absent means the legacy v1 shape, verified exactly as before.
+   */
+  timestamp?: number;
   note?: string | null;
 }
 
@@ -326,6 +333,60 @@ export interface MobileTaskRecord {
 /** `shannon/task.list` success — newest first. */
 export interface TaskListResult {
   tasks: MobileTaskRecord[];
+}
+
+// ── T9: desktop pairing-approval shapes ────────────────────────────────────
+
+/**
+ * `shannon/pairing.pending` — list the IM pairing challenges awaiting approval.
+ * Caller trust: a paired device session, or a valid (unconsumed) pair token —
+ * the desktop host's credential (see mobile/accessRpc.ts).
+ */
+export interface PairingPendingParams {
+  /**
+   * One-time pair token minted by the desktop (its Design-D control channel).
+   * Verified, not consumed, for this read-only call. Optional for callers that
+   * already hold a bound device session (a paired phone).
+   */
+  token?: string;
+}
+
+/** One pending pairing request, mirroring the IM guard's PairingRecord. */
+export interface PairingRequestRecord {
+  /** The 6-digit code shown in the IM challenge (also what approval consumes). */
+  code: string;
+  /** Chat platform the requester came from (slack/telegram/…). */
+  platform: string;
+  /** Platform sender id the allowlist entry will carry. */
+  senderId: string;
+  /** Epoch ms when the challenge was issued. */
+  requestedAt: number;
+  /** Epoch ms after which the code dies (issue + 5 min). */
+  expiresAt: number;
+}
+
+/** `shannon/pairing.pending` success — oldest first, expired codes pruned. */
+export interface PairingPendingResult {
+  pending: PairingRequestRecord[];
+}
+
+/**
+ * `shannon/pairing.approve` — approve (allowlist) a pending IM pairing. Same
+ * store the IM `approve <code>` reply consumes; unknown/expired codes are
+ * rejected. Caller trust: paired device session, or a pair token which IS
+ * consumed (this call mutates access control).
+ */
+export interface PairingApproveParams {
+  /** The challenged sender's 6-digit code. */
+  code: string;
+  /** One-time pair token (consumed on success or failure to authorize). */
+  token?: string;
+}
+
+/** `shannon/pairing.approve` success — the approved request (now allowlisted). */
+export interface PairingApproveResult {
+  ok: true;
+  record: PairingRequestRecord;
 }
 
 // ── Error codes ────────────────────────────────────────────────────────────

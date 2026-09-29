@@ -349,7 +349,7 @@ mod tests {
                     delta.num_seconds()
                 );
             }
-            other => panic!("expected Retry, got {:?}", other),
+            other => panic!("expected Retry, got {other:?}"),
         }
     }
 
@@ -382,7 +382,7 @@ mod tests {
         };
         for _ in 0..50 {
             let d = compute_delay(&policy, 1).as_secs();
-            assert!((75..=125).contains(&d), "delay {} out of jitter window", d);
+            assert!((75..=125).contains(&d), "delay {d} out of jitter window");
         }
     }
 
@@ -412,7 +412,7 @@ mod tests {
             "404 not found",
             "parse error in config",
         ] {
-            assert!(!is_retryable_error(m), "{} should be non-retryable", m);
+            assert!(!is_retryable_error(m), "{m} should be non-retryable");
         }
     }
 

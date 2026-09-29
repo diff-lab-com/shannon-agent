@@ -37,7 +37,7 @@ export function Stepper({ step, labels }: { step: number; labels: string[] }) {
             <span
               className={cn(
                 'font-label-sm text-center',
-                i === step ? 'text-primary font-bold' : 'text-on-surface-variant',
+                i === step ? 'text-link font-bold' : 'text-on-surface-variant',
               )}
             >
               {intl.formatMessage({ id: key })}
@@ -59,7 +59,7 @@ export function WelcomeCard({ title, subtitle, footer, children }: {
   children: React.ReactNode
 }) {
   return (
-    <section className="bg-surface-container-lowest border border-outline-variant/30 rounded-2xl p-xl shadow-sm">
+    <section className="bg-surface-container-lowest border border-outline-variant/30 rounded-2xl p-xl shadow-e1">
       <h1 className="font-headline-lg text-on-surface mb-xs">{title}</h1>
       <p className="font-body-md text-on-surface-variant mb-xl">{subtitle}</p>
       {children}

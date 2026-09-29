@@ -51,17 +51,62 @@ pub(super) fn split_think_content(text: &str) -> (bool, String) {
 /// `Text` event. Tag-aware across chunk boundaries — `<think>` / `</think>`
 /// may split across deltas, so a tail that could be a tag prefix is held
 /// back (up to 7 chars of display lag; flushed by `finish`).
-#[derive(Default)]
+///
+/// Stray `</think>` close tags outside a think block are swallowed — but
+/// only in the *leading region* (before any non-whitespace visible text has
+/// been emitted; whitespace alone does not end it). That is the observed
+/// failure shape (MiniMax-M3 leads the visible stream with `</think>\n\n`).
+/// Once real content is on the wire a stray close tag is ordinary literal
+/// text — models legitimately print `</think>` mid-answer (e.g. code that
+/// processes reasoning traces), and swallowing it there corrupts the
+/// delivered answer.
 pub(super) struct ThinkStreamSplitter {
     /// Bytes held back because they may be a partial `<think>`/`</think>` tag.
     pending: String,
     /// True while inside a `<think>` block.
     in_think: bool,
+    /// True until any non-whitespace visible text has been emitted. While
+    /// true, a stray close tag is model noise and is swallowed; afterwards
+    /// it passes through literally.
+    in_leading: bool,
+}
+
+impl Default for ThinkStreamSplitter {
+    fn default() -> Self {
+        Self {
+            pending: String::new(),
+            in_think: false,
+            in_leading: true,
+        }
+    }
 }
 
 impl ThinkStreamSplitter {
     const OPEN: &'static str = "<think>";
     const CLOSE: &'static str = "</think>";
+
+    /// Decide whether a stray `</think>` (whose preceding head is `head`)
+    /// is swallowed as model noise. Swallowable only in the leading region
+    /// and only when `head` is whitespace-free-visible (i.e. whitespace
+    /// only). Real text before the tag ends the leading region and leaves
+    /// the tag literal.
+    fn swallow_stray_close(&mut self, head: &str) -> bool {
+        if !self.in_leading {
+            return false;
+        }
+        if head.chars().any(|c| !c.is_whitespace()) {
+            self.in_leading = false;
+            return false;
+        }
+        true
+    }
+
+    /// End the leading region when non-whitespace visible text is emitted.
+    fn end_leading_on_text(&mut self, text: &str) {
+        if self.in_leading && text.chars().any(|c| !c.is_whitespace()) {
+            self.in_leading = false;
+        }
+    }
 
     /// Consume one content delta. Returns `(thinking, visible)` — either
     /// side may be empty for a given chunk.
@@ -74,7 +119,31 @@ impl ThinkStreamSplitter {
             let (tag, is_open) = if self.in_think {
                 (Self::CLOSE, false)
             } else {
-                (Self::OPEN, true)
+                // A close tag while outside a think block is model noise —
+                // e.g. reasoning-family models stream reasoning via a
+                // separate channel and still emit the literal `</think>` in
+                // the content (observed with MiniMax-M3, DeepSWE mm3-smoke01).
+                // Swallow it instead of leaking the tag into the visible
+                // answer, where it masqueraded as a final answer and
+                // defeated the parse-error recovery gates. Scoped to the
+                // leading region — see the struct docs.
+                match (buf.find(Self::OPEN), buf.find(Self::CLOSE)) {
+                    (Some(open_pos), Some(close_pos)) if close_pos < open_pos => {
+                        if self.swallow_stray_close(&buf[..close_pos]) {
+                            (Self::CLOSE, false)
+                        } else {
+                            (Self::OPEN, true)
+                        }
+                    }
+                    (None, Some(close_pos)) => {
+                        if self.swallow_stray_close(&buf[..close_pos]) {
+                            (Self::CLOSE, false)
+                        } else {
+                            (Self::OPEN, true)
+                        }
+                    }
+                    _ => (Self::OPEN, true),
+                }
             };
             match buf.find(tag) {
                 Some(pos) => {
@@ -82,6 +151,7 @@ impl ThinkStreamSplitter {
                     if self.in_think {
                         thinking.push_str(head);
                     } else {
+                        self.end_leading_on_text(head);
                         visible.push_str(head);
                     }
                     buf = buf[pos + tag.len()..].to_string();
@@ -89,17 +159,30 @@ impl ThinkStreamSplitter {
                 }
                 None => {
                     // Hold back a tail that could be a tag prefix split across
-                    // the next chunk boundary. The tag is ASCII, so a real
+                    // the next chunk boundary. The tags are ASCII, so a real
                     // prefix always starts on a char boundary — walk back only
                     // along boundaries (a raw `buf[len-n..]` panics on
-                    // multi-byte text, e.g. Chinese replies).
-                    let max_keep = tag.len().saturating_sub(1).min(buf.len());
+                    // multi-byte text, e.g. Chinese replies). Outside a think
+                    // block a tail could start either tag, so both candidates
+                    // are checked. Bound by the longer (close) tag: a `</think`
+                    // split right before the `>` is a 7-byte close-tag prefix
+                    // and used to leak literally when only the open tag's
+                    // length bounded the hold-back.
+                    let max_keep = Self::CLOSE.len().saturating_sub(1).min(buf.len());
                     let mut keep = 0;
                     for n in 1..=max_keep {
                         if !buf.is_char_boundary(buf.len() - n) {
                             continue;
                         }
-                        if tag.starts_with(&buf[buf.len() - n..]) {
+                        let tail = &buf[buf.len() - n..];
+                        let candidate = if self.in_think {
+                            Self::CLOSE
+                        } else {
+                            Self::OPEN
+                        };
+                        if candidate.starts_with(tail)
+                            || (!self.in_think && Self::CLOSE.starts_with(tail))
+                        {
                             keep = n;
                             break;
                         }
@@ -108,6 +191,7 @@ impl ThinkStreamSplitter {
                     if self.in_think {
                         thinking.push_str(&buf[..split_at]);
                     } else {
+                        self.end_leading_on_text(&buf[..split_at]);
                         visible.push_str(&buf[..split_at]);
                     }
                     self.pending = buf[split_at..].to_string();
@@ -117,7 +201,10 @@ impl ThinkStreamSplitter {
         }
     }
 
-    /// Flush at stream end. A dangling partial tag is literal text; an
+    /// Flush at stream end. A dangling partial tag is literal text — except
+    /// a partial close-tag fragment in the *leading region* outside a think
+    /// block, which is the same noise class as a full stray close tag and is
+    /// dropped; after the leading region has ended it flushes literally. An
     /// unclosed `<think>` swallows the tail (a response cut mid-reasoning
     /// has no visible answer by definition). Idempotent.
     pub(super) fn finish(&mut self) -> (String, String) {
@@ -125,6 +212,8 @@ impl ThinkStreamSplitter {
         if self.in_think {
             self.in_think = false;
             (pending, String::new())
+        } else if self.in_leading && !pending.is_empty() && Self::CLOSE.starts_with(&pending) {
+            (String::new(), String::new())
         } else {
             (String::new(), pending)
         }

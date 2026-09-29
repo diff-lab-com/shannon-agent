@@ -111,8 +111,8 @@ export default function HookRoutineCreateDialog({ open, onClose, onCreated }: Ho
       <form onSubmit={onSubmit} className="flex flex-col gap-md">
         <ModalBody className="pt-0 space-y-md">
           {error ? (
-            <div className="bg-error/10 border border-error/30 rounded-lg p-sm font-label-sm text-error flex items-start gap-sm" role="alert">
-              <span className="material-symbols-outlined text-[14px] mt-0.5" aria-hidden="true">error</span>
+            <div className="bg-error-container border border-error/30 rounded-lg p-sm font-label-sm text-on-error-container flex items-start gap-sm" role="alert">
+              <span className="material-symbols-outlined icon-sm mt-0.5" aria-hidden="true">error</span>
               <span className="flex-1 break-words">{error}</span>
             </div>
           ) : null}
@@ -128,7 +128,7 @@ export default function HookRoutineCreateDialog({ open, onClose, onCreated }: Ho
               aria-invalid={!nameOk && name.length > 0}
               className="bg-surface-container-low border border-outline-variant/40 rounded-lg px-md py-sm font-body-md text-on-surface focus:outline-none focus-visible:ring-2 focus-visible:ring-primary/40"
             />
-            <span className="font-label-sm text-[11px] text-on-surface-variant">
+            <span className="font-label-sm text-label-xs text-on-surface-variant">
               {t('tasks.hookRoutineCreateDialog.nameHint')}
             </span>
           </label>
@@ -144,7 +144,7 @@ export default function HookRoutineCreateDialog({ open, onClose, onCreated }: Ho
                 <option key={o.value} value={o.value}>{o.value}</option>
               ))}
             </select>
-            <span className="font-label-sm text-[11px] text-on-surface-variant">{selectedHint}</span>
+            <span className="font-label-sm text-label-xs text-on-surface-variant">{selectedHint}</span>
           </label>
 
           <label className="flex flex-col gap-xs">
@@ -157,7 +157,7 @@ export default function HookRoutineCreateDialog({ open, onClose, onCreated }: Ho
               required
               className="bg-surface-container-low border border-outline-variant/40 rounded-lg px-md py-sm font-body-md font-mono text-on-surface focus:outline-none focus-visible:ring-2 focus-visible:ring-primary/40"
             />
-            <span className="font-label-sm text-[11px] text-on-surface-variant">
+            <span className="font-label-sm text-label-xs text-on-surface-variant">
               {t('tasks.hookRoutineCreateDialog.commandHint')}
             </span>
           </label>
@@ -211,7 +211,7 @@ export default function HookRoutineCreateDialog({ open, onClose, onCreated }: Ho
             disabled={!canSubmit}
             className="disabled:cursor-not-allowed"
           >
-            <span className="material-symbols-outlined text-[14px]" aria-hidden="true">{submitting ? 'hourglass_top' : 'add'}</span>
+            <span className="material-symbols-outlined icon-sm" aria-hidden="true">{submitting ? 'hourglass_top' : 'add'}</span>
             {submitting ? t('tasks.hookRoutineCreateDialog.creating') : t('tasks.hookRoutineCreateDialog.createRoutine')}
           </Button>
         </ModalFooter>

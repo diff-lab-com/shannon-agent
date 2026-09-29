@@ -184,12 +184,16 @@ matplotlib-14623、seaborn-3069、pytest-10051、scikit-learn-10908、sympy-1209
 （31 题分层样本 ×3 rep）脚本与清单就绪（`docs/backlog.md` §四 T1），按需启动。
 
 ### 建议排队（真实能力/健壮性）
+- [ ] `has_content` 在 splitter 之前对原始 TextDelta 置位（agent_loop.rs TextDelta 臂）：纯标签/纯思考响应仍算「有内容」，A1 think-only 补救网漏接——判据改为可见内容（F14 §5；引擎）
+- [ ] 秘密/命令护栏的文本级 expansion+dangerous-verb 检查不解析引号，`'$(x | sh)'` 单引号外观被判 Critical——与 #143 分段器的引号语义对齐（F14 §5；tools）
+- [ ] run-batch.sh 退出码台账认识 headless rc=7（NoProgress，#142 新语义），聚合报告区分模型退化与 infra
 - [ ] musl 二进制的 CI 产出（`CFLAGS_x86_64_unknown_linux_musl` fortify 处理已文档化，待接 CI）
 - [ ] provider A/B 执行（需按量 key：`~/.shannon/credentials/zhipu-payg.json`；脚本就绪 `012bce57`）
 - [ ] regression 池加入 nightly 工作流（现 nightly 只跑 L1 read/edit/search 层）
 - [ ] A2 措辞的持续观察：若真实使用再现「过早收工/该停不停」新证据，按 L4 规则处理
 
 ### 观测性
+- [x] M3 空参数 wire RCA：trace 判据已实战（wire06 167/167 非空），定分为**会话级随机 API/模型侧**、非引擎侧（F14 §7）；复现时自动留证。剩余观察：空参数窗口与 API 服务端状态的相关性、commit 行为方差
 - [ ] TB harness 简化 token 估计仍为近似值（stderr 回退），待引擎侧提供中间事件用量
 - [ ] harbor job 级 cost 聚合依赖 catalog 价（C4 修复后已可信），补进聚合报告
 

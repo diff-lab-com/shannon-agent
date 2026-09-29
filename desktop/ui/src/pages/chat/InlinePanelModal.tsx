@@ -42,7 +42,11 @@ export default function InlinePanelModal<P extends object>({
       showCloseButton={false}
       className={modalClassName}
     >
-      <div className="flex items-center justify-between px-lg py-md bg-surface-container-lowest/95 backdrop-blur-md border-b border-outline-variant/20">
+      {/* G1/G3: the Modal popup itself is glass-overlay now — this inner
+          sticky header only needs the hairline; its old bg/95+backdrop-blur-md
+          was invisible over the solid popup and would double-count as a second
+          backdrop-filter layer inside the glass one. */}
+      <div className="flex items-center justify-between px-lg py-md border-b border-outline-variant/20">
         <h3 className="font-headline-md text-on-surface">{title}</h3>
         <Button variant="ghost" aria-label={t('chat.delete.cancel')} onClick={onClose}>
           <span className="material-symbols-outlined">close</span>

@@ -30,11 +30,11 @@ export default function TaskCard({ task, isRunning, onSelect, onRunNow, onCancel
     // (caught by the walkthrough gate). The title button is the keyboard-
     // reachable open action; inner buttons stay natively focusable and
     // stopPropagation keeps their clicks card-local.
-    <div className="glass-panel border border-outline-variant/10 rounded-xl p-md shadow-sm hover:shadow-md hover:-translate-y-0.5 transition-all duration-300 group bg-surface-container-lowest/80">
+    <div className="bg-surface-container-lowest border border-outline-variant/10 rounded-xl p-md shadow-e1 hover:shadow-e2 hover:-translate-y-0.5 transition-all duration-(--duration-slow) group">
       <div className="flex items-center justify-between">
         <div className="flex items-center gap-md">
-          <div className="w-12 h-12 rounded-xl bg-primary/10 flex items-center justify-center text-primary">
-            <span className="material-symbols-outlined text-[28px]">task_alt</span>
+          <div className="w-12 h-12 rounded-xl bg-primary-container flex items-center justify-center text-on-primary-container">
+            <span className="material-symbols-outlined icon-xl">task_alt</span>
           </div>
           <div>
             <h3 className="font-body-lg font-semibold text-on-surface group-hover:text-primary transition-colors">
@@ -46,16 +46,16 @@ export default function TaskCard({ task, isRunning, onSelect, onRunNow, onCancel
                 {task.title}
               </button>
             </h3>
-            <div className="flex items-center gap-md mt-1">
+            <div className="flex items-center gap-md mt-xs">
               {task.assignee ? (
                 <span className="font-label-sm text-label-sm text-on-surface-variant flex items-center gap-xs">
-                  <span className="material-symbols-outlined text-[14px]">smart_toy</span>
+                  <span className="material-symbols-outlined icon-sm">smart_toy</span>
                   {task.assignee}
                 </span>
               ) : null}
               {task.priority ? (
                 <span className="font-label-sm text-label-sm text-on-surface-variant flex items-center gap-xs">
-                  <span className="material-symbols-outlined text-[14px]">flag</span>
+                  <span className="material-symbols-outlined icon-sm">flag</span>
                   {task.priority}
                 </span>
               ) : null}
@@ -65,7 +65,7 @@ export default function TaskCard({ task, isRunning, onSelect, onRunNow, onCancel
                   title={intl.formatMessage({ id: 'tasks.taskCard.teamTitle' }, { team: task.team })}
                   className="font-label-sm text-label-sm text-on-surface-variant flex items-center gap-xs"
                 >
-                  <span className="material-symbols-outlined text-[14px]">groups</span>
+                  <span className="material-symbols-outlined icon-sm">groups</span>
                   {task.team}
                 </span>
               ) : null}
@@ -74,15 +74,15 @@ export default function TaskCard({ task, isRunning, onSelect, onRunNow, onCancel
         </div>
         <div className="flex items-center gap-lg">
           {/* B6-37: status changes announce politely. */}
-          <div aria-live="polite" title={intl.formatMessage({ id: badge.tipId }, badge.values)} className={cn('flex items-center gap-xs px-sm py-1 rounded-full border', badge.bg)}>
+          <div aria-live="polite" title={intl.formatMessage({ id: badge.tipId }, badge.values)} className={cn('flex items-center gap-xs px-sm py-xs rounded-full border', badge.bg)}>
             <span className={cn('w-2 h-2 rounded-full', badge.dot)} />
-            <span className="font-label-sm text-[11px] font-bold uppercase tracking-wider">{intl.formatMessage({ id: badge.labelId }, badge.values)}</span>
+            <span className="font-label-sm text-label-xs font-bold uppercase tracking-wider">{intl.formatMessage({ id: badge.labelId }, badge.values)}</span>
           </div>
           <div className="flex items-center gap-sm">
             {isActive ? (
               <Button
                 aria-label={t('tasks.taskCard.cancelAria')}
-                className="p-2 rounded-lg hover:bg-error/10 text-error transition-colors cursor-pointer focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-error/40"
+                className="p-sm rounded-lg hover:bg-error/10 text-error transition-colors cursor-pointer focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-error/40"
                 onClick={e => { e.stopPropagation(); onCancel() }}
               >
                 <span className="material-symbols-outlined" aria-hidden="true">stop_circle</span>
@@ -95,12 +95,12 @@ export default function TaskCard({ task, isRunning, onSelect, onRunNow, onCancel
             >
               {isRunning ? (
                 <>
-                  <span className="material-symbols-outlined text-[18px]">check_circle</span>
+                  <span className="material-symbols-outlined icon-md">check_circle</span>
                   {t('tasks.taskCard.success')}
                 </>
               ) : (
                 <>
-                  <span className="material-symbols-outlined text-[18px]">play_arrow</span>
+                  <span className="material-symbols-outlined icon-md">play_arrow</span>
                   {t('tasks.taskCard.runNow')}
                 </>
               )}

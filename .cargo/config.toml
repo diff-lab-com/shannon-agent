@@ -1,14 +1,8 @@
 # Limit parallel compilation to cap peak memory at ~8Gi.
-# jobs=4, codegen-units=2: 4 parallel × ~1.5Gi = ~6Gi peak.
+# jobs=4 pairs with the dev/test profile settings (codegen-units=2,
+# debug="line-tables-only") that live in the root Cargo.toml — cargo
+# silently ignores [profile.*] tables in config files; profiles only load
+# from the workspace root manifest (they lived here by mistake until
+# 2026-09-28).
 [build]
 jobs = 4
-
-# Fewer codegen units = less memory; 2 is a good speed/memory balance.
-# "line-tables-only" preserves line info for panics without full variable data.
-[profile.dev]
-codegen-units = 2
-debug = "line-tables-only"
-
-[profile.test]
-codegen-units = 2
-debug = "line-tables-only"

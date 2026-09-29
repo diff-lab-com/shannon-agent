@@ -46,7 +46,7 @@ export default function OPC() {
 
   return (
     <div className="flex-1 w-full bg-background overflow-y-auto h-full px-lg py-xl">
-      <div className="max-w-[1600px] mx-auto animate-in fade-in duration-700">
+      <div className="max-w-wide mx-auto animate-in fade-in duration-(--duration-slower)">
         <OPCMissionFocus config={config} />
 
         {loading ? (
@@ -69,7 +69,7 @@ export default function OPC() {
                   type="button"
                   aria-pressed={teamFilter === 'all'}
                   onClick={() => setTeamFilter('all')}
-                  className={`px-sm py-xs rounded-full text-label-sm transition-colors cursor-pointer ${teamFilter === 'all' ? 'bg-primary/10 text-primary font-bold' : 'bg-surface-container-low text-on-surface-variant hover:text-primary hover:bg-primary/10'}`}
+                  className={`px-sm py-xs rounded-full text-label-sm transition-colors cursor-pointer ${teamFilter === 'all' ? 'bg-primary-container text-on-primary-container font-bold' : 'bg-surface-container-low text-on-surface-variant hover:text-primary hover:bg-primary/10'}`}
                 >
                   {intl.formatMessage({ id: 'opc.teamFilter.all' })} ({tasks.length})
                 </button>
@@ -81,7 +81,7 @@ export default function OPC() {
                       type="button"
                       aria-pressed={teamFilter === name}
                       onClick={() => setTeamFilter(name)}
-                      className={`px-sm py-xs rounded-full text-label-sm transition-colors cursor-pointer ${teamFilter === name ? 'bg-primary/10 text-primary font-bold' : 'bg-surface-container-low text-on-surface-variant hover:text-primary hover:bg-primary/10'}`}
+                      className={`px-sm py-xs rounded-full text-label-sm transition-colors cursor-pointer ${teamFilter === name ? 'bg-primary-container text-on-primary-container font-bold' : 'bg-surface-container-low text-on-surface-variant hover:text-primary hover:bg-primary/10'}`}
                     >
                       {name} ({count})
                     </button>

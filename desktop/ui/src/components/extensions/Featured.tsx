@@ -217,7 +217,7 @@ export default function Featured() {
               className={cn(
                 'px-md py-xs rounded-md font-label-md text-label-md transition-colors cursor-pointer whitespace-nowrap',
                 marketTab === opt.id
-                  ? 'bg-primary text-on-primary shadow-sm font-bold'
+                  ? 'bg-primary text-on-primary shadow-e1 font-bold'
                   : 'text-on-surface-variant hover:text-primary',
               )}
             >
@@ -256,14 +256,14 @@ export default function Featured() {
               >
                 <div className={cn(
                   'w-11 h-11 rounded-xl flex items-center justify-center shrink-0',
-                  a.enabled ? 'bg-primary/10 text-primary' : 'bg-surface-container-low text-on-surface-variant/60',
+                  a.enabled ? 'bg-primary-container text-on-primary-container' : 'bg-surface-container-low text-on-surface-variant/60',
                 )}>
-                  <span className="material-symbols-outlined text-[22px]" aria-hidden="true">extension</span>
+                  <span className="material-symbols-outlined icon-lg" aria-hidden="true">extension</span>
                 </div>
                 <div className="flex-1 min-w-0">
                   <div className="flex items-center gap-sm">
                     <h3 className="font-bold text-label-md text-on-surface truncate">{a.name}</h3>
-                    <span className="font-label-xs px-xs py-[1px] rounded bg-surface-container-low text-on-surface-variant shrink-0">{a.kind}</span>
+                    <span className="font-label-xs px-xs py-[1px] rounded-sm bg-surface-container-low text-on-surface-variant shrink-0">{a.kind}</span>
                   </div>
                   <p className="text-label-xs text-on-surface-variant font-mono truncate mt-[2px]">{a.id}</p>
                   {!a.enabled && (
@@ -284,15 +284,15 @@ export default function Featured() {
           return (
             <div
               key={vendor.slug}
-              className={`relative overflow-hidden rounded-3xl border border-outline-variant/30 bg-surface-container-lowest hover:border-primary/40 hover:shadow-xl hover:-translate-y-1 transition-all duration-200 flex flex-col group`}
+              className={`relative overflow-hidden rounded-3xl border border-outline-variant/30 bg-surface-container-lowest hover:border-primary/40 hover:shadow-e4 hover:-translate-y-1 transition-all duration-(--duration-normal) flex flex-col group`}
             >
               {/* Accent strip */}
               <div className={cn("h-1.5 w-full bg-gradient-to-r", accent.bar)} />
 
               <div className="p-lg flex flex-col flex-1">
                 <div className="flex items-start justify-between mb-md">
-                  <div className={cn("relative w-14 h-14 rounded-2xl bg-gradient-to-br flex items-center justify-center shadow-md", accent.icon)}>
-                    <span className="material-symbols-outlined text-white text-[28px] drop-shadow-sm max-w-full overflow-hidden">
+                  <div className={cn("relative w-14 h-14 rounded-2xl bg-gradient-to-br flex items-center justify-center shadow-e2", accent.icon)}>
+                    <span className="material-symbols-outlined text-white icon-xl drop-shadow-e1 max-w-full overflow-hidden">
                       {vendor.icon}
                     </span>
                   </div>
@@ -310,8 +310,8 @@ export default function Featured() {
                     scanner + signature verifier — surface it as a visible
                     differentiator (audit §3.6: the capability existed but was
                     never shown). */}
-                <p className="text-[11px] text-on-surface-variant/90 mb-lg inline-flex items-center gap-1">
-                  <span className="material-symbols-outlined text-[14px] text-success" aria-hidden="true">verified_user</span>
+                <p className="text-label-xs text-on-surface-variant/90 mb-lg inline-flex items-center gap-xs">
+                  <span className="material-symbols-outlined icon-sm text-success" aria-hidden="true">verified_user</span>
                   {t('extensions.featured.securityBadge')}
                 </p>
 
@@ -332,7 +332,7 @@ export default function Featured() {
                         : "bg-error-container/50 text-on-error-container",
                     )}
                   >
-                    <span className="material-symbols-outlined text-[14px]">
+                    <span className="material-symbols-outlined icon-sm">
                       {feedbackForVendor.ok ? "check_circle" : "error"}
                     </span>
                     {feedbackForVendor.msg}
@@ -352,7 +352,7 @@ export default function Featured() {
                     onClick={() => handleConnect(vendor)}
                     disabled={isBusy}
                     aria-busy={isBusy || undefined}
-                    className="group/button inline-flex shrink-0 items-center justify-center rounded-xl border border-transparent bg-primary text-on-primary text-label-md font-bold shadow-sm hover:shadow-md w-full px-md py-sm transition-all outline-none select-none focus-visible:border-ring focus-visible:ring-3 focus-visible:ring-ring/50 disabled:cursor-not-allowed disabled:bg-surface-container disabled:text-on-surface disabled:shadow-none"
+                    className="group/button inline-flex shrink-0 items-center justify-center rounded-xl border border-transparent bg-primary text-on-primary text-label-md font-bold shadow-e1 hover:shadow-e2 w-full px-md py-sm transition-all outline-none select-none focus-visible:border-ring focus-visible:ring-3 focus-visible:ring-ring/50 disabled:cursor-not-allowed disabled:bg-surface-container disabled:text-on-surface disabled:shadow-none"
                   >
                     {isBusy ? (
                       <>
@@ -363,12 +363,12 @@ export default function Featured() {
                       </>
                     ) : vendor.install_kind.type === "oauth_remote" ? (
                       <>
-                        <span className="material-symbols-outlined text-[18px]">link</span>
+                        <span className="material-symbols-outlined icon-md">link</span>
                         {t('extensions.featured.connect')}
                       </>
                     ) : (
                       <>
-                        <span className="material-symbols-outlined text-[18px]">download</span>
+                        <span className="material-symbols-outlined icon-md">download</span>
                         {t('extensions.featured.install')}
                       </>
                     )}
@@ -449,7 +449,7 @@ function TokenPasteForm({
         value={token}
         onChange={(e) => setToken(e.target.value)}
         placeholder={t('extensions.featured.tokenPlaceholder')}
-        className="w-full px-sm py-xs rounded border border-outline-variant text-label-sm bg-surface mb-xs"
+        className="w-full px-sm py-xs rounded-sm border border-outline-variant text-label-sm bg-surface mb-xs"
         disabled={disabled}
       />
       <div className="flex gap-xs">
@@ -458,7 +458,7 @@ function TokenPasteForm({
           size="sm"
           onClick={() => token && onSubmit(token)}
           disabled={disabled || !token}
-          className="flex-1 rounded"
+          className="flex-1 rounded-sm"
         >
           {t('extensions.featured.tokenSubmit')}
         </Button>
@@ -468,7 +468,7 @@ function TokenPasteForm({
           type="button"
           onClick={onCancel}
           disabled={disabled}
-          className="rounded"
+          className="rounded-sm"
         >
           {t('extensions.featured.tokenCancel')}
         </Button>

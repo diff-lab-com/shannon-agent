@@ -8,7 +8,6 @@ use super::*;
 use crate::query_engine::QueryMetadata;
 use crate::query_engine::recovery;
 use crate::tools::ToolRegistry;
-use shannon_engine::api::ImageSource;
 use shannon_engine::api::{LlmClient, LlmClientConfig, MessageContent};
 use shannon_engine::permissions::PermissionManager;
 use std::env;
@@ -17,6 +16,7 @@ use uuid::Uuid;
 
 fn create_test_client() -> LlmClient {
     let config = LlmClientConfig {
+        thinking_type: None,
         api_key: "test-key".to_string(),
         base_url: "http://localhost:11434".to_string(),
         model: "test-model".to_string(),

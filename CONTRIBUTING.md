@@ -4,7 +4,22 @@ Thanks for your interest. This monorepo ships three products that share one Rust
 
 ## Development setup
 
-Prerequisites: Rust 1.88+, pnpm 10+, bun latest. On Linux also: `libwebkit2gtk-4.1-dev libgtk-3-dev libayatana-appindicator3-dev librsvg2-dev libxdo-dev patchelf`.
+Prerequisites: Rust 1.88+, pnpm 10+, bun latest. On Linux also: `libwebkit2gtk-4.1-dev libgtk-3-dev libayatana-appindicator3-dev librsvg2-dev libxdo-dev libgbm-dev libdrm-dev libpipewire-0.3-dev patchelf`.
+
+### Desktop build on Linux (libspa/pipewire)
+
+The three capture-related packages (`libgbm-dev libdrm-dev libpipewire-0.3-dev`) only affect compiling the `shannon-desktop` crate (via xcap → pipewire → libspa) and the `shannon-tools --features computer-use` / libei legs — the rest of the workspace builds and tests without them.
+
+**Symptom**: `cargo check --workspace` fails inside `~/.cargo/registry/src/…/libspa-0.10.1/` with ``error[E0425]: cannot find function `spa_meta_region_is_valid` in crate `spa_sys``` plus ~6 more errors (E0425 `spa_meta_first`, E0560/E0609 on `spa_video_info_raw.flags`, E0308).
+
+**Root cause**: `libspa-sys` 0.10.x declares only the `libspa-0.2`/`libpipewire-0.3` ABI via pkg-config (so any 0.3.x system package installs cleanly), but it bindgens your **system** SPA headers at build time while libspa 0.10.x's handwritten wrapper expects the `static inline` helpers and struct fields of newer pipewire. Ubuntu 22.04's `libspa-0.2-dev 0.3.48` (2022) predates them — an environment mismatch, not a repo bug; CI and release builds use working versions.
+
+**Workarounds** (pick one):
+
+1. Install a compatible `libpipewire-0.3-dev`/`libspa-0.2-dev` — Ubuntu 24.04's 1.0.x is verified working; 0.3.48 is verified broken.
+2. Skip the capture feature: `just check` detects this failure and retries automatically; the manual equivalents are `cargo check --workspace --exclude shannon-desktop` and `cargo check -p shannon-desktop --no-default-features --features tauri`.
+
+Verified matrix: Ubuntu 24.04 works (PipeWire 1.0.x headers — same as CI); Ubuntu 22.04 does not (see above). No version floor is claimed beyond these two data points.
 
 ```bash
 git clone https://github.com/diff-lab-com/shannon-agent.git

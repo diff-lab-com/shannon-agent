@@ -502,3 +502,108 @@ fn token_budget_nudge_fires_across_three_turns() {
         "must report the third turn's cumulative total; got: {text}"
     );
 }
+
+/// Regression (DeepSWE mm3-smoke01, 2026-09-27): MiniMax-M3 streams its
+/// reasoning via a separate channel and still emits the literal `</think>`
+/// in the content stream. A stray close tag **in the leading region**
+/// (before any non-whitespace visible text has been emitted) must be
+/// swallowed — leaking it into the visible answer poisoned `assistant_text`
+/// and defeated both parse-error recovery gates (the query ended after one
+/// turn with the task abandoned).
+///
+/// Follow-up (malformed-call-recovery): #140's swallow is scoped down to
+/// the leading region. Once real visible content is on the wire, a stray
+/// close tag is ordinary literal text — models legitimately print
+/// `</think>` mid-answer (e.g. code that processes reasoning traces), and
+/// silently deleting it ships corrupted content. Whitespace alone does not
+/// end the leading region, so the observed leading `</think>\n\n` payload
+/// is still swallowed.
+#[test]
+fn stream_splitter_swallows_stray_close_tag_outside_think_block() {
+    // The exact production payload: close tag as the whole visible stream.
+    let mut s = ThinkStreamSplitter::default();
+    let (thinking, visible) = feed_all(&mut s, &["</think>\n\n"]);
+    assert!(thinking.is_empty());
+    assert!(
+        visible.trim().is_empty(),
+        "leading stray close tag must not leak as visible text: {visible:?}"
+    );
+
+    // Leading whitespace does not end the leading region.
+    let mut s = ThinkStreamSplitter::default();
+    let (thinking, visible) = feed_all(&mut s, &["\n\n ", "</think> tail"]);
+    assert!(thinking.is_empty());
+    assert_eq!(
+        visible, "\n\n  tail",
+        "close tag in the leading region must be swallowed (whitespace passes through)"
+    );
+
+    // Mixed: a close tag after real answer text is literal content now.
+    let mut s = ThinkStreamSplitter::default();
+    let (_, visible) = feed_all(&mut s, &["a </think> b"]);
+    assert_eq!(visible, "a </think> b");
+
+    // Close tag split across the chunk boundary after real text.
+    let mut s = ThinkStreamSplitter::default();
+    let (_, visible) = feed_all(&mut s, &["hello </thi", "nk> world"]);
+    assert_eq!(visible, "hello </think> world");
+
+    // A dangling close-tag fragment at stream end is literal text once the
+    // leading region has ended; the real text before it is kept.
+    let mut s = ThinkStreamSplitter::default();
+    let (thinking, visible) = feed_all(&mut s, &["answer </thi"]);
+    assert!(thinking.is_empty());
+    assert_eq!(visible, "answer </thi");
+}
+
+/// The observed leading payload must stay swallowed even when the close tag
+/// itself is split across chunk boundaries — every split point.
+#[test]
+fn stream_splitter_still_swallows_leading_close_tag_split_across_chunks() {
+    let text = "</think>\n\n";
+    for split in 0..text.len() {
+        if !text.is_char_boundary(split) {
+            continue;
+        }
+        let mut s = ThinkStreamSplitter::default();
+        let (a, b) = text.split_at(split);
+        let (thinking, visible) = feed_all(&mut s, &[a, b]);
+        assert!(thinking.is_empty());
+        assert!(
+            visible.trim().is_empty(),
+            "leading close tag must be swallowed at split {split}: {visible:?}"
+        );
+    }
+}
+
+/// The leading region ends at the first non-whitespace visible character.
+/// A markdown code fence is visible content, so a literal `</think>` inside
+/// a code fence in the reply body must survive verbatim — the model writing
+/// code that handles reasoning traces is a legitimate shape, and an
+/// unscoped swallow silently corrupted the delivered answer.
+#[test]
+fn stream_splitter_keeps_close_tag_literal_inside_code_fence() {
+    // Fence at the very start: the fence line itself ends the leading
+    // region before the close tag inside the fence.
+    let code = "```rust\nif reasoning.ends_with(\"</think>\") { bail!(..) }\n```\n";
+    let mut s = ThinkStreamSplitter::default();
+    let (thinking, visible) = feed_all(&mut s, &[code]);
+    assert!(thinking.is_empty());
+    assert_eq!(
+        visible, code,
+        "close tag inside a code fence must survive verbatim"
+    );
+
+    // Same shape with the close tag split across the chunk boundary.
+    let mut s = ThinkStreamSplitter::default();
+    let split = code.find("</thi").unwrap() + 4;
+    let (a, b) = code.split_at(split);
+    let (thinking, visible) = feed_all(&mut s, &[a, b]);
+    assert!(thinking.is_empty());
+    assert_eq!(visible, code, "split at {split}");
+
+    // Prose before the fence, stray close tag inside it — still literal.
+    let mut s = ThinkStreamSplitter::default();
+    let (_, visible) = feed_all(&mut s, &["Sure.\n```\n</think>\n```\n"]);
+    assert_eq!(visible, "Sure.\n```\n</think>\n```\n");
+}

@@ -288,6 +288,24 @@ impl LlmClient {
         self.request_capture.clone()
     }
 
+    /// Build an internal sub-client for mid-stream reconnection (F11).
+    ///
+    /// The sub-client starts from this client's config and inherits:
+    /// - the session-log request tee ([`RequestCapture`]) — without it the
+    ///   replayed reconnect request vanished from the session log;
+    /// - the retry observer (SHARED `Arc` cell, like `Clone`) so reconnect
+    ///   pauses are surfaced the same way first-attempt pauses are;
+    /// - the stream-idle override budget (SHARED `Arc` cell) so an engine
+    ///   A14 escalation performed after this sub-client was built is still
+    ///   visible to the reconnect request it makes.
+    pub(crate) fn reconnect_clone(&self) -> Self {
+        let mut cloned = Self::new(self.config.clone());
+        cloned.request_capture = self.request_capture.clone();
+        cloned.retry_observer = self.retry_observer.clone();
+        cloned.stream_idle_override = self.stream_idle_override.clone();
+        cloned
+    }
+
     /// Fire the observer (if attached) with a serialized request body.
     fn capture_request(&self, body: &serde_json::Value) {
         if let Some(capture) = &self.request_capture {
@@ -373,6 +391,23 @@ impl LlmClient {
                 headers.push(("anthropic-version".to_string(), "2023-06-01".to_string()));
             }
             LlmProvider::Custom => {
+                // Default to Bearer auth with the stored key so a key saved
+                // via `/connect` works against openai-compatible gateways
+                // (review 2026-09-29 P0-7). An explicit Authorization in
+                // extra_headers (case-insensitive) suppresses the default
+                // and wins, so bespoke gateways keep full control.
+                if !self.config.api_key.is_empty()
+                    && !self
+                        .config
+                        .extra_headers
+                        .keys()
+                        .any(|k| k.eq_ignore_ascii_case("authorization"))
+                {
+                    headers.push((
+                        "Authorization".to_string(),
+                        format!("Bearer {}", self.config.api_key),
+                    ));
+                }
                 // Use extra_headers for custom provider auth
                 for (k, v) in &self.config.extra_headers {
                     headers.push((k.clone(), v.clone()));
@@ -562,6 +597,7 @@ impl LlmClient {
 
         let request_body = MessageRequest {
             model: self.config.model.clone(),
+            thinking_type: self.config.thinking_type.clone(),
             max_tokens: self.config.max_tokens,
             system,
             system_blocks: None,
@@ -666,12 +702,9 @@ impl LlmClient {
             let messages_clone = request_body.messages.clone();
             let tools_clone = request_body.tools.clone();
             let system_clone = request_body.system.clone();
-            let reconnect_client = Self::new(self.config.clone());
-            let reconnect_client = match self.request_capture_handle() {
-                Some(capture) => reconnect_client.with_request_capture(capture),
-                None => reconnect_client,
-            }
-            .with_retry_observer(self.retry_observer_handle());
+            // F11: the reconnect sub-client inherits the request tee, the
+            // retry observer, and the (shared) stream-idle override.
+            let reconnect_client = self.reconnect_clone();
             Ok(super::streaming::sse_stream_from_response_resumable(
                 response,
                 self.config.provider.clone(),
@@ -703,6 +736,7 @@ impl LlmClient {
     ) -> Result<MessageStream, ApiError> {
         let request_body = MessageRequest {
             model: self.config.model.clone(),
+            thinking_type: self.config.thinking_type.clone(),
             max_tokens: self.config.max_tokens,
             system: None,
             system_blocks: Some(system_blocks),
@@ -814,6 +848,7 @@ impl LlmClient {
     ) -> Result<MessageStream, ApiError> {
         let request_body = MessageRequest {
             model: self.config.model.clone(),
+            thinking_type: self.config.thinking_type.clone(),
             max_tokens: self.config.max_tokens,
             system,
             system_blocks: None,
@@ -826,7 +861,10 @@ impl LlmClient {
             stop_sequences: None,
             budget_tokens: self.config.budget_tokens,
             thinking_budget: None,
-            reasoning_effort: None,
+            // F11: replay the SAME request shape the interrupted attempt
+            // used — this was hardcoded to `None`, so a reconnect silently
+            // downgraded adaptive-thinking requests.
+            reasoning_effort: self.config.reasoning_effort,
         };
 
         let url = self.endpoint_url();
@@ -905,6 +943,7 @@ impl LlmClient {
     ) -> Result<Vec<ContentBlock>, ApiError> {
         let request_body = MessageRequest {
             model: self.config.model.clone(),
+            thinking_type: self.config.thinking_type.clone(),
             max_tokens: self.config.max_tokens,
             system,
             system_blocks: None,
@@ -1375,6 +1414,7 @@ mod tests {
 
     fn test_config() -> LlmClientConfig {
         LlmClientConfig {
+            thinking_type: None,
             provider: LlmProvider::Anthropic,
             api_key: "test-key".to_string(),
             model: "claude-3-5-sonnet-20241022".to_string(),
@@ -1395,6 +1435,7 @@ mod tests {
 
     fn ollama_config() -> LlmClientConfig {
         LlmClientConfig {
+            thinking_type: None,
             provider: LlmProvider::Ollama,
             api_key: String::new(),
             model: "llama3".to_string(),
@@ -1413,6 +1454,80 @@ mod tests {
         }
     }
 
+    // ── Custom provider default Bearer (review 2026-09-29 P0-7) ──────────
+
+    fn custom_config() -> LlmClientConfig {
+        LlmClientConfig {
+            provider: LlmProvider::Custom,
+            api_key: "sk-custom-secret".to_string(),
+            model: "test-model".to_string(),
+            base_url: "https://gateway.example.com".to_string(),
+            max_tokens: 4096,
+            api_version: String::new(),
+            timeout_seconds: 30,
+            max_stream_reconnects: 0,
+            extra_headers: Default::default(),
+            budget_tokens: None,
+            fallback_provider: None,
+            fallback_base_url: None,
+            retry_config: Default::default(),
+            reasoning_effort: None,
+            thinking_type: None,
+            enable_anthropic_toolsets: crate::api::toolsets::anthropic_toolsets_from_env(),
+        }
+    }
+
+    /// A stored key with no explicit auth header must produce a default
+    /// `Authorization: Bearer` — previously the `/connect` key was never
+    /// sent and custom openai-compatible gateways always 401'd.
+    #[test]
+    fn custom_provider_sends_bearer_from_stored_key() {
+        let client = LlmClient::new(custom_config());
+        let headers = client.auth_headers();
+        assert!(
+            headers
+                .iter()
+                .any(|(k, v)| k == "Authorization" && v == "Bearer sk-custom-secret"),
+            "default Bearer from the stored key must be sent: {headers:?}"
+        );
+    }
+
+    /// An explicit Authorization in extra_headers (any case) suppresses the
+    /// default so bespoke gateways keep full control of the auth scheme.
+    #[test]
+    fn custom_provider_extra_headers_override_authorization() {
+        let mut cfg = custom_config();
+        cfg.extra_headers
+            .insert("authorization".to_string(), "X".to_string());
+        let client = LlmClient::new(cfg);
+        let headers = client.auth_headers();
+        let auth: Vec<&(String, String)> = headers
+            .iter()
+            .filter(|(k, _)| k.eq_ignore_ascii_case("authorization"))
+            .collect();
+        assert_eq!(
+            auth.len(),
+            1,
+            "exactly one Authorization header: {headers:?}"
+        );
+        assert_eq!(auth[0].1, "X", "extra_headers auth must win verbatim");
+    }
+
+    /// No key and no extra_headers → no Authorization header at all.
+    #[test]
+    fn custom_provider_empty_key_adds_no_authorization() {
+        let mut cfg = custom_config();
+        cfg.api_key = String::new();
+        let client = LlmClient::new(cfg);
+        let headers = client.auth_headers();
+        assert!(
+            !headers
+                .iter()
+                .any(|(k, _)| k.eq_ignore_ascii_case("authorization")),
+            "empty key must not add an Authorization header: {headers:?}"
+        );
+    }
+
     // ── Stream timeouts (review 2026-08-28 PERF-2) ──────────────────────
 
     const STREAM_TIMEOUT_SECS: u64 = 2;
@@ -1422,6 +1537,7 @@ mod tests {
     /// so the timeout behavior is observed in isolation.
     fn slow_stream_config(base_url: String) -> LlmClientConfig {
         LlmClientConfig {
+            thinking_type: None,
             provider: LlmProvider::Anthropic,
             api_key: "test-key".to_string(),
             model: "claude-3-5-sonnet-20241022".to_string(),
@@ -1455,7 +1571,6 @@ mod tests {
     #[tokio::test]
     async fn slow_stream_survives_past_legacy_total_timeout() {
         use futures::StreamExt;
-        use std::io::Write as _;
         use std::sync::Arc;
         use std::time::Instant;
 
@@ -1532,7 +1647,6 @@ mod tests {
     #[tokio::test]
     async fn stalled_stream_is_cut_by_read_idle_timeout() {
         use futures::StreamExt;
-        use std::io::Write as _;
         use std::time::{Duration, Instant};
 
         let mut server = mockito::Server::new_async().await;
@@ -1951,6 +2065,7 @@ mod tests {
     #[test]
     fn test_zhipu_auth_headers_use_jwt() {
         let config = LlmClientConfig {
+            thinking_type: None,
             provider: LlmProvider::Zhipu,
             api_key: "testid.testsecret".to_string(),
             model: "glm-4-flash".to_string(),
@@ -2160,5 +2275,126 @@ mod tests {
         // Clearing on the original is visible to the clone (shared RwLock).
         client.set_stream_idle_override(None);
         assert_eq!(clone.stream_idle_override_handle(), None);
+    }
+
+    // ── F11: reconnect sub-client inheritance ───────────────────────────
+
+    /// `reconnect_clone` must inherit the request tee and the retry
+    /// observer, and SHARE the stream-idle override cell so an engine-side
+    /// A14 escalation after the clone is still visible to the reconnect.
+    #[test]
+    fn reconnect_clone_propagates_capture_observer_and_idle_override() {
+        let cfg = test_config();
+        let client = LlmClient::new(cfg)
+            .with_request_capture(std::sync::Arc::new(|_body| {
+                // tee: any sync sink; presence is what matters here
+            }))
+            .with_retry_observer(Some(std::sync::Arc::new(|_notice| {
+                Box::pin(futures::future::ready(()))
+            })));
+
+        let sub = client.reconnect_clone();
+
+        assert!(
+            sub.request_capture_handle().is_some(),
+            "reconnect sub-client must inherit the session-log tee"
+        );
+        assert!(
+            sub.retry_observer_handle().is_some(),
+            "reconnect sub-client must inherit the retry observer"
+        );
+
+        // Shared idle-override cell: escalate on the parent AFTER cloning.
+        assert_eq!(sub.stream_idle_override_handle(), None);
+        client.set_stream_idle_override(Some(std::time::Duration::from_secs(600)));
+        assert_eq!(
+            sub.stream_idle_override_handle(),
+            Some(std::time::Duration::from_secs(600)),
+            "an escalation after the clone must be visible to the reconnect client"
+        );
+    }
+
+    /// Full-path regression (F11): a mid-stream reconnect must (a) tee the
+    /// replayed request like the original — the pre-fix fresh client lost
+    /// the capture, so only ONE body was ever observed — and (b) replay the
+    /// same reasoning_effort the interrupted attempt carried (the resumable
+    /// path used to hardcode `None`).
+    #[tokio::test]
+    async fn reconnect_replays_request_tee_and_reasoning_effort() {
+        use futures::StreamExt;
+        use std::sync::atomic::{AtomicUsize, Ordering};
+
+        let mut server = mockito::Server::new_async().await;
+
+        let truncated = truncated_sse_body();
+        let complete = format!(
+            "data: {}\n\ndata: {}\n\ndata: {}\n\ndata: [DONE]\n\n",
+            r#"{"type":"message_start","message":{"id":"msg_reconnect","role":"assistant","content":[],"model":"test-model","stop_reason":null,"usage":{"input_tokens":1,"output_tokens":0}}}"#,
+            r#"{"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"after reconnect"}}"#,
+            r#"{"type":"message_delta","delta":{"stop_reason":"end_turn"},"usage":{"input_tokens":1,"output_tokens":3}}"#,
+        );
+
+        let call_index = AtomicUsize::new(0);
+        let mock = server
+            .mock("POST", "/v1/messages")
+            .with_status(200)
+            .with_header("content-type", "text/event-stream")
+            .with_chunked_body(move |w| {
+                let n = call_index.fetch_add(1, Ordering::SeqCst);
+                if n == 0 {
+                    w.write_all(truncated.as_bytes())?;
+                } else {
+                    w.write_all(complete.as_bytes())?;
+                }
+                w.flush()?;
+                Ok(())
+            })
+            .expect(2)
+            .create_async()
+            .await;
+
+        let captured: std::sync::Arc<std::sync::Mutex<Vec<serde_json::Value>>> = Default::default();
+        let captured_for_tee = captured.clone();
+
+        let mut cfg = test_config();
+        cfg.max_stream_reconnects = 1;
+        cfg.base_url = server.url();
+        cfg.reasoning_effort = Some(ReasoningEffort::High);
+        let client = LlmClient::new(cfg).with_request_capture(std::sync::Arc::new(move |body| {
+            captured_for_tee.lock().unwrap().push(body.clone());
+        }));
+
+        let mut text = String::new();
+        let mut stream = client
+            .send_message_stream(vec![user_message()], None, None)
+            .await
+            .expect("stream must open");
+        while let Some(item) = stream.next().await {
+            if let Ok(StreamEvent::ContentBlockDelta {
+                delta: ContentDelta::TextDelta { text: t },
+                ..
+            }) = item
+            {
+                text.push_str(&t);
+            }
+        }
+        mock.assert(); // exactly two HTTP hits: original + one reconnect
+
+        // (a) The tee saw BOTH envelopes.
+        let bodies = captured.lock().unwrap();
+        assert_eq!(
+            bodies.len(),
+            2,
+            "the reconnect request must be captured too (tee propagation)"
+        );
+        // (b) The replay carries the same reasoning_effort (pre-fix: null).
+        for (i, body) in bodies.iter().enumerate() {
+            assert_eq!(
+                body.get("reasoning_effort").and_then(|v| v.as_str()),
+                Some("High"),
+                "request {i} must carry reasoning_effort"
+            );
+        }
+        assert_eq!(text, "partial before the cutafter reconnect");
     }
 }

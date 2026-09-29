@@ -23,6 +23,7 @@ mod engine_recovery_tests {
     /// Create a QueryEngine pointing at a mock server.
     fn create_engine(mock_url: &str) -> QueryEngine {
         let config = LlmClientConfig {
+            thinking_type: None,
             api_key: "test-key".to_string(),
             base_url: mock_url.to_string(),
             model: "claude-sonnet-4-20250514".to_string(),
@@ -789,6 +790,7 @@ mod engine_recovery_tests {
     /// Create a QueryEngine configured for Ollama pointing at a mock server.
     fn create_ollama_engine(mock_url: &str) -> QueryEngine {
         let config = LlmClientConfig {
+            thinking_type: None,
             api_key: String::new(),
             base_url: mock_url.to_string(),
             model: "tiny-model".to_string(),
@@ -1184,10 +1186,8 @@ data: {\"type\":\"message_stop\"}\n\
         // before the synthetic tool_result could be added, so no event
         // would have 3+ messages.
         let mut found_full_history = false;
-        for ev in &events {
-            if let Ok(shannon_core::query_engine::QueryEvent::ConversationUpdate {
-                messages, ..
-            }) = ev
+        for ev in events.iter().flatten() {
+            if let shannon_core::query_engine::QueryEvent::ConversationUpdate { messages, .. } = ev
             {
                 if messages.len() >= 3 {
                     found_full_history = true;

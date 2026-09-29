@@ -50,15 +50,15 @@ export function ProviderCard({
             ) : null}
           </div>
           <div className="flex items-center gap-xs flex-wrap">
-            <span className="font-label-xs text-[11px] text-on-surface-variant">{kindLabel(intl, conn.kind)}</span>
+            <span className="font-label-xs text-label-xs text-on-surface-variant">{kindLabel(intl, conn.kind)}</span>
             {conn.base_url ? (
-              <span className="font-label-xs text-[11px] text-on-surface-variant font-mono truncate max-w-[260px]" title={conn.base_url ?? undefined}>{conn.base_url}</span>
+              <span className="font-label-xs text-label-xs text-on-surface-variant font-mono truncate max-w-[260px]" title={conn.base_url ?? undefined}>{conn.base_url}</span>
             ) : null}
             <span
-              className={cn("inline-flex items-center gap-[2px] font-label-xs text-[10px]", hasKey ? 'text-primary' : 'text-on-surface-variant opacity-60')}
+              className={cn("inline-flex items-center gap-[2px] font-label-xs text-label-2xs", hasKey ? 'text-primary' : 'text-on-surface-variant opacity-60')}
               title={hasKey ? t('settings.models.providers.keySet') : t('settings.models.providers.keyMissing')}
             >
-              <span className="material-symbols-outlined text-[12px]">{hasKey ? 'key' : 'key_off'}</span>
+              <span className="material-symbols-outlined icon-xs">{hasKey ? 'key' : 'key_off'}</span>
               {hasKey ? t('settings.models.providers.keySet') : t('settings.models.providers.keyMissing')}
             </span>
           </div>
@@ -66,10 +66,10 @@ export function ProviderCard({
       </div>
       <div className="flex items-center gap-xs shrink-0">
         {testingId === conn.id ? (
-          <Spinner className="text-primary text-[18px]" />
+          <Spinner className="text-primary text-body-lg" />
         ) : (
           <Button variant="ghost" className="px-sm py-xs text-on-surface-variant hover:text-primary cursor-pointer" onClick={onTest} aria-label={t('settings.models.providers.test')}>
-            <span className="material-symbols-outlined text-[18px]">cable</span>
+            <span className="material-symbols-outlined icon-md">cable</span>
           </Button>
         )}
         {!isActive ? (
@@ -80,15 +80,15 @@ export function ProviderCard({
             disabled={activatingId !== null}
           >
             {activatingId === conn.id ? (
-              <Spinner className="text-[16px] align-middle" />
+              <Spinner className="text-body-md align-middle" />
             ) : t('settings.models.providers.activate')}
           </Button>
         ) : null}
         <Button variant="ghost" className="px-sm py-xs text-on-surface-variant hover:text-primary cursor-pointer" onClick={onEdit} aria-label={t('settings.models.providers.edit')}>
-          <span className="material-symbols-outlined text-[18px]">edit</span>
+          <span className="material-symbols-outlined icon-md">edit</span>
         </Button>
         <Button variant="ghost" className="px-sm py-xs text-on-surface-variant hover:text-error cursor-pointer" onClick={onDelete} aria-label={t('settings.models.providers.delete')}>
-          <span className="material-symbols-outlined text-[18px]">delete</span>
+          <span className="material-symbols-outlined icon-md">delete</span>
         </Button>
       </div>
     </div>

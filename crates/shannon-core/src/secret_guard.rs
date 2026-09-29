@@ -43,12 +43,20 @@ pub fn context_transform() -> Option<Arc<dyn ContextTransform>> {
 /// transform. Returns the number of findings; each finding is logged with
 /// its rule id only — never the secret value (the contract's
 /// `AuditFinding` carries no secret material by construction).
+///
+/// Every finding also feeds the redaction opt-in suggestion latch (T5):
+/// in audit-only mode the detected values are forwarded to the provider
+/// verbatim, so the first hit arms a one-time user notice pointing at the
+/// opt-in config (see [`take_redaction_suggestion`]).
 pub fn audit_wire_and_log(wire: &serde_json::Value) -> usize {
     let Some(transform) = context_transform() else {
         return 0;
     };
     let findings = transform.audit_wire(wire);
     let count = findings.len();
+    // `None` = an external transform manages policy (the built-in guard did
+    // not install itself) — its host decides what to tell the user.
+    let mode = ENABLED.get().copied();
     for f in findings {
         // Deliberately narrow log: rule id only. The wire body itself is
         // already teed into the L0 session log under the redaction policy.
@@ -57,8 +65,83 @@ pub fn audit_wire_and_log(wire: &serde_json::Value) -> usize {
             rule = %f.rule_id,
             "potential secret detected in outbound LLM request (value redacted)"
         );
+        record_audit_hit(mode);
     }
     count
+}
+
+// ---- T5: redaction opt-in suggestion --------------------------------------
+//
+// The unset default mode is `audit`: detected secret values are forwarded
+// to the provider AND written to events.jsonl, while redaction is opt-in —
+// and nothing ever told the user that opt-in exists. These lock-free
+// latches record that at least one audit hit occurred so hosts can surface
+// a one-time hint after the current turn.
+
+/// Total audit findings observed this process (all modes; observability).
+static AUDIT_HITS: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+/// Latched: an audit-mode hit occurred and the suggestion was not handed
+/// out yet. Cleared by [`take_redaction_suggestion`].
+static SUGGESTION_PENDING: std::sync::atomic::AtomicBool =
+    std::sync::atomic::AtomicBool::new(false);
+/// Latched: the suggestion was already handed out once — it never re-arms.
+static SUGGESTION_TAKEN: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+/// Feed one audit finding into the suggestion latch. Only a hit under the
+/// built-in guard in `Audit` mode arms the suggestion — in `Redact` mode
+/// there is nothing to suggest, and an external transform (`None`) manages
+/// its own policy and user surface.
+fn record_audit_hit(mode: Option<SecretGuardMode>) {
+    AUDIT_HITS.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    if mode == Some(SecretGuardMode::Audit)
+        && !SUGGESTION_TAKEN.load(std::sync::atomic::Ordering::Relaxed)
+    {
+        SUGGESTION_PENDING.store(true, std::sync::atomic::Ordering::Relaxed);
+    }
+}
+
+/// Total secret-shaped findings the guard has audited this process
+/// (lock-free counter; all modes).
+pub fn audit_hits() -> u64 {
+    AUDIT_HITS.load(std::sync::atomic::Ordering::Relaxed)
+}
+
+/// One-time redaction opt-in suggestion: returns `true` exactly once after
+/// the first audit-mode hit, then `false` for every later call. Hosts call
+/// this after a query turn completes and surface the notice when it fires;
+/// the `tracing::warn!` here covers headless hosts that have no REPL.
+///
+/// The suggestion names the actual opt-in keys: `[secret_guard] mode =
+/// "redact"` in `.shannon.toml` (or `~/.shannon/config.toml`), or
+/// `$SHANNON_SECRET_GUARD=redact` — see [`init_from_env_or_config`].
+pub fn take_redaction_suggestion() -> bool {
+    use std::sync::atomic::Ordering::Relaxed;
+    if SUGGESTION_PENDING
+        .compare_exchange(true, false, Relaxed, Relaxed)
+        .is_ok()
+    {
+        SUGGESTION_TAKEN.store(true, Relaxed);
+        tracing::warn!(
+            target: "shannon::secret_guard",
+            "secrets were detected in outbound requests while secret-guard \
+             is in audit-only mode: values were forwarded to the provider \
+             and written to the session log. Enable redaction with \
+             [secret_guard] mode = \"redact\" in .shannon.toml (or \
+             ~/.shannon/config.toml), or SHANNON_SECRET_GUARD=redact"
+        );
+        true
+    } else {
+        false
+    }
+}
+
+/// Test seam: clear the process-global suggestion latches so tests are
+/// order-independent in shared-process runs.
+#[cfg(test)]
+fn reset_redaction_suggestion() {
+    AUDIT_HITS.store(0, std::sync::atomic::Ordering::Relaxed);
+    SUGGESTION_PENDING.store(false, std::sync::atomic::Ordering::Relaxed);
+    SUGGESTION_TAKEN.store(false, std::sync::atomic::Ordering::Relaxed);
 }
 
 /// ---- Phase 2 wiring points (blueprint §9.6) -------------------------------
@@ -1042,14 +1125,14 @@ mod tests {
             fn register(&self, surrogate: &str, secret: &str) {
                 self.0
                     .lock()
-                    .unwrap()
+                    .expect("store lock")
                     .push((surrogate.to_string(), secret.to_string()));
             }
             fn pairs(&self) -> Vec<(String, String)> {
-                self.0.lock().unwrap().clone()
+                self.0.lock().expect("store lock").clone()
             }
             fn len(&self) -> usize {
-                self.0.lock().unwrap().len()
+                self.0.lock().expect("store lock").len()
             }
         }
 
@@ -1316,7 +1399,7 @@ mod tests {
         struct RecordSources(Arc<std::sync::Mutex<Vec<IngestSource>>>);
         impl ContextTransform for RecordSources {
             fn transform_ingest(&self, block: &mut IngestBlock) -> TransformAction {
-                self.0.lock().unwrap().push(block.source.clone());
+                self.0.lock().expect("seen lock").push(block.source.clone());
                 TransformAction::Passthrough
             }
             fn restore_tool_args(
@@ -1343,7 +1426,7 @@ mod tests {
         let _ = transform_outgoing_messages(messages);
         set_context_transform(None);
         assert_eq!(
-            *seen.lock().unwrap(),
+            *seen.lock().expect("seen lock"),
             vec![IngestSource::UserMessage],
             "Text blocks of a user message must carry UserMessage provenance"
         );
@@ -1472,6 +1555,73 @@ mod tests {
         );
     }
 
+    // ---- T5: redaction opt-in suggestion latch ------------------------------
+    //
+    // Audit mode is the unset default: detected secrets are forwarded to the
+    // provider and logged, and nothing told the user redaction exists. The
+    // latch must arm on the first audit-mode hit, hand the suggestion out
+    // exactly once, and stay silent when redaction is already active (or an
+    // external transform manages policy).
+
+    #[test]
+    fn redaction_suggestion_fires_exactly_once_after_audit_hit() {
+        let _g = global_lock();
+        reset_redaction_suggestion();
+        assert!(
+            !take_redaction_suggestion(),
+            "no hit yet — nothing to suggest"
+        );
+
+        record_audit_hit(Some(SecretGuardMode::Audit));
+        assert_eq!(audit_hits(), 1, "hit counter is lock-free but exact");
+        assert!(take_redaction_suggestion(), "first hit arms the suggestion");
+        assert!(
+            !take_redaction_suggestion(),
+            "suggestion must hand out exactly once"
+        );
+        // Later hits never re-arm a consumed suggestion.
+        record_audit_hit(Some(SecretGuardMode::Audit));
+        assert!(!take_redaction_suggestion(), "one-shot per process");
+    }
+
+    #[test]
+    fn redaction_suggestion_absent_when_redaction_already_on() {
+        let _g = global_lock();
+        reset_redaction_suggestion();
+
+        // Redact mode: nothing to suggest.
+        record_audit_hit(Some(SecretGuardMode::Redact));
+        assert!(!take_redaction_suggestion());
+
+        // External transform (built-in guard did not install): its host owns
+        // the user surface, so the built-in opt-in hint must not fire.
+        record_audit_hit(None);
+        assert!(!take_redaction_suggestion());
+        assert_eq!(
+            audit_hits(),
+            2,
+            "hits are counted in every mode for observability"
+        );
+    }
+
+    #[test]
+    fn audit_wire_and_log_counts_hits_without_suggestion_for_external_transform() {
+        let _g = global_lock();
+        reset_redaction_suggestion();
+        set_context_transform(None);
+        assert_eq!(audit_wire_and_log(&json!({ "messages": [] })), 0);
+        assert_eq!(audit_hits(), 0);
+
+        // A host/plugin-installed transform (ENABLED unset → mode None):
+        // findings count, but the built-in opt-in suggestion stays quiet.
+        set_context_transform(Some(Arc::new(FakeDetector)));
+        let n = audit_wire_and_log(&json!({ "messages": [{ "role": "user" }] }));
+        set_context_transform(None);
+        assert_eq!(n, 1);
+        assert_eq!(audit_hits(), 1);
+        assert!(!take_redaction_suggestion());
+    }
+
     // ---- T3: registry rebuild from restored raw history --------------------
     //
     // The derivation is deterministic, so a restart can rebuild the
@@ -1484,14 +1634,14 @@ mod tests {
         fn register(&self, surrogate: &str, secret: &str) {
             self.0
                 .lock()
-                .unwrap()
+                .expect("store lock")
                 .push((surrogate.to_string(), secret.to_string()));
         }
         fn pairs(&self) -> Vec<(String, String)> {
-            self.0.lock().unwrap().clone()
+            self.0.lock().expect("store lock").clone()
         }
         fn len(&self) -> usize {
-            self.0.lock().unwrap().len()
+            self.0.lock().expect("store lock").len()
         }
     }
 
@@ -1612,7 +1762,7 @@ mod tests {
             vec![UNMAPPED_TOKEN.to_string()],
             "the unmapped token must be reported"
         );
-        let content = args["content"].as_str().unwrap();
+        let content = args["content"].as_str().expect("content is a string");
         assert!(content.contains(secret), "mapped value restored: {content}");
         assert!(
             content.contains(UNMAPPED_TOKEN),

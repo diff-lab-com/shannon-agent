@@ -47,8 +47,23 @@ struct RepoMapInjectorInner {
     /// tokens — a comfortable slice of the system prompt for a typical
     /// 100K+ context model.
     budget_tokens: usize,
-    /// Cached symbol map. Lazily initialised on first build call.
-    cache: RwLock<Option<RepoMapCache>>,
+    /// Cached symbol map plus its packed rendering. Lazily initialised on
+    /// first build call.
+    cache: RwLock<Option<CachedRepoMap>>,
+}
+
+/// A loaded [`RepoMapCache`] together with the trimmed rendering that turns
+/// (`build`) actually serve. The rendering is cached because the underlying
+/// pack is non-destructive but not free (it clones the map to trim a
+/// snapshot): unchanged turns reuse the string, and any mutation via
+/// [`RepoMapInjector::notify_file_changed`] / [`RepoMapInjector::invalidate`]
+/// marks it dirty.
+#[derive(Debug)]
+struct CachedRepoMap {
+    cache: RepoMapCache,
+    /// `pack_snapshot(budget_tokens)` output. `None` = dirty, re-render on
+    /// the next build.
+    rendered: Option<String>,
 }
 
 impl RepoMapInjector {
@@ -100,10 +115,72 @@ impl RepoMapInjector {
     /// augmentation.
     pub fn build(&self) -> Option<String> {
         let root = self.resolve_root()?;
-        let mut cache = self.ensure_cache(&root).ok()?;
-        let md = cache.pack(self.inner.budget_tokens);
+        // Fast path: the packed rendering for this root is already cached.
+        // This is the every-turn path — no map clone, no re-trim.
+        if let Ok(guard) = self.inner.cache.read() {
+            if let Some(ref cached) = *guard {
+                if cached.cache.root() == root {
+                    if let Some(ref md) = cached.rendered {
+                        return Self::checked_render(md.clone(), &root, self.inner.budget_tokens);
+                    }
+                }
+            }
+        }
+        // Slow path: build (or rebuild) the cache. Use a write lock so we
+        // don't race two threads into both doing a full walk.
+        let mut guard = self
+            .inner
+            .cache
+            .write()
+            .map_err(|_| anyhow::anyhow!("repo map: cache lock poisoned"))
+            .ok()?;
+        // Re-check after acquiring the write lock — another thread may have
+        // populated or re-rendered while we were waiting.
+        if let Some(ref cached) = *guard {
+            if cached.cache.root() == root {
+                if let Some(ref md) = cached.rendered {
+                    return Self::checked_render(md.clone(), &root, self.inner.budget_tokens);
+                }
+            }
+        }
+        // Take the cache out so we can render without holding the borrow
+        // across the (possibly slow) pack; reuse it when the root matches.
+        let mut cached = match guard.take() {
+            Some(c) if c.cache.root() == root => c,
+            _ => CachedRepoMap {
+                cache: RepoMapCache::new(&root)
+                    .context("repo map: cold cache load")
+                    .ok()?,
+                rendered: None,
+            },
+        };
+        let md = cached.cache.pack_snapshot(self.inner.budget_tokens);
+        cached.rendered = Some(md.clone());
+        *guard = Some(cached);
+        Self::checked_render(md, &root, self.inner.budget_tokens)
+    }
+
+    /// Shared post-render checks: empty render → `None`; oversize render →
+    /// loud warning (guardrail, not a truncation). The renderer already
+    /// bounds its own output (symbol-token budget per file plus a 4 KiB cap
+    /// on the folded symbol-less-file list); if a render ever blows past the
+    /// expected envelope (~tokens * 4 chars/token with slack for markdown
+    /// headers), warn so a renderer regression surfaces in logs instead of
+    /// silently eating the context window. The markdown is returned
+    /// untouched.
+    fn checked_render(md: String, root: &Path, budget_tokens: usize) -> Option<String> {
         if md.trim().is_empty() {
             return None;
+        }
+        let max_bytes = budget_tokens.saturating_mul(32);
+        if md.len() > max_bytes {
+            tracing::warn!(
+                bytes = md.len(),
+                max_bytes,
+                root = %root.display(),
+                "repo map render exceeded expected size envelope (budget_tokens * 32); \
+                 renderer size bounds may have regressed"
+            );
         }
         Some(md)
     }
@@ -113,21 +190,28 @@ impl RepoMapInjector {
     /// want to drive the whole system-prompt rebuild.
     pub fn notify_file_changed(&self, path: &Path) -> anyhow::Result<bool> {
         let root = self.resolve_root().context("repo map: no project root")?;
-        // Take the write lock. `ensure_cache` returns a clone, which is fine
-        // for reads but useless for mutating — the original cache in
-        // `self.inner.cache` would never see the change. Take the cache out,
-        // mutate, then put it back.
+        // Take the write lock. Read methods return shared state, which is
+        // useless for mutating — the original cache in `self.inner.cache`
+        // would never see the change. Take the cache out, mutate, then put
+        // it back.
         let mut guard = self
             .inner
             .cache
             .write()
             .map_err(|_| anyhow::anyhow!("repo map: cache lock poisoned"))?;
-        let mut cache = match guard.take() {
+        let mut cached = match guard.take() {
             Some(c) => c,
-            None => RepoMapCache::new(&root).context("repo map: cold cache load")?,
+            None => CachedRepoMap {
+                cache: RepoMapCache::new(&root).context("repo map: cold cache load")?,
+                rendered: None,
+            },
         };
-        let changed = cache.update_file(path)?;
-        *guard = Some(cache);
+        let changed = cached.cache.update_file(path)?;
+        // The packed rendering is stale the moment the map changed (and
+        // conservatively also when the update was a no-op — re-packing once
+        // is cheap next to serving a stale map).
+        cached.rendered = None;
+        *guard = Some(cached);
         Ok(changed)
     }
 
@@ -139,34 +223,6 @@ impl RepoMapInjector {
         }
         std::env::current_dir().ok()
     }
-
-    fn ensure_cache(&self, root: &Path) -> anyhow::Result<RepoMapCache> {
-        // Fast path: cache already initialised.
-        if let Ok(guard) = self.inner.cache.read() {
-            if let Some(ref cache) = *guard {
-                if cache.root() == root {
-                    return Ok(cache.clone());
-                }
-            }
-        }
-        // Slow path: build (or rebuild) the cache. Use a write lock so we
-        // don't race two threads into both doing a full walk.
-        let mut guard = self
-            .inner
-            .cache
-            .write()
-            .map_err(|_| anyhow::anyhow!("repo map: cache lock poisoned"))?;
-        // Re-check after acquiring the write lock — another thread may have
-        // populated it while we were waiting.
-        if let Some(ref cache) = *guard {
-            if cache.root() == root {
-                return Ok(cache.clone());
-            }
-        }
-        let cache = RepoMapCache::new(root).context("repo map: cold cache load")?;
-        *guard = Some(cache.clone());
-        Ok(cache)
-    }
 }
 
 #[cfg(test)]
@@ -175,26 +231,16 @@ mod tests {
     use super::*;
     use std::fs;
 
-    fn tmp_root(label: &str) -> PathBuf {
-        let mut p = std::env::temp_dir();
-        p.push(format!(
-            "shannon_repomap_injector_{label}_{}_{}",
-            std::process::id(),
-            std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .map(|d| d.as_nanos())
-                .unwrap_or(0)
-        ));
-        let _ = fs::remove_dir_all(&p);
-        fs::create_dir_all(&p).unwrap();
-        p
+    // RAII temp root: removed automatically when the guard drops.
+    fn tmp_root() -> tempfile::TempDir {
+        tempfile::tempdir().unwrap()
     }
 
     #[test]
     fn build_returns_none_for_empty_root() {
-        let root = tmp_root("empty");
+        let root = tmp_root();
         // Empty directory → no parseable files → map is empty → None.
-        let inj = RepoMapInjector::new(Some(&root), 2_000);
+        let inj = RepoMapInjector::new(Some(root.path()), 2_000);
         // Empty dir: walk succeeds but produces no entries. The markdown is
         // just the header line, which we treat as empty (whitespace only).
         let out = inj.build();
@@ -208,13 +254,13 @@ mod tests {
 
     #[test]
     fn build_returns_markdown_for_populated_root() {
-        let root = tmp_root("populated");
+        let root = tmp_root();
         fs::write(
-            root.join("hello.rs"),
+            root.path().join("hello.rs"),
             "pub fn greet(name: &str) -> String { format!(\"hi {name}\") }\n",
         )
         .unwrap();
-        let inj = RepoMapInjector::new(Some(&root), 2_000);
+        let inj = RepoMapInjector::new(Some(root.path()), 2_000);
         let md = inj.build().expect("markdown for populated root");
         assert!(md.contains("Repo Map:"));
         assert!(md.contains("greet"));
@@ -222,23 +268,75 @@ mod tests {
 
     #[test]
     fn notify_file_changed_updates_cache() {
-        let root = tmp_root("notify");
-        fs::write(root.join("a.rs"), "pub fn a() {}\n").unwrap();
-        let inj = RepoMapInjector::new(Some(&root), 2_000);
+        let root = tmp_root();
+        fs::write(root.path().join("a.rs"), "pub fn a() {}\n").unwrap();
+        let inj = RepoMapInjector::new(Some(root.path()), 2_000);
         // Warm the cache.
         let _ = inj.build();
         // Add a new file and notify — next build should surface it.
-        fs::write(root.join("b.rs"), "pub fn freshly_added() {}\n").unwrap();
-        let _ = inj.notify_file_changed(&root.join("b.rs")).unwrap();
+        fs::write(root.path().join("b.rs"), "pub fn freshly_added() {}\n").unwrap();
+        let _ = inj.notify_file_changed(&root.path().join("b.rs")).unwrap();
         let md = inj.build().expect("markdown after notify");
         assert!(md.contains("freshly_added"));
     }
 
+    /// T12b: repeated builds serve the cached rendering — identical output,
+    /// and the underlying map is never destructively trimmed (the old
+    /// `pack` path deep-cloned the whole map every turn to protect it).
+    #[test]
+    fn build_reuses_cached_rendering_without_retrimming() {
+        let root = tmp_root();
+        for i in 0..6 {
+            fs::write(
+                root.path().join(format!("m{i}.rs")),
+                format!("pub fn stable_fn_{i}(x: i32) -> i32 {{ x + {i} }}\n"),
+            )
+            .unwrap();
+        }
+        // Tiny budget: the trim actually drops symbols, so any destructive
+        // packing or per-turn divergence would show up here.
+        let inj = RepoMapInjector::new(Some(root.path()), 40);
+        let first = inj.build().expect("first build");
+        let second = inj.build().expect("second build");
+        assert_eq!(first, second, "unchanged turns must render identically");
+
+        // The cached map still tracks every file with its full symbol list
+        // (pack_snapshot is non-destructive) and the rendering is memoised.
+        let guard = inj.inner.cache.read().unwrap();
+        let cached = guard.as_ref().expect("cache populated by build");
+        assert_eq!(cached.cache.file_count(), 6);
+        assert!(cached.rendered.is_some());
+    }
+
+    /// T12b: a notify_file_changed invalidates the memoised rendering —
+    /// the next build re-renders from the updated map instead of serving
+    /// the cached string.
+    #[test]
+    fn modified_file_changes_cached_rendering_after_notify() {
+        let root = tmp_root();
+        let file = root.path().join("solo.rs");
+        fs::write(&file, "pub fn before() -> u32 { 1 }\n").unwrap();
+        let inj = RepoMapInjector::new(Some(root.path()), 2_000);
+        assert!(inj.build().expect("initial build").contains("before"));
+
+        // Rewrite the file and pin a distinctly different mtime so the
+        // whole-second fast path in `update_file` can't swallow the change.
+        fs::write(&file, "pub fn after() -> u32 { 2 }\n").unwrap();
+        let f = fs::OpenOptions::new().append(true).open(&file).unwrap();
+        f.set_modified(std::time::UNIX_EPOCH + std::time::Duration::from_secs(1_700_000_000))
+            .unwrap();
+        assert!(inj.notify_file_changed(&file).unwrap());
+
+        let md = inj.build().expect("rebuild after notify");
+        assert!(md.contains("after"), "stale rendering served: {md}");
+        assert!(!md.contains("before"), "stale symbol served: {md}");
+    }
+
     #[test]
     fn invalidating_forces_fresh_walk() {
-        let root = tmp_root("invalidate");
-        fs::write(root.join("a.rs"), "pub fn a() {}\n").unwrap();
-        let inj = RepoMapInjector::new(Some(&root), 2_000);
+        let root = tmp_root();
+        fs::write(root.path().join("a.rs"), "pub fn a() {}\n").unwrap();
+        let inj = RepoMapInjector::new(Some(root.path()), 2_000);
         let _ = inj.build();
         inj.invalidate();
         // No panic, no broken state.

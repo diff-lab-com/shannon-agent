@@ -22,7 +22,7 @@ export function DocumentsSkillsList({ skillState, onInstall, onBrowseLater }: Do
   return (
     <div className="mt-md p-md rounded-xl border border-outline-variant/50 bg-surface-container-low">
       <div className="flex items-center gap-xs mb-xs">
-        <span className="material-symbols-outlined text-primary text-[20px]">extension</span>
+        <span className="material-symbols-outlined text-primary icon-md">extension</span>
         <span className="font-headline-md text-on-surface">
           {intl.formatMessage({ id: 'welcome.skills.title' })}
         </span>
@@ -38,7 +38,7 @@ export function DocumentsSkillsList({ skillState, onInstall, onBrowseLater }: Do
               key={skill.id}
               className="flex items-start gap-sm p-sm rounded-lg bg-surface-container-lowest border border-outline-variant/30"
             >
-              <span className="material-symbols-outlined text-on-surface-variant text-[20px] mt-[2px] shrink-0">
+              <span className="material-symbols-outlined text-on-surface-variant icon-md mt-[2px] shrink-0">
                 {skill.icon}
               </span>
               <div className="flex-1 min-w-0">
@@ -59,10 +59,10 @@ export function DocumentsSkillsList({ skillState, onInstall, onBrowseLater }: Do
                 aria-label={intl.formatMessage({ id: 'welcome.skills.install.aria' }, { name: intl.formatMessage({ id: skill.labelKey }) })}
               >
                 {state.status === 'installing' && (
-                  <Spinner className="text-[14px]" />
+                  <Spinner className="text-body-sm" />
                 )}
                 {state.status === 'installed' ? (
-                  <span className="material-symbols-outlined text-[14px]">check</span>
+                  <span className="material-symbols-outlined icon-sm">check</span>
                 ) : state.status === 'installing' ? (
                   intl.formatMessage({ id: 'welcome.skills.installing' })
                 ) : (

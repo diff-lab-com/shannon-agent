@@ -712,7 +712,7 @@ export function TerminalPanel({ projectDir }: TerminalPanelProps) {
           aria-expanded={false}
           aria-label={t('terminal.panel.toggle')}
           title={t('terminal.panel.toggle')}
-          className="inline-flex items-center gap-xs rounded-full border border-outline-variant/40 bg-surface-container-low px-sm py-1 font-label-sm text-label-sm text-on-surface-variant hover:bg-surface-container focus-visible:outline focus-visible:outline-2 focus-visible:outline-primary"
+          className="inline-flex items-center gap-xs rounded-full border border-outline-variant/40 bg-surface-container-low px-sm py-xs font-label-sm text-label-sm text-on-surface-variant hover:bg-surface-container focus-visible:outline focus-visible:outline-2 focus-visible:outline-primary"
         >
           <span className="material-symbols-outlined icon-sm" aria-hidden="true">terminal</span>
           {t('terminal.title')}
@@ -731,7 +731,7 @@ export function TerminalPanel({ projectDir }: TerminalPanelProps) {
       style={!fullHeight ? { height: drawerHeight } : undefined}
     >
       {/* Toolbar: tabs + actions */}
-      <div className="flex items-center gap-xs px-sm py-1 border-b border-outline-variant/20 bg-surface-container-low/60">
+      <div className="flex items-center gap-xs px-sm py-xs border-b border-outline-variant/20 bg-surface-container-low/60">
         <div
           role="tablist"
           aria-label={t('terminal.panel.label')}
@@ -754,7 +754,7 @@ export function TerminalPanel({ projectDir }: TerminalPanelProps) {
                   aria-controls="terminal-tab-panel"
                   tabIndex={selected ? 0 : -1}
                   onClick={() => setActiveId(tab.info.terminalId)}
-                  className={`px-sm py-1 rounded-t-md font-label-sm text-label-sm flex items-center gap-xs ${
+                  className={`px-sm py-xs rounded-t-md font-label-sm text-label-sm flex items-center gap-xs ${
                     selected
                       ? 'bg-surface-container-lowest text-on-surface border border-b-0 border-outline-variant/30'
                       : 'text-on-surface-variant hover:bg-surface-container'
@@ -770,7 +770,7 @@ export function TerminalPanel({ projectDir }: TerminalPanelProps) {
                   type="button"
                   onClick={() => closeTab(tab.info.terminalId)}
                   aria-label={`${t('terminal.tab.close')}: ${dirLabel(tab.info.projectDir)}`}
-                  className="ml-0.5 p-0.5 rounded text-on-surface-variant hover:text-error hover:bg-surface-container focus-visible:outline focus-visible:outline-2 focus-visible:outline-primary"
+                  className="ml-0.5 p-0.5 rounded-sm text-on-surface-variant hover:text-error hover:bg-surface-container focus-visible:outline focus-visible:outline-2 focus-visible:outline-primary"
                 >
                   <span className="material-symbols-outlined icon-sm" aria-hidden="true">close</span>
                 </button>
@@ -784,7 +784,7 @@ export function TerminalPanel({ projectDir }: TerminalPanelProps) {
           aria-disabled={!canSpawn}
           aria-label={t('terminal.tab.new')}
           title={canSpawn ? t('terminal.tab.new') : t('terminal.maxReached', { max: MAX_TERMINALS })}
-          className="p-1 rounded text-on-surface-variant hover:bg-surface-container disabled:opacity-40 disabled:cursor-not-allowed aria-disabled:opacity-40 aria-disabled:cursor-not-allowed focus-visible:outline focus-visible:outline-2 focus-visible:outline-primary"
+          className="p-xs rounded-sm text-on-surface-variant hover:bg-surface-container disabled:opacity-40 disabled:cursor-not-allowed aria-disabled:opacity-40 aria-disabled:cursor-not-allowed focus-visible:outline focus-visible:outline-2 focus-visible:outline-primary"
         >
           <span className="material-symbols-outlined icon-sm" aria-hidden="true">add</span>
         </button>
@@ -803,7 +803,7 @@ export function TerminalPanel({ projectDir }: TerminalPanelProps) {
           disabled={!hasSelection}
           aria-label={t('terminal.sendToAgent.title')}
           title={t('terminal.sendToAgent.title')}
-          className="p-1 rounded text-on-surface-variant hover:bg-surface-container disabled:opacity-40 disabled:cursor-not-allowed focus-visible:outline focus-visible:outline-2 focus-visible:outline-primary"
+          className="p-xs rounded-sm text-on-surface-variant hover:bg-surface-container disabled:opacity-40 disabled:cursor-not-allowed focus-visible:outline focus-visible:outline-2 focus-visible:outline-primary"
         >
           <span className="material-symbols-outlined icon-sm" aria-hidden="true">send</span>
         </button>
@@ -813,7 +813,7 @@ export function TerminalPanel({ projectDir }: TerminalPanelProps) {
           aria-pressed={fullHeight}
           aria-label={t('terminal.panel.fullHeight')}
           title={t('terminal.panel.fullHeight')}
-          className="p-1 rounded text-on-surface-variant hover:bg-surface-container focus-visible:outline focus-visible:outline-2 focus-visible:outline-primary"
+          className="p-xs rounded-sm text-on-surface-variant hover:bg-surface-container focus-visible:outline focus-visible:outline-2 focus-visible:outline-primary"
         >
           <span className="material-symbols-outlined icon-sm" aria-hidden="true">
             {fullHeight ? 'collapse_content' : 'expand_content'}
@@ -826,7 +826,7 @@ export function TerminalPanel({ projectDir }: TerminalPanelProps) {
           aria-expanded
           aria-label={t('terminal.panel.close')}
           title={t('terminal.panel.toggle')}
-          className="p-1 rounded text-on-surface-variant hover:bg-surface-container focus-visible:outline focus-visible:outline-2 focus-visible:outline-primary"
+          className="p-xs rounded-sm text-on-surface-variant hover:bg-surface-container focus-visible:outline focus-visible:outline-2 focus-visible:outline-primary"
         >
           <span className="material-symbols-outlined icon-sm" aria-hidden="true">keyboard_hide</span>
         </button>

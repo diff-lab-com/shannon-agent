@@ -802,6 +802,18 @@ impl ToolRegistry {
             .collect()
     }
 
+    /// Return `(name, is_read_only)` for every registered tool.
+    ///
+    /// Consumed by the permission manager so the read-only name fast-path can
+    /// be vetoed for tools whose trait flags contradict their name (e.g. a
+    /// plugin tool registered as `file_info` that mutates state).
+    pub fn tool_read_only_flags(&self) -> Vec<(String, bool)> {
+        Self::recover_lock(self.tools.read())
+            .values()
+            .map(|t| (t.name().to_string(), t.is_read_only()))
+            .collect()
+    }
+
     /// Partition a list of approved tool calls into execution batches.
     /// Invalidate streaming cache entries for the given file paths.
     ///
@@ -2152,6 +2164,10 @@ mod tests {
         }
     }
 
+    // Intentional: the global secret-guard transform is read by the tool
+    // boundary *during* the awaited execute(), so its serialization lock must
+    // be held across the await (test-only, uncontended).
+    #[allow(clippy::await_holding_lock)]
     #[tokio::test]
     async fn execution_boundary_restores_model_echoed_surrogates() {
         let _g = crate::secret_guard::test_support::acquire();
@@ -2184,6 +2200,9 @@ mod tests {
         );
     }
 
+    // Intentional: same global-transform lock, read during the awaited
+    // execute(); test-only and uncontended.
+    #[allow(clippy::await_holding_lock)]
     #[tokio::test]
     async fn fail_closed_plugin_blocks_execution() {
         let _g = crate::secret_guard::test_support::acquire();
@@ -2208,6 +2227,9 @@ mod tests {
         );
     }
 
+    // Intentional: same global-transform lock, read during the awaited
+    // execute(); test-only and uncontended.
+    #[allow(clippy::await_holding_lock)]
     #[tokio::test]
     async fn unresolved_tool_args_pass_through_with_visible_warning() {
         let _g = crate::secret_guard::test_support::acquire();

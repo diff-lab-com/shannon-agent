@@ -7,18 +7,64 @@
 //! Coverage: Ollama, Anthropic, OpenAI, DeepSeek, Groq, Mistral (OpenAI-compatible),
 //! multi-turn tool use, context preservation, compact, streaming formats, error recovery.
 //!
-//! Run with: cargo test --test cli_e2e_tests -- --test-threads=1
+//! Run with: cargo nextest run -p shannon-cli
+//!
+//! nextest gives every test its own process, so the `#[serial]` attributes
+//! below are no-ops there (they only matter for plain `cargo test`, where
+//! they keep the runs single-threaded). Every CLI invocation runs in a
+//! per-test sandbox cwd ([`SandboxCmd`]), so results do not depend on the
+//! machine's directory state (e.g. a polluted /tmp).
 
 use assert_cmd::Command;
 use mockito::{Matcher, Mock, ServerGuard};
 use predicates::prelude::*;
 use serial_test::serial;
-use std::sync::atomic::{AtomicU32, Ordering};
+use std::ops::{Deref, DerefMut};
 
 const BIN: &str = "shannon";
 
-fn shannon() -> Command {
-    Command::cargo_bin(BIN).unwrap()
+/// A shannon CLI invocation pinned to a fresh, empty sandbox cwd.
+///
+/// The engine's repo-map injector cold-builds a tree-sitter symbol map of
+/// the CWD on startup. These tests used to pin the CWD to the machine's temp
+/// directory, so on a host with a polluted /tmp (thousands of leftover
+/// directories) every invocation burned tens of seconds of CPU walking it
+/// and was killed by the test's timeout with empty stdout. Each command now
+/// owns an empty `TempDir` instead: the walk stays O(1), the repomap disk
+/// cache (`$HOME/.shannon/repomap/`, keyed by CWD) is always cold, and the
+/// tests are hermetic with respect to machine state.
+///
+/// `Deref`/`DerefMut` to [`Command`] forward the usual builder chain
+/// (`env`, `args`, `timeout`, `current_dir`, `assert`, `output`, ...) so
+/// call sites read exactly like plain `assert_cmd` code. Tests that
+/// explicitly `current_dir()` elsewhere (session and offline suites) simply
+/// override the sandbox and leave its directory unused; the directory is
+/// kept alive by this handle until the assert on the chain result is done.
+struct SandboxCmd {
+    cmd: Command,
+    _cwd: tempfile::TempDir,
+}
+
+impl Deref for SandboxCmd {
+    type Target = Command;
+
+    fn deref(&self) -> &Command {
+        &self.cmd
+    }
+}
+
+impl DerefMut for SandboxCmd {
+    fn deref_mut(&mut self) -> &mut Command {
+        &mut self.cmd
+    }
+}
+
+/// Build the compiled `shannon` binary running in a fresh, empty sandbox cwd.
+fn shannon() -> SandboxCmd {
+    SandboxCmd {
+        cmd: Command::cargo_bin(BIN).unwrap(),
+        _cwd: tempfile::TempDir::new().expect("create per-test sandbox cwd"),
+    }
 }
 
 // ── Mock Response Builders ─────────────────────────────────────────────
@@ -117,16 +163,18 @@ fn mock_groq_streaming(server: &mut ServerGuard, text: &str) -> Mock {
 // ── Common Helpers ─────────────────────────────────────────────────────
 
 /// Build a shannon command with clean env vars pointing to mock server.
-fn shannon_with_mock(provider: &str, server_url: &str) -> Command {
-    let mut cmd = shannon();
-    cmd.env("SHANNON_BASE_URL", server_url)
+///
+/// The cwd is the per-test sandbox directory created by [`shannon`].
+fn shannon_with_mock(provider: &str, server_url: &str) -> SandboxCmd {
+    let mut sandbox = shannon();
+    sandbox
+        .env("SHANNON_BASE_URL", server_url)
         .env("SHANNON_PROVIDER", provider)
         .env("SHANNON_MODEL", "test-model")
         .env_remove("ANTHROPIC_API_KEY")
         .env_remove("OPENAI_API_KEY")
-        .env_remove("SHANNON_API_KEY")
-        .current_dir(std::env::temp_dir());
-    cmd
+        .env_remove("SHANNON_API_KEY");
+    sandbox
 }
 
 /// Extract owned stdout from an Assert result.
@@ -163,7 +211,7 @@ async fn test_ollama_text_response_headless() {
     let stdout = stdout_string(&result);
     let json = parse_json_output(&stdout);
 
-    assert_eq!(json["exit_code"], "success");
+    assert_eq!(json["exit_code"], 0);
     let response = json["response"].as_str().unwrap_or("");
     assert!(
         response.contains("Ollama"),
@@ -186,7 +234,7 @@ async fn test_openai_text_response_headless() {
     let stdout = stdout_string(&result);
     let json = parse_json_output(&stdout);
 
-    assert_eq!(json["exit_code"], "success");
+    assert_eq!(json["exit_code"], 0);
     let response = json["response"].as_str().unwrap_or("");
     assert!(
         response.contains("OpenAI"),
@@ -209,7 +257,7 @@ async fn test_anthropic_text_response_headless() {
     let stdout = stdout_string(&result);
     let json = parse_json_output(&stdout);
 
-    assert_eq!(json["exit_code"], "success");
+    assert_eq!(json["exit_code"], 0);
     let response = json["response"].as_str().unwrap_or("");
     assert!(
         response.contains("Anthropic"),
@@ -237,7 +285,7 @@ async fn test_deepseek_text_response_headless() {
     let stdout = stdout_string(&result);
     let json = parse_json_output(&stdout);
 
-    assert_eq!(json["exit_code"], "success");
+    assert_eq!(json["exit_code"], 0);
     let response = json["response"].as_str().unwrap_or("");
     assert!(
         response.contains("DeepSeek"),
@@ -276,7 +324,7 @@ async fn test_mistral_text_response_headless() {
     let stdout = stdout_string(&result);
     let json = parse_json_output(&stdout);
 
-    assert_eq!(json["exit_code"], "success");
+    assert_eq!(json["exit_code"], 0);
     let response = json["response"].as_str().unwrap_or("");
     assert!(
         response.contains("Mistral"),
@@ -300,7 +348,7 @@ async fn test_groq_text_response_headless() {
     let stdout = stdout_string(&result);
     let json = parse_json_output(&stdout);
 
-    assert_eq!(json["exit_code"], "success");
+    assert_eq!(json["exit_code"], 0);
     let response = json["response"].as_str().unwrap_or("");
     assert!(
         response.contains("Groq"),
@@ -325,10 +373,7 @@ async fn test_openai_compatible_providers_same_endpoint() {
 
         let stdout = stdout_string(&result);
         let json = parse_json_output(&stdout);
-        assert_eq!(
-            json["exit_code"], "success",
-            "Provider '{provider}' should succeed"
-        );
+        assert_eq!(json["exit_code"], 0, "Provider '{provider}' should succeed");
     }
 }
 
@@ -369,7 +414,7 @@ async fn test_ollama_malformed_retry() {
     let stdout = stdout_string(&result);
     let json = parse_json_output(&stdout);
 
-    assert_eq!(json["exit_code"], "success");
+    assert_eq!(json["exit_code"], 0);
     let response = json["response"].as_str().unwrap_or("");
     assert!(
         response.contains("Retry"),
@@ -404,7 +449,7 @@ async fn test_ollama_generic_500_retry() {
     let stdout = stdout_string(&result);
     let json = parse_json_output(&stdout);
 
-    assert_eq!(json["exit_code"], "success");
+    assert_eq!(json["exit_code"], 0);
     let response = json["response"].as_str().unwrap_or("");
     assert!(
         response.contains("Recovered"),
@@ -466,7 +511,7 @@ async fn test_anthropic_usage_tracking() {
     let stdout = stdout_string(&result);
     let json = parse_json_output(&stdout);
 
-    assert_eq!(json["exit_code"], "success");
+    assert_eq!(json["exit_code"], 0);
     let tokens = json["total_tokens"].as_u64().unwrap_or(0);
     assert!(
         tokens > 0,
@@ -490,7 +535,7 @@ async fn test_openai_streaming_json_output() {
     let stdout = stdout_string(&result);
     let json = parse_json_output(&stdout);
 
-    assert_eq!(json["exit_code"], "success");
+    assert_eq!(json["exit_code"], 0);
     assert!(
         json["response"]
             .as_str()
@@ -516,7 +561,7 @@ async fn test_deepseek_streaming_json_output() {
     let stdout = stdout_string(&result);
     let json = parse_json_output(&stdout);
 
-    assert_eq!(json["exit_code"], "success");
+    assert_eq!(json["exit_code"], 0);
     assert!(json["response"].as_str().unwrap_or("").contains("DeepSeek"));
     assert!(json["prompt"].as_str().unwrap_or("").contains("test query"));
 }
@@ -550,7 +595,7 @@ async fn test_context_preservation_prompt_in_output() {
         prompt.contains("meaning of 42"),
         "Prompt should be preserved in output, got: {prompt}"
     );
-    assert_eq!(json["exit_code"], "success");
+    assert_eq!(json["exit_code"], 0);
 }
 
 #[serial]
@@ -587,7 +632,7 @@ async fn test_prompt_preserved_in_response_context() {
 #[serial]
 async fn test_json_stream_event_sequence() {
     // Verify json-stream output produces correct event ordering:
-    // start → text_delta* → done (CiEvent) → done (OutputEvent)
+    // start → text_delta* → ONE done line (F38 unified envelope).
     let mut server = mockito::Server::new_async().await;
     let _m = mock_ollama_streaming(&mut server, "Event sequence test");
 
@@ -613,19 +658,25 @@ async fn test_json_stream_event_sequence() {
         events[0]
     );
 
-    // Find the CiEvent::Done (has turns_used + tokens_used, not just exit_code)
-    let ci_done = events
-        .iter()
-        .find(|e| e["type"] == "done" && e.get("turns_used").is_some());
-    assert!(
-        ci_done.is_some(),
-        "Should have CiEvent::Done with turns_used"
+    // F38: exactly ONE done line carrying the full field union.
+    let done_count = events.iter().filter(|e| e["type"] == "done").count();
+    assert_eq!(
+        done_count, 1,
+        "F38: exactly one done event, got {done_count}"
     );
 
-    let done = ci_done.unwrap();
+    let done = events
+        .iter()
+        .find(|e| e["type"] == "done")
+        .expect("single done event");
     assert!(
         done.get("exit_code").is_some(),
         "done should have exit_code"
+    );
+    assert!(
+        done["exit_code"].is_i64(),
+        "exit_code must be an integer, got: {}",
+        done["exit_code"]
     );
     assert!(
         done.get("turns_used").is_some(),
@@ -635,13 +686,24 @@ async fn test_json_stream_event_sequence() {
         done.get("tokens_used").is_some(),
         "done should have tokens_used"
     );
+    assert!(
+        done.get("tokens_in").is_some() && done.get("tokens_out").is_some(),
+        "done should have split tokens_in/tokens_out"
+    );
+
+    // F38: the legacy vocabulary never leaks into the default stream.
+    assert!(
+        !events.iter().any(|e| e["type"] == "tool_use"),
+        "default json-stream must not emit legacy tool_use events"
+    );
 }
 
 #[serial]
 #[tokio::test]
 #[serial]
 async fn test_json_stream_text_delta_events() {
-    // Verify json-stream includes "text_delta" events with content (OutputEvent format)
+    // Verify json-stream includes "text_delta" events with content
+    // (part of the unified F38 envelope).
     let mut server = mockito::Server::new_async().await;
     let _m = mock_anthropic_streaming(&mut server, "Stream message content");
 
@@ -684,7 +746,7 @@ async fn test_json_stream_text_delta_events() {
 #[tokio::test]
 #[serial]
 async fn test_json_stream_anthropic_full_event_flow() {
-    // Verify Anthropic json-stream: start → text_delta → CiEvent::done → OutputEvent::done
+    // Verify Anthropic json-stream: start → text_delta* → ONE done (F38 unified)
     let mut server = mockito::Server::new_async().await;
     let _m = mock_anthropic_streaming(&mut server, "Full flow test");
 
@@ -716,21 +778,30 @@ async fn test_json_stream_anthropic_full_event_flow() {
         "Should have text_delta events, got: {types:?}"
     );
 
-    // Should end with two done events (CiEvent::Done then OutputEvent::Done)
+    // F38: exactly ONE done event with full metadata
     let done_count = types.iter().filter(|&&t| t == "done").count();
-    assert!(done_count >= 1, "Should have at least one done event");
+    assert_eq!(
+        done_count, 1,
+        "F38: exactly one done event, got {done_count}"
+    );
 
-    // CiEvent::Done should have full metadata
-    let ci_done = events
+    let done = events
         .iter()
-        .find(|e| e["type"] == "done" && e.get("turns_used").is_some());
+        .find(|e| e["type"] == "done")
+        .expect("single done event");
     assert!(
-        ci_done.is_some(),
-        "Should have CiEvent::Done with turns_used"
+        done.get("turns_used").is_some(),
+        "done should have turns_used"
     );
     assert!(
-        ci_done.unwrap()["exit_code"].as_i64().unwrap_or(-1) == 0,
+        done["exit_code"].as_i64().unwrap_or(-1) == 0,
         "exit_code should be 0 for success"
+    );
+
+    // F38: no legacy tool_use lines in the default stream.
+    assert!(
+        !types.contains(&"tool_use"),
+        "default json-stream must not emit legacy tool_use events, got: {types:?}"
     );
 }
 
@@ -843,10 +914,12 @@ async fn test_rate_limit_exit_code() {
 
     let stdout = stdout_string(&result);
     if let Ok(json) = serde_json::from_str::<serde_json::Value>(&stdout) {
-        let code = json["exit_code"].as_str().unwrap_or("unknown");
+        // review F35: HeadlessOutput.exit_code serializes as an integer
+        // (4 = rate limited, 1 = error).
+        let code = json["exit_code"].as_i64().unwrap_or(-1);
         assert!(
-            code == "rate_limited" || code == "error",
-            "Expected rate_limited or error exit code, got: {code}"
+            code == 4 || code == 1,
+            "Expected rate_limited (4) or error (1) exit code, got: {code}"
         );
     } else {
         assert!(
@@ -860,6 +933,21 @@ async fn test_rate_limit_exit_code() {
 /// like a silent stall: stderr notes each API retry (attempt/total + wait),
 /// json-stream emits a progress event, and the exhausted run still
 /// classifies as rate_limited (exit 4) — not a generic error.
+///
+/// Two independent retry layers are at play, and only one is tunable here:
+/// - API layer (the asserted `API retry N/4` lines): the engine retries the
+///   HTTP request per `RetryConfig::default()`
+///   (crates/shannon-engine/src/api/retry.rs) — 3 retries on top of the
+///   initial call, with a 1s/2s/4s backoff ladder. Hard-coded defaults; no
+///   env var reaches them.
+/// - Run layer (crates/shannon-cli/src/main.rs): after the API layer gives
+///   up, headless mode may restart the whole query (`SHANNON_RUN_RETRIES`,
+///   default 2), sleeping `SHANNON_RUN_RETRY_BACKOFF_BASE_MS` per attempt
+///   (default 20s, capped at 60s). The 50ms base set below only shrinks
+///   THIS layer so the exhausted-run path fits inside the 60s subprocess
+///   timeout and the terminal `"exit_code":4` stays reachable — removing it
+///   would not speed up the asserted API retries, it would push the
+///   run-level backoffs past the timeout.
 #[serial]
 #[tokio::test]
 #[serial]
@@ -875,8 +963,11 @@ async fn test_rate_limit_retries_are_visible_in_headless() {
 
     let result = shannon_with_mock("openai", &server.url())
         .env("SHANNON_API_KEY", "test-key")
-        // N2 backoff base: keep the 429 retry ladder fast (20s/40s sleeps
-        // would exceed the test timeout); the ladder order is what's asserted.
+        // Run-layer backoff base (main.rs run-retry sleep, default 20s per
+        // attempt, cap 60s): shrink it so the run-level restarts fit inside
+        // the 60s subprocess timeout. The asserted `API retry N/4` ladder
+        // comes from the API layer's RetryConfig::default() (1s/2s/4s) and
+        // is NOT affected by this env var.
         .env("SHANNON_RUN_RETRY_BACKOFF_BASE_MS", "50")
         .args([
             "--prompt",
@@ -1019,7 +1110,10 @@ async fn test_json_output_structure() {
         json["duration_ms"].is_number(),
         "duration_ms should be number"
     );
-    assert!(json["exit_code"].is_string(), "exit_code should be string");
+    assert!(
+        json["exit_code"].is_i64(),
+        "exit_code should be an integer 0-7 (review F35)"
+    );
 }
 
 #[serial]
@@ -1275,7 +1369,7 @@ async fn test_ollama_glm_unmarshal_retry() {
     let stdout = stdout_string(&result);
     let json = parse_json_output(&stdout);
 
-    assert_eq!(json["exit_code"], "success");
+    assert_eq!(json["exit_code"], 0);
     assert!(json["response"].as_str().unwrap_or("").contains("retry"));
 }
 
@@ -1310,7 +1404,7 @@ async fn test_ollama_invalid_json_retry() {
     let stdout = stdout_string(&result);
     let json = parse_json_output(&stdout);
 
-    assert_eq!(json["exit_code"], "success");
+    assert_eq!(json["exit_code"], 0);
 }
 
 #[serial]
@@ -1344,7 +1438,7 @@ async fn test_ollama_unexpected_token_retry() {
     let stdout = stdout_string(&result);
     let json = parse_json_output(&stdout);
 
-    assert_eq!(json["exit_code"], "success");
+    assert_eq!(json["exit_code"], 0);
 }
 
 #[serial]
@@ -1496,7 +1590,7 @@ async fn test_ollama_request_has_no_tools_field() {
 
     let stdout = stdout_string(&result);
     let json = parse_json_output(&stdout);
-    assert_eq!(json["exit_code"], "success");
+    assert_eq!(json["exit_code"], 0);
     let response = json["response"].as_str().unwrap_or("");
     assert!(
         response.contains("local model"),
@@ -1579,7 +1673,7 @@ async fn test_ollama_request_uses_short_system_prompt() {
 
     let stdout = stdout_string(&result);
     let json = parse_json_output(&stdout);
-    assert_eq!(json["exit_code"], "success");
+    assert_eq!(json["exit_code"], 0);
 }
 
 #[serial]
@@ -1607,39 +1701,54 @@ async fn test_openai_still_sends_tools_by_default() {
 
     let stdout = stdout_string(&result);
     let json = parse_json_output(&stdout);
-    assert_eq!(json["exit_code"], "success");
+    assert_eq!(json["exit_code"], 0);
 }
 
 // ════════════════════════════════════════════════════════════════════════
 // Section: Multi-turn conversation tests (mockito, no API key needed)
 // ════════════════════════════════════════════════════════════════════════
 
-static SESSION_TEST_COUNTER: AtomicU32 = AtomicU32::new(0);
+/// RAII temp HOME: the directory is removed when the guard drops, so a
+/// failing session test no longer litters `/tmp` with `shannon-test-multiturn`
+/// subdirectories. Deref to `Path` so existing `&home` call sites are
+/// unchanged.
+struct TempHome(tempfile::TempDir);
+
+impl std::ops::Deref for TempHome {
+    type Target = std::path::Path;
+    fn deref(&self) -> &Self::Target {
+        self.0.path()
+    }
+}
 
 /// Create an isolated temp HOME directory for session tests.
-fn session_home_dir() -> std::path::PathBuf {
-    let n = SESSION_TEST_COUNTER.fetch_add(1, Ordering::SeqCst);
-    let dir = std::env::temp_dir()
-        .join("shannon-test-multiturn")
-        .join(format!("test-{n}-{}", std::process::id()));
-    std::fs::create_dir_all(&dir).unwrap();
-    dir
+fn session_home_dir() -> TempHome {
+    TempHome(tempfile::tempdir_in(std::env::temp_dir()).expect("create session home"))
 }
 
 /// Build a shannon command with isolated HOME for session testing.
 ///
-/// The child's project dir (CWD) is pinned to the isolated home dir: the
-/// engine's repo-map injector cold-builds a tree-sitter symbol map of the CWD
-/// on startup, and its disk cache (`$HOME/.shannon/repomap/`) is keyed by CWD
-/// — always cold here because HOME is per-test. With the default /tmp CWD
-/// that walk parses every source file in the machine's temp directory and can
+/// HOME is pinned to a per-test directory so sessions one test writes under
+/// `~/.shannon/sessions/` never leak into another, and the repomap disk
+/// cache stays cold. The CWD is also pinned to that same directory (this
+/// overrides [`shannon`]'s sandbox cwd, which then simply goes unused): the
+/// resume guard matches sessions by their recorded `cwd`, and the fixtures
+/// below seed sessions with `cwd = home`, so the child process must run
+/// from `home` for `-c` selection and the cross-directory rejection to be
+/// exercised deterministically. An empty per-test CWD also keeps the
+/// startup repo-map walk O(1) — with the historical default /tmp CWD that
+/// walk parsed every source file in the machine's temp directory and could
 /// burn tens of seconds of CPU per invocation, blowing past the test
-/// timeouts. An empty CWD keeps the walk O(1) and makes the tests hermetic.
-fn shannon_with_sessions(provider: &str, server_url: &str, home_dir: &std::path::Path) -> Command {
-    let mut cmd = shannon_with_mock(provider, server_url);
-    cmd.env("HOME", home_dir.to_string_lossy().to_string());
-    cmd.current_dir(home_dir);
-    cmd
+/// timeouts.
+fn shannon_with_sessions(
+    provider: &str,
+    server_url: &str,
+    home_dir: &std::path::Path,
+) -> SandboxCmd {
+    let mut sandbox = shannon_with_mock(provider, server_url);
+    sandbox.env("HOME", home_dir.to_string_lossy().to_string());
+    sandbox.cmd.current_dir(home_dir);
+    sandbox
 }
 
 /// Seed an L0 session log directly into the isolated sessions directory
@@ -1704,6 +1813,7 @@ fn write_session_file_with_cwd(
             reason: TurnEndPayload::REASON_COMPLETED.into(),
             usage: None,
             error: None,
+            llm_steps: None,
         }));
     }
 
@@ -1779,10 +1889,7 @@ async fn test_continue_prefers_session_recorded_in_current_directory() {
         ])
         .timeout(std::time::Duration::from_secs(15))
         .assert();
-    assert_eq!(
-        parse_json_output(&stdout_string(&r))["exit_code"],
-        "success"
-    );
+    assert_eq!(parse_json_output(&stdout_string(&r))["exit_code"], 0);
     // The matching session produces no cross-directory warning.
     assert!(!stderr_string(&r).contains("WARNING: resuming session"));
 }
@@ -1870,10 +1977,7 @@ async fn test_headless_resume_without_recorded_cwd_warns_but_resumes() {
         ])
         .timeout(std::time::Duration::from_secs(15))
         .assert();
-    assert_eq!(
-        parse_json_output(&stdout_string(&r))["exit_code"],
-        "success"
-    );
+    assert_eq!(parse_json_output(&stdout_string(&r))["exit_code"], 0);
     assert!(stderr_string(&r).contains("NOTE: resuming session"));
 }
 
@@ -1915,10 +2019,7 @@ async fn test_multiturn_ollama_three_turns_accumulated_context() {
         ])
         .timeout(std::time::Duration::from_secs(15))
         .assert();
-    assert_eq!(
-        parse_json_output(&stdout_string(&r1))["exit_code"],
-        "success"
-    );
+    assert_eq!(parse_json_output(&stdout_string(&r1))["exit_code"], 0);
     assert!(
         find_latest_session_id(&home).is_some(),
         "Session saved after turn 1"
@@ -1937,10 +2038,7 @@ async fn test_multiturn_ollama_three_turns_accumulated_context() {
         ])
         .timeout(std::time::Duration::from_secs(15))
         .assert();
-    assert_eq!(
-        parse_json_output(&stdout_string(&r2))["exit_code"],
-        "success"
-    );
+    assert_eq!(parse_json_output(&stdout_string(&r2))["exit_code"], 0);
 
     // Turn 3: resume again — session persists across multiple turns
     let mut s3 = mockito::Server::new_async().await;
@@ -1956,7 +2054,7 @@ async fn test_multiturn_ollama_three_turns_accumulated_context() {
         .timeout(std::time::Duration::from_secs(15))
         .assert();
     let j3 = parse_json_output(&stdout_string(&r3));
-    assert_eq!(j3["exit_code"], "success");
+    assert_eq!(j3["exit_code"], 0);
 }
 
 #[serial]
@@ -1975,10 +2073,7 @@ async fn test_multiturn_openai_resume_preserves_context() {
         .args(["--prompt", "Tell me about Rust", "--output-format", "json"])
         .timeout(std::time::Duration::from_secs(15))
         .assert();
-    assert_eq!(
-        parse_json_output(&stdout_string(&r1))["exit_code"],
-        "success"
-    );
+    assert_eq!(parse_json_output(&stdout_string(&r1))["exit_code"], 0);
 
     let mut s2 = mockito::Server::new_async().await;
     let _m2 = s2
@@ -2002,10 +2097,7 @@ async fn test_multiturn_openai_resume_preserves_context() {
         ])
         .timeout(std::time::Duration::from_secs(15))
         .assert();
-    assert_eq!(
-        parse_json_output(&stdout_string(&r2))["exit_code"],
-        "success"
-    );
+    assert_eq!(parse_json_output(&stdout_string(&r2))["exit_code"], 0);
 }
 
 #[serial]
@@ -2024,10 +2116,7 @@ async fn test_multiturn_anthropic_resume_context() {
         .args(["--prompt", "What is Python?", "--output-format", "json"])
         .timeout(std::time::Duration::from_secs(15))
         .assert();
-    assert_eq!(
-        parse_json_output(&stdout_string(&r1))["exit_code"],
-        "success"
-    );
+    assert_eq!(parse_json_output(&stdout_string(&r1))["exit_code"], 0);
 
     // Turn 2: resume — session loaded, query succeeds
     let mut s2 = mockito::Server::new_async().await;
@@ -2046,10 +2135,7 @@ async fn test_multiturn_anthropic_resume_context() {
         ])
         .timeout(std::time::Duration::from_secs(15))
         .assert();
-    assert_eq!(
-        parse_json_output(&stdout_string(&r2))["exit_code"],
-        "success"
-    );
+    assert_eq!(parse_json_output(&stdout_string(&r2))["exit_code"], 0);
 }
 
 #[serial]
@@ -2070,10 +2156,7 @@ async fn test_multiturn_ollama_story_then_character_count() {
         ])
         .timeout(std::time::Duration::from_secs(15))
         .assert();
-    assert_eq!(
-        parse_json_output(&stdout_string(&r1))["exit_code"],
-        "success"
-    );
+    assert_eq!(parse_json_output(&stdout_string(&r1))["exit_code"], 0);
 
     // Turn 2: resume — session loaded, query succeeds
     let mut s2 = mockito::Server::new_async().await;
@@ -2092,7 +2175,7 @@ async fn test_multiturn_ollama_story_then_character_count() {
         .timeout(std::time::Duration::from_secs(15))
         .assert();
     let j2 = parse_json_output(&stdout_string(&r2));
-    assert_eq!(j2["exit_code"], "success");
+    assert_eq!(j2["exit_code"], 0);
 }
 
 #[serial]
@@ -2112,7 +2195,7 @@ async fn test_multiturn_resume_no_session_fails_gracefully() {
     // Verify it still works — just without prior context.
     let stdout = stdout_string(&result);
     let json = parse_json_output(&stdout);
-    assert_eq!(json["exit_code"], "success");
+    assert_eq!(json["exit_code"], 0);
 }
 
 #[serial]
@@ -2136,10 +2219,7 @@ async fn test_multiturn_deepseek_resume_context() {
         ])
         .timeout(std::time::Duration::from_secs(15))
         .assert();
-    assert_eq!(
-        parse_json_output(&stdout_string(&r1))["exit_code"],
-        "success"
-    );
+    assert_eq!(parse_json_output(&stdout_string(&r1))["exit_code"], 0);
 
     // Turn 2: resume — session loaded, query succeeds
     let mut s2 = mockito::Server::new_async().await;
@@ -2158,10 +2238,7 @@ async fn test_multiturn_deepseek_resume_context() {
         ])
         .timeout(std::time::Duration::from_secs(15))
         .assert();
-    assert_eq!(
-        parse_json_output(&stdout_string(&r2))["exit_code"],
-        "success"
-    );
+    assert_eq!(parse_json_output(&stdout_string(&r2))["exit_code"], 0);
 }
 
 // ════════════════════════════════════════════════════════════════════════
@@ -2195,10 +2272,7 @@ async fn run_long_conversation_test(n_turns: usize) {
 
     let stdout = stdout_string(&result);
     let json = parse_json_output(&stdout);
-    assert_eq!(
-        json["exit_code"], "success",
-        "Failed for {n_turns} turns: {stdout}"
-    );
+    assert_eq!(json["exit_code"], 0, "Failed for {n_turns} turns: {stdout}");
 }
 
 #[serial]

@@ -163,7 +163,7 @@ export function LivePreview() {
               onChange={e => setAddressDraft(e.target.value)}
               onKeyDown={e => { if (e.key === 'Enter') commitAddress() }}
               aria-label={t('chat.artifact.live.address.aria')}
-              className="flex-1 min-w-0 font-body-sm font-mono text-on-surface bg-surface-container-high rounded px-sm py-1 outline-none focus-visible:ring-2 focus-visible:ring-primary/30"
+              className="flex-1 min-w-0 font-body-sm font-mono text-on-surface bg-surface-container-high rounded-sm px-sm py-xs outline-none focus-visible:ring-2 focus-visible:ring-primary/30"
             />
             <Button
               type="button"

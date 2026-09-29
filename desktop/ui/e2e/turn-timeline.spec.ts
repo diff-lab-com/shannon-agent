@@ -40,7 +40,8 @@ test.describe('Turn Timeline (§4.14)', () => {
     await expect(page).toHaveURL(/\/timeline\/sess-001$/)
     const panel = page.getByTestId('turn-timeline')
     await expect(panel).toBeVisible()
-    await expect(panel.getByRole('heading', { name: 'Turn Timeline' })).toBeVisible()
+    // Route title now lives in the app Header (TITLE_MAP), outside the panel.
+    await expect(page.getByRole('heading', { name: 'Timeline', exact: true })).toBeVisible()
   })
 
   test('deep link renders turns, tools, and the cumulative curve', async ({ page }) => {
@@ -49,7 +50,7 @@ test.describe('Turn Timeline (§4.14)', () => {
     await page.goto('/timeline/sess-002')
 
     const panel = page.getByTestId('turn-timeline')
-    await expect(panel.getByRole('heading', { name: 'Turn Timeline' })).toBeVisible()
+    await expect(page.getByRole('heading', { name: 'Timeline', exact: true })).toBeVisible()
     await expect(panel.getByText('Turn 1')).toBeVisible()
     await expect(panel.getByText('Turn 2')).toBeVisible()
     await expect(

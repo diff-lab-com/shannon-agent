@@ -55,7 +55,7 @@ export default function NewTaskForm({ value, onChange, onSubmit, onCancel }: New
   return (
     <Form
       onSubmit={e => { e.preventDefault(); void submit() }}
-      className="bg-surface-container-lowest border border-primary/30 rounded-xl p-lg mb-lg flex flex-col gap-md shadow-sm !space-y-md"
+      className="bg-surface-container-lowest border border-primary/30 rounded-xl p-lg mb-lg flex flex-col gap-md shadow-e1 !space-y-md"
       data-testid="new-task-form"
     >
       <div className="flex items-center justify-between">
@@ -64,12 +64,12 @@ export default function NewTaskForm({ value, onChange, onSubmit, onCancel }: New
           variant="ghost"
           size="sm"
           type="button"
-          className="font-label-sm text-primary hover:bg-primary/10 rounded px-sm py-xs gap-1"
+          className="font-label-sm text-primary hover:bg-primary/10 rounded-sm px-sm py-xs gap-xs"
           onClick={() => setShowMeta(!showMeta)}
           aria-expanded={showMeta}
           aria-controls="new-task-meta"
         >
-          <span className="material-symbols-outlined text-[14px]">{showMeta ? 'remove' : 'add'}</span>
+          <span className="material-symbols-outlined icon-sm">{showMeta ? 'remove' : 'add'}</span>
           {showMeta ? t('tasks.newTaskForm.hideOptions') : t('tasks.newTaskForm.addOptions')}
         </Button>
       </div>

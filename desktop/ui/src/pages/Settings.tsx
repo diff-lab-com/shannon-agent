@@ -45,7 +45,7 @@ export default function Settings() {
               cn(
                 'flex items-center gap-sm whitespace-nowrap rounded-lg px-md py-sm font-label-md transition-colors cursor-pointer',
                 isActive
-                  ? 'bg-primary/10 text-primary font-medium'
+                  ? 'bg-primary-container text-on-primary-container font-medium'
                   : 'text-on-surface-variant hover:bg-surface-container-high hover:text-on-surface',
               )
             }
@@ -56,7 +56,7 @@ export default function Settings() {
         ))}
       </nav>
       <div className="flex-1 overflow-y-auto min-h-0 min-w-0">
-        <div className="max-w-[1000px] mx-auto px-lg py-xl animate-in fade-in duration-700 pb-8">
+        <div className="max-w-medium mx-auto px-lg py-xl animate-in fade-in duration-(--duration-slower) pb-xl">
           <Outlet />
         </div>
       </div>

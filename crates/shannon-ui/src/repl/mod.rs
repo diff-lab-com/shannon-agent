@@ -518,16 +518,13 @@ impl Repl {
             if mcp_count > 0 {
                 tracing::info!("Discovered {} MCP server configuration(s)", mcp_count);
 
-                // Load approval state for MCP server gating. §P3-21: honor
-                // SHANNON_MCP_APPROVALS exactly like the `/mcp` extension
-                // command does, so both call sites read the same state file;
-                // the default path is relative to the process working
-                // directory (documented in McpApprovalManager::save_to_file).
-                let approval_path = std::env::var("SHANNON_MCP_APPROVALS")
-                    .map(std::path::PathBuf::from)
-                    .unwrap_or_else(|_| std::path::PathBuf::from(".shannon/mcp_approvals.json"));
+                // Load approval state for MCP server gating. review F6: state
+                // lives ONLY in the user domain (`~/.shannon/mcp_approvals.json`,
+                // or the SHANNON_MCP_APPROVALS override). `load_user_domain`
+                // refuses project-local approval files, so a repo cannot ship
+                // a pre-seeded "approved" list (trust-domain inversion).
                 let mut approval_manager = shannon_core::McpApprovalManager::with_defaults();
-                if let Err(e) = approval_manager.load_from_file(&approval_path) {
+                if let Err(e) = approval_manager.load_user_domain() {
                     tracing::debug!("Could not load MCP approval state: {}", e);
                 }
 
@@ -556,6 +553,14 @@ impl Repl {
                     );
                     if let Some(ref url) = config.url {
                         approval_req.server_url = Some(url.clone());
+                    }
+                    // review F6: bind the request to the exact server identity
+                    // so a changed command/argument set re-triggers approval
+                    // instead of inheriting a decision made for the old one.
+                    if let Some(ref cmd) = config.command {
+                        approval_req = approval_req.with_fingerprint(cmd, &config.args);
+                    } else if let Some(ref url) = config.url {
+                        approval_req = approval_req.with_fingerprint(url, &[]);
                     }
                     approval_req.capabilities.push("tools".to_string());
                     let decision = approval_manager
@@ -747,8 +752,11 @@ impl Repl {
                     }
                 }
 
-                // Persist approval state (auto-approved servers, any new denies)
-                if let Err(e) = approval_manager.save_to_file(&approval_path) {
+                // Persist approval state (auto-approved servers, any new denies).
+                // review F6: user domain only — a project-relative approvals
+                // file would be refused by the loader on next startup.
+                let approval_state_path = shannon_core::McpApprovalManager::default_state_path();
+                if let Err(e) = approval_manager.save_to_file(&approval_state_path) {
                     tracing::debug!("Could not save MCP approval state: {}", e);
                 }
             }
@@ -972,6 +980,13 @@ impl Repl {
         // Register destructive MCP tools with permission manager
         for name in tool_registry.destructive_tool_names() {
             permission_manager.register_destructive_tool(name);
+        }
+
+        // review F17: feed the read-only fast-path veto real trait metadata
+        // so a plugin tool that merely names itself like a read-only builtin
+        // cannot ride the name list when its flags say otherwise.
+        for (name, read_only) in tool_registry.tool_read_only_flags() {
+            permission_manager.register_tool_read_only(name, read_only);
         }
 
         // Load permission allow/deny rules from settings files

@@ -84,7 +84,7 @@ export default function ComposerPanel({ setQuickFixOpen, setEditorOpen }: Compos
             title={sessionWorkingDir || t('chat.input.footer.workingDir.unset')}
             aria-label={t('chat.input.footer.workingDir.aria')}
           >
-            <span className="material-symbols-outlined text-[14px] shrink-0">folder</span>
+            <span className="material-symbols-outlined icon-sm shrink-0">folder</span>
             <span className="truncate font-mono">
               {sessionWorkingDir ? formatDirBreadcrumb(sessionWorkingDir) : t('chat.input.footer.workingDir.unset')}
             </span>
@@ -114,7 +114,7 @@ function EditBanner({ timestamp, onCancel }: { timestamp: number; onCancel: () =
         onClick={onCancel}
         aria-label={t('chat.edit.cancel.aria')}
         title={t('chat.edit.cancel.aria')}
-        className="rounded hover:bg-error/10 hover:text-error shrink-0"
+        className="rounded-sm hover:bg-error/10 hover:text-error shrink-0"
       >
         <span className="material-symbols-outlined icon-sm" aria-hidden="true">close</span>
       </Button>

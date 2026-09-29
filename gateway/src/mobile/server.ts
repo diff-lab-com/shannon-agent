@@ -7,6 +7,7 @@ import type { Logger } from "../adapters/types.js";
 import type { ShannonEvent } from "./protocol.js";
 import { dispatchNdjson } from "./dispatch.js";
 import { MOBILE_PAGE_HTML } from "./web/page.js";
+import { DirectLink, type DirectE2EOptions } from "./directE2E.js";
 
 /**
  * The inbound mobile server — a WebSocket endpoint speaking NDJSON `shannon/*`
@@ -99,6 +100,27 @@ export interface MobileServerOptions {
    * tests that want the old bare-WS behavior.
    */
   servePage?: boolean;
+  /**
+   * T9: optional POST handler for the desktop-facing RPC skins (the pairing
+   * access endpoints). Called with the request path (query stripped) and the
+   * RAW body (already size-capped). Returning null = "not mine" → the request
+   * falls through to the plain 404. Non-null results are sent verbatim
+   * (status + JSON body). The listener applies the same cross-site Origin
+   * defense to these POSTs as it does to WS upgrades.
+   */
+  httpApi?: (
+    path: string,
+    rawBody: string,
+  ) => Promise<{ status: number; body: string } | null>;
+  /**
+   * v0.13 negotiated direct-link E2E seal (cross-repo-adaptation-spec §I).
+   * When set, each connection's first binary frame may be the phone's
+   * `e2e_direct_hello`; an accepted hello seals both directions (C6 frames,
+   * per-connection counters) behind the host's static X25519 key. Absent —
+   * or a hello that cannot be honored — keeps the exact legacy plaintext
+   * behavior, so old phones are unaffected.
+   */
+  directE2E?: DirectE2EOptions;
 }
 
 export interface MobileServerHandle {
@@ -126,6 +148,30 @@ export class MobileServer {
       if (servePage && req.method === "GET" && (req.url ?? "/").split("?")[0] === "/") {
         res.writeHead(200, { "content-type": "text/html; charset=utf-8" });
         res.end(MOBILE_PAGE_HTML);
+        return;
+      }
+      if (
+        req.method === "POST" &&
+        this.opts.httpApi &&
+        isOriginAllowed(req)
+      ) {
+        const path = (req.url ?? "/").split("?")[0] ?? "/";
+        const httpApi = this.opts.httpApi;
+        readBody(req, MAX_HTTP_BODY_BYTES)
+          .then((rawBody) => httpApi(path, rawBody))
+          .then((outcome) => {
+            if (outcome) {
+              res.writeHead(outcome.status, { "content-type": "application/json" });
+              res.end(outcome.body);
+              return;
+            }
+            res.writeHead(404, { "content-type": "text/plain; charset=utf-8" });
+            res.end("not found");
+          })
+          .catch(() => {
+            res.writeHead(500, { "content-type": "application/json" });
+            res.end(JSON.stringify({ error: { message: "handler error" } }));
+          });
         return;
       }
       res.writeHead(404, { "content-type": "text/plain; charset=utf-8" });
@@ -209,14 +255,34 @@ export class MobileServer {
         return;
       }
     }
-    const ctx: MethodContext = { socket, sessionId: null, logger: this.opts.logger };
+    // v0.13 direct seal: when configured, the link owns the inbound frame
+    // routing (first-frame negotiation) and every outbound send routes
+    // through it via the proxy socket (queued until the first frame decides,
+    // sealed once negotiated). The phone-facing surface is otherwise identical.
+    const link = this.opts.directE2E
+      ? new DirectLink(this.opts.directE2E, socket, this.opts.logger)
+      : null;
+    const ctx: MethodContext = {
+      socket: (link?.socket ?? socket) as WebSocket,
+      sessionId: null,
+      logger: this.opts.logger,
+    };
     const detach = this.opts.onContext?.(ctx);
     if (typeof detach === "function") this.detachers.push(detach);
+    // §I6.2: a pairing-flavor link publishes kid→K0 once shannon/pair binds
+    // this connection (after onContext so the hub's binder stays ahead).
+    link?.armPublishOnBind(ctx);
 
-    socket.on("message", (data) => {
-      const text = frameToString(data);
-      void this.onMessage(text, ctx);
-    });
+    if (link) {
+      link.listen((text) => {
+        void this.onMessage(text, ctx);
+      });
+    } else {
+      socket.on("message", (data) => {
+        const text = frameToString(data);
+        void this.onMessage(text, ctx);
+      });
+    }
     socket.on("error", (err) =>
       this.opts.logger.warn(`mobile socket error: ${(err as Error).message}`),
     );
@@ -239,6 +305,28 @@ export class MobileServer {
 }
 
 // ── helpers ──────────────────────────────────────────────────────────────────
+
+/** Cap for POST bodies (the pairing-access JSON is a token + a 6-digit code). */
+const MAX_HTTP_BODY_BYTES = 64 * 1024;
+
+/** Collect a request body, rejecting early once `max` bytes are exceeded. */
+function readBody(req: IncomingMessage, max: number): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const chunks: Buffer[] = [];
+    let size = 0;
+    req.on("data", (chunk: Buffer) => {
+      size += chunk.length;
+      if (size > max) {
+        req.destroy(); // stop reading; the response write below still works
+        reject(new Error("body too large"));
+        return;
+      }
+      chunks.push(chunk);
+    });
+    req.on("end", () => resolve(Buffer.concat(chunks).toString("utf8")));
+    req.on("error", reject);
+  });
+}
 
 /**
  * Cross-site WebSocket handshake defense. Browsers always send `Origin`;

@@ -2405,6 +2405,10 @@ mod tests {
         );
     }
 
+    // Intentional: CWD_LOCK is held across the awaited run below — the
+    // engine tee reads the process cwd mid-run, so the lock must span the
+    // awaits (test-only and uncontended).
+    #[allow(clippy::await_holding_lock)]
     #[tokio::test]
     async fn routine_run_without_working_dir_keeps_the_default_session_start() {
         // The assert below pins the tee's default (process cwd) — the

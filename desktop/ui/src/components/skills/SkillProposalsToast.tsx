@@ -68,7 +68,7 @@ export default function SkillProposalsToast() {
     <div className="fixed bottom-4 right-4 z-modal animate-slide-in-from-bottom">
       <div
         role="status"
-        className="bg-surface-container-lowest rounded-lg shadow-lg border border-outline-variant p-4 max-w-md"
+        className="bg-surface-container-lowest rounded-lg shadow-e3 border border-outline-variant p-md max-w-md"
       >
         <div className="flex items-start gap-3">
           <span className="material-symbols-outlined icon-lg text-primary" aria-hidden="true">lightbulb</span>
@@ -81,15 +81,15 @@ export default function SkillProposalsToast() {
               )}
               </h4>
             )}
-            <p className="text-xs text-on-surface-variant mt-1">
+            <p className="text-xs text-on-surface-variant mt-xs">
               {t('skillProposals.toast.description')}
             </p>
             {hasDrafts && (
-              <p className="text-xs text-on-surface-variant mt-1" data-testid="skill-proposals-draft-hint">
+              <p className="text-xs text-on-surface-variant mt-xs" data-testid="skill-proposals-draft-hint">
                 {t('skillProposals.toast.draftHint')}
               </p>
             )}
-            <div className="flex gap-2 mt-3">
+            <div className="flex gap-sm mt-3">
               <Button
                 onClick={() => navigate('/extensions/pending')}
                 size="sm"

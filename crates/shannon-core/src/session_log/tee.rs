@@ -241,6 +241,10 @@ pub struct SessionTee {
     /// start/end pairing: every opened turn is closed exactly once — on
     /// `Completed`, on `Failed`, or (cancellation) on drop as interrupted.
     turn_open: bool,
+    /// LLM calls folded into the open turn (one per `Usage`/`TurnCompleted`
+    /// event). Reported as `turn/end.llm_steps` so per-call efficiency
+    /// analysis has a denominator without per-step events.
+    turn_steps: u64,
     /// Whether this tee opened a fresh log (first header says "initial").
     fresh_log: bool,
     headers_written: u32,
@@ -370,6 +374,7 @@ impl SessionTee {
                     turn_usage: None,
                     bare_tokens: None,
                     turn_open: false,
+                    turn_steps: 0,
                     fresh_log: fresh,
                     headers_written: 0,
                 }
@@ -389,6 +394,7 @@ impl SessionTee {
             turn_usage: None,
             bare_tokens: None,
             turn_open: false,
+            turn_steps: 0,
             fresh_log: false,
             headers_written: 0,
         }
@@ -434,11 +440,13 @@ impl SessionTee {
     pub fn record_query_event(&mut self, event: &QueryEvent) {
         match event {
             QueryEvent::Usage { .. } => {
+                self.turn_steps += 1;
                 let usage = token_usage_from_event(event).expect("Usage maps to usage");
                 self.add_turn_usage(usage);
                 return;
             }
             QueryEvent::TurnCompleted { tokens_used, .. } => {
+                self.turn_steps += 1;
                 self.bare_tokens = Some(*tokens_used);
                 return;
             }
@@ -478,8 +486,19 @@ impl SessionTee {
                 self.record_body(event.body.clone());
             }
             crate::bus::BusInput::Coalesce(coalesce) => match coalesce {
-                crate::bus::CoalesceInput::StepUsage(usage) => self.add_turn_usage(usage.clone()),
-                crate::bus::CoalesceInput::BareTokens(tokens) => self.bare_tokens = Some(*tokens),
+                // Each fold directive is one LLM step, exactly like the
+                // `Usage`/`TurnCompleted` engine events that map to it (see
+                // `query_event_to_bus_inputs`): without these increments the
+                // bus path would report `turn/end.llm_steps: 0` while the
+                // direct path counts them (the §4.8 parity contract).
+                crate::bus::CoalesceInput::StepUsage(usage) => {
+                    self.turn_steps += 1;
+                    self.add_turn_usage(usage.clone());
+                }
+                crate::bus::CoalesceInput::BareTokens(tokens) => {
+                    self.turn_steps += 1;
+                    self.bare_tokens = Some(*tokens);
+                }
                 crate::bus::CoalesceInput::TurnBoundary { reason, error } => {
                     self.close_turn(reason, error.clone());
                 }
@@ -529,7 +548,9 @@ impl SessionTee {
             reason: reason.into(),
             usage,
             error,
+            llm_steps: Some(self.turn_steps),
         }));
+        self.turn_steps = 0;
     }
 
     /// Record a `request/header` built from the adapter's own serialized
@@ -899,6 +920,7 @@ mod tests {
             });
             tee.record_query_event(&QueryEvent::Completed {
                 query_id: query_id(),
+                outcome: Default::default(),
             });
             tee.close();
         }
@@ -929,6 +951,70 @@ mod tests {
     }
 
     #[test]
+    fn test_bus_path_counts_llm_steps_like_direct_path() {
+        // The engine's production path is bus-only (`EventTx::send` expands
+        // every engine event via `query_event_to_bus_inputs`), so the
+        // `Usage`/`TurnCompleted` step counting (`turn/end.llm_steps`) must
+        // survive the fold-directive detour byte-identically to the direct
+        // `record_query_event` path (§4.8 parity; drifted to 0 in #149).
+        let usage = QueryEvent::Usage {
+            query_id: query_id(),
+            input_tokens: 11,
+            output_tokens: 22,
+            cost_usd: 0.5,
+            cache_creation_tokens: 3,
+            cache_read_tokens: 4,
+        };
+        let turn_completed = QueryEvent::TurnCompleted {
+            query_id: query_id(),
+            turn_number: 1,
+            tokens_used: 42,
+        };
+        let completed = QueryEvent::Completed {
+            query_id: query_id(),
+            outcome: Default::default(),
+        };
+
+        let dir_direct = TempDir::new().expect("tempdir");
+        {
+            let mut tee = open_tee(&dir_direct);
+            tee.record_turn_start(None);
+            tee.record_query_event(&usage);
+            tee.record_query_event(&turn_completed);
+            tee.record_query_event(&completed);
+            tee.close();
+        }
+
+        let dir_bus = TempDir::new().expect("tempdir");
+        {
+            let mut tee = open_tee(&dir_bus);
+            tee.record_turn_start(None);
+            for event in [&usage, &turn_completed, &completed] {
+                for input in crate::session_log::query_event_to_bus_inputs(event) {
+                    tee.record_bus_input(&input);
+                }
+            }
+            tee.close();
+        }
+
+        fn turn_end_fields(dir: &TempDir) -> (Option<u64>, Option<TokenUsage>) {
+            let body = read_bodies(dir)
+                .into_iter()
+                .find(|b| b.kind() == SessionEventKind::TurnEnd)
+                .expect("turn/end recorded");
+            match body {
+                SessionEventBody::TurnEnd(p) => (p.llm_steps, p.usage),
+                other => panic!("wrong body: {other:?}"),
+            }
+        }
+        let (direct_steps, direct_usage) = turn_end_fields(&dir_direct);
+        let (bus_steps, bus_usage) = turn_end_fields(&dir_bus);
+        assert_eq!(direct_steps, Some(2), "two LLM steps on the direct path");
+        assert_eq!(bus_steps, direct_steps, "bus path must count identically");
+        assert_eq!(bus_usage, direct_usage, "folded usage must match too");
+    }
+
+    #[test]
     fn test_turn_end_without_usage_keeps_bare_tokens() {
         let dir = TempDir::new().expect("tempdir");
         {
@@ -943,6 +1029,7 @@ mod tests {
             });
             tee.record_query_event(&QueryEvent::Completed {
                 query_id: query_id(),
+                outcome: Default::default(),
             });
             tee.close();
         }
@@ -1199,5 +1286,92 @@ mod tests {
             content: "x".into(),
         });
         tee.close();
+    }
+
+    // ---- T6: durable boundary flush completes through the new path ---------
+    //
+    // Turn boundaries reach the writer through the synchronous bus dispatch
+    // on executor threads; the `sync_data` half of the durable flush runs
+    // off that thread (blocking pool inside a runtime, inline otherwise).
+    // These tests pin both halves of the contract: the event bytes are
+    // visible in events.jsonl immediately after the boundary (the
+    // page-cache drain stays synchronous under the tee lock), and the
+    // durability step actually completes.
+
+    /// Boundary through the bus-input path without a runtime: the sync ran
+    /// inline, so the counter has already landed when the call returns.
+    #[test]
+    fn test_boundary_bus_input_flushes_durable_inline() {
+        let dir = TempDir::new().expect("tempdir");
+        let mut tee = open_tee(&dir);
+        tee.record_turn_start(None);
+        tee.record_bus_input(&crate::bus::BusInput::Coalesce(
+            crate::bus::CoalesceInput::TurnBoundary {
+                reason: TurnEndPayload::REASON_COMPLETED.into(),
+                error: None,
+            },
+        ));
+        let path = super::super::session_events_path(dir.path(), "sess-tee");
+        let raw = std::fs::read_to_string(&path).expect("read events");
+        assert!(
+            raw.contains("\"kind\":\"turn/end\""),
+            "boundary event must be visible on disk synchronously"
+        );
+        assert_eq!(
+            tee.writer.as_ref().map(|w| w.durable_syncs()),
+            Some(1),
+            "turn boundary is a durable sync point"
+        );
+        tee.close();
+    }
+
+    /// Boundary inside a tokio runtime: the executor thread must not be
+    /// stalled by the fdatasync (it is offloaded to the blocking pool), the
+    /// bytes still land synchronously, and the offloaded sync completes.
+    #[test]
+    fn test_boundary_flush_offloads_sync_inside_runtime() {
+        let dir = TempDir::new().expect("tempdir");
+        let rt = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .expect("test runtime");
+        let handle = TeeHandle::open_in_dir(dir.path(), "sess-tee-async", "m", None);
+        rt.block_on(async {
+            handle.record_turn_start(None);
+            handle.record_bus_input(&crate::bus::BusInput::Coalesce(
+                crate::bus::CoalesceInput::TurnBoundary {
+                    reason: TurnEndPayload::REASON_COMPLETED.into(),
+                    error: None,
+                },
+            ));
+        });
+        let path = super::super::session_events_path(dir.path(), "sess-tee-async");
+        let raw = std::fs::read_to_string(&path).expect("read events");
+        assert!(
+            raw.contains("\"kind\":\"turn/end\""),
+            "boundary event must be visible on disk synchronously"
+        );
+
+        // The fdatasync runs on the blocking pool: poll the shared counter
+        // through the tee's writer until the task lands (the lock is never
+        // held across the syscall, so this cannot deadlock).
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+        let mut syncs = 0;
+        while std::time::Instant::now() < deadline {
+            syncs = handle
+                .tee
+                .lock()
+                .expect("tee lock")
+                .writer
+                .as_ref()
+                .map(|w| w.durable_syncs())
+                .unwrap_or(0);
+            if syncs >= 1 {
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(5));
+        }
+        assert_eq!(syncs, 1, "offloaded boundary sync must complete");
+        handle.close();
     }
 }

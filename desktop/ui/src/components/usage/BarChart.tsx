@@ -181,7 +181,7 @@ export function BarChart({ data, series, height = 220, formatValue, ariaLabel }:
       {/* Hover tooltip — pinned at the hovered column. */}
       {hover !== null && data[hover.idx] && (
         <div
-          className="pointer-events-none absolute z-floating px-sm py-xs rounded-md bg-surface-container-highest shadow-lg border border-outline-variant/30 text-label-xs text-on-surface min-w-[160px]"
+          className="pointer-events-none absolute z-floating px-sm py-xs rounded-md bg-surface-container-highest shadow-e3 border border-outline-variant/30 text-label-xs text-on-surface min-w-[160px]"
           style={{
             left: `calc(${(hover.idx + 0.5) / colCount * 100}% )`,
             top: 0,

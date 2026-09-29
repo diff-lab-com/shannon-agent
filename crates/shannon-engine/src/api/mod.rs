@@ -179,6 +179,7 @@ mod tests {
     #[test]
     fn test_client_creation() {
         let config = LlmClientConfig {
+            thinking_type: None,
             api_key: "test-key".to_string(),
             provider: LlmProvider::Anthropic,
             ..Default::default()
@@ -206,6 +207,7 @@ mod tests {
     #[test]
     fn test_client_add_header() {
         let mut client = LlmClient::new(LlmClientConfig {
+            thinking_type: None,
             provider: LlmProvider::Custom,
             ..Default::default()
         });
@@ -221,6 +223,7 @@ mod tests {
     #[test]
     fn test_auth_headers_anthropic() {
         let client = LlmClient::new(LlmClientConfig {
+            thinking_type: None,
             api_key: "sk-ant-test".to_string(),
             api_version: "2023-06-01".to_string(),
             provider: LlmProvider::Anthropic,
@@ -242,6 +245,7 @@ mod tests {
     #[test]
     fn test_auth_headers_openai() {
         let client = LlmClient::new(LlmClientConfig {
+            thinking_type: None,
             api_key: "sk-oai-test".to_string(),
             provider: LlmProvider::OpenAI,
             ..Default::default()
@@ -266,6 +270,7 @@ mod tests {
         let mut extra = HashMap::new();
         extra.insert("X-Auth".to_string(), "token123".to_string());
         let client = LlmClient::new(LlmClientConfig {
+            thinking_type: None,
             provider: LlmProvider::Custom,
             extra_headers: extra,
             ..Default::default()
@@ -283,6 +288,7 @@ mod tests {
     #[test]
     fn test_endpoint_url_anthropic() {
         let client = LlmClient::new(LlmClientConfig {
+            thinking_type: None,
             base_url: "https://api.anthropic.com".to_string(),
             provider: LlmProvider::Anthropic,
             ..Default::default()
@@ -296,6 +302,7 @@ mod tests {
     #[test]
     fn test_endpoint_url_openai() {
         let client = LlmClient::new(LlmClientConfig {
+            thinking_type: None,
             base_url: "https://api.openai.com".to_string(),
             provider: LlmProvider::OpenAI,
             ..Default::default()
@@ -353,6 +360,7 @@ mod tests {
     #[test]
     fn test_message_request_serialization() {
         let request = MessageRequest {
+            thinking_type: None,
             model: "test-model".to_string(),
             max_tokens: 4096,
             system: None,
@@ -409,6 +417,7 @@ mod tests {
     #[test]
     fn test_backward_compat_claude_client() {
         let client: ClaudeClient = ClaudeClient::new(LlmClientConfig {
+            thinking_type: None,
             api_key: "test".to_string(),
             ..Default::default()
         });

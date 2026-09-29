@@ -163,18 +163,31 @@ impl StateManager {
     }
 
     /// Update a session (in-memory only).
+    ///
+    /// F12: the read → mutate → write runs inside the `DashMap` shard lock
+    /// via [`dashmap::mapref::entry::Entry`]. The previous `get` → mutate →
+    /// `insert` sequence let two concurrent `add_tokens_used` /
+    /// `increment_query_count` calls both read the same base value and the
+    /// loser's write silently discard the winner's increment.
+    ///
+    /// The `updater` runs while the shard write lock is held — it must not
+    /// call back into this `StateManager` (deadlock hazard on the same
+    /// shard), which no current caller does.
     pub fn update_session(
         &self,
         session_id: Uuid,
         mut updater: impl FnMut(&mut SessionState),
     ) -> Result<(), StateError> {
-        let mut session = self.get_session(session_id)?;
-
-        updater(&mut session);
-        session.updated_at = chrono::Utc::now();
-
-        self.sessions.insert(session_id, session);
-        Ok(())
+        use dashmap::mapref::entry::Entry;
+        match self.sessions.entry(session_id) {
+            Entry::Occupied(mut entry) => {
+                let session = entry.get_mut();
+                updater(session);
+                session.updated_at = chrono::Utc::now();
+                Ok(())
+            }
+            Entry::Vacant(_) => Err(StateError::SessionNotFound(session_id)),
+        }
     }
 
     /// Delete a session (in-memory only).
@@ -395,6 +408,47 @@ mod tests {
         assert_eq!(
             final_len,
             num_threads as usize * operations_per_thread as usize
+        );
+    }
+
+    /// F12 regression: `update_session` used to be a non-atomic
+    /// get → mutate → insert, so concurrent `increment_query_count` /
+    /// `add_tokens_used` on the SAME session lost updates. Every increment
+    /// must survive.
+    #[tokio::test]
+    async fn concurrent_updates_on_one_session_do_not_lose_increments() {
+        let manager = Arc::new(StateManager::new());
+        let session = manager
+            .create_session(None, "test-model".to_string())
+            .unwrap();
+        let session_id = session.session_id;
+
+        let threads = 8u64;
+        let increments_per_thread = 200u64;
+        let mut handles = Vec::new();
+        for _ in 0..threads {
+            let manager = manager.clone();
+            handles.push(tokio::spawn(async move {
+                for _ in 0..increments_per_thread {
+                    manager.increment_query_count(session_id).unwrap();
+                    manager.add_tokens_used(session_id, 10).unwrap();
+                }
+            }));
+        }
+        for handle in handles {
+            handle.await.unwrap();
+        }
+
+        let final_state = manager.get_session(session_id).unwrap();
+        assert_eq!(
+            final_state.metadata.query_count,
+            threads * increments_per_thread,
+            "no query_count increment may be lost"
+        );
+        assert_eq!(
+            final_state.metadata.total_tokens_used,
+            threads * increments_per_thread * 10,
+            "no token total may be lost"
         );
     }
 

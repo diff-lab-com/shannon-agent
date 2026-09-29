@@ -2168,7 +2168,7 @@ mod tests {
         let mut recorded = 0usize;
         for i in 0..8 {
             let path = if i % 2 == 0 { path_a } else { path_b };
-            let content = format!("{i}::{}", big);
+            let content = format!("{i}::{big}");
             let snapshot = manager
                 .record_snapshot(path, &content, FileOperation::Edit)
                 .unwrap_or_else(|e| panic!("record {i} must not fail on quota: {e}"));
@@ -2183,8 +2183,7 @@ mod tests {
         let used = dir_size(manager.fs.as_ref(), &manager.history_dir).unwrap_or(0);
         assert!(
             used <= 1024 * 1024 + 400 * 1024,
-            "expected quota enforcement, {} bytes remain",
-            used
+            "expected quota enforcement, {used} bytes remain"
         );
 
         // The globally oldest snapshot (the first one recorded) is gone —

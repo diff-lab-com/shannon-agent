@@ -155,7 +155,7 @@ export default function CommandPalette({ open, onClose }: { open: boolean; onClo
                 // query-filtered ones, so it reads as "5 tasks available".
                 <>
                   {category}
-                  <span className="ml-2 px-xs py-[1px] rounded-full bg-surface-container-high text-on-surface-variant font-label-xs tabular-nums">
+                  <span className="ml-sm px-xs py-[1px] rounded-full bg-surface-container-high text-on-surface-variant font-label-xs tabular-nums">
                     {items.length}
                   </span>
                 </>
@@ -169,7 +169,7 @@ export default function CommandPalette({ open, onClose }: { open: boolean; onClo
                   value={`${item.label} ${category} ${(item.synonyms ?? []).join(' ')}`}
                   onSelect={() => { item.action(); onClose() }}
                 >
-                  <span className="material-symbols-outlined text-[18px]">{item.icon}</span>
+                  <span className="material-symbols-outlined icon-md">{item.icon}</span>
                   <span className="font-label-md truncate">{item.label}</span>
                 </CommandItem>
               ))}

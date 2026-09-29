@@ -10,6 +10,7 @@ import type { GatewayConfig, GatewayProcessState } from '@/types'
 import { EngineConnectionCard } from './connections-settings/EngineConnectionCard'
 import { GatewayProcessCard } from './connections-settings/GatewayProcessCard'
 import { MobileDispatchCard } from './connections-settings/MobileDispatchCard'
+import { PairingRequestsCard } from './connections-settings/PairingRequestsCard'
 import { PlatformsCard } from './connections-settings/PlatformsCard'
 import { ALL_SLOTS, type Platform } from './connections-settings/types'
 
@@ -105,7 +106,7 @@ export default function ConnectionsSettings() {
           className="text-primary hover:underline cursor-pointer inline-flex items-center gap-0.5"
         >
           {t('settings.connections.crossLink.link')}
-          <span className="material-symbols-outlined text-[14px]" aria-hidden="true">
+          <span className="material-symbols-outlined icon-sm" aria-hidden="true">
             arrow_forward
           </span>
         </button>
@@ -141,6 +142,9 @@ export default function ConnectionsSettings() {
         onHasSecretChange={setHasSecret}
         onProcStateChange={setProcState}
       />
+
+      {/* T9 — desktop approval entry for IM pairing requests (review F42). */}
+      <PairingRequestsCard config={config} procState={procState} />
     </div>
   )
 }

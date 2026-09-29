@@ -1,4 +1,7 @@
 _hi: "&हिन्दी"
+# Hindi locale for Shannon Code
+
+# ── REPL Messages ──────────────────────────────────────────────────────────
 repl:
   chat_cleared: "चैट साफ़ की गई।"
   unknown_command: "अज्ञात कमांड: /%{name}। उपलब्ध कमांड के लिए /help टाइप करें।"
@@ -13,6 +16,10 @@ repl:
   cancelled: "रद्द किया गया"
   cancelled_by_user: "उपयोगकर्ता द्वारा रद्द किया गया।"
   query_task_panicked: "क्वेरी कार्य पैनिक हुआ"
+  tools_disabled: "टूल अक्षम किए गए — मॉडल सादे टेक्स्ट के रूप में जवाब देगा। पुनः सक्षम करने के लिए /tools का उपयोग करें।"
+  tools_enabled: "टूल फिर से सक्षम किए गए।"
+
+# ── Status Messages ────────────────────────────────────────────────────────
 status:
   ready: "तैयार"
   processing: "प्रोसेसिंग..."
@@ -23,7 +30,26 @@ status:
   completed: "पूर्ण"
   failed: "विफल"
   cancelled_status: "रद्द किया गया"
+
+# ── Command Descriptions ───────────────────────────────────────────────────
 commands:
+  help:
+    title: "उपलब्ध कमांड"
+    no_help_found: "इसके लिए सहायता नहीं मिली: %{topic}"
+    footer: "किसी विशिष्ट कमांड की विस्तृत जानकारी के लिए `/help <command>` उपयोग करें।\n"
+  clear:
+    title: "चैट साफ़ करें"
+    confirm: "सभी संदेश हटाएं? इसे पूर्ववत नहीं किया जा सकता।"
+  quit:
+    title: "सेशन समाप्त करें?"
+    confirm: "आपकी असहेजी गतिविधि है। फिर भी बाहर निकलें?"
+  model:
+    title: "मॉडल सेट करें"
+    prompt: "मॉडल का नाम दर्ज करें (उदा. claude-3.5-sonnet, gpt-4o)..."
+    set: "मॉडल सेट किया गया: %{name}"
+    context_unknown: "अज्ञात (प्रदाता अनुसार)"
+    cost_unknown: "अनुमान अनुपलब्ध"
+    cost_free_local: "मुफ़्त (स्थानीय)"
   remote:
     dashboard_title: "रिमोट टार्गेट — टूल निष्पादन सक्रिय टार्गेट का अनुसरण करता है।"
     none: "अभी कोई टार्गेट नहीं है। `/remote add ssh <user@host> <नाम> <वर्कस्पेस>` से जोड़ें।"
@@ -54,19 +80,38 @@ commands:
     resumed: "▶ लक्ष्य फिर से शुरू (राउंड काउंट रीसेट)।"
     complete: "✓ लक्ष्य %{iterations} राउंड में पूरा: %{objective}"
     conflict_loop: "/ralph या /loop सक्रिय है — पहले उसे रोकें, फिर /goal सेट करें।"
-  help:
-    title: "उपलब्ध कमांड"
-    no_help_found: "इसके लिए सहायता नहीं मिली: %{topic}"
-  clear:
-    title: "चैट साफ़ करें"
-    confirm: "सभी संदेश हटाएं? इसे पूर्ववत नहीं किया जा सकता।"
-  quit:
-    title: "सेशन समाप्त करें?"
-    confirm: "आपकी असहेजी गतिविधि है। फिर भी बाहर निकलें?"
-  model:
-    title: "मॉडल सेट करें"
-    prompt: "मॉडल का नाम दर्ज करें (उदा. claude-3.5-sonnet, gpt-4o)..."
-    set: "मॉडल सेट किया गया: %{name}"
+  connect:
+    success: "✓ %{provider} से जुड़ा"
+    choose_model: "नीचे से मॉडल चुनें (Enter = डिफ़ॉल्ट, ↑↓ = चयन, Esc = डिफ़ॉल्ट उपयोग करें)।"
+    refresh_started: "पृष्ठभूमि में मॉडल कैटलॉग ताज़ा हो रहा है…"
+    refresh_success: "कैटलॉग ताज़ा हुआ — %{count} मॉडल उपलब्ध।"
+    refresh_failed: "ऑफ़लाइन — कैश किया कैटलॉग उपयोग हो रहा है।"
+    dashboard_header: "प्रदाता जोड़ें — पर्यावरण चर की आवश्यकता नहीं।"
+    dashboard_providers: "प्रदाता:"
+    dashboard_usage: "उपयोग: /connect <provider> <api-key>"
+    dashboard_help: "विवरण: /help connect"
+    key_stored: "✓ '%{provider}' के लिए API कुंजी सहेजी गई (सेवा: %{service})"
+    config_saved: "✓ प्रदाता कॉन्फ़िग सहेजा गया: %{path}"
+    reusing_key: "• '%{provider}' की सहेजी कुंजी पुनः उपयोग हो रही है (सेवा: %{service})"
+    cred_verified: "✓ क्रेडेंशियल सत्यापित — '%{model}' इस कुंजी से सुलभ है।"
+    auth_failed: "✗ '%{provider}' के लिए प्रमाणीकरण विफल। कुंजी सहेजी गई लेकिन प्रदाता ने अस्वीकार की — कुंजी जाँचें और /connect फिर से चलाएँ।"
+    verify_warning: "⚠ '%{provider}' के क्रेडेंशियल पूरी तरह सत्यापित नहीं हो सके (%{error})। कुंजी सहेजी गई है; फिर भी काम कर सकती है — संदेश भेजकर देखें।"
+    probe_failed: "⚠ '%{provider}' के क्रेडेंशियल जाँच विफल। कुंजी सहेजी गई है; फिर भी काम कर सकती है।"
+    switched: "✓ %{provider} पर स्विच हुआ — मॉडल: %{model} (नया क्रेडेंशियल सक्रिय; पुनरारंभ की आवश्यकता नहीं)"
+    storing_error: "क्रेडेंशियल सहेजना: %{error}"
+    saving_error: "providers.toml सहेजना: %{error}"
+  provider:
+    available: "उपलब्ध प्रदाता:"
+    legend: "* = वर्तमान | बदलने के लिए /provider <नाम> उपयोग करें"
+    switched: "प्रदाता: %{provider} | मॉडल: %{model}"
+    switched_no_catalog: "प्रदाता %{provider} सेट हुआ। इसकी अंतर्निहित मॉडल सूची नहीं है — मॉडल चुनने के लिए `/model <provider>/<model-id>` उपयोग करें।"
+    no_selection: "कोई प्रदाता चयनित नहीं। पहले /connect <provider> <key> चलाएँ।"
+  disconnect:
+    usage: "उपयोग: /disconnect <provider>\nप्रदाता का सहेजा कनेक्शन (providers.toml में उसकी प्रविष्टि) हटाता है ताकि वह जुड़ा न रहे। आपकी सहेजी API कुंजी बनी रहती है — दोबारा जुड़ने के लिए /connect फिर से चलाएँ।"
+    not_connected: "'%{provider}' जुड़ा नहीं था। जोड़ने के लिए /connect उपयोग करें।"
+    done: "✓ '%{provider}' डिस्कनेक्ट हो गया।"
+    switched: "सक्रिय प्रदाता %{provider} पर बदला (मॉडल: %{model})।"
+    none_remain: "कोई जुड़ा प्रदाता नहीं बचा — दोबारा जुड़ने के लिए /connect <provider> <key> चलाएँ।"
   config:
     warning_load: "चेतावनी: कॉन्फ़िग लोड नहीं हो सका: %{error}"
     key_not_found: "कॉन्फ़िग कुंजी नहीं मिली: %{key}"
@@ -74,6 +119,14 @@ commands:
     usage_get: "उपयोग: /config get <key>"
     usage_set: "उपयोग: /config set <key> <value>"
     usage_reset: "उपयोग: /config reset <key>"
+    settings_title: "कॉन्फ़िगरेशन सेटिंग्स:\n\n"
+    usage: |
+
+      उपयोग:
+        /config list          - सभी सेटिंग दिखाएँ
+        /config get <key>     - एक विशिष्ट मान प्राप्त करें
+        /config set <key> <value> - एक मान सेट करें
+        /config reset <key>   - डिफ़ॉल्ट पर रीसेट करें
   hooks:
     none: "कोई हुक कॉन्फ़िगर नहीं किया गया।"
     reloaded: "हुक सफलतापूर्वक पुनः लोड किए गए।"
@@ -122,6 +175,259 @@ commands:
     enabled: "सैंडबॉक्स मोड सक्षम किया गया (Docker आइसोलेशन)।"
     disabled: "सैंडबॉक्स मोड अक्षम किया गया (प्रत्यक्ष निष्पादन)।"
     not_available: "Docker उपलब्ध नहीं है। सैंडबॉक्स मोड के लिए Docker आवश्यक है।"
+  team:
+    help: |-
+      /team create <name> [description]  — नई एजेंट टीम बनाएँ
+      /team add <team> <agent-name>  — टीम में एजेंट जोड़ें
+      /team task <team> <subject>  — एक कार्य जोड़ें
+      /team assign <team>  — लंबित कार्य उपलब्ध एजेंटों को सौंपें
+      /team status [team]  — टीम की स्थिति दिखाएँ
+      /team list  — सभी टीमें सूचीबद्ध करें
+      /team run  — लंबित कार्य समानांतर चलाएँ
+      /team shutdown  — टीम बंद करें
+      /team disband <team>  — टीम भंग करें और सफ़ाई करें
+      /team delegate  — प्रतिनिधि मोड टॉगल करें (केवल लीड समन्वय करता है)
+  plugin:
+    help: |
+      प्लगइन प्रबंधन:
+
+        /plugin list                    - स्थापित प्लगइन सूचीबद्ध करें
+        /plugin search <query>          - प्लगइन रजिस्ट्री खोजें
+        /plugin info <name>             - अनुक्रमणिका से प्लगइन विवरण दिखाएँ
+        /plugin install <name-or-url>   - एक प्लगइन स्थापित करें
+        /plugin uninstall <name>        - एक प्लगइन हटाएँ
+        /plugin update [name]           - प्लगइन अपडेट करें
+        /plugin enable <name>           - एक प्लगइन सक्षम करें
+        /plugin disable <name>          - एक प्लगइन अक्षम करें
+
+      प्लगइन स्रोत:
+        - रजिस्ट्री नाम (उदा. "example-plugin")
+        - Git URL (उदा. "https://github.com/user/plugin")
+        - स्थानीय पथ (उदा. "/path/to/plugin")
+    installed_title: "स्थापित प्लगइन:\n\n"
+    none_installed: |-
+      कोई प्लगइन स्थापित नहीं है।
+
+      प्लगइन स्थापित करें:
+        /plugin install <name-or-url>
+    none_found: "कोई प्लगइन नहीं मिला। कोई अन्य खोज क्वेरी आज़माएँ।"
+    search_results_title: "खोज परिणाम:\n\n"
+    search_results_ranked_title: "खोज परिणाम (प्रासंगिकता अनुसार क्रमित):\n\n"
+  doctor:
+    title: "Shannon Code निदान\n"
+    results_summary: "परिणाम: %{passed} सफल, %{warnings} चेतावनियाँ, %{failed} विफल\n"
+  credentials:
+    title: "सहेजे गए क्रेडेंशियल:\n\n"
+    none: "  कोई क्रेडेंशियल सहेजा नहीं गया।\n"
+    usage: |
+
+      उपयोग:
+        /credentials list              - सहेजे गए क्रेडेंशियल दिखाएँ
+        /credentials store <svc> <val> - एक क्रेडेंशियल सहेजें
+        /credentials get <service>     - एक क्रेडेंशियल प्राप्त करें (मास्क किया हुआ)
+        /credentials delete <service>  - एक क्रेडेंशियल हटाएँ
+        /credentials count             - सहेजे गए क्रेडेंशियल की संख्या दिखाएँ
+  session:
+    snapshots_title: "सहेजे गए सेशन स्नैपशॉट:\n\n"
+    none_saved: |-
+      कोई सहेजा सेशन स्नैपशॉट नहीं।
+      बनाने के लिए `/session save <name>` उपयोग करें।
+    load_hint: "\nस्नैपशॉट पुनर्स्थापित करने के लिए `/session load <name>` उपयोग करें।"
+  debug:
+    help: |
+      डेवलपर डीबग कमांड:
+
+        /debug log [level]     - लॉग स्तर सेट करें (trace|debug|info|warn|error)
+        /debug profile start   - प्रदर्शन प्रोफाइलिंग शुरू करें
+        /debug profile stop    - प्रोफाइलिंग रोकें और परिणाम दिखाएँ
+        /debug trace [on|off]  - निष्पादन ट्रेसिंग टॉगल करें
+        /debug info            - सिस्टम निदान दिखाएँ
+
+      लॉग स्तर:
+        trace - आंतरिक सहित सभी संदेश
+        debug - डीबग संदेश और ऊपर
+        info  - सूचनात्मक संदेश (डिफ़ॉल्ट)
+        warn  - केवल चेतावनियाँ और त्रुटियाँ
+        error - केवल गंभीर त्रुटियाँ
+    system_info_title: "सिस्टम निदान:\n\n"
+  preset:
+    available_title: "उपलब्ध प्रीसेट:\n\n"
+    no_description: "कोई विवरण नहीं"
+    usage: |
+
+      उपयोग:
+        /preset              - सभी प्रीसेट सूचीबद्ध करें
+        /preset <name>       - एक प्रीसेट लागू करें
+        /preset show <name>  - प्रीसेट विवरण दिखाएँ
+
+# ── Thinking Phrases ──────────────────────────────────────────────────────
+thinking:
+  - "सोच"
+  - "विश्लेषण"
+  - "प्रोसेसिंग"
+  - "तर्क"
+  - "विचार"
+  - "मनन"
+  - "विमर्श"
+  - "कार्य"
+  - "चिंतन"
+
+# ── UI Labels ─────────────────────────────────────────────────────────────
+ui:
+  working: "कार्यरत"
+  tool: "टूल %{n}"
+  cache: "कैश %{pct}%"
+  turn: "बारी %{n}"
+  mem: "मेमो %{size}"
+  errors: "%{n} त्रुटियाँ"
+  response_complete: "प्रतिक्रिया पूर्ण"
+  tokens_this_turn: "इस बारी में %{count} token"
+  cost_total: "कुल $%{cost}"
+  cache_hit_rate: "कैश हिट %{pct}%"
+  message_queued: "संदेश कतार में (%{count} कतार में)"
+  removed_queued: "हटाया गया — %{count} संदेश अभी भी कतार में हैं"
+  removed_last: "कतार का अंतिम संदेश हटाया — संपादित करके फिर से कतार में डालें"
+  removed_edit: "हटाया गया — संपादित करके फिर से कतार में डालें"
+  thinking_chars: "सोच··· (%{count} वर्ण)"
+  thinking_chars_k: "सोच··· (%{count}k वर्ण)"
+  thinking_header: "▼ सोच (%{count} वर्ण)"
+  thinking_header_k: "▼ सोच (%{count}k वर्ण)"
+  no_model: "कोई मॉडल कॉन्फ़िगर नहीं है"
+  budget_warning: "⚠️ बजट चेतावनी: $%{cost} / $%{limit} (%{pct}% उपयोग)"
+  budget_exceeded: "🚨 बजट पार: $%{cost} > $%{limit}"
+  cancelled_partial: "उपयोगकर्ता द्वारा रद्द (आंशिक प्रतिक्रिया)"
+  tool_running: "%{name} चल रहा है…"
+  tool_completed_count: "टूल पूर्ण (×%{count})"
+  query_engine_unavailable: "त्रुटि: क्वेरी इंजन उपलब्ध नहीं है। कृपया सेशन पुनरारंभ करें।"
+  tokens_per_sec: "%{status} · %{rate} tok/s"
+  tool_progress: "%{name}: %{pct}%"
+  vim_insert: "सम्मिलित"
+  vim_normal: "सामान्य"
+  vim_visual: "विज़ुअल"
+  vim_command: "कमांड"
+  placeholder: "अपना संदेश टाइप करें..."
+  notification_task_completed: "कार्य पूर्ण हुआ"
+  status_diag: "निदान"
+  permission_allow_once: "एक बार अनुमति दें"
+  permission_always_allow: "हमेशा अनुमति दें"
+  permission_edit_run: "संपादित+चलाएँ"
+  permission_deny: "अस्वीकार करें"
+  plan_approve: "स्वीकार करें"
+  plan_reject: "अस्वीकार करें"
+  plan_dismiss: "हटाएँ"
+  perm_tool: "टूल"
+  perm_description: "विवरण"
+  perm_why: "क्यों"
+  approval_edit: "संपादन"
+  approval_ask: "पूछें"
+  approval_plan: "योजना"
+  approval_auto: "स्वतः"
+  approval_full: "पूर्ण"
+  key_input: "इनपुट"
+  key_insert: "सम्मिलित करें"
+  key_insert_newline: "नई पंक्ति डालें"
+  key_editor: "संपादक"
+  prompt_input_label: "इनपुट:"
+  prompt_edit_run: "संपादित+चलाएँ"
+  category_edit: "संपादित करें"
+  # ── Key hint labels (compact bar) ─────────────────────────────────────────
+  key_help: "सहायता"
+  key_normal: "सामान्य"
+  key_send: "भेजें"
+  key_complete: "पूर्ण करें"
+  key_copy: "कॉपी"
+  key_visual: "विज़ुअल"
+  key_command: "कमांड"
+  key_move: "हिलाएँ"
+  key_del_line: "पंक्ति हटाएँ"
+  key_chat_search: "चैट खोज"
+  key_scroll: "स्क्रॉल"
+  key_pager: "पेजर"
+  key_mode: "मोड"
+  key_quit: "बाहर"
+  key_cancel: "रद्द करें"
+  key_yank: "कॉपी"
+  key_delete: "हटाएँ"
+  # ── Help panel sections ───────────────────────────────────────────────────
+  help_section_navigation: "नेविगेशन"
+  help_section_input: "इनपुट"
+  help_section_chat: "चैट"
+  help_section_vim: "Vim"
+  help_section_system: "सहायता और सिस्टम"
+  help_title: "शॉर्टकट"
+  help_press_any_key: "बंद करने के लिए कोई कुंजी दबाएँ"
+  # ── Help panel items ──────────────────────────────────────────────────────
+  help_scroll_page: "चैट को पृष्ठ अनुसार स्क्रॉल करें"
+  help_jump_top_bottom: "शीर्ष / तल पर जाएँ"
+  help_toggle_transcript: "ट्रांसक्रिप्ट पेजर टॉगल करें"
+  help_send_message: "संदेश भेजें"
+  help_newline: "नई पंक्ति डालें"
+  help_clear_input: "इनपुट साफ़ करें (या बाहर निकलें)"
+  help_external_editor: "बाहरी संपादक खोलें"
+  help_copy_response: "अंतिम प्रतिक्रिया क्लिपबोर्ड पर कॉपी करें"
+  help_search_chat: "चैट संदेश खोजें"
+  help_search_history: "कमांड इतिहास खोजें"
+  help_delete_word: "पिछला शब्द हटाएँ"
+  help_kill_line: "पंक्ति के अंत तक हटाएँ"
+  help_kill_start: "पंक्ति के आरंभ तक हटाएँ"
+  help_clear_screen: "स्क्रीन साफ़ करें"
+  help_complete: "पूर्ण करें / स्ट्रीमिंग के दौरान कतार में डालें"
+  help_approval_mode: "अनुमोदन मोड बदलें"
+  help_command_history: "कमांड इतिहास"
+  help_fold_tool: "अंतिम टूल आउटपुट फोल्ड/अनफोल्ड करें"
+  help_cycle_view: "दृश्य मोड बदलें (डिफ़ॉल्ट/विस्तृत)"
+  help_toggle_fold: "सभी टूल फोल्डिंग टॉगल करें"
+  help_paste_image: "क्लिपबोर्ड से छवि पेस्ट करें"
+  help_command_palette: "कमांड पैलेट"
+  help_active_agents: "सक्रिय एजेंट दिखाएँ"
+  help_insert_mode: "इनसर्ट मोड में जाएँ"
+  help_visual_mode: "विज़ुअल मोड (टेक्स्ट चुनें)"
+  help_visual_line: "विज़ुअल लाइन मोड"
+  help_move_cursor: "कर्सर हिलाएँ"
+  help_word_forward_back: "शब्द आगे / पीछे"
+  help_line_start_end: "पंक्ति आरंभ / अंत"
+  help_delete_line: "पंक्ति हटाएँ"
+  help_yank_line: "पंक्ति कॉपी करें"
+  help_paste_after: "कर्सर के बाद पेस्ट करें"
+  help_undo: "पूर्ववत करें"
+  help_redo: "पुनः करें"
+  help_command_mode: "कमांड मोड"
+  help_return_normal: "सामान्य मोड पर लौटें"
+  help_this_overlay: "यह सहायता पैनल"
+  help_toggle_mouse: "माउस स्क्रॉल टॉगल करें"
+  help_undo_exchange: "अंतिम विनिमय पूर्ववत करें"
+  # ── Header labels ─────────────────────────────────────────────────────────
+  header_send: "भेजें"
+  header_newline: "नई पंक्ति"
+  header_editor: "संपादक"
+  header_fullscreen: "पूर्ण स्क्रीन"
+  sidebar:
+    context: "संदर्भ"
+    cost: "लागत"
+    memory: "मेमोरी"
+    tools: "टूल"
+    changes: "परिवर्तन"
+    pressure_emergency: "आपातकाल"
+    pressure_critical: "गंभीर"
+    pressure_high: "उच्च"
+    pressure_normal: "सामान्य"
+    pressure_low: "निम्न"
+  status_card:
+    title: " स्थिति "
+    no_provider: "कोई प्रदाता जुड़ा नहीं है। शुरू करने के लिए /connect चलाएँ।"
+    active_label: "सक्रिय:"
+    tier_label: "स्तर:"
+    available_providers: "उपलब्ध प्रदाता ({connected} जुड़े / {total} समर्थित):"
+    commands: "कमांड: /connect · /model · /provider · /profile · /help"
+  help_overlay:
+    title: " Shannon सहायता — बंद करने के लिए Esc "
+    categories: " श्रेणियाँ "
+    commands: " कमांड "
+    footer: " j/k: श्रेणी बदलें │ Enter: विवरण │ /: खोज │ Esc: बंद करें │ फ़िल्टर: {filter} "
+  status_bar:
+    no_provider: "[कोई प्रदाता जुड़ा नहीं]"
+
+# ── CLI Help ───────────────────────────────────────────────────────────────
 cli:
   about: "Rust में AI-संचालित कोड सहायक"
   prompt_help: "प्रॉम्प्ट सीधे निष्पादित करें (गैर-संवादात्मक मोड)।"
@@ -149,6 +455,8 @@ cli:
   version_line: "Shannon Code v0.1.0"
   pipe_requires_input: "त्रुटि: --pipe को इनपुट या प्रॉम्प्ट तर्क की आवश्यकता है"
   lang_help: "भाषा/लोकेल सेट करें (उदा., en, zh)"
+
+# ── Tool Messages ──────────────────────────────────────────────────────────
 tools:
   registration_failed: "टूल पंजीकरण विफल: %{error}"
   using: "उपयोग किया जा रहा: %{name}, इनपुट के साथ: %{input}"
@@ -158,6 +466,8 @@ tools:
   loaded_plugins: "%{count} प्लगइन लोड किए गए"
   plugin_warning: "चेतावनी: प्लगइन खोज विफल: %{error}"
   discovered_mcp: "%{count} MCP सर्वर खोजे गए"
+
+# ── Query Events ───────────────────────────────────────────────────────────
 query:
   turn_completed: "[बारी %{turn} पूर्ण, %{tokens} token]"
   processing_status: "प्रोसेसिंग: %{message}"
@@ -169,6 +479,8 @@ query:
   api_key_required: "API कुंजी आवश्यक"
   api_key_prompt: "अपनी API कुंजी दर्ज करें..."
   query_error: "क्वेरी त्रुटि"
+
+# ── Diff/Review ────────────────────────────────────────────────────────────
 review:
   all_accepted: "सभी परिवर्तन स्वीकृत और स्टेज किए गए।"
   no_changes_reject: "अस्वीकार करने के लिए कोई परिवर्तन नहीं।"

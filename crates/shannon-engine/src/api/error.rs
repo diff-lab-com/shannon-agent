@@ -319,6 +319,27 @@ impl ApiError {
         matches!(self, ApiError::StreamEndedUnexpectedly)
     }
 
+    /// Provider-aware guidance for authentication failures (review
+    /// 2026-09-29 P0-3): `/config` cannot set keys — `/connect` is the
+    /// surface that stores them — and each provider has its own canonical
+    /// env var ([`LlmProvider::canonical_api_key_env`]).
+    ///
+    /// Callers that know the active provider should prefer this over the
+    /// provider-agnostic text produced by [`Self::user_suggestion`] for the
+    /// bare [`ApiError::AuthenticationFailed`] variant (which, as a unit
+    /// variant, carries no provider).
+    pub fn auth_failure_suggestion(provider: &LlmProvider) -> String {
+        let slug = provider.to_string();
+        match provider.canonical_api_key_env() {
+            Some(env) => format!(
+                "Authentication failed for {slug}. Update the key with /connect {slug} <new-key>, or set {env}."
+            ),
+            None => format!(
+                "Authentication failed for {slug}. Update the key with /connect {slug} <new-key>."
+            ),
+        }
+    }
+
     /// Return a user-facing suggestion for how to resolve this error.
     pub fn user_suggestion(&self) -> Option<String> {
         if self.is_token_overflow() {
@@ -329,7 +350,11 @@ impl ApiError {
                 Some("Rate limited — the request will be retried automatically. If this persists, consider using a different model.".to_string())
             }
             ApiError::AuthenticationFailed => {
-                Some("Authentication failed. Check your API key with /config or set SHANNON_API_KEY.".to_string())
+                // The unit variant carries no provider, so the hint stays
+                // generic; use [`Self::auth_failure_suggestion`] where the
+                // active provider is known. `/config` cannot set keys —
+                // `/connect` is the surface that stores them.
+                Some("Authentication failed. Update the key with /connect <provider> <new-key>, or set the provider's API key environment variable.".to_string())
             }
             ApiError::Timeout => {
                 Some("Request timed out. Try again, use a smaller model, or reduce context with /compact.".to_string())
@@ -569,6 +594,68 @@ mod tests {
             err.user_suggestion().is_none(),
             "Generic ProviderError should have no suggestion"
         );
+    }
+
+    // ── Auth-failure suggestion routing (review 2026-09-29 P0-3) ────────
+
+    /// Regression: the 401 suggestion used to point at `/config`, which
+    /// cannot set keys. It must route to `/connect` — the surface that
+    /// stores credentials.
+    #[test]
+    fn test_auth_suggestion_routes_to_connect_not_config() {
+        let suggestion = ApiError::AuthenticationFailed
+            .user_suggestion()
+            .expect("AuthenticationFailed must have a suggestion");
+        assert!(
+            suggestion.contains("/connect"),
+            "must point at /connect: {suggestion}"
+        );
+        assert!(
+            !suggestion.contains("/config"),
+            "must not point at /config: {suggestion}"
+        );
+    }
+
+    /// The provider-aware helper names the provider slug and its canonical
+    /// env var.
+    #[test]
+    fn test_auth_failure_suggestion_names_provider_and_env() {
+        let s = ApiError::auth_failure_suggestion(&LlmProvider::Anthropic);
+        assert!(
+            s.starts_with("Authentication failed for anthropic."),
+            "must name the provider: {s}"
+        );
+        assert!(
+            s.contains("/connect anthropic <new-key>"),
+            "must give the exact /connect invocation: {s}"
+        );
+        assert!(
+            s.contains("ANTHROPIC_API_KEY"),
+            "must name the canonical env var: {s}"
+        );
+        assert!(s.ends_with('.'), "must end with a period: {s}");
+
+        let s = ApiError::auth_failure_suggestion(&LlmProvider::Zhipu);
+        assert!(s.contains("/connect zhipu"), "{s}");
+        assert!(s.contains("ZHIPU_API_KEY"), "{s}");
+    }
+
+    /// Providers without a canonical env var still get the /connect route,
+    /// just without the "set {ENV_VAR}" tail.
+    #[test]
+    fn test_auth_failure_suggestion_without_canonical_env() {
+        for provider in [LlmProvider::Custom, LlmProvider::Ollama] {
+            let s = ApiError::auth_failure_suggestion(&provider);
+            assert!(
+                s.contains(&format!("/connect {provider} <new-key>")),
+                "must still route to /connect: {s}"
+            );
+            assert!(
+                !s.contains("or set"),
+                "no env var to name, so no 'or set' tail: {s}"
+            );
+            assert!(s.ends_with('.'), "{s}");
+        }
     }
 
     // ── Regression: error message formatting ────────────────────────────

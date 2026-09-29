@@ -8,7 +8,7 @@ export default function Hero({ lang }: HeroProps) {
   const t = getTranslations(lang);
 
   return (
-    <section style={{
+    <section className="hero-glow" style={{
       textAlign: 'center',
       padding: '80px 24px 60px',
     }}>

@@ -47,11 +47,10 @@ export default function ComparisonTable({ lang }: ComparisonTableProps) {
         {t.comparison.items.map((item, i) => (
           <div
             key={i}
+            className="glass-card"
             style={{
               textAlign: 'center',
               padding: '24px 12px',
-              background: 'var(--paper)',
-              border: '1px solid var(--line)',
               borderRadius: 'var(--radius-md)',
               opacity: visible ? 1 : 0,
               transform: visible ? 'translateY(0)' : 'translateY(10px)',
@@ -71,10 +70,8 @@ export default function ComparisonTable({ lang }: ComparisonTableProps) {
       </div>
 
       {/* Comparison rows */}
-      <div className="comparison-table-wrapper" style={{
-        background: 'var(--paper)',
+      <div className="comparison-table-wrapper glass-card" style={{
         borderRadius: 'var(--radius-lg)',
-        border: '1px solid var(--line)',
         overflow: 'hidden',
       }}>
         <div style={{
@@ -86,7 +83,7 @@ export default function ComparisonTable({ lang }: ComparisonTableProps) {
           background: 'var(--bg-soft)',
         }}>
           <span style={{ fontWeight: 600, fontSize: 13, color: 'var(--muted)' }} />
-          <span style={{ fontWeight: 600, fontSize: 13, color: 'var(--accent)', textAlign: 'center' }}>Shannon</span>
+          <span style={{ fontWeight: 600, fontSize: 13, color: 'var(--accent-bright)', textAlign: 'center' }}>Shannon</span>
           <span style={{ fontWeight: 600, fontSize: 13, color: 'var(--muted)', textAlign: 'center' }}>
             {lang === 'en' ? 'Typical Cloud Agent' : '典型云端 agent'}
           </span>

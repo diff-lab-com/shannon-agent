@@ -86,6 +86,22 @@ fn safe_relative_path(kind_of_path: &str, value: &str) -> Result<(), PluginError
     Ok(())
 }
 
+/// A plugin name must be a single safe path component: it becomes the
+/// directory name under the plugins directory (`plugins_dir.join(name)`) on
+/// install and the registry key everywhere else (review F18).
+///
+/// Pattern: `^[A-Za-z0-9][A-Za-z0-9._-]*$`. The alnum first character
+/// already excludes the reserved relative components `.` and `..`, path
+/// separators, absolute paths and Windows drive/prefix forms.
+pub(super) fn is_safe_plugin_name(name: &str) -> bool {
+    let mut chars = name.chars();
+    match chars.next() {
+        Some(c) if c.is_ascii_alphanumeric() => {}
+        _ => return false,
+    }
+    chars.all(|c| c.is_ascii_alphanumeric() || matches!(c, '.' | '_' | '-'))
+}
+
 /// Validate a parsed manifest for installation.
 ///
 /// `Ok(warnings)` means the plugin may install; the warnings are human-
@@ -96,6 +112,15 @@ pub fn validate_for_install(manifest: &PluginManifest) -> Result<Vec<String>, Pl
         return Err(PluginError::InvalidManifest(
             "manifest 'name' must not be empty".into(),
         ));
+    }
+    // F18: the name is joined onto the plugins directory at install time and
+    // fed to remove_dir_all at uninstall time — refuse traversal-shaped or
+    // otherwise unsafe names outright.
+    if !is_safe_plugin_name(&manifest.name) {
+        return Err(PluginError::InvalidManifest(format!(
+            "plugin '{}': 'name' must match [A-Za-z0-9][A-Za-z0-9._-]* — it becomes a directory under the plugins folder",
+            manifest.name
+        )));
     }
     if manifest.description.trim().is_empty() {
         return Err(PluginError::InvalidManifest(format!(
@@ -356,6 +381,70 @@ command_name = "z"
             .unwrap_err()
             .to_string();
         assert!(err.contains("'description' must not be empty"), "{err}");
+    }
+
+    #[test]
+    fn plugin_names_must_be_safe_single_components() {
+        // F18: names become directory names under the plugins dir — reject
+        // traversal shapes and anything outside the safe pattern outright.
+        for bad in [
+            "../outside",
+            "..",
+            ".",
+            ".hidden",
+            "a/b",
+            "/abs",
+            "sp ace",
+            "semi;colon",
+            "",
+        ] {
+            let manifest = parse(&format!(
+                r#"
+name = "{bad}"
+version = "1.0.0"
+description = "d"
+type = "skill"
+entry = "t.md"
+trigger = "/t"
+template = "t"
+"#
+            ));
+            let err = validate_for_install(&manifest)
+                .expect_err(&format!("unsafe plugin name {bad:?} must be refused"));
+            let msg = err.to_string();
+            assert!(
+                msg.contains("must match [A-Za-z0-9]") || msg.contains("must not be empty"),
+                "unsafe name {bad:?} rejected with a clear error, got: {msg}"
+            );
+        }
+
+        for good in ["a", "my-plugin", "my.plugin", "my_plugin", "Plugin2"] {
+            assert!(
+                is_safe_plugin_name(good),
+                "ordinary plugin name {good:?} must stay valid"
+            );
+        }
+        // Non-ASCII and separator-ish characters stay out.
+        assert!(!is_safe_plugin_name("plättchen"));
+        assert!(!is_safe_plugin_name("a:b"));
+    }
+
+    #[test]
+    fn unsafe_name_error_is_actionable() {
+        let manifest = parse(
+            r#"
+name = "../escape"
+version = "1.0.0"
+description = "traversal"
+type = "skill"
+entry = "t.md"
+trigger = "/t"
+template = "t"
+"#,
+        );
+        let err = validate_for_install(&manifest).unwrap_err().to_string();
+        assert!(err.contains("../escape"), "{err}");
+        assert!(err.contains("directory"), "{err}");
     }
 
     #[test]

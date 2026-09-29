@@ -16,13 +16,13 @@ import LoadingState from '@/components/ui/loading-state'
 import ErrorState from '@/components/ui/error-state'
 
 const STATUS_TONES: Record<string, string> = {
-  completed: 'bg-tertiary/15 text-tertiary border-tertiary/40',
-  done: 'bg-tertiary/15 text-tertiary border-tertiary/40',
-  in_progress: 'bg-primary/15 text-primary border-primary/40',
-  running: 'bg-primary/15 text-primary border-primary/40',
+  completed: 'bg-tertiary-container text-on-tertiary-container border-tertiary/40',
+  done: 'bg-tertiary-container text-on-tertiary-container border-tertiary/40',
+  in_progress: 'bg-primary-container text-on-primary-container border-primary/40',
+  running: 'bg-primary-container text-on-primary-container border-primary/40',
   pending: 'bg-primary text-on-primary border-outline-variant/40',
   todo: 'bg-outline/15 text-on-surface-variant border-outline/40',
-  deprecated: 'bg-error/15 text-error border-error/40',
+  deprecated: 'bg-error-container text-on-error-container border-error/40',
 }
 
 // Review 2026-09-16 (UI-review #18): raw maxima produced odd axis labels
@@ -72,7 +72,7 @@ export default function OpcAnalyticsDashboard() {
 
   if (loading && !metrics) {
     return (
-      <div className="bg-surface-container-lowest rounded-2xl p-lg border border-outline-variant/30 shadow-sm">
+      <div className="bg-surface-container-lowest rounded-2xl p-lg border border-outline-variant/30 shadow-e1">
         <LoadingState label={t('opc.analytics.loading')} size="sm" />
       </div>
     )
@@ -80,7 +80,7 @@ export default function OpcAnalyticsDashboard() {
 
   if (error) {
     return (
-      <div className="bg-surface-container-lowest rounded-2xl p-lg border border-outline-variant/30 shadow-sm">
+      <div className="bg-surface-container-lowest rounded-2xl p-lg border border-outline-variant/30 shadow-e1">
         <ErrorState
           title={t('opc.analytics.loadFailed')}
           description={error}
@@ -97,12 +97,12 @@ export default function OpcAnalyticsDashboard() {
   return (
     <section
       aria-label={t('opc.analytics.aria')}
-      className="bg-surface-container-lowest rounded-2xl p-lg border border-outline-variant/30 shadow-sm flex flex-col gap-lg"
+      className="bg-surface-container-lowest rounded-2xl p-lg border border-outline-variant/30 shadow-e1 flex flex-col gap-lg"
     >
       <header className="flex items-center justify-between">
         <div className="flex items-center gap-sm">
           <span className="material-symbols-outlined icon-md text-primary">monitoring</span>
-          <h3 className="font-headline-md text-[16px] font-bold text-on-surface">{t('opc.analytics.title')}</h3>
+          <h3 className="font-headline-md text-body-md font-bold text-on-surface">{t('opc.analytics.title')}</h3>
         </div>
         <Button
           variant="ghost"
@@ -110,9 +110,9 @@ export default function OpcAnalyticsDashboard() {
           onClick={refresh}
           disabled={loading}
           aria-label={t('opc.analytics.refreshAria')}
-          className="font-label-sm text-primary hover:bg-primary/10 rounded px-sm py-xs gap-1"
+          className="font-label-sm text-link hover:bg-primary/10 rounded-sm px-sm py-xs gap-xs"
         >
-          <span className="material-symbols-outlined text-[14px]">{loading ? 'hourglass_top' : 'refresh'}</span>
+          <span className="material-symbols-outlined icon-sm">{loading ? 'hourglass_top' : 'refresh'}</span>
           {t('opc.analytics.refresh')}
         </Button>
       </header>
@@ -137,7 +137,7 @@ export default function OpcAnalyticsDashboard() {
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-md items-start">
         <div className="lg:col-span-2">
         <h4 className="font-label-md text-on-surface mb-sm flex items-center gap-xs">
-          <span className="material-symbols-outlined text-[14px] text-on-surface-variant">bar_chart</span>
+          <span className="material-symbols-outlined icon-sm text-on-surface-variant">bar_chart</span>
           {t('opc.analytics.dailyActivity')}
         </h4>
         {metrics.daily.length === 0 ? (
@@ -149,7 +149,7 @@ export default function OpcAnalyticsDashboard() {
               {[1, 0.5, 0].map(f => (
                 <span
                   key={f}
-                  className="absolute right-0 -translate-y-1/2 font-label-sm text-[9px] text-on-surface-variant tabular-nums"
+                  className="absolute right-0 -translate-y-1/2 font-label-sm text-label-2xs text-on-surface-variant tabular-nums"
                   style={{ top: `${(1 - f) * 100}%` }}
                 >
                   {Math.round(maxDaily * f)}
@@ -186,7 +186,7 @@ export default function OpcAnalyticsDashboard() {
                       title={intl.formatMessage({ id: 'opc.analytics.completedTitle' }, { count: d.completed })}
                     />
                   </div>
-                  <span className="font-label-sm text-[10px] text-on-surface-variant">{shortDay}</span>
+                  <span className="font-label-sm text-label-2xs text-on-surface-variant">{shortDay}</span>
                 </div>
               )
             })}
@@ -194,16 +194,16 @@ export default function OpcAnalyticsDashboard() {
             </div>
           </div>
         )}
-        <div className="flex items-center gap-md mt-sm font-label-sm text-[11px] text-on-surface-variant">
-          <span className="flex items-center gap-1"><span className="w-2 h-2 bg-primary/70 inline-block rounded-sm" /> {t('opc.analytics.createdLegend')}</span>
-          <span className="flex items-center gap-1"><span className="w-2 h-2 bg-tertiary/70 inline-block rounded-sm" /> {t('opc.analytics.completedLegend')}</span>
+        <div className="flex items-center gap-md mt-sm font-label-sm text-label-xs text-on-surface-variant">
+          <span className="flex items-center gap-xs"><span className="w-2 h-2 bg-primary/70 inline-block rounded-sm" /> {t('opc.analytics.createdLegend')}</span>
+          <span className="flex items-center gap-xs"><span className="w-2 h-2 bg-tertiary/70 inline-block rounded-sm" /> {t('opc.analytics.completedLegend')}</span>
         </div>
       </div>
 
         <div className="flex flex-col gap-md">
         <div>
           <h4 className="font-label-md text-on-surface mb-sm flex items-center gap-xs">
-            <span className="material-symbols-outlined text-[14px] text-on-surface-variant">bubble_chart</span>
+            <span className="material-symbols-outlined icon-sm text-on-surface-variant">bubble_chart</span>
             {t('opc.analytics.byStatus')}
           </h4>
           {metrics.by_status.length === 0 ? (
@@ -212,7 +212,7 @@ export default function OpcAnalyticsDashboard() {
             <ul className="flex flex-col gap-xs">
               {metrics.by_status.map(s => (
                 <li key={s.status} className="flex items-center gap-sm">
-                  <span className={cn("inline-flex items-center px-xs py-1 rounded-full border font-label-sm text-[10px] font-bold tracking-wide w-32 justify-center", toneFor(s.status))}>
+                  <span className={cn("inline-flex items-center px-xs py-xs rounded-full border font-label-sm text-label-2xs font-bold tracking-wide w-32 justify-center", toneFor(s.status))}>
                     {label(s.status)}
                   </span>
                   <div className="flex-1 bg-surface-container-low rounded-full h-2 overflow-hidden">
@@ -230,7 +230,7 @@ export default function OpcAnalyticsDashboard() {
 
         <div>
           <h4 className="font-label-md text-on-surface mb-sm flex items-center gap-xs">
-            <span className="material-symbols-outlined text-[14px] text-on-surface-variant">priority_high</span>
+            <span className="material-symbols-outlined icon-sm text-on-surface-variant">priority_high</span>
             {t('opc.analytics.byPriority')}
           </h4>
           {metrics.by_priority.length === 0 ? (
@@ -257,7 +257,7 @@ export default function OpcAnalyticsDashboard() {
 
       <div>
         <h4 className="font-label-md text-on-surface mb-sm flex items-center gap-xs">
-          <span className="material-symbols-outlined text-[14px] text-on-surface-variant">group</span>
+          <span className="material-symbols-outlined icon-sm text-on-surface-variant">group</span>
           {t('opc.analytics.workloadByAssignee')}
         </h4>
         {metrics.by_assignee.length === 0 ? (
@@ -266,9 +266,9 @@ export default function OpcAnalyticsDashboard() {
           <ul className="flex flex-col gap-xs">
             {metrics.by_assignee.map(a => (
               <li key={a.assignee} className="flex items-center gap-sm">
-                <span className="material-symbols-outlined text-[14px] text-on-surface-variant">person</span>
+                <span className="material-symbols-outlined icon-sm text-on-surface-variant">person</span>
                 <span className="font-label-md text-on-surface flex-1 truncate">{a.assignee}</span>
-                <span className="font-label-sm text-[11px] text-on-surface-variant">
+                <span className="font-label-sm text-label-xs text-on-surface-variant">
                   <strong className="text-primary">{a.in_progress}</strong> {t('opc.analytics.inProgressLabel')} ·{' '}
                   <strong className="text-tertiary">{a.done}</strong> {t('opc.analytics.doneLabel')} ·{' '}
                   <strong className="text-on-surface">{a.total}</strong> {t('opc.analytics.totalLabel')}

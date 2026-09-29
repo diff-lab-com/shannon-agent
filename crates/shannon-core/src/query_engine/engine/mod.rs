@@ -69,8 +69,9 @@ use super::env_config::DEFAULT_THINK_ONLY_MIN_ANSWER_CHARS;
 // DEFAULT_MAX_TOOL_RESULT_CHARS/env_num_override: test-only in this module
 use super::env_config::{
     DEFAULT_MAX_TOOL_RESULT_CHARS, MICRO_PRUNE_THRESHOLD, THINK_ONLY_NUDGE_PROMPT,
-    TRUNCATION_CONTINUATION_PROMPT, cap_tool_result, env_num_override, think_only_min_answer_chars,
-    think_only_nudge_max, token_budget_limit, token_budget_nudge_for,
+    TRUNCATION_CONTINUATION_PROMPT, cap_tool_result, env_num_override,
+    max_consecutive_malformed_calls, think_only_min_answer_chars, think_only_nudge_max,
+    token_budget_limit, token_budget_nudge_for,
 };
 #[allow(unused_imports)] // split_think_content: used by tests in this module
 use super::parsers::{
@@ -83,7 +84,7 @@ use crate::compact as p2_compact;
 use crate::query_engine::streaming::ConversationState;
 use crate::query_engine::types::{
     ConversationStats, CostTracker, EffortLevel, GOAL_BLOCKED_MARKER, GOAL_COMPLETE_MARKER,
-    GoalSpec, QueryContext, QueryEngineConfig, QueryError, QueryEvent, QueryStream,
+    GoalSpec, QueryContext, QueryEngineConfig, QueryError, QueryEvent, QueryOutcome, QueryStream,
 };
 use crate::tools::ToolRegistry;
 use shannon_engine::api::{
@@ -758,7 +759,88 @@ impl QueryEngine {
             Err(e) => Err(QueryError::StateError(e.to_string())),
         }
     }
+}
 
+/// True when `msg` OPENS a conversation turn.
+///
+/// Only a real user prompt opens a turn. The agent loop also pushes user-role
+/// messages that are NOT prompts (see `agent_loop.rs`):
+///
+/// - tool results (`MessageContent::Blocks` carrying `ToolResult` blocks —
+///   the wire requires `assistant(tool_use)` → `user(tool_result)`),
+/// - synthetic reminders injected as plain user text: the P-M token-budget
+///   warnings (`"[Token budget at {pct}%] …"`), the B.6 targeted-read nudge
+///   (`"Context is large (…)"`), the pinned nudge prompts (truncation
+///   continuation, think-only, wrap-up, turn continuation), and the runtime
+///   `user_notices` drain (denial soft-limit warning, auto-test outcomes).
+///
+/// Counting those as turn openers made `/rewind n` cut at the last tool
+/// result instead of the user's prompt, leaving an assistant `tool_use`
+/// dangling.
+fn is_turn_opener(msg: &Message) -> bool {
+    if msg.role != "user" {
+        return false;
+    }
+    match &msg.content {
+        MessageContent::Blocks(blocks) => !blocks
+            .iter()
+            .any(|b| matches!(b, ContentBlock::ToolResult { .. })),
+        MessageContent::Text(text) => !is_synthetic_reminder(text),
+    }
+}
+
+/// True when `text` is a synthetic reminder the agent loop injected as a
+/// user-role message rather than a typed user prompt. Prefix/equality pins
+/// mirror the producers: the format-string reminders live in `agent_loop.rs`,
+/// the nudge prompts are the consts referenced here, and the runtime
+/// `user_notices` pins mirror the two notice producers — the denial
+/// soft-limit warning (`agent_loop.rs`) and the auto-test outcome reports
+/// (`auto_test::TestOutcome::describe`). A batch of notices drains as ONE
+/// user message with paragraphs joined by `"\n\n"`, so an exact-match notice
+/// also counts when it OPENS a batch; a notice that is only a later
+/// paragraph is covered because the batch's first paragraph is always a
+/// producer text and every producer is recognized here. Trade-off (same as
+/// every pin): a user prompt that verbatim starts with one of these pinned
+/// texts is misread as synthetic — accepted, the strings are unmistakably
+/// machine-generated.
+fn is_synthetic_reminder(text: &str) -> bool {
+    text.starts_with("[Token budget at") // P-M 60%/80% context warnings
+        // Turn-N checkpoint commit-now reminder (SHANNON_TURN_CHECKPOINT):
+        // pushed as user-role text OUTSIDE the user_notices drain
+        // (agent_loop.rs P-B block), so the notice pins below don't see it.
+        || (text.starts_with("[Turn ") && text.contains(" reminder] You have used "))
+        || text.starts_with("Context is large (") // B.6 targeted-read nudge
+        || text == TRUNCATION_CONTINUATION_PROMPT
+        || text == THINK_ONLY_NUDGE_PROMPT
+        || text == agent_loop::WRAP_UP_NUDGE_PROMPT
+        || text == recovery::TURN_CONTINUATION_NUDGE_PROMPT
+        // Runtime user_notices (T15b): variable-text messages pushed as
+        // user-role text by agent_loop's notice drain.
+        || text.starts_with("The user has denied ") // denial soft-limit warning
+        || text.starts_with("Tests failed:\n```") // auto-test failure report
+        || text.starts_with("Could not execute test command (spawn error): ") // auto-test spawn error
+        || pinned_user_notice(text, "All tests passed.")
+        || pinned_user_notice(text, "Tests timed out (no output within the configured timeout).")
+}
+
+/// A pinned exact notice either travels alone (whole message equals the
+/// notice) or opens a joined notice batch (notice + `join("\n\n")`
+/// separator + the rest).
+fn pinned_user_notice(text: &str, notice: &str) -> bool {
+    text == notice || text.starts_with(&format!("{notice}\n\n"))
+}
+
+/// True when `msg` is an assistant message carrying a `tool_use` block whose
+/// result may no longer follow it — used to keep the rewind cut from
+/// orphaning a tool call.
+fn is_dangling_tool_use(msg: &Message) -> bool {
+    msg.role == "assistant"
+        && matches!(&msg.content, MessageContent::Blocks(blocks) if blocks
+            .iter()
+            .any(|b| matches!(b, ContentBlock::ToolUse { .. })))
+}
+
+impl QueryEngine {
     /// Get a reference to the tool registry
     pub fn tools(&self) -> &ToolRegistry {
         &self.tools
@@ -810,9 +892,18 @@ impl QueryEngine {
 
     /// Rewind the conversation by removing the last `n` user turns.
     ///
-    /// A turn starts with a user message and includes all subsequent non-user
-    /// messages until the next user message. Returns the number of messages removed.
-    /// Decrements `turn_count` by the number of turns rewound.
+    /// A turn starts with a real user prompt (see the private
+    /// `is_turn_opener` predicate) and includes
+    /// all subsequent messages until the next turn opener — tool results and
+    /// synthetic reminders travel as user-role messages but never open a turn.
+    /// The cut is additionally moved back past any trailing assistant
+    /// `tool_use` so the kept prefix never dangles a tool call whose result
+    /// was removed.
+    ///
+    /// Returns the number of messages removed. Decrements `turn_count` by the
+    /// number of turns rewound. The surviving turn count — the `keep_turns`
+    /// that keeps the L0 event log in lockstep with the rewound memory — is
+    /// [`Self::conversation_turn_count`] *after* this call.
     pub fn rewind_conversation(&mut self, turns: usize) -> usize {
         if turns == 0 || self.conversation.messages.is_empty() {
             return 0;
@@ -822,7 +913,7 @@ impl QueryEngine {
         let mut cutoff = self.conversation.messages.len();
 
         for i in (0..self.conversation.messages.len()).rev() {
-            if self.conversation.messages[i].role == "user" {
+            if is_turn_opener(&self.conversation.messages[i]) {
                 turns_found += 1;
                 cutoff = i;
                 if turns_found >= turns {
@@ -835,11 +926,33 @@ impl QueryEngine {
             return 0;
         }
 
+        // Defense in depth: never leave a kept assistant `tool_use` whose
+        // tool result is gone (can happen after interrupted turns). Move the
+        // cut before the dangling call so it is removed with its turn.
+        while cutoff > 0 && is_dangling_tool_use(&self.conversation.messages[cutoff - 1]) {
+            cutoff -= 1;
+        }
+
         let removed = self.conversation.messages.len() - cutoff;
         self.conversation.messages.truncate(cutoff);
         self.conversation.turn_count = self.conversation.turn_count.saturating_sub(turns_found);
 
         removed
+    }
+
+    /// Number of conversation turns currently present in memory — i.e. the
+    /// turns a rewind has left behind.
+    ///
+    /// This is the `keep_turns` value callers must hand to
+    /// `SessionStore::truncate_to_turn` so the authoritative L0 log keeps
+    /// exactly the turns that survive in memory. (Passing a removed-*message*
+    /// count instead used to over- or under-truncate the log by whole turns.)
+    pub fn conversation_turn_count(&self) -> usize {
+        self.conversation
+            .messages
+            .iter()
+            .filter(|m| is_turn_opener(m))
+            .count()
     }
 
     /// Clear the conversation history

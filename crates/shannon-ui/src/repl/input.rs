@@ -7,6 +7,36 @@ use rust_i18n::t;
 
 use super::Repl;
 
+/// Which agents UI a key event toggles (F34).
+///
+/// Ctrl+A used to be triple-shadowed in the main key match: only the first
+/// arm (agents panel toggle) ever ran, leaving the dashboard toggle and the
+/// readline start-of-line behavior dead code. The dispatch is now decided by
+/// this one function so there is exactly one binding per key.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum AgentUiToggle {
+    /// Agents panel dropdown — documented as Ctrl+A in the F1 key hints
+    /// (`ui.help_active_agents`), in `keybindings.rs`, and in `state.rs`.
+    Panel,
+    /// Agent dashboard expand/collapse — lives on Alt+A so it no longer
+    /// fights the documented Ctrl+A panel binding.
+    Dashboard,
+}
+
+/// Resolve the agents-UI toggle action for a key event, if any.
+pub(crate) fn agent_ui_toggle_for_key(key: &KeyEvent) -> Option<AgentUiToggle> {
+    if key.code != KeyCode::Char('a') {
+        return None;
+    }
+    if key.modifiers.contains(KeyModifiers::CONTROL) {
+        return Some(AgentUiToggle::Panel);
+    }
+    if key.modifiers.contains(KeyModifiers::ALT) {
+        return Some(AgentUiToggle::Dashboard);
+    }
+    None
+}
+
 /// Open an external editor ($VISUAL or $EDITOR, fallback to vi) with a temp file.
 /// Returns the edited content on success.
 fn open_external_editor(
@@ -247,8 +277,19 @@ pub fn handle_input(
             open_command_palette(repl);
             Ok(())
         }
-        KeyCode::Char('a') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+        // F34: Ctrl+A toggles the agents panel (the documented binding — F1
+        // key hints + keybindings.rs). The dashboard got Alt+A below; the
+        // readline start-of-line behavior stays on the documented Home key.
+        KeyCode::Char('a') if agent_ui_toggle_for_key(&key) == Some(AgentUiToggle::Panel) => {
             repl.state.agents_panel_visible = !repl.state.agents_panel_visible;
+            Ok(())
+        }
+        // F34: agent dashboard expand/collapse on a distinct key (Alt+A).
+        // This was previously a dead Ctrl+A arm that never ran.
+        KeyCode::Char('a') if agent_ui_toggle_for_key(&key) == Some(AgentUiToggle::Dashboard) => {
+            if let Some(ref mut dashboard) = repl.state.agent_dashboard {
+                dashboard.toggle_expand();
+            }
             Ok(())
         }
         KeyCode::Char('s') if key.modifiers.contains(KeyModifiers::CONTROL) => {
@@ -402,13 +443,9 @@ pub fn handle_input(
             );
             Ok(())
         }
-        // Ctrl+A: toggle agent dashboard
-        KeyCode::Char('a') if key.modifiers.contains(KeyModifiers::CONTROL) => {
-            if let Some(ref mut dashboard) = repl.state.agent_dashboard {
-                dashboard.toggle_expand();
-            }
-            Ok(())
-        }
+        // F34: the dead Ctrl+A dashboard-toggle arm that used to live here
+        // was removed — dashboard expansion is on Alt+A (see the dispatch
+        // table in `agent_ui_toggle_for_key`).
         // Alt+F: toggle all tool messages collapsed/expanded
         KeyCode::Char('f') if key.modifiers.contains(KeyModifiers::ALT) => {
             repl.chat.collapsed_tools = !repl.chat.collapsed_tools;
@@ -535,14 +572,9 @@ pub fn handle_input(
             update_auto_completions(repl);
             Ok(())
         }
-        // Ctrl+A: move to start of line (readline convention)
-        KeyCode::Char('a') if key.modifiers.contains(KeyModifiers::CONTROL) => {
-            let col = repl.prompt.cursor_position();
-            for _ in 0..col {
-                repl.prompt.cursor_left();
-            }
-            Ok(())
-        }
+        // F34: the dead Ctrl+A move-to-start-of-line arm that used to live
+        // here was removed. Start-of-line is on the documented Home key
+        // (and the /help readline list); Ctrl+A toggles the agents panel.
         KeyCode::Char(c) => {
             repl.prompt.add_char_smart(c);
             update_auto_completions(repl);
@@ -1108,7 +1140,11 @@ pub(crate) fn complete_command_args(cmd_name: &str, prefix: &str) -> Vec<String>
             "preview",
             "--preview",
         ],
-        "permissions" | "perm" | "perms" => &["allow", "deny", "reset", "status"],
+        // R1-6 (decision ② step 1): /permissions manages permission profiles
+        // (the /profile command); the tool allow/deny view keeps /perms and
+        // /perm.
+        "permissions" => &["list", "show", "set", "create"],
+        "perm" | "perms" => &["allow", "deny", "reset", "status"],
         "plan" => &["create", "approve", "reject", "done", "status"],
         "review" => &["HEAD~1", "main...HEAD", "--staged", "--full"],
         "history" => &["--export"],
@@ -2830,6 +2866,13 @@ fn handle_dashboard_input(repl: &mut Repl, key: KeyEvent) -> Result<()> {
                 dashboard.enter_detail();
                 Ok(())
             }
+            // F34: 'o' toggles the overlay back to the compact bar (and,
+            // via Alt+A, back again) so the expand/collapse cycle is
+            // reachable from inside the dashboard too.
+            KeyCode::Char('o') => {
+                dashboard.toggle_expand();
+                Ok(())
+            }
             _ => Ok(()),
         }
     }
@@ -2838,6 +2881,41 @@ fn handle_dashboard_input(repl: &mut Repl, key: KeyEvent) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// F34: the Ctrl+A / Alt+A dispatch table. Ctrl+A belongs to the agents
+    /// panel (the documented binding); the dashboard toggle lives on Alt+A;
+    /// a plain 'a' must keep typing a character.
+    #[test]
+    fn test_agent_ui_toggle_dispatch() {
+        let k = |code: KeyCode, mods: KeyModifiers| crossterm::event::KeyEvent::new(code, mods);
+
+        assert_eq!(
+            agent_ui_toggle_for_key(&k(KeyCode::Char('a'), KeyModifiers::CONTROL)),
+            Some(AgentUiToggle::Panel),
+            "Ctrl+A = agents panel (documented in F1 key hints)"
+        );
+        assert_eq!(
+            agent_ui_toggle_for_key(&k(KeyCode::Char('a'), KeyModifiers::ALT)),
+            Some(AgentUiToggle::Dashboard),
+            "Alt+A = dashboard expand/collapse"
+        );
+        assert_eq!(
+            agent_ui_toggle_for_key(&k(KeyCode::Char('a'), KeyModifiers::NONE)),
+            None,
+            "plain 'a' types a character"
+        );
+        assert_eq!(
+            agent_ui_toggle_for_key(&k(KeyCode::Char('b'), KeyModifiers::CONTROL)),
+            None,
+            "other Ctrl+letters are not agents toggles"
+        );
+        // Only one toggle can ever match — no shadowed arms.
+        let key = k(KeyCode::Char('a'), KeyModifiers::CONTROL);
+        assert_ne!(
+            agent_ui_toggle_for_key(&key),
+            Some(AgentUiToggle::Dashboard)
+        );
+    }
 
     #[test]
     fn test_complete_command_args_compact() {
@@ -2987,11 +3065,33 @@ mod tests {
             "credentials and creds should have same completions"
         );
 
-        let perm = complete_command_args("permissions", "");
-        let perm_alias = complete_command_args("perms", "");
+        // R1-6: /perms and /perm are still the same (tool) command, but
+        // /permissions moved to the permission-profile command — its
+        // completions are the profile subcommands instead.
+        let perm = complete_command_args("perms", "");
+        let perm_alias = complete_command_args("perm", "");
         assert_eq!(
             perm, perm_alias,
-            "permissions and perms should have same completions"
+            "perms and perm should have same completions"
+        );
+        assert_eq!(
+            perm,
+            vec![
+                "allow".to_string(),
+                "deny".to_string(),
+                "reset".to_string(),
+                "status".to_string()
+            ]
+        );
+        assert_eq!(
+            complete_command_args("permissions", ""),
+            vec![
+                "list".to_string(),
+                "show".to_string(),
+                "set".to_string(),
+                "create".to_string()
+            ],
+            "/permissions should complete permission-profile subcommands"
         );
     }
 

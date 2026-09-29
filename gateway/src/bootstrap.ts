@@ -17,12 +17,14 @@ import { createConsoleLogger } from "./logger.js";
 import { GATEWAY_VERSION } from "./version.js";
 import { MobileServer } from "./mobile/server.js";
 import { ensureTlsMaterial } from "./mobile/mobileTls.js";
+import { directE2EPaths, ensureDirectE2EKey } from "./mobile/directE2E.js";
 import { advertiseMobileServer, type MdnsHandle } from "./mobile/mdns.js";
 import {
   createMobileHandlers,
   DeviceRegistry,
   PairTokenStore,
 } from "./mobile/pairing.js";
+import { createPairingAccess } from "./mobile/accessRpc.js";
 import type { EngineClientFactory as MobileEngineClientFactory } from "./mobile/engineBridge.js";
 import { MobileDispatchHub } from "./mobile/hub.js";
 import { createMobileChannelAdapter } from "./mobile/channel.js";
@@ -36,8 +38,8 @@ import { startRelayHost, type RelayHostHandle } from "./mobile/relay/relayHost.j
 import { generateQrV2Payload, generateRelaySessionId } from "./mobile/relay/qrV2.js";
 import { evaluateTrigger, resolveTriggerConfig } from "./router/trigger.js";
 import { withTaskLifecycle } from "./router/lifecycle.js";
-import { AllowlistGuard, type InboundGuard } from "./access/guard.js";
-import { Allowlist } from "./access/allowlist.js";
+import { AllowlistGuard, pairingChallengeMessage, type InboundGuard } from "./access/guard.js";
+import { Allowlist, resolveAllowlistPath } from "./access/allowlist.js";
 import { PairingStore } from "./access/pairing.js";
 
 /**
@@ -50,6 +52,13 @@ export type AdapterFactory = (
   cfg: AdapterConfig,
   ctx: AdapterContext,
 ) => ChannelAdapter | Promise<ChannelAdapter>;
+
+/**
+ * Review F42: `approve <code>` — the pairing-approval command an
+ * already-allowed sender sends in any chat. Six digits matches
+ * PairingStore.generateCode().
+ */
+const APPROVE_PAIRING_RE = /^approve\s+(\d{6})$/i;
 
 export interface BootstrapOptions {
   /** platform id → factory. Real adapters register here (Slack in P1-g, others in T6). */
@@ -70,12 +79,24 @@ export interface BootstrapOptions {
   mobileEngineClientFactory?: MobileEngineClientFactory;
   mobileFetchImpl?: typeof fetch;
   /**
+   * Override the directory holding the direct-link E2E identity (default
+   * `~/.shannon/mobile-direct-e2e/`). Tests inject a tmpdir so a test boot
+   * never writes to the real HOME.
+   */
+  mobileDirectE2EDir?: string;
+  /**
    * Access-control seam (review §P0-7). Production defaults to an
-   * `AllowlistGuard` with empty in-memory state — meaning any IM sender
-   * that has not been paired/allowlisted receives a pairing challenge on
-   * DM and is denied in group chats. Tests inject a mock guard.
+   * `AllowlistGuard` over a persisted allowlist — any IM sender that has not
+   * been paired/allowlisted receives a pairing challenge on DM and is denied
+   * in group chats. Tests inject a mock guard.
    */
   accessGuard?: InboundGuard;
+  /**
+   * Review F42: where the allowlist persists. Undefined (default) resolves to
+   * `$SHANNON_GATEWAY_ALLOWLIST` > `~/.shannon/gateway/allowlist.json`; pass
+   * `null` to force the in-memory store (tests), or an explicit path.
+   */
+  allowlistPath?: string | null;
 }
 
 export interface BootstrapHandle {
@@ -180,7 +201,29 @@ export async function bootstrap(
   // unpaired DMs receive a pairing challenge, group mentions by strangers
   // are denied with a hint. Access control was previously implemented but
   // never wired in — fix closes that gap so strangers cannot drive tools.
-  const accessGuard = opts.accessGuard ?? new AllowlistGuard(new Allowlist(), new PairingStore());
+  //
+  // Review F42: the allowlist now persists by default (previously the guard
+  // was built over empty in-memory state with NO approval path — every
+  // unpaired DM got an endless challenge loop pointing at a desktop approval
+  // UI that doesn't exist). Approval works today: a paired sender replies
+  // `approve <code>` in any chat; entries survive restarts via the file.
+  const allowlistPath = resolveAllowlistPath(opts.allowlistPath);
+  const allowlist = new Allowlist(allowlistPath);
+  const accessPairing = new PairingStore();
+  const accessGuard: InboundGuard =
+    opts.accessGuard ?? new AllowlistGuard(allowlist, accessPairing);
+  // The `approve <code>` interception only exists on the concrete guard —
+  // injected mock guards (tests) skip it.
+  const allowlistGuard = accessGuard instanceof AllowlistGuard ? accessGuard : null;
+  if (allowlistGuard && allowlist.size === 0) {
+    logger.warn(
+      "IM access control is enabled with an EMPTY allowlist — nobody is paired " +
+        "and nobody can approve pairings yet. Bootstrap the first user by adding " +
+        `an entry to ${allowlistPath ?? "the gateway allowlist file"} ` +
+        '(format: {"entries":[{"platform":"slack","senderId":"U…","addedAt":0}]}) ' +
+        "and restarting; from then on `approve <code>` self-serves new users.",
+    );
+  }
   const triggerByPlatform = new Map(
     config.adapters.map((cfg) => [cfg.platform, resolveTriggerConfig(cfg.options)]),
   );
@@ -188,25 +231,49 @@ export async function bootstrap(
     const triggerCfg = triggerByPlatform.get(adapter.platform) ?? {};
     adapter.onMessage((m) => {
       void (async () => {
+        const replyTarget = {
+          platform: m.platform,
+          chatId: m.chatId,
+          threadId: m.threadId,
+        };
         // 1) access guard: deny/challenge before any further work.
         const decision = await accessGuard.check(m);
         if (decision.decision !== "allow") {
-          const replyTarget = {
-            platform: m.platform,
-            chatId: m.chatId,
-            threadId: m.threadId,
-          };
           if (decision.decision === "challenge") {
             logger.info(`pairing challenge issued for ${m.platform}:${m.senderId}`);
-            void adapter.send(
-              replyTarget,
-              `Pairing required — approve code ${decision.code} in the Shannon desktop app. (expires in 5 min)`,
-            );
+            void adapter.send(replyTarget, pairingChallengeMessage(decision.code, allowlistPath));
           } else {
             logger.info(`denied inbound from ${m.platform}:${m.senderId} (not paired)`);
             void adapter.send(replyTarget, decision.reason);
           }
           return;
+        }
+        // 1b) review F42: an already-allowed sender can approve a pending
+        // pairing with `approve <code>`. Intercepted BEFORE the trigger gate
+        // so it works in DMs and groups alike; the command never reaches the
+        // engine.
+        if (allowlistGuard) {
+          const approve = APPROVE_PAIRING_RE.exec(m.text.trim());
+          if (approve?.[1]) {
+            const outcome = allowlistGuard.approve(m, approve[1]);
+            if (outcome.ok) {
+              logger.info(
+                `pairing approved by ${m.platform}:${m.senderId} — ` +
+                  `${outcome.record.platform}:${outcome.record.senderId} allowlisted`,
+              );
+              void adapter.send(
+                replyTarget,
+                `Paired — ${outcome.record.platform}:${outcome.record.senderId} is now ` +
+                  "allowed to talk to the agent.",
+              );
+            } else {
+              logger.info(
+                `pairing approval from ${m.platform}:${m.senderId} rejected: ${outcome.reason}`,
+              );
+              void adapter.send(replyTarget, outcome.reason);
+            }
+            return;
+          }
         }
         // 2) trigger gate: DMs reply directly; group chats need @mention or /shannon.
         const verdict = evaluateTrigger(m, triggerCfg);
@@ -217,7 +284,16 @@ export async function bootstrap(
           return;
         }
         const routed = verdict.text === m.text ? m : { ...m, text: verdict.text };
-        void router.handleInbound(routed);
+        // Review F40: handleInbound rejects when the engine is down or the
+        // turn throws mid-stream. An escaping rejection here used to crash
+        // the whole gateway (unhandled promise rejection) — exactly when the
+        // engine is restarting. Log with channel context and keep serving.
+        router.handleInbound(routed).catch((err: unknown) => {
+          logger.error(
+            `inbound turn failed on ${routed.platform}:${routed.chatId} ` +
+              `from ${routed.senderId}: ${(err as Error)?.message ?? String(err)}`,
+          );
+        });
       })();
     });
   }
@@ -226,7 +302,10 @@ export async function bootstrap(
   logger.info(`shannon-gateway up: ${registry.size} adapter(s) started`);
 
   const mobile = config.mobile?.enabled
-    ? await startMobileServer(config, logger, opts, dispatchHub!, engineAuthToken)
+    ? await startMobileServer(config, logger, opts, dispatchHub!, engineAuthToken, {
+        allowlist,
+        pairing: accessPairing,
+      })
     : null;
   if (mobile) {
     logger.info(
@@ -274,6 +353,8 @@ async function startMobileServer(
   opts: BootstrapOptions,
   dispatchHub: MobileDispatchHub,
   engineAuthToken: string | null,
+  /** T9: the IM access stores the desktop pairing-approval RPC serves. */
+  access: { allowlist: Allowlist; pairing: PairingStore },
 ): Promise<{ handle: { stop(): Promise<void> }; port: number }> {
   const mobileCfg = config.mobile!;
   const host = mobileCfg.host ?? "0.0.0.0";
@@ -295,6 +376,26 @@ async function startMobileServer(
         `(phones pin it from the QR)`,
     );
   }
+  // T9: desktop pairing approval — same stores the IM `approve <code>` reply
+  // uses (access/guard.ts), served as `shannon/pairing.*` JSON-RPC over the WS
+  // dispatch AND over the HTTP POST skin the Rust desktop calls.
+  const pairingAccess = createPairingAccess({
+    allowlist: access.allowlist,
+    pairing: access.pairing,
+    tokens,
+    registry,
+    logger,
+  });
+  // v0.13 direct-link E2E seal (cross-repo-adaptation-spec §I): the host's
+  // static X25519 identity, generated once and persisted (~/.shannon/
+  // mobile-direct-e2e/, 0600; the pub also lands in direct-e2e-info.json for
+  // the desktop's direct-QR composer). Phones that scanned a direct QR offer
+  // the sealed handshake; everyone else sees unchanged plaintext behavior.
+  const directE2EKey = ensureDirectE2EKey(
+    opts.mobileDirectE2EDir ? directE2EPaths(opts.mobileDirectE2EDir) : undefined,
+  );
+  const directLinkKeys = new Map<string, Buffer>(); // kid → K0, filled on sealed pairs
+
   const handlers = createMobileHandlers({
     engine: {
       engineWsUrl: config.engine.wsUrl,
@@ -317,6 +418,7 @@ async function startMobileServer(
       // shannon/* RPC (engineBridge) and shannon/task.* alike.
       isDeviceTrusted: (deviceId: string) => registry.has(deviceId),
     }),
+    access: pairingAccess.handlers,
   });
 
   const server = new MobileServer({
@@ -324,10 +426,22 @@ async function startMobileServer(
     port,
     logger,
     handlers,
+    httpApi: pairingAccess.http,
     onContext: (ctx) => dispatchHub.registerConnection(ctx),
+    directE2E: {
+      privateKey: directE2EKey.privateKey,
+      // The pairing flavor mixes the token the phone scanned; it is consumed
+      // later by shannon/pair on the sealed channel, so this is a peek.
+      livePairToken: () => tokens.latest()?.token ?? null,
+      linkKeys: directLinkKeys,
+    },
     ...(tlsMaterial ? { tls: { key: tlsMaterial.key, cert: tlsMaterial.cert } } : {}),
   });
   const handle = await server.start();
+  logger.info(
+    `direct-link E2E seal ready — hostE2EPubKey ${directE2EKey.pubB64} ` +
+      `(direct QR field / resume rekeys enabled)`,
+  );
 
   // §A8/§A8b (cross-repo-adaptation-spec): advertise _shannon._tcp while the
   // pairing server is up. iOS ATS rejects raw-IP ws:// endpoints outright, so

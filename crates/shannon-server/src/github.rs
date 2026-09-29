@@ -608,6 +608,7 @@ mod tests {
 
     fn test_config() -> shannon_engine::api::LlmClientConfig {
         shannon_core::LlmClientConfig {
+            thinking_type: None,
             provider: shannon_engine::api::types::LlmProvider::Ollama,
             model: "test-model".into(),
             base_url: "http://127.0.0.1:1".into(),
@@ -720,6 +721,7 @@ mod tests {
             github_secret.map(str::to_string),
             routines,
             inbox.clone(),
+            Some(crate::auth::HostGuardConfig::default()),
         );
         TestApp { app, inbox }
     }
@@ -850,6 +852,7 @@ mod tests {
                 Some("opened"),
             )],
             inbox.clone(),
+            Some(crate::auth::HostGuardConfig::default()),
         );
         let payload = issues_opened();
         let req = Request::builder()

@@ -43,9 +43,9 @@ const TRUST_LABEL_KEY: Record<TrustLevel, string> = {
 
 const TRUST_BADGE_CLASS: Record<TrustLevel, string> = {
   unknown: "bg-surface-container-high text-on-surface-variant",
-  community: "bg-secondary/15 text-secondary",
-  official: "bg-primary/15 text-primary",
-  verified: "bg-tertiary/20 text-tertiary",
+  community: "bg-secondary-container text-on-secondary-container",
+  official: "bg-primary-container text-on-primary-container",
+  verified: "bg-tertiary-container text-on-tertiary-container",
 };
 
 const TRUST_ORDER: Record<TrustLevel, number> = {
@@ -57,9 +57,9 @@ const TRUST_ORDER: Record<TrustLevel, number> = {
 
 // X6 source badge (derived desktop-side by plugin_source_for_path).
 const SOURCE_BADGE: Record<PluginSource, { icon: string; class: string }> = {
-  git: { icon: "sync", class: "bg-secondary/15 text-secondary" },
+  git: { icon: "sync", class: "bg-secondary-container text-on-secondary-container" },
   local: { icon: "folder_open", class: "bg-surface-container-high text-on-surface-variant" },
-  migration: { icon: "move_to_inbox", class: "bg-tertiary/20 text-tertiary" },
+  migration: { icon: "move_to_inbox", class: "bg-tertiary-container text-on-tertiary-container" },
 };
 
 // B6-36: the source line used to hardcode English ("Shannon Featured",
@@ -465,7 +465,7 @@ export default function Plugins() {
         data-testid={`installed-row-${plugin.name}`}
         className="border border-outline-variant/40 rounded-xl px-md py-sm bg-surface-container-lowest flex items-center gap-md"
       >
-        <div className="w-8 h-8 rounded-lg bg-primary/10 text-primary flex items-center justify-center shrink-0">
+        <div className="w-8 h-8 rounded-lg bg-primary-container text-on-primary-container flex items-center justify-center shrink-0">
           <span className="material-symbols-outlined icon-sm">workspaces</span>
         </div>
         <div className="min-w-0 flex-1">
@@ -484,7 +484,7 @@ export default function Plugins() {
               {t(`extensions.plugins.installed.source.${plugin.source}`)}
             </span>
             <span
-              className="inline-flex items-center px-xs py-[1px] rounded bg-surface-container-high text-label-xs font-mono text-on-surface-variant"
+              className="inline-flex items-center px-xs py-[1px] rounded-sm bg-surface-container-high text-label-xs font-mono text-on-surface-variant"
               title={t("extensions.plugins.installed.sourceFormat", { format: plugin.source_format })}
             >
               {plugin.source_format}
@@ -535,7 +535,7 @@ export default function Plugins() {
             data-testid={`installed-update-${plugin.name}`}
             className="px-sm py-xs rounded-lg cursor-pointer"
           >
-            <span className="material-symbols-outlined text-[14px]">sync</span>
+            <span className="material-symbols-outlined icon-sm">sync</span>
             {t("extensions.plugins.installed.update")}
           </Button>
         )}
@@ -551,7 +551,7 @@ export default function Plugins() {
             data-testid={`installed-uninstall-${plugin.name}`}
             className="px-sm py-xs rounded-lg text-on-surface-variant hover:text-error hover:bg-error/10 cursor-pointer"
           >
-            <span className="material-symbols-outlined text-[16px]">delete</span>
+            <span className="material-symbols-outlined icon-sm">delete</span>
           </Button>
         </span>
       </li>
@@ -565,11 +565,11 @@ export default function Plugins() {
     return (
       <div
         key={entry.id}
-        className="border border-outline-variant/40 rounded-2xl p-md bg-surface-container-lowest hover:border-primary/50 hover:shadow-md transition-all flex flex-col gap-sm"
+        className="border border-outline-variant/40 rounded-2xl p-md bg-surface-container-lowest hover:border-primary/50 hover:shadow-e2 transition-all flex flex-col gap-sm"
       >
         <div className="flex items-start justify-between gap-sm">
           <div className="flex items-start gap-sm min-w-0">
-            <div className="w-9 h-9 rounded-lg bg-primary/10 text-primary flex items-center justify-center shrink-0">
+            <div className="w-9 h-9 rounded-lg bg-primary-container text-on-primary-container flex items-center justify-center shrink-0">
               <span className="material-symbols-outlined icon-md">workspaces</span>
             </div>
             <div className="min-w-0">
@@ -592,19 +592,19 @@ export default function Plugins() {
 
         <div className="flex flex-wrap items-center gap-xs text-label-xs text-on-surface-variant">
           {license && (
-            <span className="inline-flex items-center gap-[2px] px-xs py-[1px] rounded bg-surface-container-high">
+            <span className="inline-flex items-center gap-[2px] px-xs py-[1px] rounded-sm bg-surface-container-high">
               <span className="material-symbols-outlined icon-xs">gavel</span>
               {license}
             </span>
           )}
           {typeof stars === "number" && (
-            <span className="inline-flex items-center gap-[2px] px-xs py-[1px] rounded bg-surface-container-high">
+            <span className="inline-flex items-center gap-[2px] px-xs py-[1px] rounded-sm bg-surface-container-high">
               <span className="material-symbols-outlined icon-xs">star</span>
               {stars >= 1000 ? `${(stars / 1000).toFixed(1)}k` : stars}
             </span>
           )}
           {entry.version && (
-            <span className="inline-flex items-center gap-[2px] px-xs py-[1px] rounded bg-surface-container-high">
+            <span className="inline-flex items-center gap-[2px] px-xs py-[1px] rounded-sm bg-surface-container-high">
               <span className="material-symbols-outlined icon-xs">tag</span>
               {entry.version}
             </span>
@@ -623,7 +623,7 @@ export default function Plugins() {
               rel="noopener noreferrer"
               className="text-label-sm text-link hover:underline inline-flex items-center gap-xs"
             >
-              <span className="material-symbols-outlined text-[14px]">open_in_new</span>
+              <span className="material-symbols-outlined icon-sm">open_in_new</span>
               {t("extensions.plugins.homepage")}
             </a>
           ) : (
@@ -633,7 +633,7 @@ export default function Plugins() {
             onClick={() => handleInstall(entry)}
             className="px-md py-xs rounded-lg hover:bg-primary/90 cursor-pointer focus-visible:ring-2 focus-visible:ring-primary/30"
           >
-            <span className="material-symbols-outlined text-[14px]">download</span>
+            <span className="material-symbols-outlined icon-sm">download</span>
             {t("extensions.plugins.install")}
           </Button>
         </div>
@@ -645,7 +645,7 @@ export default function Plugins() {
     <div className="p-lg max-w-7xl mx-auto">
       <div className="text-center py-xl">
         <div className="inline-flex items-center justify-center w-16 h-16 rounded-full bg-primary/10 mb-md">
-          <span className="material-symbols-outlined text-primary text-[32px]">workspaces</span>
+          <span className="material-symbols-outlined text-primary icon-xl">workspaces</span>
         </div>
         <h2 className="text-headline-md font-headline-md text-on-surface mb-sm">
           {intl.formatMessage({ id: "extensions.plugins.title" })}
@@ -683,7 +683,7 @@ export default function Plugins() {
               data-testid="add-plugin-button"
               className="px-md py-xs rounded-lg hover:bg-primary/90 cursor-pointer focus-visible:ring-2 focus-visible:ring-primary/30 disabled:opacity-50 disabled:cursor-not-allowed"
             >
-              <span className="material-symbols-outlined text-[14px]">add</span>
+              <span className="material-symbols-outlined icon-sm">add</span>
               {t("extensions.plugins.add.label")}
             </Button>
             <DropdownMenu
@@ -739,7 +739,7 @@ export default function Plugins() {
                 className="inline-flex items-center gap-xs px-sm py-xs rounded-full bg-surface-container-low text-on-surface-variant text-label-sm hover:bg-surface-container-high transition-colors"
                 title={u.repo ? `github.com/${u.repo}` : u.display_name}
               >
-                <span className="material-symbols-outlined text-[14px] text-primary">
+                <span className="material-symbols-outlined icon-sm text-primary">
                   {u.kind === "skill"
                     ? "extension"
                     : u.kind === "agent"
@@ -817,7 +817,7 @@ export default function Plugins() {
               onClick={resetFilters}
               className="px-sm py-xs rounded-lg hover:bg-surface-container-high focus-visible:ring-2 focus-visible:ring-primary/30"
             >
-              <span className="material-symbols-outlined text-[14px]">filter_alt_off</span>
+              <span className="material-symbols-outlined icon-sm">filter_alt_off</span>
               {t("extensions.plugins.filter.reset")}
             </Button>
           )}
@@ -906,7 +906,7 @@ export default function Plugins() {
               ) : (
                 confirmRows.map((row) => (
                   <div key={row.id} data-testid={row.testid} className="flex items-start gap-xs text-label-sm text-on-surface-variant">
-                    <span className="material-symbols-outlined text-[14px] mt-[2px]" aria-hidden="true">
+                    <span className="material-symbols-outlined icon-sm mt-[2px]" aria-hidden="true">
                       remove_circle
                     </span>
                     <span>{intl.formatMessage({ id: row.id }, { count: row.count, names: row.names })}</span>

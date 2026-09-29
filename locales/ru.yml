@@ -1,4 +1,7 @@
 _ru: "&Русский"
+# Russian locale for Shannon Code
+
+# ── REPL Messages ──────────────────────────────────────────────────────────
 repl:
   chat_cleared: "Чат очищен."
   unknown_command: "Неизвестная команда: /%{name}. Введите /help для списка команд."
@@ -13,6 +16,10 @@ repl:
   cancelled: "Отменено"
   cancelled_by_user: "Отменено пользователем."
   query_task_panicked: "Задача запроса завершилась аварийно"
+  tools_disabled: "Инструменты отключены — модель будет отвечать обычным текстом. Используйте /tools, чтобы включить снова."
+  tools_enabled: "Инструменты снова включены."
+
+# ── Status Messages ────────────────────────────────────────────────────────
 status:
   ready: "Готово"
   processing: "Обработка..."
@@ -23,7 +30,26 @@ status:
   completed: "Завершено"
   failed: "Сбой"
   cancelled_status: "Отменено"
+
+# ── Command Descriptions ───────────────────────────────────────────────────
 commands:
+  help:
+    title: "Доступные команды"
+    no_help_found: "Справка не найдена для: %{topic}"
+    footer: "Используйте `/help <команда>` для подробной информации о конкретной команде.\n"
+  clear:
+    title: "Очистить чат"
+    confirm: "Очистить все сообщения? Это действие нельзя отменить."
+  quit:
+    title: "Завершить сеанс?"
+    confirm: "У вас есть несохранённые данные. Всё равно выйти?"
+  model:
+    title: "Установить модель"
+    prompt: "Введите название модели (например, claude-3.5-sonnet, gpt-4o)..."
+    set: "Модель установлена: %{name}"
+    context_unknown: "неизвестно (зависит от провайдера)"
+    cost_unknown: "оценка недоступна"
+    cost_free_local: "бесплатно (локально)"
   remote:
     dashboard_title: "Удалённые цели — выполнение инструментов следует за активной целью."
     none: "Целей пока нет. Добавьте через `/remote add ssh <user@host> <имя> <рабочая_папка>`."
@@ -54,19 +80,38 @@ commands:
     resumed: "▶ Цель возобновлена (счётчик итераций сброшен)."
     complete: "✓ Цель достигнута за %{iterations} итерации(й): %{objective}"
     conflict_loop: "Активен /ralph или /loop — сначала остановите их, затем задайте /goal."
-  help:
-    title: "Доступные команды"
-    no_help_found: "Справка не найдена для: %{topic}"
-  clear:
-    title: "Очистить чат"
-    confirm: "Очистить все сообщения? Это действие нельзя отменить."
-  quit:
-    title: "Завершить сеанс?"
-    confirm: "У вас есть несохранённые данные. Всё равно выйти?"
-  model:
-    title: "Установить модель"
-    prompt: "Введите название модели (например, claude-3.5-sonnet, gpt-4o)..."
-    set: "Модель установлена: %{name}"
+  connect:
+    success: "✓ Подключено к %{provider}"
+    choose_model: "Выберите модель ниже (Enter = по умолчанию, ↑↓ = выбор, Esc = оставить по умолчанию)."
+    refresh_started: "Обновление каталога моделей в фоне…"
+    refresh_success: "Каталог обновлён — доступно моделей: %{count}."
+    refresh_failed: "Нет сети — используется кэшированный каталог."
+    dashboard_header: "Подключите провайдера — переменные окружения не нужны."
+    dashboard_providers: "Провайдеры:"
+    dashboard_usage: "Использование: /connect <провайдер> <api-ключ>"
+    dashboard_help: "подробнее: /help connect"
+    key_stored: "✓ API-ключ сохранён для '%{provider}' (сервис: %{service})"
+    config_saved: "✓ Конфигурация провайдера сохранена: %{path}"
+    reusing_key: "• Используется сохранённый ключ для '%{provider}' (сервис: %{service})"
+    cred_verified: "✓ Учётные данные проверены — '%{model}' доступен с этим ключом."
+    auth_failed: "✗ Ошибка аутентификации для '%{provider}'. Ключ сохранён, но провайдер его отклонил — проверьте ключ и снова выполните /connect."
+    verify_warning: "⚠ Не удалось полностью проверить учётные данные для '%{provider}' (%{error}). Ключ сохранён; он всё ещё может работать — попробуйте отправить сообщение."
+    probe_failed: "⚠ Не удалось проверить учётные данные для '%{provider}'. Ключ сохранён; он всё ещё может работать."
+    switched: "✓ Переключено на %{provider} — модель: %{model} (новые учётные данные активны; перезапуск не нужен)"
+    storing_error: "сохранение учётных данных: %{error}"
+    saving_error: "сохранение providers.toml: %{error}"
+  provider:
+    available: "Доступные провайдеры:"
+    legend: "* = текущий | Используйте /provider <имя> для переключения"
+    switched: "Провайдер: %{provider} | Модель: %{model}"
+    switched_no_catalog: "Провайдер установлен: %{provider}. У него нет встроенного списка моделей — используйте `/model <provider>/<model-id>`, чтобы выбрать модель."
+    no_selection: "Провайдер не выбран. Сначала выполните /connect <провайдер> <ключ>."
+  disconnect:
+    usage: "Использование: /disconnect <провайдер>\nУдаляет сохранённое подключение провайдера (его запись в providers.toml), так что он перестаёт быть подключённым. Сохранённый API-ключ остаётся — выполните /connect снова, чтобы переподключиться."
+    not_connected: "'%{provider}' не был подключён. Используйте /connect, чтобы подключить его."
+    done: "✓ '%{provider}' отключён."
+    switched: "Активный провайдер переключён на %{provider} (модель: %{model})."
+    none_remain: "Подключённых провайдеров не осталось — выполните /connect <провайдер> <ключ>, чтобы переподключиться."
   config:
     warning_load: "Предупреждение: не удалось загрузить конфигурацию: %{error}"
     key_not_found: "Ключ конфигурации не найден: %{key}"
@@ -74,6 +119,14 @@ commands:
     usage_get: "Использование: /config get <ключ>"
     usage_set: "Использование: /config set <ключ> <значение>"
     usage_reset: "Использование: /config reset <ключ>"
+    settings_title: "Настройки конфигурации:\n\n"
+    usage: |
+
+      Использование:
+        /config list          - Показать все настройки
+        /config get <ключ>     - Получить конкретное значение
+        /config set <ключ> <значение> - Установить значение
+        /config reset <ключ>   - Сбросить к значению по умолчанию
   hooks:
     none: "Хуки не настроены."
     reloaded: "Хуки успешно перезагружены."
@@ -122,6 +175,259 @@ commands:
     enabled: "Режим песочницы включён (изоляция Docker)."
     disabled: "Режим песочницы отключён (прямое выполнение)."
     not_available: "Docker недоступен. Режим песочницы требует Docker."
+  team:
+    help: |-
+      /team create <name> [description]  — Создать новую команду агентов
+      /team add <team> <agent-name>  — Добавить агента в команду
+      /team task <team> <subject>  — Добавить задачу
+      /team assign <team>  — Распределить ожидающие задачи между свободными агентами
+      /team status [team]  — Показать статус команды
+      /team list  — Список всех команд
+      /team run  — Выполнить ожидающие задачи параллельно
+      /team shutdown  — Остановить команду
+      /team disband <team>  — Расформировать команду и выполнить очистку
+      /team delegate  — Переключить режим делегирования (координирует только лид)
+  plugin:
+    help: |
+      Управление плагинами:
+
+        /plugin list                    - Список установленных плагинов
+        /plugin search <query>          - Поиск в реестре плагинов
+        /plugin info <name>             - Показать сведения о плагине из индекса
+        /plugin install <name-or-url>   - Установить плагин
+        /plugin uninstall <name>        - Удалить плагин
+        /plugin update [name]           - Обновить плагины
+        /plugin enable <name>           - Включить плагин
+        /plugin disable <name>          - Отключить плагин
+
+      Источники плагинов:
+        - Имя в реестре (например, "example-plugin")
+        - Git URL (например, "https://github.com/user/plugin")
+        - Локальный путь (например, "/path/to/plugin")
+    installed_title: "Установленные плагины:\n\n"
+    none_installed: |-
+      Плагины не установлены.
+
+      Установите плагины командой:
+        /plugin install <name-or-url>
+    none_found: "Плагины не найдены. Попробуйте изменить поисковый запрос."
+    search_results_title: "Результаты поиска:\n\n"
+    search_results_ranked_title: "Результаты поиска (отсортированы по релевантности):\n\n"
+  doctor:
+    title: "Диагностика Shannon Code\n"
+    results_summary: "Результаты: %{passed} успешно, %{warnings} предупреждений, %{failed} с ошибками\n"
+  credentials:
+    title: "Сохранённые учётные данные:\n\n"
+    none: "  Учётные данные не сохранены.\n"
+    usage: |
+
+      Использование:
+        /credentials list              - Показать сохранённые учётные данные
+        /credentials store <svc> <val> - Сохранить учётные данные
+        /credentials get <service>     - Получить учётные данные (скрытые маской)
+        /credentials delete <service>  - Удалить учётные данные
+        /credentials count             - Показать количество сохранённых учётных данных
+  session:
+    snapshots_title: "Сохранённые снимки сеанса:\n\n"
+    none_saved: |-
+      Сохранённых снимков сеанса нет.
+      Создайте их командой `/session save <имя>`.
+    load_hint: "\nИспользуйте `/session load <имя>`, чтобы восстановить снимок."
+  debug:
+    help: |
+      Команды отладки для разработчиков:
+
+        /debug log [level]     - Установить уровень журнала (trace|debug|info|warn|error)
+        /debug profile start   - Запустить профилирование производительности
+        /debug profile stop    - Остановить профилирование и показать результаты
+        /debug trace [on|off]  - Переключить трассировку выполнения
+        /debug info            - Показать диагностику системы
+
+      Уровни журнала:
+        trace - Все сообщения, включая внутренние
+        debug - Отладочные сообщения и выше
+        info  - Информационные сообщения (по умолчанию)
+        warn  - Только предупреждения и ошибки
+        error - Только критические ошибки
+    system_info_title: "Диагностика системы:\n\n"
+  preset:
+    available_title: "Доступные пресеты:\n\n"
+    no_description: "Нет описания"
+    usage: |
+
+      Использование:
+        /preset              - Список всех пресетов
+        /preset <имя>       - Применить пресет
+        /preset show <имя>  - Показать детали пресета
+
+# ── Thinking Phrases ──────────────────────────────────────────────────────
+thinking:
+  - "Думаю"
+  - "Анализирую"
+  - "Обрабатываю"
+  - "Рассуждаю"
+  - "Обдумываю"
+  - "Размышляю"
+  - "Взвешиваю"
+  - "Работаю"
+  - "Осмысливаю"
+
+# ── UI Labels ─────────────────────────────────────────────────────────────
+ui:
+  working: "Работаю"
+  tool: "Инструмент %{n}"
+  cache: "Кэш %{pct}%"
+  turn: "Ход %{n}"
+  mem: "MEM %{size}"
+  errors: "Ошибок: %{n}"
+  response_complete: "Ответ завершён"
+  tokens_this_turn: "%{count} токенов за ход"
+  cost_total: "всего $%{cost}"
+  cache_hit_rate: "попаданий в кэш %{pct}%"
+  message_queued: "Сообщение поставлено в очередь (%{count} в очереди)"
+  removed_queued: "Удалено — в очереди ещё %{count} сообщ."
+  removed_last: "Удалено последнее сообщение из очереди — отредактируйте и поставьте в очередь снова"
+  removed_edit: "Удалено — отредактируйте и поставьте в очередь снова"
+  thinking_chars: "Думаю··· (%{count} симв.)"
+  thinking_chars_k: "Думаю··· (%{count}k симв.)"
+  thinking_header: "▼ Размышления (%{count} симв.)"
+  thinking_header_k: "▼ Размышления (%{count}k симв.)"
+  no_model: "Модель не настроена"
+  budget_warning: "⚠️ Предупреждение о бюджете: $%{cost} / $%{limit} (использовано %{pct}%)"
+  budget_exceeded: "🚨 Бюджет превышен: $%{cost} > $%{limit}"
+  cancelled_partial: "Отменено пользователем (частичный ответ)"
+  tool_running: "Выполняется %{name}…"
+  tool_completed_count: "Инструмент завершён (×%{count})"
+  query_engine_unavailable: "Ошибка: движок запросов недоступен. Перезапустите сеанс."
+  tokens_per_sec: "%{status} · %{rate} ток/с"
+  tool_progress: "%{name}: %{pct}%"
+  vim_insert: "ВСТАВКА"
+  vim_normal: "ОБЫЧНЫЙ"
+  vim_visual: "ВИЗУАЛЬНЫЙ"
+  vim_command: "КОМАНДНЫЙ"
+  placeholder: "Введите сообщение..."
+  notification_task_completed: "Задача завершена"
+  status_diag: "Диагн"
+  permission_allow_once: "Разрешить один раз"
+  permission_always_allow: "Всегда разрешать"
+  permission_edit_run: "Изменить+Запустить"
+  permission_deny: "Отклонить"
+  plan_approve: "Утвердить"
+  plan_reject: "Отклонить"
+  plan_dismiss: "Закрыть"
+  perm_tool: "Инструмент"
+  perm_description: "Описание"
+  perm_why: "Причина"
+  approval_edit: "ПРАВКА"
+  approval_ask: "СПРОС"
+  approval_plan: "ПЛАН"
+  approval_auto: "АВТО"
+  approval_full: "ПОЛН"
+  key_input: "Ввод"
+  key_insert: "Вставка"
+  key_insert_newline: "Вставить перевод строки"
+  key_editor: "Редактор"
+  prompt_input_label: "Ввод:"
+  prompt_edit_run: "Изменить+Запустить"
+  category_edit: "Правка"
+  # ── Key hint labels (compact bar) ─────────────────────────────────────────
+  key_help: "Справка"
+  key_normal: "Обычный"
+  key_send: "Отправить"
+  key_complete: "Завершить"
+  key_copy: "Копировать"
+  key_visual: "Визуальный"
+  key_command: "Команда"
+  key_move: "Переместить"
+  key_del_line: "Удал. строку"
+  key_chat_search: "Поиск по чату"
+  key_scroll: "Прокрутка"
+  key_pager: "Пейджер"
+  key_mode: "Режим"
+  key_quit: "Выход"
+  key_cancel: "Отмена"
+  key_yank: "Копировать"
+  key_delete: "Удалить"
+  # ── Help panel sections ───────────────────────────────────────────────────
+  help_section_navigation: "Навигация"
+  help_section_input: "Ввод"
+  help_section_chat: "Чат"
+  help_section_vim: "Vim"
+  help_section_system: "Справка и система"
+  help_title: "Горячие клавиши"
+  help_press_any_key: "Нажмите любую клавишу для закрытия"
+  # ── Help panel items ──────────────────────────────────────────────────────
+  help_scroll_page: "Прокручивать чат постранично"
+  help_jump_top_bottom: "В начало / в конец"
+  help_toggle_transcript: "Переключить пейджер расшифровки"
+  help_send_message: "Отправить сообщение"
+  help_newline: "Вставить перевод строки"
+  help_clear_input: "Очистить ввод (или выйти)"
+  help_external_editor: "Открыть внешний редактор"
+  help_copy_response: "Скопировать последний ответ в буфер обмена"
+  help_search_chat: "Поиск по сообщениям чата"
+  help_search_history: "Поиск по истории команд"
+  help_delete_word: "Удалить предыдущее слово"
+  help_kill_line: "Удалить до конца строки"
+  help_kill_start: "Удалить до начала строки"
+  help_clear_screen: "Очистить экран"
+  help_complete: "Завершить / поставить в очередь при стриминге"
+  help_approval_mode: "Переключить режим подтверждения"
+  help_command_history: "История команд"
+  help_fold_tool: "Свернуть/развернуть вывод последнего инструмента"
+  help_cycle_view: "Переключить режим просмотра (Обычный/Подробный)"
+  help_toggle_fold: "Переключить свёртывание всех инструментов"
+  help_paste_image: "Вставить изображение из буфера обмена"
+  help_command_palette: "Палитра команд"
+  help_active_agents: "Показать активных агентов"
+  help_insert_mode: "Войти в режим вставки"
+  help_visual_mode: "Визуальный режим (выделение текста)"
+  help_visual_line: "Построчный визуальный режим"
+  help_move_cursor: "Переместить курсор"
+  help_word_forward_back: "Слово вперёд / назад"
+  help_line_start_end: "Начало / конец строки"
+  help_delete_line: "Удалить строку"
+  help_yank_line: "Скопировать строку"
+  help_paste_after: "Вставить после курсора"
+  help_undo: "Отменить"
+  help_redo: "Повторить"
+  help_command_mode: "Командный режим"
+  help_return_normal: "Вернуться в обычный режим"
+  help_this_overlay: "Эта панель справки"
+  help_toggle_mouse: "Переключить прокрутку мышью"
+  help_undo_exchange: "Отменить последний обмен"
+  # ── Header labels ─────────────────────────────────────────────────────────
+  header_send: "Отправить"
+  header_newline: "Новая строка"
+  header_editor: "Редактор"
+  header_fullscreen: "Полный экран"
+  sidebar:
+    context: "Контекст"
+    cost: "Затраты"
+    memory: "Память"
+    tools: "Инструменты"
+    changes: "Изменения"
+    pressure_emergency: "АВАРИЯ"
+    pressure_critical: "КРИТИЧНО"
+    pressure_high: "ВЫСОКО"
+    pressure_normal: "НОРМА"
+    pressure_low: "НИЗКО"
+  status_card:
+    title: " Статус "
+    no_provider: "Провайдер не подключён. Выполните /connect, чтобы начать."
+    active_label: "Активен:"
+    tier_label: "Уровень:"
+    available_providers: "Доступные провайдеры ({connected} подключено / {total} поддерживается):"
+    commands: "Команды: /connect · /model · /provider · /profile · /help"
+  help_overlay:
+    title: " Справка Shannon — Esc для закрытия "
+    categories: " Категории "
+    commands: " Команды "
+    footer: " j/k: смена категории │ Enter: подробнее │ /: поиск │ Esc: закрыть │ фильтр: {filter} "
+  status_bar:
+    no_provider: "[Провайдер не подключён]"
+
+# ── CLI Help ───────────────────────────────────────────────────────────────
 cli:
   about: "AI-помощник для кода на Rust"
   prompt_help: "Выполнить запрос напрямую (неинтерактивный режим)."
@@ -149,6 +455,8 @@ cli:
   version_line: "Shannon Code v0.1.0"
   pipe_requires_input: "Ошибка: --pipe требует входных данных из stdin или аргумента запроса"
   lang_help: "Установить язык/локаль (например, en, ru)"
+
+# ── Tool Messages ──────────────────────────────────────────────────────────
 tools:
   registration_failed: "ошибка регистрации инструмента: %{error}"
   using: "Используется: %{name} с входными данными: %{input}"
@@ -158,6 +466,8 @@ tools:
   loaded_plugins: "Загружено плагинов: %{count}"
   plugin_warning: "Предупреждение: ошибка обнаружения плагинов: %{error}"
   discovered_mcp: "Обнаружено MCP-серверов: %{count}"
+
+# ── Query Events ───────────────────────────────────────────────────────────
 query:
   turn_completed: "[Ход %{turn} завершён, %{tokens} токенов]"
   processing_status: "Обработка: %{message}"
@@ -169,6 +479,8 @@ query:
   api_key_required: "Требуется API-ключ"
   api_key_prompt: "Введите ваш API-ключ..."
   query_error: "Ошибка запроса"
+
+# ── Diff/Review ────────────────────────────────────────────────────────────
 review:
   all_accepted: "Все изменения приняты и добавлены в индекс."
   no_changes_reject: "Нет изменений для отклонения."

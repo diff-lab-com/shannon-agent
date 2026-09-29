@@ -123,7 +123,7 @@ export default function SkillDetailDrawer({
               <dd className="font-label-md text-on-surface flex items-center gap-xs">
                 {entry.stars != null ? (
                   <>
-                    <span className="material-symbols-outlined text-[14px]">star</span>
+                    <span className="material-symbols-outlined icon-sm">star</span>
                     {entry.stars}
                   </>
                 ) : na}
@@ -174,7 +174,7 @@ export default function SkillDetailDrawer({
                     rel="noreferrer"
                     className="text-label-md text-link hover:underline break-all inline-flex items-center gap-xs"
                   >
-                    <span className="material-symbols-outlined text-[14px]">open_in_new</span>
+                    <span className="material-symbols-outlined icon-sm">open_in_new</span>
                     {entry.homepage_url}
                   </a>
                 </dd>

@@ -1,6 +1,8 @@
 import { useIntl } from 'react-intl'
+import { useNavigate } from 'react-router-dom'
 import { Button } from '@/components/ui/button'
 import { TextLoop } from '@/components/reactbits/TextLoop'
+import { useCatalog } from '@/context/CatalogContext'
 import { formatShortcut } from '@/lib/platform'
 import { WELCOME_EXAMPLES } from './welcomeExamples'
 
@@ -11,6 +13,16 @@ interface WelcomeStateProps {
 export default function WelcomeState({ onSelectPrompt }: WelcomeStateProps) {
   const intl = useIntl()
   const t = (id: string) => intl.formatMessage({ id })
+  const navigate = useNavigate()
+  const { providerStatus } = useCatalog()
+  // Review §3-A1 (item e): the empty chat canvas is where unconfigured users
+  // land after skipping Welcome — surface the provider CTA here, but only on
+  // a POSITIVE unconfigured signal (no active provider AND no env fallback).
+  // `null` (snapshot still loading / read failed) and any configured shape
+  // never show it.
+  const unconfigured = !!providerStatus
+    && providerStatus.active_provider_id == null
+    && providerStatus.env_provider == null
   // Cycled subtitle items. Order mirrors the example-card order below so the
   // highlighted verb ("draft emails") cues the next card the user is likely to
   // reach for. TextLoop honors prefers-reduced-motion (static) and window blur
@@ -35,6 +47,23 @@ export default function WelcomeState({ onSelectPrompt }: WelcomeStateProps) {
           {t('welcomeState.subtitlePrefix')}{' '}
           <TextLoop items={loopItems} className="text-primary font-medium" />
         </p>
+        {unconfigured && (
+          <div
+            data-testid="welcome-provider-cta"
+            className="mb-lg rounded-xl border border-primary/30 bg-primary/5 p-md flex flex-col items-center gap-sm"
+          >
+            <span className="material-symbols-outlined icon-md text-primary">key_alert</span>
+            <p className="font-label-lg text-on-surface font-bold">{t('welcomeState.providerCta.title')}</p>
+            <p className="font-body-sm text-on-surface-variant">{t('welcomeState.providerCta.body')}</p>
+            <Button
+              type="button"
+              onClick={() => navigate('/settings/models')}
+              className="px-lg py-sm rounded-lg bg-primary text-on-primary font-label-md cursor-pointer hover:bg-primary/90 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary"
+            >
+              {t('welcomeState.providerCta.cta')}
+            </Button>
+          </div>
+        )}
         <div className="grid grid-cols-1 sm:grid-cols-2 gap-sm">
           {WELCOME_EXAMPLES.map(ex => (
             <Button
@@ -52,9 +81,9 @@ export default function WelcomeState({ onSelectPrompt }: WelcomeStateProps) {
           ))}
         </div>
         <div className="mt-xl flex items-center justify-center gap-lg text-on-surface-variant opacity-50">
-          <span className="flex items-center gap-xs text-label-sm"><kbd className="px-1.5 py-0.5 rounded bg-surface-container-high text-on-surface-variant font-mono text-[11px]">{formatShortcut('K')}</kbd> {t('welcomeState.shortcuts.commands')}</span>
-          <span className="flex items-center gap-xs text-label-sm"><kbd className="px-1.5 py-0.5 rounded bg-surface-container-high text-on-surface-variant font-mono text-[11px]">?</kbd> {t('welcomeState.shortcuts.shortcuts')}</span>
-          <span className="flex items-center gap-xs text-label-sm"><kbd className="px-1.5 py-0.5 rounded bg-surface-container-high text-on-surface-variant font-mono text-[11px]">Alt+Up</kbd> {t('welcomeState.shortcuts.history')}</span>
+          <span className="flex items-center gap-xs text-label-sm"><kbd className="px-1.5 py-0.5 rounded-sm bg-surface-container-high text-on-surface-variant font-mono text-label-xs">{formatShortcut('K')}</kbd> {t('welcomeState.shortcuts.commands')}</span>
+          <span className="flex items-center gap-xs text-label-sm"><kbd className="px-1.5 py-0.5 rounded-sm bg-surface-container-high text-on-surface-variant font-mono text-label-xs">?</kbd> {t('welcomeState.shortcuts.shortcuts')}</span>
+          <span className="flex items-center gap-xs text-label-sm"><kbd className="px-1.5 py-0.5 rounded-sm bg-surface-container-high text-on-surface-variant font-mono text-label-xs">Alt+Up</kbd> {t('welcomeState.shortcuts.history')}</span>
         </div>
       </div>
     </div>

@@ -55,7 +55,7 @@ export function DoneStep({
       subtitle={intl.formatMessage({ id: 'welcome.done.subtitle' })}
       footer={
         <>
-          <Button variant="ghost" onClick={onBack} className="px-lg py-sm text-on-surface-variant hover:text-primary font-label-md cursor-pointer focus-visible:outline focus-visible:outline-2 focus-visible:outline-primary rounded">
+          <Button variant="ghost" onClick={onBack} className="px-lg py-sm text-on-surface-variant hover:text-primary font-label-md cursor-pointer focus-visible:outline focus-visible:outline-2 focus-visible:outline-primary rounded-sm">
             {intl.formatMessage({ id: 'welcome.done.back' })}
           </Button>
           <Button
@@ -72,15 +72,15 @@ export function DoneStep({
         <div className="font-label-sm text-on-surface-variant mb-xs">{intl.formatMessage({ id: 'welcome.done.setup.label' })}</div>
         <ul className="space-y-xs text-body-sm text-on-surface">
           <li className="flex items-center gap-sm">
-            <span className="material-symbols-outlined text-[18px] text-primary">{currentTask.icon}</span>
+            <span className="material-symbols-outlined icon-md text-primary">{currentTask.icon}</span>
             <span>{intl.formatMessage({ id: currentTask.labelKey })}</span>
           </li>
           <li className="flex items-center gap-sm">
-            <span className="material-symbols-outlined text-[18px] text-primary">memory</span>
+            <span className="material-symbols-outlined icon-md text-primary">memory</span>
             <span>{PROVIDERS.find(p => p.id === provider)?.label ?? provider}</span>
           </li>
           <li className="flex items-center gap-sm">
-            <span className="material-symbols-outlined text-[18px] text-primary">build</span>
+            <span className="material-symbols-outlined icon-md text-primary">build</span>
             <span>{intl.formatMessage({ id: 'welcome.done.setup.tools' }, { count: recommendedToolCount })}</span>
           </li>
         </ul>
@@ -97,7 +97,7 @@ export function DoneStep({
           onClick={onPickDirectory}
           className="px-md py-sm bg-surface-container-low hover:bg-surface-container-high border border-outline-variant/50 rounded-lg font-label-md text-on-surface cursor-pointer transition-colors flex items-center gap-sm focus-visible:outline focus-visible:outline-2 focus-visible:outline-primary"
         >
-          <span className="material-symbols-outlined text-[18px]">folder_open</span>
+          <span className="material-symbols-outlined icon-md">folder_open</span>
           {pickedDir
             ? intl.formatMessage({ id: 'welcome.done.workingDir.chooseOther' })
             : intl.formatMessage({ id: 'welcome.done.workingDir.choose' })}
@@ -112,7 +112,7 @@ export function DoneStep({
           return (
             <div key={s.actionKey} className="flex items-center justify-between py-xs">
               <span className="font-body-sm text-on-surface-variant">{intl.formatMessage({ id: s.actionKey })}</span>
-              <kbd className="text-[11px] px-1.5 py-0.5 rounded bg-surface-container-high text-on-surface-variant font-mono shrink-0">{keys}</kbd>
+              <kbd className="text-label-xs px-1.5 py-0.5 rounded-sm bg-surface-container-high text-on-surface-variant font-mono shrink-0">{keys}</kbd>
             </div>
           )
         })}
@@ -122,7 +122,7 @@ export function DoneStep({
           { id: 'welcome.done.shortcuts.help' },
           {
             key: (chunks: React.ReactNode) => (
-              <kbd className="text-[11px] px-1.5 py-0.5 rounded bg-surface-container-high text-on-surface-variant font-mono">{chunks}</kbd>
+              <kbd className="text-label-xs px-1.5 py-0.5 rounded-sm bg-surface-container-high text-on-surface-variant font-mono">{chunks}</kbd>
             ),
           },
         )}
@@ -152,7 +152,7 @@ export function DoneStep({
           className="mt-md flex items-center gap-md p-md rounded-xl border border-outline-variant/50 hover:border-primary/50 transition-all"
           data-testid="welcome-migration-entry"
         >
-          <span className="material-symbols-outlined text-primary text-[22px]" aria-hidden="true">move_in</span>
+          <span className="material-symbols-outlined text-primary icon-lg" aria-hidden="true">move_in</span>
           <div className="flex-1">
             <div className="font-headline-md text-on-surface">{intl.formatMessage({ id: 'welcome.migration.entry.title' })}</div>
             <div className="font-body-sm text-on-surface-variant mt-xs">

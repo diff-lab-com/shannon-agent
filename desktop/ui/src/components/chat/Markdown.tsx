@@ -106,7 +106,7 @@ function PreOrChart(props: React.HTMLAttributes<HTMLPreElement>) {
       if (spec) return <Chart spec={spec} />
       return (
         <div className="my-md p-sm rounded-lg bg-error-container/20 border border-error/30 text-label-sm text-error">
-          <span className="material-symbols-outlined text-[14px] align-middle mr-xs">error</span>
+          <span className="material-symbols-outlined icon-sm align-middle mr-xs">error</span>
           {intl.formatMessage({ id: 'chat.chart.invalidSpec' })}
         </div>
       )
@@ -321,7 +321,7 @@ function MarkdownLink(props: React.AnchorHTMLAttributes<HTMLAnchorElement>) {
         href={href}
         id={id}
         aria-label={`Footnote ${extractText(children)}`}
-        className="inline-flex items-center mx-[1px] px-[3px] h-[16px] rounded-full bg-primary text-on-primary text-[10px] font-bold leading-none align-super hover:bg-secondary hover:text-on-secondary transition-colors no-underline"
+        className="inline-flex items-center mx-[1px] px-[3px] h-[16px] rounded-full bg-primary text-on-primary text-label-2xs font-bold leading-none align-super hover:bg-secondary hover:text-on-secondary transition-colors no-underline"
       >
         {children}
       </a>
@@ -338,7 +338,7 @@ function MarkdownLink(props: React.AnchorHTMLAttributes<HTMLAnchorElement>) {
         {...anchorRest}
         href={href}
         aria-label={intl.formatMessage({ id: 'chat.footnotes.back' }, { id: refId })}
-        className="ml-xs text-[11px] text-primary hover:underline"
+        className="ml-xs text-label-xs text-primary hover:underline"
       >
         {children}
       </a>
@@ -352,13 +352,13 @@ function MarkdownLink(props: React.AnchorHTMLAttributes<HTMLAnchorElement>) {
       href={href}
       target={isExternal ? '_blank' : undefined}
       rel={isExternal ? 'noopener noreferrer' : undefined}
-      className="text-link hover:underline inline-flex items-baseline gap-[2px] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/30 rounded"
+      className="text-link hover:underline inline-flex items-baseline gap-[2px] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/30 rounded-sm"
       {...stripNodeProp(rest)}
     >
       {children}
       {isExternal && (
         <span
-          className="material-symbols-outlined text-[12px] leading-none text-primary/70 -translate-y-[1px]"
+          className="material-symbols-outlined icon-xs leading-none text-primary/70 -translate-y-[1px]"
           aria-hidden="true"
         >
           open_in_new

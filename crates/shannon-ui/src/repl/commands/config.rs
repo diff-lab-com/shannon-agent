@@ -263,6 +263,62 @@ fn connect_status(requires_auth: bool, connected: bool, has_key: bool) -> Provid
     ProviderConnectionStatus::classify(requires_auth, connected, has_key)
 }
 
+/// True when Shannon has no usable provider configuration at all — the
+/// first-run state the onboarding guidance targets (review P0-1/P0-2).
+///
+/// Reuses the same three probes the [`ProviderConnectionStatus`] classifier is
+/// fed (stored credential, persisted providers.toml entry, env-resolvable key):
+/// configured means *any* provider satisfies any one of them.
+///
+/// Pure decision over the three probes so it is unit-testable without touching
+/// the real `HOME` or environment.
+fn provider_unconfigured_from(
+    has_stored_credential: bool,
+    has_connected: bool,
+    has_env_key: bool,
+) -> bool {
+    !(has_stored_credential || has_connected || has_env_key)
+}
+
+/// Any provider has a key stored in `~/.shannon/credentials/`?
+fn stored_provider_credential_exists() -> bool {
+    use shannon_core::credential_manager::read_credential_value_default;
+    use shannon_core::provider_resolver::llm_provider_id;
+
+    model_registry::available_providers()
+        .iter()
+        .any(|p| read_credential_value_default(&llm_provider_id(p)).is_some())
+}
+
+/// `SHANNON_API_KEY` or any canonical per-provider env var set? (Ollama and
+/// friends resolve to none, which is exactly what we want here.)
+fn provider_env_key_present() -> bool {
+    model_registry::available_providers()
+        .iter()
+        .any(|p| !p.resolve_api_key_from_env().is_empty())
+}
+
+/// Process-global "is Shannon unconfigured?" check. Reads `providers.toml`,
+/// the credential store, and the process environment — cheap enough for the
+/// onboarding frame and the query-failure path, both of which run rarely.
+pub(crate) fn provider_unconfigured() -> bool {
+    provider_unconfigured_from(
+        stored_provider_credential_exists(),
+        !connected_provider_slugs().is_empty(),
+        provider_env_key_present(),
+    )
+}
+
+impl Repl {
+    /// Unconfigured-state check for the REPL: true when no credential is
+    /// stored for any provider, `providers.toml` has no entries, and neither
+    /// `SHANNON_API_KEY` nor a canonical provider env var is set. Drives the
+    /// first-run guidance card and the query-failure exit ramp (review P0-1).
+    pub(crate) fn provider_unconfigured(&self) -> bool {
+        provider_unconfigured()
+    }
+}
+
 /// Slugs of providers that have a persisted provider config in
 /// `~/.shannon/providers.toml` (i.e. `/connect` was run for them).
 ///
@@ -521,6 +577,20 @@ mod tests {
     fn parse_color_string_invalid() {
         assert_eq!(parse_color_string("notacolor"), None);
         assert_eq!(parse_color_string("#xyz"), None);
+    }
+
+    // ── provider_unconfigured (review P0-1: unconfigured-state guidance) ─
+
+    #[test]
+    fn provider_unconfigured_truth_table() {
+        // Nothing stored, nothing connected, no env key → the first-run dead
+        // state the guidance card targets.
+        assert!(provider_unconfigured_from(false, false, false));
+        // Any single escape hatch counts as configured.
+        assert!(!provider_unconfigured_from(true, false, false));
+        assert!(!provider_unconfigured_from(false, true, false));
+        assert!(!provider_unconfigured_from(false, false, true));
+        assert!(!provider_unconfigured_from(true, true, true));
     }
 
     // ── resolve_model_arg (ADR-0005 Phase 3) ───────────────────────────

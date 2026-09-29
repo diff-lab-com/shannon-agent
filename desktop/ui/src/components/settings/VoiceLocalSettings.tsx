@@ -172,12 +172,12 @@ export function VoiceLocalSettings({ featureDisabled = false }: VoiceLocalSettin
 
   if (featureDisabled) {
     return (
-      <div className="bg-surface-container-lowest p-lg rounded-xl shadow-sm border border-outline-variant/30 group hover:shadow-md transition-shadow">
+      <div className="bg-surface-container-lowest p-lg rounded-xl shadow-e1 border border-outline-variant/30 group hover:shadow-e2 transition-shadow">
         <div className="flex items-center gap-md mb-md">
-          <div className="p-2 bg-tertiary/10 rounded-lg text-tertiary flex items-center justify-center">
+          <div className="p-sm bg-tertiary-container rounded-lg text-on-tertiary-container flex items-center justify-center">
             <span className="material-symbols-outlined">offline_bolt</span>
           </div>
-          <h3 className="font-headline-md text-[24px] font-bold text-on-surface">
+          <h3 className="font-headline-md text-headline-md font-bold text-on-surface">
             {t('settings.voiceLocal.title')}
           </h3>
         </div>
@@ -189,12 +189,12 @@ export function VoiceLocalSettings({ featureDisabled = false }: VoiceLocalSettin
   }
 
   return (
-    <div className="bg-surface-container-lowest p-lg rounded-xl shadow-sm border border-outline-variant/30 group hover:shadow-md transition-shadow">
+    <div className="bg-surface-container-lowest p-lg rounded-xl shadow-e1 border border-outline-variant/30 group hover:shadow-e2 transition-shadow">
       <div className="flex items-center gap-md mb-md">
-        <div className="p-2 bg-primary/10 rounded-lg text-primary flex items-center justify-center">
+        <div className="p-sm bg-primary-container rounded-lg text-on-primary-container flex items-center justify-center">
           <span className="material-symbols-outlined">offline_bolt</span>
         </div>
-        <h3 className="font-headline-md text-[24px] font-bold text-on-surface">
+        <h3 className="font-headline-md text-headline-md font-bold text-on-surface">
           {t('settings.voiceLocal.title')}
         </h3>
         <span
@@ -215,10 +215,10 @@ export function VoiceLocalSettings({ featureDisabled = false }: VoiceLocalSettin
       <div className="space-y-md">
         <div className="flex items-center justify-between gap-md">
           <div>
-            <div className="font-label-md text-[14px] text-on-surface font-semibold mb-1">
+            <div className="font-label-md text-body-sm text-on-surface font-semibold mb-xs">
               {t('settings.voiceLocal.enable')}
             </div>
-            <div className="font-label-sm text-[12px] text-on-surface-variant leading-tight">
+            <div className="font-label-sm text-label-sm text-on-surface-variant leading-tight">
               {t('settings.voiceLocal.enableDesc')}
             </div>
           </div>
@@ -233,7 +233,7 @@ export function VoiceLocalSettings({ featureDisabled = false }: VoiceLocalSettin
         </div>
 
         <div>
-          <label className="block font-label-sm text-[12px] text-on-surface-variant mb-1">
+          <label className="block font-label-sm text-label-sm text-on-surface-variant mb-xs">
             {t('settings.voiceLocal.model')}
           </label>
           <div className="space-y-sm">
@@ -246,10 +246,10 @@ export function VoiceLocalSettings({ featureDisabled = false }: VoiceLocalSettin
                   className="flex items-center gap-md p-sm rounded-lg border border-outline-variant/30 bg-surface-container-low"
                 >
                   <div className="flex-1 min-w-0">
-                    <div className="font-label-md text-[14px] text-on-surface font-semibold">
+                    <div className="font-label-md text-body-sm text-on-surface font-semibold">
                       {m.model}
                     </div>
-                    <div className="font-label-sm text-[12px] text-on-surface-variant">
+                    <div className="font-label-sm text-label-sm text-on-surface-variant">
                       {m.downloaded
                         ? t('settings.voiceLocal.modelReady', {
                             size: m.size_bytes
@@ -261,7 +261,7 @@ export function VoiceLocalSettings({ featureDisabled = false }: VoiceLocalSettin
                           })}
                     </div>
                     {isActive && progress && (
-                      <div className="mt-xs h-1.5 w-full bg-surface-container-highest rounded overflow-hidden">
+                      <div className="mt-xs h-1.5 w-full bg-surface-container-highest rounded-sm overflow-hidden">
                         <div
                           className="h-full bg-primary transition-all"
                           style={{ width: `${Math.round(progress.progress * 100)}%` }}
@@ -298,7 +298,7 @@ export function VoiceLocalSettings({ featureDisabled = false }: VoiceLocalSettin
         </div>
 
         <div>
-          <label className="block font-label-sm text-[12px] text-on-surface-variant mb-1">
+          <label className="block font-label-sm text-label-sm text-on-surface-variant mb-xs">
             {t('settings.voiceLocal.preferredModel')}
           </label>
           <Select
@@ -319,7 +319,7 @@ export function VoiceLocalSettings({ featureDisabled = false }: VoiceLocalSettin
         </div>
 
         <div>
-          <label className="block font-label-sm text-[12px] text-on-surface-variant mb-1" htmlFor="voice-local-language">
+          <label className="block font-label-sm text-label-sm text-on-surface-variant mb-xs" htmlFor="voice-local-language">
             {t('settings.voiceLocal.language')}
           </label>
           <Input
@@ -338,10 +338,10 @@ export function VoiceLocalSettings({ featureDisabled = false }: VoiceLocalSettin
 
         <div className="flex items-center justify-between gap-md">
           <div>
-            <div className="font-label-md text-[14px] text-on-surface font-semibold mb-1">
+            <div className="font-label-md text-body-sm text-on-surface font-semibold mb-xs">
               {t('settings.voiceLocal.autoDownload')}
             </div>
-            <div className="font-label-sm text-[12px] text-on-surface-variant leading-tight">
+            <div className="font-label-sm text-label-sm text-on-surface-variant leading-tight">
               {t('settings.voiceLocal.autoDownloadDesc')}
             </div>
           </div>

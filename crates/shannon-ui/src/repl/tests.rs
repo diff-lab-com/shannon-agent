@@ -1103,11 +1103,15 @@ fn test_repl_team_shutdown_without_create() {
 }
 
 // ── /permissions Command Tests ────────────────────────────────────
+// R1-6 (decision ② step 1): the primary /permissions name moved to the
+// permission-profile command (the /profile handler) — see the R1-6 tests at
+// the end of this section. The tool allow/deny view below lives on at its
+// short aliases /perms and /perm.
 
 #[test]
 fn test_repl_permissions_status() {
     let mut repl = Repl::new().unwrap();
-    repl.prompt.set_input("/permissions".to_string());
+    repl.prompt.set_input("/perms".to_string());
     super::commands::submit_input(&mut repl, None).unwrap();
     let last_msg = &repl.chat.last_message().unwrap().content;
     assert!(last_msg.contains("Permission Status"));
@@ -1117,7 +1121,7 @@ fn test_repl_permissions_status() {
 #[test]
 fn test_repl_permissions_status_subcommand() {
     let mut repl = Repl::new().unwrap();
-    repl.prompt.set_input("/permissions status".to_string());
+    repl.prompt.set_input("/perms status".to_string());
     super::commands::submit_input(&mut repl, None).unwrap();
     let last_msg = &repl.chat.last_message().unwrap().content;
     assert!(last_msg.contains("Permission Status"));
@@ -1126,14 +1130,14 @@ fn test_repl_permissions_status_subcommand() {
 #[test]
 fn test_repl_permissions_allow_tool() {
     let mut repl = Repl::new().unwrap();
-    repl.prompt.set_input("/permissions allow Bash".to_string());
+    repl.prompt.set_input("/perms allow Bash".to_string());
     super::commands::submit_input(&mut repl, None).unwrap();
     let last_msg = &repl.chat.last_message().unwrap().content;
     assert!(last_msg.contains("always allowed"));
     assert!(last_msg.contains("Bash"));
 
     // Verify it shows in status
-    repl.prompt.set_input("/permissions status".to_string());
+    repl.prompt.set_input("/perms status".to_string());
     super::commands::submit_input(&mut repl, None).unwrap();
     let status_msg = &repl.chat.last_message().unwrap().content;
     assert!(status_msg.contains("Always allowed"));
@@ -1143,15 +1147,14 @@ fn test_repl_permissions_allow_tool() {
 #[test]
 fn test_repl_permissions_deny_tool() {
     let mut repl = Repl::new().unwrap();
-    repl.prompt
-        .set_input("/permissions deny FileWrite".to_string());
+    repl.prompt.set_input("/perms deny FileWrite".to_string());
     super::commands::submit_input(&mut repl, None).unwrap();
     let last_msg = &repl.chat.last_message().unwrap().content;
     assert!(last_msg.contains("always denied"));
     assert!(last_msg.contains("FileWrite"));
 
     // Verify it shows in status
-    repl.prompt.set_input("/permissions status".to_string());
+    repl.prompt.set_input("/perms status".to_string());
     super::commands::submit_input(&mut repl, None).unwrap();
     let status_msg = &repl.chat.last_message().unwrap().content;
     assert!(status_msg.contains("Always denied"));
@@ -1161,36 +1164,36 @@ fn test_repl_permissions_deny_tool() {
 #[test]
 fn test_repl_permissions_allow_no_tool() {
     let mut repl = Repl::new().unwrap();
-    repl.prompt.set_input("/permissions allow".to_string());
+    repl.prompt.set_input("/perms allow".to_string());
     super::commands::submit_input(&mut repl, None).unwrap();
     let last_msg = &repl.chat.last_message().unwrap().content;
-    assert!(last_msg.contains("Usage: /permissions allow"));
+    assert!(last_msg.contains("Usage: /perms allow"));
 }
 
 #[test]
 fn test_repl_permissions_deny_no_tool() {
     let mut repl = Repl::new().unwrap();
-    repl.prompt.set_input("/permissions deny".to_string());
+    repl.prompt.set_input("/perms deny".to_string());
     super::commands::submit_input(&mut repl, None).unwrap();
     let last_msg = &repl.chat.last_message().unwrap().content;
-    assert!(last_msg.contains("Usage: /permissions deny"));
+    assert!(last_msg.contains("Usage: /perms deny"));
 }
 
 #[test]
 fn test_repl_permissions_reset() {
     let mut repl = Repl::new().unwrap();
     // Allow a tool first
-    repl.prompt.set_input("/permissions allow Bash".to_string());
+    repl.prompt.set_input("/perms allow Bash".to_string());
     super::commands::submit_input(&mut repl, None).unwrap();
 
     // Reset
-    repl.prompt.set_input("/permissions reset".to_string());
+    repl.prompt.set_input("/perms reset".to_string());
     super::commands::submit_input(&mut repl, None).unwrap();
     let last_msg = &repl.chat.last_message().unwrap().content;
     assert!(last_msg.contains("cleared") || last_msg.contains("removed"));
 
     // Verify status shows no overrides
-    repl.prompt.set_input("/permissions status".to_string());
+    repl.prompt.set_input("/perms status".to_string());
     super::commands::submit_input(&mut repl, None).unwrap();
     let status_msg = &repl.chat.last_message().unwrap().content;
     assert!(status_msg.contains("No tool-level overrides"));
@@ -1199,13 +1202,13 @@ fn test_repl_permissions_reset() {
 #[test]
 fn test_repl_permissions_help() {
     let mut repl = Repl::new().unwrap();
-    repl.prompt.set_input("/permissions help".to_string());
+    repl.prompt.set_input("/perms help".to_string());
     super::commands::submit_input(&mut repl, None).unwrap();
     let last_msg = &repl.chat.last_message().unwrap().content;
-    assert!(last_msg.contains("/permissions status"));
-    assert!(last_msg.contains("/permissions allow"));
-    assert!(last_msg.contains("/permissions deny"));
-    assert!(last_msg.contains("/permissions reset"));
+    assert!(last_msg.contains("/perms status"));
+    assert!(last_msg.contains("/perms allow"));
+    assert!(last_msg.contains("/perms deny"));
+    assert!(last_msg.contains("/perms reset"));
 }
 
 #[test]
@@ -1239,7 +1242,7 @@ fn test_repl_permissions_alias_perm() {
 
 #[test]
 fn test_repl_permissions_tab_completion() {
-    let args = crate::repl::input::complete_command_args("permissions", "");
+    let args = crate::repl::input::complete_command_args("perms", "");
     assert!(args.contains(&"status".to_string()));
     assert!(args.contains(&"allow".to_string()));
     assert!(args.contains(&"deny".to_string()));
@@ -1248,7 +1251,7 @@ fn test_repl_permissions_tab_completion() {
 
 #[test]
 fn test_repl_permissions_tab_completion_prefix() {
-    let args = crate::repl::input::complete_command_args("permissions", "st");
+    let args = crate::repl::input::complete_command_args("perms", "st");
     assert!(args.contains(&"status".to_string()));
     assert!(!args.contains(&"allow".to_string()));
 }
@@ -1256,7 +1259,7 @@ fn test_repl_permissions_tab_completion_prefix() {
 #[test]
 fn test_repl_permissions_shows_policies() {
     let mut repl = Repl::new().unwrap();
-    repl.prompt.set_input("/permissions status".to_string());
+    repl.prompt.set_input("/perms status".to_string());
     super::commands::submit_input(&mut repl, None).unwrap();
     let msg = &repl.chat.last_message().unwrap().content;
     // Default policies should be registered
@@ -1268,18 +1271,109 @@ fn test_repl_permissions_shows_policies() {
 fn test_repl_permissions_allow_then_deny_same_tool() {
     let mut repl = Repl::new().unwrap();
     // Allow then deny the same tool
-    repl.prompt.set_input("/permissions allow Bash".to_string());
+    repl.prompt.set_input("/perms allow Bash".to_string());
     super::commands::submit_input(&mut repl, None).unwrap();
-    repl.prompt.set_input("/permissions deny Bash".to_string());
+    repl.prompt.set_input("/perms deny Bash".to_string());
     super::commands::submit_input(&mut repl, None).unwrap();
 
     // Should show in denied, not allowed
-    repl.prompt.set_input("/permissions status".to_string());
+    repl.prompt.set_input("/perms status".to_string());
     super::commands::submit_input(&mut repl, None).unwrap();
     let msg = &repl.chat.last_message().unwrap().content;
     assert!(msg.contains("Always denied"));
     assert!(msg.contains("Bash"));
     assert!(!msg.contains("Always allowed"));
+}
+
+// ── /permissions alias + /profile migration hint (R1-6, decision ②) ──
+
+/// Whole transcript joined — the R1-6 assertions look at message ordering
+/// (hint above output) and occurrence counts (hint once), not just the last
+/// message.
+fn r16_chat_text(repl: &Repl) -> String {
+    repl.chat
+        .messages()
+        .iter()
+        .map(|m| m.content.as_str())
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
+/// `/permissions` must resolve to the same handler as /profile (the
+/// permission-profile prompt command), not to the old tool allow/deny view.
+#[test]
+fn test_repl_permissions_alias_resolves_to_profile_handler() {
+    let mut repl = Repl::new().unwrap();
+    // Detach the engine so the dispatch test stays offline: the profile
+    // prompt command funnels into handle_query, which exits early with an
+    // "engine unavailable" note when no engine is set.
+    repl.query_engine = None;
+    repl.prompt.set_input("/permissions list".to_string());
+    super::commands::submit_input(&mut repl, None).unwrap();
+
+    let all = r16_chat_text(&repl);
+    assert!(
+        all.contains("Running /profile..."),
+        "/permissions must dispatch the /profile handler, got: {all}"
+    );
+    assert!(
+        !all.contains("Permission Status"),
+        "/permissions must not fall back to the tool allow/deny view, got: {all}"
+    );
+}
+
+/// The first /profile of a session prints the migration hint above its
+/// output; a second /profile runs the command again but never repeats it.
+#[test]
+fn test_repl_profile_migration_hint_shown_once() {
+    let mut repl = Repl::new().unwrap();
+    repl.query_engine = None;
+
+    repl.prompt.set_input("/profile".to_string());
+    super::commands::submit_input(&mut repl, None).unwrap();
+
+    let first = r16_chat_text(&repl);
+    assert!(
+        first.contains("being renamed"),
+        "first /profile must carry the migration hint, got: {first}"
+    );
+    let hint_pos = first.find("being renamed").unwrap();
+    let out_pos = first.find("Running /profile...").unwrap();
+    assert!(
+        hint_pos < out_pos,
+        "hint must appear above the command output, got: {first}"
+    );
+
+    repl.prompt.set_input("/profile".to_string());
+    super::commands::submit_input(&mut repl, None).unwrap();
+
+    let both = r16_chat_text(&repl);
+    assert_eq!(
+        both.matches("being renamed").count(),
+        1,
+        "hint must appear exactly once per session, got: {both}"
+    );
+    assert_eq!(
+        both.matches("Running /profile...").count(),
+        2,
+        "/profile itself must still run on every invocation, got: {both}"
+    );
+}
+
+/// The new name never warns about itself.
+#[test]
+fn test_repl_permissions_alias_has_no_migration_hint() {
+    let mut repl = Repl::new().unwrap();
+    repl.query_engine = None;
+    repl.prompt.set_input("/permissions".to_string());
+    super::commands::submit_input(&mut repl, None).unwrap();
+
+    let all = r16_chat_text(&repl);
+    assert!(
+        all.contains("Running /profile..."),
+        "/permissions must dispatch the /profile handler, got: {all}"
+    );
+    assert!(!all.contains("being renamed"), "got: {all}");
 }
 
 // ── /plan Command Tests ──────────────────────────────────────────────

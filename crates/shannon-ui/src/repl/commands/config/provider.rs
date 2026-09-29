@@ -14,6 +14,7 @@ use crate::repl::Repl;
 use crate::{Result, widgets::ChatRole};
 use rust_i18n::t;
 use shannon_core::model_registry;
+use shannon_engine::api::LlmProvider;
 
 pub(crate) fn handle_provider(repl: &mut Repl, args: &str) -> Result<()> {
     if args.trim() == "health" {
@@ -50,9 +51,22 @@ pub(crate) fn handle_provider(repl: &mut Repl, args: &str) -> Result<()> {
         let models = model_registry::merged_models_for_provider(provider.clone());
         let default_model = models.first().map(|m| m.id.to_string());
 
+        // Foreign-model warning (review P1-8): a catalog-less provider keeps
+        // the current model id, so compute the warning *before* the switch
+        // mutates `selected_provider`.
+        let foreign_warning = if default_model.is_none() {
+            foreign_model_warning(
+                repl.state.model.as_deref(),
+                repl.state.selected_provider.as_ref(),
+                &provider,
+            )
+        } else {
+            None
+        };
+
         // Single switch path. `default_model = None` means "this provider has
-        // no built-in catalog (Ollama, OpenRouter, Bedrock, Custom, …)" — the
-        // current model id is kept and the user picks via
+        // no built-in catalog (Ollama, Bedrock, Custom, …)" — the current
+        // model id is kept and the user picks via
         // `/model <provider>/<model-id>`.
         apply_model_selection(repl, provider.clone(), default_model.clone(), None, false)?;
 
@@ -79,8 +93,85 @@ pub(crate) fn handle_provider(repl: &mut Repl, args: &str) -> Result<()> {
                 );
             }
         }
+
+        // The switch still happens (kept — /provider is an explicit request);
+        // the warning only makes the kept model's cross-provider trip visible.
+        if let Some(warning) = foreign_warning {
+            repl.chat.add_message(ChatRole::System, warning);
+        }
     }
     Ok(())
+}
+
+/// Compose the foreign-model warning for a catalog-less `/provider` switch
+/// (review P1-8).
+///
+/// When the target provider has no catalog models, the switch keeps the
+/// current model id — silently pointing a model trained for one provider at
+/// another. Returns the warning text when that current model is attributable
+/// to a provider *other than* the target: ownership comes from the catalog
+/// first (`model_info_for_alias`, which also expands aliases), falling back to
+/// the currently selected provider for ids the catalog does not know. Pure —
+/// unit-tested below.
+fn foreign_model_warning(
+    current_model: Option<&str>,
+    current_provider: Option<&LlmProvider>,
+    target: &LlmProvider,
+) -> Option<String> {
+    let model = current_model?.trim();
+    if model.is_empty() {
+        return None;
+    }
+    let owner = model_registry::model_info_for_alias(model)
+        .map(|info| &info.provider)
+        .or(current_provider)?;
+    if owner == target {
+        return None;
+    }
+    Some(
+        t!(
+            "commands.provider.foreign_model_warning",
+            model = model,
+            old_provider = shannon_core::provider_resolver::llm_provider_id(owner),
+            new_provider = shannon_core::provider_resolver::llm_provider_id(target),
+        )
+        .to_string(),
+    )
+}
+
+/// Providers the concurrent probe cannot cover, one formatted line each.
+///
+/// `probe_all_health` silently drops providers whose list-models API has no
+/// shared probeable endpoint per `probe_kind_for_provider` (currently Gemini
+/// and Bedrock; everything OpenAI-wire — including Azure and Replicate — is
+/// probeable via the openai-compatible `/models` endpoint), so silence in the
+/// live table would be indistinguishable from health. This reports each
+/// skipped provider explicitly, sorted by name. A provider already present in
+/// `probes` (e.g. a keyless Gemini reporting NotConfigured) is not repeated
+/// here. Pure — unit-tested below.
+fn health_skipped_lines(
+    providers: &[LlmProvider],
+    probes: &[shannon_core::ProviderHealth],
+) -> Vec<String> {
+    use shannon_engine::api::probe::probe_kind_for_provider;
+
+    let mut skipped: Vec<&LlmProvider> = providers
+        .iter()
+        .filter(|p| {
+            probe_kind_for_provider(p).is_none() && !probes.iter().any(|h| &h.provider == *p)
+        })
+        .collect();
+    skipped.sort_by_key(|p| p.to_string());
+    skipped
+        .iter()
+        .map(|p| {
+            t!(
+                "commands.provider.health_skipped_line",
+                provider = p.to_string()
+            )
+            .to_string()
+        })
+        .collect()
 }
 
 /// `/provider health` — live-probe every allowed provider and inventory
@@ -93,8 +184,10 @@ pub(crate) fn handle_provider(repl: &mut Repl, args: &str) -> Result<()> {
 /// switching automatically (Shannon ships no model router, spec §11).
 ///
 /// Probe is fail-soft: a transport error reports "unreachable" but never
-/// crashes the REPL. Bespoke-API providers (Gemini / Bedrock / Azure /
-/// Replicate) are skipped because they have no shared list-models endpoint.
+/// crashes the REPL. Providers without a probeable list-models endpoint (per
+/// `probe_kind_for_provider` — currently Gemini / Bedrock) are skipped; each
+/// of them is printed with its own skip line instead of disappearing from
+/// the report (R1-5).
 fn handle_provider_health(repl: &mut Repl) -> Result<()> {
     use shannon_core::credential_manager::read_credential_value_default;
     use shannon_core::provider_resolver::llm_provider_id;
@@ -194,6 +287,16 @@ fn handle_provider_health(repl: &mut Repl) -> Result<()> {
         ));
     }
 
+    // 3b. Skipped providers (R1-5): the probe only covers providers with a
+    //     shared list-models endpoint; report each bespoke-API provider so
+    //     its absence from the table above is explained, not silent.
+    let skipped = health_skipped_lines(&providers, &probes);
+    if !skipped.is_empty() {
+        lines.push(String::new());
+        lines.push(t!("commands.provider.health_skipped_header").to_string());
+        lines.extend(skipped);
+    }
+
     // 4. Switch hint: when the active provider is down, list reachable
     //    candidates the user can switch to. **Manual only** — Shannon has no
     //    model router (spec §11). Pick up to 3 alphabetically.
@@ -247,4 +350,150 @@ fn handle_provider_health(repl: &mut Repl) -> Result<()> {
     );
     repl.chat.add_message(ChatRole::System, lines.join("\n"));
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // ── health_skipped_lines (R1-5: /provider health explains its skips) ──
+
+    #[test]
+    fn skipped_lines_cover_every_bespoke_api_provider() {
+        let providers = vec![
+            LlmProvider::Anthropic,
+            LlmProvider::Ollama,
+            LlmProvider::Gemini,
+            LlmProvider::Bedrock,
+            // Azure / Replicate share the OpenAI wire format, so the engine's
+            // probe covers them via the openai-compatible /models endpoint —
+            // they must never be reported as skipped (the pre-R1-5 roadmap
+            // text listing them as skipped predates that probe coverage).
+            LlmProvider::Azure,
+            LlmProvider::Replicate,
+        ];
+        let lines = health_skipped_lines(&providers, &[]);
+
+        // Exactly the providers `probe_kind_for_provider` cannot cover:
+        // Gemini (bespoke Gemini API) and Bedrock (Anthropic-wire signing).
+        assert_eq!(lines.len(), 2, "one line per skipped provider: {lines:?}");
+        let joined = lines.join("\n");
+        for name in ["bedrock", "gemini"] {
+            assert!(
+                lines
+                    .iter()
+                    .any(|l| l.contains(name) && l.contains("skipped")),
+                "each skipped provider gets its own reason line ({name}): {joined}"
+            );
+        }
+        // Probeable providers are never reported as skipped — including the
+        // openai-wire ones.
+        for name in ["anthropic", "ollama", "azure", "replicate"] {
+            assert!(!joined.contains(name), "{name}: {joined}");
+        }
+        // Sorted by name for a stable report.
+        let names: Vec<String> = lines
+            .iter()
+            .map(|l| {
+                l.split("—")
+                    .next()
+                    .unwrap_or_default()
+                    .trim()
+                    .trim_start_matches('·')
+                    .trim()
+                    .to_string()
+            })
+            .collect();
+        let mut sorted = names.clone();
+        sorted.sort();
+        assert_eq!(names, sorted, "skipped lines are name-sorted: {names:?}");
+    }
+
+    #[test]
+    fn skipped_lines_do_not_repeat_probed_providers() {
+        use shannon_core::{ProviderHealth, ProviderHealthStatus};
+
+        let providers = vec![LlmProvider::Gemini, LlmProvider::Anthropic];
+        // A keyless Gemini shows up in the live table as NotConfigured —
+        // it must not be reported as skipped a second time.
+        let probes = vec![ProviderHealth {
+            provider: LlmProvider::Gemini,
+            status: ProviderHealthStatus::NotConfigured,
+            latency_ms: None,
+        }];
+        assert!(health_skipped_lines(&providers, &probes).is_empty());
+    }
+
+    // ── foreign_model_warning (review P1-8: /provider keeps the old model
+    //    when the target has no catalog — make the cross-provider trip
+    //    explicit instead of silent) ────────────────────────────────────────
+
+    #[test]
+    fn warning_fires_for_catalog_model_moving_to_a_different_provider() {
+        let out = foreign_model_warning(
+            Some("claude-sonnet-4-20250514"),
+            Some(&LlmProvider::Anthropic),
+            &LlmProvider::Ollama,
+        )
+        .expect("warning expected for a cross-provider kept model");
+        assert!(out.contains("claude-sonnet-4-20250514"), "got {out}");
+        assert!(out.contains("anthropic"), "got {out}");
+        assert!(out.contains("ollama"), "got {out}");
+        // The exact fix command must be pasteable.
+        assert!(out.contains("/model ollama/<model-id>"), "got {out}");
+    }
+
+    #[test]
+    fn warning_resolves_alias_to_owner_provider() {
+        // A bare alias ("sonnet") must attribute to its catalog owner
+        // (Anthropic), not stay unattributed.
+        let out = foreign_model_warning(Some("sonnet"), None, &LlmProvider::Replicate)
+            .expect("warning expected: alias resolves to a foreign owner");
+        assert!(out.contains("anthropic"), "got {out}");
+        assert!(out.contains("replicate"), "got {out}");
+    }
+
+    #[test]
+    fn warning_quiet_when_owner_equals_target() {
+        // Switching within the same provider cannot misroute the model.
+        assert_eq!(
+            foreign_model_warning(
+                Some("claude-sonnet-4-20250514"),
+                Some(&LlmProvider::Anthropic),
+                &LlmProvider::Anthropic,
+            ),
+            None
+        );
+    }
+
+    #[test]
+    fn warning_unknown_model_falls_back_to_selected_provider() {
+        // An id the catalog does not know is attributed to the currently
+        // selected provider (where it was actually being used).
+        let out = foreign_model_warning(
+            Some("my-fine-tune"),
+            Some(&LlmProvider::OpenAI),
+            &LlmProvider::Anthropic,
+        )
+        .expect("warning expected: selected provider differs from target");
+        assert!(out.contains("openai"), "got {out}");
+        // With nothing selected there is nothing attributable → no warning.
+        assert_eq!(
+            foreign_model_warning(Some("llama3"), None, &LlmProvider::Ollama),
+            None
+        );
+    }
+
+    #[test]
+    fn warning_none_without_a_current_model() {
+        assert_eq!(
+            foreign_model_warning(None, None, &LlmProvider::Ollama),
+            None
+        );
+        // A blank/whitespace model id is treated as "no model".
+        assert_eq!(
+            foreign_model_warning(Some("   "), None, &LlmProvider::Ollama),
+            None
+        );
+    }
 }

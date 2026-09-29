@@ -1,4 +1,5 @@
 import { useT } from '@/i18n'
+import { useNavigate } from 'react-router-dom'
 import { Banner } from '@/components/ui/banner'
 import type { RefObject } from 'react'
 import { useEffect, useMemo, useRef, useState, useCallback } from 'react'
@@ -194,7 +195,8 @@ export default function MessageArea({
     () => (lastAssistantIndex >= 0 ? regenerateInfoFor(messages, lastAssistantIndex, checkpointTurns) : null),
     [messages, lastAssistantIndex, checkpointTurns],
   )
-  const { error } = useCatalog()
+  const { error, errorKind, providerStatus } = useCatalog()
+  const navigate = useNavigate()
   const t = useT()
   const shouldVirtualize = messages.length > VIRTUALIZE_THRESHOLD
   const messageKeys = useStableMessageKeys(messages)
@@ -288,7 +290,41 @@ export default function MessageArea({
           expanding tool cards. */}
       {isQuerying && <RunStatusLine startedAt={currentSessionId ? sessionActivity[currentSessionId]?.startedAt ?? null : null} activeTool={currentSessionId ? sessionActivity[currentSessionId]?.activeTool ?? null : null} toolProgress={toolProgress} />}
 
-      {error && (
+      {/* Review §2-3: auth failures (401/403, classified Rust-side on the
+          QUERY_FAILED payload as error_kind="auth") get a dedicated banner
+          that names the provider and deep-links to Settings → Models, where
+          the key is actually fixable — the engine's raw text points at the
+          CLI's /config, a dead end on desktop. All other failures keep the
+          raw error line + Retry. */}
+      {error && errorKind === 'auth' ? (
+        <Banner
+          variant="card"
+          tone="error"
+          className="mx-auto max-w-md text-error font-label-md"
+          data-testid="auth-error-banner"
+        >
+          <span className="material-symbols-outlined icon-md text-error">key_alert</span>
+          <span className="flex-1 text-center">
+            {t('chat.error.auth.title', {
+              provider: providerStatus?.display_name
+                ?? providerStatus?.active_provider_id
+                ?? t('chat.error.auth.fallbackProvider'),
+            })}
+            <span className="block font-body-sm text-on-surface-variant mt-xs">
+              {t('chat.error.auth.body')}
+            </span>
+          </span>
+          <Button
+            type="button"
+            variant="ghost"
+            className="mt-sm text-error hover:bg-error/10 text-label-md cursor-pointer"
+            onClick={() => navigate('/settings/models')}
+          >
+            {t('chat.error.auth.updateKey')}
+          </Button>
+          <ComposerRetryButton />
+        </Banner>
+      ) : error ? (
         <Banner
           variant="card"
           tone="error"
@@ -298,7 +334,7 @@ export default function MessageArea({
           <span className="flex-1 text-center">{error}</span>
           <ComposerRetryButton />
         </Banner>
-      )}
+      ) : null}
 
       <div ref={messagesEndRef} />
 
@@ -309,7 +345,9 @@ export default function MessageArea({
           aria-label={t('chat.scrollToLatest.aria')}
           title={t('chat.scrollToLatest.aria')}
           onClick={scrollToBottom}
-          className="sticky bottom-md left-full -translate-x-full ml-sm w-10 h-10 rounded-full bg-surface-container-lowest/95 backdrop-blur-md border border-outline-variant/30 shadow-lg hover:bg-primary-container hover:border-primary/40 text-on-surface hover:text-primary transition-all flex items-center justify-center"
+          // G1: solid — a transient affordance doesn't earn one of the four
+          // per-screen backdrop-filter slots.
+          className="sticky bottom-md left-full -translate-x-full ml-sm w-10 h-10 rounded-full bg-surface-container-lowest border border-outline-variant/30 shadow-e3 hover:bg-primary-container hover:border-primary/40 text-on-surface hover:text-primary transition-all flex items-center justify-center"
         >
           <span className="material-symbols-outlined icon-md" aria-hidden="true">arrow_downward</span>
         </Button>
@@ -318,6 +356,8 @@ export default function MessageArea({
       {/* B1 P2-3: session-swap skeleton — shown only while a switch IPC is in
           flight (AppContext never sets the flag for same-session remounts),
           so opening a session reads as instant-and-loading instead of stale. */}
+      {/* G1: veil (遮罩) over the message list while switching — scrim-class,
+          intentional direct backdrop-blur, exempt from the material rule. */}
       {switchingSession && (
         <div
           data-testid="session-switch-overlay"
@@ -369,11 +409,12 @@ export function RunStatusLine({ startedAt, activeTool, toolProgress }: { started
     : null
   const progressMsg = toolProgress?.message?.trim() ?? ''
   return (
+    // G1: solid pill — same budget reasoning as the scroll FAB above.
     <div
       role="status"
       aria-live="polite"
       data-testid="run-status-line"
-      className="sticky bottom-0 mt-md mx-auto w-fit max-w-full flex items-center gap-xs px-md py-xs rounded-full bg-surface-container-lowest/95 backdrop-blur-md border border-outline-variant/30 shadow-sm"
+      className="sticky bottom-0 mt-md mx-auto w-fit max-w-full flex items-center gap-xs px-md py-xs rounded-full bg-surface-container-lowest border border-outline-variant/30 shadow-e1"
     >
       <span className="size-1.5 rounded-full bg-secondary animate-pulse shrink-0" aria-hidden="true" />
       <span className="font-label-sm text-on-surface-variant whitespace-nowrap">

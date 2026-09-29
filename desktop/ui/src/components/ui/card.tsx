@@ -41,7 +41,10 @@ const shannonCardVariants = cva("", {
       xl: "p-xl",
     },
     interactive: {
-      true: "transition-all duration-[var(--duration-normal)] hover:shadow-[var(--shadow-e2)] hover:border-primary/40 focus-visible:outline-2 focus-visible:outline-primary focus-visible:outline-offset-2",
+      // G5: press-scale = the interactive transition spec (colors/shadow/
+      // transform on the glass curve; replaces transition-all) and the
+      // pressed scale fires on the card itself (clickable card pattern).
+      true: "press-scale active:press-scale-active hover:shadow-[var(--shadow-e2)] hover:border-primary/40 focus-visible:outline-2 focus-visible:outline-primary focus-visible:outline-offset-2",
       false: "",
     },
   },

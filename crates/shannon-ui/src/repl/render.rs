@@ -142,6 +142,13 @@ pub fn draw_frame(
         repl.chat.trim_old_committed();
     }
 
+    // First-run setup guidance (review P0-1/P0-2): show the /connect exit ramp
+    // on the welcome screen only while onboarding is active AND nothing is
+    // configured — never for users who simply skipped the overlay with a
+    // working provider.
+    repl.chat
+        .set_setup_hint(repl.state.onboarding_active && repl.provider_unconfigured());
+
     let chat = &repl.chat;
     let prompt = &repl.prompt;
     // Borrow state instead of cloning — the closure only reads, never mutates.
@@ -1255,7 +1262,9 @@ fn render_plan_overlay(
 /// Render first-run onboarding overlay showing essential keybindings and tips.
 fn render_onboarding_overlay(frame: &mut ratatui::Frame, area: Rect, theme: &Theme) {
     let dialog_width = 60.min(area.width.saturating_sub(4));
-    let dialog_height = 40.min(area.height.saturating_sub(4));
+    // Tallest content so far: logo + keybindings + commands + setup + tips +
+    // footer = 43 lines (+2 borders). Small terminals still clip gracefully.
+    let dialog_height = 46.min(area.height.saturating_sub(4));
     let x = (area.width.saturating_sub(dialog_width)) / 2;
     let y = (area.height.saturating_sub(dialog_height)) / 2;
     let dialog_area = Rect {
@@ -1382,6 +1391,36 @@ fn render_onboarding_overlay(frame: &mut ratatui::Frame, area: Rect, theme: &The
             Span::styled("  /sessions       ", accent_style),
             Span::styled("List saved sessions", text_style),
         ]),
+        Line::from(""),
+        // Setup section (review P0-1): the first-run overlay previously taught
+        // only keybindings — a fresh user had no path to a working provider.
+        // `/connect` is the exit ramp, so it gets its own prominent section.
+        Line::from(Span::styled(
+            t!("ui.onboarding.setup_title").to_string(),
+            Style::default()
+                .fg(theme.success)
+                .add_modifier(Modifier::BOLD),
+        )),
+        Line::from(Span::styled(
+            format!(" {}", "─".repeat(sep_width)),
+            Style::default().fg(theme.border_dim),
+        )),
+        Line::from(Span::styled(
+            t!("ui.onboarding.setup_connect").to_string(),
+            text_style,
+        )),
+        Line::from(Span::styled(
+            t!("ui.onboarding.setup_connect_note").to_string(),
+            Style::default().fg(theme.text_dim),
+        )),
+        Line::from(Span::styled(
+            t!("ui.onboarding.setup_list").to_string(),
+            text_style,
+        )),
+        Line::from(Span::styled(
+            t!("ui.onboarding.setup_local").to_string(),
+            text_style,
+        )),
         Line::from(""),
         Line::from(Span::styled(
             " \u{2728} Tips",

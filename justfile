@@ -49,18 +49,38 @@ gen-protocol:
     cargo run -p shannon-api-protocol --bin gen-ts
     cd gateway && pnpm typecheck
 
+# ---------- Check ----------
+
+# Fast type-check. On Linux hosts whose system libspa/pipewire headers are too
+# old for libspa-sys (e.g. Ubuntu 22.04 / pipewire 0.3.48), the xcap → pipewire
+# → libspa chain fails inside dependency source — an environment mismatch, not
+# a repo bug. Retries without shannon-desktop's `preview-capture` feature.
+# Docs: CONTRIBUTING.md → "Desktop build on Linux (libspa/pipewire)".
+check:
+    #!/usr/bin/env bash
+    set -uo pipefail
+    if out="$(cargo check --workspace 2>&1)"; then
+        exit 0
+    fi
+    if echo "$out" | grep -qE 'in crate .spa_sys.|registry/src/[^[:space:]]*/libspa-[0-9]'; then
+        echo "⚠ libspa/pipewire header skew — retrying without shannon-desktop's preview-capture (see CONTRIBUTING.md → 'Desktop build on Linux (libspa/pipewire)')"
+        cargo check --workspace --exclude shannon-desktop || exit 1
+        exec cargo check -p shannon-desktop --no-default-features --features tauri
+    fi
+    printf '%s\n' "$out"
+    exit 1
+
 # ---------- Lint / fmt ----------
 
 fmt:
     cargo fmt --all
 
-# Note: clippy runs against the workspace library + bin targets only (matches
-# the original shannon-code CI gate). Test targets are intentionally NOT
-# linted here -- the upstream test code uses `unwrap()` extensively and was
-# never subject to `clippy --all-targets` in the original justfile; re-linting
-# it would block CI for pre-existing patterns the migration does not own.
+# Clippy runs against EVERY target (lib, bins, tests, benches, examples) via
+# --all-targets, matching the CI Clippy job. All targets are clippy-clean —
+# including the shannon-core `unwrap_used` warn (tests use expect()/expect_err()
+# with reasons) — so any regression in any target fails this gate.
 lint:
-    cargo clippy --workspace -- -D warnings
+    cargo clippy --workspace --all-targets -- -D warnings
     cd desktop/ui && pnpm lint
     cd gateway && pnpm typecheck
 
@@ -78,13 +98,13 @@ lint:
 # scenarios  - YAML 声明式场景测试
 
 # 提交前快路径(跳过 doctest,跳过 release lint)
-dev:
+dev: version-check
     cargo check --workspace
-    cargo clippy --workspace
-    cargo nextest run --workspace || cargo test --workspace -- --test-threads=1
+    cargo clippy --workspace --all-targets
+    @cargo nextest run --workspace || (echo "✗ tests failed — reproduce CI behavior with: just test-ci (retries=2, fail-fast=false)" && exit 1)
 
-# 完整测试(nextest + doctests)
-test-all: test-rust
+# 完整测试(CI 同参 + doctests)
+test-all: test-ci
     cargo test --workspace --doc
 
 # 微基准
@@ -119,8 +139,13 @@ eval-diff a b:
 
 # ---------- Test ----------
 
+# 快路径:默认 profile(fail-fast,无重试)— 开发者日常快速反馈。
 test-rust:
-    cargo nextest run --workspace || cargo test --workspace -- --test-threads=1
+    @cargo nextest run --workspace || (echo "✗ tests failed — reproduce CI behavior with: just test-ci (retries=2, fail-fast=false)" && exit 1)
+
+# CI 同参复现（retries=2、fail-fast=false、core/commands 串行组，见 .config/nextest.toml）
+test-ci:
+    cargo nextest run --workspace --profile ci
 
 test-ui:
     cd desktop/ui && pnpm test:ci
@@ -131,6 +156,14 @@ test-gateway:
 test: test-rust test-ui test-gateway
 
 # ---------- Supply chain ----------
+
+# Version lockstep guard (review F48): the six release-version sources (root
+# Cargo.toml + desktop/Cargo.toml + tauri.conf.json + gateway/package.json +
+# desktop/ui/package.json + shannon-plugin-api) must agree with the workspace
+# version. Wired into `just dev`; ci.yml's facade-facts job runs the same
+# script so drift can never reach release.yml's prep guard again.
+version-check:
+    @bash scripts/check-version-lockstep.sh
 
 deny:
     cargo deny check
@@ -152,7 +185,7 @@ ci: fmt lint deny gen-protocol test
 # CI regenerates this as an artifact on every run (ci.yml `Generate Metrics`);
 # this recipe refreshes the *committed* snapshot locally — e.g. before a
 # test-count-changing PR or a release. See .github/workflows/metrics-update.yml
-# for the (opt-in) automated weekly refresh.
+# for the automated weekly refresh (cron fires from `main`; PRs the result).
 metrics:
     bash scripts/gen-metrics.sh
 

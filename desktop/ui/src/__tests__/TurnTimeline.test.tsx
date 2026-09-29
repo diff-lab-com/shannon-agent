@@ -1,7 +1,8 @@
 // TurnTimeline page tests (§4.14). Mocks @/lib/tauri-api getTraceTimeline —
-// no Tauri runtime involved. Covers: header/chips, turn cards with tool
-// waterfall rows (incl. interrupted-call error marking), the cumulative
-// curve card, the i18n-driven empty state, and the load-failure state.
+// no Tauri runtime involved. Covers: subtitle row/summary chips, turn cards
+// with tool waterfall rows (incl. interrupted-call error marking), the
+// cumulative curve card, the i18n-driven empty state, and the load-failure
+// state. (The page title itself lives in the Header's TITLE_MAP.)
 
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { render, screen, waitFor } from '@testing-library/react'
@@ -92,7 +93,9 @@ describe('TurnTimeline', () => {
     await waitFor(() => {
       expect(screen.getByText('Turn 1')).toBeInTheDocument()
     })
-    expect(screen.getByRole('heading', { name: 'Turn Timeline' })).toBeInTheDocument()
+    // The page-local h1 was converged into the Header's TITLE_MAP
+    // (header.title.timeline) — the panel row carries the model subtitle.
+    expect(screen.getByText('claude-sonnet-4-20250514')).toBeInTheDocument()
     expect(screen.getByText('Turn 2')).toBeInTheDocument()
 
     // Tool names across the waterfall rows.
@@ -173,7 +176,8 @@ describe('TurnTimeline — reason badges and locale (B4 §7-28)', () => {
     getTraceTimeline.mockResolvedValue(fixtureWithReason('failed'))
     renderAt()
     const badge = await screen.findByText('Failed')
-    expect(badge.className).toContain('bg-error/10')
+    // G7 2026-09-30: error tone = MD3 container pair (was bg-error/10 tint).
+    expect(badge.className).toContain('bg-error-container')
   })
 
   it('renders neutral stopping reasons (interrupted) without error styling', async () => {

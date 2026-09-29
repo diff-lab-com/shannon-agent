@@ -101,8 +101,8 @@ fn every_pub_protocol_type_is_emitted() {
         .iter()
         .filter(|name| {
             !GENERATION_SKIPPED.contains(name)
-                && !(generated.contains(&format!("export interface {name} {{"))
-                    || generated.contains(&format!("export type {name} =")))
+                && !generated.contains(&format!("export interface {name} {{"))
+                && !generated.contains(&format!("export type {name} ="))
         })
         .copied()
         .collect();

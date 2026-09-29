@@ -9,6 +9,7 @@ use axum::{
 use futures::StreamExt;
 use serde::{Deserialize, Serialize};
 use shannon_core::api_server::{MessageAttachment, attachments_to_blocks};
+use std::sync::Arc;
 use uuid::Uuid;
 
 #[derive(Debug, Deserialize, utoipa::ToSchema)]
@@ -196,25 +197,135 @@ pub async fn post_message(
         guard.process_query(context, None).await
     };
     let engine_for_events = engine.clone();
-    let stream = query_stream.map(move |item| {
-        // review §P1-6: tap ConversationUpdate so subsequent REST messages
-        // on this session see the prior context. We must NOT hold the SSE
-        // stream's exclusive access to the engine when re-locking here, hence
-        // the explicit clone + per-event try-lock acquisition.
-        if let Ok(shannon_core::query_engine::QueryEvent::ConversationUpdate { messages, .. }) =
-            item.as_ref()
-        {
-            if let Ok(mut guard) = engine_for_events.try_lock() {
-                guard.restore_messages(messages.clone());
+    let engine_for_flush = engine_for_events.clone();
+    // review F45: when a concurrent request on the same session holds the
+    // engine lock, the per-event try_lock below used to fail and the update
+    // was silently dropped — the next message then ran without this turn's
+    // context. Contended updates are now retained and flushed once the
+    // stream ends, with a bounded retry.
+    let pending_restore: PendingRestore = Arc::new(std::sync::Mutex::new(None));
+    let stasher = Arc::clone(&pending_restore);
+    let stream = query_stream
+        .map(move |item| {
+            // review §P1-6: tap ConversationUpdate so subsequent REST messages
+            // on this session see the prior context. We must NOT hold the SSE
+            // stream's exclusive access to the engine when re-locking here,
+            // hence the explicit clone + per-event try-lock acquisition.
+            if let Ok(shannon_core::query_engine::QueryEvent::ConversationUpdate {
+                messages, ..
+            }) = item.as_ref()
+            {
+                if let Ok(mut guard) = engine_for_events.try_lock() {
+                    guard.restore_messages(messages.clone());
+                    if let Ok(mut pending) = stasher.lock() {
+                        *pending = None;
+                    }
+                } else if let Ok(mut pending) = stasher.lock() {
+                    *pending = Some(messages.clone());
+                }
+            }
+            Ok(item.map(sse::event).unwrap_or_else(|e| {
+                axum::response::sse::Event::default()
+                    .event("error")
+                    .data(e.to_string())
+            }))
+        })
+        // End-of-stream flush: emits nothing on the wire; it only performs
+        // the retained write-back (F45) after the last event.
+        .chain(restore_flush_stream(engine_for_flush, pending_restore));
+    // T4: the response body cannot outlive the server — it ends with a
+    // terminal `error` frame on shutdown (SIGINT/SIGTERM drain) or when the
+    // overall stream duration cap expires (a wedged query can no longer
+    // hold the connection and its keepalive pings open forever). Scoped to
+    // this SSE body stream only; there is deliberately no per-request
+    // middleware timeout that could kill a long legitimate turn.
+    let guarded =
+        sse::with_shutdown_and_cap(stream, state.shutdown.clone(), SSE_STREAM_MAX_DURATION);
+    Ok(Sse::new(guarded).keep_alive(KeepAlive::default()))
+}
+
+/// Overall cap on one SSE response stream (T4), measured from stream start.
+/// Exists so a wedged query cannot hold an SSE connection open forever; at
+/// 30 minutes it is orders of magnitude above any legitimate turn, so it is
+/// not a per-request timeout. On expiry the stream ends with the terminal
+/// `error` event (`sse::with_shutdown_and_cap`).
+pub(crate) const SSE_STREAM_MAX_DURATION: std::time::Duration =
+    std::time::Duration::from_secs(30 * 60);
+
+// ── ConversationUpdate write-back (review F45) ──────────────────────────
+
+/// Latest un-restored `ConversationUpdate` payload from a live SSE stream.
+type PendingRestore = std::sync::Arc<std::sync::Mutex<Option<Vec<shannon_engine::api::Message>>>>;
+
+/// How long / how often the end-of-stream restore retries the engine lock.
+/// The lock is held only while a concurrent request builds its query context
+/// or performs its own restore, so it frees quickly; five seconds of
+/// sustained contention means something is wedged and we give up loudly
+/// (with a warn!) instead of silently dropping the turn.
+const RESTORE_RETRY_BUDGET: std::time::Duration = std::time::Duration::from_secs(5);
+const RESTORE_RETRY_INTERVAL: std::time::Duration = std::time::Duration::from_millis(100);
+
+/// Write `messages` back into the engine's conversation history, retrying
+/// the lock for up to [`RESTORE_RETRY_BUDGET`]. Returns `false` when the
+/// write-back was abandoned (the caller warns — the next message on this
+/// session may run without this turn's context).
+async fn restore_with_retry(
+    engine: &tokio::sync::Mutex<shannon_core::query_engine::QueryEngine>,
+    messages: Vec<shannon_engine::api::Message>,
+) -> bool {
+    restore_with_retry_budget(
+        engine,
+        messages,
+        RESTORE_RETRY_BUDGET,
+        RESTORE_RETRY_INTERVAL,
+    )
+    .await
+}
+
+/// [`restore_with_retry`] with injectable budget/interval (test seam).
+async fn restore_with_retry_budget(
+    engine: &tokio::sync::Mutex<shannon_core::query_engine::QueryEngine>,
+    messages: Vec<shannon_engine::api::Message>,
+    budget: std::time::Duration,
+    interval: std::time::Duration,
+) -> bool {
+    let deadline = tokio::time::Instant::now() + budget;
+    loop {
+        match engine.try_lock() {
+            Ok(mut guard) => {
+                guard.restore_messages(messages);
+                return true;
+            }
+            Err(_contended) if tokio::time::Instant::now() < deadline => {
+                tokio::time::sleep(interval).await;
+            }
+            Err(_contended) => return false,
+        }
+    }
+}
+
+/// End-of-stream flush for the retained restore payload (F45): a zero-item
+/// stream that performs the bounded-retry write-back exactly once when the
+/// SSE body finishes. If the stream is dropped mid-flight (client
+/// disconnect) the flush is skipped — the same failure mode as before this
+/// fix, never worse.
+fn restore_flush_stream(
+    engine: std::sync::Arc<tokio::sync::Mutex<shannon_core::query_engine::QueryEngine>>,
+    pending: PendingRestore,
+) -> impl futures::Stream<Item = Result<axum::response::sse::Event, std::convert::Infallible>> {
+    futures::stream::unfold((engine, pending), |(engine, pending)| async move {
+        let messages = pending.lock().ok().and_then(|mut p| p.take());
+        if let Some(messages) = messages {
+            if !restore_with_retry(&engine, messages).await {
+                tracing::warn!(
+                    budget = ?RESTORE_RETRY_BUDGET,
+                    "abandoning ConversationUpdate restore: engine lock stayed contended; \
+                     the next message on this session may miss this turn's context"
+                );
             }
         }
-        Ok(item.map(sse::event).unwrap_or_else(|e| {
-            axum::response::sse::Event::default()
-                .event("error")
-                .data(e.to_string())
-        }))
-    });
-    Ok(Sse::new(stream).keep_alive(KeepAlive::default()))
+        None
+    })
 }
 
 // ── Routine trigger (P0-3) ──────────────────────────────────────────────
@@ -369,5 +480,110 @@ mod tests {
     fn api_error_session_not_found_is_stable() {
         let err = ApiError::session_not_found();
         assert_eq!(err.code, ApiError::SESSION_NOT_FOUND_CODE);
+    }
+
+    // ── F45: ConversationUpdate restore write-back ──────────────────────
+
+    fn test_engine() -> shannon_core::query_engine::QueryEngine {
+        let config = shannon_engine::api::LlmClientConfig {
+            thinking_type: None,
+            provider: shannon_engine::api::types::LlmProvider::Ollama,
+            model: "test-model".into(),
+            base_url: "http://127.0.0.1:1".into(),
+            ..Default::default()
+        };
+        let client = shannon_engine::api::LlmClient::new_unauthenticated(config);
+        shannon_core::query_engine::QueryEngine::with_defaults(
+            client,
+            shannon_core::tools::ToolRegistry::new(),
+            shannon_engine::permissions::PermissionManager::new(),
+            shannon_engine::state::StateManager::new(),
+        )
+    }
+
+    fn turn(role: &str, text: &str) -> shannon_engine::api::Message {
+        shannon_engine::api::Message {
+            role: role.to_string(),
+            content: shannon_engine::api::MessageContent::Text(text.to_string()),
+        }
+    }
+
+    #[tokio::test]
+    async fn restore_writes_back_immediately_when_uncontended() {
+        let engine = Arc::new(tokio::sync::Mutex::new(test_engine()));
+        assert!(restore_with_retry(&engine, vec![turn("user", "hi")]).await);
+        assert_eq!(engine.lock().await.conversation_messages().len(), 1);
+    }
+
+    #[tokio::test]
+    async fn restore_retries_until_contended_lock_frees() {
+        let engine = Arc::new(tokio::sync::Mutex::new(test_engine()));
+        // Hold the engine lock the way a concurrent request would (context
+        // building / its own restore): the retry must wait it out, not drop
+        // the update.
+        let guard = engine.lock().await;
+        let eng = Arc::clone(&engine);
+        let worker = tokio::spawn(async move {
+            restore_with_retry_budget(
+                &eng,
+                vec![turn("user", "hi")],
+                std::time::Duration::from_secs(5),
+                std::time::Duration::from_millis(20),
+            )
+            .await
+        });
+        tokio::time::sleep(std::time::Duration::from_millis(150)).await;
+        assert!(
+            !worker.is_finished(),
+            "retry must still be waiting while the lock is held"
+        );
+        drop(guard);
+        let restored = tokio::time::timeout(std::time::Duration::from_secs(5), worker)
+            .await
+            .expect("restore must complete shortly after the lock frees")
+            .expect("worker join");
+        assert!(restored);
+        assert_eq!(engine.lock().await.conversation_messages().len(), 1);
+    }
+
+    #[tokio::test]
+    async fn restore_gives_up_and_reports_after_the_budget() {
+        let engine = Arc::new(tokio::sync::Mutex::new(test_engine()));
+        let guard = engine.lock().await; // never released during the retry
+        let restored = restore_with_retry_budget(
+            &engine,
+            vec![turn("user", "hi")],
+            std::time::Duration::from_millis(60),
+            std::time::Duration::from_millis(10),
+        )
+        .await;
+        assert!(!restored, "sustained contention must end in a false return");
+        // Release before re-locking for the assertion — the guard is still
+        // in scope here and tokio::sync::Mutex has no reentrancy.
+        drop(guard);
+        assert_eq!(
+            engine.lock().await.conversation_messages().len(),
+            0,
+            "nothing was written back"
+        );
+    }
+
+    #[tokio::test]
+    async fn restore_flush_stream_ends_without_emitting_events() {
+        // The flush is a zero-item stream: chaining it must not add anything
+        // to the SSE wire.
+        let engine = Arc::new(tokio::sync::Mutex::new(test_engine()));
+        let pending: PendingRestore = Arc::new(std::sync::Mutex::new(Some(vec![
+            turn("user", "hi"),
+            turn("assistant", "hello"),
+        ])));
+        let flush = restore_flush_stream(Arc::clone(&engine), pending);
+        let items: Vec<_> = flush.collect().await;
+        assert!(items.is_empty(), "flush stream must emit nothing");
+        assert_eq!(
+            engine.lock().await.conversation_messages().len(),
+            2,
+            "the retained payload was written back"
+        );
     }
 }

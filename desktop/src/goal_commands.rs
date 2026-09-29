@@ -1369,11 +1369,11 @@ impl<R: tauri::Runtime> EngineGoalTurnRunner<R> {
                     QueryEvent::Failed { error, .. } => {
                         let _ = self.app.emit(
                             event_names::QUERY_FAILED,
-                            crate::events::QueryFailedPayload {
-                                query_id: qid.clone(),
-                                error: error.clone(),
-                                session_id: Some(self.session_id.to_string()),
-                            },
+                            crate::events::query_failed_payload(
+                                &qid,
+                                &error,
+                                Some(self.session_id.to_string()),
+                            ),
                         );
                         observation.failure = Some(error);
                         break;
@@ -1384,11 +1384,11 @@ impl<R: tauri::Runtime> EngineGoalTurnRunner<R> {
                     let err = e.to_string();
                     let _ = self.app.emit(
                         event_names::QUERY_FAILED,
-                        crate::events::QueryFailedPayload {
-                            query_id: qid.clone(),
-                            error: err.clone(),
-                            session_id: Some(self.session_id.to_string()),
-                        },
+                        crate::events::query_failed_payload(
+                            &qid,
+                            &err,
+                            Some(self.session_id.to_string()),
+                        ),
                     );
                     observation.failure = Some(err);
                     break;

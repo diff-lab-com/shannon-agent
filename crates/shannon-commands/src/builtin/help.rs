@@ -781,16 +781,30 @@ pub fn get_command_help(command_name: &str) -> Option<CommandHelpEntry> {
             .with_when_to_use("Use to view and manage MCP server configurations stored in .shannon/mcp.json")
             .with_related(vec!["config", "tools"])
         ),
+        // R1-6 (decision ② step 1): /permissions is the permission-profile
+        // command (formerly /profile); the tool allow/deny view lives at
+        // /perms and /perm.
         "permissions" => Some(
             CommandHelpEntry::new(
                 "permissions".to_string(),
-                "View and manage tool permissions".to_string(),
+                "Manage permission profiles — list, show, set, create".to_string(),
                 HelpCategory::System,
             )
-            .with_aliases(vec!["perms", "perm"])
-            .with_arg_hint("[status|allow <tool>|deny <tool>|reset]")
-            .with_examples(vec!["/permissions", "/permissions status", "/permissions allow Bash", "/permissions deny FileWrite", "/permissions reset"])
-            .with_when_to_use("Use to view current permission policies, allow or deny tools without prompting, or reset overrides")
+            .with_arg_hint("[list|show|set|create] [name]")
+            .with_examples(vec!["/permissions", "/permissions list", "/permissions show", "/permissions set balanced", "/permissions create my-profile"])
+            .with_when_to_use("Use to view or switch permission profiles that control which tools are auto-approved, need confirmation, or are denied. Tool allow/deny overrides live at /perms.")
+            .with_related(vec!["config", "doctor"])
+        ),
+        "perms" => Some(
+            CommandHelpEntry::new(
+                "perms".to_string(),
+                "View and manage tool permissions (status, allow/deny, mode)".to_string(),
+                HelpCategory::System,
+            )
+            .with_aliases(vec!["perm"])
+            .with_arg_hint("[status|allow <tool>|deny <tool>|reset|mode]")
+            .with_examples(vec!["/perms", "/perms status", "/perms allow Bash", "/perms deny FileWrite", "/perms reset"])
+            .with_when_to_use("Use to view current permission policies, allow or deny tools without prompting, or reset overrides. Permission profiles live at /permissions.")
             .with_related(vec!["config", "doctor"])
         ),
         "plan" => Some(
@@ -1223,6 +1237,8 @@ pub fn categorize_commands() -> Vec<(&'static str, Vec<(String, String)>)> {
 
 /// Generate help output
 pub fn generate_help(command_filter: Option<&str>) -> String {
+    use rust_i18n::t;
+
     if let Some(cmd) = command_filter {
         if let Some(entry) = get_command_help(cmd) {
             entry.to_markdown()
@@ -1264,8 +1280,7 @@ pub fn generate_help(command_filter: Option<&str>) -> String {
             }
         }
 
-        output
-            .push_str("Use `/help <command>` for detailed information about a specific command.\n");
+        output.push_str(t!("commands.help.footer").as_ref());
         output
     }
 }

@@ -57,7 +57,7 @@ export function ContextPanelContent({ usage, activeToolCalls }: { usage: UsagePa
                     <span className="font-bold">{pct.toFixed(0)}%</span>
                   </div>
                   <div className="w-full h-1.5 bg-surface-container-high rounded-full overflow-hidden">
-                    <div className={cn("h-full rounded-full transition-all duration-500", barColor)} style={{ width: `${pct}%` }} />
+                    <div className={cn("h-full rounded-full transition-all duration-(--duration-slower)", barColor)} style={{ width: `${pct}%` }} />
                   </div>
                   <p className="text-label-sm text-on-surface-variant mt-xs">{total.toLocaleString()} / {max.toLocaleString()}</p>
                 </div>
@@ -81,7 +81,7 @@ export function ContextPanelContent({ usage, activeToolCalls }: { usage: UsagePa
                 <span className="font-bold text-on-surface tabular-nums">{budgetPct?.toFixed(0)}%</span>
               </div>
               <div className="w-full h-1.5 bg-surface-container-high rounded-full overflow-hidden">
-                <div className={cn('h-full rounded-full transition-all duration-500', budgetBarColor)} style={{ width: `${budgetPct ?? 0}%` }} />
+                <div className={cn('h-full rounded-full transition-all duration-(--duration-slower)', budgetBarColor)} style={{ width: `${budgetPct ?? 0}%` }} />
               </div>
             </>
           ) : (

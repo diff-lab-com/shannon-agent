@@ -31,7 +31,7 @@ export default function DeleteSessionModal({ t, target, pending, onCancel, onCon
     >
       <ModalBody>
         <div className="flex items-center gap-sm mb-md">
-          <span className="material-symbols-outlined text-error text-[24px]">delete</span>
+          <span className="material-symbols-outlined text-error icon-lg">delete</span>
           <h3 className="font-headline-md text-on-surface">
             {permanent ? t('chat.delete.permanent.title') : t('chat.delete.title')}
           </h3>

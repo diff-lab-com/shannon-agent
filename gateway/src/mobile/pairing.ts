@@ -161,6 +161,70 @@ export class PairTokenStore {
     return this.consumeFromFile(token);
   }
 
+  /**
+   * T9: validate a token WITHOUT consuming it. The desktop proves ownership
+   * with a freshly minted token on the read-only `shannon/pairing.pending`
+   * RPC — burning a single-use token on every list refresh would make the
+   * desktop mint one per poll, so reads verify and only the mutating
+   * `shannon/pairing.approve` consumes. File mode reads the JSONL and checks
+   * presence + expiry without rewriting (same tolerance of malformed lines as
+   * `consumeFromFile`); memory mode is a plain map lookup.
+   */
+  verify(token: string): PairTokenRecord | null {
+    if (!this.filePath) {
+      const record = this.pending.get(token);
+      if (!record) return null;
+      if (this.now() >= record.expiresAt) return null;
+      return record;
+    }
+    let raw: string;
+    try {
+      raw = readFileSync(this.filePath, "utf8");
+    } catch {
+      return null; // no file yet → no tokens
+    }
+    const now = this.now();
+    for (const line of raw.split("\n")) {
+      const trimmed = line.trim();
+      if (trimmed.length === 0) continue;
+      const rec = parseTokenRecord(trimmed);
+      if (!rec) continue;
+      if (rec.token === token && now < rec.expiresAt) return rec;
+    }
+    return null;
+  }
+
+  /**
+   * Freshest live (unexpired) token without consuming it — a peek, unlike
+   * `consume`. Serves the v0.13 direct-link pairing flavor: the sealed
+   * handshake needs the token the phone scanned while `shannon/pair` (later,
+   * on the sealed channel) is what actually consumes it single-use.
+   */
+  latest(): PairTokenRecord | null {
+    const now = this.now();
+    let best: PairTokenRecord | null = null;
+    const consider = (rec: PairTokenRecord | null): void => {
+      if (!rec || now >= rec.expiresAt) return;
+      if (!best || rec.issuedAt > best.issuedAt) best = rec;
+    };
+    if (!this.filePath) {
+      for (const rec of this.pending.values()) consider(rec);
+    } else {
+      let raw: string;
+      try {
+        raw = readFileSync(this.filePath, "utf8");
+      } catch {
+        return null; // no file yet → no tokens
+      }
+      for (const line of raw.split("\n")) {
+        const trimmed = line.trim();
+        if (trimmed.length === 0) continue;
+        consider(parseTokenRecord(trimmed));
+      }
+    }
+    return best;
+  }
+
   private consumeFromFile(token: string): PairTokenRecord | null {
     let raw: string;
     try {
@@ -700,6 +764,12 @@ export interface MobileHandlersOptions {
    * self-gate on the bound session.
    */
   tasks?: MethodHandlers;
+  /**
+   * T9: the pairing-access handlers (`shannon/pairing.pending` +
+   * `shannon/pairing.approve`), built by bootstrap via `createPairingAccess`.
+   * They self-gate on a trusted device session or a valid pair token.
+   */
+  access?: MethodHandlers;
 }
 
 /**
@@ -725,5 +795,5 @@ export function createMobileHandlers(opts: MobileHandlersOptions): MethodHandler
     // re-checks the registry (which refreshes from disk on read).
     isDeviceTrusted: (deviceId) => opts.registry.has(deviceId),
   });
-  return { ...engine, ...pairing, ...opts.tasks };
+  return { ...engine, ...pairing, ...opts.tasks, ...opts.access };
 }

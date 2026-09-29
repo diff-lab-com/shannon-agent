@@ -69,7 +69,7 @@ export function MermaidRenderer({ source, title }: MermaidRendererProps) {
           role="alert"
           className="m-sm p-sm rounded-lg border border-error/30 bg-error-container/20 text-error text-label-sm break-words"
         >
-          <span className="material-symbols-outlined mr-xs align-middle text-[14px]">error</span>
+          <span className="material-symbols-outlined mr-xs align-middle icon-sm">error</span>
           {failedLabel}
           {failed}
         </div>

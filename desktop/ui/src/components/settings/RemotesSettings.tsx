@@ -148,7 +148,7 @@ function RemotesSettings(): React.JSX.Element {
               return (
                 <div
                   key={target.name}
-                  className="flex items-center gap-sm rounded border p-sm"
+                  className="flex items-center gap-sm rounded-sm border p-sm"
                   data-testid={`remotes-target-${target.name}`}
                 >
                   <Icon name={target.kind === 'ssh' ? 'terminal' : 'deployed_code'} />
@@ -334,7 +334,7 @@ function AddRemoteDialog({ open, onClose, onAdded }: AddRemoteDialogProps): Reac
         <label className="block space-y-xs">
           <span className="text-label-md">{t('settings.remotes.fieldKind')}</span>
           <select
-            className="h-8 w-full min-w-0 rounded-lg border border-input bg-transparent px-2.5 py-1 text-base transition-colors outline-none focus-visible:border-ring focus-visible:ring-3 focus-visible:ring-ring/50 md:text-sm dark:bg-input/30"
+            className="h-8 w-full min-w-0 rounded-lg border border-input bg-transparent px-2.5 py-xs text-base transition-colors outline-none focus-visible:border-ring focus-visible:ring-3 focus-visible:ring-ring/50 md:text-sm dark:bg-input/30"
             value={kind}
             onChange={(e) => setKind(e.target.value as 'ssh' | 'docker')}
             data-testid="remotes-dialog-kind"

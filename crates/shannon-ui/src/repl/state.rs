@@ -367,6 +367,10 @@ pub struct ReplState {
     /// blocking, and Esc kills the child's whole process group. See
     /// `repl::commands::{ShellJob, start_inline_shell, poll_inline_shell_jobs}`.
     pub shell_job: Option<super::commands::ShellJob>,
+    /// R1-6 (decision ② step 1): whether the one-time `/profile` →
+    /// `/permissions` migration hint has been shown this REPL session.
+    /// Printed above `/profile`'s output exactly once, never repeated.
+    pub profile_migration_hint_shown: bool,
 }
 
 /// Pending MCP elicitation request forwarded from the provider to the TUI.
@@ -660,6 +664,7 @@ impl Default for ReplState {
             prompt_bar_color: None,
             sidebar_tab: SidebarTab::default(),
             approval_mode_label: "EDIT".to_string(),
+            profile_migration_hint_shown: false,
             active_agents: Vec::new(),
             agent_dashboard: None,
             diagnostic_store: crate::lsp_bridge::DiagnosticStore::new(),

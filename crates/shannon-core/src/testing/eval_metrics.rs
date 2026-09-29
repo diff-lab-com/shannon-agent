@@ -1084,6 +1084,7 @@ mod tests {
             }),
             // Turn 1 closes with a usage triple.
             SessionEventBody::TurnEnd(TurnEndPayload {
+                llm_steps: None,
                 reason: TurnEndPayload::REASON_COMPLETED.into(),
                 usage: Some(usage(100, 20, 5, 50, 0.25)),
                 error: None,
@@ -1154,6 +1155,7 @@ mod tests {
             }),
             // Final turn closes (interrupted marker exercises the signal).
             SessionEventBody::TurnEnd(TurnEndPayload {
+                llm_steps: None,
                 reason: TurnEndPayload::REASON_INTERRUPTED.into(),
                 usage: Some(usage(30, 10, 0, 80, 0.05)),
                 error: None,
@@ -1217,6 +1219,7 @@ mod tests {
             dir.path(),
             "one",
             vec![SessionEventBody::TurnEnd(TurnEndPayload {
+                llm_steps: None,
                 reason: TurnEndPayload::REASON_COMPLETED.into(),
                 usage: Some(usage(10, 5, 0, 0, 0.01)),
                 error: None,
@@ -1233,6 +1236,7 @@ mod tests {
                 call("c", "Read", r#"{"p":1}"#),
                 result("c", "Read", false),
                 SessionEventBody::TurnEnd(TurnEndPayload {
+                    llm_steps: None,
                     reason: TurnEndPayload::REASON_COMPLETED.into(),
                     usage: Some(usage(4, 2, 1, 3, 0.02)),
                     error: None,

@@ -30,8 +30,21 @@ use shannon_types::session_event::{
 };
 use tempfile::TempDir;
 
+/// Process-lifetime hermetic HOME for the spawned binary: the headless
+/// startup gate reads `~/.shannon/meta.json`, so a developer home last
+/// written by a NEWER build aborts the binary with the downgrade refusal
+/// before the trace behavior under test ever runs.
+fn hermetic_home() -> &'static std::path::Path {
+    static HOME: std::sync::OnceLock<TempDir> = std::sync::OnceLock::new();
+    HOME.get_or_init(|| TempDir::new().expect("create hermetic test home"))
+        .path()
+}
+
 fn shannon_bin() -> Command {
-    Command::cargo_bin("shannon").expect("shannon binary")
+    let mut cmd = Command::cargo_bin("shannon").expect("shannon binary");
+    cmd.env("HOME", hermetic_home());
+    cmd.env("USERPROFILE", hermetic_home());
+    cmd
 }
 
 // ── Deterministic fixture ──────────────────────────────────────────────
@@ -97,6 +110,7 @@ fn seed(container: &std::path::Path) {
             cost_usd: Some(0.02),
         }),
         error: None,
+        llm_steps: None,
     }));
 
     w.close().unwrap();
@@ -193,6 +207,7 @@ fn replay_rendering_matches_live_broadcast_content_and_snaps() {
         registry.register(Box::new(Echo)).unwrap();
 
         let client_cfg = LlmClientConfig {
+            thinking_type: None,
             api_key: "k".into(),
             base_url: server.url(),
             model: "claude-sonnet-4-20250514".into(),
@@ -223,7 +238,7 @@ fn replay_rendering_matches_live_broadcast_content_and_snaps() {
         // low-risk `echo` tool executes.
         let mut permissions = PermissionManager::new();
         permissions.set_approval_mode(shannon_engine::permissions::ApprovalMode::FullAuto);
-        let mut engine = shannon_core::query_engine::QueryEngine::with_session_id(
+        let engine = shannon_core::query_engine::QueryEngine::with_session_id(
             shannon_engine::api::LlmClient::new(client_cfg),
             registry,
             permissions,

@@ -1,4 +1,7 @@
 _ar: "&العربية"
+# Arabic locale for Shannon Code
+
+# ── REPL Messages ──────────────────────────────────────────────────────────
 repl:
   chat_cleared: "تم مسح المحادثة."
   unknown_command: "أمر غير معروف: /%{name}. اكتب /help للأوامر المتاحة."
@@ -13,6 +16,10 @@ repl:
   cancelled: "تم الإلغاء"
   cancelled_by_user: "تم الإلغاء بواسطة المستخدم."
   query_task_panicked: "تعطلت مهمة الاستعلام"
+  tools_disabled: "تم تعطيل الأدوات — سيستجيب النموذج كنص عادي. استخدم /tools لإعادة تفعيلها."
+  tools_enabled: "تمت إعادة تفعيل الأدوات."
+
+# ── Status Messages ────────────────────────────────────────────────────────
 status:
   ready: "جاهز"
   processing: "جارٍ المعالجة..."
@@ -23,7 +30,26 @@ status:
   completed: "مكتمل"
   failed: "فشل"
   cancelled_status: "تم الإلغاء"
+
+# ── Command Descriptions ───────────────────────────────────────────────────
 commands:
+  help:
+    title: "الأوامر المتاحة"
+    no_help_found: "لم يتم العثور على مساعدة لـ: %{topic}"
+    footer: "استخدم `/help <الأمر>` للحصول على معلومات مفصلة عن أمر محدد.\n"
+  clear:
+    title: "مسح المحادثة"
+    confirm: "مسح جميع الرسائل؟ لا يمكن التراجع عن هذا الإجراء."
+  quit:
+    title: "إنهاء الجلسة؟"
+    confirm: "لديك نشاط غير محفوظ. هل تريد إنهاء الجلسة على أي حال؟"
+  model:
+    title: "تعيين النموذج"
+    prompt: "أدخل اسم النموذج (مثال claude-3.5-sonnet, gpt-4o)..."
+    set: "تم تعيين النموذج إلى: %{name}"
+    context_unknown: "غير معروف (حسب المزود)"
+    cost_unknown: "التقدير غير متاح"
+    cost_free_local: "مجاني (محلي)"
   remote:
     dashboard_title: "الأهداف البعيدة — تنفيذ الأدوات يتبع الهدف النشط."
     none: "لا توجد أهداف بعد. أضف واحداً عبر `/remote add ssh <user@host> <اسم> <مسار_العمل>`."
@@ -54,19 +80,38 @@ commands:
     resumed: "▶ تمت استئناف الهدف (إعادة تعيين عداد الجولات)."
     complete: "✓ تحقق الهدف بعد %{iterations} جولة: %{objective}"
     conflict_loop: "هناك /ralph أو /loop نشط — أوقفه أولًا ثم عيّن /goal."
-  help:
-    title: "الأوامر المتاحة"
-    no_help_found: "لم يتم العثور على مساعدة لـ: %{topic}"
-  clear:
-    title: "مسح المحادثة"
-    confirm: "مسح جميع الرسائل؟ لا يمكن التراجع عن هذا الإجراء."
-  quit:
-    title: "إنهاء الجلسة؟"
-    confirm: "لديك نشاط غير محفوظ. هل تريد إنهاء الجلسة على أي حال؟"
-  model:
-    title: "تعيين النموذج"
-    prompt: "أدخل اسم النموذج (مثال claude-3.5-sonnet, gpt-4o)..."
-    set: "تم تعيين النموذج إلى: %{name}"
+  connect:
+    success: "✓ تم الاتصال بـ %{provider}"
+    choose_model: "اختر نموذجًا أدناه (Enter = الافتراضي، ↑↓ = تحديد، Esc = استخدام الافتراضي)."
+    refresh_started: "جارٍ تحديث كتالوج النماذج في الخلفية…"
+    refresh_success: "تم تحديث الكتالوج — %{count} نماذج متاحة."
+    refresh_failed: "غير متصل — سيتم استخدام الكتالوج المخزن مؤقتًا."
+    dashboard_header: "اتصل بمزود — لا حاجة إلى متغير بيئة."
+    dashboard_providers: "المزودون:"
+    dashboard_usage: "الاستخدام: /connect <المزود> <مفتاح-api>"
+    dashboard_help: "التفاصيل: /help connect"
+    key_stored: "✓ تم تخزين مفتاح API لـ '%{provider}' (الخدمة: %{service})"
+    config_saved: "✓ تم حفظ إعدادات المزود: %{path}"
+    reusing_key: "• إعادة استخدام المفتاح المخزن لـ '%{provider}' (الخدمة: %{service})"
+    cred_verified: "✓ تم التحقق من بيانات الاعتماد — '%{model}' قابل للوصول بهذا المفتاح."
+    auth_failed: "✗ فشل التحقق للمزود '%{provider}'. تم تخزين المفتاح لكن المزود رفضه — تحقق من المفتاح وشغّل /connect مرة أخرى."
+    verify_warning: "⚠ تعذر التحقق الكامل من بيانات اعتماد '%{provider}' (%{error}). المفتاح مخزّن؛ قد يعمل على أي حال — جرّب إرسال رسالة."
+    probe_failed: "⚠ فشل اختبار بيانات الاعتماد لـ '%{provider}'. المفتاح مخزّن؛ قد يعمل على أي حال."
+    switched: "✓ تم التبديل إلى %{provider} — النموذج: %{model} (بيانات اعتماد جديدة نشطة؛ لا حاجة لإعادة التشغيل)"
+    storing_error: "تخزين بيانات الاعتماد: %{error}"
+    saving_error: "حفظ providers.toml: %{error}"
+  provider:
+    available: "المزودون المتاحون:"
+    legend: "* = الحالي | استخدم /provider <اسم> للتبديل"
+    switched: "المزود: %{provider} | النموذج: %{model}"
+    switched_no_catalog: "تم تعيين المزود إلى %{provider}. لا يحتوي على قائمة نماذج مدمجة — استخدم `/model <provider>/<model-id>` لاختيار نموذج."
+    no_selection: "لا يوجد مزود محدد. شغّل /connect <المزود> <المفتاح> أولًا."
+  disconnect:
+    usage: "الاستخدام: /disconnect <المزود>\nيزيل الاتصال المحفوظ لمزود (إدخاله في providers.toml) فيصبح غير متصل. مفتاح API المخزن يبقى محفوظًا — أعد تشغيل /connect لإعادة الاتصال."
+    not_connected: "'%{provider}' غير متصل. استخدم /connect للاتصال به."
+    done: "✓ تم قطع اتصال '%{provider}'."
+    switched: "تم تبديل المزود النشط إلى %{provider} (النموذج: %{model})."
+    none_remain: "لا يوجد مزودون متصلون — شغّل /connect <المزود> <المفتاح> لإعادة الاتصال."
   config:
     warning_load: "تحذير: تعذر تحميل التهيئة: %{error}"
     key_not_found: "مفتاح التهيئة غير موجود: %{key}"
@@ -74,6 +119,14 @@ commands:
     usage_get: "الاستخدام: /config get <مفتاح>"
     usage_set: "الاستخدام: /config set <مفتاح> <قيمة>"
     usage_reset: "الاستخدام: /config reset <مفتاح>"
+    settings_title: "إعدادات التهيئة:\n\n"
+    usage: |
+
+      الاستخدام:
+        /config list          - عرض جميع الإعدادات
+        /config get <مفتاح>     - الحصول على قيمة محددة
+        /config set <مفتاح> <قيمة> - تعيين قيمة
+        /config reset <مفتاح>   - إعادة التعيين إلى الافتراضي
   hooks:
     none: "لا توجد خطاطيف مهيأة."
     reloaded: "تم إعادة تحميل الخطاطيف بنجاح."
@@ -122,6 +175,259 @@ commands:
     enabled: "تم تفعيل وضع الحماية (عزل Docker)."
     disabled: "تم تعطيل وضع الحماية (التنفيذ المباشر)."
     not_available: "Docker غير متاح. يتطلب وضع الحماية Docker."
+  team:
+    help: |-
+      /team create <name> [description]  — إنشاء فريق وكلاء جديد
+      /team add <team> <agent-name>  — إضافة وكيل إلى الفريق
+      /team task <team> <subject>  — إضافة مهمة
+      /team assign <team>  — إسناد المهام المعلقة إلى الوكلاء المتاحين
+      /team status [team]  — عرض حالة الفريق
+      /team list  — عرض جميع الفرق
+      /team run  — تنفيذ المهام المعلقة بالتوازي
+      /team shutdown  — إيقاف الفريق
+      /team disband <team>  — حلّ الفريق وتنظيفه
+      /team delegate  — تبديل وضع التفويض (المنسق فقط ينسق)
+  plugin:
+    help: |
+      إدارة الإضافات:
+
+        /plugin list                    - عرض الإضافات المثبتة
+        /plugin search <query>          - البحث في سجل الإضافات
+        /plugin info <name>             - عرض تفاصيل الإضافة من الفهرس
+        /plugin install <name-or-url>   - تثبيت إضافة
+        /plugin uninstall <name>        - إزالة إضافة
+        /plugin update [name]           - تحديث الإضافات
+        /plugin enable <name>           - تفعيل إضافة
+        /plugin disable <name>          - تعطيل إضافة
+
+      مصادر الإضافات:
+        - اسم في السجل (مثال "example-plugin")
+        - رابط Git (مثال "https://github.com/user/plugin")
+        - مسار محلي (مثال "/path/to/plugin")
+    installed_title: "الإضافات المثبتة:\n\n"
+    none_installed: |-
+      لا توجد إضافات مثبتة.
+
+      ثبّت الإضافات باستخدام:
+        /plugin install <name-or-url>
+    none_found: "لم يتم العثور على إضافات. جرّب استعلام بحث مختلف."
+    search_results_title: "نتائج البحث:\n\n"
+    search_results_ranked_title: "نتائج البحث (مرتبة حسب الصلة):\n\n"
+  doctor:
+    title: "تشخيصات Shannon Code\n"
+    results_summary: "النتائج: %{passed} ناجحة، %{warnings} تحذيرات، %{failed} فاشلة\n"
+  credentials:
+    title: "بيانات الاعتماد المخزنة:\n\n"
+    none: "  لا توجد بيانات اعتماد مخزنة.\n"
+    usage: |
+
+      الاستخدام:
+        /credentials list              - عرض بيانات الاعتماد المخزنة
+        /credentials store <svc> <val> - تخزين بيانات اعتماد
+        /credentials get <service>     - استرداد بيانات اعتماد (مقنعة)
+        /credentials delete <service>  - حذف بيانات اعتماد
+        /credentials count             - عرض عدد بيانات الاعتماد المخزنة
+  session:
+    snapshots_title: "لقطات الجلسة المحفوظة:\n\n"
+    none_saved: |-
+      لا توجد لقطات جلسة محفوظة.
+      استخدم `/session save <اسم>` لإنشاء واحدة.
+    load_hint: "\nاستخدم `/session load <اسم>` لاستعادة لقطة."
+  debug:
+    help: |
+      أوامر التصحيح للمطورين:
+
+        /debug log [level]     - تعيين مستوى السجل (trace|debug|info|warn|error)
+        /debug profile start   - بدء قياس الأداء
+        /debug profile stop    - إيقاف القياس وعرض النتائج
+        /debug trace [on|off]  - تبديل تتبع التنفيذ
+        /debug info            - عرض تشخيصات النظام
+
+      مستويات السجل:
+        trace - جميع الرسائل بما فيها الداخلية
+        debug - رسائل التصحيح وما فوقها
+        info  - الرسائل المعلوماتية (الافتراضي)
+        warn  - التحذيرات والأخطاء فقط
+        error - الأخطاء الحرجة فقط
+    system_info_title: "تشخيصات النظام:\n\n"
+  preset:
+    available_title: "الإعدادات المسبقة المتاحة:\n\n"
+    no_description: "لا يوجد وصف"
+    usage: |
+
+      الاستخدام:
+        /preset              - عرض جميع الإعدادات المسبقة
+        /preset <اسم>       - تطبيق إعداد مسبق
+        /preset show <اسم>  - عرض تفاصيل الإعداد المسبق
+
+# ── Thinking Phrases ──────────────────────────────────────────────────────
+thinking:
+  - "التفكير"
+  - "التحليل"
+  - "المعالجة"
+  - "الاستدلال"
+  - "الاعتبار"
+  - "التروي"
+  - "المداولة"
+  - "العمل"
+  - "التأمل"
+
+# ── UI Labels ─────────────────────────────────────────────────────────────
+ui:
+  working: "قيد العمل"
+  tool: "الأداة %{n}"
+  cache: "الكاش %{pct}%"
+  turn: "الدور %{n}"
+  mem: "الذاكرة %{size}"
+  errors: "%{n} أخطاء"
+  response_complete: "اكتملت الاستجابة"
+  tokens_this_turn: "%{count} token في هذا الدور"
+  cost_total: "الإجمالي $%{cost}"
+  cache_hit_rate: "إصابة الكاش %{pct}%"
+  message_queued: "تم إدراج الرسالة في قائمة الانتظار (%{count} في الانتظار)"
+  removed_queued: "تمت الإزالة — لا يزال %{count} من الرسائل في قائمة الانتظار"
+  removed_last: "تمت إزالة آخر رسالة منتظرة — عدّلها وأعد إدراجها"
+  removed_edit: "تمت الإزالة — عدّلها وأعد إدراجها"
+  thinking_chars: "جارٍ التفكير··· (%{count} حرف)"
+  thinking_chars_k: "جارٍ التفكير··· (%{count}k حرف)"
+  thinking_header: "▼ جارٍ التفكير (%{count} حرف)"
+  thinking_header_k: "▼ جارٍ التفكير (%{count}k حرف)"
+  no_model: "لا يوجد نموذج مهيأ"
+  budget_warning: "⚠️ تحذير الميزانية: $%{cost} / $%{limit} (استُخدم %{pct}%)"
+  budget_exceeded: "🚨 تجاوزت الميزانية: $%{cost} > $%{limit}"
+  cancelled_partial: "أُلغيت بواسطة المستخدم (استجابة جزئية)"
+  tool_running: "جارٍ تشغيل %{name}…"
+  tool_completed_count: "اكتملت الأداة (×%{count})"
+  query_engine_unavailable: "خطأ: محرك الاستعلام غير متاح. الرجاء إعادة تشغيل الجلسة."
+  tokens_per_sec: "%{status} · %{rate} token/ث"
+  tool_progress: "%{name}: %{pct}%"
+  vim_insert: "إدراج"
+  vim_normal: "عادي"
+  vim_visual: "مرئي"
+  vim_command: "أمر"
+  placeholder: "اكتب رسالتك..."
+  notification_task_completed: "اكتملت المهمة"
+  status_diag: "تشخيص"
+  permission_allow_once: "السماح مرة واحدة"
+  permission_always_allow: "السماح دائمًا"
+  permission_edit_run: "تعديل+تشغيل"
+  permission_deny: "رفض"
+  plan_approve: "موافقة"
+  plan_reject: "رفض"
+  plan_dismiss: "تجاهل"
+  perm_tool: "الأداة"
+  perm_description: "الوصف"
+  perm_why: "السبب"
+  approval_edit: "تحرير"
+  approval_ask: "سؤال"
+  approval_plan: "خطة"
+  approval_auto: "تلقائي"
+  approval_full: "كامل"
+  key_input: "إدخال"
+  key_insert: "إدراج"
+  key_insert_newline: "إدراج سطر جديد"
+  key_editor: "المحرر"
+  prompt_input_label: "الإدخال:"
+  prompt_edit_run: "تعديل+تشغيل"
+  category_edit: "تحرير"
+  # ── Key hint labels (compact bar) ─────────────────────────────────────────
+  key_help: "مساعدة"
+  key_normal: "عادي"
+  key_send: "إرسال"
+  key_complete: "إكمال"
+  key_copy: "نسخ"
+  key_visual: "مرئي"
+  key_command: "أمر"
+  key_move: "نقل"
+  key_del_line: "حذف سطر"
+  key_chat_search: "بحث المحادثة"
+  key_scroll: "تمرير"
+  key_pager: "تصفّح"
+  key_mode: "الوضع"
+  key_quit: "خروج"
+  key_cancel: "إلغاء"
+  key_yank: "نسخ"
+  key_delete: "حذف"
+  # ── Help panel sections ───────────────────────────────────────────────────
+  help_section_navigation: "التنقل"
+  help_section_input: "الإدخال"
+  help_section_chat: "المحادثة"
+  help_section_vim: "Vim"
+  help_section_system: "المساعدة والنظام"
+  help_title: "الاختصارات"
+  help_press_any_key: "اضغط أي مفتاح للإغلاق"
+  # ── Help panel items ──────────────────────────────────────────────────────
+  help_scroll_page: "تمرير المحادثة صفحة بصفحة"
+  help_jump_top_bottom: "الانتقال إلى الأعلى / الأسفل"
+  help_toggle_transcript: "تبديل عارض السجل"
+  help_send_message: "إرسال الرسالة"
+  help_newline: "إدراج سطر جديد"
+  help_clear_input: "مسح الإدخال (أو الخروج)"
+  help_external_editor: "فتح محرر خارجي"
+  help_copy_response: "نسخ آخر استجابة إلى الحافظة"
+  help_search_chat: "البحث في رسائل المحادثة"
+  help_search_history: "البحث في سجل الأوامر"
+  help_delete_word: "حذف الكلمة السابقة"
+  help_kill_line: "حذف حتى نهاية السطر"
+  help_kill_start: "حذف حتى بداية السطر"
+  help_clear_screen: "مسح الشاشة"
+  help_complete: "الإكمال / الإدراج في الانتظار أثناء البث"
+  help_approval_mode: "تبديل وضع الموافقة"
+  help_command_history: "سجل الأوامر"
+  help_fold_tool: "طي/فتح مخرجات الأداة الأخيرة"
+  help_cycle_view: "تبديل طريقة العرض (افتراضي/مفصل)"
+  help_toggle_fold: "تبديل طي جميع الأدوات"
+  help_paste_image: "لصق صورة من الحافظة"
+  help_command_palette: "لوحة الأوامر"
+  help_active_agents: "عرض الوكلاء النشطين"
+  help_insert_mode: "الدخول إلى وضع الإدراج"
+  help_visual_mode: "الوضع المرئي (تحديد نص)"
+  help_visual_line: "الوضع المرئي للأسطر"
+  help_move_cursor: "نقل المؤشر"
+  help_word_forward_back: "كلمة للأمام / للخلف"
+  help_line_start_end: "بداية / نهاية السطر"
+  help_delete_line: "حذف السطر"
+  help_yank_line: "نسخ السطر"
+  help_paste_after: "لصق بعد المؤشر"
+  help_undo: "تراجع"
+  help_redo: "إعادة"
+  help_command_mode: "وضع الأوامر"
+  help_return_normal: "العودة إلى الوضع العادي"
+  help_this_overlay: "لوحة المساعدة هذه"
+  help_toggle_mouse: "تبديل التمرير بالفأرة"
+  help_undo_exchange: "التراجع عن آخر تبديل"
+  # ── Header labels ─────────────────────────────────────────────────────────
+  header_send: "إرسال"
+  header_newline: "سطر جديد"
+  header_editor: "المحرر"
+  header_fullscreen: "ملء الشاشة"
+  sidebar:
+    context: "السياق"
+    cost: "التكلفة"
+    memory: "الذاكرة"
+    tools: "الأدوات"
+    changes: "التغييرات"
+    pressure_emergency: "طوارئ"
+    pressure_critical: "حرج"
+    pressure_high: "مرتفع"
+    pressure_normal: "عادي"
+    pressure_low: "منخفض"
+  status_card:
+    title: " الحالة "
+    no_provider: "لا يوجد مزود متصل. شغّل /connect للبدء."
+    active_label: "النشط:"
+    tier_label: "المستوى:"
+    available_providers: "المزودون المتاحون ({connected} متصل / {total} مدعوم):"
+    commands: "الأوامر: /connect · /model · /provider · /profile · /help"
+  help_overlay:
+    title: " مساعدة Shannon — Esc للإغلاق "
+    categories: " الفئات "
+    commands: " الأوامر "
+    footer: " j/k: تبديل الفئة │ Enter: التفاصيل │ /: بحث │ Esc: إغلاق │ عامل التصفية: {filter} "
+  status_bar:
+    no_provider: "[لا يوجد مزود متصل]"
+
+# ── CLI Help ───────────────────────────────────────────────────────────────
 cli:
   about: "مساعد برمجة بالذكاء الاصطناعي مكتوب بلغة Rust"
   prompt_help: "تنفيذ أمر مباشرة (الوضع غير التفاعلي)."
@@ -149,6 +455,8 @@ cli:
   version_line: "Shannon Code v0.1.0"
   pipe_requires_input: "خطأ: --pipe يتطلب مدخلات stdin أو وسيطة أمر"
   lang_help: "تعيين اللغة/الإعدادات المحلية (مثال، en, ar)"
+
+# ── Tool Messages ──────────────────────────────────────────────────────────
 tools:
   registration_failed: "فشل تسجيل الأداة: %{error}"
   using: "قيد الاستخدام: %{name} بالمدخلات: %{input}"
@@ -158,6 +466,8 @@ tools:
   loaded_plugins: "تم تحميل %{count} إضافات"
   plugin_warning: "تحذير: فشل اكتشاف الإضافات: %{error}"
   discovered_mcp: "تم اكتشاف %{count} خادم/خوادم MCP"
+
+# ── Query Events ───────────────────────────────────────────────────────────
 query:
   turn_completed: "[اكتمل الدور %{turn}، %{tokens} token]"
   processing_status: "جارٍ المعالجة: %{message}"
@@ -169,6 +479,8 @@ query:
   api_key_required: "مطلوب مفتاح API"
   api_key_prompt: "أدخل مفتاح API الخاص بك..."
   query_error: "خطأ في الاستعلام"
+
+# ── Diff/Review ────────────────────────────────────────────────────────────
 review:
   all_accepted: "تم قبول جميع التغييرات وإضافتها إلى الفهرس."
   no_changes_reject: "لا توجد تغييرات لرفضها."

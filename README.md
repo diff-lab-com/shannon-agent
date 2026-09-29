@@ -93,16 +93,16 @@ Plus: mobile pairing (scan a QR code to dispatch and approve tasks from your pho
 
 ### Multi-Provider LLM Support
 
-Connect to any LLM with a single config file — your key, your provider, direct connection:
+BYOK, no middleman: connect a provider once and Shannon stores the key locally (`0600`), probes it, and hot-reloads — no env vars required afterwards:
 
 | Provider | Models | Setup |
 |----------|--------|-------|
-| Anthropic | Claude Sonnet / Opus / Haiku families | `provider = "anthropic"` |
-| OpenAI | GPT-4o and newer | `provider = "openai"` |
-| Ollama | Llama, Mistral, Qwen, etc. (local) | `provider = "ollama"` (auto-detect) |
-| DeepSeek | DeepSeek Chat / Coder | `provider = "openai"` + `base_url` |
-| Z.ai (GLM) | GLM family | `provider = "openai"` + `base_url` |
-| Any OpenAI-compatible | Any model | `provider = "openai"` + `base_url` |
+| Anthropic | Claude Sonnet / Opus / Haiku families | `/connect anthropic <key>` — [guide](docs/providers/anthropic.md) |
+| OpenAI | GPT-4o and newer | `/connect openai <key>` — [guide](docs/providers/openai.md) |
+| Ollama | Llama, Mistral, Qwen, etc. (local) | `/connect ollama` (auto-detect) — [guide](docs/providers/ollama.md) |
+| DeepSeek | DeepSeek Chat / Coder | `/connect deepseek <key>` — [guide](docs/providers/deepseek.md) |
+| Z.ai (GLM) | GLM family | `/connect glm <key>` — [guide](docs/providers/glm-zai.md) |
+| Kimi / MiniMax / OpenRouter + 15 more | — | `/connect <slug> <key>` — [provider index](docs/providers/index.md) · [reference](docs/configuration.md#provider-reference) |
 
 Anthropic prompt caching is supported with three-layer cache breakpoint injection for maximum efficiency.
 
@@ -235,8 +235,10 @@ curl -fsSL https://github.com/diff-lab-com/shannon-agent/releases/latest/downloa
 # Server / headless — CLI only, no sudo
 curl -fsSL https://github.com/diff-lab-com/shannon-agent/releases/latest/download/install.sh | SHANNON_COMPONENTS=cli sh
 
-# Or with cargo (requires Rust 1.88+)
-cargo install --git https://github.com/diff-lab-com/shannon-agent.git
+# Or with cargo (requires Rust 1.88+) — the repo is a virtual Cargo
+# workspace, so a bare `cargo install --git` has no root binary to build;
+# pin the tag and pick the CLI binary explicitly.
+cargo install --git https://github.com/diff-lab-com/shannon-agent.git --tag v0.12.0 --locked --bin shannon
 ```
 
 <details>
@@ -250,40 +252,36 @@ cargo install --git https://github.com/diff-lab-com/shannon-agent.git
 
 ### 2. Configure
 
-Set your API key and preferred model — the key stays on your machine and is used to talk directly to your chosen provider:
+Connect a provider — the key stays on your machine and is used to talk directly to your chosen provider:
 
 ```bash
-# Option A: Environment variable (fastest)
+shannon            # start the TUI, then:
+/connect anthropic sk-ant-...    # stores the key, probes it, opens the model picker
+```
+
+Alternatives:
+
+```bash
+# Environment variable (headless / CI)
 export SHANNON_API_KEY="sk-ant-..."
 export SHANNON_MODEL="claude-sonnet-4-20250514"
 
-# Option B: Config file (persistent)
-mkdir -p ~/.shannon
-cat > ~/.shannon/config.toml << 'EOF'
-provider = "anthropic"
-api_key = "sk-ant-..."
-model = "claude-sonnet-4-20250514"
-max_tokens = 8192
-EOF
+# Non-interactive provider setup
+shannon providers add anthropic --kind anthropic --model claude-sonnet-4-6
+export ANTHROPIC_API_KEY="sk-ant-..."
 ```
+
+API keys are never written to config files — a flat `api_key = "..."` in `config.toml` is ignored by design. Keys live in `~/.shannon/credentials/` (`0600`) or the environment. Per-provider guides: [docs/providers/](docs/providers/index.md) · full reference: [docs/configuration.md](docs/configuration.md).
 
 <details>
 <summary>Other providers</summary>
 
-**OpenAI / DeepSeek / Any compatible:**
-```bash
-cat > ~/.shannon/config.toml << 'EOF'
-provider = "openai"
-model = "gpt-4o"
-api_key = "sk-..."
-base_url = "https://api.openai.com/v1"
-EOF
-```
+**DeepSeek / GLM / Kimi / MiniMax / OpenRouter** — same one-liner in the TUI, e.g. `/connect deepseek <key>`, `/connect glm <key>`. Headless: `shannon providers add <id> --kind <kind> --model <model> [--base-url <url>]` plus the provider's `*_API_KEY` env var. See [docs/providers/index.md](docs/providers/index.md).
 
 **Ollama (local, no API key needed):**
 ```bash
 ollama serve
-export SHANNON_MODEL="llama3"
+/connect ollama
 ```
 
 </details>
@@ -350,6 +348,34 @@ shannon --goal "make CI green"                  # Autonomous goal (spending cap:
 </details>
 
 <details>
+<summary>Headless NDJSON output (<code>--output-format json-stream</code>)</summary>
+
+`--output-format json-stream` writes one NDJSON event per line to stdout, in a
+single unified envelope:
+
+```jsonl
+{"type":"start","prompt":"...","model":"...","session_id":"<uuid>"}
+{"type":"text_delta","content":"..."}
+{"type":"tool_call","name":"Read","input":{...}}
+{"type":"tool_result","name":"Read","output":"...","success":true}
+{"type":"progress","message":"..."}
+{"type":"warning","message":"..."}
+{"type":"error","message":"..."}
+{"type":"done","exit_code":0,"turns_used":3,"tokens_used":1234,"tokens_in":800,"tokens_out":434,"infra_failure":true}
+```
+
+Exactly one `done` line ends the run: integer `exit_code` (0 success, 1 error,
+2 max turns, 3 timeout, 4 rate limited, 5 context overflow, 6 permission
+denied, 7 no progress), `turns_used`, `tokens_used` plus the split
+`tokens_in`/`tokens_out` ledger fields, and `infra_failure` (`true` only when
+an infra-class exit produced an empty patch; omitted otherwise). Progress and
+diagnostics always go to stderr, never stdout. The pre-unification
+`tool_use`/`is_error`/bare-`done` schema remains available for old consumers
+via `--emit-legacy-output-events` (deprecated migration flag).
+
+</details>
+
+<details>
 <summary>REPL commands</summary>
 
 | Command | Description |
@@ -411,7 +437,7 @@ Add MCP servers in `.mcp.json` (project-level) or `~/.claude/settings.json`:
 | `SHANNON_PERMISSION_PROFILE` | Permission profile: `strict`, `balanced`, `permissive` |
 | `SHANNON_TOKEN_BUDGET` | Session token budget watchdog |
 
-Fallback: `ANTHROPIC_API_KEY` and `OPENAI_API_KEY` are auto-detected.
+Fallback: `ANTHROPIC_API_KEY` and `OPENAI_API_KEY` are auto-detected (Anthropic also honors `CLAUDE_API_KEY` and `ANTHROPIC_AUTH_TOKEN`).
 
 </details>
 

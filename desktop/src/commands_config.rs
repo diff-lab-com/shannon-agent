@@ -966,8 +966,11 @@ pub struct DetectedProvider {
 ///
 /// Returns `None` if no provider env var is set. Ollama is handled separately
 /// (no API key; detected via `OLLAMA_HOST` or default `localhost:11434`).
-#[tauri::command]
-pub fn detect_provider_from_env() -> Option<DetectedProvider> {
+///
+/// Shared by the `detect_provider_from_env` command (Welcome wizard) and
+/// `get_provider_status` (the chat/settings gating signal), so both surfaces
+/// agree on what counts as "configured via the environment".
+fn detect_env_provider() -> Option<DetectedProvider> {
     let candidates: &[(&str, &str)] = &[
         ("ANTHROPIC_API_KEY", "anthropic"),
         ("OPENAI_API_KEY", "openai"),
@@ -990,6 +993,84 @@ pub fn detect_provider_from_env() -> Option<DetectedProvider> {
         });
     }
     None
+}
+
+#[tauri::command]
+pub fn detect_provider_from_env() -> Option<DetectedProvider> {
+    detect_env_provider()
+}
+
+/// Reliable provider-activation signal for the frontend (2026-09-29
+/// provider review §2-2): `DesktopConfig` no longer carries
+/// `provider`/`api_key` (ADR-0005), so the UI's `config.provider` gates
+/// were permanently false. This command reads the engine
+/// `ProviderConfigStore` through [`ProviderReadSnapshot`] instead —
+/// one lock, one projection, no key material on the wire (`has_api_key`
+/// is a credential-store presence boolean).
+///
+/// When the store has no active provider, `env_provider` reports the
+/// `detect_provider_from_env` fallback so the UI does not nag users who
+/// run with `ANTHROPIC_API_KEY`-style env configuration.
+///
+/// `model` is `None` both when unset and when it carries the `"default"`
+/// sentinel `save_provider`/`set_active_provider` store for
+/// "no explicit model" — the UI renders "—" only for a genuinely unset
+/// model.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ProviderStatus {
+    /// Id of the active managed provider, `None` when nothing is active.
+    pub active_provider_id: Option<String>,
+    /// Display name of the active provider (falls back to `None` when
+    /// the engine profile has an empty display name; UI falls back to
+    /// `active_provider_id`).
+    pub display_name: Option<String>,
+    /// Wire kind slug of the active provider (`anthropic` | `openai` |
+    /// `deepseek` | `ollama` | `openai-compatible` | `gemini`).
+    pub kind: Option<String>,
+    /// True when the credential store has a key for the active provider.
+    pub has_api_key: bool,
+    /// Active model id, `None` when unset (or the `"default"` sentinel).
+    pub model: Option<String>,
+    /// Provider detected purely from process env vars — only populated
+    /// when the store has no active provider. Slugs match `kind`.
+    pub env_provider: Option<String>,
+}
+
+#[tauri::command]
+pub async fn get_provider_status(
+    state: tauri::State<'_, AppState>,
+) -> Result<ProviderStatus, String> {
+    // ADR-0009: snapshot-then-release; the credential-store read below is
+    // a cheap file read that must not hold the provider-store mutex.
+    let snapshot = ProviderReadSnapshot::capture(&state.provider_store).await;
+    match snapshot.active_profile() {
+        Some(active) => Ok(ProviderStatus {
+            has_api_key: shannon_core::credential_manager::read_credential_value_default(
+                &active.id,
+            )
+            .is_some(),
+            active_provider_id: snapshot.active_provider_id.clone(),
+            display_name: (!active.display_name.is_empty()).then(|| active.display_name.clone()),
+            kind: Some(config::kind_engine_to_slug(&active.kind).to_string()),
+            // `"default"` is the sentinel `save_provider`/`set_active_provider`
+            // land when the user picked no model — surface that as unset.
+            model: snapshot
+                .active_model_id
+                .clone()
+                .filter(|m| m != "default" && !m.is_empty()),
+            env_provider: None,
+        }),
+        // No active profile (empty store or a dangling active id): fall
+        // back to the env scan so env-configured users keep a usable signal.
+        None => Ok(ProviderStatus {
+            active_provider_id: None,
+            display_name: None,
+            kind: None,
+            has_api_key: false,
+            model: None,
+            env_provider: detect_env_provider().map(|d| d.provider),
+        }),
+    }
 }
 
 /// Categorized connection test result for the Welcome "Test connection" button.
@@ -1057,6 +1138,36 @@ fn resolve_base_url(raw: &Option<String>) -> Result<Option<String>, String> {
     }
 }
 
+/// Run the engine's list-models probe against a provider and map the
+/// outcome to the categorized [`TestConnectionResult`]. Shared by
+/// `test_provider_connection` (saved-connection test) and
+/// `test_provider_credentials` (in-modal raw-form test, review §3-B item
+/// 11) so both paths produce identical verdicts.
+async fn probe_and_map(
+    provider_kind: &str,
+    api_key: &str,
+    base_url: Option<&str>,
+) -> TestConnectionResult {
+    use shannon_engine::api::ApiError;
+    use shannon_engine::api::probe::probe_provider_endpoint;
+
+    match probe_provider_endpoint(provider_kind, api_key, base_url).await {
+        Ok(()) => TestConnectionResult::Success,
+        Err(ApiError::AuthenticationFailed) => TestConnectionResult::InvalidKey,
+        Err(ApiError::RateLimitExceeded { .. }) => TestConnectionResult::RateLimited,
+        Err(ApiError::ApiError { status, .. }) if (500..=599).contains(&status) => {
+            TestConnectionResult::ProviderError { status }
+        }
+        Err(ApiError::Timeout) => TestConnectionResult::NetworkUnreachable,
+        Err(ApiError::HttpError(e)) if e.is_connect() || e.is_timeout() => {
+            TestConnectionResult::NetworkUnreachable
+        }
+        Err(other) => TestConnectionResult::Unknown {
+            message: other.to_string(),
+        },
+    }
+}
+
 /// Ping a provider's "list models" endpoint to verify the API key works.
 ///
 /// Thin Tauri-command wrapper over `shannon_engine::api::probe::probe_provider_endpoint`
@@ -1072,30 +1183,275 @@ pub async fn test_provider_connection(
     api_key: String,
     base_url: Option<String>,
 ) -> Result<TestConnectionResult, String> {
-    use shannon_engine::api::ApiError;
-    use shannon_engine::api::probe::probe_provider_endpoint;
-
     // Desktop-side strict validation: no embedded credentials, requires a
     // host. The engine does its own defence-in-depth scheme check.
     if let Some(raw) = base_url.as_deref().filter(|s| !s.is_empty()) {
         validate_base_url(raw)?;
     }
 
-    match probe_provider_endpoint(&provider, &api_key, base_url.as_deref()).await {
-        Ok(()) => Ok(TestConnectionResult::Success),
-        Err(ApiError::AuthenticationFailed) => Ok(TestConnectionResult::InvalidKey),
-        Err(ApiError::RateLimitExceeded { .. }) => Ok(TestConnectionResult::RateLimited),
-        Err(ApiError::ApiError { status, .. }) if (500..=599).contains(&status) => {
-            Ok(TestConnectionResult::ProviderError { status })
-        }
-        Err(ApiError::Timeout) => Ok(TestConnectionResult::NetworkUnreachable),
-        Err(ApiError::HttpError(e)) if e.is_connect() || e.is_timeout() => {
-            Ok(TestConnectionResult::NetworkUnreachable)
-        }
-        Err(other) => Ok(TestConnectionResult::Unknown {
-            message: other.to_string(),
-        }),
+    Ok(probe_and_map(
+        &provider,
+        &api_key,
+        base_url.as_deref().filter(|s| !s.is_empty()),
+    )
+    .await)
+}
+
+/// Kinds the engine can generically probe / list models for. Mirrors the
+/// allowlist `test_all_providers` uses; `gemini` (and any future kind)
+/// has no shared list-models endpoint, so both commands reject it with a
+/// typed "not supported" verdict instead of a misleading connectivity
+/// failure.
+fn is_probeable_kind(kind: &str) -> bool {
+    matches!(
+        kind,
+        "anthropic" | "openai" | "deepseek" | "openai-compatible" | "ollama"
+    )
+}
+
+/// Kinds that authenticate with a stored/typed API key (everything except
+/// Ollama). Mirrors `test_all_providers` and the UI's `KIND_INFO.needsKey`.
+fn kind_needs_key(kind: &str) -> bool {
+    kind != "ollama"
+}
+
+/// Resolve the API key for an in-modal test/fetch: an explicitly supplied
+/// (non-empty, non-mask) value wins; otherwise fall back to the stored
+/// credential for `provider_id` (the edit-mode path — the modal never
+/// re-displays the stored key, so `None` means "use what's saved").
+fn resolve_probe_key(api_key: &Option<String>, provider_id: &Option<String>) -> Option<String> {
+    let explicit = api_key
+        .as_deref()
+        .map(str::trim)
+        .filter(|s| !s.is_empty() && *s != "***");
+    if let Some(k) = explicit {
+        return Some(k.to_string());
     }
+    provider_id
+        .as_deref()
+        .filter(|s| !s.is_empty())
+        .and_then(shannon_core::credential_manager::read_credential_value_default)
+}
+
+/// Test raw (unsaved) provider credentials from inside the Add/Edit
+/// Provider modal (review §2-12 / §3-B item 11): "save ≠ verify" — the
+/// user gets a verdict on the form values BEFORE anything is persisted.
+///
+/// Mirrors [`test_provider_connection`] internals (same engine probe,
+/// same categorization, same `validate_base_url`), but takes the modal's
+/// raw form state. `api_key: None` + a `provider_id` means "test with
+/// the stored credential" (edit mode). This command never writes — no
+/// config, no credential store, no engine store.
+#[tauri::command]
+pub async fn test_provider_credentials(
+    kind: String,
+    base_url: Option<String>,
+    api_key: Option<String>,
+    provider_id: Option<String>,
+) -> Result<TestConnectionResult, String> {
+    if let Some(raw) = base_url.as_deref().filter(|s| !s.is_empty()) {
+        validate_base_url(raw)?;
+    }
+    if !is_probeable_kind(&kind) {
+        return Ok(TestConnectionResult::Unknown {
+            message: format!("provider kind `{kind}` is not supported"),
+        });
+    }
+    let key = resolve_probe_key(&api_key, &provider_id);
+    if kind_needs_key(&kind) && key.is_none() {
+        return Ok(TestConnectionResult::Unknown {
+            message: "no API key provided".to_string(),
+        });
+    }
+    Ok(probe_and_map(
+        &kind,
+        key.as_deref().unwrap_or(""),
+        base_url.as_deref().filter(|s| !s.is_empty()),
+    )
+    .await)
+}
+
+// ===== Fetch model list (review §2-9 / §3-B item 7) =====
+//
+// The Add/Edit Provider modal's "Fetch model list" button calls this to
+// pull the live `/models` catalog from the provider, so users pick real
+// ids instead of typing free text and discovering typos as provider 404s.
+//
+// Error taxonomy: the command returns `Err(String)` (spec wire shape),
+// but categorizable failures are prefixed with a stable machine token
+// (`invalid_key:`, `rate_limited:`, `provider_error:<status>`,
+// `network_unreachable`, `unsupported_kind:<kind>`, `missing_key`,
+// `invalid_base_url:`) that the frontend maps to localized inline
+// messages; anything else surfaces raw under "unknown".
+
+/// Stable error category tokens understood by the frontend's
+/// `parseFetchModelsError`. Kept next to the command so the wire contract
+/// has exactly one Rust-side definition.
+mod fetch_models_error {
+    pub const INVALID_KEY: &str = "invalid_key";
+    pub const RATE_LIMITED: &str = "rate_limited";
+    pub const NETWORK_UNREACHABLE: &str = "network_unreachable";
+    pub const MISSING_KEY: &str = "missing_key";
+    pub const PROVIDER_ERROR: &str = "provider_error";
+    pub const UNSUPPORTED_KIND: &str = "unsupported_kind";
+    pub const INVALID_BASE_URL: &str = "invalid_base_url";
+
+    /// Format a categorized error the way the frontend parser expects:
+    /// `token` for token-only categories, `token:detail` otherwise.
+    pub fn categorized(token: &str, detail: Option<String>) -> String {
+        match detail {
+            Some(d) => format!("{token}:{d}"),
+            None => token.to_string(),
+        }
+    }
+
+    /// Split a wire error back into `(category_token, raw_detail)`.
+    /// Unknown/uncategorized messages parse as `("", message)` so the
+    /// frontend renders them verbatim. Test-only: the production parser
+    /// of this wire shape is the frontend's `parseFetchModelsError`
+    /// (tauri-api.ts) — this mirror pins the contract from the Rust side.
+    #[cfg(test)]
+    pub fn split(error: &str) -> (&str, &str) {
+        const TOKENS: [&str; 7] = [
+            INVALID_KEY,
+            RATE_LIMITED,
+            NETWORK_UNREACHABLE,
+            MISSING_KEY,
+            PROVIDER_ERROR,
+            UNSUPPORTED_KIND,
+            INVALID_BASE_URL,
+        ];
+        // Token-only categories travel without a colon (`invalid_key`).
+        if TOKENS.contains(&error) {
+            return (error, "");
+        }
+        match error.split_once(':') {
+            Some((token, rest)) if TOKENS.contains(&token) => (token, rest),
+            _ => ("", error),
+        }
+    }
+}
+
+/// Build the model-listing URL for a kind + normalized base. Mirrors the
+/// engine probe's per-kind endpoint choice (`probe.rs`):
+/// anthropic/openai under `/v1/models`, deepseek and every
+/// openai-compatible endpoint under `/models`, Ollama's bespoke
+/// `/api/tags`. `base` must already be validated + trailing-slash-free.
+fn models_list_url_for_kind(kind: &str, base: &str) -> String {
+    match kind {
+        "anthropic" | "openai" => format!("{base}/v1/models"),
+        "ollama" => format!("{base}/api/tags"),
+        // deepseek + openai-compatible share the OpenAI-compatible path.
+        _ => format!("{base}/models"),
+    }
+}
+
+/// Extract model ids from a provider's list-models JSON body. Handles the
+/// three shapes live providers actually return:
+/// - OpenAI / Anthropic / deepseek / openai-compatible: `{"data":[{"id":…}]}`
+/// - Ollama `/api/tags`: `{"models":[{"name":…}]}` (id/model accepted too)
+///
+/// Sorted, deduplicated. An unrecognized body yields an empty list — the
+/// UI treats that as "fetched, nothing usable" rather than an error.
+fn extract_model_ids(body: &serde_json::Value) -> Vec<String> {
+    let mut out: Vec<String> = Vec::new();
+    let items = body
+        .get("data")
+        .and_then(|v| v.as_array())
+        .or_else(|| body.get("models").and_then(|v| v.as_array()));
+    if let Some(items) = items {
+        for item in items {
+            let id = ["id", "name", "model"]
+                .iter()
+                .find_map(|k| item.get(*k))
+                .and_then(|v| v.as_str())
+                .unwrap_or("");
+            if !id.is_empty() {
+                out.push(id.to_string());
+            }
+        }
+    }
+    out.sort();
+    out.dedup();
+    out
+}
+
+/// Fetch the live model list from a provider endpoint (review §2-9).
+///
+/// `GET {base_url}/models` with per-kind auth mirroring
+/// [`test_provider_connection`] (anthropic → `x-api-key`, the OpenAI-wire
+/// kinds → `Authorization: Bearer`, ollama → none). When `api_key` is
+/// `None`/empty and `provider_id` names a saved connection, the stored
+/// credential is used — the modal never round-trips the existing secret.
+/// Results are in-memory only: nothing is persisted anywhere.
+///
+/// `base_url` is required and runs through the same `validate_base_url`
+/// normalization as the connection test.
+#[tauri::command]
+pub async fn fetch_provider_models(
+    provider_id: Option<String>,
+    kind: String,
+    base_url: String,
+    api_key: Option<String>,
+) -> Result<Vec<String>, String> {
+    let base = validate_base_url(&base_url).map_err(|e| {
+        fetch_models_error::categorized(fetch_models_error::INVALID_BASE_URL, Some(e))
+    })?;
+    if !is_probeable_kind(&kind) {
+        return Err(fetch_models_error::categorized(
+            fetch_models_error::UNSUPPORTED_KIND,
+            Some(kind),
+        ));
+    }
+
+    let needs_key = kind_needs_key(&kind);
+    let key = resolve_probe_key(&api_key, &provider_id);
+    if needs_key && key.is_none() {
+        return Err(fetch_models_error::MISSING_KEY.to_string());
+    }
+
+    let url = models_list_url_for_kind(&kind, &base);
+    let client = reqwest::Client::builder()
+        // Generous listing timeout: some self-hosted gateways paginate
+        // slowly. Mirrors the probe's "network-level failures are
+        // unreachable" semantics.
+        .timeout(std::time::Duration::from_secs(15))
+        .build()
+        .map_err(|e| format!("http client: {e}"))?;
+    let mut req = client.get(&url);
+    if let Some(k) = key.as_deref() {
+        req = if kind == "anthropic" {
+            req.header("x-api-key", k)
+        } else {
+            req.header("Authorization", format!("Bearer {k}"))
+        };
+    }
+
+    let resp = match req.send().await {
+        Ok(r) => r,
+        Err(e) if e.is_connect() || e.is_timeout() => {
+            return Err(fetch_models_error::NETWORK_UNREACHABLE.to_string());
+        }
+        Err(e) => return Err(e.to_string()),
+    };
+    let status = resp.status();
+    if status == reqwest::StatusCode::UNAUTHORIZED || status == reqwest::StatusCode::FORBIDDEN {
+        return Err(fetch_models_error::INVALID_KEY.to_string());
+    }
+    if status == reqwest::StatusCode::TOO_MANY_REQUESTS {
+        return Err(fetch_models_error::RATE_LIMITED.to_string());
+    }
+    if !status.is_success() {
+        return Err(fetch_models_error::categorized(
+            fetch_models_error::PROVIDER_ERROR,
+            Some(status.as_u16().to_string()),
+        ));
+    }
+    let body: serde_json::Value = resp
+        .json()
+        .await
+        .map_err(|e| format!("invalid response body: {e}"))?;
+    Ok(extract_model_ids(&body))
 }
 
 /// One row in the response from [`test_all_providers`]. Carries enough
@@ -2101,8 +2457,7 @@ mod tests {
             );
             assert!(
                 !conn.has_api_key,
-                "apply_provider_update must never set has_api_key (saw key={:?})",
-                key
+                "apply_provider_update must never set has_api_key (saw key={key:?})",
             );
         }
         // The display name still updates regardless of key handling.
@@ -2761,5 +3116,113 @@ mod tests {
             "GPT-4o"
         );
         assert_eq!(normalize_model_id(LlmProvider::OpenAI, ""), "");
+    }
+
+    // === Fetch model list (2026-09-29 provider review §2-9) ===
+
+    #[test]
+    fn models_list_url_for_kind_mirrors_engine_probe_endpoints() {
+        let base = "https://api.example.com";
+        assert_eq!(
+            models_list_url_for_kind("anthropic", base),
+            "https://api.example.com/v1/models"
+        );
+        assert_eq!(
+            models_list_url_for_kind("openai", base),
+            "https://api.example.com/v1/models"
+        );
+        assert_eq!(
+            models_list_url_for_kind("deepseek", base),
+            "https://api.example.com/models"
+        );
+        assert_eq!(
+            models_list_url_for_kind("openai-compatible", base),
+            "https://api.example.com/models"
+        );
+        assert_eq!(
+            models_list_url_for_kind("ollama", "http://localhost:11434"),
+            "http://localhost:11434/api/tags"
+        );
+    }
+
+    #[test]
+    fn extract_model_ids_parses_openai_data_shape() {
+        let body: serde_json::Value = serde_json::from_str(
+            r#"{"object":"list","data":[{"id":"gpt-4o","object":"model"},{"id":"gpt-4.1-mini","object":"model"}]}"#,
+        )
+        .unwrap();
+        assert_eq!(extract_model_ids(&body), vec!["gpt-4.1-mini", "gpt-4o"]);
+    }
+
+    #[test]
+    fn extract_model_ids_parses_ollama_tags_shape() {
+        let body: serde_json::Value = serde_json::from_str(
+            r#"{"models":[{"name":"llama3.2:latest"},{"name":"qwen2.5:7b"}]}"#,
+        )
+        .unwrap();
+        assert_eq!(
+            extract_model_ids(&body),
+            vec!["llama3.2:latest", "qwen2.5:7b"]
+        );
+    }
+
+    #[test]
+    fn extract_model_ids_sorts_dedups_and_tolerates_garbage() {
+        // Lookup is lenient across id/name/model keys (some gateways mix
+        // shapes inside one array); sort + dedup still apply.
+        let body: serde_json::Value = serde_json::from_str(
+            r#"{"data":[{"id":"b"},{"id":"a"},{"id":"a"},{"name":"no-id-field"}]}"#,
+        )
+        .unwrap();
+        assert_eq!(extract_model_ids(&body), vec!["a", "b", "no-id-field"]);
+        // Unrecognized body → empty list (UI treats it as "nothing usable").
+        assert!(extract_model_ids(&serde_json::json!({"error": "nope"})).is_empty());
+        assert!(extract_model_ids(&serde_json::Value::Null).is_empty());
+    }
+
+    #[test]
+    fn fetch_models_error_round_trips_through_split() {
+        // Token-only categories.
+        assert_eq!(
+            fetch_models_error::split(fetch_models_error::INVALID_KEY),
+            (fetch_models_error::INVALID_KEY, "")
+        );
+        assert_eq!(
+            fetch_models_error::split(fetch_models_error::NETWORK_UNREACHABLE),
+            (fetch_models_error::NETWORK_UNREACHABLE, "")
+        );
+        // token:detail categories survive the round trip.
+        assert_eq!(
+            fetch_models_error::split("provider_error:503"),
+            (fetch_models_error::PROVIDER_ERROR, "503")
+        );
+        assert_eq!(
+            fetch_models_error::split("unsupported_kind:gemini"),
+            (fetch_models_error::UNSUPPORTED_KIND, "gemini")
+        );
+        // Unknown messages are NOT mistaken for categories (provider error
+        // bodies with colons must reach the user verbatim).
+        assert_eq!(
+            fetch_models_error::split("boom: detail"),
+            ("", "boom: detail")
+        );
+    }
+
+    #[test]
+    fn resolve_probe_key_prefers_explicit_and_falls_back_to_store() {
+        // Explicit wins; the "***" mask means "keep stored" and must not be
+        // sent to the provider (same contract `store_provider_key` uses).
+        assert_eq!(
+            resolve_probe_key(&Some("  sk-live ".into()), &Some("id".into())).as_deref(),
+            Some("sk-live")
+        );
+        assert_eq!(resolve_probe_key(&Some("***".into()), &None), None);
+        assert_eq!(resolve_probe_key(&Some("".into()), &None), None);
+        // No key in store → None (command turns that into missing_key /
+        // Unknown "no API key provided").
+        assert_eq!(
+            resolve_probe_key(&None, &Some("nonexistent-id".into())),
+            None
+        );
     }
 }

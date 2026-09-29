@@ -37,6 +37,13 @@
   --container-5xl: 64rem;
   --container-6xl: 72rem;
   --container-7xl: 80rem;
+  /* Content width tiers (UI review 2026-09-29 Batch 1 P1): page-level
+     containers converge on three named widths — narrow (reading, dialogs),
+     medium (workbench/settings), wide (dashboard). Replaces the ad-hoc
+     max-w-3xl/6xl/max-w-[1000-1600px] mix (6 widths → 3). */
+  --container-narrow: 48rem;
+  --container-medium: 75rem;
+  --container-wide: 100rem;
   /* v4 resolves `max-w-sm` through --max-width → --spacing → --container, in
      that order. Our MD3 scale defines `--spacing-sm: 8px`, which hijacked
      `max-w-sm` and collapsed every default dialog to 8px wide. Pin the
@@ -84,6 +91,8 @@
   --color-outline-variant: #cbc3d7;
   --color-background: #f7f9fb;
   --color-on-background: #191c1e;
+  --material-base: #ffffff;
+
   --chart-series-1: #3b82f6;
   --chart-series-2: #10b981;
   --chart-series-3: #f59e0b;
@@ -105,7 +114,6 @@
   /* U9: single source for the app footer's height; main padding and the
      chat composer's bottom offset derive from it (was h-8 / bottom-6/12). */
   --spacing-footer: 32px;
-  --spacing-max-content-width: 1200px;
 
   /* Fonts */
   --font-body-md: "Inter Variable", ui-sans-serif, system-ui, sans-serif;
@@ -122,6 +130,14 @@
   --font-display-lg: "Inter Variable", ui-sans-serif, system-ui, sans-serif;
 
   /* Text Sizing Overrides */
+  /* label-2xs (Batch 1): 10px was the most-used non-token size (59 sites —
+     badges, count bubbles, table micro-labels). Promoted to a role instead
+     of forcing those call sites onto 11px. */
+  --text-label-2xs: 10px;
+  --text-label-2xs--line-height: 1;
+  --text-label-2xs--letter-spacing: 0.04em;
+  --text-label-2xs--font-weight: 500;
+
   --text-label-xs: 11px;
   --text-label-xs--line-height: 1;
   --text-label-xs--letter-spacing: 0.04em;
@@ -191,11 +207,15 @@
   --z-index-drawer: 70;
   --z-index-flash: 100;
 
-  /* Motion duration tokens */
+  /* Motion duration tokens — the ONLY duration definitions in the app
+     (UI review 2026-09-29 T1: the old :root override in this file and the
+     tokens.css mirror were deleted; these declared values are what renders). */
   --duration-fast: 100ms;
   --duration-normal: 160ms;
   --duration-slow: 240ms;
   --duration-slower: 400ms;
+  /* Spring-ish easing (Apple sheet curve) for glass/panel motion. */
+  --ease-glass: cubic-bezier(0.32, 0.72, 0, 1);
 }
 
 @layer utilities {
@@ -261,11 +281,9 @@
      (Phase C7 — replaces per-theme hand-tuned values.) */
   --glass-tint-alpha: 0.62;
   --glass-overlay-alpha: 0.78;
-  /* Spring-ish easing (Apple sheet curve) + duration scale */
-  --ease-glass: cubic-bezier(0.32, 0.72, 0, 1);
-  --duration-fast: 120ms;
-  --duration-base: 200ms;
-  --duration-slow: 280ms;
+  /* (UI review 2026-09-29 T1: the --duration-* overrides + --duration-base
+     that used to live in this block were removed — the @theme values above
+     are the single source of truth. --duration-base had zero references.) */
 }
 
 [data-theme-mode="dark"] {
@@ -292,21 +310,21 @@
   box-shadow:
     inset 0 1px 0 color-mix(in srgb, var(--color-surface-container-lowest) 36%, transparent),
     0 16px 48px color-mix(in srgb, black 40%, transparent);
-  contain: paint;
+  /* No `contain: paint` (unlike glass-surface): overlays host focusable
+     controls near their edges (dialog close buttons, first/last menu items)
+     and the containment would clip their focus rings. */
 }
 
-/* Dark mode: lighten the tint instead of darkening so glass stays legible
-   over near-black backdrops (vibrancy reads off the blur, not the fill). */
-@utility glass-surface-dark {
-  background: color-mix(in srgb, var(--color-surface-container-low) 48%, transparent);
-}
-
-/* Elevation scale for solid (non-glass) cards — replaces ad-hoc
-   shadow-sm/md/lg/xl mixes (06-26 audit: no elevation rule). */
-@utility shadow-e1 { box-shadow: 0 1px 2px color-mix(in srgb, black 18%, transparent); }
-@utility shadow-e2 { box-shadow: 0 2px 8px color-mix(in srgb, black 22%, transparent); }
-@utility shadow-e3 { box-shadow: 0 8px 24px color-mix(in srgb, black 28%, transparent); }
-@utility shadow-e4 { box-shadow: 0 16px 48px color-mix(in srgb, black 36%, transparent); }
+/* Elevation utilities for solid (non-glass) cards — replaces ad-hoc
+   shadow-sm/md/lg/xl mixes (06-26 audit: no elevation rule).
+   UI review 2026-09-29 T2: the @theme --shadow-e1..e5 tokens are the single
+   source of values; these utilities only bind the class name to the token
+   (the old hand-tuned color-mix values here drifted from the tokens). */
+@utility shadow-e1 { box-shadow: var(--shadow-e1); }
+@utility shadow-e2 { box-shadow: var(--shadow-e2); }
+@utility shadow-e3 { box-shadow: var(--shadow-e3); }
+@utility shadow-e4 { box-shadow: var(--shadow-e4); }
+@utility shadow-e5 { box-shadow: var(--shadow-e5); }
 
 /* Panel entrance (workspace grid) — one-shot fade+rise on the Apple sheet
    curve. CSS-only by design (Phase C decision): no motion runtime for a
@@ -324,9 +342,18 @@
   .animate-panel-in { animation: none; }
 }
 
-/* Unified press feedback (06-26 audit: 4 competing active states). */
+/* Unified press feedback (06-26 audit: 4 competing active states).
+   G5 (UI review 2026-09-29): the pair is live — `press-scale` is the
+   interactive transition spec (colors + shadow + transform on the glass
+   curve; replaces `transition-all` where press feedback matters), and
+   call sites compose it with `active:press-scale-active`. Bare <button>s
+   get the identical press from the base-layer rule above. */
 @utility press-scale {
-  transition: transform var(--duration-fast) var(--ease-glass);
+  transition-property:
+    color, background-color, border-color, outline-color, text-decoration-color,
+    fill, stroke, box-shadow, transform;
+  transition-timing-function: var(--ease-glass);
+  transition-duration: var(--duration-normal);
 }
 @utility press-scale-active {
   transform: scale(0.98);
@@ -349,16 +376,20 @@
   }
 }
 
-@utility node-connector {
-    background: linear-gradient(to bottom, var(--color-outline-variant) 50%, transparent 50%);
-    background-size: 1px 12px;
-}
-
-@utility thought-connector {
-    width: 2px;
-    background: linear-gradient(to bottom, var(--color-primary), transparent);
-    height: 24px;
-    margin-left: 11px;
+/* Thin themed scrollbar for overflow surfaces (KanbanBoard column strips
+   etc. — UI review 2026-09-29 T6: the class was referenced in tsx but had
+   no definition). WebKit gets a 6px track/thumb; Firefox gets the native
+   thin scrollbar recolored via scrollbar-color. */
+@utility custom-scrollbar {
+  scrollbar-width: thin;
+  scrollbar-color: var(--color-outline-variant) transparent;
+  &::-webkit-scrollbar { width: 6px; height: 6px; }
+  &::-webkit-scrollbar-track { background: transparent; }
+  &::-webkit-scrollbar-thumb {
+    background: var(--color-outline-variant);
+    border-radius: 9999px;
+  }
+  &::-webkit-scrollbar-thumb:hover { background: var(--color-outline); }
 }
 
 @utility animate-pulse-amber {
@@ -384,7 +415,12 @@
 
 @layer base {
   body {
-    @apply bg-background text-on-background font-body-md;
+    /* G2 (UI review 2026-09-29): the L0 window base. body paints the
+       window-bottom solid color the sidebar rail sits on; the content <main>
+       in Layout paints --color-surface one tier above it, so glass chrome
+       blurs over a perceptibly different depth than the content area. */
+    background: var(--material-base, var(--color-background));
+    @apply text-on-background font-body-md;
   }
 
   /* Default keyboard-focus ring for any interactive element that doesn't
@@ -409,19 +445,23 @@
 
   /* Subtle press feedback on clickable buttons. Skips disabled,
      draggable (DnD handles must not visually shift on drag start),
-     and elements that already declare their own active: utility. */
+     and elements that already declare their own active: utility.
+     G5: the curve/duration are the press-scale spec (--duration-fast on
+     --ease-glass) so bare <button>s and the utility pair press identically. */
   button:not(:disabled):not([draggable]):active,
   [role="button"]:not([aria-disabled="true"]):active {
     transform: scale(0.98);
-    transition: transform 80ms ease-out;
+    transition: transform var(--duration-fast) var(--ease-glass);
   }
 
   /* Dialog/modal entrance animation. Applies to every element taking
      role=dialog or role=alertdialog so all modals animate consistently
-     without each call-site needing a transition class. */
+     without each call-site needing a transition class. G5: reuses the
+     animate-panel-in keyframes (fade + 8px rise) on the glass curve —
+     the same entrance language as every other glass panel. */
   [role="dialog"],
   [role="alertdialog"] {
-    animation: shannon-dialog-in 160ms ease-out;
+    animation: panel-in var(--duration-slow) var(--ease-glass) both;
   }
 
   /* Native form controls: inherit the app font + cursor so selects and
@@ -436,16 +476,8 @@
   }
 }
 
-@keyframes shannon-dialog-in {
-  from {
-    opacity: 0;
-    transform: translateY(8px) scale(0.98);
-  }
-  to {
-    opacity: 1;
-    transform: translateY(0) scale(1);
-  }
-}
+/* G5: shannon-dialog-in was folded into panel-in above (same fade+8px-rise
+   language, now also on the dialog role rule). */
 
 /* shadcn radius tokens only — colors come from theme-source.json (generated) */
 @theme inline {
@@ -476,9 +508,50 @@
   --color-destructive-foreground: var(--primary-foreground);
 }
 
-/* Sonner rich-colors error toast — the stock light-theme error text
-   (#e60000) is ~4.0:1 on the pink error background; MD3 error #b3261e
-   clears 4.5:1. Light scope only: the dark theme's own --error-text passes. */
-[data-sonner-toaster][data-sonner-theme='light'] [data-sonner-toast][data-type='error'] {
-  --error-text: #b3261e;
+/* ── G4 (UI review 2026-09-29): sonner joins the theme + material system ──
+   App.tsx drives `theme` from ThemeContext (no more theme="system") and
+   supplies semantic classNames per toast type. The rules below are
+   !important because sonner injects its own UNLAYERED stylesheet at runtime,
+   which would out-rank Tailwind's layered utilities for background/color —
+   this block is the guaranteed surface those classNames describe. The glass
+   base reuses the glass-overlay recipe; each type tints it with an
+   on-AA-validated container pair from the active theme. */
+
+[data-sonner-toaster] [data-sonner-toast] {
+  background: color-mix(in srgb, var(--color-surface-container-low) calc(var(--glass-overlay-alpha) * 100%), transparent) !important;
+  backdrop-filter: var(--glass-blur-overlay) !important;
+  -webkit-backdrop-filter: var(--glass-blur-overlay) !important;
+  border: 1px solid color-mix(in srgb, var(--color-outline-variant) 65%, transparent) !important;
+  color: var(--color-on-surface) !important;
+}
+[data-sonner-toaster] [data-sonner-toast][data-type='success'] {
+  background: color-mix(in srgb, var(--color-primary-container) calc(var(--glass-overlay-alpha) * 100%), transparent) !important;
+  color: var(--color-on-primary-container) !important;
+}
+[data-sonner-toaster] [data-sonner-toast][data-type='error'] {
+  background: color-mix(in srgb, var(--color-error-container) calc(var(--glass-overlay-alpha) * 100%), transparent) !important;
+  color: var(--color-on-error-container) !important;
+}
+[data-sonner-toaster] [data-sonner-toast][data-type='warning'] {
+  background: color-mix(in srgb, var(--color-tertiary-container) calc(var(--glass-overlay-alpha) * 100%), transparent) !important;
+  color: var(--color-on-tertiary-container) !important;
+}
+[data-sonner-toaster] [data-sonner-toast][data-type='info'] {
+  background: color-mix(in srgb, var(--color-secondary-container) calc(var(--glass-overlay-alpha) * 100%), transparent) !important;
+  color: var(--color-on-secondary-container) !important;
+}
+/* Inner title/description inherit the type color above instead of sonner's
+   stock --gray-* palette (which is what the old light-error patch hacked
+   around — superseded by the token pairs). */
+[data-sonner-toaster] [data-sonner-toast] [data-title],
+[data-sonner-toaster] [data-sonner-toast] [data-description] {
+  color: inherit !important;
+}
+/* Reduced transparency: same solid fallback the glass utilities use. */
+@media (prefers-reduced-transparency: reduce) {
+  [data-sonner-toaster] [data-sonner-toast] {
+    background: var(--color-surface-container-low) !important;
+    backdrop-filter: none !important;
+    -webkit-backdrop-filter: none !important;
+  }
 }

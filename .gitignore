@@ -1,5 +1,12 @@
 # Rust 编译产物
 /target/
+# Nested cargo workspaces (dogfood fixtures, tests) build into their own
+# target/ dirs — a 13MB scratch-clean/target with two 6MB ELF binaries was
+# previously committed by accident (review F51). Keep the root-anchored line
+# above for the main workspace.
+**/target/
+# CI feature-leg builds use CARGO_TARGET_DIR=target-feature (see ci.yml test-features)
+/target-feature/
 **/*.rs.bk
 *.pdb
 

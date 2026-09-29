@@ -241,6 +241,19 @@ static DEFAULT_PRICING: &[(&str, ModelPricing)] = &[
             cache_write_per_mtok: None,
         },
     ),
+    // OpenRouter-style prefixed id (the catalog ships "openai/gpt-5" but not
+    // its mini sibling): without this gap-filler the substring scan billed
+    // gpt-5-mini at the flagship's $1.25/$10 — the same failure mode that
+    // needed the glm-5.3-flash catalog entry.
+    (
+        "openai/gpt-5-mini",
+        ModelPricing {
+            input_price_per_mtok: 0.25,
+            output_price_per_mtok: 2.0,
+            cache_read_per_mtok: None,
+            cache_write_per_mtok: None,
+        },
+    ),
     // Ollama / local models (free)
     (
         "llama",
@@ -1053,6 +1066,34 @@ impl Default for QueryEngineConfig {
     }
 }
 
+/// Why a query ended, carried on [`QueryEvent::Completed`].
+///
+/// Additive wire change: the field is `#[serde(default)]`-ed so NDJSON/SSE
+/// consumers and session logs written before it existed deserialize
+/// unchanged, and [`QueryOutcome::Completed`] is the default — a missing
+/// field means the historical "ended with usable output" semantics.
+///
+/// Motivation (malformed-call-recovery follow-up): the engine's recovery
+/// machinery can end a query without the model ever producing anything
+/// usable (A1 bail-out, malformed-call stop-loss) or with the turn budget
+/// spent — those used to complete identically to a real answer, and
+/// headless runs exited 0 with an empty patch (the accounting lie CI
+/// booked as success).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum QueryOutcome {
+    /// The query ended with usable output (a final answer, or content the
+    /// engine preserved). Default for old JSON without the field.
+    #[default]
+    Completed,
+    /// The engine ended the query because it made no usable progress: the
+    /// model produced nothing usable (A1 bail-out) or kept emitting
+    /// malformed tool calls past the consecutive-failure stop-loss.
+    NoProgress,
+    /// The turn budget (`max_turns`) was exhausted before a final answer.
+    TurnBudgetExhausted,
+}
+
 /// Events emitted during query processing
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum QueryEvent {
@@ -1094,7 +1135,13 @@ pub enum QueryEvent {
     },
 
     /// Query completed successfully
-    Completed { query_id: Uuid },
+    Completed {
+        query_id: Uuid,
+        /// Why the query ended. serde-defaulted: old JSON without the field
+        /// reads as [`QueryOutcome::Completed`].
+        #[serde(default)]
+        outcome: QueryOutcome,
+    },
 
     /// Query failed with error
     Failed { query_id: Uuid, error: String },
@@ -1938,5 +1985,95 @@ mod tests {
         // Scaled input shape: 42M input / 9M output (sweep-magnitude run).
         let cost = CostTracker::calculate_cost("glm-5.3-flash", 42_000_000, 9_000_000);
         assert!((cost - (42.0 * 0.114 + 9.0 * 0.40)).abs() < 1e-6);
+    }
+
+    // -- Review P1-8: gap-provider catalog ids (OpenRouter/Bedrock/ZhipuCoding) --
+
+    /// Every new OpenRouter / Bedrock / Zhipu-coding catalog id must resolve
+    /// in the pricing table to its OWN catalog cost fields — exact match must
+    /// win over any substring collision (e.g. "glm-5" at $7.14) so switching
+    /// providers never bills at another entry's rate.
+    #[test]
+    fn gap_provider_catalog_ids_price_from_catalog() {
+        use crate::model_registry::MODEL_CATALOG;
+        let new_ids = [
+            "anthropic/claude-sonnet-4",
+            "anthropic/claude-opus-4",
+            "openai/gpt-5",
+            "google/gemini-2.5-pro",
+            "deepseek/deepseek-chat",
+            "meta-llama/llama-3.3-70b-instruct",
+            "us.anthropic.claude-sonnet-4-20250514-v1:0",
+            "us.anthropic.claude-opus-4-20250514-v1:0",
+            "us.anthropic.claude-haiku-4-5-20251001-v1:0",
+            "glm-5.1-coding",
+            "glm-5.3-flash-coding",
+            "glm-5.1-coding-plan",
+            "glm-5.3-flash-coding-plan",
+        ];
+        for id in new_ids {
+            let info = MODEL_CATALOG
+                .iter()
+                .find(|m| m.id == id)
+                .unwrap_or_else(|| panic!("{id} must be present in MODEL_CATALOG"));
+            let p = find_pricing(id)
+                .unwrap_or_else(|| panic!("{id} must resolve in the pricing table"));
+            assert!(
+                (p.input_price_per_mtok - info.cost_per_m_input).abs() < 1e-9,
+                "{id}: input price {} != catalog {}",
+                p.input_price_per_mtok,
+                info.cost_per_m_input
+            );
+            assert!(
+                (p.output_price_per_mtok - info.cost_per_m_output).abs() < 1e-9,
+                "{id}: output price {} != catalog {}",
+                p.output_price_per_mtok,
+                info.cost_per_m_output
+            );
+        }
+    }
+
+    /// "openai/gpt-5-mini" is not a catalog id; without the DEFAULT_PRICING
+    /// gap-filler it substring-matched the "openai/gpt-5" (and "gpt-5") keys
+    /// and billed the mini at the flagship's $1.25/$10 — the glm-5.3-flash
+    /// failure mode. Exact match against the gap-filler must win.
+    #[test]
+    fn openrouter_gpt5_mini_priced_as_mini_not_flagship() {
+        let p = lookup_pricing("openai/gpt-5-mini");
+        assert!(
+            (p.input_price_per_mtok - 0.25).abs() < 1e-9,
+            "gpt-5-mini input must be $0.25, got {}",
+            p.input_price_per_mtok
+        );
+        assert!(
+            (p.output_price_per_mtok - 2.0).abs() < 1e-9,
+            "gpt-5-mini output must be $2.00, got {}",
+            p.output_price_per_mtok
+        );
+        // Display code must see it as a known price, not the $3/$15 estimate.
+        assert!(pricing_for_model_opt("openai/gpt-5-mini").is_some());
+        // The flagship id is unaffected by the gap-filler key.
+        let flagship = lookup_pricing("openai/gpt-5");
+        assert!((flagship.input_price_per_mtok - 1.25).abs() < 1e-9);
+        assert!((flagship.output_price_per_mtok - 10.0).abs() < 1e-9);
+    }
+
+    /// Bedrock also accepts the bare on-demand model id (no `us.` region
+    /// prefix, no inference profile). It is not a catalog id, so resolution
+    /// goes through the substring path — it must land on the same
+    /// Anthropic-parity price as the inference-profile entry, never the
+    /// $3/$15 fallback estimate.
+    #[test]
+    fn bedrock_bare_on_demand_ids_price_via_substring() {
+        // Haiku's $0.80/$4.00 distinguishes a real hit from the fallback.
+        let haiku = lookup_pricing("anthropic.claude-haiku-4-5-20251001-v1:0");
+        assert!((haiku.input_price_per_mtok - 0.80).abs() < 1e-9);
+        assert!((haiku.output_price_per_mtok - 4.0).abs() < 1e-9);
+        // Opus bare id: substring candidates ("claude-opus-4", the Anthropic
+        // catalog id, the inference-profile id) all agree on $15/$75, so the
+        // HashMap scan order cannot change the billed rate.
+        let opus = lookup_pricing("anthropic.claude-opus-4-20250514-v1:0");
+        assert!((opus.input_price_per_mtok - 15.0).abs() < 1e-9);
+        assert!((opus.output_price_per_mtok - 75.0).abs() < 1e-9);
     }
 }

@@ -27,6 +27,7 @@ import {
 } from './chat'
 import { VIRTUALIZE_THRESHOLD } from './chat/MessageArea'
 import type { EditingMessageState } from './chat/ComposerContext'
+import type { ProviderStatus } from '@/types'
 
 // QuickFix is a chat-inline tool launched from the composer toolbar (it has
 // no standalone route); the Editor exists both inline and as a standalone
@@ -72,6 +73,20 @@ function clearDraft(sessionId: string): void {
   try { localStorage.removeItem(draftKey(sessionId)) } catch { /* noop */ }
 }
 
+/// 2026-09-29 provider review §3-A1: the banner shows ONLY when there is
+/// genuinely something to fix —
+///   - no active provider AND no env-detected provider (nothing configured), or
+///   - an active provider whose credential store entry is missing
+///     (except key-less kinds like Ollama).
+/// Configured + keyed users (the old dead condition's main victims) never
+/// see it. `null` status (command failed / still loading) hides the banner:
+/// we nag only on a positive signal, never on a failed read.
+export function shouldShowApiKeyBanner(status: ProviderStatus | null | undefined): boolean {
+  if (!status) return false
+  if (!status.active_provider_id) return !status.env_provider
+  return !status.has_api_key && status.kind !== 'ollama'
+}
+
 export default function Chat() {
   const {
     messages, streamingText, isQuerying, usage, activeToolCalls,
@@ -79,7 +94,7 @@ export default function Chat() {
     promptQueue, dequeuePrompt, enqueuePrompt, rewindSession, checkpoints,
   } = useChat()
   const { sessions, currentSessionId, windowSessionId, createSession } = useSessions()
-  const { config } = useCatalog()
+  const { config, providerStatus } = useCatalog()
   // P1-C: file-mutating tool outputs (md/html/svg/mermaid/images written to
   // disk) dock as provenance-tagged artifact tabs.
   useDiskArtifacts(messages)
@@ -475,11 +490,12 @@ export default function Chat() {
     editing, cancelEdit,
   }
 
-  const showApiKeyBanner =
-    !bannerDismissed &&
-    !!config &&
-    !config.api_key &&
-    config.provider !== 'ollama'
+  // 2026-09-29 provider review §3-A1 (item 2): the old gate read
+  // `config.api_key`/`config.provider` — fields DesktopConfig dropped in
+  // ADR-0005 — so the banner showed for EVERY user in production. Gate on
+  // the reliable `get_provider_status` snapshot instead: only genuinely
+  // unconfigured or keyless users see it.
+  const showApiKeyBanner = !bannerDismissed && shouldShowApiKeyBanner(providerStatus)
 
   // ── Layout (2026-09 review) ────────────────────────────────────────────
   //
@@ -534,6 +550,8 @@ export default function Chat() {
           <section className="flex-1 flex flex-col relative bg-surface-container-lowest/40 overflow-hidden">
             <ApiKeyBanner
               visible={showApiKeyBanner}
+              variant={providerStatus?.active_provider_id ? 'no-key' : 'no-provider'}
+              providerName={providerStatus?.display_name ?? providerStatus?.active_provider_id ?? undefined}
               onDismiss={() => setBannerDismissed(true)}
               onOpenSettings={() => navigate('/settings/models')}
             />
@@ -580,7 +598,7 @@ export default function Chat() {
             title={t('nav.quickFix')}
             panel={QuickFixPanel}
             size="2xl"
-            modalClassName="max-w-3xl max-h-[85vh] overflow-y-auto"
+            modalClassName="max-w-narrow max-h-[85vh] overflow-y-auto"
             bodyClassName="p-lg"
           />
 

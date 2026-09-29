@@ -1,3 +1,11 @@
+// Every test in this module serializes a process global (TURN_RETRIES_ENV_LOCK /
+// MALFORMED_STREAK_ENV_LOCK for env::set_var, secret_guard::test_support::acquire
+// for the global context transform) and the guarded global is read by the engine
+// *during* the awaited run, so the guard must be held across the await points.
+// Test-only and uncontended per-process (nextest: one process per test; libtest:
+// one runtime per thread), so holding it across .await cannot deadlock.
+#![allow(clippy::await_holding_lock)]
+
 use super::*;
 
 #[tokio::test]
@@ -94,6 +102,7 @@ async fn secret_guard_client_boundary_sends_surrogates_not_secrets() {
     }];
     let to_send = crate::secret_guard::transform_outgoing_messages(messages);
     let config = LlmClientConfig {
+        thinking_type: None,
         api_key: "test-key".to_string(),
         base_url: format!("http://127.0.0.1:{port}"),
         model: "test-model".to_string(),
@@ -240,6 +249,7 @@ async fn secret_guard_query_loop_completes_with_redacted_wire() {
     let _g = crate::secret_guard::test_support::acquire();
     crate::secret_guard::set_context_transform(Some(std::sync::Arc::new(ReplaceSecret)));
     let config = LlmClientConfig {
+        thinking_type: None,
         api_key: "test-key".to_string(),
         base_url: format!("http://127.0.0.1:{port}"),
         model: "test-model".to_string(),
@@ -480,6 +490,7 @@ async fn a8_run_query_with(
 ) -> (bool, String, Vec<String>, Vec<String>, Vec<Message>) {
     use futures::StreamExt as _;
     let config = LlmClientConfig {
+        thinking_type: None,
         api_key: "test-key".to_string(),
         base_url: server.base_url.clone(),
         model: "test-model".to_string(),
@@ -639,6 +650,7 @@ async fn p2_2_hanging_tool_interrupted_into_error_tool_result() {
     let server = TurnRetryMockServer::start(responder);
 
     let config = LlmClientConfig {
+        thinking_type: None,
         api_key: "test-key".to_string(),
         base_url: server.base_url.clone(),
         model: "test-model".to_string(),
@@ -828,7 +840,7 @@ async fn a8_turn_retry_continues_after_timeout_class_stream_death() {
         progress
             .iter()
             .any(|m| m
-                .contains("Turn LLM call interrupted (upstream cutoff); continuing turn 1/2")),
+                .contains("Turn LLM call interrupted (upstream cutoff: class=timeout, err=Provider error (anthropic): timeout_error")),
         "expected an A8 continuation Progress event; got: {progress:?}"
     );
 
@@ -918,7 +930,7 @@ async fn a8_turn_retry_budget_exhaustion_falls_through_to_failed() {
     );
     let continuations = progress
         .iter()
-        .filter(|m| m.contains("Turn LLM call interrupted (upstream cutoff)"))
+        .filter(|m| m.contains("Turn LLM call interrupted (upstream cutoff"))
         .count();
     assert_eq!(
         continuations, 2,
@@ -985,7 +997,7 @@ async fn a8_turn_retry_covers_mid_stream_death_and_discards_partial() {
     assert_eq!(bodies[1].matches(nudge).count(), 1);
     assert!(
         progress.iter().any(|m| m.contains("continuing turn 1/2")
-            && (m.contains("Turn LLM call interrupted (upstream cutoff)")
+            && (m.contains("Turn LLM call interrupted (upstream cutoff")
                 // N-3: provider-reported error events use their own
                 // Progress wording but the same continuation ladder.
                 || m.contains("Provider stream error (upstream)"))),
@@ -1086,7 +1098,7 @@ async fn a8_stream_interrupted_triggers_continuation_and_discards_partial() {
         progress
             .iter()
             .any(|m| m
-                .contains("Turn LLM call interrupted (upstream cutoff); continuing turn 1/2")),
+                .contains("Turn LLM call interrupted (upstream cutoff: class=stream_interrupted, err=Stream ended unexpectedly); continuing turn 1/2")),
         "expected A8 Progress for the interrupted stream; got {progress:?}"
     );
     assert!(
@@ -1157,7 +1169,7 @@ async fn a8_stream_interrupted_budget_exhausted_falls_back_to_partial_preserve()
     assert!(
         !progress
             .iter()
-            .any(|m| m.contains("Turn LLM call interrupted (upstream cutoff)")),
+            .any(|m| m.contains("Turn LLM call interrupted (upstream cutoff")),
         "no A8 continuation may fire when disabled; got {progress:?}"
     );
     let history_text: String = history
@@ -1493,7 +1505,7 @@ async fn a8_clean_end_without_message_stop_is_not_continued() {
     assert!(
         !progress
             .iter()
-            .any(|m| m.contains("Turn LLM call interrupted (upstream cutoff)")),
+            .any(|m| m.contains("Turn LLM call interrupted (upstream cutoff")),
         "no A8 continuation for a clean completion; got {progress:?}"
     );
     assert!(
@@ -1671,7 +1683,7 @@ async fn a10_wrap_up_and_a8_stacking_no_double_injection() {
     );
     let continuations = progress
         .iter()
-        .filter(|m| m.contains("Turn LLM call interrupted (upstream cutoff)"))
+        .filter(|m| m.contains("Turn LLM call interrupted (upstream cutoff"))
         .count();
     assert_eq!(continuations, 2, "one A8 continuation per turn");
     assert_eq!(
@@ -1719,7 +1731,7 @@ async fn a8_turn_retry_zero_disables_continuation() {
     assert!(
         !progress
             .iter()
-            .any(|m| m.contains("Turn LLM call interrupted (upstream cutoff)")),
+            .any(|m| m.contains("Turn LLM call interrupted (upstream cutoff")),
         "no continuation Progress may fire when disabled; got {progress:?}"
     );
 }
@@ -1755,7 +1767,7 @@ async fn a8_non_timeout_errors_do_not_continue_turn() {
     assert!(
         !progress
             .iter()
-            .any(|m| m.contains("Turn LLM call interrupted (upstream cutoff)")),
+            .any(|m| m.contains("Turn LLM call interrupted (upstream cutoff")),
         "no A8 Progress for non-timeout errors; got {progress:?}"
     );
 }
@@ -1851,6 +1863,7 @@ fn compaction_summarizer_wire_carries_surrogates_not_secrets() {
     });
 
     let config = LlmClientConfig {
+        thinking_type: None,
         api_key: "test-key".to_string(),
         base_url: format!("http://127.0.0.1:{port}"),
         model: "test-model".to_string(),
@@ -2001,6 +2014,7 @@ async fn secret_guard_system_prompt_redacted_on_wire() {
     let _g = crate::secret_guard::test_support::acquire();
     crate::secret_guard::set_context_transform(Some(std::sync::Arc::new(ReplaceSecret)));
     let config = LlmClientConfig {
+        thinking_type: None,
         api_key: "test-key".to_string(),
         base_url: format!("http://127.0.0.1:{port}"),
         model: "test-model".to_string(),
@@ -2069,5 +2083,516 @@ async fn secret_guard_system_prompt_redacted_on_wire() {
     assert!(
         body.contains("cache_control"),
         "system block structure (cache breakpoints) must be preserved: {body}"
+    );
+}
+
+/// Regression (DeepSWE mm3-smoke01 `abs-module-cache-flags`, 2026-09-27):
+/// MiniMax-M3 streamed a stray `</think>` close tag as visible text, then
+/// narration text, then a tool_call whose arguments never arrived (empty raw
+/// input at ContentBlockStop → `Failed to parse tool arguments: EOF …`). The
+/// parse-error recovery gates originally required empty assistant text, so
+/// the tag/noise and the narration masqueraded as a final answer: the query
+/// ended "successfully" after one turn (turns_used=0, exit 0) and the task
+/// was abandoned — empty patch, reward 0. The loop must instead persist the
+/// assistant(text? + tool_use {}) → user(tool_result, is_error) pairing and
+/// issue a second request so the model can retry with corrected JSON — a
+/// pending tool request outranks any accompanying narration.
+#[tokio::test]
+async fn parse_error_recovery_survives_stray_think_close_tag_noise() {
+    let responder = std::sync::Arc::new(|request_index: usize| -> String {
+        if request_index == 0 {
+            // Turn 1: a text block carrying the stray close tag plus real
+            // narration (the smoke02 live shape), then a tool_use block with
+            // no input_json_delta at all.
+            let sse = [
+                    r#"event: message_start"#,
+                    r#"data: {"type":"message_start","message":{"id":"msg_mm3_t1","role":"assistant","content":[],"model":"test-model","stop_reason":null,"usage":{"input_tokens":10,"output_tokens":1}}}"#,
+                    r#"event: content_block_start"#,
+                    r#"data: {"type":"content_block_start","index":0,"content_block":{"type":"text","text":""}}"#,
+                    r#"event: content_block_delta"#,
+                    "data: {\"type\":\"content_block_delta\",\"index\":0,\"delta\":{\"type\":\"text_delta\",\"text\":\"</think>\\n\\n\"}}",
+                    r#"event: content_block_delta"#,
+                    "data: {\"type\":\"content_block_delta\",\"index\":0,\"delta\":{\"type\":\"text_delta\",\"text\":\"I'll start by exploring the repository structure to understand the codebase.\"}}",
+                    r#"event: content_block_stop"#,
+                    r#"data: {"type":"content_block_stop","index":0}"#,
+                    r#"event: content_block_start"#,
+                    r#"data: {"type":"content_block_start","index":1,"content_block":{"type":"tool_use","id":"toolu_mm3_1","name":"no_such_tool","input":{}}}"#,
+                    r#"event: content_block_stop"#,
+                    r#"data: {"type":"content_block_stop","index":1}"#,
+                    r#"event: message_delta"#,
+                    r#"data: {"type":"message_delta","delta":{"stop_reason":"tool_use"},"usage":{"input_tokens":10,"output_tokens":5}}"#,
+                    r#"event: message_stop"#,
+                    r#"data: {"type":"message_stop"}"#,
+                ]
+                .join("\n\n");
+            a8_http_response("200 OK", "text/event-stream", &sse)
+        } else {
+            a8_text_sse("recovered")
+        }
+    });
+    let server = TurnRetryMockServer::start(responder);
+    let (completed, failed_error, _progress, _warnings, _history) = a8_run_query(&server).await;
+    assert!(
+        failed_error.is_empty(),
+        "query failed instead of recovering: {failed_error}"
+    );
+    assert!(completed, "query must complete after the model retries");
+    let bodies = server.bodies();
+    assert_eq!(
+        bodies.len(),
+        2,
+        "expected a second request after the malformed tool call, got {}",
+        bodies.len()
+    );
+    let second = &bodies[1];
+    assert!(
+        second.contains("exploring the repository structure"),
+        "second request must preserve the assistant narration next to the tool_use: {second}"
+    );
+    assert!(
+        second.contains(r#""input":{}"#),
+        "second request must carry the synthetic {{}}-input tool_use: {second}"
+    );
+    assert!(
+        second.contains("Malformed tool input"),
+        "second request must carry the error tool_result so the model can retry: {second}"
+    );
+}
+
+// ---- malformed-tool-call stop-loss (#140 follow-up) -------------------
+//
+// Removing the text condition from the recovery gates made recovery
+// unconditional — which a model emitting ONLY malformed calls exploits:
+// recovery → recovery → … until max_turns (observed: 90 API requests /
+// 55k tokens of churn on one query). The loop must keep a query-scoped
+// streak of consecutive malformed calls, reset it when a tool call parses
+// and executes, and end the query with a warning once the cap is hit.
+
+/// Serializes tests that mutate `SHANNON_MAX_CONSECUTIVE_MALFORMED_CALLS`
+/// (plain `cargo test` runs them on shared threads; nextest isolates per
+/// process).
+static MALFORMED_STREAK_ENV_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+/// The mm3 malformed shape: narration text (after a stray think close tag)
+/// plus a tool_use block with no input at all — parse error at
+/// ContentBlockStop → synthetic error tool_result + null-input ToolUse.
+/// Ids are unique per request: the P3-10 query-scope tool_use_id dedup
+/// would otherwise drop the repeats.
+fn malformed_tool_call_sse(request_index: usize) -> String {
+    let sse = [
+        r#"event: message_start"#,
+        r#"data: {"type":"message_start","message":{"id":"msg_malformed","role":"assistant","content":[],"model":"test-model","stop_reason":null,"usage":{"input_tokens":10,"output_tokens":1}}}"#,
+        r#"event: content_block_start"#,
+        r#"data: {"type":"content_block_start","index":0,"content_block":{"type":"text","text":""}}"#,
+        r#"event: content_block_delta"#,
+        "data: {\"type\":\"content_block_delta\",\"index\":0,\"delta\":{\"type\":\"text_delta\",\"text\":\"Working on it.\"}}",
+        r#"event: content_block_stop"#,
+        r#"data: {"type":"content_block_stop","index":0}"#,
+        r#"event: content_block_start"#,
+        &format!(
+            "data: {{\"type\":\"content_block_start\",\"index\":1,\"content_block\":{{\"type\":\"tool_use\",\"id\":\"toolu_malformed_{request_index}\",\"name\":\"no_such_tool\",\"input\":{{}}}}}}"
+        ),
+        r#"event: content_block_stop"#,
+        r#"data: {"type":"content_block_stop","index":1}"#,
+        r#"event: message_delta"#,
+        r#"data: {"type":"message_delta","delta":{"stop_reason":"tool_use"},"usage":{"input_tokens":10,"output_tokens":5}}"#,
+        r#"event: message_stop"#,
+        r#"data: {"type":"message_stop"}"#,
+    ]
+    .join("\n\n");
+    a8_http_response("200 OK", "text/event-stream", &sse)
+}
+
+/// Drive one full `process_query` against the mock and return (completed,
+/// failed_error, warnings, TurnCompleted (turn_number, tokens_used) pairs,
+/// final_history, completed_outcome). The stop-loss, turn-bookkeeping and
+/// outcome tests need the visibility that `a8_run_query` discards.
+#[allow(clippy::type_complexity)]
+async fn run_query_with_recovery_bookkeeping(
+    server: &TurnRetryMockServer,
+    max_turns: usize,
+) -> (
+    bool,
+    String,
+    Vec<String>,
+    Vec<(usize, u64)>,
+    Vec<Message>,
+    Option<QueryOutcome>,
+) {
+    use futures::StreamExt as _;
+    let config = LlmClientConfig {
+        thinking_type: None,
+        api_key: "test-key".to_string(),
+        base_url: server.base_url.clone(),
+        model: "test-model".to_string(),
+        provider: shannon_engine::api::LlmProvider::Anthropic,
+        ..Default::default()
+    };
+    let client = LlmClient::new(config);
+    let engine = QueryEngine::new(
+        client,
+        ToolRegistry::new(),
+        PermissionManager::new(),
+        StateManager::new(),
+        QueryEngineConfig {
+            max_turns,
+            ..Default::default()
+        },
+    );
+    let context = QueryContext {
+        query_id: uuid::Uuid::new_v4(),
+        session_id: uuid::Uuid::new_v4(),
+        user_message: "original user task".to_string(),
+        attachments: Vec::new(),
+        metadata: QueryMetadata {
+            timestamp: chrono::Utc::now(),
+            tools_allowed: false,
+            max_tokens: None,
+            model: "test-model".to_string(),
+            temperature: None,
+            top_p: None,
+        },
+    };
+    let mut stream = engine.process_query(context, None).await;
+    let mut completed = false;
+    let mut failed = String::new();
+    let mut warnings: Vec<String> = Vec::new();
+    let mut turns: Vec<(usize, u64)> = Vec::new();
+    let mut history: Vec<Message> = Vec::new();
+    let mut outcome: Option<QueryOutcome> = None;
+    while let Some(ev) = stream.next().await {
+        match ev {
+            Ok(QueryEvent::Completed {
+                outcome: reported, ..
+            }) => {
+                completed = true;
+                outcome = Some(reported);
+                break;
+            }
+            Ok(QueryEvent::Failed { error, .. }) => {
+                failed = error;
+                break;
+            }
+            Ok(QueryEvent::Warning { message, .. }) => {
+                warnings.push(message);
+            }
+            Ok(QueryEvent::TurnCompleted {
+                turn_number,
+                tokens_used,
+                ..
+            }) => {
+                turns.push((turn_number, tokens_used));
+            }
+            Ok(QueryEvent::ConversationUpdate { messages, .. }) => {
+                history = messages;
+            }
+            Err(e) => {
+                failed = e.to_string();
+                break;
+            }
+            _ => {}
+        }
+    }
+    (completed, failed, warnings, turns, history, outcome)
+}
+
+/// Stop-loss: every request comes back malformed. The query must end after
+/// the default cap (3 consecutive malformed calls) with a stop-loss
+/// warning — NOT after 20 requests of churn to max_turns.
+#[tokio::test]
+async fn consecutive_malformed_tool_calls_stop_loss_ends_query() {
+    // Reader of SHANNON_MAX_CONSECUTIVE_MALFORMED_CALLS: serialize against
+    // the test that mutates it (cap drops to 2 process-globally mid-run).
+    let _env_lock = MALFORMED_STREAK_ENV_LOCK
+        .lock()
+        .unwrap_or_else(|e| e.into_inner());
+    let responder =
+        std::sync::Arc::new(|request_index: usize| malformed_tool_call_sse(request_index));
+    let server = TurnRetryMockServer::start(responder);
+    let (completed, failed_error, warnings, _turns, _history, _outcome) =
+        run_query_with_recovery_bookkeeping(&server, 20).await;
+    assert!(
+        failed_error.is_empty(),
+        "stop-loss must complete, not fail: {failed_error}"
+    );
+    assert!(completed, "stop-loss must complete the query");
+    assert_eq!(
+        server.bodies().len(),
+        3,
+        "query must stop at the malformed-call cap, got {} requests",
+        server.bodies().len()
+    );
+    assert_eq!(
+        warnings.len(),
+        1,
+        "exactly one stop-loss warning expected: {warnings:?}"
+    );
+    assert!(
+        warnings[0].contains("malformed tool calls"),
+        "warning must name the stop-loss reason: {}",
+        warnings[0]
+    );
+}
+
+/// The streak counts *consecutive* malformed calls: a parsed + executed
+/// tool call resets it, so only the fresh tail reaches the cap.
+#[tokio::test]
+async fn malformed_call_streak_resets_after_parsed_tool_execution() {
+    // Reader of SHANNON_MAX_CONSECUTIVE_MALFORMED_CALLS: serialize against
+    // the test that mutates it (cap drops to 2 process-globally mid-run).
+    let _env_lock = MALFORMED_STREAK_ENV_LOCK
+        .lock()
+        .unwrap_or_else(|e| e.into_inner());
+    // malformed → parsed tool call (streak resets) → malformed ×3.
+    let responder = std::sync::Arc::new(|request_index: usize| {
+        if request_index == 1 {
+            a8_tool_call_sse()
+        } else {
+            malformed_tool_call_sse(request_index)
+        }
+    });
+    let server = TurnRetryMockServer::start(responder);
+    let (completed, failed_error, warnings, _turns, _history, _outcome) =
+        run_query_with_recovery_bookkeeping(&server, 20).await;
+    assert!(
+        failed_error.is_empty(),
+        "query failed instead of recovering: {failed_error}"
+    );
+    assert!(completed, "query must complete");
+    // 1 (malformed) + 1 (parsed call resets the streak) + 3 (fresh streak
+    // reaches the cap) = 5. A non-resetting counter would have stopped at
+    // request 3 (1 + 2).
+    assert_eq!(
+        server.bodies().len(),
+        5,
+        "streak must reset after a parsed tool call, got {} requests",
+        server.bodies().len()
+    );
+    assert_eq!(
+        warnings.len(),
+        1,
+        "exactly one stop-loss warning expected: {warnings:?}"
+    );
+}
+
+/// `SHANNON_MAX_CONSECUTIVE_MALFORMED_CALLS` overrides the cap: =2 stops
+/// the same all-malformed query after two rounds instead of three.
+#[tokio::test]
+async fn malformed_call_streak_env_override_lowers_the_cap() {
+    let _guard = MALFORMED_STREAK_ENV_LOCK
+        .lock()
+        .unwrap_or_else(|e| e.into_inner());
+    let saved = env::var("SHANNON_MAX_CONSECUTIVE_MALFORMED_CALLS").ok();
+    unsafe { env::set_var("SHANNON_MAX_CONSECUTIVE_MALFORMED_CALLS", "2") };
+
+    let responder =
+        std::sync::Arc::new(|request_index: usize| malformed_tool_call_sse(request_index));
+    let server = TurnRetryMockServer::start(responder);
+    let (completed, failed_error, warnings, _turns, _history, _outcome) =
+        run_query_with_recovery_bookkeeping(&server, 20).await;
+
+    match saved {
+        Some(v) => unsafe { env::set_var("SHANNON_MAX_CONSECUTIVE_MALFORMED_CALLS", v) },
+        None => unsafe { env::remove_var("SHANNON_MAX_CONSECUTIVE_MALFORMED_CALLS") },
+    }
+    assert!(
+        failed_error.is_empty(),
+        "stop-loss must complete, not fail: {failed_error}"
+    );
+    assert!(completed, "stop-loss must complete the query");
+    assert_eq!(
+        server.bodies().len(),
+        2,
+        "SHANNON_MAX_CONSECUTIVE_MALFORMED_CALLS=2 must stop after two \
+         malformed rounds, got {} requests",
+        server.bodies().len()
+    );
+    assert_eq!(
+        warnings.len(),
+        1,
+        "exactly one stop-loss warning expected: {warnings:?}"
+    );
+}
+
+/// Env contract (mirrors `a8_turn_retries_env_parse_contract`): default 3;
+/// unset falls back to the default; whitespace-trimmed values parse
+/// (" 4 " → 4); unparseable and negative values fall back to the default
+/// (same `env_num_override` conventions as every other engine knob).
+#[test]
+fn malformed_call_streak_env_parse_contract() {
+    let _guard = MALFORMED_STREAK_ENV_LOCK
+        .lock()
+        .unwrap_or_else(|e| e.into_inner());
+    let saved = env::var("SHANNON_MAX_CONSECUTIVE_MALFORMED_CALLS").ok();
+
+    unsafe { env::remove_var("SHANNON_MAX_CONSECUTIVE_MALFORMED_CALLS") };
+    assert_eq!(
+        crate::query_engine::env_config::max_consecutive_malformed_calls(),
+        3,
+        "unset must yield the default of 3"
+    );
+
+    for garbage in ["0", "abc", "-1", " 4 "] {
+        unsafe { env::set_var("SHANNON_MAX_CONSECUTIVE_MALFORMED_CALLS", garbage) };
+        let expected = garbage.trim().parse::<u32>().unwrap_or(3);
+        assert_eq!(
+            crate::query_engine::env_config::max_consecutive_malformed_calls(),
+            expected,
+            "SHANNON_MAX_CONSECUTIVE_MALFORMED_CALLS={garbage:?} must parse \
+             like SHANNON_TURN_RETRIES"
+        );
+    }
+
+    match saved {
+        Some(v) => unsafe { env::set_var("SHANNON_MAX_CONSECUTIVE_MALFORMED_CALLS", v) },
+        None => unsafe { env::remove_var("SHANNON_MAX_CONSECUTIVE_MALFORMED_CALLS") },
+    }
+}
+
+/// Turn bookkeeping (accounting follow-up): the recovery gates do
+/// `turn += 1` and loop again WITHOUT emitting TurnCompleted, so the
+/// headless driver — which counts turns from TurnCompleted events —
+/// reported turns_used=0 on recovery exits: work actually done was
+/// invisible in the NDJSON ledger. Every recovery round must emit
+/// TurnCompleted before continuing.
+#[tokio::test]
+async fn parse_error_recovery_rounds_emit_turn_completed() {
+    let responder = std::sync::Arc::new(|request_index: usize| {
+        if request_index == 0 {
+            malformed_tool_call_sse(0)
+        } else {
+            a8_text_sse("recovered")
+        }
+    });
+    let server = TurnRetryMockServer::start(responder);
+    let (completed, failed_error, _warnings, turns, _history, _outcome) =
+        run_query_with_recovery_bookkeeping(&server, 20).await;
+    assert!(
+        failed_error.is_empty(),
+        "query failed instead of recovering: {failed_error}"
+    );
+    assert!(completed, "query must complete after the model retries");
+    assert!(
+        turns.iter().any(|(turn_number, _)| *turn_number == 1),
+        "the recovery round (turn 1) must emit TurnCompleted, got {turns:?}"
+    );
+}
+
+/// A well-formed tool call for an unregistered tool: parses, executes
+/// (error result), advances the turn. Ids are unique per request — the
+/// P3-10 query-scope dedup would otherwise drop the repeats.
+fn parsed_tool_call_sse(request_index: usize) -> String {
+    let sse = [
+        r#"event: message_start"#,
+        r#"data: {"type":"message_start","message":{"id":"msg_parsed","role":"assistant","content":[],"model":"test-model","stop_reason":null,"usage":{"input_tokens":10,"output_tokens":1}}}"#,
+        r#"event: content_block_start"#,
+        &format!(
+            "data: {{\"type\":\"content_block_start\",\"index\":0,\"content_block\":{{\"type\":\"tool_use\",\"id\":\"toolu_parsed_{request_index}\",\"name\":\"no_such_tool\",\"input\":{{}}}}}}"
+        ),
+        r#"event: content_block_delta"#,
+        r#"data: {"type":"content_block_delta","index":0,"delta":{"type":"input_json_delta","partial_json":"{}"}}"#,
+        r#"event: content_block_stop"#,
+        r#"data: {"type":"content_block_stop","index":0}"#,
+        r#"event: message_delta"#,
+        r#"data: {"type":"message_delta","delta":{"stop_reason":"tool_use"},"usage":{"input_tokens":10,"output_tokens":5}}"#,
+        r#"event: message_stop"#,
+        r#"data: {"type":"message_stop"}"#,
+    ]
+    .join("\n\n");
+    a8_http_response("200 OK", "text/event-stream", &sse)
+}
+
+/// An EMPTY completion whose MessageDelta carries the sentinel zero-usage
+/// frame: the finalize defers, the stream ends unfinalized, and the
+/// post-loop bail-out region runs (no text, no tool calls).
+fn empty_completion_zero_usage_sse() -> String {
+    let sse = [
+        r#"event: message_start"#,
+        r#"data: {"type":"message_start","message":{"id":"msg_empty","role":"assistant","content":[],"model":"test-model","stop_reason":null,"usage":{"input_tokens":10,"output_tokens":0}}}"#,
+        r#"event: content_block_start"#,
+        r#"data: {"type":"content_block_start","index":0,"content_block":{"type":"text","text":""}}"#,
+        r#"event: content_block_stop"#,
+        r#"data: {"type":"content_block_stop","index":0}"#,
+        r#"event: message_delta"#,
+        r#"data: {"type":"message_delta","delta":{"stop_reason":"end_turn"},"usage":{"input_tokens":0,"output_tokens":0}}"#,
+        r#"event: message_stop"#,
+        r#"data: {"type":"message_stop"}"#,
+    ]
+    .join("\n\n");
+    a8_http_response("200 OK", "text/event-stream", &sse)
+}
+
+/// Outcome: the stop-loss ending is a NO-PROGRESS completion — headless
+/// maps it to a non-zero exit so CI stops booking pure churn as success.
+#[tokio::test]
+async fn stop_loss_completes_with_no_progress_outcome() {
+    let responder =
+        std::sync::Arc::new(|request_index: usize| malformed_tool_call_sse(request_index));
+    let server = TurnRetryMockServer::start(responder);
+    let (completed, failed_error, _warnings, _turns, _history, outcome) =
+        run_query_with_recovery_bookkeeping(&server, 20).await;
+    assert!(
+        failed_error.is_empty(),
+        "stop-loss must complete, not fail: {failed_error}"
+    );
+    assert!(completed, "stop-loss must complete the query");
+    assert_eq!(
+        outcome,
+        Some(QueryOutcome::NoProgress),
+        "stop-loss must report outcome=no_progress"
+    );
+}
+
+/// Outcome: the A1 bail-out (nudge budget exhausted, model produced
+/// NOTHING usable) is a NO-PROGRESS completion, not a plain success.
+#[tokio::test]
+async fn bail_out_after_exhausted_nudges_reports_no_progress() {
+    let responder = std::sync::Arc::new(|_request_index: usize| empty_completion_zero_usage_sse());
+    let server = TurnRetryMockServer::start(responder);
+    let (completed, failed_error, warnings, _turns, _history, outcome) =
+        run_query_with_recovery_bookkeeping(&server, 20).await;
+    assert!(
+        failed_error.is_empty(),
+        "bail-out must complete, not fail: {failed_error}"
+    );
+    assert!(completed, "bail-out must complete the query");
+    // Two empty-completion nudges (default budget), then the third
+    // empty response exhausts the budget and bails out.
+    assert_eq!(
+        server.bodies().len(),
+        3,
+        "two nudged retries + the bail-out"
+    );
+    assert_eq!(warnings.len(), 2, "two nudge warnings: {warnings:?}");
+    assert_eq!(
+        outcome,
+        Some(QueryOutcome::NoProgress),
+        "bail-out must report outcome=no_progress"
+    );
+}
+
+/// Outcome: max-turns exhaustion reports turn_budget_exhausted instead of
+/// an indistinguishable plain success.
+#[tokio::test]
+async fn max_turns_exhaustion_reports_turn_budget_exhausted() {
+    let responder = std::sync::Arc::new(|request_index: usize| parsed_tool_call_sse(request_index));
+    let server = TurnRetryMockServer::start(responder);
+    let (completed, failed_error, _warnings, _turns, _history, outcome) =
+        run_query_with_recovery_bookkeeping(&server, 3).await;
+    assert!(
+        failed_error.is_empty(),
+        "query failed unexpectedly: {failed_error}"
+    );
+    assert!(completed, "query must complete at the turn budget");
+    assert_eq!(
+        server.bodies().len(),
+        3,
+        "the budget (3 turns) bounds the request count, got {}",
+        server.bodies().len()
+    );
+    assert_eq!(
+        outcome,
+        Some(QueryOutcome::TurnBudgetExhausted),
+        "max-turns exhaustion must report outcome=turn_budget_exhausted"
     );
 }

@@ -131,7 +131,7 @@ export function CodeBlock({
                 aria-label={t(showLines ? 'code.lineNumbers.hide' : 'code.lineNumbers.show')}
                 className="h-auto px-xs py-[2px] text-on-surface-variant hover:text-primary"
               >
-                <span className="material-symbols-outlined text-[14px] align-middle">format_list_numbered</span>
+                <span className="material-symbols-outlined icon-sm align-middle">format_list_numbered</span>
               </Button>
             )}
             <Button
@@ -144,7 +144,7 @@ export function CodeBlock({
                 copyFailed && 'text-error hover:text-error',
               )}
             >
-              <span className="material-symbols-outlined text-[14px]">
+              <span className="material-symbols-outlined icon-sm">
                 {copied ? 'check' : copyFailed ? 'error' : 'content_copy'}
               </span>
               <span>

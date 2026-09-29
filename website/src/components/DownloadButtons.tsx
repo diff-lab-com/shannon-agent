@@ -126,11 +126,10 @@ export default function DownloadButtons({ lang }: DownloadButtonsProps) {
       </div>
 
       {/* Install command */}
-      <div style={{
+      <div className="glass-terminal" style={{
         display: 'flex',
         alignItems: 'center',
         gap: 12,
-        background: 'var(--code-bg)',
         borderRadius: 'var(--radius-sm)',
         padding: '14px 18px',
         marginBottom: 16,

@@ -182,8 +182,7 @@ async fn grep_blocking_io_runs_off_the_async_worker() {
     assert!(
         ticks_during >= MIN_TICKS_DURING_BLOCK,
         "the async worker froze for the duration of the blocking calls \
-         (only {ticks_during} ticks over {}ms of blocking IO) — §P2-14 regression",
-        BLOCKING_CALL_MS
+         (only {ticks_during} ticks over {BLOCKING_CALL_MS}ms of blocking IO) — §P2-14 regression",
     );
 }
 
@@ -223,7 +222,6 @@ async fn read_binary_sniff_runs_off_the_async_worker() {
     assert!(
         ticks_during >= MIN_TICKS_DURING_BLOCK,
         "the async worker froze for the duration of the binary-sniff read \
-         (only {ticks_during} ticks over {}ms of blocking IO) — §P2-14 regression",
-        BLOCKING_CALL_MS
+         (only {ticks_during} ticks over {BLOCKING_CALL_MS}ms of blocking IO) — §P2-14 regression",
     );
 }

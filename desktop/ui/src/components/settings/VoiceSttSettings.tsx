@@ -92,12 +92,12 @@ export function VoiceSttSettings() {
   }
 
   return (
-    <div className="bg-surface-container-lowest p-lg rounded-xl shadow-sm border border-outline-variant/30 group hover:shadow-md transition-shadow">
+    <div className="bg-surface-container-lowest p-lg rounded-xl shadow-e1 border border-outline-variant/30 group hover:shadow-e2 transition-shadow">
       <div className="flex items-center gap-md mb-md">
-        <div className="p-2 bg-primary/10 rounded-lg text-primary flex items-center justify-center">
+        <div className="p-sm bg-primary-container rounded-lg text-on-primary-container flex items-center justify-center">
           <span className="material-symbols-outlined">mic</span>
         </div>
-        <h3 className="font-headline-md text-[24px] font-bold text-on-surface">{t('settings.voice.title')}</h3>
+        <h3 className="font-headline-md text-headline-md font-bold text-on-surface">{t('settings.voice.title')}</h3>
         <span
           className={cn(
             "ml-auto px-sm py-[2px] rounded-full text-label-xs font-bold",
@@ -115,7 +115,7 @@ export function VoiceSttSettings() {
         {/* B6-37: associate labels with their inputs (htmlFor/id) and render
             save failures in a role="alert" region. */}
         <div>
-          <label className="block font-label-sm text-[12px] text-on-surface-variant mb-1" htmlFor="stt-provider-select">{t('settings.voice.provider')}</label>
+          <label className="block font-label-sm text-label-sm text-on-surface-variant mb-xs" htmlFor="stt-provider-select">{t('settings.voice.provider')}</label>
           <Select value={provider} onValueChange={handleProviderChange}>
             <SelectTrigger id="stt-provider-select" size="sm" className="w-full" aria-label={t('settings.voice.provider')}>
               <SelectValue />
@@ -129,7 +129,7 @@ export function VoiceSttSettings() {
         </div>
 
         <div>
-          <label className="block font-label-sm text-[12px] text-on-surface-variant mb-1" htmlFor="stt-api-key">{t('settings.voice.apiKey')}</label>
+          <label className="block font-label-sm text-label-sm text-on-surface-variant mb-xs" htmlFor="stt-api-key">{t('settings.voice.apiKey')}</label>
           <Input
             id="stt-api-key"
             type="password"
@@ -141,7 +141,7 @@ export function VoiceSttSettings() {
         </div>
 
         <div>
-          <label className="block font-label-sm text-[12px] text-on-surface-variant mb-1" htmlFor="stt-model">{t('settings.voice.model')}</label>
+          <label className="block font-label-sm text-label-sm text-on-surface-variant mb-xs" htmlFor="stt-model">{t('settings.voice.model')}</label>
           <Input
             id="stt-model"
             type="text"
@@ -153,7 +153,7 @@ export function VoiceSttSettings() {
 
         {provider === 'custom' && (
           <div>
-            <label className="block font-label-sm text-[12px] text-on-surface-variant mb-1" htmlFor="stt-base-url">{t('settings.voice.baseUrl')}</label>
+            <label className="block font-label-sm text-label-sm text-on-surface-variant mb-xs" htmlFor="stt-base-url">{t('settings.voice.baseUrl')}</label>
             <Input
               id="stt-base-url"
               type="text"
@@ -164,18 +164,18 @@ export function VoiceSttSettings() {
           </div>
         )}
 
-        <p className="font-label-xs text-[11px] text-on-surface-variant">{t('settings.voice.help')}</p>
+        <p className="font-label-xs text-label-xs text-on-surface-variant">{t('settings.voice.help')}</p>
 
         {saveError ? (
-          <p id="stt-save-error" role="alert" className="font-label-sm text-[12px] text-error break-words">{saveError}</p>
+          <p id="stt-save-error" role="alert" className="font-label-sm text-label-sm text-error break-words">{saveError}</p>
         ) : null}
 
         <Button
-          className="w-full py-md bg-primary text-on-primary rounded-xl font-label-md font-bold text-[14px] hover:bg-primary/90 cursor-pointer"
+          className="w-full py-md bg-primary text-on-primary rounded-xl font-label-md font-bold text-body-sm hover:bg-primary/90 cursor-pointer"
           onClick={handleSave}
           disabled={saving}
         >
-          {saving ? <Spinner className="mr-sm text-[18px]" /> : null}
+          {saving ? <Spinner className="mr-sm text-body-lg" /> : null}
           {t('settings.voice.save')}
         </Button>
       </div>

@@ -48,6 +48,8 @@ Install: `cargo install just cargo-nextest`. Config in `.config/nextest.toml` ha
 | `shannon-server` | axum-based HTTP API server exposing Shannon sessions (REST + SSE) | [metrics.md](./docs/metrics.md) |
 | `shannon-stability-attr` | Proc-macro `#[stable_api]` / `#[unstable_api]` attribute markers feeding `docs/STABILITY.md` | n/a |
 | `shannon-remote` | Remote execution worlds: SSH hosts (system ssh + SFTP) and Docker containers (`docker exec`) as `ProcessProvider`/`FileSystemProvider` implementations; `DynamicWorld` hot-swap; `/remote` TUI command, `--target` CLI flag, Settings→Remotes desktop page | [design](./docs/plans/2026-09-04-remote-connections-design.md) |
+| `shannon-browser` | System-browser detection, browser providers, and the shared chromiumoxide session behind the `local-browser` feature — used by browser tools and remote worlds | n/a |
+| `shannon-plugin-api` | Content-transform middleware contract between the engine and plugins (secret-guard); version-locked to releases, not workspace-inherited | n/a |
 
 ### First-Screen UX
 
@@ -199,3 +201,4 @@ Computer use (desktop automation via `computer-use` feature flag). Browser autom
 - The `mockito` server matchers are order-dependent when using `.expect(N)`.
 - `LlmClientConfig` must include `max_stream_reconnects` field (all constructors have it).
 - `#[allow(dead_code)]` annotations in production code: ~96 remaining (re-count 2026-08-08 via `grep -r "allow(dead_code)" crates/ | wc -l`; was 61 — the count drifts as code grows, re-run before quoting). All annotated with `// KEEP: <reason>` comments. Categories: cross-platform stubs, deserialized fields, command template dynamic dispatch, test-only utilities, struct ownership, watcher lifecycle fields. The four modules a prior review flagged as dead-code sinks (`coordinator.rs`, `compact.rs`, `doctor.rs`, `ui_adapter.rs`) now carry **zero** such annotations.
+- On Linux hosts with old pipewire (e.g. Ubuntu 22.04 / libspa 0.3.48), `cargo check --workspace` fails inside `libspa-0.10.x` (`E0425 … in crate `spa_sys``, `spa_video_info_raw.flags`) because libspa-sys bindgens the **system** headers at build time — an environment mismatch, not a repo bug. Use `just check` (auto-falls back to `--exclude shannon-desktop` + desktop `--no-default-features --features tauri`); see CONTRIBUTING.md → "Desktop build on Linux (libspa/pipewire)".

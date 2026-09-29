@@ -27,7 +27,7 @@ export function FeedbackSummaryCard() {
   }, [])
 
   return (
-    <section className="bg-surface-container-lowest rounded-xl border border-outline-variant/30 p-xl shadow-sm">
+    <section className="bg-surface-container-lowest rounded-xl border border-outline-variant/30 p-xl shadow-e1">
       <div className="flex items-center gap-md mb-xs">
         <span className="material-symbols-outlined text-primary" style={{ fontVariationSettings: "'FILL' 1" }}>thumb_up</span>
         <h3 className="font-headline-md text-headline-md">{t('settings.feedback.title')}</h3>
@@ -45,12 +45,12 @@ export function FeedbackSummaryCard() {
                 {r.session_id.slice(0, 8)}
               </span>
               <span className="flex items-center gap-md text-label-sm tabular-nums">
-                <span className="flex items-center gap-1 text-primary" aria-label={t('settings.feedback.upAria')}>
-                  <span className="material-symbols-outlined text-[16px]" aria-hidden="true">thumb_up</span>
+                <span className="flex items-center gap-xs text-primary" aria-label={t('settings.feedback.upAria')}>
+                  <span className="material-symbols-outlined icon-sm" aria-hidden="true">thumb_up</span>
                   {r.up}
                 </span>
-                <span className="flex items-center gap-1 text-error" aria-label={t('settings.feedback.downAria')}>
-                  <span className="material-symbols-outlined text-[16px]" aria-hidden="true">thumb_down</span>
+                <span className="flex items-center gap-xs text-error" aria-label={t('settings.feedback.downAria')}>
+                  <span className="material-symbols-outlined icon-sm" aria-hidden="true">thumb_down</span>
                   {r.down}
                 </span>
               </span>

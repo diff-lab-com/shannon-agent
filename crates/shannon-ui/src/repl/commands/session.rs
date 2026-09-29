@@ -705,6 +705,12 @@ struct CodeRewindOutcome {
 /// session replayed exactly the turns the user had removed. The desktop path
 /// already called `SessionStore::truncate_to_turn`; the REPL now does the
 /// same (best-effort: failures are logged and do not abort the rewind).
+///
+/// `keep_turns` is a **turn** count — the turns still present in the engine's
+/// memory after the rewind (`QueryEngine::conversation_turn_count`), matching
+/// `truncate_to_turn`'s "keep the first N conversation turns" contract.
+/// (Passing the removed-*message* count here used to over-truncate the
+/// authoritative log by whole turns.)
 fn persist_log_truncation(repl: &Repl, keep_turns: usize) {
     let Some(ref engine) = repl.query_engine else {
         return;
@@ -932,8 +938,11 @@ pub(crate) fn handle_rewind(repl: &mut Repl, args: &str) -> Result<()> {
             if turns_to_rewind > 0 {
                 repl.chat.rewind(turns_to_rewind);
                 if let Some(ref mut engine) = repl.query_engine {
-                    let remaining = engine.rewind_conversation(turns_to_rewind);
-                    persist_log_truncation(repl, remaining);
+                    engine.rewind_conversation(turns_to_rewind);
+                    // Truncate the L0 log to the turns that SURVIVE in memory
+                    // (a removed-message count would over-truncate by turns).
+                    let keep_turns = engine.conversation_turn_count();
+                    persist_log_truncation(repl, keep_turns);
                 }
             }
 
@@ -966,8 +975,11 @@ pub(crate) fn handle_rewind(repl: &mut Repl, args: &str) -> Result<()> {
             let after_count = repl.chat.len();
 
             if let Some(ref mut engine) = repl.query_engine {
-                let remaining = engine.rewind_conversation(turns);
-                persist_log_truncation(repl, remaining);
+                engine.rewind_conversation(turns);
+                // Truncate the L0 log to the turns that SURVIVE in memory
+                // (a removed-message count would over-truncate by turns).
+                let keep_turns = engine.conversation_turn_count();
+                persist_log_truncation(repl, keep_turns);
             }
 
             if removed > 0 {

@@ -231,8 +231,8 @@ export default function MemoryPanel({
         )}
 
         {errorMsg && (
-          <div className="flex items-center gap-sm px-md py-sm rounded-xl bg-error/10 border border-error/20 text-error font-label-md mb-lg">
-            <span className="material-symbols-outlined text-[18px]">error</span>
+          <div className="flex items-center gap-sm px-md py-sm rounded-xl bg-error-container border border-error/20 text-on-error-container font-label-md mb-lg">
+            <span className="material-symbols-outlined icon-md">error</span>
             {errorMsg}
             <Button
               variant="ghost"
@@ -240,7 +240,7 @@ export default function MemoryPanel({
               className="ml-auto text-error/60 hover:text-error"
               onClick={() => setErrorMsg(null)}
             >
-              <span className="material-symbols-outlined text-[18px]">close</span>
+              <span className="material-symbols-outlined icon-md">close</span>
             </Button>
           </div>
         )}
@@ -262,11 +262,11 @@ export default function MemoryPanel({
                 className={cn(
                   'px-md py-sm rounded-lg text-label-md font-bold transition-colors cursor-pointer',
                   view === v
-                    ? 'bg-surface-container-lowest text-on-surface shadow-sm'
+                    ? 'bg-surface-container-lowest text-on-surface shadow-e1'
                     : 'text-on-surface-variant hover:text-on-surface',
                 )}
               >
-                <span className="material-symbols-outlined text-[16px] align-middle mr-xs">
+                <span className="material-symbols-outlined icon-sm align-middle mr-xs">
                   {v === 'list' ? 'list' : 'hub'}
                 </span>
                 {t(`memory.view.${v}`)}
@@ -302,7 +302,7 @@ export default function MemoryPanel({
           </select>
 
           <div className="flex-1 min-w-[200px] relative">
-            <span className="material-symbols-outlined absolute left-md top-1/2 -translate-y-1/2 text-on-surface-variant text-[18px]">
+            <span className="material-symbols-outlined absolute left-md top-1/2 -translate-y-1/2 text-on-surface-variant icon-md">
               search
             </span>
             <input
@@ -316,9 +316,9 @@ export default function MemoryPanel({
 
           <Button
             onClick={() => setCreating(true)}
-            className="gap-xs px-md py-sm text-[14px] font-bold"
+            className="gap-xs px-md py-sm text-body-sm font-bold"
           >
-            <span className="material-symbols-outlined text-[18px]">add</span>
+            <span className="material-symbols-outlined icon-md">add</span>
             {t('memory.action.create')}
           </Button>
         </div>
@@ -348,7 +348,7 @@ export default function MemoryPanel({
         ) : isEmpty ? (
           <div className="flex flex-col items-center justify-center text-center py-3xl px-lg">
             <div className="w-20 h-20 rounded-2xl bg-primary-container/30 flex items-center justify-center mb-lg">
-              <span className="material-symbols-outlined text-[40px] text-primary" aria-hidden="true">
+              <span className="material-symbols-outlined icon-2xl text-primary" aria-hidden="true">
                 psychology
               </span>
             </div>
@@ -356,9 +356,9 @@ export default function MemoryPanel({
             <p className="text-on-surface-variant mb-lg max-w-md">{t('memory.empty.desc')}</p>
             <Button
               onClick={() => setCreating(true)}
-              className="gap-xs px-md py-sm text-[14px] font-bold bg-primary text-on-primary"
+              className="gap-xs px-md py-sm text-body-sm font-bold bg-primary text-on-primary"
             >
-              <span className="material-symbols-outlined text-[18px]">add</span>
+              <span className="material-symbols-outlined icon-md">add</span>
               {t('memory.action.createFirst')}
             </Button>
           </div>

@@ -342,6 +342,22 @@ export interface MobilePairToken {
   qrDataUrl: string
 }
 
+/// One pending (or just-approved) IM pairing request (T9). Mirrors the Rust
+/// `GatewayPairingRequest` in `desktop/src/gateway_pairing.rs` and the
+/// gateway's `PairingRequestRecord` (camelCase, passed through).
+export interface GatewayPairingRequest {
+  /// The 6-digit code shown in the IM pairing challenge.
+  code: string
+  /// Chat platform the requester came from (slack/telegram/…).
+  platform: string
+  /// Platform sender id the allowlist entry carries.
+  senderId: string
+  /// Epoch ms when the challenge was issued.
+  requestedAt: number
+  /// Epoch ms after which the code expires (issue + 5 min).
+  expiresAt: number
+}
+
 /// E-1 方案 C — supervised gateway process status. Mirrors the Rust
 /// `GatewaySupervisorStatus` enum (externally-tagged serde, camelCase variants).
 export type GatewaySupervisorStatus =
@@ -439,6 +455,29 @@ export interface ProviderQuirks {
 export interface ProvidersFile {
   active_provider_id?: string | null
   providers: ProviderConnection[]
+}
+
+/// Reliable provider-activation signal from `get_provider_status`
+/// (2026-09-29 provider review §2-2). `DesktopConfig.provider`/`api_key`
+/// are dead since ADR-0005 — all "is a provider configured" gating reads
+/// this instead.
+export interface ProviderStatus {
+  /// Id of the active managed provider, `null` when nothing is active.
+  active_provider_id: string | null
+  /// Display name of the active provider, `null` when unset (fall back
+  /// to `active_provider_id` for display).
+  display_name: string | null
+  /// Wire kind slug of the active provider (`anthropic` | `openai` |
+  /// `deepseek` | `ollama` | `openai-compatible` | `gemini`).
+  kind: string | null
+  /// True when the credential store has a key for the active provider.
+  has_api_key: boolean
+  /// Active model id, `null` when unset (or the `"default"` sentinel).
+  model: string | null
+  /// Provider detected purely from env vars — only populated when the
+  /// store has no active provider, so env-configured users are not
+  /// nagged for a key.
+  env_provider: string | null
 }
 
 /// Payload for adding or editing a managed provider. On edit, `id` identifies

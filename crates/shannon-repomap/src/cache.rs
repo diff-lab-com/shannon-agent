@@ -13,7 +13,11 @@
 //!   one file's symbols in place (no re-walk, no re-parse of siblings). This
 //!   is the hot path used by both the FS watcher and explicit `edit` calls.
 //! - [`RepoMapCache::pack`] — trim to a token budget and return the markdown
-//!   the query engine injects into the system prompt.
+//!   the query engine injects into the system prompt. Destructive: the
+//!   trimmed symbols are gone from the cache afterwards.
+//! - [`RepoMapCache::pack_snapshot`] — same rendering without the
+//!   destruction (the cache keeps its full symbol set); prefer it whenever
+//!   the cache must stay usable after rendering.
 //! - [`RepoMapCache::flush`] — write the current state to the disk cache.
 //! - [`RepoMapCache::invalidate`] — drop the on-disk cache so the next `new`
 //!   does a full re-walk. Useful when the language set changes or the cache
@@ -219,10 +223,13 @@ impl RepoMapCache {
     /// engine injects under a labelled section.
     ///
     /// The budget is enforced on per-symbol tokens (signatures + recursive
-    /// children). Markdown rendering adds small per-file headers and a
-    /// top-level "# Repo Map: \<root\>" line — those are structural and not
-    /// counted against the budget. Callers that need a hard cap on the
-    /// rendered output should set the budget ~80% of their actual ceiling.
+    /// children). The rendered markdown is bounded overall, not just on
+    /// symbols: the top-level "# Repo Map: \<root\>" header, one section per
+    /// file that still has symbols after the trim, and a single trailing
+    /// section that folds every symbol-less file into a comma-separated path
+    /// list hard-capped at 4096 bytes (`… and N more (trimmed)` once it
+    /// overflows). Output therefore grows with the symbol budget and the
+    /// number of *surviving* symbols — never with the number of walked files.
     pub fn pack(&mut self, budget_tokens: usize) -> String {
         let mut map = SymbolMap {
             root: self.root.clone(),
@@ -232,6 +239,27 @@ impl RepoMapCache {
         let md = RepoMap { map: map.clone() }.to_system_prompt_markdown();
         self.files = map.files;
         md
+    }
+
+    /// Non-destructive variant of [`Self::pack`]: trim a *clone* of the
+    /// cached map to the budget and render it, leaving `self` untouched.
+    ///
+    /// `pack` permanently removes the trimmed symbols from the cache, so a
+    /// caller that wants to keep packing after every turn had to deep-clone
+    /// the whole cache first (the query engine's repo-map injector did
+    /// exactly that). `pack_snapshot` moves that clone inside: the rendering
+    /// is identical to `clone().pack(budget)`, and the cache keeps its full
+    /// symbol set, so subsequent [`Self::update_file`] calls still see
+    /// untrimmed symbols. The remaining cost is the one clone on the calls
+    /// that actually re-render; callers rendering every turn should cache
+    /// the returned string and only call again when the map changed.
+    pub fn pack_snapshot(&self, budget_tokens: usize) -> String {
+        let mut map = SymbolMap {
+            root: self.root.clone(),
+            files: self.files.clone(),
+        };
+        budget::trim_to_budget(&mut map, budget_tokens);
+        RepoMap { map }.to_system_prompt_markdown()
     }
 
     /// Persist the current cache to disk. Best-effort: errors are surfaced
@@ -502,22 +530,26 @@ fn disk_cache_matches_fs(root: &Path, disk: &DiskCache) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::path::PathBuf;
 
-    fn tmp_root(label: &str) -> PathBuf {
-        let mut p = std::env::temp_dir();
-        p.push(format!(
-            "shannon_repomap_cache_test_{label}_{}",
-            std::process::id()
-        ));
-        let _ = fs::remove_dir_all(&p);
-        fs::create_dir_all(&p).unwrap();
-        p
+    /// RAII temp root: the directory is removed when the guard drops, so a
+    /// failing test no longer litters `/tmp` with `shannon_repomap_cache_test_*`
+    /// directories (one machine had accumulated hundreds of these).
+    struct TempRoot(tempfile::TempDir);
+
+    impl std::ops::Deref for TempRoot {
+        type Target = std::path::Path;
+        fn deref(&self) -> &Self::Target {
+            self.0.path()
+        }
+    }
+
+    fn tmp_root() -> TempRoot {
+        TempRoot(tempfile::tempdir_in(std::env::temp_dir()).expect("create temp root"))
     }
 
     #[test]
     fn update_file_inserts_then_replaces() {
-        let root = tmp_root("insert_replace");
+        let root = tmp_root();
         fs::write(root.join("a.rs"), "pub fn a() {}\n").unwrap();
         let mut cache = RepoMapCache::ephemeral(&root).unwrap();
         assert_eq!(cache.file_count(), 1);
@@ -547,7 +579,7 @@ mod tests {
 
     #[test]
     fn update_file_removes_when_missing() {
-        let root = tmp_root("remove_missing");
+        let root = tmp_root();
         fs::write(root.join("c.rs"), "pub fn c() {}\n").unwrap();
         let mut cache = RepoMapCache::ephemeral(&root).unwrap();
         assert_eq!(cache.file_count(), 1);
@@ -559,7 +591,7 @@ mod tests {
 
     #[test]
     fn flush_and_reload_round_trip() {
-        let root = tmp_root("round_trip");
+        let root = tmp_root();
         fs::write(root.join("d.rs"), "pub fn d() {}\n").unwrap();
         {
             let cache = RepoMapCache::ephemeral(&root).unwrap();
@@ -574,7 +606,7 @@ mod tests {
 
     #[test]
     fn pack_returns_markdown_under_budget() {
-        let root = tmp_root("pack_budget");
+        let root = tmp_root();
         for i in 0..8 {
             fs::write(
                 root.join(format!("f{i}.rs")),
@@ -586,5 +618,45 @@ mod tests {
         let md = cache.pack(120);
         // Crude sanity: at least one function name should appear.
         assert!(md.contains("func_0"));
+    }
+
+    /// pack_snapshot must render exactly what the destructive pack renders,
+    /// and must leave the cache's symbol set intact (T12a): a snapshot can
+    /// be taken repeatedly with identical output, and the map afterwards
+    /// still matches a freshly built cache.
+    #[test]
+    fn pack_snapshot_matches_pack_and_leaves_cache_intact() {
+        let root = tmp_root();
+        for i in 0..8 {
+            fs::write(
+                root.join(format!("g{i}.rs")),
+                format!("pub fn snap_func_{i}(x: i32) -> i32 {{ x * {i} }}\n"),
+            )
+            .unwrap();
+        }
+        let cache = RepoMapCache::ephemeral(&root).unwrap();
+        let full_count = cache.file_count();
+        assert_eq!(full_count, 8);
+
+        // Tiny budget so trimming actually drops symbols.
+        let snapshot_a = cache.pack_snapshot(60);
+        let snapshot_b = cache.pack_snapshot(60);
+        assert_eq!(snapshot_a, snapshot_b, "snapshots must be stable");
+        assert!(snapshot_a.contains("snap_func_0"));
+
+        // Identical content to the destructive path on an equal cache.
+        let mut destructive = RepoMapCache::ephemeral(&root).unwrap();
+        let packed = destructive.pack(60);
+        assert_eq!(snapshot_a, packed);
+
+        // The snapshot left the cache's symbol set untouched: it still
+        // matches a freshly built cache exactly, while the destructive
+        // pack above visibly emptied files in its own map.
+        assert_eq!(cache.file_count(), full_count);
+        assert_eq!(
+            cache.map().files,
+            RepoMapCache::ephemeral(&root).unwrap().map().files
+        );
+        assert_ne!(cache.map().files, destructive.map().files);
     }
 }

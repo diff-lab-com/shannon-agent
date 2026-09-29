@@ -102,7 +102,7 @@ export default function RoutineDetailDrawer({
                 {routine.policy.result_routing.map(entry => (
                   <li
                     key={entry}
-                    className="font-label-sm text-[11px] bg-tertiary/10 text-tertiary px-sm py-0.5 rounded-full border border-tertiary/30"
+                    className="font-label-sm text-label-xs bg-tertiary-container text-on-tertiary-container px-sm py-0.5 rounded-full border border-tertiary/30"
                   >
                     {entry}
                   </li>
@@ -115,7 +115,7 @@ export default function RoutineDetailDrawer({
               <span className="text-label-sm text-on-surface-variant uppercase tracking-wider">
                 {t('tasks.routineDetailDrawer.dependencies')}
               </span>
-              <span className="font-label-sm text-[11px] text-on-surface-variant">
+              <span className="font-label-sm text-label-xs text-on-surface-variant">
                 {deps.length === 0 ? t('tasks.routineDetailDrawer.none') : deps.join(', ')}
               </span>
             </div>

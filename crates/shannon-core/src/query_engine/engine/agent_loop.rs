@@ -22,6 +22,25 @@ fn publish_stop_trigger(bus: &crate::bus::EventBus, tool_calls_count: usize) {
     );
 }
 
+/// Suggestion for a stream error, provider-aware for auth failures (review
+/// 2026-09-29 P0-3): `ApiError::AuthenticationFailed` is a unit variant, so
+/// the generic [`ApiError::user_suggestion`] text cannot name the provider or
+/// its canonical env var. Where the active provider is known (here: the
+/// client's resolved provider), upgrade the auth-failure hint to
+/// [`ApiError::auth_failure_suggestion`]; every other error keeps its
+/// existing suggestion unchanged.
+fn error_suggestion(
+    e: &shannon_engine::api::ApiError,
+    provider: &shannon_engine::api::LlmProvider,
+) -> Option<String> {
+    if matches!(e, shannon_engine::api::ApiError::AuthenticationFailed) {
+        return Some(shannon_engine::api::ApiError::auth_failure_suggestion(
+            provider,
+        ));
+    }
+    e.user_suggestion()
+}
+
 /// Progress sender that forwards tool output lines as `ToolProgress` events.
 struct ChannelProgressSender {
     tx: EventTx,
@@ -794,6 +813,19 @@ impl QueryEngine {
             let max_think_only_nudges = think_only_nudge_max();
             let think_only_min_chars = think_only_min_answer_chars();
 
+            // Malformed-tool-call stop-loss (#140 follow-up): the parse-error
+            // recovery gates below continue the loop whenever a synthetic
+            // tool_result is pending — regardless of narration — so a model
+            // that keeps emitting malformed calls would loop until
+            // max_turns (observed: 90 API requests, 55k tokens of churn on
+            // one query). Count consecutive malformed synthetic calls across
+            // the query; reaching the cap ends the query with a warning and
+            // an honest completion instead of churning. A successfully
+            // parsed + executed tool call resets the streak, so genuinely
+            // productive turns are never interrupted.
+            let mut consecutive_malformed_tool_calls: u32 = 0;
+            let max_consecutive_malformed_calls = max_consecutive_malformed_calls();
+
             // Auto-test loop state (P1-5). Initialized lazily inside the loop body
             // because `AutoLoopState` is only needed when `config.auto_test` is `Some`.
             // We keep the struct default-constructible so this declaration is cheap.
@@ -853,7 +885,15 @@ impl QueryEngine {
                         }
                     );
                     publish_stop_trigger(&session_bus, tool_results.len());
-                    send_event!(tx, QueryEvent::Completed { query_id });
+                    // Turn budget exhausted — reported honestly so headless
+                    // consumers can distinguish it from a real answer.
+                    send_event!(
+                        tx,
+                        QueryEvent::Completed {
+                            query_id,
+                            outcome: QueryOutcome::TurnBudgetExhausted,
+                        }
+                    );
 
                     break;
                 }
@@ -2013,7 +2053,9 @@ impl QueryEngine {
                                                         tool_results.push(ToolResultEntry {
                                                             tool_use_id: id.clone(),
                                                             content: format!(
-                                                                "Malformed tool input: {e}"
+                                                                "Malformed tool input: {e}. \
+                                                                 Re-emit the tool call with a \
+                                                                 complete JSON arguments object."
                                                             ),
                                                             is_error: true,
                                                             metadata: Default::default(),
@@ -2264,7 +2306,9 @@ impl QueryEngine {
                                                         tool_results.push(ToolResultEntry {
                                                             tool_use_id: id.clone(),
                                                             content: format!(
-                                                                "Malformed tool input: {e}"
+                                                                "Malformed tool input: {e}. \
+                                                                 Re-emit the tool call with a \
+                                                                 complete JSON arguments object."
                                                             ),
                                                             is_error: true,
                                                             metadata: Default::default(),
@@ -3466,6 +3510,11 @@ impl QueryEngine {
                                                 // nudge budget so only *consecutive* think-only
                                                 // responses exhaust it.
                                                 think_only_nudges = 0;
+                                                // A well-formed tool call parsed and executed —
+                                                // the malformed-call streak is broken (the
+                                                // stop-loss counts *consecutive* malformed
+                                                // calls only).
+                                                consecutive_malformed_tool_calls = 0;
                                                 // Break from the streaming while-let loop so
                                                 // tool results are processed on the next turn
                                                 // iteration instead of consuming more events
@@ -3474,28 +3523,129 @@ impl QueryEngine {
                                                 break;
                                             } else {
                                                 // Parse-error recovery: model emitted a malformed
-                                                // tool_call (no text content, no parsed tool inputs,
-                                                // but a synthetic tool_result was queued and a
-                                                // null-input ToolUse block with the real tool_use_id
-                                                // was captured). Save the assistant message so the
-                                                // next API call has the required
-                                                // assistant(tool_use) → user(tool_result) sequence;
-                                                // the agent loop drains tool_results on the next
-                                                // iteration and the model retries with corrected JSON.
+                                                // tool_call — no parsed tool inputs, but a
+                                                // synthetic tool_result was queued and a
+                                                // null-input ToolUse block with the real
+                                                // tool_use_id was captured. Save the assistant
+                                                // message so the next API call has the required
+                                                // assistant(tool_use) → user(tool_result)
+                                                // sequence; the agent loop drains tool_results
+                                                // on the next iteration and the model retries
+                                                // with corrected JSON.
+                                                //
+                                                // The gate does NOT consult the accompanying
+                                                // text: narration next to a tool request is not
+                                                // a final answer, so any queued synthetic
+                                                // tool_result outranks it. Gating on text
+                                                // emptiness/substance let a stray think close
+                                                // tag plus narration (MiniMax-M3, DeepSWE
+                                                // mm3-smoke01/smoke02) masquerade as a final
+                                                // answer and abandon the task after one turn.
+                                                // Output-token TRUNCATIONS are the one exception:
+                                                // there the truncation machinery owns the
+                                                // continuation (it pairs the flushed results
+                                                // with its own continuation prompt), so this
+                                                // recovery must not steal it.
                                                 //
                                                 // This was the silent-task-loss root cause for 3/50
                                                 // SWE-bench batch-3 tasks (matplotlib-23314,
                                                 // sympy-12481, django-10914, all minimax provider).
-                                                if assistant_text.is_empty()
-                                                    && !assistant_tool_uses.is_empty()
+                                                if !assistant_tool_uses.is_empty()
                                                     && !tool_results.is_empty()
+                                                    && !is_truncation_stop(
+                                                        assistant_stop_reason.as_deref(),
+                                                    )
                                                 {
-                                                    let mut blocks: Vec<ContentBlock> = Vec::new();
-                                                    blocks.append(&mut assistant_tool_uses);
-                                                    conversation.messages.push(Message {
-                                                        role: "assistant".to_string(),
-                                                        content: MessageContent::Blocks(blocks),
-                                                    });
+                                                    consecutive_malformed_tool_calls +=
+                                                        assistant_tool_uses.len() as u32;
+                                                    // Turn bookkeeping must cover recovery
+                                                    // rounds: the headless driver counts
+                                                    // turns from TurnCompleted events, and
+                                                    // without this a recovery exit reported
+                                                    // turns_used=0 (work done was invisible).
+                                                    // Same argument shape as the tool path
+                                                    // above: turn_number is the completed
+                                                    // round, tokens are this turn's usage.
+                                                    send_event!(
+                                                        tx,
+                                                        QueryEvent::TurnCompleted {
+                                                            query_id,
+                                                            turn_number: turn + 1,
+                                                            tokens_used: (usage.input_tokens
+                                                                as u64)
+                                                                + (usage.output_tokens as u64),
+                                                        }
+                                                    );
+                                                    if consecutive_malformed_tool_calls
+                                                        < max_consecutive_malformed_calls
+                                                    {
+                                                        let mut blocks: Vec<ContentBlock> =
+                                                            Vec::new();
+                                                        if !assistant_text.is_empty() {
+                                                            blocks.push(ContentBlock::Text {
+                                                                text: std::mem::take(
+                                                                    &mut assistant_text,
+                                                                ),
+                                                            });
+                                                        }
+                                                        blocks.append(&mut assistant_tool_uses);
+                                                        conversation.messages.push(Message {
+                                                            role: "assistant".to_string(),
+                                                            content: MessageContent::Blocks(blocks),
+                                                        });
+                                                        send_event!(
+                                                            tx,
+                                                            QueryEvent::ConversationUpdate {
+                                                                query_id,
+                                                                messages: conversation
+                                                                    .messages
+                                                                    .clone(),
+                                                            }
+                                                        );
+                                                        turn += 1;
+                                                        phase = StreamingPhase::Finalized;
+                                                        break;
+                                                    }
+                                                    // Stop-loss reached: a model stuck in a
+                                                    // malformed-call loop gets a bounded number
+                                                    // of recovery rounds, then the query ends
+                                                    // honestly instead of churning to max_turns
+                                                    // (90 requests / 55k tokens observed).
+                                                    send_event!(
+                                                        tx,
+                                                        QueryEvent::Warning {
+                                                            query_id,
+                                                            message: format!(
+                                                                "Model produced \
+                                                                 {consecutive_malformed_tool_calls} \
+                                                                 consecutive malformed tool calls \
+                                                                 — ending the query as no-progress \
+                                                                 instead of retrying again."
+                                                            ),
+                                                        }
+                                                    );
+                                                    if !assistant_text.is_empty() {
+                                                        conversation.messages.push(Message {
+                                                            role: "assistant".to_string(),
+                                                            content: MessageContent::Text(
+                                                                std::mem::take(&mut assistant_text),
+                                                            ),
+                                                        });
+                                                    }
+                                                    let total_cost = CostTracker::calculate_cost(
+                                                        &client_model,
+                                                        total_input_tokens,
+                                                        total_output_tokens,
+                                                    );
+                                                    send_event!(
+                                                        tx,
+                                                        QueryEvent::Cost {
+                                                            query_id,
+                                                            total_cost_usd: total_cost,
+                                                            input_tokens: total_input_tokens,
+                                                            output_tokens: total_output_tokens,
+                                                        }
+                                                    );
                                                     send_event!(
                                                         tx,
                                                         QueryEvent::ConversationUpdate {
@@ -3503,9 +3653,18 @@ impl QueryEngine {
                                                             messages: conversation.messages.clone(),
                                                         }
                                                     );
-                                                    turn += 1;
-                                                    phase = StreamingPhase::Finalized;
-                                                    break;
+                                                    publish_stop_trigger(
+                                                        &session_bus,
+                                                        tool_results.len(),
+                                                    );
+                                                    send_event!(
+                                                        tx,
+                                                        QueryEvent::Completed {
+                                                            query_id,
+                                                            outcome: QueryOutcome::NoProgress,
+                                                        }
+                                                    );
+                                                    return;
                                                 }
 
                                                 // No tool uses — save assistant text to conversation
@@ -3753,7 +3912,10 @@ impl QueryEngine {
                                                     tool_results.len(),
                                                 );
                                                 let _ = tx
-                                                    .send(Ok(QueryEvent::Completed { query_id }))
+                                                    .send(Ok(QueryEvent::Completed {
+                                                        query_id,
+                                                        outcome: QueryOutcome::Completed,
+                                                    }))
                                                     .await;
 
                                                 return;
@@ -3861,7 +4023,12 @@ impl QueryEngine {
                                             QueryEvent::Progress {
                                                 query_id,
                                                 message: format!(
-                                                    "Turn LLM call interrupted (upstream cutoff); continuing turn {turn_retries_used}/{max_turn_retries}"
+                                                    "Turn LLM call interrupted (upstream cutoff: class={}, err={e}); continuing turn {turn_retries_used}/{max_turn_retries}",
+                                                    if e.is_timeout_class() {
+                                                        "timeout"
+                                                    } else {
+                                                        "stream_interrupted"
+                                                    }
                                                 ),
                                             }
                                         );
@@ -3902,8 +4069,7 @@ impl QueryEngine {
                                         tracing::warn!(
                                             "Stream error after partial response ({partial_len} chars) — preserving content"
                                         );
-                                        let suggestion = e
-                                            .user_suggestion()
+                                        let suggestion = error_suggestion(&e, &client_provider)
                                             .map(|s| format!(" {s}"))
                                             .unwrap_or_default();
                                         let warning_msg = if suggestion.is_empty() {
@@ -3927,7 +4093,13 @@ impl QueryEngine {
                                             }
                                         );
                                         publish_stop_trigger(&session_bus, tool_results.len());
-                                        send_event!(tx, QueryEvent::Completed { query_id });
+                                        send_event!(
+                                            tx,
+                                            QueryEvent::Completed {
+                                                query_id,
+                                                outcome: QueryOutcome::Completed,
+                                            }
+                                        );
 
                                         return;
                                     }
@@ -4054,7 +4226,13 @@ impl QueryEngine {
                                                     &session_bus,
                                                     tool_results.len(),
                                                 );
-                                                send_event!(tx, QueryEvent::Completed { query_id });
+                                                send_event!(
+                                                    tx,
+                                                    QueryEvent::Completed {
+                                                        query_id,
+                                                        outcome: QueryOutcome::Completed,
+                                                    }
+                                                );
 
                                                 return;
                                             }
@@ -4099,8 +4277,7 @@ impl QueryEngine {
                                     // failure — headless exit codes match on
                                     // "rate limit" / "timed out" substrings of
                                     // the provider error.
-                                    let suggestion = e
-                                        .user_suggestion()
+                                    let suggestion = error_suggestion(&e, &client_provider)
                                         .map(|s| format!(" {s}"))
                                         .unwrap_or_default();
                                     let user_error = if suggestion.is_empty() {
@@ -4130,31 +4307,108 @@ impl QueryEngine {
                         recovery::clear_stream_idle_override(&client);
 
                         // Parse-error recovery: when the model emitted a malformed
-                        // tool_call (no text content, no successfully-parsed tool
-                        // inputs, but a synthetic tool_result was queued and a
+                        // tool_call (no substantive text content, no successfully-parsed
+                        // tool inputs, but a synthetic tool_result was queued and a
                         // null-input ToolUse block with the real tool_use_id was
                         // captured), persist the assistant message so the next API
                         // call has the required assistant(tool_use) →
                         // user(tool_result) sequence. The agent loop drains
                         // tool_results on the next iteration, the model sees
                         // "Malformed tool input" as a tool_result, and retries
-                        // with corrected JSON.
+                        // with corrected JSON. The gate does NOT consult the
+                        // accompanying text: narration next to a tool request is
+                        // not a final answer, and any TextDelta sets
+                        // `has_content` anyway — both a stray think close tag and
+                        // real narration (MiniMax-M3, DeepSWE mm3-smoke01/smoke02)
+                        // defeated the old emptiness gates and the task was
+                        // abandoned after one turn.
                         //
                         // This was the silent-task-loss root cause for 3/50
                         // SWE-bench batch-3 tasks (matplotlib-23314, sympy-12481,
-                        // django-10914, all minimax provider).
-                        if !has_content
-                            && tool_inputs.is_empty()
+                        // django-10914, all minimax provider). Output-token
+                        // truncations are excluded — the truncation machinery
+                        // owns their continuation.
+                        if tool_inputs.is_empty()
                             && !assistant_tool_uses.is_empty()
                             && !tool_results.is_empty()
                             && phase != StreamingPhase::Finalized
+                            && !is_truncation_stop(assistant_stop_reason.as_deref())
                         {
-                            let mut blocks: Vec<ContentBlock> = Vec::new();
-                            blocks.append(&mut assistant_tool_uses);
-                            conversation.messages.push(Message {
-                                role: "assistant".to_string(),
-                                content: MessageContent::Blocks(blocks),
-                            });
+                            consecutive_malformed_tool_calls += assistant_tool_uses.len() as u32;
+                            // Turn bookkeeping must cover recovery rounds (same
+                            // rationale as the finalize-path gate): without a
+                            // TurnCompleted here the headless ledger reported
+                            // turns_used=0 on recovery exits. Post-stream there is
+                            // no per-request usage frame left, so the query
+                            // cumulative totals stand in for tokens_used.
+                            send_event!(
+                                tx,
+                                QueryEvent::TurnCompleted {
+                                    query_id,
+                                    turn_number: turn + 1,
+                                    tokens_used: total_input_tokens + total_output_tokens,
+                                }
+                            );
+                            if consecutive_malformed_tool_calls < max_consecutive_malformed_calls {
+                                let mut blocks: Vec<ContentBlock> = Vec::new();
+                                if !assistant_text.is_empty() {
+                                    blocks.push(ContentBlock::Text {
+                                        text: std::mem::take(&mut assistant_text),
+                                    });
+                                }
+                                blocks.append(&mut assistant_tool_uses);
+                                conversation.messages.push(Message {
+                                    role: "assistant".to_string(),
+                                    content: MessageContent::Blocks(blocks),
+                                });
+                                send_event!(
+                                    tx,
+                                    QueryEvent::ConversationUpdate {
+                                        query_id,
+                                        messages: conversation.messages.clone(),
+                                    }
+                                );
+                                turn += 1;
+                                continue;
+                            }
+                            // Stop-loss reached (same rationale and ending as the
+                            // finalize-path gate above): end the query honestly
+                            // instead of looping to max_turns.
+                            send_event!(
+                                tx,
+                                QueryEvent::Warning {
+                                    query_id,
+                                    message: format!(
+                                        "Model produced \
+                                         {consecutive_malformed_tool_calls} \
+                                         consecutive malformed tool calls \
+                                         — ending the query as no-progress \
+                                         instead of retrying again."
+                                    ),
+                                }
+                            );
+                            if !assistant_text.is_empty() {
+                                conversation.messages.push(Message {
+                                    role: "assistant".to_string(),
+                                    content: MessageContent::Text(std::mem::take(
+                                        &mut assistant_text,
+                                    )),
+                                });
+                            }
+                            let total_cost = CostTracker::calculate_cost(
+                                &client_model,
+                                total_input_tokens,
+                                total_output_tokens,
+                            );
+                            send_event!(
+                                tx,
+                                QueryEvent::Cost {
+                                    query_id,
+                                    total_cost_usd: total_cost,
+                                    input_tokens: total_input_tokens,
+                                    output_tokens: total_output_tokens,
+                                }
+                            );
                             send_event!(
                                 tx,
                                 QueryEvent::ConversationUpdate {
@@ -4162,8 +4416,16 @@ impl QueryEngine {
                                     messages: conversation.messages.clone(),
                                 }
                             );
-                            turn += 1;
-                            continue;
+                            publish_stop_trigger(&session_bus, tool_results.len());
+                            send_event!(
+                                tx,
+                                QueryEvent::Completed {
+                                    query_id,
+                                    outcome: QueryOutcome::NoProgress,
+                                }
+                            );
+
+                            return;
                         }
 
                         // Think-only nudge (A1): the stream produced no tool
@@ -4240,7 +4502,16 @@ impl QueryEngine {
                                 }
                             );
                             publish_stop_trigger(&session_bus, tool_results.len());
-                            send_event!(tx, QueryEvent::Completed { query_id });
+                            // Nothing usable was produced — this is a no-progress
+                            // outcome, not a success (headless used to exit 0 here
+                            // with an empty patch).
+                            send_event!(
+                                tx,
+                                QueryEvent::Completed {
+                                    query_id,
+                                    outcome: QueryOutcome::NoProgress,
+                                }
+                            );
 
                             return;
                         }
@@ -4402,7 +4673,13 @@ impl QueryEngine {
                                 }
                             );
                             publish_stop_trigger(&session_bus, tool_results.len());
-                            send_event!(tx, QueryEvent::Completed { query_id });
+                            send_event!(
+                                tx,
+                                QueryEvent::Completed {
+                                    query_id,
+                                    outcome: QueryOutcome::Completed,
+                                }
+                            );
 
                             return;
                         }
@@ -4427,7 +4704,12 @@ impl QueryEngine {
                                 QueryEvent::Progress {
                                     query_id,
                                     message: format!(
-                                        "Turn LLM call interrupted (upstream cutoff); continuing turn {turn_retries_used}/{max_turn_retries}"
+                                        "Turn LLM call interrupted (upstream cutoff: class={}, err={e}); continuing turn {turn_retries_used}/{max_turn_retries}",
+                                        if e.is_timeout_class() {
+                                            "timeout"
+                                        } else {
+                                            "stream_interrupted"
+                                        }
                                     ),
                                 }
                             );
@@ -4550,7 +4832,10 @@ impl QueryEngine {
                                                         );
                                                         send_event!(
                                                             tx,
-                                                            QueryEvent::Completed { query_id }
+                                                            QueryEvent::Completed {
+                                                                query_id,
+                                                                outcome: QueryOutcome::Completed,
+                                                            }
                                                         );
                                                     }
                                                 }
@@ -4565,10 +4850,12 @@ impl QueryEngine {
                                                             ),
                                                         });
                                                     }
-                                                    let suggestion = retry_err
-                                                        .user_suggestion()
-                                                        .map(|s| format!(" {s}"))
-                                                        .unwrap_or_default();
+                                                    let suggestion = error_suggestion(
+                                                        &retry_err,
+                                                        &client_provider,
+                                                    )
+                                                    .map(|s| format!(" {s}"))
+                                                    .unwrap_or_default();
                                                     send_event!(
                                                         tx,
                                                         QueryEvent::ConversationUpdate {
@@ -4604,14 +4891,20 @@ impl QueryEngine {
                                             }
                                         );
                                         publish_stop_trigger(&session_bus, tool_results.len());
-                                        send_event!(tx, QueryEvent::Completed { query_id });
+                                        send_event!(
+                                            tx,
+                                            QueryEvent::Completed {
+                                                query_id,
+                                                outcome: QueryOutcome::Completed,
+                                            }
+                                        );
                                         return;
                                     }
                                     Err(retry_err) => {
-                                        let suggestion = retry_err
-                                            .user_suggestion()
-                                            .map(|s| format!(" {s}"))
-                                            .unwrap_or_default();
+                                        let suggestion =
+                                            error_suggestion(&retry_err, &client_provider)
+                                                .map(|s| format!(" {s}"))
+                                                .unwrap_or_default();
                                         send_event!(
                                             tx,
                                             QueryEvent::ConversationUpdate {
@@ -4741,7 +5034,13 @@ impl QueryEngine {
                                         }
                                     );
                                     publish_stop_trigger(&session_bus, tool_results.len());
-                                    send_event!(tx, QueryEvent::Completed { query_id });
+                                    send_event!(
+                                        tx,
+                                        QueryEvent::Completed {
+                                            query_id,
+                                            outcome: QueryOutcome::Completed,
+                                        }
+                                    );
 
                                     return;
                                 }
@@ -4773,8 +5072,7 @@ impl QueryEngine {
                                 }
                             }
                         }
-                        let suggestion = e
-                            .user_suggestion()
+                        let suggestion = error_suggestion(&e, &client_provider)
                             .map(|s| format!(" {s}"))
                             .unwrap_or_default();
                         let user_error = if suggestion.is_empty() {

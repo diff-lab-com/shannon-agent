@@ -153,8 +153,8 @@ export default function PlanPanel({ workingDir, planModeActive }: PlanPanelProps
           {t('chat.plan.title')}
         </h3>
         {shown && (
-          <Badge size="sm" variant={approved ? 'primary' : 'neutral'} className={approved ? 'bg-primary/10 text-primary' : 'bg-surface-container-high text-on-surface-variant'}>
-            <span className="material-symbols-outlined text-[12px] mr-[2px]" aria-hidden="true">{approved ? 'check_circle' : 'pending'}</span>
+          <Badge size="sm" variant={approved ? 'primary' : 'neutral'} className={approved ? 'bg-primary-container text-on-primary-container' : 'bg-surface-container-high text-on-surface-variant'}>
+            <span className="material-symbols-outlined icon-xs mr-[2px]" aria-hidden="true">{approved ? 'check_circle' : 'pending'}</span>
             {t(approved ? 'chat.plan.status.approved' : 'chat.plan.status.pending')}
           </Badge>
         )}
@@ -166,7 +166,7 @@ export default function PlanPanel({ workingDir, planModeActive }: PlanPanelProps
           title={t('chat.plan.refresh.aria')}
           className="text-on-surface-variant hover:text-primary"
         >
-          <span className="material-symbols-outlined text-[14px]" aria-hidden="true">refresh</span>
+          <span className="material-symbols-outlined icon-sm" aria-hidden="true">refresh</span>
         </Button>
       </div>
 
@@ -181,7 +181,7 @@ export default function PlanPanel({ workingDir, planModeActive }: PlanPanelProps
           </span>
           <div className="flex-1 h-1.5 bg-surface-container-high rounded-full overflow-hidden">
             <div
-              className={cn('h-full rounded-full transition-all duration-500', stepPct >= 100 ? 'bg-tertiary' : 'bg-primary')}
+              className={cn('h-full rounded-full transition-all duration-(--duration-slower)', stepPct >= 100 ? 'bg-tertiary' : 'bg-primary')}
               style={{ width: `${stepPct}%` }}
             />
           </div>
@@ -193,7 +193,7 @@ export default function PlanPanel({ workingDir, planModeActive }: PlanPanelProps
           role="status"
           className="px-md py-xs rounded-lg bg-tertiary-container/40 text-on-tertiary-container font-label-sm flex items-center gap-xs"
         >
-          <span className="material-symbols-outlined text-[14px]" aria-hidden="true">route</span>
+          <span className="material-symbols-outlined icon-sm" aria-hidden="true">route</span>
           {t('chat.plan.modeActive')}
         </p>
       )}
@@ -203,7 +203,7 @@ export default function PlanPanel({ workingDir, planModeActive }: PlanPanelProps
           <div className="font-label-xs text-on-surface-variant mb-sm font-mono truncate" title={shown.created_at}>
             {shown.title}
           </div>
-          <div ref={articleRef} className="font-body-sm text-on-surface prose prose-sm max-w-none prose-p:my-1 prose-pre:bg-surface-container-lowest prose-pre:p-sm prose-pre:rounded-lg prose-code:text-primary prose-code:before:content-[''] prose-code:after:content-['']">
+          <div ref={articleRef} className="font-body-sm text-on-surface prose prose-sm max-w-none prose-p:my-xs prose-pre:bg-surface-container-lowest prose-pre:p-sm prose-pre:rounded-lg prose-code:text-primary prose-code:before:content-[''] prose-code:after:content-['']">
             <Markdown onCheckboxToggle={handleCheckboxToggle}>{shown.content}</Markdown>
           </div>
         </article>

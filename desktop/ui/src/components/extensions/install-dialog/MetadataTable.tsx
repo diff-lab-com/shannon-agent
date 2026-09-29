@@ -45,7 +45,7 @@ function MetadataValue({ value }: { value: unknown }) {
         {value.map((v, i) => (
           <span
             key={i}
-            className="px-xs py-[1px] rounded bg-surface-container-high text-label-xs font-mono"
+            className="px-xs py-[1px] rounded-sm bg-surface-container-high text-label-xs font-mono"
           >
             {typeof v === 'string' ? v : JSON.stringify(v)}
           </span>
@@ -55,7 +55,7 @@ function MetadataValue({ value }: { value: unknown }) {
   }
   if (typeof value === 'object') {
     return (
-      <pre className="bg-surface-container-low p-sm rounded text-label-xs font-mono overflow-x-auto">
+      <pre className="bg-surface-container-low p-sm rounded-sm text-label-xs font-mono overflow-x-auto">
         {JSON.stringify(value, null, 2)}
       </pre>
     )

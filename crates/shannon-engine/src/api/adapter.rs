@@ -5,6 +5,7 @@
 
 use serde::Deserialize;
 use serde_json::{Value, json};
+use std::collections::BTreeMap;
 
 use super::error::ApiError;
 use super::types::{
@@ -198,11 +199,21 @@ fn serialize_request_inner(
 ) -> Value {
     match provider.wire_format() {
         WireFormat::Anthropic => {
+            // A13 backstop (F4c): run the same tool-sequence sanitizer the
+            // OpenAI branch uses. Its assumptions are wire-safe here: it
+            // operates on the unified `Message` shape, drops user
+            // `tool_result` blocks with no declaring assistant call
+            // (Anthropic 400s on unknown `tool_use_id`), and settles
+            // dangling calls with synthetic `tool_result` blocks carried in
+            // user messages (Anthropic's required carrier role; consecutive
+            // user messages are combined into one turn by the API).
+            // Fail-closed: legal sequences pass through unchanged.
+            let mut req = request.clone();
+            req.messages = sanitize_tool_sequence(&req.messages);
             // Anthropic API only accepts `user` and `assistant` roles in the
             // messages array.  Compression / context-reinjection may inject
             // `role: "system"` messages.  Extract them and merge into the
             // top-level `system` field instead.
-            let mut req = request.clone();
             let mut system_texts: Vec<String> = Vec::new();
             req.messages.retain(|msg| {
                 if msg.role == "system" {
@@ -297,7 +308,32 @@ fn serialize_request_inner(
 
             val
         }
-        WireFormat::OpenAI => serialize_openai_request(request),
+        WireFormat::OpenAI => {
+            let mut body = serialize_openai_request(request);
+            // Explicit thinking toggle: zhipu/GLM only (`thinking: {"type":
+            // "enabled"|"disabled"}`). Other OpenAI-compatible providers never
+            // asked for this field and several reject unknown bodies with a
+            // 400, so the toggle is stripped everywhere else — SHANNON_THINKING
+            // stays a global env knob without leaking the field to non-GLM
+            // endpoints. Precedence: an explicit toggle wins over
+            // reasoning_effort on this wire (effort=high asks for MORE
+            // thinking; the toggle says less).
+            if let Some(ref t) = request.thinking_type {
+                if matches!(
+                    provider,
+                    LlmProvider::Zhipu
+                        | LlmProvider::ZhipuInternational
+                        | LlmProvider::ZhipuCoding
+                        | LlmProvider::ZhipuCodingPlan
+                ) {
+                    body["thinking"] = json!({ "type": t });
+                    if let Some(obj) = body.as_object_mut() {
+                        obj.remove("reasoning_effort");
+                    }
+                }
+            }
+            body
+        }
         WireFormat::Ollama => serialize_ollama_request(request),
         WireFormat::Gemini => serialize_gemini_request(request),
     }
@@ -1072,6 +1108,15 @@ pub struct OpenaiStreamState {
     /// assistant history and the provider rejects the next request with
     /// `invalid params, duplicate tool_call id` (2013).
     pub seen_tool_ids: Vec<String>,
+    /// Raw wire `arguments` fragments per tool-call index, in arrival order.
+    ///
+    /// RCA observability only (MiniMax-M3 DeepSWE empty-arguments diagnosis,
+    /// 90/90 failures): the adapter streams fragments through without
+    /// assembling them — the engine assembles downstream — so this ledger
+    /// exists solely so the finish paths can `tracing::trace!` the fully
+    /// assembled raw string and discriminate "the API sent no arguments"
+    /// from "we dropped them". Cleared by `reset`.
+    pub argument_fragments: BTreeMap<usize, Vec<String>>,
 }
 
 impl OpenaiStreamState {
@@ -1080,6 +1125,7 @@ impl OpenaiStreamState {
             tool_index: 0,
             open_tool_indices: Vec::new(),
             seen_tool_ids: Vec::new(),
+            argument_fragments: BTreeMap::new(),
         }
     }
 
@@ -1093,12 +1139,57 @@ impl OpenaiStreamState {
         self.tool_index = 0;
         self.open_tool_indices.clear();
         self.seen_tool_ids.clear();
+        self.argument_fragments.clear();
     }
 }
 
 impl Default for OpenaiStreamState {
     fn default() -> Self {
         Self::new()
+    }
+}
+
+/// Assemble a tool call's final raw arguments string from the wire
+/// fragments received for it, in arrival order. Deliberately a plain
+/// concatenation of UNPARSED fragments — the string itself is the RCA
+/// evidence (empty string vs non-empty), not a parsed JSON object.
+fn assemble_argument_fragments(fragments: &[String]) -> String {
+    fragments.concat()
+}
+
+/// Trace the assembled raw arguments of every tool call the stream touched,
+/// called on both finish paths (the `finish_reason` chunk, and the
+/// usage-bearing terminal chunk that packs the finish for Zhipu-style
+/// providers). Empty-string vs non-empty, compared against the per-delta
+/// fragment traces, is the M3 empty-arguments discriminator: it tells
+/// "the API never sent arguments" apart from "the engine dropped them".
+///
+/// No-op when no tool call was started and no fragment was recorded (pure
+/// text finishes; MiniMax's trailing usage-only frame after the finish
+/// chunk already reset the state).
+fn trace_assembled_tool_arguments(state: &OpenaiStreamState, finish_reason: Option<&str>) {
+    let mut indices: Vec<usize> = state.open_tool_indices.clone();
+    indices.extend(state.argument_fragments.keys().copied());
+    indices.sort_unstable();
+    indices.dedup();
+    if indices.is_empty() {
+        return;
+    }
+    for idx in indices {
+        let assembled = state
+            .argument_fragments
+            .get(&idx)
+            .map(|frags| assemble_argument_fragments(frags))
+            .unwrap_or_default();
+        // arguments may embed user code / prompt content: trace level only
+        // (explicit RUST_LOG opt-in), stays on local / eval containers.
+        tracing::trace!(
+            target: "shannon_engine::api::adapter",
+            index = idx,
+            assembled_arguments = %assembled,
+            finish_reason = ?finish_reason,
+            "tool_call finished: assembled raw wire arguments"
+        );
     }
 }
 
@@ -1165,11 +1256,19 @@ fn normalize_openai_event(
             // (ContentBlockStop handler) fires exactly once with the fully
             // parsed input.
             let mut events: Vec<Result<StreamEvent, ApiError>> = Vec::new();
+            let raw_reason = chunk.choices.first().and_then(|c| c.finish_reason.clone());
+            tracing::trace!(
+                target: "shannon_engine::api::adapter",
+                input_tokens = input,
+                output_tokens = output,
+                cached_tokens = cached,
+                "openai stream usage"
+            );
+            trace_assembled_tool_arguments(state, raw_reason.as_deref());
             for idx in state.open_tool_indices.drain(..) {
                 events.push(Ok(StreamEvent::ContentBlockStop { index: idx }));
             }
             state.reset();
-            let raw_reason = chunk.choices.first().and_then(|c| c.finish_reason.clone());
             let normalized_reason = raw_reason.map(|r| match r.as_str() {
                 "stop" | "STOP" => "end_turn".to_string(),
                 other => other.to_string(),
@@ -1260,6 +1359,19 @@ fn normalize_openai_event(
                 }
             };
 
+            // Wire-level trace: raw values exactly as received, never
+            // parsed. arguments may embed user code / prompt content —
+            // trace level only (explicit RUST_LOG opt-in), stays on local /
+            // eval containers.
+            tracing::trace!(
+                target: "shannon_engine::api::adapter",
+                index = idx,
+                id = ?tc.id,
+                name = ?tc.function.as_ref().and_then(|f| f.name.as_deref()),
+                fragment = ?tc.function.as_ref().and_then(|f| f.arguments.as_deref()),
+                "openai tool_call wire delta"
+            );
+
             if let (Some(ref id), true) = (call_id.as_ref(), is_new_call) {
                 state.seen_tool_ids.push(id.to_string());
                 // New tool call starting
@@ -1292,6 +1404,11 @@ fn normalize_openai_event(
                             partial_json: args.clone(),
                         },
                     }));
+                    state
+                        .argument_fragments
+                        .entry(idx)
+                        .or_default()
+                        .push(args.clone());
                 }
             }
         }
@@ -1302,6 +1419,12 @@ fn normalize_openai_event(
     // emit MessageDelta with the normalized stop reason. (Any final text
     // content packed into this chunk was already emitted above.)
     if let Some(ref reason) = choice.finish_reason {
+        tracing::trace!(
+            target: "shannon_engine::api::adapter",
+            finish_reason = %reason,
+            "openai stream finish"
+        );
+        trace_assembled_tool_arguments(state, Some(reason));
         for idx in state.open_tool_indices.drain(..) {
             events.push(Ok(StreamEvent::ContentBlockStop { index: idx }));
         }
@@ -1966,7 +2089,58 @@ mod tests {
             budget_tokens: None,
             thinking_budget: None,
             reasoning_effort: None,
+            thinking_type: None,
         }
+    }
+
+    // -- zhipu/GLM thinking toggle --
+
+    #[test]
+    fn test_openai_serialize_thinking_toggle_present_on_zhipu() {
+        let mut req = make_request();
+        req.thinking_type = Some("disabled".into());
+        req.reasoning_effort = Some(crate::api::types::ReasoningEffort::High);
+        let val = serialize_request(&req, &LlmProvider::ZhipuCodingPlan);
+        assert_eq!(val["thinking"]["type"], "disabled");
+        // explicit toggle wins: reasoning_effort is dropped on this wire
+        assert!(val.get("reasoning_effort").is_none());
+    }
+
+    #[test]
+    fn test_openai_serialize_thinking_stripped_off_zhipu() {
+        let mut req = make_request();
+        req.thinking_type = Some("disabled".into());
+        let val = serialize_request(&req, &LlmProvider::OpenAI);
+        assert!(val.get("thinking").is_none());
+    }
+
+    #[test]
+    fn test_openai_serialize_thinking_toggle_absent_by_default() {
+        let req = make_request();
+        let val = serialize_request(&req, &LlmProvider::OpenAI);
+        assert!(val.get("thinking").is_none());
+    }
+
+    #[test]
+    fn test_normalize_thinking_type() {
+        assert_eq!(
+            crate::api::types::normalize_thinking_type("disabled"),
+            Some("disabled".into())
+        );
+        assert_eq!(
+            crate::api::types::normalize_thinking_type(" ON "),
+            Some("enabled".into())
+        );
+        assert_eq!(
+            crate::api::types::normalize_thinking_type("True"),
+            Some("enabled".into())
+        );
+        assert_eq!(
+            crate::api::types::normalize_thinking_type("0"),
+            Some("disabled".into())
+        );
+        assert_eq!(crate::api::types::normalize_thinking_type("whatever"), None);
+        assert_eq!(crate::api::types::normalize_thinking_type(""), None);
     }
 
     // -- Anthropic passthrough --
@@ -1991,36 +2165,58 @@ mod tests {
     #[test]
     fn test_anthropic_tool_result_multi_image_single_request() {
         let req = MessageRequest {
+            thinking_type: None,
             model: "claude-test".to_string(),
             max_tokens: 1024,
             system: None,
             system_blocks: None,
-            messages: vec![Message {
-                role: "user".to_string(),
-                content: crate::api::types::MessageContent::Blocks(vec![
-                    ContentBlock::ToolResult {
-                        tool_use_id: "batch_1".to_string(),
-                        content: Some(crate::api::types::ToolResultContent::Multiple(vec![
-                            ContentBlock::Text {
-                                text: "Batch of 2 images follows".to_string(),
-                            },
-                            ContentBlock::Text {
-                                text: "## /tmp/a.png".to_string(),
-                            },
-                            ContentBlock::Image {
-                                source: crate::api::types::ImageSource::base64("image/png", "AAAA"),
-                            },
-                            ContentBlock::Text {
-                                text: "## /tmp/b.png".to_string(),
-                            },
-                            ContentBlock::Image {
-                                source: crate::api::types::ImageSource::base64("image/png", "BBBB"),
-                            },
-                        ])),
-                        is_error: Some(false),
-                    },
-                ]),
-            }],
+            messages: vec![
+                // A13/F4c: the sequence must be wire-legal — the assistant
+                // declaring the tool call precedes its result (otherwise the
+                // sanitizer drops the result as orphaned).
+                Message {
+                    role: "assistant".to_string(),
+                    content: crate::api::types::MessageContent::Blocks(vec![
+                        ContentBlock::ToolUse {
+                            id: "batch_1".to_string(),
+                            name: "read_image".to_string(),
+                            input: serde_json::json!({}),
+                        },
+                    ]),
+                },
+                Message {
+                    role: "user".to_string(),
+                    content: crate::api::types::MessageContent::Blocks(vec![
+                        ContentBlock::ToolResult {
+                            tool_use_id: "batch_1".to_string(),
+                            content: Some(crate::api::types::ToolResultContent::Multiple(vec![
+                                ContentBlock::Text {
+                                    text: "Batch of 2 images follows".to_string(),
+                                },
+                                ContentBlock::Text {
+                                    text: "## /tmp/a.png".to_string(),
+                                },
+                                ContentBlock::Image {
+                                    source: crate::api::types::ImageSource::base64(
+                                        "image/png",
+                                        "AAAA",
+                                    ),
+                                },
+                                ContentBlock::Text {
+                                    text: "## /tmp/b.png".to_string(),
+                                },
+                                ContentBlock::Image {
+                                    source: crate::api::types::ImageSource::base64(
+                                        "image/png",
+                                        "BBBB",
+                                    ),
+                                },
+                            ])),
+                            is_error: Some(false),
+                        },
+                    ]),
+                },
+            ],
             tools: None,
             stream: Some(false),
             temperature: None,
@@ -2033,9 +2229,9 @@ mod tests {
         };
 
         let val = serialize_request(&req, &LlmProvider::Anthropic);
-        // messages[0].content[0] is the tool_result block; its own "content"
+        // messages[1].content[0] is the tool_result block; its own "content"
         // is the array of per-image text/image parts sent in this one request.
-        let content = &val["messages"][0]["content"][0]["content"];
+        let content = &val["messages"][1]["content"][0]["content"];
         assert!(content.is_array(), "tool_result content should be an array");
         let image_parts: Vec<&Value> = content
             .as_array()
@@ -2069,6 +2265,7 @@ mod tests {
     #[test]
     fn test_openai_tool_result_multi_image_emits_followup_user_vision_turn() {
         let req = MessageRequest {
+            thinking_type: None,
             model: "gpt-test".to_string(),
             max_tokens: 1024,
             system: None,
@@ -2144,6 +2341,7 @@ mod tests {
     #[test]
     fn test_ollama_tool_result_image_uses_images_array() {
         let req = MessageRequest {
+            thinking_type: None,
             model: "llava-test".to_string(),
             max_tokens: 1024,
             system: None,
@@ -2183,7 +2381,7 @@ mod tests {
         assert_eq!(vision_msg["role"], "user");
         assert_eq!(vision_msg["images"][0], "BBBB");
         assert!(
-            vision_msg["content"].as_str().unwrap().len() > 0,
+            !vision_msg["content"].as_str().unwrap().is_empty(),
             "context note present"
         );
         assert!(
@@ -2199,6 +2397,7 @@ mod tests {
     #[test]
     fn test_gemini_tool_result_image_emits_inline_data_turn() {
         let req = MessageRequest {
+            thinking_type: None,
             model: "gemini-test".to_string(),
             max_tokens: 1024,
             system: None,
@@ -2250,6 +2449,7 @@ mod tests {
         // array.  The Anthropic adapter must extract them into the top-level
         // `system` field so the API doesn't reject the request.
         let req = MessageRequest {
+            thinking_type: None,
             model: "claude-3".to_string(),
             max_tokens: 1024,
             system: Some("Base prompt.".to_string()),
@@ -2300,6 +2500,7 @@ mod tests {
         // When system_blocks is used (structured prompt), extracted system
         // text should be appended as a new block.
         let req = MessageRequest {
+            thinking_type: None,
             model: "claude-3".to_string(),
             max_tokens: 1024,
             system: None,
@@ -2500,11 +2701,16 @@ mod tests {
         state: &mut OpenaiStreamState,
         out: &mut String,
     ) {
-        for ev in normalize_sse_event(chunk, provider, state) {
-            if let Ok(StreamEvent::ContentBlockDelta { delta, .. }) = ev {
-                if let ContentDelta::TextDelta { text: t } = delta {
-                    out.push_str(&t);
-                }
+        for ev in normalize_sse_event(chunk, provider, state)
+            .into_iter()
+            .flatten()
+        {
+            if let StreamEvent::ContentBlockDelta {
+                delta: ContentDelta::TextDelta { text: t },
+                ..
+            } = ev
+            {
+                out.push_str(&t);
             }
         }
     }
@@ -2983,11 +3189,11 @@ mod tests {
         assert_eq!(starts, 1, "echoed id must not re-emit ContentBlockStart");
 
         let mut args = String::new();
-        for e in &events {
-            if let Ok(StreamEvent::ContentBlockDelta {
+        for ev in events.iter().flatten() {
+            if let StreamEvent::ContentBlockDelta {
                 delta: ContentDelta::InputJsonDelta { partial_json },
                 ..
-            }) = e
+            } = ev
             {
                 args.push_str(partial_json);
             }
@@ -3000,6 +3206,285 @@ mod tests {
             .filter(|e| matches!(e, Ok(StreamEvent::ContentBlockStop { .. })))
             .count();
         assert_eq!(stops, 1);
+    }
+
+    // ── Wire-trace RCA support (M3 empty-arguments diagnosis) ──────────────
+
+    #[test]
+    fn openai_rca_assemble_argument_fragments_pure_cases() {
+        // Zhipu-shaped flow (the fragments of
+        // test_zhipu_terminal_chunk_with_usage_synthesizes_content_block_stop):
+        // three wire fragments concatenate into the full arguments object.
+        let zhipu = vec![
+            "".to_string(),
+            "{\"command\":".to_string(),
+            "\"ls\"}".to_string(),
+        ];
+        assert_eq!(assemble_argument_fragments(&zhipu), r#"{"command":"ls"}"#);
+
+        // MiniMax-shaped fragmentation (empty-id continuations).
+        let minimax = vec![
+            "{\"file_pa".to_string(),
+            "th\":\"/tmp/a.rs\"".to_string(),
+            "}".to_string(),
+        ];
+        assert_eq!(
+            assemble_argument_fragments(&minimax),
+            r#"{"file_path":"/tmp/a.rs"}"#
+        );
+
+        // The M3 DeepSWE signature: the only wire payload is the empty string.
+        assert_eq!(assemble_argument_fragments(&["".to_string()]), "");
+        assert_eq!(assemble_argument_fragments(&[]), "");
+    }
+
+    #[test]
+    fn openai_stream_state_keeps_assembled_fragments_for_rca_trace() {
+        // Drive the MiniMax empty-id-continuation flow. Before the finish
+        // chunk, the stream state must hold the per-index fragments whose
+        // concatenation is the assembled raw arguments string that the
+        // finish-path trace emits — this is the wire-vs-engine RCA
+        // discriminator (empty string = the API truly sent no arguments).
+        let mut state = fresh_state();
+        let start = r#"{"choices":[{"delta":{"tool_calls":[{"index":0,"id":"call_mm_1","type":"function","function":{"name":"Read","arguments":"{\"file_pa"}}]},"index":0}]}"#;
+        let cont1 = r#"{"choices":[{"delta":{"tool_calls":[{"index":0,"id":"","type":"function","function":{"arguments":"th\":\"/tmp/a.rs\"}"}}]},"index":0}]}"#;
+        for chunk in [start, cont1] {
+            normalize_sse_event(chunk, &LlmProvider::Minimax, &mut state);
+        }
+        let fragments = state
+            .argument_fragments
+            .get(&0)
+            .expect("wire fragments recorded for tool-call index 0");
+        assert_eq!(
+            assemble_argument_fragments(fragments),
+            r#"{"file_path":"/tmp/a.rs"}"#
+        );
+
+        // The finish chunk resets the ledger — nothing leaks into the next
+        // stream segment.
+        let cont2 = r#"{"choices":[{"index":0,"delta":{},"finish_reason":"tool_calls"}]}"#;
+        normalize_sse_event(cont2, &LlmProvider::Minimax, &mut state);
+        assert!(state.argument_fragments.is_empty());
+        assert!(state.open_tool_indices.is_empty());
+    }
+
+    // ── Wire-trace smoke: lines actually emitted under RUST_LOG ────────────
+    //
+    // The crate has no tracing-subscriber dependency (and the wire-trace
+    // task forbids adding one), so this rolls a minimal subscriber that
+    // (1) filters like a coarse EnvFilter — RUST_LOG entries `target[=level]`,
+    // bare target implying trace, bare level names as a global cap, unset
+    // RUST_LOG disabling everything — and (2) captures the emitted lines.
+    mod wire_trace_smoke {
+        use super::*;
+        use std::sync::{Arc, Mutex};
+        use tracing::field::{Field, Visit};
+
+        fn parse_level(s: &str) -> Option<tracing::level_filters::LevelFilter> {
+            match s.to_ascii_lowercase().as_str() {
+                "off" => Some(tracing::level_filters::LevelFilter::OFF),
+                "error" => Some(tracing::level_filters::LevelFilter::ERROR),
+                "warn" => Some(tracing::level_filters::LevelFilter::WARN),
+                "info" => Some(tracing::level_filters::LevelFilter::INFO),
+                "debug" => Some(tracing::level_filters::LevelFilter::DEBUG),
+                "trace" => Some(tracing::level_filters::LevelFilter::TRACE),
+                _ => None,
+            }
+        }
+
+        struct CapturingSubscriber {
+            directives: Vec<(String, tracing::level_filters::LevelFilter)>,
+            global: Option<tracing::level_filters::LevelFilter>,
+            lines: Arc<Mutex<Vec<String>>>,
+        }
+
+        impl CapturingSubscriber {
+            fn from_rust_log(raw: Option<&str>, lines: Arc<Mutex<Vec<String>>>) -> Self {
+                let mut directives = Vec::new();
+                let mut global: Option<tracing::level_filters::LevelFilter> = None;
+                if let Some(raw) = raw {
+                    for entry in raw.split(',').map(str::trim).filter(|e| !e.is_empty()) {
+                        if let Some(level) = parse_level(entry) {
+                            global = Some(global.map_or(level, |g| g.max(level)));
+                        } else if let Some((target, level)) = entry.split_once('=') {
+                            if let Some(level) = parse_level(level.trim()) {
+                                directives.push((target.trim().to_string(), level));
+                            }
+                        } else {
+                            directives.push((
+                                entry.to_string(),
+                                tracing::level_filters::LevelFilter::TRACE,
+                            ));
+                        }
+                    }
+                }
+                Self {
+                    directives,
+                    global,
+                    lines,
+                }
+            }
+
+            fn allows(&self, target: &str, level: &tracing::Level) -> bool {
+                let event_level = tracing::level_filters::LevelFilter::from(*level);
+                if let Some(g) = self.global {
+                    if event_level <= g {
+                        return true;
+                    }
+                }
+                self.directives
+                    .iter()
+                    .any(|(name, max)| target.starts_with(name.as_str()) && event_level <= *max)
+            }
+
+            /// True when any directive at all was configured.
+            fn on(&self) -> bool {
+                self.global.is_some() || !self.directives.is_empty()
+            }
+        }
+
+        struct LineVisitor<'a>(&'a mut String);
+
+        impl Visit for LineVisitor<'_> {
+            fn record_debug(&mut self, field: &Field, value: &dyn std::fmt::Debug) {
+                use std::fmt::Write as _;
+                if field.name() == "message" {
+                    let _ = write!(self.0, "{value:?}");
+                } else {
+                    let _ = write!(self.0, " {}={:?}", field.name(), value);
+                }
+            }
+        }
+
+        impl tracing::Subscriber for CapturingSubscriber {
+            fn enabled(&self, meta: &tracing::Metadata<'_>) -> bool {
+                self.allows(meta.target(), meta.level())
+            }
+
+            fn new_span(&self, _attrs: &tracing::span::Attributes<'_>) -> tracing::Id {
+                tracing::Id::from_u64(1)
+            }
+
+            fn record(&self, _id: &tracing::Id, _values: &tracing::span::Record<'_>) {}
+
+            fn record_follows_from(&self, _id: &tracing::Id, _follows: &tracing::Id) {}
+
+            fn exit(&self, _id: &tracing::Id) {}
+
+            fn event(&self, event: &tracing::Event<'_>) {
+                if !self.enabled(event.metadata()) {
+                    return;
+                }
+                let mut line = format!(
+                    "[{} {}]",
+                    event.metadata().level(),
+                    event.metadata().target()
+                );
+                event.record(&mut LineVisitor(&mut line));
+                self.lines
+                    .lock()
+                    .unwrap_or_else(|e| e.into_inner())
+                    .push(line);
+            }
+
+            fn enter(&self, _id: &tracing::Id) {}
+
+            fn max_level_hint(&self) -> Option<tracing::level_filters::LevelFilter> {
+                self.on()
+                    .then_some(tracing::level_filters::LevelFilter::TRACE)
+            }
+        }
+
+        #[test]
+        fn openai_wire_trace_smoke_assembled_arguments_emitted() {
+            let lines = Arc::new(Mutex::new(Vec::new()));
+            let subscriber = CapturingSubscriber::from_rust_log(
+                std::env::var("RUST_LOG").ok().as_deref(),
+                lines.clone(),
+            );
+            let any_directive = subscriber.on();
+            let module_trace_on =
+                subscriber.allows("shannon_engine::api::adapter", &tracing::Level::TRACE);
+
+            tracing::subscriber::with_default(subscriber, || {
+                let mut state = fresh_state();
+
+                // M3 DeepSWE shape: tool name declared with an EMPTY arguments
+                // payload, then finish (the ~4-token truncated response).
+                for chunk in [
+                    r#"{"choices":[{"delta":{"tool_calls":[{"index":0,"id":"call_m3","type":"function","function":{"name":"bash","arguments":""}}]},"index":0}]}"#,
+                    r#"{"choices":[{"index":0,"delta":{},"finish_reason":"tool_calls"}]}"#,
+                ] {
+                    normalize_sse_event(chunk, &LlmProvider::Minimax, &mut state);
+                }
+
+                // Fragmented shape: arguments split across wire frames
+                // assemble to a full object; usage arrives in a trailing
+                // choices-less frame.
+                for chunk in [
+                    r#"{"choices":[{"delta":{"tool_calls":[{"index":0,"id":"call_mm_1","type":"function","function":{"name":"Read","arguments":"{\"file_pa"}}]},"index":0}]}"#,
+                    r#"{"choices":[{"delta":{"tool_calls":[{"index":0,"id":"","type":"function","function":{"arguments":"th\":\"/tmp/a.rs\"}"}}]},"index":0}]}"#,
+                    r#"{"choices":[{"index":0,"delta":{},"finish_reason":"tool_calls"}]}"#,
+                    r#"{"choices":[],"usage":{"prompt_tokens":100,"completion_tokens":4,"total_tokens":104}}"#,
+                ] {
+                    normalize_sse_event(chunk, &LlmProvider::Minimax, &mut state);
+                }
+            });
+
+            let captured = lines.lock().unwrap_or_else(|e| e.into_inner());
+            for line in captured.iter() {
+                println!("{line}");
+            }
+
+            if !any_directive {
+                // Default runs (no RUST_LOG): the trace surface is compiled in
+                // but must stay completely silent.
+                assert!(
+                    captured.is_empty(),
+                    "trace must be silent without RUST_LOG: {captured:?}"
+                );
+                return;
+            }
+            if !module_trace_on {
+                return; // RUST_LOG enables something else; nothing to assert here.
+            }
+
+            // Per-delta: raw unparsed fragment, `Some("")` visible for M3.
+            assert!(
+                captured.iter().any(|l| {
+                    l.contains("openai tool_call wire delta")
+                        && l.contains(r#"id=Some("call_m3")"#)
+                        && l.contains(r#"fragment=Some("")"#)
+                }),
+                "missing M3 empty-arguments delta trace: {captured:?}"
+            );
+            // Finish: the assembled EMPTY string — the RCA discriminator line
+            // (display rendering leaves an empty value after `=`).
+            assert!(
+                captured.iter().any(
+                    |l| l.contains("tool_call finished") && l.contains("assembled_arguments= ")
+                ),
+                "missing assembled-empty trace line: {captured:?}"
+            );
+            // Fragmented flow assembles to the full raw object.
+            assert!(
+                captured.iter().any(|l| l.contains("tool_call finished")
+                    && l.contains("assembled_arguments={\"file_path\":\"/tmp/a.rs\"}")),
+                "missing assembled-fragmented trace line: {captured:?}"
+            );
+            // finish_reason and usage reach the trace surface.
+            assert!(
+                captured.iter().any(|l| l.contains("openai stream finish")
+                    && l.contains("finish_reason=tool_calls")),
+                "missing finish_reason trace: {captured:?}"
+            );
+            assert!(
+                captured
+                    .iter()
+                    .any(|l| l.contains("openai stream usage") && l.contains("output_tokens=4")),
+                "missing usage trace: {captured:?}"
+            );
+        }
     }
 
     #[test]
@@ -3206,8 +3691,9 @@ mod tests {
 
     #[test]
     fn test_anthropic_image_block_serialization() {
-        use crate::api::types::{ImageSource, MessageContent};
+        use crate::api::types::MessageContent;
         let req = MessageRequest {
+            thinking_type: None,
             model: "claude-3-5-sonnet".to_string(),
             max_tokens: 1024,
             system: None,
@@ -3252,8 +3738,9 @@ mod tests {
 
     #[test]
     fn test_openai_image_block_conversion() {
-        use crate::api::types::{ImageSource, MessageContent};
+        use crate::api::types::MessageContent;
         let req = MessageRequest {
+            thinking_type: None,
             model: "gpt-4o".to_string(),
             max_tokens: 1024,
             system: None,
@@ -3366,6 +3853,7 @@ mod tests {
         // role: "system" messages must not appear in contents — they should
         // be merged into systemInstruction.
         let req = MessageRequest {
+            thinking_type: None,
             model: "gemini-2.0-flash".to_string(),
             max_tokens: 1024,
             system: Some("Base system prompt.".to_string()),
@@ -3426,6 +3914,7 @@ mod tests {
     #[test]
     fn test_gemini_serialize_assistant_role_mapping() {
         let req = MessageRequest {
+            thinking_type: None,
             model: "gemini-2.0-flash".to_string(),
             max_tokens: 1024,
             system: None,
@@ -4010,6 +4499,7 @@ mod tests {
     #[test]
     fn test_anthropic_cache_control_on_last_user_message_text() {
         let req = MessageRequest {
+            thinking_type: None,
             model: "claude-sonnet-4-20250514".to_string(),
             max_tokens: 4096,
             system: Some("You are helpful.".to_string()),
@@ -4058,6 +4548,7 @@ mod tests {
     #[test]
     fn test_anthropic_no_cache_control_single_user_msg() {
         let req = MessageRequest {
+            thinking_type: None,
             model: "claude-sonnet-4-20250514".to_string(),
             max_tokens: 4096,
             system: None,
@@ -4086,6 +4577,7 @@ mod tests {
     fn test_anthropic_cache_control_with_content_blocks() {
         use crate::api::types::MessageContent;
         let req = MessageRequest {
+            thinking_type: None,
             model: "claude-sonnet-4-20250514".to_string(),
             max_tokens: 4096,
             system: None,
@@ -4133,6 +4625,7 @@ mod tests {
     #[test]
     fn test_anthropic_cache_control_not_for_openai() {
         let req = MessageRequest {
+            thinking_type: None,
             model: "gpt-4o".to_string(),
             max_tokens: 4096,
             system: None,
@@ -4170,7 +4663,12 @@ mod tests {
     #[test]
     fn test_anthropic_cache_skips_tool_result() {
         use crate::api::types::MessageContent;
+        // The tool_result must be DECLARED by a preceding assistant tool_use
+        // (F4c): the A13 sanitizer now drops orphaned results from the
+        // Anthropic branch too, so an undeclared fixture would be sanitized
+        // away before the cache-injection logic runs.
         let req = MessageRequest {
+            thinking_type: None,
             model: "claude-sonnet-4-20250514".to_string(),
             max_tokens: 4096,
             system: None,
@@ -4179,6 +4677,14 @@ mod tests {
                 Message {
                     role: "user".to_string(),
                     content: MessageContent::Text("First".to_string()),
+                },
+                Message {
+                    role: "assistant".to_string(),
+                    content: MessageContent::Blocks(vec![ContentBlock::ToolUse {
+                        id: "tool_123".to_string(),
+                        name: "Bash".to_string(),
+                        input: serde_json::json!({}),
+                    }]),
                 },
                 Message {
                     role: "user".to_string(),
@@ -4208,7 +4714,7 @@ mod tests {
         };
 
         let val = serialize_request(&req, &LlmProvider::Anthropic);
-        let blocks = val["messages"].as_array().unwrap()[1]["content"]
+        let blocks = val["messages"].as_array().unwrap()[2]["content"]
             .as_array()
             .unwrap();
         assert_eq!(blocks[0]["cache_control"]["type"], "ephemeral");
@@ -4218,6 +4724,7 @@ mod tests {
     #[test]
     fn test_anthropic_cache_control_with_system_blocks() {
         let req = MessageRequest {
+            thinking_type: None,
             model: "claude-sonnet-4-20250514".to_string(),
             max_tokens: 4096,
             system: None,
@@ -4257,6 +4764,7 @@ mod tests {
     fn test_system_blocks_renamed_to_system_in_output() {
         // system_blocks must be renamed to "system" (Anthropic API format)
         let req = MessageRequest {
+            thinking_type: None,
             model: "claude-3".to_string(),
             max_tokens: 1024,
             system: None,
@@ -4293,6 +4801,7 @@ mod tests {
     fn test_cache_control_skipped_for_third_party_endpoint() {
         // Third-party Anthropic-compatible endpoints should NOT get cache_control
         let req = MessageRequest {
+            thinking_type: None,
             model: "glm-5.1".to_string(),
             max_tokens: 1024,
             system: Some("System prompt".to_string()),
@@ -4356,6 +4865,7 @@ mod tests {
     fn test_cache_control_injected_for_real_anthropic() {
         // Real Anthropic API should still get cache_control
         let req = MessageRequest {
+            thinking_type: None,
             model: "claude-3".to_string(),
             max_tokens: 1024,
             system: Some("System".to_string()),
@@ -4402,6 +4912,7 @@ mod tests {
     #[test]
     fn test_anthropic_cache_control_on_last_tool_definition() {
         let req = MessageRequest {
+            thinking_type: None,
             model: "claude-3".to_string(),
             max_tokens: 1024,
             system: Some("System".to_string()),
@@ -4474,6 +4985,7 @@ mod tests {
     #[test]
     fn test_anthropic_no_tool_cache_when_no_tools() {
         let req = MessageRequest {
+            thinking_type: None,
             model: "claude-3".to_string(),
             max_tokens: 1024,
             system: Some("System".to_string()),
@@ -4727,6 +5239,7 @@ mod tests {
     #[test]
     fn serialize_openai_normalizes_non_object_arguments() {
         let request = MessageRequest {
+            thinking_type: None,
             model: "test-model".to_string(),
             max_tokens: 100,
             system: None,
@@ -4763,9 +5276,97 @@ mod tests {
         );
     }
 
+    /// Wire-level guard-review pin (2026-09-27): the malformed-turn recovery
+    /// path persists assistant messages mixing a narration Text block with
+    /// an empty-input `{}` tool_use. The production failure was on the
+    /// OpenAI-compatible (minimax) wire, but #140 only pinned the Anthropic
+    /// mock. Contract pin — this test passed on first run (no defect found);
+    /// it exists so the recovered-message wire shape cannot regress: text
+    /// content preserved non-empty, exactly one tool_call with the JSON
+    /// object literal `"{}"` arguments (never `"null"`), and a legal
+    /// sequence (the call answered by exactly one tool message).
+    #[test]
+    fn serialize_openai_keeps_recovered_assistant_text_with_empty_object_arguments() {
+        let request = MessageRequest {
+            thinking_type: None,
+            model: "test-model".to_string(),
+            max_tokens: 100,
+            system: None,
+            system_blocks: None,
+            messages: vec![
+                text_msg("task"),
+                Message {
+                    role: "assistant".to_string(),
+                    content: MessageContent::Blocks(vec![
+                        ContentBlock::Text {
+                            text: "Recovered narration before the tool call.".to_string(),
+                        },
+                        ContentBlock::ToolUse {
+                            id: "toolu_rec".to_string(),
+                            name: "Bash".to_string(),
+                            input: serde_json::json!({}),
+                        },
+                    ]),
+                },
+                tool_result_msg("toolu_rec"),
+            ],
+            tools: None,
+            stream: Some(false),
+            temperature: None,
+            top_p: None,
+            top_k: None,
+            stop_sequences: None,
+            budget_tokens: None,
+            thinking_budget: None,
+            reasoning_effort: None,
+        };
+        let json = serialize_openai_request(&request);
+        let wire = serde_json::to_string(&json).unwrap();
+
+        let assistant = json["messages"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|m| m["role"] == "assistant")
+            .expect("assistant message on the wire");
+        // Narration text survives — never collapsed to null.
+        assert_eq!(
+            assistant["content"].as_str(),
+            Some("Recovered narration before the tool call."),
+            "assistant text content must be preserved: {wire}"
+        );
+        // Exactly one tool call, with `{}` (JSON object literal) arguments.
+        let calls = assistant["tool_calls"]
+            .as_array()
+            .expect("tool_calls array");
+        assert_eq!(calls.len(), 1, "exactly one tool_call: {wire}");
+        assert_eq!(calls[0]["id"], "toolu_rec", "wire: {wire}");
+        assert_eq!(calls[0]["function"]["name"], "Bash", "wire: {wire}");
+        assert_eq!(
+            calls[0]["function"]["arguments"].as_str(),
+            Some("{}"),
+            "arguments must be the JSON object literal string: {wire}"
+        );
+        assert!(
+            !wire.contains("\"arguments\":\"null\""),
+            "arguments must never be the null literal minimax rejects: {wire}"
+        );
+        // Sequence stays legal: the call is answered by exactly one tool
+        // message.
+        let tool_msgs: Vec<&serde_json::Value> = json["messages"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter(|m| m["role"] == "tool")
+            .collect();
+        assert_eq!(tool_msgs.len(), 1, "exactly one tool message: {wire}");
+        assert_eq!(tool_msgs[0]["tool_call_id"], "toolu_rec", "wire: {wire}");
+    }
+
     #[test]
     fn serialize_openai_request_sanitizes_orphans() {
         let request = MessageRequest {
+            thinking_type: None,
             model: "test-model".to_string(),
             max_tokens: 100,
             system: None,
@@ -4797,6 +5398,57 @@ mod tests {
         assert_eq!(
             tool_msgs, 1,
             "the real result must be the only tool message; wire: {wire}"
+        );
+        assert!(wire.contains("(interrupted)"), "wire: {wire}");
+    }
+
+    /// F4c: the Anthropic branch runs the A13 sanitizer too (fail-closed
+    /// backstop) — a dangling tool call must be settled on the Anthropic
+    /// wire exactly like on the OpenAI wire, since Anthropic 400s on
+    /// `tool_use` blocks without a matching `tool_result`.
+    #[test]
+    fn serialize_anthropic_request_sanitizes_orphans() {
+        let request = MessageRequest {
+            thinking_type: None,
+            model: "test-model".to_string(),
+            max_tokens: 100,
+            system: None,
+            system_blocks: None,
+            messages: vec![
+                text_msg("task"),
+                tool_use_msg("toolu_w", "Edit"),
+                text_msg("continuation"),
+                tool_result_msg("toolu_w"),
+            ],
+            tools: None,
+            stream: Some(true),
+            temperature: None,
+            top_p: None,
+            top_k: None,
+            stop_sequences: None,
+            budget_tokens: None,
+            thinking_budget: None,
+            reasoning_effort: None,
+        };
+        let json = serialize_request(&request, &LlmProvider::Anthropic);
+        let wire = serde_json::to_string(&json).unwrap();
+
+        let tool_results: Vec<&Value> = json["messages"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter_map(|m| m["content"].as_array())
+            .flat_map(|blocks| blocks.iter())
+            .filter(|b| b["type"] == "tool_result")
+            .collect();
+        assert_eq!(
+            tool_results.len(),
+            1,
+            "exactly the synthetic result may reach the Anthropic wire: {wire}"
+        );
+        assert!(
+            tool_results[0]["tool_use_id"] == "toolu_w",
+            "the synthetic result must answer the dangling call: {wire}"
         );
         assert!(wire.contains("(interrupted)"), "wire: {wire}");
     }

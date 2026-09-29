@@ -88,7 +88,7 @@ export default function TasksHeader({
     <div className="flex items-stretch">
       <Button
         aria-label={t('tasks.tasksHeader.newAutomation')}
-        className="px-md py-sm bg-primary text-on-primary rounded-l-xl flex items-center gap-sm font-label-md cursor-pointer hover:shadow-md active:scale-95 transition-all"
+        className="px-md py-sm bg-primary text-on-primary rounded-l-xl flex items-center gap-sm font-label-md cursor-pointer hover:shadow-e2 active:scale-95 transition-all"
         onClick={onToggleSchedule}
       >
         <span className="material-symbols-outlined icon-md">add</span>
@@ -100,7 +100,7 @@ export default function TasksHeader({
           aria-haspopup="menu"
           aria-expanded={newMenuOpen}
           aria-label={t('tasks.tasksHeader.newMore.aria')}
-          className="px-sm bg-primary text-on-primary rounded-r-xl border-l border-on-primary/25 cursor-pointer hover:shadow-md active:scale-95 transition-all flex items-center"
+          className="px-sm bg-primary text-on-primary rounded-r-xl border-l border-on-primary/25 cursor-pointer hover:shadow-e2 active:scale-95 transition-all flex items-center"
           onClick={() => setNewMenuOpen(open => !open)}
         >
           <span className="material-symbols-outlined icon-md" aria-hidden="true">expand_more</span>
@@ -138,7 +138,7 @@ export default function TasksHeader({
         {/* ── filter ─────────────────────────────────────────────────── */}
         {teams && teams.length > 0 && onTeamFilterChange ? (
           <label className="flex items-center gap-xs px-md py-sm border border-outline-variant bg-surface-container-lowest text-on-surface rounded-xl font-label-md">
-            <span className="material-symbols-outlined text-[18px] text-on-surface-variant">groups</span>
+            <span className="material-symbols-outlined icon-md text-on-surface-variant">groups</span>
             <span className="sr-only">{t('tasks.tasksHeader.filterByTeam')}</span>
             <select
               aria-label={t('tasks.tasksHeader.filterByTeam')}
@@ -158,7 +158,7 @@ export default function TasksHeader({
           onClick={onToggleFilters}
           className={toggleClass(showFilters)}
         >
-          <span className="material-symbols-outlined text-[18px]">filter_list</span>
+          <span className="material-symbols-outlined icon-md">filter_list</span>
           {t('tasks.tasksHeader.filters')}
         </Button>
 
@@ -170,7 +170,7 @@ export default function TasksHeader({
           onClick={onToggleCalendar}
           className={toggleClass(calendarView)}
         >
-          <span className="material-symbols-outlined text-[18px]">calendar_month</span>
+          <span className="material-symbols-outlined icon-md">calendar_month</span>
           {calendarView ? t('tasks.tasksHeader.listView') : t('tasks.tasksHeader.monthView')}
         </Button>
         {onToggleDag ? (
@@ -179,7 +179,7 @@ export default function TasksHeader({
             onClick={onToggleDag}
             className={toggleClass(dagView ?? false)}
           >
-            <span className="material-symbols-outlined text-[18px]">account_tree</span>
+            <span className="material-symbols-outlined icon-md">account_tree</span>
             {dagView ? t('tasks.tasksHeader.hideGraph') : t('tasks.tasksHeader.graph')}
           </Button>
         ) : null}

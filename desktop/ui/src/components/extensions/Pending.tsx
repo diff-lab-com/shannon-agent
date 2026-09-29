@@ -42,7 +42,7 @@ export default function Pending() {
       {/* Section 1 — skill proposal review (primary area) */}
       <section aria-labelledby="extensions-pending-skills-title">
         <div className="mb-md">
-          <h2 id="extensions-pending-skills-title" className="font-headline-md text-[20px] font-bold text-on-surface leading-tight">
+          <h2 id="extensions-pending-skills-title" className="font-headline-md text-headline-sm font-bold text-on-surface leading-tight">
             {t('extensions.pending.skills.title')}
           </h2>
           <p className="font-body-sm text-on-surface-variant mt-xs">{t('extensions.pending.skills.subtitle')}</p>
@@ -57,7 +57,7 @@ export default function Pending() {
           until a subscribable MCP/install error source exists. */}
       <section aria-labelledby="extensions-pending-errors-title">
         <div className="mb-md">
-          <h2 id="extensions-pending-errors-title" className="font-headline-md text-[20px] font-bold text-on-surface leading-tight">
+          <h2 id="extensions-pending-errors-title" className="font-headline-md text-headline-sm font-bold text-on-surface leading-tight">
             {t('extensions.pending.errors.title')}
           </h2>
           <p className="font-body-sm text-on-surface-variant mt-xs">{t('extensions.pending.errors.subtitle')}</p>
