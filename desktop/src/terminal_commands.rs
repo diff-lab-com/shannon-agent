@@ -6,12 +6,14 @@
 //! `terminal_write({terminalId, data})` (stdin bytes as a UTF-8 string),
 //! `terminal_resize({terminalId, cols, rows})`,
 //! `terminal_kill({terminalId})`,
-//! `terminal_list() -> [{terminalId, projectDir, shell, startedAtMs,
-//! spawnedByWindow?}]`,
+//! `terminal_list() -> [{terminalId, projectDir, projectDirRaw?, shell,
+//! startedAtMs, spawnedByWindow?}]`,
 //! the `terminal:output` event (`shannon_types::events::event_names::
-//! TERMINAL_OUTPUT`) with payload `{ terminalId, data }` where `data` is
-//! the **base64-encoded** raw PTY byte stream (byte-preserving — the
-//! frontend decodes before writing to xterm.js), and — additive, P3-6 —
+//! TERMINAL_OUTPUT`) with payload `{ terminalId, data, seq }` where `data`
+//! is the **base64-encoded** raw PTY byte stream (byte-preserving — the
+//! frontend decodes before writing to xterm.js) and `seq` is a per-session
+//! monotonic chunk number (review fix — see [`TerminalOutputPayload`]),
+//! and — additive, P3-6 —
 //! the `terminal:exit` event (`TERMINAL_EXIT`, `{ terminalId }`) emitted
 //! when a session is reaped after a natural exit.
 //!
@@ -24,9 +26,12 @@
 //! `$SHELL` > `/bin/sh` (PowerShell on Windows).
 //!
 //! Additive replay surface (US6): `terminal_history({terminalId}) ->
-//! { data }` returns the base64 of the session's newest
+//! { data, endSeq }` returns the base64 of the session's newest
 //! [`TERMINAL_HISTORY_CAP`] raw output bytes (in-memory ring only — it
-//! dies with the session; unknown id → empty string, not an error).
+//! dies with the session; unknown id → empty string, not an error) plus
+//! `endSeq`, the highest output-chunk seq fully contained in the returned
+//! snapshot — the stitch key that lets the frontend drop the events it
+//! already replayed (review fix, see [`TerminalHistoryResponse`]).
 //!
 //! # Process discipline (mirrors `preview_commands.rs`)
 //!
@@ -73,7 +78,7 @@ use std::io::Read;
 use std::path::{Path, PathBuf};
 use std::sync::{
     Arc, Mutex as StdMutex,
-    atomic::{AtomicBool, AtomicUsize, Ordering},
+    atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering},
 };
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use tauri::Emitter;
@@ -127,6 +132,17 @@ pub struct TerminalSpawnResponse {
 pub struct TerminalInfo {
     pub terminal_id: String,
     pub project_dir: String,
+    /// Review fix (per-project tab filter): the project dir EXACTLY as the
+    /// spawner requested it, captured before [`TerminalManager::spawn`]
+    /// canonicalizes it into `project_dir`. The frontend's per-project
+    /// filter matches the raw prop against this field first — a
+    /// canonical-vs-raw mismatch (symlinked path segments on Unix,
+    /// `\\?\C:\…` verbatim prefixes on Windows) previously made a freshly
+    /// spawned tab vanish into the empty state. Always `Some` from `spawn`
+    /// (like-for-like with the raw prop); `#[serde(default)]` keeps
+    /// pre-existing wire payloads deserializable.
+    #[serde(default)]
+    pub project_dir_raw: Option<String>,
     pub shell: String,
     pub started_at_ms: i64,
     /// P3-2 window attribution: label of the webview window whose terminal
@@ -148,22 +164,34 @@ pub struct TerminalExitPayload {
 }
 
 /// `terminal:output` event payload. `data` is base64 of the raw pty bytes.
+/// `seq` (review fix, replay-ordering races) is a per-session monotonic
+/// counter — every emit CHUNK gets its own value, assigned in stream
+/// order. The frontend stitches `terminal_history`'s snapshot (which
+/// covers everything up to its `endSeq`) with the queued events whose
+/// `seq > endSeq`, closing both the loss window and the duplication
+/// window around (re)connect. `#[serde(default)]` so payloads emitted
+/// before the field existed (frontend fixtures, mock events) keep parsing.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(rename_all = "camelCase")]
 pub struct TerminalOutputPayload {
     pub terminal_id: String,
     pub data: String,
+    #[serde(default)]
+    pub seq: u64,
 }
 
-/// `terminal_history` response (frozen: `{ data }`) — base64 of the
-/// session's retained replay bytes, oldest-retained first (plain stream
-/// order). Empty string when the id is unknown or the session already
-/// ended: the frontend calls it speculatively on reconnect, so a missing
-/// ring must not be an error.
+/// `terminal_history` response — base64 of the session's retained replay
+/// bytes, oldest-retained first (plain stream order), plus `endSeq`: the
+/// highest output-chunk seq fully contained in `data` (see
+/// [`TerminalOutputPayload`]). Empty string when the id is unknown or the
+/// session already ended: the frontend calls it speculatively on
+/// reconnect, so a missing ring must not be an error.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(rename_all = "camelCase")]
 pub struct TerminalHistoryResponse {
     pub data: String,
+    #[serde(default)]
+    pub end_seq: u64,
 }
 
 // ── Shell resolution ─────────────────────────────────────────────────────
@@ -379,10 +407,12 @@ pub(crate) fn save_terminal_settings_to(
 // ── Output sink (injectable emit boundary) ───────────────────────────────
 
 /// Where coalesced pty bytes go. Production emits the `terminal:output`
-/// Tauri event; tests record bytes and count emissions. `emit_exit` has a
-/// no-op default so simple test sinks stay one-method.
+/// Tauri event; tests record bytes and count emissions. `seq` is the
+/// chunk's per-session monotonic number (review fix — see
+/// [`TerminalOutputPayload`]). `emit_exit` has a no-op default so simple
+/// test sinks stay one-method.
 pub trait TerminalOutputSink: Send + Sync {
-    fn emit_output(&self, terminal_id: &str, data: &[u8]);
+    fn emit_output(&self, terminal_id: &str, data: &[u8], seq: u64);
 
     /// P3-6: the session exited naturally and was reaped. Emitted once,
     /// after the final output flush (which still carries the human-readable
@@ -405,10 +435,11 @@ impl TauriTerminalSink {
 }
 
 impl TerminalOutputSink for TauriTerminalSink {
-    fn emit_output(&self, terminal_id: &str, data: &[u8]) {
+    fn emit_output(&self, terminal_id: &str, data: &[u8], seq: u64) {
         let payload = TerminalOutputPayload {
             terminal_id: terminal_id.to_string(),
             data: base64::engine::general_purpose::STANDARD.encode(data),
+            seq,
         };
         if let Err(e) = self
             .app
@@ -540,8 +571,14 @@ struct TerminalSession {
     /// Replay ring (US6): newest [`TERMINAL_HISTORY_CAP`] raw bytes of the
     /// session's output, appended by the pump from each drained batch.
     /// Owned by the session, so kill/reap (which removes the session from
-    /// the map) retires the ring with it — no persistence.
-    history: StdMutex<VecDeque<u8>>,
+    /// the map) retires the ring with it — no persistence. Carries the
+    /// `end_seq` watermark (review fix) under the same lock.
+    history: StdMutex<HistoryRing>,
+    /// Review fix (replay ordering): per-session monotonic emit-chunk
+    /// counter — the next seq to hand out. Incremented once per CHUNK (a
+    /// drain split by [`MAX_EMIT_CHUNK`] consumes one value per chunk), so
+    /// the seq order of the event stream matches the byte order exactly.
+    next_emit_seq: AtomicU64,
 }
 
 impl TerminalSession {
@@ -588,11 +625,35 @@ fn kill_process_tree(child: &mut Box<dyn portable_pty::Child + Send + Sync>) {
     let _ = child.kill();
 }
 
+/// Replay ring (US6) plus its snapshot watermark: `end_seq` is the
+/// highest emit-chunk seq whose bytes are FULLY contained in `bytes` (the
+/// `terminal_history` stitch key — review fix, see
+/// [`TerminalOutputPayload`]). Ring and watermark always mutate together
+/// under the one lock: a reader must never observe new ring bytes without
+/// their seq (that would duplicate them) or an advanced seq without the
+/// bytes (that would lose them).
+struct HistoryRing {
+    bytes: VecDeque<u8>,
+    end_seq: u64,
+}
+
+impl HistoryRing {
+    fn new() -> Self {
+        Self {
+            bytes: VecDeque::with_capacity(4096),
+            end_seq: 0,
+        }
+    }
+}
+
 /// Append one drained batch to a session's replay ring, keeping only the
 /// newest [`TERMINAL_HISTORY_CAP`] bytes (same oldest-dropped discipline
 /// as [`PendingBuffer::push`], minus the truncation notice — replay is a
-/// best-effort scrollback, not a guaranteed log).
-fn append_history(ring: &StdMutex<VecDeque<u8>>, bytes: &[u8]) {
+/// best-effort scrollback, not a guaranteed log), and publish `last_seq`
+/// as the snapshot watermark in the same critical section. A no-op for an
+/// empty batch (the watermark only ever advances over bytes actually
+/// present in the ring).
+fn append_history(ring: &StdMutex<HistoryRing>, bytes: &[u8], last_seq: u64) {
     if bytes.is_empty() {
         return;
     }
@@ -600,15 +661,18 @@ fn append_history(ring: &StdMutex<VecDeque<u8>>, bytes: &[u8]) {
     if bytes.len() >= TERMINAL_HISTORY_CAP {
         // A single batch at/over the cap: everything retained so far is
         // stale by definition — keep only the batch's tail.
-        ring.clear();
-        ring.extend(bytes[bytes.len() - TERMINAL_HISTORY_CAP..].iter().copied());
+        ring.bytes.clear();
+        ring.bytes
+            .extend(bytes[bytes.len() - TERMINAL_HISTORY_CAP..].iter().copied());
+        ring.end_seq = last_seq;
         return;
     }
-    let overflow = (ring.len() + bytes.len()).saturating_sub(TERMINAL_HISTORY_CAP);
+    let overflow = (ring.bytes.len() + bytes.len()).saturating_sub(TERMINAL_HISTORY_CAP);
     if overflow > 0 {
-        ring.drain(..overflow);
+        ring.bytes.drain(..overflow);
     }
-    ring.extend(bytes.iter().copied());
+    ring.bytes.extend(bytes.iter().copied());
+    ring.end_seq = last_seq;
 }
 
 // ── TerminalManager (lifecycle owner on AppState) ────────────────────────
@@ -683,8 +747,10 @@ impl TerminalManager {
         *self.inner.sink.lock().unwrap_or_else(|p| p.into_inner()) = Some(sink);
     }
 
-    /// `terminal_spawn({projectDir, shell?})`. The cwd is canonicalized;
-    /// the shell is picked by the P3-1 precedence: explicit `shell`
+    /// `terminal_spawn({projectDir, shell?})`. The cwd is canonicalized
+    /// (the requested form is preserved verbatim on
+    /// `TerminalInfo::project_dir_raw` — review fix); the shell is picked
+    /// by the P3-1 precedence: explicit `shell`
     /// argument > `configured_shell` (persisted `[terminal].shell`) >
     /// `$SHELL` (PowerShell on Windows).
     ///
@@ -699,6 +765,11 @@ impl TerminalManager {
         configured_shell: Option<String>,
         spawned_by_window: Option<String>,
     ) -> Result<TerminalInfo, String> {
+        // Capture the REQUESTED form before canonicalization: the
+        // frontend's per-project filter compares its raw prop against this
+        // string, so canonicalization (symlinks, Windows verbatim
+        // prefixes) must not be the only surviving representation.
+        let project_dir_raw = project_dir.display().to_string();
         let dir = project_dir
             .canonicalize()
             .map_err(|e| format!("project dir {}: {e}", project_dir.display()))?;
@@ -752,6 +823,7 @@ impl TerminalManager {
         let info = TerminalInfo {
             terminal_id: terminal_id.clone(),
             project_dir: dir.display().to_string(),
+            project_dir_raw: Some(project_dir_raw),
             shell: shell_line.clone(),
             started_at_ms: now_ms(),
             spawned_by_window,
@@ -775,7 +847,8 @@ impl TerminalManager {
             master: StdMutex::new(pair.master),
             child: StdMutex::new(Some(child)),
             info: info.clone(),
-            history: StdMutex::new(VecDeque::with_capacity(4096)),
+            history: StdMutex::new(HistoryRing::new()),
+            next_emit_seq: AtomicU64::new(0),
         });
         sessions.insert(terminal_id, session.clone());
         drop(sessions);
@@ -843,21 +916,19 @@ impl TerminalManager {
     }
 
     /// `terminal_history` core (US6): the session's retained replay bytes
-    /// in stream order. Unknown / already-ended id → empty (the frontend
-    /// calls speculatively on reconnect; absence is normal, not an error).
-    /// The ring dies with the session — kill/reap removed it from the map,
-    /// so this naturally returns empty afterwards.
-    pub fn history(&self, terminal_id: &str) -> Vec<u8> {
+    /// in stream order plus `end_seq` — the highest emit-chunk seq fully
+    /// contained in those bytes (read atomically with the ring so the
+    /// frontend's snapshot ⊕ events stitch is exact). Unknown /
+    /// already-ended id → empty (the frontend calls speculatively on
+    /// reconnect; absence is normal, not an error). The ring dies with the
+    /// session — kill/reap removed it from the map, so this naturally
+    /// returns empty afterwards.
+    pub fn history(&self, terminal_id: &str) -> (Vec<u8>, u64) {
         let Ok(session) = self.session(terminal_id) else {
-            return Vec::new();
+            return (Vec::new(), 0);
         };
-        session
-            .history
-            .lock()
-            .unwrap_or_else(|p| p.into_inner())
-            .iter()
-            .copied()
-            .collect()
+        let ring = session.history.lock().unwrap_or_else(|p| p.into_inner());
+        (ring.bytes.iter().copied().collect(), ring.end_seq)
     }
 
     /// Kill every session (app-exit hook / `Drop` backstop).
@@ -995,23 +1066,44 @@ fn pump_once(inner: &TerminalInner) {
     };
     for session in snapshot {
         let drained = session.pending.drain();
+        // Review fix (replay ordering): the drained batch is split into
+        // chunks up front and each chunk gets its own monotonic seq, in
+        // stream order. The ring append below (which covers exactly the
+        // drained bytes) publishes the LAST drained chunk's seq as the
+        // snapshot watermark in the same critical section, and the emits
+        // happen strictly after — so a `terminal_history` snapshot is
+        // always a clean prefix of the (seq, bytes) event stream, whichever
+        // way a concurrent reader interleaves.
+        let chunk_count = drained.chunks(MAX_EMIT_CHUNK).count() as u64;
+        let first_seq = session
+            .next_emit_seq
+            .fetch_add(chunk_count, Ordering::SeqCst);
         // Replay ring (US6): every drained byte lands in the ring before
         // the emit so a reconnecting panel can replay what was shown.
-        append_history(&session.history, &drained);
-        if let Some((success, code)) = session.poll_exit() {
-            let mut final_bytes = drained;
-            final_bytes.extend_from_slice(
-                format!(
-                    "\r\n\u{1b}[2m[shannon: process exited — {}]\u{1b}[0m\r\n",
-                    if success {
-                        "done".to_string()
-                    } else {
-                        format!("exit code {code}")
-                    }
-                )
-                .as_bytes(),
+        // (The in-stream exit notice below is NOT part of the drain, so
+        // it gets its own seq past the watermark instead.)
+        if chunk_count > 0 {
+            append_history(
+                &session.history,
+                &drained,
+                first_seq + chunk_count - 1,
             );
-            emit_chunked(&sink, &session.info.terminal_id, &final_bytes);
+        }
+        if let Some((success, code)) = session.poll_exit() {
+            emit_chunked(&sink, &session.info.terminal_id, &drained, first_seq);
+            // The human-readable exit notice rides as its own chunk with
+            // the next seq — past `end_seq` by construction, so a
+            // reconnecting panel never drops it.
+            let notice = format!(
+                "\r\n\u{1b}[2m[shannon: process exited — {}]\u{1b}[0m\r\n",
+                if success {
+                    "done".to_string()
+                } else {
+                    format!("exit code {code}")
+                }
+            );
+            let notice_seq = session.next_emit_seq.fetch_add(1, Ordering::SeqCst);
+            sink.emit_output(&session.info.terminal_id, notice.as_bytes(), notice_seq);
             // P3-6 — the machine-readable exit signal, after the final
             // bytes so the frontend never sees `terminal:exit` before the
             // last output / in-stream notice for this session.
@@ -1026,18 +1118,24 @@ fn pump_once(inner: &TerminalInner) {
                 .lock()
                 .unwrap_or_else(|p| p.into_inner())
                 .remove(&session.info.terminal_id);
-        } else if !drained.is_empty() {
-            emit_chunked(&sink, &session.info.terminal_id, &drained);
+        } else if chunk_count > 0 {
+            emit_chunked(&sink, &session.info.terminal_id, &drained, first_seq);
         }
     }
 }
 
 /// Emit a drained batch as consecutive events of at most
-/// [`MAX_EMIT_CHUNK`] bytes — one tick's flood must never become a
-/// multi-MB webview payload.
-fn emit_chunked(sink: &Arc<dyn TerminalOutputSink>, terminal_id: &str, bytes: &[u8]) {
-    for chunk in bytes.chunks(MAX_EMIT_CHUNK) {
-        sink.emit_output(terminal_id, chunk);
+/// [`MAX_EMIT_CHUNK`] bytes, numbered `first_seq` onward — one tick's
+/// flood must never become a multi-MB webview payload, and every chunk
+/// carries its own place in the stream order (review fix).
+fn emit_chunked(
+    sink: &Arc<dyn TerminalOutputSink>,
+    terminal_id: &str,
+    bytes: &[u8],
+    first_seq: u64,
+) {
+    for (i, chunk) in bytes.chunks(MAX_EMIT_CHUNK).enumerate() {
+        sink.emit_output(terminal_id, chunk, first_seq + i as u64);
     }
 }
 
@@ -1152,7 +1250,8 @@ pub async fn terminal_kill(
     state.terminals.kill(&terminal_id)
 }
 
-/// `terminal_list() -> [{ terminalId, projectDir, shell, startedAtMs }]`.
+/// `terminal_list() -> [{ terminalId, projectDir, projectDirRaw, shell,
+/// startedAtMs }]`.
 #[tauri::command]
 pub async fn terminal_list(
     state: tauri::State<'_, crate::commands::AppState>,
@@ -1181,9 +1280,12 @@ pub async fn terminal_set_settings(
     Ok(TerminalSettingsDto::from(effective))
 }
 
-/// `terminal_history({terminalId}) -> { data }` (US6, new command) —
-/// base64 of the session's retained replay bytes (newest 1 MiB, see
-/// [`TERMINAL_HISTORY_CAP`]). Unknown or already-ended id → `{ data: "" }`,
+/// `terminal_history({terminalId}) -> { data, endSeq }` (US6) — base64 of
+/// the session's retained replay bytes (newest 1 MiB, see
+/// [`TERMINAL_HISTORY_CAP`]) plus `endSeq`, the highest output-chunk seq
+/// fully included in the snapshot (review fix — the frontend drops the
+/// queued events it already replayed, see [`TerminalOutputPayload`]).
+/// Unknown or already-ended id → `{ data: "", endSeq: 0 }`,
 /// deliberately not an error: the frontend calls speculatively on
 /// reconnect. No persistence — the ring dies with its session.
 #[tauri::command]
@@ -1191,9 +1293,10 @@ pub async fn terminal_history(
     state: tauri::State<'_, crate::commands::AppState>,
     terminal_id: String,
 ) -> Result<TerminalHistoryResponse, String> {
-    let bytes = state.terminals.history(&terminal_id);
+    let (bytes, end_seq) = state.terminals.history(&terminal_id);
     Ok(TerminalHistoryResponse {
         data: base64::engine::general_purpose::STANDARD.encode(bytes),
+        end_seq,
     })
 }
 
@@ -1233,10 +1336,10 @@ mod tests {
     const TEST_TICK: Duration = Duration::from_millis(10);
     const WAIT: Duration = Duration::from_secs(5);
 
-    /// Records every emission (id, bytes) in order; the test asserts on
-    /// both delivery and coalescing. `emit_exit` records the terminal id
-    /// so the P3-6 contract is observable.
-    type Emissions = Arc<StdMutex<Vec<(String, Vec<u8>)>>>;
+    /// Records every emission (id, seq, bytes) in order; the test asserts
+    /// on delivery, coalescing, and seq monotonicity. `emit_exit` records
+    /// the terminal id so the P3-6 contract is observable.
+    type Emissions = Arc<StdMutex<Vec<(String, u64, Vec<u8>)>>>;
 
     #[derive(Default, Clone)]
     struct RecordingSink {
@@ -1250,8 +1353,19 @@ mod tests {
                 .lock()
                 .unwrap()
                 .iter()
-                .filter(|(id, _)| id == terminal_id)
-                .flat_map(|(_, bytes)| bytes.iter().copied())
+                .filter(|(id, _, _)| id == terminal_id)
+                .flat_map(|(_, _, bytes)| bytes.iter().copied())
+                .collect()
+        }
+
+        /// The seqs recorded for one terminal, in emission order.
+        fn seqs(&self, terminal_id: &str) -> Vec<u64> {
+            self.emissions
+                .lock()
+                .unwrap()
+                .iter()
+                .filter(|(id, _, _)| id == terminal_id)
+                .map(|(_, seq, _)| *seq)
                 .collect()
         }
 
@@ -1260,7 +1374,7 @@ mod tests {
                 .lock()
                 .unwrap()
                 .iter()
-                .filter(|(id, _)| id == terminal_id)
+                .filter(|(id, _, _)| id == terminal_id)
                 .count()
         }
 
@@ -1292,11 +1406,11 @@ mod tests {
     }
 
     impl TerminalOutputSink for RecordingSink {
-        fn emit_output(&self, terminal_id: &str, data: &[u8]) {
+        fn emit_output(&self, terminal_id: &str, data: &[u8], seq: u64) {
             self.emissions
                 .lock()
                 .unwrap()
-                .push((terminal_id.to_string(), data.to_vec()));
+                .push((terminal_id.to_string(), seq, data.to_vec()));
         }
 
         fn emit_exit(&self, terminal_id: &str) {
@@ -1361,6 +1475,7 @@ mod tests {
         let info = TerminalInfo {
             terminal_id: "t-1".into(),
             project_dir: "/home/u/proj".into(),
+            project_dir_raw: Some("/home/u/proj".into()),
             shell: "/bin/bash".into(),
             started_at_ms: 1_700,
             spawned_by_window: Some("session-abc".into()),
@@ -1373,6 +1488,11 @@ mod tests {
         // P3-2 additive attribution field (camelCase, nullable).
         assert!(
             json.contains("\"spawnedByWindow\":\"session-abc\""),
+            "{json}"
+        );
+        // Review-fix additive raw-dir field (camelCase, nullable).
+        assert!(
+            json.contains("\"projectDirRaw\":\"/home/u/proj\""),
             "{json}"
         );
         let back: TerminalInfo = serde_json::from_str(&json).unwrap();
@@ -1389,6 +1509,15 @@ mod tests {
         .expect("legacy TerminalInfo must deserialize");
         assert_eq!(legacy.terminal_id, "t-1");
         assert_eq!(legacy.spawned_by_window, None);
+        assert_eq!(legacy.project_dir_raw, None);
+
+        // The raw-dir field round-trips as string|null (canonical == raw
+        // collapses to a repeated value, never a surrogate).
+        let with_raw: TerminalInfo = serde_json::from_str(
+            r#"{"terminalId":"t-1","projectDir":"/p","projectDirRaw":null,"shell":"/bin/sh","startedAtMs":7}"#,
+        )
+        .expect("TerminalInfo with null projectDirRaw must deserialize");
+        assert_eq!(with_raw.project_dir_raw, None);
     }
 
     #[test]
@@ -1412,15 +1541,27 @@ mod tests {
         let payload = TerminalOutputPayload {
             terminal_id: "t-9".into(),
             data: base64::engine::general_purpose::STANDARD.encode(&raw),
+            seq: 12,
         };
         let json = serde_json::to_string(&payload).unwrap();
         assert!(json.contains("\"terminalId\":\"t-9\""), "{json}");
         assert!(json.contains("\"data\":\""), "{json}");
+        // Review fix: the additive per-chunk seq rides along (camelCase).
+        assert!(json.contains("\"seq\":12"), "{json}");
         let back: TerminalOutputPayload = serde_json::from_str(&json).unwrap();
         let decoded = base64::engine::general_purpose::STANDARD
             .decode(&back.data)
             .unwrap();
         assert_eq!(decoded, raw);
+        assert_eq!(back.seq, 12);
+
+        // Payloads emitted before the field existed keep parsing (seq
+        // defaults to 0, the pre-history watermark).
+        let legacy: TerminalOutputPayload = serde_json::from_str(
+            r#"{"terminalId":"t-9","data":"aGk="}"#,
+        )
+        .expect("legacy TerminalOutputPayload must deserialize");
+        assert_eq!(legacy.seq, 0);
     }
 
     // ── Shell resolution (pure) ──────────────────────────────────────────
@@ -1645,27 +1786,37 @@ mod tests {
 
     #[test]
     fn history_response_is_frozen_camel_case() {
+        // Review fix: the additive `endSeq` watermark rides next to `data`
+        // (the frontend drops queued events with seq ≤ endSeq).
         let resp = TerminalHistoryResponse {
             data: "aGk=".into(),
+            end_seq: 7,
         };
         let json = serde_json::to_string(&resp).unwrap();
-        assert_eq!(json, r#"{"data":"aGk="}"#);
+        assert_eq!(json, r#"{"data":"aGk=","endSeq":7}"#);
         let back: TerminalHistoryResponse = serde_json::from_str(&json).unwrap();
         assert_eq!(back.data, "aGk=");
+        assert_eq!(back.end_seq, 7);
+        // Legacy shape (no endSeq) still parses — defaults to 0, i.e.
+        // "the snapshot covers nothing" → the frontend flushes everything.
+        let legacy: TerminalHistoryResponse =
+            serde_json::from_str(r#"{"data":"aGk="}"#).expect("legacy response parses");
+        assert_eq!(legacy.end_seq, 0);
     }
 
     #[test]
     fn append_history_keeps_the_newest_cap_bytes() {
-        let ring: StdMutex<VecDeque<u8>> = StdMutex::new(VecDeque::new());
-        append_history(&ring, &[b'a'; 64]);
-        append_history(&ring, &[b'b'; 64]);
-        let held: Vec<u8> = ring.lock().unwrap().iter().copied().collect();
+        let ring: StdMutex<HistoryRing> = StdMutex::new(HistoryRing::new());
+        append_history(&ring, &[b'a'; 64], 0);
+        append_history(&ring, &[b'b'; 64], 1);
+        let held: Vec<u8> = ring.lock().unwrap().bytes.iter().copied().collect();
         assert_eq!(held.len(), 128, "under the cap everything is retained");
+        assert_eq!(ring.lock().unwrap().end_seq, 1, "watermark = last batch");
 
         // A cap-sized batch evicts everything older in one step (the
         // "batch at/over the cap" branch) and keeps only its own tail.
-        append_history(&ring, &[b'c'; TERMINAL_HISTORY_CAP]);
-        let held: Vec<u8> = ring.lock().unwrap().iter().copied().collect();
+        append_history(&ring, &[b'c'; TERMINAL_HISTORY_CAP], 2);
+        let held: Vec<u8> = ring.lock().unwrap().bytes.iter().copied().collect();
         assert_eq!(held.len(), TERMINAL_HISTORY_CAP);
         assert!(
             held.iter().all(|&b| b == b'c'),
@@ -1673,22 +1824,30 @@ mod tests {
         );
 
         // A batch larger than the cap itself keeps only its own tail.
-        let ring: StdMutex<VecDeque<u8>> = StdMutex::new(VecDeque::new());
-        append_history(&ring, &[b'x'; TERMINAL_HISTORY_CAP + 5]);
-        let held: Vec<u8> = ring.lock().unwrap().iter().copied().collect();
+        let ring: StdMutex<HistoryRing> = StdMutex::new(HistoryRing::new());
+        append_history(&ring, &[b'x'; TERMINAL_HISTORY_CAP + 5], 9);
+        let held: Vec<u8> = ring.lock().unwrap().bytes.iter().copied().collect();
         assert_eq!(held.len(), TERMINAL_HISTORY_CAP);
         assert!(held.iter().all(|&b| b == b'x'));
+        assert_eq!(ring.lock().unwrap().end_seq, 9);
         // …and appending afterwards still preserves stream order.
-        append_history(&ring, b"tail");
-        let held: Vec<u8> = ring.lock().unwrap().iter().copied().collect();
+        append_history(&ring, b"tail", 10);
+        let held: Vec<u8> = ring.lock().unwrap().bytes.iter().copied().collect();
         assert!(held.ends_with(b"tail"));
+        assert_eq!(ring.lock().unwrap().end_seq, 10);
+
+        // An empty batch is a full no-op: the watermark only ever covers
+        // bytes actually present in the ring.
+        append_history(&ring, b"", 99);
+        assert_eq!(ring.lock().unwrap().end_seq, 10);
     }
 
     #[test]
     fn history_of_unknown_id_is_empty_not_an_error() {
         let sink = RecordingSink::default();
         let manager = test_manager(&sink);
-        assert!(manager.history("no-such-terminal").is_empty());
+        assert!(manager.history("no-such-terminal").0.is_empty());
+        assert_eq!(manager.history("no-such-terminal").1, 0);
     }
 
     #[cfg(unix)]
@@ -1702,16 +1861,18 @@ mod tests {
             .expect("spawn");
         manager.test_push_pending(&info.terminal_id, b"echo replay-marker-99\n");
         manager.pump_once_for_test();
-        let bytes = manager.history(&info.terminal_id);
+        let (bytes, end_seq) = manager.history(&info.terminal_id);
         assert!(
             String::from_utf8_lossy(&bytes).contains("replay-marker-99"),
             "drained output must land in the ring, got: {}",
             String::from_utf8_lossy(&bytes)
         );
+        // The snapshot watermark covers exactly what the pump appended.
+        assert_eq!(end_seq, 0, "one drain = one chunk = seq 0");
         // …and the ring dies with the session.
         manager.kill(&info.terminal_id).expect("kill");
         assert!(
-            manager.history(&info.terminal_id).is_empty(),
+            manager.history(&info.terminal_id).0.is_empty(),
             "killed session must replay nothing"
         );
     }
@@ -1730,10 +1891,141 @@ mod tests {
         let flood = vec![b'f'; TERMINAL_HISTORY_CAP + TERMINAL_HISTORY_CAP / 2];
         manager.test_push_pending(&info.terminal_id, &flood);
         manager.pump_once_for_test();
-        let bytes = manager.history(&info.terminal_id);
+        let (bytes, end_seq) = manager.history(&info.terminal_id);
         assert_eq!(bytes.len(), TERMINAL_HISTORY_CAP, "cap enforced");
         assert!(bytes.iter().all(|&b| b == b'f'), "newest tail kept");
+        // The watermark names the LAST chunk of the drain (the eviction
+        // only dropped older bytes, never the watermark's own chunk).
+        let expected_chunks = (flood.len() as u64).div_ceil(MAX_EMIT_CHUNK as u64);
+        assert_eq!(end_seq, expected_chunks - 1, "endSeq = last chunk seq");
         manager.kill(&info.terminal_id).expect("kill");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn spawn_keeps_the_requested_dir_verbatim_in_project_dir_raw() {
+        let sink = RecordingSink::default();
+        let manager = test_manager(&sink);
+        let dir = tempfile::tempdir().expect("tempdir");
+        let real = dir.path().join("real");
+        std::fs::create_dir(&real).expect("mkdir real");
+        let link = dir.path().join("link");
+        std::os::unix::fs::symlink(&real, &link).expect("symlink");
+        let requested = link.display().to_string();
+
+        let info = manager
+            .spawn(&link, Some("/bin/sh -c 'sleep 30'".into()), None, None)
+            .expect("spawn");
+        // The stored dir is the canonicalized form (unchanged behavior)…
+        assert_eq!(
+            info.project_dir,
+            real.canonicalize().expect("canonicalize").display().to_string()
+        );
+        // …while the additive raw field preserves the exact requested
+        // (symlinked) form the frontend will compare its prop against.
+        assert_eq!(info.project_dir_raw.as_deref(), Some(requested.as_str()));
+        assert_ne!(
+            info.project_dir,
+            info.project_dir_raw.as_deref().expect("raw is Some"),
+            "the canonical-vs-raw mismatch this field exists for"
+        );
+        manager.kill(&info.terminal_id).expect("kill");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn emit_seqs_are_monotonic_and_contiguous_across_chunked_emits() {
+        let sink = RecordingSink::default();
+        let manager = test_manager(&sink);
+        let dir = tempfile::tempdir().expect("tempdir");
+        // `-c 'sleep 30'` prints nothing: every byte below is test-pushed,
+        // so the chunk/seq accounting is exact.
+        let info = manager
+            .spawn(dir.path(), Some("/bin/sh -c 'sleep 30'".into()), None, None)
+            .expect("spawn");
+        let id = info.terminal_id.clone();
+        // Two drains of 2 chunks + a remainder each → 2+2 chunks.
+        let flood = vec![b'f'; MAX_EMIT_CHUNK + MAX_EMIT_CHUNK / 2];
+        manager.test_push_pending(&id, &flood);
+        manager.pump_once_for_test();
+        manager.test_push_pending(&id, &flood);
+        manager.pump_once_for_test();
+        assert!(
+            wait_until(WAIT, || sink.count_for(&id) >= 4),
+            "all four chunks emitted"
+        );
+        let seqs = sink.seqs(&id);
+        assert_eq!(
+            seqs,
+            (0..4u64).collect::<Vec<u64>>(),
+            "one seq per chunk, strictly increasing, no gaps"
+        );
+        // Each chunk respects MAX_EMIT_CHUNK and reassembles into the
+        // exact pushed stream, in order.
+        for (_, _, bytes) in sink.emissions.lock().unwrap().iter() {
+            assert!(bytes.len() <= MAX_EMIT_CHUNK, "chunk oversized");
+        }
+        let mut expected = flood.clone();
+        expected.extend_from_slice(&flood);
+        assert_eq!(sink.joined(&id), expected, "chunks reassemble losslessly");
+        // The final watermark covers the whole stream.
+        assert_eq!(manager.history(&id).1, 3);
+        manager.kill(&id).expect("kill");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn snapshot_plus_post_snapshot_events_reconstructs_losslessly() {
+        // The review-fix invariant, end to end: whatever a reconnecting
+        // panel snapshots mid-stream, stitching history ⊕ {emissions with
+        // seq > endSeq} reproduces the byte stream with no loss and no
+        // duplication.
+        let sink = RecordingSink::default();
+        let manager = test_manager(&sink);
+        let dir = tempfile::tempdir().expect("tempdir");
+        let info = manager
+            .spawn(dir.path(), Some("/bin/sh -c 'sleep 30'".into()), None, None)
+            .expect("spawn");
+        let id = info.terminal_id.clone();
+
+        // Stream A: a 3-chunk drain, pumped, then snapshotted mid-stream.
+        let a = vec![b'A'; MAX_EMIT_CHUNK * 2 + 1024];
+        manager.test_push_pending(&id, &a);
+        manager.pump_once_for_test();
+        assert!(wait_until(WAIT, || sink.count_for(&id) >= 3));
+        let (snapshot, end_seq) = manager.history(&id);
+        assert_eq!(snapshot, a, "ring holds the full drain (under the cap)");
+        assert_eq!(end_seq, 2, "watermark = last of the 3 chunks");
+
+        // Stream B: emitted strictly AFTER the snapshot.
+        let b = vec![b'B'; MAX_EMIT_CHUNK + 512];
+        manager.test_push_pending(&id, &b);
+        manager.pump_once_for_test();
+        assert!(wait_until(WAIT, || sink.count_for(&id) >= 5));
+
+        // The frontend stitch: history ⊕ {events with seq > endSeq}.
+        let mut stitched = snapshot;
+        for (tid, seq, bytes) in sink.emissions.lock().unwrap().iter() {
+            if *tid == id && *seq > end_seq {
+                stitched.extend_from_slice(bytes);
+            }
+        }
+        let mut full = a;
+        full.extend_from_slice(&b);
+        assert_eq!(stitched, full, "no byte loss, no duplication");
+
+        // A SECOND snapshot taken now carries the advanced watermark, and
+        // stitching against it (nothing new emitted) stays lossless.
+        let (snapshot2, end_seq2) = manager.history(&id);
+        assert_eq!(end_seq2, 4);
+        let mut stitched2 = snapshot2;
+        for (tid, seq, bytes) in sink.emissions.lock().unwrap().iter() {
+            if *tid == id && *seq > end_seq2 {
+                stitched2.extend_from_slice(bytes);
+            }
+        }
+        assert_eq!(stitched2, full, "late snapshot is lossless too");
+        manager.kill(&id).expect("kill");
     }
 
     // ── Lifecycle (unix: real pty + /bin/sh) ─────────────────────────────
@@ -1751,6 +2043,9 @@ mod tests {
             info.project_dir,
             dir.path().canonicalize().unwrap().display().to_string()
         );
+        // Review fix: the requested form rides along verbatim (here the
+        // tempdir path is already canonical, so raw == canonical).
+        assert_eq!(info.project_dir_raw.as_deref(), Some(dir.path().display().to_string().as_str()));
         assert!(
             manager
                 .list()
@@ -2103,8 +2398,8 @@ mod tests {
 
         let emissions = sink.emissions.lock().unwrap();
         assert!(!emissions.is_empty());
-        let total: usize = emissions.iter().map(|(_, bytes)| bytes.len()).sum();
-        for (id, bytes) in emissions.iter() {
+        let total: usize = emissions.iter().map(|(_, _, bytes)| bytes.len()).sum();
+        for (id, _, bytes) in emissions.iter() {
             assert_eq!(id, &info.terminal_id);
             assert!(
                 bytes.len() <= MAX_EMIT_CHUNK,
@@ -2116,7 +2411,7 @@ mod tests {
         // idle prompt bytes the shell may have printed — never the full 3 MiB.
         assert!(total < 3 * 1024 * 1024, "flood must be capped, got {total}");
         assert!(total >= MAX_PENDING_BYTES);
-        let head = String::from_utf8_lossy(&emissions[0].1);
+        let head = String::from_utf8_lossy(&emissions[0].2);
         assert!(
             head.contains("output truncated") && head.contains("bytes dropped"),
             "truncation notice must lead the emit stream: {head}"
@@ -2129,6 +2424,7 @@ mod tests {
         let make = |id: &str, ms: i64| TerminalInfo {
             terminal_id: id.into(),
             project_dir: "/tmp".into(),
+            project_dir_raw: Some("/tmp".into()),
             shell: "/bin/sh".into(),
             started_at_ms: ms,
             spawned_by_window: None,

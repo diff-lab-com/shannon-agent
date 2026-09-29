@@ -802,6 +802,49 @@ describe('TerminalPanel (per-project tabs — US7)', () => {
     expect(screen.getByRole('tab', { name: /other/ })).toBeTruthy()
   })
 
+  it('still matches tabs whose stored dir is canonicalized, via projectDirRaw', async () => {
+    // Review fix: the backend canonicalizes `projectDir` before storing
+    // (symlinked segments on Unix, `\\?\C:\…` verbatim prefixes on
+    // Windows). The filter must match the panel's RAW prop against the
+    // additive `projectDirRaw` first — an exact match on the canonical
+    // field alone used to make such tabs vanish into the empty state.
+    vi.mocked(api.terminalList).mockResolvedValue([
+      // Canonical ≠ raw prop: only visible through projectDirRaw.
+      { terminalId: 't-raw', projectDir: '/run/user/1000/symlinked/demo', projectDirRaw: '/home/u/demo', shell: '/bin/zsh', startedAtMs: 1 },
+      // Legacy payload without the raw field: falls back to projectDir.
+      { terminalId: 't-canon', projectDir: '/home/u/demo', shell: '/bin/zsh', startedAtMs: 2 },
+      // Matches neither form: stays hidden.
+      { terminalId: 't-other', projectDir: '/elsewhere', projectDirRaw: '/also-elsewhere', shell: '', startedAtMs: 3 },
+    ])
+    render(<TerminalPanel projectDir="/home/u/demo" />)
+    fireEvent.keyDown(window, { key: '`', ctrlKey: true })
+    await waitFor(() => expect(screen.getAllByRole('tab', { name: /demo/ })).toHaveLength(2))
+    expect(screen.queryByRole('tab', { name: /elsewhere/ })).toBeNull()
+  })
+
+  it('keeps a freshly spawned tab visible after the canonical terminal_list merge', async () => {
+    // The spawn flow's authoritative merge replaces the optimistic
+    // raw-path info with the backend's canonical string; the raw field
+    // riding along must keep the tab matched (it used to vanish).
+    const merged: TerminalInfo = {
+      terminalId: 't-raw',
+      projectDir: '/run/user/1000/symlinked/demo',
+      projectDirRaw: '/home/u/demo',
+      shell: '/bin/zsh',
+      startedAtMs: 7,
+    }
+    vi.mocked(api.terminalSpawn).mockResolvedValue({ terminalId: 't-raw' })
+    vi.mocked(api.terminalList).mockResolvedValueOnce([]).mockResolvedValueOnce([merged])
+    render(<TerminalPanel projectDir="/home/u/demo" />)
+    fireEvent.keyDown(window, { key: '`', ctrlKey: true })
+    expect(await screen.findByRole('tab', { name: /demo/ })).toBeTruthy()
+    // The follow-up list merge ran — and the tab survived it (no empty
+    // state where the tab used to be).
+    await waitFor(() => expect(api.terminalList).toHaveBeenCalledTimes(2))
+    expect(screen.queryByRole('tab', { name: /demo/ })).toBeTruthy()
+    expect(screen.queryByText(/No open terminals/)).toBeNull()
+  })
+
   it('shows the empty state without auto-spawning when every tab belongs to another project', async () => {
     // US7: a filter that hides everything must NOT spawn a replacement —
     // the hidden terminals are still running elsewhere.

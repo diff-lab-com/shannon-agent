@@ -14,7 +14,9 @@
  *    re-geometried;
  *  - tabs are scoped to the panel's project (US7): the chat page passes
  *    the session's working dir and the tablist shows only matching
- *    terminals. Hidden tabs KEEP RUNNING — the ≤4 cap is global on the
+ *    terminals (raw spawn-request dir first, via the additive
+ *    `projectDirRaw`, then the backend-canonicalized `projectDir`).
+ *    Hidden tabs KEEP RUNNING — the ≤4 cap is global on the
  *    backend, so the filter is view-only;
  *  - Ctrl+` toggles the panel — registered here (not in the global
  *    useKeyboardShortcuts map) because xterm's hidden textarea would be
@@ -115,9 +117,17 @@ function dirLabel(projectDir: string): string {
  * US7 (P3-12): exact-match a tab against the panel's project. A null or
  * empty `projectDir` prop shows ALL terminals — same as the pre-filter
  * panel.
+ *
+ * Review fix: the backend canonicalizes the spawn dir before storing it
+ * (`projectDir`), so the RAW prop is matched against the additive
+ * `projectDirRaw` first and only falls back to the canonical field — a
+ * symlinked path segment on Unix (or a `\\?\C:\…` verbatim prefix on
+ * Windows) otherwise makes the freshly spawned tab vanish into the empty
+ * state.
  */
 function isForProject(info: TerminalInfo, projectDir?: string | null): boolean {
-  return !projectDir || info.projectDir === projectDir;
+  if (!projectDir) return true;
+  return (info.projectDirRaw ?? info.projectDir) === projectDir;
 }
 
 export interface TerminalPanelProps {
@@ -411,9 +421,15 @@ export function TerminalPanel({ projectDir }: TerminalPanelProps) {
   const spawnTab = useCallback(async (dir?: string | null) => {
     try {
       const { terminalId } = await api.terminalSpawn(dir ?? projectDir ?? null);
+      const requestedDir = dir ?? projectDir ?? '';
       const info: TerminalInfo = {
         terminalId,
-        projectDir: dir ?? projectDir ?? '',
+        projectDir: requestedDir,
+        // The optimistic placeholder carries the RAW (uncanonicalized)
+        // form in both fields so the per-project filter matches until the
+        // authoritative terminal_list merge below replaces it with the
+        // backend's canonical + raw pair (review fix).
+        projectDirRaw: requestedDir,
         shell: '',
         startedAtMs: Date.now(),
       };

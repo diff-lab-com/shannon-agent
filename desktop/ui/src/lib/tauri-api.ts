@@ -2617,8 +2617,13 @@ export async function terminalSetSettings(settings: TerminalSettings): Promise<T
  * Replay bytes for one session, base64 (US6). Empty string when the id is
  * unknown or the session already ended — the frontend calls it
  * speculatively on reconnect, so a missing ring must not be an error.
+ * `endSeq` (additive, review fix) is the highest output-chunk seq fully
+ * contained in `data`: the replay consumer drops queued `terminal:output`
+ * events with `seq <= endSeq` and flushes the rest, so the snapshot and
+ * the live stream stitch without loss or duplication. Absent on the demo
+ * backend → flush-everything fallback.
  */
-export async function terminalHistory(terminalId: string): Promise<{ data: string }> {
+export async function terminalHistory(terminalId: string): Promise<{ data: string; endSeq?: number }> {
   return invoke('terminal_history', { terminalId })
 }
 
