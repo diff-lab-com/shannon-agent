@@ -106,7 +106,7 @@ export default function ConnectionsSettings() {
           className="text-primary hover:underline cursor-pointer inline-flex items-center gap-0.5"
         >
           {t('settings.connections.crossLink.link')}
-          <span className="material-symbols-outlined text-[14px]" aria-hidden="true">
+          <span className="material-symbols-outlined icon-sm" aria-hidden="true">
             arrow_forward
           </span>
         </button>

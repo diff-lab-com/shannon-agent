@@ -37,7 +37,7 @@ export default function QuickFix() {
   }
 
   return (
-    <div className="max-w-3xl mx-auto p-md flex flex-col gap-md">
+    <div className="max-w-narrow mx-auto p-md flex flex-col gap-md">
       <header>
         <h2 className="font-headline-md text-on-surface">{t('quickFix.title')}</h2>
         <p className="font-label-sm text-on-surface-variant mt-xs">
@@ -47,7 +47,7 @@ export default function QuickFix() {
 
       <form
         onSubmit={onSubmit}
-        className="bg-surface-container-lowest rounded-2xl p-md border border-outline-variant/30 shadow-sm flex flex-col gap-sm"
+        className="bg-surface-container-lowest rounded-2xl p-md border border-outline-variant/30 shadow-e1 flex flex-col gap-sm"
       >
         <label className="font-label-sm text-on-surface-variant flex flex-col gap-xs">
           {t('quickFix.filePath')}

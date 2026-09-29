@@ -106,7 +106,7 @@ export default function KeyboardShortcutsHelp({ open, onClose }: { open: boolean
               the composer's three controls are all live-wired to engine
               config; document them where users ask "what do these do?" */}
           <section className="mb-md p-sm rounded-lg bg-surface-container-low/60 border border-outline-variant/20">
-            <h4 className="font-label-md text-on-surface-variant uppercase tracking-wider text-[11px] mb-xs px-xs">
+            <h4 className="font-label-md text-on-surface-variant uppercase tracking-wider text-label-xs mb-xs px-xs">
               {t('shortcutsHelp.composer.title')}
             </h4>
             <ul className="grid grid-cols-1 sm:grid-cols-3 gap-xs">
@@ -116,7 +116,7 @@ export default function KeyboardShortcutsHelp({ open, onClose }: { open: boolean
                 { icon: 'smart_toy', titleKey: 'shortcutsHelp.composer.model.title', descKey: 'shortcutsHelp.composer.model.desc' },
               ].map(item => (
                 <li key={item.icon} className="p-sm rounded-md bg-surface-container-lowest/60">
-                  <div className="flex items-center gap-xs mb-1">
+                  <div className="flex items-center gap-xs mb-xs">
                     <span className="material-symbols-outlined icon-sm text-primary" aria-hidden="true">{item.icon}</span>
                     <span className="font-label-md text-on-surface font-bold">{t(item.titleKey)}</span>
                   </div>
@@ -130,7 +130,7 @@ export default function KeyboardShortcutsHelp({ open, onClose }: { open: boolean
           ) : (
             filteredSections.map(section => (
               <section key={section.titleKey} className="mb-md last:mb-0">
-                <h4 className="font-label-md text-on-surface-variant uppercase tracking-wider text-[11px] mb-xs px-xs">
+                <h4 className="font-label-md text-on-surface-variant uppercase tracking-wider text-label-xs mb-xs px-xs">
                   {t(section.titleKey)}
                 </h4>
                 <ul className="grid grid-cols-1 sm:grid-cols-2 gap-xs">
@@ -140,7 +140,7 @@ export default function KeyboardShortcutsHelp({ open, onClose }: { open: boolean
                       className="flex items-center justify-between gap-sm py-xs px-sm rounded-md hover:bg-surface-container-low/60"
                     >
                       <span className="text-body-sm text-on-surface truncate">{t(entry.actionKey)}</span>
-                      <kbd className="text-[11px] px-1.5 py-0.5 rounded bg-surface-container-high text-on-surface-variant font-mono shrink-0 border border-outline-variant/30">
+                      <kbd className="text-label-xs px-1.5 py-0.5 rounded-sm bg-surface-container-high text-on-surface-variant font-mono shrink-0 border border-outline-variant/30">
                         {entry.keys}
                       </kbd>
                     </li>

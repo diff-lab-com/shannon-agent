@@ -421,7 +421,7 @@ export default function ChatInput({
           id={slashListboxId}
           role="listbox"
           aria-label={t('slash.menu.aria')}
-          className="absolute left-0 right-0 bottom-full mb-sm z-modal rounded-2xl border border-outline-variant/30 bg-surface-container-low shadow-lg overflow-hidden"
+          className="absolute left-0 right-0 bottom-full mb-sm z-modal rounded-2xl border border-outline-variant/30 bg-surface-container-low shadow-e3 overflow-hidden"
         >
           <ul className="max-h-64 overflow-y-auto py-xs">
             {slashMatches.map((cmd, i) => (
@@ -467,6 +467,8 @@ export default function ChatInput({
       )}
 
       {isDragging && (
+        // Scrim-style drag veil (遮罩) over the composer while a file drag is
+        // in flight — intentional direct backdrop-blur, G1 exempt.
         <div className="absolute inset-0 z-raised flex items-center justify-center bg-primary/10 rounded-2xl backdrop-blur-sm pointer-events-none">
           <div className="flex flex-col items-center gap-sm text-primary">
             <span className="material-symbols-outlined icon-xl">cloud_upload</span>
@@ -488,7 +490,7 @@ export default function ChatInput({
             onClick={handlePlanToggle}
             aria-label={t('chat.input.planMode.exit')}
             title={t('chat.input.planMode.exit')}
-            className="rounded hover:bg-tertiary/20 shrink-0"
+            className="rounded-sm hover:bg-tertiary/20 shrink-0"
           >
             <span className="material-symbols-outlined icon-sm">close</span>
           </Button>
@@ -669,7 +671,7 @@ export default function ChatInput({
                 {modelList.length > 0 && (
                   <div role="presentation" className="mx-sm my-xs border-t border-outline-variant/20" />
                 )}
-                <div role="presentation" className="px-sm pt-0 pb-1 font-label-xs uppercase tracking-wider text-on-surface-variant">
+                <div role="presentation" className="px-sm pt-0 pb-xs font-label-xs uppercase tracking-wider text-on-surface-variant">
                   {t('chat.input.effort.section')}
                 </div>
                 {effortOptions.map(effort => (

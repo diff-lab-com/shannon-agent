@@ -45,7 +45,7 @@ export function TiersEditor({ tiers, activeModelId, onChange }: TiersEditorProps
                 ) : null}
               </span>
               <Input
-                className="flex-1 px-sm py-xs bg-surface text-on-surface border border-outline-variant/50 rounded font-body-xs font-mono"
+                className="flex-1 px-sm py-xs bg-surface text-on-surface border border-outline-variant/50 rounded-sm font-body-xs font-mono"
                 value={tiers[key]}
                 placeholder="model-id"
                 onChange={(e) => onChange({ ...tiers, [key]: e.target.value })}
@@ -60,7 +60,7 @@ export function TiersEditor({ tiers, activeModelId, onChange }: TiersEditorProps
                   aria-label={t('settings.models.addProvider.tierClear')}
                   data-testid={`tier-${key}-clear`}
                 >
-                  <span className="material-symbols-outlined text-[16px]">close</span>
+                  <span className="material-symbols-outlined icon-sm">close</span>
                 </Button>
               ) : null}
             </label>

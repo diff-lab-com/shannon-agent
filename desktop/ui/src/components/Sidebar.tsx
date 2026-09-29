@@ -63,7 +63,7 @@ export function useSidebarMode(): [SidebarMode, () => void] {
 
 const getNavClass = ({ isActive }: { isActive: boolean }) =>
   cn(
-    "flex items-center gap-2.5 px-3 py-2 rounded-xl font-label-md text-[13px] transition-all duration-200 whitespace-nowrap min-w-0",
+    "flex items-center gap-2.5 px-3 py-sm rounded-xl font-label-md text-label-sm transition-all duration-(--duration-normal) whitespace-nowrap min-w-0",
     isActive
       ? "text-on-surface bg-primary/10 font-bold"
       : "text-on-surface-variant hover:bg-surface-container-low hover:text-primary"
@@ -88,7 +88,7 @@ function NavRow({ to, icon, labelId, titleId, kbd, trail, onNavigate }: {
     <NavLink to={to} className={getNavClass} title={titleId ? `${intl.formatMessage({ id: titleId })}${kbd ? ` · ${kbd}` : ''}` : hint} aria-label={titleId ? `${intl.formatMessage({ id: titleId })}${kbd ? ` · ${kbd}` : ''}` : hint} onClick={onNavigate}>
       {({ isActive }) => (
         <>
-          <span className="material-symbols-outlined text-[20px] shrink-0" style={{ fontVariationSettings: isActive ? "'FILL' 1" : undefined }} aria-hidden="true">{icon}</span>
+          <span className="material-symbols-outlined icon-md shrink-0" style={{ fontVariationSettings: isActive ? "'FILL' 1" : undefined }} aria-hidden="true">{icon}</span>
           <span className="flex-1 min-w-0 truncate">{label}</span>
           {trail}
         </>
@@ -212,7 +212,7 @@ export const Sidebar = memo(function Sidebar({ mobile, open = true }: { mobile?:
 
   return (
     <aside data-sidebar className={cn(
-      "fixed left-0 top-0 h-full bg-surface-container-lowest/85 border-r border-outline-variant/30 flex flex-col py-lg px-md shadow-[4px_0_24px_-12px_color-mix(in_srgb,var(--color-inverse-surface)_15%,transparent)] transition-transform duration-300",
+      "fixed left-0 top-0 h-full bg-surface-container-lowest/85 border-r border-outline-variant/30 flex flex-col py-lg px-md shadow-[4px_0_24px_-12px_color-mix(in_srgb,var(--color-inverse-surface)_15%,transparent)] transition-transform duration-(--duration-slow)",
       mobile
         ? cn("z-drawer w-[280px]", open ? "translate-x-0" : "-translate-x-full")
         : "z-20",
@@ -236,15 +236,15 @@ export const Sidebar = memo(function Sidebar({ mobile, open = true }: { mobile?:
       >
         <div className="absolute right-0 top-0 bottom-0 w-1 transition-colors group-hover:bg-primary/30 group-focus-visible:bg-primary/30 group-active:bg-primary/50" />
       </div>
-      <div className="flex items-center gap-3 mb-xl px-2 min-w-0">
+      <div className="flex items-center gap-3 mb-xl px-sm min-w-0">
         {/* U8: brand mark `cognitive` (filled) — a knowledge-graph knot reads as
             "connected intelligence" and nods to Shannon's information theory. */}
         <div className="w-9 h-9 rounded-xl bg-primary flex items-center justify-center text-on-primary shadow-lg shadow-primary/30 shrink-0">
           <span className="material-symbols-outlined" style={{fontVariationSettings: "'FILL' 1"}}>cognitive</span>
         </div>
         <div className="min-w-0">
-          <h1 className="font-headline-md text-[18px] font-bold text-on-surface leading-tight truncate">Shannon</h1>
-          <p className="font-body-sm text-[11px] text-on-surface-variant leading-none truncate">
+          <h1 className="font-headline-md text-body-lg font-bold text-on-surface leading-tight truncate">Shannon</h1>
+          <p className="font-body-sm text-label-xs text-on-surface-variant leading-none truncate">
             {intl.formatMessage({ id: 'nav.tagline' })}
           </p>
         </div>
@@ -253,11 +253,11 @@ export const Sidebar = memo(function Sidebar({ mobile, open = true }: { mobile?:
       {/* P2-⑩ (ZCode delta): "New" is a split button — chat stays the
           primary action, goal/routine creation is one click away instead of
           a detour through the Tasks page. */}
-      <div className="mb-xs w-full flex gap-1">
+      <div className="mb-xs w-full flex gap-xs">
         <Button
           aria-label={intl.formatMessage({ id: 'nav.newChat.aria' })}
           title={`${intl.formatMessage({ id: 'nav.newChat' })} · ${mod}N`}
-          className="flex-1 min-w-0 py-2.5 px-3 bg-primary text-on-primary rounded-xl font-bold flex items-center justify-center gap-2 hover:shadow-lg hover:shadow-primary/30 active:scale-95 transition-all"
+          className="flex-1 min-w-0 py-2.5 px-3 bg-primary text-on-primary rounded-xl font-bold flex items-center justify-center gap-sm hover:shadow-lg hover:shadow-primary/30 active:scale-95 transition-all"
           // B1-13 (review P1-8): align with Mod+N — creation must also LAND
           // on /chat. From /settings the old create-only behavior looked
           // like a dead button.
@@ -272,7 +272,7 @@ export const Sidebar = memo(function Sidebar({ mobile, open = true }: { mobile?:
             aria-label={intl.formatMessage({ id: 'nav.new.more.aria' })}
             title={intl.formatMessage({ id: 'nav.new.more.aria' })}
             aria-haspopup="menu"
-            className="h-full px-2 rounded-xl border-outline-variant/30 bg-surface-container-lowest/60 text-on-surface-variant hover:bg-surface-container-low hover:text-primary transition-all"
+            className="h-full px-sm rounded-xl border-outline-variant/30 bg-surface-container-lowest/60 text-on-surface-variant hover:bg-surface-container-low hover:text-primary transition-all"
             onClick={() => setNewMenuOpen(v => !v)}
           >
             <span className="material-symbols-outlined icon-md" aria-hidden="true">unfold_more</span>
@@ -294,7 +294,7 @@ export const Sidebar = memo(function Sidebar({ mobile, open = true }: { mobile?:
         variant="ghost"
         aria-label={intl.formatMessage({ id: 'sidebar.worktree.new.aria' })}
         title={intl.formatMessage({ id: 'sidebar.worktree.new.title' })}
-        className="mb-xs w-full py-2 px-3 text-on-surface-variant hover:text-primary rounded-lg font-label-md text-[13px] flex items-center justify-center gap-1.5 hover:bg-surface-container-low transition-all min-w-0"
+        className="mb-xs w-full py-sm px-3 text-on-surface-variant hover:text-primary rounded-lg font-label-md text-label-sm flex items-center justify-center gap-1.5 hover:bg-surface-container-low transition-all min-w-0"
         onClick={createSessionInWorktree}
       >
         <span className="material-symbols-outlined icon-sm shrink-0">account_tree</span>
@@ -305,12 +305,12 @@ export const Sidebar = memo(function Sidebar({ mobile, open = true }: { mobile?:
       {/* Batch B4 (ZCode 顶部动作区): 搜索 opens the command palette and
           自动化 shortcuts to the tasks page — the two highest-frequency
           detours, one click each, with their shortcuts in the tooltip. */}
-      <div className="mb-xs w-full flex gap-1">
+      <div className="mb-xs w-full flex gap-xs">
         <Button
           variant="ghost"
           aria-label={`${intl.formatMessage({ id: 'nav.search' })} · ${mod}K`}
           title={`${intl.formatMessage({ id: 'nav.search' })} · ${mod}K`}
-          className="flex-1 min-w-0 py-2 px-2 text-on-surface-variant hover:text-primary rounded-lg font-label-md text-[13px] flex items-center justify-center gap-1.5 hover:bg-surface-container-low transition-all"
+          className="flex-1 min-w-0 py-sm px-sm text-on-surface-variant hover:text-primary rounded-lg font-label-md text-label-sm flex items-center justify-center gap-1.5 hover:bg-surface-container-low transition-all"
           onClick={() => window.dispatchEvent(new Event('shannon:toggle-palette'))}
         >
           <span className="material-symbols-outlined icon-sm shrink-0">search</span>
@@ -320,7 +320,7 @@ export const Sidebar = memo(function Sidebar({ mobile, open = true }: { mobile?:
           variant="ghost"
           aria-label={`${intl.formatMessage({ id: 'nav.automation' })} · ${mod}2`}
           title={`${intl.formatMessage({ id: 'nav.automation' })} · ${mod}2`}
-          className="flex-1 min-w-0 py-2 px-2 text-on-surface-variant hover:text-primary rounded-lg font-label-md text-[13px] flex items-center justify-center gap-1.5 hover:bg-surface-container-low transition-all"
+          className="flex-1 min-w-0 py-sm px-sm text-on-surface-variant hover:text-primary rounded-lg font-label-md text-label-sm flex items-center justify-center gap-1.5 hover:bg-surface-container-low transition-all"
           onClick={() => { navigate('/tasks'); handleNavClick() }}
         >
           <span className="material-symbols-outlined icon-sm shrink-0">event_repeat</span>
@@ -338,7 +338,7 @@ export const Sidebar = memo(function Sidebar({ mobile, open = true }: { mobile?:
           active list. */}
       <div className="flex-1 min-h-0 mb-lg">
         {sessions.length === 0 && catalogLoading ? (
-          <div className="px-2 py-3 space-y-2" data-testid="sidebar-sessions-skeleton" aria-hidden="true">
+          <div className="px-sm py-3 space-y-2" data-testid="sidebar-sessions-skeleton" aria-hidden="true">
             {[0, 1, 2].map(i => (
               <div key={i} className="h-8 rounded-lg bg-surface-container animate-pulse" />
             ))}
@@ -382,7 +382,7 @@ export const Sidebar = memo(function Sidebar({ mobile, open = true }: { mobile?:
               titleId="nav.triage.aria"
               onNavigate={handleNavClick}
               trail={inboxStats.pending > 0 ? (
-                <span className="bg-error text-on-error text-[11px] font-bold px-1.5 py-0.5 rounded-full shrink-0">
+                <span className="bg-error text-on-error text-label-xs font-bold px-1.5 py-0.5 rounded-full shrink-0">
                   {inboxStats.pending}
                 </span>
               ) : undefined}
@@ -408,14 +408,14 @@ export const Sidebar = memo(function Sidebar({ mobile, open = true }: { mobile?:
             variant="ghost"
             aria-label={intl.formatMessage({ id: 'sidebar.model.badge.aria' }, { model: status.model, provider: status.provider })}
             title={intl.formatMessage({ id: 'sidebar.model.badge.aria' }, { model: status.model, provider: status.provider })}
-            className="w-full justify-between gap-3 px-3 py-2 rounded-lg font-label-md text-[12px] text-on-surface-variant hover:bg-surface-container-low hover:text-primary cursor-pointer transition-all h-auto min-w-0 whitespace-nowrap"
+            className="w-full justify-between gap-3 px-3 py-sm rounded-lg font-label-md text-label-sm text-on-surface-variant hover:bg-surface-container-low hover:text-primary cursor-pointer transition-all h-auto min-w-0 whitespace-nowrap"
             onClick={() => { navigate('/settings/models'); handleNavClick() }}
           >
-            <span className="flex items-center gap-2 min-w-0">
-              <span className="material-symbols-outlined text-[16px] text-secondary shrink-0" aria-hidden="true">deployed_code</span>
+            <span className="flex items-center gap-sm min-w-0">
+              <span className="material-symbols-outlined icon-sm text-secondary shrink-0" aria-hidden="true">deployed_code</span>
               <span className="truncate">{status.model}</span>
             </span>
-            <span className="text-[10px] uppercase tracking-wider text-on-surface-variant shrink-0">
+            <span className="text-label-2xs uppercase tracking-wider text-on-surface-variant shrink-0">
               {status.provider}
             </span>
           </Button>
@@ -423,18 +423,18 @@ export const Sidebar = memo(function Sidebar({ mobile, open = true }: { mobile?:
         <Button
           variant="ghost"
           onClick={toggleMode}
-          className="w-full justify-between gap-3 px-3 py-2 rounded-lg font-label-md text-[12px] text-on-surface-variant hover:bg-surface-container-low hover:text-primary cursor-pointer transition-all h-auto min-w-0 whitespace-nowrap"
+          className="w-full justify-between gap-3 px-3 py-sm rounded-lg font-label-md text-label-sm text-on-surface-variant hover:bg-surface-container-low hover:text-primary cursor-pointer transition-all h-auto min-w-0 whitespace-nowrap"
           aria-label={intl.formatMessage({ id: mode === 'simple' ? 'nav.simpleMode.aria' : 'nav.devMode.aria' })}
           aria-pressed={mode === 'dev'}
           title={intl.formatMessage({ id: mode === 'simple' ? 'nav.simpleMode.title' : 'nav.devMode.title' })}
         >
-          <div className="flex items-center gap-2 min-w-0">
-            <span className="material-symbols-outlined text-[18px] shrink-0">{mode === 'simple' ? 'tune' : 'dashboard_customize'}</span>
+          <div className="flex items-center gap-sm min-w-0">
+            <span className="material-symbols-outlined icon-md shrink-0">{mode === 'simple' ? 'tune' : 'dashboard_customize'}</span>
             <span className="truncate">
               {intl.formatMessage({ id: mode === 'simple' ? 'nav.modeLabel.simple' : 'nav.modeLabel.dev' })}
             </span>
           </div>
-          <span className="text-[10px] uppercase tracking-wider text-on-surface-variant shrink-0">
+          <span className="text-label-2xs uppercase tracking-wider text-on-surface-variant shrink-0">
             {intl.formatMessage({ id: mode === 'simple' ? 'nav.simpleMode.badge' : 'nav.devMode.badge' })}
           </span>
         </Button>

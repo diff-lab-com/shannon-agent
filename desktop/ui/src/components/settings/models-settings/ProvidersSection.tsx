@@ -140,7 +140,7 @@ export function ProvidersSection({
   }
 
   return (
-    <section className="bg-surface-container-lowest border border-outline-variant/30 rounded-xl p-lg shadow-sm">
+    <section className="bg-surface-container-lowest border border-outline-variant/30 rounded-xl p-lg shadow-e1">
       <div className="flex items-center justify-between mb-md">
         <div>
           <h3 className="font-headline-md text-on-surface">{t('settings.models.providers.title')}</h3>
@@ -150,7 +150,7 @@ export function ProvidersSection({
           className="px-md py-sm bg-primary text-on-primary font-label-md rounded-lg hover:bg-primary/90 transition-colors flex items-center gap-sm whitespace-nowrap cursor-pointer"
           onClick={() => { setEditing(null); setModalOpen(true) }}
         >
-          <span className="material-symbols-outlined text-[18px]">add</span>
+          <span className="material-symbols-outlined icon-md">add</span>
           {t('settings.models.providers.add')}
         </Button>
       </div>
@@ -164,12 +164,12 @@ export function ProvidersSection({
         >
           {testAllRunning ? (
             <>
-              <Spinner className="text-[18px]" />
+              <Spinner className="text-body-lg" />
               {t('settings.models.providers.testAllInProgress')}
             </>
           ) : (
             <>
-              <span className="material-symbols-outlined text-[18px]">cable</span>
+              <span className="material-symbols-outlined icon-md">cable</span>
               {t('settings.models.providers.testAll')}
             </>
           )}

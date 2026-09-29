@@ -85,13 +85,15 @@ export function ArtifactZoomBar({ zoom, zoomIn, zoomOut, reset, className }: Art
     <div
       role="group"
       aria-label={t('chat.dock.zoom.aria')}
+      // G1: solid — this bar floats INSIDE the glass RightDock; a second
+      // (nested) backdrop-filter there would stack blur cost for no visual gain.
       className={
-        'flex items-center gap-[2px] px-xs py-[2px] rounded-lg bg-surface-container/90 border border-outline-variant/15 backdrop-blur-sm ' +
+        'flex items-center gap-[2px] px-xs py-[2px] rounded-lg bg-surface-container border border-outline-variant/15 ' +
         (className ?? '')
       }
     >
       <button type="button" className={BTN} onClick={zoomOut} aria-label={t('chat.dock.zoom.out')} title={t('chat.dock.zoom.out')}>
-        <span className="material-symbols-outlined text-[16px]" aria-hidden="true">zoom_out</span>
+        <span className="material-symbols-outlined icon-sm" aria-hidden="true">zoom_out</span>
       </button>
       <button
         type="button"
@@ -103,7 +105,7 @@ export function ArtifactZoomBar({ zoom, zoomIn, zoomOut, reset, className }: Art
         {Math.round(zoom * 100)}%
       </button>
       <button type="button" className={BTN} onClick={zoomIn} aria-label={t('chat.dock.zoom.in')} title={t('chat.dock.zoom.in')}>
-        <span className="material-symbols-outlined text-[16px]" aria-hidden="true">zoom_in</span>
+        <span className="material-symbols-outlined icon-sm" aria-hidden="true">zoom_in</span>
       </button>
     </div>
   )

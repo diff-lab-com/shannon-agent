@@ -67,7 +67,7 @@ export default function DependsOnEditor({ routine, routines, onUpdated }: Depend
 
   if (candidates.length === 0) {
     return (
-      <div className="rounded-xl border border-outline-variant/20 bg-surface-container-lowest/60 px-md py-sm text-on-surface-variant font-label-md text-[13px]">
+      <div className="rounded-xl border border-outline-variant/20 bg-surface-container-lowest/60 px-md py-sm text-on-surface-variant font-label-md text-label-sm">
         {t('tasks.dependsOnEditor.empty')}
       </div>
     )
@@ -91,8 +91,8 @@ export default function DependsOnEditor({ routine, routines, onUpdated }: Depend
                 aria-label={intl.formatMessage({ id: 'tasks.dependsOnEditor.dependsOnAria' }, { name: r.name })}
               />
               <div className="flex-1 min-w-0">
-                <div className="font-label-md text-[13px] text-on-surface truncate">{r.name}</div>
-                <div className="font-label-sm text-[11px] text-on-surface-variant uppercase tracking-wider">
+                <div className="font-label-md text-label-sm text-on-surface truncate">{r.name}</div>
+                <div className="font-label-sm text-label-xs text-on-surface-variant uppercase tracking-wider">
                   {r.trigger_type}
                 </div>
               </div>
@@ -108,7 +108,7 @@ export default function DependsOnEditor({ routine, routines, onUpdated }: Depend
           disabled={!dirty || saving}
           aria-label={t('tasks.dependsOnEditor.saveAria')}
         >
-          <span className="material-symbols-outlined text-[18px]">save</span>
+          <span className="material-symbols-outlined icon-md">save</span>
           {saving ? t('tasks.dependsOnEditor.saving') : t('tasks.dependsOnEditor.save')}
         </Button>
         <Button
@@ -122,7 +122,7 @@ export default function DependsOnEditor({ routine, routines, onUpdated }: Depend
           {t('tasks.dependsOnEditor.reset')}
         </Button>
         {selected.size > 0 && (
-          <span className="ml-auto font-label-sm text-[12px] text-on-surface-variant">
+          <span className="ml-auto font-label-sm text-label-sm text-on-surface-variant">
             {intl.formatMessage({ id: 'tasks.dependsOnEditor.selectedCount' }, { count: selected.size })}
           </span>
         )}

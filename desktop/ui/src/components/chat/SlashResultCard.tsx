@@ -165,7 +165,7 @@ export default function SlashResultCard({ result, onDismiss }: SlashResultCardPr
     >
       <div className="flex items-start justify-between gap-sm">
         <h4 className="font-label-md font-bold text-on-surface-variant flex items-center gap-xs">
-          <span className="material-symbols-outlined text-[16px]">
+          <span className="material-symbols-outlined icon-sm">
             {result.kind === 'context' ? 'data_usage'
               : result.kind === 'cost' ? 'payments'
               : result.kind === 'diff' ? 'difference'

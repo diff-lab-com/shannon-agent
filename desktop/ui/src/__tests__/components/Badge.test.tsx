@@ -17,7 +17,7 @@ describe('Badge', () => {
 
   it('applies size sm classes', () => {
     const { container } = render(<Badge size="sm">x</Badge>)
-    expect(container.querySelector('[data-slot="badge"]')!.className).toContain('text-[10px]')
+    expect(container.querySelector('[data-slot="badge"]')!.className).toContain('text-label-2xs')
   })
 
   it('defaults to neutral variant', () => {

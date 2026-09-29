@@ -29,7 +29,7 @@ export function MessageAvatar({ from, icon = 'smart_toy', className = '' }: Mess
   const bg = from === 'user' ? 'bg-primary' : 'bg-primary-container'
   const fg = from === 'user' ? 'text-on-primary' : 'text-on-primary-container'
   return (
-    <div className={cn('h-10 w-10 rounded-full', bg, fg, 'flex items-center justify-center shrink-0 shadow-md', className)}>
+    <div className={cn('h-10 w-10 rounded-full', bg, fg, 'flex items-center justify-center shrink-0 shadow-e2', className)}>
       <span className="material-symbols-outlined" aria-hidden="true">{icon}</span>
     </div>
   )

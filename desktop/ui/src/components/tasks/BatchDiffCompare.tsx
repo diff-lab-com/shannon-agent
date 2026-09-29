@@ -38,7 +38,7 @@ export function DiffPatchView({ patch, className }: { patch: string; className?:
   return (
     <pre
       className={cn(
-        'font-mono text-[11px] leading-[1.5] whitespace-pre overflow-x-auto p-sm rounded-lg bg-surface-container-lowest border border-outline-variant/20',
+        'font-mono text-label-xs leading-[1.5] whitespace-pre overflow-x-auto p-sm rounded-lg bg-surface-container-lowest border border-outline-variant/20',
         className,
       )}
       data-testid="batch-diff-patch"
@@ -107,8 +107,8 @@ function BranchColumn({ batchId, branch, canAdopt, adopted, onAdopt }: BranchCol
           </p>
         </div>
         {adopted ? (
-          <span className="font-label-xs font-bold text-success shrink-0 flex items-center gap-1">
-            <span className="material-symbols-outlined text-[14px]" aria-hidden="true">
+          <span className="font-label-xs font-bold text-success shrink-0 flex items-center gap-xs">
+            <span className="material-symbols-outlined icon-sm" aria-hidden="true">
               call_merge
             </span>
             {t('batch.compare.adopted')}
@@ -218,7 +218,7 @@ export default function BatchDiffCompare({ run, onClose, onAdopt }: BatchDiffCom
                 aria-checked={selected.has(branch.index)}
                 onClick={() => toggle(branch.index)}
                 className={cn(
-                  'px-sm py-1 rounded-lg border font-label-xs cursor-pointer transition-colors',
+                  'px-sm py-xs rounded-lg border font-label-xs cursor-pointer transition-colors',
                   selected.has(branch.index)
                     ? 'bg-primary/10 text-primary border-primary/30'
                     : 'bg-surface-container-low text-on-surface-variant border-outline-variant/30',

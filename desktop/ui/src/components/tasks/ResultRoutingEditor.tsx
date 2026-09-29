@@ -73,7 +73,7 @@ export default function ResultRoutingEditor({ value, onChange }: ResultRoutingEd
   return (
     <div className="flex flex-col gap-sm">
       <div className="font-label-md text-on-surface-variant">{t('tasks.resultRoutingEditor.title')}</div>
-      <div className="font-label-sm text-[11px] text-on-surface-variant">
+      <div className="font-label-sm text-label-xs text-on-surface-variant">
         {t('tasks.resultRoutingEditor.description')}
       </div>
 
@@ -89,7 +89,7 @@ export default function ResultRoutingEditor({ value, onChange }: ResultRoutingEd
                 key={entry}
                 className="flex items-center gap-sm bg-surface-container-low/60 rounded-md px-sm py-xs border border-outline-variant/20"
               >
-                <span className="material-symbols-outlined text-[14px] text-on-surface-variant">{opt?.icon ?? 'circle'}</span>
+                <span className="material-symbols-outlined icon-sm text-on-surface-variant">{opt?.icon ?? 'circle'}</span>
                 <span className="font-label-md text-on-surface flex-1 truncate">
                   {kind === 'email' ? `${kind}: ${target}` : t(`tasks.resultRouting.kind.${kind}`)}
                 </span>
@@ -98,17 +98,17 @@ export default function ResultRoutingEditor({ value, onChange }: ResultRoutingEd
                   size="icon-xs"
                   type="button"
                   aria-label={intl.formatMessage({ id: 'tasks.resultRoutingEditor.removeAria' }, { entry })}
-                  className="text-on-surface-variant hover:text-error p-xs rounded"
+                  className="text-on-surface-variant hover:text-error p-xs rounded-sm"
                   onClick={() => removeChannel(entry)}
                 >
-                  <span className="material-symbols-outlined text-[14px]">close</span>
+                  <span className="material-symbols-outlined icon-sm">close</span>
                 </Button>
               </li>
             )
           })}
         </ul>
       ) : (
-        <p className="font-label-sm text-[11px] text-on-surface-variant italic">{t('tasks.resultRoutingEditor.noChannels')}</p>
+        <p className="font-label-sm text-label-xs text-on-surface-variant italic">{t('tasks.resultRoutingEditor.noChannels')}</p>
       )}
 
       <div className="flex flex-col md:flex-row gap-xs">

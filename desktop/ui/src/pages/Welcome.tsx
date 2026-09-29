@@ -182,19 +182,19 @@ export default function Welcome() {
           button — looked like an empty header. A two-line tagline + intro
           paragraph gives first-run users a reason to slow down and pick
           a meaningful starting point (not just "Skip →"). */}
-      <header className="flex flex-col gap-lg px-xl pt-xl pb-md max-w-3xl mx-auto w-full">
+      <header className="flex flex-col gap-lg px-xl pt-xl pb-md max-w-narrow mx-auto w-full">
         <div className="flex items-center justify-between">
           <div className="flex items-center gap-sm">
-            <span className="material-symbols-outlined text-primary text-[28px]">auto_awesome</span>
+            <span className="material-symbols-outlined text-primary icon-xl">auto_awesome</span>
             <GradientText
               text={intl.formatMessage({ id: 'app.name' })}
-              className="font-headline-md text-[24px]"
+              className="font-headline-md text-headline-md"
             />
           </div>
           <Button
             variant="ghost"
             onClick={finish}
-            className="font-label-md text-on-surface-variant hover:text-primary cursor-pointer focus-visible:outline focus-visible:outline-2 focus-visible:outline-primary rounded px-xs"
+            className="font-label-md text-on-surface-variant hover:text-primary cursor-pointer focus-visible:outline focus-visible:outline-2 focus-visible:outline-primary rounded-sm px-xs"
             aria-label={intl.formatMessage({ id: 'welcome.skipAria' })}
           >
             {intl.formatMessage({ id: 'welcome.skip' })}

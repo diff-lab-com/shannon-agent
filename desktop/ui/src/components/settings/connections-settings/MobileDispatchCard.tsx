@@ -239,6 +239,9 @@ export function MobileDispatchCard({ config, procState, onConfigChange }: Mobile
 
           {pairToken && !tokenExpired && (
             <div className="flex flex-col items-center gap-sm" data-testid="mobile-qr">
+              {/* bg-white is intentional: QR decoders need maximum luminance
+                  contrast on the quiet zone — a themed surface can drop scan
+                  reliability in dark mode. Not a design-token miss. */}
               <img
                 src={pairToken.qrDataUrl}
                 alt={t('settings.connections.mobile.qrAlt')}

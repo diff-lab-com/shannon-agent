@@ -100,7 +100,7 @@ function MessageHeader({
       {isBranch && (
         <>
           <span aria-hidden="true">·</span>
-          <span className="material-symbols-outlined text-[12px]" aria-hidden="true">fork_right</span>
+          <span className="material-symbols-outlined icon-xs" aria-hidden="true">fork_right</span>
           <span>{t('chat.message.branch')}</span>
         </>
       )}
@@ -135,15 +135,18 @@ function AttachmentPreview({ attachment }: { attachment: FileAttachment }) {
           <img
             src={convertFileSrc(attachment.path)}
             alt={attachment.name}
-            className="h-8 w-8 rounded object-cover shrink-0"
+            className="h-8 w-8 rounded-sm object-cover shrink-0"
             onError={(e) => { (e.currentTarget as HTMLImageElement).style.display = 'none' }}
           />
         ) : (
-          <span className="material-symbols-outlined text-[18px]">description</span>
+          <span className="material-symbols-outlined icon-md">description</span>
         )}
         <span className="font-label-sm max-w-[160px] truncate">{attachment.name}</span>
       </Button>
 
+      {/* Lightbox scrim panel — the dark fill must beat the glass-overlay
+          base the Modal now carries, hence the important modifier (custom
+          glass utilities sort after core utilities in the layer). */}
       <Modal
         open={open}
         onClose={() => setOpen(false)}
@@ -151,18 +154,18 @@ function AttachmentPreview({ attachment }: { attachment: FileAttachment }) {
         showCloseButton={false}
         title={attachment.name}
         closeLabel={t('chat.message.attachment.close')}
-        className="bg-black/70 backdrop-blur-sm p-lg"
+        className="!bg-black/70 backdrop-blur-sm p-lg"
       >
         {isImage ? (
           <img
             src={convertFileSrc(attachment.path)}
             alt={attachment.name}
-            className="max-h-[90vh] max-w-[90vw] object-contain rounded-lg shadow-2xl"
+            className="max-h-[90vh] max-w-[90vw] object-contain rounded-lg shadow-e5"
             onClick={(e) => e.stopPropagation()}
           />
         ) : (
           <div
-            className="bg-surface-container-lowest rounded-xl p-lg shadow-2xl max-w-md"
+            className="bg-surface-container-lowest rounded-xl p-lg shadow-e5 max-w-md"
             onClick={(e) => e.stopPropagation()}
           >
             <div className="flex items-center gap-sm mb-md">
@@ -177,7 +180,7 @@ function AttachmentPreview({ attachment }: { attachment: FileAttachment }) {
                 openWithDefaultApp(attachment.path).catch(err => toastError(t('link.open.failed'), err))
               }}
             >
-              <span className="material-symbols-outlined text-[18px] mr-xs">open_in_new</span>
+              <span className="material-symbols-outlined icon-md mr-xs">open_in_new</span>
               {t('chat.message.attachment.openExternally')}
             </Button>
           </div>
@@ -300,7 +303,7 @@ export const MessageBubble = memo(function MessageBubble({ message, messageIndex
               ))}
             </div>
           )}
-          <div className="bg-primary-fixed text-on-primary-fixed px-lg py-md rounded-2xl rounded-tr-none shadow-sm">
+          <div className="bg-primary-fixed text-on-primary-fixed px-lg py-md rounded-2xl rounded-tr-none shadow-e1">
             <p className="font-body-md whitespace-pre-wrap">
               {/* P2-1 (§4): user messages stay plain text, but pasted URLs
                   become clickable — still no block-level markdown, so the
@@ -314,7 +317,7 @@ export const MessageBubble = memo(function MessageBubble({ message, messageIndex
               onClick={handleCopy}
               className="flex items-center gap-xs px-sm py-xs rounded-lg hover:bg-surface-container text-on-surface-variant transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/30"
             >
-              <span className="material-symbols-outlined text-[18px]" aria-hidden="true">content_copy</span>
+              <span className="material-symbols-outlined icon-md" aria-hidden="true">content_copy</span>
             </Button>
             {/* B1 §4-8: composer-based edit — same rewindability gate as the
                 rewind button (a checkpoint must exist at or after this turn,
@@ -327,7 +330,7 @@ export const MessageBubble = memo(function MessageBubble({ message, messageIndex
                 className="flex items-center gap-xs px-sm py-xs rounded-lg hover:bg-surface-container text-on-surface-variant transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/30"
                 title={t('chat.message.edit.button')}
               >
-                <span className="material-symbols-outlined text-[18px]" aria-hidden="true">edit</span>
+                <span className="material-symbols-outlined icon-md" aria-hidden="true">edit</span>
               </Button>
             )}
             <Button
@@ -337,7 +340,7 @@ export const MessageBubble = memo(function MessageBubble({ message, messageIndex
               className="flex items-center gap-xs px-sm py-xs rounded-lg hover:bg-surface-container text-on-surface-variant transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/30"
               title={t('chat.message.branch.button')}
             >
-              <span className="material-symbols-outlined text-[18px]" aria-hidden="true">
+              <span className="material-symbols-outlined icon-md" aria-hidden="true">
                 {isBranching ? 'hourglass_empty' : 'fork_right'}
               </span>
             </Button>
@@ -349,7 +352,7 @@ export const MessageBubble = memo(function MessageBubble({ message, messageIndex
                 className="flex items-center gap-xs px-sm py-xs rounded-lg hover:bg-surface-container text-on-surface-variant transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/30"
                 title={t('chat.message.rewind.button')}
               >
-                <span className="material-symbols-outlined text-[18px]" aria-hidden="true">
+                <span className="material-symbols-outlined icon-md" aria-hidden="true">
                   {isRewinding ? 'hourglass_empty' : 'undo'}
                 </span>
               </Button>
@@ -391,8 +394,8 @@ export const MessageBubble = memo(function MessageBubble({ message, messageIndex
       <MessageAvatar from="assistant" icon={isTool ? 'build' : 'smart_toy'} />
       <MessageContent className="space-y-md flex-1">
         <MessageHeader role={isTool ? 'tool' : 'assistant'} timestamp={message.timestamp} />
-        <div className="bg-surface-container-lowest px-lg py-md rounded-2xl rounded-tl-none border border-outline-variant/20 shadow-sm min-w-0 overflow-x-auto">
-          <ResponseStream className="font-body-md text-on-surface prose prose-sm max-w-none prose-p:my-1 prose-pre:bg-surface-container prose-pre:p-md prose-pre:rounded-lg prose-code:text-primary prose-code:before:content-[''] prose-code:after:content-['']">
+        <div className="bg-surface-container-lowest px-lg py-md rounded-2xl rounded-tl-none border border-outline-variant/20 shadow-e1 min-w-0 overflow-x-auto">
+          <ResponseStream className="font-body-md text-on-surface prose prose-sm max-w-none prose-p:my-xs prose-pre:bg-surface-container prose-pre:p-md prose-pre:rounded-lg prose-code:text-primary prose-code:before:content-[''] prose-code:after:content-['']">
             <Markdown>{message.content}</Markdown>
           </ResponseStream>
           {detectedArtifacts.length > 0 && (
@@ -477,15 +480,15 @@ export const MessageBubble = memo(function MessageBubble({ message, messageIndex
         </div>
         <ActionToolbar className="opacity-0 group-hover:opacity-100 group-focus-within:opacity-100 focus-within:opacity-100 transition-opacity">
           <Button aria-label={t('chat.message.copy.aria')} onClick={handleCopy} className="flex items-center gap-xs px-sm py-xs rounded-lg hover:bg-surface-container text-on-surface-variant transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/30">
-            <span className="material-symbols-outlined text-[18px]" aria-hidden="true">content_copy</span>
+            <span className="material-symbols-outlined icon-md" aria-hidden="true">content_copy</span>
           </Button>
           {!isTool && (
             <>
               <Button aria-label={t('chat.message.like.aria')} aria-pressed={myRating === 'up'} onClick={() => toggleFeedback('up')} className={cn('flex items-center gap-xs px-sm py-xs rounded-lg hover:bg-surface-container transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/30', myRating === 'up' ? 'text-primary' : 'text-on-surface-variant')}>
-                <span className="material-symbols-outlined text-[18px]" aria-hidden="true">{myRating === 'up' ? 'thumb_up' : 'thumb_up_off_alt'}</span>
+                <span className="material-symbols-outlined icon-md" aria-hidden="true">{myRating === 'up' ? 'thumb_up' : 'thumb_up_off_alt'}</span>
               </Button>
               <Button aria-label={t('chat.message.dislike.aria')} aria-pressed={myRating === 'down'} onClick={() => toggleFeedback('down')} className={cn('flex items-center gap-xs px-sm py-xs rounded-lg hover:bg-surface-container transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/30', myRating === 'down' ? 'text-error' : 'text-on-surface-variant')}>
-                <span className="material-symbols-outlined text-[18px]" aria-hidden="true">{myRating === 'down' ? 'thumb_down' : 'thumb_down_off_alt'}</span>
+                <span className="material-symbols-outlined icon-md" aria-hidden="true">{myRating === 'down' ? 'thumb_down' : 'thumb_down_off_alt'}</span>
               </Button>
               {/* B1 §4-7: true regenerate renders ONLY on the last assistant
                   message (presence of the `regenerate` payload), and only
@@ -497,7 +500,7 @@ export const MessageBubble = memo(function MessageBubble({ message, messageIndex
                   disabled={isQuerying || isRegenerating}
                   className="flex items-center gap-xs px-sm py-xs rounded-lg hover:bg-surface-container text-on-surface-variant transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/30 disabled:opacity-40"
                 >
-                  <span className="material-symbols-outlined text-[18px]" aria-hidden="true">
+                  <span className="material-symbols-outlined icon-md" aria-hidden="true">
                     {isRegenerating ? 'hourglass_empty' : 'refresh'}
                   </span>
                 </Button>
@@ -509,7 +512,7 @@ export const MessageBubble = memo(function MessageBubble({ message, messageIndex
                 className="flex items-center gap-xs px-sm py-xs rounded-lg hover:bg-surface-container text-on-surface-variant transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/30"
                 title={t('chat.message.branch.button')}
               >
-                <span className="material-symbols-outlined text-[18px]" aria-hidden="true">
+                <span className="material-symbols-outlined icon-md" aria-hidden="true">
                   {isBranching ? 'hourglass_empty' : 'fork_right'}
                 </span>
               </Button>
@@ -521,7 +524,7 @@ export const MessageBubble = memo(function MessageBubble({ message, messageIndex
               onClick={() => setReportOpen(true)}
               className="flex items-center gap-xs px-sm py-xs rounded-lg hover:bg-surface-container text-on-surface-variant transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/30"
             >
-              <span className="material-symbols-outlined text-[18px]" aria-hidden="true">article</span>
+              <span className="material-symbols-outlined icon-md" aria-hidden="true">article</span>
               <span className="text-label-sm">{t('chat.message.report')}</span>
             </Button>
           )}
@@ -700,9 +703,9 @@ export const ToolCallDisplay = memo(function ToolCallDisplay({ toolCall, onViewD
             role="img"
             aria-label={t('chat.tool.sandboxDenied')}
             title={t('chat.tool.sandboxDenied')}
-            className="flex items-center gap-[2px] shrink-0 px-xs py-[1px] rounded bg-error/10 text-error font-label-xs"
+            className="flex items-center gap-[2px] shrink-0 px-xs py-[1px] rounded-sm bg-error/10 text-error font-label-xs"
           >
-            <span className="material-symbols-outlined text-[12px]" aria-hidden="true">shield</span>
+            <span className="material-symbols-outlined icon-xs" aria-hidden="true">shield</span>
             {t('chat.tool.sandboxDenied')}
           </span>
         )}
@@ -742,7 +745,7 @@ export const ToolCallDisplay = memo(function ToolCallDisplay({ toolCall, onViewD
             toolCall.is_error ? (
               <pre className="text-body-sm p-sm rounded-lg overflow-x-auto max-h-[200px] bg-error/5 text-error">{toolCall.result}</pre>
             ) : (
-              <div className="text-body-sm p-sm rounded-lg overflow-x-auto max-h-[200px] bg-surface-container text-on-surface-variant prose prose-sm max-w-none prose-pre:bg-surface-container-lowest prose-pre:p-sm prose-pre:rounded prose-code:text-primary prose-code:before:content-[''] prose-code:after:content-['']">
+              <div className="text-body-sm p-sm rounded-lg overflow-x-auto max-h-[200px] bg-surface-container text-on-surface-variant prose prose-sm max-w-none prose-pre:bg-surface-container-lowest prose-pre:p-sm prose-pre:rounded-sm prose-code:text-primary prose-code:before:content-[''] prose-code:after:content-['']">
                 <Markdown>{toolCall.result}</Markdown>
               </div>
             )
@@ -839,7 +842,7 @@ function ToolInputPrimary({ label, body }: { label: string; body: string }) {
       <div className="flex items-center gap-sm px-sm py-xs border-t border-outline-variant/15">
         <button
           type="button"
-          className="font-label-xs text-primary hover:underline focus-visible:outline focus-visible:outline-2 focus-visible:outline-primary/40 rounded px-1 -mx-1"
+          className="font-label-xs text-primary hover:underline focus-visible:outline focus-visible:outline-2 focus-visible:outline-primary/40 rounded-sm px-xs -mx-xs"
           onClick={() => setShowAll(v => !v)}
         >
           {showAll ? intl.formatMessage({ id: 'chat.tool.input.collapse' }) : intl.formatMessage({ id: 'chat.tool.input.expand' })}
@@ -897,13 +900,13 @@ export const SubagentBlock = memo(function SubagentBlock({ toolCall }: { toolCal
           {t('chat.subagent.title', { name: name || t('chat.subagent.unnamed') })}
         </span>
         {model && (
-          <span className="font-mono text-label-xs text-on-surface-variant px-xs py-[1px] rounded bg-surface-container shrink-0" aria-hidden="true">{model}</span>
+          <span className="font-mono text-label-xs text-on-surface-variant px-xs py-[1px] rounded-sm bg-surface-container shrink-0" aria-hidden="true">{model}</span>
         )}
         {team && (
-          <span className="font-label-xs text-on-surface-variant px-xs py-[1px] rounded bg-surface-container shrink-0" aria-hidden="true">{team}</span>
+          <span className="font-label-xs text-on-surface-variant px-xs py-[1px] rounded-sm bg-surface-container shrink-0" aria-hidden="true">{team}</span>
         )}
         {toolCall.status === 'running' && subagentLive && (
-          <span className="font-mono text-label-xs px-xs py-[1px] rounded bg-primary/10 text-primary shrink-0 flex items-center gap-1" aria-live="polite">
+          <span className="font-mono text-label-xs px-xs py-[1px] rounded-sm bg-primary/10 text-primary shrink-0 flex items-center gap-xs" aria-live="polite">
             <span className="size-1.5 rounded-full bg-primary animate-pulse" aria-hidden="true" />
             {t('chat.subagent.registryId', { id: subagentLive.agentId })}
           </span>

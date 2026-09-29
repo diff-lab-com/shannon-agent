@@ -74,6 +74,12 @@ export function Layout() {
   // media-query state below. Earlier code rendered two full trees, and the
   // duplicate was responsible for a cascade of CI flakes (Playwright strict-
   // mode duplicate hits, hit-test shadow on the mobile copy).
+  // Why a mobile branch at all: Tauri minWidth=800 (desktop/tauri.conf.json)
+  // keeps the desktop window above the 768px breakpoint, so ≤767px is
+  // unreachable there — this drawer form is retained only for
+  // e2e/mobile-drawer.spec.ts (pins a 375×812 viewport and asserts the
+  // drawer/scrim contract) and pure-browser `pnpm dev`. Don't delete it
+  // without migrating that spec first.
   const [mobileMode, setMobileMode] = useState(false);
   useEffect(() => {
     const mq = window.matchMedia('(max-width: 767px)')
@@ -163,8 +169,15 @@ export function Layout() {
 
   return (
     <SidebarContext.Provider value={{ open: sidebarOpen, toggle: toggleSidebar, close: closeSidebar, reportWidth: setSidebarWidth }}>
-      <div className="bg-background text-on-surface font-body-md overflow-hidden min-h-screen">
-        {/* Mobile sidebar overlay */}
+      {/* G2: no bg here on purpose — the root div is transparent so the
+          body's --material-base (L0 window base) shows around the sidebar
+          rail, while <main> paints --color-surface for the content tier. */}
+      <div className="text-on-surface font-body-md overflow-hidden min-h-screen">
+        {/* Mobile sidebar overlay — scrim (遮罩), not a glass material: the
+            direct backdrop-blur here is intentional and guard-exempt.
+            Reachable only when the ≤767px media query above matches (Tauri
+            minWidth=800 never gets there) — kept for
+            e2e/mobile-drawer.spec.ts, which asserts this scrim's open/close. */}
         {sidebarOpen && (
           <div className="fixed inset-0 z-scrim bg-black/40 backdrop-blur-sm md:hidden" onClick={closeSidebar} />
         )}
@@ -179,7 +192,9 @@ export function Layout() {
         <Header />
         <CommandPalette open={paletteOpen} onClose={() => setPaletteOpen(false)} />
         <KeyboardShortcutsHelp open={helpOpen} onClose={() => setHelpOpen(false)} />
-        <main role="main" className="pt-16 pb-footer h-screen flex flex-col relative" style={{ marginLeft: 'var(--sidebar-w)', width: 'calc(100% - var(--sidebar-w))' }}>
+        {/* G2: the content tier paints surface over the body's L0 base so
+            cards (container-lowest) keep their layer against it. */}
+        <main role="main" className="pt-16 pb-footer h-screen flex flex-col relative bg-surface" style={{ marginLeft: 'var(--sidebar-w)', width: 'calc(100% - var(--sidebar-w))' }}>
           {initError && (
             <Banner tone="error" className="items-center shrink-0">
               <span className="material-symbols-outlined icon-md text-error shrink-0" aria-hidden="true">error</span>
@@ -199,7 +214,10 @@ export function Layout() {
             </Suspense>
           </ErrorBoundary>
         </main>
-        <footer role="contentinfo" className="fixed bottom-0 right-0 h-footer bg-surface-container-low/90 backdrop-blur-sm border-t border-outline-variant/20 flex items-center justify-between px-lg z-header" style={{ left: 'var(--sidebar-w)' }}>
+        {/* G1: footer is persistent chrome — glass-surface (was a hand-rolled
+            bg/90+backdrop-blur-sm; the utility adds the inset highlight,
+            hairline and contain:paint). */}
+        <footer role="contentinfo" className="glass-surface fixed bottom-0 right-0 h-footer flex items-center justify-between px-lg z-header" style={{ left: 'var(--sidebar-w)' }}>
           {/* U2: footer carries runtime + usage only — tokens/cost, active
               tasks, version. Provider/model live in the Header and the
               session count is visible in the sidebar rail (U1). U9: the

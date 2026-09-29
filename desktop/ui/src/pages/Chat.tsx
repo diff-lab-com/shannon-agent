@@ -567,7 +567,7 @@ export default function Chat() {
             title={t('nav.quickFix')}
             panel={QuickFixPanel}
             size="2xl"
-            modalClassName="max-w-3xl max-h-[85vh] overflow-y-auto"
+            modalClassName="max-w-narrow max-h-[85vh] overflow-y-auto"
             bodyClassName="p-lg"
           />
 

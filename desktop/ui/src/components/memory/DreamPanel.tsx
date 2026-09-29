@@ -272,28 +272,28 @@ export default function DreamPanel() {
     <section
       aria-label={t('memory.dream.title')}
       data-testid="dream-panel"
-      className="bg-surface-container-lowest p-lg rounded-xl shadow-sm border border-outline-variant/30 mb-xl"
+      className="bg-surface-container-lowest p-lg rounded-xl shadow-e1 border border-outline-variant/30 mb-xl"
     >
       <div className="flex items-center gap-md mb-sm">
-        <div className="p-2 bg-primary/10 rounded-lg text-primary flex items-center justify-center shrink-0">
+        <div className="p-sm bg-primary/10 rounded-lg text-primary flex items-center justify-center shrink-0">
           <span className="material-symbols-outlined">bedtime</span>
         </div>
         <h2 className="font-headline-sm text-on-surface">{t('memory.dream.title')}</h2>
         <Button
           onClick={() => void handleRun()}
           disabled={running}
-          className="ml-auto gap-xs px-md py-sm text-[14px] font-bold shrink-0"
+          className="ml-auto gap-xs px-md py-sm text-body-sm font-bold shrink-0"
           aria-label={t('memory.dream.run.aria')}
         >
-          {running ? <Spinner className="text-[18px]" /> : <span className="material-symbols-outlined text-[18px]">auto_awesome</span>}
+          {running ? <Spinner className="icon-md" /> : <span className="material-symbols-outlined icon-md">auto_awesome</span>}
           {running ? t('memory.dream.running') : t('memory.dream.run')}
         </Button>
         <Button
           variant="ghost"
           onClick={() => void openReport()}
-          className="gap-xs px-sm py-sm text-[14px] text-on-surface-variant hover:text-primary shrink-0"
+          className="gap-xs px-sm py-sm text-body-sm text-on-surface-variant hover:text-primary shrink-0"
         >
-          <span className="material-symbols-outlined text-[18px]">description</span>
+          <span className="material-symbols-outlined icon-md">description</span>
           {t('memory.dream.viewReport')}
         </Button>
       </div>
@@ -301,7 +301,7 @@ export default function DreamPanel() {
 
       {lastRun ? (
         <div className="flex items-center gap-xs px-md py-sm rounded-lg bg-surface-container-low border border-outline-variant/30 text-label-sm text-on-surface-variant mb-md">
-          <span className="material-symbols-outlined text-[16px] text-primary" aria-hidden="true">insights</span>
+          <span className="material-symbols-outlined icon-sm text-primary" aria-hidden="true">insights</span>
           {t('memory.dream.stats', {
             scanned: lastRun.scanned_sessions,
             merge: lastRun.merge_proposed,
@@ -312,13 +312,13 @@ export default function DreamPanel() {
         </div>
       ) : coldStartLine ? (
         <div className="flex items-center gap-xs px-md py-sm rounded-lg bg-surface-container-low border border-outline-variant/30 text-label-sm text-on-surface-variant mb-md">
-          <span className="material-symbols-outlined text-[16px] text-primary" aria-hidden="true">history</span>
+          <span className="material-symbols-outlined icon-sm text-primary" aria-hidden="true">history</span>
           {coldStartLine}
         </div>
       ) : null}
 
       <div className="flex items-center gap-sm mb-xs">
-        <h3 className="font-label-md text-[14px] font-bold text-on-surface">{t('memory.dream.proposals.title')}</h3>
+        <h3 className="font-label-md text-body-sm font-bold text-on-surface">{t('memory.dream.proposals.title')}</h3>
         {proposals.length > 0 && (
           <span className="px-sm py-[2px] rounded-full bg-primary-container text-on-primary-container text-label-xs font-bold">
             {t('memory.dream.proposals.count', { count: proposals.length })}
@@ -348,8 +348,8 @@ export default function DreamPanel() {
                 className="rounded-xl border border-outline-variant/30 bg-surface-container-low p-md"
               >
                 <div className="flex items-center gap-sm flex-wrap mb-sm">
-                  <span className="font-label-md text-[14px] font-bold text-on-surface break-all">{proposal.project}</span>
-                  <span className="font-label-sm text-[12px] text-on-surface-variant">
+                  <span className="font-label-md text-body-sm font-bold text-on-surface break-all">{proposal.project}</span>
+                  <span className="font-label-sm text-label-sm text-on-surface-variant">
                     {/* B6-36: was `toLocaleString([], …)` — followed the OS
                         locale; format in the app locale instead. */}
                     {intl.formatDate(proposal.created_at, { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' })}
@@ -361,7 +361,7 @@ export default function DreamPanel() {
                       const meta = KIND_META[kind]
                       return (
                         <span key={kind} className={cn('inline-flex items-center gap-[2px] px-sm py-[2px] rounded-full text-label-xs font-bold', meta.badgeClass)}>
-                          <span className="material-symbols-outlined text-[13px]" aria-hidden="true">{meta.icon}</span>
+                          <span className="material-symbols-outlined icon-xs" aria-hidden="true">{meta.icon}</span>
                           {t(meta.labelKey)} {n}
                         </span>
                       )
@@ -390,7 +390,7 @@ export default function DreamPanel() {
                           </span>
                           {action.kind === 'add' && action.add_entry && (
                             <span className="block text-label-sm text-on-surface-variant mt-[2px]">
-                              <span className="px-xs py-[1px] mr-xs rounded bg-tertiary-container text-on-tertiary-container text-[11px] font-bold uppercase">
+                              <span className="px-xs py-[1px] mr-xs rounded-sm bg-tertiary-container text-on-tertiary-container text-label-xs font-bold uppercase">
                                 {action.add_entry.category}
                               </span>
                               {action.add_entry.content}
@@ -412,9 +412,9 @@ export default function DreamPanel() {
                     size="sm"
                     disabled={selectedIds.size === 0 || busy}
                     onClick={() => void handleApply(proposal)}
-                    className="gap-xs px-md py-sm text-[13px] font-bold"
+                    className="gap-xs px-md py-sm text-label-sm font-bold"
                   >
-                    {busy ? <Spinner className="text-[16px]" /> : <span className="material-symbols-outlined text-[16px]">check</span>}
+                    {busy ? <Spinner className="icon-sm" /> : <span className="material-symbols-outlined icon-sm">check</span>}
                     {t('memory.dream.apply')}
                   </Button>
                   <Button
@@ -422,12 +422,12 @@ export default function DreamPanel() {
                     variant="ghost"
                     disabled={busy}
                     onClick={() => setPendingDiscardId(proposal.id)}
-                    className="gap-xs px-sm py-sm text-[13px] text-on-surface-variant hover:text-error"
+                    className="gap-xs px-sm py-sm text-label-sm text-on-surface-variant hover:text-error"
                   >
-                    <span className="material-symbols-outlined text-[16px]">delete_sweep</span>
+                    <span className="material-symbols-outlined icon-sm">delete_sweep</span>
                     {t('memory.dream.discard')}
                   </Button>
-                  <span className="ml-auto font-label-sm text-[12px] text-on-surface-variant">
+                  <span className="ml-auto font-label-sm text-label-sm text-on-surface-variant">
                     {t('memory.dream.selectedCount', { count: selectedIds.size, total: proposal.actions.length })}
                   </span>
                 </div>

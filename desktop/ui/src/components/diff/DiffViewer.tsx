@@ -189,7 +189,7 @@ export default function DiffViewer({ diff, decisions, onToggleHunk, currentHunkI
     <div ref={rootRef} className={cn("rounded-xl border border-outline-variant/30 overflow-hidden bg-surface-container-lowest", className)}>
       <header className="flex items-center justify-between px-md py-sm border-b border-outline-variant/30 bg-surface-container-low">
         <div className="flex items-center gap-md min-w-0">
-          <span className="material-symbols-outlined text-[18px] text-on-surface-variant">difference</span>
+          <span className="material-symbols-outlined icon-md text-on-surface-variant">difference</span>
           <span className="font-label-md text-on-surface truncate">{diff.file_name || intl.formatMessage({ id: 'diff.viewer.untitled' })}</span>
           {diff.language ? (
             <span className="font-label-sm text-on-surface-variant uppercase tracking-wider">{diff.language}</span>
@@ -200,7 +200,7 @@ export default function DiffViewer({ diff, decisions, onToggleHunk, currentHunkI
           <span className="font-label-sm text-error">−{counts.del}</span>
         </div>
       </header>
-      <div className="overflow-x-auto font-mono text-[12px] leading-[1.5]">
+      <div className="overflow-x-auto font-mono text-label-sm leading-[1.5]">
         {hunks.length === 0 ? (
           <p className="px-md py-lg text-body-sm text-on-surface-variant italic">{intl.formatMessage({ id: 'diff.viewer.noChanges' })}</p>
         ) : (

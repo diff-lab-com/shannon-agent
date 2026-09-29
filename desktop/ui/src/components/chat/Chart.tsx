@@ -248,7 +248,7 @@ function PieChart({ spec }: PieChartProps) {
 function ChartError({ message }: { message: string }) {
   return (
     <div className="my-md p-sm rounded-lg bg-error-container/20 border border-error/30 text-label-sm text-error">
-      <span className="material-symbols-outlined text-[14px] align-middle mr-xs">error</span>
+      <span className="material-symbols-outlined icon-sm align-middle mr-xs">error</span>
       {message}
     </div>
   )

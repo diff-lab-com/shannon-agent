@@ -1,5 +1,6 @@
 :root {
-  /* Shannon brand — Dark theme */
+  /* Shannon brand — Dark theme (accent unified with desktop brand purple,
+     desktop/ui/src/styles/tokens.css --color-primary #6b38d4) */
   --bg: #0f0f14;
   --bg-soft: #181820;
   --paper: #1a1a24;
@@ -9,13 +10,22 @@
   --faint: #5e5e72;
   --line: #2a2a38;
   --line-2: #363648;
-  --accent: #f97316;
-  --accent-soft: rgba(249, 115, 22, 0.1);
-  --accent-hover: #fb923c;
+  --accent: #6b38d4;                            /* brand purple — fills, buttons, gradients */
+  --accent-hover: #8455ef;                      /* brighter fill on hover (desktop primary-container) */
+  --accent-bright: #a78bfa;                     /* accent text / links on dark bg (7.0:1) */
+  --accent-bright-hover: #c4b5fd;               /* link hover */
+  --accent-soft: rgba(139, 92, 246, 0.14);      /* accent tint — chips, active nav bg */
   --ok: #34d399;
   --code-bg: #11111b;
   --code-text: #cdd6f4;
-  --brand-gradient: linear-gradient(135deg, #f97316, #ce412b 50%, #7c3aed);
+  --brand-gradient: linear-gradient(135deg, #8b5cf6, #6b38d4 50%, #4f46e5);
+
+  /* Liquid Glass — website recipe (marketing tier, desktop glass-surface aligned) */
+  --glass-bg: rgba(26, 26, 36, 0.55);           /* semi-transparent panel (--paper @ 55%) */
+  --glass-border: rgba(255, 255, 255, 0.08);    /* 1px hairline */
+  --glass-blur: blur(20px) saturate(1.4);
+  --glass-highlight: inset 0 1px 0 rgba(255, 255, 255, 0.06);  /* top inner sheen */
+  --glass-shadow: 0 8px 32px rgba(0, 0, 0, 0.35);
 
   /* Typography */
   --font-sans: 'Inter', system-ui, -apple-system, sans-serif;
@@ -32,7 +42,7 @@
 
   /* Shadows */
   --shadow-card: 0 2px 4px rgba(0, 0, 0, 0.3), 0 32px 64px -30px rgba(0, 0, 0, 0.5);
-  --shadow-terminal: 0 40px 80px -44px rgba(0, 0, 0, 0.6), 0 0 0 1px rgba(255, 255, 255, 0.04);
+  --shadow-terminal: inset 0 1px 0 rgba(255, 255, 255, 0.06), 0 40px 80px -44px rgba(0, 0, 0, 0.6);
   --shadow-button: 0 1px 2px rgba(0, 0, 0, 0.2);
 }
 
@@ -53,8 +63,8 @@ body {
   line-height: 1.65;
 }
 
-a { color: var(--accent); text-decoration: none; }
-a:hover { color: var(--accent-hover); }
+a { color: var(--accent-bright); text-decoration: none; }
+a:hover { color: var(--accent-bright-hover); }
 
 h1, h2, h3 { color: var(--ink); line-height: 1.2; }
 
@@ -116,6 +126,7 @@ code, pre {
 .btn-primary:hover {
   transform: translateY(-1px);
   background: var(--accent-hover);
+  box-shadow: 0 8px 24px rgba(107, 56, 212, 0.35);
 }
 
 .btn-secondary {
@@ -137,6 +148,63 @@ code, pre {
 .btn-secondary:hover {
   transform: translateY(-1px);
   border-color: var(--line-2);
+}
+
+/* Liquid Glass surfaces — shared with the desktop Liquid Glass material
+   system (desktop/ui/src/index.css glass-surface), loosened for marketing
+   use: no per-screen backdrop budget, but keep it to hero + major cards. */
+.glass-card {
+  background: var(--glass-bg);
+  -webkit-backdrop-filter: var(--glass-blur);
+  backdrop-filter: var(--glass-blur);
+  border: 1px solid var(--glass-border);
+  box-shadow: var(--glass-highlight), var(--glass-shadow);
+}
+
+/* CTA banner: same glass with a brand-purple wash. */
+.glass-cta {
+  background:
+    linear-gradient(150deg, rgba(124, 58, 237, 0.22), rgba(79, 70, 229, 0.1) 55%, rgba(124, 58, 237, 0.05)),
+    var(--glass-bg);
+}
+
+/* Terminal window: darker code-panel tint instead of paper tint. */
+.glass-terminal {
+  background: rgba(17, 17, 27, 0.68);
+}
+
+/* Hero ambient brand glow (paint only — no backdrop cost). */
+.hero-glow {
+  position: relative;
+  isolation: isolate;
+}
+
+.hero-glow::before {
+  content: '';
+  position: absolute;
+  z-index: -1;
+  top: -120px;
+  left: 0;
+  right: 0;
+  height: 480px;
+  background: radial-gradient(560px 300px at 50% 10%, rgba(124, 58, 237, 0.16), rgba(79, 70, 229, 0.06) 55%, transparent 75%);
+  pointer-events: none;
+}
+
+/* Graceful degradation, mirroring desktop: engines without backdrop-filter
+   and users who disable transparency both get solid surfaces. */
+@supports not (backdrop-filter: blur(1px)) {
+  .glass-card, .glass-cta, .glass-terminal { background: var(--paper); }
+  .glass-terminal { background: var(--code-bg); }
+}
+
+@media (prefers-reduced-transparency: reduce) {
+  .glass-card, .glass-cta { background: var(--paper); }
+  .glass-terminal { background: var(--code-bg); }
+  .glass-card, .glass-cta, .glass-terminal {
+    -webkit-backdrop-filter: none;
+    backdrop-filter: none;
+  }
 }
 
 /* Responsive */

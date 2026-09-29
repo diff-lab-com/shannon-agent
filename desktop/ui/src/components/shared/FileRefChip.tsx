@@ -133,7 +133,7 @@ export function FileRefChip({ raw, className }: FileRefChipProps) {
           className,
         )}
       >
-        <span className="material-symbols-outlined text-[12px] leading-none translate-y-[1px]" aria-hidden="true">
+        <span className="material-symbols-outlined icon-xs leading-none translate-y-[1px]" aria-hidden="true">
           description
         </span>
         {raw}
@@ -144,22 +144,22 @@ export function FileRefChip({ raw, className }: FileRefChipProps) {
           role="menu"
           aria-label={t('link.fileRef.menu.aria', { path: baseName })}
           onKeyDown={(e) => handleMenuKeyDown(e, menuRef.current, () => setMenu(null))}
-          className="fixed z-modal min-w-44 rounded-lg border border-outline-variant/20 bg-surface-container-high p-xs shadow-lg animate-in fade-in zoom-in-95"
+          className="fixed z-modal min-w-44 rounded-lg border border-outline-variant/20 bg-surface-container-high p-xs shadow-e3 animate-in fade-in zoom-in-95"
           style={{
             left: Math.max(4, Math.min(menu.x, window.innerWidth - 200)),
             top: Math.max(4, Math.min(menu.y, window.innerHeight - 130)),
           }}
         >
           <button type="button" role="menuitem" className={itemClass} onClick={() => { setMenu(null); handleOpen() }}>
-            <span className="material-symbols-outlined text-[16px]" aria-hidden="true">chat_info</span>
+            <span className="material-symbols-outlined icon-sm" aria-hidden="true">chat_info</span>
             {t('link.fileRef.menu.open')}
           </button>
           <button type="button" role="menuitem" className={itemClass} onClick={() => { setMenu(null); withPathErrors(revealInFolder) }}>
-            <span className="material-symbols-outlined text-[16px]" aria-hidden="true">folder_open</span>
+            <span className="material-symbols-outlined icon-sm" aria-hidden="true">folder_open</span>
             {t('link.fileRef.menu.reveal')}
           </button>
           <button type="button" role="menuitem" className={itemClass} onClick={() => { setMenu(null); withPathErrors(openWithDefaultApp) }}>
-            <span className="material-symbols-outlined text-[16px]" aria-hidden="true">open_in_new</span>
+            <span className="material-symbols-outlined icon-sm" aria-hidden="true">open_in_new</span>
             {t('link.fileRef.menu.system')}
           </button>
         </div>

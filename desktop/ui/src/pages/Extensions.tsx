@@ -68,14 +68,16 @@ export default function Extensions() {
           narrow widths the rows stack so neither squeezes the other. The
           shared search input is owned here and piped to the active tab via
           outlet context. */}
-      <div className="flex flex-col gap-sm w-full px-lg py-sm border-b border-outline-variant/20 bg-surface/80 backdrop-blur-md sticky top-0 z-subheader">
+      {/* G1: sticky page toolbar = persistent chrome → glass-surface (was a
+          hand-rolled bg-surface/80+backdrop-blur-md). */}
+      <div className="glass-surface flex flex-col gap-sm w-full px-lg py-sm sticky top-0 z-subheader">
         {/* Batch E1 (ZCode 市场大页形态): the hub carries its own H1 — the
             marketplace is a destination, not a settings subpage. */}
-        <h1 className="font-headline-lg text-[24px] font-bold text-on-surface leading-tight">{t('extensions.hub.title')}</h1>
+        <h1 className="font-headline-lg text-headline-md font-bold text-on-surface leading-tight">{t('extensions.hub.title')}</h1>
         <div className="flex items-center justify-between gap-md flex-wrap min-w-0">
           <p className="font-body-sm text-on-surface-variant truncate">{t('extensions.hub.subtitle')}</p>
           <div className="flex items-center bg-surface-container-lowest/50 rounded-full px-md py-xs border border-outline-variant/30 w-full max-w-[360px] focus-within:border-primary/40 focus-within:ring-2 focus-within:ring-primary/20 transition-colors shrink-0">
-            <span className="material-symbols-outlined text-outline mr-sm text-[18px]">search</span>
+            <span className="material-symbols-outlined text-outline mr-sm icon-md">search</span>
             <Input
               className="bg-transparent border-none outline-none focus:ring-0 text-label-md font-label-md w-full"
               placeholder={t(searchPlaceholderKey)}
@@ -107,7 +109,7 @@ export default function Extensions() {
                 {({ isActive }) => (
                   <>
                     <span
-                      className="material-symbols-outlined text-[18px]"
+                      className="material-symbols-outlined icon-md"
                       style={{ fontVariationSettings: isActive ? "'FILL' 1" : undefined }}
                       aria-hidden="true"
                     >
@@ -118,7 +120,7 @@ export default function Extensions() {
                       <span
                         aria-hidden="true"
                         title={intl.formatMessage({ id: 'extensions.pending.tabBadge.aria' }, { count: pendingCount })}
-                        className="ml-1 px-[7px] min-w-[18px] h-[18px] inline-flex items-center justify-center rounded-full bg-primary text-on-primary font-label-sm text-[11px] font-bold leading-none"
+                        className="ml-xs px-[7px] min-w-[18px] h-[18px] inline-flex items-center justify-center rounded-full bg-primary text-on-primary font-label-sm text-label-xs font-bold leading-none"
                       >
                         {pendingCount}
                       </span>
@@ -145,9 +147,9 @@ export default function Extensions() {
               }`}
               onClick={() => setManageOpen(v => !v)}
             >
-              <span className="material-symbols-outlined text-[18px]" aria-hidden="true">tune</span>
+              <span className="material-symbols-outlined icon-md" aria-hidden="true">tune</span>
               <span>{t('extensions.manage')}</span>
-              <span className="material-symbols-outlined text-[16px] transition-transform" style={{ transform: manageOpen ? 'rotate(180deg)' : undefined }} aria-hidden="true">expand_more</span>
+              <span className="material-symbols-outlined icon-sm transition-transform" style={{ transform: manageOpen ? 'rotate(180deg)' : undefined }} aria-hidden="true">expand_more</span>
             </Button>
             {manageOpen && (
               <DropdownMenu

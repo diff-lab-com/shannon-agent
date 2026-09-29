@@ -44,7 +44,7 @@ export function ArtifactChip({ artifact }: ArtifactChipProps) {
       )}
     >
       <span className="w-8 h-8 rounded-lg bg-primary/15 flex items-center justify-center shrink-0" aria-hidden="true">
-        <span className="material-symbols-outlined text-[18px] text-primary">{artifactIcon(artifact.kind)}</span>
+        <span className="material-symbols-outlined icon-md text-primary">{artifactIcon(artifact.kind)}</span>
       </span>
       <span className="flex-1 min-w-0">
         <span className="block font-label-md text-on-surface truncate">{artifactDisplayTitle(artifact, t)}</span>
@@ -55,7 +55,7 @@ export function ArtifactChip({ artifact }: ArtifactChipProps) {
         aria-hidden="true"
       >
         {t('chat.artifact.open')}
-        <span className="material-symbols-outlined text-[13px]">open_in_new</span>
+        <span className="material-symbols-outlined icon-xs">open_in_new</span>
       </span>
     </button>
   )

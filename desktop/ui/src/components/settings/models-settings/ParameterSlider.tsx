@@ -53,7 +53,7 @@ export function ParameterSlider({ label, value, min, max, step, formatValue, low
     <div>
       <div className="flex justify-between items-center mb-sm">
         <label htmlFor={inputId} className="font-label-md text-on-surface-variant">{label}</label>
-        <span className="font-label-sm text-primary bg-primary-container/20 px-sm py-xs rounded">{display}</span>
+        <span className="font-label-sm text-primary bg-primary-container/20 px-sm py-xs rounded-sm">{display}</span>
       </div>
       <input
         id={inputId}

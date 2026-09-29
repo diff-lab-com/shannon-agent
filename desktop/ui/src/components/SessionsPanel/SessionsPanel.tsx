@@ -125,7 +125,7 @@ export function SessionsPanel({ className, titleId }: SessionsPanelProps) {
       )}
       aria-label={title}
     >
-      <div className="flex items-center justify-between px-3 py-2 border-b border-on-surface-variant/20">
+      <div className="flex items-center justify-between px-3 py-sm border-b border-on-surface-variant/20">
         <h2 className="font-label-md text-sm font-semibold text-on-surface">{title}</h2>
         <Button
           variant="ghost"
@@ -147,7 +147,7 @@ export function SessionsPanel({ className, titleId }: SessionsPanelProps) {
         {ordered.length === 0 ? (
           <EmptyState />
         ) : (
-          <ul className="flex flex-col gap-1 p-2">
+          <ul className="flex flex-col gap-xs p-sm">
             {ordered.map((s) => (
               <li key={s.id}>
                 <SessionRow
@@ -182,7 +182,7 @@ function SessionRow({ id, title, messageCount, active, onSelect }: SessionRowPro
       onClick={() => onSelect(id)}
       aria-current={active ? 'page' : undefined}
       className={cn(
-        'h-auto justify-start items-start whitespace-normal text-left rounded-md px-2 py-2',
+        'h-auto justify-start items-start whitespace-normal text-left rounded-md px-sm py-sm',
         active
           ? 'bg-primary/15 text-primary font-bold hover:bg-primary/15'
           : 'hover:bg-on-surface-variant/10 text-on-surface',
@@ -214,8 +214,8 @@ function SessionRow({ id, title, messageCount, active, onSelect }: SessionRowPro
 function EmptyState() {
   const intl = useIntl()
   return (
-    <div className="flex flex-col items-center justify-center px-4 py-8 text-center">
-      <Icon name="chat" size="md" className="text-on-surface-variant/50 mb-2" />
+    <div className="flex flex-col items-center justify-center px-md py-xl text-center">
+      <Icon name="chat" size="md" className="text-on-surface-variant/50 mb-sm" />
       <p className="text-sm text-on-surface-variant">
         {intl.formatMessage({
           id: 'sessionsPanel.empty',

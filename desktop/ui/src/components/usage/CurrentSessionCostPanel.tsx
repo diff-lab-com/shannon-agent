@@ -89,7 +89,7 @@ export default function CurrentSessionCostPanel() {
         {t('usage.ctx.explainer')}
       </p>
       <div className="flex items-baseline gap-sm mb-sm">
-        <span className="font-headline-md text-[24px] font-bold text-on-surface">
+        <span className="font-headline-md text-headline-md font-bold text-on-surface">
           {intl.formatNumber(breakdown.totalTokens)}
         </span>
         <span className="font-body-sm text-on-surface-variant">

@@ -1030,7 +1030,7 @@ export function SessionsSection({ sessions, sessionActivity, goalRunsBySession =
       if (editingProject === group.key) {
         return (
           <Input
-            className="w-full text-label-sm py-1 px-2 rounded-lg bg-surface-container-lowest border-primary/40"
+            className="w-full text-label-sm py-xs px-sm rounded-lg bg-surface-container-lowest border-primary/40"
             value={projectNameDraft}
             onChange={e => setProjectNameDraft(e.target.value)}
             onBlur={() => commitProjectRename(group.key)}
@@ -1111,22 +1111,22 @@ export function SessionsSection({ sessions, sessionActivity, goalRunsBySession =
               setEditingProject(group.key)
               setProjectNameDraft(group.label)
             }}
-            className="flex-1 min-w-0 flex items-center gap-1.5 px-3 pt-2 pb-1 font-label-sm text-[11px] font-bold text-on-surface-variant/90 hover:text-primary transition-colors cursor-pointer"
+            className="flex-1 min-w-0 flex items-center gap-1.5 px-3 pt-sm pb-xs font-label-sm text-label-xs font-bold text-on-surface-variant/90 hover:text-primary transition-colors cursor-pointer"
           >
             <span
-              className="material-symbols-outlined text-[14px] shrink-0 transition-transform duration-150"
+              className="material-symbols-outlined icon-sm shrink-0 transition-transform duration-(--duration-normal)"
               style={{ transform: isFolded ? 'rotate(-90deg)' : 'rotate(0deg)' }}
               aria-hidden="true"
             >
               expand_more
             </span>
-            <span className="material-symbols-outlined text-[13px] shrink-0" aria-hidden="true">{group.icon}</span>
+            <span className="material-symbols-outlined icon-xs shrink-0" aria-hidden="true">{group.icon}</span>
             {group.color && (
               <span className="w-2 h-2 rounded-full shrink-0" style={{ backgroundColor: group.color }} aria-hidden="true" />
             )}
             <span className="truncate flex-1 min-w-0 text-left">{group.label}</span>
             {itemCount > 0 && (
-              <span className="font-mono text-[10px] tabular-nums text-on-surface-variant/70 shrink-0">{itemCount}</span>
+              <span className="font-mono text-label-2xs tabular-nums text-on-surface-variant/70 shrink-0">{itemCount}</span>
             )}
           </button>
           <div className="relative shrink-0">
@@ -1136,7 +1136,7 @@ export function SessionsSection({ sessions, sessionActivity, goalRunsBySession =
               aria-label={t('sidebar.projects.menu.aria', { name: group.label })}
               data-testid={`project-menu-trigger-${group.key}`}
               className={cn(
-                'rounded hover:bg-surface-container text-on-surface-variant hover:text-primary transition-opacity focus-visible:ring-2 focus-visible:ring-primary/30 focus-visible:outline-none',
+                'rounded-sm hover:bg-surface-container text-on-surface-variant hover:text-primary transition-opacity focus-visible:ring-2 focus-visible:ring-primary/30 focus-visible:outline-none',
                 isMenuOpen || colorPickerFor === group.key ? 'opacity-100' : 'opacity-0 group-hover:opacity-100 focus-visible:opacity-100',
               )}
               onClick={e => {
@@ -1145,7 +1145,7 @@ export function SessionsSection({ sessions, sessionActivity, goalRunsBySession =
                 setProjectMenuFor(isMenuOpen ? null : group.key)
               }}
             >
-              <span className="material-symbols-outlined text-[16px]">more_horiz</span>
+              <span className="material-symbols-outlined icon-sm">more_horiz</span>
             </Button>
             {isMenuOpen && (
               <DropdownMenu
@@ -1163,7 +1163,7 @@ export function SessionsSection({ sessions, sessionActivity, goalRunsBySession =
                 aria-label={t('sidebar.projects.color')}
                 data-testid="project-color-popover"
                 onKeyDown={onColorPopoverKeyDown}
-                className="absolute right-0 top-full mt-sm z-modal flex items-center gap-1.5 px-sm py-sm rounded-xl border border-outline-variant/20 bg-surface-container-lowest/95 backdrop-blur-lg shadow-[var(--shadow-e3)]"
+                className="glass-overlay animate-panel-in absolute right-0 top-full mt-sm z-modal flex items-center gap-1.5 px-sm py-sm rounded-xl"
               >
                 {PROJECT_COLORS.map((color, i) => (
                   <button
@@ -1202,9 +1202,9 @@ export function SessionsSection({ sessions, sessionActivity, goalRunsBySession =
       <div
         key={`group-${group.key}`}
         role="presentation"
-        className="px-3 pt-2 pb-1 font-label-sm text-[10px] font-bold uppercase tracking-wider text-on-surface-variant/80 flex items-center gap-1.5 min-w-0"
+        className="px-3 pt-sm pb-xs font-label-sm text-label-2xs font-bold uppercase tracking-wider text-on-surface-variant/80 flex items-center gap-1.5 min-w-0"
       >
-        <span className="material-symbols-outlined text-[12px] shrink-0" aria-hidden="true">{group.icon}</span>
+        <span className="material-symbols-outlined icon-xs shrink-0" aria-hidden="true">{group.icon}</span>
         <span className="truncate min-w-0">{group.label}</span>
       </div>
     )
@@ -1241,11 +1241,11 @@ export function SessionsSection({ sessions, sessionActivity, goalRunsBySession =
         onTouchEnd={clearLongPress}
         onTouchMove={clearLongPress}
         onTouchCancel={clearLongPress}
-        className={cn('group relative flex items-center gap-1', draggedId === session.id && 'opacity-40')}
+        className={cn('group relative flex items-center gap-xs', draggedId === session.id && 'opacity-40')}
       >
         {isEditing ? (
           <Input
-            className="w-full text-label-md py-1 px-2 rounded-lg bg-surface-container-lowest border-primary/40"
+            className="w-full text-label-md py-xs px-sm rounded-lg bg-surface-container-lowest border-primary/40"
             value={editTitle}
             onChange={e => setEditTitle(e.target.value)}
             onBlur={() => commitRename(session)}
@@ -1267,7 +1267,7 @@ export function SessionsSection({ sessions, sessionActivity, goalRunsBySession =
               onClick={() => handleSwitch(session.id)}
               onKeyDown={e => handleRowKeyDown(e, session.id)}
               className={cn(
-                'flex-1 min-w-0 text-left px-3 py-2 rounded-lg font-label-md text-label-md transition-all duration-200 flex items-center gap-2 cursor-pointer select-none whitespace-nowrap',
+                'flex-1 min-w-0 text-left px-3 py-sm rounded-lg font-label-md text-label-md transition-all duration-(--duration-normal) flex items-center gap-sm cursor-pointer select-none whitespace-nowrap',
                 'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/30',
                 isActive
                   ? 'bg-primary-container text-on-primary-container font-bold'
@@ -1277,7 +1277,7 @@ export function SessionsSection({ sessions, sessionActivity, goalRunsBySession =
               {/* U5: affordance only — the grip shows on hover/focus
                   (Alt+↑/↓ or drag does the work), cutting per-row
                   visual noise. Superseded while the run dot is live. */}
-              <span className="material-symbols-outlined text-[14px] text-outline-variant shrink-0 opacity-0 transition-opacity group-hover:opacity-100 group-focus-within:opacity-100" aria-hidden="true">drag_indicator</span>
+              <span className="material-symbols-outlined icon-sm text-outline-variant shrink-0 opacity-0 transition-opacity group-hover:opacity-100 group-focus-within:opacity-100" aria-hidden="true">drag_indicator</span>
               {isRunning && (
                 <span
                   role="img"
@@ -1309,7 +1309,7 @@ export function SessionsSection({ sessions, sessionActivity, goalRunsBySession =
               {pinnedIds.has(session.id) && (
                 // U8: filled pin marks the active state; the menu
                 // action stays outlined.
-                <span className="material-symbols-outlined text-[14px] text-primary shrink-0" style={{ fontVariationSettings: "'FILL' 1" }} aria-hidden="true">push_pin</span>
+                <span className="material-symbols-outlined icon-sm text-primary shrink-0" style={{ fontVariationSettings: "'FILL' 1" }} aria-hidden="true">push_pin</span>
               )}
               {/* P2-⑥: goal-run badge — a session a goal run owns shows the
                   run's iteration progress right on the rail. */}
@@ -1327,20 +1327,20 @@ export function SessionsSection({ sessions, sessionActivity, goalRunsBySession =
                     total: goalRun.maxTurns ?? goalRun.iterations,
                   })}
                   className={cn(
-                    'flex items-center gap-[2px] shrink-0 rounded px-[3px]',
+                    'flex items-center gap-[2px] shrink-0 rounded-sm px-[3px]',
                     // E10: a stalled run (repeated no-progress strikes) gets a
                     // red badge so the user can spot it on the rail itself.
                     (goalRun.stallStrikes ?? 0) > 0 && 'bg-error/15',
                   )}
                 >
                   <span
-                    className={cn('material-symbols-outlined text-[13px]', (goalRun.stallStrikes ?? 0) > 0 ? 'text-error' : 'text-primary')}
+                    className={cn('material-symbols-outlined icon-xs', (goalRun.stallStrikes ?? 0) > 0 ? 'text-error' : 'text-primary')}
                     style={{ fontVariationSettings: goalRun.status === 'running' ? "'FILL' 1" : undefined }}
                     aria-hidden="true"
                   >
                     {(goalRun.stallStrikes ?? 0) > 0 ? 'warning' : 'flag'}
                   </span>
-                  <span className="font-mono text-[10px] tabular-nums text-on-surface" aria-hidden="true">
+                  <span className="font-mono text-label-2xs tabular-nums text-on-surface" aria-hidden="true">
                     {goalRun.iterations}/{goalRun.maxTurns ?? goalRun.iterations}
                   </span>
                 </span>
@@ -1352,7 +1352,7 @@ export function SessionsSection({ sessions, sessionActivity, goalRunsBySession =
                   time-ago on idle rows — the rail answers "which session is
                   live, how long, and when was the rest last active". */}
               {elapsed ? (
-                <span className="font-mono text-[10px] tabular-nums text-secondary shrink-0" aria-hidden="true">
+                <span className="font-mono text-label-2xs tabular-nums text-secondary shrink-0" aria-hidden="true">
                   {elapsed}
                 </span>
               ) : agoBadge ? (
@@ -1360,7 +1360,7 @@ export function SessionsSection({ sessions, sessionActivity, goalRunsBySession =
                   role="img"
                   aria-label={t('sidebar.sessions.lastActivity.aria', { time: agoBadge })}
                   title={t('sidebar.sessions.lastActivity.aria', { time: agoBadge })}
-                  className="font-mono text-[10px] tabular-nums text-on-surface-variant shrink-0"
+                  className="font-mono text-label-2xs tabular-nums text-on-surface-variant shrink-0"
                 >
                   {agoBadge}
                 </span>
@@ -1372,12 +1372,12 @@ export function SessionsSection({ sessions, sessionActivity, goalRunsBySession =
                 size="icon-xs"
                 aria-label={t('chat.session.menu.aria', { title: session.title || untitled })}
                 className={cn(
-                  'rounded hover:bg-surface-container text-on-surface-variant hover:text-primary transition-opacity focus-visible:ring-2 focus-visible:ring-primary/30 focus-visible:outline-none',
+                  'rounded-sm hover:bg-surface-container text-on-surface-variant hover:text-primary transition-opacity focus-visible:ring-2 focus-visible:ring-primary/30 focus-visible:outline-none',
                   isMenuOpen ? 'opacity-100' : 'opacity-0 group-hover:opacity-100 focus-visible:opacity-100',
                 )}
                 onClick={e => { e.stopPropagation(); setMenuFor(isMenuOpen ? null : session.id) }}
               >
-                <span className="material-symbols-outlined text-[16px]">more_horiz</span>
+                <span className="material-symbols-outlined icon-sm">more_horiz</span>
               </Button>
               {isMenuOpen && (
                 <DropdownMenu
@@ -1416,21 +1416,21 @@ export function SessionsSection({ sessions, sessionActivity, goalRunsBySession =
         data-testid={`sidebar-routine-row-${routine.id}`}
         title={routine.name}
         onClick={() => { navigate('/tasks'); closeMobile?.() }}
-        className="w-full flex items-center gap-2 px-3 py-1.5 rounded-lg font-label-md text-label-md text-on-surface-variant hover:bg-surface-container-low hover:text-primary transition-colors cursor-pointer min-w-0 select-none focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/30 whitespace-nowrap"
+        className="w-full flex items-center gap-sm px-3 py-1.5 rounded-lg font-label-md text-label-md text-on-surface-variant hover:bg-surface-container-low hover:text-primary transition-colors cursor-pointer min-w-0 select-none focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/30 whitespace-nowrap"
       >
         <span
-          className={cn('material-symbols-outlined text-[13px] shrink-0', soon ? 'text-warning' : 'text-on-surface-variant')}
+          className={cn('material-symbols-outlined icon-xs shrink-0', soon ? 'text-warning' : 'text-on-surface-variant')}
           aria-hidden="true"
         >
           schedule
         </span>
         <span className="truncate flex-1 min-w-0 text-left">{routine.name}</span>
         {soon ? (
-          <span className="font-label-xs px-1 py-[1px] rounded bg-warning/15 text-warning shrink-0" role="img" aria-label={t('sidebar.automations.soon')}>
+          <span className="font-label-xs px-xs py-[1px] rounded-sm bg-warning/15 text-warning shrink-0" role="img" aria-label={t('sidebar.automations.soon')}>
             {t('sidebar.automations.soon')}
           </span>
         ) : when ? (
-          <span className="font-mono text-[10px] tabular-nums text-on-surface-variant shrink-0" aria-hidden="true">{when}</span>
+          <span className="font-mono text-label-2xs tabular-nums text-on-surface-variant shrink-0" aria-hidden="true">{when}</span>
         ) : null}
       </button>
     )
@@ -1451,7 +1451,7 @@ export function SessionsSection({ sessions, sessionActivity, goalRunsBySession =
 
   return (
     <div className="flex flex-col h-full min-h-0">
-      <div className="flex items-center justify-between px-2 mb-xs shrink-0 gap-1 min-w-0">
+      <div className="flex items-center justify-between px-sm mb-xs shrink-0 gap-xs min-w-0">
         <span className="font-label-sm text-label-sm text-on-surface-variant uppercase tracking-wider truncate">
           {t('sidebar.sessions.title')}
         </span>
@@ -1477,13 +1477,13 @@ export function SessionsSection({ sessions, sessionActivity, goalRunsBySession =
               title={opt.label}
               onClick={() => setGroupingPersisted(opt.mode)}
               className={cn(
-                'flex items-center gap-0.5 px-1.5 py-0.5 rounded font-label-xs transition-colors cursor-pointer whitespace-nowrap',
+                'flex items-center gap-0.5 px-1.5 py-0.5 rounded-sm font-label-xs transition-colors cursor-pointer whitespace-nowrap',
                 grouping === opt.mode
-                  ? 'bg-primary text-on-primary shadow-sm'
+                  ? 'bg-primary text-on-primary shadow-e1'
                   : 'text-on-surface-variant hover:text-primary',
               )}
             >
-              <span className="material-symbols-outlined text-[12px]" aria-hidden="true">{opt.icon}</span>
+              <span className="material-symbols-outlined icon-xs" aria-hidden="true">{opt.icon}</span>
               <span className="hidden xl:inline">{opt.label}</span>
             </button>
           ))}
@@ -1495,7 +1495,7 @@ export function SessionsSection({ sessions, sessionActivity, goalRunsBySession =
         onChange={e => setQuery(e.target.value)}
         placeholder={t('sidebar.sessions.search.placeholder')}
         aria-label={t('sidebar.sessions.search.aria')}
-        className="w-full mb-xs px-2 py-1 rounded-md bg-surface-container-lowest border border-outline-variant/30 font-label-md text-label-md text-on-surface placeholder:text-on-surface-variant/70 focus-visible:border-primary focus-visible:ring-2 focus-visible:ring-primary/30 shrink-0 min-w-0"
+        className="w-full mb-xs px-sm py-xs rounded-md bg-surface-container-lowest border border-outline-variant/30 font-label-md text-label-md text-on-surface placeholder:text-on-surface-variant/70 focus-visible:border-primary focus-visible:ring-2 focus-visible:ring-primary/30 shrink-0 min-w-0"
       />
       {/* P-U1/I3: the rail's standalone 自动化 section. In project lens it
           lists ONLY unhoused routines (the housed ones nest into their
@@ -1505,10 +1505,10 @@ export function SessionsSection({ sessions, sessionActivity, goalRunsBySession =
           lens. Hidden when nothing to show. */}
       {!query.trim() && lensRoutines.length > 0 && (
         <div className="mb-xs" data-testid="sidebar-automations">
-          <div className="flex items-center gap-1.5 px-3 pt-1 pb-1 font-label-sm text-[11px] font-bold text-on-surface-variant/90 min-w-0">
-            <span className="material-symbols-outlined text-[13px] shrink-0" aria-hidden="true">event_repeat</span>
+          <div className="flex items-center gap-1.5 px-3 pt-xs pb-xs font-label-sm text-label-xs font-bold text-on-surface-variant/90 min-w-0">
+            <span className="material-symbols-outlined icon-xs shrink-0" aria-hidden="true">event_repeat</span>
             <span className="truncate flex-1 min-w-0">{t('sidebar.automations.title')}</span>
-            <span className="font-mono text-[10px] tabular-nums text-on-surface-variant shrink-0">{lensRoutines.length}</span>
+            <span className="font-mono text-label-2xs tabular-nums text-on-surface-variant shrink-0">{lensRoutines.length}</span>
           </div>
           {lensRoutines.slice(0, 3).map(r => {
             const soon = r.next_fire_at != null && r.next_fire_at - nowTick < 3600_000
@@ -1517,13 +1517,13 @@ export function SessionsSection({ sessions, sessionActivity, goalRunsBySession =
                 key={r.id}
                 type="button"
                 onClick={() => navigate('/tasks')}
-                className="w-full flex items-center gap-2 px-3 py-1.5 rounded-lg font-label-md text-label-md text-on-surface-variant hover:bg-surface-container-low hover:text-primary transition-colors cursor-pointer min-w-0"
+                className="w-full flex items-center gap-sm px-3 py-1.5 rounded-lg font-label-md text-label-md text-on-surface-variant hover:bg-surface-container-low hover:text-primary transition-colors cursor-pointer min-w-0"
                 title={r.name}
               >
-                <span className={cn('material-symbols-outlined text-[13px] shrink-0', soon ? 'text-warning' : 'text-on-surface-variant')} aria-hidden="true">schedule</span>
+                <span className={cn('material-symbols-outlined icon-xs shrink-0', soon ? 'text-warning' : 'text-on-surface-variant')} aria-hidden="true">schedule</span>
                 <span className="truncate flex-1 min-w-0 text-left">{r.name}</span>
                 {soon && (
-                  <span className="font-label-xs px-1 py-[1px] rounded bg-warning/15 text-warning shrink-0" role="img" aria-label={t('sidebar.automations.soon')}>
+                  <span className="font-label-xs px-xs py-[1px] rounded-sm bg-warning/15 text-warning shrink-0" role="img" aria-label={t('sidebar.automations.soon')}>
                     {t('sidebar.automations.soon')}
                   </span>
                 )}
@@ -1534,7 +1534,7 @@ export function SessionsSection({ sessions, sessionActivity, goalRunsBySession =
             <button
               type="button"
               onClick={() => navigate('/tasks')}
-              className="w-full px-3 py-1 text-left font-label-xs text-on-surface-variant hover:text-primary hover:underline cursor-pointer"
+              className="w-full px-3 py-xs text-left font-label-xs text-on-surface-variant hover:text-primary hover:underline cursor-pointer"
             >
               {t('sidebar.automations.more', { n: lensRoutines.length - 3 })}
             </button>
@@ -1546,18 +1546,18 @@ export function SessionsSection({ sessions, sessionActivity, goalRunsBySession =
           // 卡A 收尾: light empty hint for the active area while the rail
           // stays up for the 已归档 section (everything archived).
           <div
-            className="px-2 py-3 text-center font-label-sm text-label-sm text-on-surface-variant"
+            className="px-sm py-3 text-center font-label-sm text-label-sm text-on-surface-variant"
             data-testid="sidebar-active-empty-hint"
           >
             {t('sidebar.active.empty')}
           </div>
         ) : filtered.length === 0 ? (
-          <div className="px-2 py-3 text-center font-label-sm text-label-sm text-on-surface-variant">
+          <div className="px-sm py-3 text-center font-label-sm text-label-sm text-on-surface-variant">
             {t('sidebar.sessions.noResults')}
           </div>
         ) : groups === null ? (
           <>
-            <div className="space-y-0.5 pr-1" role="list" aria-label={t('sidebar.sessions.list.aria')}>
+            <div className="space-y-0.5 pr-xs" role="list" aria-label={t('sidebar.sessions.list.aria')}>
               {visibleSlice(filtered, 'flat').map(renderRow)}
             </div>
             {visibleSlice(filtered, 'flat').length < filtered.length && (
@@ -1568,7 +1568,7 @@ export function SessionsSection({ sessions, sessionActivity, goalRunsBySession =
             )}
           </>
         ) : (
-          <div className="space-y-0.5 pr-1" role="list" aria-label={t('sidebar.sessions.list.aria')}>
+          <div className="space-y-0.5 pr-xs" role="list" aria-label={t('sidebar.sessions.list.aria')}>
             {groups.map(group => {
               const visibleSessions = visibleSlice(group.sessions, group.key)
               return (
@@ -1589,7 +1589,7 @@ export function SessionsSection({ sessions, sessionActivity, goalRunsBySession =
                       <div
                         role="list"
                         aria-label={group.label}
-                        className="pl-4"
+                        className="pl-md"
                       >
                         {group.isEmpty ? (
                           renderProjectEmptyRow()
@@ -1642,42 +1642,42 @@ export function SessionsSection({ sessions, sessionActivity, goalRunsBySession =
             resumes it (the backend auto-unarchives). Hidden while searching
             (active results stand alone) and when nothing is archived. */}
         {!query.trim() && archivedRows.length > 0 && (
-          <div className="mt-2 border-t border-outline-variant/20 pt-1" data-testid="sidebar-archived-section">
+          <div className="mt-sm border-t border-outline-variant/20 pt-xs" data-testid="sidebar-archived-section">
             <button
               type="button"
               aria-expanded={archivedOpen}
               data-testid="sidebar-archived-toggle"
               onClick={() => setArchivedOpen(!archivedOpen)}
-              className="w-full flex items-center gap-1.5 px-3 pt-2 pb-1 font-label-sm text-[11px] font-bold text-on-surface-variant/90 hover:text-primary transition-colors min-w-0 cursor-pointer focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/30 rounded"
+              className="w-full flex items-center gap-1.5 px-3 pt-sm pb-xs font-label-sm text-label-xs font-bold text-on-surface-variant/90 hover:text-primary transition-colors min-w-0 cursor-pointer focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/30 rounded-sm"
             >
               <span
-                className="material-symbols-outlined text-[14px] shrink-0 transition-transform duration-150"
+                className="material-symbols-outlined icon-sm shrink-0 transition-transform duration-(--duration-normal)"
                 style={{ transform: archivedOpen ? 'rotate(0deg)' : 'rotate(-90deg)' }}
                 aria-hidden="true"
               >
                 expand_more
               </span>
-              <span className="material-symbols-outlined text-[13px] shrink-0" aria-hidden="true">archive</span>
+              <span className="material-symbols-outlined icon-xs shrink-0" aria-hidden="true">archive</span>
               <span className="truncate flex-1 min-w-0 text-left">{t('sidebar.sessions.archived.title')}</span>
-              <span className="font-mono text-[10px] tabular-nums text-on-surface-variant/70 shrink-0">{archivedRows.length}</span>
+              <span className="font-mono text-label-2xs tabular-nums text-on-surface-variant/70 shrink-0">{archivedRows.length}</span>
             </button>
             {archivedOpen && (
-              <div className="pl-4 space-y-0.5" role="list" aria-label={t('sidebar.sessions.archived.aria')}>
+              <div className="pl-md space-y-0.5" role="list" aria-label={t('sidebar.sessions.archived.aria')}>
                 {visibleSlice(archivedRows, 'archived').map(row => {
                   const title = row.title || untitled
                   const ago = formatRelativeTime(row.updated_at ?? undefined, nowTick, t)
                   return (
-                    <div key={row.id} role="listitem" className="group flex items-center gap-1" data-testid={`archived-row-${row.id}`}>
+                    <div key={row.id} role="listitem" className="group flex items-center gap-xs" data-testid={`archived-row-${row.id}`}>
                       <button
                         type="button"
                         title={title}
                         aria-label={t('sidebar.sessions.archived.row.aria', { title })}
                         onClick={() => handleSwitch(row.id)}
-                        className="flex-1 min-w-0 text-left px-3 py-1.5 rounded-lg font-label-md text-label-md text-on-surface-variant/80 hover:bg-surface-container-low hover:text-primary transition-colors cursor-pointer select-none flex items-center gap-2 whitespace-nowrap focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/30"
+                        className="flex-1 min-w-0 text-left px-3 py-1.5 rounded-lg font-label-md text-label-md text-on-surface-variant/80 hover:bg-surface-container-low hover:text-primary transition-colors cursor-pointer select-none flex items-center gap-sm whitespace-nowrap focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/30"
                       >
                         <span className="flex-1 truncate">{title}</span>
                         {ago && (
-                          <span className="font-mono text-[10px] tabular-nums text-on-surface-variant shrink-0" aria-hidden="true">{ago}</span>
+                          <span className="font-mono text-label-2xs tabular-nums text-on-surface-variant shrink-0" aria-hidden="true">{ago}</span>
                         )}
                       </button>
                       <Button
@@ -1687,12 +1687,12 @@ export function SessionsSection({ sessions, sessionActivity, goalRunsBySession =
                         aria-label={t('sidebar.sessions.archived.restore.aria', { title })}
                         title={t('sidebar.sessions.archived.restore')}
                         className={cn(
-                          'rounded hover:bg-surface-container text-on-surface-variant hover:text-primary transition-opacity focus-visible:ring-2 focus-visible:ring-primary/30 focus-visible:outline-none shrink-0',
+                          'rounded-sm hover:bg-surface-container text-on-surface-variant hover:text-primary transition-opacity focus-visible:ring-2 focus-visible:ring-primary/30 focus-visible:outline-none shrink-0',
                           'opacity-0 group-hover:opacity-100 focus-visible:opacity-100',
                         )}
                         onClick={() => handleRestore(row.id)}
                       >
-                        <span className="material-symbols-outlined text-[16px]">undo</span>
+                        <span className="material-symbols-outlined icon-sm">undo</span>
                       </Button>
                       {/* B4 P2-6: archived sessions finally have a way out —
                           delete_session removes the whole L0 directory
@@ -1706,12 +1706,12 @@ export function SessionsSection({ sessions, sessionActivity, goalRunsBySession =
                         aria-label={t('sidebar.sessions.archived.delete.aria', { title })}
                         title={t('sidebar.sessions.archived.delete.aria', { title })}
                         className={cn(
-                          'rounded hover:bg-error/10 text-on-surface-variant hover:text-error transition-opacity focus-visible:ring-2 focus-visible:ring-error/30 focus-visible:outline-none shrink-0',
+                          'rounded-sm hover:bg-error/10 text-on-surface-variant hover:text-error transition-opacity focus-visible:ring-2 focus-visible:ring-error/30 focus-visible:outline-none shrink-0',
                           'opacity-0 group-hover:opacity-100 focus-visible:opacity-100',
                         )}
                         onClick={() => setDeleteTarget({ id: row.id, title, permanent: true })}
                       >
-                        <span className="material-symbols-outlined text-[16px]">delete_forever</span>
+                        <span className="material-symbols-outlined icon-sm">delete_forever</span>
                       </Button>
                     </div>
                   )
@@ -1732,32 +1732,32 @@ export function SessionsSection({ sessions, sessionActivity, goalRunsBySession =
             as the live registry entry it already was). Hidden while
             searching and when nothing is archived. */}
         {!query.trim() && archivedRegistryProjects.length > 0 && (
-          <div className="mt-2 border-t border-outline-variant/20 pt-1" data-testid="sidebar-archived-projects">
+          <div className="mt-sm border-t border-outline-variant/20 pt-xs" data-testid="sidebar-archived-projects">
             <button
               type="button"
               aria-expanded={archivedProjectsOpen}
               data-testid="sidebar-archived-projects-toggle"
               onClick={() => setArchivedProjectsOpen(!archivedProjectsOpen)}
-              className="w-full flex items-center gap-1.5 px-3 pt-2 pb-1 font-label-sm text-[11px] font-bold text-on-surface-variant/90 hover:text-primary transition-colors min-w-0 cursor-pointer focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/30 rounded"
+              className="w-full flex items-center gap-1.5 px-3 pt-sm pb-xs font-label-sm text-label-xs font-bold text-on-surface-variant/90 hover:text-primary transition-colors min-w-0 cursor-pointer focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/30 rounded-sm"
             >
               <span
-                className="material-symbols-outlined text-[14px] shrink-0 transition-transform duration-150"
+                className="material-symbols-outlined icon-sm shrink-0 transition-transform duration-(--duration-normal)"
                 style={{ transform: archivedProjectsOpen ? 'rotate(0deg)' : 'rotate(-90deg)' }}
                 aria-hidden="true"
               >
                 expand_more
               </span>
-              <span className="material-symbols-outlined text-[13px] shrink-0" aria-hidden="true">folder_off</span>
+              <span className="material-symbols-outlined icon-xs shrink-0" aria-hidden="true">folder_off</span>
               <span className="truncate flex-1 min-w-0 text-left">{t('sidebar.projects.archived.title')}</span>
-              <span className="font-mono text-[10px] tabular-nums text-on-surface-variant/70 shrink-0">{archivedRegistryProjects.length}</span>
+              <span className="font-mono text-label-2xs tabular-nums text-on-surface-variant/70 shrink-0">{archivedRegistryProjects.length}</span>
             </button>
             {archivedProjectsOpen && (
-              <div className="pl-4 space-y-0.5" role="list" aria-label={t('sidebar.projects.archived.aria')}>
+              <div className="pl-md space-y-0.5" role="list" aria-label={t('sidebar.projects.archived.aria')}>
                 {archivedRegistryProjects.map(row => {
                   const label = row.name ?? pathTail(normalizePathKey(row.path) ?? row.path)
                   return (
-                    <div key={row.path} role="listitem" className="group flex items-center gap-1" data-testid={`archived-project-row-${row.path}`}>
-                      <div className="flex-1 min-w-0 px-3 py-1.5 font-label-md text-label-md text-on-surface-variant/80 flex items-center gap-2 whitespace-nowrap">
+                    <div key={row.path} role="listitem" className="group flex items-center gap-xs" data-testid={`archived-project-row-${row.path}`}>
+                      <div className="flex-1 min-w-0 px-3 py-1.5 font-label-md text-label-md text-on-surface-variant/80 flex items-center gap-sm whitespace-nowrap">
                         {row.color && (
                           <span className="w-2 h-2 rounded-full shrink-0" style={{ backgroundColor: row.color }} aria-hidden="true" />
                         )}
@@ -1770,12 +1770,12 @@ export function SessionsSection({ sessions, sessionActivity, goalRunsBySession =
                         aria-label={t('sidebar.projects.archived.restore.aria', { name: label })}
                         title={t('sidebar.sessions.archived.restore')}
                         className={cn(
-                          'rounded hover:bg-surface-container text-on-surface-variant hover:text-primary transition-opacity focus-visible:ring-2 focus-visible:ring-primary/30 focus-visible:outline-none shrink-0',
+                          'rounded-sm hover:bg-surface-container text-on-surface-variant hover:text-primary transition-opacity focus-visible:ring-2 focus-visible:ring-primary/30 focus-visible:outline-none shrink-0',
                           'opacity-0 group-hover:opacity-100 focus-visible:opacity-100',
                         )}
                         onClick={() => handleRestoreProject(row.path)}
                       >
-                        <span className="material-symbols-outlined text-[16px]">undo</span>
+                        <span className="material-symbols-outlined icon-sm">undo</span>
                       </Button>
                     </div>
                   )
@@ -1804,7 +1804,7 @@ function ExpanderRow({ label, onClick }: { label: string; onClick: () => void })
       type="button"
       data-testid="sidebar-show-all"
       onClick={onClick}
-      className="w-full px-3 py-1 text-left font-label-xs text-on-surface-variant hover:text-primary hover:underline cursor-pointer"
+      className="w-full px-3 py-xs text-left font-label-xs text-on-surface-variant hover:text-primary hover:underline cursor-pointer"
     >
       {label}
     </button>

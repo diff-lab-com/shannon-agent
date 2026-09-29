@@ -117,13 +117,13 @@ export default function LspQuickFixPanel({
 
   return (
     <div
-      className="bg-surface-container-lowest rounded-2xl p-md border border-outline-variant/30 shadow-sm flex flex-col gap-sm"
+      className="bg-surface-container-lowest rounded-2xl p-md border border-outline-variant/30 shadow-e1 flex flex-col gap-sm"
       role="region"
       aria-label={intl.formatMessage({ id: 'lsp.quickFixPanel.aria' })}
     >
       <div className="flex items-center justify-between">
         <div className="flex items-center gap-sm min-w-0">
-          <span className="material-symbols-outlined text-[18px] text-primary">build</span>
+          <span className="material-symbols-outlined icon-md text-primary">build</span>
           <h4 className="font-label-md text-on-surface truncate">{intl.formatMessage({ id: 'lsp.quickFix.title' })}</h4>
         </div>
         <div className="flex items-center gap-xs">
@@ -133,9 +133,9 @@ export default function LspQuickFixPanel({
             onClick={fetch}
             disabled={loading || !cmd}
             aria-label={intl.formatMessage({ id: 'lsp.quickFix.refresh.aria' })}
-            className="font-label-sm text-primary hover:bg-primary/10 rounded px-xs"
+            className="font-label-sm text-primary hover:bg-primary/10 rounded-sm px-xs"
           >
-            <span className="material-symbols-outlined text-[14px]">{loading ? 'hourglass_top' : 'refresh'}</span>
+            <span className="material-symbols-outlined icon-sm">{loading ? 'hourglass_top' : 'refresh'}</span>
           </Button>
           {onClose ? (
             <Button
@@ -151,21 +151,21 @@ export default function LspQuickFixPanel({
         </div>
       </div>
 
-      <p className="font-label-sm text-[11px] text-on-surface-variant line-clamp-2">
-        <code className="font-mono bg-surface-container-low px-1 rounded">{diagnostic.file_path.split('/').pop()}</code>
+      <p className="font-label-sm text-label-xs text-on-surface-variant line-clamp-2">
+        <code className="font-mono bg-surface-container-low px-xs rounded-sm">{diagnostic.file_path.split('/').pop()}</code>
         :{diagnostic.start_line + 1}:{diagnostic.start_character + 1} — {sentenceCase(diagnostic.message)}
       </p>
 
       {error ? (
         <div className="bg-error/10 border border-error/30 rounded-lg p-sm font-label-sm text-error flex items-start gap-sm" role="alert">
-          <span className="material-symbols-outlined text-[14px] mt-0.5">error</span>
+          <span className="material-symbols-outlined icon-sm mt-0.5">error</span>
           <span className="flex-1 break-words">{error}</span>
         </div>
       ) : null}
 
       {lastApplied ? (
         <div className="bg-tertiary/10 border border-tertiary/30 rounded-lg p-sm font-label-sm text-tertiary flex items-start gap-sm">
-          <span className="material-symbols-outlined text-[14px] mt-0.5">check_circle</span>
+          <span className="material-symbols-outlined icon-sm mt-0.5">check_circle</span>
           <span className="flex-1">{intl.formatMessage({ id: 'lsp.quickFix.applied' }, { result: lastApplied })}</span>
         </div>
       ) : null}
@@ -189,12 +189,12 @@ export default function LspQuickFixPanel({
                     : 'border-outline-variant/30 bg-surface-container-low text-on-surface hover:bg-surface-container-high'
                 )}
               >
-                <span className="material-symbols-outlined text-[14px] text-primary">
+                <span className="material-symbols-outlined icon-sm text-primary">
                   {applying === a.title ? 'hourglass_top' : a.is_preferred ? 'auto_awesome' : 'healing'}
                 </span>
                 <span className="flex-1 truncate">{a.title}</span>
                 {a.kind ? (
-                  <span className="font-label-sm text-[10px] text-on-surface-variant uppercase tracking-wide">
+                  <span className="font-label-sm text-label-2xs text-on-surface-variant uppercase tracking-wide">
                     {a.kind.replace('quickfix.', '').replace('refactor.', '')}
                   </span>
                 ) : null}
@@ -204,7 +204,7 @@ export default function LspQuickFixPanel({
         </ul>
       )}
 
-      <p className="font-label-sm text-[10px] text-on-surface-variant mt-xs">
+      <p className="font-label-sm text-label-2xs text-on-surface-variant mt-xs">
         {intl.formatMessage({ id: 'lsp.quickFix.spawnsServer' }, { cmd })}
       </p>
     </div>

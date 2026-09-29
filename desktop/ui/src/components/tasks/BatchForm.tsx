@@ -53,11 +53,11 @@ export default function BatchForm({ sessionId, onSubmit, onCancel }: BatchFormPr
 
   return (
     <div
-      className="bg-surface-container-lowest border border-tertiary/30 rounded-xl p-lg mb-lg flex flex-col gap-md shadow-sm"
+      className="bg-surface-container-lowest border border-tertiary/30 rounded-xl p-lg mb-lg flex flex-col gap-md shadow-e1"
       data-testid="batch-form"
     >
       <div className="flex items-center gap-sm">
-        <span className="material-symbols-outlined text-[20px] text-tertiary" aria-hidden="true">
+        <span className="material-symbols-outlined icon-md text-tertiary" aria-hidden="true">
           call_split
         </span>
         <h3 className="font-body-lg font-bold text-on-surface">{t('batch.form.title')}</h3>

@@ -18,8 +18,8 @@ export default function QueueChips({ className }: { className?: string }) {
       aria-label={t('chat.queue.aria')}
       className={cn('flex flex-wrap items-center gap-xs px-md pt-md', className)}
     >
-      <span className="font-label-xs text-on-surface-variant flex items-center gap-1 shrink-0">
-        <span className="material-symbols-outlined text-[14px]" aria-hidden="true">low_priority</span>
+      <span className="font-label-xs text-on-surface-variant flex items-center gap-xs shrink-0">
+        <span className="material-symbols-outlined icon-sm" aria-hidden="true">low_priority</span>
         {t('chat.queue.title', { count: promptQueue.length })}
       </span>
       {promptQueue.map(item => (
@@ -27,9 +27,9 @@ export default function QueueChips({ className }: { className?: string }) {
           key={item.id}
           role="listitem"
           data-testid="prompt-queue-chip"
-          className="inline-flex items-center gap-1 max-w-[260px] px-sm py-[2px] rounded-full bg-secondary-container/50 border border-outline-variant/30 text-on-surface font-label-sm"
+          className="inline-flex items-center gap-xs max-w-[260px] px-sm py-[2px] rounded-full bg-secondary-container/50 border border-outline-variant/30 text-on-surface font-label-sm"
         >
-          <span className="material-symbols-outlined text-[14px] shrink-0" aria-hidden="true">schedule</span>
+          <span className="material-symbols-outlined icon-sm shrink-0" aria-hidden="true">schedule</span>
           <span className="truncate" title={item.text}>
             {item.text.trim() || t('chat.queue.attachmentsOnly', { count: item.attachments.length })}
           </span>
@@ -41,7 +41,7 @@ export default function QueueChips({ className }: { className?: string }) {
             className="shrink-0 size-4 rounded-full hover:bg-error/10 hover:text-error"
             onClick={() => removeQueuedPrompt(item.id)}
           >
-            <span className="material-symbols-outlined text-[12px]" aria-hidden="true">close</span>
+            <span className="material-symbols-outlined icon-xs" aria-hidden="true">close</span>
           </Button>
         </span>
       ))}

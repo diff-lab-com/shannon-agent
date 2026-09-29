@@ -107,14 +107,14 @@ export function BatchRunCard({ run, onCompare, onDiscard }: BatchRunCardProps) {
 
   return (
     <div
-      className="glass-panel border border-outline-variant/10 rounded-xl p-md shadow-sm bg-surface-container-lowest/80"
+      className="bg-surface-container-lowest border border-outline-variant/10 rounded-xl p-md shadow-e1"
       data-testid="batch-run-card"
       data-status={run.status}
     >
       <div className="flex items-start justify-between gap-md">
         <div className="flex items-start gap-md min-w-0">
           <div className="w-10 h-10 rounded-xl bg-tertiary/10 flex items-center justify-center text-tertiary shrink-0">
-            <span className="material-symbols-outlined text-[24px]">call_split</span>
+            <span className="material-symbols-outlined icon-lg">call_split</span>
           </div>
           <div className="min-w-0">
             <h3 className="font-body-lg font-semibold text-on-surface truncate">
@@ -126,12 +126,12 @@ export function BatchRunCard({ run, onCompare, onDiscard }: BatchRunCardProps) {
         <div
           title={t(badge.labelId)}
           className={cn(
-            'flex items-center gap-xs px-sm py-1 rounded-full border shrink-0',
+            'flex items-center gap-xs px-sm py-xs rounded-full border shrink-0',
             badge.bg,
           )}
         >
           <span className={cn('w-2 h-2 rounded-full', badge.dot)} />
-          <span className="font-label-sm text-[11px] font-bold uppercase tracking-wider">
+          <span className="font-label-sm text-label-xs font-bold uppercase tracking-wider">
             {t(badge.labelId)}
           </span>
         </div>
@@ -145,7 +145,7 @@ export function BatchRunCard({ run, onCompare, onDiscard }: BatchRunCardProps) {
             data-testid={`batch-branch-chip-${branch.index}`}
             title={branch.error ?? branch.branchName}
             className={cn(
-              'flex items-center gap-1 px-sm py-1 rounded-lg border font-label-xs',
+              'flex items-center gap-xs px-sm py-xs rounded-lg border font-label-xs',
               branchChipClasses(branch.status),
             )}
           >
@@ -227,7 +227,7 @@ export default function BatchRunPanel() {
         id="batch-runs-heading"
         className="font-label-lg font-bold text-on-surface mb-sm flex items-center gap-xs"
       >
-        <span className="material-symbols-outlined text-[18px] text-tertiary" aria-hidden="true">
+        <span className="material-symbols-outlined icon-md text-tertiary" aria-hidden="true">
           call_split
         </span>
         {intl.formatMessage({ id: 'batch.panel.heading' })}

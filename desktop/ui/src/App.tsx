@@ -2,7 +2,7 @@ import { lazy, Suspense } from 'react';
 import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom';
 import { Toaster } from 'sonner';
 import { AppProvider } from './context/AppContext';
-import { ThemeProvider } from './context/ThemeContext';
+import { ThemeProvider, useTheme, themeModeOf } from './context/ThemeContext';
 import { I18nProvider } from './i18n';
 import { ArtifactProvider } from './components/artifact/ArtifactContext';
 import { ArtifactLinkHost } from './components/artifact/ArtifactLinkHost';
@@ -45,6 +45,35 @@ const PermissionsSettings = lazy(() => import('./components/settings/Permissions
 // Loaded here so `Chat.tsx` (production) and its component tree stay untouched.
 // Production routing never exposes this; gating happens at the route level
 // below via `import.meta.env.DEV`.
+
+// G4 (UI review 2026-09-29): the Toaster follows the APP's resolved theme
+// (was theme="system" → a dark OS + light app theme rendered inverted toasts)
+// and drops richColors in favor of semantic container/on-container token
+// pairs per type (success=primary, error=error, warning=tertiary,
+// info=secondary — every pair is AA-validated per theme by the generator).
+// The glass surface itself comes from the [data-sonner-toast] block in
+// index.css (sonner's injected stylesheet is unlayered, so plain utilities
+// in classNames alone cannot win the cascade there).
+function ThemedToaster() {
+  const { resolvedTheme } = useTheme()
+  return (
+    <Toaster
+      position="bottom-right"
+      closeButton
+      theme={themeModeOf(resolvedTheme)}
+      toastOptions={{
+        classNames: {
+          toast: 'glass-overlay',
+          success: 'bg-primary-container text-on-primary-container',
+          error: 'bg-error-container text-on-error-container',
+          warning: 'bg-tertiary-container text-on-tertiary-container',
+          info: 'bg-secondary-container text-on-secondary-container',
+          description: 'opacity-80',
+        },
+      }}
+    />
+  )
+}
 
 export default function App() {
   return (
@@ -123,7 +152,7 @@ export default function App() {
               </Route>
             </Routes>
           </Suspense>
-        <Toaster position="bottom-right" richColors closeButton theme="system" />
+        <ThemedToaster />
         <Suspense fallback={null}>
           <SkillProposalsManager />
         </Suspense>

@@ -91,7 +91,7 @@ export function ProviderVisibilitySection({
   }
 
   return (
-    <section className="bg-surface-container-lowest border border-outline-variant/30 rounded-xl p-lg shadow-sm">
+    <section className="bg-surface-container-lowest border border-outline-variant/30 rounded-xl p-lg shadow-e1">
       <div className="flex items-start justify-between mb-md gap-md">
         <div>
           <h3 className="font-headline-md text-on-surface">

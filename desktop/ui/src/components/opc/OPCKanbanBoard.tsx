@@ -110,7 +110,7 @@ export default function OPCKanbanBoard({ tasks, refreshTasks }: Props) {
         placeholder={t('opc.kanban.addTaskPlaceholder')}
         value={quickTask}
         onChange={e => setQuickTask(e.target.value)}
-        className="bg-surface-container-low border-none rounded-lg py-1.5 pl-3 pr-8 w-[200px] text-[13px] font-body-md focus:ring-2 focus:ring-primary/20 transition-all outline-none"
+        className="bg-surface-container-low border-none rounded-lg py-1.5 pl-3 pr-xl w-[200px] text-label-sm font-body-md focus:ring-2 focus:ring-primary/20 transition-all outline-none"
         aria-label={t('opc.kanban.addTaskAria')}
       />
       <Button
@@ -177,18 +177,18 @@ function DefaultDraggableCard({ task, intl, openTask }: { task: TaskItem; intl: 
     <div
       draggable
       onDragStart={e => e.dataTransfer.setData('text/plain', task.id)}
-      className="bg-surface-container-lowest rounded-xl p-md border border-outline-variant/30 shadow-sm mb-3 cursor-pointer hover:border-primary/50 hover:shadow-md transition-all group/card focus-visible:ring-2 focus-visible:ring-primary/30 focus-visible:outline-none"
+      className="bg-surface-container-lowest rounded-xl p-md border border-outline-variant/30 shadow-e1 mb-3 cursor-pointer hover:border-primary/50 hover:shadow-e2 transition-all group/card focus-visible:ring-2 focus-visible:ring-primary/30 focus-visible:outline-none"
       tabIndex={0}
       role="button"
       aria-label={task.title}
       onClick={() => openTask(task.id)}
       onKeyDown={e => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); openTask(task.id) } }}
     >
-      <div className="flex justify-between items-start mb-2">
-        <span className="font-label-sm text-[10px] font-bold text-on-surface-variant tracking-wider">{task.id.slice(0, 8)}</span>
+      <div className="flex justify-between items-start mb-sm">
+        <span className="font-label-sm text-label-2xs font-bold text-on-surface-variant tracking-wider">{task.id.slice(0, 8)}</span>
         {task.priority ? (
           <span className={cn(
-            "text-[10px] font-bold px-2 py-0.5 rounded uppercase tracking-wider",
+            "text-label-2xs font-bold px-sm py-0.5 rounded-sm uppercase tracking-wider",
             normalizePriority(task.priority) === 'critical' ? 'bg-error/20 text-error' :
             normalizePriority(task.priority) === 'high' ? 'bg-error/10 text-error' :
             normalizePriority(task.priority) === 'medium' ? 'bg-secondary/10 text-secondary' :
@@ -197,11 +197,11 @@ function DefaultDraggableCard({ task, intl, openTask }: { task: TaskItem; intl: 
           )}>{task.priority}</span>
         ) : null}
       </div>
-      <h4 className="font-label-md text-[15px] font-bold mb-3 leading-tight group-hover/card:text-primary transition-colors">{task.title}</h4>
-      {task.description ? <p className="font-body-sm text-[12px] text-on-surface-variant mb-2 leading-snug line-clamp-2">{task.description}</p> : null}
+      <h4 className="font-label-md text-body-md font-bold mb-3 leading-tight group-hover/card:text-primary transition-colors">{task.title}</h4>
+      {task.description ? <p className="font-body-sm text-label-sm text-on-surface-variant mb-sm leading-snug line-clamp-2">{task.description}</p> : null}
       <div className="flex justify-between items-center">
         {task.assignee ? (
-          <span className="font-label-sm text-[11px] text-on-surface-variant">{intl.formatMessage({ id: 'opc.kanban.proposedBy' }, { name: task.assignee })}</span>
+          <span className="font-label-sm text-label-xs text-on-surface-variant">{intl.formatMessage({ id: 'opc.kanban.proposedBy' }, { name: task.assignee })}</span>
         ) : null}
       </div>
     </div>
@@ -215,23 +215,23 @@ function BlockedCard({ task, intl, openTask }: { task: TaskItem; intl: ReturnTyp
       onDragStart={e => e.dataTransfer.setData('text/plain', task.id)}
       onClick={() => openTask(task.id)}
       onKeyDown={e => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); openTask(task.id) } }}
-      className="bg-surface-container-lowest rounded-xl p-md border border-error/20 shadow-sm mb-3 ring-1 ring-error/5 cursor-grab active:cursor-grabbing hover:border-error/40 transition-colors relative focus-visible:ring-2 focus-visible:ring-primary/30 focus-visible:outline-none"
+      className="bg-surface-container-lowest rounded-xl p-md border border-error/20 shadow-e1 mb-3 ring-1 ring-error/5 cursor-grab active:cursor-grabbing hover:border-error/40 transition-colors relative focus-visible:ring-2 focus-visible:ring-primary/30 focus-visible:outline-none"
       tabIndex={0}
       role="button"
       aria-label={intl.formatMessage({ id: 'opc.kanban.openTaskAria' }, { title: task.title })}
     >
       <div className="absolute left-0 top-0 bottom-0 w-1 bg-error rounded-l-xl" />
-      <div className="flex justify-between items-start mb-2 ml-1">
-        <span className="font-label-sm text-[10px] font-bold text-on-surface-variant tracking-wider">{task.id.slice(0, 8)}</span>
+      <div className="flex justify-between items-start mb-sm ml-xs">
+        <span className="font-label-sm text-label-2xs font-bold text-on-surface-variant tracking-wider">{task.id.slice(0, 8)}</span>
         {(normalizePriority(task.priority) === 'high' || normalizePriority(task.priority) === 'critical') ? (
-          <span className="bg-error/10 text-error text-[10px] font-bold px-2 py-0.5 rounded uppercase tracking-wider">{intl.formatMessage({ id: 'opc.kanban.critical' })}</span>
+          <span className="bg-error/10 text-error text-label-2xs font-bold px-sm py-0.5 rounded-sm uppercase tracking-wider">{intl.formatMessage({ id: 'opc.kanban.critical' })}</span>
         ) : null}
       </div>
-      <h4 className="font-label-md text-[15px] font-bold mb-2 leading-tight ml-1">{task.title}</h4>
+      <h4 className="font-label-md text-body-md font-bold mb-sm leading-tight ml-xs">{task.title}</h4>
       {task.assignee ? (
-        <div className="flex justify-between items-center ml-1">
-          <span className="font-label-sm text-[11px] text-on-surface-variant">{intl.formatMessage({ id: 'opc.kanban.assignedTo' }, { name: task.assignee })}</span>
-          <span className="font-label-sm text-[12px] text-primary font-bold">{intl.formatMessage({ id: 'opc.kanban.review' })}</span>
+        <div className="flex justify-between items-center ml-xs">
+          <span className="font-label-sm text-label-xs text-on-surface-variant">{intl.formatMessage({ id: 'opc.kanban.assignedTo' }, { name: task.assignee })}</span>
+          <span className="font-label-sm text-label-sm text-primary font-bold">{intl.formatMessage({ id: 'opc.kanban.review' })}</span>
         </div>
       ) : null}
     </div>
@@ -245,29 +245,29 @@ function ActiveCard({ task, intl, openTask }: { task: TaskItem; intl: ReturnType
       onDragStart={e => e.dataTransfer.setData('text/plain', task.id)}
       onClick={() => openTask(task.id)}
       onKeyDown={e => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); openTask(task.id) } }}
-      className="bg-surface-container-lowest rounded-xl p-md border border-primary/20 shadow-sm mb-3 cursor-grab active:cursor-grabbing hover:border-primary/50 transition-colors relative focus-visible:ring-2 focus-visible:ring-primary/30 focus-visible:outline-none"
+      className="bg-surface-container-lowest rounded-xl p-md border border-primary/20 shadow-e1 mb-3 cursor-grab active:cursor-grabbing hover:border-primary/50 transition-colors relative focus-visible:ring-2 focus-visible:ring-primary/30 focus-visible:outline-none"
       tabIndex={0}
       role="button"
       aria-label={intl.formatMessage({ id: 'opc.kanban.openTaskAria' }, { title: task.title })}
     >
       <div className="absolute left-0 top-0 bottom-0 w-1 bg-primary rounded-l-xl" />
-      <div className="flex justify-between items-center mb-2 ml-1">
-        <span className="font-label-sm text-[10px] font-bold text-primary tracking-wider">{task.id.slice(0, 8)}</span>
+      <div className="flex justify-between items-center mb-sm ml-xs">
+        <span className="font-label-sm text-label-2xs font-bold text-primary tracking-wider">{task.id.slice(0, 8)}</span>
         <span className="material-symbols-outlined icon-sm text-primary">autorenew</span>
       </div>
-      <h4 className="font-label-md text-[15px] font-bold mb-4 leading-tight ml-1">{task.title}</h4>
+      <h4 className="font-label-md text-body-md font-bold mb-md leading-tight ml-xs">{task.title}</h4>
       {task.assignee ? (
-        <div className="ml-1 mb-2">
-          <div className="h-1.5 w-full bg-surface-container rounded-full overflow-hidden mb-1">
+        <div className="ml-xs mb-sm">
+          <div className="h-1.5 w-full bg-surface-container rounded-full overflow-hidden mb-xs">
             {task.progress != null ? (
-              <div className="h-full bg-primary rounded-full transition-all duration-500" style={{ width: `${Math.min(100, Math.max(0, task.progress))}%` }} />
+              <div className="h-full bg-primary rounded-full transition-all duration-(--duration-slower)" style={{ width: `${Math.min(100, Math.max(0, task.progress))}%` }} />
             ) : (
               <div className="h-full w-1/3 bg-primary/60 rounded-full animate-pulse" />
             )}
           </div>
           <div className="flex justify-between items-center">
-            <span className="font-label-sm text-[10px] text-on-surface-variant">{task.assignee}</span>
-            <span className="font-label-sm text-[10px] font-bold text-on-surface-variant">{task.progress != null ? `${Math.min(100, Math.max(0, Math.round(task.progress)))}%` : intl.formatMessage({ id: 'opc.kanban.inProgress' })}</span>
+            <span className="font-label-sm text-label-2xs text-on-surface-variant">{task.assignee}</span>
+            <span className="font-label-sm text-label-2xs font-bold text-on-surface-variant">{task.progress != null ? `${Math.min(100, Math.max(0, Math.round(task.progress)))}%` : intl.formatMessage({ id: 'opc.kanban.inProgress' })}</span>
           </div>
         </div>
       ) : null}
@@ -282,17 +282,17 @@ function DoneCard({ task, intl, openTask }: { task: TaskItem; intl: ReturnType<t
       onDragStart={e => e.dataTransfer.setData('text/plain', task.id)}
       onClick={() => openTask(task.id)}
       onKeyDown={e => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); openTask(task.id) } }}
-      className="bg-surface-container-lowest rounded-xl p-3 border border-tertiary/20 shadow-sm mb-3 cursor-grab active:cursor-grabbing hover:bg-surface-bright transition-colors bg-tertiary/5 focus-visible:ring-2 focus-visible:ring-primary/30 focus-visible:outline-none"
+      className="bg-surface-container-lowest rounded-xl p-3 border border-tertiary/20 shadow-e1 mb-3 cursor-grab active:cursor-grabbing hover:bg-surface-bright transition-colors bg-tertiary/5 focus-visible:ring-2 focus-visible:ring-primary/30 focus-visible:outline-none"
       tabIndex={0}
       role="button"
       aria-label={intl.formatMessage({ id: 'opc.kanban.openTaskAria' }, { title: task.title })}
     >
       <div className="flex items-center justify-between">
-        <div className="flex items-center gap-2">
+        <div className="flex items-center gap-sm">
           <span className="material-symbols-outlined icon-sm text-tertiary">check_circle</span>
-          <span className="font-label-md text-[13px] text-on-surface">{task.title}</span>
+          <span className="font-label-md text-label-sm text-on-surface">{task.title}</span>
         </div>
-        <span className="font-label-sm text-[10px] text-on-surface-variant">{intl.formatMessage({ id: 'opc.kanban.done' })}</span>
+        <span className="font-label-sm text-label-2xs text-on-surface-variant">{intl.formatMessage({ id: 'opc.kanban.done' })}</span>
       </div>
     </div>
   )
@@ -305,17 +305,17 @@ function FailedCard({ task, intl, openTask }: { task: TaskItem; intl: ReturnType
       onDragStart={e => e.dataTransfer.setData('text/plain', task.id)}
       onClick={() => openTask(task.id)}
       onKeyDown={e => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); openTask(task.id) } }}
-      className="bg-surface-container-lowest/50 rounded-xl p-md border border-outline-variant/30 shadow-sm mb-3 cursor-grab active:cursor-grabbing hover:bg-surface-container-lowest transition-colors opacity-70 focus-visible:ring-2 focus-visible:ring-primary/30 focus-visible:outline-none"
+      className="bg-surface-container-lowest/50 rounded-xl p-md border border-outline-variant/30 shadow-e1 mb-3 cursor-grab active:cursor-grabbing hover:bg-surface-container-lowest transition-colors opacity-70 focus-visible:ring-2 focus-visible:ring-primary/30 focus-visible:outline-none"
       tabIndex={0}
       role="button"
       aria-label={intl.formatMessage({ id: 'opc.kanban.openTaskAria' }, { title: task.title })}
     >
       <div className="flex items-center justify-between">
-        <div className="flex items-center gap-2">
+        <div className="flex items-center gap-sm">
           <span className="material-symbols-outlined icon-sm text-on-surface-variant">archive</span>
-          <span className="font-label-md text-[13px] text-on-surface-variant line-through">{task.title}</span>
+          <span className="font-label-md text-label-sm text-on-surface-variant line-through">{task.title}</span>
         </div>
-        <span className="font-label-sm text-[10px] text-on-surface-variant uppercase tracking-wider">{intl.formatMessage({ id: 'opc.kanban.archived' })}</span>
+        <span className="font-label-sm text-label-2xs text-on-surface-variant uppercase tracking-wider">{intl.formatMessage({ id: 'opc.kanban.archived' })}</span>
       </div>
     </div>
   )

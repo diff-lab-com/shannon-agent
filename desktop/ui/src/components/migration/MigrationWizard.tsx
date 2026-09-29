@@ -206,7 +206,7 @@ export default function MigrationWizard({ open, onClose, apiOverride }: Migratio
                   data-testid={`migration-source-${s.id}`}
                   className="w-full text-left flex items-center gap-md p-lg rounded-xl border border-outline-variant/50 bg-surface-container-low hover:border-primary/60 hover:bg-surface-container cursor-pointer transition-all focus-visible:outline focus-visible:outline-2 focus-visible:outline-primary"
                 >
-                  <span className="material-symbols-outlined text-primary text-[28px]" aria-hidden="true">{s.icon}</span>
+                  <span className="material-symbols-outlined text-primary icon-xl" aria-hidden="true">{s.icon}</span>
                   <span>
                     <span className="block font-headline-md text-on-surface">{t(s.labelKey)}</span>
                     <span className="block font-body-sm text-on-surface-variant mt-xs">{t(s.descKey)}</span>
@@ -218,7 +218,7 @@ export default function MigrationWizard({ open, onClose, apiOverride }: Migratio
 
           {phase === 'scanning' && (
             <div className="flex flex-col items-center gap-md py-2xl" data-testid="migration-scanning">
-              <Spinner className="text-primary text-[28px]" />
+              <Spinner className="text-primary icon-xl" />
               <p className="font-body-md text-on-surface-variant">
                 {t('welcome.migration.scan.running', { source: source ?? '' })}
               </p>
@@ -324,9 +324,9 @@ export default function MigrationWizard({ open, onClose, apiOverride }: Migratio
                                     aria-expanded={isExpanded}
                                     aria-label={t('welcome.migration.review.expandAria', { name: asset.name })}
                                     data-testid={`migration-expand-${asset.id}`}
-                                    className="text-on-surface-variant hover:text-primary cursor-pointer rounded px-xs focus-visible:outline focus-visible:outline-2 focus-visible:outline-primary"
+                                    className="text-on-surface-variant hover:text-primary cursor-pointer rounded-sm px-xs focus-visible:outline focus-visible:outline-2 focus-visible:outline-primary"
                                   >
-                                    <span className="material-symbols-outlined text-[18px]" aria-hidden="true">
+                                    <span className="material-symbols-outlined icon-md" aria-hidden="true">
                                       {isExpanded ? 'expand_less' : 'expand_more'}
                                     </span>
                                   </button>
@@ -358,7 +358,7 @@ export default function MigrationWizard({ open, onClose, apiOverride }: Migratio
                                       }))
                                     }
                                     data-testid={`migration-conflict-${asset.id}`}
-                                    className="font-label-sm bg-surface-container-low border border-outline-variant/50 rounded px-xs py-0.5 text-on-surface cursor-pointer"
+                                    className="font-label-sm bg-surface-container-low border border-outline-variant/50 rounded-sm px-xs py-0.5 text-on-surface cursor-pointer"
                                   >
                                     <option value="rename">{t('welcome.migration.conflict.rename')}</option>
                                     <option value="overwrite">{t('welcome.migration.conflict.overwrite')}</option>
@@ -399,7 +399,7 @@ export default function MigrationWizard({ open, onClose, apiOverride }: Migratio
 
           {phase === 'applying' && (
             <div className="flex flex-col items-center gap-md py-2xl" data-testid="migration-applying">
-              <Spinner className="text-primary text-[28px]" />
+              <Spinner className="text-primary icon-xl" />
               <p className="font-body-md text-on-surface-variant">{t('welcome.migration.apply.running')}</p>
             </div>
           )}
@@ -448,7 +448,7 @@ export default function MigrationWizard({ open, onClose, apiOverride }: Migratio
             variant="ghost"
             onClick={onClose}
             disabled={phase === 'scanning' || phase === 'applying'}
-            className="font-label-md text-on-surface-variant hover:text-primary cursor-pointer rounded"
+            className="font-label-md text-on-surface-variant hover:text-primary cursor-pointer rounded-sm"
           >
             {t('welcome.migration.later')}
           </Button>
@@ -458,7 +458,7 @@ export default function MigrationWizard({ open, onClose, apiOverride }: Migratio
                 <Button
                   variant="ghost"
                   onClick={() => setPhase('source')}
-                  className="font-label-md text-on-surface-variant hover:text-primary cursor-pointer rounded"
+                  className="font-label-md text-on-surface-variant hover:text-primary cursor-pointer rounded-sm"
                 >
                   {t('welcome.migration.back')}
                 </Button>
