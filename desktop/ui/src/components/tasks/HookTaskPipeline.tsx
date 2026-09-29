@@ -20,15 +20,15 @@ import LoadingState from '@/components/ui/loading-state'
 import HookRoutineCreateDialog from './HookRoutineCreateDialog'
 
 const HOOK_BADGE: Record<string, { icon: string; tone: string }> = {
-  pretooluse: { icon: 'lock', tone: 'bg-secondary/15 text-secondary border-secondary/40' },
-  posttooluse: { icon: 'check_circle', tone: 'bg-tertiary/15 text-tertiary border-tertiary/40' },
-  subagentstart: { icon: 'rocket_launch', tone: 'bg-primary/15 text-primary border-primary/40' },
+  pretooluse: { icon: 'lock', tone: 'bg-secondary-container text-on-secondary-container border-secondary/40' },
+  posttooluse: { icon: 'check_circle', tone: 'bg-tertiary-container text-on-tertiary-container border-tertiary/40' },
+  subagentstart: { icon: 'rocket_launch', tone: 'bg-primary-container text-on-primary-container border-primary/40' },
   subagentstop: { icon: 'stop_circle', tone: 'bg-outline/15 text-on-surface-variant border-outline/40' },
-  precompact: { icon: 'compress', tone: 'bg-secondary/15 text-secondary border-secondary/40' },
-  postcompact: { icon: 'expand', tone: 'bg-tertiary/15 text-tertiary border-tertiary/40' },
-  configchange: { icon: 'settings', tone: 'bg-error/15 text-error border-error/40' },
-  taskcreated: { icon: 'add_task', tone: 'bg-primary/15 text-primary border-primary/40' },
-  taskcompleted: { icon: 'task_alt', tone: 'bg-tertiary/15 text-tertiary border-tertiary/40' },
+  precompact: { icon: 'compress', tone: 'bg-secondary-container text-on-secondary-container border-secondary/40' },
+  postcompact: { icon: 'expand', tone: 'bg-tertiary-container text-on-tertiary-container border-tertiary/40' },
+  configchange: { icon: 'settings', tone: 'bg-error-container text-on-error-container border-error/40' },
+  taskcreated: { icon: 'add_task', tone: 'bg-primary-container text-on-primary-container border-primary/40' },
+  taskcompleted: { icon: 'task_alt', tone: 'bg-tertiary-container text-on-tertiary-container border-tertiary/40' },
 }
 
 function badgeFor(trigger: string): { icon: string; tone: string; label: string } {
@@ -158,7 +158,7 @@ export default function HookTaskPipeline() {
                       <code className="font-mono font-label-sm text-label-2xs text-on-surface-variant bg-surface-container-high/60 px-xs rounded-sm">{r.matcher}</code>
                     ) : null}
                     {r.pattern ? (
-                      <code className="font-mono font-label-sm text-label-2xs text-tertiary bg-tertiary/10 px-xs rounded-sm">~/{r.pattern}/</code>
+                      <code className="font-mono font-label-sm text-label-2xs text-on-tertiary-container bg-tertiary-container px-xs rounded-sm">~/{r.pattern}/</code>
                     ) : null}
                   </div>
                   {r.description ? (

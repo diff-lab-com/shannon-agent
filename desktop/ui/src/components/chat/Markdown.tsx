@@ -12,6 +12,7 @@ import 'katex/dist/katex.min.css'
 import { convertFileSrc } from '@tauri-apps/api/core'
 import { Chart, parseChartSpec } from '@/components/chat/Chart'
 import { CodeBlock as SharedCodeBlock } from '@/components/code/CodeBlock'
+import { Button } from '@/components/ui/button'
 import { FileRefChip } from '@/components/shared/FileRefChip'
 import { looksLikeFilePath } from '@/lib/fileRefs'
 
@@ -150,15 +151,52 @@ function extractLanguage(className?: string): string | null {
   return m ? m[1] : null
 }
 
+/**
+ * US4 (plan Task 3.1, direction A — user-initiated only): every chat fenced
+ * code block carries a "run in terminal" action in the block's header
+ * chrome, next to copy. The click dispatches the `shannon:terminal-run`
+ * window CustomEvent with the raw code; the integrated terminal panel (the
+ * owner of the drawer's open/spawn state) listens while mounted and does
+ * the actual open/spawn/write. The render path stays cheap — the event is
+ * only built on click, and the Markdown memo means idle messages re-render
+ * nothing.
+ */
+const TERMINAL_RUN_EVENT = 'shannon:terminal-run'
+
 function CodeBlock(props: { children?: ReactNode } & React.HTMLAttributes<HTMLPreElement>) {
+  const intl = useIntl()
   const codeProps = getCodeChildProps(props.children)
   const code = extractText(codeProps?.children)
   const language = extractLanguage(codeProps?.className)
   // The shared primitive owns the header (language · line-number toggle ·
-  // copy) and the gutter; the already-highlighted <code> from rehype passes
-  // through as children so streaming re-renders stay cheap.
+  // copy · run-in-terminal) and the gutter; the already-highlighted <code>
+  // from rehype passes through as children so streaming re-renders stay cheap.
+  const runLabel = intl.formatMessage({ id: 'terminal.runInTerminal.title' })
+  const runInTerminal = () => {
+    // The fence's parsed text ends with a newline; the panel appends the
+    // execution newline itself, so hand over the code without it.
+    window.dispatchEvent(new CustomEvent(TERMINAL_RUN_EVENT, {
+      detail: { code: code.replace(/\n+$/, '') },
+    }))
+  }
   return (
-    <SharedCodeBlock code={code} language={language} lineNumbers="toggle">
+    <SharedCodeBlock
+      code={code}
+      language={language}
+      lineNumbers="toggle"
+      actions={
+        <Button
+          variant="ghost"
+          size="sm"
+          onClick={runInTerminal}
+          aria-label={runLabel}
+          title={runLabel}
+          className="h-auto px-xs py-[2px] gap-xs text-on-surface-variant hover:text-primary"
+        >
+          <span className="material-symbols-outlined icon-xs" aria-hidden="true">terminal</span>
+        </Button>
+      }
+    >
       {props.children}
     </SharedCodeBlock>
   )

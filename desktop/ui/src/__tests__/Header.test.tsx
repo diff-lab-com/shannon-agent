@@ -191,10 +191,17 @@ describe('Header component', () => {
 
   // U3 — four distinguishable risk tiers: critical=error, high=secondary,
   // medium=tertiary (was wrongly secondary), low=tertiary. Localized text,
-  // announced via aria-label.
+  // announced via aria-label. G7 2026-09-30: tier chips render the MD3
+  // container pairs (bg-X-container + text-on-X-container), not accent
+  // text on an accent/10 tint.
   describe.each(['critical', 'high', 'medium', 'low'] as const)('risk tier %s', (risk) => {
     const label = { critical: 'Critical', high: 'High', medium: 'Medium', low: 'Low' }[risk]
-    const tier = { critical: 'text-error', high: 'text-secondary', medium: 'text-tertiary', low: 'text-tertiary' }[risk]
+    const tier = {
+      critical: 'text-on-error-container',
+      high: 'text-on-secondary-container',
+      medium: 'text-on-tertiary-container',
+      low: 'text-on-tertiary-container',
+    }[risk]
 
     it(`renders a localized "${label}" badge in the ${tier} tier`, () => {
       mockCtx.permissionRequest = { request_id: 'p1', tool: 'bash', risk, input: null }

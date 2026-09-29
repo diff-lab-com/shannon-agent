@@ -28,6 +28,61 @@ Plan: `docs/research/2026-09-29-office-scenario-competitive-research.md` §10 v2
   longer claims email drafting.
 
 
+
+### Terminal (desktop + CLI) (2026-09-29)
+
+The 2026-09-29 terminal deep-review delivery
+(`docs/plans/2026-09-29-terminal-review-and-improvement-plan.md`): the two
+UI-freezing CLI bugs are fixed, the desktop integrated terminal is completed
+(settings, accessibility, agent integration) and the retired workspace-grid
+leftovers are gone. The PTY terminal item in `ROADMAP.md` moves from
+"genuinely-pending" to partially delivered. (The `### Terminal UI` section
+under v0.1.0 below covers the CLI REPL only — that naming predates the
+desktop terminal.)
+
+**Added — desktop integrated terminal** (PTY backend shipped 2026-09-06;
+this entry is its first changelog appearance plus this branch's completion
+work):
+
+- The chat page has a bottom-drawer terminal (``Ctrl+` `` toggles it; the
+  shortcut is listed in Keyboard Shortcuts Help): a portable-pty session
+  with byte-faithful xterm.js output, at most 4 concurrent terminals, a
+  theme that follows the app, and a confirmation before a multi-line paste
+  (a pasted newline executes in a shell).
+- **Settings → Advanced** gains a Terminal card over the new `[terminal]`
+  table in `~/.shannon/config.toml` (`shell`, `fontSize`, `scrollback`,
+  `drawerHeight`, `screenReaderMode`). A failed settings load now blocks
+  saving instead of silently overwriting the file with defaults.
+- Agent integration: fenced code blocks in chat get a "Run in terminal"
+  button, and a terminal selection can be sent to the composer as a
+  prefill ("send to agent").
+- Lifecycle: process exits emit a machine-readable `terminal:exit` event
+  (the frontend no longer infers exit from output); the last 1 MiB of raw
+  output per terminal is kept in memory and replayed when the panel
+  remounts or reconnects (`terminal_history`); PTYs spawned by a session
+  window are reaped when that window closes; the per-terminal base64
+  decode is guarded; tabs are filtered to the current project; the tablist
+  is keyboard navigable with live-region announcements.
+
+**Fixed — CLI TUI**
+
+- `!shell` no longer runs on the UI thread: it executes in the background
+  with a 30 s timeout (`SHANNON_INLINE_SHELL_TIMEOUT` overrides, bad values
+  fall back to the default) and Esc cancels a running job — open overlays
+  take Esc precedence first. `!sleep infinity` no longer freezes the
+  interface.
+- A statusline script can no longer deadlock the UI (wait-then-read
+  replaced with a concurrent read, 2 s timeout, 32 KiB capture cap); the
+  agent-board summary `block_on` is throttled off the per-frame path; idle
+  frames skip redraws via a dirty flag + heartbeat.
+- Reduced motion is decoupled from `NO_COLOR`: opt in via
+  `SHANNON_REDUCED_MOTION` or the session-scoped `/accessibility` toggle.
+- Previously hardcoded paste/diagnostics/pipe/exit strings are i18n'd.
+
+**Removed**
+
+- The retired workspace-grid feature: panel variant, workspace layout
+  commands + persistence, ACL entries, mocks, and 2 i18n keys.
 ### Followups S1-S3 (2026-09-28)
 
 All 15 approved followup tasks from the comprehensive review roadmap landed:
