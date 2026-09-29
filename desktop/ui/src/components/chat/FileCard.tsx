@@ -1,4 +1,4 @@
-import { lazy, Suspense, useState } from 'react'
+import { lazy, Suspense, useEffect, useState } from 'react'
 import { save } from '@tauri-apps/plugin-dialog'
 import { toast } from 'sonner'
 
@@ -6,7 +6,7 @@ import { Button } from '@/components/ui/button'
 import { Icon } from '@/components/ui/icon'
 import { useT } from '@/i18n'
 import { toastError } from '@/lib/errorToast'
-import { copyFile, openWithDefaultApp, revealInFolder } from '@/lib/tauri-api'
+import { registerFileIndexEntry, copyFile, openWithDefaultApp, revealInFolder } from '@/lib/tauri-api'
 
 // B8b: the pdf.js preview (and its ~1 MB pdfjs-dist chunk) only loads when a
 // preview button is actually clicked — FileCard itself stays on the chat
@@ -42,6 +42,19 @@ export interface FileCardProps {
   path: string
   /** Optional byte size, rendered as a human-readable B/KB/MB/GB label. */
   sizeBytes?: number
+  /**
+   * B9' — how this card entered the chat ('attachment' | 'generated').
+   * Drives the Files-page index registration fired on mount. Defaults to
+   * 'generated' (the engine-write case the card was built for).
+   */
+  source?: string
+  /**
+   * B7' — present only for engine-written files: adds the "Review changes"
+   * secondary button that docks the single-file diff review in the
+   * RightDock (Chat.tsx routes onViewDiff → setDiffPath → dock Diff tab).
+   * User attachments never carry it.
+   */
+  onReviewDiff?: () => void
 }
 
 /** 1024-based compact size — one decimal under 10, rounded above. */
@@ -60,9 +73,16 @@ function isPdfPath(path: string): boolean {
   return path.split('.').pop()?.toLowerCase() === 'pdf'
 }
 
-export function FileCard({ name, path, sizeBytes }: FileCardProps) {
+export function FileCard({ name, path, sizeBytes, source = 'generated', onReviewDiff }: FileCardProps) {
   const t = useT()
   const [previewOpen, setPreviewOpen] = useState(false)
+
+  // B9' Files page: every rendered card is a durable file reference — index
+  // it (upsert Rust-side) so the library lists it. Fire-and-forget with a
+  // swallowed rejection: an index write failure must never surface in chat.
+  useEffect(() => {
+    registerFileIndexEntry(path, source).catch(() => {})
+  }, [path, source])
 
   const handleOpen = () => {
     openWithDefaultApp(path).catch((err) => toastError(t('link.open.failed'), err))
@@ -107,6 +127,22 @@ export function FileCard({ name, path, sizeBytes }: FileCardProps) {
           )}
         </div>
         <div className="flex shrink-0 items-center gap-xs">
+          {/* B7' — engine-written files only: dock the single-file diff review
+              (RightDock Diff tab). Secondary emphasis next to the OS actions. */}
+          {onReviewDiff && (
+            <Button
+              variant="ghost"
+              size="sm"
+              data-testid="file-card-review-diff"
+              aria-label={t('office.diff.review')}
+              title={t('office.diff.review')}
+              onClick={onReviewDiff}
+              className="gap-xs px-xs py-[2px] text-tertiary hover:bg-tertiary-container/40"
+            >
+              <span className="material-symbols-outlined icon-sm">difference</span>
+              <span className="hidden md:inline">{t('office.diff.review')}</span>
+            </Button>
+          )}
           {isPdfPath(path) && (
             <Button
               variant="ghost"

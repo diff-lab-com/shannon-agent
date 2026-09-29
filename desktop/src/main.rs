@@ -292,6 +292,10 @@ fn main() {
             commands_files::save_text_file,
             // Office Wave 1 — save-as copy for converted office documents
             commands_files::copy_file,
+            // Office Wave 2 B9' — registered-files shelf (~/.shannon/desktop/file-index.json)
+            commands_files::list_file_index,
+            commands_files::register_file_index_entry,
+            commands_files::set_file_index_favorite,
             commands_mcp::add_mcp_server,
             commands_mcp::remove_mcp_server,
             commands_mcp::restart_mcp_server,

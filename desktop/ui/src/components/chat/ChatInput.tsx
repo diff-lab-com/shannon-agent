@@ -10,6 +10,8 @@ import { MicButton } from '@/components/voice/MicButton'
 import { VoiceOrb } from '@/components/voice/VoiceOrb'
 import AttachmentChip from '@/components/chat/AttachmentChip'
 import SessionUsageDialog from '@/components/chat/SessionUsageDialog'
+import PptOutlineDialog from '@/components/chat/PptOutlineDialog'
+import { useComposerDraftListener } from '@/lib/composerBridge'
 import { isSlashQuery, filterSlashCommands, type SlashCommand } from '@/lib/slash/commands'
 import * as api from '@/lib/tauri-api'
 import { toastError } from '@/lib/errorToast'
@@ -217,6 +219,12 @@ export default function ChatInput({
       return
     }
     onAttach(merged)
+    // B9' Files page: index the attachment references so they surface in the
+    // reference-style library. Fire-and-forget — a failed index write must
+    // never interrupt the attach flow (offline, scope errors, demo mode).
+    for (const p of paths) {
+      api.registerFileIndexEntry(p, 'attachment').catch(() => {})
+    }
   }
   // B0 P0-2: the drag-drop subscription outlives single renders, so it
   // dispatches through a latest-ref instead of re-subscribing on every
@@ -422,6 +430,22 @@ export default function ChatInput({
 
   /* "+" menu — attachments and the two inline tools, one click each. */
   const [plusOpen, setPlusOpen] = useState(false)
+  // B2 v1: "Build a presentation" — outline confirmation dialog. Generate
+  // pushes a draft into THIS composer (below) and never sends by itself.
+  const [pptOpen, setPptOpen] = useState(false)
+
+  // B2 v1: composer drafts from surface components (PPT outline today).
+  // Insertion appends after any existing draft text; the ref keeps the
+  // listener from re-subscribing on every keystroke.
+  const valueRef = useRef(value)
+  useEffect(() => {
+    valueRef.current = value
+  })
+  useComposerDraftListener(text => {
+    const current = valueRef.current
+    onChange(current.trim() ? `${current.replace(/\s+$/, '')}\n\n${text}` : text)
+    textareaRef.current?.focus()
+  })
 
   // SessionUsageDialog — composer 模型 chip 旁的会话用量入口(2026-09
   // 三项 UX 修复 #3)。弹框点击后才挂载,首屏零开销;打开期间跟随父
@@ -429,6 +453,7 @@ export default function ChatInput({
   const [usageOpen, setUsageOpen] = useState(false)
   const plusItems: DropdownMenuItem[] = [
     { id: 'attach', label: t('chat.input.attach.aria'), icon: 'attach_file', onSelect: () => { setPlusOpen(false); void handleAttachClick() } },
+    { id: 'ppt', label: t('office.ppt.title'), icon: 'slideshow', onSelect: () => { setPlusOpen(false); setPptOpen(true) } },
     { id: 'quickfix', label: t('nav.quickFix'), icon: 'build', onSelect: () => { setPlusOpen(false); onOpenQuickFix() } },
     { id: 'editor', label: t('nav.editor'), icon: 'code', onSelect: () => { setPlusOpen(false); onOpenEditor() } },
   ]
@@ -801,6 +826,9 @@ export default function ChatInput({
       {usageOpen && (
         <SessionUsageDialog open onClose={() => setUsageOpen(false)} usageTick={usageTick} />
       )}
+      {/* B2 v1 — PPT outline confirmation. Generate pushes a composer draft
+          (review-then-send); close/cancel pushes nothing. */}
+      {pptOpen && <PptOutlineDialog open onClose={() => setPptOpen(false)} />}
     </div>
   )
 }

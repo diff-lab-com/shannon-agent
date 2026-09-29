@@ -84,6 +84,7 @@ pub mod tool_search;
 pub mod web;
 pub mod windows_platform;
 pub mod worktree;
+pub mod write_xlsx;
 
 /// Test-only helper for tests that must retarget the process-wide working
 /// directory (`std::env::set_current_dir` is global state — parallel test
@@ -241,6 +242,7 @@ pub use web::{WebFetchTool, WebOperation, WebSearchTool};
 pub use worktree::{
     EnterWorktreeInput, EnterWorktreeOutput, ExitWorktreeInput, ExitWorktreeOutput, WorktreeTool,
 };
+pub use write_xlsx::{WriteXlsxInput, WriteXlsxTool, XlsxSheet};
 
 // Re-export from shannon_core
 pub use shannon_core::tools::{
@@ -357,6 +359,10 @@ fn register_all_tools(
         WriteTool::with_sandbox(sandbox.clone())
             .with_history_opt(history.clone())
             .with_fs(fs.clone()),
+    ))?;
+    // Office Wave 2 (B1): engine-native xlsx generation, scoped like Write.
+    registry.register(Box::new(
+        WriteXlsxTool::with_sandbox(sandbox.clone()).with_fs(fs.clone()),
     ))?;
     registry.register(Box::new(
         EditTool::with_sandbox(sandbox.clone())

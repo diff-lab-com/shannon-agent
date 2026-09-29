@@ -8,6 +8,8 @@ import type { CreateTaskPayload } from '@/types'
 const previewCron = vi.hoisted(() => vi.fn())
 vi.mock('@/lib/tauri-api', () => ({
   previewCron: (...args: unknown[]) => previewCron(...args),
+  // office B6'-ui: ScheduleForm probes the webhook config on mount.
+  getWebhookConfig: vi.fn().mockResolvedValue(null),
 }))
 
 beforeEach(() => {

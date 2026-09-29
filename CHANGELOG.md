@@ -4,6 +4,38 @@ All notable changes to Shannon Code are documented here. Entries are grouped by 
 
 ## [Unreleased] — §4.14 W1-P2 · OTLP bridge + full RedactionPolicy + desktop Turn Timeline
 
+### Office Wave 2 — delivery loop: generation, data sources, routing, files (2026-09-29)
+
+- **B1** native `write_xlsx` tool (rust_xlsxwriter 0.99, pure-Rust deflate):
+  model writes real spreadsheets with formulas and typed cells — no host
+  Python required. `xlsx-table` skill now prefers the tool and keeps the
+  stdlib runbook as fallback.
+- **B2 v1** PPT outline builder: composer "+" menu dialog (editable outline,
+  one slide per line) that drops a structured draft into the composer for
+  the user to send — generation itself stays with the ppt skill.
+- **B3 v1** data sources go live: real Obsidian fetcher (vault walk,
+  keyword/recency ranking, hidden-dir/symlink guards) and IMAP fetcher
+  (rustls via rustls-connector on the workspace rustls 0.23 line, timeouts
+  at the socket layer, mailparse body decoding, draft RFC822 builder).
+  Query dispatch now reads `kind` from the `[data_source]` section —
+  previously it read `[config]`, so every data-source query failed with
+  "missing kind" (pre-existing bug, all kinds). Badges: Obsidian/IMAP are
+  genuinely "Verified" again; results gain "Add to chat" (context block
+  into the composer draft) and installed cards a "Fetch now" action.
+- **B4'** `meeting-minutes` bundled skill: .srt/.vtt/.txt transcripts →
+  minutes with decisions/action items (recording pipelines explicitly out
+  of scope).
+- **B5** three productivity routine templates: weekly-report,
+  daily-news-briefing, meeting-notes-archive.
+- **B6'** scheduled routines can notify a configured webhook on completion
+  (`notify_webhook` flag, reuses the desktop webhook config; skipped with
+  a run-log note when unconfigured).
+- **B7'** generated-file cards gain a "Review changes" action wired to the
+  existing RightDock diff view.
+- **B9'** reference-style file library: `/files` page over an append-only
+  index (`~/.shannon/desktop/file-index.json`, scoped + atomic), favorite
+  toggles, missing-file detection, zero data duplication.
+
 ### Office Wave 1.5 — minimal document parsing + paginated injection + PDF preview (2026-09-29)
 
 - **A2'** new `document_parse` module: extracts sectioned text from

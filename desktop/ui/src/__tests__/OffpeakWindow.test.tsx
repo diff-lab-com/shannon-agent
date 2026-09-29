@@ -30,6 +30,8 @@ vi.mock('@/lib/tauri-api', () => ({
   getCliInstallStatus: vi.fn().mockRejectedValue(new Error('skip')),
   listSkillCandidates: vi.fn().mockRejectedValue(new Error('skip')),
   checkAppUpdate: vi.fn().mockRejectedValue(new Error('skip')),
+  // office B6'-ui: ScheduleForm probes the webhook config on mount.
+  getWebhookConfig: vi.fn().mockResolvedValue(null),
 }))
 
 function windowedRoutine(): ScheduledRoutine {

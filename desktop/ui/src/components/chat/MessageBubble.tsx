@@ -125,7 +125,7 @@ function AttachmentPreview({ attachment }: { attachment: FileAttachment }) {
   // action was "Open externally" wasted a click on the common case. The
   // lightbox stays image-only.
   if (!isImage) {
-    return <FileCard name={attachment.name} path={attachment.path} sizeBytes={attachment.size} />
+    return <FileCard name={attachment.name} path={attachment.path} sizeBytes={attachment.size} source="attachment" />
   }
 
   const handleClick = () => setOpen(true)
@@ -742,7 +742,15 @@ export const ToolCallDisplay = memo(function ToolCallDisplay({ toolCall, onViewD
           heuristic path scraping of results; failed / running writes never
           render a card. */}
       {canDiff && (
-        <FileCard name={basenameOf(filePath!)} path={filePath!} />
+        <FileCard
+          name={basenameOf(filePath!)}
+          path={filePath!}
+          source="generated"
+          // B7' — engine-written file: the "Review changes" button docks the
+          // single-file diff in the RightDock (same diffPath path the tool
+          // header's Diff button drives).
+          onReviewDiff={() => onViewDiff(filePath!)}
+        />
       )}
     </>
   )

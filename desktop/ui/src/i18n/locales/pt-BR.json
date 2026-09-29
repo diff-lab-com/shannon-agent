@@ -3572,5 +3572,22 @@
   "diff.viewer.lines": "{count, plural, =1 {1 linha} other {{count} linhas}}",
   "sessionsPanel.title": "Conversas",
   "sessionsPanel.messageCount": "{count, plural, =0 {Sem mensagens} one {# mensagem} other {# mensagens}}",
-  "tasks.taskCalendarView.day.aria": "Dia {day}"
+  "tasks.taskCalendarView.day.aria": "Dia {day}",
+  "office.ppt.title": "Build a presentation",
+  "office.ppt.outlineLabel": "Outline — one slide per line",
+  "office.ppt.outlineHint": "Edit freely; each non-empty line becomes one slide.",
+  "office.ppt.generate": "Generate with agent",
+  "office.files.title": "Files",
+  "office.files.empty": "No files yet. Attached and generated files will appear here.",
+  "office.files.favorite": "Add to favorites",
+  "office.files.unfavorite": "Remove from favorites",
+  "office.files.missing": "File moved or deleted",
+  "office.sources.addToChat": "Add to chat",
+  "office.sources.added": "Added to the chat draft",
+  "office.sources.fetchNow": "Fetch now",
+  "office.sources.noResults": "No results for this query yet.",
+  "office.routing.notifyWebhook": "Send me a webhook message when the run finishes",
+  "office.routing.webhookNone": "No webhook configured — set one up in Settings → Notifications.",
+  "office.diff.review": "Review changes",
+  "nav.files": "Files"
 }

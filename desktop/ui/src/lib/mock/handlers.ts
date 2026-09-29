@@ -7,7 +7,7 @@ import { MOCK_SCHEDULED_ROUTINES, MOCK_TRIGGERED_ROUTINES, MOCK_HOOK_EVENTS, MOC
 import { MOCK_INBOX_ITEMS, MOCK_OPC_METRICS, MOCK_PERF_TRACES, MOCK_DIAGNOSTICS,
   MOCK_CODE_ACTIONS, MOCK_GOALS } from './data/analytics'
 import { MOCK_CONFIG, MOCK_MODELS, MOCK_STATUS, MOCK_TOOLS, MOCK_PROVIDERS } from './data/config'
-import type { InboxItem, ProviderInput, SessionInfo, TerminalInfo } from '@/types'
+import type { InboxItem, ProviderInput, SessionInfo, TerminalInfo, FileIndexEntry } from '@/types'
 import { MOCK_TERMINAL_OUTPUT_EVENT } from '../runtime/terminalEvents'
 import { MOCK_MEMORIES, MOCK_MEMORY_PROJECTS, MOCK_MEMORY_STATS, MOCK_FEATURED_VENDORS } from './data/memory'
 import type { MemoryGraph } from '@/lib/tauri-api'
@@ -53,6 +53,37 @@ let nextInboxId = Math.max(...MOCK_INBOX_ITEMS.map(i => i.id)) + 1
 
 // P0-4: demo session budget — null = no cap; set via the budget control.
 let demoBudgetUsd: number | null = null
+
+// office Wave 2 B9' — demo file index (list_file_index / register /
+// favorite). Newest first is enforced by the list handler; this seed is
+// already ordered that way. `old-deck.md` intentionally dangles so the
+// missing-file state is demoable.
+const demoFileIndex: FileIndexEntry[] = [
+  {
+    path: '/Users/demo/Documents/q3-review.pptx',
+    name: 'q3-review.pptx',
+    size_bytes: 2_483_112,
+    registered_at: new Date(Date.now() - 2 * 3600_000).toISOString(),
+    favorite: true,
+    source: 'generated',
+  },
+  {
+    path: '/Users/demo/Downloads/notes.md',
+    name: 'notes.md',
+    size_bytes: 8_210,
+    registered_at: new Date(Date.now() - 26 * 3600_000).toISOString(),
+    favorite: false,
+    source: 'attachment',
+  },
+  {
+    path: '/Users/demo/Documents/old-deck.md',
+    name: 'old-deck.md',
+    size_bytes: null,
+    registered_at: new Date(Date.now() - 72 * 3600_000).toISOString(),
+    favorite: false,
+    source: 'generated',
+  },
+]
 
 // P1-5 C-1: demo live-preview lifecycle (single instance, like the backend).
 const demoPreview = {
@@ -621,6 +652,46 @@ export const handlers: Record<string, MockHandler> = {
     }
   },
   async apply_diff() { await delay(100) },
+  // office Wave 2 B9' — reference-style file index. Mutable demo state so
+  // favorite toggles and attach-time registrations feel live; the third
+  // entry points at a path that does not exist so the "moved or deleted"
+  // treatment is visible in the demo Files page.
+  async list_file_index() {
+    await delay()
+    return clone(
+      [...demoFileIndex].sort(
+        (a, b) => new Date(b.registered_at).getTime() - new Date(a.registered_at).getTime(),
+      ),
+    )
+  },
+  async register_file_index_entry(args: { path: string; source: string }) {
+    await delay(20)
+    const existing = demoFileIndex.find(f => f.path === args.path)
+    if (existing) {
+      existing.source = args.source
+      return
+    }
+    const name = args.path.split('/').pop() ?? args.path
+    demoFileIndex.push({
+      path: args.path,
+      name,
+      size_bytes: 12_400,
+      registered_at: new Date().toISOString(),
+      favorite: false,
+      source: args.source,
+    })
+  },
+  async set_file_index_favorite(args: { path: string; favorite: boolean }) {
+    await delay(20)
+    const entry = demoFileIndex.find(f => f.path === args.path)
+    if (entry) entry.favorite = args.favorite
+  },
+  // office Wave 2: the Files page's missing-detection probe (and FileRefChip's
+  // anti-hallucination backstop) — in demo mode only indexed demo paths exist.
+  async path_exists(args: { path: string }) {
+    await delay(10)
+    return demoFileIndex.some(f => f.path === args.path)
+  },
   async get_file_tree() {
     await delay()
     return {

@@ -378,6 +378,15 @@ pub struct ScheduledRoutine {
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub depends_on: Vec<String>,
 
+    // ── Completion webhook (office Wave 2 B6') ─────────────────────────
+    /// When true, a desktop run that finishes asks the notification layer to
+    /// route "task name + status + output summary" through the user's
+    /// configured `[notifications.webhook]` sink (no-op — recorded as a
+    /// skipped-delivery note in the run record — when no sink is set up).
+    /// Defaults to false; old persisted task.json files keep loading.
+    #[serde(default)]
+    pub notify_webhook: bool,
+
     // ── GitHub event trigger (P2-7) ─────────────────────────────────────
     /// GitHub event trigger config. Present only when `trigger_type` is
     /// [`TriggerType::Github`]; matched against incoming
@@ -446,6 +455,7 @@ impl ScheduledRoutine {
             last_run_id: None,
             last_error: None,
             depends_on: Vec::new(),
+            notify_webhook: false,
             github: None,
         }
     }
@@ -481,6 +491,7 @@ impl ScheduledRoutine {
             last_run_id: None,
             last_error: None,
             depends_on: Vec::new(),
+            notify_webhook: false,
             github: None,
         })
     }

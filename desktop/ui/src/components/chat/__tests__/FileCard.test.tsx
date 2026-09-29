@@ -10,16 +10,19 @@ import { FileCard } from '../FileCard'
 // wrappers FileCard touches are directly assertable. `save` keeps the global
 // setup mock (@tauri-apps/plugin-dialog) — default resolution is null, i.e.
 // the user cancels the dialog.
-const { openWithDefaultApp, revealInFolder, copyFile } = vi.hoisted(() => ({
+const { openWithDefaultApp, revealInFolder, copyFile, registerFileIndexEntry } = vi.hoisted(() => ({
   openWithDefaultApp: vi.fn(),
   revealInFolder: vi.fn(),
   copyFile: vi.fn(),
+  // office Wave 2 B9': the card indexes itself on mount (fire-and-forget).
+  registerFileIndexEntry: vi.fn(),
 }))
 
 vi.mock('@/lib/tauri-api', () => ({
   openWithDefaultApp,
   revealInFolder,
   copyFile,
+  registerFileIndexEntry,
 }))
 
 // B8b: FileCard lazy-loads PdfPreview — stub the chunk so the click test
@@ -44,6 +47,7 @@ beforeEach(() => {
   openWithDefaultApp.mockResolvedValue(undefined)
   revealInFolder.mockResolvedValue(undefined)
   copyFile.mockResolvedValue(undefined)
+  registerFileIndexEntry.mockResolvedValue(undefined)
 })
 
 afterEach(() => {

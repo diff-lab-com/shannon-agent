@@ -2281,3 +2281,47 @@ expression: output
   ],
   "type": "object"
 }
+
+## write_xlsx
+{
+  "additionalProperties": false,
+  "properties": {
+    "path": {
+      "description": "Path of the .xlsx file to write — absolute, or relative to the working directory",
+      "type": "string"
+    },
+    "sheets": {
+      "description": "Worksheets to create, in order (at least one)",
+      "items": {
+        "additionalProperties": false,
+        "properties": {
+          "name": {
+            "description": "Sheet name (unique, ≤31 chars, no []:*?/\\ characters)",
+            "type": "string"
+          },
+          "rows": {
+            "description": "Row-major cell values. Strings starting with '=' become formulas; numeric strings become numbers; everything else stays text.",
+            "items": {
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "name",
+          "rows"
+        ],
+        "type": "object"
+      },
+      "type": "array"
+    }
+  },
+  "required": [
+    "path",
+    "sheets"
+  ],
+  "type": "object"
+}

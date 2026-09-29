@@ -20,6 +20,8 @@ const OPC = lazy(() => import('./pages/OPC'));
 const OPCTask = lazy(() => import('./pages/OPCTask'));
 const Memory = lazy(() => import('./pages/Memory'));
 const Usage = lazy(() => import('./pages/Usage'));
+// office Wave 2 B9' — reference-style file library.
+const FilesPage = lazy(() => import('./pages/FilesPage'));
 // §4.14 — Turn Timeline (inside-of-a-turn visualization over the L0 log).
 const TurnTimeline = lazy(() => import('./pages/TurnTimeline'));
 const SkillProposalsManager = lazy(() => import('./components/skills/SkillProposalsManager'));
@@ -103,6 +105,7 @@ export default function App() {
                 <Route path="/quick-inject" element={<Navigate to="/tasks" replace />} />
                 <Route path="/background-tasks" element={<Navigate to="/tasks" replace />} />
                 <Route path="/chat" element={<Chat />} />
+                <Route path="/files" element={<FilesPage />} />
                 <Route path="/tasks" element={<Tasks />} />
                 <Route path="/triage" element={<Triage />} />
                 <Route path="/usage" element={<Usage />} />

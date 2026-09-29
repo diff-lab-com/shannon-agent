@@ -1,5 +1,5 @@
-//! Tests for the bundled office skills (P2-3): `docx-report`, `xlsx-table`,
-//! `ppt-outline`.
+//! Tests for the bundled office skills (P2-3 + office Wave 2 B4'):
+//! `docx-report`, `xlsx-table`, `ppt-outline`, `meeting-minutes`.
 //!
 //! Coverage:
 //! - bundled registration, id uniqueness, and frontmatter validity
@@ -16,11 +16,13 @@ use shannon_skills::frontmatter::parse_skill_frontmatter;
 const DOCX_MD: &str = include_str!("../../../skills/docx-report/SKILL.md");
 const XLSX_MD: &str = include_str!("../../../skills/xlsx-table/SKILL.md");
 const PPT_MD: &str = include_str!("../../../skills/ppt-outline/SKILL.md");
+const MEETING_MD: &str = include_str!("../../../skills/meeting-minutes/SKILL.md");
 
-const OFFICE_SKILLS: [(&str, &str); 3] = [
+const OFFICE_SKILLS: [(&str, &str); 4] = [
     ("docx-report", DOCX_MD),
     ("xlsx-table", XLSX_MD),
     ("ppt-outline", PPT_MD),
+    ("meeting-minutes", MEETING_MD),
 ];
 
 fn bundled_registry() -> BundledSkills {
@@ -230,13 +232,13 @@ fn check_xml_well_formed(xml: &str) -> Result<(), String> {
 #[test]
 fn test_office_skills_registered_with_unique_ids() {
     let registry = bundled_registry();
-    // 5 core bundled skills + 3 office skills
-    assert_eq!(registry.len(), 8);
+    // 5 core bundled skills + 4 office skills
+    assert_eq!(registry.len(), 9);
     let skills = registry.list();
     let mut ids: Vec<&str> = skills.iter().map(|s| s.id.as_str()).collect();
     ids.sort_unstable();
     ids.dedup();
-    assert_eq!(ids.len(), 8, "skill ids must be unique");
+    assert_eq!(ids.len(), 9, "skill ids must be unique");
     for (id, _) in OFFICE_SKILLS {
         assert!(ids.contains(&id), "missing office skill {id}");
     }
@@ -444,6 +446,80 @@ print("VERIFIED", p)
             "{id}: validator did not confirm the package"
         );
     }
+}
+
+// ── meeting-minutes (office Wave 2 B4') ─────────────────────────────────
+
+#[test]
+fn test_meeting_minutes_frontmatter_and_trigger_words() {
+    let parsed = parse_skill_frontmatter(MEETING_MD, "meeting-minutes")
+        .expect("meeting-minutes frontmatter must parse");
+    assert_eq!(parsed.frontmatter.name.as_deref(), Some("Meeting Minutes"));
+    let when = parsed
+        .frontmatter
+        .when_to_use
+        .as_deref()
+        .unwrap_or_default();
+    for trigger in [".srt", ".vtt", ".txt", "transcript", "minutes"] {
+        assert!(
+            when.to_lowercase().contains(trigger),
+            "when_to_use should carry trigger word `{trigger}`: {when}"
+        );
+    }
+    // Description carries the honest no-audio contract and the Chinese line.
+    let desc = parsed
+        .frontmatter
+        .description
+        .as_deref()
+        .unwrap_or_default();
+    assert!(desc.contains("No audio processing"), "{desc}");
+    assert!(desc.contains("会议转写纪要"), "{desc}");
+}
+
+#[test]
+fn test_meeting_minutes_runbook_contract() {
+    // The four mandatory minutes sections, in document order.
+    let summary = MEETING_MD.find("**Summary**").expect("Summary section");
+    let decisions = MEETING_MD.find("**Decisions**").expect("Decisions section");
+    let actions = MEETING_MD
+        .find("**Action Items**")
+        .expect("Action Items section");
+    let open = MEETING_MD
+        .find("**Open Questions**")
+        .expect("Open Questions section");
+    assert!(summary < decisions && decisions < actions && actions < open);
+
+    // Owner + due discipline: the table header and the no-guessing rule.
+    assert!(
+        MEETING_MD.contains("| Action | Owner | Due |"),
+        "action table header"
+    );
+    assert!(MEETING_MD.contains("Never guess"), "no-guessing rule");
+
+    // Audio recordings are explicitly out of scope, more than once.
+    assert!(
+        MEETING_MD.contains("never processes audio"),
+        "intro contract"
+    );
+    assert!(MEETING_MD.contains("audio/video transcription"), "v1 scope");
+
+    // Optional Cron follow-up hook.
+    assert!(MEETING_MD.contains("cron_create"), "Cron tool suggestion");
+}
+
+#[test]
+fn test_meeting_minutes_is_zero_dependency() {
+    // The runbook is a pure Read/Write skill: no embedded Python script,
+    // unlike the three binary-artifact office skills.
+    assert!(
+        fenced_python_blocks(MEETING_MD).is_empty(),
+        "meeting-minutes must not embed a python script"
+    );
+    assert!(
+        MEETING_MD.contains("zero external dependencies")
+            || MEETING_MD.contains("only the Read and Write tools"),
+        "runbook must state its zero-dependency path"
+    );
 }
 
 fn required_part(ext: &str) -> &'static str {

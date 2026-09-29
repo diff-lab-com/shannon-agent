@@ -67,6 +67,10 @@ pub struct CreateTaskPayload {
     /// the project registry key (trimmed, trailing separators stripped).
     #[serde(default)]
     pub working_dir: Option<String>,
+    /// Route run completions through the configured webhook sink (B6').
+    /// Defaults to false when omitted.
+    #[serde(default)]
+    pub notify_webhook: Option<bool>,
 }
 
 /// Payload for `update_scheduled_task`. All fields optional except `id`.
@@ -102,6 +106,10 @@ pub struct UpdateTaskPayload {
     /// leaves it unchanged. Normalized like the project registry key.
     #[serde(default)]
     pub working_dir: Option<String>,
+    /// Completion-webhook routing change (B6'). Supplied value replaces the
+    /// flag; omitted leaves it unchanged.
+    #[serde(default)]
+    pub notify_webhook: Option<bool>,
 }
 
 /// Result of `preview_cron`.
@@ -636,6 +644,9 @@ pub async fn create_scheduled_task(
     if let Some(deps) = payload.depends_on.clone() {
         routine.depends_on = deps;
     }
+    if let Some(notify_webhook) = payload.notify_webhook {
+        routine.notify_webhook = notify_webhook;
+    }
 
     state
         .scheduled_task_store()
@@ -706,6 +717,9 @@ pub async fn update_scheduled_task(
     }
     if let Some(deps) = payload.depends_on.clone() {
         routine.depends_on = deps;
+    }
+    if let Some(notify_webhook) = payload.notify_webhook {
+        routine.notify_webhook = notify_webhook;
     }
 
     store.save(&routine).map_err(|e| e.to_string())?;
@@ -1939,6 +1953,7 @@ mod tests {
             policy: None,
             depends_on: None,
             working_dir: None,
+            notify_webhook: None,
         };
         let json = serde_json::to_string(&payload).unwrap();
         let back: CreateTaskPayload = serde_json::from_str(&json).unwrap();
@@ -1960,6 +1975,7 @@ mod tests {
             policy: None,
             depends_on: None,
             working_dir: None,
+            notify_webhook: None,
         };
         let json = serde_json::to_string(&payload).unwrap();
         assert!(json.contains("\"cron_expr\""));
@@ -1990,6 +2006,7 @@ mod tests {
             policy: None,
             depends_on: Some(vec!["dep1".into(), "dep2".into()]),
             working_dir: None,
+            notify_webhook: None,
         };
         let json = serde_json::to_string(&create).unwrap();
         let back: CreateTaskPayload = serde_json::from_str(&json).unwrap();
@@ -2012,6 +2029,7 @@ mod tests {
             policy: None,
             depends_on: Some(Vec::new()),
             working_dir: None,
+            notify_webhook: None,
         };
         let ujson = serde_json::to_string(&update).unwrap();
         assert!(ujson.contains("\"depends_on\":[]"));
@@ -2099,6 +2117,7 @@ mod tests {
                 policy: None,
                 depends_on: None,
                 working_dir: Some("/work/proj/".into()),
+                notify_webhook: None,
             },
         )
         .await
@@ -2128,6 +2147,7 @@ mod tests {
                 policy: None,
                 depends_on: None,
                 working_dir: Some("/work/other".into()),
+                notify_webhook: None,
             },
         )
         .await
@@ -2155,6 +2175,7 @@ mod tests {
                 policy: None,
                 depends_on: None,
                 working_dir: Some("  ".into()),
+                notify_webhook: None,
             },
         )
         .await
@@ -2187,6 +2208,7 @@ mod tests {
                 policy: None,
                 depends_on: None,
                 working_dir: None,
+                notify_webhook: None,
             },
         )
         .await
@@ -2218,6 +2240,7 @@ mod tests {
                 policy: None,
                 depends_on: None,
                 working_dir: Some("/work/housed".into()),
+                notify_webhook: None,
             },
         )
         .await
@@ -2236,6 +2259,7 @@ mod tests {
                 policy: None,
                 depends_on: None,
                 working_dir: None,
+                notify_webhook: None,
             },
         )
         .await
@@ -2281,6 +2305,7 @@ mod tests {
                 policy: None,
                 depends_on: None,
                 working_dir: Some("/work/renamed-proj".into()),
+                notify_webhook: None,
             },
         )
         .await
@@ -2302,6 +2327,7 @@ mod tests {
                 policy: None,
                 depends_on: None,
                 working_dir: None,
+                notify_webhook: None,
             },
         )
         .await
@@ -3026,6 +3052,7 @@ mod tests {
         let deps = RoutineRunDeps {
             inbox: inbox.clone(),
             runs_store: std::sync::Arc::new(runs.clone()),
+            webhook: std::sync::Arc::new(crate::inbox_commands::DesktopWebhookPort),
             usage_store: std::sync::Arc::new(crate::commands_usage::UsageStore::with_path(
                 tmp.join("usage.jsonl"),
             )),
