@@ -314,6 +314,10 @@ pub struct ReplState {
     pub active_elicitation: Option<PendingElicitation>,
     /// /help modal overlay state. When `Some`, overlay is open.
     pub help_overlay: Option<HelpOverlayState>,
+    /// R1-6 (decision ② step 1): whether the one-time `/profile` →
+    /// `/permissions` migration hint has been shown this REPL session.
+    /// Printed above `/profile`'s output exactly once, never repeated.
+    pub profile_migration_hint_shown: bool,
 }
 
 /// Pending MCP elicitation request forwarded from the provider to the TUI.
@@ -610,6 +614,7 @@ impl Default for ReplState {
             prompt_bar_color: None,
             sidebar_tab: SidebarTab::default(),
             approval_mode_label: "EDIT".to_string(),
+            profile_migration_hint_shown: false,
             active_agents: Vec::new(),
             agent_dashboard: None,
             diagnostic_store: crate::lsp_bridge::DiagnosticStore::new(),

@@ -108,6 +108,8 @@ commands:
     switched_no_catalog: "Provider 已设为 %{provider}。它没有内置模型列表 — 使用 `/model <provider>/<model-id>` 选择模型。"
     foreign_model_warning: "⚠ 注意：当前模型 %{model} 属于 %{old_provider}；切换后会保留该模型，请求将被发送到 %{new_provider}。如需显式选择模型：/model %{new_provider}/<model-id>"
     no_selection: "未选择 provider。请先运行 /connect <provider> <key>。"
+    health_skipped_header: "已跳过（无可探测的模型列表端点）："
+    health_skipped_line: "· %{provider} — 已跳过：没有可探测的模型列表端点"
   disconnect:
     usage: "用法：/disconnect <provider>\n移除某 provider 已保存的连接（其在 providers.toml 中的条目），使其不再处于已连接状态。已存储的 API key 会保留 — 重新运行 /connect 即可再次连接。"
     not_connected: "'%{provider}' 未连接。使用 /connect 连接它。"
@@ -121,6 +123,7 @@ commands:
     usage_get: "用法: /config get <键名>"
     usage_set: "用法: /config set <键名> <值>"
     usage_reset: "用法: /config reset <键名>"
+    refused_secret: "已拒绝：'%{key}' 不是可写入的 config.toml 键 — 密钥应存放在 /credentials 中，而不是配置文件里（A1）"
     settings_title: "配置设置：\n\n"
     usage: |
 
@@ -261,6 +264,8 @@ commands:
         /preset              - 列出所有预设
         /preset <name>       - 应用预设
         /preset show <name>  - 显示预设详情
+  profile:
+    migration_hint: "注意：/profile 正在更名 — 权限 profile 现已迁至 /permissions。未来的版本中 /profile 将切换为 provider profile（/profiles）。"
 
 # ── Thinking Phrases ──────────────────────────────────────────────────────
 thinking:

@@ -538,7 +538,20 @@ pub fn handle_command(repl: &mut Repl, input: &str) -> Result<()> {
             "cost" => cost::handle_cost(repl, args)?,
             "billing" | "usage" => cost::handle_billing(repl, args)?,
             "suggest" => cost::handle_suggest(repl, args)?,
-            "permissions" | "perms" | "perm" => cost::handle_permissions(repl, args)?,
+            // R1-6 (decision ② step 1): /permissions is the first-class home
+            // of the permission-profile command — the same handler /profile
+            // resolves to. The tool allow/deny/status view keeps its short
+            // aliases /perms and /perm.
+            "permissions" => handle_permissions_profiles(repl, args)?,
+            "perms" | "perm" => cost::handle_permissions(repl, args)?,
+            // /profile keeps working during the naming transition (R1-6) but
+            // warns once per session that permission profiles now live at
+            // /permissions; in a future release it becomes the provider
+            // profile command (/profiles).
+            "profile" => {
+                maybe_profile_migration_hint(repl);
+                handle_other_command(repl, "profile", args)?;
+            }
             "plan" => session::handle_plan(repl, args)?,
             "team" => extensions::handle_team(repl, args)?,
             "agents" => extensions::handle_agents(repl, args)?,
@@ -642,6 +655,31 @@ fn handle_clear(repl: &mut Repl) -> Result<()> {
 fn handle_quit(repl: &mut Repl) -> Result<()> {
     repl.running = false;
     Ok(())
+}
+
+/// `/permissions` — first-class alias of the `/profile` permission-profile
+/// command (R1-6, decision ② step 1: permission management lives at
+/// /permissions, matching the Claude Code ecosystem; in a future release
+/// /profile itself switches to the provider profiles command, /profiles).
+/// Dispatches through the same registry path as /profile. The tool
+/// allow/deny/status view that previously owned this name remains reachable
+/// via its aliases `/perms` and `/perm`.
+fn handle_permissions_profiles(repl: &mut Repl, args: &str) -> Result<()> {
+    handle_other_command(repl, "profile", args)
+}
+
+/// One-time `/profile` migration hint (R1-6): on the first `/profile` of a
+/// REPL session, print a note above the command's output that permission
+/// profiles moved to `/permissions`. Never repeated.
+fn maybe_profile_migration_hint(repl: &mut Repl) {
+    if repl.state.profile_migration_hint_shown {
+        return;
+    }
+    repl.state.profile_migration_hint_shown = true;
+    repl.chat.add_message(
+        ChatRole::System,
+        t!("commands.profile.migration_hint").to_string(),
+    );
 }
 
 fn handle_other_command(repl: &mut Repl, cmd_name: &str, args: &str) -> Result<()> {

@@ -139,6 +139,41 @@ fn foreign_model_warning(
     )
 }
 
+/// Providers the concurrent probe cannot cover, one formatted line each.
+///
+/// `probe_all_health` silently drops providers whose list-models API has no
+/// shared probeable endpoint per `probe_kind_for_provider` (currently Gemini
+/// and Bedrock; everything OpenAI-wire — including Azure and Replicate — is
+/// probeable via the openai-compatible `/models` endpoint), so silence in the
+/// live table would be indistinguishable from health. This reports each
+/// skipped provider explicitly, sorted by name. A provider already present in
+/// `probes` (e.g. a keyless Gemini reporting NotConfigured) is not repeated
+/// here. Pure — unit-tested below.
+fn health_skipped_lines(
+    providers: &[LlmProvider],
+    probes: &[shannon_core::ProviderHealth],
+) -> Vec<String> {
+    use shannon_engine::api::probe::probe_kind_for_provider;
+
+    let mut skipped: Vec<&LlmProvider> = providers
+        .iter()
+        .filter(|p| {
+            probe_kind_for_provider(p).is_none() && !probes.iter().any(|h| &h.provider == *p)
+        })
+        .collect();
+    skipped.sort_by_key(|p| p.to_string());
+    skipped
+        .iter()
+        .map(|p| {
+            t!(
+                "commands.provider.health_skipped_line",
+                provider = p.to_string()
+            )
+            .to_string()
+        })
+        .collect()
+}
+
 /// `/provider health` — live-probe every allowed provider and inventory
 /// their credential status (ADR-0005 Phase 6 + task 6).
 ///
@@ -149,8 +184,10 @@ fn foreign_model_warning(
 /// switching automatically (Shannon ships no model router, spec §11).
 ///
 /// Probe is fail-soft: a transport error reports "unreachable" but never
-/// crashes the REPL. Bespoke-API providers (Gemini / Bedrock / Azure /
-/// Replicate) are skipped because they have no shared list-models endpoint.
+/// crashes the REPL. Providers without a probeable list-models endpoint (per
+/// `probe_kind_for_provider` — currently Gemini / Bedrock) are skipped; each
+/// of them is printed with its own skip line instead of disappearing from
+/// the report (R1-5).
 fn handle_provider_health(repl: &mut Repl) -> Result<()> {
     use shannon_core::credential_manager::read_credential_value_default;
     use shannon_core::provider_resolver::llm_provider_id;
@@ -250,6 +287,16 @@ fn handle_provider_health(repl: &mut Repl) -> Result<()> {
         ));
     }
 
+    // 3b. Skipped providers (R1-5): the probe only covers providers with a
+    //     shared list-models endpoint; report each bespoke-API provider so
+    //     its absence from the table above is explained, not silent.
+    let skipped = health_skipped_lines(&providers, &probes);
+    if !skipped.is_empty() {
+        lines.push(String::new());
+        lines.push(t!("commands.provider.health_skipped_header").to_string());
+        lines.extend(skipped);
+    }
+
     // 4. Switch hint: when the active provider is down, list reachable
     //    candidates the user can switch to. **Manual only** — Shannon has no
     //    model router (spec §11). Pick up to 3 alphabetically.
@@ -308,6 +355,74 @@ fn handle_provider_health(repl: &mut Repl) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    // ── health_skipped_lines (R1-5: /provider health explains its skips) ──
+
+    #[test]
+    fn skipped_lines_cover_every_bespoke_api_provider() {
+        let providers = vec![
+            LlmProvider::Anthropic,
+            LlmProvider::Ollama,
+            LlmProvider::Gemini,
+            LlmProvider::Bedrock,
+            // Azure / Replicate share the OpenAI wire format, so the engine's
+            // probe covers them via the openai-compatible /models endpoint —
+            // they must never be reported as skipped (the pre-R1-5 roadmap
+            // text listing them as skipped predates that probe coverage).
+            LlmProvider::Azure,
+            LlmProvider::Replicate,
+        ];
+        let lines = health_skipped_lines(&providers, &[]);
+
+        // Exactly the providers `probe_kind_for_provider` cannot cover:
+        // Gemini (bespoke Gemini API) and Bedrock (Anthropic-wire signing).
+        assert_eq!(lines.len(), 2, "one line per skipped provider: {lines:?}");
+        let joined = lines.join("\n");
+        for name in ["bedrock", "gemini"] {
+            assert!(
+                lines
+                    .iter()
+                    .any(|l| l.contains(name) && l.contains("skipped")),
+                "each skipped provider gets its own reason line ({name}): {joined}"
+            );
+        }
+        // Probeable providers are never reported as skipped — including the
+        // openai-wire ones.
+        for name in ["anthropic", "ollama", "azure", "replicate"] {
+            assert!(!joined.contains(name), "{name}: {joined}");
+        }
+        // Sorted by name for a stable report.
+        let names: Vec<String> = lines
+            .iter()
+            .map(|l| {
+                l.split("—")
+                    .next()
+                    .unwrap_or_default()
+                    .trim()
+                    .trim_start_matches('·')
+                    .trim()
+                    .to_string()
+            })
+            .collect();
+        let mut sorted = names.clone();
+        sorted.sort();
+        assert_eq!(names, sorted, "skipped lines are name-sorted: {names:?}");
+    }
+
+    #[test]
+    fn skipped_lines_do_not_repeat_probed_providers() {
+        use shannon_core::{ProviderHealth, ProviderHealthStatus};
+
+        let providers = vec![LlmProvider::Gemini, LlmProvider::Anthropic];
+        // A keyless Gemini shows up in the live table as NotConfigured —
+        // it must not be reported as skipped a second time.
+        let probes = vec![ProviderHealth {
+            provider: LlmProvider::Gemini,
+            status: ProviderHealthStatus::NotConfigured,
+            latency_ms: None,
+        }];
+        assert!(health_skipped_lines(&providers, &probes).is_empty());
+    }
 
     // ── foreign_model_warning (review P1-8: /provider keeps the old model
     //    when the target has no catalog — make the cross-provider trip
