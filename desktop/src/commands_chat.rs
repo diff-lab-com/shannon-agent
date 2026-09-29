@@ -344,7 +344,7 @@ pub(crate) fn apply_session_override(
 /// use `provider` + `model`; other sessions and new chats keep the global
 /// default.
 ///
-/// The model value runs through the same [`normalize_model_id`] repair as
+/// The model value runs through the same `normalize_model_id` repair as
 /// `configure('model')` (legacy clients may still send a display name), and
 /// `provider` must name a managed provider in the engine store — an
 /// override that could never resolve is rejected at write time instead of
