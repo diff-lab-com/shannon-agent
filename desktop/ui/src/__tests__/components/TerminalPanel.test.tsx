@@ -14,6 +14,8 @@
 // pump emits.
 
 import { describe, it, expect, vi, beforeEach } from 'vitest'
+import { readFileSync } from 'node:fs'
+import { resolve } from 'node:path'
 import { render, screen, fireEvent, waitFor, within, act } from '@testing-library/react'
 import { TerminalPanel } from '@/components/terminal/TerminalPanel'
 import { xtermThemeFor } from '@/components/terminal/xtermTheme'
@@ -140,6 +142,7 @@ vi.mock('@/lib/tauri-api', () => ({
   terminalList: vi.fn(),
   terminalGetSettings: vi.fn(),
   terminalSetSettings: vi.fn(),
+  terminalHistory: vi.fn(),
 }))
 
 const DEFAULT_SETTINGS = { shell: null, fontSize: 12, scrollback: 5000, drawerHeight: 320, screenReaderMode: false }
@@ -191,6 +194,8 @@ beforeEach(() => {
   vi.mocked(api.terminalList).mockResolvedValue([])
   vi.mocked(api.terminalGetSettings).mockResolvedValue({ ...DEFAULT_SETTINGS })
   vi.mocked(api.terminalSetSettings).mockResolvedValue({ ...DEFAULT_SETTINGS })
+  // US6 replay: the demo contract answers empty (nothing to restore).
+  vi.mocked(api.terminalHistory).mockResolvedValue({ data: '' })
   vi.mocked(api.terminalSpawn).mockImplementation(async (dir?: string | null) => {
     return { terminalId: `t-${h.terminals.length + 1}-${(dir ?? '').length}` }
   })
@@ -230,14 +235,23 @@ describe('TerminalPanel (open/close)', () => {
   })
 
   it('reconciles live terminals from terminal_list on first open', async () => {
-    vi.mocked(api.terminalList).mockResolvedValue([info('t-live-1'), info('t-live-2', '/other')])
+    vi.mocked(api.terminalList).mockResolvedValue([info('t-live-1'), info('t-live-2')])
     render(<TerminalPanel projectDir="/home/u/demo" />)
     fireEvent.keyDown(window, { key: '`', ctrlKey: true })
     await waitFor(() => expect(screen.getAllByRole('tab').length).toBe(2))
     // No duplicate spawn when live terminals exist.
     expect(api.terminalSpawn).not.toHaveBeenCalled()
-    // Reconnect hint is shown.
-    expect(await screen.findByText(/output history/i)).toBeTruthy()
+  })
+
+  it('restores reconnected tabs silently (replay replaced the history-warning banner)', async () => {
+    // US6: scrollback comes back via terminal_history, so the old
+    // "output history can't be recovered" notice is gone for good.
+    vi.mocked(api.terminalList).mockResolvedValue([info('t-live-1')])
+    render(<TerminalPanel projectDir="/home/u/demo" />)
+    fireEvent.keyDown(window, { key: '`', ctrlKey: true })
+    await screen.findByRole('tab', { name: /demo/ })
+    expect(screen.queryByText(/output history/i)).toBeNull()
+    expect(screen.queryByRole('status')).toBeNull()
   })
 
   it('shows the full-height toggle as aria-pressed', async () => {
@@ -382,8 +396,10 @@ describe('TerminalPanel (tab management)', () => {
   it('keeps only the active tab in the tab order and moves selection with the arrow keys', async () => {
     // P2-3: WAI-ARIA tabs roving tabindex — ArrowRight/Left move the
     // selection with wrapping, Home/End jump to the first/last tab.
+    // projectDir={null} shows all terminals (US7) so the three tabs here
+    // exercise the full tablist regardless of their projects.
     vi.mocked(api.terminalList).mockResolvedValue([info('t-a'), info('t-b', '/other'), info('t-c', '/third')])
-    render(<TerminalPanel projectDir="/home/u/demo" />)
+    render(<TerminalPanel projectDir={null} />)
     fireEvent.keyDown(window, { key: '`', ctrlKey: true })
     const tabA = await screen.findByRole('tab', { name: /demo/ })
     const tabB = await screen.findByRole('tab', { name: /other/ })
@@ -410,9 +426,10 @@ describe('TerminalPanel (tab management)', () => {
 
   it('wires the active tab to the terminal surface via aria-controls/aria-labelledby', async () => {
     // P2-3: the terminal surface is the tabpanel; the active tab names it
-    // and it names the active tab back.
+    // and it names the active tab back. projectDir={null} keeps both tabs
+    // visible (US7) so the labelledby pair can flip between them.
     vi.mocked(api.terminalList).mockResolvedValue([info('t-a'), info('t-b', '/other')])
-    render(<TerminalPanel projectDir="/home/u/demo" />)
+    render(<TerminalPanel projectDir={null} />)
     fireEvent.keyDown(window, { key: '`', ctrlKey: true })
     const tabB = await screen.findByRole('tab', { name: /other/ })
     const surface = screen.getByTestId('terminal-surface')
@@ -427,18 +444,11 @@ describe('TerminalPanel (tab management)', () => {
     )
   })
 
-  it('marks the reconnect/history hint as a status region', async () => {
-    // P3-4: the notice is announced when it appears on boot.
-    vi.mocked(api.terminalList).mockResolvedValue([info('t-live-1')])
-    render(<TerminalPanel projectDir="/home/u/demo" />)
-    fireEvent.keyDown(window, { key: '`', ctrlKey: true })
-    const status = await screen.findByRole('status')
-    expect(status.textContent).toMatch(/output history/i)
-  })
-
   it('switches tabs on click', async () => {
+    // projectDir={null} keeps both tabs visible (US7) for a pure
+    // click-to-select check.
     vi.mocked(api.terminalList).mockResolvedValue([info('t-a'), info('t-b', '/other')])
-    render(<TerminalPanel projectDir="/home/u/demo" />)
+    render(<TerminalPanel projectDir={null} />)
     fireEvent.keyDown(window, { key: '`', ctrlKey: true })
     const tabA = await screen.findByRole('tab', { name: /demo/ })
     const tabB = await screen.findByRole('tab', { name: /other/ })
@@ -457,6 +467,23 @@ describe('TerminalPanel (i18n + theme)', () => {
     const zhKeys = Object.keys(zhCN).filter(k => k.startsWith('terminal.')).sort()
     expect(enKeys.length).toBeGreaterThan(5)
     expect(zhKeys).toEqual(enKeys)
+  })
+
+  it('retired the history-warning keys with the replay banner (US6)', () => {
+    // No locale may still carry them…
+    for (const locale of [en, zhCN]) {
+      expect('terminal.historyWarning' in locale).toBe(false)
+      expect('terminal.panel.dismissHint' in locale).toBe(false)
+    }
+    // …and the panel source must have no dangling references (the parity
+    // test above only guards en↔zh-CN). Same cwd-relative read as
+    // i18nCheck.test.ts.
+    const panelSource = readFileSync(
+      resolve(process.cwd(), 'src/components/terminal/TerminalPanel.tsx'),
+      'utf-8',
+    )
+    expect(panelSource).not.toContain('terminal.historyWarning')
+    expect(panelSource).not.toContain('terminal.panel.dismissHint')
   })
 
   it('maps the material theme to the light ANSI floor', () => {
@@ -639,9 +666,10 @@ describe('TerminalPanel (chat integration: selection → composer — US4)', () 
   })
 
   it('ignores selection changes on background tabs', async () => {
-    // Distinct dirs so the two tabs have distinct accessible names.
+    // Distinct dirs give the tabs distinct accessible names; projectDir
+    // null shows both (US7) — this test is about selection, not filtering.
     vi.mocked(api.terminalList).mockResolvedValue([info('t-a', '/home/u/demo-a'), info('t-b', '/home/u/demo-b')])
-    render(<TerminalPanel projectDir="/home/u/demo" />)
+    render(<TerminalPanel projectDir={null} />)
     fireEvent.keyDown(window, { key: '`', ctrlKey: true })
     // Newest listed terminal (t-b) is selected and mounts first.
     await waitFor(() => expect(h.terminals.length).toBe(1))
@@ -659,8 +687,9 @@ describe('TerminalPanel (chat integration: selection → composer — US4)', () 
   })
 
   it('re-derives the button state when switching between tabs', async () => {
+    // projectDir null keeps both tabs visible (US7) — selection-scope only.
     vi.mocked(api.terminalList).mockResolvedValue([info('t-a', '/home/u/demo-a'), info('t-b', '/home/u/demo-b')])
-    render(<TerminalPanel projectDir="/home/u/demo" />)
+    render(<TerminalPanel projectDir={null} />)
     fireEvent.keyDown(window, { key: '`', ctrlKey: true })
     await waitFor(() => expect(h.terminals.length).toBe(1))
     // Switch to t-a and select there — the button enables for the tab the
@@ -673,6 +702,130 @@ describe('TerminalPanel (chat integration: selection → composer — US4)', () 
     // even though t-a still holds its selection.
     fireEvent.click(screen.getByRole('tab', { name: /demo-b/ }))
     await waitFor(() => expect(screen.getByRole('button', { name: 'Send to agent' })).toBeDisabled())
+  })
+})
+
+describe('TerminalPanel (scrollback replay — US6)', () => {
+  it('writes the history snapshot BEFORE live bytes that arrive during the fetch', async () => {
+    // The backend appends to the ring before emitting, so the snapshot is
+    // a clean prefix of the live stream; the panel must preserve that
+    // order across the async fetch by queueing in-between live payloads.
+    let resolveHistory: (v: { data: string }) => void = () => {}
+    vi.mocked(api.terminalHistory).mockImplementation(
+      () => new Promise((resolve) => { resolveHistory = resolve }),
+    )
+    await openPanel()
+    await waitFor(() => expect(h.terminals.length).toBe(1))
+    const { terminalId } = await vi.mocked(api.terminalSpawn).mock.results[0]!.value
+    // Live byte arrives while the fetch is in flight → queued, not written.
+    h.outputHandler?.({ terminalId, data: encode('LIVE-DURING-FETCH') })
+    expect(rendered(h.terminals[0])).toBe('')
+    resolveHistory({ data: encode('HISTORY-PREFIX') })
+    // Asserted as one rendered stream: snapshot first, queued live second.
+    await waitFor(() =>
+      expect(rendered(h.terminals[0])).toBe('HISTORY-PREFIXLIVE-DURING-FETCH'),
+    )
+  })
+
+  it('fetches the replay once per tab and passes live bytes straight through afterwards', async () => {
+    await openPanel()
+    await waitFor(() => expect(h.terminals.length).toBe(1))
+    const { terminalId } = await vi.mocked(api.terminalSpawn).mock.results[0]!.value
+    await waitFor(() => expect(api.terminalHistory).toHaveBeenCalledWith(terminalId))
+    h.outputHandler?.({ terminalId, data: encode('after-replay') })
+    expect(rendered(h.terminals[0])).toBe('after-replay')
+    expect(api.terminalHistory).toHaveBeenCalledTimes(1)
+  })
+
+  it('fetches the replay once per tab, even after switching away and back', async () => {
+    vi.mocked(api.terminalList).mockResolvedValue([info('t-a', '/home/u/demo-a'), info('t-b', '/home/u/demo-b')])
+    render(<TerminalPanel projectDir={null} />)
+    fireEvent.keyDown(window, { key: '`', ctrlKey: true })
+    await waitFor(() => expect(h.terminals.length).toBe(1)) // t-b (newest) mounts
+    fireEvent.click(await screen.findByRole('tab', { name: /demo-a/ }))
+    await waitFor(() => expect(h.terminals.length).toBe(2)) // t-a mounts
+    fireEvent.click(screen.getByRole('tab', { name: /demo-b/ }))
+    await waitFor(() =>
+      expect(screen.getByRole('tab', { name: /demo-b/ }).getAttribute('aria-selected')).toBe('true'),
+    )
+    // ensureTerm returned the existing entries for both switches — no
+    // third fetch, and each id fetched exactly once.
+    await new Promise((r) => setTimeout(r, 25))
+    expect(api.terminalHistory).toHaveBeenCalledTimes(2)
+    expect(vi.mocked(api.terminalHistory).mock.calls.map(c => c[0]).sort()).toEqual(['t-a', 't-b'])
+  })
+
+  it('keeps the live stream alive when the history call fails', async () => {
+    // The panel swallows the rejection (no toast, no banner) and must
+    // still flip historyReady so live bytes flow straight through.
+    vi.mocked(api.terminalHistory).mockRejectedValue(new Error('no ring'))
+    await openPanel()
+    await waitFor(() => expect(h.terminals.length).toBe(1))
+    const { terminalId } = await vi.mocked(api.terminalSpawn).mock.results[0]!.value
+    h.outputHandler?.({ terminalId, data: encode('still-live') })
+    await waitFor(() => expect(rendered(h.terminals[0])).toBe('still-live'))
+  })
+})
+
+describe('TerminalPanel (per-project tabs — US7)', () => {
+  it('hides tabs from other projects', async () => {
+    vi.mocked(api.terminalList).mockResolvedValue([info('t-mine', '/home/u/demo'), info('t-theirs', '/other/project')])
+    render(<TerminalPanel projectDir="/home/u/demo" />)
+    fireEvent.keyDown(window, { key: '`', ctrlKey: true })
+    expect(await screen.findByRole('tab', { name: /demo/ })).toBeTruthy()
+    expect(screen.queryByRole('tab', { name: /project/ })).toBeNull()
+  })
+
+  it('counts hidden tabs toward the global cap — the filter is view-only', async () => {
+    // Hidden tabs keep RUNNING and the ≤4 cap is backend-global, so the +
+    // button must read the full tab list, not the filtered one.
+    vi.mocked(api.terminalList).mockResolvedValue([
+      info('t-mine', '/home/u/demo'),
+      info('t-1', '/other/a'), info('t-2', '/other/b'), info('t-3', '/other/c'),
+    ])
+    render(<TerminalPanel projectDir="/home/u/demo" />)
+    fireEvent.keyDown(window, { key: '`', ctrlKey: true })
+    expect(await screen.findByRole('tab', { name: /demo/ })).toBeTruthy()
+    // Only this project's tab renders (and mounts a term).
+    expect(screen.getAllByRole('tab')).toHaveLength(1)
+    await waitFor(() => expect(h.terminals.length).toBe(1))
+    const plus = screen.getByRole('button', { name: 'New terminal' })
+    expect(plus.getAttribute('aria-disabled')).toBe('true')
+    expect(plus.getAttribute('title')).toContain('limit reached (4)')
+  })
+
+  it('shows all terminals when the projectDir prop is null', async () => {
+    vi.mocked(api.terminalList).mockResolvedValue([info('t-a', '/home/u/demo'), info('t-b', '/other')])
+    render(<TerminalPanel projectDir={null} />)
+    fireEvent.keyDown(window, { key: '`', ctrlKey: true })
+    expect(await screen.findByRole('tab', { name: /demo/ })).toBeTruthy()
+    expect(screen.getByRole('tab', { name: /other/ })).toBeTruthy()
+  })
+
+  it('shows the empty state without auto-spawning when every tab belongs to another project', async () => {
+    // US7: a filter that hides everything must NOT spawn a replacement —
+    // the hidden terminals are still running elsewhere.
+    vi.mocked(api.terminalList).mockResolvedValue([info('t-elsewhere', '/other/project')])
+    render(<TerminalPanel projectDir="/home/u/demo" />)
+    fireEvent.keyDown(window, { key: '`', ctrlKey: true })
+    expect(await screen.findByText(/No open terminals/)).toBeTruthy()
+    expect(screen.queryAllByRole('tab')).toHaveLength(0)
+    expect(api.terminalSpawn).not.toHaveBeenCalled()
+  })
+
+  it('re-filters when the projectDir prop changes (session switch)', async () => {
+    vi.mocked(api.terminalList).mockResolvedValue([info('t-a', '/home/u/demo'), info('t-b', '/other')])
+    const view = render(<TerminalPanel projectDir="/home/u/demo" />)
+    fireEvent.keyDown(window, { key: '`', ctrlKey: true })
+    expect(await screen.findByRole('tab', { name: /demo/ })).toBeTruthy()
+    expect(screen.queryByRole('tab', { name: /other/ })).toBeNull()
+    view.rerender(<TerminalPanel projectDir="/other" />)
+    await waitFor(() => expect(screen.getByRole('tab', { name: /other/ })).toBeTruthy())
+    expect(screen.queryByRole('tab', { name: /demo/ })).toBeNull()
+    // …and back.
+    view.rerender(<TerminalPanel projectDir="/home/u/demo" />)
+    await waitFor(() => expect(screen.getByRole('tab', { name: /demo/ })).toBeTruthy())
+    expect(screen.queryByRole('tab', { name: /other/ })).toBeNull()
   })
 })
 
@@ -729,11 +882,12 @@ describe('TerminalPanel (P2-4: resize IPC, cleanup, list merge, settings)', () =
   it('merges the follow-up terminal_list result into the spawned tab info', async () => {
     // Boot sees no live terminals, so the panel spawns; the authoritative
     // list answer (real shell/startedAtMs/projectDir) replaces the
-    // optimistic placeholder info wholesale.
+    // optimistic placeholder info wholesale. projectDir={null} keeps every
+    // tab visible (US7) so the merged label flip is observable.
     const fresh: TerminalInfo = { terminalId: 't-fresh', projectDir: '/fresh/dir', shell: '/bin/zsh', startedAtMs: 42 }
     vi.mocked(api.terminalList).mockResolvedValueOnce([]).mockResolvedValueOnce([fresh])
     vi.mocked(api.terminalSpawn).mockResolvedValue({ terminalId: 't-fresh' })
-    render(<TerminalPanel projectDir="/home/u/demo" />)
+    render(<TerminalPanel projectDir={null} />)
     fireEvent.keyDown(window, { key: '`', ctrlKey: true })
     // The tab label flips from the optimistic projectDir ('demo') to the
     // authoritative one ('dir') — impossible unless the follow-up list

@@ -12,7 +12,10 @@
  *    on first open: they set the drawer's initial height and the options
  *    of every xterm created this session — live instances are never
  *    re-geometried;
- *  - ≤4 terminal tabs (backend enforces the same cap);
+ *  - tabs are scoped to the panel's project (US7): the chat page passes
+ *    the session's working dir and the tablist shows only matching
+ *    terminals. Hidden tabs KEEP RUNNING — the ≤4 cap is global on the
+ *    backend, so the filter is view-only;
  *  - Ctrl+` toggles the panel — registered here (not in the global
  *    useKeyboardShortcuts map) because xterm's hidden textarea would be
  *    skipped by that hook's INPUT/TEXTAREA guard. Checked against the
@@ -20,9 +23,13 @@
  *    (mod+n/k/d/1-6, ?, /): Ctrl+` was free;
  *  - theme follows the app theme registry (live tokens, dark/light ANSI
  *    floor — see ./xtermTheme);
- *  - reconnect: `terminal_list` restores live tabs, but output history
- *    from before the reconnect is gone (v1 has no replay buffer) — the
- *    panel says so explicitly;
+ *  - reconnect: `terminal_list` restores live tabs and `terminal_history`
+ *    (US6) replays each tab's scrollback silently — the old "history is
+ *    gone" warning banner is retired with it;
+ *  - chat integration (US4, direction A — user-initiated only): the
+ *    `shannon:terminal-run` window event runs a chat code block here, and
+ *    the toolbar's "send to agent" hands a selection to the composer via
+ *    `shannon:composer-prefill`;
  *  - a11y: labelled region, tablist semantics, focus moves into the
  *    terminal on open and back to the toggle button on close.
  */
@@ -45,7 +52,9 @@ import type { FitAddon as XTermFitAddon } from '@xterm/addon-fit';
  * instead of `useTheme()`.
  */
 
-/** Backend cap (terminal_commands.rs MAX_TERMINALS) mirrored for the UI. */
+/** Backend cap (terminal_commands.rs MAX_TERMINALS) mirrored for the UI.
+ *  GLOBAL across projects — the per-project tab filter below is view-only
+ *  and must not change it. */
 const MAX_TERMINALS = 4;
 
 /** Fallback drawer height (brief: ~320px) until persisted settings load. */
@@ -84,6 +93,15 @@ interface TermEntry {
   term: XTerm;
   fit: XTermFitAddon;
   detachOutput: () => void;
+  /**
+   * US6 replay: false until this tab's `terminal_history` snapshot has
+   * been written to the term. Live payloads arriving before that are
+   * queued in `pendingLive` (arrival order) and flushed after the
+   * snapshot, so ordering is preserved without gaps or duplicates. The
+   * fetch happens once — ensureTerm never runs twice for one entry.
+   */
+  historyReady: boolean;
+  pendingLive: Uint8Array[];
 }
 
 /** basename(3)-ish label so tabs read "shannon-lane-f" not "/home/…". */
@@ -91,6 +109,15 @@ function dirLabel(projectDir: string): string {
   const trimmed = projectDir.replace(/\/+$/, '');
   const base = trimmed.split('/').pop() ?? trimmed;
   return base.length > 0 ? base : projectDir;
+}
+
+/**
+ * US7 (P3-12): exact-match a tab against the panel's project. A null or
+ * empty `projectDir` prop shows ALL terminals — same as the pre-filter
+ * panel.
+ */
+function isForProject(info: TerminalInfo, projectDir?: string | null): boolean {
+  return !projectDir || info.projectDir === projectDir;
 }
 
 export interface TerminalPanelProps {
@@ -112,7 +139,6 @@ export function TerminalPanel({ projectDir }: TerminalPanelProps) {
   const [drawerHeight, setDrawerHeight] = useState(DRAWER_HEIGHT_PX);
   const [tabs, setTabs] = useState<TerminalTab[]>([]);
   const [activeId, setActiveId] = useState<string | null>(null);
-  const [showHistoryHint, setShowHistoryHint] = useState(true);
   const [booted, setBooted] = useState(false);
   // P2 (review §5): a multi-line paste into a shell executes every line —
   // intercept pastes containing line breaks behind an explicit confirmation.
@@ -157,9 +183,22 @@ export function TerminalPanel({ projectDir }: TerminalPanelProps) {
     };
   }, []);
 
+  // US7 (P3-12): the tablist only shows THIS project's terminals. The
+  // filter is deliberately view-only — hidden tabs keep running and still
+  // count against the global ≤4 backend cap (MAX_TERMINALS above); the +
+  // button's enabled state therefore consults `tabs`, not this list.
+  const visibleTabs = useMemo(
+    () => tabs.filter(tab => isForProject(tab.info, projectDir)),
+    [tabs, projectDir],
+  );
+
+  // The active tab only counts when it is visible here: a projectDir prop
+  // change (session switch) can orphan the previous activeId on a hidden
+  // tab, and the drawer then shows the empty state rather than rendering a
+  // terminal its tablist doesn't list.
   const activeTab = useMemo(
-    () => tabs.find(tab => tab.info.terminalId === activeId) ?? null,
-    [tabs, activeId],
+    () => visibleTabs.find(tab => tab.info.terminalId === activeId) ?? null,
+    [visibleTabs, activeId],
   );
 
   // Latest active id for the onSelectionChange callback registered inside
@@ -223,6 +262,16 @@ export function TerminalPanel({ projectDir }: TerminalPanelProps) {
       setHasSelection(term.getSelection().length > 0);
     });
 
+    // Created BEFORE the subscriptions: the output handler consults the
+    // entry's replay-queue state (US6) on every live payload.
+    const entry: TermEntry = {
+      term,
+      fit,
+      detachOutput: () => {}, // wired below, once the subscriptions exist
+      historyReady: false,
+      pendingLive: [],
+    };
+
     // Both subscriptions resolve asynchronously (Tauri listen); a disposed
     // entry unsubscribes immediately on resolution so an
     // unmount-before-subscribe race never leaks a listener.
@@ -235,6 +284,14 @@ export function TerminalPanel({ projectDir }: TerminalPanelProps) {
       // multi-byte sequences split across events. Decoding per event would
       // turn both halves of a split sequence into U+FFFD.
       const bytes = decodeTerminalOutput(payload.data);
+      // US6: until the history snapshot has been written, live bytes queue
+      // in arrival order — the backend appends to the replay ring BEFORE
+      // emitting, so the snapshot is a clean prefix of the live stream and
+      // snapshot-then-flush reproduces the true order without duplicates.
+      if (!entry.historyReady) {
+        entry.pendingLive.push(bytes);
+        return;
+      }
       term.write(bytes);
     }).then(fn => {
       if (disposed) {
@@ -260,13 +317,34 @@ export function TerminalPanel({ projectDir }: TerminalPanelProps) {
       }
       unsubs.push(fn);
     });
-    const detachOutput = () => {
+    entry.detachOutput = () => {
       disposed = true;
       unsubs.forEach(fn => fn());
     };
 
-    const entry: TermEntry = { term, fit, detachOutput };
     termsRef.current.set(info.terminalId, entry);
+
+    // US6: replay the pre-reconnect scrollback once per tab (ensureTerm
+    // never builds a second entry for the same id). The payload is base64
+    // of the ring's bytes; empty (unknown id / ended session / mock
+    // backend) and failed calls simply restore nothing — the live stream
+    // continues either way and no banner is shown anymore.
+    void (async () => {
+      let history: { data: string } | null = null;
+      try {
+        history = await api.terminalHistory(info.terminalId);
+      } catch {
+        /* no replay backend — live stream only */
+      }
+      if (disposed) return;
+      if (history && history.data) term.write(decodeTerminalOutput(history.data));
+      const queued = entry.pendingLive;
+      entry.pendingLive = [];
+      entry.historyReady = true;
+      queued.forEach(bytes => term.write(bytes));
+      term.scrollToBottom();
+    })();
+
     return entry;
   }, []);
 
@@ -365,15 +443,24 @@ export function TerminalPanel({ projectDir }: TerminalPanelProps) {
 
   /**
    * Open the drawer; first open loads settings and reconciles with the
-   * backend. Resolves with the terminal the drawer ended up on (existing
-   * active tab, freshly spawned one, or the newest listed terminal) so
-   * callers like the chat "run in terminal" event never race the re-render;
-   * null when no terminal could be selected or spawned (the failure is
-   * already toasted by spawnTab).
+   * backend. Resolves with the terminal the drawer ended up on (the
+   * newest tab visible in THIS project — existing or freshly spawned) so
+   * callers like the chat "run in terminal" event never race the
+   * re-render; null when no terminal could be selected or spawned (the
+   * failure is already toasted by spawnTab).
    */
   const openPanel = useCallback(async (): Promise<string | null> => {
     setOpen(true);
-    if (booted) return activeId;
+    if (booted) {
+      // Re-open with preserved state: select the newest tab visible in
+      // this project (the previous activeId may have been orphaned on a
+      // hidden tab by a projectDir prop change).
+      const visible = tabs.filter(tab => isForProject(tab.info, projectDir));
+      if (visible.length === 0) return null;
+      const selected = visible[visible.length - 1].info.terminalId;
+      if (selected !== activeId) setActiveId(selected);
+      return selected;
+    }
     setBooted(true);
     // P3-1: fetch persisted settings BEFORE any terminal is created, so
     // the drawer's initial height and the first xterm instance already
@@ -390,19 +477,24 @@ export function TerminalPanel({ projectDir }: TerminalPanelProps) {
       const list = await api.terminalList();
       const known = list.slice(0, MAX_TERMINALS).map(info => ({ info, exited: false }));
       setTabs(known);
-      if (known.length > 0) {
-        const selected = known[known.length - 1].info.terminalId;
+      const visible = known.filter(tab => isForProject(tab.info, projectDir));
+      if (visible.length > 0) {
+        // Newest listed terminal wins (backend ordering is oldest-first).
+        const selected = visible[visible.length - 1].info.terminalId;
         setActiveId(selected);
-        setShowHistoryHint(true);
         return selected;
       }
-      return (await spawnTab()) ?? null;
+      // US7: every live terminal may belong to another project. Only a
+      // genuinely empty backend spawns a first tab here — a filter that
+      // hides everything shows the empty state instead of auto-spawning.
+      if (known.length === 0) return (await spawnTab()) ?? null;
+      return null;
     } catch {
       // Backend unreachable: the drawer still opens and shows the error
       // state via the empty tab list (retry through the + button).
       return null;
     }
-  }, [booted, activeId, spawnTab]);
+  }, [booted, activeId, tabs, projectDir, spawnTab]);
 
   const togglePanel = useCallback(() => {
     if (open) {
@@ -438,10 +530,14 @@ export function TerminalPanel({ projectDir }: TerminalPanelProps) {
   // would sit at the prompt). An existing tab is never spawned twice.
   const runInTerminal = useCallback(async (code: string) => {
     // Every state read below happens BEFORE the first await — no stale
-    // closure and no render race with the boot sequence.
+    // closure and no render race with the boot sequence. The active tab is
+    // only a target when it is visible in this project (US7): after a
+    // session switch the stale activeId may sit on a hidden tab.
     let target: string | null;
     if (open) {
-      target = activeId ?? ((await spawnTab()) ?? null);
+      const currentVisible = activeId != null
+        && visibleTabs.some(tab => tab.info.terminalId === activeId);
+      target = currentVisible ? activeId : ((await spawnTab()) ?? null);
     } else {
       target = await openPanel();
     }
@@ -451,7 +547,7 @@ export function TerminalPanel({ projectDir }: TerminalPanelProps) {
     } catch {
       /* dead terminal: nothing sensible to run code into */
     }
-  }, [open, activeId, openPanel, spawnTab]);
+  }, [open, activeId, visibleTabs, openPanel, spawnTab]);
 
   useEffect(() => {
     const onRun = (e: Event) => {
@@ -507,11 +603,14 @@ export function TerminalPanel({ projectDir }: TerminalPanelProps) {
       const next = prev.filter(tab => tab.info.terminalId !== terminalId);
       setActiveId(current => {
         if (current !== terminalId) return current;
-        return next.length > 0 ? next[next.length - 1].info.terminalId : null;
+        // US7: the successor is the newest tab VISIBLE in this project —
+        // hidden tabs must not become the active one.
+        const visible = next.filter(tab => isForProject(tab.info, projectDir));
+        return visible.length > 0 ? visible[visible.length - 1].info.terminalId : null;
       });
       return next;
     });
-  }, []);
+  }, [projectDir]);
 
   const canSpawn = tabs.length < MAX_TERMINALS;
 
@@ -524,8 +623,8 @@ export function TerminalPanel({ projectDir }: TerminalPanelProps) {
   const tabButtonRefs = useRef<Map<string, HTMLButtonElement>>(new Map());
 
   const onTablistKeyDown = useCallback((e: ReactKeyboardEvent) => {
-    if (tabs.length === 0) return;
-    const ids = tabs.map(tab => tab.info.terminalId);
+    if (visibleTabs.length === 0) return;
+    const ids = visibleTabs.map(tab => tab.info.terminalId);
     const current = activeId ? ids.indexOf(activeId) : -1;
     let nextId: string | null = null;
     if (e.key === 'ArrowRight') nextId = ids[(current + 1) % ids.length];
@@ -538,7 +637,7 @@ export function TerminalPanel({ projectDir }: TerminalPanelProps) {
     // `const` binding so the rAF closure keeps the narrowed type.
     const target: string = nextId;
     requestAnimationFrame(() => tabButtonRefs.current.get(target)?.focus());
-  }, [tabs, activeId]);
+  }, [visibleTabs, activeId]);
 
   const handleSpawnClick = useCallback(() => {
     if (!canSpawn) {
@@ -597,7 +696,7 @@ export function TerminalPanel({ projectDir }: TerminalPanelProps) {
           onKeyDown={onTablistKeyDown}
           className="flex items-center gap-xs flex-1 min-w-0 overflow-x-auto"
         >
-          {tabs.map(tab => {
+          {visibleTabs.map(tab => {
             const selected = tab.info.terminalId === activeId;
             return (
               <div key={tab.info.terminalId} className="flex items-center shrink-0">
@@ -691,25 +790,6 @@ export function TerminalPanel({ projectDir }: TerminalPanelProps) {
         </button>
       </div>
 
-      {/* P3-4: the reconnect/history notice is announced (role=status is
-          an implicit aria-live=polite region) when it appears on boot. */}
-      {showHistoryHint && (
-        <div role="status" className="flex items-center gap-xs px-sm py-1 bg-surface-container/70 border-b border-outline-variant/20">
-          <span className="material-symbols-outlined icon-sm text-on-surface-variant" aria-hidden="true">info</span>
-          <p className="flex-1 font-label-sm text-label-sm text-on-surface-variant">
-            {t('terminal.historyWarning')}
-          </p>
-          <button
-            type="button"
-            onClick={() => setShowHistoryHint(false)}
-            aria-label={t('terminal.panel.dismissHint')}
-            className="p-0.5 rounded text-on-surface-variant hover:bg-surface-container focus-visible:outline focus-visible:outline-2 focus-visible:outline-primary"
-          >
-            <span className="material-symbols-outlined icon-sm" aria-hidden="true">close</span>
-          </button>
-        </div>
-      )}
-
       {/* Active terminal surface — the tabpanel the tabs control (P2-3:
           aria-labelledby ↔ the active tab's aria-controls). xterm manages
           its own inner DOM. */}
@@ -719,10 +799,12 @@ export function TerminalPanel({ projectDir }: TerminalPanelProps) {
           data-testid="terminal-surface"
           role="tabpanel"
           id="terminal-tab-panel"
-          aria-labelledby={activeId ? `terminal-tab-${activeId}` : undefined}
+          aria-labelledby={activeTab ? `terminal-tab-${activeTab.info.terminalId}` : undefined}
           className="absolute inset-0 overflow-hidden px-xs py-xs"
         />
-        {tabs.length === 0 && (
+        {/* US7: the empty state also covers "terminals exist but none for
+            this project" — deliberately NOT auto-spawning one. */}
+        {visibleTabs.length === 0 && (
           <div className="absolute inset-0 flex items-center justify-center">
             <p className="font-label-md text-label-md text-on-surface-variant">
               {t('terminal.empty')}
