@@ -70,6 +70,15 @@ pub fn handle_input(
     key: KeyEvent,
     terminal: Option<&mut super::query::Term>,
 ) -> Result<()> {
+    // P0-1: while an inline `!shell` job runs, Esc kills its whole process
+    // group and the key is consumed — it must not reach the prompt, vim
+    // handler, or any overlay. Every other key keeps working: the event loop
+    // stays responsive while the job runs in the background.
+    if repl.state.shell_job.is_some() && key.code == KeyCode::Esc {
+        super::commands::cancel_inline_shell(repl);
+        return Ok(());
+    }
+
     // If the /help overlay is active, Esc closes it; all other keys are
     // consumed while the overlay is open (precedes any other Esc handling).
     if repl.state.help_overlay.is_some() {

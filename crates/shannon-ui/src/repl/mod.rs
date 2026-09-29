@@ -1569,6 +1569,11 @@ impl Repl {
 
         // Main event loop
         while self.running {
+            // Drain finished inline `!shell` jobs (P0-1, non-blocking): the
+            // placeholder tool message is finalized in place when the worker
+            // reports completion / timeout / Esc-cancel.
+            commands::poll_inline_shell_jobs(self);
+
             // Poll deferred update check result
             let update_msg = self
                 .update_check_rx
@@ -1815,6 +1820,10 @@ impl Repl {
                 self.handle_event(event, Some(&mut terminal));
             }
         }
+
+        // P0-1 hygiene: a job still in flight at exit would orphan its whole
+        // process group — kill it before tearing down the terminal.
+        commands::cancel_inline_shell(self);
 
         // Save command history to ~/.shannon/history.jsonl
         {

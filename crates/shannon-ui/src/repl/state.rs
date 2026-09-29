@@ -314,6 +314,11 @@ pub struct ReplState {
     pub active_elicitation: Option<PendingElicitation>,
     /// /help modal overlay state. When `Some`, overlay is open.
     pub help_overlay: Option<HelpOverlayState>,
+    /// In-flight inline `!shell` job (P0-1). `Some` while a background shell
+    /// command runs: the main loop polls its outcome channel without
+    /// blocking, and Esc kills the child's whole process group. See
+    /// `repl::commands::{ShellJob, start_inline_shell, poll_inline_shell_jobs}`.
+    pub shell_job: Option<super::commands::ShellJob>,
 }
 
 /// Pending MCP elicitation request forwarded from the provider to the TUI.
@@ -661,6 +666,7 @@ impl Default for ReplState {
             pending_elicitation_rx: None,
             active_elicitation: None,
             help_overlay: None,
+            shell_job: None,
         }
     }
 }
