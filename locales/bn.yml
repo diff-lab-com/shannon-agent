@@ -1,4 +1,7 @@
 _bn: "&বাংলা"
+# Bengali locale for Shannon Code
+
+# ── REPL Messages ──────────────────────────────────────────────────────────
 repl:
   chat_cleared: "চ্যাট মুছে ফেলা হয়েছে।"
   unknown_command: "অজানা কমান্ড: /%{name}। উপলব্ধ কমান্ডের জন্য /help টাইপ করুন।"
@@ -13,6 +16,10 @@ repl:
   cancelled: "বাতিল করা হয়েছে"
   cancelled_by_user: "ব্যবহারকারী দ্বারা বাতিল করা হয়েছে।"
   query_task_panicked: "কুয়েরি টাস্ক প্যানিক করেছে"
+  tools_disabled: "টুল নিষ্ক্রিয় করা হয়েছে — মডেল সাধারণ টেক্সট হিসেবে উত্তর দেবে। পুনরায় সক্রিয় করতে /tools ব্যবহার করুন।"
+  tools_enabled: "টুল পুনরায় সক্রিয় করা হয়েছে।"
+
+# ── Status Messages ────────────────────────────────────────────────────────
 status:
   ready: "প্রস্তুত"
   processing: "প্রক্রিয়াকরণ হচ্ছে..."
@@ -23,7 +30,26 @@ status:
   completed: "সম্পন্ন"
   failed: "ব্যর্থ"
   cancelled_status: "বাতিল করা হয়েছে"
+
+# ── Command Descriptions ───────────────────────────────────────────────────
 commands:
+  help:
+    title: "উপলব্ধ কমান্ড"
+    no_help_found: "এর জন্য সহায়তা পাওয়া যায়নি: %{topic}"
+    footer: "নির্দিষ্ট কমান্ডের বিস্তারিত তথ্যের জন্য `/help <command>` ব্যবহার করুন।\n"
+  clear:
+    title: "চ্যাট মুছুন"
+    confirm: "সব বার্তা মুছে ফেলবেন? এটি পূর্বাবস্থায় ফেরানো যাবে না।"
+  quit:
+    title: "সেশন শেষ করবেন?"
+    confirm: "আপনার অসংরক্ষিত কার্যকলাপ আছে। তবুও প্রস্থান করবেন?"
+  model:
+    title: "মডেল নির্ধারণ"
+    prompt: "মডেলের নাম লিখুন (যেমন claude-3.5-sonnet, gpt-4o)..."
+    set: "মডেল নির্ধারিত হয়েছে: %{name}"
+    context_unknown: "অজানা (প্রদানকারী অনুযায়ী)"
+    cost_unknown: "অনুমান অনুপলব্ধ"
+    cost_free_local: "বিনামূল্যে (স্থানীয়)"
   remote:
     dashboard_title: "রিমোট টার্গেট — টুল এক্সিকিউশন সক্রিয় টার্গেট অনুসরণ করে।"
     none: "এখনও কোনো টার্গেট নেই। `/remote add ssh <user@host> <নাম> <ওয়ার্কস্পেস>` দিয়ে যোগ করুন।"
@@ -54,19 +80,38 @@ commands:
     resumed: "▶ লক্ষ্য পুনরায় শুরু (রাউন্ড গণনা রিসেট)।"
     complete: "✓ %{iterations} রাউন্ডে লক্ষ্য পূর্ণ: %{objective}"
     conflict_loop: "/ralph বা /loop সক্রিয় আছে — আগে সেগুলো বন্ধ করে তারপর /goal সেট করুন।"
-  help:
-    title: "উপলব্ধ কমান্ড"
-    no_help_found: "এর জন্য সহায়তা পাওয়া যায়নি: %{topic}"
-  clear:
-    title: "চ্যাট মুছুন"
-    confirm: "সব বার্তা মুছে ফেলবেন? এটি পূর্বাবস্থায় ফেরানো যাবে না।"
-  quit:
-    title: "সেশন শেষ করবেন?"
-    confirm: "আপনার অসংরক্ষিত কার্যকলাপ আছে। তবুও প্রস্থান করবেন?"
-  model:
-    title: "মডেল নির্ধারণ"
-    prompt: "মডেলের নাম লিখুন (যেমন claude-3.5-sonnet, gpt-4o)..."
-    set: "মডেল নির্ধারিত হয়েছে: %{name}"
+  connect:
+    success: "✓ %{provider}-এ সংযুক্ত"
+    choose_model: "নিচ থেকে একটি মডেল নির্বাচন করুন (Enter = ডিফল্ট, ↑↓ = নির্বাচন, Esc = ডিফল্ট ব্যবহার)।"
+    refresh_started: "পটভূমিতে মডেল ক্যাটালগ রিফ্রেশ হচ্ছে…"
+    refresh_success: "ক্যাটালগ রিফ্রেশ হয়েছে — %{count}টি মডেল উপলব্ধ।"
+    refresh_failed: "অফলাইন — ক্যাশ করা ক্যাটালগ ব্যবহার হচ্ছে।"
+    dashboard_header: "একটি প্রদানকারী সংযোগ করুন — এনভায়রনমেন্ট ভেরিয়েবলের প্রয়োজন নেই।"
+    dashboard_providers: "প্রদানকারী:"
+    dashboard_usage: "ব্যবহার: /connect <provider> <api-key>"
+    dashboard_help: "বিস্তারিত: /help connect"
+    key_stored: "✓ '%{provider}'-এর জন্য API কী সংরক্ষিত হয়েছে (সার্ভিস: %{service})"
+    config_saved: "✓ প্রদানকারী কনফিগ সংরক্ষিত হয়েছে: %{path}"
+    reusing_key: "• '%{provider}'-এর সংরক্ষিত কী পুনরায় ব্যবহৃত হচ্ছে (সার্ভিস: %{service})"
+    cred_verified: "✓ ক্রেডেনশিয়াল যাচাই হয়েছে — '%{model}' এই কী দিয়ে পৌঁছানো যায়।"
+    auth_failed: "✗ '%{provider}'-এর প্রমাণীকরণ ব্যর্থ। কী সংরক্ষিত হয়েছে কিন্তু প্রদানকারী তা প্রত্যাখ্যান করেছে — কী যাচাই করে /connect আবার চালান।"
+    verify_warning: "⚠ '%{provider}'-এর ক্রেডেনশিয়াল সম্পূর্ণভাবে যাচাই করা যায়নি (%{error})। কী সংরক্ষিত আছে; তবুও কাজ করতে পারে — একটি বার্তা পাঠিয়ে দেখুন।"
+    probe_failed: "⚠ '%{provider}'-এর ক্রেডেনশিয়াল পরীক্ষা ব্যর্থ। কী সংরক্ষিত আছে; তবুও কাজ করতে পারে।"
+    switched: "✓ %{provider}-এ পরিবর্তিত — মডেল: %{model} (নতুন ক্রেডেনশিয়াল সক্রিয়; পুনরায় চালুর প্রয়োজন নেই)"
+    storing_error: "ক্রেডেনশিয়াল সংরক্ষণ: %{error}"
+    saving_error: "providers.toml সংরক্ষণ: %{error}"
+  provider:
+    available: "উপলব্ধ প্রদানকারী:"
+    legend: "* = বর্তমান | পরিবর্তনের জন্য /provider <নাম> ব্যবহার করুন"
+    switched: "প্রদানকারী: %{provider} | মডেল: %{model}"
+    switched_no_catalog: "প্রদানকারী %{provider} নির্ধারিত হয়েছে। এর নিজস্ব মডেল তালিকা নেই — মডেল বাছতে `/model <provider>/<model-id>` ব্যবহার করুন।"
+    no_selection: "কোনো প্রদানকারী নির্বাচিত নয়। প্রথমে /connect <provider> <key> চালান।"
+  disconnect:
+    usage: "ব্যবহার: /disconnect <provider>\nএকটি প্রদানকারীর সংরক্ষিত সংযোগ (providers.toml-এ তার এন্ট্রি) সরিয়ে দেয় যাতে সেটি আর সংযুক্ত থাকে না। আপনার সংরক্ষিত API কী থেকে যাবে — পুনরায় সংযোগের জন্য /connect আবার চালান।"
+    not_connected: "'%{provider}' সংযুক্ত ছিল না। সংযোগ করতে /connect ব্যবহার করুন।"
+    done: "✓ '%{provider}' বিচ্ছিন্ন করা হয়েছে।"
+    switched: "সক্রিয় প্রদানকারী %{provider}-এ পরিবর্তিত হয়েছে (মডেল: %{model})।"
+    none_remain: "কোনো সংযুক্ত প্রদানকারী নেই — পুনরায় সংযোগের জন্য /connect <provider> <key> চালান।"
   config:
     warning_load: "সতর্কতা: কনফিগ লোড করা যায়নি: %{error}"
     key_not_found: "কনফিগ কী পাওয়া যায়নি: %{key}"
@@ -74,6 +119,14 @@ commands:
     usage_get: "ব্যবহার: /config get <key>"
     usage_set: "ব্যবহার: /config set <key> <value>"
     usage_reset: "ব্যবহার: /config reset <key>"
+    settings_title: "কনফিগারেশন সেটিংস:\n\n"
+    usage: |
+
+      ব্যবহার:
+        /config list          - সব সেটিংস দেখান
+        /config get <key>     - নির্দিষ্ট একটি মান দেখুন
+        /config set <key> <value> - একটি মান নির্ধারণ করুন
+        /config reset <key>   - ডিফল্টে রিসেট করুন
   hooks:
     none: "কোনো হুক কনফিগার করা হয়নি।"
     reloaded: "হুক সফলভাবে পুনরায় লোড করা হয়েছে।"
@@ -122,6 +175,259 @@ commands:
     enabled: "স্যান্ডবক্স মোড সক্রিয় (Docker বিচ্ছিন্নতা)।"
     disabled: "স্যান্ডবক্স মোড নিষ্ক্রিয় (সরাসরি নির্বাহ)।"
     not_available: "Docker উপলব্ধ নয়। স্যান্ডবক্স মোডের জন্য Docker প্রয়োজন।"
+  team:
+    help: |-
+      /team create <name> [description]  — নতুন এজেন্ট দল তৈরি করুন
+      /team add <team> <agent-name>  — দলে এজেন্ট যোগ করুন
+      /team task <team> <subject>  — একটি কাজ যোগ করুন
+      /team assign <team>  — অপেক্ষমাণ কাজগুলো উপলব্ধ এজেন্টদের বরাদ্দ করুন
+      /team status [team]  — দলের অবস্থা দেখান
+      /team list  — সব দল তালিকাভুক্ত করুন
+      /team run  — অপেক্ষমাণ কাজ সমান্তরালে চালান
+      /team shutdown  — দল বন্ধ করুন
+      /team disband <team>  — দল ভেঙে পরিচ্ছন্নকরণ সম্পন্ন করুন
+      /team delegate  — প্রতিনিধি মোড টগল করুন (শুধু লিড সমন্বয় করে)
+  plugin:
+    help: |
+      প্লাগইন ব্যবস্থাপনা:
+
+        /plugin list                    - ইনস্টল করা প্লাগইন তালিকাভুক্ত করুন
+        /plugin search <query>          - প্লাগইন রেজিস্ট্রি অনুসন্ধান করুন
+        /plugin info <name>             - সূচি থেকে প্লাগইনের বিবরণ দেখান
+        /plugin install <name-or-url>   - একটি প্লাগইন ইনস্টল করুন
+        /plugin uninstall <name>        - একটি প্লাগইন সরান
+        /plugin update [name]           - প্লাগইন আপডেট করুন
+        /plugin enable <name>           - একটি প্লাগইন সক্রিয় করুন
+        /plugin disable <name>          - একটি প্লাগইন নিষ্ক্রিয় করুন
+
+      প্লাগইনের উৎস:
+        - রেজিস্ট্রি নাম (যেমন "example-plugin")
+        - Git URL (যেমন "https://github.com/user/plugin")
+        - স্থানীয় পথ (যেমন "/path/to/plugin")
+    installed_title: "ইনস্টল করা প্লাগইন:\n\n"
+    none_installed: |-
+      কোনো প্লাগইন ইনস্টল করা নেই।
+
+      প্লাগইন ইনস্টল করুন:
+        /plugin install <name-or-url>
+    none_found: "কোনো প্লাগইন পাওয়া যায়নি। ভিন্ন অনুসন্ধান চেষ্টা করুন।"
+    search_results_title: "অনুসন্ধান ফলাফল:\n\n"
+    search_results_ranked_title: "অনুসন্ধান ফলাফল (প্রাসঙ্গিকতা অনুযায়ী সাজানো):\n\n"
+  doctor:
+    title: "Shannon Code ডায়াগনস্টিকস\n"
+    results_summary: "ফলাফল: %{passed} সফল, %{warnings} সতর্কতা, %{failed} ব্যর্থ\n"
+  credentials:
+    title: "সংরক্ষিত ক্রেডেনশিয়াল:\n\n"
+    none: "  কোনো ক্রেডেনশিয়াল সংরক্ষিত নেই।\n"
+    usage: |
+
+      ব্যবহার:
+        /credentials list              - সংরক্ষিত ক্রেডেনশিয়াল দেখান
+        /credentials store <svc> <val> - একটি ক্রেডেনশিয়াল সংরক্ষণ করুন
+        /credentials get <service>     - একটি ক্রেডেনশিয়াল পুনরুদ্ধার করুন (মাস্ককৃত)
+        /credentials delete <service>  - একটি ক্রেডেনশিয়াল মুছুন
+        /credentials count             - সংরক্ষিত ক্রেডেনশিয়ালের সংখ্যা দেখান
+  session:
+    snapshots_title: "সংরক্ষিত সেশন স্ন্যাপশট:\n\n"
+    none_saved: |-
+      কোনো সংরক্ষিত সেশন স্ন্যাপশট নেই।
+      তৈরি করতে `/session save <name>` ব্যবহার করুন।
+    load_hint: "\nস্ন্যাপশট পুনরুদ্ধার করতে `/session load <name>` ব্যবহার করুন।"
+  debug:
+    help: |
+      ডেভেলপার ডিবাগ কমান্ড:
+
+        /debug log [level]     - লগ স্তর নির্ধারণ করুন (trace|debug|info|warn|error)
+        /debug profile start   - পারফরম্যান্স প্রোফাইলিং শুরু করুন
+        /debug profile stop    - প্রোফাইলিং বন্ধ করে ফলাফল দেখান
+        /debug trace [on|off]  - এক্সিকিউশন ট্রেসিং টগল করুন
+        /debug info            - সিস্টেম ডায়াগনস্টিকস দেখান
+
+      লগ স্তর:
+        trace - অভ্যন্তরীণ সহ সব বার্তা
+        debug - ডিবাগ বার্তা ও তদূর্ধ্ব
+        info  - তথ্যমূলক বার্তা (ডিফল্ট)
+        warn  - শুধু সতর্কতা ও ত্রুটি
+        error - শুধু গুরুতর ত্রুটি
+    system_info_title: "সিস্টেম ডায়াগনস্টিকস:\n\n"
+  preset:
+    available_title: "উপলব্ধ প্রিসেট:\n\n"
+    no_description: "বর্ণনা নেই"
+    usage: |
+
+      ব্যবহার:
+        /preset              - সব প্রিসেট তালিকাভুক্ত করুন
+        /preset <name>       - একটি প্রিসেট প্রয়োগ করুন
+        /preset show <name>  - প্রিসেটের বিবরণ দেখান
+
+# ── Thinking Phrases ──────────────────────────────────────────────────────
+thinking:
+  - "ভাবছে"
+  - "বিশ্লেষণ করছে"
+  - "প্রক্রিয়াকরণ করছে"
+  - "যুক্তি দিচ্ছে"
+  - "বিবেচনা করছে"
+  - "গভীরভাবে ভাবছে"
+  - "বিচার-বিশ্লেষণ করছে"
+  - "কাজ করছে"
+  - "প্রতিচিন্তন করছে"
+
+# ── UI Labels ─────────────────────────────────────────────────────────────
+ui:
+  working: "কাজ করছে"
+  tool: "টুল %{n}"
+  cache: "ক্যাশ %{pct}%"
+  turn: "পাল %{n}"
+  mem: "মেম %{size}"
+  errors: "%{n}টি ত্রুটি"
+  response_complete: "প্রতিক্রিয়া সম্পন্ন"
+  tokens_this_turn: "এই পালে %{count} token"
+  cost_total: "মোট $%{cost}"
+  cache_hit_rate: "ক্যাশ হিট %{pct}%"
+  message_queued: "বার্তা সারিতে যোগ হয়েছে (%{count}টি সারিতে)"
+  removed_queued: "সরানো হয়েছে — %{count}টি বার্তা এখনও সারিতে আছে"
+  removed_last: "সারির শেষ বার্তা সরানো হয়েছে — সম্পাদনা করে আবার সারিতে দিন"
+  removed_edit: "সরানো হয়েছে — সম্পাদনা করে আবার সারিতে দিন"
+  thinking_chars: "ভাবছে··· (%{count} অক্ষর)"
+  thinking_chars_k: "ভাবছে··· (%{count}k অক্ষর)"
+  thinking_header: "▼ ভাবছে (%{count} অক্ষর)"
+  thinking_header_k: "▼ ভাবছে (%{count}k অক্ষর)"
+  no_model: "কোনো মডেল কনফিগার করা নেই"
+  budget_warning: "⚠️ বাজেট সতর্কতা: $%{cost} / $%{limit} (%{pct}% ব্যবহৃত)"
+  budget_exceeded: "🚨 বাজেট অতিক্রম: $%{cost} > $%{limit}"
+  cancelled_partial: "ব্যবহারকারী দ্বারা বাতিল (আংশিক প্রতিক্রিয়া)"
+  tool_running: "%{name} চলছে…"
+  tool_completed_count: "টুল সম্পন্ন (×%{count})"
+  query_engine_unavailable: "ত্রুটি: কুয়েরি ইঞ্জিন উপলব্ধ নয়। সেশন পুনরায় চালু করুন।"
+  tokens_per_sec: "%{status} · %{rate} tok/s"
+  tool_progress: "%{name}: %{pct}%"
+  vim_insert: "সন্নিবেশ"
+  vim_normal: "স্বাভাবিক"
+  vim_visual: "ভিজ্যুয়াল"
+  vim_command: "কমান্ড"
+  placeholder: "আপনার বার্তা টাইপ করুন..."
+  notification_task_completed: "কাজ সম্পন্ন হয়েছে"
+  status_diag: "ডায়াগ"
+  permission_allow_once: "একবার অনুমতি দিন"
+  permission_always_allow: "সর্বদা অনুমতি দিন"
+  permission_edit_run: "সম্পাদন+চালান"
+  permission_deny: "অস্বীকার করুন"
+  plan_approve: "অনুমোদন করুন"
+  plan_reject: "প্রত্যাখ্যান করুন"
+  plan_dismiss: "বাদ দিন"
+  perm_tool: "টুল"
+  perm_description: "বর্ণনা"
+  perm_why: "কেন"
+  approval_edit: "সম্পাদনা"
+  approval_ask: "জিজ্ঞাসা"
+  approval_plan: "পরিকল্পনা"
+  approval_auto: "স্বয়ংক্রিয়"
+  approval_full: "সম্পূর্ণ"
+  key_input: "ইনপুট"
+  key_insert: "সন্নিবেশ"
+  key_insert_newline: "নতুন লাইন যোগ করুন"
+  key_editor: "সম্পাদক"
+  prompt_input_label: "ইনপুট:"
+  prompt_edit_run: "সম্পাদন+চালান"
+  category_edit: "সম্পাদনা"
+  # ── Key hint labels (compact bar) ─────────────────────────────────────────
+  key_help: "সহায়তা"
+  key_normal: "স্বাভাবিক"
+  key_send: "পাঠান"
+  key_complete: "সম্পূর্ণ"
+  key_copy: "কপি"
+  key_visual: "ভিজ্যুয়াল"
+  key_command: "কমান্ড"
+  key_move: "সরান"
+  key_del_line: "লাইন মুছুন"
+  key_chat_search: "চ্যাট অনুসন্ধান"
+  key_scroll: "স্ক্রল"
+  key_pager: "পেজার"
+  key_mode: "মোড"
+  key_quit: "প্রস্থান"
+  key_cancel: "বাতিল"
+  key_yank: "কপি"
+  key_delete: "মুছুন"
+  # ── Help panel sections ───────────────────────────────────────────────────
+  help_section_navigation: "নেভিগেশন"
+  help_section_input: "ইনপুট"
+  help_section_chat: "চ্যাট"
+  help_section_vim: "Vim"
+  help_section_system: "সহায়তা ও সিস্টেম"
+  help_title: "শর্টকাট"
+  help_press_any_key: "বন্ধ করতে যেকোনো কী চাপুন"
+  # ── Help panel items ──────────────────────────────────────────────────────
+  help_scroll_page: "চ্যাট পৃষ্ঠা অনুযায়ী স্ক্রল করুন"
+  help_jump_top_bottom: "শীর্ষ / নিচে যান"
+  help_toggle_transcript: "ট্রান্সক্রিপ্ট পেজার টগল করুন"
+  help_send_message: "বার্তা পাঠান"
+  help_newline: "নতুন লাইন যোগ করুন"
+  help_clear_input: "ইনপুট মুছুন (অথবা প্রস্থান)"
+  help_external_editor: "বাহ্যিক সম্পাদক খুলুন"
+  help_copy_response: "শেষ প্রতিক্রিয়া ক্লিপবোর্ডে কপি করুন"
+  help_search_chat: "চ্যাট বার্তা অনুসন্ধান করুন"
+  help_search_history: "কমান্ড ইতিহাস অনুসন্ধান করুন"
+  help_delete_word: "পূর্ববর্তী শব্দ মুছুন"
+  help_kill_line: "লাইনের শেষ পর্যন্ত মুছুন"
+  help_kill_start: "লাইনের শুরু পর্যন্ত মুছুন"
+  help_clear_screen: "স্ক্রিন পরিষ্কার করুন"
+  help_complete: "সম্পূর্ণ / স্ট্রিমিংয়ের সময় সারিতে দিন"
+  help_approval_mode: "অনুমোদন মোড পরিবর্তন করুন"
+  help_command_history: "কমান্ড ইতিহাস"
+  help_fold_tool: "শেষ টুল আউটপুট ভাঁজ/খুলুন"
+  help_cycle_view: "ভিউ মোড পরিবর্তন (ডিফল্ট/বিস্তারিত)"
+  help_toggle_fold: "সব টুল ভাঁজ টগল করুন"
+  help_paste_image: "ক্লিপবোর্ড থেকে ছবি পেস্ট করুন"
+  help_command_palette: "কমান্ড প্যালেট"
+  help_active_agents: "সক্রিয় এজেন্ট দেখান"
+  help_insert_mode: "সন্নিবেশ মোডে প্রবেশ করুন"
+  help_visual_mode: "ভিজ্যুয়াল মোড (টেক্সট নির্বাচন)"
+  help_visual_line: "ভিজ্যুয়াল লাইন মোড"
+  help_move_cursor: "কার্সর সরান"
+  help_word_forward_back: "শব্দ সামনে / পিছনে"
+  help_line_start_end: "লাইনের শুরু / শেষ"
+  help_delete_line: "লাইন মুছুন"
+  help_yank_line: "লাইন কপি করুন"
+  help_paste_after: "কার্সরের পরে পেস্ট করুন"
+  help_undo: "আনডু"
+  help_redo: "রিডু"
+  help_command_mode: "কমান্ড মোড"
+  help_return_normal: "স্বাভাবিক মোডে ফিরুন"
+  help_this_overlay: "এই সহায়তা প্যানেল"
+  help_toggle_mouse: "মাউস স্ক্রল টগল করুন"
+  help_undo_exchange: "শেষ বিনিময় বাতিল করুন"
+  # ── Header labels ─────────────────────────────────────────────────────────
+  header_send: "পাঠান"
+  header_newline: "নতুন লাইন"
+  header_editor: "সম্পাদক"
+  header_fullscreen: "পূর্ণ স্ক্রিন"
+  sidebar:
+    context: "প্রসঙ্গ"
+    cost: "খরচ"
+    memory: "মেমরি"
+    tools: "টুল"
+    changes: "পরিবর্তন"
+    pressure_emergency: "জরুরি"
+    pressure_critical: "গুরুতর"
+    pressure_high: "উচ্চ"
+    pressure_normal: "স্বাভাবিক"
+    pressure_low: "নিম্ন"
+  status_card:
+    title: " অবস্থা "
+    no_provider: "কোনো প্রদানকারী সংযুক্ত নেই। শুরু করতে /connect চালান।"
+    active_label: "সক্রিয়:"
+    tier_label: "স্তর:"
+    available_providers: "উপলব্ধ প্রদানকারী ({connected} সংযুক্ত / {total} সমর্থিত):"
+    commands: "কমান্ড: /connect · /model · /provider · /profile · /help"
+  help_overlay:
+    title: " Shannon সহায়তা — বন্ধ করতে Esc "
+    categories: " বিভাগ "
+    commands: " কমান্ড "
+    footer: " j/k: বিভাগ পরিবর্তন │ Enter: বিস্তারিত │ /: অনুসন্ধান │ Esc: বন্ধ │ ফিল্টার: {filter} "
+  status_bar:
+    no_provider: "[কোনো প্রদানকারী সংযুক্ত নেই]"
+
+# ── CLI Help ───────────────────────────────────────────────────────────────
 cli:
   about: "Rust-এ তৈরি AI-চালিত কোড সহকারী"
   prompt_help: "সরাসরি একটি প্রম্পট কার্যকর করুন (অ-ইন্টারেক্টিভ মোড)।"
@@ -149,6 +455,8 @@ cli:
   version_line: "Shannon Code v0.1.0"
   pipe_requires_input: "ত্রুটি: --pipe-এ stdin ইনপুট বা একটি প্রম্পট আর্গুমেন্ট প্রয়োজন"
   lang_help: "ভাষা/লোকেল নির্ধারণ করুন (যেমন, en, zh)"
+
+# ── Tool Messages ──────────────────────────────────────────────────────────
 tools:
   registration_failed: "টুল নিবন্ধন ব্যর্থ: %{error}"
   using: "ব্যবহৃত: %{name}, ইনপুট: %{input}"
@@ -158,6 +466,8 @@ tools:
   loaded_plugins: "%{count}টি প্লাগইন লোড করা হয়েছে"
   plugin_warning: "সতর্কতা: প্লাগইন আবিষ্কার ব্যর্থ: %{error}"
   discovered_mcp: "%{count}টি MCP সার্ভার আবিষ্কৃত হয়েছে"
+
+# ── Query Events ───────────────────────────────────────────────────────────
 query:
   turn_completed: "[পাল %{turn} সম্পন্ন, %{tokens} token]"
   processing_status: "প্রক্রিয়াকরণ হচ্ছে: %{message}"
@@ -169,6 +479,8 @@ query:
   api_key_required: "API কী প্রয়োজন"
   api_key_prompt: "আপনার API কী লিখুন..."
   query_error: "কুয়েরি ত্রুটি"
+
+# ── Diff/Review ────────────────────────────────────────────────────────────
 review:
   all_accepted: "সব পরিবর্তন গ্রহণ করা হয়েছে এবং স্টেজ করা হয়েছে।"
   no_changes_reject: "প্রত্যাখ্যান করার মতো কোনো পরিবর্তন নেই।"
