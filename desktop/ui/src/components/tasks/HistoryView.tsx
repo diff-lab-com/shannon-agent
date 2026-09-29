@@ -238,7 +238,7 @@ export default function HistoryView({
                       {row.error_message ? (
                         <div>
                           <div className="font-label-sm text-label-xs text-error uppercase tracking-wider mb-xs">{t('tasks.historyView.error')}</div>
-                          <pre className="font-mono text-label-sm bg-error/5 text-error border border-error/20 rounded-sm p-sm whitespace-pre-wrap break-words">{row.error_message}</pre>
+                          <pre className="font-mono text-label-sm bg-error-container text-on-error-container border border-error/20 rounded-sm p-sm whitespace-pre-wrap break-words">{row.error_message}</pre>
                         </div>
                       ) : null}
                     </div>

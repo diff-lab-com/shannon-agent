@@ -425,7 +425,7 @@ function AdapterCard({
             <p className="text-label-sm text-on-surface-variant line-clamp-2">{entry.description}</p>
           </div>
           {isQueryPending && !isInstalled ? (
-            <span className="text-label-xs px-xs py-[1px] rounded-full font-bold bg-secondary/15 text-secondary shrink-0 inline-flex items-center gap-[4px]" title={t('extensions.datasources.queryComingSoonHint')}>
+            <span className="text-label-xs px-xs py-[1px] rounded-full font-bold bg-secondary-container text-on-secondary-container shrink-0 inline-flex items-center gap-[4px]" title={t('extensions.datasources.queryComingSoonHint')}>
               <span className="material-symbols-outlined icon-xs">schedule</span>
               {t('extensions.datasources.queryComingSoon')}
             </span>

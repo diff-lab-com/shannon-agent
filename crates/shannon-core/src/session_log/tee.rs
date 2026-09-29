@@ -486,8 +486,19 @@ impl SessionTee {
                 self.record_body(event.body.clone());
             }
             crate::bus::BusInput::Coalesce(coalesce) => match coalesce {
-                crate::bus::CoalesceInput::StepUsage(usage) => self.add_turn_usage(usage.clone()),
-                crate::bus::CoalesceInput::BareTokens(tokens) => self.bare_tokens = Some(*tokens),
+                // Each fold directive is one LLM step, exactly like the
+                // `Usage`/`TurnCompleted` engine events that map to it (see
+                // `query_event_to_bus_inputs`): without these increments the
+                // bus path would report `turn/end.llm_steps: 0` while the
+                // direct path counts them (the §4.8 parity contract).
+                crate::bus::CoalesceInput::StepUsage(usage) => {
+                    self.turn_steps += 1;
+                    self.add_turn_usage(usage.clone());
+                }
+                crate::bus::CoalesceInput::BareTokens(tokens) => {
+                    self.turn_steps += 1;
+                    self.bare_tokens = Some(*tokens);
+                }
                 crate::bus::CoalesceInput::TurnBoundary { reason, error } => {
                     self.close_turn(reason, error.clone());
                 }
@@ -937,6 +948,70 @@ mod tests {
             }
             other => panic!("wrong body: {other:?}"),
         }
+    }
+
+    #[test]
+    fn test_bus_path_counts_llm_steps_like_direct_path() {
+        // The engine's production path is bus-only (`EventTx::send` expands
+        // every engine event via `query_event_to_bus_inputs`), so the
+        // `Usage`/`TurnCompleted` step counting (`turn/end.llm_steps`) must
+        // survive the fold-directive detour byte-identically to the direct
+        // `record_query_event` path (§4.8 parity; drifted to 0 in #149).
+        let usage = QueryEvent::Usage {
+            query_id: query_id(),
+            input_tokens: 11,
+            output_tokens: 22,
+            cost_usd: 0.5,
+            cache_creation_tokens: 3,
+            cache_read_tokens: 4,
+        };
+        let turn_completed = QueryEvent::TurnCompleted {
+            query_id: query_id(),
+            turn_number: 1,
+            tokens_used: 42,
+        };
+        let completed = QueryEvent::Completed {
+            query_id: query_id(),
+            outcome: Default::default(),
+        };
+
+        let dir_direct = TempDir::new().expect("tempdir");
+        {
+            let mut tee = open_tee(&dir_direct);
+            tee.record_turn_start(None);
+            tee.record_query_event(&usage);
+            tee.record_query_event(&turn_completed);
+            tee.record_query_event(&completed);
+            tee.close();
+        }
+
+        let dir_bus = TempDir::new().expect("tempdir");
+        {
+            let mut tee = open_tee(&dir_bus);
+            tee.record_turn_start(None);
+            for event in [&usage, &turn_completed, &completed] {
+                for input in crate::session_log::query_event_to_bus_inputs(event) {
+                    tee.record_bus_input(&input);
+                }
+            }
+            tee.close();
+        }
+
+        fn turn_end_fields(dir: &TempDir) -> (Option<u64>, Option<TokenUsage>) {
+            let body = read_bodies(dir)
+                .into_iter()
+                .find(|b| b.kind() == SessionEventKind::TurnEnd)
+                .expect("turn/end recorded");
+            match body {
+                SessionEventBody::TurnEnd(p) => (p.llm_steps, p.usage),
+                other => panic!("wrong body: {other:?}"),
+            }
+        }
+        let (direct_steps, direct_usage) = turn_end_fields(&dir_direct);
+        let (bus_steps, bus_usage) = turn_end_fields(&dir_bus);
+        assert_eq!(direct_steps, Some(2), "two LLM steps on the direct path");
+        assert_eq!(bus_steps, direct_steps, "bus path must count identically");
+        assert_eq!(bus_usage, direct_usage, "folded usage must match too");
     }
 
     #[test]

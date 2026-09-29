@@ -94,7 +94,7 @@ export function VoiceSttSettings() {
   return (
     <div className="bg-surface-container-lowest p-lg rounded-xl shadow-e1 border border-outline-variant/30 group hover:shadow-e2 transition-shadow">
       <div className="flex items-center gap-md mb-md">
-        <div className="p-sm bg-primary/10 rounded-lg text-primary flex items-center justify-center">
+        <div className="p-sm bg-primary-container rounded-lg text-on-primary-container flex items-center justify-center">
           <span className="material-symbols-outlined">mic</span>
         </div>
         <h3 className="font-headline-md text-headline-md font-bold text-on-surface">{t('settings.voice.title')}</h3>

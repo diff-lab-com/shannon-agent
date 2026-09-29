@@ -646,6 +646,16 @@ pub fn handle_input(
                 repl.state.completion_suggestion_index = 0;
                 return Ok(());
             }
+            // P0-1: while an inline `!shell` job runs, Esc kills its whole
+            // process group and is consumed — it must not trigger the
+            // double-Esc /rewind or the vim insert→normal switch. Every
+            // overlay/dialog handler above already returned for its own keys,
+            // so an open overlay wins over the cancel (its Esc closes the
+            // overlay; the job keeps running and the next Esc cancels it).
+            if repl.state.shell_job.is_some() {
+                super::commands::cancel_inline_shell(repl);
+                return Ok(());
+            }
             // Double-Esc on empty input triggers /undo
             let now = std::time::Instant::now();
             let input_empty = repl.prompt.input().trim().is_empty();
@@ -1130,7 +1140,11 @@ pub(crate) fn complete_command_args(cmd_name: &str, prefix: &str) -> Vec<String>
             "preview",
             "--preview",
         ],
-        "permissions" | "perm" | "perms" => &["allow", "deny", "reset", "status"],
+        // R1-6 (decision ② step 1): /permissions manages permission profiles
+        // (the /profile command); the tool allow/deny view keeps /perms and
+        // /perm.
+        "permissions" => &["list", "show", "set", "create"],
+        "perm" | "perms" => &["allow", "deny", "reset", "status"],
         "plan" => &["create", "approve", "reject", "done", "status"],
         "review" => &["HEAD~1", "main...HEAD", "--staged", "--full"],
         "history" => &["--export"],
@@ -3051,11 +3065,33 @@ mod tests {
             "credentials and creds should have same completions"
         );
 
-        let perm = complete_command_args("permissions", "");
-        let perm_alias = complete_command_args("perms", "");
+        // R1-6: /perms and /perm are still the same (tool) command, but
+        // /permissions moved to the permission-profile command — its
+        // completions are the profile subcommands instead.
+        let perm = complete_command_args("perms", "");
+        let perm_alias = complete_command_args("perm", "");
         assert_eq!(
             perm, perm_alias,
-            "permissions and perms should have same completions"
+            "perms and perm should have same completions"
+        );
+        assert_eq!(
+            perm,
+            vec![
+                "allow".to_string(),
+                "deny".to_string(),
+                "reset".to_string(),
+                "status".to_string()
+            ]
+        );
+        assert_eq!(
+            complete_command_args("permissions", ""),
+            vec![
+                "list".to_string(),
+                "show".to_string(),
+                "set".to_string(),
+                "create".to_string()
+            ],
+            "/permissions should complete permission-profile subcommands"
         );
     }
 
@@ -3669,5 +3705,58 @@ mod tests {
         let diag = complete_command_args("diag", "");
         assert!(diag.contains(&"--full".to_string()));
         assert!(diag.contains(&"--json".to_string()));
+    }
+
+    /// P0-1 Esc precedence: with the /help overlay open while an inline
+    /// `!shell` job runs, Esc is consumed by the overlay's own handler — it
+    /// closes the overlay and must NOT kill the job. Only once no overlay is
+    /// left does Esc cancel the running job.
+    #[test]
+    fn esc_with_overlay_open_does_not_cancel_inline_shell_job() {
+        use crate::repl::commands::{poll_inline_shell_jobs, start_inline_shell};
+        use crate::repl::state::HelpOverlayState;
+
+        let mut repl = Repl::new().expect("test repl");
+        start_inline_shell(&mut repl, "sleep 30", 30);
+        assert!(repl.state.shell_job.is_some(), "job in flight");
+        let idx = repl.chat.message_count() - 1;
+        assert!(
+            repl.chat.messages[idx]
+                .content
+                .contains("running, Esc to cancel")
+        );
+
+        // /help overlay open on top of the running job: its Esc wins.
+        repl.state.help_overlay = Some(HelpOverlayState::default());
+        let esc = KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE);
+        handle_input(&mut repl, esc, None).expect("overlay Esc handled");
+        assert!(
+            repl.state.help_overlay.is_none(),
+            "overlay closed by its own Esc handler"
+        );
+        assert!(
+            repl.state.shell_job.is_some(),
+            "job must survive the overlay's Esc"
+        );
+        assert!(
+            repl.chat.messages[idx]
+                .content
+                .contains("running, Esc to cancel"),
+            "placeholder untouched while the job runs"
+        );
+
+        // Overlay gone: the next Esc is the job-cancel.
+        handle_input(&mut repl, esc, None).expect("job-cancel Esc handled");
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(2);
+        while repl.state.shell_job.is_some() && std::time::Instant::now() < deadline {
+            poll_inline_shell_jobs(&mut repl);
+            std::thread::sleep(std::time::Duration::from_millis(10));
+        }
+        assert!(repl.state.shell_job.is_none(), "job settled after cancel");
+        assert!(
+            repl.chat.messages[idx].content.contains("cancelled"),
+            "placeholder finalized as cancelled: {:?}",
+            repl.chat.messages[idx].content
+        );
     }
 }

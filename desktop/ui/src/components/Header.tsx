@@ -182,7 +182,7 @@ export function Header() {
           {isWindowMode && (
             <div className="flex items-center gap-sm">
               <span
-                className="hidden md:inline-flex items-center gap-xs px-sm py-xs rounded-full bg-primary/10 text-primary font-label-sm text-label-xs font-bold uppercase tracking-wider"
+                className="hidden md:inline-flex items-center gap-xs px-sm py-xs rounded-full bg-primary-container text-on-primary-container font-label-sm text-label-xs font-bold uppercase tracking-wider"
                 title={t('windowMode.badge.title')}
               >
                 <span className="material-symbols-outlined icon-sm" aria-hidden="true">picture_in_picture</span>
@@ -240,9 +240,9 @@ export function Header() {
               className={cn(
                 'hidden md:inline-flex items-center gap-xs px-sm py-xs rounded-full font-mono font-label-sm text-label-xs border tabular-nums',
                 (sessionUsage?.cost_usd ?? 0) >= sessionBudget
-                  ? 'bg-error/10 text-error border-error/30'
+                  ? 'bg-error-container text-on-error-container border-error/30'
                   : (sessionUsage?.cost_usd ?? 0) >= sessionBudget * 0.8
-                    ? 'bg-warning/10 text-warning border-warning/30'
+                    ? 'bg-warning-container text-on-warning-container border-warning/30'
                     : 'bg-surface-container-low text-on-surface-variant border-outline-variant/30'
               )}
             >
@@ -295,7 +295,7 @@ export function Header() {
                       aria-selected={m.id === status?.model}
                       className={cn(
                         'w-full justify-between px-md py-sm h-auto rounded-none',
-                        i === modelFocus ? 'bg-primary/10 text-primary' : m.id === status?.model ? 'text-primary font-bold' : 'text-on-surface hover:bg-primary/5'
+                        i === modelFocus ? 'bg-primary-container text-on-primary-container' : m.id === status?.model ? 'text-primary font-bold' : 'text-on-surface hover:bg-primary/5'
                       )}
                       onClick={() => handleModelSwitch(m.id)}
                       onMouseEnter={() => setModelFocus(i)}
@@ -374,9 +374,9 @@ export function Header() {
               <span
                 aria-label={t('header.permRequest.risk.aria', { level: t(`header.permRequest.risk.${permissionRequest.risk}`) })}
                 className={cn('px-sm py-xs rounded-full font-label-sm font-bold uppercase tracking-wider',
-                  permissionRequest.risk === 'critical' ? 'bg-error/10 text-error' :
-                  permissionRequest.risk === 'high' ? 'bg-secondary/10 text-secondary' :
-                  'bg-tertiary/10 text-tertiary'
+                  permissionRequest.risk === 'critical' ? 'bg-error-container text-on-error-container' :
+                  permissionRequest.risk === 'high' ? 'bg-secondary-container text-on-secondary-container' :
+                  'bg-tertiary-container text-on-tertiary-container'
                 )}>{t(`header.permRequest.risk.${permissionRequest.risk}`)}</span>
             </div>
             <div className="p-md bg-surface-container-low rounded-xl mb-lg space-y-sm">

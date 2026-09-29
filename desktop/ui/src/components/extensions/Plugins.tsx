@@ -43,9 +43,9 @@ const TRUST_LABEL_KEY: Record<TrustLevel, string> = {
 
 const TRUST_BADGE_CLASS: Record<TrustLevel, string> = {
   unknown: "bg-surface-container-high text-on-surface-variant",
-  community: "bg-secondary/15 text-secondary",
-  official: "bg-primary/15 text-primary",
-  verified: "bg-tertiary/20 text-tertiary",
+  community: "bg-secondary-container text-on-secondary-container",
+  official: "bg-primary-container text-on-primary-container",
+  verified: "bg-tertiary-container text-on-tertiary-container",
 };
 
 const TRUST_ORDER: Record<TrustLevel, number> = {
@@ -57,9 +57,9 @@ const TRUST_ORDER: Record<TrustLevel, number> = {
 
 // X6 source badge (derived desktop-side by plugin_source_for_path).
 const SOURCE_BADGE: Record<PluginSource, { icon: string; class: string }> = {
-  git: { icon: "sync", class: "bg-secondary/15 text-secondary" },
+  git: { icon: "sync", class: "bg-secondary-container text-on-secondary-container" },
   local: { icon: "folder_open", class: "bg-surface-container-high text-on-surface-variant" },
-  migration: { icon: "move_to_inbox", class: "bg-tertiary/20 text-tertiary" },
+  migration: { icon: "move_to_inbox", class: "bg-tertiary-container text-on-tertiary-container" },
 };
 
 // B6-36: the source line used to hardcode English ("Shannon Featured",
@@ -465,7 +465,7 @@ export default function Plugins() {
         data-testid={`installed-row-${plugin.name}`}
         className="border border-outline-variant/40 rounded-xl px-md py-sm bg-surface-container-lowest flex items-center gap-md"
       >
-        <div className="w-8 h-8 rounded-lg bg-primary/10 text-primary flex items-center justify-center shrink-0">
+        <div className="w-8 h-8 rounded-lg bg-primary-container text-on-primary-container flex items-center justify-center shrink-0">
           <span className="material-symbols-outlined icon-sm">workspaces</span>
         </div>
         <div className="min-w-0 flex-1">
@@ -569,7 +569,7 @@ export default function Plugins() {
       >
         <div className="flex items-start justify-between gap-sm">
           <div className="flex items-start gap-sm min-w-0">
-            <div className="w-9 h-9 rounded-lg bg-primary/10 text-primary flex items-center justify-center shrink-0">
+            <div className="w-9 h-9 rounded-lg bg-primary-container text-on-primary-container flex items-center justify-center shrink-0">
               <span className="material-symbols-outlined icon-md">workspaces</span>
             </div>
             <div className="min-w-0">

@@ -50,7 +50,7 @@ function countByKind(proposal: DreamProposal, kind: DreamAction['kind']): number
 
 const KIND_META: Record<DreamAction['kind'], { icon: string; labelKey: string; badgeClass: string }> = {
   merge: { icon: 'call_merge', labelKey: 'memory.dream.action.merge', badgeClass: 'bg-secondary-container text-on-secondary-container' },
-  remove: { icon: 'delete', labelKey: 'memory.dream.action.remove', badgeClass: 'bg-error/10 text-error' },
+  remove: { icon: 'delete', labelKey: 'memory.dream.action.remove', badgeClass: 'bg-error-container text-on-error-container' },
   add: { icon: 'add_circle', labelKey: 'memory.dream.action.add', badgeClass: 'bg-primary-container text-on-primary-container' },
 }
 
@@ -275,7 +275,7 @@ export default function DreamPanel() {
       className="bg-surface-container-lowest p-lg rounded-xl shadow-e1 border border-outline-variant/30 mb-xl"
     >
       <div className="flex items-center gap-md mb-sm">
-        <div className="p-sm bg-primary/10 rounded-lg text-primary flex items-center justify-center shrink-0">
+        <div className="p-sm bg-primary-container rounded-lg text-on-primary-container flex items-center justify-center shrink-0">
           <span className="material-symbols-outlined">bedtime</span>
         </div>
         <h2 className="font-headline-sm text-on-surface">{t('memory.dream.title')}</h2>

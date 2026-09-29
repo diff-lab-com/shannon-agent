@@ -49,7 +49,6 @@ fn main() {
     use shannon_desktop::session_window_commands;
     use shannon_desktop::skill_pattern_detection;
     use shannon_desktop::terminal_commands;
-    use shannon_desktop::workspace_commands;
     use tauri::{Emitter, Listener, Manager};
     use tauri::{
         menu::{MenuBuilder, MenuItemBuilder},
@@ -488,9 +487,11 @@ fn main() {
             terminal_commands::terminal_resize,
             terminal_commands::terminal_kill,
             terminal_commands::terminal_list,
-            // P1-5 C-2 — draggable panel workspace (frozen contract).
-            workspace_commands::workspace_get_layout,
-            workspace_commands::workspace_set_layout,
+            // P3-1 — terminal settings (`[terminal]` in config.toml).
+            terminal_commands::terminal_get_settings,
+            terminal_commands::terminal_set_settings,
+            // US6 — per-terminal replay history (in-memory ring).
+            terminal_commands::terminal_history,
         ])
         // 2026-09-26 round2 §5-1 A — the `artifact://` custom protocol:
         // interactive HTML artifacts are served from a bounded in-memory
@@ -541,6 +542,15 @@ fn main() {
                 tauri::async_runtime::spawn(async move {
                     if let Some(state) = app.try_state::<commands::AppState>() {
                         session_window_commands::cleanup_destroyed_window(&state, &label).await;
+                        // P3-2 — a destroyed session window must not leak
+                        // the PTYs its terminal panel spawned: reap every
+                        // session attributed to this window label. The
+                        // main window's own destroyed path already does
+                        // `kill_all` above.
+                        let killed = terminal_commands::kill_window_sessions(&state, &label);
+                        if killed > 0 {
+                            tracing::info!(%label, killed, "reaped terminals of destroyed session window");
+                        }
                     }
                 });
             }

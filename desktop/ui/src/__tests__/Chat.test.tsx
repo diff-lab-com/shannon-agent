@@ -420,6 +420,35 @@ describe('Chat page', () => {
     expect(document.querySelector('input[type="file"]')).toBeNull()
   })
 
+  // ── US4 direction A: terminal selection → composer prefill ─────────────
+  it('prefills the composer and refocuses it on shannon:composer-prefill', () => {
+    resetCtx()
+    renderChat()
+    const input = screen.getByPlaceholderText(/Try: "Explain this repo"/)
+    act(() => {
+      window.dispatchEvent(new CustomEvent('shannon:composer-prefill', {
+        detail: { text: '```\nnpm ERR! missing script\n```' },
+      }))
+    })
+    // The quoted block becomes the draft…
+    expect(input).toHaveValue('```\nnpm ERR! missing script\n```')
+    // …and the composer is focused so typing continues below it.
+    expect(input).toHaveFocus()
+  })
+
+  it('ignores shannon:composer-prefill payloads without text', () => {
+    resetCtx()
+    renderChat()
+    const input = screen.getByPlaceholderText(/Try: "Explain this repo"/)
+    fireEvent.change(input, { target: { value: 'kept draft' } })
+    act(() => {
+      window.dispatchEvent(new CustomEvent('shannon:composer-prefill', { detail: {} }))
+      window.dispatchEvent(new CustomEvent('shannon:composer-prefill', { detail: { text: '' } }))
+      window.dispatchEvent(new CustomEvent('shannon:composer-prefill', { detail: { text: 42 } }))
+    })
+    expect(input).toHaveValue('kept draft')
+  })
+
   // Header working-directory chip was removed when ChatInput took ownership
   // of WD selection. Per-input chip behavior is covered in ChatInput.test.tsx.
   // U1 additionally removed the per-row WD hint + export/print hover buttons

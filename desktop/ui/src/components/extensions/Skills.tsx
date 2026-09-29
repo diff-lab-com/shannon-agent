@@ -283,7 +283,7 @@ export default function Skills() {
                 className={cn(
                   "px-sm py-xs rounded-full text-label-sm transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/30",
                   installedFilter === opt.id
-                    ? 'bg-primary/10 text-primary'
+                    ? 'bg-primary-container text-on-primary-container'
                     : 'text-on-surface-variant hover:bg-surface-container hover:text-on-surface',
                 )}
               >

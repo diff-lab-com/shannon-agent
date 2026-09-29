@@ -35,6 +35,7 @@ use crossterm::{
     terminal::{disable_raw_mode, enable_raw_mode},
 };
 use ratatui::{Terminal, TerminalOptions, Viewport, backend::CrosstermBackend};
+use rust_i18n::t;
 use shannon_types::recover_lock;
 use std::collections::HashMap;
 
@@ -145,6 +146,18 @@ pub struct Repl {
     pub(crate) agent_registry: Option<std::sync::Arc<shannon_agents::SubAgentRegistry>>,
     /// Throttle timestamp for agent refresh (avoids block_on on every tick)
     pub(crate) last_agent_refresh: Option<std::time::Instant>,
+    /// Last task-board summary refresh. The summary is cached on the agent
+    /// dashboard and re-fetched at most every 500ms while the dashboard is
+    /// visible — `TaskBoard::summary()` is async, and blocking on it every
+    /// 50ms tick stalled input latency (review §P1-1).
+    pub(crate) last_task_board_summary: Option<std::time::Instant>,
+    /// Redraw gate (review §P2-5): set by any state change that justifies a
+    /// frame (input events, background drains, tick mutations). Cleared when
+    /// the frame is drawn. See `state::should_draw_frame`.
+    pub(crate) frame_dirty: bool,
+    /// When the last frame was completed; drives the idle heartbeat
+    /// (`state::IDLE_HEARTBEAT`) that bounds frame skips.
+    pub(crate) last_frame_at: Option<std::time::Instant>,
     /// Coordinator event receiver for agent dashboard live updates
     pub(crate) coordinator_event_rx:
         Option<tokio::sync::broadcast::Receiver<shannon_agents::CoordinatorEvent>>,
@@ -315,6 +328,26 @@ impl Repl {
             self.state_manager.sessions_dir().to_path_buf(),
         )
     }
+
+    /// Mark the next main-loop frame as dirty (review §P2-5).
+    ///
+    /// Called by every mutation path that today justifies a frame: input
+    /// events, background drains, and tick-driven changes (toast expiry,
+    /// statusline cache update, elicitation dialog). Cleared when the frame
+    /// is drawn; the idle heartbeat bounds any site that forgets to call it.
+    pub(crate) fn mark_frame_dirty(&mut self) {
+        self.frame_dirty = true;
+    }
+
+    /// Update reduced motion and keep the spinner's static mode in lockstep
+    /// (same sync as REPL init). Session-scoped: toggled via
+    /// `/accessibility`; the env-level opt-in is `SHANNON_REDUCED_MOTION`
+    /// (review §P2-6).
+    pub(crate) fn set_reduced_motion(&mut self, enabled: bool) {
+        self.state.reduced_motion = enabled;
+        self.state.spinner.set_static_mode(enabled);
+        self.mark_frame_dirty();
+    }
     /// Minimal REPL for test mode — skips MCP, skills, memory, project instructions,
     /// but includes a lightweight query_engine with an unauthenticated LLM client.
     fn new_minimal(runtime: Runtime) -> Result<Self> {
@@ -383,6 +416,9 @@ impl Repl {
             team_coordinator: None,
             agent_registry: None,
             last_agent_refresh: None,
+            last_task_board_summary: None,
+            frame_dirty: false,
+            last_frame_at: None,
             coordinator_event_rx: None,
             mcp_pool,
             tool_registry,
@@ -1372,6 +1408,9 @@ impl Repl {
             team_coordinator: shared_coordinator,
             agent_registry: None,
             last_agent_refresh: None,
+            last_task_board_summary: None,
+            frame_dirty: false,
+            last_frame_at: None,
             coordinator_event_rx: None,
             mcp_pool,
             tool_registry,
@@ -1584,6 +1623,16 @@ impl Repl {
 
         // Main event loop
         while self.running {
+            // Drain finished inline `!shell` jobs (P0-1, non-blocking): the
+            // placeholder tool message is finalized in place when the worker
+            // reports completion / timeout / Esc-cancel.
+            let had_shell_job = self.state.shell_job.is_some();
+            commands::poll_inline_shell_jobs(self);
+            if had_shell_job && self.state.shell_job.is_none() {
+                // The placeholder was finalized — the chat area changed.
+                self.mark_frame_dirty();
+            }
+
             // Poll deferred update check result
             let update_msg = self
                 .update_check_rx
@@ -1592,6 +1641,7 @@ impl Repl {
             if let Some(msg) = update_msg {
                 self.chat.add_message(ChatRole::System, msg);
                 self.update_check_rx = None;
+                self.mark_frame_dirty();
             }
 
             // Check for permission requests (non-blocking)
@@ -1658,6 +1708,7 @@ impl Repl {
                         },
                         permission_req.prompt.diff_preview.clone(),
                     );
+                    self.mark_frame_dirty();
                 }
             }
 
@@ -1684,6 +1735,9 @@ impl Repl {
                         self.state.theme.accent,
                     );
                 }
+                if had_updates {
+                    self.mark_frame_dirty();
+                }
             }
 
             // Refresh agent states for sidebar display
@@ -1693,10 +1747,15 @@ impl Repl {
 
             // Drain coordinator events into agent dashboard
             if let Some(ref mut rx) = self.coordinator_event_rx {
+                let mut had_events = false;
                 while let Ok(event) = rx.try_recv() {
                     if let Some(ref mut dashboard) = self.state.agent_dashboard {
                         dashboard.handle_coordinator_event(&event);
                     }
+                    had_events = true;
+                }
+                if had_events {
+                    self.mark_frame_dirty();
                 }
             }
 
@@ -1705,17 +1764,38 @@ impl Repl {
                 let mut dashboard = crate::widgets::agent_bar::AgentDashboardState::new();
                 dashboard.sync_from_agents(&self.state.active_agents);
                 self.state.agent_dashboard = Some(dashboard);
+                self.mark_frame_dirty();
             }
             // Sync dashboard entries from current agent state
             if let Some(ref mut dashboard) = self.state.agent_dashboard {
                 dashboard.sync_from_agents(&self.state.active_agents);
             }
-            // Fetch task board summary for the dashboard (P0-2: task ratio)
-            if let Some(ref coordinator) = self.team_coordinator {
-                if let Some(ref mut dashboard) = self.state.agent_dashboard {
-                    let task_board = coordinator.task_board();
-                    let summary = self.runtime.block_on(task_board.summary());
-                    dashboard.task_summary = Some(summary);
+            // Fetch task board summary for the dashboard (P0-2: task ratio).
+            //
+            // Review P1-1: `TaskBoard::summary()` is async, and the previous
+            // code blocked on it on EVERY loop iteration (50ms tick → up to
+            // 20x/s), stalling input latency. The summary is cached on the
+            // dashboard instead and refreshed at most every 500ms — and only
+            // while a dashboard actually renders (one exists exactly while it
+            // is on screen; it is auto-created with agents and dropped
+            // without them). The async runtime handle is kept; only the
+            // per-frame blocking is gone.
+            const TASK_BOARD_SUMMARY_REFRESH: std::time::Duration =
+                std::time::Duration::from_millis(500);
+            if self.team_coordinator.is_some() && self.state.agent_dashboard.is_some() {
+                let due = self
+                    .last_task_board_summary
+                    .is_none_or(|t| t.elapsed() >= TASK_BOARD_SUMMARY_REFRESH);
+                if due {
+                    if let Some(ref coordinator) = self.team_coordinator {
+                        let task_board = coordinator.task_board();
+                        let summary = self.runtime.block_on(task_board.summary());
+                        if let Some(ref mut dashboard) = self.state.agent_dashboard {
+                            dashboard.task_summary = Some(summary);
+                        }
+                        self.mark_frame_dirty();
+                    }
+                    self.last_task_board_summary = Some(std::time::Instant::now());
                 }
             }
             // Auto-remove dashboard when no agents (but keep if expanded)
@@ -1723,6 +1803,7 @@ impl Repl {
                 if let Some(ref dashboard) = self.state.agent_dashboard {
                     if !dashboard.expanded {
                         self.state.agent_dashboard = None;
+                        self.mark_frame_dirty();
                     }
                 }
             }
@@ -1753,6 +1834,7 @@ impl Repl {
                     format!("[Source changed: {preview}{suffix}]"),
                 );
                 self.state.diagnostic_store.mark_stale();
+                self.mark_frame_dirty();
 
                 // Invalidate streaming cache entries for changed files
                 if let Some(ref cache) = self.streaming_cache {
@@ -1771,15 +1853,16 @@ impl Repl {
                         if count > 0 {
                             self.chat.add_message(
                                 ChatRole::System,
-                                format!("[Diagnostics: {count} issue(s) found]"),
+                                t!("ui.diagnostics_issues", count => count).to_string(),
                             );
                         } else {
                             self.chat.add_message(
                                 ChatRole::System,
-                                "[Diagnostics: ✓ No issues]".to_string(),
+                                t!("ui.diagnostics_clean").to_string(),
                             );
                         }
                         self.diagnostic_rx = None;
+                        self.mark_frame_dirty();
                     }
                 } else {
                     // Spawn a new diagnostic run
@@ -1795,6 +1878,9 @@ impl Repl {
 
             // Check scheduled routines and inject due prompts
             let due = self.state.routine_manager.drain_due();
+            if !due.is_empty() {
+                self.mark_frame_dirty();
+            }
             for (name, prompt) in due {
                 self.chat
                     .add_message(ChatRole::System, format!("[Routine: {name}] {prompt}"));
@@ -1803,6 +1889,9 @@ impl Repl {
             // Check cron-based scheduled tasks and inject due prompts
             if std::env::var("SHANNON_DISABLE_CRON").is_err() {
                 let cron_due = self.state.cron_tool.drain_due();
+                if !cron_due.is_empty() {
+                    self.mark_frame_dirty();
+                }
                 for job in cron_due {
                     let overdue = if job.was_overdue { " (catch-up)" } else { "" };
                     let next = match &job.next_run {
@@ -1821,15 +1910,37 @@ impl Repl {
             if commands::maybe_fire_check_in(self) {
                 // The check-in submitted a query — fall through to the event
                 // loop; handle_query drives it to completion.
+                self.mark_frame_dirty();
             }
 
-            render::draw_frame(&mut terminal, self)?;
+            // Review P2-5: draw only when something can have changed. Input
+            // events, background drains, and tick mutations mark the frame
+            // dirty; spinner/progress animation and streaming keep today's
+            // per-tick cadence; a 500ms heartbeat bounds how long anything
+            // the flags missed can stay invisible. The gate only skips the
+            // draw call — the event-loop structure is untouched.
+            let frame_gate = state::FrameGate {
+                dirty: self.frame_dirty,
+                animating: self.state.animation_active(),
+                streaming: self.state.render_in_progress() || self.chat.streaming_active,
+                scrollback_pending: !self.chat.pending_scrollback.is_empty(),
+                since_last_draw: self.last_frame_at.map(|t| t.elapsed()),
+            };
+            if state::should_draw_frame(frame_gate) {
+                render::draw_frame(&mut terminal, self)?;
+                self.last_frame_at = Some(std::time::Instant::now());
+                self.frame_dirty = false;
+            }
 
             // Handle events
             if let Some(event) = self.events.next()? {
                 self.handle_event(event, Some(&mut terminal));
             }
         }
+
+        // P0-1 hygiene: a job still in flight at exit would orphan its whole
+        // process group — kill it before tearing down the terminal.
+        commands::cancel_inline_shell(self);
 
         // Save command history to ~/.shannon/history.jsonl
         {
@@ -1895,23 +2006,42 @@ impl Repl {
                 let total_cost = tracker.total_cost();
                 if tracker.total_input_tokens > 0 {
                     println!();
-                    println!("── Session Summary ──");
+                    println!("{}", t!("ui.session_summary_title"));
                     println!(
-                        "  Tokens: {} in + {} out  |  Cost: ${total_cost:.4}",
-                        tracker.total_input_tokens, tracker.total_output_tokens
+                        "{}",
+                        t!(
+                            "ui.session_summary_tokens",
+                            input => tracker.total_input_tokens,
+                            output => tracker.total_output_tokens,
+                            cost => format!("{total_cost:.4}")
+                        )
                     );
                     if let Some(budget) = tracker.budget_limit_usd {
                         let pct = (total_cost / budget) * 100.0;
-                        println!("  Budget: ${total_cost:.4} / ${budget:.2} ({pct:.0}%)");
+                        println!(
+                            "{}",
+                            t!(
+                                "ui.session_summary_budget",
+                                cost => format!("{total_cost:.4}"),
+                                budget => format!("{budget:.2}"),
+                                pct => format!("{pct:.0}")
+                            )
+                        );
                     }
-                    println!("  Model: {}", tracker.model_name);
+                    println!(
+                        "{}",
+                        t!("ui.session_summary_model", model => tracker.model_name)
+                    );
                     if let Some(started) = &self.session_started_at {
                         let elapsed = chrono::Utc::now() - *started;
                         let mins = elapsed.num_minutes();
                         let secs = elapsed.num_seconds() % 60;
-                        println!("  Duration: {mins}m {secs}s");
+                        println!(
+                            "{}",
+                            t!("ui.session_summary_duration", mins => mins, secs => secs)
+                        );
                     }
-                    println!("─────────────────────");
+                    println!("{}", t!("ui.session_summary_separator"));
                 }
             }
         }
@@ -1923,19 +2053,26 @@ impl Repl {
     fn handle_event(&mut self, event: crate::events::Event, terminal: Option<&mut query::Term>) {
         match event {
             crate::events::Event::Input(key) => {
+                self.mark_frame_dirty();
                 if let Err(e) = input::handle_input(self, key, terminal) {
                     // Display error in UI chat instead of stderr to prevent escape sequence leakage
-                    self.chat
-                        .add_message(ChatRole::System, format!("Input error: {e}"));
+                    self.chat.add_message(
+                        ChatRole::System,
+                        t!("repl.input_error", error => e).to_string(),
+                    );
                 }
             }
             crate::events::Event::Paste(content) => {
+                self.mark_frame_dirty();
                 let line_count = content.lines().count();
                 if line_count > PASTE_THRESHOLD_LINES {
                     self.state.paste_counter += 1;
                     let num = self.state.paste_counter;
                     self.state.pasted_texts.insert(num, content);
-                    let display = format!("[Pasted Text #{num} {line_count} lines]");
+                    // The "[Pasted Text #" prefix is machine-parsed on submit
+                    // (expand_pasted_texts) — locale files must keep it intact.
+                    let display =
+                        t!("ui.pasted_text_marker", num => num, count => line_count).to_string();
                     self.prompt.insert_text(&display);
                 } else {
                     self.prompt.insert_text(&content);
@@ -1944,6 +2081,7 @@ impl Repl {
             }
             crate::events::Event::Mouse(mouse) => {
                 if self.state.mouse_capture_enabled {
+                    self.mark_frame_dirty();
                     input::handle_mouse(self, mouse);
                 }
             }
@@ -1985,11 +2123,22 @@ impl Repl {
                 if let Some((_, started)) = self.state.toast {
                     if started.elapsed().as_secs() >= 5 {
                         self.state.toast = None;
+                        self.mark_frame_dirty();
                     }
                 }
 
-                // Refresh custom statusline (throttled internally)
+                // Refresh custom statusline (throttled internally). Mark the
+                // frame dirty only when the refreshed cache or the git
+                // branch actually changed — an unchanged refresh justifies
+                // no frame.
+                let statusline_before = self.state.cached_statusline.clone();
+                let branch_before = self.state.git_branch.clone();
                 self.refresh_statusline();
+                if self.state.cached_statusline != statusline_before
+                    || self.state.git_branch != branch_before
+                {
+                    self.mark_frame_dirty();
+                }
 
                 // Drain pending MCP elicitations: if no dialog is open and a
                 // request is queued, surface it as an InputDialog. The dialog
@@ -2023,11 +2172,13 @@ impl Repl {
                             self.state.input_dialog = Some(Box::new(dlg));
                             self.state.input_dialog_action = Some("__elicit__".to_string());
                             self.state.active_elicitation = Some(req);
+                            self.mark_frame_dirty();
                         }
                     }
                 }
             }
             crate::events::Event::Resize(_cols, _rows) => {
+                self.mark_frame_dirty();
                 // Reflow committed scrollback if terminal width changed
                 let width = _cols;
                 if self.chat.needs_reflow(width) {
@@ -2050,7 +2201,7 @@ impl Repl {
         let input = input.trim().to_string();
 
         if input.is_empty() {
-            return Err("No input provided on stdin.".into());
+            return Err(t!("repl.no_input").to_string().into());
         }
         self.run_pipe_with(input)
     }
@@ -2062,7 +2213,7 @@ impl Repl {
         let input = input.trim().to_string();
 
         if input.is_empty() {
-            return Err("No input provided on stdin.".into());
+            return Err(t!("repl.no_input").to_string().into());
         }
 
         if input.starts_with('/') {

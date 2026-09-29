@@ -491,3 +491,18 @@ review:
 # ── Session ──────────────────────────────────────────────────────────────────
 session:
   auto_restored: "Sesión restaurada automáticamente: \"%{title}\" (%{count} mensajes, %{model})\nEscribe /clear para comenzar de nuevo."
+
+# ── UI: paste / diagnostics / pipe / session summary ────────────────────
+# NOTE: pasted_text_marker keeps the literal "[Pasted Text #" prefix on
+# purpose — it is machine-parsed on submit (expand_pasted_texts), so
+# translations must keep that prefix with the number directly after it.
+ui:
+  pasted_text_marker: "[Pasted Text #%{num} · %{count} líneas]"
+  diagnostics_issues: "[Diagnóstico: %{count} problema(s) encontrado(s)]"
+  diagnostics_clean: "[Diagnóstico: ✓ sin problemas]"
+  session_summary_title: "── Resumen de sesión ──"
+  session_summary_tokens: "  Tokens: %{input} de entrada + %{output} de salida  |  Coste: $%{cost}"
+  session_summary_budget: "  Presupuesto: $%{cost} / $%{budget} (%{pct}%)"
+  session_summary_model: "  Modelo: %{model}"
+  session_summary_duration: "  Duración: %{mins}m %{secs}s"
+  session_summary_separator: "─────────────────────"
