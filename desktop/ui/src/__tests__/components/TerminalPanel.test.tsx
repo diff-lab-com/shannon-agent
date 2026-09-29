@@ -36,6 +36,9 @@ const h = vi.hoisted(() => ({
     element: HTMLElement | null
     dataHandler: ((data: string) => void) | null
     resizeHandler: ((size: { cols: number; rows: number }) => void) | null
+    /** US4: captured selection-change callback (xterm's carries no payload). */
+    selectionHandler: (() => void) | null
+    selection: string
     open: (container: HTMLElement) => void
     loadAddon: (addon: unknown) => void
     scrollToBottom: () => void
@@ -45,6 +48,8 @@ const h = vi.hoisted(() => ({
     write: (data: string | Uint8Array) => void
     onData: (cb: (data: string) => void) => { dispose: () => void }
     onResize: (cb: (size: { cols: number; rows: number }) => void) => { dispose: () => void }
+    onSelectionChange: (cb: () => void) => { dispose: () => void }
+    getSelection: () => string
   }[],
   /** Every FitAddon the panel created, in creation order. */
   fits: [] as {
@@ -77,6 +82,8 @@ vi.mock('@xterm/xterm', () => ({
     element: HTMLElement | null = null
     dataHandler: ((data: string) => void) | null = null
     resizeHandler: ((size: { cols: number; rows: number }) => void) | null = null
+    selectionHandler: (() => void) | null = null
+    selection = ''
     constructor(options: Record<string, unknown>) {
       this.options = options
       h.terminals.push(this)
@@ -91,6 +98,13 @@ vi.mock('@xterm/xterm', () => ({
     onResize(cb: (size: { cols: number; rows: number }) => void) {
       this.resizeHandler = cb
       return { dispose: () => {} }
+    }
+    onSelectionChange(cb: () => void) {
+      this.selectionHandler = cb
+      return { dispose: () => {} }
+    }
+    getSelection() {
+      return this.selection
     }
     open(container: HTMLElement) {
       this.element = document.createElement('div')
@@ -580,6 +594,85 @@ describe('TerminalPanel (chat integration: run in terminal — US4 direction A)'
     await new Promise((r) => setTimeout(r, 25))
     expect(api.terminalWrite).not.toHaveBeenCalled()
     expect(api.terminalSpawn).toHaveBeenCalledTimes(1)
+  })
+})
+
+describe('TerminalPanel (chat integration: selection → composer — US4)', () => {
+  /** Drive a selection change the way real xterm does: mutate the instance
+   *  selection, then fire the (payload-less) onSelectionChange callback. */
+  const select = (term: (typeof h.terminals)[number], text: string) => {
+    term.selection = text
+    act(() => { term.selectionHandler?.() })
+  }
+
+  it('keeps the send-to-agent button disabled without a selection', async () => {
+    await openPanel()
+    await waitFor(() => expect(h.terminals.length).toBe(1))
+    expect(screen.getByRole('button', { name: 'Send to agent' })).toBeDisabled()
+  })
+
+  it('enables on a non-empty selection and prefills the composer via shannon:composer-prefill', async () => {
+    const seen = vi.fn()
+    window.addEventListener('shannon:composer-prefill', seen)
+    await openPanel()
+    await waitFor(() => expect(h.terminals.length).toBe(1))
+    const button = screen.getByRole('button', { name: 'Send to agent' })
+    select(h.terminals[0], 'npm ERR! missing script')
+    await waitFor(() => expect(button).toBeEnabled())
+
+    fireEvent.click(button)
+    window.removeEventListener('shannon:composer-prefill', seen)
+    expect(seen).toHaveBeenCalledTimes(1)
+    const detail = (seen.mock.calls[0][0] as CustomEvent).detail
+    // The selection is quoted as a fenced block, verbatim.
+    expect(detail.text).toBe('```\nnpm ERR! missing script\n```')
+  })
+
+  it('disables again when the selection is cleared', async () => {
+    await openPanel()
+    await waitFor(() => expect(h.terminals.length).toBe(1))
+    const button = screen.getByRole('button', { name: 'Send to agent' })
+    select(h.terminals[0], 'some output')
+    await waitFor(() => expect(button).toBeEnabled())
+    select(h.terminals[0], '')
+    await waitFor(() => expect(button).toBeDisabled())
+  })
+
+  it('ignores selection changes on background tabs', async () => {
+    // Distinct dirs so the two tabs have distinct accessible names.
+    vi.mocked(api.terminalList).mockResolvedValue([info('t-a', '/home/u/demo-a'), info('t-b', '/home/u/demo-b')])
+    render(<TerminalPanel projectDir="/home/u/demo" />)
+    fireEvent.keyDown(window, { key: '`', ctrlKey: true })
+    // Newest listed terminal (t-b) is selected and mounts first.
+    await waitFor(() => expect(h.terminals.length).toBe(1))
+    // Make t-a active so its term exists, then switch back to t-b.
+    fireEvent.click(await screen.findByRole('tab', { name: /demo-a/ }))
+    await waitFor(() => expect(h.terminals.length).toBe(2))
+    fireEvent.click(screen.getByRole('tab', { name: /demo-b/ }))
+    await waitFor(() =>
+      expect(screen.getByRole('tab', { name: /demo-b/ }).getAttribute('aria-selected')).toBe('true'),
+    )
+    // A selection in the now-background t-a must not enable the button.
+    select(h.terminals[1], 'hidden selection')
+    await new Promise((r) => setTimeout(r, 25))
+    expect(screen.getByRole('button', { name: 'Send to agent' })).toBeDisabled()
+  })
+
+  it('re-derives the button state when switching between tabs', async () => {
+    vi.mocked(api.terminalList).mockResolvedValue([info('t-a', '/home/u/demo-a'), info('t-b', '/home/u/demo-b')])
+    render(<TerminalPanel projectDir="/home/u/demo" />)
+    fireEvent.keyDown(window, { key: '`', ctrlKey: true })
+    await waitFor(() => expect(h.terminals.length).toBe(1))
+    // Switch to t-a and select there — the button enables for the tab the
+    // user is looking at.
+    fireEvent.click(await screen.findByRole('tab', { name: /demo-a/ }))
+    await waitFor(() => expect(h.terminals.length).toBe(2))
+    select(h.terminals[1], 'selected in t-a')
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Send to agent' })).toBeEnabled())
+    // Switching back to t-b (no selection) must re-derive → disabled again,
+    // even though t-a still holds its selection.
+    fireEvent.click(screen.getByRole('tab', { name: /demo-b/ }))
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Send to agent' })).toBeDisabled())
   })
 })
 

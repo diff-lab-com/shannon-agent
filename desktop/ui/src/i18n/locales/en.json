@@ -3070,6 +3070,7 @@
   "terminal.spawn.failed": "Couldn't start a new terminal",
   "terminal.paste.multiline.title": "Paste multiple lines?",
   "terminal.runInTerminal.title": "Run in terminal",
+  "terminal.sendToAgent.title": "Send to agent",
   "terminal.paste.multiline.message": "{lines, plural, =1 {1 line will be sent to the terminal and executed.} other {{lines} lines will be sent to the terminal and executed.}}",
   "terminal.paste.multiline.confirm": "Paste anyway",
   "terminal.paste.multiline.cancel": "Cancel",

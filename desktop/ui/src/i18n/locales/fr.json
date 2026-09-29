@@ -3410,6 +3410,7 @@
   "terminal.spawn.failed": "Impossible de démarrer un nouveau terminal",
   "terminal.paste.multiline.title": "Coller plusieurs lignes ?",
   "terminal.runInTerminal.title": "Exécuter dans le terminal",
+  "terminal.sendToAgent.title": "Envoyer à l'agent",
   "terminal.paste.multiline.message": "{lines, plural, =1 {1 ligne sera envoyée au terminal et exécutée.} other {{lines} lignes seront envoyées au terminal et exécutées.}}",
   "terminal.paste.multiline.confirm": "Coller quand même",
   "terminal.paste.multiline.cancel": "Annuler",

@@ -59,6 +59,13 @@ const DRAWER_HEIGHT_PX = 320;
  */
 const TERMINAL_RUN_EVENT = 'shannon:terminal-run';
 
+/**
+ * Window CustomEvent consumed by the chat page (pages/Chat.tsx), payload
+ * `{ text: string }` — the composer prefill carrying the terminal
+ * selection quoted as a fenced block (US4, "send to agent").
+ */
+const COMPOSER_PREFILL_EVENT = 'shannon:composer-prefill';
+
 /** xterm defaults matching the backend's `[terminal]` fallbacks. */
 const DEFAULT_FONT_SIZE = 12;
 const DEFAULT_SCROLLBACK = 5000;
@@ -114,6 +121,11 @@ export function TerminalPanel({ projectDir }: TerminalPanelProps) {
   // not disabled) so clicking it can trigger the live-region cap feedback
   // below — a disabled button can neither explain nor be asked why.
   const [capFeedback, setCapFeedback] = useState(false);
+  // US4 "send to agent": whether the ACTIVE xterm holds a non-empty
+  // selection (drives the toolbar button below). xterm has no selection
+  // change → React binding, so the onSelectionChange callback in
+  // ensureTerm maintains it for the active tab only.
+  const [hasSelection, setHasSelection] = useState(false);
 
   const containerRef = useRef<HTMLDivElement>(null);
   const toggleRef = useRef<HTMLButtonElement>(null);
@@ -150,6 +162,23 @@ export function TerminalPanel({ projectDir }: TerminalPanelProps) {
     [tabs, activeId],
   );
 
+  // Latest active id for the onSelectionChange callback registered inside
+  // the stable ensureTerm closure: the toolbar's selection state tracks
+  // the ACTIVE tab only, so background tabs with a selection must not
+  // enable the button.
+  const activeIdRef = useRef<string | null>(activeId);
+  useEffect(() => {
+    activeIdRef.current = activeId;
+  }, [activeId]);
+
+  // Re-derive the toolbar selection state when the active tab changes —
+  // switching to a tab that holds a selection must enable "send to agent"
+  // even though no selection event fires on the switch itself.
+  useEffect(() => {
+    const entry = activeId ? termsRef.current.get(activeId) : undefined;
+    setHasSelection((entry?.term.getSelection() ?? '').length > 0);
+  }, [activeId]);
+
   // ── xterm instance lifecycle ────────────────────────────────────────
 
   const ensureTerm = useCallback((info: TerminalInfo): TermEntry | null => {
@@ -185,6 +214,13 @@ export function TerminalPanel({ projectDir }: TerminalPanelProps) {
     });
     term.onResize(({ cols, rows }) => {
       void api.terminalResize(info.terminalId, cols, rows).catch(() => {});
+    });
+    // US4: keep the "send to agent" button honest for the ACTIVE tab.
+    // xterm's onSelectionChange carries no payload — read the selection
+    // off the instance (empty string once cleared).
+    term.onSelectionChange(() => {
+      if (activeIdRef.current !== info.terminalId) return;
+      setHasSelection(term.getSelection().length > 0);
     });
 
     // Both subscriptions resolve asynchronously (Tauri listen); a disposed
@@ -512,6 +548,19 @@ export function TerminalPanel({ projectDir }: TerminalPanelProps) {
     void spawnTab();
   }, [canSpawn, spawnTab]);
 
+  // US4 (second half): hand the active terminal's selection to the chat
+  // composer as a fenced (quoted) block. The drawer stays open — Chat.tsx
+  // prefills the draft and re-focuses the composer via the established
+  // `shannon:focus-composer` event, so typing continues below the block.
+  const handleSendToAgent = useCallback(() => {
+    if (!activeId) return;
+    const selection = termsRef.current.get(activeId)?.term.getSelection() ?? '';
+    if (selection.length === 0) return;
+    window.dispatchEvent(new CustomEvent(COMPOSER_PREFILL_EVENT, {
+      detail: { text: `\`\`\`\n${selection}\n\`\`\`` },
+    }));
+  }, [activeId]);
+
   if (!open) {
     return (
       <div className="shrink-0 flex justify-end px-md pb-xs">
@@ -604,6 +653,19 @@ export function TerminalPanel({ projectDir }: TerminalPanelProps) {
         <span aria-live="polite" className="sr-only">
           {capFeedback ? t('terminal.maxReached', { max: MAX_TERMINALS }) : ''}
         </span>
+        {/* US4: send the active terminal's selection to the chat composer.
+            Enabled only while a selection exists (xterm has no selection →
+            React binding, so the state is maintained by the panel). */}
+        <button
+          type="button"
+          onClick={handleSendToAgent}
+          disabled={!hasSelection}
+          aria-label={t('terminal.sendToAgent.title')}
+          title={t('terminal.sendToAgent.title')}
+          className="p-1 rounded text-on-surface-variant hover:bg-surface-container disabled:opacity-40 disabled:cursor-not-allowed focus-visible:outline focus-visible:outline-2 focus-visible:outline-primary"
+        >
+          <span className="material-symbols-outlined icon-sm" aria-hidden="true">send</span>
+        </button>
         <button
           type="button"
           onClick={() => setFullHeight(p => !p)}

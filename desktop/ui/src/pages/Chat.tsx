@@ -105,6 +105,23 @@ export default function Chat() {
     return () => window.removeEventListener('shannon:open-editor', open)
   }, [])
 
+  // US4 (direction A): the terminal toolbar's "send to agent" hands the
+  // selection over as a quoted (fenced) block. Prefill follows the same
+  // input-state path as the location.state prefill below — replace the
+  // draft — then the established `shannon:focus-composer` event moves
+  // focus into the composer so typing continues under the block. The
+  // terminal drawer stays open.
+  useEffect(() => {
+    const prefill = (e: Event) => {
+      const text = (e as CustomEvent<{ text?: unknown }>).detail?.text
+      if (typeof text !== 'string' || text.length === 0) return
+      setInput(text)
+      window.dispatchEvent(new Event('shannon:focus-composer'))
+    }
+    window.addEventListener('shannon:composer-prefill', prefill)
+    return () => window.removeEventListener('shannon:composer-prefill', prefill)
+  }, [])
+
   // Pre-fill the composer when navigated from elsewhere (e.g. Editor's
   // "Ask AI about this diagnostic" button passes { prefill } in location.state).
   // Guard with a ref so the effect doesn't re-fire on every keystroke that
