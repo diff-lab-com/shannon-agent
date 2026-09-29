@@ -49,6 +49,7 @@ import type {
   DataSourceResult,
   MobileTlsStatus,
   ProjectRecord,
+  ProviderStatus,
 } from '@/types'
 import type {
   ScheduledRoutine,
@@ -383,6 +384,79 @@ export async function testProviderConnection(
   return invoke('test_provider_connection', { provider, apiKey, baseUrl })
 }
 
+/// Test raw (unsaved) credentials from inside the Add/Edit Provider modal
+/// (review §2-12): `apiKey: null` + a `providerId` tests the STORED key
+/// (edit mode — the modal never re-displays the secret). Mirrors
+/// `test_provider_connection` internals; never persists anything.
+export async function testProviderCredentials(
+  kind: string,
+  baseUrl: string | null,
+  apiKey: string | null,
+  providerId: string | null,
+): Promise<TestConnectionResult> {
+  return invoke('test_provider_credentials', { kind, baseUrl, apiKey, providerId })
+}
+
+// --- Fetch model list (review §2-9) ---
+//
+// `fetch_provider_models` returns `Err(String)` with a stable category
+// token prefix for categorizable failures (`invalid_key`, `rate_limited`,
+// `provider_error:<status>`, `network_unreachable`, `unsupported_kind:<kind>`,
+// `missing_key`, `invalid_base_url:<detail>`); anything else is the raw
+// provider message. The parser below turns that into the discriminated
+// union the modal renders inline (utils.ts categorization style).
+
+export type FetchModelsFailure =
+  | { kind: 'invalid_key' }
+  | { kind: 'rate_limited' }
+  | { kind: 'network_unreachable' }
+  | { kind: 'missing_key' }
+  | { kind: 'provider_error'; status: number }
+  | { kind: 'unsupported_kind' }
+  | { kind: 'invalid_base_url'; detail: string }
+  | { kind: 'unknown'; message: string }
+
+export function parseFetchModelsError(message: string): FetchModelsFailure {
+  const sep = message.indexOf(':')
+  const token = sep === -1 ? message : message.slice(0, sep)
+  const rest = sep === -1 ? '' : message.slice(sep + 1)
+  switch (token) {
+    case 'invalid_key':
+      return { kind: 'invalid_key' }
+    case 'rate_limited':
+      return { kind: 'rate_limited' }
+    case 'network_unreachable':
+      return { kind: 'network_unreachable' }
+    case 'missing_key':
+      return { kind: 'missing_key' }
+    case 'provider_error': {
+      const status = Number(rest)
+      return Number.isFinite(status) && status > 0
+        ? { kind: 'provider_error', status }
+        : { kind: 'provider_error', status: 0 }
+    }
+    case 'unsupported_kind':
+      return { kind: 'unsupported_kind' }
+    case 'invalid_base_url':
+      return { kind: 'invalid_base_url', detail: rest }
+    default:
+      return { kind: 'unknown', message }
+  }
+}
+
+/// Fetch the live model list from a provider endpoint. In-memory only.
+/// `providerId` (a saved connection id) lets the backend fall back to the
+/// stored credential when `apiKey` is null — the modal never round-trips
+/// the existing secret.
+export async function fetchProviderModels(
+  providerId: string | null,
+  kind: string,
+  baseUrl: string,
+  apiKey: string | null,
+): Promise<string[]> {
+  return invoke('fetch_provider_models', { providerId, kind, baseUrl, apiKey })
+}
+
 /// One row in the response from `testAllProviders`. Mirrors the Rust
 /// `ProviderTestRow` shape; the Settings → Models "Test all" UI renders one
 /// per managed connection with a status pill.
@@ -428,8 +502,19 @@ export async function setActiveProvider(id: string): Promise<void> {
   await invoke('set_active_provider', { id })
 }
 
-export type { ProviderConnection, ProvidersFile, ProviderInput }
+export type {
+  ProviderConnection,
+  ProvidersFile,
+  ProviderInput,
+  ProviderStatus,
+}
 export type { SurfaceInfo, CliInstallStatus, CliInstallResult, AppUpdateInfo }
+
+/// Reliable provider-activation signal (ADR-0005-safe replacement for the
+/// dead `config.provider` / `config.api_key` gating).
+export async function getProviderStatus(): Promise<ProviderStatus> {
+  return invoke('get_provider_status')
+}
 
 // --- Models & Status ---
 

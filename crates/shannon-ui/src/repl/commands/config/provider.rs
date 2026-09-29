@@ -14,6 +14,7 @@ use crate::repl::Repl;
 use crate::{Result, widgets::ChatRole};
 use rust_i18n::t;
 use shannon_core::model_registry;
+use shannon_engine::api::LlmProvider;
 
 pub(crate) fn handle_provider(repl: &mut Repl, args: &str) -> Result<()> {
     if args.trim() == "health" {
@@ -50,9 +51,22 @@ pub(crate) fn handle_provider(repl: &mut Repl, args: &str) -> Result<()> {
         let models = model_registry::merged_models_for_provider(provider.clone());
         let default_model = models.first().map(|m| m.id.to_string());
 
+        // Foreign-model warning (review P1-8): a catalog-less provider keeps
+        // the current model id, so compute the warning *before* the switch
+        // mutates `selected_provider`.
+        let foreign_warning = if default_model.is_none() {
+            foreign_model_warning(
+                repl.state.model.as_deref(),
+                repl.state.selected_provider.as_ref(),
+                &provider,
+            )
+        } else {
+            None
+        };
+
         // Single switch path. `default_model = None` means "this provider has
-        // no built-in catalog (Ollama, OpenRouter, Bedrock, Custom, …)" — the
-        // current model id is kept and the user picks via
+        // no built-in catalog (Ollama, Bedrock, Custom, …)" — the current
+        // model id is kept and the user picks via
         // `/model <provider>/<model-id>`.
         apply_model_selection(repl, provider.clone(), default_model.clone(), None, false)?;
 
@@ -79,8 +93,50 @@ pub(crate) fn handle_provider(repl: &mut Repl, args: &str) -> Result<()> {
                 );
             }
         }
+
+        // The switch still happens (kept — /provider is an explicit request);
+        // the warning only makes the kept model's cross-provider trip visible.
+        if let Some(warning) = foreign_warning {
+            repl.chat.add_message(ChatRole::System, warning);
+        }
     }
     Ok(())
+}
+
+/// Compose the foreign-model warning for a catalog-less `/provider` switch
+/// (review P1-8).
+///
+/// When the target provider has no catalog models, the switch keeps the
+/// current model id — silently pointing a model trained for one provider at
+/// another. Returns the warning text when that current model is attributable
+/// to a provider *other than* the target: ownership comes from the catalog
+/// first (`model_info_for_alias`, which also expands aliases), falling back to
+/// the currently selected provider for ids the catalog does not know. Pure —
+/// unit-tested below.
+fn foreign_model_warning(
+    current_model: Option<&str>,
+    current_provider: Option<&LlmProvider>,
+    target: &LlmProvider,
+) -> Option<String> {
+    let model = current_model?.trim();
+    if model.is_empty() {
+        return None;
+    }
+    let owner = model_registry::model_info_for_alias(model)
+        .map(|info| &info.provider)
+        .or(current_provider)?;
+    if owner == target {
+        return None;
+    }
+    Some(
+        t!(
+            "commands.provider.foreign_model_warning",
+            model = model,
+            old_provider = shannon_core::provider_resolver::llm_provider_id(owner),
+            new_provider = shannon_core::provider_resolver::llm_provider_id(target),
+        )
+        .to_string(),
+    )
 }
 
 /// `/provider health` — live-probe every allowed provider and inventory
@@ -247,4 +303,82 @@ fn handle_provider_health(repl: &mut Repl) -> Result<()> {
     );
     repl.chat.add_message(ChatRole::System, lines.join("\n"));
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // ── foreign_model_warning (review P1-8: /provider keeps the old model
+    //    when the target has no catalog — make the cross-provider trip
+    //    explicit instead of silent) ────────────────────────────────────────
+
+    #[test]
+    fn warning_fires_for_catalog_model_moving_to_a_different_provider() {
+        let out = foreign_model_warning(
+            Some("claude-sonnet-4-20250514"),
+            Some(&LlmProvider::Anthropic),
+            &LlmProvider::Ollama,
+        )
+        .expect("warning expected for a cross-provider kept model");
+        assert!(out.contains("claude-sonnet-4-20250514"), "got {out}");
+        assert!(out.contains("anthropic"), "got {out}");
+        assert!(out.contains("ollama"), "got {out}");
+        // The exact fix command must be pasteable.
+        assert!(out.contains("/model ollama/<model-id>"), "got {out}");
+    }
+
+    #[test]
+    fn warning_resolves_alias_to_owner_provider() {
+        // A bare alias ("sonnet") must attribute to its catalog owner
+        // (Anthropic), not stay unattributed.
+        let out = foreign_model_warning(Some("sonnet"), None, &LlmProvider::Replicate)
+            .expect("warning expected: alias resolves to a foreign owner");
+        assert!(out.contains("anthropic"), "got {out}");
+        assert!(out.contains("replicate"), "got {out}");
+    }
+
+    #[test]
+    fn warning_quiet_when_owner_equals_target() {
+        // Switching within the same provider cannot misroute the model.
+        assert_eq!(
+            foreign_model_warning(
+                Some("claude-sonnet-4-20250514"),
+                Some(&LlmProvider::Anthropic),
+                &LlmProvider::Anthropic,
+            ),
+            None
+        );
+    }
+
+    #[test]
+    fn warning_unknown_model_falls_back_to_selected_provider() {
+        // An id the catalog does not know is attributed to the currently
+        // selected provider (where it was actually being used).
+        let out = foreign_model_warning(
+            Some("my-fine-tune"),
+            Some(&LlmProvider::OpenAI),
+            &LlmProvider::Anthropic,
+        )
+        .expect("warning expected: selected provider differs from target");
+        assert!(out.contains("openai"), "got {out}");
+        // With nothing selected there is nothing attributable → no warning.
+        assert_eq!(
+            foreign_model_warning(Some("llama3"), None, &LlmProvider::Ollama),
+            None
+        );
+    }
+
+    #[test]
+    fn warning_none_without_a_current_model() {
+        assert_eq!(
+            foreign_model_warning(None, None, &LlmProvider::Ollama),
+            None
+        );
+        // A blank/whitespace model id is treated as "no model".
+        assert_eq!(
+            foreign_model_warning(Some("   "), None, &LlmProvider::Ollama),
+            None
+        );
+    }
 }

@@ -146,6 +146,12 @@ fn main() {
             commands_config::detect_provider_from_env,
             commands_config::test_provider_connection,
             commands_config::test_all_providers,
+            // 2026-09-29 provider review §3-A/B — reliable activation signal
+            // for the UI gates (config.provider is dead, ADR-0005), in-modal
+            // credential test, and live /models listing for the modal.
+            commands_config::get_provider_status,
+            commands_config::test_provider_credentials,
+            commands_config::fetch_provider_models,
             commands_config::list_providers,
             commands_config::save_provider,
             commands_config::delete_provider,

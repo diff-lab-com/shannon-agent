@@ -855,6 +855,185 @@ pub static MODEL_CATALOG: &[ModelInfo] = &[
         cost_per_m_output: 8.0,
         capabilities: ModelCapabilities::coding().or(ModelCapabilities::reasoning()),
     },
+    // ── OpenRouter ───────────────────────────────────────────
+    // First-switch defaults for `/provider openrouter` (the aggregator had
+    // zero catalog entries, so switching kept the previous provider's model).
+    // Ids follow OpenRouter's vendor-prefixed convention ("<vendor>/<model>",
+    // the same shape as the models.dev overlay ids); prices and capabilities
+    // mirror the same model's first-party catalog entry — OpenRouter
+    // passthrough bills the upstream rate.
+    ModelInfo {
+        id: "anthropic/claude-sonnet-4",
+        display_name: "Claude Sonnet 4 (OpenRouter)",
+        aliases: &[],
+        provider: LlmProvider::OpenRouter,
+        context_window: 200_000,
+        max_output: 16_384,
+        cost_per_m_input: 3.0,
+        cost_per_m_output: 15.0,
+        capabilities: ModelCapabilities::coding().or(ModelCapabilities::reasoning()),
+    },
+    ModelInfo {
+        id: "anthropic/claude-opus-4",
+        display_name: "Claude Opus 4 (OpenRouter)",
+        aliases: &[],
+        provider: LlmProvider::OpenRouter,
+        context_window: 200_000,
+        max_output: 32_000,
+        cost_per_m_input: 15.0,
+        cost_per_m_output: 75.0,
+        capabilities: ModelCapabilities::reasoning()
+            .or(ModelCapabilities::coding())
+            .or(ModelCapabilities::vision()),
+    },
+    ModelInfo {
+        id: "openai/gpt-5",
+        display_name: "GPT-5 (OpenRouter)",
+        aliases: &[],
+        provider: LlmProvider::OpenRouter,
+        context_window: 400_000,
+        max_output: 128_000,
+        cost_per_m_input: 1.25,
+        cost_per_m_output: 10.0,
+        capabilities: ModelCapabilities::coding()
+            .or(ModelCapabilities::reasoning())
+            .or(ModelCapabilities::vision()),
+    },
+    ModelInfo {
+        id: "google/gemini-2.5-pro",
+        display_name: "Gemini 2.5 Pro (OpenRouter)",
+        aliases: &[],
+        provider: LlmProvider::OpenRouter,
+        context_window: 1_000_000,
+        max_output: 65_536,
+        cost_per_m_input: 1.25,
+        cost_per_m_output: 10.0,
+        capabilities: ModelCapabilities::reasoning()
+            .or(ModelCapabilities::coding())
+            .or(ModelCapabilities::vision()),
+    },
+    ModelInfo {
+        id: "deepseek/deepseek-chat",
+        display_name: "DeepSeek V3 (OpenRouter)",
+        aliases: &[],
+        provider: LlmProvider::OpenRouter,
+        context_window: 128_000,
+        max_output: 8_192,
+        cost_per_m_input: 0.27,
+        cost_per_m_output: 1.10,
+        capabilities: ModelCapabilities::coding().or(ModelCapabilities::cheap()),
+    },
+    ModelInfo {
+        id: "meta-llama/llama-3.3-70b-instruct",
+        display_name: "Llama 3.3 70B (OpenRouter)",
+        aliases: &[],
+        provider: LlmProvider::OpenRouter,
+        context_window: 128_000,
+        max_output: 32_768,
+        // Mirrors the Groq entry's rate for the same open-weights model;
+        // OpenRouter's per-vendor pricing fluctuates around it.
+        cost_per_m_input: 0.59,
+        cost_per_m_output: 0.79,
+        capabilities: ModelCapabilities::speed().or(ModelCapabilities::cheap()),
+    },
+    // ── AWS Bedrock ──────────────────────────────────────────
+    // US cross-region inference-profile ids (`us.anthropic.claude-*-v1:0`).
+    // Bedrock price parity with the matching Anthropic catalog entry is an
+    // acceptable approximation — Bedrock bills Claude at the same USD rates.
+    ModelInfo {
+        id: "us.anthropic.claude-sonnet-4-20250514-v1:0",
+        display_name: "Claude Sonnet 4 (Bedrock)",
+        aliases: &[],
+        provider: LlmProvider::Bedrock,
+        context_window: 200_000,
+        max_output: 16_384,
+        cost_per_m_input: 3.0,
+        cost_per_m_output: 15.0,
+        capabilities: ModelCapabilities::coding().or(ModelCapabilities::reasoning()),
+    },
+    ModelInfo {
+        id: "us.anthropic.claude-opus-4-20250514-v1:0",
+        display_name: "Claude Opus 4 (Bedrock)",
+        aliases: &[],
+        provider: LlmProvider::Bedrock,
+        context_window: 200_000,
+        max_output: 32_000,
+        cost_per_m_input: 15.0,
+        cost_per_m_output: 75.0,
+        capabilities: ModelCapabilities::reasoning()
+            .or(ModelCapabilities::coding())
+            .or(ModelCapabilities::vision()),
+    },
+    ModelInfo {
+        id: "us.anthropic.claude-haiku-4-5-20251001-v1:0",
+        display_name: "Claude Haiku 4.5 (Bedrock)",
+        aliases: &[],
+        provider: LlmProvider::Bedrock,
+        context_window: 200_000,
+        max_output: 8_192,
+        cost_per_m_input: 0.80,
+        cost_per_m_output: 4.0,
+        capabilities: ModelCapabilities::cheap().or(ModelCapabilities::speed()),
+    },
+    // ── GLM / Zhipu Coding & Coding Plan ─────────────────────
+    // Both Zhipu coding providers serve the same GLM lineup as the Zhipu
+    // entries above: `zhipu-coding` is the Anthropic-compatible
+    // /api/anthropic endpoint, `zhipu-coding-plan` the Coding Plan quota at
+    // /api/coding/paas/v4. Catalog ids add a provider suffix (same
+    // convention as the "-intl" entries) to stay unique; prices mirror the
+    // Zhipu (bigmodel.cn) entries.
+    ModelInfo {
+        id: "glm-5.1-coding",
+        display_name: "GLM-5.1 (Coding)",
+        aliases: &[],
+        provider: LlmProvider::ZhipuCoding,
+        context_window: 198_000,
+        max_output: 128_000,
+        cost_per_m_input: 10.0,
+        cost_per_m_output: 10.0,
+        capabilities: ModelCapabilities::coding().or(ModelCapabilities::reasoning()),
+    },
+    ModelInfo {
+        id: "glm-5.3-flash-coding",
+        display_name: "GLM-5.3 Flash (Coding)",
+        aliases: &[],
+        provider: LlmProvider::ZhipuCoding,
+        context_window: 1_000_000,
+        max_output: 128_000,
+        // Mirrors the Zhipu glm-5.3-flash entry (bigmodel.cn ¥0.8/M input,
+        // ¥2.8/M output at ≈7 CNY/USD).
+        cost_per_m_input: 0.114,
+        cost_per_m_output: 0.40,
+        capabilities: ModelCapabilities::speed()
+            .or(ModelCapabilities::cheap())
+            .or(ModelCapabilities::vision()),
+    },
+    ModelInfo {
+        id: "glm-5.1-coding-plan",
+        display_name: "GLM-5.1 (Coding Plan)",
+        aliases: &[],
+        provider: LlmProvider::ZhipuCodingPlan,
+        context_window: 198_000,
+        max_output: 128_000,
+        cost_per_m_input: 10.0,
+        cost_per_m_output: 10.0,
+        capabilities: ModelCapabilities::coding().or(ModelCapabilities::reasoning()),
+    },
+    ModelInfo {
+        id: "glm-5.3-flash-coding-plan",
+        display_name: "GLM-5.3 Flash (Coding Plan)",
+        aliases: &[],
+        provider: LlmProvider::ZhipuCodingPlan,
+        context_window: 1_000_000,
+        max_output: 128_000,
+        // Mirrors the Zhipu glm-5.3-flash entry (bigmodel.cn ¥0.8/M input,
+        // ¥2.8/M output at ≈7 CNY/USD).
+        cost_per_m_input: 0.114,
+        cost_per_m_output: 0.40,
+        capabilities: ModelCapabilities::speed()
+            .or(ModelCapabilities::cheap())
+            .or(ModelCapabilities::vision()),
+    },
 ];
 
 #[cfg(test)]
@@ -911,6 +1090,112 @@ mod tests {
         let mut seen = std::collections::HashSet::new();
         for info in MODEL_CATALOG {
             assert!(seen.insert(info.id), "duplicate catalog id: {}", info.id);
+        }
+    }
+
+    /// Review P1-8 (2026-09-29): OpenRouter / Bedrock / ZhipuCoding /
+    /// ZhipuCodingPlan had zero catalog entries, so `/provider <slug>` kept
+    /// the previous provider's model (silent misconfiguration). Each gap
+    /// provider must now ship first-switch defaults.
+    #[test]
+    fn gap_providers_have_catalog_entries() {
+        for (provider, min) in [
+            (LlmProvider::OpenRouter, 4),
+            (LlmProvider::Bedrock, 2),
+            (LlmProvider::ZhipuCoding, 2),
+            (LlmProvider::ZhipuCodingPlan, 2),
+        ] {
+            let count = MODEL_CATALOG
+                .iter()
+                .filter(|m| m.provider == provider)
+                .count();
+            assert!(
+                count >= min,
+                "{provider:?} should have at least {min} catalog entries, got {count}"
+            );
+        }
+    }
+
+    /// Aggregator/channel entries mirror a first-party entry's pricing; keep
+    /// the mirrors in sync with their origins (drift here means billing one
+    /// provider at another provider's stale rate).
+    #[test]
+    fn aggregator_and_channel_entries_mirror_first_party_pricing() {
+        let pairs: &[(&str, &str)] = &[
+            // OpenRouter mirrors.
+            ("anthropic/claude-sonnet-4", "claude-sonnet-4-20250514"),
+            ("anthropic/claude-opus-4", "claude-opus-4-20250115"),
+            ("openai/gpt-5", "gpt-5"),
+            ("google/gemini-2.5-pro", "gemini-2.5-pro"),
+            ("deepseek/deepseek-chat", "deepseek-chat"),
+            (
+                "meta-llama/llama-3.3-70b-instruct",
+                "llama-3.3-70b-versatile",
+            ),
+            // Bedrock inference profiles mirror Anthropic (price parity).
+            (
+                "us.anthropic.claude-sonnet-4-20250514-v1:0",
+                "claude-sonnet-4-20250514",
+            ),
+            (
+                "us.anthropic.claude-opus-4-20250514-v1:0",
+                "claude-opus-4-20250115",
+            ),
+            (
+                "us.anthropic.claude-haiku-4-5-20251001-v1:0",
+                "claude-haiku-4-5-20251001",
+            ),
+            // Zhipu coding endpoints mirror the Zhipu (bigmodel.cn) entries.
+            ("glm-5.1-coding", "glm-5.1"),
+            ("glm-5.3-flash-coding", "glm-5.3-flash"),
+            ("glm-5.1-coding-plan", "glm-5.1"),
+            ("glm-5.3-flash-coding-plan", "glm-5.3-flash"),
+        ];
+        for (mirror, origin) in pairs {
+            let (a, b) = (find(mirror), find(origin));
+            assert!(
+                (a.cost_per_m_input - b.cost_per_m_input).abs() < 1e-9,
+                "{mirror}: input ${} must mirror {origin}'s ${}",
+                a.cost_per_m_input,
+                b.cost_per_m_input
+            );
+            assert!(
+                (a.cost_per_m_output - b.cost_per_m_output).abs() < 1e-9,
+                "{mirror}: output ${} must mirror {origin}'s ${}",
+                a.cost_per_m_output,
+                b.cost_per_m_output
+            );
+        }
+    }
+
+    /// Tier-inference sanity for the gap-provider ids: `tier_label` must
+    /// classify each new entry the way its capability flags advertise
+    /// (Pro flagships, Standard workhorses, Fast cheap models).
+    #[test]
+    fn gap_provider_entries_tier_labels() {
+        let expected: &[(&str, TierLabel)] = &[
+            ("anthropic/claude-sonnet-4", TierLabel::Standard),
+            ("anthropic/claude-opus-4", TierLabel::Pro),
+            ("openai/gpt-5", TierLabel::Standard),
+            ("google/gemini-2.5-pro", TierLabel::Standard),
+            ("deepseek/deepseek-chat", TierLabel::Fast),
+            ("meta-llama/llama-3.3-70b-instruct", TierLabel::Fast),
+            (
+                "us.anthropic.claude-sonnet-4-20250514-v1:0",
+                TierLabel::Standard,
+            ),
+            ("us.anthropic.claude-opus-4-20250514-v1:0", TierLabel::Pro),
+            (
+                "us.anthropic.claude-haiku-4-5-20251001-v1:0",
+                TierLabel::Fast,
+            ),
+            ("glm-5.1-coding", TierLabel::Standard),
+            ("glm-5.3-flash-coding", TierLabel::Fast),
+            ("glm-5.1-coding-plan", TierLabel::Standard),
+            ("glm-5.3-flash-coding-plan", TierLabel::Fast),
+        ];
+        for (id, tier) in expected {
+            assert_eq!(&find(id).tier_label(), tier, "{id} tier label");
         }
     }
 }

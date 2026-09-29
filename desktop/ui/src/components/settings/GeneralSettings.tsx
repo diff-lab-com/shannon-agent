@@ -31,7 +31,14 @@ const APPROVAL_MODE_KEYS: { value: ApprovalModeKey; labelKey: string; descriptio
 ]
 
 export default function GeneralSettings() {
-  const { config, refreshConfig } = useCatalog()
+  const { config, providerStatus, refreshConfig } = useCatalog()
+  // Real active-provider label for the Session Info row (falls back to the
+  // env-detected provider when no managed connection is active). null = the
+  // snapshot says genuinely unconfigured → the row renders its "Not
+  // configured" placeholder again.
+  const activeProviderLabel = providerStatus
+    ? (providerStatus.display_name ?? providerStatus.active_provider_id ?? providerStatus.env_provider)
+    : null
   // P2-⑧/D6 display density: 'auto' follows the sidebar mode (Advanced →
   // Compact); an explicit choice overrides and persists.
   const [density, setDensityState] = useState<DensityPref>(readDensityPref)
@@ -249,13 +256,17 @@ export default function GeneralSettings() {
                 <option value="browser">{t('settings.general.linkTarget.browser')}</option>
               </select>
             </div>
+            {/* 2026-09-29 provider review §3-A1: `config.provider`/`config.model`
+                are dead since ADR-0005 (the row read "Not configured" for every
+                user). Render the real active provider/model from the
+                get_provider_status snapshot; "—" only when genuinely unset. */}
             <div className="flex justify-between items-center py-sm">
               <span className="font-label-md text-on-surface-variant">{t('settings.general.sessionInfo.activeProvider')}</span>
-              <span className="font-label-md text-on-surface font-bold">{config?.provider ?? t('settings.general.sessionInfo.notConfigured')}</span>
+              <span className="font-label-md text-on-surface font-bold">{activeProviderLabel ?? t('settings.general.sessionInfo.notConfigured')}</span>
             </div>
             <div className="flex justify-between items-center py-sm">
               <span className="font-label-md text-on-surface-variant">{t('settings.general.sessionInfo.model')}</span>
-              <span className="font-label-md text-on-surface font-bold">{config?.model ?? t('settings.general.sessionInfo.notConfigured')}</span>
+              <span className="font-label-md text-on-surface font-bold">{providerStatus?.model ?? t('settings.general.sessionInfo.notConfigured')}</span>
             </div>
             <div className="flex justify-between items-center py-sm">
               <span className="font-label-md text-on-surface-variant">{t('settings.general.sessionInfo.workingDir')}</span>

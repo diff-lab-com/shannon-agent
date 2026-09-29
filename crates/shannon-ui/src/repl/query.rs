@@ -791,7 +791,12 @@ pub fn handle_query(repl: &mut Repl, input: &str, terminal: &mut Option<&mut Ter
                 Ok(QueryEvent::Failed { error, .. }) => {
                     // Don't return immediately — preserve conversation_messages
                     // that may have been received via ConversationUpdate before Failed.
-                    response_text.push_str(&format!("\n\n⚠️ Query failed: {error}"));
+                    // When nothing is configured, prepend an exit ramp so a fresh
+                    // user hitting the silent Ollama fallback isn't left with a
+                    // bare connection error (review P0-1/P0-2). The engine's
+                    // resolution behavior is untouched.
+                    let unconfigured = crate::repl::commands::provider_unconfigured();
+                    response_text.push_str(&compose_query_failure(unconfigured, &error));
                     if let Ok(mut s) = ss.lock() {
                         s.done = true;
                         s.status = format!("Failed: {error}");
@@ -1750,6 +1755,23 @@ fn escape_html_simple(s: &str) -> String {
         .replace('>', "&gt;")
 }
 
+/// Compose the user-facing text for `QueryEvent::Failed`.
+///
+/// When Shannon is unconfigured (review P0-1/P0-2: the silent Ollama fallback
+/// makes a fresh user's first message die with a bare connection error), a
+/// guidance line pointing at `/connect` is prepended before the underlying
+/// error so there is always an exit ramp. Pure — unit-tested below.
+fn compose_query_failure(unconfigured: bool, error: &str) -> String {
+    if unconfigured {
+        format!(
+            "\n\n⚠️ {}\n⚠️ Query failed: {error}",
+            t!("repl.unconfigured_guidance")
+        )
+    } else {
+        format!("\n\n⚠️ Query failed: {error}")
+    }
+}
+
 #[cfg(test)]
 mod tests {
     //! Tests for query engine recovery after errors.
@@ -1772,7 +1794,7 @@ mod tests {
     use shannon_engine::state::StateManager;
     use std::collections::HashMap;
 
-    use super::{Repl, StreamingState, drain_streaming_delta, handle_query};
+    use super::{Repl, StreamingState, compose_query_failure, drain_streaming_delta, handle_query};
 
     fn create_test_engine() -> QueryEngine {
         let config = LlmClientConfig {
@@ -2054,6 +2076,46 @@ mod tests {
             repl.state.queued_messages,
             vec!["first queued".to_string(), "second queued".to_string()],
             "failed query must retain queued messages"
+        );
+    }
+
+    // ── compose_query_failure (review P0-1/P0-2: unconfigured exit ramp) ──
+
+    #[test]
+    fn compose_query_failure_unconfigured_prepends_guidance_before_error() {
+        use rust_i18n::t;
+        let out = compose_query_failure(true, "connection refused");
+        let guidance = t!("repl.unconfigured_guidance").to_string();
+        assert!(
+            out.contains(&guidance),
+            "guidance line must be present, got {out:?}"
+        );
+        // Literal-substring guard: `t!` yields the key path itself when the
+        // key is missing (e.g. placed under the wrong yml namespace), which
+        // would make the `contains` above pass vacuously.
+        assert!(
+            out.contains("run /connect <provider> <key>"),
+            "guidance must be resolved translation text, got {out:?}"
+        );
+        // Guidance comes before the underlying error, both on separate lines.
+        let gpos = out.find(&guidance).expect("guidance present");
+        let epos = out
+            .find("Query failed: connection refused")
+            .expect("error present");
+        assert!(
+            gpos < epos,
+            "guidance must precede the raw error, got {out:?}"
+        );
+        assert!(out.contains("\n⚠️ Query failed: connection refused"));
+    }
+
+    #[test]
+    fn compose_query_failure_configured_keeps_legacy_format() {
+        // The configured path must be byte-identical to the old message so
+        // nothing changes for users who already set a provider up.
+        assert_eq!(
+            compose_query_failure(false, "boom"),
+            "\n\n⚠️ Query failed: boom"
         );
     }
 }

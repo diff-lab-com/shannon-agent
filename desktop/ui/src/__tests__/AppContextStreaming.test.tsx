@@ -345,4 +345,61 @@ describe('AppContext — P2-19 tool progress lifecycle', () => {
     })
     expect(result.current.toolProgress).toBeNull()
   })
+
+  // 2026-09-29 provider review §2-3: the desktop classifies QUERY_FAILED
+  // payloads Rust-side (`error_kind: "auth" | "other"`). The provider
+  // forwards the class so the chat area can route 401/403 to the dedicated
+  // update-key banner while every other failure keeps the raw line.
+  describe('QUERY_FAILED error_kind classification', () => {
+    it('marks auth failures with errorKind "auth"', async () => {
+      const { result } = renderHook(() => useApp(), { wrapper })
+      await waitFor(() => expect(result.current.loading).toBe(false))
+      await flushUntilRegistered()
+      await act(async () => { await result.current.createSession() })
+      await act(async () => { await result.current.sendMessage('Hello') })
+
+      act(() => {
+        flush(EVENT_NAMES.QUERY_FAILED, {
+          error: 'Authentication failed',
+          error_kind: 'auth',
+          session_id: SESSION_A,
+        })
+      })
+      expect(result.current.error).toBe('Authentication failed')
+      expect(result.current.errorKind).toBe('auth')
+    })
+
+    it('marks every other failure with errorKind "other"', async () => {
+      const { result } = renderHook(() => useApp(), { wrapper })
+      await waitFor(() => expect(result.current.loading).toBe(false))
+      await flushUntilRegistered()
+      await act(async () => { await result.current.createSession() })
+      await act(async () => { await result.current.sendMessage('Hello') })
+
+      act(() => {
+        flush(EVENT_NAMES.QUERY_FAILED, {
+          error: 'error sending request',
+          error_kind: 'other',
+          session_id: SESSION_A,
+        })
+      })
+      expect(result.current.error).toBe('error sending request')
+      expect(result.current.errorKind).toBe('other')
+    })
+
+    it('a new send clears error and errorKind together', async () => {
+      const { result } = renderHook(() => useApp(), { wrapper })
+      await waitFor(() => expect(result.current.loading).toBe(false))
+      await flushUntilRegistered()
+      await act(async () => { await result.current.createSession() })
+      await act(async () => { await result.current.sendMessage('Hello') })
+      act(() => {
+        flush(EVENT_NAMES.QUERY_FAILED, { error: 'Authentication failed', error_kind: 'auth', session_id: SESSION_A })
+      })
+      expect(result.current.errorKind).toBe('auth')
+      await act(async () => { await result.current.sendMessage('Retry') })
+      expect(result.current.error).toBeNull()
+      expect(result.current.errorKind).toBeNull()
+    })
+  })
 })

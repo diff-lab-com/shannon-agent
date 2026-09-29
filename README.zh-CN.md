@@ -93,16 +93,16 @@ Shannon 是完全开源（Apache-2.0）、基于 Rust 的 **AI agent 工作台**
 
 ### 多提供商 LLM 支持
 
-一个配置文件连接任意 LLM——你的密钥、你的提供商、直连：
+BYOK、无中间商：连接一次提供商，Shannon 即在本地保存密钥（`0600`）、探活并热加载——之后无需任何环境变量：
 
 | 提供商 | 模型 | 配置 |
-|--------|------|------|
-| Anthropic | Claude Sonnet / Opus / Haiku 系列 | `provider = "anthropic"` |
-| OpenAI | GPT-4o 及更新 | `provider = "openai"` |
-| Ollama | Llama、Mistral、Qwen 等（本地） | `provider = "ollama"`（自动检测） |
-| DeepSeek | DeepSeek Chat / Coder | `provider = "openai"` + `base_url` |
-| 智谱 Z.ai（GLM） | GLM 系列 | `provider = "openai"` + `base_url` |
-| 任何 OpenAI 兼容端点 | 任意模型 | `provider = "openai"` + `base_url` |
+|----------|--------|-------|
+| Anthropic | Claude Sonnet / Opus / Haiku 系列 | `/connect anthropic <key>` —— [指南](docs/providers/anthropic.md) |
+| OpenAI | GPT-4o 及更新 | `/connect openai <key>` —— [指南](docs/providers/openai.md) |
+| Ollama | Llama、Mistral、Qwen 等（本地） | `/connect ollama`（自动检测）—— [指南](docs/providers/ollama.md) |
+| DeepSeek | DeepSeek Chat / Coder | `/connect deepseek <key>` —— [指南](docs/providers/deepseek.md) |
+| 智谱 Z.ai（GLM） | GLM 系列 | `/connect glm <key>` —— [指南](docs/providers/glm-zai.md) |
+| Kimi / MiniMax / OpenRouter 等 20+ | — | `/connect <slug> <key>` —— [提供商索引](docs/providers/index.md) · [参考](docs/configuration.md#provider-reference) |
 
 支持 Anthropic 提示缓存，采用三层缓存断点注入以实现最高效率。
 
@@ -250,40 +250,36 @@ cargo install --git https://github.com/diff-lab-com/shannon-agent.git --tag v0.1
 
 ### 2. 配置
 
-设置 API 密钥和首选模型——密钥只在你电脑上，直连你选择的提供商：
+连接一个提供商——密钥只在你电脑上，直连你选择的提供商：
 
 ```bash
-# 方式 A：环境变量（最快）
+shannon            # 启动 TUI，然后：
+/connect anthropic sk-ant-...    # 保存密钥、探活并打开模型选择器
+```
+
+其他方式：
+
+```bash
+# 环境变量（无头 / CI）
 export SHANNON_API_KEY="sk-ant-..."
 export SHANNON_MODEL="claude-sonnet-4-20250514"
 
-# 方式 B：配置文件（持久化）
-mkdir -p ~/.shannon
-cat > ~/.shannon/config.toml << 'EOF'
-provider = "anthropic"
-api_key = "sk-ant-..."
-model = "claude-sonnet-4-20250514"
-max_tokens = 8192
-EOF
+# 非交互式提供商配置
+shannon providers add anthropic --kind anthropic --model claude-sonnet-4-6
+export ANTHROPIC_API_KEY="sk-ant-..."
 ```
+
+API 密钥永远不会写入配置文件——配置文件中的 `api_key = "..."` 会被设计性地忽略。密钥保存在 `~/.shannon/credentials/`（`0600`）或环境变量中。各提供商指南：[docs/providers/](docs/providers/index.md) · 完整参考：[docs/configuration.md](docs/configuration.md)。
 
 <details>
 <summary>其他提供商</summary>
 
-**OpenAI / DeepSeek / 任何兼容端点：**
-```bash
-cat > ~/.shannon/config.toml << 'EOF'
-provider = "openai"
-model = "gpt-4o"
-api_key = "sk-..."
-base_url = "https://api.openai.com/v1"
-EOF
-```
+**DeepSeek / GLM / Kimi / MiniMax / OpenRouter** —— 在 TUI 中同样一行命令，例如 `/connect deepseek <key>`、`/connect glm <key>`。无头模式：`shannon providers add <id> --kind <kind> --model <model> [--base-url <url>]` 加上对应提供商的 `*_API_KEY` 环境变量。见 [docs/providers/index.md](docs/providers/index.md)。
 
 **Ollama（本地，无需 API 密钥）：**
 ```bash
 ollama serve
-export SHANNON_MODEL="llama3"
+/connect ollama
 ```
 
 </details>
@@ -375,7 +371,7 @@ shannon --goal "让 CI 变绿"                   # 自主目标（REPL 内 /goal
 | `SHANNON_PERMISSION_PROFILE` | 权限配置：`strict`、`balanced`、`permissive` |
 | `SHANNON_TOKEN_BUDGET` | 会话 token 预算看门狗 |
 
-自动检测：`ANTHROPIC_API_KEY` 和 `OPENAI_API_KEY` 也可作为备用密钥。
+自动检测：`ANTHROPIC_API_KEY` 和 `OPENAI_API_KEY` 也可作为备用密钥（Anthropic 另外识别 `CLAUDE_API_KEY` 和 `ANTHROPIC_AUTH_TOKEN`）。
 
 </details>
 

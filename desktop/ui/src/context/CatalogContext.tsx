@@ -8,6 +8,7 @@ import { createContext, useContext } from 'react'
 import type {
   StatusResponse,
   DesktopConfig,
+  ProviderStatus,
   ModelInfo,
   TaskItem,
   AgentInfo,
@@ -19,6 +20,10 @@ import type {
 export interface CatalogContextValue {
   status: StatusResponse | null
   config: DesktopConfig | null
+  /** Reliable provider-activation snapshot (`get_provider_status`) — the
+   *  ADR-0005-safe replacement for the dead `config.provider`/`api_key`
+   *  gates (2026-09-29 provider review §3-A1). */
+  providerStatus: ProviderStatus | null
   models: ModelInfo[]
   agents: AgentInfo[]
   tasks: TaskItem[]
@@ -26,6 +31,10 @@ export interface CatalogContextValue {
   backgroundTasks: BackgroundTaskInfo[]
   permissionRequest: PermissionRequest | null
   error: string | null
+  /** Failure class for `error`: `auth` (key rejected — dedicated
+   *  "update key" banner) vs `other` (raw error line). null when no error
+   *  or when the error came from a non-query path. */
+  errorKind: 'auth' | 'other' | null
   loading: boolean
   /** Set when the initial data load fails for any surface; cleared by retryInit. */
   initError: string | null

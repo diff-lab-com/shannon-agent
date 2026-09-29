@@ -308,6 +308,15 @@
       }
     },
     {
+      "identifier": "allow-fetch-provider-models",
+      "description": "Enables the fetch_provider_models command without any pre-configured scope.",
+      "commands": {
+        "allow": [
+          "fetch_provider_models"
+        ]
+      }
+    },
+    {
       "identifier": "allow-detect-slash",
       "description": "Enables the detect_slash command without any pre-configured scope.",
       "commands": {
@@ -709,6 +718,15 @@
       "commands": {
         "allow": [
           "get_provider_allowlist"
+        ]
+      }
+    },
+    {
+      "identifier": "allow-get-provider-status",
+      "description": "Enables the get_provider_status command without any pre-configured scope.",
+      "commands": {
+        "allow": [
+          "get_provider_status"
         ]
       }
     },
@@ -2360,6 +2378,15 @@
       }
     },
     {
+      "identifier": "allow-test-provider-credentials",
+      "description": "Enables the test_provider_credentials command without any pre-configured scope.",
+      "commands": {
+        "allow": [
+          "test_provider_credentials"
+        ]
+      }
+    },
+    {
       "identifier": "allow-toggle-scheduled-task",
       "description": "Enables the toggle_scheduled_task command without any pre-configured scope.",
       "commands": {
@@ -2609,12 +2636,15 @@
         "allow-configure",
         "allow-delete-provider",
         "allow-detect-provider-from-env",
+        "allow-fetch-provider-models",
         "allow-get-config",
+        "allow-get-provider-status",
         "allow-list-providers",
         "allow-save-provider",
         "allow-set-active-provider",
         "allow-test-all-providers",
-        "allow-test-provider-connection"
+        "allow-test-provider-connection",
+        "allow-test-provider-credentials"
       ]
     },
     {

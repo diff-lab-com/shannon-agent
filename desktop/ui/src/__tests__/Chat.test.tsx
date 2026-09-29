@@ -17,6 +17,10 @@ const ctx = vi.hoisted(() => ({
   currentSessionId: null as string | null,
   windowSessionId: null as string | null,
   error: null as string | null,
+  // 2026-09-29 provider review — the banner/welcome gates read the
+  // provider-status snapshot, not the dead `config.provider` fields.
+  errorKind: null as 'auth' | 'other' | null,
+  providerStatus: null as any,
   config: null as any,
   status: null as any,
   sendMessage: vi.fn().mockResolvedValue(true),
@@ -57,6 +61,8 @@ function resetCtx() {
   ctx.currentSessionId = null
   ctx.windowSessionId = null
   ctx.error = null
+  ctx.errorKind = null
+  ctx.providerStatus = null
   ctx.config = null
   ctx.status = null
   ctx.sendMessage = vi.fn().mockResolvedValue(true)
@@ -608,32 +614,75 @@ describe('Chat page', () => {
     expect(screen.getByTestId('session-switch-overlay')).toBeInTheDocument()
   })
 
+  // 2026-09-29 provider review §3-A1: the banner gates on the
+  // get_provider_status snapshot (`config.api_key`/`config.provider` are
+  // dead since ADR-0005). Each test drives the snapshot directly.
   describe('API key missing banner', () => {
-    it('renders banner when config has no api_key and provider is not ollama', () => {
+    it('renders banner when nothing is configured (no active, no env provider)', () => {
       resetCtx()
-      ctx.config = { provider: 'anthropic' }
+      ctx.providerStatus = {
+        active_provider_id: null, display_name: null, kind: null,
+        has_api_key: false, model: null, env_provider: null,
+      }
       renderChat()
       expect(screen.getByText('Add your API key to start chatting')).toBeInTheDocument()
       expect(screen.getByText('Open Settings')).toBeInTheDocument()
     })
 
-    it('hides banner when api_key is present', () => {
+    it('renders the named-provider variant when the active provider has no key', () => {
       resetCtx()
-      ctx.config = { provider: 'anthropic', api_key: 'sk-xxx' }
+      ctx.providerStatus = {
+        active_provider_id: 'anthropic-main', display_name: 'Anthropic', kind: 'anthropic',
+        has_api_key: false, model: null, env_provider: null,
+      }
+      renderChat()
+      expect(screen.getByText('API key missing for Anthropic')).toBeInTheDocument()
+    })
+
+    it('hides banner when the active provider has a key (configured + keyed users)', () => {
+      resetCtx()
+      ctx.providerStatus = {
+        active_provider_id: 'anthropic-main', display_name: 'Anthropic', kind: 'anthropic',
+        has_api_key: true, model: null, env_provider: null,
+      }
+      renderChat()
+      expect(screen.queryByText('Add your API key to start chatting')).not.toBeInTheDocument()
+      expect(screen.queryByText(/API key missing for/)).not.toBeInTheDocument()
+    })
+
+    it('hides banner when an env provider is detected without a stored one', () => {
+      resetCtx()
+      ctx.providerStatus = {
+        active_provider_id: null, display_name: null, kind: null,
+        has_api_key: false, model: null, env_provider: 'anthropic',
+      }
       renderChat()
       expect(screen.queryByText('Add your API key to start chatting')).not.toBeInTheDocument()
     })
 
-    it('hides banner when provider is ollama (no key required)', () => {
+    it('hides banner when the active provider is ollama (no key required)', () => {
       resetCtx()
-      ctx.config = { provider: 'ollama' }
+      ctx.providerStatus = {
+        active_provider_id: 'ollama-local', display_name: 'Ollama', kind: 'ollama',
+        has_api_key: false, model: null, env_provider: null,
+      }
+      renderChat()
+      expect(screen.queryByText('Add your API key to start chatting')).not.toBeInTheDocument()
+    })
+
+    it('hides banner while the snapshot is unavailable (null)', () => {
+      resetCtx()
+      ctx.providerStatus = null
       renderChat()
       expect(screen.queryByText('Add your API key to start chatting')).not.toBeInTheDocument()
     })
 
     it('hides banner when user clicks dismiss', () => {
       resetCtx()
-      ctx.config = { provider: 'anthropic' }
+      ctx.providerStatus = {
+        active_provider_id: null, display_name: null, kind: null,
+        has_api_key: false, model: null, env_provider: null,
+      }
       renderChat()
       fireEvent.click(screen.getByLabelText('Dismiss'))
       expect(screen.queryByText('Add your API key to start chatting')).not.toBeInTheDocument()
@@ -641,10 +690,43 @@ describe('Chat page', () => {
 
     it('deep-links to /settings/models when CTA clicked', () => {
       resetCtx()
-      ctx.config = { provider: 'anthropic' }
+      ctx.providerStatus = {
+        active_provider_id: null, display_name: null, kind: null,
+        has_api_key: false, model: null, env_provider: null,
+      }
       renderChat()
       const cta = screen.getByText('Open Settings').closest('button')!
       expect(cta).toBeInTheDocument()
+    })
+  })
+
+  // Review §2-3: query failures classified Rust-side as error_kind="auth"
+  // get the dedicated update-key banner; others keep the raw error line.
+  describe('auth failure banner', () => {
+    const baseStatus = {
+      active_provider_id: 'anthropic-main', display_name: 'Anthropic', kind: 'anthropic',
+      has_api_key: true, model: null, env_provider: null,
+    }
+
+    it('shows the update-key banner with the provider name for auth errors', () => {
+      resetCtx()
+      ctx.error = 'Authentication failed for anthropic'
+      ctx.errorKind = 'auth'
+      ctx.providerStatus = baseStatus
+      renderChat()
+      expect(screen.getByTestId('auth-error-banner')).toBeInTheDocument()
+      expect(screen.getByText('API key rejected by Anthropic')).toBeInTheDocument()
+      expect(screen.getByText('Update key')).toBeInTheDocument()
+    })
+
+    it('keeps the raw error line for non-auth errors', () => {
+      resetCtx()
+      ctx.error = 'Network unreachable'
+      ctx.errorKind = 'other'
+      ctx.providerStatus = baseStatus
+      renderChat()
+      expect(screen.queryByTestId('auth-error-banner')).not.toBeInTheDocument()
+      expect(screen.getByText('Network unreachable')).toBeInTheDocument()
     })
   })
 })

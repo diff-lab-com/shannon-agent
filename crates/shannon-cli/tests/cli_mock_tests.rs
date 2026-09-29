@@ -20,8 +20,21 @@ use std::path::Path;
 
 const BIN: &str = "shannon";
 
+/// Process-lifetime hermetic HOME for the spawned binary: the headless
+/// startup gate reads `~/.shannon/meta.json`, so a developer home last
+/// written by a NEWER build aborts the binary with the downgrade refusal
+/// before the mocked scenario under test ever runs.
+fn hermetic_home() -> &'static std::path::Path {
+    static HOME: std::sync::OnceLock<tempfile::TempDir> = std::sync::OnceLock::new();
+    HOME.get_or_init(|| tempfile::tempdir().expect("create hermetic test home"))
+        .path()
+}
+
 fn shannon() -> Command {
-    Command::cargo_bin(BIN).unwrap()
+    let mut cmd = Command::cargo_bin(BIN).unwrap();
+    cmd.env("HOME", hermetic_home());
+    cmd.env("USERPROFILE", hermetic_home());
+    cmd
 }
 
 // ── SSE Response Builders (using serde_json for correct JSON) ─────────

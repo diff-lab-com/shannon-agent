@@ -22,6 +22,25 @@ fn publish_stop_trigger(bus: &crate::bus::EventBus, tool_calls_count: usize) {
     );
 }
 
+/// Suggestion for a stream error, provider-aware for auth failures (review
+/// 2026-09-29 P0-3): `ApiError::AuthenticationFailed` is a unit variant, so
+/// the generic [`ApiError::user_suggestion`] text cannot name the provider or
+/// its canonical env var. Where the active provider is known (here: the
+/// client's resolved provider), upgrade the auth-failure hint to
+/// [`ApiError::auth_failure_suggestion`]; every other error keeps its
+/// existing suggestion unchanged.
+fn error_suggestion(
+    e: &shannon_engine::api::ApiError,
+    provider: &shannon_engine::api::LlmProvider,
+) -> Option<String> {
+    if matches!(e, shannon_engine::api::ApiError::AuthenticationFailed) {
+        return Some(shannon_engine::api::ApiError::auth_failure_suggestion(
+            provider,
+        ));
+    }
+    e.user_suggestion()
+}
+
 /// Progress sender that forwards tool output lines as `ToolProgress` events.
 struct ChannelProgressSender {
     tx: EventTx,
@@ -4050,8 +4069,7 @@ impl QueryEngine {
                                         tracing::warn!(
                                             "Stream error after partial response ({partial_len} chars) — preserving content"
                                         );
-                                        let suggestion = e
-                                            .user_suggestion()
+                                        let suggestion = error_suggestion(&e, &client_provider)
                                             .map(|s| format!(" {s}"))
                                             .unwrap_or_default();
                                         let warning_msg = if suggestion.is_empty() {
@@ -4259,8 +4277,7 @@ impl QueryEngine {
                                     // failure — headless exit codes match on
                                     // "rate limit" / "timed out" substrings of
                                     // the provider error.
-                                    let suggestion = e
-                                        .user_suggestion()
+                                    let suggestion = error_suggestion(&e, &client_provider)
                                         .map(|s| format!(" {s}"))
                                         .unwrap_or_default();
                                     let user_error = if suggestion.is_empty() {
@@ -4833,10 +4850,12 @@ impl QueryEngine {
                                                             ),
                                                         });
                                                     }
-                                                    let suggestion = retry_err
-                                                        .user_suggestion()
-                                                        .map(|s| format!(" {s}"))
-                                                        .unwrap_or_default();
+                                                    let suggestion = error_suggestion(
+                                                        &retry_err,
+                                                        &client_provider,
+                                                    )
+                                                    .map(|s| format!(" {s}"))
+                                                    .unwrap_or_default();
                                                     send_event!(
                                                         tx,
                                                         QueryEvent::ConversationUpdate {
@@ -4882,10 +4901,10 @@ impl QueryEngine {
                                         return;
                                     }
                                     Err(retry_err) => {
-                                        let suggestion = retry_err
-                                            .user_suggestion()
-                                            .map(|s| format!(" {s}"))
-                                            .unwrap_or_default();
+                                        let suggestion =
+                                            error_suggestion(&retry_err, &client_provider)
+                                                .map(|s| format!(" {s}"))
+                                                .unwrap_or_default();
                                         send_event!(
                                             tx,
                                             QueryEvent::ConversationUpdate {
@@ -5053,8 +5072,7 @@ impl QueryEngine {
                                 }
                             }
                         }
-                        let suggestion = e
-                            .user_suggestion()
+                        let suggestion = error_suggestion(&e, &client_provider)
                             .map(|s| format!(" {s}"))
                             .unwrap_or_default();
                         let user_error = if suggestion.is_empty() {

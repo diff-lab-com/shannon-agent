@@ -38,7 +38,11 @@ pub fn command() -> Command {
                 "Use to manage stored API keys and credentials for various services".to_string(),
             ),
             version: Some("0.1.0".to_string()),
-            disable_model_invocation: false,
+            // Decision A1 (review P0-5): the prompt template interpolates the
+            // raw args, so a model invocation could carry a plaintext key into
+            // the conversation. Humans invoke /credentials directly (the REPL
+            // executes it via the CredentialManager); the model must never.
+            disable_model_invocation: true,
             user_invocable: true,
             is_workflow: false,
             immediate: false,
@@ -310,6 +314,24 @@ mod tests {
         assert_eq!(parse_credential_action("unknown"), CredentialAction::List);
     }
 
+    /// Review P0-5 / decision A1: the prompt template interpolates the raw
+    /// args, so the model must never be able to invoke /credentials (a model
+    /// invocation could carry a plaintext key into the conversation). Users
+    /// invoke it directly; the REPL executes it via the CredentialManager.
+    #[test]
+    fn test_credentials_command_not_model_invocable() {
+        match command() {
+            Command::Prompt(pc) => {
+                assert!(pc.base.disable_model_invocation);
+                assert!(
+                    pc.base.user_invocable,
+                    "users must still be able to invoke it"
+                );
+            }
+            other => panic!("expected Prompt command, got {other:?}"),
+        }
+    }
+
     #[test]
     fn test_format_credentials_list() {
         let _guard = HOME_LOCK.lock().unwrap_or_else(|e| e.into_inner());
@@ -362,6 +384,50 @@ mod tests {
         assert!(
             output.contains("Stored credentials: 0"),
             "test must be HOME-isolated, got {output:?}"
+        );
+    }
+
+    /// Direct store → get → delete roundtrip through the same formatters the
+    /// REPL `/credentials` dispatcher uses (review P0-5: these execute locally
+    /// via the CredentialManager, never as an LLM prompt — and the plaintext
+    /// value must never surface in any output).
+    #[test]
+    fn test_store_get_delete_roundtrip_masks_value() {
+        let _guard = HOME_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let _home = ScopedHome::new();
+
+        // 1. Store directly + confirm (service name echoed, value never).
+        let stored = format_credential_store("roundtrip-svc", "sk-secret-roundtrip");
+        assert!(
+            stored.contains("Credential stored for service: roundtrip-svc"),
+            "store should confirm, got {stored:?}"
+        );
+        assert!(
+            !stored.contains("sk-secret-roundtrip"),
+            "store output must not echo the plaintext value"
+        );
+
+        // 2. Get returns the masked form only (first 2 + last 2 chars).
+        let got = format_credential_get("roundtrip-svc");
+        assert!(
+            got.contains("sk****ip"),
+            "get should print the ab****cd masked form, got {got:?}"
+        );
+        assert!(
+            !got.contains("sk-secret-roundtrip"),
+            "get must never print the plaintext value"
+        );
+
+        // 3. Delete confirms, and a subsequent get reports it missing.
+        let deleted = format_credential_delete("roundtrip-svc");
+        assert!(
+            deleted.contains("Credential deleted for service: roundtrip-svc"),
+            "delete should confirm, got {deleted:?}"
+        );
+        let got_after = format_credential_get("roundtrip-svc");
+        assert!(
+            got_after.contains("Credential not found"),
+            "get after delete should report missing, got {got_after:?}"
         );
     }
 }

@@ -275,9 +275,20 @@ pub fn provider_display_name(p: &LlmProvider) -> &'static str {
     }
 }
 
+/// Last-resort context window for locally detected Ollama models when
+/// `ollama show` fails or reports nothing parseable. Kept from the old
+/// always-fabricated value (review 2026-09-29 P1-13) — it is now only a
+/// floor, not the norm.
+const OLLAMA_FALLBACK_CONTEXT: u32 = 4096;
+
 /// Attempt to detect locally running Ollama models via `ollama list`.
 ///
 /// Returns an empty Vec silently if Ollama is not installed or not running.
+///
+/// Each model's real context length is fetched with a single `ollama show
+/// <model>` call (review 2026-09-29 P1-13 — the previously hardcoded `4096`
+/// misled compaction budgets). A `show` failure or unparseable output falls
+/// back to `OLLAMA_FALLBACK_CONTEXT` and never breaks listing.
 pub fn detect_local_models() -> Vec<ModelInfo> {
     let output = match std::process::Command::new("ollama").arg("list").output() {
         Ok(o) => o,
@@ -297,12 +308,13 @@ pub fn detect_local_models() -> Vec<ModelInfo> {
         if name.is_empty() {
             continue;
         }
+        let context_window = ollama_show_context(&name).unwrap_or(OLLAMA_FALLBACK_CONTEXT) as usize;
         models.push(ModelInfo {
             id: Box::leak(name.clone().into_boxed_str()),
             display_name: Box::leak(name.into_boxed_str()),
             aliases: &[],
             provider: LlmProvider::Ollama,
-            context_window: 4096,
+            context_window,
             max_output: 4_096,
             cost_per_m_input: 0.0,
             cost_per_m_output: 0.0,
@@ -311,6 +323,69 @@ pub fn detect_local_models() -> Vec<ModelInfo> {
     }
 
     models
+}
+
+/// Read a model's context length via one `ollama show <model>` invocation.
+/// Returns `None` when the command fails or its output parses to nothing —
+/// callers fall back to `OLLAMA_FALLBACK_CONTEXT`.
+fn ollama_show_context(model: &str) -> Option<u32> {
+    let output = std::process::Command::new("ollama")
+        .arg("show")
+        .arg(model)
+        .output()
+        .ok()?;
+    if !output.status.success() {
+        return None;
+    }
+    parse_ollama_show_context(&String::from_utf8_lossy(&output.stdout))
+}
+
+/// Parse the context length out of `ollama show <model>` output.
+///
+/// Best-effort across Ollama versions (review 2026-09-29 P1-13). In order:
+///
+/// 1. `num_ctx <n>` — the runtime parameter, either as a `Parameters`
+///    section line (`num_ctx    4096`) or the `--modelfile` form
+///    (`PARAMETER num_ctx 4096`). This is the context the server will
+///    actually use, so it wins over the architectural maximum.
+/// 2. `context length <n>` — the model architecture's maximum from the
+///    modern `ollama show` header table.
+///
+/// Matching is case-insensitive and whitespace-tolerant; `0` is rejected as
+/// nonsense. Anything unrecognised yields `None` — never a guess.
+fn parse_ollama_show_context(output: &str) -> Option<u32> {
+    let mut context_length: Option<u32> = None;
+    for line in output.lines() {
+        let tokens: Vec<&str> = line.split_whitespace().collect();
+        let lower: Vec<String> = tokens
+            .iter()
+            .map(|t| t.to_ascii_lowercase().trim_end_matches(':').to_string())
+            .collect();
+        for i in 0..lower.len() {
+            match lower[i].as_str() {
+                "num_ctx" => {
+                    if let Some(v) = lower
+                        .get(i + 1)
+                        .and_then(|t| t.parse::<u32>().ok())
+                        .filter(|v| *v > 0)
+                    {
+                        return Some(v);
+                    }
+                }
+                "context" if lower.get(i + 1).map(String::as_str) == Some("length") => {
+                    if let Some(v) = lower
+                        .get(i + 2)
+                        .and_then(|t| t.parse::<u32>().ok())
+                        .filter(|v| *v > 0)
+                    {
+                        context_length = Some(v);
+                    }
+                }
+                _ => {}
+            }
+        }
+    }
+    context_length
 }
 
 /// Return all model IDs from the catalog (for Tab completion).
@@ -1680,5 +1755,83 @@ mod tests {
             model_info_for("grok-build-0.1").unwrap().tier_label(),
             TierLabel::Fast
         );
+    }
+
+    // ── parse_ollama_show_context (review 2026-09-29 P1-13) ──────────────
+
+    /// Modern `ollama show` header-table shape (architecture maximum).
+    #[test]
+    fn parse_ollama_show_context_header_table() {
+        let output = "\
+  Model
+    architecture        llama
+    parameters          7.6B
+    context length      131072
+    embedding length    4096
+    quantization        Q4_K_M
+
+  Params
+    stop                \"<|user|>\"
+
+  System
+    You are a helpful assistant.
+";
+        assert_eq!(parse_ollama_show_context(output), Some(131_072));
+    }
+
+    /// `--modelfile` shape: `PARAMETER num_ctx <n>`.
+    #[test]
+    fn parse_ollama_show_context_modelfile_parameter() {
+        let output = "\
+# Modelfile generated by \"ollama show\"
+# To build a new Modelfile based on this, replace FROM with:
+# FROM llama3:latest
+FROM /usr/share/ollama/.ollama/models/blobs/sha256-...
+PARAMETER num_ctx 32768
+PARAMETER stop \"<|user|>\"
+";
+        assert_eq!(parse_ollama_show_context(output), Some(32_768));
+    }
+
+    /// A `Parameters`-section `num_ctx` is the *effective* runtime context
+    /// and wins over the larger architectural maximum.
+    #[test]
+    fn parse_ollama_show_context_num_ctx_wins_over_context_length() {
+        let output = "\
+  Model
+    architecture        qwen3
+    context length      40960
+
+  Parameters
+    num_ctx             8192
+    temperature         0.7
+";
+        assert_eq!(parse_ollama_show_context(output), Some(8_192));
+    }
+
+    /// Case/whitespace tolerance for older or hand-tuned output.
+    #[test]
+    fn parse_ollama_show_context_is_case_insensitive() {
+        assert_eq!(
+            parse_ollama_show_context("  Context Length:  8192\n"),
+            Some(8192)
+        );
+        assert_eq!(parse_ollama_show_context("NUM_CTX=16384\n"), None);
+        assert_eq!(parse_ollama_show_context("num_ctx   16384"), Some(16_384));
+    }
+
+    #[test]
+    fn parse_ollama_show_context_rejects_garbage_and_zero() {
+        assert_eq!(parse_ollama_show_context(""), None);
+        assert_eq!(parse_ollama_show_context("no useful data here"), None);
+        // "embedding length" must not match the "context length" pattern.
+        assert_eq!(
+            parse_ollama_show_context("embedding length    4096\n"),
+            None
+        );
+        // A non-numeric or zero value is never guessed.
+        assert_eq!(parse_ollama_show_context("context length unknown\n"), None);
+        assert_eq!(parse_ollama_show_context("context length 0\n"), None);
+        assert_eq!(parse_ollama_show_context("num_ctx 0\n"), None);
     }
 }

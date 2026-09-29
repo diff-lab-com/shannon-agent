@@ -1424,11 +1424,35 @@ Patterns match against the start of your query. Examples:
     Ok(())
 }
 
+/// The `/credentials` help text. Direct-execution semantics (review P0-5):
+/// store/get/delete run locally via the CredentialManager — the plaintext
+/// value never reaches an LLM prompt and is never recorded in the session.
+fn credentials_help() -> String {
+    "Credential Management (executed locally — values are \
+     never sent to the model):\n\n\
+     /credentials list              - Show stored credentials\n\
+     /credentials store <svc> <val> - Store a credential directly (saved to \
+     ~/.shannon/credentials/<svc>.json, 0600; the value is never recorded in the \
+     conversation)\n\
+     /credentials get <service>     - Retrieve a credential (masked display)\n\
+     /credentials delete <service>  - Delete a credential\n\
+     /credentials count             - Show stored credential count\n"
+        .to_string()
+}
+
 pub(crate) fn handle_credentials(repl: &mut Repl, args: &str) -> Result<()> {
     use shannon_commands::credential_utils::{
         CredentialAction, format_credential_count, format_credential_delete, format_credential_get,
         format_credential_store, format_credentials_list, parse_credential_action,
     };
+
+    // No subcommand → the help text: it is the only output that describes the
+    // direct-execution semantics (`format_credentials_list` still carries the
+    // pre-P0-5 prompt-style usage block).
+    if args.trim().is_empty() {
+        repl.chat.add_message(ChatRole::System, credentials_help());
+        return Ok(());
+    }
 
     let parts: Vec<&str> = args.splitn(3, ' ').collect();
     let action_str = parts.first().copied().unwrap_or("");
@@ -1462,13 +1486,7 @@ pub(crate) fn handle_credentials(repl: &mut Repl, args: &str) -> Result<()> {
             }
         }
         CredentialAction::Count => format_credential_count(),
-        CredentialAction::Help => "Credential Management:\n\n\
-             /credentials list              - Show stored credentials\n\
-             /credentials store <svc> <val> - Store a credential\n\
-             /credentials get <service>     - Retrieve a credential (masked)\n\
-             /credentials delete <service>  - Delete a credential\n\
-             /credentials count             - Show stored credential count\n"
-            .to_string(),
+        CredentialAction::Help => credentials_help(),
     };
 
     repl.chat.add_message(ChatRole::System, output);
@@ -1531,4 +1549,30 @@ fn sweep_orphaned_agent_worktrees(repl: &Repl) -> Option<String> {
         ));
     }
     Some(msg)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::repl::commands::submit_input;
+
+    /// Review P0-5: `/credentials` with no subcommand prints the
+    /// direct-execution help — the only text that describes the local-only
+    /// semantics (values never sent to the model) — not a prompt to the LLM.
+    #[test]
+    fn credentials_no_arg_prints_direct_execution_help() {
+        let mut repl = Repl::new().expect("repl should construct");
+        repl.prompt.set_input("/credentials".to_string());
+        submit_input(&mut repl, None).unwrap();
+
+        let last = &repl.chat.last_message().unwrap().content;
+        assert!(
+            last.contains("Credential Management"),
+            "no-arg /credentials should print help, got {last:?}"
+        );
+        assert!(
+            last.contains("executed locally"),
+            "help must state the direct-execution semantics, got {last:?}"
+        );
+    }
 }

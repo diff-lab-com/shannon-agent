@@ -2,15 +2,36 @@ import { Button } from '@/components/ui/button'
 import { Banner } from '@/components/ui/banner'
 import { useT } from '@/i18n'
 
+/// `no-provider`: nothing configured at all (no active provider, no env
+/// fallback). `no-key`: an active provider exists but its credential store
+/// entry is missing — copy names the provider so the fix is unambiguous
+/// (2026-09-29 provider review §3-A1: accurate copy for both cases).
+export type ApiKeyBannerVariant = 'no-provider' | 'no-key'
+
 interface ApiKeyBannerProps {
   visible: boolean
+  variant?: ApiKeyBannerVariant
+  /** Active provider display name (variant `no-key`). */
+  providerName?: string
   onDismiss: () => void
   onOpenSettings: () => void
 }
 
-export default function ApiKeyBanner({ visible, onDismiss, onOpenSettings }: ApiKeyBannerProps) {
+export default function ApiKeyBanner({
+  visible,
+  variant = 'no-provider',
+  providerName,
+  onDismiss,
+  onOpenSettings,
+}: ApiKeyBannerProps) {
   const t = useT()
   if (!visible) return null
+  const title = variant === 'no-key'
+    ? t('chat.banner.providerKeyMissing.title', { provider: providerName ?? '' })
+    : t('chat.banner.apiKeyMissing.title')
+  const body = variant === 'no-key'
+    ? t('chat.banner.providerKeyMissing.body', { provider: providerName ?? '' })
+    : t('chat.banner.apiKeyMissing.body')
   return (
     <Banner
       tone="info"
@@ -20,8 +41,8 @@ export default function ApiKeyBanner({ visible, onDismiss, onOpenSettings }: Api
     >
       <span className="material-symbols-outlined text-secondary icon-md shrink-0 mt-[2px]">key_alert</span>
       <div className="flex-1 min-w-0">
-        <p className="font-label-md text-on-surface">{t('chat.banner.apiKeyMissing.title')}</p>
-        <p className="font-body-sm text-on-surface-variant mt-xs">{t('chat.banner.apiKeyMissing.body')}</p>
+        <p className="font-label-md text-on-surface">{title}</p>
+        <p className="font-body-sm text-on-surface-variant mt-xs">{body}</p>
       </div>
       <Button
         type="button"

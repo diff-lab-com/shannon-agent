@@ -457,6 +457,29 @@ export interface ProvidersFile {
   providers: ProviderConnection[]
 }
 
+/// Reliable provider-activation signal from `get_provider_status`
+/// (2026-09-29 provider review §2-2). `DesktopConfig.provider`/`api_key`
+/// are dead since ADR-0005 — all "is a provider configured" gating reads
+/// this instead.
+export interface ProviderStatus {
+  /// Id of the active managed provider, `null` when nothing is active.
+  active_provider_id: string | null
+  /// Display name of the active provider, `null` when unset (fall back
+  /// to `active_provider_id` for display).
+  display_name: string | null
+  /// Wire kind slug of the active provider (`anthropic` | `openai` |
+  /// `deepseek` | `ollama` | `openai-compatible` | `gemini`).
+  kind: string | null
+  /// True when the credential store has a key for the active provider.
+  has_api_key: boolean
+  /// Active model id, `null` when unset (or the `"default"` sentinel).
+  model: string | null
+  /// Provider detected purely from env vars — only populated when the
+  /// store has no active provider, so env-configured users are not
+  /// nagged for a key.
+  env_provider: string | null
+}
+
 /// Payload for adding or editing a managed provider. On edit, `id` identifies
 /// the entry; an `api_key` of '***' or empty means "keep the existing key".
 ///
