@@ -564,4 +564,12 @@ vi.mock('@/lib/tauri-api', async (importOriginal) => ({
   terminalWrite: vi.fn().mockResolvedValue(undefined),
   terminalResize: vi.fn().mockResolvedValue(undefined),
   terminalKill: vi.fn().mockResolvedValue(undefined),
+  // P3-1 — terminal settings card (AdvancedSettings mounts it on every
+  // render). set-settings echoes its input like the backend's effective
+  // response; history stays an empty replay payload.
+  terminalGetSettings: vi.fn().mockResolvedValue({
+    shell: null, fontSize: 12, scrollback: 5000, drawerHeight: 320, screenReaderMode: false,
+  }),
+  terminalSetSettings: vi.fn().mockImplementation((settings: unknown) => Promise.resolve(settings)),
+  terminalHistory: vi.fn().mockResolvedValue({ data: '' }),
 }))

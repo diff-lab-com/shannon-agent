@@ -104,7 +104,7 @@ export default function FilesPage() {
               onClick={() => setFilter('all')}
               className={cn(
                 'rounded-lg font-label-sm',
-                filter === 'all' ? 'bg-primary/10 text-primary' : 'text-on-surface-variant hover:text-primary',
+                filter === 'all' ? 'bg-primary-container text-on-primary-container' : 'text-on-surface-variant hover:text-primary',
               )}
             >
               {t('inbox.filter.all')}
@@ -118,7 +118,7 @@ export default function FilesPage() {
               onClick={() => setFilter('favorites')}
               className={cn(
                 'rounded-lg',
-                filter === 'favorites' ? 'bg-primary/10 text-primary' : 'text-on-surface-variant hover:text-primary',
+                filter === 'favorites' ? 'bg-primary-container text-on-primary-container' : 'text-on-surface-variant hover:text-primary',
               )}
             >
               <span

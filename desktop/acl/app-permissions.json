@@ -2378,6 +2378,24 @@
       }
     },
     {
+      "identifier": "allow-terminal-get-settings",
+      "description": "Enables the terminal_get_settings command without any pre-configured scope.",
+      "commands": {
+        "allow": [
+          "terminal_get_settings"
+        ]
+      }
+    },
+    {
+      "identifier": "allow-terminal-history",
+      "description": "Enables the terminal_history command without any pre-configured scope.",
+      "commands": {
+        "allow": [
+          "terminal_history"
+        ]
+      }
+    },
+    {
       "identifier": "allow-terminal-kill",
       "description": "Enables the terminal_kill command without any pre-configured scope.",
       "commands": {
@@ -2401,6 +2419,15 @@
       "commands": {
         "allow": [
           "terminal_resize"
+        ]
+      }
+    },
+    {
+      "identifier": "allow-terminal-set-settings",
+      "description": "Enables the terminal_set_settings command without any pre-configured scope.",
+      "commands": {
+        "allow": [
+          "terminal_set_settings"
         ]
       }
     },
@@ -2653,24 +2680,6 @@
       "commands": {
         "allow": [
           "verify_signature"
-        ]
-      }
-    },
-    {
-      "identifier": "allow-workspace-get-layout",
-      "description": "Enables the workspace_get_layout command without any pre-configured scope.",
-      "commands": {
-        "allow": [
-          "workspace_get_layout"
-        ]
-      }
-    },
-    {
-      "identifier": "allow-workspace-set-layout",
-      "description": "Enables the workspace_set_layout command without any pre-configured scope.",
-      "commands": {
-        "allow": [
-          "workspace_set_layout"
         ]
       }
     }
@@ -2993,7 +3002,7 @@
     },
     {
       "identifier": "app-window-management",
-      "description": "Session multi-window lifecycle and draggable workspace layout commands.",
+      "description": "Session multi-window lifecycle commands.",
       "permissions": [
         "allow-close-session-window",
         "allow-list-session-windows",
@@ -3034,9 +3043,12 @@
         "allow-preview-start",
         "allow-preview-status",
         "allow-preview-stop",
+        "allow-terminal-get-settings",
+        "allow-terminal-history",
         "allow-terminal-kill",
         "allow-terminal-list",
         "allow-terminal-resize",
+        "allow-terminal-set-settings",
         "allow-terminal-spawn",
         "allow-terminal-write"
       ]

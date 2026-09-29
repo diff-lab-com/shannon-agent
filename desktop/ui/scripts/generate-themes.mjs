@@ -13,7 +13,7 @@
 import { readFileSync, writeFileSync, mkdirSync } from 'node:fs'
 import { fileURLToPath } from 'node:url'
 import { dirname, join } from 'node:path'
-import { auditThemes, contrast } from './lib/contrast.mjs'
+import { auditThemes, contrast, chipCompositesInUse } from './lib/contrast.mjs'
 
 const root = join(dirname(fileURLToPath(import.meta.url)), '..')
 const source = JSON.parse(readFileSync(join(root, 'scripts', 'theme-source.json'), 'utf8'))
@@ -66,12 +66,17 @@ for (const [id, theme] of Object.entries(source.themes)) {
 }
 
 // ── Validate against the AA pair contract ───────────────────────────────────
+// The accent-chip composites (scripts/lib/contrast.mjs CHIP_COMPOSITES) are
+// enforced only for the hue/tint patterns still present in src — migrating
+// a pattern to the MD3 container roles (already gated by the plain PAIRS)
+// retires its composite check.
+const chipPatterns = chipCompositesInUse(join(root, 'src'))
 const auditInput = {}
 for (const [id, theme] of Object.entries(source.themes)) {
   auditInput[id] = { ...source.base, ...theme.vars }
 }
 auditInput.material = { ...auditInput.material } // base ⊂ material by construction
-const failures = auditThemes(auditInput)
+const failures = auditThemes(auditInput, { chipPatterns })
 if (failures.length > 0) {
   console.error('generate-themes: AA pair contract FAILED:')
   for (const f of failures) {

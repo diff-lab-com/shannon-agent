@@ -2,9 +2,17 @@ import { defineConfig } from 'vitest/config'
 import react from '@vitejs/plugin-react'
 import tailwindcss from '@tailwindcss/vite'
 import path from 'path'
+import pkg from './package.json' with { type: 'json' }
 
 export default defineConfig({
   plugins: [react(), tailwindcss()],
+  // Mirror vite.config.ts's `__APP_VERSION__` define: the mock-handler
+  // coverage tripwire imports the mock layer (handlers.ts → data/config.ts),
+  // which references that global — undefined under vitest otherwise, because
+  // this file is separate from vite.config.ts and its define doesn't apply.
+  define: {
+    '__APP_VERSION__': JSON.stringify(pkg.version),
+  },
   test: {
     globals: true,
     environment: 'jsdom',

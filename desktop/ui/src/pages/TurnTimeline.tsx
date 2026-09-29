@@ -404,8 +404,8 @@ function TurnCard({
             <span
               className={cn(
                 'inline-flex items-center gap-xs rounded-full px-sm py-0.5 font-label-xs text-xs border',
-                tone === 'success' && 'bg-primary/10 text-primary border-primary/30',
-                tone === 'error' && 'bg-error/10 text-error border-error/30',
+                tone === 'success' && 'bg-primary-container text-on-primary-container border-primary/30',
+                tone === 'error' && 'bg-error-container text-on-error-container border-error/30',
                 tone === 'neutral' && 'bg-surface-container-high text-on-surface-variant border-outline-variant/30',
               )}
             >

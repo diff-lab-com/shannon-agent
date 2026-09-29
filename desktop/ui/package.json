@@ -11,6 +11,7 @@
     "preview": "vite preview",
     "test": "vitest",
     "test:e2e": "playwright test",
+    "gallery:shoot": "node scripts/shoot-theme-gallery.mjs",
     "test:coverage": "vitest --coverage",
     "test:ci": "CI=1 vitest --run",
     "lint": "tsc --noEmit && eslint src --max-warnings 0 && node scripts/check-design-tokens.mjs && node scripts/i18n-check.mjs",

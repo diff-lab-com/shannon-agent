@@ -44,6 +44,7 @@ import type {
   FileDiff,
   FileNode,
   TerminalInfo,
+  TerminalSettings,
   WorkingDirInfo,
   CatalogEntry,
   PluginBundleSummary,
@@ -2751,11 +2752,35 @@ export async function terminalList(): Promise<TerminalInfo[]> {
   return invoke('terminal_list')
 }
 
-// Draggable panel workspace (P1-5 C-2 — frozen contract) was retired in
-// e786ec25 alongside the WorkspaceGrid / Toolbar components. The
-// workspace_get_layout / workspace_set_layout Tauri commands and their
-// types still live on disk but are no longer wired into the chat page.
-// Keep the mock layer aware so existing data files don't trip type-check.
+/**
+ * P3-1: persisted terminal preferences (`[terminal]` in
+ * `~/.shannon/config.toml`). The backend clamps numerics (fontSize 8–32,
+ * scrollback 0–100000, drawerHeight 120–1200) and blanks the shell —
+ * callers must render the values returned here, not what they sent.
+ */
+export async function terminalGetSettings(): Promise<TerminalSettings> {
+  return invoke('terminal_get_settings')
+}
+
+/** Persist preferences; returns the sanitized (effective) values. */
+export async function terminalSetSettings(settings: TerminalSettings): Promise<TerminalSettings> {
+  return invoke('terminal_set_settings', { settings })
+}
+
+/**
+ * Replay bytes for one session, base64 (US6). Empty string when the id is
+ * unknown or the session already ended — the frontend calls it
+ * speculatively on reconnect, so a missing ring must not be an error.
+ * `endSeq` (additive, review fix) is the highest output-chunk seq fully
+ * contained in `data`: the replay consumer drops queued `terminal:output`
+ * events with `seq <= endSeq` and flushes the rest, so the snapshot and
+ * the live stream stitch without loss or duplication. Absent on the demo
+ * backend → flush-everything fallback.
+ */
+export async function terminalHistory(terminalId: string): Promise<{ data: string; endSeq?: number }> {
+  return invoke('terminal_history', { terminalId })
+}
+
 // --- P-E3 project registry (projects.db, adopt-not-migrate) ---
 
 /** Every registered project, path-ascending. Archived rows are included

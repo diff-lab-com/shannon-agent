@@ -1,15 +1,25 @@
 # Shannon Code - Implementation Roadmap
 
-> Updated: 2026-06-18 — status sync after code audit
+> Updated: 2026-09-29 — PTY terminal partially delivered; previous sync 2026-06-18
 > Priority: P0 features referencing Claude Code's implementation approach
 > Goal: Claude Code MCP/Skill/Agent ecosystem compatibility
+
+> **Status sync (2026-09-29).** The PTY terminal is no longer
+> genuinely-pending — it is **partially delivered**: `execute_in_pty`
+> (`crates/shannon-tools/src/pty.rs`) already runs interactive commands on
+> a PTY, and the TUI `!` inline shell is now non-blocking with cancel +
+> timeout. The remaining gap is the Gemini-style snapshot + inline render
+> of interactive programs (see the P0-Future entry below). The desktop
+> integrated terminal has also shipped — see the Terminal entry in
+> `CHANGELOG.md`.
 
 > **Status sync (2026-06-18).** A code-level audit against the crates shows
 > that **all P0 items (#1–#7) and all P0.5 Agent Teams items (AT-1 through
 > AT-7) listed below have shipped.** The earlier "What's Missing" column was
 > stale. The remaining genuinely-pending engine work is in
-> [Future Considerations](#future-considerations-p1-p3) — PTY terminal,
-> RepoMap, Computer Use, Surface-agnostic protocol, Guardian Agent, etc.
+> [Future Considerations](#future-considerations-p1-p3) — RepoMap,
+> Computer Use, Surface-agnostic protocol, Guardian Agent, etc. (PTY
+> terminal left this list on 2026-09-29 — see the sync note above.)
 > The next major effort lives in `shannon-desktop` (Scheduled Sprint 2-3 +
 > Triage queue); planning docs now live under `docs/plans/` — the old
 > `shannon-desktop/SCHEDULED-FIX-PLAN.md` path no longer exists.
@@ -430,11 +440,16 @@ Phase 5 (Agent Teams):  AT-6 → AT-1 → AT-3 → AT-5 → AT-4 → AT-7 → AT
 Based on comparison against Claude Code, Codex CLI, OpenCode, Aider, Cursor, and Gemini CLI.
 These items are deferred from the current sprint for future evaluation.
 
-#### P0-Future: PTY Pseudo-Terminal (Gemini CLI Pattern)
+#### P0-Future: PTY Pseudo-Terminal (Gemini CLI Pattern) — ⚠️ Partially Delivered (2026-09-29)
+- **Status**: Partially delivered. `execute_in_pty` (`crates/shannon-tools/src/pty.rs`)
+  runs interactive commands on a PTY; the TUI `!` inline shell is now
+  non-blocking with Esc-cancel + timeout; the desktop app ships an
+  integrated PTY terminal (see the Terminal entry in `CHANGELOG.md`).
+- **Remaining gap**: Gemini-style snapshot + inline render of interactive programs.
 - **Why**: Interactive programs (vim, htop, npm init) currently block the session
 - **Competitor**: Gemini CLI spawns a PTY, takes snapshots, renders inline — handles any interactive program
 - **Approach**: Integrate `portable-pty` crate into `BashTool`, detect interactive commands, switch to PTY snapshot mode
-- **Effort**: High (7+ days)
+- **Effort**: High (7+ days) — remaining work is the snapshot/inline-render layer
 - **Impact**: Solves a universal pain point; only Gemini CLI has this
 
 #### P0-Future: RepoMap (Aider Pattern)

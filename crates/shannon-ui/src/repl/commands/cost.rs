@@ -506,6 +506,11 @@ pub(crate) fn extract_plan_steps(description: &str) -> Vec<String> {
     steps
 }
 
+/// Tool-permission view: status / allow / deny / reset / mode.
+///
+/// R1-6 (decision ② step 1): the primary `/permissions` name moved to the
+/// permission-profile command (the `/profile` handler), so this view lives on
+/// at its short aliases `/perms` and `/perm` — the strings below point there.
 pub(crate) fn handle_permissions(repl: &mut Repl, args: &str) -> Result<()> {
     use shannon_engine::permissions::RiskLevel;
 
@@ -570,7 +575,7 @@ pub(crate) fn handle_permissions(repl: &mut Repl, args: &str) -> Result<()> {
             if parts.len() < 2 {
                 repl.chat.add_message(
                     ChatRole::System,
-                    "Usage: /permissions allow <tool_name>".to_string(),
+                    "Usage: /perms allow <tool_name>".to_string(),
                 );
                 return Ok(());
             }
@@ -589,7 +594,7 @@ pub(crate) fn handle_permissions(repl: &mut Repl, args: &str) -> Result<()> {
             if parts.len() < 2 {
                 repl.chat.add_message(
                     ChatRole::System,
-                    "Usage: /permissions deny <tool_name>".to_string(),
+                    "Usage: /perms deny <tool_name>".to_string(),
                 );
                 return Ok(());
             }
@@ -670,9 +675,9 @@ pub(crate) fn handle_permissions(repl: &mut Repl, args: &str) -> Result<()> {
                     repl.chat.add_message(
                         ChatRole::System,
                         "Permission Modes:\n\
-                         /permissions mode suggest   — Require approval for dangerous tools\n\
-                         /permissions mode auto      — Auto-accept all tool executions\n\
-                         /permissions mode readonly  — Read-only, no file modifications"
+                         /perms mode suggest   — Require approval for dangerous tools\n\
+                         /perms mode auto      — Auto-accept all tool executions\n\
+                         /perms mode readonly  — Read-only, no file modifications"
                             .to_string(),
                     );
                 }
@@ -682,12 +687,12 @@ pub(crate) fn handle_permissions(repl: &mut Repl, args: &str) -> Result<()> {
             repl.chat.add_message(
                 ChatRole::System,
                 "Permission Commands:\n\
-                 /permissions status — Show current permission policies and overrides\n\
-                 /permissions allow <tool> — Always allow a tool without prompting\n\
-                 /permissions deny <tool> — Always deny a tool\n\
-                 /permissions reset — Clear all permission overrides\n\
-                 /permissions mode [suggest|auto|readonly] — Change approval mode\n\
-                 /permissions help — Show this help"
+                 /perms status — Show current permission policies and overrides\n\
+                 /perms allow <tool> — Always allow a tool without prompting\n\
+                 /perms deny <tool> — Always deny a tool\n\
+                 /perms reset — Clear all permission overrides\n\
+                 /perms mode [suggest|auto|readonly] — Change approval mode\n\
+                 /perms help — Show this help"
                     .to_string(),
             );
         }

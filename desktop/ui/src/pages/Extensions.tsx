@@ -101,7 +101,7 @@ export default function Extensions() {
                 className={({ isActive }) =>
                   `flex items-center gap-xs px-md py-xs rounded-xl font-label-md text-label-md transition-all whitespace-nowrap focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/40 focus-visible:ring-offset-1 focus-visible:ring-offset-surface ${
                     isActive
-                      ? 'bg-primary/15 text-primary font-bold'
+                      ? 'bg-primary-container text-on-primary-container font-bold'
                       : 'text-on-surface-variant hover:text-primary hover:bg-surface-container-low'
                   }`
                 }
@@ -142,7 +142,7 @@ export default function Extensions() {
               aria-expanded={manageOpen}
               className={`flex items-center gap-xs px-md py-xs rounded-xl font-label-md text-label-md whitespace-nowrap transition-all ${
                 manageActive
-                  ? 'bg-primary/15 text-primary font-bold'
+                  ? 'bg-primary-container text-on-primary-container font-bold'
                   : 'text-on-surface-variant hover:text-primary hover:bg-surface-container-low'
               }`}
               onClick={() => setManageOpen(v => !v)}

@@ -329,7 +329,10 @@ export default function Tasks() {
                 title={t(`tasks.tab.${tabId}.title`)}
                 className={cn(
                   'h-auto px-md py-sm font-label-md text-label-sm font-bold cursor-pointer border-b-2 -mb-px transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-primary/30 rounded-none',
-                  selected ? 'border-primary text-primary' : 'border-transparent text-on-surface-variant hover:text-on-surface',
+                  // G7: text-link — selected accent tab must clear AA on every
+                  // theme (bare text-primary fails 4.5:1 on light surfaces in
+                  // gruvbox-light / solarized-light / solarized).
+                  selected ? 'border-primary text-link' : 'border-transparent text-on-surface-variant hover:text-on-surface',
                 )}
               >
                 {t(`tasks.tab.${tabId}`)}

@@ -121,7 +121,7 @@ export default function SkillCandidateReviewQueue({ focusCandidateId }: {
                   <div className="flex items-center gap-sm mb-xs flex-wrap">
                     <h4 className="font-body-md font-semibold text-on-surface">{candidate.proposed_name}</h4>
                     {candidate.refined && (
-                      <span className="px-xs py-0.5 rounded-full bg-tertiary/10 text-tertiary font-label-sm text-label-xs font-bold uppercase tracking-wider">
+                      <span className="px-xs py-0.5 rounded-full bg-tertiary-container text-on-tertiary-container font-label-sm text-label-xs font-bold uppercase tracking-wider">
                         {t('extensions.pending.candidate.refined')}
                       </span>
                     )}

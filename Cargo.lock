@@ -7650,6 +7650,7 @@ dependencies = [
  "futures",
  "image",
  "insta",
+ "libc",
  "notify",
  "parking_lot",
  "pulldown-cmark",

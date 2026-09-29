@@ -75,7 +75,7 @@ export function DocumentToc({ source }: { source: string }) {
                   'w-full flex items-start gap-1.5 text-left px-sm py-xs rounded-md font-label-sm transition-colors cursor-pointer',
                   h.level === 1 ? 'font-bold' : h.level === 3 ? 'pl-md' : '',
                   activeId === h.id
-                    ? 'bg-primary/10 text-primary'
+                    ? 'bg-primary-container text-on-primary-container'
                     : 'text-on-surface-variant hover:bg-surface-container-low hover:text-on-surface',
                 )}
               >

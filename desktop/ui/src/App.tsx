@@ -60,8 +60,10 @@ const PermissionsSettings = lazy(() => import('./components/settings/Permissions
 // G4 (UI review 2026-09-29): the Toaster follows the APP's resolved theme
 // (was theme="system" → a dark OS + light app theme rendered inverted toasts)
 // and drops richColors in favor of semantic container/on-container token
-// pairs per type (success=primary, error=error, warning=tertiary,
-// info=secondary — every pair is AA-validated per theme by the generator).
+// pairs per type (success=success, error=error, warning=warning,
+// info=info — every pair is AA-validated per theme by the generator;
+// success/warning/info used to approximate with primary/tertiary/secondary
+// containers before those hues became real tokens).
 // The glass surface itself comes from the [data-sonner-toast] block in
 // index.css (sonner's injected stylesheet is unlayered, so plain utilities
 // in classNames alone cannot win the cascade there).
@@ -75,10 +77,10 @@ function ThemedToaster() {
       toastOptions={{
         classNames: {
           toast: 'glass-overlay',
-          success: 'bg-primary-container text-on-primary-container',
+          success: 'bg-success-container text-on-success-container',
           error: 'bg-error-container text-on-error-container',
-          warning: 'bg-tertiary-container text-on-tertiary-container',
-          info: 'bg-secondary-container text-on-secondary-container',
+          warning: 'bg-warning-container text-on-warning-container',
+          info: 'bg-info-container text-on-info-container',
           description: 'opacity-80',
         },
       }}

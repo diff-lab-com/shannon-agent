@@ -184,7 +184,7 @@ function SessionRow({ id, title, messageCount, active, onSelect }: SessionRowPro
       className={cn(
         'h-auto justify-start items-start whitespace-normal text-left rounded-md px-sm py-sm',
         active
-          ? 'bg-primary/15 text-primary font-bold hover:bg-primary/15'
+          ? 'bg-primary-container text-on-primary-container font-bold hover:bg-primary/15'
           : 'hover:bg-on-surface-variant/10 text-on-surface',
       )}
     >

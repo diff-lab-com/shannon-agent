@@ -186,7 +186,8 @@ describe('TurnTimeline — reason badges and locale (B4 §7-28)', () => {
     getTraceTimeline.mockResolvedValue(fixtureWithReason('failed'))
     renderAt()
     const badge = await screen.findByText('Failed')
-    expect(badge.className).toContain('bg-error/10')
+    // G7 2026-09-30: error tone = MD3 container pair (was bg-error/10 tint).
+    expect(badge.className).toContain('bg-error-container')
   })
 
   it('renders neutral stopping reasons (interrupted) without error styling', async () => {
