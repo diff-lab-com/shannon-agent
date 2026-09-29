@@ -70,15 +70,6 @@ pub fn handle_input(
     key: KeyEvent,
     terminal: Option<&mut super::query::Term>,
 ) -> Result<()> {
-    // P0-1: while an inline `!shell` job runs, Esc kills its whole process
-    // group and the key is consumed — it must not reach the prompt, vim
-    // handler, or any overlay. Every other key keeps working: the event loop
-    // stays responsive while the job runs in the background.
-    if repl.state.shell_job.is_some() && key.code == KeyCode::Esc {
-        super::commands::cancel_inline_shell(repl);
-        return Ok(());
-    }
-
     // If the /help overlay is active, Esc closes it; all other keys are
     // consumed while the overlay is open (precedes any other Esc handling).
     if repl.state.help_overlay.is_some() {
@@ -621,6 +612,16 @@ pub fn handle_input(
             if !repl.state.completion_suggestions.is_empty() {
                 repl.state.completion_suggestions.clear();
                 repl.state.completion_suggestion_index = 0;
+                return Ok(());
+            }
+            // P0-1: while an inline `!shell` job runs, Esc kills its whole
+            // process group and is consumed — it must not trigger the
+            // double-Esc /rewind or the vim insert→normal switch. Every
+            // overlay/dialog handler above already returned for its own keys,
+            // so an open overlay wins over the cancel (its Esc closes the
+            // overlay; the job keeps running and the next Esc cancels it).
+            if repl.state.shell_job.is_some() {
+                super::commands::cancel_inline_shell(repl);
                 return Ok(());
             }
             // Double-Esc on empty input triggers /undo
@@ -3604,5 +3605,58 @@ mod tests {
         let diag = complete_command_args("diag", "");
         assert!(diag.contains(&"--full".to_string()));
         assert!(diag.contains(&"--json".to_string()));
+    }
+
+    /// P0-1 Esc precedence: with the /help overlay open while an inline
+    /// `!shell` job runs, Esc is consumed by the overlay's own handler — it
+    /// closes the overlay and must NOT kill the job. Only once no overlay is
+    /// left does Esc cancel the running job.
+    #[test]
+    fn esc_with_overlay_open_does_not_cancel_inline_shell_job() {
+        use crate::repl::commands::{poll_inline_shell_jobs, start_inline_shell};
+        use crate::repl::state::HelpOverlayState;
+
+        let mut repl = Repl::new().expect("test repl");
+        start_inline_shell(&mut repl, "sleep 30", 30);
+        assert!(repl.state.shell_job.is_some(), "job in flight");
+        let idx = repl.chat.message_count() - 1;
+        assert!(
+            repl.chat.messages[idx]
+                .content
+                .contains("running, Esc to cancel")
+        );
+
+        // /help overlay open on top of the running job: its Esc wins.
+        repl.state.help_overlay = Some(HelpOverlayState::default());
+        let esc = KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE);
+        handle_input(&mut repl, esc, None).expect("overlay Esc handled");
+        assert!(
+            repl.state.help_overlay.is_none(),
+            "overlay closed by its own Esc handler"
+        );
+        assert!(
+            repl.state.shell_job.is_some(),
+            "job must survive the overlay's Esc"
+        );
+        assert!(
+            repl.chat.messages[idx]
+                .content
+                .contains("running, Esc to cancel"),
+            "placeholder untouched while the job runs"
+        );
+
+        // Overlay gone: the next Esc is the job-cancel.
+        handle_input(&mut repl, esc, None).expect("job-cancel Esc handled");
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(2);
+        while repl.state.shell_job.is_some() && std::time::Instant::now() < deadline {
+            poll_inline_shell_jobs(&mut repl);
+            std::thread::sleep(std::time::Duration::from_millis(10));
+        }
+        assert!(repl.state.shell_job.is_none(), "job settled after cancel");
+        assert!(
+            repl.chat.messages[idx].content.contains("cancelled"),
+            "placeholder finalized as cancelled: {:?}",
+            repl.chat.messages[idx].content
+        );
     }
 }
