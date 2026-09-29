@@ -436,6 +436,14 @@ pub mod event_names {
     /// Emitted by `desktop/src/terminal_commands.rs`; coalesced to at most
     /// one event per 16 ms per terminal.
     pub const TERMINAL_OUTPUT: &str = "terminal:output";
+    /// P3-6: the terminal's process exited naturally and the session was
+    /// reaped. Payload: `{ terminalId }` (see
+    /// `desktop/src/terminal_commands.rs` `TerminalExitPayload`). The
+    /// authoritative exit signal — the in-stream "[shannon: process exited
+    /// …" notice in `terminal:output` is display text only and must not be
+    /// parsed. Emitted right after the final output flush; explicit
+    /// `terminal_kill` does not emit it (the killing client already knows).
+    pub const TERMINAL_EXIT: &str = "terminal:exit";
 }
 
 #[cfg(test)]
@@ -450,6 +458,14 @@ mod tests {
         assert!(event_names::TASK_RETRY.contains(':'));
         assert!(event_names::BUDGET_WARNING.contains(':'));
         assert!(event_names::BUDGET_EXCEEDED.contains(':'));
+        assert!(event_names::TERMINAL_EXIT.contains(':'));
+    }
+
+    #[test]
+    fn terminal_exit_event_name_is_frozen() {
+        // Task 3's frontend listens on this exact string
+        // (desktop/ui EVENT_NAMES.TERMINAL_EXIT) — it must never drift.
+        assert_eq!(event_names::TERMINAL_EXIT, "terminal:exit");
     }
 
     #[test]

@@ -89,6 +89,40 @@ describe('Markdown — code blocks', () => {
   })
 })
 
+describe('Markdown — run in terminal (US4 direction A)', () => {
+  it('renders a "Run in terminal" action on fenced code blocks', () => {
+    renderMd('```bash\nnpm test\n```')
+    const run = screen.getByRole('button', { name: 'Run in terminal' })
+    expect(run.getAttribute('title')).toBe('Run in terminal')
+  })
+
+  it('dispatches shannon:terminal-run with the raw code on click', () => {
+    const seen = vi.fn()
+    window.addEventListener('shannon:terminal-run', seen)
+    renderMd('```bash\nnpm test\n```')
+    fireEvent.click(screen.getByRole('button', { name: 'Run in terminal' }))
+    window.removeEventListener('shannon:terminal-run', seen)
+    expect(seen).toHaveBeenCalledTimes(1)
+    const detail = (seen.mock.calls[0][0] as CustomEvent).detail
+    expect(detail.code).toBe('npm test')
+  })
+
+  it('carries the multi-line code verbatim, including a language-less fence', () => {
+    const seen = vi.fn()
+    window.addEventListener('shannon:terminal-run', seen)
+    renderMd('```\nline one\nline two\n```')
+    fireEvent.click(screen.getByRole('button', { name: 'Run in terminal' }))
+    window.removeEventListener('shannon:terminal-run', seen)
+    const detail = (seen.mock.calls[0][0] as CustomEvent).detail
+    expect(detail.code).toBe('line one\nline two')
+  })
+
+  it('does not put the action on inline code spans', () => {
+    renderMd('Use `npm test` now.')
+    expect(screen.queryByRole('button', { name: 'Run in terminal' })).toBeNull()
+  })
+})
+
 describe('Markdown — chart dispatch', () => {
   it('renders a `language-chart` block as a chart (svg)', () => {
     const md = '```chart\n{"type":"bar","data":[{"label":"a","value":1}]}\n```'

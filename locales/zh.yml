@@ -410,6 +410,18 @@ ui:
   header_newline: "换行"
   header_editor: "编辑器"
   header_fullscreen: "全屏"
+  # ── 粘贴 / 诊断 / 管道 / 会话摘要 ────────────────────────────────────────────
+  # 注意：pasted_text_marker 的 "[Pasted Text #" 前缀会被提交时的
+  # expand_pasted_texts 解析，翻译时必须保留该前缀及紧随其后的数字。
+  pasted_text_marker: "[Pasted Text #%{num} · %{count} 行]"
+  diagnostics_issues: "[诊断: 发现 %{count} 个问题]"
+  diagnostics_clean: "[诊断: ✓ 无问题]"
+  session_summary_title: "── 会话摘要 ──"
+  session_summary_tokens: "  Token: %{input} 输入 + %{output} 输出  |  费用: $%{cost}"
+  session_summary_budget: "  预算: $%{cost} / $%{budget} (%{pct}%)"
+  session_summary_model: "  模型: %{model}"
+  session_summary_duration: "  时长: %{mins}分%{secs}秒"
+  session_summary_separator: "─────────────────────"
   sidebar:
     context: "上下文"
     cost: "费用"

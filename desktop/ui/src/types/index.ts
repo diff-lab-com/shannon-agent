@@ -1343,6 +1343,13 @@ export const EVENT_NAMES = {
   SUBAGENT_STOP: 'subagent:stop',
   /** P1-5 D: PTY output for the integrated terminal (data is base64). */
   TERMINAL_OUTPUT: 'terminal:output',
+  /**
+   * P3-6: the terminal's process exited (backend emission lands with the
+   * Task-4 pump change). Authoritative exit signal — the in-stream
+   * "[shannon: process exited …" notice is display text only and must not
+   * be parsed.
+   */
+  TERMINAL_EXIT: 'terminal:exit',
 } as const
 
 export type EventName = (typeof EVENT_NAMES)[keyof typeof EVENT_NAMES]
@@ -1353,6 +1360,15 @@ export type EventName = (typeof EVENT_NAMES)[keyof typeof EVENT_NAMES]
 export interface TerminalInfo {
   terminalId: string
   projectDir: string
+  /**
+   * Additive (review fix): the project dir EXACTLY as the spawn request
+   * carried it, before the backend canonicalized `projectDir`. The
+   * per-project tab filter matches this first — canonical-vs-raw
+   * mismatches (symlinked segments on Unix, `\\?\C:\…` verbatim prefixes
+   * on Windows) used to make a freshly spawned tab vanish into the empty
+   * state. Absent/null on legacy payloads: fall back to `projectDir`.
+   */
+  projectDirRaw?: string | null
   shell: string
   startedAtMs: number
 }
@@ -1361,6 +1377,36 @@ export interface TerminalInfo {
 export interface TerminalOutputPayload {
   terminalId: string
   data: string
+  /**
+   * Additive (review fix): per-session monotonic chunk number assigned by
+   * the backend pump in stream order. Replay stitching drops queued
+   * events with `seq <= terminal_history.endSeq` (already replayed) and
+   * flushes the rest — no loss, no duplication around (re)connect.
+   * Absent on legacy/demo payloads: the consumer falls back to
+   * flush-everything.
+   */
+  seq?: number
+}
+
+/** `terminal:exit` payload — the terminal's process has exited. */
+export interface TerminalExitPayload {
+  terminalId: string
+}
+
+/**
+ * P3-1: persisted terminal preferences (`[terminal]` in
+ * `~/.shannon/config.toml`; camelCase over the wire, frozen shape).
+ * The backend clamps `fontSize` (8–32), `scrollback` (0–100000) and
+ * `drawerHeight` (120–1200) and blanks the shell on read AND write —
+ * after a set, render the values the response carries, not the ones the
+ * caller sent.
+ */
+export interface TerminalSettings {
+  shell: string | null
+  fontSize: number
+  scrollback: number
+  drawerHeight: number
+  screenReaderMode: boolean
 }
 
 // --- Inter-agent message history (Phase D C3) ---

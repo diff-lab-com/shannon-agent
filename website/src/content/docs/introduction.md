@@ -17,9 +17,15 @@ section: getting-started
 | Extensions | MCP (Model Context Protocol) — Claude Code compatible |
 | Tools | Read, Edit, Write, Bash, Grep, Glob + MCP tools |
 | Agents | Multi-agent orchestration with per-agent model/tool config |
-| UI | Terminal UI with vim mode, diff viewer, markdown rendering |
+| UI | Terminal UI with vim mode, diff viewer, markdown rendering; desktop app with an integrated terminal |
 | Tests | 11,752+ automated tests across 20 workspace members |
 | i18n | 10 languages |
+
+## Desktop Integrated Terminal
+
+The desktop app embeds a real terminal next to the chat. Press ``Ctrl+` `` to open a bottom-drawer session backed by a PTY and rendered with xterm.js: up to 4 terminals at once, tabs scoped to the current project, and a theme that follows the app. Pasting multi-line text asks for confirmation first, since a pasted newline executes in a shell.
+
+Defaults (shell, font size, scrollback, drawer height, screen-reader mode) live under `[terminal]` in `~/.shannon/config.toml`, editable in Settings → Advanced. The last 1 MiB of output is kept per terminal, so scrollback replays when the panel remounts or reconnects. Chat integration: fenced code blocks offer a **Run in terminal** button, and terminal output can be selected and sent to the agent composer.
 
 ## Design Principles
 

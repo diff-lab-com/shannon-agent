@@ -7,11 +7,10 @@ import { MOCK_SCHEDULED_ROUTINES, MOCK_TRIGGERED_ROUTINES, MOCK_HOOK_EVENTS, MOC
 import { MOCK_INBOX_ITEMS, MOCK_OPC_METRICS, MOCK_PERF_TRACES, MOCK_DIAGNOSTICS,
   MOCK_CODE_ACTIONS, MOCK_GOALS } from './data/analytics'
 import { MOCK_CONFIG, MOCK_MODELS, MOCK_STATUS, MOCK_TOOLS, MOCK_PROVIDERS } from './data/config'
-import type { InboxItem, ProviderInput, SessionInfo, TerminalInfo } from '@/types'
-import { MOCK_TERMINAL_OUTPUT_EVENT } from '../runtime/terminalEvents'
+import type { InboxItem, ProviderInput, SessionInfo, TerminalInfo, TerminalSettings } from '@/types'
+import { MOCK_TERMINAL_OUTPUT_EVENT, MOCK_TERMINAL_EXIT_EVENT } from '../runtime/terminalEvents'
 import { MOCK_MEMORIES, MOCK_MEMORY_PROJECTS, MOCK_MEMORY_STATS, MOCK_FEATURED_VENDORS } from './data/memory'
 import type { MemoryGraph } from '@/lib/tauri-api'
-import type { WorkspaceLayout } from '@/lib/types/workspaceLayout'
 import {
   MOCK_SKILL_CATALOG,
   MOCK_AGENT_CATALOG,
@@ -66,14 +65,23 @@ const PREVIEW_PNG = 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mN
 
 // P1-5 D: demo PTY sessions + a tiny simulated shell. Output rides the same
 // shape as the real `terminal:output` event (base64 data) re-dispatched as a
-// window CustomEvent — `runtime/terminalEvents.listenTerminalOutput` is the
-// single subscriber that knows about this transport.
+// window CustomEvent, and process exit re-dispatches `terminal:exit`
+// (`{ terminalId }`) — `runtime/terminalEvents.listenTerminalOutput` /
+// `.listenTerminalExit` are the subscribers that know about this transport.
 const demoTerminals = new Map<string, TerminalInfo & { buffer: string }>()
 let nextTerminalSeq = 1
 
-// P1-5 C-2: per-project workspace layouts, session-scoped (in-memory stand-in
-// for ~/.shannon/desktop/workspace-layouts.json).
-const demoWorkspaceLayouts = new Map<string, WorkspaceLayout>()
+// P3-1: demo stand-in for the persisted `[terminal]` config table. Same
+// clamp ranges as the backend's `TerminalSettings::sanitized` so the
+// settings card shows the same effective-value behavior in demo mode.
+const demoTerminalSettings: TerminalSettings = {
+  shell: null,
+  fontSize: 12,
+  scrollback: 5000,
+  drawerHeight: 320,
+  screenReaderMode: false,
+}
+const clamp = (v: number, lo: number, hi: number) => Math.min(hi, Math.max(lo, Math.floor(v)))
 
 // P-E3/P-U2: in-memory stand-in for the engine project registry
 // (~/.shannon/projects.db). Same wire shape as the Rust ProjectRecord
@@ -156,7 +164,17 @@ function demoShellRun(terminalId: string, input: string) {
       out = `sh: command not found: ${line.split(/\s+/)[0]}\r\n$ `
     }
     demoTerminalEmit(terminalId, out)
-    if (out.includes('process exited')) demoTerminals.delete(terminalId)
+    if (out.includes('process exited')) {
+      demoTerminals.delete(terminalId)
+      // P3-6: the printed notice is for humans only — the tab is ended by
+      // the dedicated `terminal:exit` event, exactly like the real backend.
+      // Fired after the output emit so the exit text renders first.
+      setTimeout(() => {
+        window.dispatchEvent(new CustomEvent(MOCK_TERMINAL_EXIT_EVENT, {
+          detail: { terminalId },
+        }))
+      }, 120 + Math.random() * 60)
+    }
   }
 }
 
@@ -1525,15 +1543,30 @@ export const handlers: Record<string, MockHandler> = {
     await delay()
     return [...demoTerminals.values()].map(({ buffer: _buffer, ...info }) => info)
   },
-
-  // --- Draggable panel workspace (P1-5 C-2, per-project, session-scoped) ---
-  async workspace_get_layout(args: { projectKey: string }) {
+  async terminal_get_settings() {
     await delay()
-    return clone(demoWorkspaceLayouts.get(args.projectKey) ?? null)
+    return clone(demoTerminalSettings)
   },
-  async workspace_set_layout(args: { projectKey: string; layout: WorkspaceLayout }) {
+  async terminal_set_settings(args: { settings: TerminalSettings }) {
     await delay()
-    demoWorkspaceLayouts.set(args.projectKey, clone(args.layout))
+    const s = args?.settings
+    if (!s || typeof s !== 'object') throw new Error('invalid terminal settings')
+    const shell = (s.shell ?? '').trim()
+    Object.assign(demoTerminalSettings, {
+      shell: shell === '' ? null : shell,
+      fontSize: clamp(Number(s.fontSize) || 0, 8, 32),
+      scrollback: clamp(Number(s.scrollback) || 0, 0, 100000),
+      drawerHeight: clamp(Number(s.drawerHeight) || 0, 120, 1200),
+      screenReaderMode: s.screenReaderMode === true,
+    })
+    return clone(demoTerminalSettings)
+  },
+  async terminal_history(_args: { terminalId: string }) {
+    await delay()
+    // The demo shell keeps no replay ring — empty payload, same "unknown
+    // id is not an error" contract as the real command (Task 6 wires the
+    // consumer flow).
+    return { data: '' }
   },
 
   async discard_batch_run(args: { batchId: string }) {
