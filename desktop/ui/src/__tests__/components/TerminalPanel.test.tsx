@@ -1,19 +1,21 @@
 // Tests for the P1-5 D integrated terminal panel: open/close + Ctrl+`,
 // tab management with the 4-instance cap, base64 output decoding into
-// xterm, stdin dispatch, exit notice, history-warning hint, i18n key
-// parity (en + zh-CN), and the xterm theme mapping floor.
+// xterm, stdin dispatch, terminal:exit end-marking, history-warning hint,
+// i18n key parity (en + zh-CN), and the xterm theme mapping floor.
 //
 // jsdom cannot run the real xterm renderer — @xterm/xterm and
 // @xterm/addon-fit are replaced with fakes that expose the same surface
 // the panel uses (write/onData/onResize/open/dispose, fit). The event
-// transport is captured from `listenTerminalOutput` so tests drive the
-// exact payload shape the Rust pump emits.
+// transports are captured from `listenTerminalOutput` /
+// `listenTerminalExit` so tests drive the exact payload shapes the Rust
+// pump emits.
 
 import { describe, it, expect, vi, beforeEach } from 'vitest'
-import { render, screen, fireEvent, waitFor, within } from '@testing-library/react'
+import { render, screen, fireEvent, waitFor, within, act } from '@testing-library/react'
 import { TerminalPanel } from '@/components/terminal/TerminalPanel'
 import { xtermThemeFor } from '@/components/terminal/xtermTheme'
 import * as api from '@/lib/tauri-api'
+import { decodeTerminalOutput } from '@/lib/runtime/terminalEvents'
 import en from '@/i18n/locales/en.json'
 import zhCN from '@/i18n/locales/zh-CN.json'
 import type { TerminalInfo } from '@/types'
@@ -41,7 +43,9 @@ const h = vi.hoisted(() => ({
     onResize: (cb: (size: { cols: number; rows: number }) => void) => { dispose: () => void }
   }[],
   outputHandler: null as ((payload: { terminalId: string; data: string }) => void) | null,
+  exitHandler: null as ((payload: { terminalId: string }) => void) | null,
   unsubscribed: false,
+  exitUnsubscribed: false,
 }))
 
 /** What xterm would render: every written chunk re-decoded as one stream. */
@@ -116,6 +120,13 @@ vi.mock('@/lib/runtime/terminalEvents', async () => {
         h.unsubscribed = true
       })
     },
+    listenTerminalExit: (handler: (payload: { terminalId: string }) => void) => {
+      h.exitHandler = handler
+      h.exitUnsubscribed = false
+      return Promise.resolve(() => {
+        h.exitUnsubscribed = true
+      })
+    },
   }
 })
 
@@ -139,6 +150,7 @@ beforeEach(() => {
   document.documentElement.removeAttribute('data-theme')
   h.terminals.length = 0
   h.outputHandler = null
+  h.exitHandler = null
   localStorage.clear()
   vi.mocked(api.terminalList).mockResolvedValue([])
   vi.mocked(api.terminalSpawn).mockImplementation(async (dir?: string | null) => {
@@ -243,7 +255,17 @@ describe('TerminalPanel (output + input)', () => {
     ))
   })
 
-  it('marks the tab ended when the backend exit notice arrives', async () => {
+  it('marks the tab ended when the terminal:exit event arrives', async () => {
+    await openPanel()
+    await waitFor(() => expect(h.terminals.length).toBe(1))
+    const { terminalId } = await vi.mocked(api.terminalSpawn).mock.results[0]!.value
+    act(() => { h.exitHandler?.({ terminalId }) })
+    expect(await screen.findByText(/ended/)).toBeTruthy()
+  })
+
+  it('does not mark the tab ended when output merely prints the exit notice text', async () => {
+    // P3-6: the in-stream "[shannon: process exited …" notice is display
+    // text — any program can print it, so it must never flip the tab.
     await openPanel()
     await waitFor(() => expect(h.terminals.length).toBe(1))
     const { terminalId } = await vi.mocked(api.terminalSpawn).mock.results[0]!.value
@@ -251,8 +273,34 @@ describe('TerminalPanel (output + input)', () => {
       terminalId,
       data: encode('\r\n\x1b[2m[shannon: process exited — done]\x1b[0m\r\n'),
     })
-    // Marker detection runs on the raw bytes of the event (ASCII-safe).
-    expect(await screen.findByText(/ended/)).toBeTruthy()
+    await new Promise((r) => setTimeout(r, 25))
+    expect(screen.queryByText(/ended/)).toBeNull()
+    // The notice itself still reaches xterm untouched (it is for humans).
+    expect(rendered(h.terminals[0])).toContain('[shannon: process exited')
+  })
+
+  it('drops a malformed base64 payload with a warning and keeps the stream alive', async () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    try {
+      // Unit: the decode itself never throws.
+      expect(decodeTerminalOutput('!!!not-base64!!!').length).toBe(0)
+      expect(warn).toHaveBeenCalledOnce()
+    } finally {
+      warn.mockRestore()
+    }
+    // Through the panel handler: one bad payload must not break the
+    // subscription — the next good payload still reaches xterm.
+    await openPanel()
+    await waitFor(() => expect(h.terminals.length).toBe(1))
+    const { terminalId } = await vi.mocked(api.terminalSpawn).mock.results[0]!.value
+    const warnDuring = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    try {
+      h.outputHandler?.({ terminalId, data: '!!!not-base64!!!' })
+      h.outputHandler?.({ terminalId, data: encode('still-alive') })
+    } finally {
+      warnDuring.mockRestore()
+    }
+    expect(rendered(h.terminals[0])).toContain('still-alive')
   })
 })
 

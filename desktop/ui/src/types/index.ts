@@ -1304,6 +1304,13 @@ export const EVENT_NAMES = {
   SUBAGENT_STOP: 'subagent:stop',
   /** P1-5 D: PTY output for the integrated terminal (data is base64). */
   TERMINAL_OUTPUT: 'terminal:output',
+  /**
+   * P3-6: the terminal's process exited (backend emission lands with the
+   * Task-4 pump change). Authoritative exit signal — the in-stream
+   * "[shannon: process exited …" notice is display text only and must not
+   * be parsed.
+   */
+  TERMINAL_EXIT: 'terminal:exit',
 } as const
 
 export type EventName = (typeof EVENT_NAMES)[keyof typeof EVENT_NAMES]
@@ -1322,6 +1329,11 @@ export interface TerminalInfo {
 export interface TerminalOutputPayload {
   terminalId: string
   data: string
+}
+
+/** `terminal:exit` payload — the terminal's process has exited. */
+export interface TerminalExitPayload {
+  terminalId: string
 }
 
 // --- Inter-agent message history (Phase D C3) ---

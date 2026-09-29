@@ -29,7 +29,7 @@ import { toastError } from '@/lib/errorToast';
 import '@xterm/xterm/css/xterm.css';
 import * as api from '@/lib/tauri-api';
 import type { TerminalInfo } from '@/types';
-import { bytesContainAscii, decodeTerminalOutput, listenTerminalOutput } from '@/lib/runtime/terminalEvents';
+import { decodeTerminalOutput, listenTerminalExit, listenTerminalOutput } from '@/lib/runtime/terminalEvents';
 import { xtermTheme } from './xtermTheme';
 import { readResolvedThemeAttr, useResolvedThemeAttr } from '@/hooks/useResolvedThemeAttr';
 import { ConfirmDialog } from '@/components/ui/confirm-dialog';
@@ -156,11 +156,11 @@ export function TerminalPanel({ projectDir }: TerminalPanelProps) {
       void api.terminalResize(info.terminalId, cols, rows).catch(() => {});
     });
 
-    // listenTerminalOutput resolves asynchronously (Tauri listen); a
-    // disposed entry unsubscribes immediately on resolution so an
+    // Both subscriptions resolve asynchronously (Tauri listen); a disposed
+    // entry unsubscribes immediately on resolution so an
     // unmount-before-subscribe race never leaks a listener.
-    let detach: (() => void) | null = null;
     let disposed = false;
+    const unsubs: Array<() => void> = [];
     void listenTerminalOutput(payload => {
       if (payload.terminalId !== info.terminalId) return;
       // Raw bytes go straight to xterm: the pump slices the pty stream at
@@ -169,21 +169,33 @@ export function TerminalPanel({ projectDir }: TerminalPanelProps) {
       // turn both halves of a split sequence into U+FFFD.
       const bytes = decodeTerminalOutput(payload.data);
       term.write(bytes);
-      if (bytesContainAscii(bytes, '[shannon: process exited')) {
-        setTabs(prev => prev.map(tab => (
-          tab.info.terminalId === info.terminalId ? { ...tab, exited: true } : tab
-        )));
-      }
     }).then(fn => {
       if (disposed) {
         fn();
         return;
       }
-      detach = fn;
+      unsubs.push(fn);
+    });
+    // P3-6: exit is signaled by the dedicated `terminal:exit` event, never
+    // by parsing the in-stream "[shannon: process exited …" notice (that
+    // text is for humans — any program could print it). The backend
+    // emission lands with the Task-4 pump change; until then the tab just
+    // never auto-marks exited.
+    void listenTerminalExit(payload => {
+      if (payload.terminalId !== info.terminalId) return;
+      setTabs(prev => prev.map(tab => (
+        tab.info.terminalId === info.terminalId ? { ...tab, exited: true } : tab
+      )));
+    }).then(fn => {
+      if (disposed) {
+        fn();
+        return;
+      }
+      unsubs.push(fn);
     });
     const detachOutput = () => {
       disposed = true;
-      detach?.();
+      unsubs.forEach(fn => fn());
     };
 
     const entry: TermEntry = { term, fit, detachOutput };
