@@ -324,6 +324,28 @@ pub(crate) fn cancel_inline_shell(repl: &mut Repl) {
     }
 }
 
+/// Cancel the in-flight inline `!shell` job as part of a chat clear
+/// (review fix): `/clear` wipes the message list, which strands the job's
+/// `placeholder_idx` — the worker's asynchronous `Cancelled` report would
+/// otherwise finalize at that stale index later and overwrite an
+/// UNRELATED message (bounds-checked, so no panic, just wrong). This
+/// kills the process group exactly like the Esc path, then finalizes the
+/// placeholder SYNCHRONOUSLY — while the index is still valid — and frees
+/// the job slot, so the main-loop drain can never touch the wiped list.
+/// The worker's own report lands on a dropped receiver and is discarded.
+/// Safe to call with no job in flight.
+pub(crate) fn cancel_inline_shell_for_clear(repl: &mut Repl) {
+    cancel_inline_shell(repl);
+    let Some(mut job) = repl.state.shell_job.take() else {
+        return;
+    };
+    // Honor an outcome the worker already delivered (the child may have
+    // exited naturally between the last drain and this cancel); otherwise
+    // the cancel above IS the outcome.
+    let outcome = job.rx.try_recv().ok().unwrap_or(ShellJobOutcome::Cancelled);
+    finalize_inline_shell_outcome(repl, &job, outcome);
+}
+
 /// Non-blocking drain of finished inline `!shell` jobs — called every main
 /// loop iteration. Finalizes the placeholder tool message in place when the
 /// worker reports, then frees the single job slot.
@@ -932,6 +954,12 @@ fn handle_help(repl: &mut Repl, args: &str) -> Result<()> {
 }
 
 fn handle_clear(repl: &mut Repl) -> Result<()> {
+    // Review fix: cancelling here (both branches) kills an in-flight
+    // `!shell` job's process group and finalizes its placeholder while
+    // the index is still valid — after the wipe below, the worker's
+    // asynchronous report would finalize at the stranded placeholder
+    // index and overwrite an unrelated message.
+    cancel_inline_shell_for_clear(repl);
     if repl.chat.len() > 1 {
         repl.show_confirm_dialog(
             "Clear Chat",
@@ -1035,6 +1063,10 @@ fn handle_other_command(repl: &mut Repl, cmd_name: &str, args: &str) -> Result<(
 pub fn execute_pending_action(repl: &mut Repl, action: &str) -> Result<()> {
     match action {
         "clear_chat" => {
+            // Same discipline as handle_clear (review fix): a job started
+            // (or still lingering) between the confirm dialog opening and
+            // this confirmation must not finalize into the wiped list.
+            cancel_inline_shell_for_clear(repl);
             repl.chat.clear();
             repl.chat
                 .add_message(ChatRole::System, t!("repl.chat_cleared").to_string());
@@ -1475,6 +1507,54 @@ mod inline_shell_tests {
             msg.content.contains("cancelled"),
             "notice: {:?}",
             msg.content
+        );
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn clear_cancels_an_inflight_inline_shell_without_a_later_overwrite() {
+        // Review fix: `/clear` used to leave the job slot occupied, so the
+        // worker's asynchronous Cancelled report finalized at the stranded
+        // placeholder index after the wipe — overwriting whatever message
+        // had taken its place.
+        let mut repl = Repl::new().expect("test repl");
+        start_inline_shell(&mut repl, "sleep 30", 30);
+        let job = repl.state.shell_job.as_ref().expect("job in flight");
+        let pgid = job.pgid.expect("unix spawn has a pgid");
+        let placeholder_idx = job.placeholder_idx;
+        assert!(
+            repl.chat.messages[placeholder_idx]
+                .content
+                .contains("running, Esc to cancel"),
+            "placeholder expected before the clear"
+        );
+
+        // `/clear`: the placeholder is the only message, so handle_clear
+        // takes the direct (no-dialog) branch.
+        super::handle_clear(&mut repl).expect("clear");
+        // The job slot is freed synchronously — the main-loop drain can
+        // never finalize into the wiped list — and the group is dead.
+        assert!(repl.state.shell_job.is_none(), "job slot freed by /clear");
+        assert!(
+            wait_pid_gone(pgid, Duration::from_secs(2)),
+            "/clear must kill the job's process group"
+        );
+        // The chat was wiped down to the system notice.
+        assert_eq!(repl.chat.len(), 1);
+
+        // The dangerous window: new traffic grows the list past the stale
+        // placeholder index while the (dropped) worker report would have
+        // arrived. Repeated drains must be no-ops and touch nothing.
+        repl.chat
+            .add_message(crate::widgets::ChatRole::User, "unrelated user message".into());
+        std::thread::sleep(Duration::from_millis(60));
+        for _ in 0..10 {
+            poll_inline_shell_jobs(&mut repl);
+        }
+        assert_eq!(repl.chat.len(), 2, "no message appended by the drain");
+        assert_eq!(
+            repl.chat.messages[1].content, "unrelated user message",
+            "the stale placeholder finalization must not overwrite new traffic"
         );
     }
 
