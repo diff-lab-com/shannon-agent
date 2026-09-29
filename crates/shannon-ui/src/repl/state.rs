@@ -52,6 +52,50 @@ pub struct HelpOverlayState {
     pub search_query: String,
 }
 
+/// How often the main loop redraws while fully idle (review §P2-5).
+///
+/// When nothing is dirty, animating, or streaming, frames are skipped — but
+/// never for longer than one heartbeat, so any state change the dirty flag
+/// missed cannot stay invisible indefinitely.
+pub(crate) const IDLE_HEARTBEAT: std::time::Duration = std::time::Duration::from_millis(500);
+
+/// Inputs to the main-loop redraw gate ([`should_draw_frame`]).
+///
+/// Pure data so the skip/skip/draw matrix is unit-testable without a
+/// terminal (review §P2-5: no visual regressions allowed).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct FrameGate {
+    /// A state change (input event, background drain, tick mutation)
+    /// explicitly marked the frame dirty.
+    pub dirty: bool,
+    /// Spinner or progress-bar animation is active — keep today's per-tick
+    /// (20 FPS) cadence.
+    pub animating: bool,
+    /// A query/stream render may still be mutating the chat area — keep
+    /// today's per-tick cadence.
+    pub streaming: bool,
+    /// Committed scrollback lines wait to be flushed by the next draw
+    /// (`draw_frame` is also what inserts them into terminal history).
+    pub scrollback_pending: bool,
+    /// Time since the last completed draw. `None` = never drawn (always
+    /// draw the first frame).
+    pub since_last_draw: Option<std::time::Duration>,
+}
+
+/// Decide whether the main loop should draw a frame this tick.
+///
+/// Draws when anything can have changed (dirty flag, animation, streaming,
+/// pending scrollback) or when the idle heartbeat is due; otherwise the
+/// frame is skipped. Never restructures the event loop — this only gates
+/// the `draw_frame` call.
+pub(crate) fn should_draw_frame(gate: FrameGate) -> bool {
+    gate.dirty
+        || gate.animating
+        || gate.streaming
+        || gate.scrollback_pending
+        || gate.since_last_draw.is_none_or(|d| d >= IDLE_HEARTBEAT)
+}
+
 /// Application state for the REPL
 #[derive(Debug)]
 pub struct ReplState {
@@ -671,6 +715,30 @@ impl Default for ReplState {
     }
 }
 
+impl ReplState {
+    /// True while the spinner or a progress indicator is animating — the
+    /// main loop must keep today's per-tick frame cadence (review §P2-5).
+    ///
+    /// The status check mirrors the Tick handler's spinner gate plus the
+    /// localized ready string, so a non-English UI (`status.ready` is
+    /// translated) does not read as permanently busy and pin the loop at
+    /// 20 FPS. When in doubt this returns true (over-drawing is today's
+    /// behavior; under-drawing would regress visuals).
+    pub(crate) fn animation_active(&self) -> bool {
+        // `t!` without args is a Cow<str>; String compares against it directly.
+        let busy_status = self.status != "Ready" && self.status != rust_i18n::t!("status.ready");
+        busy_status || self.progress_bar_visible || self.multi_progress_visible
+    }
+
+    /// True while a query/stream may still be mutating the chat area — the
+    /// main loop keeps today's per-tick frame cadence while it renders
+    /// (review §P2-5). Conservatively includes every streaming flag so a
+    /// missed transition can only cause extra frames, never stalled ones.
+    pub(crate) fn render_in_progress(&self) -> bool {
+        self.streaming_active || self.thinking_phase || self.active_tool.is_some()
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -847,6 +915,127 @@ mod tests {
         assert_eq!(s.selected_category_idx, 0);
         assert_eq!(s.selected_command_idx, 0);
         assert!(s.search_query.is_empty());
+    }
+
+    // -- Idle-redraw gate (review §P2-5) ------------------------------------
+
+    /// Fully idle gate: nothing dirty, nothing animating, just drawn.
+    fn idle_gate(since_last_draw: Option<std::time::Duration>) -> super::FrameGate {
+        super::FrameGate {
+            dirty: false,
+            animating: false,
+            streaming: false,
+            scrollback_pending: false,
+            since_last_draw,
+        }
+    }
+
+    #[test]
+    fn frame_gate_skips_when_idle_and_recently_drawn() {
+        let recent = std::time::Duration::from_millis(50);
+        assert!(
+            !super::should_draw_frame(idle_gate(Some(recent))),
+            "idle + fresh frame must skip the redraw"
+        );
+    }
+
+    #[test]
+    fn frame_gate_heartbeat_redraws_when_idle_too_long() {
+        let stale = super::IDLE_HEARTBEAT;
+        let longer = super::IDLE_HEARTBEAT + std::time::Duration::from_millis(1);
+        assert!(super::should_draw_frame(idle_gate(Some(stale))));
+        assert!(super::should_draw_frame(idle_gate(Some(longer))));
+    }
+
+    #[test]
+    fn frame_gate_always_draws_the_first_frame() {
+        assert!(
+            super::should_draw_frame(idle_gate(None)),
+            "never-drawn must draw immediately"
+        );
+    }
+
+    #[test]
+    fn frame_gate_dirty_flag_forces_draw() {
+        let mut gate = idle_gate(Some(std::time::Duration::from_millis(10)));
+        gate.dirty = true;
+        assert!(super::should_draw_frame(gate));
+    }
+
+    #[test]
+    fn frame_gate_animation_forces_draw() {
+        let mut gate = idle_gate(Some(std::time::Duration::from_millis(10)));
+        gate.animating = true;
+        assert!(super::should_draw_frame(gate), "spinner/progress cadence kept");
+    }
+
+    #[test]
+    fn frame_gate_streaming_forces_draw() {
+        let mut gate = idle_gate(Some(std::time::Duration::from_millis(10)));
+        gate.streaming = true;
+        assert!(super::should_draw_frame(gate), "streaming cadence kept");
+    }
+
+    #[test]
+    fn frame_gate_pending_scrollback_forces_draw() {
+        let mut gate = idle_gate(Some(std::time::Duration::from_millis(10)));
+        gate.scrollback_pending = true;
+        assert!(
+            super::should_draw_frame(gate),
+            "scrollback flush rides on draw_frame and must not be skipped"
+        );
+    }
+
+    #[test]
+    fn animation_active_false_for_default_ready_state() {
+        let state = ReplState::default();
+        assert!(!state.animation_active(), "fresh Ready state is not animating");
+        assert!(
+            !state.render_in_progress(),
+            "fresh state is not rendering"
+        );
+    }
+
+    #[test]
+    fn animation_active_true_for_progress_widgets() {
+        let state = ReplState {
+            progress_bar_visible: true,
+            ..Default::default()
+        };
+        assert!(state.animation_active());
+        let state = ReplState {
+            multi_progress_visible: true,
+            ..Default::default()
+        };
+        assert!(state.animation_active());
+    }
+
+    #[test]
+    fn animation_active_true_for_busy_status() {
+        let state = ReplState {
+            status: "Tool: bash".to_string(),
+            ..Default::default()
+        };
+        assert!(state.animation_active());
+    }
+
+    #[test]
+    fn render_in_progress_flags() {
+        let state = ReplState {
+            streaming_active: true,
+            ..Default::default()
+        };
+        assert!(state.render_in_progress());
+        let state = ReplState {
+            thinking_phase: true,
+            ..Default::default()
+        };
+        assert!(state.render_in_progress());
+        let state = ReplState {
+            active_tool: Some("bash".to_string()),
+            ..Default::default()
+        };
+        assert!(state.render_in_progress());
     }
 }
 
