@@ -2547,24 +2547,6 @@
           "verify_signature"
         ]
       }
-    },
-    {
-      "identifier": "allow-workspace-get-layout",
-      "description": "Enables the workspace_get_layout command without any pre-configured scope.",
-      "commands": {
-        "allow": [
-          "workspace_get_layout"
-        ]
-      }
-    },
-    {
-      "identifier": "allow-workspace-set-layout",
-      "description": "Enables the workspace_set_layout command without any pre-configured scope.",
-      "commands": {
-        "allow": [
-          "workspace_set_layout"
-        ]
-      }
     }
   ],
   "set": [
@@ -2875,14 +2857,12 @@
     },
     {
       "identifier": "app-window-management",
-      "description": "Session multi-window lifecycle and draggable workspace layout commands.",
+      "description": "Session multi-window lifecycle commands.",
       "permissions": [
         "allow-close-session-window",
         "allow-list-session-windows",
         "allow-open-session-window",
-        "allow-reveal-session-in-main",
-        "allow-workspace-get-layout",
-        "allow-workspace-set-layout"
+        "allow-reveal-session-in-main"
       ]
     },
     {

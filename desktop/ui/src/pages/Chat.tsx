@@ -467,12 +467,8 @@ export default function Chat() {
   // ── Layout (2026-09 review) ────────────────────────────────────────────
   //
   // The chat page is one full-width conversation plus the RightDock
-  // (documents / diffs / live preview / context) and the terminal drawer.
-  // The former workspace toolbar (对话 / Diff / 预览 preset switcher and its
-  // grid panels) was retired: the preset triad read as three competing
-  // "views" of the conversation and confused first-run users — everything
-  // it offered now has a single home in the RightDock tabs, and the
-  // terminal keeps its own drawer toggle (Ctrl+`).
+  // (documents / diffs / live preview / context) and the terminal drawer
+  // with its own toggle (Ctrl+`).
 
   const workingDir = sessions.find(s => s.id === currentSessionId)?.working_dir
     ?? config?.working_dir

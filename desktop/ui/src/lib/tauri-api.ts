@@ -2597,11 +2597,6 @@ export async function terminalList(): Promise<TerminalInfo[]> {
   return invoke('terminal_list')
 }
 
-// Draggable panel workspace (P1-5 C-2 — frozen contract) was retired in
-// e786ec25 alongside the WorkspaceGrid / Toolbar components. The
-// workspace_get_layout / workspace_set_layout Tauri commands and their
-// types still live on disk but are no longer wired into the chat page.
-// Keep the mock layer aware so existing data files don't trip type-check.
 // --- P-E3 project registry (projects.db, adopt-not-migrate) ---
 
 /** Every registered project, path-ascending. Archived rows are included

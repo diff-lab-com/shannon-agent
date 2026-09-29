@@ -48,7 +48,6 @@ fn main() {
     use shannon_desktop::session_window_commands;
     use shannon_desktop::skill_pattern_detection;
     use shannon_desktop::terminal_commands;
-    use shannon_desktop::workspace_commands;
     use tauri::{Emitter, Listener, Manager};
     use tauri::{
         menu::{MenuBuilder, MenuItemBuilder},
@@ -472,9 +471,6 @@ fn main() {
             terminal_commands::terminal_resize,
             terminal_commands::terminal_kill,
             terminal_commands::terminal_list,
-            // P1-5 C-2 — draggable panel workspace (frozen contract).
-            workspace_commands::workspace_get_layout,
-            workspace_commands::workspace_set_layout,
         ])
         // 2026-09-26 round2 §5-1 A — the `artifact://` custom protocol:
         // interactive HTML artifacts are served from a bounded in-memory

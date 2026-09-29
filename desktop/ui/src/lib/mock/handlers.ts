@@ -11,7 +11,6 @@ import type { InboxItem, ProviderInput, SessionInfo, TerminalInfo } from '@/type
 import { MOCK_TERMINAL_OUTPUT_EVENT } from '../runtime/terminalEvents'
 import { MOCK_MEMORIES, MOCK_MEMORY_PROJECTS, MOCK_MEMORY_STATS, MOCK_FEATURED_VENDORS } from './data/memory'
 import type { MemoryGraph } from '@/lib/tauri-api'
-import type { WorkspaceLayout } from '@/lib/types/workspaceLayout'
 import {
   MOCK_SKILL_CATALOG,
   MOCK_AGENT_CATALOG,
@@ -70,10 +69,6 @@ const PREVIEW_PNG = 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mN
 // single subscriber that knows about this transport.
 const demoTerminals = new Map<string, TerminalInfo & { buffer: string }>()
 let nextTerminalSeq = 1
-
-// P1-5 C-2: per-project workspace layouts, session-scoped (in-memory stand-in
-// for ~/.shannon/desktop/workspace-layouts.json).
-const demoWorkspaceLayouts = new Map<string, WorkspaceLayout>()
 
 // P-E3/P-U2: in-memory stand-in for the engine project registry
 // (~/.shannon/projects.db). Same wire shape as the Rust ProjectRecord
@@ -1492,16 +1487,6 @@ export const handlers: Record<string, MockHandler> = {
   async terminal_list() {
     await delay()
     return [...demoTerminals.values()].map(({ buffer: _buffer, ...info }) => info)
-  },
-
-  // --- Draggable panel workspace (P1-5 C-2, per-project, session-scoped) ---
-  async workspace_get_layout(args: { projectKey: string }) {
-    await delay()
-    return clone(demoWorkspaceLayouts.get(args.projectKey) ?? null)
-  },
-  async workspace_set_layout(args: { projectKey: string; layout: WorkspaceLayout }) {
-    await delay()
-    demoWorkspaceLayouts.set(args.projectKey, clone(args.layout))
   },
 
   async discard_batch_run(args: { batchId: string }) {
