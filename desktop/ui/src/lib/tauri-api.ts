@@ -21,6 +21,7 @@ import type {
   MobilePairToken,
   ContainerInfo,
   SessionWindowInfo,
+  CompanionWindowInfo,
   RemoteHealth,
   RemoteTargetListItem,
   SshHostCandidate,
@@ -708,6 +709,18 @@ export async function closeSessionWindow(label: string): Promise<void> {
 /** Focus the main window and have it switch to `sessionId`. */
 export async function revealSessionInMain(sessionId: string): Promise<void> {
   await invoke('reveal_session_in_main', { sessionId })
+}
+
+// --- Office Wave 3 C3 companion Quick Capture window (frozen backend contract) ---
+
+/** Create (or focus) the always-on-top-capable `companion` window. */
+export async function openCompanionWindow(): Promise<CompanionWindowInfo> {
+  return invoke('open_companion_window')
+}
+
+/** Toggle the companion window's stay-on-top flag (only acts on `companion`). */
+export async function setCompanionAlwaysOnTop(enabled: boolean): Promise<void> {
+  await invoke('set_companion_always_on_top', { enabled })
 }
 
 export async function setSessionWorkingDir(id: string, path: string): Promise<void> {

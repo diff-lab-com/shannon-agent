@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { Fragment, useEffect, useState } from "react";
 import { useOutletContext } from "react-router-dom";
 import { useIntl } from 'react-intl'
 import {
@@ -27,6 +27,24 @@ const CATALOG_PAGE_SIZE = 24;
 // B0 P0-6: catalog names come from upstream HTTP — enforce the same shape
 // the backend sanitizes to before an install can be attempted.
 const SAFE_NAME_RE = /^[a-z0-9][a-z0-9._-]*$/;
+
+/**
+ * office Wave 3 C7: tags that mark a catalog entry as office/productivity —
+ * document handling, spreadsheets, tabular data and the scripting/data
+ * tooling office flows lean on. Grouped under a pinned "Productivity"
+ * heading in the catalog; everything else keeps the original list. Tag
+ * matching is case-insensitive; skills without matching tags are untouched.
+ */
+const PRODUCTIVITY_TAGS: ReadonlySet<string> = new Set([
+  "documents", "document", "docs", "pdf", "docx", "word", "pptx", "ppt",
+  "slides", "powerpoint", "xlsx", "excel", "csv", "spreadsheet",
+  "spreadsheets", "sheets", "office", "data", "python", "email", "notes",
+  "writing",
+]);
+
+export function isProductivitySkill(entry: { tags: string[] }): boolean {
+  return entry.tags.some((t) => PRODUCTIVITY_TAGS.has(t.toLowerCase()));
+}
 
 /** P1-22: a catalog description with newlines could inject extra YAML
  *  frontmatter fields — collapse it to a single line before interpolating. */
@@ -194,7 +212,16 @@ export default function Skills() {
       )
     : catalog;
 
-  const catalogPage = usePagedVisible(filtered, CATALOG_PAGE_SIZE);
+  // C7: office/productivity entries are pinned to the top of the catalog
+  // under their own group heading; the rest keep the original order. The
+  // pagination slices the reordered list, so "Show more" semantics hold.
+  const ordered =
+    filtered.some(isProductivitySkill)
+      ? [...filtered.filter(isProductivitySkill), ...filtered.filter((e) => !isProductivitySkill(e))]
+      : filtered;
+
+  const catalogPage = usePagedVisible(ordered, CATALOG_PAGE_SIZE);
+  const firstProductivityIdx = catalogPage.slice.findIndex(isProductivitySkill);
 
   return (
     <div className="p-lg max-w-medium mx-auto space-y-xl">
@@ -228,16 +255,31 @@ export default function Skills() {
             ) : (
               <>
                 <div className="grid grid-cols-1 md:grid-cols-2 gap-md">
-                  {catalogPage.slice.map((entry) => (
-                    <SkillCard
-                      key={entry.id}
-                      entry={entry}
-                      installed={installedNames.has(entry.name)}
-                      busy={busyId === entry.id}
-                      feedback={feedback?.id === entry.id ? feedback : null}
-                      onInstall={() => handleInstall(entry)}
-                      onOpenDetail={() => setDetailEntry(entry)}
-                    />
+                  {catalogPage.slice.map((entry, i) => (
+                    <Fragment key={entry.id}>
+                      {i === firstProductivityIdx && (
+                        <div
+                          className="col-span-full flex items-center gap-sm mt-sm first:mt-0"
+                          data-testid="skills-productivity-group"
+                        >
+                          <span className="material-symbols-outlined icon-sm text-primary" aria-hidden="true">work</span>
+                          <h4 className="text-label-lg font-bold text-primary uppercase tracking-wide">
+                            {t('extensions.skills.group.productivity')}
+                          </h4>
+                          <span className="text-label-xs text-on-surface-variant">
+                            {filtered.filter(isProductivitySkill).length}
+                          </span>
+                        </div>
+                      )}
+                      <SkillCard
+                        entry={entry}
+                        installed={installedNames.has(entry.name)}
+                        busy={busyId === entry.id}
+                        feedback={feedback?.id === entry.id ? feedback : null}
+                        onInstall={() => handleInstall(entry)}
+                        onOpenDetail={() => setDetailEntry(entry)}
+                      />
+                    </Fragment>
                   ))}
                 </div>
                 {catalogPage.hasMore && (

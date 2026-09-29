@@ -1,5 +1,5 @@
-import { lazy, Suspense } from 'react';
-import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom';
+import { lazy, Suspense, useEffect, useRef } from 'react';
+import { BrowserRouter, Routes, Route, Navigate, useNavigate, useLocation } from 'react-router-dom';
 import { Toaster } from 'sonner';
 import { AppProvider } from './context/AppContext';
 import { ThemeProvider, useTheme, themeModeOf } from './context/ThemeContext';
@@ -9,9 +9,18 @@ import { ArtifactLinkHost } from './components/artifact/ArtifactLinkHost';
 import { ErrorBoundary } from './components/ErrorBoundary';
 import { LinkContextMenuHost } from './components/shared/LinkContextMenu';
 import { Layout } from './components/Layout';
+// Office Wave 3 C3 — companion Quick Capture window receiver + fallback route.
+import {
+  isMainWindowLocation,
+  useCompanionPromptListener,
+} from './lib/companionBridge';
+import { pushComposerDraft } from './lib/composerBridge';
 
 const Welcome = lazy(() => import('./pages/Welcome'));
 const Chat = lazy(() => import('./pages/Chat'));
+// Office Wave 3 C3 — companion Quick Capture (standalone chrome-less page:
+// the companion window's whole UI, and a fallback in the main window).
+const CompanionPage = lazy(() => import('./pages/CompanionPage'));
 const Tasks = lazy(() => import('./pages/Tasks'));
 const Triage = lazy(() => import('./pages/Triage'));
 const Extensions = lazy(() => import('./pages/Extensions'));
@@ -77,6 +86,46 @@ function ThemedToaster() {
   )
 }
 
+/**
+ * Office Wave 3 C3 — main-window receiver for the companion Quick Capture
+ * window. Cross-window leg: the companion emits
+ * `shannon:companion-prompt` targeted at `main` (Tauri event — the only
+ * thing that crosses webviews). In-window leg: the Wave 2 composer draft
+ * bridge (`pushComposerDraft`, window CustomEvent). Trust contract intact:
+ * the capture lands as a DRAFT, never auto-sent.
+ *
+ * Mounted app-level (inside the router) so it exists regardless of route.
+ * Exported named for tests.
+ */
+export function CompanionPromptBridge() {
+  const navigate = useNavigate();
+  const location = useLocation();
+  const locationRef = useRef(location);
+  useEffect(() => {
+    locationRef.current = location;
+  });
+  useCompanionPromptListener((text) => {
+    // `emitTo` already scopes delivery to `main`; this guard additionally
+    // keeps session windows inert if a window's boot URL is ambiguous and
+    // skips the main window when IT is showing the /companion fallback page
+    // (its own Send would otherwise navigate itself away mid-capture).
+    if (!isMainWindowLocation()) return;
+    if (locationRef.current.pathname === '/chat') {
+      pushComposerDraft(text);
+    } else {
+      // The composer lives on /chat and is not mounted yet — navigate
+      // first, then push once. Single deferred push on purpose: ChatInput
+      // APPENDS drafts, so a retry loop could duplicate the text. The
+      // fixed delay covers the common (already-loaded chunk) case; a cold
+      // lazy-load slower than the delay can drop the draft — accepted for
+      // this wave, see the C3 report.
+      navigate('/chat');
+      window.setTimeout(() => pushComposerDraft(text), 150);
+    }
+  });
+  return null;
+}
+
 export default function App() {
   return (
     <I18nProvider>
@@ -91,12 +140,21 @@ export default function App() {
           <LinkContextMenuHost />
           {/* P0-B/P1-C/P1-E: links→web tabs, file chips→artifact tabs. */}
           <ArtifactLinkHost />
+          {/* Office Wave 3 C3: companion Quick Capture prompts → composer drafts. */}
+          <CompanionPromptBridge />
           {/* B1-16: the route-level Suspense lives in Layout (around the
               Outlet) so lazy chunks no longer unmount the whole shell; this
               top-level boundary only exists for /welcome and stays null. */}
           <Suspense fallback={null}>
             <Routes>
               <Route path="/welcome" element={<Welcome />} />
+              {/* Office Wave 3 C3 — companion Quick Capture. Standalone like
+                  /welcome (no Layout chrome): this is the companion window's
+                  whole UI; the main window only ever renders it as a manual
+                  fallback. The CompanionPromptBridge above ignores prompts
+                  while a window shows this route, so the fallback page never
+                  navigates itself away mid-capture. */}
+              <Route path="/companion" element={<CompanionPage />} />
               <Route element={<Layout />}>
                 <Route path="/" element={<Navigate to="/chat" replace />} />
                 {/* Legacy route redirects — keep old bookmarks/links working. */}

@@ -1586,6 +1586,15 @@
       }
     },
     {
+      "identifier": "allow-open-companion-window",
+      "description": "Enables the open_companion_window command without any pre-configured scope.",
+      "commands": {
+        "allow": [
+          "open_companion_window"
+        ]
+      }
+    },
+    {
       "identifier": "allow-open-external",
       "description": "Enables the open_external command without any pre-configured scope.",
       "commands": {
@@ -2122,6 +2131,15 @@
       "commands": {
         "allow": [
           "save_stt_config"
+        ]
+      }
+    },
+    {
+      "identifier": "allow-set-companion-always-on-top",
+      "description": "Enables the set_companion_always_on_top command without any pre-configured scope.",
+      "commands": {
+        "allow": [
+          "set_companion_always_on_top"
         ]
       }
     },
@@ -2979,8 +2997,10 @@
       "permissions": [
         "allow-close-session-window",
         "allow-list-session-windows",
+        "allow-open-companion-window",
         "allow-open-session-window",
         "allow-reveal-session-in-main",
+        "allow-set-companion-always-on-top",
         "allow-workspace-get-layout",
         "allow-workspace-set-layout"
       ]

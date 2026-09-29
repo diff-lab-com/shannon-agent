@@ -37,6 +37,7 @@ fn main() {
     use shannon_desktop::commands_usage;
     use shannon_desktop::commands_voice;
     use shannon_desktop::commands_voice_models;
+    use shannon_desktop::companion_window_commands;
     use shannon_desktop::desktop_logging;
     use shannon_desktop::engine_discovery;
     use shannon_desktop::engine_discovery_commands as commands_engine_discovery;
@@ -430,6 +431,9 @@ fn main() {
             session_window_commands::list_session_windows,
             session_window_commands::close_session_window,
             session_window_commands::reveal_session_in_main,
+            // Office Wave 3 C3 — companion Quick Capture window (frozen contract)
+            companion_window_commands::open_companion_window,
+            companion_window_commands::set_companion_always_on_top,
             // Automation: hook-event catalog + custom permission profiles
             shannon_desktop::automation_commands::list_hook_events,
             shannon_desktop::automation_commands::list_permission_profiles,
@@ -747,13 +751,26 @@ fn main() {
             let show_item = MenuItemBuilder::with_id("show", "Show Shannon").build(app)?;
             let new_session_item =
                 MenuItemBuilder::with_id("new-session", "New Session").build(app)?;
+            // Office Wave 3 C3 — companion Quick Capture entry. The frontend
+            // has no main-window chrome surface for it this wave (the global
+            // shortcut belongs to useKeyboardShortcuts, another owner), so
+            // the tray is the summon path; `open_companion_window` stays
+            // invocable for the future shortcut/UI wiring.
+            let companion_item =
+                MenuItemBuilder::with_id("companion", "Quick Capture").build(app)?;
             let status_item = MenuItemBuilder::with_id("status", initial_label.clone())
                 .enabled(false)
                 .build(app)?;
             let quit_item = MenuItemBuilder::with_id("quit", "Quit").build(app)?;
 
             let menu = MenuBuilder::new(app)
-                .items(&[&status_item, &show_item, &new_session_item, &quit_item])
+                .items(&[
+                    &status_item,
+                    &show_item,
+                    &new_session_item,
+                    &companion_item,
+                    &quit_item,
+                ])
                 .build()?;
 
             let _tray = TrayIconBuilder::with_id(TRAY_ID)
@@ -770,6 +787,15 @@ fn main() {
                     "new-session" => {
                         // Trigger new session via event
                         let _ = app.emit("new-session", ());
+                    }
+                    "companion" => {
+                        // Office Wave 3 C3 — create or focus the companion
+                        // Quick Capture window (dedupe lives in the command's
+                        // inner helper; failures are log-only here).
+                        if let Err(e) = companion_window_commands::open_companion_window_inner(app)
+                        {
+                            tracing::warn!(error = %e, "failed to open companion window");
+                        }
                     }
                     "quit" => {
                         // Audit P1-5: a tray Quit must also stop the managed

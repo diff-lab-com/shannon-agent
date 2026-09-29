@@ -131,4 +131,17 @@ describe('FileCard', () => {
     render(<FileCard {...PROPS} />)
     expect(screen.queryByRole('button', { name: 'Preview' })).not.toBeInTheDocument()
   })
+
+  // ── office Wave 3 C2: csv-only "Batch run" affordance ──
+
+  it('a csv card shows the Batch run button', () => {
+    render(<FileCard name="inventory.csv" path="/tmp/shannon/inventory.csv" />)
+    expect(screen.getByTestId('file-card-batch-run')).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'Batch run over table rows' })).toBeInTheDocument()
+  })
+
+  it('a docx card has no Batch run button', () => {
+    render(<FileCard {...PROPS} />)
+    expect(screen.queryByTestId('file-card-batch-run')).not.toBeInTheDocument()
+  })
 })

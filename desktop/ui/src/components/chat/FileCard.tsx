@@ -12,6 +12,8 @@ import { registerFileIndexEntry, copyFile, openWithDefaultApp, revealInFolder } 
 // preview button is actually clicked — FileCard itself stays on the chat
 // page's critical path.
 const PdfPreview = lazy(() => import('./PdfPreview').then((m) => ({ default: m.PdfPreview })))
+// office Wave 3 C2: per-row batch execution over csv tables (tiny dialog).
+import { BatchRunDialog } from './BatchRunDialog'
 
 /**
  * FileCard — office Wave 1 (docs/research/2026-09-29-office-scenario-
@@ -73,9 +75,17 @@ function isPdfPath(path: string): boolean {
   return path.split('.').pop()?.toLowerCase() === 'pdf'
 }
 
+/** C2: "Batch run" is a csv-table affordance — the per-row instruction flow
+ *  assumes a header + data rows spreadsheet shape. */
+function isCsvPath(path: string): boolean {
+  return path.split('.').pop()?.toLowerCase() === 'csv'
+}
+
 export function FileCard({ name, path, sizeBytes, source = 'generated', onReviewDiff }: FileCardProps) {
   const t = useT()
   const [previewOpen, setPreviewOpen] = useState(false)
+  // C2: csv cards grow a "Batch run" affordance (dialog → composer draft).
+  const [batchOpen, setBatchOpen] = useState(false)
 
   // B9' Files page: every rendered card is a durable file reference — index
   // it (upsert Rust-side) so the library lists it. Fire-and-forget with a
@@ -143,6 +153,24 @@ export function FileCard({ name, path, sizeBytes, source = 'generated', onReview
               <span className="hidden md:inline">{t('office.diff.review')}</span>
             </Button>
           )}
+          {/* C2 — csv only: opens the per-row batch instruction dialog. The
+              visible label is the dialog's own "Build prompt" verb (the
+              affordance IS building the prompt); title carries the full
+              "batch run" context. */}
+          {isCsvPath(path) && (
+            <Button
+              variant="ghost"
+              size="sm"
+              data-testid="file-card-batch-run"
+              aria-label={t('office.batch.title')}
+              title={t('office.batch.title')}
+              onClick={() => setBatchOpen(true)}
+              className="gap-xs px-xs py-[2px] text-tertiary hover:bg-tertiary-container/40"
+            >
+              <span className="material-symbols-outlined icon-sm">checklist</span>
+              <span className="hidden md:inline">{t('office.batch.build')}</span>
+            </Button>
+          )}
           {isPdfPath(path) && (
             <Button
               variant="ghost"
@@ -193,6 +221,8 @@ export function FileCard({ name, path, sizeBytes, source = 'generated', onReview
           <PdfPreview path={path} name={name} onClose={() => setPreviewOpen(false)} />
         </Suspense>
       )}
+      {/* C2: batch instruction dialog — pushes a composer draft, never sends. */}
+      <BatchRunDialog open={batchOpen} path={path} name={name} onClose={() => setBatchOpen(false)} />
     </>
   )
 }

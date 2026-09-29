@@ -4,6 +4,32 @@ All notable changes to Shannon Code are documented here. Entries are grouped by 
 
 ## [Unreleased] — §4.14 W1-P2 · OTLP bridge + full RedactionPolicy + desktop Turn Timeline
 
+### Office Wave 3 — differentiation pass (2026-09-29)
+
+- **C2** batch table runs: CSV file cards gain "Batch run" — a per-row
+  instruction dialog that drafts a structured row-by-row prompt (results land
+  in `<name>-enriched.<ext>`).
+- **C3** companion window (Quick Capture): tray-menu-launched always-on-top
+  420x320 window; prompts cross to the main window via targeted Tauri events
+  and land as composer drafts. Minimal capability (`core:event`) for the
+  companion window; ACL coverage extended. Global hotkey wiring left for the
+  existing shortcuts system.
+- **C4** session sources: RightDock context tab gains a per-session source
+  list (paths/URLs) with one-click cited references into the composer.
+- **C5** `style-extract` bundled skill: extracts theme fonts / color scheme /
+  layouts / header-footer facts from an existing .pptx or .docx into brand
+  notes (python-stdlib read-only, honest degradation; v1 extracts, does not
+  restyle).
+- **C6** timeline HTML export: self-contained standalone export of a turn
+  timeline (inline styles, escaped content) via the save dialog.
+- **C7** Extensions skills page: Productivity grouping pinned to the top of
+  the catalog grid.
+- **C8** citation pills: `[Source: name] (ref)` lines render as clickable
+  pills (path → open, URL → browser), quote/code contexts untouched.
+- **C1** product narrative: `docs/product/office-agent-story.md` plus a
+  website feature entry and README office sections (no email-sending claims).
+- Per review decision, per-page PPT regeneration (C9) remains future work.
+
 ### Office Wave 2 — delivery loop: generation, data sources, routing, files (2026-09-29)
 
 - **B1** native `write_xlsx` tool (rust_xlsxwriter 0.99, pure-Rust deflate):

@@ -28,7 +28,6 @@ describe('DataSourcesQuery', () => {
   const mockQueryDataSource = vi.mocked(api.queryDataSource)
   const mockPushComposerDraft = vi.mocked(pushComposerDraft)
   const mockToastSuccess = vi.mocked(toast.success)
-  const mockToastError = vi.mocked(toast.error)
 
   beforeEach(() => {
     vi.clearAllMocks()

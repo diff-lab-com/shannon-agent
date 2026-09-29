@@ -317,6 +317,17 @@ export const handlers: Record<string, MockHandler> = {
     await delay(60)
     return null
   },
+  // --- Office Wave 3 C3: companion Quick Capture window ---
+  // Demo mode has no real webview to spawn — the mock just reports the
+  // fixed label the Rust command would return.
+  async open_companion_window() {
+    await delay(40)
+    return { label: 'companion' }
+  },
+  async set_companion_always_on_top() {
+    await delay(30)
+    return null
+  },
   // --- Chat ---
   async send_message() {
     await delay(120)

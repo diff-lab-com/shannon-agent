@@ -1,4 +1,4 @@
-import { useState, useEffect, memo, type ReactNode } from 'react'
+import { useState, useEffect, memo, createContext, useContext, type ReactNode } from 'react'
 import { useIntl } from 'react-intl'
 import ReactMarkdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
@@ -13,6 +13,7 @@ import { convertFileSrc } from '@tauri-apps/api/core'
 import { Chart, parseChartSpec } from '@/components/chat/Chart'
 import { CodeBlock as SharedCodeBlock } from '@/components/code/CodeBlock'
 import { FileRefChip } from '@/components/shared/FileRefChip'
+import { matchSourceLine, SourcePill } from '@/components/chat/SourcePill'
 import { looksLikeFilePath } from '@/lib/fileRefs'
 
 // Extend the default sanitize schema so syntax-highlight classes from
@@ -61,6 +62,9 @@ export const Markdown = memo(function Markdown({ children, className, onCheckbox
         ]}
         components={{
           pre: PreOrChart,
+          // office Wave 3 C8: a B3 source line (`[Source: <name>] (<target>)`)
+          // on its own paragraph renders as a citation pill instead of text.
+          p: SourceParagraph,
           img: LocalImage,
           table: TableRoot,
           th: TableHeader,
@@ -184,12 +188,53 @@ function TableCell(props: React.TdHTMLAttributes<HTMLTableCellElement>) {
 
 /* ────────────────────  Block quotes  ──────────────────── */
 
+/** C8 guard: true while rendering inside a blockquote — source lines quoted
+ *  verbatim must stay literal markdown, not turn into clickable pills. */
+const InsideQuoteContext = createContext(false)
+
 function BlockQuote(props: React.BlockquoteHTMLAttributes<HTMLQuoteElement>) {
   return (
-    <blockquote
-      className="my-md pl-md pr-sm py-xs border-l-4 border-tertiary/60 bg-tertiary/5 text-on-surface italic"
-      {...props}
-    />
+    <InsideQuoteContext.Provider value={true}>
+      <blockquote
+        className="my-md pl-md pr-sm py-xs border-l-4 border-tertiary/60 bg-tertiary/5 text-on-surface italic"
+        {...props}
+      />
+    </InsideQuoteContext.Provider>
+  )
+}
+
+/* ────────────────────  Source pills (office Wave 3 C8)  ──────────────────── */
+
+/**
+ * Paragraph override implementing the C8 citation pill. Chosen intrusion
+ * point: the rendered-paragraph level, NOT string preprocessing or a remark
+ * plugin — a whole-line `[Source: <name>] (<target>)` parses as plain
+ * paragraph text anyway (the space after `]` blocks link parsing), so
+ * inspecting the extracted paragraph text catches exactly the injected
+ * lines with zero sanitize-schema changes and no risk to code spans/fences
+ * (those never flow through `p`). Every non-empty line of the paragraph
+ * must match the B3 convention; any other line keeps the `<p>` untouched.
+ * Inside blockquotes (context guard above) the line stays literal.
+ */
+function SourceParagraph(props: React.HTMLAttributes<HTMLParagraphElement>) {
+  const inQuote = useContext(InsideQuoteContext)
+  const text = extractText(props.children)
+  const sources: { name: string; target: string }[] = []
+  for (const line of text.split('\n')) {
+    if (line.trim() === '') continue
+    const m = matchSourceLine(line)
+    if (!m) return <p {...stripNodeProp(props as unknown as Record<string, unknown>)} />
+    sources.push(m)
+  }
+  if (inQuote || sources.length === 0) {
+    return <p {...stripNodeProp(props as unknown as Record<string, unknown>)} />
+  }
+  return (
+    <div className="my-sm flex flex-wrap items-center gap-xs" data-testid="source-pill-row">
+      {sources.map((s, i) => (
+        <SourcePill key={`${s.target}-${i}`} name={s.name} target={s.target} />
+      ))}
+    </div>
   )
 }
 

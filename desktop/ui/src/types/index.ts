@@ -595,6 +595,13 @@ export interface SessionWindowInfo {
   sessionId: string
 }
 
+// --- Companion Quick Capture window (Office Wave 3 C3) ---
+
+/** Result of `open_companion_window` (fixed `companion` label). */
+export interface CompanionWindowInfo {
+  label: string
+}
+
 // --- Diff Types ---
 
 export interface FileDiff {
