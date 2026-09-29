@@ -89,7 +89,9 @@ const isAllowed = p => ALLOWLIST.some(a => rel(p).startsWith(a))
 // Same rule as scripts/lib/contrast.mjs chipCompositesInUse and the
 // migrate-accent-chips codemod: a hue's `text-<hue>` (any variant prefix)
 // plus an UNPREFIXED rest-state `bg-<hue>/<n>` in one class string.
-const HUES = ['primary', 'secondary', 'tertiary', 'error']
+// success/warning/info joined when the status hues became real tokens
+// (2026-09) — keep the three lists in sync.
+const HUES = ['primary', 'secondary', 'tertiary', 'error', 'success', 'warning', 'info']
 const TINT_TEXT_RE = hue => new RegExp(`(?:[\\w@/\\[\\].-]+:)?text-${hue}(?![\\w/-])`)
 const TINT_BG_RE = new RegExp(`(?<![\\w./:-])bg-(${HUES.join('|')})/(\\d+)(?![\\w-])`, 'g')
 

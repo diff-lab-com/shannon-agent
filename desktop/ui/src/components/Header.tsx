@@ -242,7 +242,7 @@ export function Header() {
                 (sessionUsage?.cost_usd ?? 0) >= sessionBudget
                   ? 'bg-error-container text-on-error-container border-error/30'
                   : (sessionUsage?.cost_usd ?? 0) >= sessionBudget * 0.8
-                    ? 'bg-warning/10 text-warning border-warning/30'
+                    ? 'bg-warning-container text-on-warning-container border-warning/30'
                     : 'bg-surface-container-low text-on-surface-variant border-outline-variant/30'
               )}
             >
