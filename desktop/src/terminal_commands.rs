@@ -12,7 +12,7 @@
 //! TERMINAL_OUTPUT`) with payload `{ terminalId, data, seq }` where `data`
 //! is the **base64-encoded** raw PTY byte stream (byte-preserving — the
 //! frontend decodes before writing to xterm.js) and `seq` is a per-session
-//! monotonic chunk number (review fix — see [`TerminalOutputPayload`]),
+//! monotonic chunk number (review fix — see [`crate::terminal_commands::TerminalOutputPayload`]),
 //! and — additive, P3-6 —
 //! the `terminal:exit` event (`TERMINAL_EXIT`, `{ terminalId }`) emitted
 //! when a session is reaped after a natural exit.
@@ -27,11 +27,11 @@
 //!
 //! Additive replay surface (US6): `terminal_history({terminalId}) ->
 //! { data, endSeq }` returns the base64 of the session's newest
-//! [`TERMINAL_HISTORY_CAP`] raw output bytes (in-memory ring only — it
+//! [`crate::terminal_commands::TERMINAL_HISTORY_CAP`] raw output bytes (in-memory ring only — it
 //! dies with the session; unknown id → empty string, not an error) plus
 //! `endSeq`, the highest output-chunk seq fully contained in the returned
 //! snapshot — the stitch key that lets the frontend drop the events it
-//! already replayed (review fix, see [`TerminalHistoryResponse`]).
+//! already replayed (review fix, see [`crate::terminal_commands::TerminalHistoryResponse`]).
 //!
 //! # Process discipline (mirrors `preview_commands.rs`)
 //!
