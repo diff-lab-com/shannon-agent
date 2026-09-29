@@ -56,6 +56,14 @@
   --color-outline-variant: #cbc3d7;
   --color-background: #f7f9fb;
   --color-on-background: #191c1e;
+  --chart-series-1: #2563eb;
+  --chart-series-2: #059669;
+  --chart-series-3: #d97706;
+  --chart-series-4: #dc2626;
+  --chart-series-5: #7c3aed;
+  --chart-series-6: #db2777;
+  --chart-series-7: #0891b2;
+  --chart-series-8: #4d7c0f;
   --color-on-surface-container: #212122;
 }
 
@@ -113,6 +121,14 @@
   --color-outline-variant: #3b4261;
   --color-background: #1a1b26;
   --color-on-background: #c0caf5;
+  --chart-series-1: #7aa2f7;
+  --chart-series-2: #9ece6a;
+  --chart-series-3: #e0af68;
+  --chart-series-4: #f7768e;
+  --chart-series-5: #bb9af7;
+  --chart-series-6: #ff9e64;
+  --chart-series-7: #7dcfff;
+  --chart-series-8: #73daca;
   --color-on-surface-container: #e0e0e3;
 }
 
@@ -169,6 +185,14 @@
   --color-outline-variant: #b8bdd4;
   --color-background: #e1e2f0;
   --color-on-background: #1a1b26;
+  --chart-series-1: #2e7de9;
+  --chart-series-2: #387068;
+  --chart-series-3: #8c6c3e;
+  --chart-series-4: #c43e58;
+  --chart-series-5: #7847bd;
+  --chart-series-6: #a85510;
+  --chart-series-7: #00719c;
+  --chart-series-8: #d20065;
   --color-on-surface-container: #202022;
 }
 
@@ -226,6 +250,14 @@
   --color-outline-variant: #45475a;
   --color-background: #1e1e2e;
   --color-on-background: #d9e0ee;
+  --chart-series-1: #89b4fa;
+  --chart-series-2: #a6e3a1;
+  --chart-series-3: #f9e2af;
+  --chart-series-4: #f38ba8;
+  --chart-series-5: #cba6f7;
+  --chart-series-6: #fab387;
+  --chart-series-7: #94e2d5;
+  --chart-series-8: #f5c2e7;
   --color-on-surface-container: #dfdfe0;
 }
 
@@ -283,6 +315,14 @@
   --color-outline-variant: #4c566a;
   --color-background: #2e3440;
   --color-on-background: #e5ecf0;
+  --chart-series-1: #88c0d0;
+  --chart-series-2: #a3be8c;
+  --chart-series-3: #ebcb8b;
+  --chart-series-4: #bf616a;
+  --chart-series-5: #b48ead;
+  --chart-series-6: #d08770;
+  --chart-series-7: #81a1c1;
+  --chart-series-8: #8fbcbb;
   --color-on-surface-container: #e4e5e7;
 }
 
@@ -339,6 +379,14 @@
   --color-outline-variant: #dcc8b4;
   --color-background: #faf5f0;
   --color-on-background: #2d1f14;
+  --chart-series-1: #bf4a1a;
+  --chart-series-2: #4e6e3d;
+  --chart-series-3: #8a6508;
+  --chart-series-4: #c62828;
+  --chart-series-5: #6b4fa0;
+  --chart-series-6: #a64d79;
+  --chart-series-7: #2e6e8e;
+  --chart-series-8: #8b5e3c;
   --color-on-surface-container: #21201f;
 }
 
@@ -395,6 +443,14 @@
   --color-outline-variant: #cbd5e1;
   --color-background: #f8f9fa;
   --color-on-background: #1e293b;
+  --chart-series-1: #475569;
+  --chart-series-2: #0f766e;
+  --chart-series-3: #b45309;
+  --chart-series-4: #be123c;
+  --chart-series-5: #6d28d9;
+  --chart-series-6: #db2777;
+  --chart-series-7: #0369a1;
+  --chart-series-8: #4d7c0f;
   --color-on-surface-container: #202022;
 }
 
@@ -452,6 +508,14 @@
   --color-outline-variant: #073642;
   --color-background: #002b36;
   --color-on-background: #c9d4d4;
+  --chart-series-1: #268bd2;
+  --chart-series-2: #859900;
+  --chart-series-3: #b58900;
+  --chart-series-4: #dc322f;
+  --chart-series-5: #d33682;
+  --chart-series-6: #cb4b16;
+  --chart-series-7: #2aa198;
+  --chart-series-8: #6c71c4;
   --color-on-surface-container: #dce3e5;
 }
 
@@ -509,6 +573,14 @@
   --color-outline-variant: #44475a;
   --color-background: #282a36;
   --color-on-background: #f8f8f2;
+  --chart-series-1: #bd93f9;
+  --chart-series-2: #50fa7b;
+  --chart-series-3: #f1fa8c;
+  --chart-series-4: #ff5555;
+  --chart-series-5: #ff79c6;
+  --chart-series-6: #ffb86c;
+  --chart-series-7: #8be9fd;
+  --chart-series-8: #6c8cff;
   --color-on-surface-container: #e3e3e6;
 }
 
@@ -566,6 +638,14 @@
   --color-outline-variant: #504945;
   --color-background: #282828;
   --color-on-background: #ebdbb2;
+  --chart-series-1: #83a598;
+  --chart-series-2: #b8bb26;
+  --chart-series-3: #fabd2f;
+  --chart-series-4: #fb4934;
+  --chart-series-5: #d3869b;
+  --chart-series-6: #fe8019;
+  --chart-series-7: #8ec07c;
+  --chart-series-8: #928374;
   --color-on-surface-container: #e4e3e3;
 }
 
@@ -622,6 +702,14 @@
   --color-outline-variant: #c0bda5;
   --color-background: #fdf6e3;
   --color-on-background: #3b4d56;
+  --chart-series-1: #268bd2;
+  --chart-series-2: #718c00;
+  --chart-series-3: #a98400;
+  --chart-series-4: #dc322f;
+  --chart-series-5: #d33682;
+  --chart-series-6: #cb4b16;
+  --chart-series-7: #1f8679;
+  --chart-series-8: #6c71c4;
   --color-on-surface-container: #21201e;
 }
 
@@ -678,5 +766,13 @@
   --color-outline-variant: #c0b292;
   --color-background: #fbf1c7;
   --color-on-background: #3c3836;
+  --chart-series-1: #076678;
+  --chart-series-2: #79740e;
+  --chart-series-3: #b57614;
+  --chart-series-4: #9d0006;
+  --chart-series-5: #8f3f71;
+  --chart-series-6: #af3a03;
+  --chart-series-7: #427b58;
+  --chart-series-8: #7c6f64;
   --color-on-surface-container: #211f19;
 }

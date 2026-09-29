@@ -191,11 +191,15 @@
   --z-index-drawer: 70;
   --z-index-flash: 100;
 
-  /* Motion duration tokens */
+  /* Motion duration tokens — the ONLY duration definitions in the app
+     (UI review 2026-09-29 T1: the old :root override in this file and the
+     tokens.css mirror were deleted; these declared values are what renders). */
   --duration-fast: 100ms;
   --duration-normal: 160ms;
   --duration-slow: 240ms;
   --duration-slower: 400ms;
+  /* Spring-ish easing (Apple sheet curve) for glass/panel motion. */
+  --ease-glass: cubic-bezier(0.32, 0.72, 0, 1);
 }
 
 @layer utilities {
@@ -261,11 +265,9 @@
      (Phase C7 — replaces per-theme hand-tuned values.) */
   --glass-tint-alpha: 0.62;
   --glass-overlay-alpha: 0.78;
-  /* Spring-ish easing (Apple sheet curve) + duration scale */
-  --ease-glass: cubic-bezier(0.32, 0.72, 0, 1);
-  --duration-fast: 120ms;
-  --duration-base: 200ms;
-  --duration-slow: 280ms;
+  /* (UI review 2026-09-29 T1: the --duration-* overrides + --duration-base
+     that used to live in this block were removed — the @theme values above
+     are the single source of truth. --duration-base had zero references.) */
 }
 
 [data-theme-mode="dark"] {
@@ -295,18 +297,16 @@
   contain: paint;
 }
 
-/* Dark mode: lighten the tint instead of darkening so glass stays legible
-   over near-black backdrops (vibrancy reads off the blur, not the fill). */
-@utility glass-surface-dark {
-  background: color-mix(in srgb, var(--color-surface-container-low) 48%, transparent);
-}
-
-/* Elevation scale for solid (non-glass) cards — replaces ad-hoc
-   shadow-sm/md/lg/xl mixes (06-26 audit: no elevation rule). */
-@utility shadow-e1 { box-shadow: 0 1px 2px color-mix(in srgb, black 18%, transparent); }
-@utility shadow-e2 { box-shadow: 0 2px 8px color-mix(in srgb, black 22%, transparent); }
-@utility shadow-e3 { box-shadow: 0 8px 24px color-mix(in srgb, black 28%, transparent); }
-@utility shadow-e4 { box-shadow: 0 16px 48px color-mix(in srgb, black 36%, transparent); }
+/* Elevation utilities for solid (non-glass) cards — replaces ad-hoc
+   shadow-sm/md/lg/xl mixes (06-26 audit: no elevation rule).
+   UI review 2026-09-29 T2: the @theme --shadow-e1..e5 tokens are the single
+   source of values; these utilities only bind the class name to the token
+   (the old hand-tuned color-mix values here drifted from the tokens). */
+@utility shadow-e1 { box-shadow: var(--shadow-e1); }
+@utility shadow-e2 { box-shadow: var(--shadow-e2); }
+@utility shadow-e3 { box-shadow: var(--shadow-e3); }
+@utility shadow-e4 { box-shadow: var(--shadow-e4); }
+@utility shadow-e5 { box-shadow: var(--shadow-e5); }
 
 /* Panel entrance (workspace grid) — one-shot fade+rise on the Apple sheet
    curve. CSS-only by design (Phase C decision): no motion runtime for a
@@ -349,16 +349,20 @@
   }
 }
 
-@utility node-connector {
-    background: linear-gradient(to bottom, var(--color-outline-variant) 50%, transparent 50%);
-    background-size: 1px 12px;
-}
-
-@utility thought-connector {
-    width: 2px;
-    background: linear-gradient(to bottom, var(--color-primary), transparent);
-    height: 24px;
-    margin-left: 11px;
+/* Thin themed scrollbar for overflow surfaces (KanbanBoard column strips
+   etc. — UI review 2026-09-29 T6: the class was referenced in tsx but had
+   no definition). WebKit gets a 6px track/thumb; Firefox gets the native
+   thin scrollbar recolored via scrollbar-color. */
+@utility custom-scrollbar {
+  scrollbar-width: thin;
+  scrollbar-color: var(--color-outline-variant) transparent;
+  &::-webkit-scrollbar { width: 6px; height: 6px; }
+  &::-webkit-scrollbar-track { background: transparent; }
+  &::-webkit-scrollbar-thumb {
+    background: var(--color-outline-variant);
+    border-radius: 9999px;
+  }
+  &::-webkit-scrollbar-thumb:hover { background: var(--color-outline); }
 }
 
 @utility animate-pulse-amber {
