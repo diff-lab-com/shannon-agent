@@ -400,12 +400,15 @@ jobs:
         # material + tokyo-night and fails on any critical/serious axe
         # violation. Serves the production build via `vite preview`
         # (playwright.walkthrough.config.ts) — no dev server needed.
+        # --workers=1: one worker = one deterministic screenshot set and a
+        # single axe-report-worker0.md (the spec writes one report file per
+        # worker process; parallel workers would shard both across files).
         working-directory: desktop/ui
         env:
           WALKTHROUGH: "1"
           VITE_MOCK_MODE: "1"
           CI: "1"
-        run: pnpm exec playwright test -c playwright.walkthrough.config.ts
+        run: pnpm exec playwright test -c playwright.walkthrough.config.ts --workers=1
 
   desktop-unit:
     name: Desktop Unit Tests
