@@ -166,7 +166,7 @@ pub fn format_snapshot_list(snapshots: &[(String, String)]) -> String {
 }
 
 /// Format detailed information about a single snapshot.
-#[allow(dead_code)] // invoked dynamically by LLM via /session command tools
+#[allow(dead_code)] // KEEP: invoked dynamically by LLM via /session command tools
 pub fn format_snapshot_detail(snapshot: &SessionSnapshot) -> String {
     let mut out = format!("Session: {}\n", snapshot.name);
     out.push_str(&format!("  Created: {}\n", snapshot.created_at));
