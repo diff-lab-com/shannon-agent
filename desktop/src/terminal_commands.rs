@@ -23,6 +23,11 @@
 //! precedence: explicit `shell` arg > configured `[terminal].shell` >
 //! `$SHELL` > `/bin/sh` (PowerShell on Windows).
 //!
+//! Additive replay surface (US6): `terminal_history({terminalId}) ->
+//! { data }` returns the base64 of the session's newest
+//! [`TERMINAL_HISTORY_CAP`] raw output bytes (in-memory ring only — it
+//! dies with the session; unknown id → empty string, not an error).
+//!
 //! # Process discipline (mirrors `preview_commands.rs`)
 //!
 //! PTY sessions are owned by the `TerminalManager` on `AppState`:
@@ -63,7 +68,7 @@
 use base64::Engine as _;
 use portable_pty::{CommandBuilder, MasterPty, PtySize, native_pty_system};
 use serde::{Deserialize, Serialize};
-use std::collections::HashMap;
+use std::collections::{HashMap, VecDeque};
 use std::io::Read;
 use std::path::{Path, PathBuf};
 use std::sync::{
@@ -90,6 +95,12 @@ pub const MAX_PENDING_BYTES: usize = 2 * 1024 * 1024;
 /// into consecutive chunks of at most this size so a single emit never
 /// ships multi-MB payloads to the webview.
 pub const MAX_EMIT_CHUNK: usize = 256 * 1024;
+
+/// Per-session replay-history cap (US6 / plan §5 Task 3.2): the pump
+/// retains the newest this-many raw bytes of each session's output so a
+/// re-opened panel can replay the scrollback. Purely in-memory — the ring
+/// dies with its session (kill/reap drops it), nothing is persisted.
+pub const TERMINAL_HISTORY_CAP: usize = 1024 * 1024;
 
 /// Initial pty geometry; corrected by `terminal_resize` once the frontend
 /// fit addon measures the panel.
@@ -141,6 +152,17 @@ pub struct TerminalExitPayload {
 #[serde(rename_all = "camelCase")]
 pub struct TerminalOutputPayload {
     pub terminal_id: String,
+    pub data: String,
+}
+
+/// `terminal_history` response (frozen: `{ data }`) — base64 of the
+/// session's retained replay bytes, oldest-retained first (plain stream
+/// order). Empty string when the id is unknown or the session already
+/// ended: the frontend calls it speculatively on reconnect, so a missing
+/// ring must not be an error.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct TerminalHistoryResponse {
     pub data: String,
 }
 
@@ -515,6 +537,11 @@ struct TerminalSession {
     master: StdMutex<Box<dyn MasterPty + Send>>,
     /// `None` once the child has been reaped or killed.
     child: StdMutex<Option<Box<dyn portable_pty::Child + Send + Sync>>>,
+    /// Replay ring (US6): newest [`TERMINAL_HISTORY_CAP`] raw bytes of the
+    /// session's output, appended by the pump from each drained batch.
+    /// Owned by the session, so kill/reap (which removes the session from
+    /// the map) retires the ring with it — no persistence.
+    history: StdMutex<VecDeque<u8>>,
 }
 
 impl TerminalSession {
@@ -559,6 +586,29 @@ fn kill_process_tree(child: &mut Box<dyn portable_pty::Child + Send + Sync>) {
         let _ = pid;
     }
     let _ = child.kill();
+}
+
+/// Append one drained batch to a session's replay ring, keeping only the
+/// newest [`TERMINAL_HISTORY_CAP`] bytes (same oldest-dropped discipline
+/// as [`PendingBuffer::push`], minus the truncation notice — replay is a
+/// best-effort scrollback, not a guaranteed log).
+fn append_history(ring: &StdMutex<VecDeque<u8>>, bytes: &[u8]) {
+    if bytes.is_empty() {
+        return;
+    }
+    let mut ring = ring.lock().unwrap_or_else(|p| p.into_inner());
+    if bytes.len() >= TERMINAL_HISTORY_CAP {
+        // A single batch at/over the cap: everything retained so far is
+        // stale by definition — keep only the batch's tail.
+        ring.clear();
+        ring.extend(bytes[bytes.len() - TERMINAL_HISTORY_CAP..].iter().copied());
+        return;
+    }
+    let overflow = (ring.len() + bytes.len()).saturating_sub(TERMINAL_HISTORY_CAP);
+    if overflow > 0 {
+        ring.drain(..overflow);
+    }
+    ring.extend(bytes.iter().copied());
 }
 
 // ── TerminalManager (lifecycle owner on AppState) ────────────────────────
@@ -725,6 +775,7 @@ impl TerminalManager {
             master: StdMutex::new(pair.master),
             child: StdMutex::new(Some(child)),
             info: info.clone(),
+            history: StdMutex::new(VecDeque::with_capacity(4096)),
         });
         sessions.insert(terminal_id, session.clone());
         drop(sessions);
@@ -789,6 +840,24 @@ impl TerminalManager {
         let mut infos: Vec<TerminalInfo> = sessions.values().map(|s| s.info.clone()).collect();
         sort_infos(&mut infos);
         infos
+    }
+
+    /// `terminal_history` core (US6): the session's retained replay bytes
+    /// in stream order. Unknown / already-ended id → empty (the frontend
+    /// calls speculatively on reconnect; absence is normal, not an error).
+    /// The ring dies with the session — kill/reap removed it from the map,
+    /// so this naturally returns empty afterwards.
+    pub fn history(&self, terminal_id: &str) -> Vec<u8> {
+        let Ok(session) = self.session(terminal_id) else {
+            return Vec::new();
+        };
+        session
+            .history
+            .lock()
+            .unwrap_or_else(|p| p.into_inner())
+            .iter()
+            .copied()
+            .collect()
     }
 
     /// Kill every session (app-exit hook / `Drop` backstop).
@@ -926,6 +995,9 @@ fn pump_once(inner: &TerminalInner) {
     };
     for session in snapshot {
         let drained = session.pending.drain();
+        // Replay ring (US6): every drained byte lands in the ring before
+        // the emit so a reconnecting panel can replay what was shown.
+        append_history(&session.history, &drained);
         if let Some((success, code)) = session.poll_exit() {
             let mut final_bytes = drained;
             final_bytes.extend_from_slice(
@@ -1107,6 +1179,22 @@ pub async fn terminal_set_settings(
     let effective = TerminalSettings::from(settings).sanitized();
     save_terminal_settings(&effective)?;
     Ok(TerminalSettingsDto::from(effective))
+}
+
+/// `terminal_history({terminalId}) -> { data }` (US6, new command) —
+/// base64 of the session's retained replay bytes (newest 1 MiB, see
+/// [`TERMINAL_HISTORY_CAP`]). Unknown or already-ended id → `{ data: "" }`,
+/// deliberately not an error: the frontend calls speculatively on
+/// reconnect. No persistence — the ring dies with its session.
+#[tauri::command]
+pub async fn terminal_history(
+    state: tauri::State<'_, crate::commands::AppState>,
+    terminal_id: String,
+) -> Result<TerminalHistoryResponse, String> {
+    let bytes = state.terminals.history(&terminal_id);
+    Ok(TerminalHistoryResponse {
+        data: base64::engine::general_purpose::STANDARD.encode(bytes),
+    })
 }
 
 /// Install the production `terminal:output` sink on the manager. Called
@@ -1551,6 +1639,101 @@ mod tests {
             .expect("spawn configured");
         assert_eq!(configured.shell, "/bin/sh");
         manager.kill_all();
+    }
+
+    // ── Replay history ring (US6) ────────────────────────────────────────
+
+    #[test]
+    fn history_response_is_frozen_camel_case() {
+        let resp = TerminalHistoryResponse {
+            data: "aGk=".into(),
+        };
+        let json = serde_json::to_string(&resp).unwrap();
+        assert_eq!(json, r#"{"data":"aGk="}"#);
+        let back: TerminalHistoryResponse = serde_json::from_str(&json).unwrap();
+        assert_eq!(back.data, "aGk=");
+    }
+
+    #[test]
+    fn append_history_keeps_the_newest_cap_bytes() {
+        let ring: StdMutex<VecDeque<u8>> = StdMutex::new(VecDeque::new());
+        append_history(&ring, &[b'a'; 64]);
+        append_history(&ring, &[b'b'; 64]);
+        let held: Vec<u8> = ring.lock().unwrap().iter().copied().collect();
+        assert_eq!(held.len(), 128, "under the cap everything is retained");
+
+        // A cap-sized batch evicts everything older in one step (the
+        // "batch at/over the cap" branch) and keeps only its own tail.
+        append_history(&ring, &[b'c'; TERMINAL_HISTORY_CAP]);
+        let held: Vec<u8> = ring.lock().unwrap().iter().copied().collect();
+        assert_eq!(held.len(), TERMINAL_HISTORY_CAP);
+        assert!(
+            held.iter().all(|&b| b == b'c'),
+            "a cap-sized batch evicts everything older"
+        );
+
+        // A batch larger than the cap itself keeps only its own tail.
+        let ring: StdMutex<VecDeque<u8>> = StdMutex::new(VecDeque::new());
+        append_history(&ring, &[b'x'; TERMINAL_HISTORY_CAP + 5]);
+        let held: Vec<u8> = ring.lock().unwrap().iter().copied().collect();
+        assert_eq!(held.len(), TERMINAL_HISTORY_CAP);
+        assert!(held.iter().all(|&b| b == b'x'));
+        // …and appending afterwards still preserves stream order.
+        append_history(&ring, b"tail");
+        let held: Vec<u8> = ring.lock().unwrap().iter().copied().collect();
+        assert!(held.ends_with(b"tail"));
+    }
+
+    #[test]
+    fn history_of_unknown_id_is_empty_not_an_error() {
+        let sink = RecordingSink::default();
+        let manager = test_manager(&sink);
+        assert!(manager.history("no-such-terminal").is_empty());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn output_accumulates_into_the_history_ring() {
+        let sink = RecordingSink::default();
+        let manager = test_manager(&sink);
+        let dir = tempfile::tempdir().expect("tempdir");
+        let info = manager
+            .spawn(dir.path(), Some("/bin/sh".into()), None, None)
+            .expect("spawn");
+        manager.test_push_pending(&info.terminal_id, b"echo replay-marker-99\n");
+        manager.pump_once_for_test();
+        let bytes = manager.history(&info.terminal_id);
+        assert!(
+            String::from_utf8_lossy(&bytes).contains("replay-marker-99"),
+            "drained output must land in the ring, got: {}",
+            String::from_utf8_lossy(&bytes)
+        );
+        // …and the ring dies with the session.
+        manager.kill(&info.terminal_id).expect("kill");
+        assert!(
+            manager.history(&info.terminal_id).is_empty(),
+            "killed session must replay nothing"
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn history_ring_enforces_the_one_mib_cap_through_the_pump() {
+        let sink = RecordingSink::default();
+        let manager = test_manager(&sink);
+        let dir = tempfile::tempdir().expect("tempdir");
+        let info = manager
+            .spawn(dir.path(), Some("/bin/sh -c 'sleep 30'".into()), None, None)
+            .expect("spawn");
+        // 1.5 MiB in one batch: under the 2 MiB pending cap it drains
+        // whole, and the ring must retain exactly the newest 1 MiB.
+        let flood = vec![b'f'; TERMINAL_HISTORY_CAP + TERMINAL_HISTORY_CAP / 2];
+        manager.test_push_pending(&info.terminal_id, &flood);
+        manager.pump_once_for_test();
+        let bytes = manager.history(&info.terminal_id);
+        assert_eq!(bytes.len(), TERMINAL_HISTORY_CAP, "cap enforced");
+        assert!(bytes.iter().all(|&b| b == b'f'), "newest tail kept");
+        manager.kill(&info.terminal_id).expect("kill");
     }
 
     // ── Lifecycle (unix: real pty + /bin/sh) ─────────────────────────────

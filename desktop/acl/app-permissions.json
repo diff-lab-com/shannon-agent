@@ -2288,6 +2288,15 @@
       }
     },
     {
+      "identifier": "allow-terminal-history",
+      "description": "Enables the terminal_history command without any pre-configured scope.",
+      "commands": {
+        "allow": [
+          "terminal_history"
+        ]
+      }
+    },
+    {
       "identifier": "allow-terminal-kill",
       "description": "Enables the terminal_kill command without any pre-configured scope.",
       "commands": {
@@ -2913,6 +2922,7 @@
         "allow-preview-status",
         "allow-preview-stop",
         "allow-terminal-get-settings",
+        "allow-terminal-history",
         "allow-terminal-kill",
         "allow-terminal-list",
         "allow-terminal-resize",
