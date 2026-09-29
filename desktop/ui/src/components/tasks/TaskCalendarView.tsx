@@ -157,7 +157,7 @@ export default function TaskCalendarView({
                   >
                     <div className="flex items-center justify-between">
                       <div className="flex items-center gap-md">
-                        <div className="w-10 h-10 rounded-xl bg-primary/10 flex items-center justify-center text-primary">
+                        <div className="w-10 h-10 rounded-xl bg-primary-container flex items-center justify-center text-on-primary-container">
                           <span className="material-symbols-outlined icon-lg">task_alt</span>
                         </div>
                         <div>

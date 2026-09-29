@@ -157,14 +157,14 @@ export default function LspQuickFixPanel({
       </p>
 
       {error ? (
-        <div className="bg-error/10 border border-error/30 rounded-lg p-sm font-label-sm text-error flex items-start gap-sm" role="alert">
+        <div className="bg-error-container border border-error/30 rounded-lg p-sm font-label-sm text-on-error-container flex items-start gap-sm" role="alert">
           <span className="material-symbols-outlined icon-sm mt-0.5">error</span>
           <span className="flex-1 break-words">{error}</span>
         </div>
       ) : null}
 
       {lastApplied ? (
-        <div className="bg-tertiary/10 border border-tertiary/30 rounded-lg p-sm font-label-sm text-tertiary flex items-start gap-sm">
+        <div className="bg-tertiary-container border border-tertiary/30 rounded-lg p-sm font-label-sm text-on-tertiary-container flex items-start gap-sm">
           <span className="material-symbols-outlined icon-sm mt-0.5">check_circle</span>
           <span className="flex-1">{intl.formatMessage({ id: 'lsp.quickFix.applied' }, { result: lastApplied })}</span>
         </div>

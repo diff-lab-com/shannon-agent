@@ -189,9 +189,9 @@ function DefaultDraggableCard({ task, intl, openTask }: { task: TaskItem; intl: 
         {task.priority ? (
           <span className={cn(
             "text-label-2xs font-bold px-sm py-0.5 rounded-sm uppercase tracking-wider",
-            normalizePriority(task.priority) === 'critical' ? 'bg-error/20 text-error' :
-            normalizePriority(task.priority) === 'high' ? 'bg-error/10 text-error' :
-            normalizePriority(task.priority) === 'medium' ? 'bg-secondary/10 text-secondary' :
+            normalizePriority(task.priority) === 'critical' ? 'bg-error-container text-on-error-container' :
+            normalizePriority(task.priority) === 'high' ? 'bg-error-container text-on-error-container' :
+            normalizePriority(task.priority) === 'medium' ? 'bg-secondary-container text-on-secondary-container' :
             normalizePriority(task.priority) === 'low' ? 'bg-surface-container text-on-surface-variant' :
             'bg-surface-container text-on-surface-variant'
           )}>{task.priority}</span>
@@ -224,7 +224,7 @@ function BlockedCard({ task, intl, openTask }: { task: TaskItem; intl: ReturnTyp
       <div className="flex justify-between items-start mb-sm ml-xs">
         <span className="font-label-sm text-label-2xs font-bold text-on-surface-variant tracking-wider">{task.id.slice(0, 8)}</span>
         {(normalizePriority(task.priority) === 'high' || normalizePriority(task.priority) === 'critical') ? (
-          <span className="bg-error/10 text-error text-label-2xs font-bold px-sm py-0.5 rounded-sm uppercase tracking-wider">{intl.formatMessage({ id: 'opc.kanban.critical' })}</span>
+          <span className="bg-error-container text-on-error-container text-label-2xs font-bold px-sm py-0.5 rounded-sm uppercase tracking-wider">{intl.formatMessage({ id: 'opc.kanban.critical' })}</span>
         ) : null}
       </div>
       <h4 className="font-label-md text-body-md font-bold mb-sm leading-tight ml-xs">{task.title}</h4>

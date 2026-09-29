@@ -296,7 +296,7 @@ export default function AdvancedSettings() {
         {/* Skill Extraction */}
         <div className="bg-surface-container-lowest p-lg rounded-xl shadow-e1 border border-outline-variant/30 group hover:shadow-e2 transition-shadow">
           <div className="flex items-center gap-md mb-md">
-            <div className="p-sm bg-tertiary/10 rounded-lg text-tertiary flex items-center justify-center">
+            <div className="p-sm bg-tertiary-container rounded-lg text-on-tertiary-container flex items-center justify-center">
               <span className="material-symbols-outlined">auto_awesome</span>
             </div>
             <h3 className="font-headline-md text-headline-md font-bold text-on-surface">{t('settings.skillLoop.title')}</h3>
@@ -337,7 +337,7 @@ export default function AdvancedSettings() {
             refine step, both default off, review-gated writes only. */}
         <div className="bg-surface-container-lowest p-lg rounded-xl shadow-e1 border border-outline-variant/30 group hover:shadow-e2 transition-shadow" data-testid="dream-card">
           <div className="flex items-center gap-md mb-md">
-            <div className="p-sm bg-primary/10 rounded-lg text-primary flex items-center justify-center">
+            <div className="p-sm bg-primary-container rounded-lg text-on-primary-container flex items-center justify-center">
               <span className="material-symbols-outlined">bedtime</span>
             </div>
             <h3 className="font-headline-md text-headline-md font-bold text-on-surface">{t('settings.dream.title')}</h3>
@@ -365,7 +365,7 @@ export default function AdvancedSettings() {
             最后活跃时间计时；默认永不自动删除. */}
         <div className="bg-surface-container-lowest p-lg rounded-xl shadow-e1 border border-outline-variant/30 group hover:shadow-e2 transition-shadow" data-testid="session-gc-card">
           <div className="flex items-center gap-md mb-md">
-            <div className="p-sm bg-primary/10 rounded-lg text-primary flex items-center justify-center">
+            <div className="p-sm bg-primary-container rounded-lg text-on-primary-container flex items-center justify-center">
               <span className="material-symbols-outlined">auto_delete</span>
             </div>
             <h3 className="font-headline-md text-headline-md font-bold text-on-surface">{t('settings.advanced.sessionGc.title')}</h3>
@@ -402,7 +402,7 @@ export default function AdvancedSettings() {
         {/* B2 — Agent teams (real sub-agent execution) */}
         <div className="bg-surface-container-lowest p-lg rounded-xl shadow-e1 border border-outline-variant/30 group hover:shadow-e2 transition-shadow" data-testid="agent-teams-card">
           <div className="flex items-center gap-md mb-md">
-            <div className="p-sm bg-primary/10 rounded-lg text-primary flex items-center justify-center">
+            <div className="p-sm bg-primary-container rounded-lg text-on-primary-container flex items-center justify-center">
               <span className="material-symbols-outlined">account_tree</span>
             </div>
             <h3 className="font-headline-md text-headline-md font-bold text-on-surface">{t('settings.advanced.agentTeamsTitle')}</h3>
@@ -420,7 +420,7 @@ export default function AdvancedSettings() {
         {/* Memory Management */}
         <div className="bg-surface-container-lowest p-lg rounded-xl shadow-e1 border border-outline-variant/30 group hover:shadow-e2 transition-shadow">
           <div className="flex items-center gap-md mb-md">
-            <div className="p-sm bg-primary/10 rounded-lg text-primary flex items-center justify-center">
+            <div className="p-sm bg-primary-container rounded-lg text-on-primary-container flex items-center justify-center">
               <span className="material-symbols-outlined">memory</span>
             </div>
             <h3 className="font-headline-md text-headline-md font-bold text-on-surface">{t('settings.advanced.memoryTitle')}</h3>
@@ -448,7 +448,7 @@ export default function AdvancedSettings() {
         {/* Data Privacy */}
         <div className="bg-surface-container-lowest p-lg rounded-xl shadow-e1 border border-outline-variant/30 group hover:shadow-e2 transition-shadow">
           <div className="flex items-center gap-md mb-md">
-            <div className="p-sm bg-secondary/10 rounded-lg text-secondary flex items-center justify-center">
+            <div className="p-sm bg-secondary-container rounded-lg text-on-secondary-container flex items-center justify-center">
               <span className="material-symbols-outlined" style={{fontVariationSettings: "'FILL' 1"}}>security</span>
             </div>
             <h3 className="font-headline-md text-headline-md font-bold text-on-surface">{t('settings.advanced.dataPrivacy')}</h3>
@@ -475,7 +475,7 @@ export default function AdvancedSettings() {
         {/* Off-peak model override (P2-5, frozen key `offpeak.model_override`) */}
         <div className="bg-surface-container-lowest p-lg rounded-xl shadow-e1 border border-outline-variant/30 group hover:shadow-e2 transition-shadow">
           <div className="flex items-center gap-md mb-md">
-            <div className="p-sm bg-secondary/10 rounded-lg text-secondary flex items-center justify-center">
+            <div className="p-sm bg-secondary-container rounded-lg text-on-secondary-container flex items-center justify-center">
               <span className="material-symbols-outlined">bedtime</span>
             </div>
             <h3 className="font-headline-md text-headline-md font-bold text-on-surface">{t('settings.advanced.offpeak.title')}</h3>
@@ -518,7 +518,7 @@ export default function AdvancedSettings() {
         {/* Command line — expose the bundled `shannon` CLI (ADR-0011 B3) */}
         <div className="bg-surface-container-lowest p-lg rounded-xl shadow-e1 border border-outline-variant/30 lg:col-span-2 group hover:shadow-e2 transition-shadow">
           <div className="flex items-center gap-md mb-md">
-            <div className="p-sm bg-primary/10 rounded-lg text-primary flex items-center justify-center">
+            <div className="p-sm bg-primary-container rounded-lg text-on-primary-container flex items-center justify-center">
               <span className="material-symbols-outlined">terminal</span>
             </div>
             <h3 className="font-headline-md text-headline-md font-bold text-on-surface">{t('settings.advanced.cliTitle')}</h3>
@@ -527,7 +527,7 @@ export default function AdvancedSettings() {
                 "ml-auto px-sm py-[2px] rounded-full text-label-xs font-bold whitespace-nowrap",
                 cliStatus?.onPath
                   ? 'bg-tertiary-container text-on-tertiary-container'
-                  : 'bg-error/10 text-error',
+                  : 'bg-error-container text-on-error-container',
               )}
             >
               {cliStatus?.onPath
@@ -555,7 +555,7 @@ export default function AdvancedSettings() {
         {/* Version & updates — semi-automatic update check (C1①) */}
         <div className="bg-surface-container-lowest p-lg rounded-xl shadow-e1 border border-outline-variant/30 lg:col-span-2 group hover:shadow-e2 transition-shadow">
           <div className="flex items-center gap-md mb-md">
-            <div className="p-sm bg-primary/10 rounded-lg text-primary flex items-center justify-center">
+            <div className="p-sm bg-primary-container rounded-lg text-on-primary-container flex items-center justify-center">
               <span className="material-symbols-outlined">system_update_alt</span>
             </div>
             <h3 className="font-headline-md text-headline-md font-bold text-on-surface">{t('settings.advanced.updateTitle')}</h3>
@@ -613,7 +613,7 @@ export default function AdvancedSettings() {
         {/* Developer Options */}
         <div className="bg-surface-container-lowest p-lg rounded-xl shadow-e1 border border-outline-variant/30 lg:col-span-2 group hover:shadow-e2 transition-shadow">
           <div className="flex items-center gap-md mb-md">
-            <div className="p-sm bg-tertiary/10 rounded-lg text-tertiary flex items-center justify-center">
+            <div className="p-sm bg-tertiary-container rounded-lg text-on-tertiary-container flex items-center justify-center">
               <span className="material-symbols-outlined">terminal</span>
             </div>
             <h3 className="font-headline-md text-headline-md font-bold text-on-surface">{t('settings.advanced.devOptions')}</h3>
@@ -659,7 +659,7 @@ export default function AdvancedSettings() {
         <div className="lg:col-span-2 border-2 border-error/20 bg-error/5 p-lg rounded-xl mt-sm relative overflow-hidden">
           <div className="flex flex-col md:flex-row items-start md:items-center justify-between gap-lg relative z-raised">
             <div className="flex items-start gap-md">
-              <div className="p-sm bg-error/10 rounded-lg text-error shrink-0 flex items-center justify-center">
+              <div className="p-sm bg-error-container rounded-lg text-on-error-container shrink-0 flex items-center justify-center">
                 <span className="material-symbols-outlined">warning</span>
               </div>
               <div>

@@ -120,7 +120,7 @@ export default function ModelsSettings() {
                 </div>
                 <div>
                   <div className="flex items-center gap-xs">
-                    <span className="font-headline-md text-primary text-lg">{currentModel}</span>
+                    <span className="font-headline-md text-link text-lg">{currentModel}</span>
                     <span className="px-xs py-[2px] bg-primary text-on-primary rounded-sm text-label-2xs font-bold">{t('settings.models.activeBadge')}</span>
                   </div>
                   <p className="text-label-sm text-on-surface-variant">{intl.formatMessage({ id: 'settings.models.providerLabel' }, { provider: status?.provider })}</p>
@@ -168,7 +168,7 @@ export default function ModelsSettings() {
                 onClick={() => setActiveProvider(null)}
                 className={cn(
                   'h-auto pb-sm px-xs border-b-2 font-label-md whitespace-nowrap cursor-pointer transition-colors rounded-none',
-                  !activeProvider ? 'border-primary text-primary font-bold' : 'border-transparent text-on-surface-variant hover:text-primary',
+                  !activeProvider ? 'border-primary text-link font-bold' : 'border-transparent text-on-surface-variant hover:text-primary',
                 )}
               >{t('settings.models.tabAll')}</Button>
               {providers.map(p => (
@@ -178,7 +178,7 @@ export default function ModelsSettings() {
                   onClick={() => setActiveProvider(activeProvider === p ? null : p)}
                   className={cn(
                     'h-auto pb-sm px-xs border-b-2 font-label-md whitespace-nowrap cursor-pointer transition-colors rounded-none',
-                    activeProvider === p ? 'border-primary text-primary font-bold' : 'border-transparent text-on-surface-variant hover:text-primary',
+                    activeProvider === p ? 'border-primary text-link font-bold' : 'border-transparent text-on-surface-variant hover:text-primary',
                   )}
                 >{p}</Button>
               ))}
@@ -192,7 +192,7 @@ export default function ModelsSettings() {
                 <h3 className="font-headline-md text-on-surface">{t('settings.models.availableModels')}</h3>
                 <p className="text-body-sm text-on-surface-variant">{t('settings.models.availableDesc')}</p>
               </div>
-              <span className="inline-flex items-center px-sm py-xs bg-primary/10 text-primary rounded-full text-label-2xs font-bold tracking-wider uppercase">
+              <span className="inline-flex items-center px-sm py-xs bg-primary-container text-on-primary-container rounded-full text-label-2xs font-bold tracking-wider uppercase">
                 {intl.formatMessage({ id: 'settings.models.count' }, { count: models.length })}
               </span>
             </div>
@@ -220,7 +220,7 @@ export default function ModelsSettings() {
                       </div>
                       <div>
                     <div className="flex items-center gap-xs">
-                      <span className={cn("font-headline-md text-lg", m.id === currentModel ? 'text-primary' : 'text-on-surface')}>{m.name}</span>
+                      <span className={cn("font-headline-md text-lg", m.id === currentModel ? 'text-link' : 'text-on-surface')}>{m.name}</span>
                       {m.id === currentModel ? <span className="px-xs py-[2px] bg-primary text-on-primary rounded-sm text-label-2xs font-bold">{t('settings.models.defaultBadge')}</span> : null}
                       {m.tier ? (
                         <span

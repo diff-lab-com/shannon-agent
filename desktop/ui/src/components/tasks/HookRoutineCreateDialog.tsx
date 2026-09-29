@@ -111,7 +111,7 @@ export default function HookRoutineCreateDialog({ open, onClose, onCreated }: Ho
       <form onSubmit={onSubmit} className="flex flex-col gap-md">
         <ModalBody className="pt-0 space-y-md">
           {error ? (
-            <div className="bg-error/10 border border-error/30 rounded-lg p-sm font-label-sm text-error flex items-start gap-sm" role="alert">
+            <div className="bg-error-container border border-error/30 rounded-lg p-sm font-label-sm text-on-error-container flex items-start gap-sm" role="alert">
               <span className="material-symbols-outlined icon-sm mt-0.5" aria-hidden="true">error</span>
               <span className="flex-1 break-words">{error}</span>
             </div>

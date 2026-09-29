@@ -63,9 +63,11 @@ function canOpenSource(item: InboxItem): boolean {
 export function sourceMeta(source: InboxSource): { icon: string; color: string; labelKey: string } {
   switch (source) {
     case 'routine':
-      return { icon: 'event_repeat', color: 'text-primary', labelKey: 'inbox.source.routine' }
+      // G7: text-link — accent-as-text labels sit on white cards where bare
+      // text-primary misses 4.5:1 in gruvbox-light / solarized-light.
+      return { icon: 'event_repeat', color: 'text-link', labelKey: 'inbox.source.routine' }
     case 'scheduled_task':
-      return { icon: 'task_alt', color: 'text-primary', labelKey: 'inbox.source.scheduled_task' }
+      return { icon: 'task_alt', color: 'text-link', labelKey: 'inbox.source.scheduled_task' }
     case 'goal':
       return { icon: 'flag', color: 'text-secondary', labelKey: 'inbox.source.goal' }
     case 'trigger':
@@ -643,7 +645,7 @@ export default function Triage() {
                 variant="ghost"
                 onClick={() => updateParams({ status: opt === 'all' ? null : opt })}
                 aria-pressed={active}
-                className={cn("px-sm py-xs rounded-full text-label-sm transition-colors cursor-pointer", active ? 'bg-primary/10 text-primary font-bold' : 'bg-surface-container-low text-on-surface-variant hover:text-primary hover:bg-primary/10')}
+                className={cn("px-sm py-xs rounded-full text-label-sm transition-colors cursor-pointer", active ? 'bg-primary-container text-on-primary-container font-bold' : 'bg-surface-container-low text-on-surface-variant hover:text-primary hover:bg-primary/10')}
               >
                 {t(opt === 'all' ? 'inbox.filter.all' : `inbox.status.${opt}`)}
               </Button>
@@ -671,7 +673,7 @@ export default function Triage() {
             className={cn(
               'px-sm py-xs rounded-full text-label-sm transition-colors cursor-pointer',
               groupBySource
-                ? 'bg-primary/10 text-primary font-bold'
+                ? 'bg-primary-container text-on-primary-container font-bold'
                 : 'bg-surface-container-low text-on-surface-variant hover:text-primary hover:bg-primary/10',
             )}
           >
@@ -775,7 +777,7 @@ export default function Triage() {
             {error && (
               <div
                 role="alert"
-                className="mb-md flex items-center gap-sm px-md py-sm rounded-xl bg-error/10 border border-error/30 text-error"
+                className="mb-md flex items-center gap-sm px-md py-sm rounded-xl bg-error-container border border-error/30 text-on-error-container"
               >
                 <span className="material-symbols-outlined icon-md" aria-hidden="true">cloud_off</span>
                 <span className="font-label-md flex-1 min-w-0">{t('inbox.errorState.title')}</span>
@@ -927,7 +929,7 @@ function SourceFilterDropdown({
         onClick={() => setOpen(v => !v)}
         className={cn(
           'inline-flex items-center gap-xs px-sm py-xs rounded-full text-label-sm transition-colors cursor-pointer',
-          value ? 'bg-primary/10 text-primary font-bold' : 'bg-surface-container-low text-on-surface-variant hover:text-primary hover:bg-primary/10'
+          value ? 'bg-primary-container text-on-primary-container font-bold' : 'bg-surface-container-low text-on-surface-variant hover:text-primary hover:bg-primary/10'
         )}
       >
         <span className="material-symbols-outlined icon-sm align-middle" aria-hidden="true">{triggerIcon}</span>

@@ -33,7 +33,7 @@ export default function TaskCard({ task, isRunning, onSelect, onRunNow, onCancel
     <div className="bg-surface-container-lowest border border-outline-variant/10 rounded-xl p-md shadow-e1 hover:shadow-e2 hover:-translate-y-0.5 transition-all duration-(--duration-slow) group">
       <div className="flex items-center justify-between">
         <div className="flex items-center gap-md">
-          <div className="w-12 h-12 rounded-xl bg-primary/10 flex items-center justify-center text-primary">
+          <div className="w-12 h-12 rounded-xl bg-primary-container flex items-center justify-center text-on-primary-container">
             <span className="material-symbols-outlined icon-xl">task_alt</span>
           </div>
           <div>

@@ -113,7 +113,7 @@ export function BatchRunCard({ run, onCompare, onDiscard }: BatchRunCardProps) {
     >
       <div className="flex items-start justify-between gap-md">
         <div className="flex items-start gap-md min-w-0">
-          <div className="w-10 h-10 rounded-xl bg-tertiary/10 flex items-center justify-center text-tertiary shrink-0">
+          <div className="w-10 h-10 rounded-xl bg-tertiary-container flex items-center justify-center text-on-tertiary-container shrink-0">
             <span className="material-symbols-outlined icon-lg">call_split</span>
           </div>
           <div className="min-w-0">
