@@ -34,10 +34,8 @@ export default function TrustSection({ lang }: TrustSectionProps) {
         {t.trust.cards.map((card, i) => (
           <div
             key={i}
-            className="reveal"
+            className="reveal glass-card"
             style={{
-              background: 'var(--paper)',
-              border: '1px solid var(--line)',
               borderRadius: 'var(--radius-md)',
               padding: '32px 28px',
               opacity: visible ? 1 : 0,

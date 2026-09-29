@@ -34,10 +34,8 @@ export default function FeatureGrid({ lang }: FeatureGridProps) {
         {t.features.items.map((item, i) => (
           <div
             key={i}
-            className="reveal"
+            className="reveal glass-card"
             style={{
-              background: 'var(--paper)',
-              border: '1px solid var(--line)',
               borderRadius: 'var(--radius-md)',
               padding: '28px 24px',
               opacity: visible ? 1 : 0,
@@ -48,7 +46,7 @@ export default function FeatureGrid({ lang }: FeatureGridProps) {
             <span style={{
               fontFamily: 'var(--font-mono)',
               fontSize: 12,
-              color: 'var(--accent)',
+              color: 'var(--accent-bright)',
               fontWeight: 600,
               letterSpacing: '0.05em',
             }}>{item.num}</span>

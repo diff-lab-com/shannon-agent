@@ -41,27 +41,27 @@ export default function Terminal({ lang }: TerminalProps) {
   }, [started, visibleLines, lines.length]);
 
   const getLineColor = (type: string) => {
+    // Tokyo Night (desktop default theme) decoration palette.
     switch (type) {
-      case 'prompt': return '#7aa2ff';
-      case 'tool': return '#c7a3f0';
+      case 'prompt': return '#7aa2f7';
+      case 'tool': return '#9d7cd8';
       default: return '#cdd6f4';
     }
   };
 
   return (
-    <div ref={ref} style={{
+    <div className="glass-terminal" ref={ref} style={{
       maxWidth: 740,
       margin: '40px auto 80px',
-      background: 'var(--code-bg)',
       borderRadius: 'var(--radius-lg)',
       boxShadow: 'var(--shadow-terminal)',
       overflow: 'hidden',
     }}>
-      {/* macOS dots */}
+      {/* macOS dots — Tokyo Night red/amber/green (desktop theme hues) */}
       <div style={{ display: 'flex', gap: 8, padding: '14px 18px' }}>
-        <span style={{ width: 12, height: 12, borderRadius: '50%', background: '#ff5f57' }} />
-        <span style={{ width: 12, height: 12, borderRadius: '50%', background: '#febc2e' }} />
-        <span style={{ width: 12, height: 12, borderRadius: '50%', background: '#28c840' }} />
+        <span style={{ width: 12, height: 12, borderRadius: '50%', background: '#f7768e' }} />
+        <span style={{ width: 12, height: 12, borderRadius: '50%', background: '#e0af68' }} />
+        <span style={{ width: 12, height: 12, borderRadius: '50%', background: '#9ece6a' }} />
       </div>
       {/* Terminal lines */}
       <div style={{ padding: '4px 20px 20px', fontFamily: 'var(--font-mono)', fontSize: 14 }}>
@@ -87,7 +87,7 @@ export default function Terminal({ lang }: TerminalProps) {
             display: 'inline-block',
             width: 7,
             height: 15,
-            background: '#7aa2ff',
+            background: '#7aa2f7',
             animation: 'blink 1s steps(1) infinite',
             verticalAlign: 'middle',
           }} />

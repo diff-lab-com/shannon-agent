@@ -58,3 +58,32 @@
 
 **待设计**。当前仓库仅有应用图标 `desktop/icons/`（icon.png / tray-icon.png，无矢量源、无使用规范）。
 建议下一步：以 `cognitive`（现 Sidebar 品牌图标）为字形基础做矢量化和留白/最小尺寸/单色规范。
+
+## 7. Website / 官网（2026-09-29 增补）
+
+官网（`website/`，Astro 5 + React islands）的 accent 自橙色 `#f97316` 体系**统一回品牌紫 #6b38d4 体系**（UI 审查计划 Batch 3.1 / E1），深色底与玻璃材质语言与桌面端同源。落地文件：`website/src/styles/global.css`（token 定义）+ 各 landing 组件。
+
+| 项 | 值 / 规则 |
+|---|---|
+| 深色底 | `--bg: #0f0f14`（不变；官网自有中性阶，不随桌面主题切换） |
+| 品牌 accent | `--accent: #6b38d4`（与桌面 `--color-primary` 同值；仅用于填充：按钮、渐变、选中态） |
+| accent hover | `--accent-hover: #8455ef`（取自桌面 `--color-primary-container`） |
+| accent 文字态 | `--accent-bright: #a78bfa`，hover `--accent-bright-hover: #c4b5fd`（深底文字对比度 ~7:1，过 AA；链接/序号/表头等**文字一律用亮档**，禁用 #6b38d4 直接做深底文字色） |
+| accent 弱化底 | `--accent-soft: rgba(139, 92, 246, 0.14)`（chips、侧栏激活项背景） |
+| 品牌渐变 | `linear-gradient(135deg, #8b5cf6, #6b38d4 50%, #4f46e5)`（紫主导 → 辅助冷色 indigo；logo 块与 favicon.svg 同源） |
+| 主 CTA 光晕 | hover 时 `box-shadow: 0 8px 24px rgba(107, 56, 212, 0.35)`，仅限 `.btn-primary`（对齐 §4 "发光仅限主 CTA"） |
+| 终端拟物装饰 | macOS 三色灯与 prompt/tool 语法色取 Tokyo Night（桌面默认主题）语义色：红 `#f7768e` / 琥珀 `#e0af68` / 绿 `#9ece6a` / 蓝 `#7aa2f7` / 紫 `#9d7cd8`，不得回退到通用 macOS 糖果色 |
+
+**官网玻璃配方**（营销页档，对齐桌面 `glass-surface`；不受桌面"同屏 ≤4 backdrop"预算约束，但克制在导航栏 + hero + 主要卡片）：
+
+```css
+background: rgba(26, 26, 36, 0.55);            /* --paper @ 55%（--glass-bg） */
+backdrop-filter: blur(20px) saturate(1.4);
+border: 1px solid rgba(255, 255, 255, 0.08);   /* hairline（--glass-border） */
+box-shadow: inset 0 1px 0 rgba(255,255,255,0.06),  /* 顶部内高光（--glass-highlight） */
+            0 8px 32px rgba(0, 0, 0, 0.35);        /*（--glass-shadow） */
+```
+
+变体：`.glass-cta`（CTA banner 叠加紫晕渐变）、`.glass-terminal`（终端窗用 `rgba(17,17,27,0.68)` 深代码底）。两者均带 `@supports not (backdrop-filter)` 与 `prefers-reduced-transparency` 实心回退（`--paper` / `--code-bg`）。
+
+**权威来源不变**：桌面端 token（`desktop/ui/src/index.css` + `desktop/ui/src/theme/generated/themes.css`，经 `desktop/ui/src/styles/tokens.css` 沉淀）仍是全局唯一权威来源；官网 CSS 变量是**派生镜像**，改动官网色值须同步核对桌面端 token，反之桌面端改动（尤其 `--color-primary`）须回写官网并过对比度检查。

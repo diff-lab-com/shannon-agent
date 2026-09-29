@@ -37,9 +37,11 @@ export default function Navbar({ lang, onLangChange }: NavbarProps) {
       height: 'var(--nav-height)',
       display: 'flex',
       alignItems: 'center',
-      background: scrolled ? 'rgba(15, 15, 20, 0.92)' : 'var(--bg)',
-      backdropFilter: scrolled ? 'saturate(1.4) blur(12px)' : 'none',
-      borderBottom: scrolled ? '1px solid var(--line)' : '1px solid transparent',
+      background: scrolled ? 'var(--glass-bg)' : 'var(--bg)',
+      WebkitBackdropFilter: scrolled ? 'var(--glass-blur)' : 'none',
+      backdropFilter: scrolled ? 'var(--glass-blur)' : 'none',
+      borderBottom: scrolled ? '1px solid var(--glass-border)' : '1px solid transparent',
+      boxShadow: scrolled ? 'var(--glass-highlight)' : 'none',
       transition: 'background 0.2s, border-color 0.2s, backdrop-filter 0.2s',
     }}>
       <div style={{
