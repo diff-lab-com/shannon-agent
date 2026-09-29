@@ -82,6 +82,15 @@ sha2 = "0.10"
 rand = "0.8"
 qrcode = "0.14"
 zip = { version = "2", default-features = false, features = ["deflate"] }
+# Office Wave A2' — minimal office-document parsing for send_message text
+# injection. roxmltree (pull parser over xmlparser) reads the OOXML document
+# parts out of the zip container; calamine reads xlsx/ods cell values
+# (formula results included); csv handles plain CSV. All three are pure-Rust,
+# MIT/Apache-2.0 dual-licensed, and reuse the zip 2.x already resolved for the
+# workspace (no second zip major in the tree).
+roxmltree = { workspace = true }
+calamine = { workspace = true }
+csv = { workspace = true }
 percent-encoding = "2"
 # P2-2 — persona/profile pack (.tar.gz). Both crates are already resolved in
 # Cargo.lock via transitive dependencies (tar 0.4.46, flate2 1.1.9), so these

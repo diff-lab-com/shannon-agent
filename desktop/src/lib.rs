@@ -105,6 +105,11 @@ pub(crate) fn resolve_write_target_in_working_dir(
 pub mod agent_message_watcher;
 pub mod commands;
 
+/// Office Wave A2' — docx/pptx/xlsx/ods/csv text extraction, guard rails,
+/// extracted-text cache and the send_message injection-block builder. No
+/// Tauri dependency; every failure is a `Result`, never a panic.
+pub mod document_parse;
+
 #[cfg(feature = "tauri")]
 pub mod commands_agents;
 

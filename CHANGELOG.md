@@ -4,6 +4,25 @@ All notable changes to Shannon Code are documented here. Entries are grouped by 
 
 ## [Unreleased] — §4.14 W1-P2 · OTLP bridge + full RedactionPolicy + desktop Turn Timeline
 
+### Office Wave 1.5 — minimal document parsing + paginated injection + PDF preview (2026-09-29)
+
+- **A2'** new `document_parse` module: extracts sectioned text from
+  docx/pptx (zip + roxmltree), xlsx/ods (calamine 0.26, formula cache
+  values), csv (csv crate). Extracted text is cached at
+  `~/.shannon/cache/extracted/<hash>.txt`; `send_message` injects a bounded
+  summary block with explicit truncation ranges and the cache path so the
+  model can page through with Read/Grep — no new tools. Guardrails: zip
+  entry/count/ratio bombs, XML/container/csv size caps, all failure paths
+  return placeholder blocks.
+- **PDF injection fixed**: the media-type filter never matched PDFs
+  (detect_media_type only knew images), so the whole PDF text-injection
+  path was dead code — switched to extension matching and added page-count
+  metadata (pdfinfo) to the injected block.
+- **B8b** PDF inline preview: `pdfjs-dist` 4.10.38 in a lazy-loaded
+  `PdfPreview` modal (worker via `?url` import), page navigation with a
+  200-page cap and an "open externally" escape hatch; FileCard gains a
+  Preview action for .pdf attachments.
+
 ### Office Wave 1 — honest office-document surface (2026-09-29)
 
 Plan: `docs/research/2026-09-29-office-scenario-competitive-research.md` §10 v2
