@@ -1,4 +1,5 @@
-//! CLI plumbing for `shannon list-providers` and `shannon providers add|remove`.
+//! CLI plumbing for `shannon list-providers` and
+//! `shannon providers add|remove|model-meta`.
 //!
 //! Mirrors the desktop's Add Provider / Delete Provider flows: read/write the
 //! engine's `~/.shannon/providers.toml` via [`shannon_core::provider_config_store::ProviderConfigStore`].
@@ -27,7 +28,9 @@ use anyhow::{Context, Result, anyhow, bail};
 use shannon_core::provider_config_service::ProviderConfigService;
 use shannon_core::provider_config_store::ProviderConfigStore;
 use shannon_engine::api::LlmProvider;
-use shannon_types::provider_config::{CredentialRef, ProviderKind, ProviderProfile, ProviderTiers};
+use shannon_types::provider_config::{
+    CredentialRef, ModelCapability, ModelSpec, ProviderKind, ProviderProfile, ProviderTiers,
+};
 
 /// Canonical tier names accepted by `--tier`. Aliases are rejected.
 /// Doc-only: the runtime validator is [`validate_canonical_tier`].
@@ -488,6 +491,7 @@ fn build_profile(args: &AddProviderArgs) -> Result<(ProviderProfile, String)> {
         fallback_models: Vec::new(),
         quirks: Default::default(),
         tiers,
+        models: Vec::new(),
     };
 
     Ok((profile, service))
@@ -659,6 +663,209 @@ pub fn run_providers_remove(
     Ok(())
 }
 
+// ── providers model-meta (R2-4) ─────────────────────────────────────────
+
+/// Parameters captured from `shannon providers model-meta …` clap args.
+/// Mirrors [`ModelSpec`] semantics; the pure builder lives in
+/// [`build_model_meta_spec`] so validation is unit-testable without disk
+/// I/O.
+#[derive(Debug, Clone)]
+pub struct ModelMetaArgs {
+    pub provider: String,
+    pub model: String,
+    pub display_name: Option<String>,
+    pub context: Option<u32>,
+    pub max_output: Option<u32>,
+    pub price_in: Option<f64>,
+    pub price_out: Option<f64>,
+    pub cap: Vec<String>,
+    pub remove: bool,
+}
+
+/// Parse a `--cap` value into a [`ModelCapability`]. Unknown names are
+/// rejected with the accepted list (the schema rejects them too, but the
+/// CLI surfaces a friendlier error before any write).
+pub fn parse_capability(s: &str) -> Result<ModelCapability> {
+    match s.trim().to_ascii_lowercase().as_str() {
+        "reasoning" => Ok(ModelCapability::Reasoning),
+        "coding" => Ok(ModelCapability::Coding),
+        "speed" => Ok(ModelCapability::Speed),
+        "cheap" => Ok(ModelCapability::Cheap),
+        "vision" => Ok(ModelCapability::Vision),
+        other => Err(anyhow!(
+            "unknown --cap '{other}'; expected one of: reasoning, coding, speed, cheap, vision"
+        )),
+    }
+}
+
+/// Build (or merge into) the [`ModelSpec`] for a `providers model-meta`
+/// invocation. When `existing` is `Some`, its values are the starting
+/// point and the supplied flags overwrite only the fields they set — so
+/// `providers model-meta glm glm-4.6 --context 200000` updates just the
+/// context window. Pure: no store access, no disk I/O.
+pub fn build_model_meta_spec(
+    existing: Option<&ModelSpec>,
+    args: &ModelMetaArgs,
+) -> Result<ModelSpec> {
+    let provider = args.provider.trim();
+    let model = args.model.trim();
+    if provider.is_empty() {
+        bail!("provider id cannot be empty");
+    }
+    if model.is_empty() {
+        bail!("model id cannot be empty");
+    }
+
+    let mut spec = match existing {
+        Some(e) => {
+            let mut s = e.clone();
+            // The positional MODEL id always wins (renames via upsert).
+            s.id = model.to_string();
+            s
+        }
+        None => ModelSpec {
+            id: model.to_string(),
+            display_name: None,
+            context_window: None,
+            max_output: None,
+            cost_per_m_input: None,
+            cost_per_m_output: None,
+            capabilities: Vec::new(),
+        },
+    };
+
+    if args.display_name.is_some() {
+        spec.display_name = args.display_name.clone();
+    }
+    if args.context.is_some() {
+        spec.context_window = args.context;
+    }
+    if args.max_output.is_some() {
+        spec.max_output = args.max_output;
+    }
+    if args.price_in.is_some() {
+        spec.cost_per_m_input = args.price_in;
+    }
+    if args.price_out.is_some() {
+        spec.cost_per_m_output = args.price_out;
+    }
+    if !args.cap.is_empty() {
+        spec.capabilities = args
+            .cap
+            .iter()
+            .map(|c| parse_capability(c))
+            .collect::<Result<Vec<_>>>()?;
+    }
+
+    // Semantic validation (positive limits, finite non-negative prices) —
+    // the same rules `providers.toml` load enforces, applied before any
+    // write so the user gets a clean error instead of a refused file.
+    spec.validate().map_err(|e| anyhow!("{e}"))?;
+    Ok(spec)
+}
+
+/// Run `shannon providers model-meta <PROVIDER> <MODEL> [flags]`.
+///
+/// Routes through [`ProviderConfigService`] (`set_model_meta` /
+/// `remove_model_meta`) — the single semantic write path for
+/// `providers.toml`, shared with the REPL and the desktop. The provider id
+/// is the raw stored slug (an openai-compatible slot may be `glm`, which
+/// must not be canonicalized to `zhipu`).
+pub fn run_providers_model_meta(
+    store: &mut ProviderConfigStore,
+    args: &ModelMetaArgs,
+) -> Result<()> {
+    if args.remove {
+        // Idempotence with a visible outcome: when the provider slot exists
+        // but carries no such declaration, say so and skip the write (the
+        // store-level remove is a no-op in that case anyway).
+        let entry_exists = store
+            .config()
+            .profiles
+            .get("default")
+            .and_then(|mp| mp.providers.iter().find(|p| p.id == args.provider.trim()))
+            .map(|p| p.models.iter().any(|m| m.id == args.model.trim()))
+            .unwrap_or(false);
+        if !entry_exists {
+            println!(
+                "No model declaration for {model} on provider {provider} (no change)",
+                model = args.model.trim(),
+                provider = args.provider.trim(),
+            );
+            return Ok(());
+        }
+        let mut svc = ProviderConfigService::from_store(std::mem::take(store));
+        let result = svc.remove_model_meta(args.provider.trim(), args.model.trim());
+        *store = svc.into_inner();
+        result.with_context(|| "failed to persist providers.toml")?;
+        println!(
+            "Removed model metadata for {model} on provider {provider}",
+            model = args.model.trim(),
+            provider = args.provider.trim(),
+        );
+        Ok(())
+    } else {
+        // Merge with the current entry (if any) so omitted flags keep the
+        // previously-declared values.
+        let existing = store
+            .config()
+            .profiles
+            .get("default")
+            .and_then(|mp| mp.providers.iter().find(|p| p.id == args.provider.trim()))
+            .and_then(|p| p.models.iter().find(|m| m.id == args.model.trim()))
+            .cloned();
+        let spec = build_model_meta_spec(existing.as_ref(), args)?;
+        let summary = summarize_spec(&spec);
+
+        let mut svc = ProviderConfigService::from_store(std::mem::take(store));
+        let result = svc.set_model_meta(args.provider.trim(), spec);
+        *store = svc.into_inner();
+        let saved_path = result.with_context(|| "failed to persist providers.toml")?;
+        println!(
+            "Declared model metadata for {model} on provider {provider}: {summary}",
+            model = args.model.trim(),
+            provider = args.provider.trim(),
+        );
+        println!("  Persisted to: {}", saved_path.display());
+        Ok(())
+    }
+}
+
+/// One-line human summary of a [`ModelSpec`] for command output.
+fn summarize_spec(spec: &ModelSpec) -> String {
+    let mut parts: Vec<String> = Vec::new();
+    if let Some(ctx) = spec.context_window {
+        parts.push(format!("context={ctx}"));
+    }
+    if let Some(out) = spec.max_output {
+        parts.push(format!("max_output={out}"));
+    }
+    if let (Some(i), Some(o)) = (spec.cost_per_m_input, spec.cost_per_m_output) {
+        parts.push(format!("pricing=${i}/${o} per Mtok"));
+    } else if spec.cost_per_m_input.is_some() || spec.cost_per_m_output.is_some() {
+        parts.push("pricing=(incomplete — needs both prices)".to_string());
+    }
+    if !spec.capabilities.is_empty() {
+        let caps: Vec<&str> = spec
+            .capabilities
+            .iter()
+            .map(|c| match c {
+                ModelCapability::Reasoning => "reasoning",
+                ModelCapability::Coding => "coding",
+                ModelCapability::Speed => "speed",
+                ModelCapability::Cheap => "cheap",
+                ModelCapability::Vision => "vision",
+                _ => "other",
+            })
+            .collect();
+        parts.push(format!("caps={}", caps.join(",")));
+    }
+    if parts.is_empty() {
+        parts.push("(metadata only)".to_string());
+    }
+    parts.join(" ")
+}
+
 // ── Pure helpers exposed for tests ──────────────────────────────────────
 
 /// Public wrapper around [`parse_kind`] used by the CLI dispatch in
@@ -786,6 +993,7 @@ mod tests {
                 standard: Some(model_id.to_string()),
                 ..Default::default()
             },
+            models: Vec::new(),
         }
     }
 
@@ -1238,6 +1446,117 @@ mod tests {
         assert_eq!(validate_tier_cli("standard").unwrap(), "standard");
         assert_eq!(validate_tier_cli("pro").unwrap(), "pro");
         assert_eq!(validate_tier_cli("FAST").unwrap(), "fast");
+    }
+
+    // ── providers model-meta ─────────────────────────────────────────
+
+    fn meta_args(model: &str, caps: &[&str]) -> ModelMetaArgs {
+        ModelMetaArgs {
+            provider: "glm".to_string(),
+            model: model.to_string(),
+            display_name: None,
+            context: None,
+            max_output: None,
+            price_in: None,
+            price_out: None,
+            cap: caps.iter().map(|s| s.to_string()).collect(),
+            remove: false,
+        }
+    }
+
+    #[test]
+    fn parse_capability_accepts_all_canonical_names_case_insensitively() {
+        assert_eq!(parse_capability("vision").unwrap(), ModelCapability::Vision);
+        assert_eq!(
+            parse_capability("REASONING").unwrap(),
+            ModelCapability::Reasoning
+        );
+        assert_eq!(
+            parse_capability(" coding ").unwrap(),
+            ModelCapability::Coding
+        );
+        assert_eq!(parse_capability("Speed").unwrap(), ModelCapability::Speed);
+        assert_eq!(parse_capability("cheap").unwrap(), ModelCapability::Cheap);
+    }
+
+    #[test]
+    fn parse_capability_rejects_unknown_with_accepted_list() {
+        let err = parse_capability("visionn").expect_err("must reject");
+        let msg = format!("{err}");
+        assert!(
+            msg.contains("visionn") && msg.contains("reasoning") && msg.contains("vision"),
+            "error must name the bad value and the accepted set: {msg}"
+        );
+    }
+
+    #[test]
+    fn build_model_meta_spec_fresh_from_flags() {
+        let mut args = meta_args("glm-5.3-flash", &["vision"]);
+        args.context = Some(198_000);
+        args.max_output = Some(32_768);
+        args.price_in = Some(0.5);
+        args.price_out = Some(2.0);
+        let spec = build_model_meta_spec(None, &args).expect("must build");
+        assert_eq!(spec.id, "glm-5.3-flash");
+        assert_eq!(spec.context_window, Some(198_000));
+        assert_eq!(spec.max_output, Some(32_768));
+        assert_eq!(spec.cost_per_m_input, Some(0.5));
+        assert_eq!(spec.cost_per_m_output, Some(2.0));
+        assert_eq!(spec.capabilities, vec![ModelCapability::Vision]);
+    }
+
+    #[test]
+    fn build_model_meta_spec_merges_into_existing_entry() {
+        let mut existing = build_model_meta_spec(
+            None,
+            &ModelMetaArgs {
+                provider: "glm".into(),
+                model: "glm-4.6".into(),
+                display_name: Some("GLM".into()),
+                context: Some(198_000),
+                max_output: Some(8_192),
+                price_in: Some(0.6),
+                price_out: Some(2.2),
+                cap: vec!["vision".into()],
+                remove: false,
+            },
+        )
+        .expect("seed spec");
+
+        // Update ONLY the context window: every other value survives.
+        let mut args = meta_args("glm-4.6", &[]);
+        args.context = Some(200_000);
+        let merged = build_model_meta_spec(Some(&existing), &args).expect("merge must succeed");
+        assert_eq!(merged.context_window, Some(200_000));
+        assert_eq!(merged.display_name.as_deref(), Some("GLM"));
+        assert_eq!(merged.max_output, Some(8_192));
+        assert_eq!(merged.cost_per_m_input, Some(0.6));
+        assert_eq!(merged.cost_per_m_output, Some(2.2));
+        assert_eq!(merged.capabilities, vec![ModelCapability::Vision]);
+        existing.context_window = Some(200_000);
+        assert_eq!(merged, existing);
+    }
+
+    #[test]
+    fn build_model_meta_spec_rejects_bad_numbers_and_empty_ids() {
+        // Zero context.
+        let mut args = meta_args("m", &[]);
+        args.context = Some(0);
+        assert!(build_model_meta_spec(None, &args).is_err());
+
+        // Negative price.
+        let mut args = meta_args("m", &[]);
+        args.price_in = Some(-0.5);
+        assert!(build_model_meta_spec(None, &args).is_err());
+
+        // Empty model id.
+        let args = meta_args("", &[]);
+        assert!(build_model_meta_spec(None, &args).is_err());
+
+        // Empty provider id.
+        let mut args = meta_args("m", &[]);
+        args.provider = "  ".to_string();
+        assert!(build_model_meta_spec(None, &args).is_err());
     }
 
     #[test]

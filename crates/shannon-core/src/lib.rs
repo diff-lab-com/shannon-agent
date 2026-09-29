@@ -50,6 +50,10 @@ pub mod config_watcher;
 /// Data-directory version marker + downgrade gate (Phase 1) — meta.json,
 /// startup compatibility check, and the migration-backup primitive.
 pub mod data_meta;
+/// R2-4 — runtime registry of per-model metadata declarations from the
+/// active `providers.toml` v2 profile (pricing / context window / tier
+/// overrides). Consulted by the engine's existing lookup boundaries.
+pub mod declared_models;
 pub mod diagnostics;
 pub mod extract_memories;
 pub mod git_operation_tracking;
