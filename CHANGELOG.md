@@ -4,6 +4,25 @@ All notable changes to Shannon Code are documented here. Entries are grouped by 
 
 ## [Unreleased] — §4.14 W1-P2 · OTLP bridge + full RedactionPolicy + desktop Turn Timeline
 
+### Followups S1-S3 (2026-09-28)
+
+All 15 approved followup tasks from the comprehensive review roadmap landed:
+clippy `--all-targets` gate (180+21 warnings → 0, CI tightened), DiffReviewBody
+flaky test stabilized, graceful server shutdown with drain window + terminal
+SSE frame + 30-min stream cap, `SHANNON_SERVE_EXTRA_HOSTS`, one-time
+secret-guard redact suggestion, tee durable sync off the executor, cooldown
+bounds, MCP approval source-path binding, repomap render memoization, unified
+headless NDJSON envelope (legacy vocabulary behind `--emit-legacy-output-events`),
+gateway pairing approval from the desktop, 25 command strings migrated to i18n,
+all 10 locales at 100% key coverage, metrics weekly job fixed (missing system
+deps), libspa/pipewire environment docs + `just check` fallback. See
+[docs/plans/2026-09-28-followups-roadmap.md](docs/plans/2026-09-28-followups-roadmap.md).
+
+Note: workspace versions 0.11.0 and 0.12.0 were internal bumps — no `v0.11.0`
+tag/release exists (releases stop at v0.10.0), which is what allowed the
+five-source version drift fixed in PR #148; the v0.12.0 section below covers
+that whole cycle.
+
 ### Comprehensive review hardening (2026-09-28)
 
 40+ fixes across engine streaming/compaction, session log integrity, MCP
