@@ -316,7 +316,13 @@ impl LlmProvider {
     }
 
     /// Resolve the API key for this provider from environment variables.
-    /// Chain: SHANNON_API_KEY → {PROVIDER_CANONICAL}_API_KEY → empty
+    ///
+    /// Chain: `SHANNON_API_KEY` → `{PROVIDER_CANONICAL}_API_KEY` → empty.
+    ///
+    /// Anthropic additionally honours the Claude Code migration aliases
+    /// **after** the canonical var, in this precedence order:
+    /// `ANTHROPIC_API_KEY` → `CLAUDE_API_KEY` → `ANTHROPIC_AUTH_TOKEN`
+    /// (review 2026-09-29 P1-14 — migrants' env must not silently fail).
     pub fn resolve_api_key_from_env(&self) -> String {
         if let Ok(key) = std::env::var("SHANNON_API_KEY") {
             return key;
@@ -324,6 +330,14 @@ impl LlmProvider {
         if let Some(env_var) = self.canonical_api_key_env() {
             if let Ok(key) = std::env::var(env_var) {
                 return key;
+            }
+            // Claude Code migration aliases (Anthropic only, in order).
+            if matches!(self, LlmProvider::Anthropic) {
+                for alias in ["CLAUDE_API_KEY", "ANTHROPIC_AUTH_TOKEN"] {
+                    if let Ok(key) = std::env::var(alias) {
+                        return key;
+                    }
+                }
             }
         }
         String::new()
@@ -2058,8 +2072,19 @@ mod tests {
 
     // -- resolve_api_key_from_env() --
 
+    /// Serializes the env-mutating resolution tests: set_var/remove_var are
+    /// process-global and parallel siblings race otherwise (nextest isolates
+    /// per-process; plain `cargo test` does not).
+    fn env_test_lock() -> std::sync::MutexGuard<'static, ()> {
+        static LOCK: std::sync::OnceLock<std::sync::Mutex<()>> = std::sync::OnceLock::new();
+        LOCK.get_or_init(|| std::sync::Mutex::new(()))
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+    }
+
     #[test]
     fn test_resolve_api_key_prefers_shannon_key() {
+        let _env = env_test_lock();
         // SAFETY: Test-only env var manipulation. These vars are test-scoped
         // and cleaned up before and after the test.
         unsafe {
@@ -2083,6 +2108,7 @@ mod tests {
 
     #[test]
     fn test_resolve_api_key_falls_back_to_provider_key() {
+        let _env = env_test_lock();
         unsafe {
             std::env::remove_var("SHANNON_API_KEY");
             std::env::remove_var("OPENAI_API_KEY");
@@ -2098,8 +2124,94 @@ mod tests {
         }
     }
 
+    // -- resolve_api_key_from_env(): Claude Code migration aliases (P1-14) --
+
+    /// Clear every var in the Anthropic resolution chain so the resolution
+    /// result is deterministic regardless of the host environment.
+    fn clear_anthropic_env_chain() {
+        for var in [
+            "SHANNON_API_KEY",
+            "ANTHROPIC_API_KEY",
+            "CLAUDE_API_KEY",
+            "ANTHROPIC_AUTH_TOKEN",
+        ] {
+            unsafe { std::env::remove_var(var) };
+        }
+    }
+
+    #[test]
+    fn test_resolve_api_key_honours_claude_api_key_alias() {
+        let _env = env_test_lock();
+        unsafe {
+            clear_anthropic_env_chain();
+            std::env::set_var("CLAUDE_API_KEY", "claude-code-key");
+        }
+
+        let resolved = LlmProvider::Anthropic.resolve_api_key_from_env();
+        assert_eq!(resolved, "claude-code-key");
+
+        clear_anthropic_env_chain();
+    }
+
+    #[test]
+    fn test_resolve_api_key_honours_anthropic_auth_token_alias() {
+        let _env = env_test_lock();
+        unsafe {
+            clear_anthropic_env_chain();
+            std::env::set_var("ANTHROPIC_AUTH_TOKEN", "auth-token-key");
+        }
+
+        let resolved = LlmProvider::Anthropic.resolve_api_key_from_env();
+        assert_eq!(resolved, "auth-token-key");
+
+        clear_anthropic_env_chain();
+    }
+
+    #[test]
+    fn test_resolve_api_key_anthropic_alias_precedence_order() {
+        let _env = env_test_lock();
+        // Canonical var wins over both aliases.
+        unsafe {
+            clear_anthropic_env_chain();
+            std::env::set_var("ANTHROPIC_API_KEY", "canonical");
+            std::env::set_var("CLAUDE_API_KEY", "claude-alias");
+            std::env::set_var("ANTHROPIC_AUTH_TOKEN", "token-alias");
+        }
+        assert_eq!(
+            LlmProvider::Anthropic.resolve_api_key_from_env(),
+            "canonical"
+        );
+
+        // CLAUDE_API_KEY outranks ANTHROPIC_AUTH_TOKEN.
+        unsafe {
+            std::env::remove_var("ANTHROPIC_API_KEY");
+        }
+        assert_eq!(
+            LlmProvider::Anthropic.resolve_api_key_from_env(),
+            "claude-alias"
+        );
+
+        clear_anthropic_env_chain();
+    }
+
+    #[test]
+    fn test_resolve_api_key_aliases_are_anthropic_only() {
+        let _env = env_test_lock();
+        // Another provider must NOT pick up the Anthropic migration aliases.
+        unsafe {
+            clear_anthropic_env_chain();
+            std::env::set_var("CLAUDE_API_KEY", "claude-code-key");
+        }
+
+        let resolved = LlmProvider::OpenAI.resolve_api_key_from_env();
+        assert!(resolved.is_empty(), "aliases must not leak to OpenAI");
+
+        clear_anthropic_env_chain();
+    }
+
     #[test]
     fn test_resolve_api_key_returns_empty_when_none_set() {
+        let _env = env_test_lock();
         unsafe {
             std::env::remove_var("SHANNON_API_KEY");
             std::env::remove_var("DEEPSEEK_API_KEY");

@@ -391,6 +391,23 @@ impl LlmClient {
                 headers.push(("anthropic-version".to_string(), "2023-06-01".to_string()));
             }
             LlmProvider::Custom => {
+                // Default to Bearer auth with the stored key so a key saved
+                // via `/connect` works against openai-compatible gateways
+                // (review 2026-09-29 P0-7). An explicit Authorization in
+                // extra_headers (case-insensitive) suppresses the default
+                // and wins, so bespoke gateways keep full control.
+                if !self.config.api_key.is_empty()
+                    && !self
+                        .config
+                        .extra_headers
+                        .keys()
+                        .any(|k| k.eq_ignore_ascii_case("authorization"))
+                {
+                    headers.push((
+                        "Authorization".to_string(),
+                        format!("Bearer {}", self.config.api_key),
+                    ));
+                }
                 // Use extra_headers for custom provider auth
                 for (k, v) in &self.config.extra_headers {
                     headers.push((k.clone(), v.clone()));
@@ -1435,6 +1452,80 @@ mod tests {
             reasoning_effort: None,
             enable_anthropic_toolsets: crate::api::toolsets::anthropic_toolsets_from_env(),
         }
+    }
+
+    // ── Custom provider default Bearer (review 2026-09-29 P0-7) ──────────
+
+    fn custom_config() -> LlmClientConfig {
+        LlmClientConfig {
+            provider: LlmProvider::Custom,
+            api_key: "sk-custom-secret".to_string(),
+            model: "test-model".to_string(),
+            base_url: "https://gateway.example.com".to_string(),
+            max_tokens: 4096,
+            api_version: String::new(),
+            timeout_seconds: 30,
+            max_stream_reconnects: 0,
+            extra_headers: Default::default(),
+            budget_tokens: None,
+            fallback_provider: None,
+            fallback_base_url: None,
+            retry_config: Default::default(),
+            reasoning_effort: None,
+            thinking_type: None,
+            enable_anthropic_toolsets: crate::api::toolsets::anthropic_toolsets_from_env(),
+        }
+    }
+
+    /// A stored key with no explicit auth header must produce a default
+    /// `Authorization: Bearer` — previously the `/connect` key was never
+    /// sent and custom openai-compatible gateways always 401'd.
+    #[test]
+    fn custom_provider_sends_bearer_from_stored_key() {
+        let client = LlmClient::new(custom_config());
+        let headers = client.auth_headers();
+        assert!(
+            headers
+                .iter()
+                .any(|(k, v)| k == "Authorization" && v == "Bearer sk-custom-secret"),
+            "default Bearer from the stored key must be sent: {headers:?}"
+        );
+    }
+
+    /// An explicit Authorization in extra_headers (any case) suppresses the
+    /// default so bespoke gateways keep full control of the auth scheme.
+    #[test]
+    fn custom_provider_extra_headers_override_authorization() {
+        let mut cfg = custom_config();
+        cfg.extra_headers
+            .insert("authorization".to_string(), "X".to_string());
+        let client = LlmClient::new(cfg);
+        let headers = client.auth_headers();
+        let auth: Vec<&(String, String)> = headers
+            .iter()
+            .filter(|(k, _)| k.eq_ignore_ascii_case("authorization"))
+            .collect();
+        assert_eq!(
+            auth.len(),
+            1,
+            "exactly one Authorization header: {headers:?}"
+        );
+        assert_eq!(auth[0].1, "X", "extra_headers auth must win verbatim");
+    }
+
+    /// No key and no extra_headers → no Authorization header at all.
+    #[test]
+    fn custom_provider_empty_key_adds_no_authorization() {
+        let mut cfg = custom_config();
+        cfg.api_key = String::new();
+        let client = LlmClient::new(cfg);
+        let headers = client.auth_headers();
+        assert!(
+            !headers
+                .iter()
+                .any(|(k, _)| k.eq_ignore_ascii_case("authorization")),
+            "empty key must not add an Authorization header: {headers:?}"
+        );
     }
 
     // ── Stream timeouts (review 2026-08-28 PERF-2) ──────────────────────
