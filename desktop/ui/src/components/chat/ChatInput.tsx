@@ -71,6 +71,8 @@ interface ChatInputProps {
 // R2-1 splits the two intents: a chip switch now re-targets only the CURRENT
 // session, while the menu's "Set as default" action writes the global
 // config — the Header selector keeps showing that global default.
+import { promoteSessionModelToDefault } from './sessionModelPromotion'
+
 export default function ChatInput({
   value,
   onChange,
@@ -211,10 +213,11 @@ export default function ChatInput({
     const target = currentModel
     if (!target) return
     try {
-      await api.configure({ key: 'model', value: target.id })
-      await api.configure({ key: 'provider', value: target.provider })
-      await refreshConfig()
-      await refreshStatus()
+      await promoteSessionModelToDefault(target, {
+        configure: api.configure,
+        refreshConfig,
+        refreshStatus,
+      })
       toast.success(intl.formatMessage({ id: 'chat.input.model.setDefault.toast' }, { model: target.name }))
     } catch (err) {
       toastError(t('chat.input.model.setDefault.failed'), err)

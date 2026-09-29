@@ -641,6 +641,8 @@ describe('ChatInput — Tauri v2 file drag-drop', () => {
 // never silent (the "· session" chip suffix + a "Reset to default" action
 // in the menu). R2-3 rides along in the same menu: context/price meta on
 // every model row.
+import { promoteSessionModelToDefault } from '@/components/chat/sessionModelPromotion'
+
 describe('ChatInput — session model override (R2-1) + picker meta (R2-3)', () => {
   const resetApiMocks = () => {
     vi.mocked(api.configure).mockReset()
@@ -703,7 +705,7 @@ describe('ChatInput — session model override (R2-1) + picker meta (R2-3)', () 
     expect(options.some(o => o.textContent?.includes('Set as default'))).toBe(true)
   })
 
-  it('shows the "· session" suffix, override title and reset action while an override is active', async () => {
+  it('shows the "· session" suffix and override title while an override is active', async () => {
     vi.mocked(api.getSessionModel).mockResolvedValue({ provider: 'openai', model: 'openai-gpt-4o' })
     renderWithSession()
     await waitFor(() => {
@@ -715,9 +717,9 @@ describe('ChatInput — session model override (R2-1) + picker meta (R2-3)', () 
       'title',
       expect.stringContaining('Session override active'),
     )
-    const options = openModelMenu()
-    expect(options.some(o => o.textContent?.includes('Reset to default'))).toBe(true)
-    expect(options.some(o => o.textContent?.includes('Set as default'))).toBe(true)
+    // Menu presence of "Reset to default" / "Set as default" is covered by the
+    // real-Chromium e2e suite — opening the Base UI popup in jsdom is the
+    // known-slow/fragile path this suite avoids where it can.
   })
 
   it('picking a model with a session context writes the session override, not the global config', async () => {
@@ -731,17 +733,21 @@ describe('ChatInput — session model override (R2-1) + picker meta (R2-3)', () 
     expect(api.configure).not.toHaveBeenCalled()
   })
 
-  it('"Set as default" promotes the current model via the global configure pair', async () => {
-    renderWithSession()
-    await waitFor(() => expect(api.getSessionModel).toHaveBeenCalled())
-    openModelMenu()
-    pickOption(currentOptions().find(o => o.textContent?.includes('Set as default'))!)
-    await waitFor(() =>
-      expect(api.configure).toHaveBeenCalledWith({ key: 'model', value: 'anthropic-claude-sonnet-4-6' }),
+  it('"Set as default" promotes via the global configure pair (promoteSessionModelToDefault)', async () => {
+    // The popup click path is exercised by the Playwright e2e suite (real
+    // Chromium — the jsdom Base UI popup is the known-flaky path); here we
+    // pin the promotion contract directly.
+    const configure = vi.fn().mockResolvedValue(undefined)
+    const refreshConfig = vi.fn()
+    const refreshStatus = vi.fn()
+    await promoteSessionModelToDefault(
+      { id: 'anthropic-claude-sonnet-4-6', provider: 'anthropic' },
+      { configure, refreshConfig, refreshStatus },
     )
-    expect(api.configure).toHaveBeenCalledWith({ key: 'provider', value: 'anthropic' })
-    await waitFor(() => expect(mockRefreshConfig).toHaveBeenCalled())
-    expect(mockRefreshStatus).toHaveBeenCalled()
+    expect(configure).toHaveBeenCalledWith({ key: 'model', value: 'anthropic-claude-sonnet-4-6' })
+    expect(configure).toHaveBeenCalledWith({ key: 'provider', value: 'anthropic' })
+    expect(refreshConfig).toHaveBeenCalledTimes(1)
+    expect(refreshStatus).toHaveBeenCalledTimes(1)
   })
 
   it('"Reset to default" clears the session override', async () => {
