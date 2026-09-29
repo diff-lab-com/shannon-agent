@@ -289,7 +289,7 @@ impl Default for NotificationsConfig {
 /// fallback to the per-notification id keyed every fire by a fresh UUID,
 /// growing the map with entries that could never dedup anything).
 ///
-/// The map self-bounds: once it grows past [`COOLDOWN_MAP_BOUND`] entries,
+/// The map self-bounds: once it grows past `COOLDOWN_MAP_BOUND` entries,
 /// an insert opportunistically evicts entries older than the applicable
 /// cooldown horizon (T15a — previously the map only ever grew).
 pub struct Cooldown {

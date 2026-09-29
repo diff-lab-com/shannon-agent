@@ -47,8 +47,8 @@ use std::time::Duration;
 
 use serde::{Deserialize, Serialize};
 
-use crate::commands_connections::{gateway_read_config, GatewayConfig};
-use crate::commands_mobile_pairing::{mint_pair_token, DEFAULT_MOBILE_PORT};
+use crate::commands_connections::{GatewayConfig, gateway_read_config};
+use crate::commands_mobile_pairing::{DEFAULT_MOBILE_PORT, mint_pair_token};
 
 /// Gateway HTTP skin paths (gateway/src/mobile/accessRpc.ts). One place so
 /// desktop and gateway agree.
@@ -182,14 +182,18 @@ pub(crate) async fn pairing_rpc_post(
 
 /// Parse a `pending` result. Pure so tests cover the wire contract without
 /// spinning a server.
-pub(crate) fn parse_pending_result(value: serde_json::Value) -> Result<Vec<GatewayPairingRequest>, String> {
+pub(crate) fn parse_pending_result(
+    value: serde_json::Value,
+) -> Result<Vec<GatewayPairingRequest>, String> {
     let body: PendingBody = serde_json::from_value(value)
         .map_err(|e| format!("pairing RPC: unexpected pending response shape: {e}"))?;
     Ok(body.result.pending)
 }
 
 /// Parse an `approve` result into the approved record. Pure likewise.
-pub(crate) fn parse_approve_result(value: serde_json::Value) -> Result<GatewayPairingRequest, String> {
+pub(crate) fn parse_approve_result(
+    value: serde_json::Value,
+) -> Result<GatewayPairingRequest, String> {
     let body: ApproveBody = serde_json::from_value(value)
         .map_err(|e| format!("pairing RPC: unexpected approve response shape: {e}"))?;
     if !body.result.ok {
@@ -206,8 +210,12 @@ pub async fn gateway_pairing_pending() -> Result<Vec<GatewayPairingRequest>, Str
     let config: GatewayConfig = gateway_read_config().await?;
     let base = pairing_rpc_base_url(&config)?;
     let token = mint_pair_token()?.token;
-    let response = pairing_rpc_post(&base, PAIRING_PENDING_PATH, serde_json::json!({ "token": token }))
-        .await?;
+    let response = pairing_rpc_post(
+        &base,
+        PAIRING_PENDING_PATH,
+        serde_json::json!({ "token": token }),
+    )
+    .await?;
     parse_pending_result(response)
 }
 
@@ -235,7 +243,9 @@ pub async fn gateway_pairing_approve(code: String) -> Result<GatewayPairingReque
 mod tests {
     use super::*;
 
-    fn config_with_mobile(mobile: Option<crate::commands_connections::GatewayMobileConfig>) -> GatewayConfig {
+    fn config_with_mobile(
+        mobile: Option<crate::commands_connections::GatewayMobileConfig>,
+    ) -> GatewayConfig {
         GatewayConfig {
             engine: crate::commands_connections::GatewayEngineConfig {
                 ws_url: "ws://127.0.0.1:33420/api/ws".into(),
@@ -283,7 +293,12 @@ mod tests {
 
     #[test]
     fn base_url_keeps_explicit_hosts_and_honors_tls_off() {
-        let cfg = config_with_mobile(Some(mobile_block(true, Some("192.168.1.10"), Some(3399), false)));
+        let cfg = config_with_mobile(Some(mobile_block(
+            true,
+            Some("192.168.1.10"),
+            Some(3399),
+            false,
+        )));
         assert_eq!(
             pairing_rpc_base_url(&cfg).expect("base url"),
             "http://192.168.1.10:3399"
@@ -309,13 +324,16 @@ mod tests {
         });
         let pending = parse_pending_result(value).expect("parse");
         assert_eq!(pending.len(), 1);
-        assert_eq!(pending[0], GatewayPairingRequest {
-            code: "012345".into(),
-            platform: "slack".into(),
-            sender_id: "U123".into(),
-            requested_at: 1000,
-            expires_at: 1300,
-        });
+        assert_eq!(
+            pending[0],
+            GatewayPairingRequest {
+                code: "012345".into(),
+                platform: "slack".into(),
+                sender_id: "U123".into(),
+                requested_at: 1000,
+                expires_at: 1300,
+            }
+        );
         // camelCase serializes back for the UI contract.
         let json = serde_json::to_string(&pending[0]).expect("serialize");
         assert!(json.contains("\"senderId\""));
@@ -326,7 +344,9 @@ mod tests {
     fn parses_pending_empty_and_rejects_garbage() {
         let empty = parse_pending_result(serde_json::json!({ "result": {} })).expect("parse");
         assert!(empty.is_empty());
-        assert!(parse_pending_result(serde_json::json!({ "result": { "pending": "nope" } })).is_err());
+        assert!(
+            parse_pending_result(serde_json::json!({ "result": { "pending": "nope" } })).is_err()
+        );
     }
 
     #[test]
@@ -350,8 +370,8 @@ mod tests {
     /// path — URL building, error mapping, parsing — is exercised for real.
     #[tokio::test]
     async fn pairing_rpc_post_maps_success_and_gateway_errors() {
-        use axum::routing::{get, post};
         use axum::Json;
+        use axum::routing::{get, post};
 
         async fn pending() -> Json<serde_json::Value> {
             Json(serde_json::json!({
@@ -399,13 +419,23 @@ mod tests {
         )
         .await
         .expect_err("approve error maps to Err");
-        assert!(err.contains("Unknown or expired pairing code"), "got: {err}");
-        assert!(err.contains("-32001"), "error carries the gateway code: {err}");
+        assert!(
+            err.contains("Unknown or expired pairing code"),
+            "got: {err}"
+        );
+        assert!(
+            err.contains("-32001"),
+            "error carries the gateway code: {err}"
+        );
 
         // Unreachable base URL → Err mentioning the gateway.
-        let down = pairing_rpc_post("http://127.0.0.1:1", PAIRING_PENDING_PATH, serde_json::json!({}))
-            .await
-            .expect_err("unreachable gateway is an Err");
+        let down = pairing_rpc_post(
+            "http://127.0.0.1:1",
+            PAIRING_PENDING_PATH,
+            serde_json::json!({}),
+        )
+        .await
+        .expect_err("unreachable gateway is an Err");
         assert!(down.contains("cannot reach the gateway"), "got: {down}");
 
         server.abort();

@@ -45,10 +45,10 @@ pub fn terminal_event(reason: &str) -> Event {
 /// Wrap an SSE event stream so it cannot outlive the server (T4):
 ///
 /// - when the shared drain flag ([`crate::AppState::shutdown`]) flips
-///   `true`, emits [`terminal_event`] with [`SHUTDOWN_REASON`] and ends
+///   `true`, emits [`terminal_event`] with `SHUTDOWN_REASON` and ends
 ///   cleanly — SIGTERM no longer cuts clients off mid-frame;
 /// - when `cap` has elapsed since stream start, emits [`terminal_event`]
-///   with [`CAP_REASON`] and ends cleanly — a wedged query can no longer
+///   with `CAP_REASON` and ends cleanly — a wedged query can no longer
 ///   hold an SSE connection (and its keepalive pings) open forever. The cap
 ///   is an overall stream duration bound, NOT a per-request timeout: the
 ///   production value is far above any legitimate turn.

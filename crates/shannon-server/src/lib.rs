@@ -369,7 +369,7 @@ pub async fn run(
 /// Shuts down gracefully (T4): on SIGINT (Ctrl-C) or SIGTERM the listener
 /// stops accepting, every in-flight SSE stream receives a terminal `error`
 /// frame ([`sse::with_shutdown_and_cap`]) and completes, and once all
-/// connections drain — or after [`SHUTDOWN_DRAIN_WINDOW`], whichever comes
+/// connections drain — or after `SHUTDOWN_DRAIN_WINDOW`, whichever comes
 /// first — the future resolves. A wedged query can therefore no longer hold
 /// the process open past the drain window.
 pub async fn run_with_allow_nonloopback(
