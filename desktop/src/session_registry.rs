@@ -146,6 +146,30 @@ pub enum SessionEventStatus {
     Failed(String),
 }
 
+/// R2-1 — session-level model override (composer chip switch).
+///
+/// Set by `set_session_model` when the user picks a model in the composer
+/// chip; consulted by `send_message` when it builds the query client.
+/// `provider` is the desktop provider-kind slug the UI speaks
+/// (`anthropic` | `openai` | `deepseek` | `ollama` | `gemini` |
+/// `openai-compatible`) and `model` is the canonical catalog id.
+///
+/// Precedence (roadmap R2-1 / R3-3): **session override > global default**
+/// (the engine `active_target` behind `AppState::client_config`). A session
+/// without an override inherits the global default, so a new chat tracks
+/// whatever the user set in Settings or "Set as default".
+///
+/// Lifetime: in-memory for the app's lifetime -- `SessionState` already dies
+/// with the registry entry and the desktop layer has no on-disk per-session
+/// metadata extension point, so a restart re-inherits the global default.
+/// The composer chip renders a "session" suffix while an override is active
+/// so the state is never silent.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub struct SessionModelOverride {
+    pub provider: String,
+    pub model: String,
+}
+
 /// Per-session mutable state.
 ///
 /// Owns everything that used to live on `AppState` but belonged to a single
@@ -164,12 +188,18 @@ pub enum SessionEventStatus {
 ///
 /// All `Mutex` fields are `tokio::sync::Mutex` because the call sites
 /// (`send_message`, `cancel_query`, the `get_status` status bar) all `.lock()`
-/// across `await` points.
+/// across `await` points. The one exception is `model_override`: a plain
+/// `std::sync::Mutex` because its critical sections never span an `await`
+/// (read the pair, build the client config, drop the guard before any I/O),
+/// keeping the accessor await-free.
 pub struct SessionState {
     pub messages: Mutex<Vec<ChatMessage>>,
     pub querying: Mutex<bool>,
     pub cancellation_token: Mutex<Option<CancellationToken>>,
     pub session_id: Uuid,
+    /// R2-1: session-level model override ([`SessionModelOverride`]).
+    /// `None` = inherit the global default (`AppState::client_config`).
+    pub model_override: std::sync::Mutex<Option<SessionModelOverride>>,
     /// Per-session `QueryEngine` — lazy-initialised on the first
     /// `send_message` so we don't pay the construction cost for
     /// `SessionState`s that never receive a query (e.g. a freshly listed
@@ -208,6 +238,7 @@ impl SessionState {
             querying: Mutex::new(false),
             cancellation_token: Mutex::new(None),
             session_id,
+            model_override: std::sync::Mutex::new(None),
             query_engine: tokio::sync::Mutex::new(None),
             events_tx,
             events_rx: Mutex::new(Some(events_rx)),
@@ -231,6 +262,13 @@ impl SessionState {
     pub async fn take_event_receiver(&self) -> Option<mpsc::UnboundedReceiver<SessionEvent>> {
         let mut guard = self.events_rx.lock().await;
         guard.take()
+    }
+
+    /// R2-1: snapshot the session's model override, if one is set. A
+    /// poisoned lock (a panic while holding it) degrades to `None` — the
+    /// session then inherits the global default rather than failing sends.
+    pub fn model_override_snapshot(&self) -> Option<SessionModelOverride> {
+        self.model_override.lock().ok().and_then(|g| g.clone())
     }
 }
 
@@ -697,6 +735,42 @@ mod tests {
     }
 
     // === P1-1 fix: explicit per-window send/cancel routing ===
+
+    // === R2-1: session-level model override ===
+
+    #[test]
+    fn session_state_model_override_defaults_to_none_and_round_trips() {
+        let s = SessionState::new(Uuid::new_v4());
+        assert!(
+            s.model_override_snapshot().is_none(),
+            "a fresh session inherits the global default (no override)"
+        );
+        let ov = SessionModelOverride {
+            provider: "openai".into(),
+            model: "gpt-5".into(),
+        };
+        *s.model_override.lock().unwrap() = Some(ov.clone());
+        assert_eq!(s.model_override_snapshot(), Some(ov));
+    }
+
+    #[test]
+    fn session_model_overrides_are_per_session_isolated() {
+        let reg = SessionRegistry::new();
+        let a = reg.create();
+        let b = reg.create();
+        *reg.get(a).unwrap().model_override.lock().unwrap() = Some(SessionModelOverride {
+            provider: "anthropic".into(),
+            model: "claude-opus-4-7".into(),
+        });
+        assert!(
+            reg.get(b).unwrap().model_override_snapshot().is_none(),
+            "session B must not inherit session A's override"
+        );
+        assert_eq!(
+            reg.get(a).unwrap().model_override_snapshot().unwrap().model,
+            "claude-opus-4-7"
+        );
+    }
 
     /// Explicit id routes to THAT session without mutating the active
     /// pointer — the load-bearing invariant behind per-window sends: one

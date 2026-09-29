@@ -543,6 +543,57 @@ export async function getStatus(): Promise<StatusResponse> {
   return invoke('get_status')
 }
 
+// --- R2-1: session-level model override (composer chip) ---
+
+/** A per-session model override (R2-1). `provider` is the desktop
+ *  provider-kind slug (`anthropic` | `openai` | … | `openai-compatible`),
+ *  `model` the canonical catalog id. `null` results mean "session inherits
+ *  the global default". */
+export interface SessionModelOverride {
+  provider: string
+  model: string
+}
+
+/** Pin the CURRENT session's model: subsequent queries of this session use
+ *  `provider` + `model`; other sessions and new chats keep the global
+ *  default. The chip's "Set as default" action goes through `configure`
+ *  instead (global semantics). */
+export async function setSessionModel(
+  sessionId: string | null | undefined,
+  provider: string,
+  model: string,
+): Promise<void> {
+  await invoke('set_session_model', { sessionId: sessionId ?? null, provider, model })
+}
+
+/** Clear the session override — the session inherits the global default
+ *  again (including future default changes). Idempotent. */
+export async function clearSessionModel(sessionId: string | null | undefined): Promise<void> {
+  await invoke('clear_session_model', { sessionId: sessionId ?? null })
+}
+
+/** Read the session's model override, `null` when none is set. */
+export async function getSessionModel(
+  sessionId: string | null | undefined,
+): Promise<SessionModelOverride | null> {
+  return invoke<SessionModelOverride | null>('get_session_model', { sessionId: sessionId ?? null })
+}
+
+// --- R2-2: Settings "Refresh model catalog" ---
+
+/** Result of `refresh_model_catalog`: how many models the dynamic
+ *  models.dev overlay now carries + its monotonic generation counter. */
+export interface ModelCatalogRefreshResult {
+  count: number
+  generation: number
+}
+
+/** Re-fetch the models.dev dynamic catalog (same path as CLI
+ *  `/model refresh`). Throws with the upstream failure reason. */
+export async function refreshModelCatalog(): Promise<ModelCatalogRefreshResult> {
+  return invoke('refresh_model_catalog')
+}
+
 export async function getTools(): Promise<ToolInfo[]> {
   return invoke('list_tools')
 }

@@ -283,6 +283,13 @@ vi.mock('@/lib/tauri-api', async (importOriginal) => ({
   listModels: vi.fn().mockResolvedValue([
     { id: 'claude-sonnet-4-6', name: 'Claude Sonnet', provider: 'anthropic', context_window: 200000 },
   ]),
+  // R2-1 — session model override (composer chip). Default: no override on
+  // any session; per-test `vi.mocked(...)` overrides cover the active paths.
+  setSessionModel: vi.fn().mockResolvedValue(undefined),
+  clearSessionModel: vi.fn().mockResolvedValue(undefined),
+  getSessionModel: vi.fn().mockResolvedValue(null),
+  // R2-2 — Settings "Refresh model catalog". Default: no-op success.
+  refreshModelCatalog: vi.fn().mockResolvedValue({ count: 0, generation: 1 }),
   // ADR-0005 P4.9 — provider allowlist. Default: no override (returns
   // env-var state or null).
   getProviderAllowlist: vi.fn().mockResolvedValue(null),

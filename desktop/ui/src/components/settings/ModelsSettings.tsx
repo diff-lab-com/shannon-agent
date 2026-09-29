@@ -78,6 +78,28 @@ export default function ModelsSettings() {
   const [activeProvider, setActiveProvider] = useState<string | null>(null)
   const filteredModels = activeProvider ? models.filter(m => m.provider === activeProvider) : models
 
+  // R2-2: manual models.dev overlay refresh (same engine path as the CLI
+  // `/model refresh`). Idle → busy (spinner) → done (model count) / failed
+  // (inline reason). The overlay feeds `list_models`, so a success also
+  // refreshes the visible catalog.
+  const [catalogRefresh, setCatalogRefresh] = useState<
+    { phase: 'idle' } | { phase: 'busy' } | { phase: 'done'; count: number } | { phase: 'failed'; reason: string }
+  >({ phase: 'idle' })
+
+  const handleRefreshCatalog = async () => {
+    setCatalogRefresh({ phase: 'busy' })
+    try {
+      const r = await api.refreshModelCatalog()
+      setCatalogRefresh({ phase: 'done', count: r.count })
+      await refreshModels()
+    } catch (e) {
+      setCatalogRefresh({
+        phase: 'failed',
+        reason: e instanceof Error ? e.message : String(e),
+      })
+    }
+  }
+
   return (
     <div className="max-w-medium pr-xl pb-10">
       <p className="font-body-md text-on-surface-variant mb-md">{t('settings.models.subtitle')}</p>
@@ -192,10 +214,45 @@ export default function ModelsSettings() {
                 <h3 className="font-headline-md text-on-surface">{t('settings.models.availableModels')}</h3>
                 <p className="text-body-sm text-on-surface-variant">{t('settings.models.availableDesc')}</p>
               </div>
-              <span className="inline-flex items-center px-sm py-xs bg-primary-container text-on-primary-container rounded-full text-label-2xs font-bold tracking-wider uppercase">
-                {intl.formatMessage({ id: 'settings.models.count' }, { count: models.length })}
-              </span>
+              <div className="flex items-center gap-sm shrink-0">
+                {/* R2-2: manual dynamic-catalog refresh (models.dev overlay) —
+                    previously reachable only via the CLI `/model refresh`. */}
+                <Button
+                  variant="outline"
+                  onClick={() => { void handleRefreshCatalog() }}
+                  disabled={catalogRefresh.phase === 'busy'}
+                  aria-label={t('settings.models.refreshCatalog.aria')}
+                  title={t('settings.models.refreshCatalog.aria')}
+                  data-testid="refresh-model-catalog"
+                  className="h-auto py-sm px-md rounded-lg font-label-md flex items-center gap-xs cursor-pointer"
+                >
+                  {catalogRefresh.phase === 'busy' ? (
+                    <Spinner className="text-primary icon-sm" />
+                  ) : (
+                    <span className="material-symbols-outlined icon-sm" aria-hidden="true">refresh</span>
+                  )}
+                  {t('settings.models.refreshCatalog')}
+                </Button>
+                <span className="inline-flex items-center px-sm py-xs bg-primary-container text-on-primary-container rounded-full text-label-2xs font-bold tracking-wider uppercase">
+                  {intl.formatMessage({ id: 'settings.models.count' }, { count: models.length })}
+                </span>
+              </div>
             </div>
+
+            {/* R2-2: refresh outcome — success count or the upstream failure
+                reason inline (never a silent no-op). */}
+            {catalogRefresh.phase === 'done' && (
+              <p role="status" data-testid="refresh-model-catalog-result" className="mb-md text-label-sm text-on-surface-variant flex items-center gap-xs">
+                <span className="material-symbols-outlined icon-sm text-success" aria-hidden="true">check_circle</span>
+                {intl.formatMessage({ id: 'settings.models.refreshCatalog.success' }, { count: catalogRefresh.count })}
+              </p>
+            )}
+            {catalogRefresh.phase === 'failed' && (
+              <p role="alert" data-testid="refresh-model-catalog-result" className="mb-md text-label-sm text-error flex items-center gap-xs">
+                <span className="material-symbols-outlined icon-sm" aria-hidden="true">error</span>
+                {intl.formatMessage({ id: 'settings.models.refreshCatalog.failed' }, { reason: catalogRefresh.reason })}
+              </p>
+            )}
 
             {filteredModels.length === 0 ? (
               <p className="text-body-sm text-on-surface-variant py-lg text-center">{t('settings.models.noModelsFound')}</p>

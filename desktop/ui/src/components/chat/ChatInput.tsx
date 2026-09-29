@@ -1,6 +1,7 @@
 import { useState, useRef, useEffect, useLayoutEffect, useId, useCallback } from 'react'
 import { useIntl } from 'react-intl'
 import { open } from '@tauri-apps/plugin-dialog'
+import { toast } from 'sonner'
 import { Button } from '@/components/ui/button'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 import { DropdownMenu, type DropdownMenuItem } from '@/components/ui/dropdown-menu'
@@ -14,6 +15,7 @@ import { isSlashQuery, filterSlashCommands, type SlashCommand } from '@/lib/slas
 import * as api from '@/lib/tauri-api'
 import { toastError } from '@/lib/errorToast'
 import { cn } from '@/lib/utils'
+import { modelPickerMeta } from '@/components/settings/models-settings/types'
 
 const IMAGE_EXTENSIONS = new Set(['png', 'jpg', 'jpeg', 'gif', 'webp', 'bmp', 'svg'])
 
@@ -56,12 +58,19 @@ interface ChatInputProps {
   sessionWorkingDir?: string
   /** 最近一次流式 Usage payload — composer 侧会话用量弹框跟随刷新。 */
   usageTick?: unknown
+  /** R2-1: the session this composer targets. When present, model-chip
+   *  switches are SESSION-scoped (`set_session_model`) and the chip shows a
+   *  "· session" suffix while an override is active; "Set as default" in the
+   *  chip menu performs the global configure. Omitted → legacy global
+   *  behavior (no session context to scope to). */
+  sessionId?: string | null
 }
 
 // U2 removed the composer's model Select; the ZCode delta P0-③ brings a
-// model chip back (per-message switching without reaching for the Header)
-// while the global Header selector stays in sync — both write the same
-// engine config keys (`model` holds a model NAME, not the catalog id).
+// model chip back (per-message switching without reaching for the Header).
+// R2-1 splits the two intents: a chip switch now re-targets only the CURRENT
+// session, while the menu's "Set as default" action writes the global
+// config — the Header selector keeps showing that global default.
 export default function ChatInput({
   value,
   onChange,
@@ -77,6 +86,7 @@ export default function ChatInput({
   onOpenEditor,
   sessionWorkingDir,
   usageTick,
+  sessionId,
 }: ChatInputProps) {
   const intl = useIntl()
   const t = (id: string) => intl.formatMessage({ id })
@@ -141,20 +151,85 @@ export default function ChatInput({
     }
   }
 
-  // P0-③ (ZCode delta): composer model chip. Mirrors Header.handleModelSwitch
-  // exactly — configure the model NAME plus its provider, then refresh both
-  // config and status so the two selectors stay in sync.
-  const currentModel = modelList.find(m => m.name === status?.model || m.id === status?.model)
+  // P0-③ (ZCode delta): composer model chip. R2-1 — with a session context
+  // the switch is session-scoped (`set_session_model`); without one the
+  // legacy global configure applies. "Set as default" always goes global.
+  // R2-1: the session's model override — mirrors the backend's
+  // `SessionState.model_override`. Re-read whenever the focused session
+  // changes so the chip never shows a stale override after a switch.
+  // Presence of the prop (not truthiness) gates session-scoping: `null`
+  // means "no focused id — the backend resolves the ACTIVE session", which
+  // is exactly what a brand-new chat is.
+  const sessionScoped = sessionId !== undefined
+  const [sessionOverride, setSessionOverride] = useState<api.SessionModelOverride | null>(null)
+  useEffect(() => {
+    let cancelled = false
+    if (!sessionScoped) {
+      setSessionOverride(null)
+      return
+    }
+    api.getSessionModel(sessionId ?? null)
+      .then(ov => { if (!cancelled) setSessionOverride(ov ?? null) })
+      .catch(() => { if (!cancelled) setSessionOverride(null) })
+    return () => { cancelled = true }
+  }, [sessionScoped, sessionId])
+
+  // R2-1: the chip reflects the SESSION override when one is active — the
+  // global `status` stays untouched so the Header keeps showing the default.
+  const currentModel =
+    (sessionOverride
+      ? modelList.find(m => m.id === sessionOverride.model || m.name === sessionOverride.model)
+      : undefined) ??
+    modelList.find(m => m.name === status?.model || m.id === status?.model)
   const handleModelSwitch = async (modelId: string | null) => {
     const model = modelList.find(m => m.id === modelId)
     if (!model) return
     try {
-      await api.configure({ key: 'model', value: model.name })
-      await api.configure({ key: 'provider', value: model.provider })
-      await refreshConfig()
-      await refreshStatus()
+      if (sessionScoped) {
+        // R2-1: chip switch is session-scoped. Writes the canonical catalog
+        // id (same normalization contract as `configure('model')`); a null
+        // session id resolves to the active session backend-side.
+        await api.setSessionModel(sessionId ?? null, model.provider, model.id)
+        setSessionOverride({ provider: model.provider, model: model.id })
+      } else {
+        // No session context (tests / degraded catalogs) — legacy global write.
+        await api.configure({ key: 'model', value: model.id })
+        await api.configure({ key: 'provider', value: model.provider })
+        await refreshConfig()
+        await refreshStatus()
+      }
     } catch (err) {
       toastError(t('chat.input.model.failed'), err)
+    }
+  }
+
+  // R2-1: promote the chip's CURRENT effective target (session override when
+  // active, else the displayed global model) to the engine-global default —
+  // exactly the configure('model') + configure('provider') pair the chip
+  // performed before R2-1.
+  const handleSetAsDefault = async () => {
+    const target = currentModel
+    if (!target) return
+    try {
+      await api.configure({ key: 'model', value: target.id })
+      await api.configure({ key: 'provider', value: target.provider })
+      await refreshConfig()
+      await refreshStatus()
+      toast.success(intl.formatMessage({ id: 'chat.input.model.setDefault.toast' }, { model: target.name }))
+    } catch (err) {
+      toastError(t('chat.input.model.setDefault.failed'), err)
+    }
+  }
+
+  // R2-1: drop the session override — the session re-inherits the global
+  // default (including future default changes).
+  const handleClearSessionOverride = async () => {
+    if (!sessionScoped) return
+    try {
+      await api.clearSessionModel(sessionId ?? null)
+      setSessionOverride(null)
+    } catch (err) {
+      toastError(t('chat.input.model.resetSession.failed'), err)
     }
   }
 
@@ -628,10 +703,19 @@ export default function ChatInput({
             <Select
               value={currentModel?.id ?? ''}
               onValueChange={value => {
-                // Reasoning effort is folded into the model dropdown as a
-                // namespaced section — one pill instead of two.
+                // Namespaced menu values never become the Select value:
+                // reasoning effort (`effort:`) and the R2-1 session actions
+                // (`set-default` / `clear-override`) commit and return.
                 if (value && value.startsWith('effort:')) {
                   void handleEffortChange(value.slice('effort:'.length))
+                  return
+                }
+                if (value === 'set-default') {
+                  void handleSetAsDefault()
+                  return
+                }
+                if (value === 'clear-override') {
+                  void handleClearSessionOverride()
                   return
                 }
                 if (value) void handleModelSwitch(value)
@@ -640,12 +724,18 @@ export default function ChatInput({
               <SelectTrigger
                 size="sm"
                 aria-label={t('chat.input.model.label')}
-                title={t('chat.input.model.title')}
+                title={sessionOverride
+                  ? intl.formatMessage(
+                      { id: 'chat.input.model.sessionTitle' },
+                      { model: currentModel?.name ?? sessionOverride.model },
+                    )
+                  : t('chat.input.model.title')}
                 className="max-w-[170px] rounded-full border border-outline-variant/50 bg-transparent hover:bg-surface-container-low/50 transition-colors"
               >
                 <span className="material-symbols-outlined icon-sm">smart_toy</span>
-                {/* Render the model NAME (what config `model` stores and what
-                    the Header displays), not the catalog id. */}
+                {/* Render the effective model NAME — the session override's
+                    model when one is active (with a "· session" suffix so the
+                    override is never silent), else the global default. */}
                 <SelectValue placeholder={status?.model || t('chat.input.model.label')}>
                   {(value: unknown) => {
                     // Reflect a non-default reasoning effort on the chip —
@@ -654,22 +744,70 @@ export default function ChatInput({
                     // the Select value), so read it from config directly.
                     const eff = effortOptions.find(e => e.value === currentEffort)
                     const m = modelList.find(x => x.id === value)
-                    const name = m?.name ?? status?.model ?? t('chat.input.model.label')
+                    const name = m?.name
+                      ?? sessionOverride?.model
+                      ?? status?.model
+                      ?? t('chat.input.model.label')
+                    let label = name
                     if (eff && eff.value !== 'medium') {
-                      return `${name} · ${eff.label}`
+                      label = `${label} · ${eff.label}`
                     }
-                    return name
+                    if (sessionOverride) {
+                      label = `${label} · ${t('chat.input.model.sessionSuffix')}`
+                    }
+                    return label
                   }}
                 </SelectValue>
               </SelectTrigger>
-              <SelectContent>
+              {/* R2-3: widened past the chip's anchor width so the context/
+                  price meta fits on the model rows. */}
+              <SelectContent className="w-[320px]">
                 {modelList.map(m => (
-                  <SelectItem key={m.id} value={m.id}>
-                    <span className="font-mono">{m.name}</span>
+                  <SelectItem key={m.id} value={m.id} data-testid={`model-option-${m.id}`}>
+                    <span className="flex w-full min-w-0 items-center gap-xs">
+                      <span className="font-mono truncate">{m.name}</span>
+                      {/* R2-3: vision dot — rendered only from real catalog
+                          metadata; unknown renders nothing (never guessed). */}
+                      {m.vision === true && (
+                        <span
+                          aria-label={t('chat.input.model.vision')}
+                          title={t('chat.input.model.vision')}
+                          className="inline-block size-1.5 shrink-0 rounded-full bg-primary"
+                        />
+                      )}
+                      <span className="ml-auto shrink-0 whitespace-nowrap font-label-xs text-on-surface-variant tabular-nums">
+                        {modelPickerMeta(m)}
+                      </span>
+                    </span>
                   </SelectItem>
                 ))}
                 {modelList.length > 0 && (
                   <div role="presentation" className="mx-sm my-xs border-t border-outline-variant/20" />
+                )}
+                {/* R2-1: session model actions — "Set as default" promotes
+                    the chip's current model to the engine-global default
+                    (the pre-R2-1 chip behavior); "Reset to default" (shown
+                    only while an override is active) re-inherits it. */}
+                {sessionScoped && (
+                  <>
+                    <div role="presentation" className="px-sm pt-0 pb-xs font-label-xs uppercase tracking-wider text-on-surface-variant">
+                      {t('chat.input.model.sessionSection')}
+                    </div>
+                    <SelectItem value="set-default" data-testid="model-action-set-default">
+                      <span className="flex items-center gap-xs">
+                        <span className="material-symbols-outlined icon-sm" aria-hidden="true">push_pin</span>
+                        {t('chat.input.model.setDefault')}
+                      </span>
+                    </SelectItem>
+                    {sessionOverride && (
+                      <SelectItem value="clear-override" data-testid="model-action-clear-override">
+                        <span className="flex items-center gap-xs">
+                          <span className="material-symbols-outlined icon-sm" aria-hidden="true">restart_alt</span>
+                          {t('chat.input.model.resetSession')}
+                        </span>
+                      </SelectItem>
+                    )}
+                  </>
                 )}
                 <div role="presentation" className="px-sm pt-0 pb-xs font-label-xs uppercase tracking-wider text-on-surface-variant">
                   {t('chat.input.effort.section')}

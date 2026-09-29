@@ -422,6 +422,10 @@ impl ProviderConnection {
             fallback_models: self.fallback_models.clone(),
             quirks: self.quirks.clone(),
             tiers: self.tiers.clone(),
+            // R2-4 (engine): per-model metadata declarations. The desktop's
+            // legacy `ProviderConnection` cache carries none — the engine
+            // store's reload-merge is where declared models enter.
+            models: Vec::new(),
         }
     }
 }

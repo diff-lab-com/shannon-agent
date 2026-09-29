@@ -279,6 +279,19 @@ function findTask(id: string) {
   return state.tasks.find(t => t.id === id)
 }
 
+// R2-1: per-session model override demo state — mirrors the backend's
+// `SessionState.model_override` (in-memory, keyed by session id). The
+// composer chip writes via set_session_model and reads back via
+// get_session_model, so demo switches stay visible per session. A null
+// sessionId resolves to the active session backend-side; demo mirrors that
+// with an `__active__` bucket.
+const demoSessionModels = new Map<string, { provider: string; model: string }>()
+const demoSessionKey = (id?: string | null) => id ?? '__active__'
+
+// R2-2: fake models.dev overlay generation — bumped on every demo refresh so
+// the Settings button's success payload visibly changes.
+let demoCatalogGeneration = 1
+
 // Mutable notification prefs so DND/quiet-hours toggling feels live in demo mode.
 // Audit §P2-3 (round 6): start with events off so the new empty-state
 // guidance card is visible on first visit — instead of the page looking
@@ -414,6 +427,28 @@ export const handlers: Record<string, MockHandler> = {
 
   // --- Models & Status ---
   async list_models() { await delay(); return clone(MOCK_MODELS) },
+  // R2-1: session-scoped model override (composer chip). Writes/reads the
+  // per-session demo map; null sessionId → the active-session bucket, like
+  // the backend's `resolve_explicit_or_active(None)` fallback.
+  async set_session_model(args: { sessionId?: string | null; provider: string; model: string }) {
+    await delay(60)
+    demoSessionModels.set(demoSessionKey(args.sessionId), { provider: args.provider, model: args.model })
+  },
+  async clear_session_model(args: { sessionId?: string | null }) {
+    await delay(30)
+    demoSessionModels.delete(demoSessionKey(args.sessionId))
+  },
+  async get_session_model(args: { sessionId?: string | null }) {
+    await delay()
+    return demoSessionModels.get(demoSessionKey(args.sessionId)) ?? null
+  },
+  // R2-2: demo refresh pretends to re-fetch models.dev — reports the seeded
+  // catalog size and bumps the generation so the success line moves.
+  async refresh_model_catalog() {
+    await delay(600)
+    demoCatalogGeneration += 1
+    return { count: MOCK_MODELS.length, generation: demoCatalogGeneration }
+  },
   // Status mirrors demoConfig so model switching (composer chip / header)
   // visibly updates both selectors in the demo — they stay in sync the way
   // the real engine does.
