@@ -128,6 +128,7 @@
   "shortcuts.help.send": "Send message",
   "shortcuts.help.show": "Show all shortcuts",
   "shortcuts.help.toggle": "Toggle sidebar",
+  "shortcuts.help.toggleTerminal": "터미널 패널 전환",
   "settings.language.label": "Language",
   "settings.language.help": "Choose the interface language. Changes apply immediately.",
   "settings.language.en": "English",

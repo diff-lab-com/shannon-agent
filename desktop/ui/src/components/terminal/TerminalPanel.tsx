@@ -26,7 +26,7 @@
  *  - a11y: labelled region, tablist semantics, focus moves into the
  *    terminal on open and back to the toggle button on close.
  */
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState, type KeyboardEvent as ReactKeyboardEvent } from 'react';
 import { useIntl, type PrimitiveType } from 'react-intl';
 import { toastError } from '@/lib/errorToast';
 import '@xterm/xterm/css/xterm.css';
@@ -102,6 +102,10 @@ export function TerminalPanel({ projectDir }: TerminalPanelProps) {
   // P2 (review §5): a multi-line paste into a shell executes every line —
   // intercept pastes containing line breaks behind an explicit confirmation.
   const [pendingPaste, setPendingPaste] = useState<string | null>(null);
+  // P2-3: the + button stays clickable at the terminal cap (aria-disabled,
+  // not disabled) so clicking it can trigger the live-region cap feedback
+  // below — a disabled button can neither explain nor be asked why.
+  const [capFeedback, setCapFeedback] = useState(false);
 
   const containerRef = useRef<HTMLDivElement>(null);
   const toggleRef = useRef<HTMLButtonElement>(null);
@@ -422,6 +426,39 @@ export function TerminalPanel({ projectDir }: TerminalPanelProps) {
 
   const canSpawn = tabs.length < MAX_TERMINALS;
 
+  // ── Tablist a11y (P2-3: WAI-ARIA tabs pattern) ───────────────────────
+  // Roving tabindex: only the ACTIVE tab is in the tab order; the arrow
+  // keys move the selection (wrapping) and Home/End jump to the first/
+  // last tab. Selection moves with the key, then focus follows onto the
+  // newly selected tab button.
+
+  const tabButtonRefs = useRef<Map<string, HTMLButtonElement>>(new Map());
+
+  const onTablistKeyDown = useCallback((e: ReactKeyboardEvent) => {
+    if (tabs.length === 0) return;
+    const ids = tabs.map(tab => tab.info.terminalId);
+    const current = activeId ? ids.indexOf(activeId) : -1;
+    let nextId: string | null = null;
+    if (e.key === 'ArrowRight') nextId = ids[(current + 1) % ids.length];
+    else if (e.key === 'ArrowLeft') nextId = ids[(current - 1 + ids.length) % ids.length];
+    else if (e.key === 'Home') nextId = ids[0];
+    else if (e.key === 'End') nextId = ids[ids.length - 1];
+    if (!nextId) return;
+    e.preventDefault();
+    setActiveId(nextId);
+    // `const` binding so the rAF closure keeps the narrowed type.
+    const target: string = nextId;
+    requestAnimationFrame(() => tabButtonRefs.current.get(target)?.focus());
+  }, [tabs, activeId]);
+
+  const handleSpawnClick = useCallback(() => {
+    if (!canSpawn) {
+      setCapFeedback(true);
+      return;
+    }
+    void spawnTab();
+  }, [canSpawn, spawnTab]);
+
   if (!open) {
     return (
       <div className="shrink-0 flex justify-end px-md pb-xs">
@@ -452,15 +489,27 @@ export function TerminalPanel({ projectDir }: TerminalPanelProps) {
     >
       {/* Toolbar: tabs + actions */}
       <div className="flex items-center gap-xs px-sm py-1 border-b border-outline-variant/20 bg-surface-container-low/60">
-        <div role="tablist" aria-label={t('terminal.panel.label')} className="flex items-center gap-xs flex-1 min-w-0 overflow-x-auto">
+        <div
+          role="tablist"
+          aria-label={t('terminal.panel.label')}
+          onKeyDown={onTablistKeyDown}
+          className="flex items-center gap-xs flex-1 min-w-0 overflow-x-auto"
+        >
           {tabs.map(tab => {
             const selected = tab.info.terminalId === activeId;
             return (
               <div key={tab.info.terminalId} className="flex items-center shrink-0">
                 <button
+                  ref={el => {
+                    if (el) tabButtonRefs.current.set(tab.info.terminalId, el);
+                    else tabButtonRefs.current.delete(tab.info.terminalId);
+                  }}
+                  id={`terminal-tab-${tab.info.terminalId}`}
                   type="button"
                   role="tab"
                   aria-selected={selected}
+                  aria-controls="terminal-tab-panel"
+                  tabIndex={selected ? 0 : -1}
                   onClick={() => setActiveId(tab.info.terminalId)}
                   className={`px-sm py-1 rounded-t-md font-label-sm text-label-sm flex items-center gap-xs ${
                     selected
@@ -488,14 +537,20 @@ export function TerminalPanel({ projectDir }: TerminalPanelProps) {
         </div>
         <button
           type="button"
-          onClick={() => void spawnTab()}
-          disabled={!canSpawn}
+          onClick={handleSpawnClick}
+          aria-disabled={!canSpawn}
           aria-label={t('terminal.tab.new')}
           title={canSpawn ? t('terminal.tab.new') : t('terminal.maxReached', { max: MAX_TERMINALS })}
-          className="p-1 rounded text-on-surface-variant hover:bg-surface-container disabled:opacity-40 disabled:cursor-not-allowed focus-visible:outline focus-visible:outline-2 focus-visible:outline-primary"
+          className="p-1 rounded text-on-surface-variant hover:bg-surface-container disabled:opacity-40 disabled:cursor-not-allowed aria-disabled:opacity-40 aria-disabled:cursor-not-allowed focus-visible:outline focus-visible:outline-2 focus-visible:outline-primary"
         >
           <span className="material-symbols-outlined icon-sm" aria-hidden="true">add</span>
         </button>
+        {/* P3-4: cap feedback is announced, not just painted on the title —
+            the text swaps in on a capped + click and the live region (plus
+            the change) is picked up by screen readers. */}
+        <span aria-live="polite" className="sr-only">
+          {capFeedback ? t('terminal.maxReached', { max: MAX_TERMINALS }) : ''}
+        </span>
         <button
           type="button"
           onClick={() => setFullHeight(p => !p)}
@@ -521,8 +576,10 @@ export function TerminalPanel({ projectDir }: TerminalPanelProps) {
         </button>
       </div>
 
+      {/* P3-4: the reconnect/history notice is announced (role=status is
+          an implicit aria-live=polite region) when it appears on boot. */}
       {showHistoryHint && (
-        <div className="flex items-center gap-xs px-sm py-1 bg-surface-container/70 border-b border-outline-variant/20">
+        <div role="status" className="flex items-center gap-xs px-sm py-1 bg-surface-container/70 border-b border-outline-variant/20">
           <span className="material-symbols-outlined icon-sm text-on-surface-variant" aria-hidden="true">info</span>
           <p className="flex-1 font-label-sm text-label-sm text-on-surface-variant">
             {t('terminal.historyWarning')}
@@ -538,11 +595,16 @@ export function TerminalPanel({ projectDir }: TerminalPanelProps) {
         </div>
       )}
 
-      {/* Active terminal surface. xterm manages its own inner DOM. */}
+      {/* Active terminal surface — the tabpanel the tabs control (P2-3:
+          aria-labelledby ↔ the active tab's aria-controls). xterm manages
+          its own inner DOM. */}
       <div className="flex-1 min-h-0 relative">
         <div
           ref={containerRef}
           data-testid="terminal-surface"
+          role="tabpanel"
+          id="terminal-tab-panel"
+          aria-labelledby={activeId ? `terminal-tab-${activeId}` : undefined}
           className="absolute inset-0 overflow-hidden px-xs py-xs"
         />
         {tabs.length === 0 && (

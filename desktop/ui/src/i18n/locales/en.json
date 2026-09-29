@@ -129,6 +129,7 @@
   "shortcuts.help.send": "Send message",
   "shortcuts.help.show": "Show all shortcuts",
   "shortcuts.help.toggle": "Toggle sidebar",
+  "shortcuts.help.toggleTerminal": "Toggle the terminal panel",
   "settings.language.label": "Language",
   "settings.language.help": "Choose the interface language. Changes apply immediately.",
   "settings.language.en": "English",

@@ -55,6 +55,10 @@ const SECTIONS: ShortcutSection[] = [
       { keys: 'Escape', actionKey: 'shortcuts.help.cancel' },
       { keys: formatShortcutShift('P'), actionKey: 'shortcuts.help.planMode' },
       { keys: formatShortcutShift('A'), actionKey: 'shortcuts.help.cycleArtifact' },
+      // P3-4: the integrated-terminal toggle (registered capture-phase in
+      // TerminalPanel so it wins over xterm's textarea) — documented with
+      // the other chat-page bindings.
+      { keys: formatShortcut('`'), actionKey: 'shortcuts.help.toggleTerminal' },
     ],
   },
   {

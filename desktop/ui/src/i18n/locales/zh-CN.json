@@ -129,6 +129,7 @@
   "shortcuts.help.send": "发送消息",
   "shortcuts.help.show": "显示全部快捷键",
   "shortcuts.help.toggle": "折叠 / 展开侧栏",
+  "shortcuts.help.toggleTerminal": "切换终端面板",
   "settings.language.label": "语言",
   "settings.language.help": "选择界面语言。更改会立即生效。",
   "settings.language.en": "English",

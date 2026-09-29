@@ -319,7 +319,10 @@ describe('TerminalPanel (tab management)', () => {
     await waitFor(() => expect(screen.getAllByRole('tab').length).toBe(1))
   })
 
-  it('disables + at the 4-terminal cap with an explanatory title', async () => {
+  it('marks + aria-disabled at the 4-terminal cap, and a capped click announces the limit', async () => {
+    // P2-3/P3-4: the + button stays clickable (aria-disabled, not
+    // disabled) so a capped click can trigger the aria-live feedback —
+    // a disabled button can neither explain nor be asked why.
     vi.mocked(api.terminalList).mockResolvedValue([
       info('t-1'), info('t-2'), info('t-3'), info('t-4'),
     ])
@@ -327,8 +330,70 @@ describe('TerminalPanel (tab management)', () => {
     fireEvent.keyDown(window, { key: '`', ctrlKey: true })
     const plus = await screen.findByRole('button', { name: 'New terminal' })
     await waitFor(() => expect(screen.getAllByRole('tab').length).toBe(4))
-    expect((plus as HTMLButtonElement).disabled).toBe(true)
+    expect(plus.getAttribute('aria-disabled')).toBe('true')
     expect(plus.getAttribute('title')).toContain('limit reached (4)')
+
+    // Nothing spawns, and the limit is announced through the live region.
+    fireEvent.click(plus)
+    expect(api.terminalSpawn).not.toHaveBeenCalled()
+    expect(screen.getByText(/limit reached \(4\)/)).toBeTruthy()
+  })
+
+  it('keeps only the active tab in the tab order and moves selection with the arrow keys', async () => {
+    // P2-3: WAI-ARIA tabs roving tabindex — ArrowRight/Left move the
+    // selection with wrapping, Home/End jump to the first/last tab.
+    vi.mocked(api.terminalList).mockResolvedValue([info('t-a'), info('t-b', '/other'), info('t-c', '/third')])
+    render(<TerminalPanel projectDir="/home/u/demo" />)
+    fireEvent.keyDown(window, { key: '`', ctrlKey: true })
+    const tabA = await screen.findByRole('tab', { name: /demo/ })
+    const tabB = await screen.findByRole('tab', { name: /other/ })
+    const tabC = await screen.findByRole('tab', { name: /third/ })
+    // Newest listed terminal is selected initially.
+    expect(tabC.getAttribute('aria-selected')).toBe('true')
+    expect(tabC.getAttribute('tabindex')).toBe('0')
+    expect(tabA.getAttribute('tabindex')).toBe('-1')
+    expect(tabB.getAttribute('tabindex')).toBe('-1')
+    // ArrowLeft steps to the previous tab.
+    fireEvent.keyDown(tabC, { key: 'ArrowLeft' })
+    await waitFor(() => expect(tabB.getAttribute('aria-selected')).toBe('true'))
+    expect(tabB.getAttribute('tabindex')).toBe('0')
+    expect(tabC.getAttribute('tabindex')).toBe('-1')
+    // …and wraps past the first tab back to the last.
+    fireEvent.keyDown(tabB, { key: 'Home' })
+    await waitFor(() => expect(tabA.getAttribute('aria-selected')).toBe('true'))
+    fireEvent.keyDown(tabA, { key: 'ArrowLeft' })
+    await waitFor(() => expect(tabC.getAttribute('aria-selected')).toBe('true'))
+    // End jumps back to the last tab.
+    fireEvent.keyDown(tabA, { key: 'End' })
+    await waitFor(() => expect(tabC.getAttribute('aria-selected')).toBe('true'))
+  })
+
+  it('wires the active tab to the terminal surface via aria-controls/aria-labelledby', async () => {
+    // P2-3: the terminal surface is the tabpanel; the active tab names it
+    // and it names the active tab back.
+    vi.mocked(api.terminalList).mockResolvedValue([info('t-a'), info('t-b', '/other')])
+    render(<TerminalPanel projectDir="/home/u/demo" />)
+    fireEvent.keyDown(window, { key: '`', ctrlKey: true })
+    const tabB = await screen.findByRole('tab', { name: /other/ })
+    const surface = screen.getByTestId('terminal-surface')
+    expect(surface.getAttribute('role')).toBe('tabpanel')
+    expect(surface.getAttribute('id')).toBe('terminal-tab-panel')
+    expect(tabB.getAttribute('aria-controls')).toBe('terminal-tab-panel')
+    expect(surface.getAttribute('aria-labelledby')).toBe(tabB.getAttribute('id'))
+    fireEvent.click(await screen.findByRole('tab', { name: /demo/ }))
+    await waitFor(() =>
+      expect(screen.getByTestId('terminal-surface').getAttribute('aria-labelledby'))
+        .toBe(screen.getByRole('tab', { name: /demo/ }).getAttribute('id')),
+    )
+  })
+
+  it('marks the reconnect/history hint as a status region', async () => {
+    // P3-4: the notice is announced when it appears on boot.
+    vi.mocked(api.terminalList).mockResolvedValue([info('t-live-1')])
+    render(<TerminalPanel projectDir="/home/u/demo" />)
+    fireEvent.keyDown(window, { key: '`', ctrlKey: true })
+    const status = await screen.findByRole('status')
+    expect(status.textContent).toMatch(/output history/i)
   })
 
   it('switches tabs on click', async () => {
