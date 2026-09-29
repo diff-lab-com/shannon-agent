@@ -15,7 +15,7 @@ export default function ProjectFilterChip({ label, onRemove }: { label: string; 
       role="group"
       aria-label={intl.formatMessage({ id: 'project.filter.chip.aria' }, { name: label })}
       title={intl.formatMessage({ id: 'project.filter.chip.aria' }, { name: label })}
-      className="inline-flex items-center gap-xs px-sm py-xs rounded-full bg-primary/10 border border-primary/20 text-primary font-label-sm mb-md max-w-full"
+      className="inline-flex items-center gap-xs px-sm py-xs rounded-full bg-primary-container border border-primary/20 text-on-primary-container font-label-sm mb-md max-w-full"
     >
       <span className="material-symbols-outlined icon-sm shrink-0" aria-hidden="true">folder</span>
       <span className="font-bold truncate min-w-0">{label}</span>

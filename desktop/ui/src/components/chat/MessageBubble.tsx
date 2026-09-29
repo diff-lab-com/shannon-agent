@@ -703,7 +703,7 @@ export const ToolCallDisplay = memo(function ToolCallDisplay({ toolCall, onViewD
             role="img"
             aria-label={t('chat.tool.sandboxDenied')}
             title={t('chat.tool.sandboxDenied')}
-            className="flex items-center gap-[2px] shrink-0 px-xs py-[1px] rounded-sm bg-error/10 text-error font-label-xs"
+            className="flex items-center gap-[2px] shrink-0 px-xs py-[1px] rounded-sm bg-error-container text-on-error-container font-label-xs"
           >
             <span className="material-symbols-outlined icon-xs" aria-hidden="true">shield</span>
             {t('chat.tool.sandboxDenied')}
@@ -743,7 +743,7 @@ export const ToolCallDisplay = memo(function ToolCallDisplay({ toolCall, onViewD
           ) : null}
           {toolCall.result && (
             toolCall.is_error ? (
-              <pre className="text-body-sm p-sm rounded-lg overflow-x-auto max-h-[200px] bg-error/5 text-error">{toolCall.result}</pre>
+              <pre className="text-body-sm p-sm rounded-lg overflow-x-auto max-h-[200px] bg-error-container text-on-error-container">{toolCall.result}</pre>
             ) : (
               <div className="text-body-sm p-sm rounded-lg overflow-x-auto max-h-[200px] bg-surface-container text-on-surface-variant prose prose-sm max-w-none prose-pre:bg-surface-container-lowest prose-pre:p-sm prose-pre:rounded-sm prose-code:text-primary prose-code:before:content-[''] prose-code:after:content-['']">
                 <Markdown>{toolCall.result}</Markdown>
@@ -906,7 +906,7 @@ export const SubagentBlock = memo(function SubagentBlock({ toolCall }: { toolCal
           <span className="font-label-xs text-on-surface-variant px-xs py-[1px] rounded-sm bg-surface-container shrink-0" aria-hidden="true">{team}</span>
         )}
         {toolCall.status === 'running' && subagentLive && (
-          <span className="font-mono text-label-xs px-xs py-[1px] rounded-sm bg-primary/10 text-primary shrink-0 flex items-center gap-xs" aria-live="polite">
+          <span className="font-mono text-label-xs px-xs py-[1px] rounded-sm bg-primary-container text-on-primary-container shrink-0 flex items-center gap-xs" aria-live="polite">
             <span className="size-1.5 rounded-full bg-primary animate-pulse" aria-hidden="true" />
             {t('chat.subagent.registryId', { id: subagentLive.agentId })}
           </span>
@@ -937,7 +937,7 @@ export const SubagentBlock = memo(function SubagentBlock({ toolCall }: { toolCal
           {toolCall.result && (
             <pre className={cn(
               'text-body-sm p-sm rounded-lg overflow-x-auto max-h-[200px]',
-              toolCall.is_error ? 'bg-error/5 text-error' : 'bg-surface-container text-on-surface-variant',
+              toolCall.is_error ? 'bg-error-container text-on-error-container' : 'bg-surface-container text-on-surface-variant',
             )}>{toolCall.result}</pre>
           )}
         </div>

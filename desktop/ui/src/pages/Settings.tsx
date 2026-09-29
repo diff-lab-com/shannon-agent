@@ -45,7 +45,7 @@ export default function Settings() {
               cn(
                 'flex items-center gap-sm whitespace-nowrap rounded-lg px-md py-sm font-label-md transition-colors cursor-pointer',
                 isActive
-                  ? 'bg-primary/10 text-primary font-medium'
+                  ? 'bg-primary-container text-on-primary-container font-medium'
                   : 'text-on-surface-variant hover:bg-surface-container-high hover:text-on-surface',
               )
             }

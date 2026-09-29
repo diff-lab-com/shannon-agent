@@ -13,7 +13,7 @@
 import { readFileSync } from 'node:fs'
 import { fileURLToPath } from 'node:url'
 import { dirname, join } from 'node:path'
-import { auditThemes } from './lib/contrast.mjs'
+import { auditThemes, chipCompositesInUse } from './lib/contrast.mjs'
 
 const root = join(dirname(fileURLToPath(import.meta.url)), '..')
 // Base palette lives in index.css's GENERATED:THEME_BASE region (the @theme
@@ -40,7 +40,11 @@ for (const m of css.matchAll(/\[data-theme='([\w-]+)'\]\s*\{([^}]+)\}/g)) {
   themes[m[1]] = parseVars(m[2])
 }
 
-const failures = auditThemes(themes)
+// Chip composites are usage-conditioned (see scripts/lib/contrast.mjs) —
+// scan src with the same rule the generator uses so both gates agree.
+const chipPatterns = chipCompositesInUse(join(root, 'src'))
+
+const failures = auditThemes(themes, { chipPatterns })
 const byTheme = new Map()
 for (const f of failures) {
   const rows = byTheme.get(f.theme) ?? []

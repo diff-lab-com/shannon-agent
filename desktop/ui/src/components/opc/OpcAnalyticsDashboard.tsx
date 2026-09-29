@@ -16,13 +16,13 @@ import LoadingState from '@/components/ui/loading-state'
 import ErrorState from '@/components/ui/error-state'
 
 const STATUS_TONES: Record<string, string> = {
-  completed: 'bg-tertiary/15 text-tertiary border-tertiary/40',
-  done: 'bg-tertiary/15 text-tertiary border-tertiary/40',
-  in_progress: 'bg-primary/15 text-primary border-primary/40',
-  running: 'bg-primary/15 text-primary border-primary/40',
+  completed: 'bg-tertiary-container text-on-tertiary-container border-tertiary/40',
+  done: 'bg-tertiary-container text-on-tertiary-container border-tertiary/40',
+  in_progress: 'bg-primary-container text-on-primary-container border-primary/40',
+  running: 'bg-primary-container text-on-primary-container border-primary/40',
   pending: 'bg-primary text-on-primary border-outline-variant/40',
   todo: 'bg-outline/15 text-on-surface-variant border-outline/40',
-  deprecated: 'bg-error/15 text-error border-error/40',
+  deprecated: 'bg-error-container text-on-error-container border-error/40',
 }
 
 // Review 2026-09-16 (UI-review #18): raw maxima produced odd axis labels
@@ -110,7 +110,7 @@ export default function OpcAnalyticsDashboard() {
           onClick={refresh}
           disabled={loading}
           aria-label={t('opc.analytics.refreshAria')}
-          className="font-label-sm text-primary hover:bg-primary/10 rounded-sm px-sm py-xs gap-xs"
+          className="font-label-sm text-link hover:bg-primary/10 rounded-sm px-sm py-xs gap-xs"
         >
           <span className="material-symbols-outlined icon-sm">{loading ? 'hourglass_top' : 'refresh'}</span>
           {t('opc.analytics.refresh')}

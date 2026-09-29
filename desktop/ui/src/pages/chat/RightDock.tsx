@@ -340,7 +340,7 @@ export default function RightDock({
     cn(
       'relative shrink-0 gap-0 px-sm h-auto py-xs rounded-lg max-w-40',
       active
-        ? 'bg-primary/10 text-primary hover:bg-primary/10'
+        ? 'bg-primary-container text-on-primary-container hover:bg-primary/10'
         : 'text-on-surface-variant hover:bg-surface-container hover:text-on-surface',
     )
 
@@ -659,7 +659,7 @@ function ArtifactDocBody({ artifact, workingDir }: { artifact: ArtifactItem; wor
         </span>
         {artifact.origin === 'disk' && (
           <span
-            className="font-label-xs text-on-surface-variant px-xs py-[1px] rounded-sm bg-tertiary/15 text-tertiary shrink-0"
+            className="font-label-xs text-on-surface-variant px-xs py-[1px] rounded-sm bg-tertiary-container text-on-tertiary-container shrink-0"
             title={filePath ?? undefined}
           >
             {t('chat.artifact.fromDisk')}
@@ -684,7 +684,7 @@ function ArtifactDocBody({ artifact, workingDir }: { artifact: ArtifactItem; wor
             onClick={() => setShowCode(v => !v)}
             className={cn(
               'gap-0 px-sm h-auto py-xs rounded-lg',
-              showCode ? 'bg-primary/10 text-primary hover:bg-primary/10' : 'text-on-surface-variant hover:bg-surface-container hover:text-on-surface',
+              showCode ? 'bg-primary-container text-on-primary-container hover:bg-primary/10' : 'text-on-surface-variant hover:bg-surface-container hover:text-on-surface',
             )}
           >
             <span className="material-symbols-outlined icon-sm align-middle" aria-hidden="true">code</span>
