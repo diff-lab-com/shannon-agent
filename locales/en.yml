@@ -308,6 +308,19 @@ ui:
   header_newline: "Newline"
   header_editor: "Editor"
   header_fullscreen: "Fullscreen"
+  # ── Paste / diagnostics / pipe / session summary ──────────────────────────
+  # NOTE: pasted_text_marker keeps the literal "[Pasted Text #" prefix on
+  # purpose — it is machine-parsed on submit (expand_pasted_texts), so
+  # translations must keep that prefix with the number directly after it.
+  pasted_text_marker: "[Pasted Text #%{num} %{count} lines]"
+  diagnostics_issues: "[Diagnostics: %{count} issue(s) found]"
+  diagnostics_clean: "[Diagnostics: ✓ No issues]"
+  session_summary_title: "── Session Summary ──"
+  session_summary_tokens: "  Tokens: %{input} in + %{output} out  |  Cost: $%{cost}"
+  session_summary_budget: "  Budget: $%{cost} / $%{budget} (%{pct}%)"
+  session_summary_model: "  Model: %{model}"
+  session_summary_duration: "  Duration: %{mins}m %{secs}s"
+  session_summary_separator: "─────────────────────"
   sidebar:
     context: "Context"
     cost: "Cost"

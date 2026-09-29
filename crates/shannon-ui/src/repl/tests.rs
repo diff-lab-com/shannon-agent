@@ -4900,3 +4900,68 @@ fn test_elicitation_default_state_has_no_channels() {
     assert!(state.pending_elicitation_rx.is_none());
     assert!(state.active_elicitation.is_none());
 }
+
+// -- i18n: routed strings keep byte-identical English copy -----------------
+
+/// The strings routed through `t!` (paste marker, diagnostics banners, pipe
+/// errors, session summary) must render byte-identically in the default (en)
+/// locale, so chat history and snapshot expectations don't churn.
+#[test]
+fn i18n_en_copy_is_byte_identical_to_previous_hardcoded_strings() {
+    use rust_i18n::t;
+
+    // Paste marker (prefix is machine-parsed by expand_pasted_texts).
+    assert_eq!(
+        t!("ui.pasted_text_marker", num => 3, count => 42).to_string(),
+        "[Pasted Text #3 42 lines]"
+    );
+    // Diagnostics banners.
+    assert_eq!(
+        t!("ui.diagnostics_issues", count => 2).to_string(),
+        "[Diagnostics: 2 issue(s) found]"
+    );
+    assert_eq!(
+        t!("ui.diagnostics_clean").to_string(),
+        "[Diagnostics: ✓ No issues]"
+    );
+    // Pipe-mode + input errors (pre-existing repl.* keys).
+    assert_eq!(t!("repl.no_input").to_string(), "No input provided on stdin.");
+    assert_eq!(
+        t!("repl.input_error", error => "boom").to_string(),
+        "Input error: boom"
+    );
+    // Exit session summary (formatting done at the call site).
+    assert_eq!(t!("ui.session_summary_title").to_string(), "── Session Summary ──");
+    assert_eq!(
+        t!(
+            "ui.session_summary_tokens",
+            input => 1234,
+            output => 567,
+            cost => format!("{:.4}", 0.5)
+        )
+        .to_string(),
+        "  Tokens: 1234 in + 567 out  |  Cost: $0.5000"
+    );
+    assert_eq!(
+        t!(
+            "ui.session_summary_budget",
+            cost => format!("{:.4}", 0.5),
+            budget => format!("{:.2}", 10.0),
+            pct => format!("{:.0}", 5.0)
+        )
+        .to_string(),
+        "  Budget: $0.5000 / $10.00 (5%)"
+    );
+    assert_eq!(
+        t!("ui.session_summary_model", model => "gpt-4o").to_string(),
+        "  Model: gpt-4o"
+    );
+    assert_eq!(
+        t!("ui.session_summary_duration", mins => 2, secs => 7).to_string(),
+        "  Duration: 2m 7s"
+    );
+    assert_eq!(
+        t!("ui.session_summary_separator").to_string(),
+        "─────────────────────"
+    );
+}

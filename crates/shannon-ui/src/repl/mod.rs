@@ -35,6 +35,7 @@ use crossterm::{
     terminal::{disable_raw_mode, enable_raw_mode},
 };
 use ratatui::{Terminal, TerminalOptions, Viewport, backend::CrosstermBackend};
+use rust_i18n::t;
 use shannon_types::recover_lock;
 use std::collections::HashMap;
 
@@ -1837,12 +1838,12 @@ impl Repl {
                         if count > 0 {
                             self.chat.add_message(
                                 ChatRole::System,
-                                format!("[Diagnostics: {count} issue(s) found]"),
+                                t!("ui.diagnostics_issues", count => count).to_string(),
                             );
                         } else {
                             self.chat.add_message(
                                 ChatRole::System,
-                                "[Diagnostics: ✓ No issues]".to_string(),
+                                t!("ui.diagnostics_clean").to_string(),
                             );
                         }
                         self.diagnostic_rx = None;
@@ -1990,23 +1991,42 @@ impl Repl {
                 let total_cost = tracker.total_cost();
                 if tracker.total_input_tokens > 0 {
                     println!();
-                    println!("── Session Summary ──");
+                    println!("{}", t!("ui.session_summary_title"));
                     println!(
-                        "  Tokens: {} in + {} out  |  Cost: ${total_cost:.4}",
-                        tracker.total_input_tokens, tracker.total_output_tokens
+                        "{}",
+                        t!(
+                            "ui.session_summary_tokens",
+                            input => tracker.total_input_tokens,
+                            output => tracker.total_output_tokens,
+                            cost => format!("{total_cost:.4}")
+                        )
                     );
                     if let Some(budget) = tracker.budget_limit_usd {
                         let pct = (total_cost / budget) * 100.0;
-                        println!("  Budget: ${total_cost:.4} / ${budget:.2} ({pct:.0}%)");
+                        println!(
+                            "{}",
+                            t!(
+                                "ui.session_summary_budget",
+                                cost => format!("{total_cost:.4}"),
+                                budget => format!("{budget:.2}"),
+                                pct => format!("{pct:.0}")
+                            )
+                        );
                     }
-                    println!("  Model: {}", tracker.model_name);
+                    println!(
+                        "{}",
+                        t!("ui.session_summary_model", model => tracker.model_name)
+                    );
                     if let Some(started) = &self.session_started_at {
                         let elapsed = chrono::Utc::now() - *started;
                         let mins = elapsed.num_minutes();
                         let secs = elapsed.num_seconds() % 60;
-                        println!("  Duration: {mins}m {secs}s");
+                        println!(
+                            "{}",
+                            t!("ui.session_summary_duration", mins => mins, secs => secs)
+                        );
                     }
-                    println!("─────────────────────");
+                    println!("{}", t!("ui.session_summary_separator"));
                 }
             }
         }
@@ -2022,7 +2042,7 @@ impl Repl {
                 if let Err(e) = input::handle_input(self, key, terminal) {
                     // Display error in UI chat instead of stderr to prevent escape sequence leakage
                     self.chat
-                        .add_message(ChatRole::System, format!("Input error: {e}"));
+                        .add_message(ChatRole::System, t!("repl.input_error", error => e).to_string());
                 }
             }
             crate::events::Event::Paste(content) => {
@@ -2032,7 +2052,10 @@ impl Repl {
                     self.state.paste_counter += 1;
                     let num = self.state.paste_counter;
                     self.state.pasted_texts.insert(num, content);
-                    let display = format!("[Pasted Text #{num} {line_count} lines]");
+                    // The "[Pasted Text #" prefix is machine-parsed on submit
+                    // (expand_pasted_texts) — locale files must keep it intact.
+                    let display =
+                        t!("ui.pasted_text_marker", num => num, count => line_count).to_string();
                     self.prompt.insert_text(&display);
                 } else {
                     self.prompt.insert_text(&content);
@@ -2161,7 +2184,7 @@ impl Repl {
         let input = input.trim().to_string();
 
         if input.is_empty() {
-            return Err("No input provided on stdin.".into());
+            return Err(t!("repl.no_input").to_string().into());
         }
         self.run_pipe_with(input)
     }
@@ -2173,7 +2196,7 @@ impl Repl {
         let input = input.trim().to_string();
 
         if input.is_empty() {
-            return Err("No input provided on stdin.".into());
+            return Err(t!("repl.no_input").to_string().into());
         }
 
         if input.starts_with('/') {

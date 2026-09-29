@@ -179,3 +179,18 @@ review:
 # ── Session ──────────────────────────────────────────────────────────────────
 session:
   auto_restored: "স্বয়ংক্রিয়ভাবে পুনরুদ্ধার করা সেশন: \"%{title}\" (%{count} বার্তা, %{model})\nনতুন সেশন শুরু করতে /clear টাইপ করুন।"
+
+# ── UI: paste / diagnostics / pipe / session summary ────────────────────
+# NOTE: pasted_text_marker keeps the literal "[Pasted Text #" prefix on
+# purpose — it is machine-parsed on submit (expand_pasted_texts), so
+# translations must keep that prefix with the number directly after it.
+ui:
+  pasted_text_marker: "[Pasted Text #%{num} · %{count} লাইন]"
+  diagnostics_issues: "[ডায়াগনস্টিকস: %{count}টি সমস্যা পাওয়া গেছে]"
+  diagnostics_clean: "[ডায়াগনস্টিকস: ✓ কোনো সমস্যা নেই]"
+  session_summary_title: "── সেশন সারসংক্ষেপ ──"
+  session_summary_tokens: "  টোকেন: %{input} ইনপুট + %{output} আউটপুট  |  খরচ: $%{cost}"
+  session_summary_budget: "  বাজেট: $%{cost} / $%{budget} (%{pct}%)"
+  session_summary_model: "  মডেল: %{model}"
+  session_summary_duration: "  সময়কাল: %{mins}মি %{secs}সে"
+  session_summary_separator: "─────────────────────"

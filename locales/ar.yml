@@ -179,3 +179,18 @@ review:
 # ── Session ──────────────────────────────────────────────────────────────────
 session:
   auto_restored: "تمت استعادة الجلسة تلقائيًا: \"%{title}\" (%{count} رسالة، %{model})\nاكتب /clear لبدء جلسة جديدة."
+
+# ── UI: paste / diagnostics / pipe / session summary ────────────────────
+# NOTE: pasted_text_marker keeps the literal "[Pasted Text #" prefix on
+# purpose — it is machine-parsed on submit (expand_pasted_texts), so
+# translations must keep that prefix with the number directly after it.
+ui:
+  pasted_text_marker: "[Pasted Text #%{num} · %{count} أسطر]"
+  diagnostics_issues: "[التشخيص: تم العثور على %{count} من المشاكل]"
+  diagnostics_clean: "[التشخيص: ✓ لا توجد مشاكل]"
+  session_summary_title: "── ملخص الجلسة ──"
+  session_summary_tokens: "  الرموز: %{input} إدخال + %{output} إخراج  |  التكلفة: $%{cost}"
+  session_summary_budget: "  الميزانية: $%{cost} / $%{budget} (%{pct}%)"
+  session_summary_model: "  النموذج: %{model}"
+  session_summary_duration: "  المدة: %{mins}د %{secs}ث"
+  session_summary_separator: "─────────────────────"
