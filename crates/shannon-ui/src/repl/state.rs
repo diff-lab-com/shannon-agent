@@ -183,7 +183,11 @@ pub struct ReplState {
     pub theme: Theme,
     /// Accessibility mode: replace decorative chars with plain text
     pub accessibility_mode: bool,
-    /// Reduced motion: disables animations (spinner, shimmer) for accessibility
+    /// Reduced motion: disables animations (spinner, shimmer) for
+    /// accessibility. Defaults from motion-specific env signals only —
+    /// `SHANNON_REDUCED_MOTION=1|true|yes` or the legacy `REDUCED_MOTION` /
+    /// `NO_GRAPHICS` / `ACCESSIBILITY`; `NO_COLOR` must not affect it
+    /// (review §P2-6). Toggle per session via `/accessibility`.
     pub reduced_motion: bool,
     /// Configurable keybindings
     pub keybindings: crate::keybindings::KeyBindings,
@@ -626,10 +630,7 @@ impl Default for ReplState {
             theme: Theme::detect(),
             accessibility_mode: std::env::var("NO_GRAPHICS").is_ok()
                 || std::env::var("ACCESSIBILITY").is_ok(),
-            reduced_motion: std::env::var("NO_COLOR").is_ok()
-                || std::env::var("REDUCED_MOTION").is_ok()
-                || std::env::var("NO_GRAPHICS").is_ok()
-                || std::env::var("ACCESSIBILITY").is_ok(),
+            reduced_motion: Self::reduced_motion_from_env(),
             keybindings: crate::keybindings::load_keybindings(),
             sidebar_visible: true,
             diff_viewer: None,
@@ -736,6 +737,35 @@ impl ReplState {
     /// missed transition can only cause extra frames, never stalled ones.
     pub(crate) fn render_in_progress(&self) -> bool {
         self.streaming_active || self.thinking_phase || self.active_tool.is_some()
+    }
+
+    /// Motion preference from the process environment (review §P2-6).
+    pub(crate) fn reduced_motion_from_env() -> bool {
+        Self::reduced_motion_from(|key| std::env::var(key).ok())
+    }
+
+    /// Pure decision core of [`Self::reduced_motion_from_env`], parameterized
+    /// over an env lookup so tests never touch process-global state.
+    ///
+    /// Color preference is not motion preference: `NO_COLOR` deliberately
+    /// does NOT appear here (review §P2-6). Opt in with
+    /// `SHANNON_REDUCED_MOTION=1|true|yes` (case-insensitive); the legacy
+    /// accessibility signals (`REDUCED_MOTION`, `NO_GRAPHICS`,
+    /// `ACCESSIBILITY`) keep their set-means-on behavior.
+    pub(crate) fn reduced_motion_from(get: impl Fn(&str) -> Option<String>) -> bool {
+        Self::env_flag_on(get("SHANNON_REDUCED_MOTION"))
+            || get("REDUCED_MOTION").is_some()
+            || get("NO_GRAPHICS").is_some()
+            || get("ACCESSIBILITY").is_some()
+    }
+
+    /// `SHANNON_REDUCED_MOTION` accepts `1` / `true` / `yes`
+    /// case-insensitively (surrounding whitespace tolerated); any other
+    /// value — `0`, `false`, garbage, empty — leaves motion untouched.
+    fn env_flag_on(value: Option<String>) -> bool {
+        value
+            .map(|v| v.trim().to_ascii_lowercase())
+            .is_some_and(|v| matches!(v.as_str(), "1" | "true" | "yes"))
     }
 }
 
@@ -1036,6 +1066,75 @@ mod tests {
             ..Default::default()
         };
         assert!(state.render_in_progress());
+    }
+
+    // -- Reduced motion env parsing (review §P2-6) ---------------------------
+
+    /// Build an env lookup closure over a fixed pair list (no process env).
+    fn env_map<'a>(pairs: &'a [(&'a str, &'a str)]) -> impl Fn(&str) -> Option<String> + 'a {
+        move |key| {
+            pairs
+                .iter()
+                .find(|(k, _)| *k == key)
+                .map(|(_, v)| v.to_string())
+        }
+    }
+
+    #[test]
+    fn shannon_reduced_motion_truthy_values_enable() {
+        for value in ["1", "true", "TRUE", "True", "yes", "YES", " yes "] {
+            let pairs = [("SHANNON_REDUCED_MOTION", value)];
+            assert!(
+                ReplState::reduced_motion_from(env_map(&pairs)),
+                "SHANNON_REDUCED_MOTION={value:?} must enable reduced motion"
+            );
+        }
+    }
+
+    #[test]
+    fn shannon_reduced_motion_falsy_or_garbage_values_do_not_enable() {
+        for value in ["0", "false", "no", "off", "sure", "", "  "] {
+            let pairs = [("SHANNON_REDUCED_MOTION", value)];
+            assert!(
+                !ReplState::reduced_motion_from(env_map(&pairs)),
+                "SHANNON_REDUCED_MOTION={value:?} must not enable reduced motion"
+            );
+        }
+    }
+
+    #[test]
+    fn no_color_alone_leaves_reduced_motion_off() {
+        // P2-6: color preference is not motion preference.
+        let pairs = [("NO_COLOR", "1")];
+        assert!(!ReplState::reduced_motion_from(env_map(&pairs)));
+    }
+
+    #[test]
+    fn unset_env_leaves_reduced_motion_off() {
+        assert!(!ReplState::reduced_motion_from(|_| None));
+    }
+
+    #[test]
+    fn legacy_accessibility_env_vars_still_enable_reduced_motion() {
+        for (key, value) in [
+            ("REDUCED_MOTION", "1"),
+            ("REDUCED_MOTION", ""),
+            ("NO_GRAPHICS", "1"),
+            ("ACCESSIBILITY", "anything"),
+        ] {
+            let pairs = [(key, value)];
+            assert!(
+                ReplState::reduced_motion_from(env_map(&pairs)),
+                "{key}={value:?} must keep enabling reduced motion"
+            );
+        }
+    }
+
+    #[test]
+    fn shannon_reduced_motion_enables_without_legacy_vars() {
+        // Explicit opt-in works without any legacy var set.
+        let pairs = [("SHANNON_REDUCED_MOTION", "yes")];
+        assert!(ReplState::reduced_motion_from(env_map(&pairs)));
     }
 }
 

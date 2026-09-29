@@ -337,6 +337,16 @@ impl Repl {
     pub(crate) fn mark_frame_dirty(&mut self) {
         self.frame_dirty = true;
     }
+
+    /// Update reduced motion and keep the spinner's static mode in lockstep
+    /// (same sync as REPL init). Session-scoped: toggled via
+    /// `/accessibility`; the env-level opt-in is `SHANNON_REDUCED_MOTION`
+    /// (review §P2-6).
+    pub(crate) fn set_reduced_motion(&mut self, enabled: bool) {
+        self.state.reduced_motion = enabled;
+        self.state.spinner.set_static_mode(enabled);
+        self.mark_frame_dirty();
+    }
     /// Minimal REPL for test mode — skips MCP, skills, memory, project instructions,
     /// but includes a lightweight query_engine with an unauthenticated LLM client.
     fn new_minimal(runtime: Runtime) -> Result<Self> {
