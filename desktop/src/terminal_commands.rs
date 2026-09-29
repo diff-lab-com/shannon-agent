@@ -6,11 +6,14 @@
 //! `terminal_write({terminalId, data})` (stdin bytes as a UTF-8 string),
 //! `terminal_resize({terminalId, cols, rows})`,
 //! `terminal_kill({terminalId})`,
-//! `terminal_list() -> [{terminalId, projectDir, shell, startedAtMs}]`,
-//! and the `terminal:output` event (`shannon_types::events::event_names::
+//! `terminal_list() -> [{terminalId, projectDir, shell, startedAtMs,
+//! spawnedByWindow?}]`,
+//! the `terminal:output` event (`shannon_types::events::event_names::
 //! TERMINAL_OUTPUT`) with payload `{ terminalId, data }` where `data` is
 //! the **base64-encoded** raw PTY byte stream (byte-preserving — the
-//! frontend decodes before writing to xterm.js).
+//! frontend decodes before writing to xterm.js), and — additive, P3-6 —
+//! the `terminal:exit` event (`TERMINAL_EXIT`, `{ terminalId }`) emitted
+//! when a session is reaped after a natural exit.
 //!
 //! # Process discipline (mirrors `preview_commands.rs`)
 //!
@@ -24,10 +27,14 @@
 //!   the whole tree;
 //! * the single output-pump thread (≤16 ms tick) coalesces PTY bytes into
 //!   at most one `terminal:output` emit per tick per terminal, reaps
-//!   naturally exited shells (no phantom entries in `terminal_list`), and
-//!   announces the exit in the terminal stream;
+//!   naturally exited shells (no phantom entries in `terminal_list`),
+//!   announces the exit in the terminal stream, and emits the
+//!   `terminal:exit` event as the machine-readable exit signal;
 //! * `terminal_kill` / `kill_all` (main-window-destroyed hook in
-//!   `main.rs`) kill the trees explicitly, and `Drop for TerminalManager`
+//!   `main.rs`) kill the trees explicitly — as does `kill_for_window`
+//!   (P3-2: every `session-*` window's destroyed hook reaps the sessions
+//!   its terminal panel spawned, via the additive `spawnedByWindow`
+//!   attribution on `TerminalInfo`) — and `Drop for TerminalManager`
 //!   is the app-exit backstop — the pump thread holds only a `Weak` to the
 //!   manager so teardown is never pinned by it;
 //! * a per-session reader thread moves pty bytes into a small pending
@@ -103,6 +110,22 @@ pub struct TerminalInfo {
     pub project_dir: String,
     pub shell: String,
     pub started_at_ms: i64,
+    /// P3-2 window attribution: label of the webview window whose terminal
+    /// panel spawned this session (`main` or `session-<uuid>`), used by
+    /// `kill_for_window` when a session window is destroyed. Additive
+    /// field — `#[serde(default)]` keeps pre-existing wire payloads
+    /// (which never carried it) deserializable.
+    #[serde(default)]
+    pub spawned_by_window: Option<String>,
+}
+
+/// `terminal:exit` event payload (P3-6, frozen: `{ terminalId }`).
+/// Emitted exactly once when the pump reaps a naturally exited session;
+/// the in-stream exit notice stays for humans.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct TerminalExitPayload {
+    pub terminal_id: String,
 }
 
 /// `terminal:output` event payload. `data` is base64 of the raw pty bytes.
@@ -140,13 +163,21 @@ fn tokenize_shell(shell: &str) -> Result<Vec<String>, String> {
 // ── Output sink (injectable emit boundary) ───────────────────────────────
 
 /// Where coalesced pty bytes go. Production emits the `terminal:output`
-/// Tauri event; tests record bytes and count emissions.
+/// Tauri event; tests record bytes and count emissions. `emit_exit` has a
+/// no-op default so simple test sinks stay one-method.
 pub trait TerminalOutputSink: Send + Sync {
     fn emit_output(&self, terminal_id: &str, data: &[u8]);
+
+    /// P3-6: the session exited naturally and was reaped. Emitted once,
+    /// after the final output flush (which still carries the human-readable
+    /// exit notice). Explicit kills do not emit this — the caller asked for
+    /// the death and already updates its own state.
+    fn emit_exit(&self, _terminal_id: &str) {}
 }
 
 /// Production sink: base64-encode the coalesced bytes and emit
-/// `terminal:output` with `{ terminalId, data }` (frozen payload shape).
+/// `terminal:output` with `{ terminalId, data }` (frozen payload shape);
+/// exits go out as `terminal:exit` with `{ terminalId }`.
 pub struct TauriTerminalSink {
     app: tauri::AppHandle,
 }
@@ -168,6 +199,18 @@ impl TerminalOutputSink for TauriTerminalSink {
             .emit(crate::events::event_names::TERMINAL_OUTPUT, payload)
         {
             tracing::debug!(terminal_id, error = %e, "terminal:output emit failed");
+        }
+    }
+
+    fn emit_exit(&self, terminal_id: &str) {
+        let payload = TerminalExitPayload {
+            terminal_id: terminal_id.to_string(),
+        };
+        if let Err(e) = self
+            .app
+            .emit(crate::events::event_names::TERMINAL_EXIT, payload)
+        {
+            tracing::debug!(terminal_id, error = %e, "terminal:exit emit failed");
         }
     }
 }
@@ -398,7 +441,17 @@ impl TerminalManager {
 
     /// `terminal_spawn({projectDir, shell?})`. The cwd is canonicalized;
     /// the default shell is `$SHELL` (PowerShell on Windows).
-    pub fn spawn(&self, project_dir: &Path, shell: Option<String>) -> Result<TerminalInfo, String> {
+    ///
+    /// `spawned_by_window` is the calling webview window's label (P3-2) —
+    /// `None` only in tests / non-window callers. It rides on
+    /// `TerminalInfo` so `kill_for_window` can reap every session a
+    /// destroyed window owns.
+    pub fn spawn(
+        &self,
+        project_dir: &Path,
+        shell: Option<String>,
+        spawned_by_window: Option<String>,
+    ) -> Result<TerminalInfo, String> {
         let dir = project_dir
             .canonicalize()
             .map_err(|e| format!("project dir {}: {e}", project_dir.display()))?;
@@ -450,6 +503,7 @@ impl TerminalManager {
             project_dir: dir.display().to_string(),
             shell: shell_line.clone(),
             started_at_ms: now_ms(),
+            spawned_by_window,
         };
 
         let writer = pair
@@ -554,6 +608,37 @@ impl TerminalManager {
         }
     }
 
+    /// P3-2 — kill every session spawned by the named window (same
+    /// process-tree discipline as [`Self::kill`]). Called from the
+    /// `session-*` window-destroyed hook in `main.rs` so a closed session
+    /// window cannot leak its shells; returns how many sessions were
+    /// reaped (0 is normal — a window whose panel never opened a terminal).
+    pub fn kill_for_window(&self, label: &str) -> usize {
+        let removed: Vec<Arc<TerminalSession>> = {
+            let mut sessions = self
+                .inner
+                .sessions
+                .lock()
+                .unwrap_or_else(|p| p.into_inner());
+            let victims: Vec<String> = sessions
+                .values()
+                .filter(|s| s.info.spawned_by_window.as_deref() == Some(label))
+                .map(|s| s.info.terminal_id.clone())
+                .collect();
+            victims
+                .into_iter()
+                .filter_map(|id| sessions.remove(&id))
+                .collect()
+        };
+        for session in &removed {
+            session.pending.close();
+            if let Some(mut child) = session.take_child() {
+                kill_process_tree(&mut child);
+            }
+        }
+        removed.len()
+    }
+
     fn session(&self, terminal_id: &str) -> Result<Arc<TerminalSession>, String> {
         self.inner
             .sessions
@@ -654,6 +739,10 @@ fn pump_once(inner: &TerminalInner) {
                 .as_bytes(),
             );
             emit_chunked(&sink, &session.info.terminal_id, &final_bytes);
+            // P3-6 — the machine-readable exit signal, after the final
+            // bytes so the frontend never sees `terminal:exit` before the
+            // last output / in-stream notice for this session.
+            sink.emit_exit(&session.info.terminal_id);
             // Retire: close the reader, drop the child handle, remove the
             // session. The take_child here is just prompt cleanup — the
             // process already exited, so no kill signal is needed.
@@ -728,9 +817,15 @@ fn spawn_reader(reader: Box<dyn Read + Send>, pending: Arc<PendingBuffer>) {
 /// `terminal_spawn({projectDir, shell?}) -> { terminalId }`. `projectDir`
 /// may be omitted: the backend then resolves the current session working
 /// directory (same fallback as `preview_*`).
+///
+/// The `window` parameter is injected by Tauri (never sent by the
+/// frontend) — the invoking webview window's label is recorded on the
+/// session (`TerminalInfo.spawnedByWindow`) so the window's destroyed hook
+/// can reap it (P3-2). The wire contract is unchanged.
 #[tauri::command]
 pub async fn terminal_spawn(
     state: tauri::State<'_, crate::commands::AppState>,
+    window: tauri::WebviewWindow,
     project_dir: Option<String>,
     shell: Option<String>,
 ) -> Result<TerminalSpawnResponse, String> {
@@ -738,7 +833,9 @@ pub async fn terminal_spawn(
         Some(dir) if !dir.trim().is_empty() => PathBuf::from(dir),
         _ => crate::commands_agents::resolve_working_dir(&state).await,
     };
-    let info = state.terminals.spawn(&dir, shell)?;
+    let info = state
+        .terminals
+        .spawn(&dir, shell, Some(window.label().to_string()))?;
     Ok(TerminalSpawnResponse {
         terminal_id: info.terminal_id,
     })
@@ -799,6 +896,14 @@ pub fn shutdown_on_exit(state: &crate::commands::AppState) {
     state.terminals.kill_all();
 }
 
+/// P3-2 — reap every session spawned by the named window, for the
+/// `session-*` window-destroyed hook in `main.rs`. Pub lib function (not
+/// field access) keeps the bin's surface tiny — same pattern as
+/// [`shutdown_on_exit`]. Returns the number of sessions killed.
+pub fn kill_window_sessions(state: &crate::commands::AppState, label: &str) -> usize {
+    state.terminals.kill_for_window(label)
+}
+
 // ── Tests ────────────────────────────────────────────────────────────────
 
 #[cfg(test)]
@@ -811,12 +916,14 @@ mod tests {
     const WAIT: Duration = Duration::from_secs(5);
 
     /// Records every emission (id, bytes) in order; the test asserts on
-    /// both delivery and coalescing.
+    /// both delivery and coalescing. `emit_exit` records the terminal id
+    /// so the P3-6 contract is observable.
     type Emissions = Arc<StdMutex<Vec<(String, Vec<u8>)>>>;
 
     #[derive(Default, Clone)]
     struct RecordingSink {
         emissions: Emissions,
+        exits: Arc<StdMutex<Vec<String>>>,
     }
 
     impl RecordingSink {
@@ -855,6 +962,15 @@ mod tests {
             }
             self.contains(terminal_id, needle)
         }
+
+        /// True once `emit_exit` fired for this terminal (P3-6).
+        fn exited(&self, terminal_id: &str) -> bool {
+            self.exits
+                .lock()
+                .unwrap()
+                .iter()
+                .any(|id| id == terminal_id)
+        }
     }
 
     impl TerminalOutputSink for RecordingSink {
@@ -863,6 +979,10 @@ mod tests {
                 .lock()
                 .unwrap()
                 .push((terminal_id.to_string(), data.to_vec()));
+        }
+
+        fn emit_exit(&self, terminal_id: &str) {
+            self.exits.lock().unwrap().push(terminal_id.to_string());
         }
     }
 
@@ -925,14 +1045,45 @@ mod tests {
             project_dir: "/home/u/proj".into(),
             shell: "/bin/bash".into(),
             started_at_ms: 1_700,
+            spawned_by_window: Some("session-abc".into()),
         };
         let json = serde_json::to_string(&info).unwrap();
         assert!(json.contains("\"terminalId\":\"t-1\""), "{json}");
         assert!(json.contains("\"projectDir\":\"/home/u/proj\""), "{json}");
         assert!(json.contains("\"shell\":\"/bin/bash\""), "{json}");
         assert!(json.contains("\"startedAtMs\":1700"), "{json}");
+        // P3-2 additive attribution field (camelCase, nullable).
+        assert!(
+            json.contains("\"spawnedByWindow\":\"session-abc\""),
+            "{json}"
+        );
         let back: TerminalInfo = serde_json::from_str(&json).unwrap();
         assert_eq!(back, info);
+    }
+
+    #[test]
+    fn list_item_without_spawned_by_window_still_parses() {
+        // P3-2: wire payloads emitted before the additive attribution field
+        // existed (and the frontend's own fixtures) must keep deserializing.
+        let legacy: TerminalInfo = serde_json::from_str(
+            r#"{"terminalId":"t-1","projectDir":"/p","shell":"/bin/sh","startedAtMs":7}"#,
+        )
+        .expect("legacy TerminalInfo must deserialize");
+        assert_eq!(legacy.terminal_id, "t-1");
+        assert_eq!(legacy.spawned_by_window, None);
+    }
+
+    #[test]
+    fn exit_payload_is_frozen_camel_case() {
+        // Task 3's frontend parses exactly this shape (TerminalExitPayload
+        // in desktop/ui/src/types) — `{"terminalId": …}`, nothing else.
+        let json = serde_json::to_string(&TerminalExitPayload {
+            terminal_id: "t-9".into(),
+        })
+        .unwrap();
+        assert_eq!(json, r#"{"terminalId":"t-9"}"#);
+        let back: TerminalExitPayload = serde_json::from_str(&json).unwrap();
+        assert_eq!(back.terminal_id, "t-9");
     }
 
     #[test]
@@ -990,7 +1141,7 @@ mod tests {
         let manager = test_manager(&sink);
         let dir = tempfile::tempdir().expect("tempdir");
         let info = manager
-            .spawn(dir.path(), Some("/bin/sh".into()))
+            .spawn(dir.path(), Some("/bin/sh".into()), None)
             .expect("spawn");
         assert_eq!(
             info.project_dir,
@@ -1021,7 +1172,7 @@ mod tests {
         let manager = test_manager(&sink);
         let dir = tempfile::tempdir().expect("tempdir");
         let info = manager
-            .spawn(dir.path(), Some("/bin/sh".into()))
+            .spawn(dir.path(), Some("/bin/sh".into()), None)
             .expect("spawn");
         // Direct pending seeding (reader equivalent) + a synchronous pump
         // pass: five bursts within one tick must leave as ONE emission.
@@ -1051,7 +1202,7 @@ mod tests {
         let manager = test_manager(&sink);
         let dir = tempfile::tempdir().expect("tempdir");
         let info = manager
-            .spawn(dir.path(), Some("/bin/sh".into()))
+            .spawn(dir.path(), Some("/bin/sh".into()), None)
             .expect("spawn");
         manager.resize(&info.terminal_id, 100, 30).expect("resize");
         // `stty size` reports "<rows> <cols>" from the pty winsize.
@@ -1078,17 +1229,72 @@ mod tests {
         // group must take both down.
         let dir = tempfile::tempdir().expect("tempdir");
         let info = manager
-            .spawn(dir.path(), Some("/bin/sh -c 'sleep 30'".into()))
+            .spawn(dir.path(), Some("/bin/sh -c 'sleep 30'".into()), None)
             .expect("spawn");
         let pid = pid_of(&manager, &info.terminal_id).expect("pid");
         let killed = manager.kill(&info.terminal_id).expect("kill");
         assert_eq!(killed.terminal_id, info.terminal_id);
         assert!(wait_until(WAIT, || process_gone(pid)), "process must die");
         assert!(manager.list().is_empty(), "no phantom entries after kill");
+        // Explicit kills are caller-requested deaths: no `terminal:exit`
+        // event (only natural exits emit it — the killer already knows).
+        assert!(!sink.exited(&info.terminal_id));
         // Unknown id on every mutating command → explicit error.
         assert!(manager.kill(&info.terminal_id).is_err());
         assert!(manager.write(&info.terminal_id, "x").is_err());
         assert!(manager.resize(&info.terminal_id, 80, 24).is_err());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn kill_for_window_reaps_only_that_windows_sessions() {
+        let sink = RecordingSink::default();
+        let manager = test_manager(&sink);
+        let dir = tempfile::tempdir().expect("tempdir");
+        // Two sessions attributed to different (session-)window labels;
+        // each runs a `sleep 30` child so the group kill is observable.
+        let a = manager
+            .spawn(
+                dir.path(),
+                Some("/bin/sh -c 'sleep 30'".into()),
+                Some("session-aaaa".into()),
+            )
+            .expect("spawn a");
+        let b = manager
+            .spawn(
+                dir.path(),
+                Some("/bin/sh -c 'sleep 30'".into()),
+                Some("session-bbbb".into()),
+            )
+            .expect("spawn b");
+        assert_eq!(a.spawned_by_window.as_deref(), Some("session-aaaa"));
+        assert_eq!(b.spawned_by_window.as_deref(), Some("session-bbbb"));
+        let pid_a = pid_of(&manager, &a.terminal_id).expect("pid a");
+
+        // Reap window A only.
+        let killed = manager.kill_for_window("session-aaaa");
+        assert_eq!(killed, 1, "exactly session A dies");
+        assert!(
+            wait_until(WAIT, || process_gone(pid_a)),
+            "targeted session's process tree must die"
+        );
+        assert!(
+            !manager.list().iter().any(|t| t.terminal_id == a.terminal_id),
+            "targeted session leaves the list"
+        );
+        assert!(
+            manager.list().iter().any(|t| t.terminal_id == b.terminal_id),
+            "the other window's session must survive"
+        );
+        // Reaping an unknown/already-clean label is a no-op, not an error.
+        assert_eq!(manager.kill_for_window("session-aaaa"), 0);
+        assert_eq!(manager.kill_for_window("main"), 0);
+        // The survivor is still writable; clean up.
+        manager
+            .write(&b.terminal_id, "exit\n")
+            .expect("survivor alive");
+        manager.kill_all();
+        assert!(manager.list().is_empty());
     }
 
     #[cfg(unix)]
@@ -1098,7 +1304,7 @@ mod tests {
         let manager = test_manager(&sink);
         let dir = tempfile::tempdir().expect("tempdir");
         let info = manager
-            .spawn(dir.path(), Some("/bin/sh -c 'echo bye-now'".into()))
+            .spawn(dir.path(), Some("/bin/sh -c 'echo bye-now'".into()), None)
             .expect("spawn");
         assert!(sink.wait_for(&info.terminal_id, "bye-now", WAIT));
         // The pump must reap the exited session: list empties and the
@@ -1111,6 +1317,10 @@ mod tests {
             sink.contains(&info.terminal_id, "process exited"),
             "exit must be announced in the stream"
         );
+        // P3-6 — and the machine-readable `terminal:exit` event must fire
+        // exactly once for the natural exit (the in-stream notice is for
+        // humans only; the frontend keys off this event).
+        assert!(sink.exited(&info.terminal_id), "terminal:exit must fire");
     }
 
     #[cfg(unix)]
@@ -1122,13 +1332,13 @@ mod tests {
         let mut ids = Vec::new();
         for _ in 0..MAX_TERMINALS {
             let info = manager
-                .spawn(dir.path(), Some("/bin/sh -c 'sleep 30'".into()))
+                .spawn(dir.path(), Some("/bin/sh -c 'sleep 30'".into()), None)
                 .expect("spawn");
             ids.push(info.terminal_id);
         }
         assert_eq!(manager.list().len(), MAX_TERMINALS);
         let err = manager
-            .spawn(dir.path(), Some("/bin/sh -c 'sleep 30'".into()))
+            .spawn(dir.path(), Some("/bin/sh -c 'sleep 30'".into()), None)
             .unwrap_err();
         assert!(err.contains("terminal limit reached (4)"), "{err}");
         manager.kill_all();
@@ -1150,7 +1360,7 @@ mod tests {
         let mut pids = Vec::new();
         for _ in 0..2 {
             let info = manager
-                .spawn(dir.path(), Some("/bin/sh -c 'sleep 30'".into()))
+                .spawn(dir.path(), Some("/bin/sh -c 'sleep 30'".into()), None)
                 .expect("spawn");
             pids.push(pid_of(&manager, &info.terminal_id).expect("pid"));
         }
@@ -1168,7 +1378,7 @@ mod tests {
         let manager = test_manager(&sink);
         let dir = tempfile::tempdir().expect("tempdir");
         let info = manager
-            .spawn(dir.path(), Some("/bin/sh -c 'sleep 30'".into()))
+            .spawn(dir.path(), Some("/bin/sh -c 'sleep 30'".into()), None)
             .expect("spawn");
         let pid = pid_of(&manager, &info.terminal_id).expect("pid");
         assert_eq!(manager.live_pumps(), 1, "exactly one pump thread");
@@ -1191,7 +1401,7 @@ mod tests {
         let manager = test_manager(&sink);
         let dir = tempfile::tempdir().expect("tempdir");
         let info = manager
-            .spawn(dir.path(), Some("/bin/sh".into()))
+            .spawn(dir.path(), Some("/bin/sh".into()), None)
             .expect("spawn");
         // Five rapid writes inside one tick window — however the pump
         // coalesces them, every byte must arrive exactly once in order.
@@ -1224,7 +1434,7 @@ mod tests {
         let sink = RecordingSink::default();
         let manager = test_manager(&sink);
         let err = manager
-            .spawn(&PathBuf::from("/nonexistent/dir/for/terminal"), None)
+            .spawn(&PathBuf::from("/nonexistent/dir/for/terminal"), None, None)
             .unwrap_err();
         assert!(err.contains("project dir"), "{err}");
     }
@@ -1277,7 +1487,7 @@ mod tests {
         let manager = test_manager(&sink);
         let dir = tempfile::tempdir().expect("tempdir");
         let info = manager
-            .spawn(dir.path(), Some("/bin/sh -c 'sleep 30'".into()))
+            .spawn(dir.path(), Some("/bin/sh -c 'sleep 30'".into()), None)
             .expect("spawn");
         // 3 MiB in a single push: the 2 MiB cap drops the oldest 1 MiB and
         // the pump must ship the retained 2 MiB as ≤256 KiB events.
@@ -1315,6 +1525,7 @@ mod tests {
             project_dir: "/tmp".into(),
             shell: "/bin/sh".into(),
             started_at_ms: ms,
+            spawned_by_window: None,
         };
         let mut infos = vec![
             make("b", 200),

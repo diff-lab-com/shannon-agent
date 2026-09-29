@@ -521,6 +521,15 @@ fn main() {
                 tauri::async_runtime::spawn(async move {
                     if let Some(state) = app.try_state::<commands::AppState>() {
                         session_window_commands::cleanup_destroyed_window(&state, &label).await;
+                        // P3-2 — a destroyed session window must not leak
+                        // the PTYs its terminal panel spawned: reap every
+                        // session attributed to this window label. The
+                        // main window's own destroyed path already does
+                        // `kill_all` above.
+                        let killed = terminal_commands::kill_window_sessions(&state, &label);
+                        if killed > 0 {
+                            tracing::info!(%label, killed, "reaped terminals of destroyed session window");
+                        }
                     }
                 });
             }
