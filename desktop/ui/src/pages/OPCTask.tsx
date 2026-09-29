@@ -212,7 +212,7 @@ export default function OPCTask() {
 
             {/* Human-in-the-Loop Review — only render when a permission request is actually pending */}
             {permissionRequest !== null && (
-              <div className="glass-card bg-surface-container-lowest/80 rounded-2xl p-xl border border-outline-variant/40 shadow-e1">
+              <div className="bg-surface-container-lowest rounded-2xl p-xl border border-outline-variant/40 shadow-e1">
                 <div className="flex items-center gap-sm mb-lg">
                   <span className="material-symbols-outlined icon-md text-on-surface-variant">verified_user</span>
                   <h3 className="font-headline-md text-headline-sm font-bold text-on-surface">{t('opcTask.humanInTheLoopReview')}</h3>

@@ -39,6 +39,7 @@ of hardcoding hex codes, pixel sizes, or timings.
 | Shadow       | `--shadow-e{1..5}`  | `--shadow-e1`                          | Elevation levels (1..5); the `shadow-e{n}` utilities bind to these tokens |
 | Animation    | `--duration-*`      | `--duration-normal` (160ms)            | fast 100ms / normal 160ms / slow 240ms / slower 400ms — declared once in `@theme`, no overrides |
 | Easing       | `--ease-glass`      | —                                      | Apple sheet curve used by glass/panel motion |
+| Material     | `--material-base`   | `--material-base`                      | L0 window-base solid color (Batch 2 G2): body paints it, the sidebar rail sits on it, `<main>` paints `--color-surface` one tier above. Declared per theme in `theme-source.json` — dark themes reuse their `--color-surface-dim`, light themes get a hand-picked lighter/warmer step |
 | Z-index      | `--z-index-*`       | `--z-index-modal` (50)                 | Reserved scale (`z-modal` etc. utilities); most code should not need this |
 
 ### Type-scale adoption & guard rules (UI review 2026-09-29, Batch 1)

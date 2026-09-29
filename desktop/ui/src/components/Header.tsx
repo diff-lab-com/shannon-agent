@@ -140,7 +140,10 @@ export function Header() {
 
   return (
     <>
-      <header className="fixed top-0 right-0 z-header flex justify-between items-center h-16 px-lg bg-surface/80 [backdrop-filter:var(--glass-blur-surface)] shadow-e1 border-b border-outline-variant/10" style={{ left: 'var(--sidebar-w)' }}>
+      {/* G1: persistent chrome bar — glass-surface (was a hand-rolled
+          bg-surface/80+[backdrop-filter] that bypassed the utility's inset
+          highlight, hairline and contain:paint). */}
+      <header className="glass-surface fixed top-0 right-0 z-header flex justify-between items-center h-16 px-lg" style={{ left: 'var(--sidebar-w)' }}>
         {!isWindowMode && (
           <Button variant="ghost" aria-label={t('header.toggleSidebar.aria')} className="md:hidden p-sm mr-sm text-on-surface-variant hover:text-primary" onClick={toggleSidebar}>
             <span className="material-symbols-outlined icon-lg">menu</span>
@@ -261,7 +264,7 @@ export function Header() {
                 <span className="material-symbols-outlined icon-sm">expand_more</span>
               </Button>
               {modelOpen && models.length > 0 && (
-                <div className="absolute right-0 top-full mt-sm w-[280px] bg-surface-container-lowest/95 backdrop-blur-lg rounded-xl border border-outline-variant/20 shadow-e4 z-modal py-sm" role="listbox" onKeyDown={e => {
+                <div className="glass-overlay animate-panel-in absolute right-0 top-full mt-sm w-[280px] rounded-xl z-modal py-sm" role="listbox" onKeyDown={e => {
                   if (e.key === 'ArrowDown') { e.preventDefault(); setModelFocus(f => Math.min(f + 1, models.length - 1)) }
                   else if (e.key === 'ArrowUp') { e.preventDefault(); setModelFocus(f => Math.max(f - 1, 0)) }
                   // B6-37: only handle Enter when the keydown originated on the
@@ -339,7 +342,10 @@ export function Header() {
         {routeAnnouncement ? t('nav.routeChanged.aria', { title: routeAnnouncement }) : ''}
       </div>
 
-      {/* Permission Modal — alertdialog because it demands immediate attention */}
+      {/* Permission Modal — alertdialog because it demands immediate attention.
+          G1: no className override — the old bg-black/30+backdrop-blur-sm landed
+          on the POPUP (not the backdrop) and double-scrimmed it; the Modal now
+          carries the unified glass-overlay panel + its own scrim backdrop. */}
       {permissionRequest && (
       <Modal
         open
@@ -347,7 +353,6 @@ export function Header() {
         size="md"
         role="alertdialog"
         showCloseButton={false}
-        className="bg-black/30 backdrop-blur-sm"
       >
         <div className="p-xl">
             <div className="flex items-center gap-md mb-lg">

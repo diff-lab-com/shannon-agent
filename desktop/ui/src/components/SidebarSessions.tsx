@@ -1163,7 +1163,7 @@ export function SessionsSection({ sessions, sessionActivity, goalRunsBySession =
                 aria-label={t('sidebar.projects.color')}
                 data-testid="project-color-popover"
                 onKeyDown={onColorPopoverKeyDown}
-                className="absolute right-0 top-full mt-sm z-modal flex items-center gap-1.5 px-sm py-sm rounded-xl border border-outline-variant/20 bg-surface-container-lowest/95 backdrop-blur-lg shadow-[var(--shadow-e3)]"
+                className="glass-overlay animate-panel-in absolute right-0 top-full mt-sm z-modal flex items-center gap-1.5 px-sm py-sm rounded-xl"
               >
                 {PROJECT_COLORS.map((color, i) => (
                   <button

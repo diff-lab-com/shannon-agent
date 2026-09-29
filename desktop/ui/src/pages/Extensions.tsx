@@ -68,7 +68,9 @@ export default function Extensions() {
           narrow widths the rows stack so neither squeezes the other. The
           shared search input is owned here and piped to the active tab via
           outlet context. */}
-      <div className="flex flex-col gap-sm w-full px-lg py-sm border-b border-outline-variant/20 bg-surface/80 backdrop-blur-md sticky top-0 z-subheader">
+      {/* G1: sticky page toolbar = persistent chrome → glass-surface (was a
+          hand-rolled bg-surface/80+backdrop-blur-md). */}
+      <div className="glass-surface flex flex-col gap-sm w-full px-lg py-sm sticky top-0 z-subheader">
         {/* Batch E1 (ZCode 市场大页形态): the hub carries its own H1 — the
             marketplace is a destination, not a settings subpage. */}
         <h1 className="font-headline-lg text-headline-md font-bold text-on-surface leading-tight">{t('extensions.hub.title')}</h1>

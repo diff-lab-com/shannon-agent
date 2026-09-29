@@ -109,7 +109,7 @@ export default function SkillCandidateReviewQueue({ focusCandidateId }: {
               role="listitem"
               data-focus-candidate={focused ? 'true' : undefined}
               className={cn(
-                'glass-panel border border-outline-variant/20 rounded-xl p-md shadow-e1 bg-surface-container-lowest/80',
+                'bg-surface-container-lowest border border-outline-variant/20 rounded-xl p-md shadow-e1',
                 focused && 'ring-2 ring-tertiary',
               )}
             >

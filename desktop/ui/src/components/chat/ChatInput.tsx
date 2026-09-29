@@ -467,6 +467,8 @@ export default function ChatInput({
       )}
 
       {isDragging && (
+        // Scrim-style drag veil (遮罩) over the composer while a file drag is
+        // in flight — intentional direct backdrop-blur, G1 exempt.
         <div className="absolute inset-0 z-raised flex items-center justify-center bg-primary/10 rounded-2xl backdrop-blur-sm pointer-events-none">
           <div className="flex flex-col items-center gap-sm text-primary">
             <span className="material-symbols-outlined icon-xl">cloud_upload</span>

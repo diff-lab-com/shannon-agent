@@ -56,7 +56,9 @@ export function ComboboxSelect({ options, value, onChange, placeholder, label, e
         </Combobox.Trigger>
         <Combobox.Portal>
           <Combobox.Positioner sideOffset={4} className="z-modal outline-none">
-            <Combobox.Popup className="w-[var(--anchor-width)] max-h-72 overflow-y-auto rounded-xl border border-outline-variant/40 bg-surface-container-lowest shadow-e3 [backdrop-filter:var(--glass-blur-overlay)]">
+            {/* G3: floating-layer glass-overlay family (was a hand-rolled
+                bg + [backdrop-filter] private recipe). */}
+            <Combobox.Popup className="glass-overlay animate-panel-in w-[var(--anchor-width)] max-h-72 overflow-y-auto rounded-xl">
               <Combobox.Input
                 placeholder={placeholder}
                 className="w-full border-b border-outline-variant/30 bg-transparent px-sm py-xs font-body-md text-on-surface outline-none placeholder:text-on-surface-variant/60"

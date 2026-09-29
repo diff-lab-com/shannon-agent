@@ -42,6 +42,7 @@
     "--color-outline-variant": "#cbc3d7",
     "--color-background": "#f7f9fb",
     "--color-on-background": "#191c1e",
+    "--material-base": "#ffffff",
     "--chart-series-1": "#3b82f6",
     "--chart-series-2": "#10b981",
     "--chart-series-3": "#f59e0b",
@@ -56,6 +57,7 @@
       "mode": "light",
       "vars": {
         "--radius": "0.625rem",
+        "--material-base": "#ffffff",
         "--background": "#f7f9fb",
         "--foreground": "#191c1e",
         "--card": "#ffffff",
@@ -120,6 +122,7 @@
       "comment": "Tokyo Night (dark)",
       "vars": {
         "--radius": "0.625rem",
+        "--material-base": "var(--color-surface-dim)",
         "--background": "#1a1b26",
         "--foreground": "#a9b1d6",
         "--card": "#1f2335",
@@ -185,6 +188,7 @@
       "comment": "Tokyo Night Light",
       "vars": {
         "--radius": "0.625rem",
+        "--material-base": "#eef0fa",
         "--background": "#e1e2f0",
         "--foreground": "#1a1b26",
         "--card": "#eceef6",
@@ -249,6 +253,7 @@
       "comment": "Catppuccin Mocha",
       "vars": {
         "--radius": "0.625rem",
+        "--material-base": "var(--color-surface-dim)",
         "--background": "#1e1e2e",
         "--foreground": "#cdd6f4",
         "--card": "#181825",
@@ -314,6 +319,7 @@
       "comment": "Nord",
       "vars": {
         "--radius": "0.625rem",
+        "--material-base": "var(--color-surface-dim)",
         "--background": "#2e3440",
         "--foreground": "#d8dee9",
         "--card": "#3b4252",
@@ -379,6 +385,7 @@
       "comment": "Ember (warm orange/red)",
       "vars": {
         "--radius": "0.625rem",
+        "--material-base": "#fffcf7",
         "--background": "#faf5f0",
         "--foreground": "#2d1f14",
         "--card": "#ffffff",
@@ -443,6 +450,7 @@
       "comment": "Slate (neutral gray)",
       "vars": {
         "--radius": "0.625rem",
+        "--material-base": "#ffffff",
         "--background": "#f8f9fa",
         "--foreground": "#1e293b",
         "--card": "#ffffff",
@@ -507,6 +515,7 @@
       "comment": "Solarized Dark",
       "vars": {
         "--radius": "0.625rem",
+        "--material-base": "var(--color-surface-dim)",
         "--background": "#002b36",
         "--foreground": "#93a1a1",
         "--card": "#073642",
@@ -572,6 +581,7 @@
       "comment": "Dracula",
       "vars": {
         "--radius": "0.625rem",
+        "--material-base": "var(--color-surface-dim)",
         "--background": "#282a36",
         "--foreground": "#f8f8f2",
         "--card": "#383a4c",
@@ -637,6 +647,7 @@
       "comment": "Gruvbox",
       "vars": {
         "--radius": "0.625rem",
+        "--material-base": "var(--color-surface-dim)",
         "--background": "#282828",
         "--foreground": "#ebdbb2",
         "--card": "#3c3836",
@@ -702,6 +713,7 @@
       "comment": "Solarized Light",
       "vars": {
         "--radius": "0.625rem",
+        "--material-base": "#fffbee",
         "--background": "#fdf6e3",
         "--foreground": "#4d6269",
         "--card": "#eee8d5",
@@ -766,6 +778,7 @@
       "comment": "Gruvbox Light",
       "vars": {
         "--radius": "0.625rem",
+        "--material-base": "#fef7d9",
         "--background": "#fbf1c7",
         "--foreground": "#3c3836",
         "--card": "#ebdbb2",

@@ -29,7 +29,7 @@ export default function OPCMissionFocus({ config }: Props) {
   }
 
   return (
-    <div className="bg-surface-container-lowest/70 backdrop-blur-md rounded-2xl p-xl mb-lg border border-outline-variant/30 relative shadow-e1">
+    <div className="bg-surface-container-lowest rounded-2xl p-xl mb-lg border border-outline-variant/30 relative shadow-e1">
       <div className="flex items-center justify-between mb-sm">
         <div className="flex items-center gap-sm uppercase font-label-md text-label-sm tracking-widest text-on-surface-variant font-bold">
           <span className="w-1.5 h-1.5 bg-outline-variant rotate-45 block" />

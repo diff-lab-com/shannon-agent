@@ -131,7 +131,7 @@ export default function OPCAgentSwarm({ agents, tasks }: Props) {
       </div>
 
       {agents.length === 0 ? (
-        <div className="bg-surface-container-lowest/70 backdrop-blur-md border border-outline-variant/20 rounded-xl p-lg">
+        <div className="bg-surface-container-lowest border border-outline-variant/20 rounded-xl p-lg">
           <EmptyState
             icon="group"
             title={intl.formatMessage({ id: 'opc.agentSwarm.noAgentsRunning' })}
@@ -166,7 +166,7 @@ export default function OPCAgentSwarm({ agents, tasks }: Props) {
                   // code; translate it via the shared `status.*` keys (B3),
                   // falling back to the code for values this build doesn't know.
                   aria-label={`${agent.name} — ${intl.formatMessage({ id: `status.${agent.status}`, defaultMessage: agent.status })}${agent.worktree_path ? ` (${shortWorktree(agent.worktree_path)})` : ''}`}
-                  className="bg-surface-container-lowest/70 backdrop-blur-md border border-outline-variant/20 rounded-xl p-md flex flex-col shadow-e1 cursor-pointer hover:border-primary/30 transition-colors group"
+                  className="bg-surface-container-lowest border border-outline-variant/20 rounded-xl p-md flex flex-col shadow-e1 cursor-pointer hover:border-primary/30 transition-colors group"
                   onClick={() => handleAgentClick(agent.id, agent.session_id)}
                   onKeyDown={e => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); handleAgentClick(agent.id, agent.session_id) } }}
                 >

@@ -353,9 +353,13 @@ export default function RightDock({
         fullscreen
           ? // Batch D4: fullscreen reading position — the dock covers the
             // window (above the chat, below toasts) instead of hugging it.
-            'glass-panel fixed inset-0 z-modal flex flex-col overflow-hidden bg-surface-container-lowest'
+            // G1: fullscreen solid page — the old glass-panel blur had
+            // nothing behind it to blur.
+            'fixed inset-0 z-modal flex flex-col overflow-hidden bg-surface-container-lowest'
           : cn(
-              'glass-panel shrink-0 relative flex flex-col overflow-hidden border-l border-outline-variant/10 bg-surface-container-lowest/50',
+              // G1: the dock is persistent window chrome → glass-surface
+              // (was glass-panel + bg/50, an off-system third recipe).
+              'glass-surface shrink-0 relative flex flex-col overflow-hidden',
               // §P2-22: suppress the open/close width transition while the
               // user is dragging the resizer — otherwise every pointermove
               // chases a 300ms ease and the panel lags like a rubber band.

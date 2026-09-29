@@ -162,7 +162,7 @@ export function ExecutionModeSwitcher() {
       </Button>
       {open && (
         <div
-          className="absolute right-0 top-full mt-sm w-[240px] bg-surface-container-lowest/95 backdrop-blur-lg rounded-xl border border-outline-variant/20 shadow-e4 z-modal py-sm"
+          className="glass-overlay animate-panel-in absolute right-0 top-full mt-sm w-[240px] rounded-xl z-modal py-sm"
           role="listbox"
           aria-label={t('execMode.menu.aria')}
           onKeyDown={handleKeyDown}

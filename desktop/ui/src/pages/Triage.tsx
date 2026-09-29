@@ -12,7 +12,7 @@
 // cards with checkbox + Mark Read / Archive / View-or-Continue session /
 // Rerun / Review-candidate actions, expandable error details, empty states.
 //
-// The page keeps the previous triage page's visual language (glass-panel
+// The page keeps the previous triage page's visual language (solid elevated
 // cards, chip filters, keyboard j/k navigation, bulk selection bar).
 
 import { useState, useMemo, useCallback, useEffect, useRef, type KeyboardEvent as ReactKeyboardEvent } from 'react'
@@ -149,7 +149,9 @@ function InboxCard({ item, selected, focused, highlighted, onToggleSelected, onM
   const isDreamReport = item.source === 'dream_report'
 
   return (
-    <div role="listitem" data-focused={focused ? 'true' : undefined} data-highlight={highlighted ? 'true' : undefined} className={cn('glass-panel border rounded-xl p-md shadow-e1 hover:shadow-e2 transition-all group bg-surface-container-lowest/80', isPending ? 'border-primary/20' : 'border-outline-variant/10', focused ? 'ring-2 ring-primary' : highlighted ? 'ring-2 ring-tertiary' : selected ? 'ring-2 ring-primary/40' : '')}>
+    // G1: list items are content cards — solid surface per the material
+    // doctrine (glass carries floating chrome only); shadow-e1 keeps the lift.
+    <div role="listitem" data-focused={focused ? 'true' : undefined} data-highlight={highlighted ? 'true' : undefined} className={cn('triage-card bg-surface-container-lowest border rounded-xl p-md shadow-e1 hover:shadow-e2 transition-all group', isPending ? 'border-primary/20' : 'border-outline-variant/10', focused ? 'ring-2 ring-primary' : highlighted ? 'ring-2 ring-tertiary' : selected ? 'ring-2 ring-primary/40' : '')}>
       <div className="flex items-start gap-sm">
         <label className="flex items-center pt-xs cursor-pointer shrink-0" aria-label={t('inbox.select.aria', { id: item.id })}>
           <input
@@ -689,12 +691,15 @@ export default function Triage() {
           </Button>
         </div>
 
-        {/* Bulk-action bar (visible when items are selected) */}
+        {/* Bulk-action bar (visible when items are selected) — tinted glass:
+            glass-surface sorts after the core background and border-color
+            utilities in the utilities layer, so the primary fill and border
+            need the important modifier over the utility's neutral ones. */}
         {effectiveSelected.size > 0 ? (
           <div
             role="region"
             aria-label={t('inbox.bulk.title')}
-            className="sticky top-0 z-raised mb-md flex items-center gap-md px-md py-sm rounded-xl bg-primary/10 border border-primary/30 backdrop-blur-md"
+            className="glass-surface animate-panel-in sticky top-0 z-raised mb-md flex items-center gap-md px-md py-sm rounded-xl !border-primary/30 !bg-primary/10"
           >
             <span className="font-label-md text-primary font-bold">
               {intl.formatMessage({ id: 'inbox.bulk.selected' }, { count: effectiveSelected.size })}

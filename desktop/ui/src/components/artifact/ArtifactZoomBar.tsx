@@ -85,8 +85,10 @@ export function ArtifactZoomBar({ zoom, zoomIn, zoomOut, reset, className }: Art
     <div
       role="group"
       aria-label={t('chat.dock.zoom.aria')}
+      // G1: solid — this bar floats INSIDE the glass RightDock; a second
+      // (nested) backdrop-filter there would stack blur cost for no visual gain.
       className={
-        'flex items-center gap-[2px] px-xs py-[2px] rounded-lg bg-surface-container/90 border border-outline-variant/15 backdrop-blur-sm ' +
+        'flex items-center gap-[2px] px-xs py-[2px] rounded-lg bg-surface-container border border-outline-variant/15 ' +
         (className ?? '')
       }
     >

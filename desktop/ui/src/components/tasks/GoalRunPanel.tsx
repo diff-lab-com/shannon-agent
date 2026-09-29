@@ -61,7 +61,7 @@ export function GoalRunCard({ run, onPause, onResume, onStop, onUpdateObjective,
 
   return (
     <div
-      className="glass-panel border border-outline-variant/10 rounded-xl p-md shadow-e1 bg-surface-container-lowest/80"
+      className="bg-surface-container-lowest border border-outline-variant/10 rounded-xl p-md shadow-e1"
       data-testid="goal-run-card"
       data-status={run.status}
     >

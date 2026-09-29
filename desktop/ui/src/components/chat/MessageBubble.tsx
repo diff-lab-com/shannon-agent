@@ -144,6 +144,9 @@ function AttachmentPreview({ attachment }: { attachment: FileAttachment }) {
         <span className="font-label-sm max-w-[160px] truncate">{attachment.name}</span>
       </Button>
 
+      {/* Lightbox scrim panel — the dark fill must beat the glass-overlay
+          base the Modal now carries, hence the important modifier (custom
+          glass utilities sort after core utilities in the layer). */}
       <Modal
         open={open}
         onClose={() => setOpen(false)}
@@ -151,7 +154,7 @@ function AttachmentPreview({ attachment }: { attachment: FileAttachment }) {
         showCloseButton={false}
         title={attachment.name}
         closeLabel={t('chat.message.attachment.close')}
-        className="bg-black/70 backdrop-blur-sm p-lg"
+        className="!bg-black/70 backdrop-blur-sm p-lg"
       >
         {isImage ? (
           <img

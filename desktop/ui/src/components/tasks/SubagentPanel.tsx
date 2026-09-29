@@ -51,7 +51,7 @@ export default function SubagentPanel() {
           return (
             <div
               key={a.id}
-              className="glass-panel border border-outline-variant/10 rounded-xl p-md shadow-e1 bg-surface-container-lowest/80"
+              className="bg-surface-container-lowest border border-outline-variant/10 rounded-xl p-md shadow-e1"
               data-testid="subagent-card"
               data-status={a.status}
             >

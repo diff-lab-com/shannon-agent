@@ -107,7 +107,7 @@ export function BatchRunCard({ run, onCompare, onDiscard }: BatchRunCardProps) {
 
   return (
     <div
-      className="glass-panel border border-outline-variant/10 rounded-xl p-md shadow-e1 bg-surface-container-lowest/80"
+      className="bg-surface-container-lowest border border-outline-variant/10 rounded-xl p-md shadow-e1"
       data-testid="batch-run-card"
       data-status={run.status}
     >

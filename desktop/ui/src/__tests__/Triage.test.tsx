@@ -399,11 +399,11 @@ describe('Triage page (inbox)', () => {
       makeItem({ id: 2, title: 'Newer', createdAtMs: 5_000 }),
     ])
     const { container } = renderPage()
-    const cards = container.querySelectorAll('.glass-panel')
+    const cards = container.querySelectorAll('[role="listitem"]')
     expect(cards[0]).toHaveTextContent('Newer')
     expect(cards[1]).toHaveTextContent('Older')
     fireEvent.click(screen.getByRole('button', { name: 'Toggle sort order' }))
-    const cardsAfter = container.querySelectorAll('.glass-panel')
+    const cardsAfter = container.querySelectorAll('[role="listitem"]')
     expect(cardsAfter[0]).toHaveTextContent('Older')
     expect(cardsAfter[1]).toHaveTextContent('Newer')
   })
@@ -576,12 +576,12 @@ describe('Triage — session sources, skill candidates and pending pinning (IA T
       makeItem({ id: 2, status: 'pending', title: 'Older pending', createdAtMs: 1_000 }),
     ])
     const { container } = renderPage()
-    const cards = container.querySelectorAll('.glass-panel')
+    const cards = container.querySelectorAll('[role="listitem"]')
     expect(cards[0]).toHaveTextContent('Older pending')
     expect(cards[1]).toHaveTextContent('Newer read')
     // Pinning survives the sort toggle; time order stays stable inside a band.
     fireEvent.click(screen.getByRole('button', { name: 'Toggle sort order' }))
-    const cardsAfter = container.querySelectorAll('.glass-panel')
+    const cardsAfter = container.querySelectorAll('[role="listitem"]')
     expect(cardsAfter[0]).toHaveTextContent('Older pending')
     expect(cardsAfter[1]).toHaveTextContent('Newer read')
   })
@@ -612,13 +612,13 @@ describe('Triage — session sources, skill candidates and pending pinning (IA T
       }),
     ])
     const { container } = renderPage()
-    const cards = container.querySelectorAll('.glass-panel')
+    const cards = container.querySelectorAll('[role="listitem"]')
     expect(cards[0]).toHaveTextContent('Re-failed session')
     expect(cards[1]).toHaveTextContent('Stale failure')
     // The toggle still only reorders inside the band — the refreshed entry
     // lands last under 'oldest', never losing its band membership.
     fireEvent.click(screen.getByRole('button', { name: 'Toggle sort order' }))
-    const cardsAfter = container.querySelectorAll('.glass-panel')
+    const cardsAfter = container.querySelectorAll('[role="listitem"]')
     expect(cardsAfter[0]).toHaveTextContent('Stale failure')
     expect(cardsAfter[1]).toHaveTextContent('Re-failed session')
   })
@@ -760,7 +760,7 @@ describe('Triage — B4 URL view state and error state (§7-28)', () => {
     renderPage('/triage?status=read&sort=oldest')
     expect(setFilter).toHaveBeenCalledWith({ status: 'read', source: undefined })
     // oldest-first honored from the param.
-    const cards = document.querySelectorAll('.glass-panel')
+    const cards = document.querySelectorAll('[role="listitem"]')
     expect(cards[0]).toHaveTextContent('Read earlier')
     expect(cards[1]).toHaveTextContent('Read later')
     // Interactions write the params back (replace navigation).

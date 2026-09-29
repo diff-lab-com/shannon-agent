@@ -147,10 +147,10 @@ export function DropdownMenu({
       aria-label={ariaLabel}
       data-slot="dropdown-menu-content"
       className={cn(
-        // Match the shadcn base-nova surface tokens (rounded-xl, surface
-        // container lowest, shadow-e3) so a future migration to the
-        // Base UI composition will look identical.
-        "absolute z-modal min-w-[200px] bg-surface-container-lowest/95 backdrop-blur-lg rounded-xl border border-outline-variant/20 shadow-[var(--shadow-e3)] py-xs",
+        // G3 (UI review 2026-09-29): menu content carries the shared
+        // glass-overlay floating material (bg/blur/border/shadow from the
+        // utility) + the panel-in entrance; no per-component surface recipe.
+        "glass-overlay animate-panel-in absolute z-modal min-w-[200px] rounded-xl py-xs",
         align === "end" ? "right-0 top-full mt-sm" : "left-0 top-full mt-sm",
         className
       )}

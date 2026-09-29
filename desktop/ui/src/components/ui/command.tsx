@@ -22,7 +22,11 @@ function Command({
     <CommandPrimitive
       data-slot="command"
       className={cn(
-        "flex size-full flex-col overflow-hidden rounded-xl! bg-popover p-xs text-popover-foreground",
+        // G3: transparent — the CommandDialog's DialogContent carries the
+        // glass-overlay material now; a solid bg-popover here would paint
+        // over it. (CommandPalette is this component's only consumer and
+        // always renders inside CommandDialog.)
+        "flex size-full flex-col overflow-hidden rounded-xl! bg-transparent p-xs text-popover-foreground",
         className
       )}
       {...props}

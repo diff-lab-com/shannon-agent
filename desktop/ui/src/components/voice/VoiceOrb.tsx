@@ -21,7 +21,9 @@ export function VoiceOrb({ state, size = 64 }: VoiceOrbProps) {
       className={cn("relative rounded-full", baseColor, ringClass, "before:absolute before:inset-0 before:rounded-full before:-z-raised transition-colors")}
       style={{ width: size, height: size }}
     >
-      <div className="absolute inset-2 rounded-full bg-surface-container-lowest/40 backdrop-blur-sm flex items-center justify-center">
+      {/* G1: solid disc — a 40px blur behind an icon costs a backdrop layer
+          for an effect invisible at this size. */}
+      <div className="absolute inset-2 rounded-full bg-surface-container-lowest/90 flex items-center justify-center">
         <span className="material-symbols-outlined text-on-surface">
           {state === 'recording' ? 'mic' : 'auto_awesome'}
         </span>

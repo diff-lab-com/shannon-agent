@@ -146,7 +146,7 @@ export default function TaskCalendarView({
                     role="button"
                     tabIndex={0}
                     aria-label={task.title}
-                    className="glass-panel border border-outline-variant/10 rounded-xl p-md shadow-e1 hover:shadow-e2 transition-all group bg-surface-container-lowest/80 cursor-pointer"
+                    className="bg-surface-container-lowest border border-outline-variant/10 rounded-xl p-md shadow-e1 hover:shadow-e2 transition-all group cursor-pointer"
                     onClick={() => onSelectTask(task.id)}
                     onKeyDown={(e) => {
                       if (e.key === 'Enter' || e.key === ' ') {

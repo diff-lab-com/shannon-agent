@@ -110,8 +110,9 @@ test.describe('Plugins Marketplace', () => {
   })
 
   test('page structure matches design', async ({ page }) => {
-    // Check for the main marketplace icon/header area (the large 32px one)
-    await expect(page.locator('.material-symbols-outlined.text-primary.text-\\[32px\\]').filter({ hasText: 'workspaces' })).toBeVisible()
+    // Check for the main marketplace icon/header area (the large 32px one).
+    // Batch 1 (1fe10663) retired text-[32px] for the icon-xl utility.
+    await expect(page.locator('.material-symbols-outlined.text-primary.icon-xl').filter({ hasText: 'workspaces' })).toBeVisible()
 
     // Check for description text
     await expect(page.getByText('Browse the unified catalog')).toBeVisible()

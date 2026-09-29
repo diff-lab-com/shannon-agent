@@ -309,7 +309,9 @@ export default function MessageArea({
           aria-label={t('chat.scrollToLatest.aria')}
           title={t('chat.scrollToLatest.aria')}
           onClick={scrollToBottom}
-          className="sticky bottom-md left-full -translate-x-full ml-sm w-10 h-10 rounded-full bg-surface-container-lowest/95 backdrop-blur-md border border-outline-variant/30 shadow-e3 hover:bg-primary-container hover:border-primary/40 text-on-surface hover:text-primary transition-all flex items-center justify-center"
+          // G1: solid — a transient affordance doesn't earn one of the four
+          // per-screen backdrop-filter slots.
+          className="sticky bottom-md left-full -translate-x-full ml-sm w-10 h-10 rounded-full bg-surface-container-lowest border border-outline-variant/30 shadow-e3 hover:bg-primary-container hover:border-primary/40 text-on-surface hover:text-primary transition-all flex items-center justify-center"
         >
           <span className="material-symbols-outlined icon-md" aria-hidden="true">arrow_downward</span>
         </Button>
@@ -318,6 +320,8 @@ export default function MessageArea({
       {/* B1 P2-3: session-swap skeleton — shown only while a switch IPC is in
           flight (AppContext never sets the flag for same-session remounts),
           so opening a session reads as instant-and-loading instead of stale. */}
+      {/* G1: veil (遮罩) over the message list while switching — scrim-class,
+          intentional direct backdrop-blur, exempt from the material rule. */}
       {switchingSession && (
         <div
           data-testid="session-switch-overlay"
@@ -369,11 +373,12 @@ export function RunStatusLine({ startedAt, activeTool, toolProgress }: { started
     : null
   const progressMsg = toolProgress?.message?.trim() ?? ''
   return (
+    // G1: solid pill — same budget reasoning as the scroll FAB above.
     <div
       role="status"
       aria-live="polite"
       data-testid="run-status-line"
-      className="sticky bottom-0 mt-md mx-auto w-fit max-w-full flex items-center gap-xs px-md py-xs rounded-full bg-surface-container-lowest/95 backdrop-blur-md border border-outline-variant/30 shadow-e1"
+      className="sticky bottom-0 mt-md mx-auto w-fit max-w-full flex items-center gap-xs px-md py-xs rounded-full bg-surface-container-lowest border border-outline-variant/30 shadow-e1"
     >
       <span className="size-1.5 rounded-full bg-secondary animate-pulse shrink-0" aria-hidden="true" />
       <span className="font-label-sm text-on-surface-variant whitespace-nowrap">

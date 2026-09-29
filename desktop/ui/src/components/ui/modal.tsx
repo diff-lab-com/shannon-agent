@@ -87,7 +87,10 @@ export function Modal({
           aria-label={title}
           data-testid={testId}
           className={cn(
-            "fixed top-1/2 left-1/2 z-flash -translate-x-1/2 -translate-y-1/2 w-full max-w-[calc(100%-2rem)] bg-surface-container-lowest rounded-2xl shadow-[var(--shadow-e5)] border border-outline-variant/30 outline-none p-md duration-(--duration-fast) data-open:animate-in data-open:fade-in-0 data-open:zoom-in-95 data-closed:animate-out data-closed:fade-out-0 data-closed:zoom-out-95",
+            // G3 (UI review 2026-09-29): the floating-layer family shares one
+            // glass-overlay material (bg/blur/border/shadow from the utility);
+            // the Backdrop above stays the plain scrim.
+            "fixed top-1/2 left-1/2 z-flash -translate-x-1/2 -translate-y-1/2 w-full max-w-[calc(100%-2rem)] glass-overlay rounded-2xl outline-none p-md duration-(--duration-fast) data-open:animate-in data-open:fade-in-0 data-open:zoom-in-95 data-closed:animate-out data-closed:fade-out-0 data-closed:zoom-out-95",
             modalSizes({ size }),
             className
           )}
