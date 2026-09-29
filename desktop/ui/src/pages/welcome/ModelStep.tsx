@@ -32,7 +32,7 @@ export function ModelStep({ task, saving, canContinue, onOpenAddProvider, onBack
       }
       footer={
         <>
-          <Button variant="ghost" onClick={onBack} className="px-lg py-sm text-on-surface-variant hover:text-primary font-label-md cursor-pointer focus-visible:outline focus-visible:outline-2 focus-visible:outline-primary rounded">
+          <Button variant="ghost" onClick={onBack} className="px-lg py-sm text-on-surface-variant hover:text-primary font-label-md cursor-pointer focus-visible:outline focus-visible:outline-2 focus-visible:outline-primary rounded-sm">
             {intl.formatMessage({ id: 'welcome.model.back' })}
           </Button>
           <div className="flex flex-col items-end gap-xs">

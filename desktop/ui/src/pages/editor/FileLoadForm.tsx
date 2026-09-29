@@ -26,7 +26,7 @@ export default function FileLoadForm({
   return (
     <form
       onSubmit={onLoad}
-      className="bg-surface-container-lowest rounded-2xl p-md border border-outline-variant/30 shadow-sm flex flex-col gap-sm"
+      className="bg-surface-container-lowest rounded-2xl p-md border border-outline-variant/30 shadow-e1 flex flex-col gap-sm"
     >
       <label className="font-label-sm text-on-surface-variant flex flex-col gap-xs">
         {t('editor.filePath')}
@@ -45,7 +45,7 @@ export default function FileLoadForm({
             aria-label={t('editor.browse')}
             className="flex items-center gap-xs px-md py-xs rounded-lg border border-outline-variant/40 bg-surface-container-low text-on-surface hover:bg-surface-container-high focus:outline-none focus-visible:ring-2 focus-visible:ring-primary/30 cursor-pointer"
           >
-            <span className="material-symbols-outlined text-[18px]">
+            <span className="material-symbols-outlined icon-md">
               folder_open
             </span>
             <span className="font-label-md">{t('editor.browse')}</span>

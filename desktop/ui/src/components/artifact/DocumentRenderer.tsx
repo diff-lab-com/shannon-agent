@@ -98,18 +98,18 @@ function TableShell({ children }: { children?: React.ReactNode }) {
           type="button"
           onClick={() => void handleCopy()}
           aria-label={t('chat.artifact.table.copy')}
-          className="flex items-center gap-[2px] px-xs py-[2px] rounded bg-surface-container-high text-on-surface-variant hover:text-primary font-label-xs cursor-pointer"
+          className="flex items-center gap-[2px] px-xs py-[2px] rounded-sm bg-surface-container-high text-on-surface-variant hover:text-primary font-label-xs cursor-pointer"
         >
-          <span className="material-symbols-outlined text-[13px]" aria-hidden="true">{copied ? 'check' : 'content_copy'}</span>
+          <span className="material-symbols-outlined icon-xs" aria-hidden="true">{copied ? 'check' : 'content_copy'}</span>
           {copied ? t('code.copy.copied') : t('chat.artifact.table.copy')}
         </button>
         <button
           type="button"
           onClick={() => void handleDownload()}
           aria-label={t('chat.artifact.table.download')}
-          className="flex items-center gap-[2px] px-xs py-[2px] rounded bg-surface-container-high text-on-surface-variant hover:text-primary font-label-xs cursor-pointer"
+          className="flex items-center gap-[2px] px-xs py-[2px] rounded-sm bg-surface-container-high text-on-surface-variant hover:text-primary font-label-xs cursor-pointer"
         >
-          <span className="material-symbols-outlined text-[13px]" aria-hidden="true">download</span>
+          <span className="material-symbols-outlined icon-xs" aria-hidden="true">download</span>
           {t('chat.artifact.table.download')}
         </button>
       </div>
@@ -159,7 +159,7 @@ export const DocumentRenderer = memo(function DocumentRenderer({ source }: Docum
       },
       code: ({ children, className }: { children?: React.ReactNode; className?: string }) => {
         if (className?.includes('language-')) return <code className={className}>{children}</code>
-        return <code className="bg-surface-container-high text-on-surface rounded px-[2px] py-[1px] text-label-sm font-mono">{children}</code>
+        return <code className="bg-surface-container-high text-on-surface rounded-sm px-[2px] py-[1px] text-label-sm font-mono">{children}</code>
       },
       a: ({ children, href }: { children?: React.ReactNode; href?: string }) => (
         <a href={href} target="_blank" rel="noreferrer" className="text-primary underline hover:text-primary/80">{children}</a>

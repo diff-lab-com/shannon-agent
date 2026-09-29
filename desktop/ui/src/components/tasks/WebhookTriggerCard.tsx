@@ -38,7 +38,7 @@ export default function WebhookTriggerCard({ routines }: { routines: ScheduledRo
       data-testid="webhook-trigger-card"
     >
       <h2 id="webhook-triggers-heading" className="font-label-lg font-bold text-on-surface mb-sm flex items-center gap-xs">
-        <span className="material-symbols-outlined text-[18px] text-primary" aria-hidden="true">webhook</span>
+        <span className="material-symbols-outlined icon-md text-primary" aria-hidden="true">webhook</span>
         {t('tasks.webhookTrigger.heading')}
       </h2>
       <p className="font-body-sm text-on-surface-variant mb-md">{t('tasks.webhookTrigger.hint')}</p>
@@ -46,7 +46,7 @@ export default function WebhookTriggerCard({ routines }: { routines: ScheduledRo
         {webhookRoutines.map(r => (
           <li key={r.id} className="flex items-center gap-sm flex-wrap p-sm rounded-lg bg-surface-container-low border border-outline-variant/20">
             <span className="font-label-md text-on-surface font-medium truncate max-w-[240px]">{r.name}</span>
-            <code className="flex-1 min-w-[200px] truncate font-mono text-[11px] text-on-surface-variant px-sm py-1 rounded bg-surface-container-lowest border border-outline-variant/20">
+            <code className="flex-1 min-w-[200px] truncate font-mono text-label-xs text-on-surface-variant px-sm py-xs rounded-sm bg-surface-container-lowest border border-outline-variant/20">
               POST {TRIGGER_BASE}/{r.id}/trigger
             </code>
             <Button

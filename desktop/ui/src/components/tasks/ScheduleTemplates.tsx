@@ -94,7 +94,7 @@ export default function ScheduleTemplates({ onApply }: ScheduleTemplatesProps) {
   return (
     <div className="flex flex-col gap-sm mb-md">
       <div className="font-label-md text-on-surface-variant flex items-center gap-xs">
-        <span className="material-symbols-outlined text-[14px]">auto_awesome</span>
+        <span className="material-symbols-outlined icon-sm">auto_awesome</span>
         {t('tasks.scheduleTemplates.title')}
       </div>
       <div className="flex flex-wrap gap-xs">
@@ -106,9 +106,9 @@ export default function ScheduleTemplates({ onApply }: ScheduleTemplatesProps) {
             size="sm"
             title={t(`tasks.scheduleTemplates.${tpl.idKey}.description`)}
             onClick={() => onApply(tpl)}
-            className="rounded-full border-outline-variant/30 bg-surface-container-low hover:bg-primary/10 hover:border-primary/40 text-on-surface-variant hover:text-primary font-label-sm text-[12px]"
+            className="rounded-full border-outline-variant/30 bg-surface-container-low hover:bg-primary/10 hover:border-primary/40 text-on-surface-variant hover:text-primary font-label-sm text-label-sm"
           >
-            <span className="material-symbols-outlined text-[14px]">{tpl.icon}</span>
+            <span className="material-symbols-outlined icon-sm">{tpl.icon}</span>
             {t(`tasks.scheduleTemplates.${tpl.idKey}.name`)}
           </Button>
         ))}

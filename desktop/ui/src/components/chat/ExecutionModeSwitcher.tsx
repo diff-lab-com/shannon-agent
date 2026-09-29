@@ -153,7 +153,7 @@ export function ExecutionModeSwitcher() {
         <span className="material-symbols-outlined icon-md" aria-hidden="true">
           tune
         </span>
-        <span className="font-label-sm text-[12px] whitespace-nowrap max-w-[110px] truncate">
+        <span className="font-label-sm text-label-sm whitespace-nowrap max-w-[110px] truncate">
           {currentLabel}
         </span>
         <span className="material-symbols-outlined icon-sm" aria-hidden="true">
@@ -162,7 +162,7 @@ export function ExecutionModeSwitcher() {
       </Button>
       {open && (
         <div
-          className="absolute right-0 top-full mt-sm w-[240px] bg-surface-container-lowest/95 backdrop-blur-lg rounded-xl border border-outline-variant/20 shadow-xl z-modal py-sm"
+          className="absolute right-0 top-full mt-sm w-[240px] bg-surface-container-lowest/95 backdrop-blur-lg rounded-xl border border-outline-variant/20 shadow-e4 z-modal py-sm"
           role="listbox"
           aria-label={t('execMode.menu.aria')}
           onKeyDown={handleKeyDown}

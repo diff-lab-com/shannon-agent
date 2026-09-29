@@ -129,7 +129,7 @@ export default function McpServers() {
   }
 
   return (
-    <div className="p-lg max-w-6xl mx-auto space-y-xl">
+    <div className="p-lg max-w-medium mx-auto space-y-xl">
       <header>
         <h2 className="text-headline-md font-headline-md text-on-surface mb-xs">
           {t("extensions.mcp.title")}
@@ -174,7 +174,7 @@ export default function McpServers() {
           onClick={() => setDialogOpen(true)}
           className="px-lg py-sm rounded-xl hover:bg-primary/90 cursor-pointer"
         >
-          <span className="material-symbols-outlined text-[18px]">add</span>
+          <span className="material-symbols-outlined icon-md">add</span>
           {t("extensions.mcp.addDialog.cta")}
         </Button>
       </div>
@@ -256,7 +256,7 @@ function InstalledSection({
                   i !== servers.length - 1 && "border-b border-outline-variant/15",
                 )}
               >
-                <span className="material-symbols-outlined text-primary text-[20px]" aria-hidden="true">
+                <span className="material-symbols-outlined text-primary icon-md" aria-hidden="true">
                   {mcpServerIcon(srv.name)}
                 </span>
                 <div className="flex-1 min-w-0">

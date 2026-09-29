@@ -60,17 +60,17 @@ export function TestAllResultsPanel({
             >
               <div className="flex items-center gap-sm min-w-0">
                 <span className="font-label-md text-on-surface truncate">{r.label}</span>
-                <span className="font-label-xs text-[11px] text-on-surface-variant">{r.provider_kind}</span>
+                <span className="font-label-xs text-label-xs text-on-surface-variant">{r.provider_kind}</span>
               </div>
               <div className="flex items-center gap-sm shrink-0">
                 {r.latency_ms !== null ? (
-                  <span className="font-label-xs text-[11px] text-on-surface-variant">
+                  <span className="font-label-xs text-label-xs text-on-surface-variant">
                     {intl.formatMessage({ id: 'settings.models.providers.latency' }, { ms: r.latency_ms })}
                   </span>
                 ) : null}
                 <span
                   data-testid={`test-all-result-${r.id}`}
-                  className={cn("px-sm py-[2px] rounded-full text-[10px] font-bold uppercase tracking-wider", pillClass)}
+                  className={cn("px-sm py-[2px] rounded-full text-label-2xs font-bold uppercase tracking-wider", pillClass)}
                   title={pillLabel}
                 >
                   {pillLabel}

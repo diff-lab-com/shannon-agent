@@ -149,7 +149,7 @@ function InboxCard({ item, selected, focused, highlighted, onToggleSelected, onM
   const isDreamReport = item.source === 'dream_report'
 
   return (
-    <div role="listitem" data-focused={focused ? 'true' : undefined} data-highlight={highlighted ? 'true' : undefined} className={cn('glass-panel border rounded-xl p-md shadow-sm hover:shadow-md transition-all group bg-surface-container-lowest/80', isPending ? 'border-primary/20' : 'border-outline-variant/10', focused ? 'ring-2 ring-primary' : highlighted ? 'ring-2 ring-tertiary' : selected ? 'ring-2 ring-primary/40' : '')}>
+    <div role="listitem" data-focused={focused ? 'true' : undefined} data-highlight={highlighted ? 'true' : undefined} className={cn('glass-panel border rounded-xl p-md shadow-e1 hover:shadow-e2 transition-all group bg-surface-container-lowest/80', isPending ? 'border-primary/20' : 'border-outline-variant/10', focused ? 'ring-2 ring-primary' : highlighted ? 'ring-2 ring-tertiary' : selected ? 'ring-2 ring-primary/40' : '')}>
       <div className="flex items-start gap-sm">
         <label className="flex items-center pt-xs cursor-pointer shrink-0" aria-label={t('inbox.select.aria', { id: item.id })}>
           <input
@@ -165,9 +165,9 @@ function InboxCard({ item, selected, focused, highlighted, onToggleSelected, onM
           </div>
           <div className="min-w-0 flex-1">
             <div className="flex items-center gap-sm mb-xs flex-wrap">
-              <span className={cn("font-label-sm text-[11px] font-bold uppercase tracking-wider", meta.color)}>{t(meta.labelKey)}</span>
+              <span className={cn("font-label-sm text-label-xs font-bold uppercase tracking-wider", meta.color)}>{t(meta.labelKey)}</span>
               {isPending && <span className="w-2 h-2 rounded-full bg-primary shrink-0" title={t('inbox.pending.title')} />}
-              {item.status === 'archived' && <span className="font-label-sm text-[11px] text-on-surface-variant">{t('inbox.status.archived')}</span>}
+              {item.status === 'archived' && <span className="font-label-sm text-label-xs text-on-surface-variant">{t('inbox.status.archived')}</span>}
             </div>
             <p className={cn("text-body-sm font-medium mb-xs break-words", isPending ? "text-on-surface" : "text-on-surface-variant")}>{item.title}</p>
             {item.summary && (
@@ -182,9 +182,9 @@ function InboxCard({ item, selected, focused, highlighted, onToggleSelected, onM
                   onClick={() => setShowError(v => !v)}
                   className="px-xs py-0.5 rounded-lg text-label-sm text-error hover:bg-error/10 cursor-pointer inline-flex items-center gap-xs"
                 >
-                  <span className="material-symbols-outlined text-[14px]" aria-hidden="true">warning</span>
+                  <span className="material-symbols-outlined icon-sm" aria-hidden="true">warning</span>
                   {t('inbox.error.label')}
-                  <span className="material-symbols-outlined text-[14px]" aria-hidden="true">{showError ? 'expand_less' : 'expand_more'}</span>
+                  <span className="material-symbols-outlined icon-sm" aria-hidden="true">{showError ? 'expand_less' : 'expand_more'}</span>
                 </Button>
                 {showError && (
                   <pre id={`inbox-error-${item.id}`} className="mt-xs px-sm py-xs rounded-lg bg-surface-container-low border border-outline-variant/30 text-label-sm text-error whitespace-pre-wrap break-words max-h-48 overflow-y-auto">{item.error}</pre>
@@ -193,7 +193,7 @@ function InboxCard({ item, selected, focused, highlighted, onToggleSelected, onM
             )}
             <div className="flex items-center gap-md flex-wrap">
               <span className="font-label-sm text-label-sm text-on-surface-variant flex items-center gap-xs">
-                <span className="material-symbols-outlined text-[14px]" aria-hidden="true">schedule</span>
+                <span className="material-symbols-outlined icon-sm" aria-hidden="true">schedule</span>
                 {/* B4 #28: format in the app's locale, not the OS default. */}
                 {new Date(item.createdAtMs).toLocaleString(intl.locale, { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' })}
               </span>
@@ -213,7 +213,7 @@ function InboxCard({ item, selected, focused, highlighted, onToggleSelected, onM
               className="cursor-pointer inline-flex items-center gap-xs text-on-surface-variant hover:text-primary"
               onClick={() => onOpenSource(item)}
             >
-              <span className="material-symbols-outlined text-[16px]">event_repeat</span>
+              <span className="material-symbols-outlined icon-sm">event_repeat</span>
               {t('inbox.openSource.label')}
             </Button>
           )}
@@ -228,7 +228,7 @@ function InboxCard({ item, selected, focused, highlighted, onToggleSelected, onM
               className="cursor-pointer inline-flex items-center gap-xs text-tertiary hover:text-primary"
               onClick={() => onReview(item)}
             >
-              <span className="material-symbols-outlined text-[16px]">rate_review</span>
+              <span className="material-symbols-outlined icon-sm">rate_review</span>
               {t('inbox.review.label')}
             </Button>
           )}
@@ -244,7 +244,7 @@ function InboxCard({ item, selected, focused, highlighted, onToggleSelected, onM
               className="cursor-pointer inline-flex items-center gap-xs text-tertiary hover:text-primary"
               onClick={() => onViewReport(item)}
             >
-              <span className="material-symbols-outlined text-[16px]">bedtime</span>
+              <span className="material-symbols-outlined icon-sm">bedtime</span>
               {t('inbox.viewReport.label')}
             </Button>
           )}
@@ -259,7 +259,7 @@ function InboxCard({ item, selected, focused, highlighted, onToggleSelected, onM
               className="cursor-pointer inline-flex items-center gap-xs"
               onClick={() => onContinue(item)}
             >
-              <span className="material-symbols-outlined text-[16px]">{isSessionSource ? 'visibility' : 'forum'}</span>
+              <span className="material-symbols-outlined icon-sm">{isSessionSource ? 'visibility' : 'forum'}</span>
               {t(isSessionSource ? 'inbox.action.viewSession' : 'inbox.action.resume')}
             </Button>
           )}
@@ -267,32 +267,32 @@ function InboxCard({ item, selected, focused, highlighted, onToggleSelected, onM
             aria-label={t('inbox.rerun.aria')}
             variant="ghost"
             disabled={!rerunnable}
-            className="p-2 rounded-lg hover:bg-surface-container-low text-on-surface-variant cursor-pointer disabled:opacity-40 disabled:cursor-not-allowed"
+            className="p-sm rounded-lg hover:bg-surface-container-low text-on-surface-variant cursor-pointer disabled:opacity-40 disabled:cursor-not-allowed"
             onClick={() => onRerun(item)}
             title={rerunnable ? t('inbox.rerun.title') : t('inbox.rerun.disabled.title')}
           >
-            <span className="material-symbols-outlined text-[18px]">replay</span>
+            <span className="material-symbols-outlined icon-md">replay</span>
           </Button>
           {isPending && (
             <Button
               aria-label={t('inbox.markRead.aria', { id: item.id })}
               variant="ghost"
-              className="p-2 rounded-lg hover:bg-surface-container-low text-on-surface-variant cursor-pointer"
+              className="p-sm rounded-lg hover:bg-surface-container-low text-on-surface-variant cursor-pointer"
               onClick={() => onMarkRead(item.id)}
               title={t('inbox.markRead.title')}
             >
-              <span className="material-symbols-outlined text-[18px]">check</span>
+              <span className="material-symbols-outlined icon-md">check</span>
             </Button>
           )}
           {item.status !== 'archived' && (
             <Button
               aria-label={t('inbox.archive.aria', { id: item.id })}
               variant="ghost"
-              className="p-2 rounded-lg hover:bg-surface-container-low text-on-surface-variant cursor-pointer"
+              className="p-sm rounded-lg hover:bg-surface-container-low text-on-surface-variant cursor-pointer"
               onClick={() => onArchive(item.id)}
               title={t('inbox.archive.title')}
             >
-              <span className="material-symbols-outlined text-[18px]">archive</span>
+              <span className="material-symbols-outlined icon-md">archive</span>
             </Button>
           )}
         </div>
@@ -606,7 +606,7 @@ export default function Triage() {
 
   return (
     <div className="flex-1 overflow-y-auto w-full pb-16">
-      <div className="max-w-[1200px] mx-auto px-lg py-xl">
+      <div className="max-w-medium mx-auto px-lg py-xl">
         {/* Header — the page title is rendered globally in the app Header;
             here we keep the one-line subtitle so first-time users get the
             "计划任务、目标与触发器..." context without a duplicate H1. */}
@@ -614,11 +614,11 @@ export default function Triage() {
           <p className="text-on-surface-variant">{t('inbox.subtitle')}</p>
           <div className="flex items-center gap-md">
             <div className="flex items-center gap-sm px-md py-sm rounded-xl bg-surface-container-lowest border border-outline-variant/30">
-              <span className="material-symbols-outlined text-[18px] text-primary" aria-hidden="true">mark_email_unread</span>
+              <span className="material-symbols-outlined icon-md text-primary" aria-hidden="true">mark_email_unread</span>
               <span className="font-label-md text-on-surface">{intl.formatMessage({ id: 'inbox.stats.pending' }, { count: stats.pending })}</span>
             </div>
             <div className="flex items-center gap-sm px-md py-sm rounded-xl bg-surface-container-lowest border border-outline-variant/30">
-              <span className="material-symbols-outlined text-[18px] text-on-surface-variant" aria-hidden="true">today</span>
+              <span className="material-symbols-outlined icon-md text-on-surface-variant" aria-hidden="true">today</span>
               <span className="font-label-md text-on-surface">{intl.formatMessage({ id: 'inbox.stats.today' }, { count: stats.today })}</span>
             </div>
           </div>
@@ -673,7 +673,7 @@ export default function Triage() {
                 : 'bg-surface-container-low text-on-surface-variant hover:text-primary hover:bg-primary/10',
             )}
           >
-            <span className="material-symbols-outlined text-[14px] mr-xs align-middle" aria-hidden="true">folder_open</span>
+            <span className="material-symbols-outlined icon-sm mr-xs align-middle" aria-hidden="true">folder_open</span>
             {t('inbox.groupBySource')}
           </Button>
           <Button
@@ -682,7 +682,7 @@ export default function Triage() {
             aria-label={t('inbox.sort.aria')}
             className="ml-auto px-sm py-xs rounded-full text-label-sm transition-colors cursor-pointer bg-surface-container-low text-on-surface-variant hover:text-primary hover:bg-primary/10"
           >
-            <span className="material-symbols-outlined text-[14px] mr-xs align-middle" aria-hidden="true">
+            <span className="material-symbols-outlined icon-sm mr-xs align-middle" aria-hidden="true">
               {sortOrder === 'newest' ? 'arrow_downward' : 'arrow_upward'}
             </span>
             {t(sortOrder === 'newest' ? 'inbox.sort.newest' : 'inbox.sort.oldest')}
@@ -772,7 +772,7 @@ export default function Triage() {
                 role="alert"
                 className="mb-md flex items-center gap-sm px-md py-sm rounded-xl bg-error/10 border border-error/30 text-error"
               >
-                <span className="material-symbols-outlined text-[18px]" aria-hidden="true">cloud_off</span>
+                <span className="material-symbols-outlined icon-md" aria-hidden="true">cloud_off</span>
                 <span className="font-label-md flex-1 min-w-0">{t('inbox.errorState.title')}</span>
                 <Button
                   variant="ghost"
@@ -816,8 +816,8 @@ export default function Triage() {
                     const meta = sourceMeta(src)
                     return (
                       <div key={src} className="space-y-xs">
-                        <div className="flex items-center gap-xs px-1 pt-2 pb-1 text-[11px] font-bold uppercase tracking-wider text-on-surface-variant/80">
-                          <span className="material-symbols-outlined text-[14px]" aria-hidden="true">{meta.icon}</span>
+                        <div className="flex items-center gap-xs px-xs pt-sm pb-xs text-label-xs font-bold uppercase tracking-wider text-on-surface-variant/80">
+                          <span className="material-symbols-outlined icon-sm" aria-hidden="true">{meta.icon}</span>
                           <span className={meta.color}>{t(meta.labelKey)}</span>
                           <span className="text-on-surface-variant/60">· {bucket.length}</span>
                         </div>
@@ -925,9 +925,9 @@ function SourceFilterDropdown({
           value ? 'bg-primary/10 text-primary font-bold' : 'bg-surface-container-low text-on-surface-variant hover:text-primary hover:bg-primary/10'
         )}
       >
-        <span className="material-symbols-outlined text-[14px] align-middle" aria-hidden="true">{triggerIcon}</span>
+        <span className="material-symbols-outlined icon-sm align-middle" aria-hidden="true">{triggerIcon}</span>
         <span className="align-middle">{triggerLabel}</span>
-        <span className="material-symbols-outlined text-[14px] align-middle" aria-hidden="true">expand_more</span>
+        <span className="material-symbols-outlined icon-sm align-middle" aria-hidden="true">expand_more</span>
       </Button>
       {open && (
         <DropdownMenu

@@ -140,51 +140,51 @@ export function Header() {
 
   return (
     <>
-      <header className="fixed top-0 right-0 z-header flex justify-between items-center h-16 px-lg bg-surface/80 [backdrop-filter:var(--glass-blur-surface)] shadow-sm border-b border-outline-variant/10" style={{ left: 'var(--sidebar-w)' }}>
+      <header className="fixed top-0 right-0 z-header flex justify-between items-center h-16 px-lg bg-surface/80 [backdrop-filter:var(--glass-blur-surface)] shadow-e1 border-b border-outline-variant/10" style={{ left: 'var(--sidebar-w)' }}>
         {!isWindowMode && (
-          <Button variant="ghost" aria-label={t('header.toggleSidebar.aria')} className="md:hidden p-2 mr-sm text-on-surface-variant hover:text-primary" onClick={toggleSidebar}>
+          <Button variant="ghost" aria-label={t('header.toggleSidebar.aria')} className="md:hidden p-sm mr-sm text-on-surface-variant hover:text-primary" onClick={toggleSidebar}>
             <span className="material-symbols-outlined icon-lg">menu</span>
           </Button>
         )}
         <div className="flex items-center gap-md relative w-full overflow-hidden">
           {isOpcTask ? (
-            <div className="flex items-center gap-2">
-              <span className="material-symbols-outlined text-primary text-[28px]">auto_awesome</span>
+            <div className="flex items-center gap-sm">
+              <span className="material-symbols-outlined text-primary icon-xl">auto_awesome</span>
               {/* B1-13: programmatic focus target on route change (no visible
                   ring — the aria-live announcement below carries the signal). */}
-              <h2 ref={titleRef} tabIndex={-1} className="font-headline-md text-[24px] font-extrabold text-primary whitespace-nowrap outline-none">{title}</h2>
+              <h2 ref={titleRef} tabIndex={-1} className="font-headline-md text-headline-md font-extrabold text-primary whitespace-nowrap outline-none">{title}</h2>
             </div>
           ) : (
-            <h2 ref={titleRef} tabIndex={-1} className="font-headline-md text-[24px] font-extrabold text-on-surface whitespace-nowrap outline-none">{title}</h2>
+            <h2 ref={titleRef} tabIndex={-1} className="font-headline-md text-headline-md font-extrabold text-on-surface whitespace-nowrap outline-none">{title}</h2>
           )}
 
           {isOpcTask && (
-            <div className="ml-auto mr-lg flex items-center gap-2 bg-surface-container-low px-3 py-1.5 rounded-full border border-outline-variant/20 shrink-0">
+            <div className="ml-auto mr-lg flex items-center gap-sm bg-surface-container-low px-3 py-1.5 rounded-full border border-outline-variant/20 shrink-0">
                <span className="w-2 h-2 rounded-full bg-tertiary"></span>
-               <span className="font-label-sm text-[12px] text-on-surface-variant whitespace-nowrap">{t('header.syncStatus')}</span>
+               <span className="font-label-sm text-label-sm text-on-surface-variant whitespace-nowrap">{t('header.syncStatus')}</span>
             </div>
           )}
         </div>
         {/* Review 2026-09-16: on phones this cluster forced 579px of unshrinkable
             width and pushed the whole app into horizontal overflow; mode/model
             pickers live in the composer chips anyway. */}
-        <div className="hidden md:flex items-center gap-lg shrink-0 pl-4 border-l border-outline-variant/20 md:border-none md:pl-0">
+        <div className="hidden md:flex items-center gap-lg shrink-0 pl-md border-l border-outline-variant/20 md:border-none md:pl-0">
           {/* P1-1 window mode: identify the dedicated window and offer the
               two window controls from the task brief. */}
           {isWindowMode && (
             <div className="flex items-center gap-sm">
               <span
-                className="hidden md:inline-flex items-center gap-xs px-sm py-xs rounded-full bg-primary/10 text-primary font-label-sm text-[11px] font-bold uppercase tracking-wider"
+                className="hidden md:inline-flex items-center gap-xs px-sm py-xs rounded-full bg-primary/10 text-primary font-label-sm text-label-xs font-bold uppercase tracking-wider"
                 title={t('windowMode.badge.title')}
               >
-                <span className="material-symbols-outlined text-[14px]" aria-hidden="true">picture_in_picture</span>
+                <span className="material-symbols-outlined icon-sm" aria-hidden="true">picture_in_picture</span>
                 {t('windowMode.badge')}
               </span>
               <Button
                 variant="ghost"
                 aria-label={t('windowMode.openInMain.aria')}
                 title={t('windowMode.openInMain.title')}
-                className="p-2 rounded-lg hover:bg-surface-container-low text-on-surface-variant hover:text-primary transition-colors"
+                className="p-sm rounded-lg hover:bg-surface-container-low text-on-surface-variant hover:text-primary transition-colors"
                 onClick={handleOpenInMain}
               >
                 <span className="material-symbols-outlined icon-md" aria-hidden="true">open_in_new</span>
@@ -193,7 +193,7 @@ export function Header() {
                 variant="ghost"
                 aria-label={t('windowMode.close.aria')}
                 title={t('windowMode.close.title')}
-                className="p-2 rounded-lg hover:bg-surface-container-low text-on-surface-variant hover:text-error transition-colors"
+                className="p-sm rounded-lg hover:bg-surface-container-low text-on-surface-variant hover:text-error transition-colors"
                 onClick={handleCloseWindow}
               >
                 <span className="material-symbols-outlined icon-md" aria-hidden="true">close</span>
@@ -209,7 +209,7 @@ export function Header() {
               title={`${t('header.contextPanel.toggle')} (Ctrl+\\)`}
               aria-expanded={contextPanelOpen}
               aria-pressed={contextPanelOpen}
-              className="p-2 rounded-lg hover:bg-surface-container-low text-on-surface-variant hover:text-primary transition-colors"
+              className="p-sm rounded-lg hover:bg-surface-container-low text-on-surface-variant hover:text-primary transition-colors"
               onClick={toggleContextPanel}
             >
               <span className="material-symbols-outlined icon-md" aria-hidden="true">
@@ -230,7 +230,7 @@ export function Header() {
                 budget: `$${sessionBudget.toFixed(2)}`,
               })}
               className={cn(
-                'hidden md:inline-flex items-center gap-xs px-sm py-xs rounded-full font-mono font-label-sm text-[11px] border tabular-nums',
+                'hidden md:inline-flex items-center gap-xs px-sm py-xs rounded-full font-mono font-label-sm text-label-xs border tabular-nums',
                 (sessionUsage?.cost_usd ?? 0) >= sessionBudget
                   ? 'bg-error/10 text-error border-error/30'
                   : (sessionUsage?.cost_usd ?? 0) >= sessionBudget * 0.8
@@ -238,7 +238,7 @@ export function Header() {
                     : 'bg-surface-container-low text-on-surface-variant border-outline-variant/30'
               )}
             >
-              <span className="material-symbols-outlined text-[14px]" aria-hidden="true">payments</span>
+              <span className="material-symbols-outlined icon-sm" aria-hidden="true">payments</span>
               {(sessionUsage?.cost_usd ?? 0).toFixed(2)} / ${sessionBudget.toFixed(2)}
             </span>
           )}
@@ -257,11 +257,11 @@ export function Header() {
                 onClick={() => { setModelOpen(!modelOpen); setModelFocus(-1) }}
               >
                 <span className={cn('w-2 h-2 rounded-full shrink-0', status?.querying ? 'bg-secondary animate-pulse' : 'bg-tertiary')}></span>
-                <span className="font-mono font-label-sm text-[12px] whitespace-nowrap max-w-[120px] truncate">{status?.model || t('header.model.noModel')}</span>
+                <span className="font-mono font-label-sm text-label-sm whitespace-nowrap max-w-[120px] truncate">{status?.model || t('header.model.noModel')}</span>
                 <span className="material-symbols-outlined icon-sm">expand_more</span>
               </Button>
               {modelOpen && models.length > 0 && (
-                <div className="absolute right-0 top-full mt-sm w-[280px] bg-surface-container-lowest/95 backdrop-blur-lg rounded-xl border border-outline-variant/20 shadow-xl z-modal py-sm" role="listbox" onKeyDown={e => {
+                <div className="absolute right-0 top-full mt-sm w-[280px] bg-surface-container-lowest/95 backdrop-blur-lg rounded-xl border border-outline-variant/20 shadow-e4 z-modal py-sm" role="listbox" onKeyDown={e => {
                   if (e.key === 'ArrowDown') { e.preventDefault(); setModelFocus(f => Math.min(f + 1, models.length - 1)) }
                   else if (e.key === 'ArrowUp') { e.preventDefault(); setModelFocus(f => Math.max(f - 1, 0)) }
                   // B6-37: only handle Enter when the keydown originated on the
@@ -307,18 +307,18 @@ export function Header() {
           {/* U6/IA T3: the bell tooltip says where it leads — /triage, with
               the pending skill count when one exists. The click is never
               hijacked into a modal. */}
-          <Button variant="ghost" aria-label={t('header.notifications')} title={pendingCount > 0 ? t('header.notifications.pending', { count: pendingCount }) : t('header.notifications.aria')} className="p-2 rounded-lg hover:bg-surface-container-low text-on-surface-variant hover:text-primary transition-colors relative" onClick={handleBellClick}>
+          <Button variant="ghost" aria-label={t('header.notifications')} title={pendingCount > 0 ? t('header.notifications.pending', { count: pendingCount }) : t('header.notifications.aria')} className="p-sm rounded-lg hover:bg-surface-container-low text-on-surface-variant hover:text-primary transition-colors relative" onClick={handleBellClick}>
             <span className="material-symbols-outlined icon-md" aria-hidden="true">notifications</span>
             {pendingCount > 0 && (
               <span
                 aria-hidden="true"
-                className="absolute top-0 right-0 min-w-[16px] h-4 px-[4px] rounded-full bg-error text-on-error text-[10px] font-bold flex items-center justify-center leading-none"
+                className="absolute top-0 right-0 min-w-[16px] h-4 px-[4px] rounded-full bg-error text-on-error text-label-2xs font-bold flex items-center justify-center leading-none"
               >
                 {pendingCount > 9 ? '9+' : pendingCount}
               </span>
             )}
           </Button>
-          <Button variant="ghost" aria-label={t('header.help')} title={t('header.help.aria')} className="p-2 rounded-lg hover:bg-surface-container-low text-on-surface-variant hover:text-primary transition-colors" onClick={() => window.dispatchEvent(new CustomEvent('shannon:toggle-help'))}>
+          <Button variant="ghost" aria-label={t('header.help')} title={t('header.help.aria')} className="p-sm rounded-lg hover:bg-surface-container-low text-on-surface-variant hover:text-primary transition-colors" onClick={() => window.dispatchEvent(new CustomEvent('shannon:toggle-help'))}>
             <span className="material-symbols-outlined icon-md" aria-hidden="true">help</span>
           </Button>
           {/* U6: the avatar is no longer a dead icon — it opens Settings. */}
@@ -329,7 +329,7 @@ export function Header() {
             className="h-8 w-8 rounded-full overflow-hidden bg-surface-container flex items-center justify-center ring-2 ring-primary/10 hover:bg-surface-container-high transition-colors"
             onClick={() => navigate('/settings')}
           >
-            <span className="material-symbols-outlined text-on-surface-variant text-[18px]" aria-hidden="true">person</span>
+            <span className="material-symbols-outlined text-on-surface-variant icon-md" aria-hidden="true">person</span>
           </Button>
         </div>
       </header>

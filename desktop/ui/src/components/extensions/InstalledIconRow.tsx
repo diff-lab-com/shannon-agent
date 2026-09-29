@@ -64,7 +64,7 @@ export default function InstalledIconRow() {
                 : 'bg-surface-container-low border-outline-variant/30 text-on-surface-variant hover:bg-surface-container',
             )}
           >
-            <span className="material-symbols-outlined text-[18px]" aria-hidden="true">{KIND_ICONS[a.kind]}</span>
+            <span className="material-symbols-outlined icon-md" aria-hidden="true">{KIND_ICONS[a.kind]}</span>
           </button>
         ))}
         {overflow > 0 && (

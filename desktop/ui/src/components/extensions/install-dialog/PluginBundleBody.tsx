@@ -94,7 +94,7 @@ export function PluginBundleBody({
   return (
     <div className="flex flex-col gap-md">
       <div className="flex items-center gap-sm">
-        <span className="material-symbols-outlined text-[18px] text-on-surface-variant">
+        <span className="material-symbols-outlined icon-md text-on-surface-variant">
           workspaces
         </span>
         <span className="font-body-md font-mono text-on-surface truncate" title={url}>
@@ -128,7 +128,7 @@ export function PluginBundleBody({
                 data-testid={row.testid}
                 className="flex items-start gap-xs text-label-sm text-on-surface-variant"
               >
-                <span className="material-symbols-outlined text-[14px] mt-[2px]" aria-hidden="true">
+                <span className="material-symbols-outlined icon-sm mt-[2px]" aria-hidden="true">
                   add_circle
                 </span>
                 <span>

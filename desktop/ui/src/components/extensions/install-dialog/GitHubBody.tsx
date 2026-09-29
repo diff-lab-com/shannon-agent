@@ -25,18 +25,18 @@ export function GitHubBody({ repo, ref_, installing, onInstall }: GitHubBodyProp
   return (
     <div className="flex flex-col gap-md">
       <div className="flex items-center gap-sm">
-        <span className="material-symbols-outlined text-[18px] text-on-surface-variant">
+        <span className="material-symbols-outlined icon-md text-on-surface-variant">
           code
         </span>
         <span className="font-body-md font-mono text-on-surface">{repo}</span>
       </div>
       <div className="flex items-center gap-sm">
-        <span className="material-symbols-outlined text-[18px] text-on-surface-variant">
+        <span className="material-symbols-outlined icon-md text-on-surface-variant">
           commit
         </span>
         <span className="font-body-md font-mono text-on-surface">{ref_}</span>
         {isFloatingBranch ? (
-          <span className="inline-flex items-center gap-[4px] px-xs py-[2px] rounded bg-tertiary-container/50 text-on-tertiary-container text-label-xs font-bold">
+          <span className="inline-flex items-center gap-[4px] px-xs py-[2px] rounded-sm bg-tertiary-container/50 text-on-tertiary-container text-label-xs font-bold">
             <span className="material-symbols-outlined icon-xs">warning</span>
             {t('extensions.installDialog.floatingBranch')}
           </span>

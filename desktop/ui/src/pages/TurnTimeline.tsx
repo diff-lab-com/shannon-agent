@@ -138,7 +138,7 @@ export default function TurnTimeline({ sessionId }: TurnTimelineProps) {
 
   if (loading) {
     return (
-      <div className="p-6 space-y-3" aria-busy="true">
+      <div className="p-lg space-y-3" aria-busy="true">
         <CardSkeleton />
         <CardSkeleton />
       </div>
@@ -147,7 +147,7 @@ export default function TurnTimeline({ sessionId }: TurnTimelineProps) {
 
   if (error || !timeline) {
     return (
-      <div className="p-6">
+      <div className="p-lg">
         <ErrorState
           icon="error"
           title={t('timeline.error.title')}
@@ -161,7 +161,7 @@ export default function TurnTimeline({ sessionId }: TurnTimelineProps) {
   return (
     <div className="h-full flex flex-col" data-testid="turn-timeline">
       {/* Summary header */}
-      <div className="flex items-center gap-2 px-4 pt-4 pb-2 shrink-0">
+      <div className="flex items-center gap-sm px-md pt-md pb-sm shrink-0">
         <Button
           variant="ghost"
           size="icon-sm"
@@ -190,8 +190,8 @@ export default function TurnTimeline({ sessionId }: TurnTimelineProps) {
         </div>
       </div>
 
-      <ScrollArea className="flex-1 min-h-0 px-4 pb-6">
-        <div className="max-w-3xl mx-auto space-y-4">
+      <ScrollArea className="flex-1 min-h-0 px-md pb-lg">
+        <div className="max-w-narrow mx-auto space-y-4">
           {/* Cumulative token/cost curve */}
           {timeline.cumulative.length > 0 && (
             <Card>
@@ -201,7 +201,7 @@ export default function TurnTimeline({ sessionId }: TurnTimelineProps) {
                   {t('timeline.curve.title')}
                 </CardTitle>
               </CardHeader>
-              <CardContent className="pt-2">
+              <CardContent className="pt-sm">
                 <CumulativeCurve cumulative={timeline.cumulative} />
               </CardContent>
             </Card>
@@ -229,7 +229,7 @@ function SummaryChip({ icon, label }: { icon: string; label: string }) {
   return (
     <span
       role="listitem"
-      className="inline-flex items-center gap-1 rounded-full bg-surface-container-low px-2 py-1 font-label-sm text-label-sm text-on-surface-variant border border-outline-variant/30"
+      className="inline-flex items-center gap-xs rounded-full bg-surface-container-low px-sm py-xs font-label-sm text-label-sm text-on-surface-variant border border-outline-variant/30"
     >
       <Icon name={icon} size="xs" />
       {label}
@@ -241,9 +241,9 @@ function EmptyTurns() {
   const t = useT()
   return (
     <div className="flex flex-col items-center justify-center rounded-xl border border-dashed border-outline-variant/40 py-14 text-center">
-      <Icon name="timeline" size="xl" className="text-on-surface-variant/50 mb-2" />
+      <Icon name="timeline" size="xl" className="text-on-surface-variant/50 mb-sm" />
       <p className="font-label-md text-on-surface">{t('timeline.empty.title')}</p>
-      <p className="font-label-sm text-on-surface-variant mt-1">
+      <p className="font-label-sm text-on-surface-variant mt-xs">
         {t('timeline.empty.hint')}
       </p>
     </div>
@@ -307,15 +307,15 @@ function CumulativeCurve({
           />
         )}
       </svg>
-      <figcaption className="mt-1 flex items-center justify-between font-label-xs text-xs text-on-surface-variant">
+      <figcaption className="mt-xs flex items-center justify-between font-label-xs text-xs text-on-surface-variant">
         <span>{formatTime(cumulative[0]?.ts_ns ?? 0, intl.locale)}</span>
         <span>
           {t('timeline.curve.tokens', { count: yMax })}
-          <span aria-hidden="true" className="mx-1">·</span>
+          <span aria-hidden="true" className="mx-xs">·</span>
           {t('timeline.curve.samples', { count: cumulative.length })}
           {showCost && (
             <>
-              <span aria-hidden="true" className="mx-1">·</span>
+              <span aria-hidden="true" className="mx-xs">·</span>
               {t('timeline.curve.cost', { cost: COST_FORMAT.format(costMax) })}
             </>
           )}
@@ -350,15 +350,15 @@ function TurnCard({
 
   return (
     <Card data-testid={`timeline-turn-${turn.turn}`}>
-      <CardHeader className="pb-2">
-        <div className="flex items-center gap-2 flex-wrap">
+      <CardHeader className="pb-sm">
+        <div className="flex items-center gap-sm flex-wrap">
           <CardTitle className="text-sm font-semibold">
             {t('timeline.turn.label', { n: turn.turn })}
           </CardTitle>
           {turn.reason && (
             <span
               className={cn(
-                'inline-flex items-center gap-1 rounded-full px-2 py-0.5 font-label-xs text-xs border',
+                'inline-flex items-center gap-xs rounded-full px-sm py-0.5 font-label-xs text-xs border',
                 tone === 'success' && 'bg-primary/10 text-primary border-primary/30',
                 tone === 'error' && 'bg-error/10 text-error border-error/30',
                 tone === 'neutral' && 'bg-surface-container-high text-on-surface-variant border-outline-variant/30',
@@ -371,19 +371,19 @@ function TurnCard({
             {formatTime(turn.start_ts_ns, intl.locale)} → {formatTime(turn.end_ts_ns, intl.locale)}
           </span>
         </div>
-        <div className="flex items-center gap-3 font-label-xs text-xs text-on-surface-variant pt-1">
-          <span className="inline-flex items-center gap-1">
+        <div className="flex items-center gap-3 font-label-xs text-xs text-on-surface-variant pt-xs">
+          <span className="inline-flex items-center gap-xs">
             <Icon name="login" size="xs" />↓ {nf.format(turn.input_tokens)}
           </span>
-          <span className="inline-flex items-center gap-1">
+          <span className="inline-flex items-center gap-xs">
             <Icon name="logout" size="xs" />↑ {nf.format(turn.output_tokens)}
           </span>
-          <span className="inline-flex items-center gap-1">
+          <span className="inline-flex items-center gap-xs">
             <Icon name="cached" size="xs" />
             ↻ {nf.format(turn.cache_read_tokens)}/{nf.format(turn.cache_creation_tokens)}
           </span>
           {turn.cost_usd != null && (
-            <span className="inline-flex items-center gap-1">
+            <span className="inline-flex items-center gap-xs">
               <Icon name="payments" size="xs" />
               {COST_FORMAT.format(turn.cost_usd)}
             </span>
@@ -416,7 +416,7 @@ function TurnCard({
                 <div className="absolute inset-x-0 top-1/2 -translate-y-1/2 h-px bg-outline-variant/40" />
                 <div
                   className={cn(
-                    'absolute top-1/2 -translate-y-1/2 h-5 rounded-md flex items-center gap-1 px-1.5 overflow-hidden whitespace-nowrap',
+                    'absolute top-1/2 -translate-y-1/2 h-5 rounded-md flex items-center gap-xs px-1.5 overflow-hidden whitespace-nowrap',
                     tool.is_error
                       ? 'bg-error/15 border border-error/40'
                       : 'bg-secondary-container/70',
@@ -429,10 +429,10 @@ function TurnCard({
                   )}
                   {fitsInside && (
                     <>
-                      <span className="font-label-xs text-[11px] text-on-surface truncate">
+                      <span className="font-label-xs text-label-xs text-on-surface truncate">
                         {tool.tool_name}
                       </span>
-                      <span className="ml-auto font-label-xs text-[11px] text-on-surface-variant pl-1 shrink-0">
+                      <span className="ml-auto font-label-xs text-label-xs text-on-surface-variant pl-xs shrink-0">
                         {formatDuration(tool.duration_ms)}
                       </span>
                     </>
@@ -441,7 +441,7 @@ function TurnCard({
                 {!fitsInside && (
                   <span
                     className={cn(
-                      'absolute top-1/2 -translate-y-1/2 whitespace-nowrap font-label-xs text-[11px]',
+                      'absolute top-1/2 -translate-y-1/2 whitespace-nowrap font-label-xs text-label-xs',
                       tool.is_error ? 'text-error' : 'text-on-surface',
                     )}
                     style={
@@ -452,7 +452,7 @@ function TurnCard({
                   >
                     <span>{tool.tool_name}</span>
                     {tool.duration_ms && (
-                      <span className="pl-1 text-on-surface-variant">
+                      <span className="pl-xs text-on-surface-variant">
                         · {formatDuration(tool.duration_ms)}
                       </span>
                     )}

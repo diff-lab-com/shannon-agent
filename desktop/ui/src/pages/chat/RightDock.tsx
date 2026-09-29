@@ -359,7 +359,7 @@ export default function RightDock({
               // §P2-22: suppress the open/close width transition while the
               // user is dragging the resizer — otherwise every pointermove
               // chases a 300ms ease and the panel lags like a rubber band.
-              !resizing && 'transition-all duration-300 ease-in-out',
+              !resizing && 'transition-all duration-(--duration-slow) ease-in-out',
             )
       }
       style={
@@ -398,15 +398,15 @@ export default function RightDock({
               data-testid="dock-shortcut-hint"
               className="mx-sm mt-sm flex items-center gap-sm px-sm py-xs rounded-lg bg-primary-container/40 text-on-surface text-label-xs animate-in fade-in"
             >
-              <span className="material-symbols-outlined text-[14px] text-primary shrink-0">lightbulb</span>
+              <span className="material-symbols-outlined icon-sm text-primary shrink-0">lightbulb</span>
               <span className="flex-1 min-w-0 truncate">{t('chat.dock.hint')}</span>
               <button
                 type="button"
                 aria-label={t('chat.dock.close.aria')}
                 onClick={dismissHint}
-                className="rounded p-0.5 hover:bg-surface-container text-on-surface-variant hover:text-primary"
+                className="rounded-sm p-0.5 hover:bg-surface-container text-on-surface-variant hover:text-primary"
               >
-                <span className="material-symbols-outlined text-[14px]">close</span>
+                <span className="material-symbols-outlined icon-sm">close</span>
               </button>
             </div>
           )}
@@ -649,23 +649,23 @@ function ArtifactDocBody({ artifact, workingDir }: { artifact: ArtifactItem; wor
         <span className="font-label-sm text-on-surface-variant truncate" title={project ?? undefined}>
           {project ?? t('sidebar.sessions.project.untitled')}
         </span>
-        <span className="material-symbols-outlined text-[13px] text-on-surface-variant shrink-0" aria-hidden="true">chevron_right</span>
+        <span className="material-symbols-outlined icon-xs text-on-surface-variant shrink-0" aria-hidden="true">chevron_right</span>
         <span className="font-label-sm font-bold text-on-surface truncate flex-1 min-w-0" title={displayTitle}>
           {displayTitle}
         </span>
         {artifact.origin === 'disk' && (
           <span
-            className="font-label-xs text-on-surface-variant px-xs py-[1px] rounded bg-tertiary/15 text-tertiary shrink-0"
+            className="font-label-xs text-on-surface-variant px-xs py-[1px] rounded-sm bg-tertiary/15 text-tertiary shrink-0"
             title={filePath ?? undefined}
           >
             {t('chat.artifact.fromDisk')}
           </span>
         )}
-        <span className="font-label-xs text-on-surface-variant px-xs py-[1px] rounded bg-surface-container-high shrink-0">
+        <span className="font-label-xs text-on-surface-variant px-xs py-[1px] rounded-sm bg-surface-container-high shrink-0">
           {artifactKindLabel(artifact.kind, t)}
         </span>
         {hasText && (
-          <span className="font-mono text-[10px] tabular-nums text-on-surface-variant shrink-0" title={t('chat.artifact.lines.aria', { n: lineCount })}>
+          <span className="font-mono text-label-2xs tabular-nums text-on-surface-variant shrink-0" title={t('chat.artifact.lines.aria', { n: lineCount })}>
             {lineCount}L
           </span>
         )}
@@ -735,7 +735,7 @@ function ArtifactDocBody({ artifact, workingDir }: { artifact: ArtifactItem; wor
       <div className="flex-1 min-h-0 overflow-hidden flex gap-sm min-w-0">
         <div className="flex-1 min-w-0 min-h-0">
           {showCode && hasText ? (
-            <pre className="h-full overflow-auto font-mono text-[12px] whitespace-pre-wrap break-words text-on-surface p-sm bg-surface-container-low/50 rounded-lg">
+            <pre className="h-full overflow-auto font-mono text-label-sm whitespace-pre-wrap break-words text-on-surface p-sm bg-surface-container-low/50 rounded-lg">
               {artifact.source}
             </pre>
           ) : artifact.kind === 'html' ? (
@@ -754,7 +754,7 @@ function ArtifactDocBody({ artifact, workingDir }: { artifact: ArtifactItem; wor
                   // code instead of a dead end; only truly unreadable files
                   // get the fallback card.
                   artifact.source && artifact.source !== filePath ? (
-                    <pre className="h-full overflow-auto font-mono text-[12px] whitespace-pre-wrap break-words text-on-surface p-sm bg-surface-container-low/50 rounded-lg">
+                    <pre className="h-full overflow-auto font-mono text-label-sm whitespace-pre-wrap break-words text-on-surface p-sm bg-surface-container-low/50 rounded-lg">
                       {artifact.source}
                     </pre>
                   ) : (

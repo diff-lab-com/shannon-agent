@@ -59,7 +59,7 @@ export function WelcomeCard({ title, subtitle, footer, children }: {
   children: React.ReactNode
 }) {
   return (
-    <section className="bg-surface-container-lowest border border-outline-variant/30 rounded-2xl p-xl shadow-sm">
+    <section className="bg-surface-container-lowest border border-outline-variant/30 rounded-2xl p-xl shadow-e1">
       <h1 className="font-headline-lg text-on-surface mb-xs">{title}</h1>
       <p className="font-body-md text-on-surface-variant mb-xl">{subtitle}</p>
       {children}

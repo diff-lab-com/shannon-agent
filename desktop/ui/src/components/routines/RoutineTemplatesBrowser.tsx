@@ -160,7 +160,7 @@ export default function RoutineTemplatesBrowser({ onInstantiated }: Props) {
               {tmpl.description}
             </p>
             <div className="flex items-center justify-between gap-sm pt-xs">
-              <code className="font-mono text-[11px] text-on-surface-variant bg-surface-container-high px-xs py-xxs rounded">
+              <code className="font-mono text-label-xs text-on-surface-variant bg-surface-container-high px-xs py-xxs rounded-sm">
                 {tmpl.trigger_type === 'cron'
                   ? tmpl.cron_expr ?? ''
                   : `${tmpl.interval_secs ?? 0}s`}

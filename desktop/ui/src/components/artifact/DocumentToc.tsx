@@ -72,14 +72,14 @@ export function DocumentToc({ source }: { source: string }) {
                 onClick={() => jump(h.id)}
                 aria-current={activeId === h.id ? 'location' : undefined}
                 className={cn(
-                  'w-full flex items-start gap-1.5 text-left px-sm py-1 rounded-md font-label-sm transition-colors cursor-pointer',
+                  'w-full flex items-start gap-1.5 text-left px-sm py-xs rounded-md font-label-sm transition-colors cursor-pointer',
                   h.level === 1 ? 'font-bold' : h.level === 3 ? 'pl-md' : '',
                   activeId === h.id
                     ? 'bg-primary/10 text-primary'
                     : 'text-on-surface-variant hover:bg-surface-container-low hover:text-on-surface',
                 )}
               >
-                <span className="font-mono text-[10px] tabular-nums mt-[2px] shrink-0" aria-hidden="true">
+                <span className="font-mono text-label-2xs tabular-nums mt-[2px] shrink-0" aria-hidden="true">
                   {i + 1}
                 </span>
                 <span className="truncate flex-1 min-w-0">{h.text}</span>

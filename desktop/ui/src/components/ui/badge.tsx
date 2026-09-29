@@ -36,7 +36,7 @@ const TONE_ACCENT: Record<ShannonVariant, string> = {
 }
 
 const SIZE_CLASSES: Record<ShannonSize, string | undefined> = {
-  sm: "px-1.5 py-[1px] text-[10px]",
+  sm: "px-1.5 py-[1px] text-label-2xs",
   md: undefined,
   lg: "px-2.5 py-[3px] text-label-sm",
 }

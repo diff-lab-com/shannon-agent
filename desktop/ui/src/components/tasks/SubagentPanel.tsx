@@ -40,7 +40,7 @@ export default function SubagentPanel() {
         id="subagents-heading"
         className="font-label-lg font-bold text-on-surface mb-sm flex items-center gap-xs"
       >
-        <span className="material-symbols-outlined text-[18px] text-primary" aria-hidden="true">
+        <span className="material-symbols-outlined icon-md text-primary" aria-hidden="true">
           account_tree
         </span>
         {t('subagent.panel.heading')}
@@ -51,7 +51,7 @@ export default function SubagentPanel() {
           return (
             <div
               key={a.id}
-              className="glass-panel border border-outline-variant/10 rounded-xl p-md shadow-sm bg-surface-container-lowest/80"
+              className="glass-panel border border-outline-variant/10 rounded-xl p-md shadow-e1 bg-surface-container-lowest/80"
               data-testid="subagent-card"
               data-status={a.status}
             >
@@ -66,12 +66,12 @@ export default function SubagentPanel() {
                       {a.name}
                     </span>
                   </div>
-                  <div className="flex flex-wrap items-center gap-sm mt-1 font-label-sm text-on-surface-variant">
-                    <span className="font-mono text-[11px] px-1.5 py-0.5 rounded bg-surface-container shrink-0">
+                  <div className="flex flex-wrap items-center gap-sm mt-xs font-label-sm text-on-surface-variant">
+                    <span className="font-mono text-label-xs px-1.5 py-0.5 rounded-sm bg-surface-container shrink-0">
                       {a.model}
                     </span>
                     {a.team && (
-                      <span className="font-label-xs px-1.5 py-0.5 rounded bg-surface-container">
+                      <span className="font-label-xs px-1.5 py-0.5 rounded-sm bg-surface-container">
                         {a.team}
                       </span>
                     )}
@@ -82,7 +82,7 @@ export default function SubagentPanel() {
                 </div>
                 <span
                   className={cn(
-                    'font-label-xs uppercase tracking-wide px-2 py-0.5 rounded border shrink-0',
+                    'font-label-xs uppercase tracking-wide px-sm py-0.5 rounded-sm border shrink-0',
                     badge.bg,
                   )}
                 >

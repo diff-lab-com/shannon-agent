@@ -25,7 +25,7 @@ export function MemoryCard({ entry, onEdit, onDelete, onOpenMemorySource }: Memo
   }
 
   return (
-    <div className="px-md py-md rounded-xl bg-surface-container-low border border-outline-variant/30 shadow-sm hover:shadow-md hover:border-primary/30 transition-all">
+    <div className="px-md py-md rounded-xl bg-surface-container-low border border-outline-variant/30 shadow-e1 hover:shadow-e2 hover:border-primary/30 transition-all">
       <div className="flex items-start gap-md">
         <span
           className={cn('material-symbols-outlined icon-md mt-[2px] px-sm py-xs rounded-lg', CATEGORY_COLOR[entry.category])}
@@ -56,7 +56,7 @@ export function MemoryCard({ entry, onEdit, onDelete, onOpenMemorySource }: Memo
                 className="inline-flex items-center gap-xs text-label-xs px-sm py-[2px] rounded-full bg-primary-container/40 text-on-surface"
                 data-testid="memory-source-badge"
               >
-                <span className="material-symbols-outlined text-[12px]" aria-hidden>
+                <span className="material-symbols-outlined icon-xs" aria-hidden>
                   history
                 </span>
                 {entry.source_kind ? t(`memory.source.kind.${entry.source_kind}`) : t('memory.source.badge')}
@@ -72,7 +72,7 @@ export function MemoryCard({ entry, onEdit, onDelete, onOpenMemorySource }: Memo
                 {entry.tags.map((tag) => (
                   <span
                     key={tag}
-                    className="text-label-xs px-sm py-[2px] rounded bg-primary-container text-on-primary-container"
+                    className="text-label-xs px-sm py-[2px] rounded-sm bg-primary-container text-on-primary-container"
                   >
                     #{tag}
                   </span>
@@ -88,7 +88,7 @@ export function MemoryCard({ entry, onEdit, onDelete, onOpenMemorySource }: Memo
                   onOpenMemorySource(entry.id, entry.source_session_id as string)
                 }
               >
-                <span className="material-symbols-outlined text-[14px]">chat</span>
+                <span className="material-symbols-outlined icon-sm">chat</span>
                 {t('memory.source.jump')}
               </Button>
             )}
@@ -102,7 +102,7 @@ export function MemoryCard({ entry, onEdit, onDelete, onOpenMemorySource }: Memo
             aria-label={t('memory.action.edit')}
             className="rounded-lg hover:bg-surface-container-high"
           >
-            <span className="material-symbols-outlined text-[18px] text-on-surface-variant">edit</span>
+            <span className="material-symbols-outlined icon-md text-on-surface-variant">edit</span>
           </Button>
           <Button
             variant="ghost"
@@ -111,7 +111,7 @@ export function MemoryCard({ entry, onEdit, onDelete, onOpenMemorySource }: Memo
             aria-label={t('memory.action.delete')}
             className="rounded-lg hover:bg-error/10"
           >
-            <span className="material-symbols-outlined text-[18px] text-error/70">delete</span>
+            <span className="material-symbols-outlined icon-md text-error/70">delete</span>
           </Button>
         </div>
       </div>

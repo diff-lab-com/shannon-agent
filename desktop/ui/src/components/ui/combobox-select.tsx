@@ -51,7 +51,7 @@ export function ComboboxSelect({ options, value, onChange, placeholder, label, e
             {selected?.label ?? placeholder}
           </span>
           <Combobox.Icon className="text-on-surface-variant">
-            <span className="material-symbols-outlined text-[18px]" aria-hidden="true">expand_more</span>
+            <span className="material-symbols-outlined icon-md" aria-hidden="true">expand_more</span>
           </Combobox.Icon>
         </Combobox.Trigger>
         <Combobox.Portal>
@@ -74,7 +74,7 @@ export function ComboboxSelect({ options, value, onChange, placeholder, label, e
                   >
                     <span className="truncate">{opt.label}</span>
                     {opt.value === value && (
-                      <span className="material-symbols-outlined text-[16px] text-primary" aria-hidden="true">check</span>
+                      <span className="material-symbols-outlined icon-sm text-primary" aria-hidden="true">check</span>
                     )}
                   </Combobox.Item>
                 ))}

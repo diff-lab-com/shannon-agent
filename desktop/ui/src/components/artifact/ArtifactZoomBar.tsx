@@ -91,7 +91,7 @@ export function ArtifactZoomBar({ zoom, zoomIn, zoomOut, reset, className }: Art
       }
     >
       <button type="button" className={BTN} onClick={zoomOut} aria-label={t('chat.dock.zoom.out')} title={t('chat.dock.zoom.out')}>
-        <span className="material-symbols-outlined text-[16px]" aria-hidden="true">zoom_out</span>
+        <span className="material-symbols-outlined icon-sm" aria-hidden="true">zoom_out</span>
       </button>
       <button
         type="button"
@@ -103,7 +103,7 @@ export function ArtifactZoomBar({ zoom, zoomIn, zoomOut, reset, className }: Art
         {Math.round(zoom * 100)}%
       </button>
       <button type="button" className={BTN} onClick={zoomIn} aria-label={t('chat.dock.zoom.in')} title={t('chat.dock.zoom.in')}>
-        <span className="material-symbols-outlined text-[16px]" aria-hidden="true">zoom_in</span>
+        <span className="material-symbols-outlined icon-sm" aria-hidden="true">zoom_in</span>
       </button>
     </div>
   )

@@ -284,7 +284,7 @@ export default function Tasks() {
 
   return (
     <div className="flex-1 overflow-y-auto w-full pb-16">
-      <div className="max-w-[1200px] mx-auto px-lg py-xl">
+      <div className="max-w-medium mx-auto px-lg py-xl">
         {/* E2E (extensions.spec.ts) and screen readers look up the Tasks page
             by its h1 — the visible h1/h2 was retired in P0-3 (the global app
             Header carries the page name now), but a sr-only h1 keeps the page
@@ -328,7 +328,7 @@ export default function Tasks() {
                 onClick={() => setTab(tabId)}
                 title={t(`tasks.tab.${tabId}.title`)}
                 className={cn(
-                  'h-auto px-md py-sm font-label-md text-[13px] font-bold cursor-pointer border-b-2 -mb-px transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-primary/30 rounded-none',
+                  'h-auto px-md py-sm font-label-md text-label-sm font-bold cursor-pointer border-b-2 -mb-px transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-primary/30 rounded-none',
                   selected ? 'border-primary text-primary' : 'border-transparent text-on-surface-variant hover:text-on-surface',
                 )}
               >

@@ -12,6 +12,7 @@ import { useEffect, useState, useCallback } from 'react'
 import EmptyState from '@/components/ui/empty-state'
 import { useIntl } from 'react-intl'
 import { Button } from '@/components/ui/button'
+import { Switch } from '@/components/ui/switch'
 import { cn } from '@/lib/utils'
 import * as api from '@/lib/tauri-api'
 import type { TriggeredRoutineDto } from '@/types'
@@ -81,13 +82,13 @@ export default function HookTaskPipeline() {
   const enabledCount = routines.filter(r => r.enabled).length
 
   return (
-    <div className="bg-surface-container-lowest rounded-2xl p-lg border border-outline-variant/30 shadow-sm flex flex-col gap-md">
+    <div className="bg-surface-container-lowest rounded-2xl p-lg border border-outline-variant/30 shadow-e1 flex flex-col gap-md">
       <div className="flex items-center justify-between">
         <div className="flex items-center gap-sm">
           <span className="material-symbols-outlined icon-md text-on-surface">conversion_path</span>
-          <h3 className="font-headline-md text-[16px] font-bold text-on-surface">{t('tasks.hookTaskPipeline.title')}</h3>
+          <h3 className="font-headline-md text-body-md font-bold text-on-surface">{t('tasks.hookTaskPipeline.title')}</h3>
           {routines.length > 0 ? (
-            <span className="font-label-sm text-[11px] text-on-surface-variant bg-surface-container-low px-xs py-1 rounded-full">
+            <span className="font-label-sm text-label-xs text-on-surface-variant bg-surface-container-low px-xs py-xs rounded-full">
               {intl.formatMessage({ id: 'tasks.hookTaskPipeline.active' }, { enabled: enabledCount, total: routines.length })}
             </span>
           ) : null}
@@ -98,9 +99,9 @@ export default function HookTaskPipeline() {
             size="sm"
             onClick={() => setCreateOpen(true)}
             aria-label={t('routines.create.aria')}
-            className="font-label-sm text-primary hover:bg-primary/10 rounded px-sm py-xs gap-1"
+            className="font-label-sm text-primary hover:bg-primary/10 rounded-sm px-sm py-xs gap-xs"
           >
-            <span className="material-symbols-outlined text-[14px]">add</span>
+            <span className="material-symbols-outlined icon-sm">add</span>
             {t('tasks.hookTaskPipeline.add')}
           </Button>
           <Button
@@ -108,9 +109,9 @@ export default function HookTaskPipeline() {
             size="sm"
             onClick={refresh}
             disabled={loading}
-            className="font-label-sm text-primary hover:bg-primary/10 rounded px-sm py-xs gap-1"
+            className="font-label-sm text-primary hover:bg-primary/10 rounded-sm px-sm py-xs gap-xs"
           >
-            <span className="material-symbols-outlined text-[14px]">{loading ? 'hourglass_top' : 'refresh'}</span>
+            <span className="material-symbols-outlined icon-sm">{loading ? 'hourglass_top' : 'refresh'}</span>
             {t('tasks.hookTaskPipeline.refresh')}
           </Button>
         </div>
@@ -118,7 +119,7 @@ export default function HookTaskPipeline() {
 
       {error ? (
         <div className="font-label-sm text-error flex items-center gap-sm">
-          <span className="material-symbols-outlined text-[14px]">error</span>
+          <span className="material-symbols-outlined icon-sm">error</span>
           {error}
         </div>
       ) : null}
@@ -146,7 +147,7 @@ export default function HookTaskPipeline() {
                     : 'border-outline-variant/20 bg-surface-container-low/40 opacity-70'
                 )}
               >
-                <span className={cn('inline-flex items-center gap-1 px-xs py-1 rounded-full border font-label-sm text-[10px] font-bold uppercase tracking-wide', b.tone)}>
+                <span className={cn('inline-flex items-center gap-xs px-xs py-xs rounded-full border font-label-sm text-label-2xs font-bold uppercase tracking-wide', b.tone)}>
                   <span className="material-symbols-outlined icon-xs">{b.icon}</span>
                   {b.label}
                 </span>
@@ -154,33 +155,28 @@ export default function HookTaskPipeline() {
                   <div className="flex items-center gap-xs">
                     <span className="font-label-md text-on-surface truncate">{r.name}</span>
                     {r.matcher ? (
-                      <code className="font-mono font-label-sm text-[10px] text-on-surface-variant bg-surface-container-high/60 px-1 rounded">{r.matcher}</code>
+                      <code className="font-mono font-label-sm text-label-2xs text-on-surface-variant bg-surface-container-high/60 px-xs rounded-sm">{r.matcher}</code>
                     ) : null}
                     {r.pattern ? (
-                      <code className="font-mono font-label-sm text-[10px] text-tertiary bg-tertiary/10 px-1 rounded">~/{r.pattern}/</code>
+                      <code className="font-mono font-label-sm text-label-2xs text-tertiary bg-tertiary/10 px-xs rounded-sm">~/{r.pattern}/</code>
                     ) : null}
                   </div>
                   {r.description ? (
-                    <p className="font-label-sm text-[11px] text-on-surface-variant mt-1">{r.description}</p>
+                    <p className="font-label-sm text-label-xs text-on-surface-variant mt-xs">{r.description}</p>
                   ) : null}
-                  <code className="font-mono font-label-sm text-[11px] text-on-surface-variant block mt-1 truncate">
+                  <code className="font-mono font-label-sm text-label-xs text-on-surface-variant block mt-xs truncate">
                     $ {r.command}
                   </code>
                 </div>
-                <Button
-                  variant="ghost"
-                  size="sm"
-                  role="switch"
-                  aria-checked={r.enabled}
+                {/* Shared ui/switch (C4): replaces the hand-drawn Button+thumb
+                    whose bg-white knob was invisible against light themes —
+                    the thumb now rides the --color-background token. */}
+                <Switch
+                  checked={r.enabled}
+                  onCheckedChange={checked => onToggle(r.name, checked)}
                   aria-label={intl.formatMessage({ id: 'tasks.hookTaskPipeline.toggleAria' }, { name: r.name })}
                   disabled={isToggling}
-                  onClick={() => onToggle(r.name, !r.enabled)}
-                  className={cn('relative inline-flex h-5 w-9 shrink-0 p-0 cursor-pointer rounded-full',
-                    r.enabled ? 'bg-primary hover:bg-primary/80' : 'bg-outline-variant hover:bg-outline-variant/80'
-                  )}
-                >
-                  <span className={cn('inline-block h-4 w-4 bg-white rounded-full shadow transition-transform absolute top-0.5', r.enabled ? 'translate-x-4' : 'translate-x-0.5')} />
-                </Button>
+                />
               </li>
             )
           })}

@@ -109,7 +109,7 @@ export default function SkillCandidateReviewQueue({ focusCandidateId }: {
               role="listitem"
               data-focus-candidate={focused ? 'true' : undefined}
               className={cn(
-                'glass-panel border border-outline-variant/20 rounded-xl p-md shadow-sm bg-surface-container-lowest/80',
+                'glass-panel border border-outline-variant/20 rounded-xl p-md shadow-e1 bg-surface-container-lowest/80',
                 focused && 'ring-2 ring-tertiary',
               )}
             >
@@ -121,7 +121,7 @@ export default function SkillCandidateReviewQueue({ focusCandidateId }: {
                   <div className="flex items-center gap-sm mb-xs flex-wrap">
                     <h4 className="font-body-md font-semibold text-on-surface">{candidate.proposed_name}</h4>
                     {candidate.refined && (
-                      <span className="px-xs py-0.5 rounded-full bg-tertiary/10 text-tertiary font-label-sm text-[11px] font-bold uppercase tracking-wider">
+                      <span className="px-xs py-0.5 rounded-full bg-tertiary/10 text-tertiary font-label-sm text-label-xs font-bold uppercase tracking-wider">
                         {t('extensions.pending.candidate.refined')}
                       </span>
                     )}
@@ -140,16 +140,16 @@ export default function SkillCandidateReviewQueue({ focusCandidateId }: {
                   </ol>
                   <div className="flex items-center gap-md flex-wrap font-label-sm text-label-sm text-on-surface-variant">
                     <span className="flex items-center gap-xs">
-                      <span className="material-symbols-outlined text-[14px]" aria-hidden="true">history</span>
+                      <span className="material-symbols-outlined icon-sm" aria-hidden="true">history</span>
                       {t('extensions.pending.candidate.occurrences', { count: candidate.occurrence_count })}
                     </span>
                     <span className="flex items-center gap-xs">
-                      <span className="material-symbols-outlined text-[14px]" aria-hidden="true">schedule</span>
+                      <span className="material-symbols-outlined icon-sm" aria-hidden="true">schedule</span>
                       {t('extensions.pending.candidate.detectedAt', { date: detected.toLocaleString(intl.locale) })}
                     </span>
                     {candidate.example_session_ids.length > 0 && (
                       <span className="flex items-center gap-xs">
-                        <span className="material-symbols-outlined text-[14px]" aria-hidden="true">forum</span>
+                        <span className="material-symbols-outlined icon-sm" aria-hidden="true">forum</span>
                         {t('extensions.pending.candidate.sessions', { count: candidate.example_session_ids.length })}
                       </span>
                     )}
@@ -164,7 +164,7 @@ export default function SkillCandidateReviewQueue({ focusCandidateId }: {
                     className="cursor-pointer inline-flex items-center gap-xs text-on-surface-variant hover:text-error"
                     onClick={() => void handleReject(candidate)}
                   >
-                    <span className="material-symbols-outlined text-[16px]" aria-hidden="true">close</span>
+                    <span className="material-symbols-outlined icon-sm" aria-hidden="true">close</span>
                     {t('skills.approval.reject')}
                   </Button>
                   <Button
@@ -173,7 +173,7 @@ export default function SkillCandidateReviewQueue({ focusCandidateId }: {
                     className="cursor-pointer inline-flex items-center gap-xs"
                     onClick={() => setApproveTarget(candidate)}
                   >
-                    <span className="material-symbols-outlined text-[16px]" aria-hidden="true">save</span>
+                    <span className="material-symbols-outlined icon-sm" aria-hidden="true">save</span>
                     {t('skills.approval.approve')}
                   </Button>
                 </div>

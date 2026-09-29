@@ -17,6 +17,7 @@ import * as api from '@/lib/tauri-api'
 import { toastError } from '@/lib/errorToast'
 import { Button } from '@/components/ui/button'
 import EmptyState from '@/components/ui/empty-state'
+import StatCard from '@/components/ui/stat-card'
 import { cn } from '@/lib/utils'
 import type { UsageStats, UsageBucket, SessionUsageRow } from '@/types'
 import CurrentSessionCostPanel from '@/components/usage/CurrentSessionCostPanel'
@@ -54,43 +55,6 @@ function fmtCost(locale: string, n: number): string {
     minimumFractionDigits: 2,
     maximumFractionDigits: 4,
   }).format(n)}`
-}
-
-function StatCard({
-  icon,
-  label,
-  value,
-  hint,
-}: {
-  icon: string
-  label: string
-  value: string
-  hint?: string
-}) {
-  return (
-    // Audit §P2-4 (round 6): align label and hint on a single horizontal row
-    // so cards with a hint line are the same height as cards without one.
-    // This keeps the 2-col grid tidy on narrow viewports.
-    <div className="bg-surface-container-low rounded-2xl p-lg border border-outline-variant/30 flex flex-col h-full">
-      <div className="flex items-center justify-between gap-sm text-on-surface-variant mb-sm min-h-[20px]">
-        <span className="flex items-center gap-xs min-w-0">
-          <span className="material-symbols-outlined icon-sm">{icon}</span>
-          <span className="font-label-sm text-label-sm uppercase tracking-wider truncate">{label}</span>
-        </span>
-        {hint && (
-          <span
-            className="font-label-xs text-label-xs text-on-surface-variant truncate max-w-[60%] text-right"
-            title={hint}
-          >
-            {hint}
-          </span>
-        )}
-      </div>
-      <div className="font-mono font-headline-md text-[26px] font-bold text-on-surface leading-tight tabular-nums">
-        {value}
-      </div>
-    </div>
-  )
 }
 
 /** Card wrapper for a chart — title + subtitle on top, the SVG below. */
@@ -386,7 +350,7 @@ export default function Usage() {
   const hasData = (stats != null && stats.totals.requests > 0)
 
   return (
-    <div className="p-lg max-w-6xl mx-auto">
+    <div className="p-lg max-w-medium mx-auto">
       <p className="text-on-surface-variant font-body-md mb-lg">{t('usage.subtitle')}</p>
 
       <div className="flex items-center gap-xs mb-lg flex-wrap">

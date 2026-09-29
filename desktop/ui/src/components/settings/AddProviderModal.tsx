@@ -161,9 +161,9 @@ export default function AddProviderModal({ editing, onClose, onSaved }: AddProvi
                 type="button"
                 variant="outline"
                 onClick={() => applyQuickFill(qf)}
-                className="inline-flex items-center gap-xs px-sm py-xs rounded-lg border border-outline-variant/40 bg-surface-container-low/40 hover:border-primary/40 hover:bg-primary/5 text-on-surface-variant hover:text-primary font-label-sm text-[12px] cursor-pointer"
+                className="inline-flex items-center gap-xs px-sm py-xs rounded-lg border border-outline-variant/40 bg-surface-container-low/40 hover:border-primary/40 hover:bg-primary/5 text-on-surface-variant hover:text-primary font-label-sm text-label-sm cursor-pointer"
               >
-                <span className="material-symbols-outlined text-[14px]">{qf.icon}</span>
+                <span className="material-symbols-outlined icon-sm">{qf.icon}</span>
                 {qf.id === 'custom' ? t(qf.label) : qf.label}
               </Button>
             ))}
@@ -233,7 +233,7 @@ export default function AddProviderModal({ editing, onClose, onSaved }: AddProvi
               aria-expanded={advancedOpen}
               data-testid="add-provider-advanced-toggle"
             >
-              <span className="material-symbols-outlined text-[18px]">{advancedOpen ? 'expand_less' : 'expand_more'}</span>
+              <span className="material-symbols-outlined icon-md">{advancedOpen ? 'expand_less' : 'expand_more'}</span>
               {t('settings.models.providers.advanced')}
             </Button>
             {advancedOpen ? (
@@ -261,7 +261,7 @@ export default function AddProviderModal({ editing, onClose, onSaved }: AddProvi
         </div>
 
         {error ? (
-          <div id="add-provider-error" role="alert" className="font-label-sm text-[12px] text-error">{error}</div>
+          <div id="add-provider-error" role="alert" className="font-label-sm text-label-sm text-error">{error}</div>
         ) : null}
 
         <div className="flex justify-end gap-sm pt-xs">
@@ -269,7 +269,7 @@ export default function AddProviderModal({ editing, onClose, onSaved }: AddProvi
             {t('settings.models.providers.cancel')}
           </Button>
           <Button className="px-lg py-sm bg-primary text-on-primary font-label-md rounded-lg hover:bg-primary/90 transition-colors flex items-center gap-sm cursor-pointer disabled:opacity-50" onClick={submit} disabled={saving}>
-            <span className="material-symbols-outlined text-[18px]">{saving ? 'progress_activity' : 'save'}</span>
+            <span className="material-symbols-outlined icon-md">{saving ? 'progress_activity' : 'save'}</span>
             {saving ? t('settings.models.providers.saving') : t('settings.models.providers.save')}
           </Button>
         </div>

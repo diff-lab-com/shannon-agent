@@ -62,11 +62,11 @@ export default function TaskCalendarView({
   return (
     <div className="space-y-lg">
       {/* Full-Width Calendar Grid */}
-      <div className="bg-surface-container-lowest border border-outline-variant/30 rounded-2xl p-lg shadow-sm">
+      <div className="bg-surface-container-lowest border border-outline-variant/30 rounded-2xl p-lg shadow-e1">
         <div className="grid grid-cols-7 text-center mb-sm">
-          {[1, 2, 3, 4, 5, 6, 0].map(jsDay => <span key={jsDay} className="text-[11px] font-bold text-on-surface-variant uppercase py-sm">{weekdayName(intl.locale, jsDay, 'short')}</span>)}
+          {[1, 2, 3, 4, 5, 6, 0].map(jsDay => <span key={jsDay} className="text-label-xs font-bold text-on-surface-variant uppercase py-sm">{weekdayName(intl.locale, jsDay, 'short')}</span>)}
         </div>
-        <div className="grid grid-cols-7 gap-1">
+        <div className="grid grid-cols-7 gap-xs">
           {Array.from({ length: startDay }, (_, i) => (
             <div key={`prev-${i}`} className="min-h-[80px] p-xs rounded-lg" />
           ))}
@@ -98,7 +98,7 @@ export default function TaskCalendarView({
                   }
                 }}
               >
-                <div className={cn('text-[12px] font-bold mb-xs', isToday ? 'w-6 h-6 rounded-full bg-primary text-on-primary flex items-center justify-center' : 'text-on-surface-variant')}>
+                <div className={cn('text-label-sm font-bold mb-xs', isToday ? 'w-6 h-6 rounded-full bg-primary text-on-primary flex items-center justify-center' : 'text-on-surface-variant')}>
                   {day}
                 </div>
                 <div className="space-y-0.5">
@@ -106,7 +106,7 @@ export default function TaskCalendarView({
                     <div key={`fire-${ri}`} className="h-1 rounded-full bg-secondary" title={r.name} />
                   ))}
                   {dayFires.length > 3 && (
-                    <span className="text-[9px] text-on-surface-variant">+{dayFires.length - 3}</span>
+                    <span className="text-label-2xs text-on-surface-variant">+{dayFires.length - 3}</span>
                   )}
                 </div>
               </div>
@@ -146,7 +146,7 @@ export default function TaskCalendarView({
                     role="button"
                     tabIndex={0}
                     aria-label={task.title}
-                    className="glass-panel border border-outline-variant/10 rounded-xl p-md shadow-sm hover:shadow-md transition-all group bg-surface-container-lowest/80 cursor-pointer"
+                    className="glass-panel border border-outline-variant/10 rounded-xl p-md shadow-e1 hover:shadow-e2 transition-all group bg-surface-container-lowest/80 cursor-pointer"
                     onClick={() => onSelectTask(task.id)}
                     onKeyDown={(e) => {
                       if (e.key === 'Enter' || e.key === ' ') {
@@ -166,9 +166,9 @@ export default function TaskCalendarView({
                         </div>
                       </div>
                       {/* B6-37: status changes announce politely. */}
-                      <div aria-live="polite" title={intl.formatMessage({ id: badge.tipId }, badge.values)} className={cn('flex items-center gap-xs px-sm py-1 rounded-full border', badge.bg)}>
+                      <div aria-live="polite" title={intl.formatMessage({ id: badge.tipId }, badge.values)} className={cn('flex items-center gap-xs px-sm py-xs rounded-full border', badge.bg)}>
                         <span className={cn('w-2 h-2 rounded-full', badge.dot)} />
-                        <span className="font-label-sm text-[11px] font-bold uppercase tracking-wider">{intl.formatMessage({ id: badge.labelId }, badge.values)}</span>
+                        <span className="font-label-sm text-label-xs font-bold uppercase tracking-wider">{intl.formatMessage({ id: badge.labelId }, badge.values)}</span>
                       </div>
                     </div>
                   </div>
@@ -184,14 +184,14 @@ export default function TaskCalendarView({
         <EfficiencyCard percentage={efficiencyPct} variant="compact" />
         <AgentAllocation agents={agents} />
         <div className="bg-surface-container-lowest border border-outline-variant/30 rounded-2xl p-lg">
-          <h4 className="font-headline-md text-[16px] text-on-surface mb-md">{t('tasks.taskCalendarView.activeNow')}</h4>
+          <h4 className="font-headline-md text-body-md text-on-surface mb-md">{t('tasks.taskCalendarView.activeNow')}</h4>
           <div className="space-y-md">
             {allTasks.filter(task => task.status === 'running' || task.status === 'in_progress').slice(0, 3).map(task => (
               <div key={task.id} className="flex items-start gap-md">
                 <div className="w-1 bg-primary h-8 rounded-full" />
                 <div>
                   <p className="text-body-sm font-semibold">{task.title}</p>
-                  <p className="text-[12px] text-on-surface-variant">{task.assignee || t('tasks.taskCalendarView.unassigned')}</p>
+                  <p className="text-label-sm text-on-surface-variant">{task.assignee || t('tasks.taskCalendarView.unassigned')}</p>
                 </div>
               </div>
             ))}

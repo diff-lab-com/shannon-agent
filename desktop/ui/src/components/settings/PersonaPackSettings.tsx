@@ -137,7 +137,7 @@ export default function PersonaPackSettings() {
 
   return (
     <section
-      className="bg-surface-container-lowest rounded-xl border border-outline-variant/30 p-xl shadow-sm"
+      className="bg-surface-container-lowest rounded-xl border border-outline-variant/30 p-xl shadow-e1"
       data-testid="persona-pack-section"
     >
       <div className="flex items-center gap-md mb-xs">
@@ -188,7 +188,7 @@ export default function PersonaPackSettings() {
         >
           {exporting ? (
             <span className="flex items-center gap-sm">
-              <Spinner className="text-on-primary text-[16px]" />
+              <Spinner className="text-on-primary text-body-md" />
               {t('settings.personaPack.export.working')}
             </span>
           ) : (
@@ -210,7 +210,7 @@ export default function PersonaPackSettings() {
               {CATEGORIES.map(cat => (
                 <li
                   key={cat.key}
-                  className="font-label-sm bg-surface-container-high text-on-surface rounded px-sm py-0.5"
+                  className="font-label-sm bg-surface-container-high text-on-surface rounded-sm px-sm py-0.5"
                   data-testid={`persona-pack-export-count-${cat.key}`}
                 >
                   {t(cat.labelKey)}: {exportResult.counts[COUNTS_KEY[cat.key]]}
@@ -325,7 +325,7 @@ export default function PersonaPackSettings() {
               {CATEGORIES.map(cat => (
                 <li
                   key={cat.key}
-                  className="font-label-sm bg-surface-container-high text-on-surface rounded px-sm py-0.5"
+                  className="font-label-sm bg-surface-container-high text-on-surface rounded-sm px-sm py-0.5"
                   data-testid={`persona-pack-imported-${cat.key}`}
                 >
                   {t(cat.labelKey)}: {importReport.imported[COUNTS_KEY[cat.key]]} / {importReport.skipped[COUNTS_KEY[cat.key]]}

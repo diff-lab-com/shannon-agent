@@ -175,7 +175,7 @@ function WebhookSection({ onSaved }: { onSaved?: () => void } = {}) {
   const presetMeta = PRESET_META[preset]
 
   return (
-    <div className="bg-surface-container-lowest p-lg rounded-xl shadow-sm border border-outline-variant/30 space-y-md">
+    <div className="bg-surface-container-lowest p-lg rounded-xl shadow-e1 border border-outline-variant/30 space-y-md">
       <div>
         <h4 className="font-headline-md text-on-surface">{t('settings.notifications.webhook.title')}</h4>
         <p className="text-on-surface-variant font-body-sm">{t('settings.notifications.webhook.subtitle')}</p>
@@ -193,7 +193,7 @@ function WebhookSection({ onSaved }: { onSaved?: () => void } = {}) {
             aria-labelledby="webhook-preset-label"
             className="w-full border-outline bg-surface text-on-surface"
           >
-            <span className="material-symbols-outlined text-[18px] text-primary" aria-hidden="true">
+            <span className="material-symbols-outlined icon-md text-primary" aria-hidden="true">
               {presetMeta.icon}
             </span>
             <SelectValue />
@@ -238,7 +238,7 @@ function WebhookSection({ onSaved }: { onSaved?: () => void } = {}) {
               Surface the endpoint so automation authors can wire GitHub /
               IM webhooks to it. */}
           <p className="text-on-surface-variant font-body-sm mt-sm flex items-start gap-xs">
-            <span className="material-symbols-outlined text-[16px] text-primary" aria-hidden="true">sync_alt</span>
+            <span className="material-symbols-outlined icon-sm text-primary" aria-hidden="true">sync_alt</span>
             <span>
               {t('settings.notifications.inboundHint', { endpoint: 'POST http://127.0.0.1:33420/api/routines/:id/trigger' })}
             </span>
@@ -382,10 +382,10 @@ function DndSection({ onSaved }: { onSaved?: () => void } = {}) {
     <section className="rounded-xl border border-outline-variant/30 bg-surface-container-lowest p-lg space-y-md">
       <div className="flex items-center justify-between gap-md">
         <div>
-          <div className="font-label-md text-[14px] text-on-surface font-semibold mb-1">
+          <div className="font-label-md text-body-sm text-on-surface font-semibold mb-xs">
             {t('settings.notifications.dnd.master')}
           </div>
-          <div className="font-label-sm text-[12px] text-on-surface-variant leading-tight">
+          <div className="font-label-sm text-label-sm text-on-surface-variant leading-tight">
             {t('settings.notifications.dnd.masterDesc')}
           </div>
         </div>
@@ -399,16 +399,16 @@ function DndSection({ onSaved }: { onSaved?: () => void } = {}) {
       </div>
 
       <div className="pt-xs">
-        <div className="font-label-sm text-[12px] uppercase tracking-wide text-on-surface-variant mb-sm">
+        <div className="font-label-sm text-label-sm uppercase tracking-wide text-on-surface-variant mb-sm">
           {t('settings.notifications.dnd.eventsTitle')}
         </div>
         <div className="space-y-md">
           <div className="flex items-center justify-between gap-md">
             <div>
-              <div className="font-label-md text-[14px] text-on-surface font-semibold mb-1">
+              <div className="font-label-md text-body-sm text-on-surface font-semibold mb-xs">
                 {t('settings.notifications.dnd.completed')}
               </div>
-              <div className="font-label-sm text-[12px] text-on-surface-variant leading-tight">
+              <div className="font-label-sm text-label-sm text-on-surface-variant leading-tight">
                 {t('settings.notifications.dnd.completedDesc')}
               </div>
             </div>
@@ -422,10 +422,10 @@ function DndSection({ onSaved }: { onSaved?: () => void } = {}) {
           </div>
           <div className="flex items-center justify-between gap-md">
             <div>
-              <div className="font-label-md text-[14px] text-on-surface font-semibold mb-1">
+              <div className="font-label-md text-body-sm text-on-surface font-semibold mb-xs">
                 {t('settings.notifications.dnd.failed')}
               </div>
-              <div className="font-label-sm text-[12px] text-on-surface-variant leading-tight">
+              <div className="font-label-sm text-label-sm text-on-surface-variant leading-tight">
                 {t('settings.notifications.dnd.failedDesc')}
               </div>
             </div>
@@ -442,10 +442,10 @@ function DndSection({ onSaved }: { onSaved?: () => void } = {}) {
 
       <div className="flex items-center justify-between gap-md">
         <div>
-          <div className="font-label-md text-[14px] text-on-surface font-semibold mb-1">
+          <div className="font-label-md text-body-sm text-on-surface font-semibold mb-xs">
             {t('settings.notifications.dnd.quietHours')}
           </div>
-          <div className="font-label-sm text-[12px] text-on-surface-variant leading-tight">
+          <div className="font-label-sm text-label-sm text-on-surface-variant leading-tight">
             {t('settings.notifications.dnd.quietHoursDesc')}
           </div>
         </div>
@@ -461,7 +461,7 @@ function DndSection({ onSaved }: { onSaved?: () => void } = {}) {
       {dnd && master && (
         <div className="grid grid-cols-1 sm:grid-cols-2 gap-md">
           <label className="flex flex-col gap-xs">
-            <span className="font-label-sm text-[12px] text-on-surface-variant">
+            <span className="font-label-sm text-label-sm text-on-surface-variant">
               {t('settings.notifications.dnd.start')}
             </span>
             <input
@@ -473,7 +473,7 @@ function DndSection({ onSaved }: { onSaved?: () => void } = {}) {
             />
           </label>
           <label className="flex flex-col gap-xs">
-            <span className="font-label-sm text-[12px] text-on-surface-variant">
+            <span className="font-label-sm text-label-sm text-on-surface-variant">
               {t('settings.notifications.dnd.end')}
             </span>
             <input
@@ -484,7 +484,7 @@ function DndSection({ onSaved }: { onSaved?: () => void } = {}) {
               className="rounded-lg border border-outline-variant bg-surface-container-lowest px-md py-sm font-body-md text-on-surface focus:outline-none focus:ring-2 focus:ring-primary"
             />
           </label>
-          <p className="sm:col-span-2 font-label-sm text-[12px] text-on-surface-variant">
+          <p className="sm:col-span-2 font-label-sm text-label-sm text-on-surface-variant">
             {t('settings.notifications.dnd.windowHint')}
           </p>
         </div>
@@ -541,7 +541,7 @@ export default function NotificationsSettings() {
           className="mb-xl p-lg rounded-2xl border border-outline-variant/30 bg-surface-container-low flex flex-col sm:flex-row items-start gap-md"
         >
           <div className="w-12 h-12 rounded-xl bg-primary-container/30 flex items-center justify-center shrink-0">
-            <span className="material-symbols-outlined text-[28px] text-primary" aria-hidden="true">
+            <span className="material-symbols-outlined icon-xl text-primary" aria-hidden="true">
               notifications_active
             </span>
           </div>

@@ -56,7 +56,7 @@ export default function Settings() {
         ))}
       </nav>
       <div className="flex-1 overflow-y-auto min-h-0 min-w-0">
-        <div className="max-w-[1000px] mx-auto px-lg py-xl animate-in fade-in duration-700 pb-8">
+        <div className="max-w-medium mx-auto px-lg py-xl animate-in fade-in duration-(--duration-slower) pb-xl">
           <Outlet />
         </div>
       </div>

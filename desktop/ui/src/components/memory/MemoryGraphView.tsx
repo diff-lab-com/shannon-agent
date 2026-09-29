@@ -84,7 +84,7 @@ export function MemoryGraphView({
           role="status"
           className="flex items-center gap-sm px-md py-sm mb-md rounded-xl bg-tertiary-container/20 border border-tertiary-container/40 text-on-surface text-label-md"
         >
-          <span className="material-symbols-outlined text-[18px]">info</span>
+          <span className="material-symbols-outlined icon-md">info</span>
           {t('memory.graph.truncated', { count: graph.entryCount, shown: graph.maxEntries })}
         </div>
       )}
@@ -178,7 +178,7 @@ export function MemoryGraphView({
                 aria-label={t('memory.graph.detail.close')}
                 className="rounded-lg hover:bg-surface-container-high"
               >
-                <span className="material-symbols-outlined text-[18px] text-on-surface-variant">
+                <span className="material-symbols-outlined icon-md text-on-surface-variant">
                   close
                 </span>
               </Button>
@@ -191,7 +191,7 @@ export function MemoryGraphView({
                 {selected.tags!.map((tag) => (
                   <span
                     key={tag}
-                    className="text-label-xs px-sm py-[2px] rounded bg-primary-container text-on-primary-container"
+                    className="text-label-xs px-sm py-[2px] rounded-sm bg-primary-container text-on-primary-container"
                   >
                     #{tag}
                   </span>
@@ -222,7 +222,7 @@ export function MemoryGraphView({
                       onOpenMemorySource(selected.id.replace(/^entry:/, ''), selected.sourceSessionId as string)
                     }
                   >
-                    <span className="material-symbols-outlined text-[16px] mr-xs">chat</span>
+                    <span className="material-symbols-outlined icon-sm mr-xs">chat</span>
                     {t('memory.source.jump')}
                   </Button>
                 )}

@@ -22,15 +22,15 @@ export default function TaskExecutionLog({ tasks, onCancel }: TaskExecutionLogPr
   return (
     <div className="pt-lg">
       <h4 className="font-label-md text-label-md text-on-surface-variant uppercase tracking-[0.1em] mb-md pl-xs">{t('tasks.taskExecutionLog.title')}</h4>
-      <div className="relative pl-8 border-l border-outline-variant/30 space-y-lg ml-md">
+      <div className="relative pl-xl border-l border-outline-variant/30 space-y-lg ml-md">
         {tasks.map(bt => {
           const badge = statusBadge(bt.status)
           return (
             <div key={bt.task_id} className="relative">
               <div className={cn('absolute -left-[41px] top-1 w-4 h-4 rounded-full border-2 bg-surface-container-lowest z-raised', bt.status === 'running' ? 'border-primary animate-pulse' : bt.status === 'completed' ? 'border-tertiary' : bt.status === 'failed' ? 'border-error' : 'border-outline-variant')} />
-              <div className="flex justify-between items-start mb-1">
+              <div className="flex justify-between items-start mb-xs">
                 <div>
-                  <p className={cn('font-label-sm text-label-sm mb-1', badge.bg.includes('primary') ? 'text-primary' : badge.bg.includes('tertiary') ? 'text-tertiary' : badge.bg.includes('error') ? 'text-error' : 'text-on-surface-variant')}>
+                  <p className={cn('font-label-sm text-label-sm mb-xs', badge.bg.includes('primary') ? 'text-primary' : badge.bg.includes('tertiary') ? 'text-tertiary' : badge.bg.includes('error') ? 'text-error' : 'text-on-surface-variant')}>
                     {formatTime(bt.started_at)} — {intl.formatMessage({ id: badge.labelId }, badge.values).toUpperCase()}
                   </p>
                   <p className="text-on-surface-variant text-body-sm italic">{bt.prompt}</p>
@@ -39,7 +39,7 @@ export default function TaskExecutionLog({ tasks, onCancel }: TaskExecutionLogPr
                 {bt.status === 'running' ? (
                   <Button
                     aria-label={t('tasks.taskExecutionLog.cancelAria')}
-                    className="p-2 rounded-lg hover:bg-error/10 text-error cursor-pointer"
+                    className="p-sm rounded-lg hover:bg-error/10 text-error cursor-pointer"
                     onClick={() => onCancel(bt.task_id)}
                   >
                     <span className="material-symbols-outlined" aria-hidden="true">stop_circle</span>

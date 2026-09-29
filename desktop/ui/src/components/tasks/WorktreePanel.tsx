@@ -83,7 +83,7 @@ export default function WorktreePanel() {
       <div className="flex items-center justify-between">
         <div>
           <h3 className="font-headline-md text-on-surface">{t('tasks.worktreePanel.title')}</h3>
-          <p className="text-on-surface-variant text-[13px] mt-xs">
+          <p className="text-on-surface-variant text-label-sm mt-xs">
             {t('tasks.worktreePanel.description')}
           </p>
         </div>
@@ -93,7 +93,7 @@ export default function WorktreePanel() {
           disabled={busy || worktrees.length === 0}
           aria-label={t('tasks.worktreePanel.pruneStaleAria')}
         >
-          <span className="material-symbols-outlined text-[18px]">cleaning_services</span>
+          <span className="material-symbols-outlined icon-md">cleaning_services</span>
           {t('tasks.worktreePanel.pruneStale')}
         </Button>
       </div>
@@ -104,7 +104,7 @@ export default function WorktreePanel() {
           tone="error"
           className="text-error font-label-md"
         >
-          <span className="material-symbols-outlined text-[18px]">error</span>
+          <span className="material-symbols-outlined icon-md">error</span>
           <span className="flex-1">{error}</span>
         </Banner>
       ) : null}
@@ -112,7 +112,7 @@ export default function WorktreePanel() {
       {/* Create-worktree picker */}
       <div className="bg-surface-container-lowest/80 border border-outline-variant/20 rounded-xl p-md flex flex-col md:flex-row md:items-end gap-sm">
         <div className="flex-1">
-          <label htmlFor="worktree-task-select" className="block font-label-sm text-[11px] text-on-surface-variant uppercase tracking-wider mb-xs">
+          <label htmlFor="worktree-task-select" className="block font-label-sm text-label-xs text-on-surface-variant uppercase tracking-wider mb-xs">
             {t('tasks.worktreePanel.routine')}
           </label>
           <select
@@ -133,7 +133,7 @@ export default function WorktreePanel() {
           disabled={busy || !selectedTaskId}
           aria-label={t('tasks.worktreePanel.createWorktreeAria')}
         >
-          <span className="material-symbols-outlined text-[18px]">add</span>
+          <span className="material-symbols-outlined icon-md">add</span>
           {t('tasks.worktreePanel.createWorktree')}
         </Button>
       </div>
@@ -159,16 +159,16 @@ export default function WorktreePanel() {
               >
                 <span className="material-symbols-outlined icon-md text-primary">folder_git</span>
                 <div className="flex-1 min-w-0">
-                  <div className="font-label-md text-[13px] font-bold text-on-surface truncate">
+                  <div className="font-label-md text-label-sm font-bold text-on-surface truncate">
                     {wt.task_name}
                     {routine ? <span className="text-on-surface-variant font-normal"> · {routine.trigger_type}</span> : null}
                   </div>
                   <div className="flex items-center gap-md mt-xs">
-                    <span className="font-mono text-[11px] text-on-surface-variant truncate" title={wt.path}>
+                    <span className="font-mono text-label-xs text-on-surface-variant truncate" title={wt.path}>
                       {shortPath(wt.path)}
                     </span>
-                    <span className="font-mono text-[11px] text-on-surface-variant truncate" title={wt.branch}>
-                      <span className="material-symbols-outlined text-[11px] align-middle">commit</span>
+                    <span className="font-mono text-label-xs text-on-surface-variant truncate" title={wt.branch}>
+                      <span className="material-symbols-outlined icon-xs align-middle">commit</span>
                       {wt.branch}
                     </span>
                   </div>
@@ -203,7 +203,7 @@ export default function WorktreePanel() {
                     title={t('tasks.worktreePanel.removeWorktree')}
                     className="text-on-surface-variant hover:text-error"
                   >
-                    <span className="material-symbols-outlined text-[18px]">delete</span>
+                    <span className="material-symbols-outlined icon-md">delete</span>
                   </Button>
                 )}
               </div>

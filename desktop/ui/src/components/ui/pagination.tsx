@@ -34,7 +34,7 @@ export function Pagination({ page, totalPages, onPageChange }: PaginationProps) 
         className="px-sm py-xs rounded-lg text-on-surface-variant hover:text-primary disabled:opacity-30"
         aria-label={intl.formatMessage({ id: 'ui.pagination.previous' })}
       >
-        <Icon name="chevron_left" className="text-[18px]" />
+        <Icon name="chevron_left" className="text-body-lg" />
       </Button>
       {pages.map((p, i) =>
         p === '…' ? (
@@ -59,7 +59,7 @@ export function Pagination({ page, totalPages, onPageChange }: PaginationProps) 
         className="px-sm py-xs rounded-lg text-on-surface-variant hover:text-primary disabled:opacity-30"
         aria-label={intl.formatMessage({ id: 'ui.pagination.next' })}
       >
-        <Icon name="chevron_right" className="text-[18px]" />
+        <Icon name="chevron_right" className="text-body-lg" />
       </Button>
     </div>
   )

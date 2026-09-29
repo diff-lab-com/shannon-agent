@@ -15,7 +15,7 @@ export function DefaultMaxTokensField({ value, onChange }: DefaultMaxTokensField
     <div>
       <p className="font-label-sm text-on-surface-variant mb-xs">{t('settings.models.providers.defaultMaxTokens')}</p>
       <Input
-        className="w-40 px-sm py-xs bg-surface text-on-surface border border-outline-variant/50 rounded font-body-sm font-mono"
+        className="w-40 px-sm py-xs bg-surface text-on-surface border border-outline-variant/50 rounded-sm font-body-sm font-mono"
         type="number"
         min={1}
         max={200000}

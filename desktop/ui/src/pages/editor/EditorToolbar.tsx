@@ -31,10 +31,10 @@ export default function EditorToolbar({
 }: EditorToolbarProps) {
   return (
     <div className="flex items-center gap-sm font-label-sm text-on-surface-variant flex-wrap">
-      <code className="font-mono bg-surface-container-low px-1.5 py-0.5 rounded">
+      <code className="font-mono bg-surface-container-low px-1.5 py-0.5 rounded-sm">
         {file.path.split('/').pop()}
       </code>
-      <span className="text-[11px] uppercase tracking-wider">
+      <span className="text-label-xs uppercase tracking-wider">
         {file.language_id}
       </span>
       <span>·</span>
@@ -50,9 +50,9 @@ export default function EditorToolbar({
         aria-label={t('editor.reRun')}
       >
         {diagLoading ? (
-          <Spinner className="text-[14px]" />
+          <Spinner className="text-body-sm" />
         ) : (
-          <span className="material-symbols-outlined text-[14px]">refresh</span>
+          <span className="material-symbols-outlined icon-sm">refresh</span>
         )}
         <span>{diagLoading ? t('editor.running') : t('editor.reRun')}</span>
       </Button>
@@ -65,7 +65,7 @@ export default function EditorToolbar({
               disabled={saving}
               className="flex items-center gap-xs px-sm py-0.5 rounded-full bg-primary text-on-primary hover:bg-primary/90 focus:outline-none focus-visible:ring-2 focus-visible:ring-primary/30 disabled:opacity-40 disabled:cursor-not-allowed cursor-pointer"
             >
-              <span className="material-symbols-outlined text-[14px]">
+              <span className="material-symbols-outlined icon-sm">
                 {saving ? 'progress_activity' : 'save'}
               </span>
               <span>{saving ? t('editor.saving') : t('editor.save')}</span>
@@ -77,7 +77,7 @@ export default function EditorToolbar({
               disabled={saving}
               className="flex items-center gap-xs px-sm py-0.5 rounded-full border border-outline-variant/40 bg-surface-container-low text-on-surface hover:bg-surface-container-high focus:outline-none focus-visible:ring-2 focus-visible:ring-primary/30 disabled:opacity-40 disabled:cursor-not-allowed cursor-pointer"
             >
-              <span className="material-symbols-outlined text-[14px]">
+              <span className="material-symbols-outlined icon-sm">
                 close
               </span>
               <span>{t('editor.cancel')}</span>
@@ -91,7 +91,7 @@ export default function EditorToolbar({
             className="flex items-center gap-xs px-sm py-0.5 rounded-full border border-outline-variant/40 bg-surface-container-low text-on-surface hover:bg-surface-container-high focus:outline-none focus-visible:ring-2 focus-visible:ring-primary/30 cursor-pointer"
             aria-label={t('editor.editMode')}
           >
-            <span className="material-symbols-outlined text-[14px]">edit</span>
+            <span className="material-symbols-outlined icon-sm">edit</span>
             <span>{t('editor.editMode')}</span>
           </Button>
         )}

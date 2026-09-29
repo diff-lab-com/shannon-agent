@@ -35,7 +35,7 @@ export default function StreamingResponse({
   return (
     <div className="relative" role="presentation">
       <div className="flex gap-md max-w-[90%] pt-lg">
-        <div className="h-10 w-10 rounded-full bg-primary-container flex items-center justify-center shrink-0 shadow-md">
+        <div className="h-10 w-10 rounded-full bg-primary-container flex items-center justify-center shrink-0 shadow-e2">
           <span className="material-symbols-outlined text-on-primary-container">smart_toy</span>
         </div>
         <div className="space-y-md flex-1">
@@ -54,8 +54,8 @@ export default function StreamingResponse({
             )
           ))}
           {streamingText && (
-            <div className="bg-surface-container-lowest px-lg py-md rounded-2xl rounded-tl-none border border-outline-variant/20 shadow-sm">
-              <div className="font-body-md text-on-surface prose prose-sm max-w-none prose-p:my-1 prose-pre:bg-surface-container prose-pre:p-md prose-pre:rounded-lg prose-code:text-primary prose-code:before:content-[''] prose-code:after:content-['']">
+            <div className="bg-surface-container-lowest px-lg py-md rounded-2xl rounded-tl-none border border-outline-variant/20 shadow-e1">
+              <div className="font-body-md text-on-surface prose prose-sm max-w-none prose-p:my-xs prose-pre:bg-surface-container prose-pre:p-md prose-pre:rounded-lg prose-code:text-primary prose-code:before:content-[''] prose-code:after:content-['']">
                 <Markdown>{streamingText}</Markdown>
                 {/* P2-5d typing cursor — CSS-driven (not a moving dot) so it
                     matches Claude Desktop's style. */}

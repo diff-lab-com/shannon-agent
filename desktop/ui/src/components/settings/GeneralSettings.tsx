@@ -109,16 +109,16 @@ export default function GeneralSettings() {
   const currentMode = APPROVAL_MODE_KEYS[approvalMode]
 
   return (
-    <div className="max-w-3xl">
+    <div className="max-w-narrow">
       <p className="font-body-md text-on-surface-variant mb-md">{t('settings.general.subheader')}</p>
 
       <div className="space-y-lg">
         {/* Autonomy Level */}
-        <section className="bg-surface-container-lowest rounded-xl border border-outline-variant/30 p-xl shadow-sm transition-all hover:shadow-md">
+        <section className="bg-surface-container-lowest rounded-xl border border-outline-variant/30 p-xl shadow-e1 transition-all hover:shadow-e2">
           <div className="flex items-center gap-md mb-xs">
             <span className="material-symbols-outlined text-primary" style={{fontVariationSettings: "'FILL' 1"}}>auto_awesome</span>
             <h3 className="font-headline-md text-headline-md">{t('settings.general.approvalMode.title')}</h3>
-            {saving && <Spinner className="text-primary text-[18px]" />}
+            {saving && <Spinner className="text-primary text-body-lg" />}
           </div>
           <p className="font-body-sm text-on-surface-variant mb-xl">
             {intl.formatMessage({ id: 'settings.general.approvalMode.current' }, {
@@ -131,7 +131,7 @@ export default function GeneralSettings() {
               flex segments carry the short label only; the selected mode's
               description moves to a single helper line below. */}
           <div role="radiogroup" aria-label={intl.formatMessage({ id: 'settings.general.approvalMode.sliderAria' })}>
-            <div className="flex rounded-xl bg-surface-container-low p-1 gap-1 border border-outline-variant/30">
+            <div className="flex rounded-xl bg-surface-container-low p-xs gap-xs border border-outline-variant/30">
               {APPROVAL_MODE_KEYS.map((m, i) => (
                 <button
                   key={m.value}
@@ -140,7 +140,7 @@ export default function GeneralSettings() {
                   aria-checked={i === approvalMode}
                   onClick={() => handleModeChange(i)}
                   className={cn(
-                    'flex-1 min-w-0 px-1 py-sm rounded-lg font-label-md text-center cursor-pointer transition-all duration-200',
+                    'flex-1 min-w-0 px-xs py-sm rounded-lg font-label-md text-center cursor-pointer transition-all duration-(--duration-normal)',
                     'focus-visible:outline focus-visible:outline-2 focus-visible:outline-primary',
                     i === approvalMode
                       ? 'bg-primary text-on-primary font-bold shadow-e1'
@@ -151,14 +151,14 @@ export default function GeneralSettings() {
                 </button>
               ))}
             </div>
-            <p className="font-body-sm text-on-surface-variant mt-sm px-1">
+            <p className="font-body-sm text-on-surface-variant mt-sm px-xs">
               {t(currentMode.descriptionKey)}
             </p>
           </div>
         </section>
 
         {/* Language */}
-        <section className="bg-surface-container-lowest rounded-xl border border-outline-variant/30 p-xl shadow-sm transition-all hover:shadow-md">
+        <section className="bg-surface-container-lowest rounded-xl border border-outline-variant/30 p-xl shadow-e1 transition-all hover:shadow-e2">
           <div className="flex items-center gap-md mb-xs">
             <span className="material-symbols-outlined text-primary" style={{fontVariationSettings: "'FILL' 1"}}>translate</span>
             <h3 className="font-headline-md text-headline-md">{intl.formatMessage({ id: 'settings.language.label' })}</h3>
@@ -185,7 +185,7 @@ export default function GeneralSettings() {
         </section>
 
         {/* P2-⑧ Display density */}
-        <section className="bg-surface-container-lowest rounded-xl border border-outline-variant/30 p-xl shadow-sm transition-all hover:shadow-md">
+        <section className="bg-surface-container-lowest rounded-xl border border-outline-variant/30 p-xl shadow-e1 transition-all hover:shadow-e2">
           <div className="flex items-center gap-md mb-xs">
             <span className="material-symbols-outlined text-primary" style={{fontVariationSettings: "'FILL' 1"}}>format_line_spacing</span>
             <h3 className="font-headline-md text-headline-md">{intl.formatMessage({ id: 'settings.density.title' })}</h3>
@@ -216,7 +216,7 @@ export default function GeneralSettings() {
         </section>
 
         {/* Session Info */}
-        <section className="bg-surface-container-lowest rounded-xl border border-outline-variant/30 p-xl shadow-sm">
+        <section className="bg-surface-container-lowest rounded-xl border border-outline-variant/30 p-xl shadow-e1">
           <h3 className="font-headline-md text-headline-md mb-md">{t('settings.general.sessionInfo.title')}</h3>
           <div className="space-y-sm">
             {/* Batch D4: artifact auto-open preference (recovered from the
@@ -265,7 +265,7 @@ export default function GeneralSettings() {
         </section>
 
         {/* Notifications */}
-        <section className="bg-surface-container-lowest rounded-xl border border-outline-variant/30 p-xl shadow-sm">
+        <section className="bg-surface-container-lowest rounded-xl border border-outline-variant/30 p-xl shadow-e1">
           <div className="flex items-center gap-md mb-xs">
             <span className="material-symbols-outlined text-primary" style={{fontVariationSettings: "'FILL' 1"}}>notifications</span>
             <h3 className="font-headline-md text-headline-md">{intl.formatMessage({ id: 'settings.notifications.label' })}</h3>
@@ -286,7 +286,7 @@ export default function GeneralSettings() {
         <FeedbackSummaryCard />
 
         {/* P1-6 — migration wizard entry (import from Claude Code / ZCode) */}
-        <section className="bg-surface-container-lowest rounded-xl border border-outline-variant/30 p-xl shadow-sm">
+        <section className="bg-surface-container-lowest rounded-xl border border-outline-variant/30 p-xl shadow-e1">
           <div className="flex items-center gap-md mb-xs">
             <span className="material-symbols-outlined text-primary" style={{fontVariationSettings: "'FILL' 1"}}>move_in</span>
             <h3 className="font-headline-md text-headline-md">{t('settings.migration.title')}</h3>
@@ -306,7 +306,7 @@ export default function GeneralSettings() {
         <PersonaPackSettings />
 
         {/* Re-run setup wizard */}
-        <section className="bg-surface-container-lowest rounded-xl border border-outline-variant/30 p-xl shadow-sm">
+        <section className="bg-surface-container-lowest rounded-xl border border-outline-variant/30 p-xl shadow-e1">
           <div className="flex items-center gap-md mb-xs">
             <span className="material-symbols-outlined text-primary" style={{fontVariationSettings: "'FILL' 1"}}>refresh</span>
             <h3 className="font-headline-md text-headline-md">{t('settings.general.rerunWizard.title')}</h3>

@@ -273,7 +273,7 @@ export default function Editor({ initialPath, onDirtyChange }: EditorProps) {
   const diagCount = diags.length
 
   return (
-    <div className="max-w-6xl mx-auto p-md flex flex-col gap-md">
+    <div className="max-w-medium mx-auto p-md flex flex-col gap-md">
       <header>
         <h2 className="text-headline-md font-headline-md text-on-surface">{t('editor.title')}</h2>
         <p className="font-label-sm text-on-surface-variant mt-xs">

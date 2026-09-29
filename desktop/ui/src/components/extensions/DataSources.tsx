@@ -190,7 +190,7 @@ export default function DataSources() {
     : catalog;
 
   return (
-    <div className="p-lg max-w-6xl mx-auto space-y-xl">
+    <div className="p-lg max-w-medium mx-auto space-y-xl">
       <header>
         <h2 className="text-headline-md font-headline-md text-on-surface mb-xs">{t('extensions.datasources.title')}</h2>
         <p className="text-body-md text-on-surface-variant">
@@ -210,7 +210,7 @@ export default function DataSources() {
             className="text-primary hover:underline cursor-pointer inline-flex items-center gap-0.5"
           >
             {t('extensions.datasources.crossLink.link')}
-            <span className="material-symbols-outlined text-[14px]" aria-hidden="true">
+            <span className="material-symbols-outlined icon-sm" aria-hidden="true">
               arrow_forward
             </span>
           </button>
@@ -338,7 +338,7 @@ export default function DataSources() {
                   i !== installed.length - 1 && "border-b border-outline-variant/15",
                 )}
               >
-                <span className="material-symbols-outlined text-primary text-[20px]" aria-hidden="true">{datasourceIcon(row.slug)}</span>
+                <span className="material-symbols-outlined text-primary icon-md" aria-hidden="true">{datasourceIcon(row.slug)}</span>
                 <div className="flex-1 min-w-0">
                   <div className="font-bold text-label-md text-on-surface truncate">{row.name}</div>
                   <div className="text-label-xs text-on-surface-variant font-mono truncate">
@@ -412,12 +412,12 @@ function AdapterCard({
   const accent = ACCENT_BY_KIND[kind] ?? ACCENT_DEFAULT;
   const isQueryPending = CONFIG_ONLY_KINDS.has(kind);
   return (
-    <div className="relative overflow-hidden rounded-2xl border border-outline-variant/30 bg-surface-container-lowest hover:border-primary/40 hover:shadow-lg transition-all flex flex-col group">
+    <div className="relative overflow-hidden rounded-2xl border border-outline-variant/30 bg-surface-container-lowest hover:border-primary/40 hover:shadow-e3 transition-all flex flex-col group">
       <div className={cn("h-1 w-full bg-gradient-to-r", accent.bar)} />
       <div className="p-md flex flex-col flex-1">
         <div className="flex items-start gap-sm mb-xs">
-          <div className={cn("w-11 h-11 rounded-xl bg-gradient-to-br flex items-center justify-center shrink-0 shadow-sm", accent.icon)}>
-            <span className="material-symbols-outlined text-white text-[22px]">{accent.icon_name}</span>
+          <div className={cn("w-11 h-11 rounded-xl bg-gradient-to-br flex items-center justify-center shrink-0 shadow-e1", accent.icon)}>
+            <span className="material-symbols-outlined text-white icon-lg">{accent.icon_name}</span>
           </div>
           <div className="flex-1 min-w-0">
             <h4 className="font-bold text-label-md text-on-surface truncate">{entry.name}</h4>
@@ -436,14 +436,14 @@ function AdapterCard({
         </div>
 
         {isQueryPending && !isInstalled && (
-          <div className="text-label-xs mb-xs inline-flex items-center gap-[4px] px-xs py-[2px] rounded bg-secondary/10 text-on-secondary-container border border-secondary/20">
+          <div className="text-label-xs mb-xs inline-flex items-center gap-[4px] px-xs py-[2px] rounded-sm bg-secondary/10 text-on-secondary-container border border-secondary/20">
             <span className="material-symbols-outlined icon-xs">info</span>
             {t('extensions.datasources.queryComingSoonHint')}
           </div>
         )}
 
         {feedback && (
-          <div className={cn("text-label-xs mb-xs inline-flex items-center gap-[4px] px-xs py-[2px] rounded", feedback.ok ? "bg-primary-container text-on-primary-container" : "bg-error-container text-on-error-container")}>
+          <div className={cn("text-label-xs mb-xs inline-flex items-center gap-[4px] px-xs py-[2px] rounded-sm", feedback.ok ? "bg-primary-container text-on-primary-container" : "bg-error-container text-on-error-container")}>
             <span className="material-symbols-outlined icon-xs">{feedback.ok ? "check_circle" : "error"}</span>
             {feedback.msg}
           </div>

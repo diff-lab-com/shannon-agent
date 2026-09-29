@@ -121,19 +121,19 @@ export default function AgentMessagesPanel({ team, limit = 100 }: AgentMessagesP
   const empty = useMemo(() => rows.length === 0, [rows])
 
   return (
-    <div className="bg-surface-container-lowest rounded-2xl p-xl border border-outline-variant/30 shadow-sm">
+    <div className="bg-surface-container-lowest rounded-2xl p-xl border border-outline-variant/30 shadow-e1">
       <div className="flex items-center justify-between mb-md">
-        <div className="flex items-center gap-2">
+        <div className="flex items-center gap-sm">
           <span className="material-symbols-outlined icon-md text-on-surface">forum</span>
-          <h3 className="font-headline-md text-[18px] font-bold text-on-surface">{t('tasks.agentMessagesPanel.title')}</h3>
+          <h3 className="font-headline-md text-body-lg font-bold text-on-surface">{t('tasks.agentMessagesPanel.title')}</h3>
           {team && (
-            <span className="text-label-sm text-on-surface-variant bg-surface-container px-2 py-0.5 rounded-full border border-outline-variant/20">
+            <span className="text-label-sm text-on-surface-variant bg-surface-container px-sm py-0.5 rounded-full border border-outline-variant/20">
               {team}
             </span>
           )}
         </div>
         <div className="flex items-center gap-sm">
-          <label className="flex items-center gap-1 text-label-sm text-on-surface-variant cursor-pointer select-none">
+          <label className="flex items-center gap-xs text-label-sm text-on-surface-variant cursor-pointer select-none">
             <input
               type="checkbox"
               checked={autoRefresh}
@@ -149,7 +149,7 @@ export default function AgentMessagesPanel({ team, limit = 100 }: AgentMessagesP
             disabled={loading}
             aria-label={t('tasks.agentMessagesPanel.reloadAria')}
           >
-            <span className="material-symbols-outlined text-[18px]">refresh</span>
+            <span className="material-symbols-outlined icon-md">refresh</span>
           </Button>
         </div>
       </div>

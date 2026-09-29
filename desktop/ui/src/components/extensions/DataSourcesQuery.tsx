@@ -96,7 +96,7 @@ export default function DataSourcesQuery({ onSwitchToAdapters }: { onSwitchToAda
               onClick={onSwitchToAdapters}
               className="cursor-pointer"
             >
-              <span className="material-symbols-outlined text-[18px]">addon</span>
+              <span className="material-symbols-outlined icon-md">addon</span>
               {t('extensions.datasources.query.installCta')}
             </Button>
           )}

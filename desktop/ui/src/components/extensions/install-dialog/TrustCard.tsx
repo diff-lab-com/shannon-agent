@@ -54,7 +54,7 @@ export function TrustCard({ entry }: { entry: CatalogEntry }) {
 
       {/* Source — derivable for every entry, so always shown. */}
       <div className="flex items-start gap-sm text-label-sm text-on-surface-variant">
-        <span className="material-symbols-outlined text-[14px] mt-[2px]" aria-hidden="true">
+        <span className="material-symbols-outlined icon-sm mt-[2px]" aria-hidden="true">
           source
         </span>
         <div className="min-w-0">
@@ -92,7 +92,7 @@ export function TrustCard({ entry }: { entry: CatalogEntry }) {
       {/* Skills: the trigger description is what gets enabled. */}
       {entry.kind === 'skill' && entry.description ? (
         <div className="flex items-start gap-sm text-label-sm text-on-surface-variant">
-          <span className="material-symbols-outlined text-[14px] mt-[2px]" aria-hidden="true">
+          <span className="material-symbols-outlined icon-sm mt-[2px]" aria-hidden="true">
             bolt
           </span>
           <div className="min-w-0">
@@ -114,7 +114,7 @@ export function TrustCard({ entry }: { entry: CatalogEntry }) {
               className="inline-flex items-center gap-xs px-xs py-[2px] rounded-full bg-warning-container/40 text-on-warning-container text-label-xs font-bold"
               title={[stdioSpec.command, ...stdioSpec.args].join(' ')}
             >
-              <span className="material-symbols-outlined text-[12px]" aria-hidden="true">
+              <span className="material-symbols-outlined icon-xs" aria-hidden="true">
                 terminal
               </span>
               {t('extensions.installDialog.trust.capability.command')}
@@ -122,7 +122,7 @@ export function TrustCard({ entry }: { entry: CatalogEntry }) {
           )}
           {isContainer && (
             <span className="inline-flex items-center gap-xs px-xs py-[2px] rounded-full bg-surface-container-high text-on-surface-variant text-label-xs font-bold">
-              <span className="material-symbols-outlined text-[12px]" aria-hidden="true">
+              <span className="material-symbols-outlined icon-xs" aria-hidden="true">
                 deployable_code
               </span>
               {t('extensions.installDialog.trust.capability.container')}
@@ -130,7 +130,7 @@ export function TrustCard({ entry }: { entry: CatalogEntry }) {
           )}
           {isRemoteSource && (
             <span className="inline-flex items-center gap-xs px-xs py-[2px] rounded-full bg-surface-container-high text-on-surface-variant text-label-xs font-bold">
-              <span className="material-symbols-outlined text-[12px]" aria-hidden="true">
+              <span className="material-symbols-outlined icon-xs" aria-hidden="true">
                 cloud_download
               </span>
               {t('extensions.installDialog.trust.capability.fetch')}
@@ -138,7 +138,7 @@ export function TrustCard({ entry }: { entry: CatalogEntry }) {
           )}
           {scopes.length > 0 && (
             <span className="inline-flex items-center gap-xs px-xs py-[2px] rounded-full bg-surface-container-high text-on-surface-variant text-label-xs font-bold">
-              <span className="material-symbols-outlined text-[12px]" aria-hidden="true">
+              <span className="material-symbols-outlined icon-xs" aria-hidden="true">
                 key
               </span>
               {t('extensions.installDialog.trust.capability.scopes')}
@@ -150,7 +150,7 @@ export function TrustCard({ entry }: { entry: CatalogEntry }) {
       {/* Fallback for fields the catalog manifest doesn't model (MCP tool
           lists, runtime permissions): tell the user where they appear. */}
       <p className="text-label-xs text-on-surface-variant/80 flex items-center gap-xs">
-        <span className="material-symbols-outlined text-[12px]" aria-hidden="true">
+        <span className="material-symbols-outlined icon-xs" aria-hidden="true">
           info
         </span>
         <FormattedMessage id="extensions.installDialog.trust.afterInstall" />

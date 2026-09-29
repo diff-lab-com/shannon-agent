@@ -90,7 +90,7 @@ export default function NewGoalDialog({ open, onClose, onStart }: NewGoalDialogP
               className="text-left p-sm rounded-xl border border-outline-variant/40 bg-surface-container-lowest hover:border-primary hover:bg-primary/5 transition-colors focus-visible:outline focus-visible:outline-2 focus-visible:outline-primary"
               data-testid={`goal-template-${tpl.id}`}
             >
-              <span className="material-symbols-outlined text-primary text-[18px] mb-1 block" aria-hidden="true">{tpl.icon}</span>
+              <span className="material-symbols-outlined text-primary icon-md mb-xs block" aria-hidden="true">{tpl.icon}</span>
               <span className="font-label-sm text-on-surface font-bold block">{intl.formatMessage({ id: tpl.labelKey })}</span>
               <span className="font-body-xs text-on-surface-variant line-clamp-2">{intl.formatMessage({ id: tpl.descKey })}</span>
             </button>

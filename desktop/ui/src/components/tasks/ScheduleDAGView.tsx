@@ -132,10 +132,10 @@ export default function ScheduleDAGView({ routines, onSelectRoutine, queuedTaskI
 
   if (routines.length === 0) {
     return (
-      <div className="bg-surface-container-lowest rounded-2xl p-xl border border-outline-variant/30 shadow-sm">
-        <div className="flex items-center gap-2 mb-md">
+      <div className="bg-surface-container-lowest rounded-2xl p-xl border border-outline-variant/30 shadow-e1">
+        <div className="flex items-center gap-sm mb-md">
           <span className="material-symbols-outlined icon-md text-on-surface">account_tree</span>
-          <h3 className="font-headline-md text-[18px] font-bold text-on-surface">{t('tasks.scheduleDAGView.title')}</h3>
+          <h3 className="font-headline-md text-body-lg font-bold text-on-surface">{t('tasks.scheduleDAGView.title')}</h3>
         </div>
         <p className="text-body-sm text-on-surface-variant text-center py-lg">
           {t('tasks.scheduleDAGView.empty')}
@@ -145,11 +145,11 @@ export default function ScheduleDAGView({ routines, onSelectRoutine, queuedTaskI
   }
 
   return (
-    <div className="bg-surface-container-lowest rounded-2xl p-lg border border-outline-variant/30 shadow-sm">
-      <div className="flex items-center gap-2 mb-md">
+    <div className="bg-surface-container-lowest rounded-2xl p-lg border border-outline-variant/30 shadow-e1">
+      <div className="flex items-center gap-sm mb-md">
         <span className="material-symbols-outlined icon-md text-on-surface">account_tree</span>
-        <h3 className="font-headline-md text-[18px] font-bold text-on-surface">{t('tasks.scheduleDAGView.title')}</h3>
-        <span className="font-label-sm text-[11px] text-on-surface-variant bg-surface-container-low px-xs py-1 rounded-full">
+        <h3 className="font-headline-md text-body-lg font-bold text-on-surface">{t('tasks.scheduleDAGView.title')}</h3>
+        <span className="font-label-sm text-label-xs text-on-surface-variant bg-surface-container-low px-xs py-xs rounded-full">
           {intl.formatMessage({ id: 'tasks.scheduleDAGView.routineCount' }, { count: routines.length })}
         </span>
       </div>

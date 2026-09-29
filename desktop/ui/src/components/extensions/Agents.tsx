@@ -149,7 +149,7 @@ export default function Agents() {
     : catalog;
 
   return (
-    <div className="p-lg max-w-6xl mx-auto space-y-xl">
+    <div className="p-lg max-w-medium mx-auto space-y-xl">
       <header>
         <h2 className="text-headline-md font-headline-md text-on-surface mb-xs">{t('extensions.agents.title')}</h2>
         <p className="text-body-md text-on-surface-variant">
@@ -225,7 +225,7 @@ export default function Agents() {
                   i !== installed.length - 1 && "border-b border-outline-variant/15",
                 )}
               >
-                <span className="material-symbols-outlined text-primary text-[20px]">smart_toy</span>
+                <span className="material-symbols-outlined text-primary icon-md">smart_toy</span>
                 <div className="flex-1 min-w-0">
                   <div className="font-bold text-label-md text-on-surface truncate">{agent.name}</div>
                   <div className="text-label-xs text-on-surface-variant font-mono truncate">

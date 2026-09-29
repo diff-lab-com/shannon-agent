@@ -61,7 +61,7 @@ export function WebRenderer({ url }: { url: string }) {
           reader, not a general-purpose browser. */}
       <div className="flex items-center gap-xs px-sm py-xs bg-surface-container-low border-b border-outline-variant/15 shrink-0">
         <span className="material-symbols-outlined icon-sm text-on-surface-variant shrink-0" aria-hidden="true">language</span>
-        <span className="font-mono text-[11px] text-on-surface-variant truncate flex-1 min-w-0" title={url}>
+        <span className="font-mono text-label-xs text-on-surface-variant truncate flex-1 min-w-0" title={url}>
           {url}
         </span>
         <button

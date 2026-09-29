@@ -179,7 +179,7 @@ export function DropdownMenu({
           onMouseEnter={() => !item.disabled && setFocusIndex(index)}
         >
           {item.icon && (
-            <span className="material-symbols-outlined text-[18px] shrink-0" aria-hidden="true">
+            <span className="material-symbols-outlined icon-md shrink-0" aria-hidden="true">
               {item.icon}
             </span>
           )}

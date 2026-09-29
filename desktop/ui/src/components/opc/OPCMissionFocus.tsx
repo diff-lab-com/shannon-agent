@@ -29,9 +29,9 @@ export default function OPCMissionFocus({ config }: Props) {
   }
 
   return (
-    <div className="bg-surface-container-lowest/70 backdrop-blur-md rounded-2xl p-xl mb-lg border border-outline-variant/30 relative shadow-sm">
-      <div className="flex items-center justify-between mb-2">
-        <div className="flex items-center gap-2 uppercase font-label-md text-[13px] tracking-widest text-on-surface-variant font-bold">
+    <div className="bg-surface-container-lowest/70 backdrop-blur-md rounded-2xl p-xl mb-lg border border-outline-variant/30 relative shadow-e1">
+      <div className="flex items-center justify-between mb-sm">
+        <div className="flex items-center gap-sm uppercase font-label-md text-label-sm tracking-widest text-on-surface-variant font-bold">
           <span className="w-1.5 h-1.5 bg-outline-variant rotate-45 block" />
           {intl.formatMessage({ id: 'opc.missionFocus.todayMission' })}
         </div>
@@ -46,7 +46,7 @@ export default function OPCMissionFocus({ config }: Props) {
         </Button>
       </div>
       {editing ? (
-        <div className="mt-2 space-y-md">
+        <div className="mt-sm space-y-md">
           <textarea
             className="w-full h-24 p-md bg-surface-container-low rounded-xl border border-outline-variant/30 text-body-md resize-none focus:outline-none focus:ring-2 focus:ring-primary/30"
             value={text}
@@ -61,7 +61,7 @@ export default function OPCMissionFocus({ config }: Props) {
           </Button>
         </div>
       ) : (
-        <h2 className="font-headline-lg text-[28px] font-bold text-on-surface mt-2 max-w-5xl">
+        <h2 className="font-headline-lg text-[28px] font-bold text-on-surface mt-sm max-w-5xl">
           {focus}
         </h2>
       )}

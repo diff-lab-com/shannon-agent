@@ -37,6 +37,13 @@
   --container-5xl: 64rem;
   --container-6xl: 72rem;
   --container-7xl: 80rem;
+  /* Content width tiers (UI review 2026-09-29 Batch 1 P1): page-level
+     containers converge on three named widths — narrow (reading, dialogs),
+     medium (workbench/settings), wide (dashboard). Replaces the ad-hoc
+     max-w-3xl/6xl/max-w-[1000-1600px] mix (6 widths → 3). */
+  --container-narrow: 48rem;
+  --container-medium: 75rem;
+  --container-wide: 100rem;
   /* v4 resolves `max-w-sm` through --max-width → --spacing → --container, in
      that order. Our MD3 scale defines `--spacing-sm: 8px`, which hijacked
      `max-w-sm` and collapsed every default dialog to 8px wide. Pin the
@@ -105,7 +112,6 @@
   /* U9: single source for the app footer's height; main padding and the
      chat composer's bottom offset derive from it (was h-8 / bottom-6/12). */
   --spacing-footer: 32px;
-  --spacing-max-content-width: 1200px;
 
   /* Fonts */
   --font-body-md: "Inter Variable", ui-sans-serif, system-ui, sans-serif;
@@ -122,6 +128,14 @@
   --font-display-lg: "Inter Variable", ui-sans-serif, system-ui, sans-serif;
 
   /* Text Sizing Overrides */
+  /* label-2xs (Batch 1): 10px was the most-used non-token size (59 sites —
+     badges, count bubbles, table micro-labels). Promoted to a role instead
+     of forcing those call sites onto 11px. */
+  --text-label-2xs: 10px;
+  --text-label-2xs--line-height: 1;
+  --text-label-2xs--letter-spacing: 0.04em;
+  --text-label-2xs--font-weight: 500;
+
   --text-label-xs: 11px;
   --text-label-xs--line-height: 1;
   --text-label-xs--letter-spacing: 0.04em;

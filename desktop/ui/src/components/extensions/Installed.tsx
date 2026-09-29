@@ -138,7 +138,7 @@ export default function Installed() {
       <div className="p-lg max-w-7xl mx-auto">
         <div className="border border-error/30 rounded-2xl p-lg bg-error-container/20">
           <div className="flex items-start gap-md">
-            <span className="material-symbols-outlined text-error text-[24px]">error</span>
+            <span className="material-symbols-outlined text-error icon-lg">error</span>
             <div>
               <h3 className="font-bold text-error mb-xs">{t('extensions.installed.loadFailed')}</h3>
               <p className="text-label-sm text-on-surface-variant font-mono">{error}</p>
@@ -152,7 +152,7 @@ export default function Installed() {
                 onClick={refetchAll}
                 className="mt-sm inline-flex items-center gap-xs px-sm py-xs rounded-lg border border-error/40 bg-surface-container-lowest text-label-sm font-bold text-on-surface hover:bg-surface-container-low cursor-pointer focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-error/40"
               >
-                <span className="material-symbols-outlined text-[14px]" aria-hidden="true">refresh</span>
+                <span className="material-symbols-outlined icon-sm" aria-hidden="true">refresh</span>
                 {t('extensions.installed.retry')}
               </button>
             </div>
@@ -221,7 +221,7 @@ export default function Installed() {
               }
               className="inline-flex items-center gap-xs px-sm py-xs rounded-full border border-outline-variant/30 bg-surface-container-low text-label-sm text-on-surface-variant hover:border-primary/40 hover:text-primary transition-colors cursor-pointer focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/40"
             >
-              <span className="material-symbols-outlined text-[14px]" aria-hidden="true">
+              <span className="material-symbols-outlined icon-sm" aria-hidden="true">
                 {KIND_ICONS[kind]}
               </span>
               {kindLabel(intl, kind)}
@@ -323,12 +323,12 @@ function InstalledRow({
         <div className="flex items-center gap-sm">
           <h3 className="font-bold text-label-md text-on-surface truncate">{row.name}</h3>
           {row.version && (
-            <span className="text-label-xs px-xs py-[1px] rounded bg-surface-container-low text-on-surface-variant font-mono">
+            <span className="text-label-xs px-xs py-[1px] rounded-sm bg-surface-container-low text-on-surface-variant font-mono">
               {row.version}
             </span>
           )}
           {!row.enabled && (
-            <span className="text-label-xs px-xs py-[1px] rounded bg-warning-container/50 text-on-warning-container font-bold">
+            <span className="text-label-xs px-xs py-[1px] rounded-sm bg-warning-container/50 text-on-warning-container font-bold">
               {t('extensions.installed.disabled')}
             </span>
           )}
@@ -356,10 +356,10 @@ function InstalledRow({
           <button
             type="button"
             onClick={() => navigate(KIND_TO_PATH[row.kind])}
-            className="mt-xs inline-flex items-center gap-0.5 text-label-xs text-primary hover:underline focus-visible:outline focus-visible:outline-2 focus-visible:outline-primary/40 rounded px-0.5 -mx-0.5"
+            className="mt-xs inline-flex items-center gap-0.5 text-label-xs text-primary hover:underline focus-visible:outline focus-visible:outline-2 focus-visible:outline-primary/40 rounded-sm px-0.5 -mx-0.5"
             title={intl.formatMessage({ id: 'extensions.installed.disabledCtaHint' }, { tab: t(KIND_TO_MANAGE_TAB[row.kind]) })}
           >
-            <span className="material-symbols-outlined text-[14px]" aria-hidden="true">arrow_forward</span>
+            <span className="material-symbols-outlined icon-sm" aria-hidden="true">arrow_forward</span>
             {t('extensions.installed.disabledCta')} {t(KIND_TO_MANAGE_TAB[row.kind])} →
           </button>
         )}

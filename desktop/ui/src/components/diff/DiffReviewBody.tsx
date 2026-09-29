@@ -247,7 +247,7 @@ export default function DiffReviewBody({ filePath, onClose, active }: DiffReview
           </div>
         ) : error || errorCode ? (
           <div className="flex items-start gap-sm p-md bg-error/10 border border-error/20 rounded-xl text-error">
-            <span className="material-symbols-outlined text-[18px] mt-[2px]" aria-hidden="true">error</span>
+            <span className="material-symbols-outlined icon-md mt-[2px]" aria-hidden="true">error</span>
             <div>
               <p className="font-label-md">{t('diff.dialog.loadFailed')}</p>
               <p className="font-body-sm mt-xs opacity-80">
@@ -264,7 +264,7 @@ export default function DiffReviewBody({ filePath, onClose, active }: DiffReview
                 role="alert"
                 className="flex items-start gap-sm p-md mb-md bg-error/10 border border-error/30 rounded-xl text-error"
               >
-                <span className="material-symbols-outlined text-[18px] mt-[2px]" aria-hidden="true">warning</span>
+                <span className="material-symbols-outlined icon-md mt-[2px]" aria-hidden="true">warning</span>
                 <p className="font-label-md">{t('diff.review.deleteWarning')}</p>
               </div>
             )}
@@ -298,7 +298,7 @@ export default function DiffReviewBody({ filePath, onClose, active }: DiffReview
           >
             {applying ? (
               <span className="flex items-center gap-xs">
-                <Spinner className="text-[16px]" />
+                <Spinner className="text-body-md" />
                 {t('diff.dialog.apply', { count: acceptedCount })}
               </span>
             ) : (

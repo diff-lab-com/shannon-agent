@@ -46,7 +46,7 @@ export default function OPC() {
 
   return (
     <div className="flex-1 w-full bg-background overflow-y-auto h-full px-lg py-xl">
-      <div className="max-w-[1600px] mx-auto animate-in fade-in duration-700">
+      <div className="max-w-wide mx-auto animate-in fade-in duration-(--duration-slower)">
         <OPCMissionFocus config={config} />
 
         {loading ? (

@@ -346,8 +346,8 @@ export default function PermissionsSettings() {
                 <h3 className="font-title-sm text-on-surface font-semibold">
                   {t('settings.permissions.scope.resultsTitle', { scope: rawScope })}
                 </h3>
-                <span className="inline-flex items-center gap-xs px-sm py-xs rounded-full bg-primary/10 text-primary font-label-sm text-[11px] font-bold">
-                  <span className="material-symbols-outlined text-[14px]" aria-hidden="true">
+                <span className="inline-flex items-center gap-xs px-sm py-xs rounded-full bg-primary/10 text-primary font-label-sm text-label-xs font-bold">
+                  <span className="material-symbols-outlined icon-sm" aria-hidden="true">
                     filter_alt
                   </span>
                   {rawScope}
@@ -358,7 +358,7 @@ export default function PermissionsSettings() {
                     className="ml-xs inline-flex items-center justify-center rounded-full hover:bg-primary/20 cursor-pointer"
                     onClick={clearScope}
                   >
-                    <span className="material-symbols-outlined text-[14px]" aria-hidden="true">
+                    <span className="material-symbols-outlined icon-sm" aria-hidden="true">
                       close
                     </span>
                   </button>
@@ -384,7 +384,7 @@ export default function PermissionsSettings() {
                       key={`${hit.profile}-${hit.group}-${hit.rule}`}
                       className="flex items-center gap-sm flex-wrap"
                     >
-                      <code className="font-mono text-body-sm text-on-surface bg-surface-container px-sm py-xs rounded">
+                      <code className="font-mono text-body-sm text-on-surface bg-surface-container px-sm py-xs rounded-sm">
                         {hit.rule}
                       </code>
                       <span className="text-label-sm text-on-surface-variant">
@@ -442,7 +442,7 @@ export default function PermissionsSettings() {
                       <div className="flex items-center gap-sm">
                         <span className="font-title-sm text-on-surface font-semibold truncate">{p.name}</span>
                         {activeProfile === p.name && (
-                          <span className="px-sm py-xs rounded-full bg-primary/10 text-primary font-label-sm text-[11px] font-bold uppercase tracking-wider">
+                          <span className="px-sm py-xs rounded-full bg-primary/10 text-primary font-label-sm text-label-xs font-bold uppercase tracking-wider">
                             {t('settings.permissions.activeBadge')}
                           </span>
                         )}
@@ -531,11 +531,11 @@ export default function PermissionsSettings() {
               ))}
             </div>
             <p className="text-label-md text-on-surface-variant flex items-center gap-xs">
-              <span className="material-symbols-outlined text-[14px]" aria-hidden="true">science</span>
+              <span className="material-symbols-outlined icon-sm" aria-hidden="true">science</span>
               {t('settings.permissions.sandbox.landlockNote')}
             </p>
             <p className="text-label-md text-warning flex items-center gap-xs">
-              <span className="material-symbols-outlined text-[14px]" aria-hidden="true">restart_alt</span>
+              <span className="material-symbols-outlined icon-sm" aria-hidden="true">restart_alt</span>
               {t('settings.permissions.sandbox.restartNote')}
             </p>
           </section>
@@ -614,7 +614,7 @@ function BuiltinCard({
         </span>
         <span className="font-title-sm text-on-surface font-semibold capitalize">{profile.id}</span>
         {active && (
-          <span className="ml-auto px-sm py-xs rounded-full bg-primary/10 text-primary font-label-sm text-[11px] font-bold uppercase tracking-wider">
+          <span className="ml-auto px-sm py-xs rounded-full bg-primary/10 text-primary font-label-sm text-label-xs font-bold uppercase tracking-wider">
             {t('settings.permissions.activeBadge')}
           </span>
         )}
@@ -623,7 +623,7 @@ function BuiltinCard({
       <ul className="text-label-md text-on-surface-variant space-y-xs">
         {flags.map(([on, key]) => (
           <li key={key} className="flex items-center gap-xs">
-            <span className={cn('material-symbols-outlined text-[14px]', on ? 'text-primary' : 'text-on-surface-variant/60')} aria-hidden="true">
+            <span className={cn('material-symbols-outlined icon-sm', on ? 'text-primary' : 'text-on-surface-variant/60')} aria-hidden="true">
               {on ? 'check_circle' : 'radio_button_unchecked'}
             </span>
             {t(key)}
@@ -800,13 +800,13 @@ function RuleGroupEditor({
         <ul className="space-y-xs">
           {rules.map((rule, index) => (
             <li key={`${rule}-${index}`} className="flex items-center gap-sm">
-              <code className="font-mono text-body-sm text-on-surface bg-surface-container px-sm py-xs rounded flex-1 truncate">
+              <code className="font-mono text-body-sm text-on-surface bg-surface-container px-sm py-xs rounded-sm flex-1 truncate">
                 {rule}
               </code>
               <Button
                 variant="ghost"
                 aria-label={t('settings.permissions.editor.removeRule')}
-                className="p-xs rounded text-on-surface-variant hover:text-error"
+                className="p-xs rounded-sm text-on-surface-variant hover:text-error"
                 onClick={() => onRemove(index)}
               >
                 <span className="material-symbols-outlined icon-sm" aria-hidden="true">close</span>

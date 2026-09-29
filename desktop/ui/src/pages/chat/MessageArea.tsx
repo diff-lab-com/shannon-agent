@@ -309,7 +309,7 @@ export default function MessageArea({
           aria-label={t('chat.scrollToLatest.aria')}
           title={t('chat.scrollToLatest.aria')}
           onClick={scrollToBottom}
-          className="sticky bottom-md left-full -translate-x-full ml-sm w-10 h-10 rounded-full bg-surface-container-lowest/95 backdrop-blur-md border border-outline-variant/30 shadow-lg hover:bg-primary-container hover:border-primary/40 text-on-surface hover:text-primary transition-all flex items-center justify-center"
+          className="sticky bottom-md left-full -translate-x-full ml-sm w-10 h-10 rounded-full bg-surface-container-lowest/95 backdrop-blur-md border border-outline-variant/30 shadow-e3 hover:bg-primary-container hover:border-primary/40 text-on-surface hover:text-primary transition-all flex items-center justify-center"
         >
           <span className="material-symbols-outlined icon-md" aria-hidden="true">arrow_downward</span>
         </Button>
@@ -373,7 +373,7 @@ export function RunStatusLine({ startedAt, activeTool, toolProgress }: { started
       role="status"
       aria-live="polite"
       data-testid="run-status-line"
-      className="sticky bottom-0 mt-md mx-auto w-fit max-w-full flex items-center gap-xs px-md py-xs rounded-full bg-surface-container-lowest/95 backdrop-blur-md border border-outline-variant/30 shadow-sm"
+      className="sticky bottom-0 mt-md mx-auto w-fit max-w-full flex items-center gap-xs px-md py-xs rounded-full bg-surface-container-lowest/95 backdrop-blur-md border border-outline-variant/30 shadow-e1"
     >
       <span className="size-1.5 rounded-full bg-secondary animate-pulse shrink-0" aria-hidden="true" />
       <span className="font-label-sm text-on-surface-variant whitespace-nowrap">
