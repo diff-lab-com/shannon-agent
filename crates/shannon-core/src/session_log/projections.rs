@@ -500,9 +500,11 @@ pub fn project_turn_timeline(events: &[SessionEvent]) -> TurnTimeline {
                 }
             }
             SessionEventBody::TurnEnd(TurnEndPayload {
+                llm_steps: None,
                 reason,
                 usage,
                 error,
+                ..
             }) => {
                 let acc = timeline_slot(&mut accs, event.turn, event.ts_ns);
                 acc.end_ts_ns = event.ts_ns.max(acc.start_ts_ns);
@@ -759,9 +761,11 @@ pub fn project_session_analytics(events: &[SessionEvent]) -> SessionAnalytics {
                 }
             }
             SessionEventBody::TurnEnd(TurnEndPayload {
+                llm_steps: None,
                 reason,
                 usage,
                 error,
+                ..
             }) => {
                 if reason == TurnEndPayload::REASON_COMPLETED {
                     view.turns_completed += 1;
@@ -1017,6 +1021,7 @@ mod tests {
             seq,
             100 + seq,
             SessionEventBody::TurnEnd(TurnEndPayload {
+                llm_steps: None,
                 reason: TurnEndPayload::REASON_COMPLETED.into(),
                 usage,
                 error: None,
@@ -1062,6 +1067,7 @@ mod tests {
             seq,
             turn,
             SessionEventBody::TurnEnd(TurnEndPayload {
+                llm_steps: None,
                 reason: TurnEndPayload::REASON_COMPLETED.into(),
                 usage: Some(TokenUsage {
                     input_tokens: 5,

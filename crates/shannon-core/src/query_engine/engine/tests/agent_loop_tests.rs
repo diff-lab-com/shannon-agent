@@ -94,6 +94,7 @@ async fn secret_guard_client_boundary_sends_surrogates_not_secrets() {
     }];
     let to_send = crate::secret_guard::transform_outgoing_messages(messages);
     let config = LlmClientConfig {
+        thinking_type: None,
         api_key: "test-key".to_string(),
         base_url: format!("http://127.0.0.1:{port}"),
         model: "test-model".to_string(),
@@ -240,6 +241,7 @@ async fn secret_guard_query_loop_completes_with_redacted_wire() {
     let _g = crate::secret_guard::test_support::acquire();
     crate::secret_guard::set_context_transform(Some(std::sync::Arc::new(ReplaceSecret)));
     let config = LlmClientConfig {
+        thinking_type: None,
         api_key: "test-key".to_string(),
         base_url: format!("http://127.0.0.1:{port}"),
         model: "test-model".to_string(),
@@ -480,6 +482,7 @@ async fn a8_run_query_with(
 ) -> (bool, String, Vec<String>, Vec<String>, Vec<Message>) {
     use futures::StreamExt as _;
     let config = LlmClientConfig {
+        thinking_type: None,
         api_key: "test-key".to_string(),
         base_url: server.base_url.clone(),
         model: "test-model".to_string(),
@@ -639,6 +642,7 @@ async fn p2_2_hanging_tool_interrupted_into_error_tool_result() {
     let server = TurnRetryMockServer::start(responder);
 
     let config = LlmClientConfig {
+        thinking_type: None,
         api_key: "test-key".to_string(),
         base_url: server.base_url.clone(),
         model: "test-model".to_string(),
@@ -828,7 +832,7 @@ async fn a8_turn_retry_continues_after_timeout_class_stream_death() {
         progress
             .iter()
             .any(|m| m
-                .contains("Turn LLM call interrupted (upstream cutoff); continuing turn 1/2")),
+                .contains("Turn LLM call interrupted (upstream cutoff: class=timeout, err=Provider error (anthropic): timeout_error")),
         "expected an A8 continuation Progress event; got: {progress:?}"
     );
 
@@ -918,7 +922,7 @@ async fn a8_turn_retry_budget_exhaustion_falls_through_to_failed() {
     );
     let continuations = progress
         .iter()
-        .filter(|m| m.contains("Turn LLM call interrupted (upstream cutoff)"))
+        .filter(|m| m.contains("Turn LLM call interrupted (upstream cutoff"))
         .count();
     assert_eq!(
         continuations, 2,
@@ -985,7 +989,7 @@ async fn a8_turn_retry_covers_mid_stream_death_and_discards_partial() {
     assert_eq!(bodies[1].matches(nudge).count(), 1);
     assert!(
         progress.iter().any(|m| m.contains("continuing turn 1/2")
-            && (m.contains("Turn LLM call interrupted (upstream cutoff)")
+            && (m.contains("Turn LLM call interrupted (upstream cutoff")
                 // N-3: provider-reported error events use their own
                 // Progress wording but the same continuation ladder.
                 || m.contains("Provider stream error (upstream)"))),
@@ -1086,7 +1090,7 @@ async fn a8_stream_interrupted_triggers_continuation_and_discards_partial() {
         progress
             .iter()
             .any(|m| m
-                .contains("Turn LLM call interrupted (upstream cutoff); continuing turn 1/2")),
+                .contains("Turn LLM call interrupted (upstream cutoff: class=stream_interrupted, err=Stream ended unexpectedly); continuing turn 1/2")),
         "expected A8 Progress for the interrupted stream; got {progress:?}"
     );
     assert!(
@@ -1157,7 +1161,7 @@ async fn a8_stream_interrupted_budget_exhausted_falls_back_to_partial_preserve()
     assert!(
         !progress
             .iter()
-            .any(|m| m.contains("Turn LLM call interrupted (upstream cutoff)")),
+            .any(|m| m.contains("Turn LLM call interrupted (upstream cutoff")),
         "no A8 continuation may fire when disabled; got {progress:?}"
     );
     let history_text: String = history
@@ -1493,7 +1497,7 @@ async fn a8_clean_end_without_message_stop_is_not_continued() {
     assert!(
         !progress
             .iter()
-            .any(|m| m.contains("Turn LLM call interrupted (upstream cutoff)")),
+            .any(|m| m.contains("Turn LLM call interrupted (upstream cutoff")),
         "no A8 continuation for a clean completion; got {progress:?}"
     );
     assert!(
@@ -1671,7 +1675,7 @@ async fn a10_wrap_up_and_a8_stacking_no_double_injection() {
     );
     let continuations = progress
         .iter()
-        .filter(|m| m.contains("Turn LLM call interrupted (upstream cutoff)"))
+        .filter(|m| m.contains("Turn LLM call interrupted (upstream cutoff"))
         .count();
     assert_eq!(continuations, 2, "one A8 continuation per turn");
     assert_eq!(
@@ -1719,7 +1723,7 @@ async fn a8_turn_retry_zero_disables_continuation() {
     assert!(
         !progress
             .iter()
-            .any(|m| m.contains("Turn LLM call interrupted (upstream cutoff)")),
+            .any(|m| m.contains("Turn LLM call interrupted (upstream cutoff")),
         "no continuation Progress may fire when disabled; got {progress:?}"
     );
 }
@@ -1755,7 +1759,7 @@ async fn a8_non_timeout_errors_do_not_continue_turn() {
     assert!(
         !progress
             .iter()
-            .any(|m| m.contains("Turn LLM call interrupted (upstream cutoff)")),
+            .any(|m| m.contains("Turn LLM call interrupted (upstream cutoff")),
         "no A8 Progress for non-timeout errors; got {progress:?}"
     );
 }
@@ -1851,6 +1855,7 @@ fn compaction_summarizer_wire_carries_surrogates_not_secrets() {
     });
 
     let config = LlmClientConfig {
+        thinking_type: None,
         api_key: "test-key".to_string(),
         base_url: format!("http://127.0.0.1:{port}"),
         model: "test-model".to_string(),
@@ -2001,6 +2006,7 @@ async fn secret_guard_system_prompt_redacted_on_wire() {
     let _g = crate::secret_guard::test_support::acquire();
     crate::secret_guard::set_context_transform(Some(std::sync::Arc::new(ReplaceSecret)));
     let config = LlmClientConfig {
+        thinking_type: None,
         api_key: "test-key".to_string(),
         base_url: format!("http://127.0.0.1:{port}"),
         model: "test-model".to_string(),
@@ -2207,6 +2213,7 @@ async fn run_query_with_recovery_bookkeeping(
 ) {
     use futures::StreamExt as _;
     let config = LlmClientConfig {
+        thinking_type: None,
         api_key: "test-key".to_string(),
         base_url: server.base_url.clone(),
         model: "test-model".to_string(),
@@ -2286,6 +2293,11 @@ async fn run_query_with_recovery_bookkeeping(
 /// warning — NOT after 20 requests of churn to max_turns.
 #[tokio::test]
 async fn consecutive_malformed_tool_calls_stop_loss_ends_query() {
+    // Reader of SHANNON_MAX_CONSECUTIVE_MALFORMED_CALLS: serialize against
+    // the test that mutates it (cap drops to 2 process-globally mid-run).
+    let _env_lock = MALFORMED_STREAK_ENV_LOCK
+        .lock()
+        .unwrap_or_else(|e| e.into_inner());
     let responder =
         std::sync::Arc::new(|request_index: usize| malformed_tool_call_sse(request_index));
     let server = TurnRetryMockServer::start(responder);
@@ -2318,6 +2330,11 @@ async fn consecutive_malformed_tool_calls_stop_loss_ends_query() {
 /// tool call resets it, so only the fresh tail reaches the cap.
 #[tokio::test]
 async fn malformed_call_streak_resets_after_parsed_tool_execution() {
+    // Reader of SHANNON_MAX_CONSECUTIVE_MALFORMED_CALLS: serialize against
+    // the test that mutates it (cap drops to 2 process-globally mid-run).
+    let _env_lock = MALFORMED_STREAK_ENV_LOCK
+        .lock()
+        .unwrap_or_else(|e| e.into_inner());
     // malformed → parsed tool call (streak resets) → malformed ×3.
     let responder = std::sync::Arc::new(|request_index: usize| {
         if request_index == 1 {

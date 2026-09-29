@@ -113,6 +113,7 @@ fn build_session_bodies(count: usize) -> Vec<SessionEventBody> {
     }
     bodies.push(SessionEventBody::TurnEnd(
         shannon_types::session_event::TurnEndPayload {
+            llm_steps: None,
             reason: shannon_types::session_event::TurnEndPayload::REASON_COMPLETED.into(),
             usage: None,
             error: None,

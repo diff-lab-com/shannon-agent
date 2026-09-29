@@ -176,6 +176,7 @@ async fn transient_kind_request_failures_are_retried_to_success() {
     let addr = support::spawn_injecting_server();
 
     let config = LlmClientConfig {
+        thinking_type: None,
         provider: LlmProvider::Anthropic,
         api_key: "test-key".to_string(),
         model: "claude-3".to_string(),
@@ -222,6 +223,7 @@ async fn permanent_failures_surface_immediately_when_retries_disabled() {
     // No listener at all: connect-phase errors with retries disabled must
     // surface as an error after a single attempt (bounded behavior guard).
     let config = LlmClientConfig {
+        thinking_type: None,
         provider: LlmProvider::Anthropic,
         api_key: "test-key".to_string(),
         model: "claude-3".to_string(),

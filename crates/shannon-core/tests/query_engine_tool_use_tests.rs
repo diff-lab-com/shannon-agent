@@ -120,6 +120,7 @@ mod tool_use_tests {
 
     fn create_engine(mock_url: &str, registry: ToolRegistry) -> QueryEngine {
         let config = LlmClientConfig {
+            thinking_type: None,
             api_key: "test-key".to_string(),
             base_url: mock_url.to_string(),
             model: "claude-sonnet-4-20250514".to_string(),
@@ -694,6 +695,7 @@ mod openai_trailing_usage_tests {
                 .create();
         }
         let config = LlmClientConfig {
+            thinking_type: None,
             api_key: "test-key".to_string(),
             base_url: server.url(),
             model: "test-model".to_string(),
@@ -873,6 +875,7 @@ mod openai_truncation_continuation_tests {
             );
         }
         let config = LlmClientConfig {
+            thinking_type: None,
             api_key: "test-key".to_string(),
             base_url: server.url(),
             model: "test-model".to_string(),
@@ -1167,6 +1170,7 @@ mod zhipu_tool_use_broadcast_tests {
                 .create();
         }
         let config = LlmClientConfig {
+            thinking_type: None,
             api_key: "test-key".to_string(),
             base_url: server.url(),
             model: "glm-5.3-flash".to_string(),

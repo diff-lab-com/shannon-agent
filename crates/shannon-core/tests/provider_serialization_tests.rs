@@ -30,6 +30,7 @@ mod provider_serialization_tests {
 
     fn make_simple_request() -> MessageRequest {
         MessageRequest {
+            thinking_type: None,
             model: "test-model".to_string(),
             max_tokens: 4096,
             system: Some("You are a helpful assistant.".to_string()),
@@ -52,6 +53,7 @@ mod provider_serialization_tests {
 
     fn make_tool_request() -> MessageRequest {
         MessageRequest {
+            thinking_type: None,
             model: "test-model".to_string(),
             max_tokens: 4096,
             system: Some("You are a coding assistant.".to_string()),
@@ -468,6 +470,7 @@ mod provider_serialization_tests {
     #[test]
     fn test_empty_messages_request() {
         let req = MessageRequest {
+            thinking_type: None,
             model: "test".to_string(),
             max_tokens: 100,
             system: None,

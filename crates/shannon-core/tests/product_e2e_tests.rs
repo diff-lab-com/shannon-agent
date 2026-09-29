@@ -51,6 +51,7 @@ impl Drop for AnthropicKeyGuard {
 
 fn make_client(server: &ServerGuard, provider: LlmProvider) -> LlmClient {
     let config = LlmClientConfig {
+        thinking_type: None,
         api_key: "test-key".to_string(),
         base_url: server.url(),
         model: "test-model".to_string(),
@@ -812,6 +813,7 @@ fn test_session_persistence_round_trip() {
             );
             w.record(shannon_types::session_event::SessionEventBody::TurnEnd(
                 shannon_types::session_event::TurnEndPayload {
+                    llm_steps: None,
                     reason: shannon_types::session_event::TurnEndPayload::REASON_COMPLETED.into(),
                     usage: Some(shannon_types::session_event::TokenUsage {
                         input_tokens: 1250,

@@ -308,7 +308,32 @@ fn serialize_request_inner(
 
             val
         }
-        WireFormat::OpenAI => serialize_openai_request(request),
+        WireFormat::OpenAI => {
+            let mut body = serialize_openai_request(request);
+            // Explicit thinking toggle: zhipu/GLM only (`thinking: {"type":
+            // "enabled"|"disabled"}`). Other OpenAI-compatible providers never
+            // asked for this field and several reject unknown bodies with a
+            // 400, so the toggle is stripped everywhere else — SHANNON_THINKING
+            // stays a global env knob without leaking the field to non-GLM
+            // endpoints. Precedence: an explicit toggle wins over
+            // reasoning_effort on this wire (effort=high asks for MORE
+            // thinking; the toggle says less).
+            if let Some(ref t) = request.thinking_type {
+                if matches!(
+                    provider,
+                    LlmProvider::Zhipu
+                        | LlmProvider::ZhipuInternational
+                        | LlmProvider::ZhipuCoding
+                        | LlmProvider::ZhipuCodingPlan
+                ) {
+                    body["thinking"] = json!({ "type": t });
+                    if let Some(obj) = body.as_object_mut() {
+                        obj.remove("reasoning_effort");
+                    }
+                }
+            }
+            body
+        }
         WireFormat::Ollama => serialize_ollama_request(request),
         WireFormat::Gemini => serialize_gemini_request(request),
     }
@@ -2064,7 +2089,58 @@ mod tests {
             budget_tokens: None,
             thinking_budget: None,
             reasoning_effort: None,
+            thinking_type: None,
         }
+    }
+
+    // -- zhipu/GLM thinking toggle --
+
+    #[test]
+    fn test_openai_serialize_thinking_toggle_present_on_zhipu() {
+        let mut req = make_request();
+        req.thinking_type = Some("disabled".into());
+        req.reasoning_effort = Some(crate::api::types::ReasoningEffort::High);
+        let val = serialize_request(&req, &LlmProvider::ZhipuCodingPlan);
+        assert_eq!(val["thinking"]["type"], "disabled");
+        // explicit toggle wins: reasoning_effort is dropped on this wire
+        assert!(val.get("reasoning_effort").is_none());
+    }
+
+    #[test]
+    fn test_openai_serialize_thinking_stripped_off_zhipu() {
+        let mut req = make_request();
+        req.thinking_type = Some("disabled".into());
+        let val = serialize_request(&req, &LlmProvider::OpenAI);
+        assert!(val.get("thinking").is_none());
+    }
+
+    #[test]
+    fn test_openai_serialize_thinking_toggle_absent_by_default() {
+        let req = make_request();
+        let val = serialize_request(&req, &LlmProvider::OpenAI);
+        assert!(val.get("thinking").is_none());
+    }
+
+    #[test]
+    fn test_normalize_thinking_type() {
+        assert_eq!(
+            crate::api::types::normalize_thinking_type("disabled"),
+            Some("disabled".into())
+        );
+        assert_eq!(
+            crate::api::types::normalize_thinking_type(" ON "),
+            Some("enabled".into())
+        );
+        assert_eq!(
+            crate::api::types::normalize_thinking_type("True"),
+            Some("enabled".into())
+        );
+        assert_eq!(
+            crate::api::types::normalize_thinking_type("0"),
+            Some("disabled".into())
+        );
+        assert_eq!(crate::api::types::normalize_thinking_type("whatever"), None);
+        assert_eq!(crate::api::types::normalize_thinking_type(""), None);
     }
 
     // -- Anthropic passthrough --
@@ -2089,6 +2165,7 @@ mod tests {
     #[test]
     fn test_anthropic_tool_result_multi_image_single_request() {
         let req = MessageRequest {
+            thinking_type: None,
             model: "claude-test".to_string(),
             max_tokens: 1024,
             system: None,
@@ -2188,6 +2265,7 @@ mod tests {
     #[test]
     fn test_openai_tool_result_multi_image_emits_followup_user_vision_turn() {
         let req = MessageRequest {
+            thinking_type: None,
             model: "gpt-test".to_string(),
             max_tokens: 1024,
             system: None,
@@ -2263,6 +2341,7 @@ mod tests {
     #[test]
     fn test_ollama_tool_result_image_uses_images_array() {
         let req = MessageRequest {
+            thinking_type: None,
             model: "llava-test".to_string(),
             max_tokens: 1024,
             system: None,
@@ -2318,6 +2397,7 @@ mod tests {
     #[test]
     fn test_gemini_tool_result_image_emits_inline_data_turn() {
         let req = MessageRequest {
+            thinking_type: None,
             model: "gemini-test".to_string(),
             max_tokens: 1024,
             system: None,
@@ -2369,6 +2449,7 @@ mod tests {
         // array.  The Anthropic adapter must extract them into the top-level
         // `system` field so the API doesn't reject the request.
         let req = MessageRequest {
+            thinking_type: None,
             model: "claude-3".to_string(),
             max_tokens: 1024,
             system: Some("Base prompt.".to_string()),
@@ -2419,6 +2500,7 @@ mod tests {
         // When system_blocks is used (structured prompt), extracted system
         // text should be appended as a new block.
         let req = MessageRequest {
+            thinking_type: None,
             model: "claude-3".to_string(),
             max_tokens: 1024,
             system: None,
@@ -3606,6 +3688,7 @@ mod tests {
     fn test_anthropic_image_block_serialization() {
         use crate::api::types::{ImageSource, MessageContent};
         let req = MessageRequest {
+            thinking_type: None,
             model: "claude-3-5-sonnet".to_string(),
             max_tokens: 1024,
             system: None,
@@ -3652,6 +3735,7 @@ mod tests {
     fn test_openai_image_block_conversion() {
         use crate::api::types::{ImageSource, MessageContent};
         let req = MessageRequest {
+            thinking_type: None,
             model: "gpt-4o".to_string(),
             max_tokens: 1024,
             system: None,
@@ -3764,6 +3848,7 @@ mod tests {
         // role: "system" messages must not appear in contents — they should
         // be merged into systemInstruction.
         let req = MessageRequest {
+            thinking_type: None,
             model: "gemini-2.0-flash".to_string(),
             max_tokens: 1024,
             system: Some("Base system prompt.".to_string()),
@@ -3824,6 +3909,7 @@ mod tests {
     #[test]
     fn test_gemini_serialize_assistant_role_mapping() {
         let req = MessageRequest {
+            thinking_type: None,
             model: "gemini-2.0-flash".to_string(),
             max_tokens: 1024,
             system: None,
@@ -4408,6 +4494,7 @@ mod tests {
     #[test]
     fn test_anthropic_cache_control_on_last_user_message_text() {
         let req = MessageRequest {
+            thinking_type: None,
             model: "claude-sonnet-4-20250514".to_string(),
             max_tokens: 4096,
             system: Some("You are helpful.".to_string()),
@@ -4456,6 +4543,7 @@ mod tests {
     #[test]
     fn test_anthropic_no_cache_control_single_user_msg() {
         let req = MessageRequest {
+            thinking_type: None,
             model: "claude-sonnet-4-20250514".to_string(),
             max_tokens: 4096,
             system: None,
@@ -4484,6 +4572,7 @@ mod tests {
     fn test_anthropic_cache_control_with_content_blocks() {
         use crate::api::types::MessageContent;
         let req = MessageRequest {
+            thinking_type: None,
             model: "claude-sonnet-4-20250514".to_string(),
             max_tokens: 4096,
             system: None,
@@ -4531,6 +4620,7 @@ mod tests {
     #[test]
     fn test_anthropic_cache_control_not_for_openai() {
         let req = MessageRequest {
+            thinking_type: None,
             model: "gpt-4o".to_string(),
             max_tokens: 4096,
             system: None,
@@ -4573,6 +4663,7 @@ mod tests {
         // Anthropic branch too, so an undeclared fixture would be sanitized
         // away before the cache-injection logic runs.
         let req = MessageRequest {
+            thinking_type: None,
             model: "claude-sonnet-4-20250514".to_string(),
             max_tokens: 4096,
             system: None,
@@ -4628,6 +4719,7 @@ mod tests {
     #[test]
     fn test_anthropic_cache_control_with_system_blocks() {
         let req = MessageRequest {
+            thinking_type: None,
             model: "claude-sonnet-4-20250514".to_string(),
             max_tokens: 4096,
             system: None,
@@ -4667,6 +4759,7 @@ mod tests {
     fn test_system_blocks_renamed_to_system_in_output() {
         // system_blocks must be renamed to "system" (Anthropic API format)
         let req = MessageRequest {
+            thinking_type: None,
             model: "claude-3".to_string(),
             max_tokens: 1024,
             system: None,
@@ -4703,6 +4796,7 @@ mod tests {
     fn test_cache_control_skipped_for_third_party_endpoint() {
         // Third-party Anthropic-compatible endpoints should NOT get cache_control
         let req = MessageRequest {
+            thinking_type: None,
             model: "glm-5.1".to_string(),
             max_tokens: 1024,
             system: Some("System prompt".to_string()),
@@ -4766,6 +4860,7 @@ mod tests {
     fn test_cache_control_injected_for_real_anthropic() {
         // Real Anthropic API should still get cache_control
         let req = MessageRequest {
+            thinking_type: None,
             model: "claude-3".to_string(),
             max_tokens: 1024,
             system: Some("System".to_string()),
@@ -4812,6 +4907,7 @@ mod tests {
     #[test]
     fn test_anthropic_cache_control_on_last_tool_definition() {
         let req = MessageRequest {
+            thinking_type: None,
             model: "claude-3".to_string(),
             max_tokens: 1024,
             system: Some("System".to_string()),
@@ -4884,6 +4980,7 @@ mod tests {
     #[test]
     fn test_anthropic_no_tool_cache_when_no_tools() {
         let req = MessageRequest {
+            thinking_type: None,
             model: "claude-3".to_string(),
             max_tokens: 1024,
             system: Some("System".to_string()),
@@ -5137,6 +5234,7 @@ mod tests {
     #[test]
     fn serialize_openai_normalizes_non_object_arguments() {
         let request = MessageRequest {
+            thinking_type: None,
             model: "test-model".to_string(),
             max_tokens: 100,
             system: None,
@@ -5185,6 +5283,7 @@ mod tests {
     #[test]
     fn serialize_openai_keeps_recovered_assistant_text_with_empty_object_arguments() {
         let request = MessageRequest {
+            thinking_type: None,
             model: "test-model".to_string(),
             max_tokens: 100,
             system: None,
@@ -5262,6 +5361,7 @@ mod tests {
     #[test]
     fn serialize_openai_request_sanitizes_orphans() {
         let request = MessageRequest {
+            thinking_type: None,
             model: "test-model".to_string(),
             max_tokens: 100,
             system: None,
@@ -5304,6 +5404,7 @@ mod tests {
     #[test]
     fn serialize_anthropic_request_sanitizes_orphans() {
         let request = MessageRequest {
+            thinking_type: None,
             model: "test-model".to_string(),
             max_tokens: 100,
             system: None,

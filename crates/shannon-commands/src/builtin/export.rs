@@ -766,6 +766,7 @@ mod tests {
                     reason: shannon_types::session_event::TurnEndPayload::REASON_COMPLETED.into(),
                     usage: None,
                     error: None,
+                    llm_steps: None,
                 },
             ));
             w.close().unwrap();

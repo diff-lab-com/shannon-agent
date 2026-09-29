@@ -17,6 +17,7 @@ use uuid::Uuid;
 
 fn create_test_client() -> LlmClient {
     let config = LlmClientConfig {
+        thinking_type: None,
         api_key: "test-key".to_string(),
         base_url: "http://localhost:11434".to_string(),
         model: "test-model".to_string(),

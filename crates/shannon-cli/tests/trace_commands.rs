@@ -97,6 +97,7 @@ fn seed(container: &std::path::Path) {
             cost_usd: Some(0.02),
         }),
         error: None,
+        llm_steps: None,
     }));
 
     w.close().unwrap();
@@ -193,6 +194,7 @@ fn replay_rendering_matches_live_broadcast_content_and_snaps() {
         registry.register(Box::new(Echo)).unwrap();
 
         let client_cfg = LlmClientConfig {
+            thinking_type: None,
             api_key: "k".into(),
             base_url: server.url(),
             model: "claude-sonnet-4-20250514".into(),

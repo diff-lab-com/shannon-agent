@@ -408,6 +408,11 @@ pub struct LlmClientConfig {
     /// OpenAI's `reasoning_effort` parameter. Takes precedence over `budget_tokens`
     /// for OpenAI-compatible providers when set.
     pub reasoning_effort: Option<ReasoningEffort>,
+    /// Explicit thinking toggle for providers that take a `thinking` object
+    /// (zhipu/GLM: `{"type": "enabled"|"disabled"}`). When unset, the
+    /// provider default applies (GLM-5.x servers default to thinking on).
+    /// Sourced from `SHANNON_THINKING` via [`thinking_type_from_env`].
+    pub thinking_type: Option<String>,
 }
 
 impl Default for LlmClientConfig {
@@ -470,7 +475,30 @@ impl Default for LlmClientConfig {
             budget_tokens: None,
             reasoning_effort: None,
             enable_anthropic_toolsets: false,
+            thinking_type: thinking_type_from_env(),
         }
+    }
+}
+
+/// Read the explicit thinking toggle from `SHANNON_THINKING`.
+/// `enabled|on|true` → `Some("enabled")`; `disabled|off|false|0` →
+/// `Some("disabled")`; unset or unrecognized → `None` (provider default
+/// applies — GLM-5.x servers default to thinking on).
+pub fn thinking_type_from_env() -> Option<String> {
+    std::env::var("SHANNON_THINKING")
+        .ok()
+        .as_deref()
+        .and_then(normalize_thinking_type)
+}
+
+/// Normalize a raw thinking-toggle value: `enabled|on|true` →
+/// `Some("enabled")`; `disabled|off|false|0` → `Some("disabled")`;
+/// anything else → `None` (provider default applies).
+pub fn normalize_thinking_type(raw: &str) -> Option<String> {
+    match raw.trim().to_ascii_lowercase().as_str() {
+        "enabled" | "on" | "true" => Some("enabled".into()),
+        "disabled" | "off" | "false" | "0" => Some("disabled".into()),
+        _ => None,
     }
 }
 
@@ -591,6 +619,7 @@ impl LlmClientConfig {
             budget_tokens: None,
             reasoning_effort: None,
             enable_anthropic_toolsets: false,
+            thinking_type: None,
         }
     }
 
@@ -616,6 +645,7 @@ impl LlmClientConfig {
             budget_tokens: None,
             reasoning_effort: None,
             enable_anthropic_toolsets: false,
+            thinking_type: None,
         }
     }
 
@@ -642,6 +672,7 @@ impl LlmClientConfig {
             budget_tokens: None,
             reasoning_effort: None,
             enable_anthropic_toolsets: false,
+            thinking_type: None,
         }
     }
 
@@ -667,6 +698,7 @@ impl LlmClientConfig {
             budget_tokens: None,
             reasoning_effort: None,
             enable_anthropic_toolsets: false,
+            thinking_type: None,
         }
     }
 
@@ -693,6 +725,7 @@ impl LlmClientConfig {
             budget_tokens: None,
             reasoning_effort: None,
             enable_anthropic_toolsets: false,
+            thinking_type: None,
         }
     }
 
@@ -717,6 +750,7 @@ impl LlmClientConfig {
             budget_tokens: None,
             reasoning_effort: None,
             enable_anthropic_toolsets: false,
+            thinking_type: None,
         }
     }
 
@@ -740,6 +774,7 @@ impl LlmClientConfig {
             budget_tokens: None,
             reasoning_effort: None,
             enable_anthropic_toolsets: false,
+            thinking_type: None,
         }
     }
 
@@ -764,6 +799,7 @@ impl LlmClientConfig {
             budget_tokens: None,
             reasoning_effort: None,
             enable_anthropic_toolsets: false,
+            thinking_type: None,
         }
     }
 
@@ -788,6 +824,7 @@ impl LlmClientConfig {
             budget_tokens: None,
             reasoning_effort: None,
             enable_anthropic_toolsets: false,
+            thinking_type: None,
         }
     }
 }
@@ -986,6 +1023,10 @@ pub struct MessageRequest {
     /// Translated to the appropriate provider-specific parameter at request time.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub reasoning_effort: Option<ReasoningEffort>,
+    /// Explicit thinking toggle (zhipu/GLM `thinking.type`). Serialized only
+    /// on the OpenAI-compatible wire; ignored elsewhere.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub thinking_type: Option<String>,
 }
 
 // ============================================================================
@@ -1600,6 +1641,7 @@ mod tests {
     #[test]
     fn test_message_request_with_thinking_budget() {
         let request = MessageRequest {
+            thinking_type: None,
             model: "claude-sonnet-4-20250514".to_string(),
             max_tokens: 4096,
             system: None,
@@ -1623,6 +1665,7 @@ mod tests {
     #[test]
     fn test_message_request_with_reasoning_effort() {
         let request = MessageRequest {
+            thinking_type: None,
             model: "gpt-4o".to_string(),
             max_tokens: 4096,
             system: None,
@@ -1646,6 +1689,7 @@ mod tests {
     #[test]
     fn test_message_request_without_thinking_fields() {
         let request = MessageRequest {
+            thinking_type: None,
             model: "test-model".to_string(),
             max_tokens: 4096,
             system: None,
@@ -2083,6 +2127,7 @@ mod tests {
             budget_tokens: None,
             reasoning_effort: None,
             enable_anthropic_toolsets: false,
+            thinking_type: None,
         };
         assert!(cfg.validate().is_ok());
         assert!(cfg.is_configured());
@@ -2113,6 +2158,7 @@ mod tests {
             budget_tokens: None,
             reasoning_effort: None,
             enable_anthropic_toolsets: false,
+            thinking_type: None,
         };
         let err = cfg.validate().unwrap_err();
         assert!(
@@ -2140,6 +2186,7 @@ mod tests {
             budget_tokens: None,
             reasoning_effort: None,
             enable_anthropic_toolsets: false,
+            thinking_type: None,
         };
         let err = cfg.validate().unwrap_err();
         assert!(
@@ -2171,6 +2218,7 @@ mod tests {
             budget_tokens: None,
             reasoning_effort: None,
             enable_anthropic_toolsets: false,
+            thinking_type: None,
         };
         let err = cfg.validate().unwrap_err();
         assert!(err.contains("model"), "error should mention model: {err}");
