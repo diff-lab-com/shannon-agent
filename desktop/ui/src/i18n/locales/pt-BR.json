@@ -305,6 +305,8 @@
   "settings.terminal.saved": "Configurações do terminal salvas",
   "settings.terminal.saveFailed": "Não foi possível salvar as configurações do terminal",
   "settings.terminal.loadFailed": "Não foi possível carregar as configurações do terminal",
+  "settings.terminal.loadFailedDesc": "Não foi possível ler as configurações salvas do terminal — salvar permanece desativado até que sejam carregadas.",
+  "settings.terminal.loadRetry": "Tentar novamente",
   "nav.general": "General",
   "nav.theme": "Theme",
   "nav.models": "Models",

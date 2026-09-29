@@ -305,6 +305,8 @@
   "settings.terminal.saved": "Настройки терминала сохранены",
   "settings.terminal.saveFailed": "Не удалось сохранить настройки терминала",
   "settings.terminal.loadFailed": "Не удалось загрузить настройки терминала",
+  "settings.terminal.loadFailedDesc": "Не удалось прочитать сохранённые настройки терминала — сохранение отключено, пока они не загрузятся.",
+  "settings.terminal.loadRetry": "Повторить",
   "nav.general": "General",
   "nav.theme": "Theme",
   "nav.models": "Models",

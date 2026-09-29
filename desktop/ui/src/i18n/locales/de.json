@@ -305,6 +305,8 @@
   "settings.terminal.saved": "Terminal-Einstellungen gespeichert",
   "settings.terminal.saveFailed": "Terminal-Einstellungen konnten nicht gespeichert werden",
   "settings.terminal.loadFailed": "Terminal-Einstellungen konnten nicht geladen werden",
+  "settings.terminal.loadFailedDesc": "Die gespeicherten Terminal-Einstellungen konnten nicht gelesen werden — Speichern bleibt deaktiviert, bis sie geladen sind.",
+  "settings.terminal.loadRetry": "Erneut versuchen",
   "nav.general": "General",
   "nav.theme": "Theme",
   "nav.models": "Models",

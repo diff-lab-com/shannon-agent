@@ -307,6 +307,8 @@
   "settings.terminal.saved": "终端设置已保存",
   "settings.terminal.saveFailed": "无法保存终端设置",
   "settings.terminal.loadFailed": "无法加载终端设置",
+  "settings.terminal.loadFailedDesc": "无法读取已保存的终端设置——在成功加载前无法保存。",
+  "settings.terminal.loadRetry": "重试",
   "nav.general": "通用",
   "nav.theme": "主题",
   "nav.models": "模型",

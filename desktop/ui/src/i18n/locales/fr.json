@@ -305,6 +305,8 @@
   "settings.terminal.saved": "Paramètres du terminal enregistrés",
   "settings.terminal.saveFailed": "Impossible d'enregistrer les paramètres du terminal",
   "settings.terminal.loadFailed": "Impossible de charger les paramètres du terminal",
+  "settings.terminal.loadFailedDesc": "Impossible de lire les paramètres du terminal enregistrés — l'enregistrement reste désactivé jusqu'à leur chargement.",
+  "settings.terminal.loadRetry": "Réessayer",
   "nav.general": "General",
   "nav.theme": "Theme",
   "nav.models": "Models",

@@ -305,6 +305,8 @@
   "settings.terminal.saved": "終端機設定已儲存",
   "settings.terminal.saveFailed": "無法儲存終端機設定",
   "settings.terminal.loadFailed": "無法載入終端機設定",
+  "settings.terminal.loadFailedDesc": "無法讀取已儲存的終端機設定——在成功載入前無法儲存。",
+  "settings.terminal.loadRetry": "重試",
   "nav.general": "General",
   "nav.theme": "Theme",
   "nav.models": "Models",

@@ -307,6 +307,8 @@
   "settings.terminal.saved": "Terminal settings saved",
   "settings.terminal.saveFailed": "Couldn't save terminal settings",
   "settings.terminal.loadFailed": "Couldn't load terminal settings",
+  "settings.terminal.loadFailedDesc": "Couldn't read the saved terminal settings — saving stays disabled until they load.",
+  "settings.terminal.loadRetry": "Retry",
   "nav.general": "General",
   "nav.theme": "Theme",
   "nav.models": "Models",

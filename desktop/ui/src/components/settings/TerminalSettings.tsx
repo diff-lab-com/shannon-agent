@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { useCallback, useEffect, useState } from 'react'
 import { useIntl } from 'react-intl'
 import { toast } from 'sonner'
 import { Button } from '@/components/ui/button'
@@ -19,6 +19,11 @@ import type { TerminalSettings as TerminalSettingsDto } from '@/types'
  *    from the set-response, so what's on screen is what's on disk.
  *  - Changes only reach terminals opened afterwards — live xterm
  *    instances are never re-geometried behind the user's back.
+ *  - Load failure is NOT an editable empty form: every field disables,
+ *    Save stays disabled until a load SUCCEEDS, and an error banner with
+ *    retry takes the card. Saving `Number('') = 0` for untouched numerics
+ *    would let the backend clamp them onto the minimums and silently
+ *    clobber the stored config — that must never be one click away.
  */
 export function TerminalSettings() {
   const intl = useIntl()
@@ -32,29 +37,42 @@ export function TerminalSettings() {
   const [drawerHeight, setDrawerHeight] = useState('')
   const [screenReaderMode, setScreenReaderMode] = useState(false)
   const [loading, setLoading] = useState(true)
+  // True only after a SUCCESSFUL load — Save stays gated on it so a
+  // failed load can never springboard a clobbering save from empty inputs.
+  const [loaded, setLoaded] = useState(false)
+  const [loadFailed, setLoadFailed] = useState(false)
   const [saving, setSaving] = useState(false)
 
   /** Render the effective values (used for both load and save responses). */
-  const apply = (s: TerminalSettingsDto) => {
+  const apply = useCallback((s: TerminalSettingsDto) => {
     setShell(s.shell ?? '')
     setFontSize(String(s.fontSize))
     setScrollback(String(s.scrollback))
     setDrawerHeight(String(s.drawerHeight))
     setScreenReaderMode(s.screenReaderMode)
-  }
-
-  useEffect(() => {
-    let cancelled = false
-    setLoading(true)
-    api.terminalGetSettings()
-      .then((s) => { if (!cancelled) apply(s) })
-      .catch((e) => { if (!cancelled) toastError(t('settings.terminal.loadFailed'), e) })
-      .finally(() => { if (!cancelled) setLoading(false) })
-    return () => { cancelled = true }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
 
+  const load = useCallback(() => {
+    setLoading(true)
+    setLoadFailed(false)
+    api.terminalGetSettings()
+      .then((s) => { apply(s); setLoaded(true) })
+      .catch((e) => {
+        setLoadFailed(true)
+        toastError(t('settings.terminal.loadFailed'), e)
+      })
+      .finally(() => { setLoading(false) })
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- one-shot loader + retry entry; `t` follows the intl provider
+  }, [apply])
+
+  useEffect(() => {
+    load()
+  }, [load])
+
   const handleSave = async () => {
+    // Belt and braces: without a successful load the inputs hold nothing
+    // meaningful — never let a save fire from them.
+    if (!loaded) return
     setSaving(true)
     try {
       const effective = await api.terminalSetSettings({
@@ -74,6 +92,10 @@ export function TerminalSettings() {
     setSaving(false)
   }
 
+  // Every field is dead until a load succeeds (loading) and stays dead
+  // after a failed one (loadFailed) — retry is the only way back.
+  const fieldsDisabled = loading || loadFailed
+
   return (
     <div className="bg-surface-container-lowest p-lg rounded-xl shadow-sm border border-outline-variant/30 lg:col-span-2 group hover:shadow-md transition-shadow" data-testid="terminal-settings-card">
       <div className="flex items-center gap-md mb-md">
@@ -84,6 +106,25 @@ export function TerminalSettings() {
       </div>
       <p className="text-on-surface-variant text-body-sm mb-lg">{t('settings.terminal.description')}</p>
 
+      {loadFailed && (
+        <div
+          role="alert"
+          data-testid="terminal-settings-load-error"
+          className="flex flex-col md:flex-row md:items-center justify-between gap-sm p-sm mb-md rounded-lg bg-error/5 border border-error/20"
+        >
+          <p className="text-body-sm text-on-surface-variant">{t('settings.terminal.loadFailedDesc')}</p>
+          <Button
+            variant="ghost"
+            className="flex items-center gap-xs text-link font-label-md text-[14px] hover:underline cursor-pointer shrink-0"
+            onClick={load}
+            aria-label={t('settings.terminal.loadRetry')}
+          >
+            <span className="material-symbols-outlined icon-sm" aria-hidden="true">refresh</span>
+            {t('settings.terminal.loadRetry')}
+          </Button>
+        </div>
+      )}
+
       <div className="grid grid-cols-1 md:grid-cols-2 gap-md">
         <label className="flex flex-col gap-xs md:col-span-2">
           <span className="font-label-sm text-[12px] text-on-surface-variant">
@@ -93,7 +134,7 @@ export function TerminalSettings() {
             type="text"
             value={shell}
             onChange={e => setShell(e.target.value)}
-            disabled={loading}
+            disabled={fieldsDisabled}
             aria-label={t('settings.terminal.shell')}
             className="bg-surface-container-low rounded-lg border border-outline-variant/30 px-sm py-sm text-body-sm font-mono focus:outline-none focus:ring-2 focus:ring-primary/30 disabled:opacity-50"
           />
@@ -112,7 +153,7 @@ export function TerminalSettings() {
             max={32}
             value={fontSize}
             onChange={e => setFontSize(e.target.value)}
-            disabled={loading}
+            disabled={fieldsDisabled}
             aria-label={t('settings.terminal.fontSize')}
             className="bg-surface-container-low rounded-lg border border-outline-variant/30 px-sm py-sm text-body-sm font-mono focus:outline-none focus:ring-2 focus:ring-primary/30 disabled:opacity-50"
           />
@@ -128,7 +169,7 @@ export function TerminalSettings() {
             max={100000}
             value={scrollback}
             onChange={e => setScrollback(e.target.value)}
-            disabled={loading}
+            disabled={fieldsDisabled}
             aria-label={t('settings.terminal.scrollback')}
             className="bg-surface-container-low rounded-lg border border-outline-variant/30 px-sm py-sm text-body-sm font-mono focus:outline-none focus:ring-2 focus:ring-primary/30 disabled:opacity-50"
           />
@@ -144,7 +185,7 @@ export function TerminalSettings() {
             max={1200}
             value={drawerHeight}
             onChange={e => setDrawerHeight(e.target.value)}
-            disabled={loading}
+            disabled={fieldsDisabled}
             aria-label={t('settings.terminal.drawerHeight')}
             className="bg-surface-container-low rounded-lg border border-outline-variant/30 px-sm py-sm text-body-sm font-mono focus:outline-none focus:ring-2 focus:ring-primary/30 disabled:opacity-50"
           />
@@ -162,7 +203,7 @@ export function TerminalSettings() {
           <Switch
             checked={screenReaderMode}
             onCheckedChange={setScreenReaderMode}
-            disabled={loading}
+            disabled={fieldsDisabled}
             className="shrink-0"
             aria-label={t('settings.terminal.screenReaderMode')}
           />
@@ -173,7 +214,7 @@ export function TerminalSettings() {
         <Button
           className="px-xl py-md bg-primary text-on-primary rounded-lg font-label-md text-[14px] font-bold hover:bg-primary/90 shadow-sm active:scale-[0.98] transition-all cursor-pointer disabled:opacity-50"
           onClick={() => void handleSave()}
-          disabled={saving || loading}
+          disabled={saving || loading || !loaded}
           aria-label={t('settings.terminal.saveAria')}
         >
           {saving ? t('settings.terminal.saving') : t('settings.terminal.save')}

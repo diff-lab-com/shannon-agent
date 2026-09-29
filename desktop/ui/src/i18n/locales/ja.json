@@ -305,6 +305,8 @@
   "settings.terminal.saved": "ターミナル設定を保存しました",
   "settings.terminal.saveFailed": "ターミナル設定を保存できませんでした",
   "settings.terminal.loadFailed": "ターミナル設定を読み込めませんでした",
+  "settings.terminal.loadFailedDesc": "保存されたターミナル設定を読み取れませんでした。読み込みが完了するまで保存は無効です。",
+  "settings.terminal.loadRetry": "再試行",
   "nav.general": "General",
   "nav.theme": "Theme",
   "nav.models": "Models",
