@@ -64,6 +64,28 @@ pub(crate) async fn extract_pdf_text_best_effort(path: &Path) -> String {
     }
 }
 
+/// Best-effort PDF page count via `pdfinfo` (poppler). `None` when poppler
+/// is missing, the file is unreadable, or the probe fails — callers must
+/// omit the metadata rather than guess. (Office Wave A2': the send_message
+/// entry point carries no page-range request yet, so `pdftotext` stays
+/// whole-document; this is the honest per-document metadata for the
+/// injection block, and a `-f`/`-l` range plugs in here once a page
+/// parameter exists.)
+pub(crate) async fn pdf_page_count_best_effort(path: &Path) -> Option<u32> {
+    use std::process::Command;
+
+    let path_str = path.to_string_lossy().into_owned();
+    let output = Command::new("pdfinfo").arg(&path_str).output().ok()?;
+    if !output.status.success() {
+        return None;
+    }
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    stdout.lines().find_map(|line| {
+        line.strip_prefix("Pages:")
+            .and_then(|rest| rest.trim().parse::<u32>().ok())
+    })
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AttachmentPayload {
     pub mime: String,

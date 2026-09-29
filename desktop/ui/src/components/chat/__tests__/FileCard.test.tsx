@@ -22,6 +22,14 @@ vi.mock('@/lib/tauri-api', () => ({
   copyFile,
 }))
 
+// B8b: FileCard lazy-loads PdfPreview — stub the chunk so the click test
+// asserts the wiring (mount with the card's path) without pulling pdf.js in.
+vi.mock('../PdfPreview', () => ({
+  PdfPreview: (props: { path: string; name: string; onClose: () => void }) => (
+    <div data-testid="pdf-preview-stub" data-path={props.path} data-name={props.name} />
+  ),
+}))
+
 vi.mock('sonner', () => ({
   toast: { success: vi.fn(), error: vi.fn(), warning: vi.fn(), info: vi.fn(), message: vi.fn() },
 }))
@@ -100,5 +108,23 @@ describe('FileCard', () => {
       expect(toast.error).toHaveBeenCalledWith('Save failed', { description: 'disk full' })
     })
     expect(toast.success).not.toHaveBeenCalled()
+  })
+
+  // ── Wave 1.5 B8b: PDF-only inline preview ──
+
+  it('a pdf card shows a Preview button that mounts PdfPreview with the card path', async () => {
+    render(<FileCard name="report.pdf" path="/tmp/shannon/report.pdf" />)
+    expect(screen.getByRole('button', { name: 'Preview' })).toBeInTheDocument()
+
+    fireEvent.click(screen.getByRole('button', { name: 'Preview' }))
+    // lazy chunk resolves on the next microtask → findBy*
+    const stub = await screen.findByTestId('pdf-preview-stub')
+    expect(stub).toHaveAttribute('data-path', '/tmp/shannon/report.pdf')
+    expect(stub).toHaveAttribute('data-name', 'report.pdf')
+  })
+
+  it('non-pdf cards keep the three-action layout without a preview button', () => {
+    render(<FileCard {...PROPS} />)
+    expect(screen.queryByRole('button', { name: 'Preview' })).not.toBeInTheDocument()
   })
 })

@@ -783,33 +783,48 @@ pub async fn send_message(
     // when available (same helper the attachment preview uses); scanned PDFs
     // with no extractable text are called out explicitly so the model can
     // tell the user instead of guessing.
+    //
+    // Office Wave A2' fixes: the attachment record's `media_type` is
+    // "application/octet-stream" for PDFs (`detect_media_type` only knows
+    // image mimes), so the old media-type filter never matched and this
+    // whole block was dead — filter on extension instead. There is no page
+    // request at this entry point, so `pdftotext` stays whole-document; the
+    // `pdfinfo` page count is added as honest metadata (the byte truncation
+    // below already states exactly how much was cut).
     let mut attachment_blocks = image_blocks;
     {
         let pdf_futs = attachments
             .as_ref()
             .map(|list| {
                 list.iter()
-                    .filter(|att| att.media_type.as_deref() == Some("application/pdf"))
+                    .filter(|att| {
+                        std::path::Path::new(&att.path)
+                            .extension()
+                            .and_then(|e| e.to_str())
+                            .is_some_and(|e| e.eq_ignore_ascii_case("pdf"))
+                    })
                     .map(|att| async move {
-                        let text = crate::commands_files::extract_pdf_text_best_effort(
-                            std::path::Path::new(&att.path),
-                        )
-                        .await;
-                        (att.name.clone(), att.size, text)
+                        let path = std::path::Path::new(&att.path);
+                        let (text, pages) = tokio::join!(
+                            crate::commands_files::extract_pdf_text_best_effort(path),
+                            crate::commands_files::pdf_page_count_best_effort(path),
+                        );
+                        (att.name.clone(), att.size, text, pages)
                     })
                     .collect::<Vec<_>>()
             })
             .unwrap_or_default();
-        for (name, size, text) in futures::future::join_all(pdf_futs).await {
+        for (name, size, text, pages) in futures::future::join_all(pdf_futs).await {
+            let pages_meta = pages.map(|p| format!(", {p} pages")).unwrap_or_default();
             let trimmed = text.trim();
             let body = if crate::commands_files::is_pdf_unavailable_placeholder(trimmed) {
                 // Extraction failed (no poppler / pdftotext error): surface
                 // the placeholder as-is instead of framing it as extracted
                 // text.
-                format!("Attached PDF \"{name}\" ({size} bytes). {trimmed}")
+                format!("Attached PDF \"{name}\" ({size} bytes{pages_meta}). {trimmed}")
             } else if trimmed.is_empty() {
                 format!(
-                    "Attached PDF \"{name}\" ({size} bytes). No extractable text — the PDF is likely scanned/image-only; OCR is not available."
+                    "Attached PDF \"{name}\" ({size} bytes{pages_meta}). No extractable text — the PDF is likely scanned/image-only; OCR is not available."
                 )
             } else {
                 let mut end = PDF_TEXT_INJECT_LIMIT;
@@ -826,10 +841,53 @@ pub async fn send_message(
                     String::new()
                 };
                 format!(
-                    "Attached PDF \"{name}\" ({size} bytes). Extracted text:\n```text\n{truncated}\n```{suffix}"
+                    "Attached PDF \"{name}\" ({size} bytes{pages_meta}). Extracted text:\n```text\n{truncated}\n```{suffix}"
                 )
             };
             attachment_blocks.push(shannon_engine::api::ContentBlock::Text { text: body });
+        }
+    }
+
+    // Office Wave A2' — docx/pptx/xlsx/ods/csv attachments reach the model
+    // as extracted, sectioned text on the same ContentBlock::Text path as
+    // the PDF blocks above. Parsing + cache write run on the blocking pool
+    // (a 50 MB CSV or 2 000-entry container must not stall the async
+    // runtime); guard trips and malformed containers become placeholder
+    // blocks that state the reason. The inline block carries the leading
+    // sections (16 KiB budget per file) plus the cache path
+    // (~/.shannon/cache/extracted/<sha256-of-path+mtime>.txt) so the model
+    // can page through the rest with its existing Read/Grep tools.
+    {
+        let office_atts: Vec<(String, String, u64)> = attachments
+            .as_ref()
+            .map(|list| {
+                list.iter()
+                    .filter(|att| {
+                        crate::document_parse::is_office_document(std::path::Path::new(&att.path))
+                    })
+                    .map(|att| (att.name.clone(), att.path.clone(), att.size))
+                    .collect()
+            })
+            .unwrap_or_default();
+        if !office_atts.is_empty() {
+            let blocks = tokio::task::spawn_blocking(move || {
+                office_atts
+                    .into_iter()
+                    .map(|(name, path, size)| {
+                        crate::document_parse::office_block_for_file(
+                            std::path::Path::new(&path),
+                            &name,
+                            size,
+                        )
+                    })
+                    .collect::<Vec<_>>()
+            })
+            .await;
+            if let Ok(blocks) = blocks {
+                for block in blocks {
+                    attachment_blocks.push(shannon_engine::api::ContentBlock::Text { text: block });
+                }
+            }
         }
     }
 
@@ -2587,6 +2645,130 @@ mod pure_function_tests {
         assert!(detect_media_type("video.mp4").is_none());
         assert!(detect_media_type("noext").is_none());
         assert!(detect_media_type("").is_none());
+    }
+
+    // ── Office Wave A2' — send_message attachment injection ───────────
+
+    #[test]
+    fn office_extension_filter_matches_the_a2_prime_formats_only() {
+        // The send_message office branch routes on this predicate (the
+        // attachment record's media_type stays "application/octet-stream"
+        // for office files — detect_media_type only knows image mimes).
+        for name in ["a.docx", "b.pptx", "c.XLSX", "d.Ods", "e.CSV"] {
+            let p = std::path::Path::new(name);
+            assert!(
+                crate::document_parse::is_office_document(p),
+                "{name} must route to office injection"
+            );
+        }
+        for name in [
+            "a.doc", "b.xls", "c.ppt", "d.odt", "e.rtf", "f.pdf", "g.png",
+        ] {
+            let p = std::path::Path::new(name);
+            assert!(
+                !crate::document_parse::is_office_document(p),
+                "{name} must not route to office injection"
+            );
+        }
+    }
+
+    #[test]
+    fn office_attachment_injection_block_contract() {
+        // Locks the exact block send_message injects for an office
+        // attachment: header line, shown-range wording with the Read/Grep
+        // cache hint, and `[Section i/N]` markers — the same pipeline the
+        // PDF injection test relies on (helpers behind send_message).
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = dir.path().join("plan.docx");
+        let document_xml = concat!(
+            "<?xml version=\"1.0\" encoding=\"UTF-8\" standalone=\"yes\"?>",
+            "<w:document xmlns:w=\"http://schemas.openxmlformats.org/wordprocessingml/2006/main\">",
+            "<w:body>",
+            "<w:p><w:pPr><w:pStyle w:val=\"Heading1\"/></w:pPr><w:r><w:t>Plan</w:t></w:r></w:p>",
+            "<w:p><w:r><w:t>Do the thing.</w:t></w:r></w:p>",
+            "</w:body></w:document>"
+        );
+        // Wrap in a real zip container (in-process, no binary fixture).
+        let mut buffer = std::io::Cursor::new(Vec::new());
+        {
+            use std::io::Write as _;
+            use zip::write::SimpleFileOptions;
+            let mut writer = zip::ZipWriter::new(&mut buffer);
+            writer
+                .start_file("word/document.xml", SimpleFileOptions::default())
+                .expect("start_file");
+            writer.write_all(document_xml.as_bytes()).expect("write");
+            writer.finish().expect("finish");
+        }
+        let bytes = buffer.into_inner();
+        std::fs::write(&path, &bytes).expect("write docx");
+        let size = bytes.len() as u64;
+
+        // Redirect the cache at a temp SHANNON_HOME (same save/restore
+        // pattern as the commands_feedback tests). SAFETY: unique tempdir
+        // per test run; restored right after the call.
+        let cache_home = tempfile::tempdir().expect("cache tempdir");
+        let prev_home = std::env::var("SHANNON_HOME").ok();
+        unsafe { std::env::set_var("SHANNON_HOME", cache_home.path()) };
+        // This is the exact call the send_message office branch makes inside
+        // spawn_blocking.
+        let block = crate::document_parse::office_block_for_file(&path, "plan.docx", size);
+        match prev_home {
+            Some(prev) => unsafe { std::env::set_var("SHANNON_HOME", prev) },
+            None => unsafe { std::env::remove_var("SHANNON_HOME") },
+        }
+        assert!(
+            block.starts_with(&format!(
+                "Attached Office document \"plan.docx\" ({size} bytes). Extracted text: 1 section(s)."
+            )),
+            "{block}"
+        );
+        assert!(
+            block
+                .lines()
+                .nth(1)
+                .expect("range line")
+                .starts_with("Showing all 1 sections. Full extracted text: "),
+            "{block}"
+        );
+        assert!(
+            block
+                .lines()
+                .nth(1)
+                .expect("range line")
+                .contains(" — use Read/Grep on it for the rest."),
+            "{block}"
+        );
+        assert!(
+            block.contains("[Section 1/1] Heading: Plan\nDo the thing."),
+            "{block}"
+        );
+        // The referenced cache file exists and holds the sectioned text.
+        let cache_path = block
+            .lines()
+            .nth(1)
+            .expect("range line")
+            .trim_start_matches("Showing all 1 sections. Full extracted text: ")
+            .trim_end_matches(" — use Read/Grep on it for the rest.");
+        assert_eq!(
+            std::fs::read_to_string(cache_path).expect("cache readable"),
+            "[Section 1/1] Heading: Plan\nDo the thing.\n"
+        );
+    }
+
+    #[test]
+    fn office_attachment_injection_failure_is_an_explaining_placeholder() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = dir.path().join("junk.docx");
+        std::fs::write(&path, b"definitely not a zip container").expect("write");
+        let block = crate::document_parse::office_block_for_file(&path, "junk.docx", 29);
+        assert!(
+            block.starts_with(
+                "Attached Office document \"junk.docx\" (29 bytes). Text extraction failed: "
+            ),
+            "{block}"
+        );
+        assert!(block.contains("zip"), "{block}");
     }
 
     // ── iso_days_ago ──────────────────────────────────────────────────
