@@ -1336,6 +1336,22 @@ export interface TerminalExitPayload {
   terminalId: string
 }
 
+/**
+ * P3-1: persisted terminal preferences (`[terminal]` in
+ * `~/.shannon/config.toml`; camelCase over the wire, frozen shape).
+ * The backend clamps `fontSize` (8–32), `scrollback` (0–100000) and
+ * `drawerHeight` (120–1200) and blanks the shell on read AND write —
+ * after a set, render the values the response carries, not the ones the
+ * caller sent.
+ */
+export interface TerminalSettings {
+  shell: string | null
+  fontSize: number
+  scrollback: number
+  drawerHeight: number
+  screenReaderMode: boolean
+}
+
 // --- Inter-agent message history (Phase D C3) ---
 
 export interface AgentMessageEntry {

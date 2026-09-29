@@ -7,8 +7,11 @@
  * component never touches a shell surface itself.
  *
  * UX contract (brief):
- *  - bottom drawer in the chat page, fixed ~320 px, full-height toggle;
- *    NO free-form drag layout (that is T11);
+ *  - bottom drawer, full-height toggle; NO free-form drag layout (T11);
+ *  - persisted settings (`terminal_get_settings`, P3-1) are fetched once
+ *    on first open: they set the drawer's initial height and the options
+ *    of every xterm created this session — live instances are never
+ *    re-geometried;
  *  - ≤4 terminal tabs (backend enforces the same cap);
  *  - Ctrl+` toggles the panel — registered here (not in the global
  *    useKeyboardShortcuts map) because xterm's hidden textarea would be
@@ -28,7 +31,7 @@ import { useIntl, type PrimitiveType } from 'react-intl';
 import { toastError } from '@/lib/errorToast';
 import '@xterm/xterm/css/xterm.css';
 import * as api from '@/lib/tauri-api';
-import type { TerminalInfo } from '@/types';
+import type { TerminalInfo, TerminalSettings } from '@/types';
 import { decodeTerminalOutput, listenTerminalExit, listenTerminalOutput } from '@/lib/runtime/terminalEvents';
 import { xtermTheme } from './xtermTheme';
 import { readResolvedThemeAttr, useResolvedThemeAttr } from '@/hooks/useResolvedThemeAttr';
@@ -45,8 +48,12 @@ import type { FitAddon as XTermFitAddon } from '@xterm/addon-fit';
 /** Backend cap (terminal_commands.rs MAX_TERMINALS) mirrored for the UI. */
 const MAX_TERMINALS = 4;
 
-/** Default drawer height (brief: ~320px). */
+/** Fallback drawer height (brief: ~320px) until persisted settings load. */
 const DRAWER_HEIGHT_PX = 320;
+
+/** xterm defaults matching the backend's `[terminal]` fallbacks. */
+const DEFAULT_FONT_SIZE = 12;
+const DEFAULT_SCROLLBACK = 5000;
 
 /** Monospace fallback stack (brief: 字体回退等宽栈). */
 const FONT_FAMILY =
@@ -85,6 +92,9 @@ export function TerminalPanel({ projectDir }: TerminalPanelProps) {
 
   const [open, setOpen] = useState(false);
   const [fullHeight, setFullHeight] = useState(false);
+  // P3-1: initial height comes from the persisted `drawerHeight` once the
+  // boot fetch resolves; until then the brief's ~320px fallback applies.
+  const [drawerHeight, setDrawerHeight] = useState(DRAWER_HEIGHT_PX);
   const [tabs, setTabs] = useState<TerminalTab[]>([]);
   const [activeId, setActiveId] = useState<string | null>(null);
   const [showHistoryHint, setShowHistoryHint] = useState(true);
@@ -96,6 +106,10 @@ export function TerminalPanel({ projectDir }: TerminalPanelProps) {
   const containerRef = useRef<HTMLDivElement>(null);
   const toggleRef = useRef<HTMLButtonElement>(null);
   const termsRef = useRef<Map<string, TermEntry>>(new Map());
+  // P3-1: settings read at xterm creation time. Mirrored through a ref so
+  // the stable `ensureTerm` closure always sees the freshly booted values
+  // without re-subscribing terminals.
+  const settingsRef = useRef<TerminalSettings | null>(null);
   // xterm is loaded on first mount, not at module import: the chat bundle
   // stays free of xterm until a terminal is actually opened, and jsdom
   // test trees never load it at all (its module init touches canvas).
@@ -133,12 +147,17 @@ export function TerminalPanel({ projectDir }: TerminalPanelProps) {
     if (!xterm) return null; // module still loading — next effect run mounts
 
     const fit = new xterm.FitAddon();
+    // P3-1: persisted preferences apply at CREATION only — never mutate a
+    // live instance's geometry (font/scrollback changes land in terminals
+    // opened afterwards).
+    const settings = settingsRef.current;
     const term = new xterm.Terminal({
       convertEol: false,
       cursorBlink: true,
       fontFamily: FONT_FAMILY,
-      fontSize: 12,
-      scrollback: 5000,
+      fontSize: settings?.fontSize ?? DEFAULT_FONT_SIZE,
+      scrollback: settings?.scrollback ?? DEFAULT_SCROLLBACK,
+      screenReaderMode: settings?.screenReaderMode ?? false,
       // P1-36: read the CURRENT theme off `<html data-theme>` at creation —
       // this callback has stable deps, so the `resolvedTheme` captured by
       // the closure is stale for any instance created after a theme switch.
@@ -296,11 +315,22 @@ export function TerminalPanel({ projectDir }: TerminalPanelProps) {
     }
   }, [projectDir, t]);
 
-  /** Open the drawer; first open reconciles with the backend. */
+  /** Open the drawer; first open loads settings and reconciles with the backend. */
   const openPanel = useCallback(async () => {
     setOpen(true);
     if (booted) return;
     setBooted(true);
+    // P3-1: fetch persisted settings BEFORE any terminal is created, so
+    // the drawer's initial height and the first xterm instance already
+    // honor them. Best-effort: backend defaults (or a failed call) leave
+    // the built-in fallbacks in place.
+    try {
+      const settings = await api.terminalGetSettings();
+      settingsRef.current = settings;
+      setDrawerHeight(settings.drawerHeight);
+    } catch {
+      // No settings (plain-browser dev / backend down): keep defaults.
+    }
     try {
       const list = await api.terminalList();
       const known = list.slice(0, MAX_TERMINALS).map(info => ({ info, exited: false }));
@@ -418,7 +448,7 @@ export function TerminalPanel({ projectDir }: TerminalPanelProps) {
       className={`flex flex-col bg-surface-container-lowest shrink-0 border-t border-outline-variant/30 ${
         fullHeight ? 'flex-1 min-h-0' : ''
       }`}
-      style={!fullHeight ? { height: DRAWER_HEIGHT_PX } : undefined}
+      style={!fullHeight ? { height: drawerHeight } : undefined}
     >
       {/* Toolbar: tabs + actions */}
       <div className="flex items-center gap-xs px-sm py-1 border-b border-outline-variant/20 bg-surface-container-low/60">

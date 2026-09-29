@@ -42,6 +42,7 @@ import type {
   FileDiff,
   FileNode,
   TerminalInfo,
+  TerminalSettings,
   WorkingDirInfo,
   CatalogEntry,
   PluginBundleSummary,
@@ -2595,6 +2596,30 @@ export async function terminalKill(terminalId: string): Promise<void> {
 /** Live terminals, oldest first. */
 export async function terminalList(): Promise<TerminalInfo[]> {
   return invoke('terminal_list')
+}
+
+/**
+ * P3-1: persisted terminal preferences (`[terminal]` in
+ * `~/.shannon/config.toml`). The backend clamps numerics (fontSize 8–32,
+ * scrollback 0–100000, drawerHeight 120–1200) and blanks the shell —
+ * callers must render the values returned here, not what they sent.
+ */
+export async function terminalGetSettings(): Promise<TerminalSettings> {
+  return invoke('terminal_get_settings')
+}
+
+/** Persist preferences; returns the sanitized (effective) values. */
+export async function terminalSetSettings(settings: TerminalSettings): Promise<TerminalSettings> {
+  return invoke('terminal_set_settings', { settings })
+}
+
+/**
+ * Replay bytes for one session, base64 (US6). Empty string when the id is
+ * unknown or the session already ended — the frontend calls it
+ * speculatively on reconnect, so a missing ring must not be an error.
+ */
+export async function terminalHistory(terminalId: string): Promise<{ data: string }> {
+  return invoke('terminal_history', { terminalId })
 }
 
 // --- P-E3 project registry (projects.db, adopt-not-migrate) ---

@@ -1,0 +1,184 @@
+import { useEffect, useState } from 'react'
+import { useIntl } from 'react-intl'
+import { toast } from 'sonner'
+import { Button } from '@/components/ui/button'
+import { Switch } from '@/components/ui/switch'
+import * as api from '@/lib/tauri-api'
+import { toastError } from '@/lib/errorToast'
+import type { TerminalSettings as TerminalSettingsDto } from '@/types'
+
+/**
+ * P3-1 — Advanced-settings card for the integrated terminal's persisted
+ * preferences (`[terminal]` in `~/.shannon/config.toml`, served by the
+ * `terminal_get_settings` / `terminal_set_settings` commands).
+ *
+ * Contract notes:
+ *  - The backend clamps every numeric knob (fontSize 8–32, scrollback
+ *    0–100000, drawerHeight 120–1200) and trims/blanks the shell. The
+ *    frontend sends the raw values and then renders the EFFECTIVE values
+ *    from the set-response, so what's on screen is what's on disk.
+ *  - Changes only reach terminals opened afterwards — live xterm
+ *    instances are never re-geometried behind the user's back.
+ */
+export function TerminalSettings() {
+  const intl = useIntl()
+  const t = (id: string) => intl.formatMessage({ id })
+
+  // Inputs stay strings so the user can type freely (mid-edit "",
+  // partial numbers); parsed raw on save — the backend clamps.
+  const [shell, setShell] = useState('')
+  const [fontSize, setFontSize] = useState('')
+  const [scrollback, setScrollback] = useState('')
+  const [drawerHeight, setDrawerHeight] = useState('')
+  const [screenReaderMode, setScreenReaderMode] = useState(false)
+  const [loading, setLoading] = useState(true)
+  const [saving, setSaving] = useState(false)
+
+  /** Render the effective values (used for both load and save responses). */
+  const apply = (s: TerminalSettingsDto) => {
+    setShell(s.shell ?? '')
+    setFontSize(String(s.fontSize))
+    setScrollback(String(s.scrollback))
+    setDrawerHeight(String(s.drawerHeight))
+    setScreenReaderMode(s.screenReaderMode)
+  }
+
+  useEffect(() => {
+    let cancelled = false
+    setLoading(true)
+    api.terminalGetSettings()
+      .then((s) => { if (!cancelled) apply(s) })
+      .catch((e) => { if (!cancelled) toastError(t('settings.terminal.loadFailed'), e) })
+      .finally(() => { if (!cancelled) setLoading(false) })
+    return () => { cancelled = true }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [])
+
+  const handleSave = async () => {
+    setSaving(true)
+    try {
+      const effective = await api.terminalSetSettings({
+        shell: shell.trim() === '' ? null : shell.trim(),
+        fontSize: Number(fontSize),
+        scrollback: Number(scrollback),
+        drawerHeight: Number(drawerHeight),
+        screenReaderMode,
+      })
+      // Show what the backend actually stored (clamped into range), not
+      // the raw input.
+      apply(effective)
+      toast.success(t('settings.terminal.saved'))
+    } catch (e) {
+      toastError(t('settings.terminal.saveFailed'), e)
+    }
+    setSaving(false)
+  }
+
+  return (
+    <div className="bg-surface-container-lowest p-lg rounded-xl shadow-sm border border-outline-variant/30 lg:col-span-2 group hover:shadow-md transition-shadow" data-testid="terminal-settings-card">
+      <div className="flex items-center gap-md mb-md">
+        <div className="p-2 bg-primary/10 rounded-lg text-primary flex items-center justify-center">
+          <span className="material-symbols-outlined">terminal</span>
+        </div>
+        <h3 className="font-headline-md text-[24px] font-bold text-on-surface">{t('settings.terminal.title')}</h3>
+      </div>
+      <p className="text-on-surface-variant text-body-sm mb-lg">{t('settings.terminal.description')}</p>
+
+      <div className="grid grid-cols-1 md:grid-cols-2 gap-md">
+        <label className="flex flex-col gap-xs md:col-span-2">
+          <span className="font-label-sm text-[12px] text-on-surface-variant">
+            {t('settings.terminal.shell')}
+          </span>
+          <input
+            type="text"
+            value={shell}
+            onChange={e => setShell(e.target.value)}
+            disabled={loading}
+            aria-label={t('settings.terminal.shell')}
+            className="bg-surface-container-low rounded-lg border border-outline-variant/30 px-sm py-sm text-body-sm font-mono focus:outline-none focus:ring-2 focus:ring-primary/30 disabled:opacity-50"
+          />
+          <span className="font-label-sm text-[11px] text-on-surface-variant">
+            {t('settings.terminal.shellHint')}
+          </span>
+        </label>
+
+        <label className="flex flex-col gap-xs">
+          <span className="font-label-sm text-[12px] text-on-surface-variant">
+            {t('settings.terminal.fontSize')}
+          </span>
+          <input
+            type="number"
+            min={8}
+            max={32}
+            value={fontSize}
+            onChange={e => setFontSize(e.target.value)}
+            disabled={loading}
+            aria-label={t('settings.terminal.fontSize')}
+            className="bg-surface-container-low rounded-lg border border-outline-variant/30 px-sm py-sm text-body-sm font-mono focus:outline-none focus:ring-2 focus:ring-primary/30 disabled:opacity-50"
+          />
+        </label>
+
+        <label className="flex flex-col gap-xs">
+          <span className="font-label-sm text-[12px] text-on-surface-variant">
+            {t('settings.terminal.scrollback')}
+          </span>
+          <input
+            type="number"
+            min={0}
+            max={100000}
+            value={scrollback}
+            onChange={e => setScrollback(e.target.value)}
+            disabled={loading}
+            aria-label={t('settings.terminal.scrollback')}
+            className="bg-surface-container-low rounded-lg border border-outline-variant/30 px-sm py-sm text-body-sm font-mono focus:outline-none focus:ring-2 focus:ring-primary/30 disabled:opacity-50"
+          />
+        </label>
+
+        <label className="flex flex-col gap-xs">
+          <span className="font-label-sm text-[12px] text-on-surface-variant">
+            {t('settings.terminal.drawerHeight')}
+          </span>
+          <input
+            type="number"
+            min={120}
+            max={1200}
+            value={drawerHeight}
+            onChange={e => setDrawerHeight(e.target.value)}
+            disabled={loading}
+            aria-label={t('settings.terminal.drawerHeight')}
+            className="bg-surface-container-low rounded-lg border border-outline-variant/30 px-sm py-sm text-body-sm font-mono focus:outline-none focus:ring-2 focus:ring-primary/30 disabled:opacity-50"
+          />
+        </label>
+
+        <div className="flex items-center justify-between gap-md">
+          <div>
+            <div className="font-label-md text-[14px] text-on-surface font-semibold mb-1">
+              {t('settings.terminal.screenReaderMode')}
+            </div>
+            <div className="font-label-sm text-[12px] text-on-surface-variant leading-tight">
+              {t('settings.terminal.screenReaderModeDesc')}
+            </div>
+          </div>
+          <Switch
+            checked={screenReaderMode}
+            onCheckedChange={setScreenReaderMode}
+            disabled={loading}
+            className="shrink-0"
+            aria-label={t('settings.terminal.screenReaderMode')}
+          />
+        </div>
+      </div>
+
+      <div className="flex justify-end mt-md">
+        <Button
+          className="px-xl py-md bg-primary text-on-primary rounded-lg font-label-md text-[14px] font-bold hover:bg-primary/90 shadow-sm active:scale-[0.98] transition-all cursor-pointer disabled:opacity-50"
+          onClick={() => void handleSave()}
+          disabled={saving || loading}
+          aria-label={t('settings.terminal.saveAria')}
+        >
+          {saving ? t('settings.terminal.saving') : t('settings.terminal.save')}
+        </Button>
+      </div>
+    </div>
+  )
+}

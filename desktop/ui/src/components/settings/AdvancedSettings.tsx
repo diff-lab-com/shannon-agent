@@ -13,6 +13,7 @@ import { useCatalog } from '@/context/CatalogContext'
 import { save as saveDialog } from '@tauri-apps/plugin-dialog'
 import { VoiceSttSettings } from '@/components/settings/VoiceSttSettings'
 import { VoiceLocalSettings } from '@/components/settings/VoiceLocalSettings'
+import { TerminalSettings } from '@/components/settings/TerminalSettings'
 import * as api from '@/lib/tauri-api'
 import { toastError } from '@/lib/errorToast'
 import type { SkillCandidate, CliInstallStatus, AppUpdateInfo } from '@/lib/tauri-api'
@@ -514,6 +515,9 @@ export default function AdvancedSettings() {
 
         {/* Voice / Local (P2-5e whisper-rs) — opt-in offline STT */}
         <VoiceLocalSettings />
+
+        {/* Integrated terminal defaults (P3-1) — the [terminal] config card */}
+        <TerminalSettings />
 
         {/* Command line — expose the bundled `shannon` CLI (ADR-0011 B3) */}
         <div className="bg-surface-container-lowest p-lg rounded-xl shadow-sm border border-outline-variant/30 lg:col-span-2 group hover:shadow-md transition-shadow">
