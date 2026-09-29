@@ -4,6 +4,31 @@ All notable changes to Shannon Code are documented here. Entries are grouped by 
 
 ## [Unreleased] — §4.14 W1-P2 · OTLP bridge + full RedactionPolicy + desktop Turn Timeline
 
+### Office Wave 1 — honest office-document surface (2026-09-29)
+
+Plan: `docs/research/2026-09-29-office-scenario-competitive-research.md` §10 v2
+(reviewed in `docs/reviews/2026-09-29-office-plan-adversarial-review.md`).
+
+- **A1a** chat: dragging an office file (doc/xls/ppt/odt/rtf family) now shows a
+  dismissible composer notice that its content is NOT sent to the model (the
+  attachment used to disappear into a display-only chip silently); MIME table
+  covers the office types.
+- **A5/B8a** chat: new `FileCard` for non-image attachments and for completed
+  file-mutating tool calls — open / reveal-in-folder / save-as (new
+  `copy_file` command, `$HOME`/`$TEMP`-scoped).
+- **A3'** Welcome: the fake "install document skills" section (unpublished
+  repos) is replaced by a self-probing capabilities card — lists the built-in
+  `/docx-report` `/xlsx-table` `/ppt-outline` when the host has python3,
+  shows an install hint otherwise, renders nothing if the probe fails
+  (new `probe_host_runtime` command).
+- **A4'** honesty: Obsidian/IMAP data sources no longer claim "Verified"
+  (query is still in development — badge now says so); six native skill
+  catalog entries with stub runbooks are marked "[In development]";
+  `inbox-triage-hourly` template annotated as preview; desktop README no
+  longer claims email drafting.
+
+
+
 ### Terminal (desktop + CLI) (2026-09-29)
 
 The 2026-09-29 terminal deep-review delivery

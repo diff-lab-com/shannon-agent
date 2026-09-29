@@ -3,9 +3,10 @@
 > Chat with any model. Deploy agents on any task. Automate anything.
 
 Shannon is a cross-platform **AI workspace** for knowledge workers — not just
-coders. Same Rust engine that writes code also drafts email, researches
-topics, summarizes docs, and runs on schedules. One product, many jobs to
-be done.
+coders. Same Rust engine that writes code also researches topics, summarizes
+documents (PDF and text today; Office formats are in progress), generates
+Word/Excel/PPT deliverables via built-in Python skills, and runs work on
+schedules. One product, many jobs to be done.
 
 > **Desktop surface of the single `shannon` product** ([ADR-0011](../docs/adr/0011-single-product-multi-surface-distribution.md)):
 > every desktop bundle ships the `shannon` CLI alongside the GUI — `/usr/bin`

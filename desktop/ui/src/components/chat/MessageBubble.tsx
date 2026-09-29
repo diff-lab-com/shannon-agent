@@ -29,8 +29,8 @@ import { ResearchReportModal } from '@/components/chat/ResearchReportModal'
 import { ArtifactChipList } from '@/components/artifact/ArtifactChip'
 import { detectArtifacts } from '@/components/artifact/detectArtifact'
 import { FileRefChip } from '@/components/shared/FileRefChip'
-import { extractToolInputPath, FILE_MUTATING_TOOLS } from '@/lib/fileRefs'
-import { openWithDefaultApp } from '@/lib/tauri-api'
+import { basenameOf, extractToolInputPath, FILE_MUTATING_TOOLS } from '@/lib/fileRefs'
+import { FileCard } from '@/components/chat/FileCard'
 import type { ChatMessage, ToolCall, FileAttachment } from '@/types'
 import { cn } from '@/lib/utils'
 
@@ -120,6 +120,14 @@ function AttachmentPreview({ attachment }: { attachment: FileAttachment }) {
   const [open, setOpen] = useState(false)
   const isImage = isImagePath(attachment.path)
 
+  // office Wave 1 (A5+B8a): non-image attachments render as a full FileCard
+  // (open / reveal / save-as) — the old chip → lightbox detour whose only
+  // action was "Open externally" wasted a click on the common case. The
+  // lightbox stays image-only.
+  if (!isImage) {
+    return <FileCard name={attachment.name} path={attachment.path} sizeBytes={attachment.size} />
+  }
+
   const handleClick = () => setOpen(true)
 
   return (
@@ -131,16 +139,12 @@ function AttachmentPreview({ attachment }: { attachment: FileAttachment }) {
         title={attachment.path}
         aria-label={t('chat.message.attachment.open')}
       >
-        {isImage ? (
-          <img
-            src={convertFileSrc(attachment.path)}
-            alt={attachment.name}
-            className="h-8 w-8 rounded-sm object-cover shrink-0"
-            onError={(e) => { (e.currentTarget as HTMLImageElement).style.display = 'none' }}
-          />
-        ) : (
-          <span className="material-symbols-outlined icon-md">description</span>
-        )}
+        <img
+          src={convertFileSrc(attachment.path)}
+          alt={attachment.name}
+          className="h-8 w-8 rounded-sm object-cover shrink-0"
+          onError={(e) => { (e.currentTarget as HTMLImageElement).style.display = 'none' }}
+        />
         <span className="font-label-sm max-w-[160px] truncate">{attachment.name}</span>
       </Button>
 
@@ -156,35 +160,12 @@ function AttachmentPreview({ attachment }: { attachment: FileAttachment }) {
         closeLabel={t('chat.message.attachment.close')}
         className="!bg-black/70 backdrop-blur-sm p-lg"
       >
-        {isImage ? (
-          <img
-            src={convertFileSrc(attachment.path)}
-            alt={attachment.name}
-            className="max-h-[90vh] max-w-[90vw] object-contain rounded-lg shadow-e5"
-            onClick={(e) => e.stopPropagation()}
-          />
-        ) : (
-          <div
-            className="bg-surface-container-lowest rounded-xl p-lg shadow-e5 max-w-md"
-            onClick={(e) => e.stopPropagation()}
-          >
-            <div className="flex items-center gap-sm mb-md">
-              <span className="material-symbols-outlined text-on-surface-variant">description</span>
-              <span className="font-label-md text-on-surface truncate">{attachment.name}</span>
-            </div>
-            <p className="text-body-sm text-on-surface-variant mb-md break-all">{attachment.path}</p>
-            <Button
-              onClick={() => {
-                // P2-5 (§4): hand the file to the OS default app instead of
-                // opening the asset URL inside the webview.
-                openWithDefaultApp(attachment.path).catch(err => toastError(t('link.open.failed'), err))
-              }}
-            >
-              <span className="material-symbols-outlined icon-md mr-xs">open_in_new</span>
-              {t('chat.message.attachment.openExternally')}
-            </Button>
-          </div>
-        )}
+        <img
+          src={convertFileSrc(attachment.path)}
+          alt={attachment.name}
+          className="max-h-[90vh] max-w-[90vw] object-contain rounded-lg shadow-e5"
+          onClick={(e) => e.stopPropagation()}
+        />
         <Button
           variant="ghost"
           onClick={() => setOpen(false)}
@@ -694,7 +675,8 @@ export const ToolCallDisplay = memo(function ToolCallDisplay({ toolCall, onViewD
   })()
 
   return (
-    <Tool name={toolCall.tool_name} status={toolCall.status} className="p-sm">
+    <>
+      <Tool name={toolCall.tool_name} status={toolCall.status} className="p-sm">
       <ToolHeader onClick={() => setExpanded(!expanded)}>
         <span className={cn('material-symbols-outlined icon-sm', statusColor, toolCall.status === 'running' ? 'animate-spin' : '')}>{statusIcon}</span>
         <span className="font-label-md text-on-surface flex-1 truncate">{toolCall.tool_name}</span>
@@ -752,7 +734,17 @@ export const ToolCallDisplay = memo(function ToolCallDisplay({ toolCall, onViewD
           )}
         </ToolContent>
       )}
-    </Tool>
+      </Tool>
+      {/* office Wave 1 (A5): a COMPLETED file-mutating tool with a path input
+          is the same reliable write signal the Diff button gates on
+          (FILE_MUTATING_TOOLS × extractToolInputPath × status) — surface the
+          produced file as a FileCard directly under the tool block. No
+          heuristic path scraping of results; failed / running writes never
+          render a card. */}
+      {canDiff && (
+        <FileCard name={basenameOf(filePath!)} path={filePath!} />
+      )}
+    </>
   )
 })
 

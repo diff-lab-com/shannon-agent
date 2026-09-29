@@ -1,15 +1,10 @@
 // Step 3 — final summary + workspace picker + shortcuts + dev mode opt-in
-// + optional Documents skills list. Extracted from Welcome.tsx (T3.1).
+// + documents-capabilities card. Extracted from Welcome.tsx (T3.1).
 import { useIntl } from 'react-intl'
 import { Button } from '@/components/ui/button'
 import { WelcomeCard } from './components'
-import { DOCUMENTS_SKILLS_AVAILABLE, PROVIDERS, SHORTCUT_ROWS, TASKS, type TaskId, type DocumentsSkill } from './constants'
+import { PROVIDERS, SHORTCUT_ROWS, TASKS, type TaskId } from './constants'
 import { DocumentsSkillsList } from './DocumentsSkillsList'
-
-interface SkillState {
-  status: 'idle' | 'installing' | 'installed' | 'failed'
-  error?: string
-}
 
 interface DoneStepProps {
   task: TaskId
@@ -21,12 +16,9 @@ interface DoneStepProps {
   fallbackWorkingDir: string | null
   devMode: boolean
   setDevMode: React.Dispatch<React.SetStateAction<boolean>>
-  skillState: Record<string, SkillState>
   onPickDirectory: () => void
   onBack: () => void
   onFinish: () => void
-  onInstallSkill: (skill: DocumentsSkill) => void
-  onBrowseFeaturedSkills: () => void
   /** P1-6 — opens the migration wizard (import from Claude Code / ZCode). */
   onOpenMigration?: () => void
 }
@@ -39,12 +31,9 @@ export function DoneStep({
   fallbackWorkingDir,
   devMode,
   setDevMode,
-  skillState,
   onPickDirectory,
   onBack,
   onFinish,
-  onInstallSkill,
-  onBrowseFeaturedSkills,
   onOpenMigration,
 }: DoneStepProps) {
   const intl = useIntl()
@@ -170,15 +159,10 @@ export function DoneStep({
         </div>
       )}
 
-      {/* P2.4 — Documents skill recommendations. Hidden until the skill
-          repos are published. */}
-      {DOCUMENTS_SKILLS_AVAILABLE && (
-        <DocumentsSkillsList
-          skillState={skillState}
-          onInstall={onInstallSkill}
-          onBrowseLater={onBrowseFeaturedSkills}
-        />
-      )}
+      {/* Office Wave 1 A3' — self-probing documents-capabilities card (the
+          community-skill install list it replaced advertised unpublished
+          repos; the card is honest in both probe outcomes). */}
+      <DocumentsSkillsList />
     </WelcomeCard>
   )
 }

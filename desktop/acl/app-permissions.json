@@ -182,6 +182,15 @@
       }
     },
     {
+      "identifier": "allow-copy-file",
+      "description": "Enables the copy_file command without any pre-configured scope.",
+      "commands": {
+        "allow": [
+          "copy_file"
+        ]
+      }
+    },
+    {
       "identifier": "allow-create-agent-definition",
       "description": "Enables the create_agent_definition command without any pre-configured scope.",
       "commands": {
@@ -1604,6 +1613,15 @@
       }
     },
     {
+      "identifier": "allow-probe-host-runtime",
+      "description": "Enables the probe_host_runtime command without any pre-configured scope.",
+      "commands": {
+        "allow": [
+          "probe_host_runtime"
+        ]
+      }
+    },
+    {
       "identifier": "allow-probe-url-frameable",
       "description": "Enables the probe_url_frameable command without any pre-configured scope.",
       "commands": {
@@ -2699,6 +2717,7 @@
         "allow-open-external",
         "allow-open-release-page",
         "allow-open-with-default-app",
+        "allow-probe-host-runtime",
         "allow-probe-url-frameable",
         "allow-register-interactive-artifact",
         "allow-reveal-in-folder",
@@ -2780,6 +2799,7 @@
       "permissions": [
         "allow-apply-code-action",
         "allow-apply-diff",
+        "allow-copy-file",
         "allow-get-file-diff",
         "allow-get-file-tree",
         "allow-get-working-dir-info",

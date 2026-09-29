@@ -410,7 +410,8 @@ function AdapterCard({
   const fields: DataSourceField[] = entry.metadata.fields ?? [];
   const kind = (entry.metadata.kind as string | undefined) ?? "";
   const accent = ACCENT_BY_KIND[kind] ?? ACCENT_DEFAULT;
-  const isQueryPending = CONFIG_ONLY_KINDS.has(kind);
+  const isQueryPending = CONFIG_ONLY_KINDS.has(kind) || QUERY_IN_DEV_KINDS.has(kind);
+  const isQueryInDev = QUERY_IN_DEV_KINDS.has(kind);
   return (
     <div className="relative overflow-hidden rounded-2xl border border-outline-variant/30 bg-surface-container-lowest hover:border-primary/40 hover:shadow-e3 transition-all flex flex-col group">
       <div className={cn("h-1 w-full bg-gradient-to-r", accent.bar)} />
@@ -427,6 +428,14 @@ function AdapterCard({
             <span className="text-label-xs px-xs py-[1px] rounded-full font-bold bg-secondary-container text-on-secondary-container shrink-0 inline-flex items-center gap-[4px]" title={t('extensions.datasources.queryComingSoonHint')}>
               <span className="material-symbols-outlined icon-xs">schedule</span>
               {t('extensions.datasources.queryComingSoon')}
+            </span>
+          ) : isQueryInDev && isInstalled ? (
+            // Office Wave 1 A4' — configured but the Rust dispatch has no
+            // fetcher for this kind yet (falls through to UnknownKind).
+            // Same secondary palette as the coming-soon badge, distinct copy.
+            <span className="text-label-xs px-xs py-[1px] rounded-full font-bold bg-secondary/15 text-secondary shrink-0 inline-flex items-center gap-[4px]" title={t('extensions.datasources.queryComingSoonHint')}>
+              <span className="material-symbols-outlined icon-xs">schedule</span>
+              {t('extensions.datasources.queryInDev')}
             </span>
           ) : (
             <span className="text-label-xs px-xs py-[1px] rounded-full font-bold bg-primary-container text-on-primary-container shrink-0">
@@ -525,6 +534,15 @@ function AdapterCard({
 /// Kinds whose query path is stubbed (config-only). Surfaced as a "coming
 /// soon" badge in the card header so users know install works today.
 const CONFIG_ONLY_KINDS = new Set(["slack", "discord", "telegram", "rss", "ical"]);
+
+/// Office Wave 1 A4' honesty fix — obsidian/email_imap install and persist
+/// config fine, but the Rust `dispatch()` has no fetcher for them yet: the
+/// query falls through to `UnknownKind`. They join the query-not-ready
+/// family (pre-install: "Query coming soon" + hint instead of a bare
+/// "Verified"), and once installed they show "Configured · query in
+/// development" instead of "Verified" so the badge never promises a working
+/// query path.
+const QUERY_IN_DEV_KINDS = new Set(["obsidian", "email_imap"]);
 
 const ACCENT_DEFAULT = {
   bar: "from-primary/60 to-primary/20",

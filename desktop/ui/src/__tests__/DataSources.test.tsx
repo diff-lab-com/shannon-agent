@@ -133,6 +133,59 @@ describe('DataSources (P5 native adapters)', () => {
     })
   })
 
+  // Office Wave 1 A4' — obsidian's Rust query dispatch has no fetcher yet
+  // (falls through to UnknownKind), so the card must never promise a working
+  // query path with a "Verified" badge.
+  it('shows the coming-soon badge for uninstalled obsidian instead of Verified', async () => {
+    listDataSourceCatalog.mockResolvedValue([obsidianEntry])
+    listInstalledDataSources.mockResolvedValue([])
+    renderWithRouter()
+    await waitFor(() => {
+      expect(screen.getByText('Obsidian Vault')).toBeInTheDocument()
+    })
+    expect(screen.getByText('Query coming soon')).toBeInTheDocument()
+    expect(screen.queryByText('Verified')).not.toBeInTheDocument()
+  })
+
+  it('shows "Configured · query in development" for installed obsidian instead of Verified', async () => {
+    listDataSourceCatalog.mockResolvedValue([obsidianEntry])
+    listInstalledDataSources.mockResolvedValue([installedObsidian])
+    renderWithRouter()
+    await waitFor(() => {
+      expect(screen.getByText('Configured · query in development')).toBeInTheDocument()
+    })
+    expect(screen.queryByText('Verified')).not.toBeInTheDocument()
+  })
+
+  it('shows "Configured · query in development" for installed email_imap instead of Verified', async () => {
+    listDataSourceCatalog.mockResolvedValue([emailEntry])
+    listInstalledDataSources.mockResolvedValue([
+      { ...installedObsidian, slug: 'email-imap', kind: 'email_imap', name: 'Email (IMAP)' },
+    ])
+    renderWithRouter()
+    await waitFor(() => {
+      expect(screen.getByText('Configured · query in development')).toBeInTheDocument()
+    })
+    expect(screen.queryByText('Verified')).not.toBeInTheDocument()
+  })
+
+  it('keeps the Verified badge for adapters with a real query fetcher (notion)', async () => {
+    const notionEntry = {
+      ...obsidianEntry,
+      id: 'native:data-source-notion',
+      name: 'Notion',
+      metadata: { kind: 'notion', fields: [] },
+    }
+    listDataSourceCatalog.mockResolvedValue([notionEntry])
+    listInstalledDataSources.mockResolvedValue([])
+    renderWithRouter()
+    await waitFor(() => {
+      expect(screen.getByText('Notion')).toBeInTheDocument()
+    })
+    expect(screen.getByText('Verified')).toBeInTheDocument()
+    expect(screen.queryByText('Query coming soon')).not.toBeInTheDocument()
+  })
+
   it('expands install form on Configure & Install click', async () => {
     listDataSourceCatalog.mockResolvedValue([obsidianEntry])
     listInstalledDataSources.mockResolvedValue([])

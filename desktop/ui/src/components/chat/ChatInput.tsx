@@ -17,6 +17,23 @@ import { cn } from '@/lib/utils'
 
 const IMAGE_EXTENSIONS = new Set(['png', 'jpg', 'jpeg', 'gif', 'webp', 'bmp', 'svg'])
 
+/**
+ * Office Wave 1 A1a — extensions whose content the attachment pipeline does
+ * NOT parse today (the Rust reader returns opaque bytes for them). The chip
+ * is still attached and the path is still sent (parsing lands in the next
+ * wave), but the composer must say out loud that the file's CONTENT never
+ * reaches the model — attaching a .docx used to look like context when it
+ * wasn't. Keep in sync with the reader's supported set.
+ */
+export const UNPARSED_EXTENSIONS = new Set(['doc', 'docx', 'xls', 'xlsx', 'ppt', 'pptx', 'odt', 'rtf'])
+
+/** Lowercased extension without the dot ('' for dotfiles/no extension). */
+export function pathExtension(path: string): string {
+  const name = path.replace(/\\/g, '/').split('/').pop() ?? ''
+  const dot = name.lastIndexOf('.')
+  return dot > 0 ? name.slice(dot + 1).toLowerCase() : ''
+}
+
 /** Last path segment, no extension — used by the contextual placeholder so a
  *  repo named "shannon-desktop" reads as "Working in shannon-desktop …". */
 function basename(p: string): string {
@@ -102,6 +119,17 @@ export default function ChatInput({
   const slashQuery = isSlashQuery(value) ? value.trim() : null
   const slashMatches = slashQuery && !slashDismissed ? filterSlashCommands(slashQuery) : []
   const slashOpen = slashMatches.length > 0
+
+  // Office Wave 1 A1a — honest notice while an unparseable attachment
+  // (.docx/.xlsx/…) rides along. Dismissible, but re-arming: once every
+  // unsupported file is removed the dismissal resets, so a NEW .docx warns
+  // again instead of relying on a stale dismiss.
+  const hasUnparsedAttachment = attachedFiles.some(p => UNPARSED_EXTENSIONS.has(pathExtension(p)))
+  const [unparsedDismissed, setUnparsedDismissed] = useState(false)
+  useEffect(() => {
+    if (!hasUnparsedAttachment) setUnparsedDismissed(false)
+  }, [hasUnparsedAttachment])
+  const showUnparsedNotice = hasUnparsedAttachment && !unparsedDismissed
 
   useEffect(() => {
     setSlashActive(0)
@@ -500,6 +528,34 @@ export default function ChatInput({
       {voice.state !== 'idle' && (
         <div className="flex items-center justify-center py-sm bg-primary/5 rounded-t-2xl">
           <VoiceOrb state={voice.state} />
+        </div>
+      )}
+
+      {/* A1a — sits above the input box so the honest "content was NOT sent"
+          line is read before the user hits send. Same banner shape as the
+          plan-mode strip, warning palette. */}
+      {showUnparsedNotice && (
+        <div
+          role="status"
+          className="flex items-start gap-xs px-md py-xs bg-warning-container/60 border-b border-warning/30 rounded-t-2xl text-on-warning-container"
+        >
+          <span className="material-symbols-outlined icon-sm shrink-0 mt-[2px]">info</span>
+          <div className="flex-1 min-w-0">
+            <div className="font-label-sm">{t('chat.input.attach.unsupportedType')}</div>
+            <div className="font-label-xs text-on-warning-container/80 mt-[1px]">
+              {t('chat.input.attach.unsupportedHint')}
+            </div>
+          </div>
+          <Button
+            variant="ghost"
+            size="icon-xs"
+            onClick={() => setUnparsedDismissed(true)}
+            aria-label={t('chat.message.attachment.close')}
+            title={t('chat.message.attachment.close')}
+            className="rounded-sm hover:bg-warning/20 shrink-0"
+          >
+            <span className="material-symbols-outlined icon-sm">close</span>
+          </Button>
         </div>
       )}
 
