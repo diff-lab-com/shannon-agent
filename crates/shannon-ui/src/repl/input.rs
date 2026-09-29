@@ -1130,7 +1130,11 @@ pub(crate) fn complete_command_args(cmd_name: &str, prefix: &str) -> Vec<String>
             "preview",
             "--preview",
         ],
-        "permissions" | "perm" | "perms" => &["allow", "deny", "reset", "status"],
+        // R1-6 (decision ② step 1): /permissions manages permission profiles
+        // (the /profile command); the tool allow/deny view keeps /perms and
+        // /perm.
+        "permissions" => &["list", "show", "set", "create"],
+        "perm" | "perms" => &["allow", "deny", "reset", "status"],
         "plan" => &["create", "approve", "reject", "done", "status"],
         "review" => &["HEAD~1", "main...HEAD", "--staged", "--full"],
         "history" => &["--export"],
@@ -3051,11 +3055,33 @@ mod tests {
             "credentials and creds should have same completions"
         );
 
-        let perm = complete_command_args("permissions", "");
-        let perm_alias = complete_command_args("perms", "");
+        // R1-6: /perms and /perm are still the same (tool) command, but
+        // /permissions moved to the permission-profile command — its
+        // completions are the profile subcommands instead.
+        let perm = complete_command_args("perms", "");
+        let perm_alias = complete_command_args("perm", "");
         assert_eq!(
             perm, perm_alias,
-            "permissions and perms should have same completions"
+            "perms and perm should have same completions"
+        );
+        assert_eq!(
+            perm,
+            vec![
+                "allow".to_string(),
+                "deny".to_string(),
+                "reset".to_string(),
+                "status".to_string()
+            ]
+        );
+        assert_eq!(
+            complete_command_args("permissions", ""),
+            vec![
+                "list".to_string(),
+                "show".to_string(),
+                "set".to_string(),
+                "create".to_string()
+            ],
+            "/permissions should complete permission-profile subcommands"
         );
     }
 

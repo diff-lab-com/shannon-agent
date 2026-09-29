@@ -742,13 +742,61 @@ mod tests {
         assert_eq!(picker.current_tier_idx, 2);
 
         picker.next_tier();
+        assert_eq!(picker.current_tier_idx, 3);
+
+        picker.next_tier();
         assert_eq!(picker.current_tier_idx, 0, "should wrap around");
 
         picker.prev_tier();
-        assert_eq!(picker.current_tier_idx, 2, "should wrap to Pro from Fast");
+        assert_eq!(picker.current_tier_idx, 3, "should wrap to Pro from All");
 
         picker.prev_tier();
-        assert_eq!(picker.current_tier_idx, 1);
+        assert_eq!(picker.current_tier_idx, 2);
+    }
+
+    #[test]
+    fn picker_all_tier_tab_restores_unfiltered_catalog() {
+        let mut picker = ModelPickerWidget::new(None);
+        // Jump to Anthropic if available; otherwise just confirm on whatever
+        // provider tab the picker opened with.
+        if let Some(idx) = picker
+            .providers
+            .iter()
+            .position(|p| *p == LlmProvider::Anthropic)
+        {
+            picker.current_provider_idx = idx;
+            picker.refresh_models();
+        }
+
+        // The picker opens on the "All" tab — the unfiltered catalog.
+        assert_eq!(picker.current_tier_idx, 0);
+        let total = picker.models.len();
+        assert!(total > 0, "expected at least one model in the catalog");
+
+        // Cycle into a tier tab (subset), then all the way back to All: the
+        // unfiltered catalog must be restored, not eroded by repeated
+        // filtering of the already-filtered list.
+        picker.next_tier();
+        assert!(
+            picker.models.len() <= total,
+            "tier filter must be a subset of the catalog"
+        );
+        for _ in 1..TIER_COUNT {
+            picker.next_tier();
+        }
+        assert_eq!(picker.current_tier_idx, 0, "cycle wraps back to All");
+        assert_eq!(
+            picker.models.len(),
+            total,
+            "All tab restores the full catalog"
+        );
+
+        // Backwards works the same way: All → Pro (filtered) → All (full).
+        picker.prev_tier();
+        assert_eq!(picker.current_tier_idx, TIER_COUNT - 1);
+        picker.next_tier();
+        assert_eq!(picker.current_tier_idx, 0);
+        assert_eq!(picker.models.len(), total);
     }
 
     #[test]
@@ -769,7 +817,7 @@ mod tests {
         assert!(total > 0, "expected at least one model for the provider");
 
         // Standard tier should be a strict subset
-        picker.current_tier_idx = 1;
+        picker.current_tier_idx = 2;
         picker.refresh_models_for_tier();
         assert!(
             picker.models.len() <= total,
@@ -970,7 +1018,7 @@ const MAX_VISIBLE_MODELS: usize = 10;
 ///
 /// Navigate with:
 /// - `←` / `→` — switch provider tab
-/// - `Tab` / `BackTab` — cycle tier tab (Fast → Standard → Pro)
+/// - `Tab` / `BackTab` — cycle tier tab (All → Fast → Standard → Pro)
 /// - `↑` / `↓` / `j` / `k` — select model
 /// - `Enter` — confirm selection
 /// - `Esc` — cancel
@@ -990,7 +1038,8 @@ pub struct ModelPickerWidget {
     local_models: Vec<ModelInfo>,
     /// The model ID currently in use (shown with ✓ marker).
     current_model_id: Option<String>,
-    /// Index of the currently active tier tab (0 = Fast, 1 = Standard, 2 = Pro).
+    /// Index of the currently active tier tab (0 = All, 1 = Fast, 2 = Standard,
+    /// 3 = Pro). "All" shows the unfiltered catalog.
     pub current_tier_idx: usize,
     /// Manual model-id entry mode (escape hatch for models outside the catalog).
     manual_mode: bool,
@@ -1017,8 +1066,8 @@ fn model_cost_label(model: &ModelInfo) -> String {
     }
 }
 
-/// Number of tier tabs (Fast, Standard, Pro).
-pub const TIER_COUNT: usize = 3;
+/// Number of tier tabs (All, Fast, Standard, Pro).
+pub const TIER_COUNT: usize = 4;
 
 impl ModelPickerWidget {
     /// Create a new model picker, optionally highlighting `current_model`.
@@ -1098,13 +1147,13 @@ impl ModelPickerWidget {
         self.scroll_offset = 0;
     }
 
-    /// Cycle to the next tier tab (Fast → Standard → Pro → Fast).
+    /// Cycle to the next tier tab (All → Fast → Standard → Pro → All).
     pub fn next_tier(&mut self) {
         self.current_tier_idx = (self.current_tier_idx + 1) % TIER_COUNT;
         self.refresh_models_for_tier();
     }
 
-    /// Cycle to the previous tier tab (Fast → Pro → Standard → Fast).
+    /// Cycle to the previous tier tab (All → Pro → Standard → Fast → All).
     pub fn prev_tier(&mut self) {
         self.current_tier_idx = if self.current_tier_idx == 0 {
             TIER_COUNT - 1
@@ -1114,14 +1163,23 @@ impl ModelPickerWidget {
         self.refresh_models_for_tier();
     }
 
-    /// Filter the current model list to those matching the selected tier.
+    /// Rebuild the model list for the current tier tab.
+    ///
+    /// Reloads the provider's unfiltered catalog first, then applies the tier
+    /// filter — filtering the already-filtered list would lose every other
+    /// tier, making the cycle one-way. Index 0 is the "All" tab: the
+    /// unfiltered catalog, so the picker can always get back to everything
+    /// (R1-5).
     fn refresh_models_for_tier(&mut self) {
-        let tier_label = match self.current_tier_idx {
-            0 => TierLabel::Fast,
-            1 => TierLabel::Standard,
-            _ => TierLabel::Pro,
-        };
-        self.models.retain(|m| m.tier_label() == tier_label);
+        self.refresh_models();
+        if self.current_tier_idx > 0 {
+            let tier_label = match self.current_tier_idx {
+                1 => TierLabel::Fast,
+                2 => TierLabel::Standard,
+                _ => TierLabel::Pro,
+            };
+            self.models.retain(|m| m.tier_label() == tier_label);
+        }
         self.selected_idx = 0;
         self.scroll_offset = 0;
     }
@@ -1299,8 +1357,8 @@ impl ModelPickerWidget {
             lines.push(Line::from(""));
         }
 
-        // ── Tier tabs (Fast / Standard / Pro) ──
-        let tiers = ["Fast", "Standard", "Pro"];
+        // ── Tier tabs (All / Fast / Standard / Pro) ──
+        let tiers = ["All", "Fast", "Standard", "Pro"];
         let tier_spans: Vec<Span> = tiers
             .iter()
             .enumerate()
