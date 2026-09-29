@@ -1,7 +1,10 @@
 // Tests for the P1-5 D integrated terminal panel: open/close + Ctrl+`,
 // tab management with the 4-instance cap, base64 output decoding into
 // xterm, stdin dispatch, terminal:exit end-marking, history-warning hint,
-// i18n key parity (en + zh-CN), and the xterm theme mapping floor.
+// i18n key parity (en + zh-CN), the xterm theme mapping floor, plus the
+// P2-4 gap coverage: resize→IPC, unmount cleanup (dispose/unsubscribe),
+// the authoritative terminal_list merge, Ctrl+` over a focused surface,
+// and persisted-settings application at xterm creation.
 //
 // jsdom cannot run the real xterm renderer — @xterm/xterm and
 // @xterm/addon-fit are replaced with fakes that expose the same surface
@@ -38,9 +41,16 @@ const h = vi.hoisted(() => ({
     scrollToBottom: () => void
     focus: () => void
     dispose: () => void
+    disposed: boolean
     write: (data: string | Uint8Array) => void
     onData: (cb: (data: string) => void) => { dispose: () => void }
     onResize: (cb: (size: { cols: number; rows: number }) => void) => { dispose: () => void }
+  }[],
+  /** Every FitAddon the panel created, in creation order. */
+  fits: [] as {
+    fit: () => void
+    dispose: () => void
+    disposed: boolean
   }[],
   outputHandler: null as ((payload: { terminalId: string; data: string }) => void) | null,
   exitHandler: null as ((payload: { terminalId: string }) => void) | null,
@@ -90,14 +100,21 @@ vi.mock('@xterm/xterm', () => ({
     loadAddon() {}
     scrollToBottom() {}
     focus() {}
-    dispose() {}
+    // P2-4: dispose is a spy target — unmount cleanup must run it.
+    disposed = false
+    dispose() { this.disposed = true }
   },
 }))
 
 vi.mock('@xterm/addon-fit', () => ({
   FitAddon: class {
+    disposed = false
+    constructor() {
+      h.fits.push(this)
+    }
     fit() { /* jsdom has no layout */ }
-    dispose() {}
+    // P2-4: dispose is a spy target — unmount cleanup must run it.
+    dispose() { this.disposed = true }
   },
 }))
 
@@ -107,7 +124,11 @@ vi.mock('@/lib/tauri-api', () => ({
   terminalResize: vi.fn(),
   terminalKill: vi.fn(),
   terminalList: vi.fn(),
+  terminalGetSettings: vi.fn(),
+  terminalSetSettings: vi.fn(),
 }))
+
+const DEFAULT_SETTINGS = { shell: null, fontSize: 12, scrollback: 5000, drawerHeight: 320, screenReaderMode: false }
 
 vi.mock('@/lib/runtime/terminalEvents', async () => {
   const actual = await import('@/lib/runtime/terminalEvents')
@@ -149,10 +170,13 @@ beforeEach(() => {
   vi.clearAllMocks()
   document.documentElement.removeAttribute('data-theme')
   h.terminals.length = 0
+  h.fits.length = 0
   h.outputHandler = null
   h.exitHandler = null
   localStorage.clear()
   vi.mocked(api.terminalList).mockResolvedValue([])
+  vi.mocked(api.terminalGetSettings).mockResolvedValue({ ...DEFAULT_SETTINGS })
+  vi.mocked(api.terminalSetSettings).mockResolvedValue({ ...DEFAULT_SETTINGS })
   vi.mocked(api.terminalSpawn).mockImplementation(async (dir?: string | null) => {
     return { terminalId: `t-${h.terminals.length + 1}-${(dir ?? '').length}` }
   })
@@ -274,9 +298,11 @@ describe('TerminalPanel (output + input)', () => {
       data: encode('\r\n\x1b[2m[shannon: process exited — done]\x1b[0m\r\n'),
     })
     await new Promise((r) => setTimeout(r, 25))
-    expect(screen.queryByText(/ended/)).toBeNull()
     // The notice itself still reaches xterm untouched (it is for humans).
+    // Asserted FIRST: if it never rendered, the negative assertion below
+    // would hold vacuously — the ordering closes that pass window.
     expect(rendered(h.terminals[0])).toContain('[shannon: process exited')
+    expect(screen.queryByText(/ended/)).toBeNull()
   })
 
   it('drops a malformed base64 payload with a warning and keeps the stream alive', async () => {
@@ -501,5 +527,107 @@ describe('TerminalPanel (P1-36 theme currency + B5 paste guard + spawn errors)',
         expect.objectContaining({ description: expect.stringMatching(/pty busy/) }),
       ),
     )
+  })
+})
+
+describe('TerminalPanel (P2-4: resize IPC, cleanup, list merge, settings)', () => {
+  it('pushes the fitted cols/rows to terminal_resize when the drawer resizes', async () => {
+    // jsdom lacks ResizeObserver — stub it and drive the observer callback
+    // the way a real container resize would.
+    class MockResizeObserver {
+      static latest: MockResizeObserver | null = null
+      cb: ResizeObserverCallback
+      constructor(cb: ResizeObserverCallback) {
+        this.cb = cb
+        MockResizeObserver.latest = this
+      }
+      observe() {}
+      unobserve() {}
+      disconnect() {}
+    }
+    vi.stubGlobal('ResizeObserver', MockResizeObserver)
+    try {
+      await openPanel()
+      await waitFor(() => expect(h.terminals.length).toBe(1))
+      const { terminalId } = await vi.mocked(api.terminalSpawn).mock.results[0]!.value
+      // Real xterm: fit() measures and fires the onResize handler — the
+      // panel then forwards cols/rows to the pty. Simulate that pair.
+      h.fits[0].fit = () => h.terminals[0].resizeHandler?.({ cols: 101, rows: 30 })
+      expect(api.terminalResize).not.toHaveBeenCalled()
+      await act(async () => {
+        MockResizeObserver.latest?.cb([], undefined as unknown as ResizeObserver)
+      })
+      expect(api.terminalResize).toHaveBeenCalledWith(terminalId, 101, 30)
+    } finally {
+      vi.unstubAllGlobals()
+    }
+  })
+
+  it('unsubscribes listeners and disposes xterm resources on unmount', async () => {
+    const { unmount } = render(<TerminalPanel projectDir="/home/u/demo" />)
+    fireEvent.keyDown(window, { key: '`', ctrlKey: true })
+    await waitFor(() => expect(h.terminals.length).toBe(1))
+    expect(h.unsubscribed).toBe(false)
+    expect(h.exitUnsubscribed).toBe(false)
+
+    unmount()
+
+    // Both transports unsubscribed…
+    expect(h.unsubscribed).toBe(true)
+    expect(h.exitUnsubscribed).toBe(true)
+    // …and the xterm/fit pair is disposed, not leaked.
+    expect(h.terminals[0].disposed).toBe(true)
+    expect(h.fits[0].disposed).toBe(true)
+  })
+
+  it('merges the follow-up terminal_list result into the spawned tab info', async () => {
+    // Boot sees no live terminals, so the panel spawns; the authoritative
+    // list answer (real shell/startedAtMs/projectDir) replaces the
+    // optimistic placeholder info wholesale.
+    const fresh: TerminalInfo = { terminalId: 't-fresh', projectDir: '/fresh/dir', shell: '/bin/zsh', startedAtMs: 42 }
+    vi.mocked(api.terminalList).mockResolvedValueOnce([]).mockResolvedValueOnce([fresh])
+    vi.mocked(api.terminalSpawn).mockResolvedValue({ terminalId: 't-fresh' })
+    render(<TerminalPanel projectDir="/home/u/demo" />)
+    fireEvent.keyDown(window, { key: '`', ctrlKey: true })
+    // The tab label flips from the optimistic projectDir ('demo') to the
+    // authoritative one ('dir') — impossible unless the follow-up list
+    // result was merged over the placeholder.
+    expect(await screen.findByRole('tab', { name: /dir/ })).toBeTruthy()
+    expect(screen.queryByRole('tab', { name: /demo/ })).toBeNull()
+    // Exactly two list calls: the boot reconciliation + the post-spawn refresh.
+    expect(api.terminalList).toHaveBeenCalledTimes(2)
+  })
+
+  it('toggles the panel from Ctrl+` while focus is inside the terminal surface', async () => {
+    // The capture-phase window handler must win over xterm's hidden
+    // textarea key handling when the surface itself holds focus.
+    await openPanel()
+    await waitFor(() => expect(h.terminals.length).toBe(1))
+    const surface = screen.getByTestId('terminal-surface')
+    // The real surface hosts xterm's focusable textarea; give the fake the
+    // same programmatic focusability.
+    surface.setAttribute('tabindex', '-1')
+    surface.focus()
+    expect(surface).toHaveFocus()
+    fireEvent.keyDown(surface, { key: '`', ctrlKey: true })
+    await waitFor(() =>
+      expect(screen.queryByRole('region', { name: 'Integrated terminal' })).toBeNull(),
+    )
+  })
+
+  it('applies persisted settings to newly created xterm instances', async () => {
+    // P3-1: settings fetched on boot are read at CREATION time — the
+    // first xterm of the session must carry fontSize/scrollback/
+    // screenReaderMode, and the drawer height follows drawerHeight.
+    vi.mocked(api.terminalGetSettings).mockResolvedValue({
+      shell: null, fontSize: 15, scrollback: 1234, drawerHeight: 480, screenReaderMode: true,
+    })
+    await openPanel()
+    await waitFor(() => expect(h.terminals.length).toBe(1))
+    expect(h.terminals[0].options.fontSize).toBe(15)
+    expect(h.terminals[0].options.scrollback).toBe(1234)
+    expect(h.terminals[0].options.screenReaderMode).toBe(true)
+    const region = screen.getByRole('region', { name: 'Integrated terminal' })
+    expect(region.getAttribute('style')).toContain('height: 480px')
   })
 })
