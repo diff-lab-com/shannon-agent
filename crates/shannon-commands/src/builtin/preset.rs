@@ -186,14 +186,20 @@ pub fn merge_presets(
 
 /// Format a preset listing for display.
 pub fn format_preset_list(presets: &HashMap<String, ConversationPreset>) -> String {
+    use rust_i18n::t;
+
     let mut names: Vec<&String> = presets.keys().collect();
     names.sort();
 
-    let mut output = String::from("Available Presets:\n\n");
+    let mut output = t!("commands.preset.available_title").to_string();
+    let no_description = t!("commands.preset.no_description");
 
     for name in &names {
         let preset = &presets[*name];
-        let desc = preset.description.as_deref().unwrap_or("No description");
+        let desc = preset
+            .description
+            .as_deref()
+            .unwrap_or(no_description.as_ref());
         output.push_str(&format!("  {name} - {desc}\n"));
 
         if let Some(ref model) = preset.model {
@@ -207,10 +213,7 @@ pub fn format_preset_list(presets: &HashMap<String, ConversationPreset>) -> Stri
         }
     }
 
-    output.push_str("\nUsage:\n");
-    output.push_str("  /preset              - List all presets\n");
-    output.push_str("  /preset <name>       - Apply a preset\n");
-    output.push_str("  /preset show <name>  - Show preset details\n");
+    output.push_str(t!("commands.preset.usage").as_ref());
 
     output
 }

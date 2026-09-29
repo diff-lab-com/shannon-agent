@@ -1223,6 +1223,8 @@ pub fn categorize_commands() -> Vec<(&'static str, Vec<(String, String)>)> {
 
 /// Generate help output
 pub fn generate_help(command_filter: Option<&str>) -> String {
+    use rust_i18n::t;
+
     if let Some(cmd) = command_filter {
         if let Some(entry) = get_command_help(cmd) {
             entry.to_markdown()
@@ -1264,8 +1266,7 @@ pub fn generate_help(command_filter: Option<&str>) -> String {
             }
         }
 
-        output
-            .push_str("Use `/help <command>` for detailed information about a specific command.\n");
+        output.push_str(t!("commands.help.footer").as_ref());
         output
     }
 }

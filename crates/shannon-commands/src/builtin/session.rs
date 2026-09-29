@@ -147,12 +147,13 @@ pub fn delete_snapshot(name: &str) -> Result<()> {
 /// Format a list of snapshots for display.
 #[allow(dead_code)] // invoked dynamically by LLM via /session command tools
 pub fn format_snapshot_list(snapshots: &[(String, String)]) -> String {
+    use rust_i18n::t;
+
     if snapshots.is_empty() {
-        return "No saved session snapshots.\nUse `/session save <name>` to create one."
-            .to_string();
+        return t!("commands.session.none_saved").to_string();
     }
 
-    let mut out = String::from("Saved session snapshots:\n\n");
+    let mut out = t!("commands.session.snapshots_title").to_string();
     for (name, description) in snapshots {
         if description.is_empty() {
             out.push_str(&format!("  {name}\n"));
@@ -160,7 +161,7 @@ pub fn format_snapshot_list(snapshots: &[(String, String)]) -> String {
             out.push_str(&format!("  {name} — {description}\n"));
         }
     }
-    out.push_str("\nUse `/session load <name>` to restore a snapshot.");
+    out.push_str(t!("commands.session.load_hint").as_ref());
     out
 }
 

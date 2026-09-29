@@ -102,13 +102,15 @@ fn get_manager() -> Result<shannon_core::credential_manager::CredentialManager, 
 
 /// Format credentials list output
 pub fn format_credentials_list() -> String {
-    let mut output = String::from("Stored Credentials:\n\n");
+    use rust_i18n::t;
+
+    let mut output = t!("commands.credentials.title").to_string();
 
     match get_manager() {
         Ok(manager) => {
             let credentials = manager.list();
             if credentials.is_empty() {
-                output.push_str("  No credentials stored.\n");
+                output.push_str(t!("commands.credentials.none").as_ref());
             } else {
                 for cred in &credentials {
                     output.push_str(&format!(
@@ -125,12 +127,7 @@ pub fn format_credentials_list() -> String {
         }
     }
 
-    output.push_str("\nUsage:\n");
-    output.push_str("  /credentials list              - Show stored credentials\n");
-    output.push_str("  /credentials store <svc> <val> - Store a credential\n");
-    output.push_str("  /credentials get <service>     - Retrieve a credential (masked)\n");
-    output.push_str("  /credentials delete <service>  - Delete a credential\n");
-    output.push_str("  /credentials count             - Show stored credential count\n");
+    output.push_str(t!("commands.credentials.usage").as_ref());
 
     output
 }

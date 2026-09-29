@@ -136,22 +136,9 @@ pub fn parse_plugin_subcommand(arg: &str) -> (PluginSubcommand, Option<String>) 
 
 /// Format plugin help output
 pub fn format_plugin_help() -> String {
-    let mut output = String::from("Plugin Management:\n\n");
+    use rust_i18n::t;
 
-    output.push_str("  /plugin list                    - List installed plugins\n");
-    output.push_str("  /plugin search <query>          - Search plugin registry\n");
-    output.push_str("  /plugin info <name>             - Show plugin details from index\n");
-    output.push_str("  /plugin install <name-or-url>   - Install a plugin\n");
-    output.push_str("  /plugin uninstall <name>        - Remove a plugin\n");
-    output.push_str("  /plugin update [name]           - Update plugins\n");
-    output.push_str("  /plugin enable <name>           - Enable a plugin\n");
-    output.push_str("  /plugin disable <name>          - Disable a plugin\n");
-    output.push_str("\nPlugin Sources:\n");
-    output.push_str("  - Registry name (e.g., \"example-plugin\")\n");
-    output.push_str("  - Git URL (e.g., \"https://github.com/user/plugin\")\n");
-    output.push_str("  - Local path (e.g., \"/path/to/plugin\")\n");
-
-    output
+    t!("commands.plugin.help").to_string()
 }
 
 /// Plugin display info
@@ -167,12 +154,13 @@ pub struct PluginDisplayInfo {
 
 /// Format a plugin list for display
 pub fn format_plugin_list(plugins: &[PluginDisplayInfo]) -> String {
+    use rust_i18n::t;
+
     if plugins.is_empty() {
-        return "No plugins installed.\n\nInstall plugins with:\n  /plugin install <name-or-url>"
-            .to_string();
+        return t!("commands.plugin.none_installed").to_string();
     }
 
-    let mut output = String::from("Installed Plugins:\n\n");
+    let mut output = t!("commands.plugin.installed_title").to_string();
 
     let name_width = plugins
         .iter()
@@ -202,12 +190,14 @@ pub fn format_plugin_list(plugins: &[PluginDisplayInfo]) -> String {
 
 /// Format search results
 pub fn format_search_results(results: &[(String, String, String, u64)]) -> String {
+    use rust_i18n::t;
+
     // (name, description, author, downloads)
     if results.is_empty() {
-        return "No plugins found. Try a different search query.".to_string();
+        return t!("commands.plugin.none_found").to_string();
     }
 
-    let mut output = String::from("Search Results:\n\n");
+    let mut output = t!("commands.plugin.search_results_title").to_string();
 
     for (name, description, author, downloads) in results {
         output.push_str(&format!(
@@ -220,12 +210,14 @@ pub fn format_search_results(results: &[(String, String, String, u64)]) -> Strin
 
 /// Format ranked search results with scores
 pub fn format_ranked_search_results(results: &[(f64, String, String, String, u64)]) -> String {
+    use rust_i18n::t;
+
     // (score, name, description, author, downloads)
     if results.is_empty() {
-        return "No plugins found. Try a different search query.".to_string();
+        return t!("commands.plugin.none_found").to_string();
     }
 
-    let mut output = String::from("Search Results (ranked by relevance):\n\n");
+    let mut output = t!("commands.plugin.search_results_ranked_title").to_string();
 
     for (score, name, description, author, downloads) in results {
         output.push_str(&format!(

@@ -1,4 +1,5 @@
 use crate::{Result, widgets::ChatRole};
+use rust_i18n::t;
 
 use super::super::Repl;
 
@@ -967,21 +968,8 @@ pub(crate) fn handle_team(repl: &mut Repl, args: &str) -> Result<()> {
 
     match subcommand {
         "help" | "" => {
-            repl.chat.add_message(
-                ChatRole::System,
-                "\
-/team create <name> [description]  — Create a new agent team
-/team add <team> <agent-name>  — Add agent to team
-/team task <team> <subject>  — Add a task
-/team assign <team>  — Assign pending tasks to available agents
-/team status [team]  — Show team status
-/team list  — List all teams
-/team run  — Execute pending tasks in parallel
-/team shutdown  — Shutdown team
-/team disband <team>  — Disband team and clean up
-/team delegate  — Toggle delegate mode (lead only coordinates)"
-                    .to_string(),
-            );
+            repl.chat
+                .add_message(ChatRole::System, t!("commands.team.help").to_string());
         }
         "create" => {
             let name = parts.get(1).copied().unwrap_or("");
