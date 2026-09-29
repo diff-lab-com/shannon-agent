@@ -472,7 +472,6 @@ mod tests {
         });
 
         let req = crate::CreateMessageRequest {
-            thinking_type: None,
             messages: vec![crate::SamplingMessage {
                 role: SamplingMessageRole::User,
                 content: SamplingContent::Text {
@@ -501,7 +500,6 @@ mod tests {
             Arc::new(|_req| Box::pin(async { Err("LLM unavailable".to_string()) }));
 
         let req = crate::CreateMessageRequest {
-            thinking_type: None,
             messages: vec![],
             model_preferences: None,
             system_prompt: None,

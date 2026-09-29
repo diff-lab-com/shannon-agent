@@ -962,7 +962,6 @@ async fn test_set_sampling_provider() {
     // Call the provider to verify it works.
     let provider = guard.as_ref().unwrap();
     let req = crate::CreateMessageRequest {
-        thinking_type: None,
         messages: vec![crate::SamplingMessage {
             role: crate::SamplingMessageRole::User,
             content: crate::SamplingContent::Text {

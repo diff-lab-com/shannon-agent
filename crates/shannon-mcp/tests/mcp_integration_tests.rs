@@ -325,7 +325,6 @@ mod protocol_type_tests {
     #[test]
     fn test_create_message_request_roundtrip() {
         let req = CreateMessageRequest {
-            thinking_type: None,
             messages: vec![SamplingMessage {
                 role: SamplingMessageRole::User,
                 content: SamplingContent::Text {
