@@ -27,7 +27,7 @@ import { respondToApproval, type GatewayApprovalChoice } from "../engine/httpCli
 import { EngineWsClient, type EngineWsClientOptions } from "../engine/wsClient.js";
 import type { EngineEvent } from "../engine/runtime.js";
 import type { Logger } from "../adapters/types.js";
-import { approvalMessage } from "./crypto.js";
+import { approvalMessage, approvalMessageV2, approvalDecideTimestampWindowMs } from "./crypto.js";
 import {
   ShannonError,
   type AgentListResult,
@@ -272,18 +272,59 @@ export function createEngineHandlers(opts: EngineBridgeOptions): MethodHandlers 
           message: 'params.choice must be "allow" or "deny"',
         };
       }
-      // P1.2: every approval decision MUST be signed by the bound device over
-      // `${request_id}:${choice}`. Unsigned or invalid signatures are rejected
-      // before the engine is touched, so a stolen/ungated connection can't
-      // auto-approve a destructive tool. The wire is still untrusted (the
-      // params cast is unchecked), so the runtime check stays defensive even
-      // though `ApprovalDecideParams.signature` is now a required field.
+      // P1.2: every approval decision MUST be signed by the bound device.
+      // Unsigned or invalid signatures are rejected before the engine is
+      // touched, so a stolen/ungated connection can't auto-approve a
+      // destructive tool. The wire is still untrusted (the params cast is
+      // unchecked), so the runtime check stays defensive even though
+      // `ApprovalDecideParams.signature` is now a required field.
+      //
+      // v1/v2 dispatch (docs/approval-decide-signing.md §2/§6): the signed
+      // message bytes ARE the version. A request WITHOUT `timestamp` verifies
+      // exactly as the pre-v2 v1 shape (`${request_id}:${choice}`); a request
+      // WITH `timestamp` must be integer epoch ms within ±
+      // approvalDecideTimestampWindowMs and verifies ONLY the v2 shape. There
+      // is deliberately NO v1 fallback for timestamped requests — a failed v2
+      // verification that fell back to v1 would let an attacker strip the
+      // freshness binding and make the replay window bypassable.
       if (requireSession) {
         const sig = typeof params.signature === "string" ? params.signature : "";
         const deviceId = ctx.sessionId as string;
-        const ok =
-          sig.length > 0 &&
-          (opts.verifyDeviceSignature?.(deviceId, approvalMessage(params.request_id, params.choice), sig) ?? false);
+        let ok = false;
+        if (sig.length > 0 && params.timestamp === undefined) {
+          // v1 (legacy, no freshness binding) — byte-for-byte the pre-v2 path.
+          ok =
+            opts.verifyDeviceSignature?.(deviceId, approvalMessage(params.request_id, params.choice), sig) ?? false;
+        } else if (sig.length > 0) {
+          // typeof doubles as the TS narrowing guard; Number.isInteger then
+          // rejects NaN, ±Infinity and fractions at runtime.
+          const ts = params.timestamp;
+          if (typeof ts !== "number" || !Number.isInteger(ts)) {
+            return {
+              kind: "error",
+              code: ShannonError.BAD_PARAMS,
+              message: "params.timestamp must be an integer epoch-ms value",
+              data: { timestamp: ts },
+            };
+          }
+          if (Math.abs(Date.now() - ts) > approvalDecideTimestampWindowMs) {
+            return {
+              kind: "error",
+              code: ShannonError.BAD_PARAMS,
+              message: "timestamp outside approval decide window",
+              data: {
+                timestamp: ts,
+                windowMs: approvalDecideTimestampWindowMs,
+              },
+            };
+          }
+          ok =
+            opts.verifyDeviceSignature?.(
+              deviceId,
+              approvalMessageV2(params.request_id, params.choice, ts),
+              sig,
+            ) ?? false;
+        }
         if (!ok) {
           return {
             kind: "error",

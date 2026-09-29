@@ -102,14 +102,21 @@ export interface ApprovalDecideParams {
   /** `"allow" | "deny"` (maps to the engine `approval/respond` choice). */
   choice: "allow" | "deny";
   /**
-   * Ed25519 signature over `${request_id}:${choice}` (see `approvalMessage`).
-   * Required at runtime whenever the gateway runs with `requireSession` on
-   * (the live pairing-gated mode, WP-15 P2-7); the type is required to match
-   * that contract instead of hinting that unsigned decisions are acceptable.
-   * Open-mode dev gateways (`requireSession: false`) tolerate absence and
-   * only log a warning.
+   * Ed25519 signature over the decision message — v2 also binds `timestamp`
+   * (see below). Required at runtime whenever the gateway runs with
+   * `requireSession` on (the live pairing-gated mode, WP-15 P2-7); the type is
+   * required to match that contract instead of hinting that unsigned decisions
+   * are acceptable. Open-mode dev gateways (`requireSession: false`) tolerate
+   * absence and only log a warning.
    */
   signature: string;
+  /**
+   * v2 anti-replay (docs/approval-decide-signing.md): epoch-ms timestamp bound
+   * into the signed message (`approvalMessageV2`). Its presence switches the
+   * gateway to v2-only verification within ±approvalDecideTimestampWindowMs;
+   * absent means the legacy v1 shape, verified exactly as before.
+   */
+  timestamp?: number;
   note?: string | null;
 }
 
