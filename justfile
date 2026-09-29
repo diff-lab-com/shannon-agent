@@ -49,6 +49,27 @@ gen-protocol:
     cargo run -p shannon-api-protocol --bin gen-ts
     cd gateway && pnpm typecheck
 
+# ---------- Check ----------
+
+# Fast type-check. On Linux hosts whose system libspa/pipewire headers are too
+# old for libspa-sys (e.g. Ubuntu 22.04 / pipewire 0.3.48), the xcap → pipewire
+# → libspa chain fails inside dependency source — an environment mismatch, not
+# a repo bug. Retries without shannon-desktop's `preview-capture` feature.
+# Docs: CONTRIBUTING.md → "Desktop build on Linux (libspa/pipewire)".
+check:
+    #!/usr/bin/env bash
+    set -uo pipefail
+    if out="$(cargo check --workspace 2>&1)"; then
+        exit 0
+    fi
+    if echo "$out" | grep -qE 'in crate .spa_sys.|registry/src/[^[:space:]]*/libspa-[0-9]'; then
+        echo "⚠ libspa/pipewire header skew — retrying without shannon-desktop's preview-capture (see CONTRIBUTING.md → 'Desktop build on Linux (libspa/pipewire)')"
+        cargo check --workspace --exclude shannon-desktop || exit 1
+        exec cargo check -p shannon-desktop --no-default-features --features tauri
+    fi
+    printf '%s\n' "$out"
+    exit 1
+
 # ---------- Lint / fmt ----------
 
 fmt:
