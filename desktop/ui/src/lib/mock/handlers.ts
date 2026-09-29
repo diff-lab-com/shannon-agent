@@ -8,7 +8,7 @@ import { MOCK_INBOX_ITEMS, MOCK_OPC_METRICS, MOCK_PERF_TRACES, MOCK_DIAGNOSTICS,
   MOCK_CODE_ACTIONS, MOCK_GOALS } from './data/analytics'
 import { MOCK_CONFIG, MOCK_MODELS, MOCK_STATUS, MOCK_TOOLS, MOCK_PROVIDERS } from './data/config'
 import type { InboxItem, ProviderInput, SessionInfo, TerminalInfo } from '@/types'
-import { MOCK_TERMINAL_OUTPUT_EVENT } from '../runtime/terminalEvents'
+import { MOCK_TERMINAL_OUTPUT_EVENT, MOCK_TERMINAL_EXIT_EVENT } from '../runtime/terminalEvents'
 import { MOCK_MEMORIES, MOCK_MEMORY_PROJECTS, MOCK_MEMORY_STATS, MOCK_FEATURED_VENDORS } from './data/memory'
 import type { MemoryGraph } from '@/lib/tauri-api'
 import {
@@ -65,8 +65,9 @@ const PREVIEW_PNG = 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mN
 
 // P1-5 D: demo PTY sessions + a tiny simulated shell. Output rides the same
 // shape as the real `terminal:output` event (base64 data) re-dispatched as a
-// window CustomEvent — `runtime/terminalEvents.listenTerminalOutput` is the
-// single subscriber that knows about this transport.
+// window CustomEvent, and process exit re-dispatches `terminal:exit`
+// (`{ terminalId }`) — `runtime/terminalEvents.listenTerminalOutput` /
+// `.listenTerminalExit` are the subscribers that know about this transport.
 const demoTerminals = new Map<string, TerminalInfo & { buffer: string }>()
 let nextTerminalSeq = 1
 
@@ -144,7 +145,17 @@ function demoShellRun(terminalId: string, input: string) {
       out = `sh: command not found: ${line.split(/\s+/)[0]}\r\n$ `
     }
     demoTerminalEmit(terminalId, out)
-    if (out.includes('process exited')) demoTerminals.delete(terminalId)
+    if (out.includes('process exited')) {
+      demoTerminals.delete(terminalId)
+      // P3-6: the printed notice is for humans only — the tab is ended by
+      // the dedicated `terminal:exit` event, exactly like the real backend.
+      // Fired after the output emit so the exit text renders first.
+      setTimeout(() => {
+        window.dispatchEvent(new CustomEvent(MOCK_TERMINAL_EXIT_EVENT, {
+          detail: { terminalId },
+        }))
+      }, 120 + Math.random() * 60)
+    }
   }
 }
 
