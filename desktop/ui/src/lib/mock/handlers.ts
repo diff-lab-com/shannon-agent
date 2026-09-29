@@ -329,6 +329,31 @@ export const handlers: Record<string, MockHandler> = {
     await delay(400)
     return { kind: 'success' }
   },
+  // 2026-09-29 provider review: the provider-status snapshot gates fire from
+  // globally-mounted components (Layout welcome gate, ApiKeyBanner,
+  // WelcomeState CTA) on every route — without a handler demo mode's
+  // unconfigured signal bounces fresh contexts to /welcome (e2e app.smoke
+  // regression). Mirror the demo roster's active provider.
+  async get_provider_status() {
+    await delay()
+    const active = MOCK_PROVIDERS.providers.find(p => p.id === MOCK_PROVIDERS.active_provider_id)
+    return {
+      active_provider_id: MOCK_PROVIDERS.active_provider_id,
+      display_name: active ? active.display_name : null,
+      kind: active ? active.kind : null,
+      has_api_key: active ? active.has_api_key : false,
+      model: MOCK_CONFIG.model ?? null,
+      env_provider: null,
+    }
+  },
+  async fetch_provider_models() {
+    await delay(200)
+    return ['claude-sonnet-4-6', 'claude-haiku-4-5']
+  },
+  async test_provider_credentials() {
+    await delay(200)
+    return { kind: 'success' }
+  },
   async list_providers() { await delay(); return providersFile() },
   async save_provider(args: { input: ProviderInput }) {
     await delay(120)
