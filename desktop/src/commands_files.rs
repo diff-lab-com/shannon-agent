@@ -299,7 +299,7 @@ pub(crate) async fn save_text_file_inner(
 /// (`commands_surface::canonicalized_in_scope`): the source must exist and
 /// canonicalize inside `$HOME/**` or `$TEMP/**` (rejecting `..` traversal
 /// and symlink escapes); the destination must land in the same bases, but
-/// may not exist yet — see [`destination_in_scope`]. Overwriting an
+/// may not exist yet — see the private `destination_in_scope` helper. Overwriting an
 /// existing destination is allowed; copying onto the source is not.
 #[tauri::command]
 pub async fn copy_file(src_path: String, dest_path: String) -> Result<(), String> {
