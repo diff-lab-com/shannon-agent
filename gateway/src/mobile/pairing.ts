@@ -194,6 +194,37 @@ export class PairTokenStore {
     return null;
   }
 
+  /**
+   * Freshest live (unexpired) token without consuming it — a peek, unlike
+   * `consume`. Serves the v0.13 direct-link pairing flavor: the sealed
+   * handshake needs the token the phone scanned while `shannon/pair` (later,
+   * on the sealed channel) is what actually consumes it single-use.
+   */
+  latest(): PairTokenRecord | null {
+    const now = this.now();
+    let best: PairTokenRecord | null = null;
+    const consider = (rec: PairTokenRecord | null): void => {
+      if (!rec || now >= rec.expiresAt) return;
+      if (!best || rec.issuedAt > best.issuedAt) best = rec;
+    };
+    if (!this.filePath) {
+      for (const rec of this.pending.values()) consider(rec);
+    } else {
+      let raw: string;
+      try {
+        raw = readFileSync(this.filePath, "utf8");
+      } catch {
+        return null; // no file yet → no tokens
+      }
+      for (const line of raw.split("\n")) {
+        const trimmed = line.trim();
+        if (trimmed.length === 0) continue;
+        consider(parseTokenRecord(trimmed));
+      }
+    }
+    return best;
+  }
+
   private consumeFromFile(token: string): PairTokenRecord | null {
     let raw: string;
     try {

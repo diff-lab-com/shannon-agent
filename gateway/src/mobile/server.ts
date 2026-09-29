@@ -7,6 +7,7 @@ import type { Logger } from "../adapters/types.js";
 import type { ShannonEvent } from "./protocol.js";
 import { dispatchNdjson } from "./dispatch.js";
 import { MOBILE_PAGE_HTML } from "./web/page.js";
+import { DirectLink, type DirectE2EOptions } from "./directE2E.js";
 
 /**
  * The inbound mobile server — a WebSocket endpoint speaking NDJSON `shannon/*`
@@ -111,6 +112,15 @@ export interface MobileServerOptions {
     path: string,
     rawBody: string,
   ) => Promise<{ status: number; body: string } | null>;
+  /**
+   * v0.13 negotiated direct-link E2E seal (cross-repo-adaptation-spec §I).
+   * When set, each connection's first binary frame may be the phone's
+   * `e2e_direct_hello`; an accepted hello seals both directions (C6 frames,
+   * per-connection counters) behind the host's static X25519 key. Absent —
+   * or a hello that cannot be honored — keeps the exact legacy plaintext
+   * behavior, so old phones are unaffected.
+   */
+  directE2E?: DirectE2EOptions;
 }
 
 export interface MobileServerHandle {
@@ -245,14 +255,34 @@ export class MobileServer {
         return;
       }
     }
-    const ctx: MethodContext = { socket, sessionId: null, logger: this.opts.logger };
+    // v0.13 direct seal: when configured, the link owns the inbound frame
+    // routing (first-frame negotiation) and every outbound send routes
+    // through it via the proxy socket (queued until the first frame decides,
+    // sealed once negotiated). The phone-facing surface is otherwise identical.
+    const link = this.opts.directE2E
+      ? new DirectLink(this.opts.directE2E, socket, this.opts.logger)
+      : null;
+    const ctx: MethodContext = {
+      socket: (link?.socket ?? socket) as WebSocket,
+      sessionId: null,
+      logger: this.opts.logger,
+    };
     const detach = this.opts.onContext?.(ctx);
     if (typeof detach === "function") this.detachers.push(detach);
+    // §I6.2: a pairing-flavor link publishes kid→K0 once shannon/pair binds
+    // this connection (after onContext so the hub's binder stays ahead).
+    link?.armPublishOnBind(ctx);
 
-    socket.on("message", (data) => {
-      const text = frameToString(data);
-      void this.onMessage(text, ctx);
-    });
+    if (link) {
+      link.listen((text) => {
+        void this.onMessage(text, ctx);
+      });
+    } else {
+      socket.on("message", (data) => {
+        const text = frameToString(data);
+        void this.onMessage(text, ctx);
+      });
+    }
     socket.on("error", (err) =>
       this.opts.logger.warn(`mobile socket error: ${(err as Error).message}`),
     );

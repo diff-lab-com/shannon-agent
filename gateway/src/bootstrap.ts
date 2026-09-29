@@ -17,6 +17,7 @@ import { createConsoleLogger } from "./logger.js";
 import { GATEWAY_VERSION } from "./version.js";
 import { MobileServer } from "./mobile/server.js";
 import { ensureTlsMaterial } from "./mobile/mobileTls.js";
+import { directE2EPaths, ensureDirectE2EKey } from "./mobile/directE2E.js";
 import { advertiseMobileServer, type MdnsHandle } from "./mobile/mdns.js";
 import {
   createMobileHandlers,
@@ -77,6 +78,12 @@ export interface BootstrapOptions {
    */
   mobileEngineClientFactory?: MobileEngineClientFactory;
   mobileFetchImpl?: typeof fetch;
+  /**
+   * Override the directory holding the direct-link E2E identity (default
+   * `~/.shannon/mobile-direct-e2e/`). Tests inject a tmpdir so a test boot
+   * never writes to the real HOME.
+   */
+  mobileDirectE2EDir?: string;
   /**
    * Access-control seam (review §P0-7). Production defaults to an
    * `AllowlistGuard` over a persisted allowlist — any IM sender that has not
@@ -379,6 +386,16 @@ async function startMobileServer(
     registry,
     logger,
   });
+  // v0.13 direct-link E2E seal (cross-repo-adaptation-spec §I): the host's
+  // static X25519 identity, generated once and persisted (~/.shannon/
+  // mobile-direct-e2e/, 0600; the pub also lands in direct-e2e-info.json for
+  // the desktop's direct-QR composer). Phones that scanned a direct QR offer
+  // the sealed handshake; everyone else sees unchanged plaintext behavior.
+  const directE2EKey = ensureDirectE2EKey(
+    opts.mobileDirectE2EDir ? directE2EPaths(opts.mobileDirectE2EDir) : undefined,
+  );
+  const directLinkKeys = new Map<string, Buffer>(); // kid → K0, filled on sealed pairs
+
   const handlers = createMobileHandlers({
     engine: {
       engineWsUrl: config.engine.wsUrl,
@@ -411,9 +428,20 @@ async function startMobileServer(
     handlers,
     httpApi: pairingAccess.http,
     onContext: (ctx) => dispatchHub.registerConnection(ctx),
+    directE2E: {
+      privateKey: directE2EKey.privateKey,
+      // The pairing flavor mixes the token the phone scanned; it is consumed
+      // later by shannon/pair on the sealed channel, so this is a peek.
+      livePairToken: () => tokens.latest()?.token ?? null,
+      linkKeys: directLinkKeys,
+    },
     ...(tlsMaterial ? { tls: { key: tlsMaterial.key, cert: tlsMaterial.cert } } : {}),
   });
   const handle = await server.start();
+  logger.info(
+    `direct-link E2E seal ready — hostE2EPubKey ${directE2EKey.pubB64} ` +
+      `(direct QR field / resume rekeys enabled)`,
+  );
 
   // §A8/§A8b (cross-repo-adaptation-spec): advertise _shannon._tcp while the
   // pairing server is up. iOS ATS rejects raw-IP ws:// endpoints outright, so

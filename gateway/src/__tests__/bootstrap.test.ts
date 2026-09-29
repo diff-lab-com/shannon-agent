@@ -269,6 +269,7 @@ describe("bootstrap", () => {
       factories: new Map(),
       logger: noopLogger,
       mobileFetchImpl: fetchMock as unknown as typeof fetch,
+      mobileDirectE2EDir: join(dir, "direct-e2e"),
     });
 
     const port = handle.mobilePort;
