@@ -490,17 +490,14 @@ pub fn handle_command(repl: &mut Repl, input: &str) -> Result<()> {
             "browse" | "files" => media::handle_browse(repl, args)?,
             "notools" => {
                 repl.state.tools_enabled = false;
-                repl.chat.add_message(
-                    ChatRole::System,
-                    "Tools disabled — model will respond as plain text. Use /tools to re-enable."
-                        .to_string(),
-                );
+                repl.chat
+                    .add_message(ChatRole::System, t!("repl.tools_disabled").to_string());
             }
             "select-tools" | "tools" => {
                 if !repl.state.tools_enabled {
                     repl.state.tools_enabled = true;
                     repl.chat
-                        .add_message(ChatRole::System, "Tools re-enabled.".to_string());
+                        .add_message(ChatRole::System, t!("repl.tools_enabled").to_string());
                 } else {
                     debug::handle_select_tools(repl)?;
                 }

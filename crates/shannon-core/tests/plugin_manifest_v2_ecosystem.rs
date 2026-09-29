@@ -9,7 +9,7 @@
 //!
 //! Clone-based installs are exercised through the same `install_from_path`
 //! entry point the git flow funnels into after cloning (`copy_dir_contents`
-//! + identical validation), so local-path fixtures are behaviorally
+//! plus identical validation), so local-path fixtures are behaviorally
 //! equivalent to `clone → install`.
 
 use shannon_core::plugin::{

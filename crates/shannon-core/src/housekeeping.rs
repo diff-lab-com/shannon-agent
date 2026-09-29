@@ -1662,7 +1662,7 @@ mod tests {
         SessionUsage {
             session_id: id.to_string(),
             dir: PathBuf::from(format!("/nonexistent/{id}")),
-            size_bytes: size_bytes,
+            size_bytes,
             last_modified: SystemTime::UNIX_EPOCH + Duration::from_secs(last_modified_secs),
         }
     }
@@ -1689,7 +1689,7 @@ mod tests {
         // eligible; deleting the oldest (3 GiB) alone restores the budget,
         // so the mid one must survive.
         let usage = vec![
-            fixture_usage("recent", 1 * GIB, days_before_now(1)),
+            fixture_usage("recent", GIB, days_before_now(1)),
             fixture_usage("mid", 2 * GIB, days_before_now(35)),
             fixture_usage("oldest", 3 * GIB, days_before_now(40)),
         ];
@@ -1732,7 +1732,7 @@ mod tests {
         let usage = vec![
             fixture_usage("yesterday", 3 * GIB, days_before_now(1)),
             fixture_usage("week-ago", 3 * GIB, days_before_now(7)),
-            fixture_usage("edge", 1 * GIB, days_before_now(29)),
+            fixture_usage("edge", GIB, days_before_now(29)),
         ];
         // 7 GiB over a 4 GiB budget, but every session is inside the 30-day
         // window — the conservative rule keeps all of them.
@@ -1838,7 +1838,7 @@ mod tests {
         let a = uuid::Uuid::new_v4();
         let b = uuid::Uuid::new_v4();
         seed_real_session(&container, &a, 6 * MIB, 2 * 24 * 3600);
-        seed_real_session(&container, &b, 6 * MIB, 1 * 24 * 3600);
+        seed_real_session(&container, &b, 6 * MIB, 24 * 3600);
 
         // Budget 4 MiB, retention 30 days: over budget but everything is
         // recent — the conservative rule deletes nothing.

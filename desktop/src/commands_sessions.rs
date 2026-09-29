@@ -1970,10 +1970,11 @@ mod archive_tests {
     }
 
     fn gc_config(enabled: bool, retention: Option<u32>) -> config::DesktopConfig {
-        let mut cfg = config::DesktopConfig::default();
-        cfg.session_gc_enabled = enabled;
-        cfg.session_retention_days = retention;
-        cfg
+        config::DesktopConfig {
+            session_gc_enabled: enabled,
+            session_retention_days: retention,
+            ..config::DesktopConfig::default()
+        }
     }
 
     #[test]

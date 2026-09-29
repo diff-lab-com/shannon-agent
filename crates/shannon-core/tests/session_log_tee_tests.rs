@@ -15,6 +15,10 @@
 //!    reconstruction byte for byte.
 
 #![allow(clippy::unwrap_used)]
+// Every test below holds `global_state_lock()` across awaits: the guarded
+// `SHANNON_HOME` is read mid-run by the engine, and the lock is uncontended
+// per-process (nextest: one process per test), so it cannot deadlock.
+#![allow(clippy::await_holding_lock)]
 
 mod session_log_tee {
     use async_trait::async_trait;

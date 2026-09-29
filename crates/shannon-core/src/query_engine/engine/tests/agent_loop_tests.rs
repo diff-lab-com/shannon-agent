@@ -1,3 +1,11 @@
+// Every test in this module serializes a process global (TURN_RETRIES_ENV_LOCK /
+// MALFORMED_STREAK_ENV_LOCK for env::set_var, secret_guard::test_support::acquire
+// for the global context transform) and the guarded global is read by the engine
+// *during* the awaited run, so the guard must be held across the await points.
+// Test-only and uncontended per-process (nextest: one process per test; libtest:
+// one runtime per thread), so holding it across .await cannot deadlock.
+#![allow(clippy::await_holding_lock)]
+
 use super::*;
 
 #[tokio::test]

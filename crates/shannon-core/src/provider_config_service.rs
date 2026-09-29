@@ -591,8 +591,10 @@ mod tests {
         let (mut svc, _dir) = service();
         let _ = svc
             .connect(LlmProvider::Anthropic, None, None, true)
-            .unwrap();
-        let _ = svc.connect(LlmProvider::OpenAI, None, None, true).unwrap();
+            .expect("connect must succeed");
+        let _ = svc
+            .connect(LlmProvider::OpenAI, None, None, true)
+            .expect("connect must succeed");
         let connected = svc.connected_slugs();
         assert!(
             connected.contains("anthropic"),
@@ -607,10 +609,14 @@ mod tests {
         let (mut svc, _dir) = service();
         let _ = svc
             .connect(LlmProvider::Anthropic, None, None, true)
-            .unwrap();
-        let _ = svc.connect(LlmProvider::OpenAI, None, None, true).unwrap();
+            .expect("connect must succeed");
+        let _ = svc
+            .connect(LlmProvider::OpenAI, None, None, true)
+            .expect("connect must succeed");
 
-        let outcome = svc.disconnect(&LlmProvider::OpenAI).unwrap();
+        let outcome = svc
+            .disconnect(&LlmProvider::OpenAI)
+            .expect("connect must succeed");
         assert!(outcome.was_connected);
         let connected = svc.connected_slugs();
         assert!(connected.contains("anthropic"));
@@ -623,10 +629,14 @@ mod tests {
         let (mut svc, _dir) = service();
         let _ = svc
             .connect(LlmProvider::Anthropic, None, None, true)
-            .unwrap();
-        let _ = svc.connect(LlmProvider::OpenAI, None, None, true).unwrap();
+            .expect("connect must succeed");
+        let _ = svc
+            .connect(LlmProvider::OpenAI, None, None, true)
+            .expect("connect must succeed");
 
-        let outcome = svc.disconnect(&LlmProvider::OpenAI).unwrap();
+        let outcome = svc
+            .disconnect(&LlmProvider::OpenAI)
+            .expect("connect must succeed");
         // OpenAI was made active by the second connect; a remaining slug is offered.
         assert_eq!(outcome.next_active.as_deref(), Some("anthropic"));
     }
@@ -637,26 +647,28 @@ mod tests {
         let (mut svc, _dir) = service();
         let _ = svc
             .connect(LlmProvider::Anthropic, None, None, true)
-            .unwrap();
+            .expect("connect must succeed");
         let anthropic_active = svc
             .store
             .config()
             .profiles
             .get("default")
-            .unwrap()
+            .expect("connect must succeed")
             .active_target
             .provider_id
             .clone();
         assert_eq!(anthropic_active, "anthropic");
 
         // Add OpenAI without making it active.
-        let _ = svc.connect(LlmProvider::OpenAI, None, None, false).unwrap();
+        let _ = svc
+            .connect(LlmProvider::OpenAI, None, None, false)
+            .expect("connect must succeed");
         let still_active = svc
             .store
             .config()
             .profiles
             .get("default")
-            .unwrap()
+            .expect("connect must succeed")
             .active_target
             .provider_id
             .clone();
@@ -671,7 +683,9 @@ mod tests {
     #[test]
     fn disconnect_unknown_provider_is_idempotent_noop() {
         let (mut svc, _dir) = service();
-        let outcome = svc.disconnect(&LlmProvider::OpenAI).unwrap();
+        let outcome = svc
+            .disconnect(&LlmProvider::OpenAI)
+            .expect("disconnect must succeed");
         assert!(!outcome.was_connected);
         assert!(!outcome.was_active);
         assert!(outcome.next_active.is_none());
@@ -687,7 +701,7 @@ mod tests {
         let (mut svc, _dir) = service();
         let _ = svc
             .connect(LlmProvider::Anthropic, None, None, true)
-            .unwrap();
+            .expect("connect must succeed");
         let custom = ProviderProfile {
             id: "my-gateway".into(),
             kind: shannon_types::provider_config::ProviderKind::OpenAiCompatible,
@@ -703,10 +717,13 @@ mod tests {
             quirks: Default::default(),
             tiers: ProviderTiers::default(),
         };
-        svc.upsert(custom, "gpt-4o", true).unwrap();
+        svc.upsert(custom, "gpt-4o", true)
+            .expect("upsert must succeed");
         // `my-gateway` became active (make_active=true); disconnecting it by
         // raw slug must report was_active and offer anthropic as next.
-        let outcome = svc.disconnect_by_slug("my-gateway").unwrap();
+        let outcome = svc
+            .disconnect_by_slug("my-gateway")
+            .expect("disconnect must succeed");
         assert!(outcome.was_connected, "custom slug must match");
         assert!(outcome.was_active, "custom slug was the active target");
         assert_eq!(outcome.next_active.as_deref(), Some("anthropic"));
@@ -724,13 +741,17 @@ mod tests {
         for svc in [&mut svc_a, &mut svc_b] {
             let _ = svc
                 .connect(LlmProvider::Anthropic, None, None, true)
-                .unwrap();
-            let _ = svc.connect(LlmProvider::OpenAI, None, None, true).unwrap();
+                .expect("connect must succeed");
+            let _ = svc
+                .connect(LlmProvider::OpenAI, None, None, true)
+                .expect("connect must succeed");
         }
-        let by_provider = svc_a.disconnect(&LlmProvider::OpenAI).unwrap();
+        let by_provider = svc_a
+            .disconnect(&LlmProvider::OpenAI)
+            .expect("connect must succeed");
         let by_slug = svc_b
             .disconnect_by_slug(&llm_provider_id(&LlmProvider::OpenAI))
-            .unwrap();
+            .expect("connect must succeed");
         assert_eq!(by_provider.was_connected, by_slug.was_connected);
         assert_eq!(by_provider.was_active, by_slug.was_active);
         assert_eq!(by_provider.next_active, by_slug.next_active);
@@ -739,7 +760,9 @@ mod tests {
     #[test]
     fn disconnect_by_slug_unknown_is_idempotent_noop() {
         let (mut svc, _dir) = service();
-        let outcome = svc.disconnect_by_slug("does-not-exist").unwrap();
+        let outcome = svc
+            .disconnect_by_slug("does-not-exist")
+            .expect("disconnect must succeed");
         assert!(!outcome.was_connected);
         assert!(!outcome.was_active);
         assert!(outcome.next_active.is_none());
@@ -753,10 +776,14 @@ mod tests {
         let (mut svc, _dir) = service();
         let _ = svc
             .connect(LlmProvider::Anthropic, None, None, true)
-            .unwrap();
-        let _ = svc.connect(LlmProvider::OpenAI, None, None, true).unwrap();
+            .expect("connect must succeed");
+        let _ = svc
+            .connect(LlmProvider::OpenAI, None, None, true)
+            .expect("connect must succeed");
         // Anthropic is NOT active (OpenAI took active). Removing anthropic:
-        let outcome = svc.disconnect(&LlmProvider::Anthropic).unwrap();
+        let outcome = svc
+            .disconnect(&LlmProvider::Anthropic)
+            .expect("connect must succeed");
         assert!(outcome.was_connected);
         assert!(!outcome.was_active, "anthropic was not the active target");
         assert!(outcome.next_active.is_none(), "active target untouched");
@@ -770,7 +797,7 @@ mod tests {
         let path = dir.path().join("providers.toml");
         let _ = svc
             .connect(LlmProvider::Anthropic, None, None, true)
-            .unwrap();
+            .expect("connect must succeed");
         drop(svc);
 
         let reloaded = ProviderConfigService::load_at(&path);
@@ -787,14 +814,14 @@ mod tests {
                 None,
                 true,
             )
-            .unwrap();
+            .expect("connect must succeed");
         assert_eq!(connected.model_id, "claude-sonnet-4-6");
         let active = &svc
             .store
             .config()
             .profiles
             .get("default")
-            .unwrap()
+            .expect("default profile exists")
             .active_target;
         assert_eq!(active.provider_id, "anthropic");
         assert_eq!(active.model_id, "claude-sonnet-4-6");
@@ -810,7 +837,7 @@ mod tests {
         let (mut svc, _dir) = service();
         let _ = svc
             .connect(LlmProvider::Anthropic, None, None, true)
-            .unwrap();
+            .expect("connect must succeed");
 
         let custom = ProviderProfile {
             id: "my-gateway".into(),
@@ -827,7 +854,8 @@ mod tests {
             quirks: Default::default(),
             tiers: ProviderTiers::default(),
         };
-        svc.upsert(custom, "gpt-4o", true).unwrap();
+        svc.upsert(custom, "gpt-4o", true)
+            .expect("upsert must succeed");
 
         let connected = svc.connected_slugs();
         assert!(connected.contains("anthropic"), "anthropic must survive");
@@ -839,7 +867,7 @@ mod tests {
             .config()
             .profiles
             .get("default")
-            .unwrap()
+            .expect("upsert must succeed")
             .active_target;
         assert_eq!(active.provider_id, "my-gateway");
         assert_eq!(active.model_id, "gpt-4o");
@@ -858,7 +886,7 @@ mod tests {
                 None,
                 true,
             )
-            .unwrap();
+            .expect("connect must succeed");
 
         let custom = ProviderProfile {
             id: "openai".into(),
@@ -875,7 +903,8 @@ mod tests {
             quirks: Default::default(),
             tiers: ProviderTiers::default(),
         };
-        svc.upsert(custom, "gpt-4o", false).unwrap();
+        svc.upsert(custom, "gpt-4o", false)
+            .expect("upsert must succeed");
 
         assert!(svc.connected_slugs().contains("openai"));
         let active = &svc
@@ -883,7 +912,7 @@ mod tests {
             .config()
             .profiles
             .get("default")
-            .unwrap()
+            .expect("upsert must succeed")
             .active_target;
         assert_eq!(
             active.provider_id, "anthropic",
@@ -914,7 +943,7 @@ mod tests {
         let (mut svc, _dir) = service();
         let connected = svc
             .connect(LlmProvider::Anthropic, None, None, true)
-            .unwrap();
+            .expect("connect must succeed");
         assert_eq!(connected.provider, LlmProvider::Anthropic);
         assert_eq!(connected.service, "anthropic");
         // No model requested → the provider's first catalog model.
@@ -935,7 +964,7 @@ mod tests {
             .config()
             .profiles
             .get("default")
-            .unwrap()
+            .expect("default profile exists")
             .active_target;
         assert_eq!(active.provider_id, "anthropic");
         assert_eq!(active.model_id, connected.model_id);
@@ -946,7 +975,7 @@ mod tests {
         let (mut svc, _dir) = service();
         let connected = svc
             .connect(LlmProvider::OpenAI, Some("gpt-4o"), None, true)
-            .unwrap();
+            .expect("connect must succeed");
         assert_eq!(connected.provider, LlmProvider::OpenAI);
         assert_eq!(connected.service, "openai");
         assert_eq!(connected.model_id, "gpt-4o");
@@ -961,7 +990,7 @@ mod tests {
             Some("https://proxy.example.com"),
             true,
         )
-        .unwrap();
+        .expect("connect must succeed");
         assert_eq!(
             profile_for(&svc, "anthropic").base_url,
             "https://proxy.example.com"
@@ -975,7 +1004,7 @@ mod tests {
         let (mut svc, _dir) = service();
         let connected = svc
             .connect(LlmProvider::Ollama, Some("llama3"), None, true)
-            .unwrap();
+            .expect("connect must succeed");
         assert_eq!(connected.service, "ollama");
         assert_eq!(connected.model_id, "llama3");
         let p = profile_for(&svc, "ollama");
@@ -1011,7 +1040,8 @@ mod tests {
                 .path()
                 .join(format!("{}.toml", llm_provider_id(&provider)));
             let mut svc = ProviderConfigService::load_at(&path);
-            svc.connect(provider.clone(), None, None, true).unwrap();
+            svc.connect(provider.clone(), None, None, true)
+                .expect("connect must succeed");
             drop(svc);
             let matches = scanner
                 .scan_file(&path)
@@ -1158,7 +1188,9 @@ service = "glm-plan"
             result.is_err(),
             "connect must refuse to rewrite an unparseable providers.toml"
         );
-        let err = result.unwrap_err().to_string();
+        let err = result
+            .expect_err("connect must have been refused")
+            .to_string();
         assert!(
             err.contains("refusing to overwrite") && err.contains("env_key"),
             "error must name the guard and the offending field; got: {err}"
@@ -1205,18 +1237,21 @@ service = "glm-plan"
             let mut locked = svc.lock().expect("lock");
             locked
                 .connect(LlmProvider::Anthropic, None, None, true)
-                .unwrap();
+                .expect("connect must succeed");
             locked
                 .connect(LlmProvider::OpenAI, None, None, true)
-                .unwrap();
+                .expect("connect must succeed");
         }
         {
             let mut locked = svc.lock().expect("lock again");
-            let outcome = locked.disconnect(&LlmProvider::OpenAI).unwrap();
+            let outcome = locked
+                .disconnect(&LlmProvider::OpenAI)
+                .expect("connect must succeed");
             assert!(outcome.was_connected);
         }
         // Now drop locked; reopen to verify shape.
-        let on_disk = std::fs::read_to_string(_dir.path().join("providers.toml")).unwrap();
+        let on_disk = std::fs::read_to_string(_dir.path().join("providers.toml"))
+            .expect("connect must succeed");
         assert!(
             on_disk.contains("anthropic"),
             "anthropic survives: {on_disk}"
@@ -1263,7 +1298,7 @@ service = "glm-plan"
         let (mut svc, dir) = service();
         // Seed one provider so subsequent calls have something to do.
         svc.connect(LlmProvider::Anthropic, None, None, true)
-            .unwrap();
+            .expect("connect must succeed");
 
         let svc = Arc::new(Mutex::new(svc));
         let dir_path = dir.path().join("providers.toml");

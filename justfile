@@ -49,18 +49,38 @@ gen-protocol:
     cargo run -p shannon-api-protocol --bin gen-ts
     cd gateway && pnpm typecheck
 
+# ---------- Check ----------
+
+# Fast type-check. On Linux hosts whose system libspa/pipewire headers are too
+# old for libspa-sys (e.g. Ubuntu 22.04 / pipewire 0.3.48), the xcap → pipewire
+# → libspa chain fails inside dependency source — an environment mismatch, not
+# a repo bug. Retries without shannon-desktop's `preview-capture` feature.
+# Docs: CONTRIBUTING.md → "Desktop build on Linux (libspa/pipewire)".
+check:
+    #!/usr/bin/env bash
+    set -uo pipefail
+    if out="$(cargo check --workspace 2>&1)"; then
+        exit 0
+    fi
+    if echo "$out" | grep -qE 'in crate .spa_sys.|registry/src/[^[:space:]]*/libspa-[0-9]'; then
+        echo "⚠ libspa/pipewire header skew — retrying without shannon-desktop's preview-capture (see CONTRIBUTING.md → 'Desktop build on Linux (libspa/pipewire)')"
+        cargo check --workspace --exclude shannon-desktop || exit 1
+        exec cargo check -p shannon-desktop --no-default-features --features tauri
+    fi
+    printf '%s\n' "$out"
+    exit 1
+
 # ---------- Lint / fmt ----------
 
 fmt:
     cargo fmt --all
 
-# Note: clippy runs against the workspace library + bin targets only (matches
-# the original shannon-code CI gate). Test targets are intentionally NOT
-# linted here -- the upstream test code uses `unwrap()` extensively and was
-# never subject to `clippy --all-targets` in the original justfile; re-linting
-# it would block CI for pre-existing patterns the migration does not own.
+# Clippy runs against EVERY target (lib, bins, tests, benches, examples) via
+# --all-targets, matching the CI Clippy job. All targets are clippy-clean —
+# including the shannon-core `unwrap_used` warn (tests use expect()/expect_err()
+# with reasons) — so any regression in any target fails this gate.
 lint:
-    cargo clippy --workspace -- -D warnings
+    cargo clippy --workspace --all-targets -- -D warnings
     cd desktop/ui && pnpm lint
     cd gateway && pnpm typecheck
 
@@ -80,7 +100,7 @@ lint:
 # 提交前快路径(跳过 doctest,跳过 release lint)
 dev: version-check
     cargo check --workspace
-    cargo clippy --workspace
+    cargo clippy --workspace --all-targets
     @cargo nextest run --workspace || (echo "✗ tests failed — reproduce CI behavior with: just test-ci (retries=2, fail-fast=false)" && exit 1)
 
 # 完整测试(CI 同参 + doctests)
@@ -165,7 +185,7 @@ ci: fmt lint deny gen-protocol test
 # CI regenerates this as an artifact on every run (ci.yml `Generate Metrics`);
 # this recipe refreshes the *committed* snapshot locally — e.g. before a
 # test-count-changing PR or a release. See .github/workflows/metrics-update.yml
-# for the (opt-in) automated weekly refresh.
+# for the automated weekly refresh (cron fires from `main`; PRs the result).
 metrics:
     bash scripts/gen-metrics.sh
 

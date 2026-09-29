@@ -472,6 +472,122 @@ describe("bootstrap", () => {
     rmSync(dir, { recursive: true, force: true });
   });
 
+  it("challenge → desktop approves over the pairing HTTP RPC (T9) → requester allowlisted", async () => {
+    // The desktop leg of review F42: instead of an IM `approve <code>` reply,
+    // the owner approves from the Shannon desktop app. The desktop authenticates
+    // with a pair token minted into the shared JSONL (Design D control channel).
+    const dir = mkdtempSync(join(tmpdir(), "gw-access-"));
+    const allowlistPath = join(dir, "allowlist.json");
+    const tokensFile = join(dir, "tokens.jsonl");
+    writeFileSync(
+      allowlistPath,
+      JSON.stringify({
+        entries: [{ platform: "slack", senderId: "admin", addedAt: 1 }],
+      }),
+    );
+    const adapter = mockAdapter();
+    const cfg: GatewayConfig = {
+      ...baseConfig,
+      mobile: {
+        enabled: true,
+        host: "127.0.0.1",
+        port: 0,
+        tokensFile,
+        devicesFile: join(dir, "devices.json"),
+      },
+    };
+    const handle = await bootstrap(cfg, {
+      factories: new Map([["slack", () => adapter]]),
+      engineClientFactory: () =>
+        mockEngineClient([{ type: "text", content: "hello from stranger" }]),
+      logger: noopLogger,
+      allowlistPath,
+    });
+    const port = handle.mobilePort;
+    expect(typeof port).toBe("number");
+    const base = `http://127.0.0.1:${port}`;
+
+    // 1) Stranger DMs → challenge with a code (the IM path, unchanged).
+    adapter.pushInbound({
+      platform: "slack",
+      chatId: "C1",
+      senderId: "stranger",
+      senderName: "Stranger",
+      text: "let me in",
+      timestamp: Date.now(),
+      isDirect: true,
+    });
+    await vi.waitFor(() => expect(adapter.sent.length).toBeGreaterThan(0));
+    const code = (adapter.sent[0]?.text.match(/approve (\d{6})/)?.[1] ?? "") as string;
+    expect(code).toMatch(/^\d{6}$/);
+
+    // 2) The desktop mints one-time pair tokens into the shared JSONL — the
+    // exact record shape `mobile_generate_pair_token` appends (one per call:
+    // pending verifies, approve consumes).
+    const mint = (token: string): void => {
+      writeFileSync(
+        tokensFile,
+        JSON.stringify({ token, issuedAt: Date.now(), expiresAt: Date.now() + 75_000 }) + "\n",
+        { flag: "a" },
+      );
+    };
+    mint("test-desktop-token-pending");
+    mint("test-desktop-token-approve");
+
+    // 3) pending lists the challenge.
+    const pendingRes = await fetch(`${base}/rpc/pairing/pending`, {
+      method: "POST",
+      body: JSON.stringify({ token: "test-desktop-token-pending" }),
+    });
+    expect(pendingRes.status).toBe(200);
+    const pendingBody = (await pendingRes.json()) as {
+      result: { pending: Array<Record<string, unknown>> };
+    };
+    expect(pendingBody.result.pending).toContainEqual({
+      code,
+      platform: "slack",
+      senderId: "stranger",
+      requestedAt: expect.any(Number),
+      expiresAt: expect.any(Number),
+    });
+
+    // 4) approve consumes the code (its own token) and persists the allowlist.
+    const approveRes = await fetch(`${base}/rpc/pairing/approve`, {
+      method: "POST",
+      body: JSON.stringify({ token: "test-desktop-token-approve", code }),
+    });
+    expect(approveRes.status).toBe(200);
+    const approveBody = (await approveRes.json()) as {
+      result: { ok: true; record: { senderId: string } };
+    };
+    expect(approveBody.result.record.senderId).toBe("stranger");
+    const persisted = JSON.parse(readFileSync(allowlistPath, "utf8")) as {
+      entries: Array<{ platform: string; senderId: string }>;
+    };
+    expect(persisted.entries).toContainEqual({
+      platform: "slack",
+      senderId: "stranger",
+      addedAt: expect.any(Number),
+    });
+
+    // 5) The stranger can now drive the agent (guard sees the entry).
+    adapter.pushInbound({
+      platform: "slack",
+      chatId: "C1",
+      senderId: "stranger",
+      senderName: "Stranger",
+      text: "hi again",
+      timestamp: Date.now(),
+      isDirect: true,
+    });
+    await vi.waitFor(() =>
+      expect(adapter.sent.some((s) => s.text === "hello from stranger")).toBe(true),
+    );
+
+    await handle.stop();
+    rmSync(dir, { recursive: true, force: true });
+  });
+
   // ── review F40: a failed turn must not crash or wedge the gateway ───────
 
   it("contains a failed turn and keeps serving later turns (F40)", async () => {

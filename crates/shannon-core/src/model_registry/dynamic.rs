@@ -398,8 +398,11 @@ mod tests {
         let claude = entries
             .iter()
             .find(|e| e.id == "anthropic/claude-sonnet-4-6")
-            .unwrap();
-        assert_eq!(claude.limit.as_ref().unwrap().context, Some(1_000_000));
+            .expect("claude entry present");
+        assert_eq!(
+            claude.limit.as_ref().expect("limit present").context,
+            Some(1_000_000)
+        );
     }
 
     #[test]
@@ -475,7 +478,7 @@ mod tests {
 
     #[test]
     fn cache_roundtrip_and_freshness() {
-        let tmp = NamedTempFile::new().unwrap();
+        let tmp = NamedTempFile::new().expect("tempfile");
         let now = now_secs();
         save_cache_at(tmp.path(), r#"{"x":1}"#, now).expect("save");
         let loaded = load_cached_payload_at(tmp.path(), now).expect("fresh load");
@@ -507,7 +510,7 @@ mod tests {
             reasoning: Some(true),
             ..Default::default()
         })
-        .unwrap();
+        .expect("dup maps");
         let fresh = entry_to_model_info(&ModelsDevEntry {
             id: "anthropic/claude-future-9".into(),
             name: Some("Future".into()),
@@ -515,7 +518,7 @@ mod tests {
             reasoning: Some(true),
             ..Default::default()
         })
-        .unwrap();
+        .expect("fresh maps");
         let merged =
             crate::model_registry::merge_static_and_dynamic(LlmProvider::Anthropic, &[dup, fresh]);
         let sonnet_count = merged

@@ -327,7 +327,9 @@ pub fn check_rust_toolchain() -> CheckResult {
 
 /// Format all check results into a human-readable report
 pub fn format_doctor_report(results: &[CheckResult]) -> String {
-    let mut report = String::from("Shannon Code Diagnostics\n");
+    use rust_i18n::t;
+
+    let mut report = t!("commands.doctor.title").to_string();
     report.push_str(&"─".repeat(40));
     report.push('\n');
 
@@ -362,9 +364,15 @@ pub fn format_doctor_report(results: &[CheckResult]) -> String {
 
     report.push_str(&"─".repeat(40));
     report.push('\n');
-    report.push_str(&format!(
-        "Results: {pass_count} passed, {warn_count} warnings, {fail_count} failed\n"
-    ));
+    report.push_str(
+        t!(
+            "commands.doctor.results_summary",
+            passed = pass_count,
+            warnings = warn_count,
+            failed = fail_count
+        )
+        .as_ref(),
+    );
 
     report
 }

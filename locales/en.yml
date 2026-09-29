@@ -16,6 +16,8 @@ repl:
   cancelled: "Cancelled"
   cancelled_by_user: "Cancelled by user."
   query_task_panicked: "Query task panicked"
+  tools_disabled: "Tools disabled — model will respond as plain text. Use /tools to re-enable."
+  tools_enabled: "Tools re-enabled."
 
 # ── Status Messages ────────────────────────────────────────────────────────
 status:
@@ -34,6 +36,7 @@ commands:
   help:
     title: "Available Commands"
     no_help_found: "No help found for: %{topic}"
+    footer: "Use `/help <command>` for detailed information about a specific command.\n"
   clear:
     title: "Clear Chat"
     confirm: "Clear all messages? This cannot be undone."
@@ -116,6 +119,14 @@ commands:
     usage_get: "Usage: /config get <key>"
     usage_set: "Usage: /config set <key> <value>"
     usage_reset: "Usage: /config reset <key>"
+    settings_title: "Configuration Settings:\n\n"
+    usage: |
+
+      Usage:
+        /config list          - Show all settings
+        /config get <key>     - Get a specific value
+        /config set <key> <value> - Set a value
+        /config reset <key>   - Reset to default
   hooks:
     none: "No hooks configured."
     reloaded: "Hooks reloaded successfully."
@@ -164,6 +175,90 @@ commands:
     enabled: "Sandbox mode enabled (Docker isolation)."
     disabled: "Sandbox mode disabled (direct execution)."
     not_available: "Docker is not available. Sandbox mode requires Docker."
+  team:
+    help: |-
+      /team create <name> [description]  — Create a new agent team
+      /team add <team> <agent-name>  — Add agent to team
+      /team task <team> <subject>  — Add a task
+      /team assign <team>  — Assign pending tasks to available agents
+      /team status [team]  — Show team status
+      /team list  — List all teams
+      /team run  — Execute pending tasks in parallel
+      /team shutdown  — Shutdown team
+      /team disband <team>  — Disband team and clean up
+      /team delegate  — Toggle delegate mode (lead only coordinates)
+  plugin:
+    help: |
+      Plugin Management:
+
+        /plugin list                    - List installed plugins
+        /plugin search <query>          - Search plugin registry
+        /plugin info <name>             - Show plugin details from index
+        /plugin install <name-or-url>   - Install a plugin
+        /plugin uninstall <name>        - Remove a plugin
+        /plugin update [name]           - Update plugins
+        /plugin enable <name>           - Enable a plugin
+        /plugin disable <name>          - Disable a plugin
+
+      Plugin Sources:
+        - Registry name (e.g., "example-plugin")
+        - Git URL (e.g., "https://github.com/user/plugin")
+        - Local path (e.g., "/path/to/plugin")
+    installed_title: "Installed Plugins:\n\n"
+    none_installed: |-
+      No plugins installed.
+
+      Install plugins with:
+        /plugin install <name-or-url>
+    none_found: "No plugins found. Try a different search query."
+    search_results_title: "Search Results:\n\n"
+    search_results_ranked_title: "Search Results (ranked by relevance):\n\n"
+  doctor:
+    title: "Shannon Code Diagnostics\n"
+    results_summary: "Results: %{passed} passed, %{warnings} warnings, %{failed} failed\n"
+  credentials:
+    title: "Stored Credentials:\n\n"
+    none: "  No credentials stored.\n"
+    usage: |
+
+      Usage:
+        /credentials list              - Show stored credentials
+        /credentials store <svc> <val> - Store a credential
+        /credentials get <service>     - Retrieve a credential (masked)
+        /credentials delete <service>  - Delete a credential
+        /credentials count             - Show stored credential count
+  session:
+    snapshots_title: "Saved session snapshots:\n\n"
+    none_saved: |-
+      No saved session snapshots.
+      Use `/session save <name>` to create one.
+    load_hint: "\nUse `/session load <name>` to restore a snapshot."
+  debug:
+    help: |
+      Developer Debug Commands:
+
+        /debug log [level]     - Set log level (trace|debug|info|warn|error)
+        /debug profile start   - Start performance profiling
+        /debug profile stop    - Stop profiling and show results
+        /debug trace [on|off]  - Toggle execution tracing
+        /debug info            - Show system diagnostics
+
+      Log Levels:
+        trace - All messages including internals
+        debug - Debug messages and above
+        info  - Informational messages (default)
+        warn  - Warnings and errors only
+        error - Critical errors only
+    system_info_title: "System Diagnostics:\n\n"
+  preset:
+    available_title: "Available Presets:\n\n"
+    no_description: "No description"
+    usage: |
+
+      Usage:
+        /preset              - List all presets
+        /preset <name>       - Apply a preset
+        /preset show <name>  - Show preset details
 
 # ── Thinking Phrases ──────────────────────────────────────────────────────
 thinking:

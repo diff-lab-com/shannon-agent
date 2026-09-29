@@ -1,4 +1,7 @@
 _pt: "&Português"
+# Portuguese (Brazil) locale for Shannon Code
+
+# ── REPL Messages ──────────────────────────────────────────────────────────
 repl:
   chat_cleared: "Chat limpo."
   unknown_command: "Comando desconhecido: /%{name}. Digite /help para ver os comandos disponíveis."
@@ -13,6 +16,10 @@ repl:
   cancelled: "Cancelado"
   cancelled_by_user: "Cancelado pelo usuário."
   query_task_panicked: "A tarefa de consulta sofreu um panic"
+  tools_disabled: "Ferramentas desativadas — o modelo responderá como texto simples. Use /tools para reativar."
+  tools_enabled: "Ferramentas reativadas."
+
+# ── Status Messages ────────────────────────────────────────────────────────
 status:
   ready: "Pronto"
   processing: "Processando..."
@@ -23,7 +30,26 @@ status:
   completed: "Concluído"
   failed: "Falhou"
   cancelled_status: "Cancelado"
+
+# ── Command Descriptions ───────────────────────────────────────────────────
 commands:
+  help:
+    title: "Comandos Disponíveis"
+    no_help_found: "Nenhuma ajuda encontrada para: %{topic}"
+    footer: "Use `/help <comando>` para informações detalhadas sobre um comando específico.\n"
+  clear:
+    title: "Limpar Chat"
+    confirm: "Limpar todas as mensagens? Esta ação não pode ser desfeita."
+  quit:
+    title: "Encerrar Sessão?"
+    confirm: "Você tem atividades não salvas. Sair mesmo assim?"
+  model:
+    title: "Definir Modelo"
+    prompt: "Digite o nome do modelo (ex: claude-3.5-sonnet, gpt-4o)..."
+    set: "Modelo definido para: %{name}"
+    context_unknown: "desconhecido (por provedor)"
+    cost_unknown: "estimativa indisponível"
+    cost_free_local: "grátis (local)"
   remote:
     dashboard_title: "Alvos remotos — a execução de ferramentas segue o alvo ativo."
     none: "Ainda não há alvos. Adicione um com `/remote add ssh <user@host> <nome> <diretório>`."
@@ -54,19 +80,38 @@ commands:
     resumed: "▶ Objetivo retomado (orçamento de iterações reiniciado)."
     complete: "✓ Objetivo concluído após %{iterations} iteração(ões): %{objective}"
     conflict_loop: "Há um /ralph ou /loop ativo — pare-o primeiro e depois defina /goal."
-  help:
-    title: "Comandos Disponíveis"
-    no_help_found: "Nenhuma ajuda encontrada para: %{topic}"
-  clear:
-    title: "Limpar Chat"
-    confirm: "Limpar todas as mensagens? Esta ação não pode ser desfeita."
-  quit:
-    title: "Encerrar Sessão?"
-    confirm: "Você tem atividades não salvas. Sair mesmo assim?"
-  model:
-    title: "Definir Modelo"
-    prompt: "Digite o nome do modelo (ex: claude-3.5-sonnet, gpt-4o)..."
-    set: "Modelo definido para: %{name}"
+  connect:
+    success: "✓ Conectado a %{provider}"
+    choose_model: "Escolha um modelo abaixo (Enter = padrão, ↑↓ = selecionar, Esc = usar o padrão)."
+    refresh_started: "Atualizando o catálogo de modelos em segundo plano…"
+    refresh_success: "Catálogo atualizado — %{count} modelos disponíveis."
+    refresh_failed: "Offline — usando o catálogo em cache."
+    dashboard_header: "Conecte um provedor — sem necessidade de variável de ambiente."
+    dashboard_providers: "Provedores:"
+    dashboard_usage: "Uso: /connect <provedor> <chave-api>"
+    dashboard_help: "detalhes: /help connect"
+    key_stored: "✓ Chave de API armazenada para '%{provider}' (serviço: %{service})"
+    config_saved: "✓ Configuração do provedor salva: %{path}"
+    reusing_key: "• Reutilizando a chave armazenada de '%{provider}' (serviço: %{service})"
+    cred_verified: "✓ Credencial verificada — '%{model}' está acessível com esta chave."
+    auth_failed: "✗ Falha na autenticação para '%{provider}'. A chave foi armazenada, mas o provedor a rejeitou — verifique a chave e execute /connect novamente."
+    verify_warning: "⚠ Não foi possível verificar totalmente a credencial de '%{provider}' (%{error}). A chave está armazenada; pode ainda funcionar — tente enviar uma mensagem."
+    probe_failed: "⚠ Falha na verificação da credencial de '%{provider}'. A chave está armazenada; pode ainda funcionar."
+    switched: "✓ Alternado para %{provider} — modelo: %{model} (nova credencial ativa; não é necessário reiniciar)"
+    storing_error: "armazenando credencial: %{error}"
+    saving_error: "salvando providers.toml: %{error}"
+  provider:
+    available: "Provedores disponíveis:"
+    legend: "* = atual | Use /provider <nome> para alternar"
+    switched: "Provedor: %{provider} | Modelo: %{model}"
+    switched_no_catalog: "Provedor definido como %{provider}. Ele não tem lista de modelos integrada — use `/model <provider>/<model-id>` para escolher um modelo."
+    no_selection: "Nenhum provedor selecionado. Execute /connect <provedor> <chave> primeiro."
+  disconnect:
+    usage: "Uso: /disconnect <provedor>\nRemove a conexão salva de um provedor (sua entrada em providers.toml) para que ele não fique mais conectado. Sua chave de API armazenada é mantida — execute /connect novamente para reconectar."
+    not_connected: "'%{provider}' não estava conectado. Use /connect para conectá-lo."
+    done: "✓ '%{provider}' desconectado."
+    switched: "Provedor ativo alternado para %{provider} (modelo: %{model})."
+    none_remain: "Não restam provedores conectados — execute /connect <provedor> <chave> para reconectar."
   config:
     warning_load: "Aviso: não foi possível carregar a configuração: %{error}"
     key_not_found: "Chave de configuração não encontrada: %{key}"
@@ -74,6 +119,14 @@ commands:
     usage_get: "Uso: /config get <chave>"
     usage_set: "Uso: /config set <chave> <valor>"
     usage_reset: "Uso: /config reset <chave>"
+    settings_title: "Configurações:\n\n"
+    usage: |
+
+      Uso:
+        /config list          - Mostrar todas as configurações
+        /config get <chave>     - Obter um valor específico
+        /config set <chave> <valor> - Definir um valor
+        /config reset <chave>   - Restaurar para o padrão
   hooks:
     none: "Nenhum hook configurado."
     reloaded: "Hooks recarregados com sucesso."
@@ -122,6 +175,259 @@ commands:
     enabled: "Modo sandbox ativado (isolamento via Docker)."
     disabled: "Modo sandbox desativado (execução direta)."
     not_available: "Docker não está disponível. O modo sandbox requer Docker."
+  team:
+    help: |-
+      /team create <name> [description]  — Criar um novo time de agentes
+      /team add <team> <agent-name>  — Adicionar agente ao time
+      /team task <team> <subject>  — Adicionar uma tarefa
+      /team assign <team>  — Atribuir tarefas pendentes aos agentes disponíveis
+      /team status [team]  — Mostrar status do time
+      /team list  — Listar todos os times
+      /team run  — Executar tarefas pendentes em paralelo
+      /team shutdown  — Encerrar o time
+      /team disband <team>  — Dissolver o time e fazer a limpeza
+      /team delegate  — Alternar modo delegação (apenas o líder coordena)
+  plugin:
+    help: |
+      Gerenciamento de plugins:
+
+        /plugin list                    - Listar plugins instalados
+        /plugin search <query>          - Buscar no registro de plugins
+        /plugin info <name>             - Mostrar detalhes do plugin do índice
+        /plugin install <name-or-url>   - Instalar um plugin
+        /plugin uninstall <name>        - Remover um plugin
+        /plugin update [name]           - Atualizar plugins
+        /plugin enable <name>           - Ativar um plugin
+        /plugin disable <name>          - Desativar um plugin
+
+      Fontes de plugins:
+        - Nome no registro (ex: "example-plugin")
+        - URL do Git (ex: "https://github.com/user/plugin")
+        - Caminho local (ex: "/path/to/plugin")
+    installed_title: "Plugins instalados:\n\n"
+    none_installed: |-
+      Nenhum plugin instalado.
+
+      Instale plugins com:
+        /plugin install <name-or-url>
+    none_found: "Nenhum plugin encontrado. Tente uma busca diferente."
+    search_results_title: "Resultados da busca:\n\n"
+    search_results_ranked_title: "Resultados da busca (classificados por relevância):\n\n"
+  doctor:
+    title: "Diagnósticos do Shannon Code\n"
+    results_summary: "Resultados: %{passed} bem-sucedidos, %{warnings} avisos, %{failed} com falha\n"
+  credentials:
+    title: "Credenciais armazenadas:\n\n"
+    none: "  Nenhuma credencial armazenada.\n"
+    usage: |
+
+      Uso:
+        /credentials list              - Mostrar credenciais armazenadas
+        /credentials store <svc> <val> - Armazenar uma credencial
+        /credentials get <service>     - Recuperar uma credencial (mascarada)
+        /credentials delete <service>  - Excluir uma credencial
+        /credentials count             - Mostrar quantidade de credenciais armazenadas
+  session:
+    snapshots_title: "Snapshots de sessão salvos:\n\n"
+    none_saved: |-
+      Nenhum snapshot de sessão salvo.
+      Use `/session save <nome>` para criar um.
+    load_hint: "\nUse `/session load <nome>` para restaurar um snapshot."
+  debug:
+    help: |
+      Comandos de depuração para desenvolvedores:
+
+        /debug log [level]     - Definir nível de log (trace|debug|info|warn|error)
+        /debug profile start   - Iniciar profiling de desempenho
+        /debug profile stop    - Parar o profiling e mostrar resultados
+        /debug trace [on|off]  - Alternar rastreamento de execução
+        /debug info            - Mostrar diagnósticos do sistema
+
+      Níveis de log:
+        trace - Todas as mensagens, incluindo internas
+        debug - Mensagens de depuração e acima
+        info  - Mensagens informativas (padrão)
+        warn  - Apenas avisos e erros
+        error - Apenas erros críticos
+    system_info_title: "Diagnósticos do sistema:\n\n"
+  preset:
+    available_title: "Presets disponíveis:\n\n"
+    no_description: "Sem descrição"
+    usage: |
+
+      Uso:
+        /preset              - Listar todos os presets
+        /preset <nome>       - Aplicar um preset
+        /preset show <nome>  - Mostrar detalhes do preset
+
+# ── Thinking Phrases ──────────────────────────────────────────────────────
+thinking:
+  - "Pensando"
+  - "Analisando"
+  - "Processando"
+  - "Raciocinando"
+  - "Considerando"
+  - "Ponderando"
+  - "Deliberando"
+  - "Trabalhando"
+  - "Refletindo"
+
+# ── UI Labels ─────────────────────────────────────────────────────────────
+ui:
+  working: "Trabalhando"
+  tool: "Ferramenta %{n}"
+  cache: "Cache %{pct}%"
+  turn: "Turno %{n}"
+  mem: "MEM %{size}"
+  errors: "%{n} erros"
+  response_complete: "Resposta concluída"
+  tokens_this_turn: "%{count} tokens neste turno"
+  cost_total: "$%{cost} no total"
+  cache_hit_rate: "cache %{pct}% de acertos"
+  message_queued: "Mensagem na fila (%{count} na fila)"
+  removed_queued: "Removida — %{count} mensagem(ns) ainda na fila"
+  removed_last: "Removida a última mensagem da fila — edite e coloque na fila novamente"
+  removed_edit: "Removida — edite e coloque na fila novamente"
+  thinking_chars: "Pensando··· (%{count} caracteres)"
+  thinking_chars_k: "Pensando··· (%{count}k caracteres)"
+  thinking_header: "▼ Pensando (%{count} caracteres)"
+  thinking_header_k: "▼ Pensando (%{count}k caracteres)"
+  no_model: "Nenhum modelo configurado"
+  budget_warning: "⚠️ Aviso de orçamento: $%{cost} / $%{limit} (%{pct}% usado)"
+  budget_exceeded: "🚨 Orçamento excedido: $%{cost} > $%{limit}"
+  cancelled_partial: "Cancelado pelo usuário (resposta parcial)"
+  tool_running: "Executando %{name}…"
+  tool_completed_count: "Ferramenta concluída (×%{count})"
+  query_engine_unavailable: "Erro: Motor de consulta não disponível. Reinicie a sessão."
+  tokens_per_sec: "%{status} · %{rate} tok/s"
+  tool_progress: "%{name}: %{pct}%"
+  vim_insert: "INSERIR"
+  vim_normal: "NORMAL"
+  vim_visual: "VISUAL"
+  vim_command: "COMANDO"
+  placeholder: "Digite sua mensagem..."
+  notification_task_completed: "Tarefa concluída"
+  status_diag: "Diag"
+  permission_allow_once: "Permitir uma vez"
+  permission_always_allow: "Sempre permitir"
+  permission_edit_run: "Editar+Executar"
+  permission_deny: "Negar"
+  plan_approve: "Aprovar"
+  plan_reject: "Rejeitar"
+  plan_dismiss: "Descartar"
+  perm_tool: "Ferramenta"
+  perm_description: "Descrição"
+  perm_why: "Por quê"
+  approval_edit: "EDIÇÃO"
+  approval_ask: "PERGUNTAR"
+  approval_plan: "PLANO"
+  approval_auto: "AUTO"
+  approval_full: "TOTAL"
+  key_input: "Entrada"
+  key_insert: "Inserir"
+  key_insert_newline: "Inserir nova linha"
+  key_editor: "Editor"
+  prompt_input_label: "Entrada:"
+  prompt_edit_run: "Editar+Executar"
+  category_edit: "Editar"
+  # ── Key hint labels (compact bar) ─────────────────────────────────────────
+  key_help: "Ajuda"
+  key_normal: "Normal"
+  key_send: "Enviar"
+  key_complete: "Completar"
+  key_copy: "Copiar"
+  key_visual: "Visual"
+  key_command: "Comando"
+  key_move: "Mover"
+  key_del_line: "Excl. linha"
+  key_chat_search: "Buscar no chat"
+  key_scroll: "Rolar"
+  key_pager: "Paginador"
+  key_mode: "Modo"
+  key_quit: "Sair"
+  key_cancel: "Cancelar"
+  key_yank: "Copiar"
+  key_delete: "Excluir"
+  # ── Help panel sections ───────────────────────────────────────────────────
+  help_section_navigation: "Navegação"
+  help_section_input: "Entrada"
+  help_section_chat: "Chat"
+  help_section_vim: "Vim"
+  help_section_system: "Ajuda e sistema"
+  help_title: "Atalhos"
+  help_press_any_key: "Pressione qualquer tecla para fechar"
+  # ── Help panel items ──────────────────────────────────────────────────────
+  help_scroll_page: "Rolar o chat por página"
+  help_jump_top_bottom: "Ir para o topo / fim"
+  help_toggle_transcript: "Alternar paginador da transcrição"
+  help_send_message: "Enviar mensagem"
+  help_newline: "Inserir nova linha"
+  help_clear_input: "Limpar entrada (ou sair)"
+  help_external_editor: "Abrir editor externo"
+  help_copy_response: "Copiar a última resposta para a área de transferência"
+  help_search_chat: "Buscar mensagens do chat"
+  help_search_history: "Buscar no histórico de comandos"
+  help_delete_word: "Excluir a palavra anterior"
+  help_kill_line: "Excluir até o fim da linha"
+  help_kill_start: "Excluir até o início da linha"
+  help_clear_screen: "Limpar tela"
+  help_complete: "Completar / enfileirar durante o stream"
+  help_approval_mode: "Alternar modo de aprovação"
+  help_command_history: "Histórico de comandos"
+  help_fold_tool: "Recolher/expandir a última saída de ferramenta"
+  help_cycle_view: "Alternar modo de exibição (Padrão/Detalhado)"
+  help_toggle_fold: "Alternar recolhimento de todas as ferramentas"
+  help_paste_image: "Colar imagem da área de transferência"
+  help_command_palette: "Paleta de comandos"
+  help_active_agents: "Mostrar agentes ativos"
+  help_insert_mode: "Entrar no modo de inserção"
+  help_visual_mode: "Modo visual (selecionar texto)"
+  help_visual_line: "Modo de linha visual"
+  help_move_cursor: "Mover cursor"
+  help_word_forward_back: "Palavra à frente / atrás"
+  help_line_start_end: "Início / fim da linha"
+  help_delete_line: "Excluir linha"
+  help_yank_line: "Copiar linha"
+  help_paste_after: "Colar após o cursor"
+  help_undo: "Desfazer"
+  help_redo: "Refazer"
+  help_command_mode: "Modo de comando"
+  help_return_normal: "Voltar ao modo normal"
+  help_this_overlay: "Este painel de ajuda"
+  help_toggle_mouse: "Alternar rolagem com o mouse"
+  help_undo_exchange: "Desfazer a última troca"
+  # ── Header labels ─────────────────────────────────────────────────────────
+  header_send: "Enviar"
+  header_newline: "Nova linha"
+  header_editor: "Editor"
+  header_fullscreen: "Tela cheia"
+  sidebar:
+    context: "Contexto"
+    cost: "Custo"
+    memory: "Memória"
+    tools: "Ferramentas"
+    changes: "Alterações"
+    pressure_emergency: "EMERGÊNCIA"
+    pressure_critical: "CRÍTICO"
+    pressure_high: "ALTO"
+    pressure_normal: "NORMAL"
+    pressure_low: "BAIXO"
+  status_card:
+    title: " Status "
+    no_provider: "Nenhum provedor conectado. Execute /connect para começar."
+    active_label: "Ativo:"
+    tier_label: "Nível:"
+    available_providers: "Provedores disponíveis ({connected} conectados / {total} suportados):"
+    commands: "Comandos: /connect · /model · /provider · /profile · /help"
+  help_overlay:
+    title: " Ajuda do Shannon — Esc para fechar "
+    categories: " Categorias "
+    commands: " Comandos "
+    footer: " j/k: trocar categoria │ Enter: detalhes │ /: buscar │ Esc: fechar │ filtro: {filter} "
+  status_bar:
+    no_provider: "[Nenhum provedor conectado]"
+
+# ── CLI Help ───────────────────────────────────────────────────────────────
 cli:
   about: "Assistente de código com IA em Rust"
   prompt_help: "Executa um prompt diretamente (modo não interativo)."
@@ -149,6 +455,8 @@ cli:
   version_line: "Shannon Code v0.1.0"
   pipe_requires_input: "Erro: --pipe requer entrada via stdin ou um argumento de prompt"
   lang_help: "Define o idioma/locale (ex: en, zh)"
+
+# ── Tool Messages ──────────────────────────────────────────────────────────
 tools:
   registration_failed: "falha no registro da ferramenta: %{error}"
   using: "Usando: %{name} com entrada: %{input}"
@@ -158,6 +466,8 @@ tools:
   loaded_plugins: "%{count} plugin(s) carregado(s)"
   plugin_warning: "Aviso: falha na descoberta de plugins: %{error}"
   discovered_mcp: "%{count} servidor(es) MCP descoberto(s)"
+
+# ── Query Events ───────────────────────────────────────────────────────────
 query:
   turn_completed: "[Turno %{turn} concluído, %{tokens} tokens]"
   processing_status: "Processando: %{message}"
@@ -169,6 +479,8 @@ query:
   api_key_required: "Chave de API Necessária"
   api_key_prompt: "Digite sua chave de API..."
   query_error: "Erro de Consulta"
+
+# ── Diff/Review ────────────────────────────────────────────────────────────
 review:
   all_accepted: "Todas as alterações foram aceitas e preparadas."
   no_changes_reject: "Nenhuma alteração para rejeitar."

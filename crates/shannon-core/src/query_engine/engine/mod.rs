@@ -770,8 +770,9 @@ impl QueryEngine {
 ///   the wire requires `assistant(tool_use)` → `user(tool_result)`),
 /// - synthetic reminders injected as plain user text: the P-M token-budget
 ///   warnings (`"[Token budget at {pct}%] …"`), the B.6 targeted-read nudge
-///   (`"Context is large (…)"`), and the pinned nudge prompts (truncation
-///   continuation, think-only, wrap-up, turn continuation).
+///   (`"Context is large (…)"`), the pinned nudge prompts (truncation
+///   continuation, think-only, wrap-up, turn continuation), and the runtime
+///   `user_notices` drain (denial soft-limit warning, auto-test outcomes).
 ///
 /// Counting those as turn openers made `/rewind n` cut at the last tool
 /// result instead of the user's prompt, leaving an assistant `tool_use`
@@ -791,14 +792,42 @@ fn is_turn_opener(msg: &Message) -> bool {
 /// True when `text` is a synthetic reminder the agent loop injected as a
 /// user-role message rather than a typed user prompt. Prefix/equality pins
 /// mirror the producers: the format-string reminders live in `agent_loop.rs`,
-/// the nudge prompts are the consts referenced here.
+/// the nudge prompts are the consts referenced here, and the runtime
+/// `user_notices` pins mirror the two notice producers — the denial
+/// soft-limit warning (`agent_loop.rs`) and the auto-test outcome reports
+/// (`auto_test::TestOutcome::describe`). A batch of notices drains as ONE
+/// user message with paragraphs joined by `"\n\n"`, so an exact-match notice
+/// also counts when it OPENS a batch; a notice that is only a later
+/// paragraph is covered because the batch's first paragraph is always a
+/// producer text and every producer is recognized here. Trade-off (same as
+/// every pin): a user prompt that verbatim starts with one of these pinned
+/// texts is misread as synthetic — accepted, the strings are unmistakably
+/// machine-generated.
 fn is_synthetic_reminder(text: &str) -> bool {
     text.starts_with("[Token budget at") // P-M 60%/80% context warnings
+        // Turn-N checkpoint commit-now reminder (SHANNON_TURN_CHECKPOINT):
+        // pushed as user-role text OUTSIDE the user_notices drain
+        // (agent_loop.rs P-B block), so the notice pins below don't see it.
+        || (text.starts_with("[Turn ") && text.contains(" reminder] You have used "))
         || text.starts_with("Context is large (") // B.6 targeted-read nudge
         || text == TRUNCATION_CONTINUATION_PROMPT
         || text == THINK_ONLY_NUDGE_PROMPT
         || text == agent_loop::WRAP_UP_NUDGE_PROMPT
         || text == recovery::TURN_CONTINUATION_NUDGE_PROMPT
+        // Runtime user_notices (T15b): variable-text messages pushed as
+        // user-role text by agent_loop's notice drain.
+        || text.starts_with("The user has denied ") // denial soft-limit warning
+        || text.starts_with("Tests failed:\n```") // auto-test failure report
+        || text.starts_with("Could not execute test command (spawn error): ") // auto-test spawn error
+        || pinned_user_notice(text, "All tests passed.")
+        || pinned_user_notice(text, "Tests timed out (no output within the configured timeout).")
+}
+
+/// A pinned exact notice either travels alone (whole message equals the
+/// notice) or opens a joined notice batch (notice + `join("\n\n")`
+/// separator + the rest).
+fn pinned_user_notice(text: &str, notice: &str) -> bool {
+    text == notice || text.starts_with(&format!("{notice}\n\n"))
 }
 
 /// True when `msg` is an assistant message carrying a `tool_use` block whose

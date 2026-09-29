@@ -110,6 +110,13 @@ let demoDevices: Array<{ deviceId: string; publicKey: string; label?: string | n
   { deviceId: 'demo-4f8a2c1e9b7d3a05c6e1f2b4a8d60317', publicKey: 'demo-key-x', label: 'Pixel 9', addedAt: 1735689600000, lastSeenAt: 1735693200000 },
 ]
 
+// T9: IM pairing-approval demo state — two pending pairing challenges; the
+// approve handler moves the approved one out (mirrors the gateway store).
+const demoPairingRequests: Array<{ code: string; platform: string; senderId: string; requestedAt: number; expiresAt: number }> = [
+  { code: '246810', platform: 'slack', senderId: 'U0DEMO1', requestedAt: Date.now() - 60_000, expiresAt: Date.now() + 240_000 },
+  { code: '135791', platform: 'telegram', senderId: 'TEDEMO2', requestedAt: Date.now() - 30_000, expiresAt: Date.now() + 270_000 },
+]
+
 function demoTerminalEmit(terminalId: string, text: string) {
   // base64, exactly like the Rust pump's wire payload
   const bytes = new TextEncoder().encode(text)
@@ -1558,6 +1565,19 @@ export const handlers: Record<string, MockHandler> = {
   async mobile_tls_status() {
     await delay(20)
     return { enabled: false, fingerprint: null }
+  },
+
+  // T9 — desktop pairing approval: list + approve the demo pairing requests.
+  async gateway_pairing_pending() {
+    await delay(40)
+    return clone(demoPairingRequests)
+  },
+  async gateway_pairing_approve(args: { code: string }) {
+    await delay()
+    const idx = demoPairingRequests.findIndex((r) => r.code === args.code)
+    if (idx < 0) throw new Error(`Unknown or expired pairing code ${args.code}`)
+    const [record] = demoPairingRequests.splice(idx, 1)
+    return record
   },
 
   // Review 2026-09-16: these fire from globally-mounted components on every

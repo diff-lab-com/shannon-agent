@@ -1186,10 +1186,8 @@ data: {\"type\":\"message_stop\"}\n\
         // before the synthetic tool_result could be added, so no event
         // would have 3+ messages.
         let mut found_full_history = false;
-        for ev in &events {
-            if let Ok(shannon_core::query_engine::QueryEvent::ConversationUpdate {
-                messages, ..
-            }) = ev
+        for ev in events.iter().flatten() {
+            if let shannon_core::query_engine::QueryEvent::ConversationUpdate { messages, .. } = ev
             {
                 if messages.len() >= 3 {
                     found_full_history = true;

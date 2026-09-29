@@ -16,6 +16,8 @@ repl:
   cancelled: "已取消"
   cancelled_by_user: "用户已取消。"
   query_task_panicked: "查询任务崩溃"
+  tools_disabled: "工具已禁用 — 模型将以纯文本回复。使用 /tools 重新启用。"
+  tools_enabled: "工具已重新启用。"
 
 # ── Status Messages ────────────────────────────────────────────────────────
 status:
@@ -34,6 +36,7 @@ commands:
   help:
     title: "可用命令"
     no_help_found: "未找到帮助信息: %{topic}"
+    footer: "使用 `/help <command>` 查看特定命令的详细信息。\n"
   clear:
     title: "清空聊天"
     confirm: "清空所有消息？此操作无法撤销。"
@@ -116,6 +119,14 @@ commands:
     usage_get: "用法: /config get <键名>"
     usage_set: "用法: /config set <键名> <值>"
     usage_reset: "用法: /config reset <键名>"
+    settings_title: "配置设置：\n\n"
+    usage: |
+
+      用法：
+        /config list          - 显示所有设置
+        /config get <键名>     - 获取指定配置项的值
+        /config set <键名> <值> - 设置配置项的值
+        /config reset <键名>   - 重置为默认值
   hooks:
     none: "未配置钩子。"
     reloaded: "钩子已成功重新加载。"
@@ -164,6 +175,90 @@ commands:
     enabled: "沙盒模式已启用（Docker 隔离）。"
     disabled: "沙盒模式已禁用（直接执行）。"
     not_available: "Docker 不可用。沙盒模式需要 Docker。"
+  team:
+    help: |-
+      /team create <name> [description]  — 创建新的代理团队
+      /team add <team> <agent-name>  — 将代理加入团队
+      /team task <team> <subject>  — 添加任务
+      /team assign <team>  — 将待办任务分配给可用代理
+      /team status [team]  — 查看团队状态
+      /team list  — 列出所有团队
+      /team run  — 并行执行待办任务
+      /team shutdown  — 关闭团队
+      /team disband <team>  — 解散团队并完成清理
+      /team delegate  — 切换委托模式（仅负责人协调）
+  plugin:
+    help: |
+      插件管理：
+
+        /plugin list                    - 列出已安装的插件
+        /plugin search <query>          - 搜索插件注册表
+        /plugin info <name>             - 显示索引中插件的详细信息
+        /plugin install <name-or-url>   - 安装插件
+        /plugin uninstall <name>        - 移除插件
+        /plugin update [name]           - 更新插件
+        /plugin enable <name>           - 启用插件
+        /plugin disable <name>          - 禁用插件
+
+      插件来源：
+        - 注册表名称（例如 "example-plugin"）
+        - Git URL（例如 "https://github.com/user/plugin"）
+        - 本地路径（例如 "/path/to/plugin"）
+    installed_title: "已安装插件：\n\n"
+    none_installed: |-
+      尚未安装任何插件。
+
+      使用以下命令安装插件：
+        /plugin install <name-or-url>
+    none_found: "未找到插件。请尝试其他搜索关键词。"
+    search_results_title: "搜索结果：\n\n"
+    search_results_ranked_title: "搜索结果（按相关度排序）：\n\n"
+  doctor:
+    title: "Shannon Code 诊断\n"
+    results_summary: "结果：%{passed} 项通过，%{warnings} 项警告，%{failed} 项失败\n"
+  credentials:
+    title: "已存储的凭据：\n\n"
+    none: "  未存储任何凭据。\n"
+    usage: |
+
+      用法：
+        /credentials list              - 显示已存储的凭据
+        /credentials store <svc> <val> - 存储凭据
+        /credentials get <service>     - 读取凭据（已掩码）
+        /credentials delete <service>  - 删除凭据
+        /credentials count             - 显示已存储凭据的数量
+  session:
+    snapshots_title: "已保存的会话快照：\n\n"
+    none_saved: |-
+      没有已保存的会话快照。
+      使用 `/session save <name>` 创建一个。
+    load_hint: "\n使用 `/session load <name>` 恢复快照。"
+  debug:
+    help: |
+      开发者调试命令：
+
+        /debug log [level]     - 设置日志级别 (trace|debug|info|warn|error)
+        /debug profile start   - 开始性能分析
+        /debug profile stop    - 停止分析并显示结果
+        /debug trace [on|off]  - 切换执行追踪
+        /debug info            - 显示系统诊断信息
+
+      日志级别：
+        trace - 所有消息（包括内部细节）
+        debug - 调试消息及更高级别
+        info  - 一般消息（默认）
+        warn  - 仅警告和错误
+        error - 仅严重错误
+    system_info_title: "系统诊断：\n\n"
+  preset:
+    available_title: "可用预设：\n\n"
+    no_description: "无描述"
+    usage: |
+
+      用法：
+        /preset              - 列出所有预设
+        /preset <name>       - 应用预设
+        /preset show <name>  - 显示预设详情
 
 # ── Thinking Phrases ──────────────────────────────────────────────────────
 thinking:

@@ -3,6 +3,8 @@
 use std::fs::{File, OpenOptions};
 use std::io::{BufRead, BufWriter, Write};
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use fs2::FileExt;
@@ -85,7 +87,13 @@ struct TailScan {
 ///   (e.g. mtime) and is therefore cheaper than `sync_all`, while still
 ///   guaranteeing the appended event bytes are retrievable after power
 ///   loss — the property the "authoritative record" promise needs. Chunk
-///   aggregation stays flush-only; see [`FlushPolicy`].
+///   aggregation stays flush-only; see [`FlushPolicy`]. The page-cache
+///   drain is always synchronous; the `sync_data` syscall itself is
+///   offloaded to the tokio blocking pool when the caller runs inside a
+///   runtime (T6: boundary flushes execute on executor threads through the
+///   synchronous bus dispatch, and one fdatasync per boundary must not
+///   stall the worker), serialized through a per-writer lane so syncs
+///   issue in boundary order.
 /// - **Derived index sidecar** (E-9): successful writes feed an incremental
 ///   accumulator, and `close` republishes `index.json` next to the log so
 ///   `SessionStore::list` never re-projects the log. The sidecar is a pure
@@ -106,7 +114,14 @@ pub struct SessionLogWriter {
     /// Write/flush failures since open (degraded-mode counter).
     failures: u64,
     /// Successful `sync_data` calls since open (observability / test seam).
-    syncs: u64,
+    /// Shared because boundary syncs complete on the blocking pool (T6).
+    syncs: Arc<AtomicU64>,
+    /// `sync_data` failures reported by off-thread boundary syncs (T6) —
+    /// folded into [`Self::failures`] / [`Self::is_degraded`].
+    bg_sync_failures: Arc<AtomicU64>,
+    /// Serializes durable syncs of this writer (caller thread + blocking
+    /// tasks) so `sync_data` issues in boundary order.
+    sync_lane: Arc<Mutex<()>>,
     /// E-9: incremental accumulator behind the `index.json` sidecar. Seeded
     /// from the previous valid index at open, fed by every recorded event,
     /// and published by [`Self::close`].
@@ -200,7 +215,9 @@ impl SessionLogWriter {
             last_flush: Instant::now(),
             policy: FlushPolicy::default(),
             failures: 0,
-            syncs: 0,
+            syncs: Arc::new(AtomicU64::new(0)),
+            bg_sync_failures: Arc::new(AtomicU64::new(0)),
+            sync_lane: Arc::new(Mutex::new(())),
             index_acc,
             #[cfg(test)]
             fail_next_write: false,
@@ -328,6 +345,16 @@ impl SessionLogWriter {
     /// [`Self::do_flush`] followed by `sync_data()`: the drained bytes are
     /// durable, not merely in the page cache. A sync failure is degraded
     /// (counted + warned), never propagated — same contract as flush.
+    ///
+    /// The page-cache drain runs synchronously (append order under the
+    /// caller's write path), but the `sync_data` syscall itself is offloaded
+    /// to the tokio blocking pool when the caller runs inside a runtime
+    /// (T6): boundary flushes reach the writer through the synchronous bus
+    /// dispatch on executor threads, and one fdatasync per boundary must not
+    /// stall the worker. The blocking task shares the per-writer sync lane
+    /// and the counters, so syncs still issue in boundary order and
+    /// failures keep degrading instead of panicking. Without a runtime
+    /// (tests, sync embedders) the sync stays inline and fully synchronous.
     fn do_flush_durable(&mut self) {
         self.do_flush();
         #[cfg(test)]
@@ -343,6 +370,54 @@ impl SessionLogWriter {
             );
             return;
         }
+        if let Ok(handle) = tokio::runtime::Handle::try_current() {
+            // Collect everything the blocking task needs while `&mut self`
+            // is still held — a duplicated fd plus shared counter/lane
+            // handles — then return immediately: the JoinHandle is dropped
+            // (detached), and the executor thread is not stalled by the
+            // syscall.
+            let file = match self.out.get_ref().try_clone() {
+                Ok(file) => file,
+                Err(e) => {
+                    self.failures += 1;
+                    warn!(
+                        path = %self.path.display(),
+                        error = %e,
+                        failures = self.failures,
+                        "session log sync_data failed; boundary events may not survive power loss"
+                    );
+                    return;
+                }
+            };
+            let syncs = Arc::clone(&self.syncs);
+            let bg_failures = Arc::clone(&self.bg_sync_failures);
+            let lane = Arc::clone(&self.sync_lane);
+            let path = self.path.clone();
+            handle.spawn_blocking(move || {
+                // Serialize with this writer's other durable syncs so they
+                // issue in boundary order even when boundaries are recorded
+                // faster than the pool drains them. A poisoned lane mutex
+                // never blocks durability: steal the guard.
+                let _lane = lane.lock().unwrap_or_else(|e| e.into_inner());
+                match file.sync_data() {
+                    Ok(()) => {
+                        syncs.fetch_add(1, Ordering::Relaxed);
+                    }
+                    Err(e) => {
+                        bg_failures.fetch_add(1, Ordering::Relaxed);
+                        warn!(
+                            path = %path.display(),
+                            error = %e,
+                            "session log sync_data failed; boundary events may not survive power loss"
+                        );
+                    }
+                }
+            });
+            return;
+        }
+        // No runtime on this thread (tests, sync hosts): keep the fully
+        // synchronous durability contract.
+        let _lane = self.sync_lane.lock().unwrap_or_else(|e| e.into_inner());
         if let Err(e) = self.out.get_ref().sync_data() {
             self.failures += 1;
             warn!(
@@ -352,7 +427,7 @@ impl SessionLogWriter {
                 "session log sync_data failed; boundary events may not survive power loss"
             );
         } else {
-            self.syncs += 1;
+            self.syncs.fetch_add(1, Ordering::Relaxed);
         }
     }
 
@@ -363,7 +438,7 @@ impl SessionLogWriter {
     pub fn flush(&mut self) -> Result<(), SessionLogError> {
         self.out.flush()?;
         self.out.get_ref().sync_data()?;
-        self.syncs += 1;
+        self.syncs.fetch_add(1, Ordering::Relaxed);
         self.chunk_since_flush = 0;
         self.last_flush = Instant::now();
         Ok(())
@@ -424,17 +499,21 @@ impl SessionLogWriter {
         self.current_turn
     }
 
-    /// Write/flush failures since open (degraded-mode counter).
+    /// Write/flush failures since open (degraded-mode counter), including
+    /// sync failures reported by off-thread boundary syncs.
     pub fn failures(&self) -> u64 {
-        self.failures
+        self.failures + self.bg_sync_failures.load(Ordering::Relaxed)
     }
 
     /// Successful durable syncs (`sync_data`) since open.
     ///
     /// Observability seam for the durability contract: replay-safe
     /// boundaries and explicit flushes must each produce exactly one.
+    /// Boundary syncs offloaded to the blocking pool (T6) land here when
+    /// the pool task completes, so inside a runtime the counter may lag the
+    /// writing thread by the fdatasync duration.
     pub fn durable_syncs(&self) -> u64 {
-        self.syncs
+        self.syncs.load(Ordering::Relaxed)
     }
 
     /// Test seam: make the next `sync_data` attempt fail exactly once,
@@ -444,9 +523,10 @@ impl SessionLogWriter {
         self.fail_next_sync = true;
     }
 
-    /// True once any write/flush failure occurred.
+    /// True once any write/flush failure occurred (including off-thread
+    /// sync failures).
     pub fn is_degraded(&self) -> bool {
-        self.failures > 0
+        self.failures > 0 || self.bg_sync_failures.load(Ordering::Relaxed) > 0
     }
 
     /// Path of the events file.
@@ -950,5 +1030,47 @@ mod tests {
         assert_eq!(writer.durable_syncs(), 2);
         assert_eq!(writer.failures(), 1);
         writer.close().expect("close after recovery");
+    }
+
+    /// T6: inside a tokio runtime the boundary `sync_data` is offloaded to
+    /// the blocking pool instead of stalling the calling (executor) thread.
+    /// The event bytes are still visible on disk immediately — the
+    /// page-cache drain stays synchronous — and the offloaded sync
+    /// completes, landing in the shared counter.
+    #[test]
+    fn test_boundary_sync_offloaded_inside_runtime_completes() {
+        let dir = TempDir::new().expect("tempdir");
+        let rt = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .expect("test runtime");
+        let mut writer =
+            SessionLogWriter::open_in_dir(dir.path(), "sess-sync-async").expect("open writer");
+        writer.set_flush_policy(FlushPolicy {
+            chunk_count: 10_000,
+            chunk_interval: Duration::from_secs(3_600),
+        });
+        rt.block_on(async {
+            writer.record(tool_result());
+        });
+        let on_disk = std::fs::read_to_string(writer.path()).expect("read file");
+        assert!(
+            on_disk.contains("\"kind\":\"tool/result\""),
+            "boundary flush must drain synchronously"
+        );
+
+        // Poll until the blocking-pool task completes (the caller thread
+        // was freed as soon as the boundary was recorded).
+        let deadline = Instant::now() + Duration::from_secs(5);
+        while writer.durable_syncs() == 0 && Instant::now() < deadline {
+            std::thread::sleep(Duration::from_millis(5));
+        }
+        assert_eq!(
+            writer.durable_syncs(),
+            1,
+            "offloaded boundary sync must complete exactly once"
+        );
+        assert!(!writer.is_degraded());
+        writer.close().expect("close");
     }
 }

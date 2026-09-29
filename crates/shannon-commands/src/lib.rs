@@ -23,6 +23,10 @@
 // - **LocalCommand**: Commands executed locally without AI
 // - **LocalJSXCommand**: Commands with rich UI (TUI components)
 
+// Load the shared locales/ directory at the repo root (same backend data as
+// shannon-ui / shannon-core); `t!` requires the backend generated in this crate.
+rust_i18n::i18n!("../../locales", fallback = "en");
+
 mod command;
 mod context;
 mod executor;

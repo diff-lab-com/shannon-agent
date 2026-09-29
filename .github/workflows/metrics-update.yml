@@ -7,11 +7,23 @@
 # review. No PAT required: the default `GITHUB_TOKEN` can push to the
 # (unprotected) `chore/metrics-update` branch and open the PR.
 #
-# ⚠️  Activation gate. `schedule` and `workflow_dispatch` events ONLY run from
-# the repo's DEFAULT branch (`main`). This file lands on `dev` first (per the
-# dev→main branch model); the cron + manual dispatch become active once it
-# propagates to `main` via the normal release flow, or immediately if
-# cherry-picked to `main`.
+# ⚠️  Activation gate — SATISFIED (review T7, 2026-09-28). `schedule` and
+# `workflow_dispatch` events ONLY run from the repo's DEFAULT branch
+# (`main`). This file landed on `dev` first (per the dev→main branch model)
+# and was cherry-picked to `main` in 56ebaf3b, so the cron has been firing
+# every Monday since. It still never refreshed docs/metrics.md, because the
+# runs FAILED — Actions logs for the weekly runs (08-31 … 09-28) show:
+#   - 09-14 & 09-28: the apt step was missing system deps that ci.yml's
+#     `metrics` job installs (`libgbm-dev libdrm-dev libpipewire-0.3-dev`).
+#     `libspa-sys` (pipewire, via the desktop capture stack) failed its
+#     pkg-config probe for `libpipewire-0.3` → exit 101. Fixed below by
+#     mirroring ci.yml's dep list verbatim.
+#   - 09-07: transient git fetch error ("Duplicate header: Authorization").
+#   - 09-21: transient `dev` checkout mid-breakage (unresolved
+#     `opentelemetry`/`notify` in shannon-core).
+# This job compiles the full workspace test binaries WITHOUT ci.yml's shared
+# `ci-v3` cache, so it gets the Test job's 60-minute timeout rather than the
+# 30 the in-CI metrics job (warm cache) uses.
 #
 # ⚠️  Bot-PR CI gap. PRs opened by `GITHUB_TOKEN` do not re-trigger workflows
 # (GitHub prevents loops), so ci.yml will NOT run on the auto-opened PR. The
@@ -45,7 +57,9 @@ env:
 jobs:
   update-metrics:
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    # 60, not the in-CI metrics job's 30: this run compiles the workspace
+    # test binaries on a cold Swatinem cache (no shared `ci-v3` key).
+    timeout-minutes: 60
     steps:
       - uses: actions/checkout@f548e57e544e1ff5a4c46bf1e1b8685f8e4a348a
         with:
@@ -59,13 +73,16 @@ jobs:
       - name: Install Tauri + libdbus system deps
         if: runner.os == 'Linux'
         # Mirrors ci.yml's `metrics` job: `cargo test --workspace --no-run`
-        # compiles shannon-desktop (Tauri → webkit2gtk/gtk headers) and
-        # shannon-mcp-saas (keyring → libdbus-sys → libdbus-1-dev).
+        # compiles shannon-desktop (Tauri → webkit2gtk/gtk headers),
+        # shannon-mcp-saas (keyring → libdbus-sys → libdbus-1-dev) and the
+        # desktop capture stack (libgbm/libdrm/libspa-sys → pkg-config
+        # libpipewire-0.3). Missing libgbm/libdrm/libpipewire made every
+        # weekly run fail at compile time (see the header note, T7).
         run: |
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends \
             libwebkit2gtk-4.1-dev libgtk-3-dev libayatana-appindicator3-dev \
-            librsvg2-dev libssl-dev libxdo-dev patchelf libdbus-1-dev
+            librsvg2-dev libssl-dev libxdo-dev libgbm-dev libdrm-dev libpipewire-0.3-dev patchelf libdbus-1-dev
 
       - name: Install nextest
         uses: taiki-e/install-action@67729d5c413db75907f0ad1e39bb04b9c868ff60

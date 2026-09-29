@@ -2101,8 +2101,7 @@ mod tests {
             );
             assert!(
                 !conn.has_api_key,
-                "apply_provider_update must never set has_api_key (saw key={:?})",
-                key
+                "apply_provider_update must never set has_api_key (saw key={key:?})",
             );
         }
         // The display name still updates regardless of key handling.

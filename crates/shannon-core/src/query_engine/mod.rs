@@ -923,8 +923,7 @@ mod tests {
             QueryEngine::apply_env_overrides(&mut cfg);
             assert!(
                 !cfg.token_budget_warning,
-                "token_budget_warning should be false for {:?}",
-                falsy
+                "token_budget_warning should be false for {falsy:?}",
             );
         }
 
@@ -937,8 +936,7 @@ mod tests {
             QueryEngine::apply_env_overrides(&mut cfg);
             assert!(
                 cfg.token_budget_warning,
-                "token_budget_warning should be true for {:?}",
-                truthy
+                "token_budget_warning should be true for {truthy:?}",
             );
         }
 

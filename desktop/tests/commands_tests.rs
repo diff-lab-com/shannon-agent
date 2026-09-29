@@ -563,7 +563,7 @@ async fn new_session(state: &AppState) -> Result<String, String> {
 
     // Seed an empty L0 session log
     let uuid = uuid::Uuid::parse_str(&id).map_err(|e| e.to_string())?;
-    seed_empty_session(&state, uuid, Some(&title))?;
+    seed_empty_session(state, uuid, Some(&title))?;
 
     // (§4.6) Snapshot-before-switch is obsolete: events.jsonl already holds
     // every turn durably.

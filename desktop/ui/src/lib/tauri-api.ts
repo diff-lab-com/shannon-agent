@@ -11,6 +11,7 @@ import type {
   ProviderInput,
   DesktopConfig,
   GatewayConfig,
+  GatewayPairingRequest,
   GatewayProcessState,
   SurfaceInfo,
   CliInstallStatus,
@@ -289,6 +290,18 @@ export async function mobileRevokeDevice(deviceId: string): Promise<boolean> {
 /** Current `mobile.tls` state + cert fingerprint (v0.12 LAN hardening). */
 export async function mobileTlsStatus(): Promise<MobileTlsStatus> {
   return invoke('mobile_tls_status')
+}
+
+// --- T9 — gateway IM pairing approval (the desktop entry for review F42) ---
+
+/** Pending IM pairing requests on the running gateway (mints a pair token). */
+export async function gatewayPairingPending(): Promise<GatewayPairingRequest[]> {
+  return invoke('gateway_pairing_pending')
+}
+
+/** Approve one pending pairing by code; returns the approved request. */
+export async function gatewayPairingApprove(code: string): Promise<GatewayPairingRequest> {
+  return invoke('gateway_pairing_approve', { code })
 }
 
 export interface WebhookConfigDto {

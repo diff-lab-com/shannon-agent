@@ -2773,8 +2773,10 @@ mod build_client_config_tests {
         let mut profile = anthropic_profile("BCC_UNSET", "https://api.anthropic.com");
         profile.default_max_tokens = Some(8192);
         let store = store_with_active(profile, "claude-sonnet-4-6");
-        let mut cfg = ShannonConfig::default();
-        cfg.max_tokens = Some(1024);
+        let cfg = ShannonConfig {
+            max_tokens: Some(1024),
+            ..ShannonConfig::default()
+        };
 
         let out =
             AppState::build_client_config(&store, &cfg).expect("active target should resolve");

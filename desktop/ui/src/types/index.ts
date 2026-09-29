@@ -342,6 +342,22 @@ export interface MobilePairToken {
   qrDataUrl: string
 }
 
+/// One pending (or just-approved) IM pairing request (T9). Mirrors the Rust
+/// `GatewayPairingRequest` in `desktop/src/gateway_pairing.rs` and the
+/// gateway's `PairingRequestRecord` (camelCase, passed through).
+export interface GatewayPairingRequest {
+  /// The 6-digit code shown in the IM pairing challenge.
+  code: string
+  /// Chat platform the requester came from (slack/telegram/…).
+  platform: string
+  /// Platform sender id the allowlist entry carries.
+  senderId: string
+  /// Epoch ms when the challenge was issued.
+  requestedAt: number
+  /// Epoch ms after which the code expires (issue + 5 min).
+  expiresAt: number
+}
+
 /// E-1 方案 C — supervised gateway process status. Mirrors the Rust
 /// `GatewaySupervisorStatus` enum (externally-tagged serde, camelCase variants).
 export type GatewaySupervisorStatus =

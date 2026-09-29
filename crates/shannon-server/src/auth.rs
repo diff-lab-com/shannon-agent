@@ -31,6 +31,14 @@ impl AuthConfig {
 /// `[::1]`/`::1`) plus [`Self::extra_hosts`]. Callers pass the literal bound
 /// host there so binds like `127.0.0.2` (or a host the operator explicitly
 /// opted into) keep working.
+///
+/// `extra_hosts` is also fed by the `SHANNON_SERVE_EXTRA_HOSTS` env var
+/// (comma-separated, read once at router/run construction in
+/// `crate::guard_for_bind`/`effective_extra_hosts` — T15c): clients that
+/// must reach a loopback-bound server through a name resolving to loopback
+/// (hosts-file alias, SSH tunnel hostname, reverse proxy) send that name in
+/// the `Host` header, and without an allowlist entry the guard would 403
+/// them. Empty/absent env leaves the default policy untouched.
 #[derive(Clone, Debug, Default)]
 pub struct HostGuardConfig {
     /// Additional accepted Host values (bare or `host:port` form).
@@ -54,7 +62,9 @@ impl HostGuardConfig {
 /// and same-origin rules let the page read responses. Browsers always set a
 /// `Host` header naming the domain they were told to contact — so rejecting
 /// any Host outside the loopback allowlist breaks the rebinding while
-/// leaving direct loopback clients untouched.
+/// leaving direct loopback clients untouched. Legitimate non-loopback names
+/// can be opted in per deployment via `SHANNON_SERVE_EXTRA_HOSTS` (T15c —
+/// see [`HostGuardConfig`]); everything else stays rejected.
 ///
 /// A request **without** a Host header is allowed: HTTP/1.0 tooling and
 /// in-process probes send none, and no browser ever does.

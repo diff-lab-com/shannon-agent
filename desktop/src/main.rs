@@ -41,6 +41,7 @@ fn main() {
     use shannon_desktop::engine_discovery;
     use shannon_desktop::engine_discovery_commands as commands_engine_discovery;
     use shannon_desktop::extensions_commands;
+    use shannon_desktop::gateway_pairing;
     use shannon_desktop::loopback_api;
     use shannon_desktop::migration_commands;
     use shannon_desktop::persona_pack_commands;
@@ -196,6 +197,10 @@ fn main() {
             commands_mobile_pairing::mobile_set_tls,
             commands_mobile_pairing::mobile_list_paired_devices,
             commands_mobile_pairing::mobile_revoke_device,
+            // T9 — desktop approval entry for IM pairing requests (talks to
+            // the running gateway's mobile listener over its HTTP RPC skin)
+            gateway_pairing::gateway_pairing_pending,
+            gateway_pairing::gateway_pairing_approve,
             // D4 — cloud speech-to-text (voice input)
             commands_voice::transcribe_audio,
             commands_voice::get_stt_config,

@@ -278,21 +278,9 @@ pub fn parse_log_level(s: &str) -> Option<LogLevel> {
 
 /// Format debug help output
 pub fn format_debug_help() -> String {
-    let mut output = String::from("Developer Debug Commands:\n\n");
+    use rust_i18n::t;
 
-    output.push_str("  /debug log [level]     - Set log level (trace|debug|info|warn|error)\n");
-    output.push_str("  /debug profile start   - Start performance profiling\n");
-    output.push_str("  /debug profile stop    - Stop profiling and show results\n");
-    output.push_str("  /debug trace [on|off]  - Toggle execution tracing\n");
-    output.push_str("  /debug info            - Show system diagnostics\n");
-    output.push_str("\nLog Levels:\n");
-    output.push_str("  trace - All messages including internals\n");
-    output.push_str("  debug - Debug messages and above\n");
-    output.push_str("  info  - Informational messages (default)\n");
-    output.push_str("  warn  - Warnings and errors only\n");
-    output.push_str("  error - Critical errors only\n");
-
-    output
+    t!("commands.debug.help").to_string()
 }
 
 /// Format log level response
@@ -338,7 +326,9 @@ pub fn format_trace_response(enabled: bool) -> String {
 
 /// Format system info diagnostics
 pub fn format_system_info() -> String {
-    let mut output = String::from("System Diagnostics:\n\n");
+    use rust_i18n::t;
+
+    let mut output = t!("commands.debug.system_info_title").to_string();
 
     output.push_str(&format!("  OS: {}\n", std::env::consts::OS));
     output.push_str(&format!("  Arch: {}\n", std::env::consts::ARCH));

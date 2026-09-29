@@ -243,6 +243,15 @@ vi.mock('@/lib/tauri-api', () => ({
   mobileListPairedDevices: vi.fn().mockResolvedValue([]),
   mobileRevokeDevice: vi.fn().mockResolvedValue(true),
   mobileTlsStatus: vi.fn().mockResolvedValue({ enabled: false, fingerprint: null }),
+  // T9 — gateway IM pairing approval. Default: nothing pending; approve echoes.
+  gatewayPairingPending: vi.fn().mockResolvedValue([]),
+  gatewayPairingApprove: vi.fn().mockImplementation(async (code: string) => ({
+    code,
+    platform: 'slack',
+    senderId: 'UAPPROVED',
+    requestedAt: Date.now(),
+    expiresAt: Date.now() + 300_000,
+  })),
   testProviderConnection: vi.fn().mockResolvedValue({ kind: 'success' }),
   listProviders: vi.fn().mockResolvedValue({ active_provider_id: null, providers: [] }),
   saveProvider: vi.fn().mockResolvedValue({ active_provider_id: null, providers: [] }),

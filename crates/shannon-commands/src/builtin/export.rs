@@ -786,16 +786,14 @@ mod tests {
     #[test]
     fn export_session_from_store_missing_session_is_err() {
         let err = export_session_from_store(&uuid::Uuid::new_v4().to_string(), "x", "", "")
-            .err()
-            .expect("missing session errors");
+            .expect_err("missing session errors");
         assert!(err.contains("not found"));
     }
 
     #[test]
     fn export_session_from_store_rejects_malformed_id() {
-        let err = export_session_from_store("not-a-uuid", "x", "", "")
-            .err()
-            .expect("malformed id errors");
+        let err =
+            export_session_from_store("not-a-uuid", "x", "", "").expect_err("malformed id errors");
         assert!(err.contains("invalid session id"));
     }
 }

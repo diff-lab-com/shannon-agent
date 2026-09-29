@@ -2381,7 +2381,7 @@ mod tests {
         assert_eq!(vision_msg["role"], "user");
         assert_eq!(vision_msg["images"][0], "BBBB");
         assert!(
-            vision_msg["content"].as_str().unwrap().len() > 0,
+            !vision_msg["content"].as_str().unwrap().is_empty(),
             "context note present"
         );
         assert!(
@@ -2701,11 +2701,16 @@ mod tests {
         state: &mut OpenaiStreamState,
         out: &mut String,
     ) {
-        for ev in normalize_sse_event(chunk, provider, state) {
-            if let Ok(StreamEvent::ContentBlockDelta { delta, .. }) = ev {
-                if let ContentDelta::TextDelta { text: t } = delta {
-                    out.push_str(&t);
-                }
+        for ev in normalize_sse_event(chunk, provider, state)
+            .into_iter()
+            .flatten()
+        {
+            if let StreamEvent::ContentBlockDelta {
+                delta: ContentDelta::TextDelta { text: t },
+                ..
+            } = ev
+            {
+                out.push_str(&t);
             }
         }
     }
@@ -3184,11 +3189,11 @@ mod tests {
         assert_eq!(starts, 1, "echoed id must not re-emit ContentBlockStart");
 
         let mut args = String::new();
-        for e in &events {
-            if let Ok(StreamEvent::ContentBlockDelta {
+        for ev in events.iter().flatten() {
+            if let StreamEvent::ContentBlockDelta {
                 delta: ContentDelta::InputJsonDelta { partial_json },
                 ..
-            }) = e
+            } = ev
             {
                 args.push_str(partial_json);
             }
@@ -3686,7 +3691,7 @@ mod tests {
 
     #[test]
     fn test_anthropic_image_block_serialization() {
-        use crate::api::types::{ImageSource, MessageContent};
+        use crate::api::types::MessageContent;
         let req = MessageRequest {
             thinking_type: None,
             model: "claude-3-5-sonnet".to_string(),
@@ -3733,7 +3738,7 @@ mod tests {
 
     #[test]
     fn test_openai_image_block_conversion() {
-        use crate::api::types::{ImageSource, MessageContent};
+        use crate::api::types::MessageContent;
         let req = MessageRequest {
             thinking_type: None,
             model: "gpt-4o".to_string(),

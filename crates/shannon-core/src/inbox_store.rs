@@ -1617,7 +1617,7 @@ mod tests {
         // Simulate the second writer (desktop-side) by opening its own
         // raw rusqlite Connection to the same file, mirroring how a
         // second process would talk to the shared inbox.db.
-        let mut desktop_conn = Connection::open(&path).unwrap();
+        let desktop_conn = Connection::open(&path).unwrap();
         desktop_conn
             .pragma_update(None, "busy_timeout", "2000")
             .unwrap();

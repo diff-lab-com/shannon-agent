@@ -1875,7 +1875,6 @@ mod tests {
 
     #[test]
     fn stripping_rules_matrix() {
-        let fixture_sk_live = format!("api_key = \"{}-live-abcdef123456\"", "sk");
         let cases: Vec<(&str, &str)> = vec![
             // R1 — assignment lines (whole line replaced)
             (
@@ -1906,26 +1905,17 @@ mod tests {
             "{out}"
         );
         assert_eq!(n, 1);
-        let fixture_ghp_tok = format!("{}{}", "ghp", "_ABCDEFGHIJKLMNOPQRSTUVWXYZ1234567890");
-        let (out, n) = strip_text(&fixture_ghp_tok, false);
         let fixture = format!("{}{}", "ghp", "_ABCDEFGHIJKLMNOPQRSTUVWXYZ1234567890");
-        let (out, n) = strip_text(&fixture, false);
+        let (_, n) = strip_text(&fixture, false);
         assert_eq!(n, 1);
-        let fixture_xoxb_tok = format!("{}{}", "xoxb", "-123456789-abcdefghijklmnopqrstuv");
-        let (out, n) = strip_text(&fixture_xoxb_tok, false);
         let fixture = format!("{}{}", "xoxb", "-123456789-abcdefghijklmnopqrstuv");
-        let (out, n) = strip_text(&fixture, false);
+        let (_, n) = strip_text(&fixture, false);
         assert_eq!(n, 1);
-        let fixture_gp_tok = format!(
-            "{}{}{}",
-            "github", "_pat_", "ABCDEFGHIJKLMNOPQRSTUVWXYZ123_4567890"
-        );
-        let (out, n) = strip_text(&fixture_gp_tok, false);
         let fixture = format!(
             "{}{}{}",
             "github", "_pat_", "ABCDEFGHIJKLMNOPQRSTUVWXYZ123_4567890"
         );
-        let (out, n) = strip_text(&fixture, false);
+        let (_, n) = strip_text(&fixture, false);
         assert_eq!(n, 1);
 
         // R3a — webhook URLs truncated after the fixed prefix.

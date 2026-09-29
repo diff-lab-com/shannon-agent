@@ -1694,7 +1694,7 @@ mod tests {
         std::fs::write(&sibling, "title = 'keep'").unwrap();
 
         assert!(store.delete(&id).unwrap());
-        assert!(!store.load(&id).unwrap().is_some());
+        assert!(store.load(&id).unwrap().is_none());
         assert!(!store.delete(&id).unwrap(), "second delete reports false");
         assert!(sibling.exists(), "non-session siblings survive");
     }
@@ -1946,7 +1946,6 @@ mod tests {
                 })
                 .collect::<Vec<_>>()
                 .join(""),
-            other => panic!("unexpected content: {other:?}"),
         };
         let texts: Vec<String> = loaded.messages.iter().map(text).collect();
         assert_eq!(

@@ -182,8 +182,8 @@ mod tests {
         assert_eq!(safe_plugin_name("code.review").unwrap(), "code.review");
         assert_eq!(safe_plugin_name("  spaced  out  ").unwrap(), "spaced-out");
         assert_eq!(safe_plugin_name(".hidden").unwrap(), "hidden");
+        let re = regex::Regex::new(r"^[a-z0-9][a-z0-9._-]*$").unwrap();
         for slug in ["my-skill-v2", "code.review", "spaced-out", "hidden"] {
-            let re = regex::Regex::new(r"^[a-z0-9][a-z0-9._-]*$").unwrap();
             assert!(re.is_match(slug), "{slug} must match the whitelist");
         }
     }

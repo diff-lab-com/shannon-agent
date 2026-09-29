@@ -982,7 +982,7 @@ mod tests {
         let event = hook_trigger_event("UserPromptSubmit", serde_json::json!({"prompt": "hi"}));
         assert!(event.is_routing_only(), "hook triggers are routing topics");
         assert_eq!(
-            event.subtopic.as_ref().map(|s| &**s),
+            event.subtopic.as_deref(),
             Some("UserPromptSubmit"),
             "subtopic carries the hook type name"
         );

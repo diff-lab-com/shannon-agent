@@ -13,7 +13,11 @@
 //!   one file's symbols in place (no re-walk, no re-parse of siblings). This
 //!   is the hot path used by both the FS watcher and explicit `edit` calls.
 //! - [`RepoMapCache::pack`] — trim to a token budget and return the markdown
-//!   the query engine injects into the system prompt.
+//!   the query engine injects into the system prompt. Destructive: the
+//!   trimmed symbols are gone from the cache afterwards.
+//! - [`RepoMapCache::pack_snapshot`] — same rendering without the
+//!   destruction (the cache keeps its full symbol set); prefer it whenever
+//!   the cache must stay usable after rendering.
 //! - [`RepoMapCache::flush`] — write the current state to the disk cache.
 //! - [`RepoMapCache::invalidate`] — drop the on-disk cache so the next `new`
 //!   does a full re-walk. Useful when the language set changes or the cache
@@ -235,6 +239,27 @@ impl RepoMapCache {
         let md = RepoMap { map: map.clone() }.to_system_prompt_markdown();
         self.files = map.files;
         md
+    }
+
+    /// Non-destructive variant of [`Self::pack`]: trim a *clone* of the
+    /// cached map to the budget and render it, leaving `self` untouched.
+    ///
+    /// `pack` permanently removes the trimmed symbols from the cache, so a
+    /// caller that wants to keep packing after every turn had to deep-clone
+    /// the whole cache first (the query engine's repo-map injector did
+    /// exactly that). `pack_snapshot` moves that clone inside: the rendering
+    /// is identical to `clone().pack(budget)`, and the cache keeps its full
+    /// symbol set, so subsequent [`Self::update_file`] calls still see
+    /// untrimmed symbols. The remaining cost is the one clone on the calls
+    /// that actually re-render; callers rendering every turn should cache
+    /// the returned string and only call again when the map changed.
+    pub fn pack_snapshot(&self, budget_tokens: usize) -> String {
+        let mut map = SymbolMap {
+            root: self.root.clone(),
+            files: self.files.clone(),
+        };
+        budget::trim_to_budget(&mut map, budget_tokens);
+        RepoMap { map }.to_system_prompt_markdown()
     }
 
     /// Persist the current cache to disk. Best-effort: errors are surfaced
@@ -593,5 +618,45 @@ mod tests {
         let md = cache.pack(120);
         // Crude sanity: at least one function name should appear.
         assert!(md.contains("func_0"));
+    }
+
+    /// pack_snapshot must render exactly what the destructive pack renders,
+    /// and must leave the cache's symbol set intact (T12a): a snapshot can
+    /// be taken repeatedly with identical output, and the map afterwards
+    /// still matches a freshly built cache.
+    #[test]
+    fn pack_snapshot_matches_pack_and_leaves_cache_intact() {
+        let root = tmp_root();
+        for i in 0..8 {
+            fs::write(
+                root.join(format!("g{i}.rs")),
+                format!("pub fn snap_func_{i}(x: i32) -> i32 {{ x * {i} }}\n"),
+            )
+            .unwrap();
+        }
+        let cache = RepoMapCache::ephemeral(&root).unwrap();
+        let full_count = cache.file_count();
+        assert_eq!(full_count, 8);
+
+        // Tiny budget so trimming actually drops symbols.
+        let snapshot_a = cache.pack_snapshot(60);
+        let snapshot_b = cache.pack_snapshot(60);
+        assert_eq!(snapshot_a, snapshot_b, "snapshots must be stable");
+        assert!(snapshot_a.contains("snap_func_0"));
+
+        // Identical content to the destructive path on an equal cache.
+        let mut destructive = RepoMapCache::ephemeral(&root).unwrap();
+        let packed = destructive.pack(60);
+        assert_eq!(snapshot_a, packed);
+
+        // The snapshot left the cache's symbol set untouched: it still
+        // matches a freshly built cache exactly, while the destructive
+        // pack above visibly emptied files in its own map.
+        assert_eq!(cache.file_count(), full_count);
+        assert_eq!(
+            cache.map().files,
+            RepoMapCache::ephemeral(&root).unwrap().map().files
+        );
+        assert_ne!(cache.map().files, destructive.map().files);
     }
 }

@@ -302,10 +302,10 @@ mod tests {
         let table = parse_litellm(payload).expect("parses");
         // Costless entries (sample_spec, free-local-model) dropped.
         assert_eq!(table.len(), 2);
-        let sonnet = table.get("claude-sonnet-4-20250514").unwrap();
+        let sonnet = table.get("claude-sonnet-4-20250514").expect("sonnet entry");
         assert!((sonnet.input_price_per_mtok - 3.0).abs() < 1e-6);
         assert!((sonnet.output_price_per_mtok - 15.0).abs() < 1e-6);
-        let opus = table.get("anthropic/claude-opus-4").unwrap();
+        let opus = table.get("anthropic/claude-opus-4").expect("opus entry");
         assert!((opus.input_price_per_mtok - 15.0).abs() < 1e-6);
     }
 
@@ -329,11 +329,11 @@ mod tests {
             }
         }"#;
         let table = parse_litellm(payload).expect("parses");
-        let a = table.get("model-a").unwrap();
-        assert!((a.cache_read_per_mtok.unwrap() - 0.3).abs() < 1e-9);
-        assert!((a.cache_write_per_mtok.unwrap() - 3.75).abs() < 1e-9);
+        let a = table.get("model-a").expect("model-a entry");
+        assert!((a.cache_read_per_mtok.expect("cache read cost kept") - 0.3).abs() < 1e-9);
+        assert!((a.cache_write_per_mtok.expect("cache write cost kept") - 3.75).abs() < 1e-9);
         // Bad cache cost: entry kept, cache rates fall back to None.
-        let b = table.get("model-b").unwrap();
+        let b = table.get("model-b").expect("model-b entry");
         assert_eq!(b.cache_read_per_mtok, None);
         assert_eq!(b.cache_write_per_mtok, None);
     }
@@ -385,10 +385,10 @@ mod tests {
         );
         with_overlay(table, || {
             // Exact bare id.
-            let p = lookup_pricing("claude-sonnet-4-20250514").unwrap();
+            let p = lookup_pricing("claude-sonnet-4-20250514").expect("bare id resolves");
             assert!((p.input_price_per_mtok - 3.0).abs() < 1e-9);
             // Prefixed id resolves via the bare tail.
-            let p = lookup_pricing("anthropic/claude-opus-4").unwrap();
+            let p = lookup_pricing("anthropic/claude-opus-4").expect("prefixed id resolves");
             assert!((p.input_price_per_mtok - 15.0).abs() < 1e-9);
             // Unknown model → None (caller falls back).
             assert!(lookup_pricing("totally-unknown-model").is_none());

@@ -2164,6 +2164,10 @@ mod tests {
         }
     }
 
+    // Intentional: the global secret-guard transform is read by the tool
+    // boundary *during* the awaited execute(), so its serialization lock must
+    // be held across the await (test-only, uncontended).
+    #[allow(clippy::await_holding_lock)]
     #[tokio::test]
     async fn execution_boundary_restores_model_echoed_surrogates() {
         let _g = crate::secret_guard::test_support::acquire();
@@ -2196,6 +2200,9 @@ mod tests {
         );
     }
 
+    // Intentional: same global-transform lock, read during the awaited
+    // execute(); test-only and uncontended.
+    #[allow(clippy::await_holding_lock)]
     #[tokio::test]
     async fn fail_closed_plugin_blocks_execution() {
         let _g = crate::secret_guard::test_support::acquire();
@@ -2220,6 +2227,9 @@ mod tests {
         );
     }
 
+    // Intentional: same global-transform lock, read during the awaited
+    // execute(); test-only and uncontended.
+    #[allow(clippy::await_holding_lock)]
     #[tokio::test]
     async fn unresolved_tool_args_pass_through_with_visible_warning() {
         let _g = crate::secret_guard::test_support::acquire();

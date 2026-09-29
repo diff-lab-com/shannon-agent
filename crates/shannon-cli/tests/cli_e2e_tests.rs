@@ -632,7 +632,7 @@ async fn test_prompt_preserved_in_response_context() {
 #[serial]
 async fn test_json_stream_event_sequence() {
     // Verify json-stream output produces correct event ordering:
-    // start → text_delta* → done (CiEvent) → done (OutputEvent)
+    // start → text_delta* → ONE done line (F38 unified envelope).
     let mut server = mockito::Server::new_async().await;
     let _m = mock_ollama_streaming(&mut server, "Event sequence test");
 
@@ -658,19 +658,25 @@ async fn test_json_stream_event_sequence() {
         events[0]
     );
 
-    // Find the CiEvent::Done (has turns_used + tokens_used, not just exit_code)
-    let ci_done = events
-        .iter()
-        .find(|e| e["type"] == "done" && e.get("turns_used").is_some());
-    assert!(
-        ci_done.is_some(),
-        "Should have CiEvent::Done with turns_used"
+    // F38: exactly ONE done line carrying the full field union.
+    let done_count = events.iter().filter(|e| e["type"] == "done").count();
+    assert_eq!(
+        done_count, 1,
+        "F38: exactly one done event, got {done_count}"
     );
 
-    let done = ci_done.unwrap();
+    let done = events
+        .iter()
+        .find(|e| e["type"] == "done")
+        .expect("single done event");
     assert!(
         done.get("exit_code").is_some(),
         "done should have exit_code"
+    );
+    assert!(
+        done["exit_code"].is_i64(),
+        "exit_code must be an integer, got: {}",
+        done["exit_code"]
     );
     assert!(
         done.get("turns_used").is_some(),
@@ -680,13 +686,24 @@ async fn test_json_stream_event_sequence() {
         done.get("tokens_used").is_some(),
         "done should have tokens_used"
     );
+    assert!(
+        done.get("tokens_in").is_some() && done.get("tokens_out").is_some(),
+        "done should have split tokens_in/tokens_out"
+    );
+
+    // F38: the legacy vocabulary never leaks into the default stream.
+    assert!(
+        !events.iter().any(|e| e["type"] == "tool_use"),
+        "default json-stream must not emit legacy tool_use events"
+    );
 }
 
 #[serial]
 #[tokio::test]
 #[serial]
 async fn test_json_stream_text_delta_events() {
-    // Verify json-stream includes "text_delta" events with content (OutputEvent format)
+    // Verify json-stream includes "text_delta" events with content
+    // (part of the unified F38 envelope).
     let mut server = mockito::Server::new_async().await;
     let _m = mock_anthropic_streaming(&mut server, "Stream message content");
 
@@ -729,7 +746,7 @@ async fn test_json_stream_text_delta_events() {
 #[tokio::test]
 #[serial]
 async fn test_json_stream_anthropic_full_event_flow() {
-    // Verify Anthropic json-stream: start → text_delta → CiEvent::done → OutputEvent::done
+    // Verify Anthropic json-stream: start → text_delta* → ONE done (F38 unified)
     let mut server = mockito::Server::new_async().await;
     let _m = mock_anthropic_streaming(&mut server, "Full flow test");
 
@@ -761,21 +778,30 @@ async fn test_json_stream_anthropic_full_event_flow() {
         "Should have text_delta events, got: {types:?}"
     );
 
-    // Should end with two done events (CiEvent::Done then OutputEvent::Done)
+    // F38: exactly ONE done event with full metadata
     let done_count = types.iter().filter(|&&t| t == "done").count();
-    assert!(done_count >= 1, "Should have at least one done event");
+    assert_eq!(
+        done_count, 1,
+        "F38: exactly one done event, got {done_count}"
+    );
 
-    // CiEvent::Done should have full metadata
-    let ci_done = events
+    let done = events
         .iter()
-        .find(|e| e["type"] == "done" && e.get("turns_used").is_some());
+        .find(|e| e["type"] == "done")
+        .expect("single done event");
     assert!(
-        ci_done.is_some(),
-        "Should have CiEvent::Done with turns_used"
+        done.get("turns_used").is_some(),
+        "done should have turns_used"
     );
     assert!(
-        ci_done.unwrap()["exit_code"].as_i64().unwrap_or(-1) == 0,
+        done["exit_code"].as_i64().unwrap_or(-1) == 0,
         "exit_code should be 0 for success"
+    );
+
+    // F38: no legacy tool_use lines in the default stream.
+    assert!(
+        !types.contains(&"tool_use"),
+        "default json-stream must not emit legacy tool_use events, got: {types:?}"
     );
 }
 

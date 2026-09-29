@@ -317,6 +317,15 @@ where
 
 /// CI/CD event types for NDJSON streaming output.
 /// Each event is serialized as a single JSON object per line (newline-delimited).
+///
+/// F38 (review 2026-09-28): this is THE primary `--output-format json-stream`
+/// envelope. It absorbed the legacy [`OutputEvent`] vocabulary's one live
+/// event (`text_delta`) so a generic NDJSON consumer needs exactly one schema;
+/// the legacy vocabulary survives only behind `--emit-legacy-output-events`.
+/// Consumer map that decided this: `shannon-core/src/testing/eval_runner.rs`
+/// (frozen) builds the eval trajectory from `tool_call` lines and links
+/// sessions via `start.session_id`; `scripts/dogfood/runner.py` and the
+/// `scripts/eval/*` adapters read the same names — none reads `tool_use`.
 #[derive(Debug, Clone, serde::Serialize)]
 #[serde(tag = "type")]
 enum CiEvent {
@@ -329,6 +338,10 @@ enum CiEvent {
         /// persisted session file (needed for `--resume` checkpointing).
         session_id: String,
     },
+    /// Streamed assistant text fragment (absorbed from the legacy
+    /// OutputEvent envelope in F38 — the only legacy event with consumers).
+    #[serde(rename = "text_delta")]
+    TextDelta { content: String },
     /// Tool was invoked.
     #[serde(rename = "tool_call")]
     ToolCall {
@@ -720,9 +733,25 @@ struct Cli {
     // NOTE: `--allowed-tools` is defined above as `team_allowed_tools` (shared
     // by both --team-agent and --prompt headless modes).  Do not add a second
     // field with the same long option name — clap rejects duplicate longs.
-    /// Output format for headless mode (text or json).
+    /// Output format for headless mode (text, json, or json-stream).
+    ///
+    /// `json-stream` emits ONE NDJSON envelope (F38): start, text_delta,
+    /// tool_call, tool_result, progress, warning, error, and a single done
+    /// line {exit_code, turns_used, tokens_used, tokens_in, tokens_out,
+    /// infra_failure}. The pre-unification OutputEvent vocabulary
+    /// (tool_use / is_error / bare done) is available only via
+    /// `--emit-legacy-output-events`.
     #[arg(long = "output-format", default_value = "text")]
     output_format: OutputFormat,
+
+    /// DEPRECATED migration escape hatch (F38): emit the LEGACY json-stream
+    /// envelope (`text_delta`/`tool_use`/`tool_result{is_error}`/bare
+    /// `done{exit_code,infra_failure}`) INSTEAD of the unified envelope, so
+    /// consumers written against the pre-unification schema keep working
+    /// while they migrate. json-stream mode only; ignored by text/json.
+    /// Never combined with the unified envelope on the same stdout.
+    #[arg(long = "emit-legacy-output-events", hide = true)]
+    emit_legacy_output_events: bool,
 
     /// Maximum turns in headless mode before exiting with code 2. When
     /// unset, headless runs default to 100 turns (interactive sessions use
@@ -1685,6 +1714,28 @@ fn warn_headless_mcp_skipped(server_name: &str) {
     eprintln!("  Warning: {msg}");
 }
 
+/// The one-line T5 redaction opt-in notice. Split from the printer so the
+/// wording is unit-testable without arming the process-global one-shot
+/// latch in `shannon_core::secret_guard`.
+fn redaction_suggestion_notice() -> &'static str {
+    "Notice: potential secrets were detected in outbound LLM requests while secret-guard \
+     is in audit-only mode (values were forwarded to the provider and written to the \
+     session log). Enable redaction with [secret_guard] mode = \"redact\" in .shannon.toml \
+     (or ~/.shannon/config.toml), or SHANNON_SECRET_GUARD=redact"
+}
+
+/// T5 leftover: after a headless run completes, surface the one-shot
+/// redaction opt-in suggestion on STDERR. Never stdout — stdout is the
+/// machine contract (NDJSON / JSON / plain text) in every non-interactive
+/// mode. [`shannon_core::secret_guard::take_redaction_suggestion`] fires at
+/// most once per process and already emits a `tracing::warn!`; this adds
+/// the human-visible stderr line.
+fn print_redaction_suggestion_notice() {
+    if shannon_core::secret_guard::take_redaction_suggestion() {
+        eprintln!("{}", redaction_suggestion_notice());
+    }
+}
+
 /// Run a non-interactive query, outputting results to stdout.
 /// `stream` controls whether text is streamed character-by-character.
 /// `config` holds explicit CLI configuration.
@@ -1705,7 +1756,7 @@ fn run_noninteractive_query(
 ) -> Result<()> {
     let rt = tokio::runtime::Runtime::new()?;
 
-    rt.block_on(async {
+    let query_result: Result<()> = rt.block_on(async {
         // Build tool registry with all standard tools (sandboxed to project dir)
         let (project_dir, providers) =
             shannon_remote::assembly::assemble_for_headless()
@@ -2066,7 +2117,15 @@ fn run_noninteractive_query(
         }
 
         Ok(())
-    })
+    });
+    query_result?;
+
+    // T5 leftover: one-shot stderr notice when the secret guard saw
+    // audit-only findings this run. STDERR only — stdout here is plain text
+    // that scripts and wrappers capture.
+    print_redaction_suggestion_notice();
+
+    Ok(())
 }
 
 /// Emit an NDJSON event to stdout (newline-delimited JSON).
@@ -2080,7 +2139,11 @@ fn emit_ci_event(event: &CiEvent) {
     }
 }
 
-/// NDJSON event type for structured streaming output.
+/// LEGACY NDJSON event type (F38) — emitted ONLY under
+/// `--emit-legacy-output-events`, for external consumers that coded against
+/// the pre-unification OutputEvent schema (`tool_use` / `is_error` / bare
+/// `done`). Default json-stream mode emits the unified [`CiEvent`] envelope
+/// instead; the two vocabularies never share a stdout anymore.
 /// Mirrors the type defined in `shannon_core::output_format` but kept local
 /// to avoid a dependency that some build environments strip during linting.
 #[derive(Debug, Clone, serde::Serialize)]
@@ -2135,6 +2198,120 @@ fn emit_output_event(event: &OutputEvent) {
     }
 }
 
+// ── F38: json-stream envelope dispatch ─────────────────────────────────
+//
+// json-stream mode previously wrote BOTH vocabularies to the same stdout:
+// every tool call produced a `CiEvent::ToolCall` ("tool_call") AND an
+// `OutputEvent::ToolUse` ("tool_use") line, and the run ended with two
+// differently-shaped `done` lines. Each helper below routes ONE logical
+// event onto the ACTIVE envelope: the unified [`CiEvent`] vocabulary by
+// default, the legacy [`OutputEvent`] vocabulary when
+// `--emit-legacy-output-events` is passed (migration escape hatch). They
+// are only called from `OutputFormat::JsonStream` branches.
+
+/// Streamed text fragment on the active envelope.
+fn emit_stream_text_delta(legacy_output_events: bool, content: &str) {
+    if legacy_output_events {
+        emit_output_event(&OutputEvent::TextDelta {
+            content: content.to_string(),
+        });
+    } else {
+        emit_ci_event(&CiEvent::TextDelta {
+            content: content.to_string(),
+        });
+    }
+}
+
+/// Tool invocation on the active envelope (`tool_call` unified,
+/// `tool_use` legacy). The full parsed input travels on both — see review F31.
+fn emit_stream_tool_call(legacy_output_events: bool, name: &str, input: &serde_json::Value) {
+    if legacy_output_events {
+        emit_output_event(&OutputEvent::ToolUse {
+            name: name.to_string(),
+            input: input.clone(),
+        });
+    } else {
+        emit_ci_event(&CiEvent::ToolCall {
+            name: name.to_string(),
+            input: input.clone(),
+        });
+    }
+}
+
+/// Tool completion on the active envelope. Unified carries `success`,
+/// legacy carries `is_error` (the two are complements).
+fn emit_stream_tool_result(legacy_output_events: bool, name: &str, output: &str, is_error: bool) {
+    if legacy_output_events {
+        emit_output_event(&OutputEvent::ToolResult {
+            name: name.to_string(),
+            output: output.to_string(),
+            is_error,
+        });
+    } else {
+        emit_ci_event(&CiEvent::ToolResult {
+            name: name.to_string(),
+            output: output.to_string(),
+            success: !is_error,
+        });
+    }
+}
+
+/// Non-fatal warning on the active envelope.
+fn emit_stream_warning(legacy_output_events: bool, message: &str) {
+    if legacy_output_events {
+        emit_output_event(&OutputEvent::Warning {
+            message: message.to_string(),
+        });
+    } else {
+        emit_ci_event(&CiEvent::Warning {
+            message: message.to_string(),
+        });
+    }
+}
+
+/// Terminal/failure notice on the active envelope.
+fn emit_stream_error(legacy_output_events: bool, message: &str) {
+    if legacy_output_events {
+        emit_output_event(&OutputEvent::Error {
+            message: message.to_string(),
+        });
+    } else {
+        emit_ci_event(&CiEvent::Error {
+            message: message.to_string(),
+        });
+    }
+}
+
+/// THE single terminal `done` line (F38). Unified carries the full union —
+/// integer `exit_code` (review F35), `turns_used`, `tokens_used`,
+/// `tokens_in`, `tokens_out`, `infra_failure`; legacy keeps its bare
+/// `{exit_code, infra_failure}` shape so old parsers stay byte-compatible.
+fn emit_stream_done(
+    legacy_output_events: bool,
+    exit_code: i32,
+    turns_used: u32,
+    tokens_used: u64,
+    tokens_in: u64,
+    tokens_out: u64,
+    infra_failure: bool,
+) {
+    if legacy_output_events {
+        emit_output_event(&OutputEvent::Done {
+            exit_code,
+            infra_failure,
+        });
+    } else {
+        emit_ci_event(&CiEvent::Done {
+            exit_code,
+            turns_used,
+            tokens_used,
+            tokens_in,
+            tokens_out,
+            infra_failure,
+        });
+    }
+}
+
 /// Load a JSON Schema from a file path or inline JSON string.
 ///
 /// If the input starts with `{` or `[`, it's parsed as inline JSON.
@@ -2164,6 +2341,12 @@ fn load_schema(input: &str) -> Result<shannon_core::StructuredOutputConfig> {
 ///   abort the run)
 /// - Limits turns via `--max-turns` (exit code 2 when exceeded)
 /// - Outputs structured JSON with `--output-format json`
+/// - `--output-format json-stream` emits ONE unified NDJSON envelope
+///   (review F38): start / text_delta / tool_call / tool_result / progress /
+///   warning / error, ended by a single `done` line. The legacy
+///   OutputEvent vocabulary is available only via the
+///   `--emit-legacy-output-events` escape hatch, which replaces (never
+///   duplicates) the unified stream.
 ///
 /// Exit codes are integers 0-7 everywhere (review F35 — the single canonical
 /// form, identical in `--output-format json`'s `exit_code` field and the
@@ -2179,6 +2362,7 @@ fn run_headless_query(
     allowed_tools: Option<&[String]>,
     disallowed_tools: &[String],
     output_format: OutputFormat,
+    emit_legacy_output_events: bool,
     max_turns: Option<u32>,
     exit_on_error: bool,
     quiet: bool,
@@ -2451,8 +2635,9 @@ fn run_headless_query(
         let run_retries = run_retry_limit();
         let mut run_attempt: u32 = 0;
 
-        // Emit start event for JsonStream format
-        if output_format == OutputFormat::JsonStream {
+        // Emit start event for JsonStream format (unified envelope only —
+        // the legacy OutputEvent vocabulary has no start event).
+        if output_format == OutputFormat::JsonStream && !emit_legacy_output_events {
             let model_name = config.model().unwrap_or_else(|| "default".to_string());
             emit_ci_event(&CiEvent::Start {
                 prompt: prompt.to_string(),
@@ -2469,7 +2654,7 @@ fn run_headless_query(
                             print!("{content}");
                             std::io::stdout().flush().ok();
                         } else if output_format == OutputFormat::JsonStream {
-                            emit_output_event(&OutputEvent::TextDelta { content: content.clone() });
+                            emit_stream_text_delta(emit_legacy_output_events, &content);
                         }
                         response_text.push_str(&content);
                     }
@@ -2534,14 +2719,10 @@ fn run_headless_query(
                         // interesting invocations. Truncation now applies only
                         // to the final HeadlessOutput summaries.
                         if output_format == OutputFormat::JsonStream {
-                            emit_ci_event(&CiEvent::ToolCall {
-                                name: tool_name.clone(),
-                                input: tool_input.clone(),
-                            });
-                            emit_output_event(&OutputEvent::ToolUse {
-                                name: tool_name.clone(),
-                                input: tool_input.clone(),
-                            });
+                            // F38: ONE tool event on the active envelope —
+                            // `tool_call` (unified) or `tool_use` (legacy),
+                            // never both.
+                            emit_stream_tool_call(emit_legacy_output_events, &tool_name, &tool_input);
                         }
                         // Store a placeholder; will be updated on ToolUseResult
                         tool_calls.push(ToolCallSummary {
@@ -2581,18 +2762,14 @@ fn run_headless_query(
                             changed_files.push((path, old, String::new()));
                         }
 
-                        // Emit NDJSON event
+                        // Emit NDJSON event (F38: single envelope)
                         if output_format == OutputFormat::JsonStream {
-                            emit_ci_event(&CiEvent::ToolResult {
-                                name: tool_name.clone(),
-                                output: output_summary.clone(),
-                                success: !is_error,
-                            });
-                            emit_output_event(&OutputEvent::ToolResult {
-                                name: tool_name.clone(),
-                                output: output_summary.clone(),
+                            emit_stream_tool_result(
+                                emit_legacy_output_events,
+                                &tool_name,
+                                &output_summary,
                                 is_error,
-                            });
+                            );
                         }
 
                         // Handle exit-on-error
@@ -2602,12 +2779,10 @@ fn run_headless_query(
                             }
                             exit_code = HeadlessExitCode::Error;
                             if output_format == OutputFormat::JsonStream {
-                                emit_ci_event(&CiEvent::Error {
-                                    message: format!("Tool {tool_name} failed: {output_summary}"),
-                                });
-                                emit_output_event(&OutputEvent::Error {
-                                    message: format!("Tool {tool_name} failed: {output_summary}"),
-                                });
+                                emit_stream_error(
+                                    emit_legacy_output_events,
+                                    &format!("Tool {tool_name} failed: {output_summary}"),
+                                );
                             }
                             break;
                         }
@@ -2656,10 +2831,7 @@ fn run_headless_query(
                                     eprintln!("[headless: {message}]");
                                 }
                                 if output_format == OutputFormat::JsonStream {
-                                    emit_ci_event(&CiEvent::Warning {
-                                        message: message.clone(),
-                                    });
-                                    emit_output_event(&OutputEvent::Warning { message });
+                                    emit_stream_warning(emit_legacy_output_events, &message);
                                 }
                             }
                         }
@@ -2741,9 +2913,10 @@ fn run_headless_query(
                             if output_format == OutputFormat::JsonStream {
                                 // Synthetic stream event so harnesses see the
                                 // restart between the failure and attempt 2.
-                                emit_output_event(&OutputEvent::Error {
-                                    message: format!("[run-retry] attempt {run_attempt} after {kind}: {error}"),
-                                });
+                                emit_stream_error(
+                                    emit_legacy_output_events,
+                                    &format!("[run-retry] attempt {run_attempt} after {kind}: {error}"),
+                                );
                             }
                             response_text.clear();
                             tool_calls.clear();
@@ -2761,9 +2934,7 @@ fn run_headless_query(
                         eprintln!("Error: {error}");
                         exit_code = class;
                         if output_format == OutputFormat::JsonStream {
-                            emit_output_event(&OutputEvent::Error {
-                                message: error.clone(),
-                            });
+                            emit_stream_error(emit_legacy_output_events, &error);
                         }
                     }
                     Ok(QueryEvent::Progress { message, .. }) => {
@@ -2774,7 +2945,9 @@ fn run_headless_query(
                         if !quiet {
                             eprintln!("[headless: {message}]");
                         }
-                        if output_format == OutputFormat::JsonStream {
+                        if output_format == OutputFormat::JsonStream && !emit_legacy_output_events {
+                            // `progress` exists only in the unified envelope;
+                            // strict legacy mode never carried it.
                             emit_ci_event(&CiEvent::Progress { message });
                         }
                     }
@@ -2783,10 +2956,7 @@ fn run_headless_query(
                             eprintln!("[headless: warning: {message}]");
                         }
                         if output_format == OutputFormat::JsonStream {
-                            emit_ci_event(&CiEvent::Warning {
-                                message: message.clone(),
-                            });
-                            emit_output_event(&OutputEvent::Warning { message });
+                            emit_stream_warning(emit_legacy_output_events, &message);
                         }
                     }
                     Ok(QueryEvent::RateLimit {
@@ -2855,9 +3025,10 @@ fn run_headless_query(
                     eprintln!("Schema validation failed: {e}");
                     exit_code = HeadlessExitCode::Error;
                     if output_format == OutputFormat::JsonStream {
-                        emit_output_event(&OutputEvent::Error {
-                            message: format!("Schema validation failed: {e}"),
-                        });
+                        emit_stream_error(
+                            emit_legacy_output_events,
+                            &format!("Schema validation failed: {e}"),
+                        );
                     }
                 }
             }
@@ -2887,19 +3058,20 @@ fn run_headless_query(
                 }));
             }
             OutputFormat::JsonStream => {
-                // Emit final done event
-                emit_ci_event(&CiEvent::Done {
-                    exit_code: i32::from(exit_code),
-                    turns_used: _turn_count as u32,
-                    tokens_used: total_tokens,
+                // F38: exactly ONE terminal `done` line, on the active
+                // envelope. The unified shape carries the full field union
+                // consumers need: integer `exit_code` (review F35),
+                // `infra_failure` (A7), `turns_used`, `tokens_used`, and the
+                // split `tokens_in`/`tokens_out` ledger fields.
+                emit_stream_done(
+                    emit_legacy_output_events,
+                    i32::from(exit_code),
+                    _turn_count as u32,
+                    total_tokens,
                     tokens_in,
                     tokens_out,
                     infra_failure,
-                });
-                emit_output_event(&OutputEvent::Done {
-                    exit_code: i32::from(exit_code),
-                    infra_failure,
-                });
+                );
             }
         }
 
@@ -2931,6 +3103,10 @@ fn run_headless_query(
     if notify {
         fire_headless_completion_notification(exit_code, prompt);
     }
+
+    // T5 leftover: one-shot stderr notice when the secret guard saw audit-only
+    // findings this run. STDERR only — stdout is the NDJSON contract above.
+    print_redaction_suggestion_notice();
 
     // Exit with the appropriate code
     std::process::exit(i32::from(exit_code));
@@ -5326,6 +5502,7 @@ fn run_with_cli(cli: Cli) -> Result<()> {
             allowed_vec.as_deref(),
             &cli.disallowed_tools,
             cli.output_format,
+            cli.emit_legacy_output_events,
             cli.max_turns,
             cli.exit_on_error,
             cli.quiet || cli.diff_only,
@@ -6368,7 +6545,6 @@ def456  shannon-x86_64-unknown-linux-gnu.tar.gz
         assert!(!cli.dump_config);
     }
 
-    #[test]
     #[test]
     fn test_cli_parse_serve_defaults() {
         let cli = Cli::try_parse_from(["shannon", "serve"]).unwrap();
@@ -7994,6 +8170,97 @@ profile_routes = []
         let line = event.to_ndjson();
         assert!(line.ends_with('\n'));
         assert_eq!(line.matches('\n').count(), 1);
+    }
+
+    // ── F38: unified json-stream envelope ──────────────────────────────────
+
+    #[test]
+    fn test_ci_event_text_delta_ndjson() {
+        // `text_delta` was absorbed from the legacy OutputEvent envelope so
+        // the unified vocabulary carries streamed text too.
+        let event = CiEvent::TextDelta {
+            content: "hello".into(),
+        };
+        let parsed: serde_json::Value =
+            serde_json::from_str(&serde_json::to_string(&event).unwrap()).unwrap();
+        assert_eq!(parsed["type"], "text_delta");
+        assert_eq!(parsed["content"], "hello");
+    }
+
+    #[test]
+    fn test_ci_event_done_carries_union_fields() {
+        // THE single done line (F38): integer exit_code (F35), the A7
+        // infra_failure marker, turns, and the token ledger fields — the
+        // union of the two pre-unification done shapes.
+        let done = CiEvent::Done {
+            exit_code: 2,
+            turns_used: 7,
+            tokens_used: 215,
+            tokens_in: 150,
+            tokens_out: 65,
+            infra_failure: false,
+        };
+        let parsed: serde_json::Value =
+            serde_json::from_str(&serde_json::to_string(&done).unwrap()).unwrap();
+        assert_eq!(parsed["type"], "done");
+        assert_eq!(parsed["exit_code"], 2);
+        assert!(parsed["exit_code"].is_i64(), "exit_code must be an integer");
+        assert_eq!(parsed["turns_used"], 7);
+        assert_eq!(parsed["tokens_used"], 215);
+        assert_eq!(parsed["tokens_in"], 150);
+        assert_eq!(parsed["tokens_out"], 65);
+        // Healthy runs stay byte-compatible: infra_failure omitted, not false.
+        assert!(
+            !serde_json::to_string(&done)
+                .unwrap()
+                .contains("infra_failure"),
+            "healthy done must omit infra_failure"
+        );
+
+        let infra = CiEvent::Done {
+            exit_code: 3,
+            turns_used: 0,
+            tokens_used: 0,
+            tokens_in: 0,
+            tokens_out: 0,
+            infra_failure: true,
+        };
+        let parsed: serde_json::Value =
+            serde_json::from_str(&serde_json::to_string(&infra).unwrap()).unwrap();
+        assert_eq!(parsed["infra_failure"], serde_json::Value::Bool(true));
+    }
+
+    #[test]
+    fn test_emit_legacy_output_events_flag_parses() {
+        // Default: unified envelope (flag absent).
+        let cli = Cli::try_parse_from(["shannon", "--prompt", "x"]).unwrap();
+        assert!(!cli.emit_legacy_output_events);
+        // Opt-in legacy escape hatch parses (hidden from --help).
+        let cli = Cli::try_parse_from([
+            "shannon",
+            "--prompt",
+            "x",
+            "--output-format",
+            "json-stream",
+            "--emit-legacy-output-events",
+        ])
+        .unwrap();
+        assert!(cli.emit_legacy_output_events);
+    }
+
+    // ── T5 leftover: headless redaction stderr notice ──────────────────────
+
+    #[test]
+    fn test_redaction_suggestion_notice_is_single_line_naming_optin() {
+        let notice = redaction_suggestion_notice();
+        assert!(
+            !notice.contains('\n'),
+            "the notice must stay one stderr line, got: {notice}"
+        );
+        assert!(notice.starts_with("Notice:"));
+        // It must name the actual opt-in keys so the hint is actionable.
+        assert!(notice.contains("[secret_guard] mode = \"redact\""));
+        assert!(notice.contains("SHANNON_SECRET_GUARD=redact"));
     }
 
     // ── load_schema tests ────────────────────────────────────────────

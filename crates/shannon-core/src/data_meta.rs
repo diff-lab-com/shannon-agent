@@ -429,7 +429,8 @@ mod tests {
         let path = meta_path_in(&home);
         let mut meta = read_from(&home).expect("marker");
         meta.schema.insert("inbox".into(), 3);
-        std::fs::write(&path, serde_json::to_vec(&meta).unwrap()).unwrap();
+        std::fs::write(&path, serde_json::to_vec(&meta).expect("meta serializes"))
+            .expect("write merged meta");
         record_in(&home, "0.11.0");
         let meta = read_from(&home).expect("marker");
         assert_eq!(meta.schema.get("inbox"), Some(&3));
@@ -439,7 +440,7 @@ mod tests {
     #[test]
     fn corrupt_marker_treated_as_absent() {
         let (_dir, home) = temp_home();
-        std::fs::write(meta_path_in(&home), b"{ not json").unwrap();
+        std::fs::write(meta_path_in(&home), b"{ not json").expect("write corrupt marker");
         assert!(read_from(&home).is_none());
         assert_eq!(check_against(None, "0.11.0"), Compatibility::NoMarker);
     }
@@ -448,10 +449,11 @@ mod tests {
     fn backup_copies_files_and_dirs_skips_missing() {
         let (_dir, home) = temp_home();
         let store = home.join("providers.toml");
-        std::fs::write(&store, b"key = 'value'").unwrap();
+        std::fs::write(&store, b"key = 'value'").expect("write store file");
         let dir_store = home.join("sessions");
-        std::fs::create_dir_all(dir_store.join("abc")).unwrap();
-        std::fs::write(dir_store.join("abc").join("events.jsonl"), b"{}\n").unwrap();
+        std::fs::create_dir_all(dir_store.join("abc")).expect("create session dir");
+        std::fs::write(dir_store.join("abc").join("events.jsonl"), b"{}\n")
+            .expect("write events file");
         let missing = home.join("does-not-exist.db");
 
         let backup = backup_before_migration_in(
@@ -465,11 +467,12 @@ mod tests {
         assert!(backup.starts_with(home.join("backups")));
         assert!(backup.to_string_lossy().contains("0.11.0-to-0.12.0"));
         assert_eq!(
-            std::fs::read_to_string(backup.join("providers.toml")).unwrap(),
+            std::fs::read_to_string(backup.join("providers.toml")).expect("read backed-up store"),
             "key = 'value'"
         );
         assert_eq!(
-            std::fs::read_to_string(backup.join("sessions/abc/events.jsonl")).unwrap(),
+            std::fs::read_to_string(backup.join("sessions/abc/events.jsonl"))
+                .expect("read backed-up events"),
             "{}\n"
         );
     }
