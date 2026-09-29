@@ -925,8 +925,11 @@ enum Commands {
         verbose: bool,
     },
 
-    /// Manage Shannon configuration
+    /// Manage Shannon configuration (no arg: list; `<key>`: get;
+    /// `<key>=<value>`: set — engine-readable keys are mirrored into
+    /// ~/.shannon/config.toml, secrets are refused)
     Config {
+        /// `key` to get, or `key=value` to set
         #[arg(short, long)]
         setting: Option<String>,
     },
@@ -5817,23 +5820,8 @@ fn run_with_cli(cli: Cli) -> Result<()> {
                     if let Some((k, v)) = key.split_once('=') {
                         let k = k.trim();
                         let v = v.trim();
-                        let value: serde_json::Value = if v == "true" {
-                            serde_json::json!(true)
-                        } else if v == "false" {
-                            serde_json::json!(false)
-                        } else if let Ok(n) = v.parse::<i64>() {
-                            serde_json::json!(n)
-                        } else if let Ok(n) = v.parse::<f64>() {
-                            serde_json::json!(n)
-                        } else {
-                            serde_json::json!(v)
-                        };
-                        manager.set(k.to_string(), value.clone());
-                        if let Err(e) = manager.save() {
-                            eprintln!("Error saving config: {e}");
-                        } else {
-                            println!("Set {k} = {value}");
-                        }
+                        let outcome = apply_config_set(&mut manager, k, v, None);
+                        print_config_set_outcome(&manager, k, outcome);
                     } else {
                         // Get a specific key
                         match manager.get(key.trim()) {
@@ -6109,9 +6097,250 @@ fn run_with_cli(cli: Cli) -> Result<()> {
     Ok(())
 }
 
+/// Outcome of one `shannon config <key>=<value>` write.
+///
+/// Aligns the CLI with the TUI `/config set` path (review P0-4): engine-read
+/// flat keys are mirrored into `~/.shannon/config.toml` via
+/// [`shannon_core::config_persist`], secret-shaped keys are refused with the
+/// A1 rationale, and everything else is stored in config.json only — with the
+/// output saying which of the two happened instead of leaving the engine-blind
+/// write invisible.
+#[derive(Debug, Clone, PartialEq)]
+enum ConfigSetOutcome {
+    /// Written to config.json AND mirrored into the engine-read config.toml.
+    Mirrored {
+        value: serde_json::Value,
+        engine_path: std::path::PathBuf,
+    },
+    /// The config.toml mirror failed (config.json itself was written).
+    MirrorFailed {
+        value: serde_json::Value,
+        error: String,
+    },
+    /// Written to config.json only — not an engine-readable flat key.
+    JsonOnly { value: serde_json::Value },
+    /// Secret-shaped key refused (decision A1) — nothing was written.
+    RefusedSecret,
+    /// config.json itself failed to save.
+    SaveFailed(String),
+}
+
+/// Apply `shannon config <key>=<value>`: persist to config.json and, for the
+/// writable flat keys, mirror into the engine-read config.toml.
+///
+/// `toml_path` overrides the config.toml location (tests pass a tempdir path;
+/// production passes `None` for the default `~/.shannon/config.toml`). Shared
+/// by [`Commands::Config`] and the unit tests.
+fn apply_config_set(
+    manager: &mut shannon_tools::config::ConfigManager,
+    key: &str,
+    value_str: &str,
+    toml_path: Option<&std::path::Path>,
+) -> ConfigSetOutcome {
+    use shannon_core::config_persist;
+
+    // Decision A1: never write a secret-shaped key to any config file. Same
+    // rationale the TUI prints (config_persist's refusal message). The
+    // writable-key allowlist is consulted FIRST so the engine-readable flat
+    // keys keep working — `max_tokens` contains the substring "token" and is
+    // therefore secret-shaped by the coarse predicate, but it is allowlisted,
+    // so it mirrors instead of being refused.
+    if !config_persist::is_writable_key(key) && config_persist::is_secret_shaped_key(key) {
+        return ConfigSetOutcome::RefusedSecret;
+    }
+
+    let value: serde_json::Value = if value_str == "true" {
+        serde_json::json!(true)
+    } else if value_str == "false" {
+        serde_json::json!(false)
+    } else if let Ok(n) = value_str.parse::<i64>() {
+        serde_json::json!(n)
+    } else if let Ok(n) = value_str.parse::<f64>() {
+        serde_json::json!(n)
+    } else {
+        serde_json::json!(value_str)
+    };
+    manager.set(key.to_string(), value.clone());
+    if let Err(e) = manager.save() {
+        return ConfigSetOutcome::SaveFailed(e);
+    }
+
+    // Mirror engine-readable flat keys into config.toml — the same
+    // config_persist write path the TUI `/config set` uses — so
+    // `shannon config model=…` actually takes effect on the next launch.
+    if config_persist::is_writable_key(key) {
+        match config_persist::set_global_config_key(toml_path, key, value_str) {
+            Ok(engine_path) => ConfigSetOutcome::Mirrored { value, engine_path },
+            Err(e) => ConfigSetOutcome::MirrorFailed {
+                value,
+                error: e.to_string(),
+            },
+        }
+    } else {
+        ConfigSetOutcome::JsonOnly { value }
+    }
+}
+
+/// Print the user-facing result of [`apply_config_set`], stating which files
+/// were written (or why the write was refused).
+fn print_config_set_outcome(
+    manager: &shannon_tools::config::ConfigManager,
+    key: &str,
+    outcome: ConfigSetOutcome,
+) {
+    match outcome {
+        ConfigSetOutcome::Mirrored { value, engine_path } => {
+            println!("Set {key} = {value}");
+            println!("  saved: {}", manager.config_path().display());
+            println!(
+                "  engine config (read on next launch): {}",
+                engine_path.display()
+            );
+        }
+        ConfigSetOutcome::MirrorFailed { value, error } => {
+            println!("Set {key} = {value}");
+            eprintln!("  warning: config.toml: {error}");
+        }
+        ConfigSetOutcome::JsonOnly { value } => {
+            println!("Set {key} = {value}");
+            println!(
+                "  note: stored in {} only — the engine does not read this key from there",
+                manager.config_path().display()
+            );
+        }
+        ConfigSetOutcome::RefusedSecret => {
+            eprintln!(
+                "Refused: '{key}' is not a writable config.toml key — secrets belong in \
+                 /credentials, not config files (A1)"
+            );
+        }
+        ConfigSetOutcome::SaveFailed(e) => {
+            eprintln!("Error saving config: {e}");
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    // ── shannon config <key>=<value> (review P0-4: CLI/TUI alignment) ──
+
+    /// Temp config.json + config.toml pair, isolated from the real `~/.shannon`.
+    fn make_config_test_paths() -> (tempfile::TempDir, std::path::PathBuf, std::path::PathBuf) {
+        let dir = tempfile::TempDir::new().expect("tempdir");
+        let json_path = dir.path().join("config.json");
+        let toml_path = dir.path().join("config.toml");
+        (dir, json_path, toml_path)
+    }
+
+    #[test]
+    fn test_config_set_writable_key_mirrors_into_config_toml() {
+        let (_dir, json_path, toml_path) = make_config_test_paths();
+        let mut manager = shannon_tools::config::ConfigManager::with_path(json_path.clone());
+
+        let outcome = apply_config_set(
+            &mut manager,
+            "model",
+            "claude-sonnet-4-20250514",
+            Some(&toml_path),
+        );
+        match outcome {
+            ConfigSetOutcome::Mirrored {
+                ref value,
+                ref engine_path,
+            } => {
+                assert_eq!(*value, serde_json::json!("claude-sonnet-4-20250514"));
+                assert_eq!(engine_path, &toml_path);
+            }
+            other => panic!("expected Mirrored, got {other:?}"),
+        }
+
+        // Both files written: the KV json store and the engine-read toml.
+        let toml: toml::Table =
+            toml::from_str(&std::fs::read_to_string(&toml_path).expect("toml written"))
+                .expect("parse");
+        assert_eq!(
+            toml.get("model").and_then(|v| v.as_str()),
+            Some("claude-sonnet-4-20250514")
+        );
+        let json: serde_json::Value =
+            serde_json::from_str(&std::fs::read_to_string(&json_path).expect("json written"))
+                .expect("parse");
+        assert_eq!(
+            json["values"]["model"],
+            serde_json::json!("claude-sonnet-4-20250514")
+        );
+    }
+
+    #[test]
+    fn test_config_set_secret_key_is_refused_without_writing() {
+        let (_dir, json_path, toml_path) = make_config_test_paths();
+        let mut manager = shannon_tools::config::ConfigManager::with_path(json_path.clone());
+
+        for key in ["api_key", "anthropic_api_key", "authToken", "my-password"] {
+            let outcome = apply_config_set(&mut manager, key, "sk-LEAK", Some(&toml_path));
+            assert_eq!(outcome, ConfigSetOutcome::RefusedSecret, "{key}");
+        }
+
+        // Decision A1: neither config file may exist after a refusal.
+        assert!(!json_path.exists(), "config.json must not be written");
+        assert!(!toml_path.exists(), "config.toml must not be written");
+    }
+
+    #[test]
+    fn test_config_set_non_writable_key_stays_json_only_with_value() {
+        let (_dir, json_path, toml_path) = make_config_test_paths();
+        let mut manager = shannon_tools::config::ConfigManager::with_path(json_path.clone());
+
+        let outcome = apply_config_set(
+            &mut manager,
+            "base_url",
+            "https://example.invalid",
+            Some(&toml_path),
+        );
+        match outcome {
+            ConfigSetOutcome::JsonOnly { ref value } => {
+                assert_eq!(*value, serde_json::json!("https://example.invalid"));
+            }
+            other => panic!("expected JsonOnly, got {other:?}"),
+        }
+        assert!(json_path.exists());
+        assert!(
+            !toml_path.exists(),
+            "non-writable key must not reach config.toml"
+        );
+    }
+
+    #[test]
+    fn test_config_set_value_coercion_matches_previous_cli_behaviour() {
+        let (_dir, json_path, toml_path) = make_config_test_paths();
+        let mut manager = shannon_tools::config::ConfigManager::with_path(json_path);
+
+        assert_eq!(
+            apply_config_set(&mut manager, "max_tokens", "8192", Some(&toml_path)),
+            ConfigSetOutcome::Mirrored {
+                value: serde_json::json!(8192),
+                engine_path: toml_path.clone(),
+            }
+        );
+        assert_eq!(
+            apply_config_set(&mut manager, "debug", "true", Some(&toml_path)),
+            ConfigSetOutcome::Mirrored {
+                value: serde_json::json!(true),
+                engine_path: toml_path.clone(),
+            }
+        );
+        // Non-numeric value for a numeric key: coerced to a TOML string by
+        // config_persist, JSON number parse falls back to string in the store.
+        assert_eq!(
+            apply_config_set(&mut manager, "temperature", "warm", Some(&toml_path)),
+            ConfigSetOutcome::Mirrored {
+                value: serde_json::json!("warm"),
+                engine_path: toml_path,
+            }
+        );
+    }
 
     // ── desktop --install: asset picking ─────────────────────────────
 

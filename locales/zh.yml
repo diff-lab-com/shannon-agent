@@ -16,6 +16,7 @@ repl:
   cancelled: "已取消"
   cancelled_by_user: "用户已取消。"
   query_task_panicked: "查询任务崩溃"
+  unconfigured_guidance: "尚未连接任何 provider — 请运行 /connect <provider> <key>（本地模型可运行 /connect ollama）。"
   tools_disabled: "工具已禁用 — 模型将以纯文本回复。使用 /tools 重新启用。"
   tools_enabled: "工具已重新启用。"
 
@@ -105,6 +106,7 @@ commands:
     legend: "* = 当前 | 使用 /provider <名称> 切换"
     switched: "Provider：%{provider} | 模型：%{model}"
     switched_no_catalog: "Provider 已设为 %{provider}。它没有内置模型列表 — 使用 `/model <provider>/<model-id>` 选择模型。"
+    foreign_model_warning: "⚠ 注意：当前模型 %{model} 属于 %{old_provider}；切换后会保留该模型，请求将被发送到 %{new_provider}。如需显式选择模型：/model %{new_provider}/<model-id>"
     no_selection: "未选择 provider。请先运行 /connect <provider> <key>。"
   disconnect:
     usage: "用法：/disconnect <provider>\n移除某 provider 已保存的连接（其在 providers.toml 中的条目），使其不再处于已连接状态。已存储的 API key 会保留 — 重新运行 /connect 即可再次连接。"
@@ -414,6 +416,18 @@ ui:
     pressure_high: "高"
     pressure_normal: "正常"
     pressure_low: "低"
+  # ── 首次运行设置引导（review P0-1/P0-2）───────────────────────────────────
+  setup_hint:
+    title: "尚未连接任何 provider — Shannon 需要一个才能回答。"
+    connect: "  /connect <provider> <key>   连接一个 provider（key 仅存本地，不会被记录）"
+    local: "  /connect ollama             使用免费本地模型（无需 key）"
+    help: "  /help connect               连接帮助"
+  onboarding:
+    setup_title: " ⚙ 初始设置"
+    setup_connect: "  /connect <provider> <key>"
+    setup_connect_note: "      将 key 存到本地（文件权限 0600，不会被记录）"
+    setup_list: "  /connect               列出 provider 与连接状态"
+    setup_local: "  /connect ollama        使用本地模型（无需 key）"
   status_card:
     title: " 状态 "
     no_provider: "未连接任何提供商。运行 /connect 即可开始。"

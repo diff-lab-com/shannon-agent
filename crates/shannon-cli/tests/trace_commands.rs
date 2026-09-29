@@ -30,8 +30,21 @@ use shannon_types::session_event::{
 };
 use tempfile::TempDir;
 
+/// Process-lifetime hermetic HOME for the spawned binary: the headless
+/// startup gate reads `~/.shannon/meta.json`, so a developer home last
+/// written by a NEWER build aborts the binary with the downgrade refusal
+/// before the trace behavior under test ever runs.
+fn hermetic_home() -> &'static std::path::Path {
+    static HOME: std::sync::OnceLock<TempDir> = std::sync::OnceLock::new();
+    HOME.get_or_init(|| TempDir::new().expect("create hermetic test home"))
+        .path()
+}
+
 fn shannon_bin() -> Command {
-    Command::cargo_bin("shannon").expect("shannon binary")
+    let mut cmd = Command::cargo_bin("shannon").expect("shannon binary");
+    cmd.env("HOME", hermetic_home());
+    cmd.env("USERPROFILE", hermetic_home());
+    cmd
 }
 
 // ── Deterministic fixture ──────────────────────────────────────────────

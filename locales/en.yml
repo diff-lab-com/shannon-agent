@@ -16,6 +16,7 @@ repl:
   cancelled: "Cancelled"
   cancelled_by_user: "Cancelled by user."
   query_task_panicked: "Query task panicked"
+  unconfigured_guidance: "No provider connected — run /connect <provider> <key> (or /connect ollama for local models)."
   tools_disabled: "Tools disabled — model will respond as plain text. Use /tools to re-enable."
   tools_enabled: "Tools re-enabled."
 
@@ -105,6 +106,7 @@ commands:
     legend: "* = current | Use /provider <name> to switch"
     switched: "Provider: %{provider} | Model: %{model}"
     switched_no_catalog: "Provider set to %{provider}. It has no built-in model list — use `/model <provider>/<model-id>` to choose a model."
+    foreign_model_warning: "⚠ Note: current model %{model} belongs to %{old_provider}; the switch keeps it, so requests would go to %{new_provider}. To pick a model explicitly: /model %{new_provider}/<model-id>"
     no_selection: "No provider selected. Run /connect <provider> <key> first."
   disconnect:
     usage: "Usage: /disconnect <provider>\nRemoves a provider's saved connection (its providers.toml entry) so it is no longer connected. Your stored API key is kept — re-run /connect to reconnect."
@@ -428,6 +430,18 @@ ui:
     footer: " j/k: switch category │ Enter: detail │ /: search │ Esc: close │ filter: {filter} "
   status_bar:
     no_provider: "[No provider connected]"
+  # ── First-run setup guidance (review P0-1/P0-2) ──────────────────────────
+  setup_hint:
+    title: "No provider connected yet — Shannon needs one to answer."
+    connect: "  /connect <provider> <key>   Connect a provider (key stored locally, never recorded)"
+    local: "  /connect ollama             Use free local models (no key needed)"
+    help: "  /help connect               Connection help"
+  onboarding:
+    setup_title: " ⚙ Setup"
+    setup_connect: "  /connect <provider> <key>"
+    setup_connect_note: "      Store a key locally (file perms 0600, never recorded)"
+    setup_list: "  /connect               List providers and connection status"
+    setup_local: "  /connect ollama        Use local models (no key needed)"
 
 # ── CLI Help ───────────────────────────────────────────────────────────────
 cli:

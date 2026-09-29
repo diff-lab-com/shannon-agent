@@ -512,11 +512,19 @@ fn test_trace_diff_requires_two_sessions() {
 #[serial]
 #[test]
 fn test_trace_show_missing_session_errors_cleanly() {
+    // Hermetic HOME: the headless startup gate reads `~/.shannon/meta.json`
+    // before arg-specific handling, so a developer home last written by a
+    // NEWER build aborts the binary with the downgrade refusal instead of
+    // reaching the trace error under test. Redirect HOME/USERPROFILE at an
+    // empty tempdir so the gate sees no data directory at all.
+    let home = tempfile::tempdir().unwrap();
     let dir = tempfile::tempdir().unwrap();
     let container = dir.path().join("sessions");
     std::fs::create_dir_all(&container).unwrap();
 
     shannon()
+        .env("HOME", home.path())
+        .env("USERPROFILE", home.path())
         .args([
             "trace",
             "show",

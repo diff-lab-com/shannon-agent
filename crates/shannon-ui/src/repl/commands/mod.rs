@@ -24,7 +24,7 @@ pub(crate) use goal::maybe_fire_check_in;
 // (repl/mod.rs) can refresh the first-screen StatusCard through the same
 // derivation used by every /connect, /model, /provider switch
 // (ADR-0008 Decision 1+2).
-pub(crate) use config::{apply_model_selection, sync_active_to_chat};
+pub(crate) use config::{apply_model_selection, provider_unconfigured, sync_active_to_chat};
 
 // Re-export public API
 #[allow(unused_imports)]
@@ -101,11 +101,17 @@ fn expand_pasted_texts(
 /// Redact inline secrets from a recorded command line so they are never
 /// persisted into the chat widget, command history, or session JSON.
 ///
-/// Currently redacts the API key from `/connect <provider> <key>`, replacing
-/// the key with `***`. The real key still reaches the command handler — this
-/// redaction only affects what is *recorded* (chat message + up-arrow history).
-/// Returns the input unchanged for any other command, free-text input, or a
-/// `/connect` invocation without an inline key.
+/// Currently redacts:
+/// - the API key from `/connect <provider> <key>`, and
+/// - the value from `/credentials store <service> <value>` (any alias, any
+///   store spelling — the REPL executes it directly via the CredentialManager,
+///   so a plaintext secret must never reach the *recorded* text either),
+///
+/// in both cases replacing the secret with `***`. The real argument still
+/// reaches the command handler — this redaction only affects what is
+/// *recorded* (chat message + up-arrow history). Returns the input unchanged
+/// for any other command, free-text input, or an invocation without an inline
+/// secret.
 ///
 /// Tokenization uses `split_whitespace`, matching how `parse_connect_args`
 /// splits the real command, so runs of whitespace (`/connect  minimax  k`) are
@@ -120,17 +126,39 @@ fn redact_secret_command(input: &str) -> String {
     };
     let mut tokens = rest.split_whitespace();
     let cmd = tokens.next().unwrap_or("");
-    if !cmd.eq_ignore_ascii_case("connect") {
-        return input.to_string();
+    if cmd.eq_ignore_ascii_case("connect") {
+        let provider = match tokens.next() {
+            Some(p) if !p.is_empty() => p,
+            _ => return input.to_string(),
+        };
+        return match tokens.next() {
+            Some(k) if !k.is_empty() => format!("{lead}/connect {provider} ***"),
+            _ => input.to_string(),
+        };
     }
-    let provider = match tokens.next() {
-        Some(p) if !p.is_empty() => p,
-        _ => return input.to_string(),
-    };
-    match tokens.next() {
-        Some(k) if !k.is_empty() => format!("{lead}/connect {provider} ***"),
-        _ => input.to_string(),
+    // `/credentials store <svc> <value>` (aliases /creds, /cred; store
+    // spellings store/add/set — all parsed to `CredentialAction::Store`).
+    // Recorded form is normalized to the canonical `/credentials store`.
+    if matches!(
+        cmd.to_ascii_lowercase().as_str(),
+        "credentials" | "creds" | "cred"
+    ) {
+        let sub = tokens.next().map(str::to_ascii_lowercase);
+        if !matches!(sub.as_deref(), Some("store" | "add" | "set")) {
+            return input.to_string();
+        }
+        let service = match tokens.next() {
+            Some(s) if !s.is_empty() => s,
+            _ => return input.to_string(),
+        };
+        // The handler takes everything after <service> as the value
+        // (`splitn(3, ' ')`), so any remaining text is part of the secret.
+        if tokens.next().is_none() {
+            return input.to_string();
+        }
+        return format!("{lead}/credentials store {service} ***");
     }
+    input.to_string()
 }
 
 /// Submit the current input
@@ -812,6 +840,59 @@ mod tests {
         assert_eq!(
             redact_secret_command("/connect minimax "),
             "/connect minimax "
+        );
+    }
+
+    #[test]
+    fn redact_credentials_store_replaces_value_with_marker() {
+        // The plaintext value must never appear in the recorded form (review
+        // P0-5: /credentials used to echo the raw secret into chat, history,
+        // and session JSON).
+        let out = redact_secret_command("/credentials store anthropic sk-ant-secret-9");
+        assert_eq!(out, "/credentials store anthropic ***");
+        assert!(!out.contains("sk-ant-secret-9"));
+    }
+
+    #[test]
+    fn redact_credentials_aliases_normalize_and_redact() {
+        // Every alias resolves to Store in the handler, so all of them redact;
+        // the recorded form is the canonical `/credentials store`.
+        assert_eq!(
+            redact_secret_command("/creds store svc sk-123"),
+            "/credentials store svc ***"
+        );
+        assert_eq!(
+            redact_secret_command("/cred add svc sk-123"),
+            "/credentials store svc ***"
+        );
+        assert_eq!(
+            redact_secret_command("/CREDENTIALS set svc tok_abc"),
+            "/credentials store svc ***"
+        );
+    }
+
+    #[test]
+    fn redact_credentials_preserves_service_and_leading_whitespace() {
+        let out = redact_secret_command("   /credentials store GitHub ghp-XyZ123");
+        assert_eq!(out, "   /credentials store GitHub ***");
+        assert!(!out.contains("ghp-XyZ123"));
+    }
+
+    #[test]
+    fn redact_credentials_non_store_subcommands_unchanged() {
+        // get/list/delete/count carry no inline secret.
+        assert_eq!(
+            redact_secret_command("/credentials get svc"),
+            "/credentials get svc"
+        );
+        assert_eq!(
+            redact_secret_command("/credentials delete svc"),
+            "/credentials delete svc"
+        );
+        // `store` without a value has nothing to redact — no fabricated `***`.
+        assert_eq!(
+            redact_secret_command("/credentials store svc"),
+            "/credentials store svc"
         );
     }
 

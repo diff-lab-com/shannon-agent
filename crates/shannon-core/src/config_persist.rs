@@ -34,6 +34,32 @@ pub const WRITABLE_KEYS: &[&str] = &[
     "debug",
 ];
 
+/// Substrings that mark a config key as secret-shaped (decision A1).
+///
+/// Matched case-insensitively as a *substring* of the key, so e.g.
+/// `anthropic_api_key` and `GitHubToken` are both caught. Shared by every
+/// write path (TUI `/config set`, the `shannon config` CLI, and the agent-facing
+/// `Config` tool) so the A1 refusal wording and coverage cannot drift.
+const SECRET_KEY_PATTERNS: &[&str] = &[
+    "api_key",
+    "api-key",
+    "apikey",
+    "token",
+    "secret",
+    "password",
+    "passwd",
+    "credential",
+    "private_key",
+];
+
+/// True iff `key` looks like it would carry a secret (see
+/// `SECRET_KEY_PATTERNS`). Callers refuse to persist such keys and point the
+/// user at the credential store instead (decision A1).
+pub fn is_secret_shaped_key(key: &str) -> bool {
+    let lowered = key.to_lowercase();
+    SECRET_KEY_PATTERNS.iter().any(|p| lowered.contains(p))
+}
+
 /// Native TOML type a writable key carries, used by [`coerce_value`].
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum KeyKind {
@@ -224,6 +250,35 @@ mod tests {
         assert!(!is_writable_key("shannon_api_key"));
         assert!(!is_writable_key("base_url"));
         assert!(!is_writable_key("random_unknown_key"));
+    }
+
+    #[test]
+    fn is_secret_shaped_key_substring_match_is_case_insensitive() {
+        for k in [
+            "api_key",
+            "anthropic_api_key",
+            "GitHubToken",
+            "openai-api-key",
+            "MY_SECRET",
+            "db_password",
+            "user_passwd",
+            "service_credential",
+            "ed25519_private_key",
+            "apikey",
+        ] {
+            assert!(is_secret_shaped_key(k), "{k} should be secret-shaped");
+        }
+        // Innocuous names are not secret-shaped. The predicate is deliberately
+        // coarse: `max_tokens` contains the substring "token" and so IS
+        // secret-shaped by this rule — acceptable, because every human write
+        // path consults the `is_writable_key` allowlist first and `max_tokens`
+        // is on it (only the raw predicate sees the false positive).
+        assert!(is_secret_shaped_key("max_tokens"));
+        for k in ["model", "provider", "temperature", "timeout", "debug"] {
+            assert!(!is_secret_shaped_key(k), "{k} must not look secret");
+        }
+        assert!(!is_secret_shaped_key("base_url"));
+        assert!(!is_secret_shaped_key("editor.theme"));
     }
 
     #[test]
