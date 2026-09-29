@@ -108,6 +108,8 @@ commands:
     switched_no_catalog: "Provider set to %{provider}. It has no built-in model list — use `/model <provider>/<model-id>` to choose a model."
     foreign_model_warning: "⚠ Note: current model %{model} belongs to %{old_provider}; the switch keeps it, so requests would go to %{new_provider}. To pick a model explicitly: /model %{new_provider}/<model-id>"
     no_selection: "No provider selected. Run /connect <provider> <key> first."
+    health_skipped_header: "Skipped (no probeable list-models endpoint):"
+    health_skipped_line: "· %{provider} — skipped: no list-models endpoint to probe"
   disconnect:
     usage: "Usage: /disconnect <provider>\nRemoves a provider's saved connection (its providers.toml entry) so it is no longer connected. Your stored API key is kept — re-run /connect to reconnect."
     not_connected: "'%{provider}' was not connected. Use /connect to connect it."
@@ -121,6 +123,7 @@ commands:
     usage_get: "Usage: /config get <key>"
     usage_set: "Usage: /config set <key> <value>"
     usage_reset: "Usage: /config reset <key>"
+    refused_secret: "Refused: '%{key}' is not a writable config.toml key — secrets belong in /credentials, not config files (A1)"
     settings_title: "Configuration Settings:\n\n"
     usage: |
 
@@ -261,6 +264,8 @@ commands:
         /preset              - List all presets
         /preset <name>       - Apply a preset
         /preset show <name>  - Show preset details
+  profile:
+    migration_hint: "Note: /profile is being renamed — permission profiles now live at /permissions. In a future release /profile will switch to provider profiles (/profiles)."
 
 # ── Thinking Phrases ──────────────────────────────────────────────────────
 thinking:
@@ -405,6 +410,19 @@ ui:
   header_newline: "Newline"
   header_editor: "Editor"
   header_fullscreen: "Fullscreen"
+  # ── Paste / diagnostics / pipe / session summary ──────────────────────────
+  # NOTE: pasted_text_marker keeps the literal "[Pasted Text #" prefix on
+  # purpose — it is machine-parsed on submit (expand_pasted_texts), so
+  # translations must keep that prefix with the number directly after it.
+  pasted_text_marker: "[Pasted Text #%{num} %{count} lines]"
+  diagnostics_issues: "[Diagnostics: %{count} issue(s) found]"
+  diagnostics_clean: "[Diagnostics: ✓ No issues]"
+  session_summary_title: "── Session Summary ──"
+  session_summary_tokens: "  Tokens: %{input} in + %{output} out  |  Cost: $%{cost}"
+  session_summary_budget: "  Budget: $%{cost} / $%{budget} (%{pct}%)"
+  session_summary_model: "  Model: %{model}"
+  session_summary_duration: "  Duration: %{mins}m %{secs}s"
+  session_summary_separator: "─────────────────────"
   sidebar:
     context: "Context"
     cost: "Cost"

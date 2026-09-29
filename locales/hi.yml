@@ -491,3 +491,18 @@ review:
 # ── Session ──────────────────────────────────────────────────────────────────
 session:
   auto_restored: "स्वतः पुनर्स्थापित सत्र: \"%{title}\" (%{count} संदेश, %{model})\nनया सत्र शुरू करने के लिए /clear टाइप करें।"
+
+# ── UI: paste / diagnostics / pipe / session summary ────────────────────
+# NOTE: pasted_text_marker keeps the literal "[Pasted Text #" prefix on
+# purpose — it is machine-parsed on submit (expand_pasted_texts), so
+# translations must keep that prefix with the number directly after it.
+ui:
+  pasted_text_marker: "[Pasted Text #%{num} · %{count} पंक्तियाँ]"
+  diagnostics_issues: "[डायग्नोस्टिक्स: %{count} समस्या(एँ) मिलीं]"
+  diagnostics_clean: "[डायग्नोस्टिक्स: ✓ कोई समस्या नहीं]"
+  session_summary_title: "── सत्र सारांश ──"
+  session_summary_tokens: "  टोकन: %{input} इनपुट + %{output} आउटपुट  |  लागत: $%{cost}"
+  session_summary_budget: "  बजट: $%{cost} / $%{budget} (%{pct}%)"
+  session_summary_model: "  मॉडल: %{model}"
+  session_summary_duration: "  अवधि: %{mins}मि %{secs}से"
+  session_summary_separator: "─────────────────────"

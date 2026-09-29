@@ -177,6 +177,8 @@ mod tests {
             event_names::SKILL_PROPOSAL_AVAILABLE,
             "skill-proposal-available"
         );
+        // P3-6 — Task 3's frontend listens on this exact string.
+        assert_eq!(event_names::TERMINAL_EXIT, "terminal:exit");
     }
 
     #[test]

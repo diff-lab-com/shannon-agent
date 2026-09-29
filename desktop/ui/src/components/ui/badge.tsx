@@ -26,12 +26,12 @@ type ShannonSize = "sm" | "md" | "lg"
 
 const TONE_ACCENT: Record<ShannonVariant, string> = {
   neutral: "bg-surface-container text-on-surface-variant",
-  primary: "bg-primary/10 text-primary",
-  secondary: "bg-secondary/10 text-secondary",
-  tertiary: "bg-tertiary/10 text-tertiary",
-  success: "bg-tertiary/10 text-tertiary",
-  warning: "bg-tertiary/15 text-on-tertiary-container",
-  error: "bg-error/10 text-error",
+  primary: "bg-primary-container text-on-primary-container",
+  secondary: "bg-secondary-container text-on-secondary-container",
+  tertiary: "bg-tertiary-container text-on-tertiary-container",
+  success: "bg-tertiary-container text-on-tertiary-container",
+  warning: "bg-tertiary-container text-on-tertiary-container",
+  error: "bg-error-container text-on-error-container",
   outline: "border border-outline-variant/40 text-on-surface-variant",
 }
 

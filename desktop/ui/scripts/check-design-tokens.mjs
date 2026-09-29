@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 // Design-system guardrails (UI audit 2026-09 acceptance criteria, §7 Wave 2;
-// extended by UI review 2026-09-29 Batch 1):
+// extended by UI review 2026-09-29 Batch 1; extended by G7 2026-09-30):
 //   1. Terminology consistency — the retired dual-track terms must never
 //      reappear in component sources (i18n locale values are the single
 //      source of truth).
@@ -19,12 +19,20 @@
 //      5 deliberate off-scale values, e.g. EfficiencyCard's 40px; the warn
 //      channel keeps them visible until each gets a role or a documented
 //      exception).
+//   6. Accent-tint chips (G7 light-theme contrast, 2026-09-30) — `text-primary`
+//      (any variant) co-occurring with a rest-state `bg-primary/<n>` in the
+//      SAME class string is rejected: the accent-on-accent-tint composite
+//      fails AA 4.5:1 on most non-default themes (scripts/lib/contrast.mjs
+//      CHIP_COMPOSITES models it). Use the MD3 container pair instead
+//      (bg-primary-container + text-on-primary-container; migrated repo-wide
+//      by scripts/codemods/migrate-accent-chips.mjs).
 // Exit 1 on any error so CI can gate on it; warnings print only.
 // Scope: desktop/ui/src only; tests may reference retired strings on purpose
 // (they assert the change).
 
 import { readFileSync, readdirSync, statSync } from 'node:fs'
 import { join, relative } from 'node:path'
+import ts from 'typescript'
 
 const ROOT = new URL('../src', import.meta.url).pathname
 
@@ -56,6 +64,11 @@ const ALLOWLIST = [
   'components/artifact/MermaidRenderer.tsx', // hex lives inside a standalone iframe document — parent vars cannot cross
   'components/CommandPalette.tsx', // synonyms field preserves retired terms during the migration window (audit §6.1)
   'lib/mock/',              // demo-mode runtime cssText (not part of the design system)
+  // G7 chip migration deferred: files are owned by in-flight parallel PRs
+  // (sidebar group controls / routine-template spacing) — migrate their
+  // remaining accent-tint chips there, then remove these entries.
+  'components/SidebarSessions.tsx',
+  'components/routines/RoutineTemplatesBrowser.tsx',
 ]
 
 const EXT = /\.(tsx?|css)$/
@@ -71,6 +84,53 @@ function* walk(dir) {
 
 const rel = p => relative(ROOT, p)
 const isAllowed = p => ALLOWLIST.some(a => rel(p).startsWith(a))
+
+// ── Rule 6: accent-tint chips (G7) ──────────────────────────────────────────
+// Same rule as scripts/lib/contrast.mjs chipCompositesInUse and the
+// migrate-accent-chips codemod: a hue's `text-<hue>` (any variant prefix)
+// plus an UNPREFIXED rest-state `bg-<hue>/<n>` in one class string.
+// success/warning/info joined when the status hues became real tokens
+// (2026-09) — keep the three lists in sync.
+const HUES = ['primary', 'secondary', 'tertiary', 'error', 'success', 'warning', 'info']
+const TINT_TEXT_RE = hue => new RegExp(`(?:[\\w@/\\[\\].-]+:)?text-${hue}(?![\\w/-])`)
+const TINT_BG_RE = new RegExp(`(?<![\\w./:-])bg-(${HUES.join('|')})/(\\d+)(?![\\w-])`, 'g')
+
+function accentTintViolations(src) {
+  const sf = ts.createSourceFile('file.tsx', src, ts.ScriptTarget.Latest, true, ts.ScriptKind.TSX)
+  const hits = []
+  const scanText = (text, line) => {
+    for (const hue of HUES) {
+      if (!TINT_TEXT_RE(hue).test(text)) continue
+      TINT_TEXT_RE(hue).lastIndex = 0
+      for (const m of text.matchAll(TINT_BG_RE)) {
+        if (m[1] === hue) hits.push({ line, hue, alpha: m[2] })
+      }
+    }
+  }
+  const visit = node => {
+    let text = null
+    if (ts.isStringLiteral(node) || ts.isNoSubstitutionTemplateLiteral(node)) {
+      text = node.text
+    } else if (ts.isTemplateExpression(node)) {
+      // Quasis hold the static class chunks; adjacent quases can each pair.
+      scanText(node.head.text, lineOf(src, node.head.getStart(sf)))
+      for (const span of node.templateSpans) scanText(span.literal.text, lineOf(src, span.literal.getStart(sf)))
+    }
+    if (text) {
+      scanText(text, lineOf(src, node.getStart(sf)))
+    }
+    ts.forEachChild(node, visit)
+  }
+  const lineCache = new Map()
+  function lineOf(source, offset) {
+    if (!lineCache.has(offset)) {
+      lineCache.set(offset, source.slice(0, offset).split('\n').length)
+    }
+    return lineCache.get(offset)
+  }
+  ts.forEachChild(sf, visit)
+  return hits
+}
 
 let failures = 0
 let warnings = 0
@@ -126,6 +186,12 @@ for (const file of walk(ROOT)) {
       }
     }
   })
+
+  // Rule 6 — per class-string, not per line (ternary branches share lines).
+  for (const v of accentTintViolations(src)) {
+    console.error(`[chip] ${rel(file)}:${v.line}: accent-tint chip "text-${v.hue}" + "bg-${v.hue}/${v.alpha}" in one class string — the composite fails AA on non-default themes; use the container pair (bg-${v.hue}-container text-on-${v.hue}-container)`)
+    failures++
+  }
 }
 
 console.error(`\ndesign-token check: ${failures} error(s), ${warnings} warning(s)`)

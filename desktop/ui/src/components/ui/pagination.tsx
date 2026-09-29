@@ -45,7 +45,7 @@ export function Pagination({ page, totalPages, onPageChange }: PaginationProps) 
             variant="ghost"
             onClick={() => onPageChange(p)}
             className={`min-w-[32px] px-sm py-xs rounded-lg text-label-sm font-label-md ${
-              p === page ? 'bg-primary/10 text-primary font-bold' : 'text-on-surface-variant hover:text-primary'
+              p === page ? 'bg-primary-container text-on-primary-container font-bold' : 'text-on-surface-variant hover:text-primary'
             }`}
           >
             {p}

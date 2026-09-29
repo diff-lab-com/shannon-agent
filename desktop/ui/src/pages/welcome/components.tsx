@@ -37,7 +37,7 @@ export function Stepper({ step, labels }: { step: number; labels: string[] }) {
             <span
               className={cn(
                 'font-label-sm text-center',
-                i === step ? 'text-primary font-bold' : 'text-on-surface-variant',
+                i === step ? 'text-link font-bold' : 'text-on-surface-variant',
               )}
             >
               {intl.formatMessage({ id: key })}

@@ -246,7 +246,7 @@ export default function DiffReviewBody({ filePath, onClose, active }: DiffReview
             <span className="ml-md text-body-sm text-on-surface-variant">{t('diff.dialog.loading')}</span>
           </div>
         ) : error || errorCode ? (
-          <div className="flex items-start gap-sm p-md bg-error/10 border border-error/20 rounded-xl text-error">
+          <div className="flex items-start gap-sm p-md bg-error-container border border-error/20 rounded-xl text-on-error-container">
             <span className="material-symbols-outlined icon-md mt-[2px]" aria-hidden="true">error</span>
             <div>
               <p className="font-label-md">{t('diff.dialog.loadFailed')}</p>
@@ -262,7 +262,7 @@ export default function DiffReviewBody({ filePath, onClose, active }: DiffReview
             {wholeFileDeletion && (
               <div
                 role="alert"
-                className="flex items-start gap-sm p-md mb-md bg-error/10 border border-error/30 rounded-xl text-error"
+                className="flex items-start gap-sm p-md mb-md bg-error-container border border-error/30 rounded-xl text-on-error-container"
               >
                 <span className="material-symbols-outlined icon-md mt-[2px]" aria-hidden="true">warning</span>
                 <p className="font-label-md">{t('diff.review.deleteWarning')}</p>

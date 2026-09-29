@@ -38,7 +38,7 @@ export default function OPCMissionFocus({ config }: Props) {
         <Button
           variant="link"
           size="sm"
-          className="text-label-sm h-auto px-0 text-primary hover:underline"
+          className="text-label-sm h-auto px-0 hover:underline"
           onClick={() => setEditing(!editing)}
           aria-expanded={editing}
         >

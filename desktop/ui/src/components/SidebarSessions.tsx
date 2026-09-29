@@ -1452,7 +1452,7 @@ export function SessionsSection({ sessions, sessionActivity, goalRunsBySession =
   return (
     <div className="flex flex-col h-full min-h-0">
       <div className="flex items-center justify-between px-sm mb-xs shrink-0 gap-xs min-w-0">
-        <span className="font-label-sm text-label-sm text-on-surface-variant uppercase tracking-wider truncate">
+        <span className="font-label-sm text-label-sm text-on-surface-variant uppercase tracking-wider truncate min-w-0">
           {t('sidebar.sessions.title')}
         </span>
         <span className="font-label-sm text-label-sm text-on-surface-variant shrink-0">
@@ -1462,8 +1462,15 @@ export function SessionsSection({ sessions, sessionActivity, goalRunsBySession =
             segmented control (按项目文件夹 vs 按会话顺序). Renamed
             "time → session" in 2026-09: the second mode is just a flat
             session list sorted by recency — labelling it "session" reads
-            more honestly to the user than abstract "time". */}
-        <div role="group" aria-label={t('sidebar.sessions.grouping.aria')} className="flex items-center rounded-md bg-surface-container-low p-0.5 shrink-0">
+            more honestly to the user than abstract "time".
+            Overflow contract: the rail is a CSS @container (aside[data-sidebar],
+            width via --sidebar-w drag range 200–400px + the 280px drawer), so
+            labels below collapse to icon-only via the @min-[320px:] container
+            variant — viewport `xl:` variants can't see the rail width and let
+            the control spill over the content pane. min-w-0 (no shrink-0) lets
+            the whole segmented control shrink and the labels ellipsize as a
+            last resort on long-locale strings between 320–400px. */}
+        <div role="group" aria-label={t('sidebar.sessions.grouping.aria')} className="flex items-center rounded-md bg-surface-container-low p-0.5 min-w-0">
           {([
             { mode: 'project' as const, icon: 'folder', label: t('sidebar.sessions.grouping.project') },
             { mode: 'smart' as const, icon: 'auto_awesome', label: t('sidebar.sessions.grouping.smart') },
@@ -1477,14 +1484,14 @@ export function SessionsSection({ sessions, sessionActivity, goalRunsBySession =
               title={opt.label}
               onClick={() => setGroupingPersisted(opt.mode)}
               className={cn(
-                'flex items-center gap-0.5 px-1.5 py-0.5 rounded-sm font-label-xs transition-colors cursor-pointer whitespace-nowrap',
+                'flex items-center gap-0.5 px-1.5 py-0.5 rounded-sm font-label-xs transition-colors cursor-pointer whitespace-nowrap min-w-0',
                 grouping === opt.mode
                   ? 'bg-primary text-on-primary shadow-e1'
                   : 'text-on-surface-variant hover:text-primary',
               )}
             >
-              <span className="material-symbols-outlined icon-xs" aria-hidden="true">{opt.icon}</span>
-              <span className="hidden xl:inline">{opt.label}</span>
+              <span className="material-symbols-outlined icon-xs shrink-0" aria-hidden="true">{opt.icon}</span>
+              <span className="hidden @min-[320px]:inline truncate min-w-0">{opt.label}</span>
             </button>
           ))}
         </div>

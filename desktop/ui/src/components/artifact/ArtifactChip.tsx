@@ -51,7 +51,7 @@ export function ArtifactChip({ artifact }: ArtifactChipProps) {
         <span className="block font-label-xs text-on-surface-variant">{artifactKindLabel(artifact.kind, t)}</span>
       </span>
       <span
-        className="flex items-center gap-[2px] shrink-0 px-xs py-[2px] rounded-md bg-primary/10 text-primary font-label-xs group-hover/card:bg-primary/20"
+        className="flex items-center gap-[2px] shrink-0 px-xs py-[2px] rounded-md bg-primary-container text-on-primary-container font-label-xs group-hover/card:bg-primary/20"
         aria-hidden="true"
       >
         {t('chat.artifact.open')}

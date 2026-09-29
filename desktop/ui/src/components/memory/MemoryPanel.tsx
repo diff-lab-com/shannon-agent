@@ -231,7 +231,7 @@ export default function MemoryPanel({
         )}
 
         {errorMsg && (
-          <div className="flex items-center gap-sm px-md py-sm rounded-xl bg-error/10 border border-error/20 text-error font-label-md mb-lg">
+          <div className="flex items-center gap-sm px-md py-sm rounded-xl bg-error-container border border-error/20 text-on-error-container font-label-md mb-lg">
             <span className="material-symbols-outlined icon-md">error</span>
             {errorMsg}
             <Button

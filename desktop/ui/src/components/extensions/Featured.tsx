@@ -256,7 +256,7 @@ export default function Featured() {
               >
                 <div className={cn(
                   'w-11 h-11 rounded-xl flex items-center justify-center shrink-0',
-                  a.enabled ? 'bg-primary/10 text-primary' : 'bg-surface-container-low text-on-surface-variant/60',
+                  a.enabled ? 'bg-primary-container text-on-primary-container' : 'bg-surface-container-low text-on-surface-variant/60',
                 )}>
                   <span className="material-symbols-outlined icon-lg" aria-hidden="true">extension</span>
                 </div>

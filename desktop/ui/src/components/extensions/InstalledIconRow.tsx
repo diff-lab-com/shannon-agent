@@ -60,7 +60,7 @@ export default function InstalledIconRow() {
             className={cn(
               'w-9 h-9 rounded-lg flex items-center justify-center shrink-0 border transition-colors cursor-pointer',
               a.enabled
-                ? 'bg-primary/10 border-primary/20 text-primary hover:bg-primary/20'
+                ? 'bg-primary-container border-primary/20 text-on-primary-container hover:bg-primary/20'
                 : 'bg-surface-container-low border-outline-variant/30 text-on-surface-variant hover:bg-surface-container',
             )}
           >

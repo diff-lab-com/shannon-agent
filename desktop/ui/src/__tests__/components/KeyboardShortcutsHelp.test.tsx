@@ -47,6 +47,13 @@ describe('KeyboardShortcutsHelp', () => {
     expect(screen.getByText('Cycle active artifact in panel')).toBeInTheDocument()
   })
 
+  it('includes the terminal-panel toggle under Chat section', () => {
+    // P3-4: Ctrl+` (TerminalPanel's capture-phase handler) is documented
+    // like every other live binding.
+    renderHelp()
+    expect(screen.getByText('Toggle the terminal panel')).toBeInTheDocument()
+  })
+
   it('includes diff-review shortcuts', () => {
     renderHelp()
     expect(screen.getAllByText('Next diff hunk').length).toBeGreaterThan(0)

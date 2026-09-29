@@ -491,3 +491,18 @@ review:
 # ── Session ──────────────────────────────────────────────────────────────────
 session:
   auto_restored: "セッションを自動復元しました：\"%{title}\"（%{count} 件のメッセージ、%{model}）\n/clear で新しいセッションを開始。"
+
+# ── UI: paste / diagnostics / pipe / session summary ────────────────────
+# NOTE: pasted_text_marker keeps the literal "[Pasted Text #" prefix on
+# purpose — it is machine-parsed on submit (expand_pasted_texts), so
+# translations must keep that prefix with the number directly after it.
+ui:
+  pasted_text_marker: "[Pasted Text #%{num} · %{count} 行]"
+  diagnostics_issues: "[診断: %{count} 件の問題を検出]"
+  diagnostics_clean: "[診断: ✓ 問題なし]"
+  session_summary_title: "── セッション概要 ──"
+  session_summary_tokens: "  トークン: %{input} 入力 + %{output} 出力  |  コスト: $%{cost}"
+  session_summary_budget: "  予算: $%{cost} / $%{budget} (%{pct}%)"
+  session_summary_model: "  モデル: %{model}"
+  session_summary_duration: "  所要時間: %{mins}分%{secs}秒"
+  session_summary_separator: "─────────────────────"

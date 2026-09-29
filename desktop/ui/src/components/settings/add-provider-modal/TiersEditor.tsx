@@ -36,7 +36,7 @@ export function TiersEditor({ tiers, activeModelId, onChange }: TiersEditorProps
                 {t(labelKey)}
                 {isActive ? (
                   <span
-                    className="inline-flex items-center px-xs py-0.5 rounded-full bg-primary/10 text-primary font-label-xs"
+                    className="inline-flex items-center px-xs py-0.5 rounded-full bg-primary-container text-on-primary-container font-label-xs"
                     data-testid={`tier-${key}-active`}
                     title={t('settings.models.addProvider.tierActiveBadge')}
                   >

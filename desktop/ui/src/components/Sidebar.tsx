@@ -212,7 +212,13 @@ export const Sidebar = memo(function Sidebar({ mobile, open = true }: { mobile?:
 
   return (
     <aside data-sidebar className={cn(
-      "fixed left-0 top-0 h-full bg-surface-container-lowest/85 border-r border-outline-variant/30 flex flex-col py-lg px-md shadow-[4px_0_24px_-12px_color-mix(in_srgb,var(--color-inverse-surface)_15%,transparent)] transition-transform duration-(--duration-slow)",
+      // `@container` marks the rail as an inline-size query container: the
+      // rail's width is CSS-driven (inline style on desktop, w-[280px] in the
+      // drawer), so descendants — e.g. the session rail's grouping switch —
+      // adapt icon-only vs icon+label with zero JS via `@min-[320px]:`
+      // variants instead of viewport `xl:` breakpoints that ignored the rail
+      // width and let the control spill over the content pane.
+      "@container fixed left-0 top-0 h-full bg-surface-container-lowest/85 border-r border-outline-variant/30 flex flex-col py-lg px-md shadow-[4px_0_24px_-12px_color-mix(in_srgb,var(--color-inverse-surface)_15%,transparent)] transition-transform duration-(--duration-slow)",
       mobile
         ? cn("z-drawer w-[280px]", open ? "translate-x-0" : "-translate-x-full")
         : "z-20",
