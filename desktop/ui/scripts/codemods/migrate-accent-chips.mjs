@@ -25,6 +25,10 @@
 // the PR description). Idempotent: after a run no literal pairs the rule, so
 // re-running is a no-op.
 //
+// EXECUTED AGAIN 2026-09 for the status-semantic-tokens PR: success/warning/
+// info joined HUES once those hues became real tokens; the four pair literals
+// that existed were migrated to their container pairs in the same PR.
+//
 // Skipped on purpose (parallel PRs own these files — migrate there later):
 //   src/components/SidebarSessions.tsx, src/components/routines/RoutineTemplatesBrowser.tsx
 //
@@ -49,6 +53,13 @@ const HUES = {
   secondary: { bg: 'bg-secondary-container', text: 'text-on-secondary-container' },
   tertiary: { bg: 'bg-tertiary-container', text: 'text-on-tertiary-container' },
   error: { bg: 'bg-error-container', text: 'text-on-error-container' },
+  // Status hues (2026-09 status-tokens PR): same pairing rule, same roles.
+  // Re-runs after that PR migrate any `text-success` + `bg-success/<n>`-style
+  // chips introduced since (keep in sync with scripts/lib/contrast.mjs
+  // chipCompositesInUse and check-design-tokens.mjs HUES).
+  success: { bg: 'bg-success-container', text: 'text-on-success-container' },
+  warning: { bg: 'bg-warning-container', text: 'text-on-warning-container' },
+  info: { bg: 'bg-info-container', text: 'text-on-info-container' },
 }
 
 // Variant prefix (hover:, group-hover/card:, data-[highlighted]:, md:, …).
@@ -88,7 +99,7 @@ for (const p of listSrcFiles()) {
   const rel = relative(SRC, p)
   if (SKIP.some(s => rel === s || rel.endsWith(s))) { skippedFiles++; continue }
   const src = readFileSync(p, 'utf8')
-  if (!/text-(primary|secondary|tertiary|error)\b/.test(src) && !/bg-(primary|secondary|tertiary|error)\/\d/.test(src)) continue
+  if (!/text-(primary|secondary|tertiary|error|success|warning|info)\b/.test(src) && !/bg-(primary|secondary|tertiary|error|success|warning|info)\/\d/.test(src)) continue
 
   const fileEdits = []
   for (const lit of literalRanges(src)) {

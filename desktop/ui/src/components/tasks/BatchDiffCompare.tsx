@@ -31,7 +31,7 @@ export function DiffPatchView({ patch, className }: { patch: string; className?:
     if (line.startsWith('+++') || line.startsWith('---')) return 'text-on-surface-variant'
     if (line.startsWith('diff ') || line.startsWith('index ')) return 'text-on-surface-variant font-bold'
     if (line.startsWith('@@')) return 'text-primary'
-    if (line.startsWith('+')) return 'bg-success/10 text-success'
+    if (line.startsWith('+')) return 'bg-success-container text-on-success-container'
     if (line.startsWith('-')) return 'bg-error-container text-on-error-container'
     return 'text-on-surface'
   }
