@@ -1438,11 +1438,11 @@ pub async fn send_message(
                     QueryEvent::Failed { error, .. } => {
                         let _ = app.emit(
                             event_names::QUERY_FAILED,
-                            events::QueryFailedPayload {
-                                query_id: qid_str.clone(),
-                                error: error.clone(),
-                                session_id: Some(session_id_str.clone()),
-                            },
+                            events::query_failed_payload(
+                                &qid_str,
+                                &error,
+                                Some(session_id_str.clone()),
+                            ),
                         );
                         route_event(crate::session_registry::SessionEvent::Status(
                             crate::session_registry::SessionEventStatus::Failed(error.clone()),
@@ -1470,11 +1470,11 @@ pub async fn send_message(
                     let err_string = e.to_string();
                     let _ = app.emit(
                         event_names::QUERY_FAILED,
-                        events::QueryFailedPayload {
-                            query_id: qid_str.clone(),
-                            error: err_string.clone(),
-                            session_id: Some(session_id_str.clone()),
-                        },
+                        events::query_failed_payload(
+                            &qid_str,
+                            &err_string,
+                            Some(session_id_str.clone()),
+                        ),
                     );
                     route_event(crate::session_registry::SessionEvent::Status(
                         crate::session_registry::SessionEventStatus::Failed(err_string.clone()),
@@ -1519,11 +1519,7 @@ pub async fn send_message(
             );
             let _ = app.emit(
                 event_names::QUERY_FAILED,
-                events::QueryFailedPayload {
-                    query_id: qid_str.clone(),
-                    error: panic_msg.clone(),
-                    session_id: Some(session_id_str.clone()),
-                },
+                events::query_failed_payload(&qid_str, &panic_msg, Some(session_id_str.clone())),
             );
             route_event(crate::session_registry::SessionEvent::Status(
                 crate::session_registry::SessionEventStatus::Failed(panic_msg.clone()),

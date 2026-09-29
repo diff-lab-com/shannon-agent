@@ -43,7 +43,7 @@ export function PageLoader() {
 export function Layout() {
   const { usage } = useChat();
   const { createSession, sessions, switchSession, windowSessionId } = useSessions();
-  const { backgroundTasks, config, loading, initError, retryInit } = useCatalog();
+  const { backgroundTasks, config, providerStatus, loading, initError, retryInit } = useCatalog();
   const navigate = useNavigate();
   // B1-12 (review P1-7): remounts the route ErrorBoundary on navigation so a
   // crashed page's fallback can never outlive its route — without the key,
@@ -118,11 +118,17 @@ export function Layout() {
     return () => window.removeEventListener('shannon:toggle-palette', handler)
   }, [])
 
+  // 2026-09-29 provider review §3-A1: `config.provider` is dead since
+  // ADR-0005 (always undefined) — the gate ran on a permanent "no
+  // provider". Use the reliable snapshot; an env-detected provider
+  // (ANTHROPIC_API_KEY etc.) counts as configured, same as the backend.
   useEffect(() => {
-    if (shouldShowWelcome(loading, !!config?.provider)) {
+    const hasProvider = !!providerStatus
+      && (providerStatus.active_provider_id != null || providerStatus.env_provider != null)
+    if (shouldShowWelcome(loading, hasProvider)) {
       navigate('/welcome', { replace: true })
     }
-  }, [loading, config, navigate])
+  }, [loading, providerStatus, navigate])
 
   // B1-10: single `--sidebar-w` write point — 0px while the sidebar is a
   // drawer (mobile) or absent (window mode), the Sidebar-reported width on

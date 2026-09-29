@@ -1,11 +1,48 @@
 import { describe, it, expect, vi } from 'vitest'
 import { render, screen, fireEvent } from '@testing-library/react'
+import { MemoryRouter } from 'react-router-dom'
 import { I18nProvider } from '@/i18n'
+import { CatalogContext, type CatalogContextValue } from '@/context/CatalogContext'
 import WelcomeState from '@/components/WelcomeState'
+import type { ProviderStatus } from '@/types'
+
+// WelcomeState reads the provider-status snapshot (CTA gate) and navigates
+// to /settings/models (CTA click) — both need providers in the test harness.
+function renderWelcomeState(
+  onSelectPrompt: (prompt: string) => void = () => {},
+  providerStatus: ProviderStatus | null = {
+    active_provider_id: 'anthropic-main',
+    display_name: 'Anthropic',
+    kind: 'anthropic',
+    has_api_key: true,
+    model: null,
+    env_provider: null,
+  },
+) {
+  const value = { providerStatus } as CatalogContextValue
+  return render(
+    <I18nProvider>
+      <MemoryRouter initialEntries={['/chat']}>
+        <CatalogContext.Provider value={value}>
+          <WelcomeState onSelectPrompt={onSelectPrompt} />
+        </CatalogContext.Provider>
+      </MemoryRouter>
+    </I18nProvider>,
+  )
+}
+
+const UNCONFIGURED: ProviderStatus = {
+  active_provider_id: null,
+  display_name: null,
+  kind: null,
+  has_api_key: false,
+  model: null,
+  env_provider: null,
+}
 
 describe('WelcomeState', () => {
   it('renders hero heading and rotating subtitle', () => {
-    render(<I18nProvider><WelcomeState onSelectPrompt={() => {}} /></I18nProvider>)
+    renderWelcomeState()
     expect(screen.getByText('What can I help with?')).toBeInTheDocument()
     // The subtitle is now "Shannon can help you <TextLoop items={...}>".
     // Under jsdom + query-aware matchMedia (prefers-reduced-motion: reduce
@@ -15,7 +52,7 @@ describe('WelcomeState', () => {
   })
 
   it('renders exactly 4 template cards', () => {
-    render(<I18nProvider><WelcomeState onSelectPrompt={() => {}} /></I18nProvider>)
+    renderWelcomeState()
     expect(screen.getByText('Draft an email')).toBeInTheDocument()
     expect(screen.getByText('Summarize')).toBeInTheDocument()
     expect(screen.getByText('Research')).toBeInTheDocument()
@@ -24,7 +61,7 @@ describe('WelcomeState', () => {
 
   it('calls onSelectPrompt with email prompt when email card clicked', () => {
     const spy = vi.fn()
-    render(<I18nProvider><WelcomeState onSelectPrompt={spy} /></I18nProvider>)
+    renderWelcomeState(spy)
     fireEvent.click(screen.getByText('Draft an email'))
     expect(spy).toHaveBeenCalledTimes(1)
     expect(spy.mock.calls[0][0]).toMatch(/follow-up email/i)
@@ -32,7 +69,7 @@ describe('WelcomeState', () => {
 
   it('calls onSelectPrompt with summary prompt when summary card clicked', () => {
     const spy = vi.fn()
-    render(<I18nProvider><WelcomeState onSelectPrompt={spy} /></I18nProvider>)
+    renderWelcomeState(spy)
     fireEvent.click(screen.getByText('Summarize'))
     expect(spy).toHaveBeenCalledTimes(1)
     expect(spy.mock.calls[0][0]).toMatch(/5 bullet points/i)
@@ -40,7 +77,7 @@ describe('WelcomeState', () => {
 
   it('calls onSelectPrompt with research prompt when research card clicked', () => {
     const spy = vi.fn()
-    render(<I18nProvider><WelcomeState onSelectPrompt={spy} /></I18nProvider>)
+    renderWelcomeState(spy)
     fireEvent.click(screen.getByText('Research'))
     expect(spy).toHaveBeenCalledTimes(1)
     expect(spy.mock.calls[0][0]).toMatch(/Rust web frameworks/i)
@@ -48,16 +85,39 @@ describe('WelcomeState', () => {
 
   it('calls onSelectPrompt with code prompt when code card clicked', () => {
     const spy = vi.fn()
-    render(<I18nProvider><WelcomeState onSelectPrompt={spy} /></I18nProvider>)
+    renderWelcomeState(spy)
     fireEvent.click(screen.getByText('Write code'))
     expect(spy).toHaveBeenCalledTimes(1)
     expect(spy.mock.calls[0][0]).toMatch(/REST API endpoint in Rust/i)
   })
 
   it('shows keyboard hint chips', () => {
-    render(<I18nProvider><WelcomeState onSelectPrompt={() => {}} /></I18nProvider>)
+    renderWelcomeState()
     expect(screen.getByText('Commands')).toBeInTheDocument()
     expect(screen.getByText('Shortcuts')).toBeInTheDocument()
     expect(screen.getByText('History')).toBeInTheDocument()
+  })
+
+  // Review §3-A1 (item e): unconfigured users get a prominent provider CTA
+  // on the empty chat canvas — never shown once configured.
+  it('shows the provider CTA card when nothing is configured', () => {
+    renderWelcomeState(() => {}, UNCONFIGURED)
+    expect(screen.getByTestId('welcome-provider-cta')).toBeInTheDocument()
+    expect(screen.getByText('Connect a provider to start')).toBeInTheDocument()
+  })
+
+  it('hides the provider CTA card when a provider is configured', () => {
+    renderWelcomeState()
+    expect(screen.queryByTestId('welcome-provider-cta')).not.toBeInTheDocument()
+  })
+
+  it('hides the provider CTA card when only an env provider is configured', () => {
+    renderWelcomeState(() => {}, { ...UNCONFIGURED, env_provider: 'anthropic' })
+    expect(screen.queryByTestId('welcome-provider-cta')).not.toBeInTheDocument()
+  })
+
+  it('hides the provider CTA card while the snapshot is unavailable', () => {
+    renderWelcomeState(() => {}, null)
+    expect(screen.queryByTestId('welcome-provider-cta')).not.toBeInTheDocument()
   })
 })

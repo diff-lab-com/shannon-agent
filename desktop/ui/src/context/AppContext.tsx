@@ -26,6 +26,7 @@ import {
   type SessionActivity,
   type StatusResponse,
   type DesktopConfig,
+  type ProviderStatus,
   type ModelInfo,
   type PermissionRequest,
   type BackgroundTaskInfo,
@@ -136,6 +137,10 @@ export function AppProvider({ children }: { children: ReactNode }) {
   const [windowSessionId] = useState<string | null>(() => parseWindowSession())
   const [status, setStatus] = useState<StatusResponse | null>(null)
   const [config, setConfig] = useState<DesktopConfig | null>(null)
+  // 2026-09-29 provider review §3-A1: reliable activation signal —
+  // `config.provider`/`config.api_key` are dead since ADR-0005, so the
+  // banner / welcome / settings gates read this snapshot instead.
+  const [providerStatus, setProviderStatus] = useState<ProviderStatus | null>(null)
   const [models, setModels] = useState<ModelInfo[]>([])
   const [permissionRequest, setPermissionRequest] = useState<PermissionRequest | null>(null)
   // /rewind: checkpoints for the current session (turn indices + previews).
@@ -147,6 +152,11 @@ export function AppProvider({ children }: { children: ReactNode }) {
   const [agents, setAgents] = useState<AgentInfo[]>([])
   const [mcpServers, setMcpServers] = useState<McpServerInfo[]>([])
   const [error, setError] = useState<string | null>(null)
+  // Review §2-3: machine-readable failure class for the chat error banner —
+  // `auth` (401/403, classified Rust-side on the QUERY_FAILED payload) gets
+  // the dedicated "update key" banner; `other` keeps the raw error line.
+  // Kept in lockstep with `error` via setChatError below.
+  const [errorKind, setErrorKind] = useState<'auth' | 'other' | null>(null)
   // P0-2: sessions currently owned by a desktop goal run (running/paused).
   // Manual sends to these are blocked — goal and manual input are mutually
   // exclusive; the backend `send_message` guard is the backstop.
@@ -354,12 +364,24 @@ export function AppProvider({ children }: { children: ReactNode }) {
     setPromptQueues(Object.fromEntries(promptQueuesRef.current))
   }, [])
 
+  // Single writer for the chat error surface so `errorKind` can never go
+  // stale relative to `error` (a subsequent non-auth failure must clear the
+  // auth classification, and a new send must clear both).
+  const setChatError = useCallback((message: string | null, kind: 'auth' | 'other' = 'other') => {
+    setError(message)
+    setErrorKind(message == null ? null : kind)
+  }, [])
+
   const refreshStatus = useCallback(async () => {
     try { setStatus(await api.getStatus()) } catch (e) { logSoftFailure('refresh status', e) }
   }, [])
 
   const refreshConfig = useCallback(async () => {
     try { setConfig(await api.getConfig()) } catch (e) { logSoftFailure('refresh config', e) }
+  }, [])
+
+  const refreshProviderStatus = useCallback(async () => {
+    try { setProviderStatus(await api.getProviderStatus()) } catch (e) { logSoftFailure('refresh provider status', e) }
   }, [])
 
   const refreshModels = useCallback(async () => {
@@ -388,11 +410,11 @@ export function AppProvider({ children }: { children: ReactNode }) {
     options?: { budgetBypass?: boolean },
   ): Promise<boolean> => {
     if (currentSessionId && goalOwnedSessionIds.includes(currentSessionId)) {
-      setError(messageFor('goal.composer.blocked'))
+      setChatError(messageFor('goal.composer.blocked'))
       setSessionQuerying(windowSessionId ?? currentSessionId, false)
       return false
     }
-    setError(null)
+    setChatError(null)
     // §P2-18: a new turn resets its session's stream buckets, not just the
     // visible projection (a previous turn may have failed mid-stream).
     const targetSessionId = windowSessionId ?? currentSessionId
@@ -437,11 +459,11 @@ export function AppProvider({ children }: { children: ReactNode }) {
         }
         return prev
       })
-      setError(String(e))
+      setChatError(String(e))
       setSessionQuerying(targetSessionId, false)
       return false
     }
-  }, [currentSessionId, goalOwnedSessionIds, windowSessionId, setSessionQuerying, cancelStreamFlush])
+  }, [currentSessionId, goalOwnedSessionIds, windowSessionId, setSessionQuerying, cancelStreamFlush, setChatError])
 
   // P1-1 fix: cancelQuery's targetSessionId mirrors sendMessage's — both
   // route explicitly instead of re-pointing the shared pointer.
@@ -467,8 +489,8 @@ export function AppProvider({ children }: { children: ReactNode }) {
       setActiveToolCalls([])
       setToolProgress(null)
       await refreshSessions()
-    } catch (e) { setError(String(e)) }
-  }, [refreshSessions])
+    } catch (e) { setChatError(String(e)) }
+  }, [refreshSessions, setChatError])
 
   const createSessionInWorktree = useCallback(async () => {
     let id: string | null = null
@@ -485,7 +507,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
       setToolProgress(null)
       await refreshSessions()
     } catch (e) {
-      setError(String(e))
+      setChatError(String(e))
       if (id) {
         // Worktree creation failed after session was created — clear
         // current session to avoid UI showing a session whose working_dir
@@ -494,7 +516,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
         setMessages([])
       }
     }
-  }, [refreshSessions])
+  }, [refreshSessions, setChatError])
 
   // B1 P2-3: a session switch now carries a transient loading flag for the
   // message area's skeleton. Same-session calls (and Chat remounts that
@@ -531,12 +553,12 @@ export function AppProvider({ children }: { children: ReactNode }) {
       }
     } catch (e) {
       if (token !== switchTokenRef.current) return
-      setError(String(e))
+      setChatError(String(e))
     } finally {
       // A superseded request must not clear the newer request's skeleton.
       if (isSwitch && token === switchTokenRef.current) setSwitchingSession(false)
     }
-  }, [cancelStreamFlush])
+  }, [cancelStreamFlush, setChatError])
 
   const deleteSessionAction = useCallback(async (id: string) => {
     try {
@@ -551,15 +573,15 @@ export function AppProvider({ children }: { children: ReactNode }) {
         setCurrentSessionId(null)
       }
       await refreshSessions()
-    } catch (e) { setError(String(e)) }
-  }, [currentSessionId, refreshSessions, dropPromptQueue])
+    } catch (e) { setChatError(String(e)) }
+  }, [currentSessionId, refreshSessions, dropPromptQueue, setChatError])
 
   const renameSessionAction = useCallback(async (id: string, title: string) => {
     try {
       await api.renameSession(id, title)
       await refreshSessions()
-    } catch (e) { setError(String(e)) }
-  }, [refreshSessions])
+    } catch (e) { setChatError(String(e)) }
+  }, [refreshSessions, setChatError])
 
   const respondPermissionAction = useCallback(async (
     requestId: string,
@@ -572,13 +594,13 @@ export function AppProvider({ children }: { children: ReactNode }) {
       // Batch B2: resolve the rail's amber dot for the prompt's session.
       if (permissionRequest?.session_id) noteSessionApproval(permissionRequest.session_id, false)
     } catch (e) {
-      setError(String(e))
+      setChatError(String(e))
       // B0 P0-1: re-throw so awaiting callers (OPC task page) can toast the
       // failure instead of reporting success. Fire-and-forget callers
       // (Header) attach a no-op catch of their own.
       throw e
     }
-  }, [permissionRequest, noteSessionApproval])
+  }, [permissionRequest, noteSessionApproval, setChatError])
 
   const refreshCheckpoints = useCallback(async () => {
     if (!currentSessionId) {
@@ -641,10 +663,10 @@ export function AppProvider({ children }: { children: ReactNode }) {
       await refreshSessions()
       await refreshCheckpoints()
     } catch (e) {
-      setError(String(e))
+      setChatError(String(e))
       throw e
     }
-  }, [currentSessionId, refreshSessions, refreshCheckpoints, cancelStreamFlush])
+  }, [currentSessionId, refreshSessions, refreshCheckpoints, cancelStreamFlush, setChatError])
   const compactSessionAction = useCallback(async () => {
     if (!currentSessionId) throw new Error('no active session')
     try {
@@ -661,10 +683,10 @@ export function AppProvider({ children }: { children: ReactNode }) {
       await refreshCheckpoints()
       return result
     } catch (e) {
-      setError(String(e))
+      setChatError(String(e))
       throw e
     }
-  }, [currentSessionId, refreshSessions, refreshCheckpoints, cancelStreamFlush])
+  }, [currentSessionId, refreshSessions, refreshCheckpoints, cancelStreamFlush, setChatError])
 
   // P0-2/P2-⑥: derive both the goal-owned id set (composer guard) and the
   // full per-session run map (sidebar badge) from one fetch.
@@ -824,7 +846,11 @@ export function AppProvider({ children }: { children: ReactNode }) {
           }
         }),
         listen(EVENT_NAMES.QUERY_FAILED, (e) => {
-          const p = e.payload as { error: string; session_id?: string }
+          // Desktop emits `error_kind` ("auth" | "other") on the payload —
+          // classified Rust-side from the engine's AuthenticationFailed
+          // text (events::classify_query_error_kind), so the JS side never
+          // string-matches provider errors.
+          const p = e.payload as { error: string; error_kind?: string; session_id?: string }
           if (!isEventForCurrentWindow(p.session_id, windowSessionId)) return
           noteSessionActivity(p.session_id, 'fail')
           // §P2-18: like QUERY_COMPLETED, failure state is scoped to the
@@ -842,7 +868,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
           streamingBucketsRef.current.set(key, '')
           thinkingBucketsRef.current.set(key, '')
           if (key === visibleKey) {
-            setError(p.error)
+            setChatError(p.error, p.error_kind === 'auth' ? 'auth' : 'other')
             setStreamingText('')
             setThinkingText('')
             setActiveToolCalls([])
@@ -892,7 +918,12 @@ export function AppProvider({ children }: { children: ReactNode }) {
               : messageFor('sidebar.sessions.archived.autoUnarchived.untitled'),
           )
         }),
-        listen(EVENT_NAMES.CONFIG_UPDATED, () => { refreshConfig() }),
+        listen(EVENT_NAMES.CONFIG_UPDATED, () => {
+          refreshConfig()
+          // Provider saves/activations emit CONFIG_UPDATED — keep the
+          // gating snapshot (active provider / has_api_key) in lockstep.
+          void refreshProviderStatus()
+        }),
         // B3 P1-25: a background-task change can also mean a new/finished
         // agent run — refresh the agents inventory alongside the tasks so
         // the OPC load/workflow views don't need an app restart to catch up.
@@ -944,6 +975,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
     await Promise.all([
       record('refreshStatus', refreshStatus()),
       record('refreshConfig', refreshConfig()),
+      record('refreshProviderStatus', refreshProviderStatus()),
       record('refreshSessions', refreshSessions()),
       record('refreshModels', refreshModels()),
       record('refreshTasks', refreshTasks()),
@@ -959,7 +991,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
     ])
     if (failures.length > 0) setInitError(failures[0])
     setLoading(false)
-  }, [refreshStatus, refreshConfig, refreshSessions, refreshModels, refreshTasks,
+  }, [refreshStatus, refreshConfig, refreshProviderStatus, refreshSessions, refreshModels, refreshTasks,
     refreshAgents, refreshMcpServers, refreshBackgroundTasks, windowSessionId, switchToSession, applyGoalRuns])
 
   useEffect(() => {
@@ -986,11 +1018,11 @@ export function AppProvider({ children }: { children: ReactNode }) {
     deleteSessionAction, renameSessionAction, refreshSessions])
 
   const catalogValue = useMemo<CatalogContextValue>(() => ({
-    status, config, models, agents, tasks, mcpServers, backgroundTasks, permissionRequest,
-    error, loading, initError, retryInit: loadInitialData, refreshStatus, refreshConfig, refreshModels, refreshTasks, refreshAgents,
+    status, config, providerStatus, models, agents, tasks, mcpServers, backgroundTasks, permissionRequest,
+    error, errorKind, loading, initError, retryInit: loadInitialData, refreshStatus, refreshConfig, refreshModels, refreshTasks, refreshAgents,
     refreshMcpServers, refreshBackgroundTasks, respondPermission: respondPermissionAction,
-  }), [status, config, models, agents, tasks, mcpServers, backgroundTasks, permissionRequest,
-    error, loading, initError, loadInitialData, refreshStatus, refreshConfig, refreshModels, refreshTasks, refreshAgents,
+  }), [status, config, providerStatus, models, agents, tasks, mcpServers, backgroundTasks, permissionRequest,
+    error, errorKind, loading, initError, loadInitialData, refreshStatus, refreshConfig, refreshModels, refreshTasks, refreshAgents,
     refreshMcpServers, refreshBackgroundTasks, respondPermissionAction])
 
   return (

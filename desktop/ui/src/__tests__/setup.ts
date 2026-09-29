@@ -135,8 +135,12 @@ class PointerEventMock extends MouseEvent {}
 ;(globalThis as any).PointerEvent = PointerEventMock
 ;(window as any).PointerEvent = PointerEventMock
 
-// Mock tauri-api module
-vi.mock('@/lib/tauri-api', () => ({
+// Mock tauri-api module. The real module is spread in first so pure
+// helpers that don't cross the bridge (e.g. `parseFetchModelsError`)
+// behave identically to production; every `invoke`-backing export below
+// is overridden with an explicit mock.
+vi.mock('@/lib/tauri-api', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('@/lib/tauri-api')>()),
   sendMessage: vi.fn().mockResolvedValue({ message_id: '1', status: 'sent' }),
   getConversation: vi.fn().mockResolvedValue([]),
   cancelQuery: vi.fn().mockResolvedValue(undefined),
@@ -253,6 +257,23 @@ vi.mock('@/lib/tauri-api', () => ({
     expiresAt: Date.now() + 300_000,
   })),
   testProviderConnection: vi.fn().mockResolvedValue({ kind: 'success' }),
+  // 2026-09-29 provider review — in-modal probe + live model listing.
+  // Defaults mirror the getConfig default below (a configured provider) so
+  // existing gate-dependent tests keep today's behavior; per-test
+  // `vi.mocked(...)` overrides cover the unconfigured / failing paths.
+  testProviderCredentials: vi.fn().mockResolvedValue({ kind: 'success' }),
+  fetchProviderModels: vi.fn().mockResolvedValue([]),
+  // Default: configured + keyed, so the ApiKeyBanner / welcome CTA stay
+  // hidden in tests that don't care about them (matches the old dead-gate
+  // behavior those tests were written against).
+  getProviderStatus: vi.fn().mockResolvedValue({
+    active_provider_id: 'anthropic-main',
+    display_name: 'Anthropic',
+    kind: 'anthropic',
+    has_api_key: true,
+    model: 'claude-sonnet-4-6',
+    env_provider: null,
+  }),
   listProviders: vi.fn().mockResolvedValue({ active_provider_id: null, providers: [] }),
   saveProvider: vi.fn().mockResolvedValue({ active_provider_id: null, providers: [] }),
   deleteProvider: vi.fn().mockResolvedValue({ active_provider_id: null, providers: [] }),

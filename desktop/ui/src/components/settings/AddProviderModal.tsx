@@ -16,13 +16,14 @@
 //   - `add-provider-modal/TiersEditor.tsx` — per-tier model overrides.
 //   - `add-provider-modal/FallbackModelsEditor.tsx` — fallback list.
 
-import { useState } from 'react'
+import { useId, useState } from 'react'
 import { useIntl } from 'react-intl'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Modal } from '@/components/ui/modal'
 import { ConfirmDialog } from '@/components/ui/confirm-dialog'
 import * as api from '@/lib/tauri-api'
+import { fetchFailureMessage, testResultMessage } from './models-settings/utils'
 import type {
   ProviderConnection,
   ProviderInput,
@@ -42,6 +43,15 @@ import {
   parseDefaultMaxTokens,
   type AdvancedState,
 } from './add-provider-modal/types'
+
+/// In-modal probe state for the "Test connection" button (review §2-12 /
+/// §3-B item 11): spinner while the probe runs, then the categorized
+/// verdict + client-side round-trip latency. Purely transient — testing
+/// never saves.
+type TestState =
+  | { status: 'testing' }
+  | { status: 'done'; result: api.TestConnectionResult; latencyMs: number }
+  | null
 
 export interface AddProviderModalProps {
   editing: ProviderConnection | null
@@ -84,11 +94,72 @@ export default function AddProviderModal({ editing, onClose, onSaved }: AddProvi
 
   const info = KIND_INFO[kind] ?? KIND_INFO['openai-compatible']
 
+  // === Fetch model list + in-modal connection test (review §2-9 / §2-12) ===
+  const modelListId = useId()
+  const [suggestions, setSuggestions] = useState<string[] | null>(null)
+  const [fetching, setFetching] = useState(false)
+  const [fetchFailure, setFetchFailure] = useState<api.FetchModelsFailure | null>(null)
+  const [testState, setTestState] = useState<TestState>(null)
+
+  // A fetched list (and any verdict) is only valid for the kind+base_url+
+  // key it was fetched with — any of those changes invalidates it.
+  const clearProbeState = () => {
+    setSuggestions(null)
+    setFetchFailure(null)
+    setTestState(null)
+  }
+
+  // The stored key counts in edit mode: the backend falls back to the saved
+  // credential for this connection id when the input is empty (the modal
+  // never re-displays the secret).
+  const keyAvailable = apiKey.trim() !== '' || !!editing?.has_api_key
+  const canProbe = baseUrl.trim() !== '' && (!info.needsKey || keyAvailable)
+  const providerLabel = kindLabel(intl, kind)
+
   const applyQuickFill = (qf: (typeof QUICK_FILL)[number]) => {
     setKind(qf.kind)
     if (qf.baseUrl) setBaseUrl(qf.baseUrl)
     if (qf.model) setModel(qf.model)
     if (!label) setLabel(qf.id === 'custom' ? '' : qf.label)
+    clearProbeState()
+  }
+
+  const handleFetchModels = async () => {
+    if (!canProbe || fetching) return
+    setFetching(true)
+    setFetchFailure(null)
+    try {
+      const models = await api.fetchProviderModels(
+        editing?.id ?? null,
+        kind,
+        baseUrl.trim(),
+        apiKey.trim() || null,
+      )
+      setSuggestions(models)
+    } catch (e) {
+      setSuggestions(null)
+      setFetchFailure(api.parseFetchModelsError(String(e)))
+    } finally {
+      setFetching(false)
+    }
+  }
+
+  const handleTestConnection = async () => {
+    if (!canProbe || testState?.status === 'testing') return
+    setTestState({ status: 'testing' })
+    setFetchFailure(null)
+    const start = performance.now()
+    try {
+      const result = await api.testProviderCredentials(
+        kind,
+        baseUrl.trim() || null,
+        apiKey.trim() || null,
+        editing?.id ?? null,
+      )
+      setTestState({ status: 'done', result, latencyMs: Math.max(1, Math.round(performance.now() - start)) })
+    } catch (e) {
+      setTestState({ status: 'done', result: { kind: 'unknown', message: String(e) }, latencyMs: 0 })
+    }
   }
 
   const submit = async () => {
@@ -187,7 +258,7 @@ export default function AddProviderModal({ editing, onClose, onSaved }: AddProvi
             <select
               className="w-full px-md py-sm bg-surface text-on-surface border border-outline-variant/50 rounded-lg outline-none focus:ring-2 focus:ring-primary font-body-sm cursor-pointer"
               value={kind}
-              onChange={(e) => setKind(e.target.value)}
+              onChange={(e) => { setKind(e.target.value); clearProbeState() }}
             >
               {Object.keys(KIND_INFO).map(k => (
                 <option key={k} value={k}>{kindLabel(intl, k)}</option>
@@ -199,7 +270,7 @@ export default function AddProviderModal({ editing, onClose, onSaved }: AddProvi
             <Input
               className="w-full px-md py-sm bg-surface text-on-surface border border-outline-variant/50 rounded-lg outline-none focus:ring-2 focus:ring-primary font-body-sm font-mono"
               value={baseUrl}
-              onChange={(e) => { setBaseUrl(e.target.value); setError(null); setErrorField(null) }}
+              onChange={(e) => { setBaseUrl(e.target.value); setError(null); setErrorField(null); clearProbeState() }}
               placeholder="https://api.example.com/v1"
               aria-invalid={errorField === 'baseUrl' || undefined}
               aria-describedby={error ? 'add-provider-error' : undefined}
@@ -211,14 +282,100 @@ export default function AddProviderModal({ editing, onClose, onSaved }: AddProvi
               className="w-full px-md py-sm bg-surface text-on-surface border border-outline-variant/50 rounded-lg outline-none focus:ring-2 focus:ring-primary font-body-sm font-mono"
               type="password"
               value={apiKey}
-              onChange={(e) => { setApiKey(e.target.value); setError(null) }}
+              onChange={(e) => { setApiKey(e.target.value); setError(null); clearProbeState() }}
               placeholder={editing ? t('settings.models.providers.apiKeyKeep') : t('settings.models.providers.apiKeyPlaceholder')}
               disabled={!info.needsKey}
             />
           </Field>
 
+          {/* Review §2-12: verify the form values BEFORE saving — save ≠
+              test. Edit mode with an untouched key tests the stored
+              credential (api_key null + provider id → backend reads the
+              credential store). */}
+          <div className="flex items-center gap-md flex-wrap">
+            <Button
+              type="button"
+              variant="outline"
+              data-testid="test-provider-connection"
+              disabled={!canProbe || testState?.status === 'testing'}
+              onClick={handleTestConnection}
+              className="inline-flex items-center gap-xs px-md py-xs rounded-lg border border-outline-variant/50 bg-surface-container-low hover:border-primary/40 hover:bg-primary/5 text-on-surface font-label-sm cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed"
+            >
+              <span className={`material-symbols-outlined icon-md${testState?.status === 'testing' ? ' animate-spin' : ''}`}>
+                {testState?.status === 'testing' ? 'progress_activity' : 'network_check'}
+              </span>
+              {testState?.status === 'testing'
+                ? t('settings.models.providers.testingConnection')
+                : t('settings.models.providers.testConnection')}
+            </Button>
+            {testState?.status === 'done' && (
+              <p
+                role="status"
+                data-testid="provider-test-status"
+                className={`font-label-sm ${testState.result.kind === 'success' ? 'text-primary' : 'text-error'}`}
+              >
+                {testState.result.kind === 'success'
+                  ? intl.formatMessage({ id: 'settings.models.testResult.successLatency' }, { ms: testState.latencyMs })
+                  : testResultMessage(intl, testState.result, providerLabel)}
+              </p>
+            )}
+          </div>
+
           <Field label={t('settings.models.providers.modelField')}>
-            <Input className="w-full px-md py-sm bg-surface text-on-surface border border-outline-variant/50 rounded-lg outline-none focus:ring-2 focus:ring-primary font-body-sm font-mono" value={model} onChange={(e) => setModel(e.target.value)} placeholder="claude-sonnet-4-6" />
+            <div className="flex gap-sm items-center">
+              <Input
+                className="w-full px-md py-sm bg-surface text-on-surface border border-outline-variant/50 rounded-lg outline-none focus:ring-2 focus:ring-primary font-body-sm font-mono"
+                value={model}
+                onChange={(e) => setModel(e.target.value)}
+                placeholder="claude-sonnet-4-6"
+                // Conditional: an input with a `list` attribute is exposed
+                // to assistive tech as a combobox, which would mislabel the
+                // free-text field (and collide with the kind select's role
+                // in tests) when no suggestions exist.
+                list={suggestions != null && suggestions.length > 0 ? modelListId : undefined}
+                data-testid="provider-model-input"
+              />
+              {/* Review §2-9: pull the live /models catalog so users pick
+                  real ids instead of typing free text and discovering typos
+                  as provider 404s. Free text stays valid — the datalist only
+                  suggests. Works identically in add and edit mode (edit
+                  falls back to the stored key). */}
+              <Button
+                type="button"
+                variant="outline"
+                data-testid="fetch-models"
+                disabled={!canProbe || fetching}
+                onClick={handleFetchModels}
+                className="shrink-0 inline-flex items-center gap-xs px-md py-sm rounded-lg border border-outline-variant/50 bg-surface-container-low hover:border-primary/40 hover:bg-primary/5 text-on-surface font-label-sm cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed"
+              >
+                <span className={`material-symbols-outlined icon-md${fetching ? ' animate-spin' : ''}`}>
+                  {fetching ? 'progress_activity' : 'cloud_download'}
+                </span>
+                {fetching
+                  ? t('settings.models.providers.fetchingModels')
+                  : t('settings.models.providers.fetchModels')}
+              </Button>
+            </div>
+            {suggestions != null && suggestions.length > 0 && (
+              <>
+                <datalist id={modelListId}>
+                  {suggestions.map((m) => <option key={m} value={m} />)}
+                </datalist>
+                <p data-testid="models-found" className="mt-xs font-label-sm text-on-surface-variant">
+                  {intl.formatMessage({ id: 'settings.models.providers.modelsFound' }, { count: suggestions.length })}
+                </p>
+              </>
+            )}
+            {suggestions != null && suggestions.length === 0 && (
+              <p data-testid="models-empty" className="mt-xs font-label-sm text-on-surface-variant">
+                {t('settings.models.providers.modelsEmpty')}
+              </p>
+            )}
+            {fetchFailure && (
+              <p role="alert" data-testid="fetch-models-error" className="mt-xs font-label-sm text-error">
+                {fetchFailureMessage(intl, fetchFailure, providerLabel)}
+              </p>
+            )}
           </Field>
 
           {/* Advanced disclosure — surfaces v2 ProviderProfile fields. The

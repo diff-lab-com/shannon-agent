@@ -26,11 +26,77 @@ pub use shannon_types::events::event_names;
 pub use shannon_types::events::{
     BackgroundTaskInfo, BackgroundTaskUpdate, ChatMessage, ConfigUpdatedPayload, DiffFileInfo,
     DiffHunk, EVENT_SCHEMA_VERSION, EventEnvelope, HunkAction, PermissionRequest,
-    QueryCancelledPayload, QueryCompletedPayload, QueryFailedPayload, QueryTextPayload,
-    SessionInfo, SessionLoaded, TaskRetryPayload, TaskStepPayload, ThinkingPayload,
-    ToolProgressPayload, ToolResultPayload, ToolStartPayload, UpdateAvailablePayload,
-    UpdateProgressPayload, UsagePayload, VoiceModelDownloadProgressPayload,
+    QueryCancelledPayload, QueryCompletedPayload, QueryTextPayload, SessionInfo, SessionLoaded,
+    TaskRetryPayload, TaskStepPayload, ThinkingPayload, ToolProgressPayload, ToolResultPayload,
+    ToolStartPayload, UpdateAvailablePayload, UpdateProgressPayload, UsagePayload,
+    VoiceModelDownloadProgressPayload,
 };
+
+/// `query:failed` payload `error_kind` for provider-authentication failures
+/// (HTTP 401/403 — bad/revoked API key). The chat UI routes these to a
+/// dedicated "update your key" banner instead of the raw error line.
+pub const QUERY_ERROR_KIND_AUTH: &str = "auth";
+/// `query:failed` payload `error_kind` for every other failure (network,
+/// rate limit, provider outage, engine bug, …). Rendered as today.
+pub const QUERY_ERROR_KIND_OTHER: &str = "other";
+
+/// Classify a query-failure error string into the machine-readable
+/// `error_kind` carried on the desktop `query:failed` payload.
+///
+/// The engine's stream pipeline hands the desktop only the error's
+/// **Display string** (the exact string that lands in
+/// `QueryEvent::Failed`), so the classification has to match text — same
+/// trade-off the CLI's `classify_headless_failure` already makes. The
+/// primary signal is the engine `ApiError::AuthenticationFailed` Display
+/// text ("Authentication failed", `shannon-engine/src/api/error.rs`),
+/// which is what an HTTP 401/403 from any provider collapses to; the
+/// remaining phrases cover error strings that surface from other layers
+/// (provider JSON bodies, gateway relays) without re-introducing a
+/// typed-error dependency the stream doesn't carry.
+pub(crate) fn classify_query_error_kind(error: &str) -> &'static str {
+    let lower = error.to_lowercase();
+    if lower.contains("authentication failed")
+        || lower.contains("unauthorized")
+        || lower.contains("invalid api key")
+        || lower.contains("invalid x-api-key")
+        || lower.contains("api key rejected")
+        || lower.contains("check your api key")
+    {
+        QUERY_ERROR_KIND_AUTH
+    } else {
+        QUERY_ERROR_KIND_OTHER
+    }
+}
+
+/// Desktop `query:failed` wire payload — the frozen engine
+/// `QueryFailedPayload` shape (`shannon-types`, read-only for the desktop)
+/// plus a desktop-only `error_kind` field, so the frontend can route
+/// authentication failures without string matching in JS. Field names and
+/// the first three fields mirror the engine type exactly; `error_kind` is
+/// additive, so older frontends ignore it.
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct DesktopQueryFailedPayload {
+    pub query_id: String,
+    pub error: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub session_id: Option<String>,
+    pub error_kind: &'static str,
+}
+
+/// Build the desktop `query:failed` payload — classifies `error` once, at
+/// the emit site, so every `QUERY_FAILED` emitter carries the same kind.
+pub(crate) fn query_failed_payload(
+    query_id: &str,
+    error: &str,
+    session_id: Option<String>,
+) -> DesktopQueryFailedPayload {
+    DesktopQueryFailedPayload {
+        query_id: query_id.to_string(),
+        error: error.to_string(),
+        session_id,
+        error_kind: classify_query_error_kind(error),
+    }
+}
 
 /// Workflow streaming — helper to emit a `task:step` event from
 /// anywhere with an `AppHandle`. Silently no-ops on emit error so a
@@ -169,11 +235,77 @@ mod tests {
             reason: None,
         };
         let json = serde_json::to_string(&req).unwrap();
-        let back: PermissionRequest = serde_json::from_str(&json).unwrap();
-        assert_eq!(back.tool, "bash");
-        assert_eq!(back.risk, "medium");
-        assert_eq!(back.request_id, "req-123");
+        let back: serde_json::Value = serde_json::from_str(&json).unwrap();
+        assert_eq!(back["tool"], "bash");
+        assert_eq!(back["risk"], "medium");
+        assert_eq!(back["request_id"], "req-123");
         // P1-3: reason unset → stays off the wire and deserializes as None.
-        assert!(back.reason.is_none());
+        assert!(back.get("reason").is_none());
+    }
+
+    // === query:failed error_kind classification (2026-09-29 provider review
+    // §2-3: chat auth failures must route to the "update key" banner) ===
+
+    #[test]
+    fn classify_query_error_kind_matches_engine_auth_failure_text() {
+        // The engine `ApiError::AuthenticationFailed` Display text — what an
+        // HTTP 401/403 from any provider collapses to.
+        assert_eq!(
+            classify_query_error_kind("Authentication failed"),
+            QUERY_ERROR_KIND_AUTH
+        );
+        // ... and its `user_suggestion` wording (some paths embed it).
+        assert_eq!(
+            classify_query_error_kind(
+                "Authentication failed. Check your API key with /config or set SHANNON_API_KEY."
+            ),
+            QUERY_ERROR_KIND_AUTH
+        );
+        // Other layers' unauthorized phrasings.
+        assert_eq!(
+            classify_query_error_kind("invalid api key provided"),
+            QUERY_ERROR_KIND_AUTH
+        );
+        assert_eq!(
+            classify_query_error_kind("401 Unauthorized from upstream"),
+            QUERY_ERROR_KIND_AUTH
+        );
+    }
+
+    #[test]
+    fn classify_query_error_kind_leaves_other_failures_unclassified() {
+        assert_eq!(classify_query_error_kind("boom"), QUERY_ERROR_KIND_OTHER);
+        assert_eq!(
+            classify_query_error_kind("Rate limit exceeded"),
+            QUERY_ERROR_KIND_OTHER
+        );
+        assert_eq!(
+            classify_query_error_kind("error sending request"),
+            QUERY_ERROR_KIND_OTHER
+        );
+        assert_eq!(classify_query_error_kind(""), QUERY_ERROR_KIND_OTHER);
+    }
+
+    #[test]
+    fn query_failed_payload_carries_kind_and_mirrors_engine_fields() {
+        let p = query_failed_payload("q-1", "Authentication failed", Some("s1".into()));
+        assert_eq!(p.query_id, "q-1");
+        assert_eq!(p.error, "Authentication failed");
+        assert_eq!(p.session_id.as_deref(), Some("s1"));
+        assert_eq!(p.error_kind, QUERY_ERROR_KIND_AUTH);
+        let json = serde_json::to_string(&p).unwrap();
+        assert!(json.contains("\"error_kind\":\"auth\""), "{json}");
+        // The three engine-mirrored field names are unchanged.
+        assert!(json.contains("\"query_id\":\"q-1\""), "{json}");
+        assert!(json.contains("\"session_id\":\"s1\""), "{json}");
+    }
+
+    #[test]
+    fn query_failed_payload_without_session_omits_field() {
+        // Matches the engine payload's skip_serializing_if contract.
+        let p = query_failed_payload("q-2", "boom", None);
+        let json = serde_json::to_string(&p).unwrap();
+        assert!(!json.contains("session_id"), "{json}");
+        assert!(json.contains("\"error_kind\":\"other\""), "{json}");
     }
 }

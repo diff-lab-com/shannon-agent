@@ -478,7 +478,9 @@ pub(crate) fn from_provider_profile(
 /// `openai-compatible` slug, which matches the existing collapse
 /// convention (engine resolvers recover fine-grained identity from
 /// `base_url` at resolution time).
-fn kind_engine_to_slug(kind: &shannon_types::provider_config::ProviderKind) -> &'static str {
+pub(crate) fn kind_engine_to_slug(
+    kind: &shannon_types::provider_config::ProviderKind,
+) -> &'static str {
     use shannon_types::provider_config::ProviderKind;
     match kind {
         ProviderKind::Anthropic => "anthropic",
