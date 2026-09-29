@@ -3009,9 +3009,7 @@
         "allow-open-companion-window",
         "allow-open-session-window",
         "allow-reveal-session-in-main",
-        "allow-set-companion-always-on-top",
-        "allow-workspace-get-layout",
-        "allow-workspace-set-layout"
+        "allow-set-companion-always-on-top"
       ]
     },
     {
