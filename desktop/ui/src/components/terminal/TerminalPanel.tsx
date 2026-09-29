@@ -27,7 +27,10 @@
  *    floor — see ./xtermTheme);
  *  - reconnect: `terminal_list` restores live tabs and `terminal_history`
  *    (US6) replays each tab's scrollback silently — the old "history is
- *    gone" warning banner is retired with it;
+ *    gone" warning banner is retired with it. Listeners attach BEFORE the
+ *    history fetch, and the snapshot's `endSeq` watermark drops the
+ *    already-replayed queued events (review fix: no loss, no duplication
+ *    around reconnect);
  *  - chat integration (US4, direction A — user-initiated only): the
  *    `shannon:terminal-run` window event runs a chat code block here, and
  *    the toolbar's "send to agent" hands a selection to the composer via
@@ -98,12 +101,14 @@ interface TermEntry {
   /**
    * US6 replay: false until this tab's `terminal_history` snapshot has
    * been written to the term. Live payloads arriving before that are
-   * queued in `pendingLive` (arrival order) and flushed after the
-   * snapshot, so ordering is preserved without gaps or duplicates. The
-   * fetch happens once — ensureTerm never runs twice for one entry.
+   * queued in `pendingLive` (arrival order, with their output seq) and
+   * stitched after the snapshot, so the invariant
+   * "history ⊕ (queued events with seq > endSeq), in order" holds with no
+   * loss and no duplication. The fetch happens once — ensureTerm never
+   * runs twice for one entry.
    */
   historyReady: boolean;
-  pendingLive: Uint8Array[];
+  pendingLive: Array<{ bytes: Uint8Array; seq?: number }>;
 }
 
 /** basename(3)-ish label so tabs read "shannon-lane-f" not "/home/…". */
@@ -284,49 +289,52 @@ export function TerminalPanel({ projectDir }: TerminalPanelProps) {
 
     // Both subscriptions resolve asynchronously (Tauri listen); a disposed
     // entry unsubscribes immediately on resolution so an
-    // unmount-before-subscribe race never leaks a listener.
+    // unmount-before-subscribe race never leaks a listener. The wrapped
+    // promises are kept: the replay fetch below must wait for BOTH — the
+    // history snapshot is only a valid stitch point once the event stream
+    // is attached (review fix: otherwise output emitted between the
+    // backend's ring snapshot and our listener registration would be
+    // neither replayed nor delivered).
     let disposed = false;
     const unsubs: Array<() => void> = [];
-    void listenTerminalOutput(payload => {
+    const track = (p: Promise<() => void>) => p.then(fn => {
+      if (disposed) {
+        fn();
+        return;
+      }
+      unsubs.push(fn);
+    });
+    const outputReady = track(listenTerminalOutput(payload => {
       if (payload.terminalId !== info.terminalId) return;
       // Raw bytes go straight to xterm: the pump slices the pty stream at
       // arbitrary byte boundaries, and xterm's write buffer completes
       // multi-byte sequences split across events. Decoding per event would
       // turn both halves of a split sequence into U+FFFD.
       const bytes = decodeTerminalOutput(payload.data);
-      // US6: until the history snapshot has been written, live bytes queue
-      // in arrival order — the backend appends to the replay ring BEFORE
-      // emitting, so the snapshot is a clean prefix of the live stream and
-      // snapshot-then-flush reproduces the true order without duplicates.
+      // US6 + review fix: until the history snapshot has been written,
+      // live bytes queue in arrival order WITH their output seq. The
+      // backend appends a drain to the replay ring (advancing endSeq)
+      // BEFORE emitting its chunks, so the snapshot covers a clean seq
+      // prefix of the live stream: after the fetch, queued events with
+      // seq <= endSeq are already inside the snapshot and must be DROPPED
+      // (writing them too would duplicate), the rest flush in order.
       if (!entry.historyReady) {
-        entry.pendingLive.push(bytes);
+        entry.pendingLive.push({ bytes, seq: payload.seq });
         return;
       }
       term.write(bytes);
-    }).then(fn => {
-      if (disposed) {
-        fn();
-        return;
-      }
-      unsubs.push(fn);
-    });
+    }));
     // P3-6: exit is signaled by the dedicated `terminal:exit` event, never
     // by parsing the in-stream "[shannon: process exited …" notice (that
     // text is for humans — any program could print it). The backend
     // emission lands with the Task-4 pump change; until then the tab just
     // never auto-marks exited.
-    void listenTerminalExit(payload => {
+    const exitReady = track(listenTerminalExit(payload => {
       if (payload.terminalId !== info.terminalId) return;
       setTabs(prev => prev.map(tab => (
         tab.info.terminalId === info.terminalId ? { ...tab, exited: true } : tab
       )));
-    }).then(fn => {
-      if (disposed) {
-        fn();
-        return;
-      }
-      unsubs.push(fn);
-    });
+    }));
     entry.detachOutput = () => {
       disposed = true;
       unsubs.forEach(fn => fn());
@@ -339,8 +347,20 @@ export function TerminalPanel({ projectDir }: TerminalPanelProps) {
     // of the ring's bytes; empty (unknown id / ended session / mock
     // backend) and failed calls simply restore nothing — the live stream
     // continues either way and no banner is shown anymore.
+    //
+    // Review fix (replay ordering races): the fetch is issued only AFTER
+    // both listeners are attached (closing the loss window), and the
+    // queued live events are stitched by seq against the snapshot's
+    // endSeq (closing the duplication window — the invoke can otherwise
+    // be processed after the listeners attached, landing the same bytes
+    // in both the snapshot and the queue). The real invariant:
+    // history ⊕ (queued events with seq > endSeq), in order, no loss, no
+    // duplication. Events without a seq (demo backend, legacy payloads)
+    // or a snapshot without endSeq fall back to flush-everything.
     void (async () => {
-      let history: { data: string } | null = null;
+      await Promise.all([outputReady, exitReady]);
+      if (disposed) return;
+      let history: { data: string; endSeq?: number } | null = null;
       try {
         history = await api.terminalHistory(info.terminalId);
       } catch {
@@ -348,10 +368,16 @@ export function TerminalPanel({ projectDir }: TerminalPanelProps) {
       }
       if (disposed) return;
       if (history && history.data) term.write(decodeTerminalOutput(history.data));
+      const endSeq = history?.endSeq;
       const queued = entry.pendingLive;
       entry.pendingLive = [];
       entry.historyReady = true;
-      queued.forEach(bytes => term.write(bytes));
+      for (const { bytes, seq } of queued) {
+        // Already replayed by the snapshot → drop; strictly-newer events
+        // (or anything unsequenced) flush in arrival order.
+        if (seq != null && endSeq != null && seq <= endSeq) continue;
+        term.write(bytes);
+      }
       term.scrollToBottom();
     })();
 

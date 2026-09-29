@@ -11,7 +11,9 @@
 // the panel uses (write/onData/onResize/open/dispose, fit). The event
 // transports are captured from `listenTerminalOutput` /
 // `listenTerminalExit` so tests drive the exact payload shapes the Rust
-// pump emits.
+// pump emits (including the additive per-chunk `seq`); gates can hold the
+// listen promises unresolved to pin the listener-before-history-fetch
+// ordering (review fix).
 
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { readFileSync } from 'node:fs'
@@ -59,10 +61,15 @@ const h = vi.hoisted(() => ({
     dispose: () => void
     disposed: boolean
   }[],
-  outputHandler: null as ((payload: { terminalId: string; data: string }) => void) | null,
+  outputHandler: null as ((payload: { terminalId: string; data: string; seq?: number }) => void) | null,
   exitHandler: null as ((payload: { terminalId: string }) => void) | null,
   unsubscribed: false,
   exitUnsubscribed: false,
+  /** Review fix: gates to hold the listener promises unresolved so tests
+   *  can observe the listener-before-history-fetch ordering. Null (the
+   *  default) resolves immediately, like the real transports. */
+  gateOutput: null as Promise<void> | null,
+  gateExit: null as Promise<void> | null,
 }))
 
 /** What xterm would render: every written chunk re-decoded as one stream. */
@@ -151,17 +158,17 @@ vi.mock('@/lib/runtime/terminalEvents', async () => {
   const actual = await import('@/lib/runtime/terminalEvents')
   return {
     ...actual,
-    listenTerminalOutput: (handler: (payload: { terminalId: string; data: string }) => void) => {
+    listenTerminalOutput: (handler: (payload: { terminalId: string; data: string; seq?: number }) => void) => {
       h.outputHandler = handler
       h.unsubscribed = false
-      return Promise.resolve(() => {
+      return (h.gateOutput ?? Promise.resolve()).then(() => () => {
         h.unsubscribed = true
       })
     },
     listenTerminalExit: (handler: (payload: { terminalId: string }) => void) => {
       h.exitHandler = handler
       h.exitUnsubscribed = false
-      return Promise.resolve(() => {
+      return (h.gateExit ?? Promise.resolve()).then(() => () => {
         h.exitUnsubscribed = true
       })
     },
@@ -190,6 +197,8 @@ beforeEach(() => {
   h.fits.length = 0
   h.outputHandler = null
   h.exitHandler = null
+  h.gateOutput = null
+  h.gateExit = null
   localStorage.clear()
   vi.mocked(api.terminalList).mockResolvedValue([])
   vi.mocked(api.terminalGetSettings).mockResolvedValue({ ...DEFAULT_SETTINGS })
@@ -764,6 +773,70 @@ describe('TerminalPanel (scrollback replay — US6)', () => {
     const { terminalId } = await vi.mocked(api.terminalSpawn).mock.results[0]!.value
     h.outputHandler?.({ terminalId, data: encode('still-live') })
     await waitFor(() => expect(rendered(h.terminals[0])).toBe('still-live'))
+  })
+
+  it('drops queued live events already covered by the snapshot (seq ≤ endSeq) and flushes the rest in order', async () => {
+    // Review fix (duplication window): the history invoke can resolve
+    // after the listeners attached, so events emitted in the
+    // attach→snapshot window land in BOTH the backend ring (replayed via
+    // the snapshot) and the pending queue. Queued events with
+    // seq ≤ endSeq must be DROPPED (not written twice); strictly newer
+    // ones flush in arrival (stream) order.
+    let resolveHistory: (v: { data: string; endSeq?: number }) => void = () => {}
+    vi.mocked(api.terminalHistory).mockImplementation(
+      () => new Promise((resolve) => { resolveHistory = resolve }),
+    )
+    await openPanel()
+    await waitFor(() => expect(h.terminals.length).toBe(1))
+    const { terminalId } = await vi.mocked(api.terminalSpawn).mock.results[0]!.value
+    h.outputHandler?.({ terminalId, data: encode('DUP-1'), seq: 1 })
+    h.outputHandler?.({ terminalId, data: encode('DUP-2'), seq: 2 })
+    h.outputHandler?.({ terminalId, data: encode('LIVE-3'), seq: 3 })
+    expect(rendered(h.terminals[0])).toBe('')
+    resolveHistory({ data: encode('SNAPSHOT'), endSeq: 2 })
+    await waitFor(() => expect(rendered(h.terminals[0])).toBe('SNAPSHOTLIVE-3'))
+    expect(rendered(h.terminals[0])).not.toContain('DUP-1')
+    expect(rendered(h.terminals[0])).not.toContain('DUP-2')
+  })
+
+  it('flushes seq-marked queued events when the snapshot carries no endSeq (legacy backend)', async () => {
+    // No endSeq on the response (demo backend, legacy payload): the
+    // conservative fallback keeps the old flush-everything behavior.
+    let resolveHistory: (v: { data: string; endSeq?: number }) => void = () => {}
+    vi.mocked(api.terminalHistory).mockImplementation(
+      () => new Promise((resolve) => { resolveHistory = resolve }),
+    )
+    await openPanel()
+    await waitFor(() => expect(h.terminals.length).toBe(1))
+    const { terminalId } = await vi.mocked(api.terminalSpawn).mock.results[0]!.value
+    h.outputHandler?.({ terminalId, data: encode('SEQD-LEGACY'), seq: 5 })
+    resolveHistory({ data: encode('HIST') })
+    await waitFor(() => expect(rendered(h.terminals[0])).toBe('HISTSEQD-LEGACY'))
+  })
+
+  it('issues the history fetch only after both terminal listeners resolved', async () => {
+    // Review fix (loss window): the fetch used to be issued before the
+    // listen promises resolved, so output between the backend's ring
+    // snapshot and listener registration was neither replayed nor
+    // delivered. The fetch must wait for BOTH subscriptions.
+    let resolveOutput: () => void = () => {}
+    let resolveExit: () => void = () => {}
+    h.gateOutput = new Promise<void>((r) => { resolveOutput = r })
+    h.gateExit = new Promise<void>((r) => { resolveExit = r })
+    await openPanel()
+    // Both handlers are registered synchronously by the transports…
+    await waitFor(() => expect(h.outputHandler).toBeTruthy())
+    await waitFor(() => expect(h.exitHandler).toBeTruthy())
+    // …but unresolved: let every pending microtask/task settle, and the
+    // fetch must still not have been issued.
+    await new Promise((r) => setTimeout(r, 10))
+    expect(api.terminalHistory).not.toHaveBeenCalled()
+    resolveOutput()
+    await new Promise((r) => setTimeout(r, 10))
+    expect(api.terminalHistory).not.toHaveBeenCalled()
+    // Only once BOTH listener promises resolve does the fetch go out.
+    resolveExit()
+    await waitFor(() => expect(api.terminalHistory).toHaveBeenCalledTimes(1))
   })
 })
 
