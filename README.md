@@ -352,6 +352,34 @@ shannon --goal "make CI green"                  # Autonomous goal (spending cap:
 </details>
 
 <details>
+<summary>Headless NDJSON output (<code>--output-format json-stream</code>)</summary>
+
+`--output-format json-stream` writes one NDJSON event per line to stdout, in a
+single unified envelope:
+
+```jsonl
+{"type":"start","prompt":"...","model":"...","session_id":"<uuid>"}
+{"type":"text_delta","content":"..."}
+{"type":"tool_call","name":"Read","input":{...}}
+{"type":"tool_result","name":"Read","output":"...","success":true}
+{"type":"progress","message":"..."}
+{"type":"warning","message":"..."}
+{"type":"error","message":"..."}
+{"type":"done","exit_code":0,"turns_used":3,"tokens_used":1234,"tokens_in":800,"tokens_out":434,"infra_failure":true}
+```
+
+Exactly one `done` line ends the run: integer `exit_code` (0 success, 1 error,
+2 max turns, 3 timeout, 4 rate limited, 5 context overflow, 6 permission
+denied, 7 no progress), `turns_used`, `tokens_used` plus the split
+`tokens_in`/`tokens_out` ledger fields, and `infra_failure` (`true` only when
+an infra-class exit produced an empty patch; omitted otherwise). Progress and
+diagnostics always go to stderr, never stdout. The pre-unification
+`tool_use`/`is_error`/bare-`done` schema remains available for old consumers
+via `--emit-legacy-output-events` (deprecated migration flag).
+
+</details>
+
+<details>
 <summary>REPL commands</summary>
 
 | Command | Description |

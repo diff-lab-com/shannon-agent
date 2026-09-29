@@ -729,6 +729,177 @@ async fn test_done_event_tokens_accumulate_across_requests() {
         "tokens_used must equal in+out, got {}",
         done["tokens_used"]
     );
+
+    // F38: this tool-flow stream must carry each tool call ONCE, in the
+    // unified vocabulary only.
+    let types: Vec<&str> = events.iter().filter_map(|e| e["type"].as_str()).collect();
+    assert_eq!(
+        types.iter().filter(|&&t| t == "tool_call").count(),
+        2,
+        "two tool_call events expected, got: {types:?}"
+    );
+    assert!(
+        !types.contains(&"tool_use"),
+        "default json-stream must not duplicate tool calls as legacy tool_use, got: {types:?}"
+    );
+    assert_eq!(
+        types.iter().filter(|&&t| t == "done").count(),
+        1,
+        "F38: exactly one done line, got: {types:?}"
+    );
+}
+
+// ── Test: F38 envelope unification — default vs legacy json-stream ────
+
+/// Default json-stream mode emits ONE envelope: each tool call appears
+/// exactly once as `tool_call` (never duplicated as legacy `tool_use`), and
+/// the run ends with a single `done` line carrying the full field union.
+#[serial]
+#[tokio::test]
+async fn test_json_stream_default_mode_single_envelope() {
+    let workspace = create_workspace();
+    let mut server = mockito::Server::new_async().await;
+    let write_input = json!({"path": "f38.txt", "content": "single envelope"});
+    let _m1 = mount_tool_use(&mut server, "toolu_f38", "Write", write_input);
+    let _m2 = mount_text_after_tool(&mut server, "Written.");
+
+    let result = shannon_with_mock(&server.url(), workspace.path())
+        .args([
+            "--prompt",
+            "write the file",
+            "--output-format",
+            "json-stream",
+            "--max-turns",
+            "5",
+        ])
+        .timeout(std::time::Duration::from_secs(45))
+        .assert();
+
+    let stdout = stdout_string(&result);
+    let events: Vec<serde_json::Value> = stdout
+        .lines()
+        .filter(|l| !l.is_empty())
+        .map(|line| {
+            serde_json::from_str(line).unwrap_or_else(|e| panic!("Invalid NDJSON: {line}\n{e}"))
+        })
+        .collect();
+    assert!(!events.is_empty(), "should produce NDJSON events");
+
+    let types: Vec<&str> = events.iter().filter_map(|e| e["type"].as_str()).collect();
+
+    // Unified envelope only: no legacy lines anywhere.
+    assert_eq!(
+        types.iter().filter(|&&t| t == "tool_call").count(),
+        1,
+        "exactly one tool_call for the single Write, got: {types:?}"
+    );
+    assert!(
+        !types.contains(&"tool_use"),
+        "legacy tool_use must not appear in the default stream, got: {types:?}"
+    );
+
+    // One tool_result with the unified `success` field (no `is_error`).
+    let results: Vec<&serde_json::Value> = events
+        .iter()
+        .filter(|e| e["type"] == "tool_result")
+        .collect();
+    assert_eq!(results.len(), 1, "one tool_result, got: {types:?}");
+    assert!(
+        results[0].get("success").is_some() && results[0].get("is_error").is_none(),
+        "unified tool_result carries `success`, not `is_error`: {}",
+        results[0]
+    );
+
+    // Single done line with the union fields.
+    let done_count = types.iter().filter(|&&t| t == "done").count();
+    assert_eq!(done_count, 1, "exactly one done, got: {types:?}");
+    let done = events
+        .iter()
+        .find(|e| e["type"] == "done")
+        .expect("done event");
+    assert!(done.get("exit_code").is_some(), "done has exit_code");
+    assert!(done.get("turns_used").is_some(), "done has turns_used");
+    assert!(done.get("tokens_in").is_some(), "done has tokens_in");
+    assert!(done.get("tokens_out").is_some(), "done has tokens_out");
+}
+
+/// `--emit-legacy-output-events` opts OUT of the unified envelope: the
+/// stream carries ONLY the legacy OutputEvent vocabulary (tool_use /
+/// is_error / bare done), for consumers written against the
+/// pre-unification schema. Never a mix of the two.
+#[serial]
+#[tokio::test]
+async fn test_json_stream_legacy_flag_emits_only_output_events() {
+    let workspace = create_workspace();
+    let mut server = mockito::Server::new_async().await;
+    let write_input = json!({"path": "legacy.txt", "content": "legacy envelope"});
+    let _m1 = mount_tool_use(&mut server, "toolu_leg", "Write", write_input);
+    let _m2 = mount_text_after_tool(&mut server, "Written.");
+
+    let result = shannon_with_mock(&server.url(), workspace.path())
+        .args([
+            "--prompt",
+            "write the file",
+            "--output-format",
+            "json-stream",
+            "--emit-legacy-output-events",
+            "--max-turns",
+            "5",
+        ])
+        .timeout(std::time::Duration::from_secs(45))
+        .assert();
+
+    let stdout = stdout_string(&result);
+    let events: Vec<serde_json::Value> = stdout
+        .lines()
+        .filter(|l| !l.is_empty())
+        .map(|line| {
+            serde_json::from_str(line).unwrap_or_else(|e| panic!("Invalid NDJSON: {line}\n{e}"))
+        })
+        .collect();
+    assert!(!events.is_empty(), "should produce NDJSON events");
+
+    let types: Vec<&str> = events.iter().filter_map(|e| e["type"].as_str()).collect();
+
+    // Legacy vocabulary only: tool_use present, unified names absent.
+    assert_eq!(
+        types.iter().filter(|&&t| t == "tool_use").count(),
+        1,
+        "exactly one legacy tool_use, got: {types:?}"
+    );
+    assert!(
+        !types.contains(&"tool_call"),
+        "legacy mode must not emit unified tool_call, got: {types:?}"
+    );
+    assert!(
+        !types.contains(&"start") && !types.contains(&"progress"),
+        "legacy mode has no start/progress events, got: {types:?}"
+    );
+
+    // Legacy tool_result carries `is_error`, not `success`.
+    let results: Vec<&serde_json::Value> = events
+        .iter()
+        .filter(|e| e["type"] == "tool_result")
+        .collect();
+    assert_eq!(results.len(), 1, "one tool_result, got: {types:?}");
+    assert!(
+        results[0].get("is_error").is_some() && results[0].get("success").is_none(),
+        "legacy tool_result carries `is_error`: {}",
+        results[0]
+    );
+
+    // Single bare done: exit_code present, no unified-only fields.
+    let done_count = types.iter().filter(|&&t| t == "done").count();
+    assert_eq!(done_count, 1, "exactly one done, got: {types:?}");
+    let done = events
+        .iter()
+        .find(|e| e["type"] == "done")
+        .expect("done event");
+    assert_eq!(done["exit_code"], 0, "legacy done has integer exit_code");
+    assert!(
+        done.get("turns_used").is_none() && done.get("tokens_in").is_none(),
+        "legacy done stays bare (no turns/tokens fields): {done}"
+    );
 }
 
 // ── Test: Tool error handling — Bash command that fails ───────────────
