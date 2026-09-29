@@ -440,7 +440,7 @@ jobs:
     runs-on: ubuntu-latest
     needs: changes
     if: github.event_name != 'pull_request' || needs.changes.result != 'success' || needs.changes.outputs.rust == 'true' || needs.changes.outputs['desktop-ui'] == 'true' || needs.changes.outputs.ci == 'true'
-    timeout-minutes: 20
+    timeout-minutes: 45
     steps:
       - uses: actions/checkout@f548e57e544e1ff5a4c46bf1e1b8685f8e4a348a
       - uses: actions/setup-node@e51e5fe84fc33b4c73ebe40526b2694712b5b858
