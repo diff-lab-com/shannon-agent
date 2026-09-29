@@ -5019,13 +5019,19 @@ fn i18n_en_copy_is_byte_identical_to_previous_hardcoded_strings() {
         "[Diagnostics: ✓ No issues]"
     );
     // Pipe-mode + input errors (pre-existing repl.* keys).
-    assert_eq!(t!("repl.no_input").to_string(), "No input provided on stdin.");
+    assert_eq!(
+        t!("repl.no_input").to_string(),
+        "No input provided on stdin."
+    );
     assert_eq!(
         t!("repl.input_error", error => "boom").to_string(),
         "Input error: boom"
     );
     // Exit session summary (formatting done at the call site).
-    assert_eq!(t!("ui.session_summary_title").to_string(), "── Session Summary ──");
+    assert_eq!(
+        t!("ui.session_summary_title").to_string(),
+        "── Session Summary ──"
+    );
     assert_eq!(
         t!(
             "ui.session_summary_tokens",

@@ -2056,8 +2056,10 @@ impl Repl {
                 self.mark_frame_dirty();
                 if let Err(e) = input::handle_input(self, key, terminal) {
                     // Display error in UI chat instead of stderr to prevent escape sequence leakage
-                    self.chat
-                        .add_message(ChatRole::System, t!("repl.input_error", error => e).to_string());
+                    self.chat.add_message(
+                        ChatRole::System,
+                        t!("repl.input_error", error => e).to_string(),
+                    );
                 }
             }
             crate::events::Event::Paste(content) => {

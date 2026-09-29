@@ -384,12 +384,11 @@ pub(crate) fn save_terminal_settings_to(
     settings: &TerminalSettings,
 ) -> Result<(), String> {
     if let Some(parent) = path.parent() {
-        std::fs::create_dir_all(parent)
-            .map_err(|e| format!("mkdir {}: {e}", parent.display()))?;
+        std::fs::create_dir_all(parent).map_err(|e| format!("mkdir {}: {e}", parent.display()))?;
     }
     let existing = std::fs::read_to_string(path).unwrap_or_default();
-    let mut root: toml::Value = toml::from_str(&existing)
-        .unwrap_or(toml::Value::Table(toml::value::Table::new()));
+    let mut root: toml::Value =
+        toml::from_str(&existing).unwrap_or(toml::Value::Table(toml::value::Table::new()));
     let table = root.as_table_mut().ok_or_else(|| {
         "config root is not a table — refusing to overwrite user config".to_string()
     })?;
@@ -1083,11 +1082,7 @@ fn pump_once(inner: &TerminalInner) {
         // (The in-stream exit notice below is NOT part of the drain, so
         // it gets its own seq past the watermark instead.)
         if chunk_count > 0 {
-            append_history(
-                &session.history,
-                &drained,
-                first_seq + chunk_count - 1,
-            );
+            append_history(&session.history, &drained, first_seq + chunk_count - 1);
         }
         if let Some((success, code)) = session.poll_exit() {
             emit_chunked(&sink, &session.info.terminal_id, &drained, first_seq);
@@ -1557,10 +1552,9 @@ mod tests {
 
         // Payloads emitted before the field existed keep parsing (seq
         // defaults to 0, the pre-history watermark).
-        let legacy: TerminalOutputPayload = serde_json::from_str(
-            r#"{"terminalId":"t-9","data":"aGk="}"#,
-        )
-        .expect("legacy TerminalOutputPayload must deserialize");
+        let legacy: TerminalOutputPayload =
+            serde_json::from_str(r#"{"terminalId":"t-9","data":"aGk="}"#)
+                .expect("legacy TerminalOutputPayload must deserialize");
         assert_eq!(legacy.seq, 0);
     }
 
@@ -1624,7 +1618,10 @@ mod tests {
         assert_eq!(s.drawer_height, 320);
         assert!(!s.screen_reader_mode);
         // Missing keys / missing table fall back to the same defaults.
-        assert_eq!(load_terminal_settings_from(Path::new("/nonexistent/config.toml")), s);
+        assert_eq!(
+            load_terminal_settings_from(Path::new("/nonexistent/config.toml")),
+            s
+        );
     }
 
     #[test]
@@ -1695,7 +1692,10 @@ mod tests {
         let dir = tempfile::tempdir().expect("tempdir");
         let path = dir.path().join("config.toml");
         // Missing file → defaults (no error).
-        assert_eq!(load_terminal_settings_from(&path), TerminalSettings::default());
+        assert_eq!(
+            load_terminal_settings_from(&path),
+            TerminalSettings::default()
+        );
         let settings = TerminalSettings {
             shell: Some("/usr/bin/fish".into()),
             font_size: 14,
@@ -1721,7 +1721,10 @@ mod tests {
         // skipped so the default fallback applies on load).
         save_terminal_settings_to(&path, &TerminalSettings::default()).expect("save 2");
         let text = std::fs::read_to_string(&path).unwrap();
-        assert!(!text.contains("shell"), "unset shell must be skipped: {text}");
+        assert!(
+            !text.contains("shell"),
+            "unset shell must be skipped: {text}"
+        );
         let reloaded = load_terminal_settings_from(&path);
         assert_eq!(reloaded, TerminalSettings::default());
     }
@@ -1770,7 +1773,12 @@ mod tests {
         let dir = tempfile::tempdir().expect("tempdir");
         // Explicit argument wins over the configured shell.
         let explicit = manager
-            .spawn(dir.path(), Some("/bin/sh".into()), Some("/bin/false".into()), None)
+            .spawn(
+                dir.path(),
+                Some("/bin/sh".into()),
+                Some("/bin/false".into()),
+                None,
+            )
             .expect("spawn explicit");
         assert_eq!(explicit.shell, "/bin/sh");
         // No argument → configured shell is used verbatim (recorded in
@@ -1919,7 +1927,10 @@ mod tests {
         // The stored dir is the canonicalized form (unchanged behavior)…
         assert_eq!(
             info.project_dir,
-            real.canonicalize().expect("canonicalize").display().to_string()
+            real.canonicalize()
+                .expect("canonicalize")
+                .display()
+                .to_string()
         );
         // …while the additive raw field preserves the exact requested
         // (symlinked) form the frontend will compare its prop against.
@@ -2045,7 +2056,10 @@ mod tests {
         );
         // Review fix: the requested form rides along verbatim (here the
         // tempdir path is already canonical, so raw == canonical).
-        assert_eq!(info.project_dir_raw.as_deref(), Some(dir.path().display().to_string().as_str()));
+        assert_eq!(
+            info.project_dir_raw.as_deref(),
+            Some(dir.path().display().to_string().as_str())
+        );
         assert!(
             manager
                 .list()
@@ -2180,11 +2194,17 @@ mod tests {
             "targeted session's process tree must die"
         );
         assert!(
-            !manager.list().iter().any(|t| t.terminal_id == a.terminal_id),
+            !manager
+                .list()
+                .iter()
+                .any(|t| t.terminal_id == a.terminal_id),
             "targeted session leaves the list"
         );
         assert!(
-            manager.list().iter().any(|t| t.terminal_id == b.terminal_id),
+            manager
+                .list()
+                .iter()
+                .any(|t| t.terminal_id == b.terminal_id),
             "the other window's session must survive"
         );
         // Reaping an unknown/already-clean label is a no-op, not an error.
@@ -2205,7 +2225,12 @@ mod tests {
         let manager = test_manager(&sink);
         let dir = tempfile::tempdir().expect("tempdir");
         let info = manager
-            .spawn(dir.path(), Some("/bin/sh -c 'echo bye-now'".into()), None, None)
+            .spawn(
+                dir.path(),
+                Some("/bin/sh -c 'echo bye-now'".into()),
+                None,
+                None,
+            )
             .expect("spawn");
         assert!(sink.wait_for(&info.terminal_id, "bye-now", WAIT));
         // The pump must reap the exited session: list empties and the
@@ -2335,7 +2360,12 @@ mod tests {
         let sink = RecordingSink::default();
         let manager = test_manager(&sink);
         let err = manager
-            .spawn(&PathBuf::from("/nonexistent/dir/for/terminal"), None, None, None)
+            .spawn(
+                &PathBuf::from("/nonexistent/dir/for/terminal"),
+                None,
+                None,
+                None,
+            )
             .unwrap_err();
         assert!(err.contains("project dir"), "{err}");
     }

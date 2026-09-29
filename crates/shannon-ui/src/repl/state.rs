@@ -1001,7 +1001,10 @@ mod tests {
     fn frame_gate_animation_forces_draw() {
         let mut gate = idle_gate(Some(std::time::Duration::from_millis(10)));
         gate.animating = true;
-        assert!(super::should_draw_frame(gate), "spinner/progress cadence kept");
+        assert!(
+            super::should_draw_frame(gate),
+            "spinner/progress cadence kept"
+        );
     }
 
     #[test]
@@ -1024,11 +1027,11 @@ mod tests {
     #[test]
     fn animation_active_false_for_default_ready_state() {
         let state = ReplState::default();
-        assert!(!state.animation_active(), "fresh Ready state is not animating");
         assert!(
-            !state.render_in_progress(),
-            "fresh state is not rendering"
+            !state.animation_active(),
+            "fresh Ready state is not animating"
         );
+        assert!(!state.render_in_progress(), "fresh state is not rendering");
     }
 
     #[test]

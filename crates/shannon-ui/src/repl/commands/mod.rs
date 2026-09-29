@@ -1661,8 +1661,10 @@ mod inline_shell_tests {
         // The dangerous window: new traffic grows the list past the stale
         // placeholder index while the (dropped) worker report would have
         // arrived. Repeated drains must be no-ops and touch nothing.
-        repl.chat
-            .add_message(crate::widgets::ChatRole::User, "unrelated user message".into());
+        repl.chat.add_message(
+            crate::widgets::ChatRole::User,
+            "unrelated user message".into(),
+        );
         std::thread::sleep(Duration::from_millis(60));
         for _ in 0..10 {
             poll_inline_shell_jobs(&mut repl);
