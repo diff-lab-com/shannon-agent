@@ -3409,6 +3409,7 @@
   "welcome.migration.scan.retry": "重試掃描",
   "terminal.spawn.failed": "無法啟動新終端機",
   "terminal.paste.multiline.title": "貼上多行內容？",
+  "terminal.runInTerminal.title": "在終端機中執行",
   "terminal.paste.multiline.message": "{lines, plural, other {{lines} 行將被傳送至終端機並執行。}}",
   "terminal.paste.multiline.confirm": "仍要貼上",
   "terminal.paste.multiline.cancel": "取消",

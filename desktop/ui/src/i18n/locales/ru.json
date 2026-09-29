@@ -3409,6 +3409,7 @@
   "welcome.migration.scan.retry": "Повторить сканирование",
   "terminal.spawn.failed": "Не удалось запустить новый терминал",
   "terminal.paste.multiline.title": "Вставить несколько строк?",
+  "terminal.runInTerminal.title": "Запустить в терминале",
   "terminal.paste.multiline.message": "{lines, plural, one {# строка будет отправлена в терминал и выполнена.} few {# строки будут отправлены в терминал и выполнены.} many {# строк будет отправлено в терминал и выполнено.} other {# строки будут отправлены в терминал и выполнены.}}",
   "terminal.paste.multiline.confirm": "Всё равно вставить",
   "terminal.paste.multiline.cancel": "Отмена",

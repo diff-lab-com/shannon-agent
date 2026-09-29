@@ -3409,6 +3409,7 @@
   "welcome.migration.scan.retry": "Reintentar escaneo",
   "terminal.spawn.failed": "No se pudo abrir una nueva terminal",
   "terminal.paste.multiline.title": "¿Pegar varias líneas?",
+  "terminal.runInTerminal.title": "Ejecutar en la terminal",
   "terminal.paste.multiline.message": "{lines, plural, =1 {Se enviará 1 línea a la terminal y se ejecutará.} other {Se enviarán {lines} líneas a la terminal y se ejecutarán.}}",
   "terminal.paste.multiline.confirm": "Pegar de todos modos",
   "terminal.paste.multiline.cancel": "Cancelar",

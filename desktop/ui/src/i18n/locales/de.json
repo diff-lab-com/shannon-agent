@@ -3409,6 +3409,7 @@
   "welcome.migration.scan.retry": "Scan wiederholen",
   "terminal.spawn.failed": "Neues Terminal konnte nicht gestartet werden",
   "terminal.paste.multiline.title": "Mehrere Zeilen einfügen?",
+  "terminal.runInTerminal.title": "Im Terminal ausführen",
   "terminal.paste.multiline.message": "{lines, plural, =1 {1 Zeile wird an das Terminal gesendet und ausgeführt.} other {{lines} Zeilen werden an das Terminal gesendet und ausgeführt.}}",
   "terminal.paste.multiline.confirm": "Trotzdem einfügen",
   "terminal.paste.multiline.cancel": "Abbrechen",

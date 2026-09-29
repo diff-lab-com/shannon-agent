@@ -530,6 +530,59 @@ describe('TerminalPanel (P1-36 theme currency + B5 paste guard + spawn errors)',
   })
 })
 
+describe('TerminalPanel (chat integration: run in terminal — US4 direction A)', () => {
+  const runEvent = (code: unknown) =>
+    act(() => {
+      window.dispatchEvent(new CustomEvent('shannon:terminal-run', { detail: { code } }))
+    })
+
+  it('opens the closed drawer, spawns the first tab and writes code + newline', async () => {
+    render(<TerminalPanel projectDir="/home/u/demo" />)
+    expect(screen.queryByRole('region', { name: 'Integrated terminal' })).toBeNull()
+    runEvent('npm test')
+    expect(await screen.findByRole('region', { name: 'Integrated terminal' })).toBeTruthy()
+    await waitFor(() => expect(api.terminalSpawn).toHaveBeenCalledTimes(1))
+    await waitFor(() =>
+      expect(api.terminalWrite).toHaveBeenCalledWith(expect.any(String), 'npm test\n'),
+    )
+  })
+
+  it('writes into the existing active tab without spawning a duplicate', async () => {
+    await openPanel()
+    await waitFor(() => expect(h.terminals.length).toBe(1))
+    const { terminalId } = await vi.mocked(api.terminalSpawn).mock.results[0]!.value
+    expect(api.terminalSpawn).toHaveBeenCalledTimes(1)
+    runEvent('echo hi')
+    await waitFor(() => expect(api.terminalWrite).toHaveBeenCalledWith(terminalId, 'echo hi\n'))
+    // Still exactly one spawn — the existing tab is reused.
+    expect(api.terminalSpawn).toHaveBeenCalledTimes(1)
+  })
+
+  it('spawns when the drawer is open but every tab is gone', async () => {
+    await openPanel()
+    await waitFor(() => expect(h.terminals.length).toBe(1))
+    // Close the only tab: the drawer stays open over the empty state.
+    fireEvent.click(screen.getByRole('button', { name: /close terminal:/i }))
+    await waitFor(() => expect(screen.queryAllByRole('tab')).toHaveLength(0))
+    runEvent('ls -la')
+    await waitFor(() => expect(api.terminalSpawn).toHaveBeenCalledTimes(2))
+    await waitFor(() =>
+      expect(api.terminalWrite).toHaveBeenCalledWith(expect.any(String), 'ls -la\n'),
+    )
+  })
+
+  it('ignores malformed payloads (non-string or empty code)', async () => {
+    await openPanel()
+    await waitFor(() => expect(h.terminals.length).toBe(1))
+    expect(api.terminalSpawn).toHaveBeenCalledTimes(1) // the boot spawn
+    runEvent(undefined)
+    runEvent('')
+    await new Promise((r) => setTimeout(r, 25))
+    expect(api.terminalWrite).not.toHaveBeenCalled()
+    expect(api.terminalSpawn).toHaveBeenCalledTimes(1)
+  })
+})
+
 describe('TerminalPanel (P2-4: resize IPC, cleanup, list merge, settings)', () => {
   it('pushes the fitted cols/rows to terminal_resize when the drawer resizes', async () => {
     // jsdom lacks ResizeObserver — stub it and drive the observer callback

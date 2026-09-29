@@ -51,6 +51,14 @@ const MAX_TERMINALS = 4;
 /** Fallback drawer height (brief: ~320px) until persisted settings load. */
 const DRAWER_HEIGHT_PX = 320;
 
+/**
+ * Window CustomEvent from the chat code-block "run in terminal" action
+ * (components/chat/Markdown), payload `{ code: string }`. String literals
+ * are the established cross-component idiom here (cf. `shannon:open-editor`);
+ * the dispatch side carries the matching literal.
+ */
+const TERMINAL_RUN_EVENT = 'shannon:terminal-run';
+
 /** xterm defaults matching the backend's `[terminal]` fallbacks. */
 const DEFAULT_FONT_SIZE = 12;
 const DEFAULT_SCROLLBACK = 5000;
@@ -319,10 +327,17 @@ export function TerminalPanel({ projectDir }: TerminalPanelProps) {
     }
   }, [projectDir, t]);
 
-  /** Open the drawer; first open loads settings and reconciles with the backend. */
-  const openPanel = useCallback(async () => {
+  /**
+   * Open the drawer; first open loads settings and reconciles with the
+   * backend. Resolves with the terminal the drawer ended up on (existing
+   * active tab, freshly spawned one, or the newest listed terminal) so
+   * callers like the chat "run in terminal" event never race the re-render;
+   * null when no terminal could be selected or spawned (the failure is
+   * already toasted by spawnTab).
+   */
+  const openPanel = useCallback(async (): Promise<string | null> => {
     setOpen(true);
-    if (booted) return;
+    if (booted) return activeId;
     setBooted(true);
     // P3-1: fetch persisted settings BEFORE any terminal is created, so
     // the drawer's initial height and the first xterm instance already
@@ -340,16 +355,18 @@ export function TerminalPanel({ projectDir }: TerminalPanelProps) {
       const known = list.slice(0, MAX_TERMINALS).map(info => ({ info, exited: false }));
       setTabs(known);
       if (known.length > 0) {
-        setActiveId(known[known.length - 1].info.terminalId);
+        const selected = known[known.length - 1].info.terminalId;
+        setActiveId(selected);
         setShowHistoryHint(true);
-        return;
+        return selected;
       }
-      await spawnTab();
+      return (await spawnTab()) ?? null;
     } catch {
       // Backend unreachable: the drawer still opens and shows the error
       // state via the empty tab list (retry through the + button).
+      return null;
     }
-  }, [booted, spawnTab]);
+  }, [booted, activeId, spawnTab]);
 
   const togglePanel = useCallback(() => {
     if (open) {
@@ -373,6 +390,42 @@ export function TerminalPanel({ projectDir }: TerminalPanelProps) {
     window.addEventListener('keydown', handler, true);
     return () => window.removeEventListener('keydown', handler, true);
   }, [togglePanel]);
+
+  // ── Chat integration: "run in terminal" (US4, direction A) ──────────
+  // Chat fenced code blocks dispatch the `shannon:terminal-run` window
+  // CustomEvent with `{ code }` (components/chat/Markdown). The panel owns
+  // its open/spawn state (drawer-only since Task 3), so this event is the
+  // seam: a closed drawer opens exactly like the toggle (openPanel resolves
+  // with the tab it selected/spawned), a drawer with no tabs spawns exactly
+  // like the + button, and the code lands on the ACTIVE terminal with a
+  // trailing newline (the shell executes on Enter — without it the command
+  // would sit at the prompt). An existing tab is never spawned twice.
+  const runInTerminal = useCallback(async (code: string) => {
+    // Every state read below happens BEFORE the first await — no stale
+    // closure and no render race with the boot sequence.
+    let target: string | null;
+    if (open) {
+      target = activeId ?? ((await spawnTab()) ?? null);
+    } else {
+      target = await openPanel();
+    }
+    if (!target) return; // spawn failed — spawnTab already toasted
+    try {
+      await api.terminalWrite(target, `${code}\n`);
+    } catch {
+      /* dead terminal: nothing sensible to run code into */
+    }
+  }, [open, activeId, openPanel, spawnTab]);
+
+  useEffect(() => {
+    const onRun = (e: Event) => {
+      const code = (e as CustomEvent<{ code?: unknown }>).detail?.code;
+      if (typeof code !== 'string' || code.length === 0) return;
+      void runInTerminal(code);
+    };
+    window.addEventListener(TERMINAL_RUN_EVENT, onRun);
+    return () => window.removeEventListener(TERMINAL_RUN_EVENT, onRun);
+  }, [runInTerminal]);
 
   // ── Multi-line paste guard (P2, review §5) ──────────────────────────
   // A paste containing line breaks makes the shell execute every line —

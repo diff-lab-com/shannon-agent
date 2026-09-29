@@ -32,6 +32,10 @@ export interface CodeBlockProps {
   /** Gutter behavior: 'toggle' (header button, >5 lines), true (always on),
    *  false (never). */
   lineNumbers?: 'toggle' | boolean
+  /** Extra header actions (chat Markdown adds the "run in terminal"
+   *  button here). Rendered after the copy button; the caller owns the
+   *  i18n and the behavior — this primitive only provides the slot. */
+  actions?: ReactNode
   className?: string
   /** Extra classes for the <pre> (e.g. wrap behavior). */
   contentClassName?: string
@@ -49,6 +53,7 @@ export function CodeBlock({
   children,
   chrome = true,
   lineNumbers = 'toggle',
+  actions,
   className,
   contentClassName,
 }: CodeBlockProps) {
@@ -146,6 +151,7 @@ export function CodeBlock({
                 {copied ? t('code.copy.copied') : copyFailed ? t('code.copy.failed') : t('code.copy.copy')}
               </span>
             </Button>
+            {actions}
           </div>
         </div>
       )}

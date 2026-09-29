@@ -3069,6 +3069,7 @@
   "terminal.maxReached": "已达终端数量上限（{max}），请先关闭一个",
   "terminal.spawn.failed": "无法启动新终端",
   "terminal.paste.multiline.title": "粘贴多行文本？",
+  "terminal.runInTerminal.title": "在终端中运行",
   "terminal.paste.multiline.message": "将向终端发送 {lines} 行内容并逐行执行。确定继续吗？",
   "terminal.paste.multiline.confirm": "仍然粘贴",
   "terminal.paste.multiline.cancel": "取消",

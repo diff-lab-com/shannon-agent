@@ -3409,6 +3409,7 @@
   "welcome.migration.scan.retry": "Tentar varredura novamente",
   "terminal.spawn.failed": "Não foi possível iniciar um novo terminal",
   "terminal.paste.multiline.title": "Colar várias linhas?",
+  "terminal.runInTerminal.title": "Executar no terminal",
   "terminal.paste.multiline.message": "{lines, plural, =1 {1 linha será enviada ao terminal e executada.} other {{lines} linhas serão enviadas ao terminal e executadas.}}",
   "terminal.paste.multiline.confirm": "Colar mesmo assim",
   "terminal.paste.multiline.cancel": "Cancelar",

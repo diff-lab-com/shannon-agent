@@ -3409,6 +3409,7 @@
   "welcome.migration.scan.retry": "スキャンを再試行",
   "terminal.spawn.failed": "新しいターミナルを起動できませんでした",
   "terminal.paste.multiline.title": "複数行を貼り付けますか？",
+  "terminal.runInTerminal.title": "ターミナルで実行",
   "terminal.paste.multiline.message": "{lines, plural, other {{lines} 行がターミナルに送信され、実行されます。}}",
   "terminal.paste.multiline.confirm": "それでも貼り付け",
   "terminal.paste.multiline.cancel": "キャンセル",
