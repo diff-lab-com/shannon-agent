@@ -15,6 +15,14 @@
 //! the `terminal:exit` event (`TERMINAL_EXIT`, `{ terminalId }`) emitted
 //! when a session is reaped after a natural exit.
 //!
+//! Additive settings surface (P3-1): `terminal_get_settings()` /
+//! `terminal_set_settings(TerminalSettingsDto) -> TerminalSettingsDto`
+//! (camelCase `{ shell, fontSize, scrollback, drawerHeight,
+//! screenReaderMode }`), persisted under the `[terminal]` table of
+//! `~/.shannon/config.toml`. `shell` participates in the spawn-shell
+//! precedence: explicit `shell` arg > configured `[terminal].shell` >
+//! `$SHELL` > `/bin/sh` (PowerShell on Windows).
+//!
 //! # Process discipline (mirrors `preview_commands.rs`)
 //!
 //! PTY sessions are owned by the `TerminalManager` on `AppState`:
@@ -138,9 +146,22 @@ pub struct TerminalOutputPayload {
 
 // ── Shell resolution ─────────────────────────────────────────────────────
 
-/// Default login shell: `$SHELL` on unix (PowerShell on Windows), with a
-/// conservative fallback when the env var is unset.
-fn resolve_default_shell(shell_env: Option<&str>, is_windows: bool) -> String {
+/// Login shell for a new session (P3-1 precedence, pure):
+///
+/// 1. explicit `shell` argument — handled by the caller ([`TerminalManager::
+///    spawn`] receives it pre-separated as `shell`);
+/// 2. `configured` — the persisted `[terminal].shell`
+///    ([`TerminalSettings`]), trimmed; blank = unset;
+/// 3. `$SHELL` env (unix only — Windows ignores it, as before);
+/// 4. platform fallback: `/bin/sh` (PowerShell on Windows).
+fn resolve_default_shell(
+    configured: Option<&str>,
+    shell_env: Option<&str>,
+    is_windows: bool,
+) -> String {
+    if let Some(configured) = configured.map(str::trim).filter(|s| !s.is_empty()) {
+        return configured.to_string();
+    }
     if is_windows {
         return "powershell.exe".to_string();
     }
@@ -158,6 +179,179 @@ fn tokenize_shell(shell: &str) -> Result<Vec<String>, String> {
         return Err("shell must not be empty".into());
     }
     Ok(tokens)
+}
+
+// ── Terminal settings (P3-1, `[terminal]` in ~/.shannon/config.toml) ─────
+
+/// Lowest / highest accepted `font_size` (clamped, not rejected — a junk
+/// value must never wedge the settings command).
+const MIN_FONT_SIZE: u32 = 8;
+const MAX_FONT_SIZE: u32 = 32;
+/// Highest accepted `scrollback` lines (0 = frontend disables scrollback).
+const MAX_SCROLLBACK: u32 = 100_000;
+/// Accepted `drawer_height` px range (clamped).
+const MIN_DRAWER_HEIGHT: u32 = 120;
+const MAX_DRAWER_HEIGHT: u32 = 1200;
+
+/// Persisted terminal preferences (P3-1). Lives under the `[terminal]`
+/// table of `~/.shannon/config.toml` — the *global* Shannon config the
+/// engine's `ConfigBuilder::load_global_toml` and `/config set` also
+/// read/write (same file as `[notifications.webhook]`) — NOT the desktop's
+/// own `~/.shannon/desktop/config.json`.
+///
+/// Wire shape: exposed to the frontend through [`TerminalSettingsDto`]
+/// (camelCase); this struct's snake_case keys are the on-disk TOML keys.
+///
+/// Missing keys (or a missing `[terminal]` table, or no config file at
+/// all) fall back to the defaults below via the container-level
+/// `#[serde(default)]` — hand-edited configs degrade, never error.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct TerminalSettings {
+    /// Shell override applied to newly spawned sessions (P3-1 precedence:
+    /// explicit `shell` arg > this > `$SHELL` > platform default). Blank /
+    /// missing = unset. Skipped when unset because TOML has no null.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub shell: Option<String>,
+    /// Font size (px) for xterm.js. Default 12.
+    pub font_size: u32,
+    /// Scrollback lines kept by xterm.js. Default 5000.
+    pub scrollback: u32,
+    /// Terminal drawer height (px). Default 320.
+    pub drawer_height: u32,
+    /// xterm.js screen-reader mode (Task 2.2 accessibility). Default off.
+    pub screen_reader_mode: bool,
+}
+
+impl Default for TerminalSettings {
+    fn default() -> Self {
+        Self {
+            shell: None,
+            font_size: 12,
+            scrollback: 5000,
+            drawer_height: 320,
+            screen_reader_mode: false,
+        }
+    }
+}
+
+impl TerminalSettings {
+    /// Normalize for use / persistence: blank shell → unset, every numeric
+    /// knob clamped into its accepted range. Applied on load AND on set so
+    /// a hand-edited config.toml can never smuggle junk into spawn or the
+    /// frontend (clamping, per the brief — junk is corrected, not fatal).
+    pub fn sanitized(mut self) -> Self {
+        self.shell = self
+            .shell
+            .take()
+            .map(|s| s.trim().to_string())
+            .filter(|s| !s.is_empty());
+        self.font_size = self.font_size.clamp(MIN_FONT_SIZE, MAX_FONT_SIZE);
+        self.scrollback = self.scrollback.clamp(0, MAX_SCROLLBACK);
+        self.drawer_height = self
+            .drawer_height
+            .clamp(MIN_DRAWER_HEIGHT, MAX_DRAWER_HEIGHT);
+        self
+    }
+}
+
+/// Wire DTO for `terminal_get_settings` / `terminal_set_settings`
+/// (camelCase, frozen):
+/// `{ shell: string|null, fontSize, scrollback, drawerHeight, screenReaderMode }`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TerminalSettingsDto {
+    pub shell: Option<String>,
+    pub font_size: u32,
+    pub scrollback: u32,
+    pub drawer_height: u32,
+    pub screen_reader_mode: bool,
+}
+
+impl From<TerminalSettings> for TerminalSettingsDto {
+    fn from(s: TerminalSettings) -> Self {
+        Self {
+            shell: s.shell,
+            font_size: s.font_size,
+            scrollback: s.scrollback,
+            drawer_height: s.drawer_height,
+            screen_reader_mode: s.screen_reader_mode,
+        }
+    }
+}
+
+impl From<TerminalSettingsDto> for TerminalSettings {
+    fn from(dto: TerminalSettingsDto) -> Self {
+        Self {
+            shell: dto.shell,
+            font_size: dto.font_size,
+            scrollback: dto.scrollback,
+            drawer_height: dto.drawer_height,
+            screen_reader_mode: dto.screen_reader_mode,
+        }
+    }
+}
+
+/// Resolve the global config file: `~/.shannon/config.toml`. Same path the
+/// engine's `ConfigBuilder::load_global_toml` and `config_persist` use
+/// (`dirs::home_dir()`, deliberately NOT `$SHANNON_HOME`-rewritten — this
+/// must land in the file the rest of the ecosystem reads).
+fn terminal_settings_path() -> PathBuf {
+    dirs::home_dir()
+        .unwrap_or_else(|| PathBuf::from("."))
+        .join(".shannon")
+        .join("config.toml")
+}
+
+/// Load `[terminal]` from the global config; defaults when the file, the
+/// table, or any key is missing. Output is always sanitized.
+pub fn load_terminal_settings() -> TerminalSettings {
+    load_terminal_settings_from(&terminal_settings_path())
+}
+
+/// Pure, path-injected core of [`load_terminal_settings`] (test seam —
+/// settings tests use tempdirs instead of mutating `HOME` process-wide).
+pub(crate) fn load_terminal_settings_from(path: &Path) -> TerminalSettings {
+    std::fs::read_to_string(path)
+        .ok()
+        .and_then(|text| toml::from_str::<toml::Value>(&text).ok())
+        .and_then(|root| root.get("terminal").cloned())
+        .and_then(|value| TerminalSettings::deserialize(value).ok())
+        .map(TerminalSettings::sanitized)
+        .unwrap_or_default()
+}
+
+/// Persist `[terminal]` into the global config (read-modify-write:
+/// preserves every other table/key; comments and formatting are lost —
+/// same accepted trade-off as the `[notifications.webhook]` write path).
+pub fn save_terminal_settings(settings: &TerminalSettings) -> Result<(), String> {
+    save_terminal_settings_to(&terminal_settings_path(), settings)
+}
+
+/// Pure, path-injected core of [`save_terminal_settings`].
+pub(crate) fn save_terminal_settings_to(
+    path: &Path,
+    settings: &TerminalSettings,
+) -> Result<(), String> {
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent)
+            .map_err(|e| format!("mkdir {}: {e}", parent.display()))?;
+    }
+    let existing = std::fs::read_to_string(path).unwrap_or_default();
+    let mut root: toml::Value = toml::from_str(&existing)
+        .unwrap_or(toml::Value::Table(toml::value::Table::new()));
+    let table = root.as_table_mut().ok_or_else(|| {
+        "config root is not a table — refusing to overwrite user config".to_string()
+    })?;
+    // Sanitize before disk so a clamped value, not the raw junk, lands in
+    // the file (what you set is what `terminal_get_settings` reads back).
+    let term = toml::Value::try_from(settings.clone().sanitized())
+        .map_err(|e| format!("serialize [terminal]: {e}"))?;
+    table.insert("terminal".into(), term);
+    let serialized = toml::to_string_pretty(&root).map_err(|e| format!("serialize: {e}"))?;
+    std::fs::write(path, serialized).map_err(|e| format!("write {}: {e}", path.display()))?;
+    crate::file_permissions::restrict_to_owner(path);
+    Ok(())
 }
 
 // ── Output sink (injectable emit boundary) ───────────────────────────────
@@ -440,7 +634,9 @@ impl TerminalManager {
     }
 
     /// `terminal_spawn({projectDir, shell?})`. The cwd is canonicalized;
-    /// the default shell is `$SHELL` (PowerShell on Windows).
+    /// the shell is picked by the P3-1 precedence: explicit `shell`
+    /// argument > `configured_shell` (persisted `[terminal].shell`) >
+    /// `$SHELL` (PowerShell on Windows).
     ///
     /// `spawned_by_window` is the calling webview window's label (P3-2) —
     /// `None` only in tests / non-window callers. It rides on
@@ -450,13 +646,18 @@ impl TerminalManager {
         &self,
         project_dir: &Path,
         shell: Option<String>,
+        configured_shell: Option<String>,
         spawned_by_window: Option<String>,
     ) -> Result<TerminalInfo, String> {
         let dir = project_dir
             .canonicalize()
             .map_err(|e| format!("project dir {}: {e}", project_dir.display()))?;
         let shell_line = shell.unwrap_or_else(|| {
-            resolve_default_shell(std::env::var("SHELL").ok().as_deref(), cfg!(windows))
+            resolve_default_shell(
+                configured_shell.as_deref(),
+                std::env::var("SHELL").ok().as_deref(),
+                cfg!(windows),
+            )
         });
         let tokens = tokenize_shell(&shell_line)?;
         let (program, args) = tokens.split_first().expect("tokenize_shell rejects empty");
@@ -833,9 +1034,17 @@ pub async fn terminal_spawn(
         Some(dir) if !dir.trim().is_empty() => PathBuf::from(dir),
         _ => crate::commands_agents::resolve_working_dir(&state).await,
     };
-    let info = state
-        .terminals
-        .spawn(&dir, shell, Some(window.label().to_string()))?;
+    // P3-1 shell precedence: the explicit `shell` argument (if any) wins;
+    // otherwise the persisted `[terminal].shell` (if set); `$SHELL` /
+    // platform default are resolved inside `spawn`. One small config read
+    // per spawn — spawns are user-initiated and rare.
+    let configured_shell = load_terminal_settings().shell;
+    let info = state.terminals.spawn(
+        &dir,
+        shell,
+        configured_shell,
+        Some(window.label().to_string()),
+    )?;
     Ok(TerminalSpawnResponse {
         terminal_id: info.terminal_id,
     })
@@ -877,6 +1086,27 @@ pub async fn terminal_list(
     state: tauri::State<'_, crate::commands::AppState>,
 ) -> Result<Vec<TerminalInfo>, String> {
     Ok(state.terminals.list())
+}
+
+/// `terminal_get_settings() -> TerminalSettingsDto` (P3-1, new command).
+/// Reads `[terminal]` from `~/.shannon/config.toml`; missing anything →
+/// defaults. Always returns the sanitized (clamped) effective values.
+#[tauri::command]
+pub async fn terminal_get_settings() -> Result<TerminalSettingsDto, String> {
+    Ok(TerminalSettingsDto::from(load_terminal_settings()))
+}
+
+/// `terminal_set_settings(settings) -> TerminalSettingsDto` (P3-1, new
+/// command). Sanitizes (blank shell → null, numerics clamped), persists
+/// under `[terminal]`, and returns the effective values — the frontend
+/// renders what was actually stored, not what it sent.
+#[tauri::command]
+pub async fn terminal_set_settings(
+    settings: TerminalSettingsDto,
+) -> Result<TerminalSettingsDto, String> {
+    let effective = TerminalSettings::from(settings).sanitized();
+    save_terminal_settings(&effective)?;
+    Ok(TerminalSettingsDto::from(effective))
 }
 
 /// Install the production `terminal:output` sink on the manager. Called
@@ -1109,17 +1339,39 @@ mod tests {
 
     #[test]
     fn default_shell_prefers_env_with_fallbacks() {
+        // No configured shell → the legacy $SHELL → /bin/sh chain (and
+        // PowerShell on Windows regardless of $SHELL).
         assert_eq!(
-            resolve_default_shell(Some("/usr/bin/zsh"), false),
+            resolve_default_shell(None, Some("/usr/bin/zsh"), false),
             "/usr/bin/zsh"
         );
-        assert_eq!(resolve_default_shell(None, false), "/bin/sh");
-        assert_eq!(resolve_default_shell(Some("  "), false), "/bin/sh");
+        assert_eq!(resolve_default_shell(None, None, false), "/bin/sh");
+        assert_eq!(resolve_default_shell(None, Some("  "), false), "/bin/sh");
         // Windows always gets PowerShell regardless of $SHELL.
         assert_eq!(
-            resolve_default_shell(Some("/usr/bin/zsh"), true),
+            resolve_default_shell(None, Some("/usr/bin/zsh"), true),
             "powershell.exe"
         );
+    }
+
+    #[test]
+    fn default_shell_configured_beats_env_and_platform() {
+        // P3-1 precedence step 2: the persisted `[terminal].shell` wins
+        // over $SHELL and over the Windows PowerShell default.
+        assert_eq!(
+            resolve_default_shell(Some("/usr/bin/fish"), Some("/usr/bin/zsh"), false),
+            "/usr/bin/fish"
+        );
+        assert_eq!(
+            resolve_default_shell(Some("pwsh.exe"), Some("C:/shell"), true),
+            "pwsh.exe"
+        );
+        // A blank/whitespace configured shell counts as unset.
+        assert_eq!(
+            resolve_default_shell(Some("   "), Some("/usr/bin/zsh"), false),
+            "/usr/bin/zsh"
+        );
+        assert_eq!(resolve_default_shell(Some("   "), None, false), "/bin/sh");
     }
 
     #[test]
@@ -1132,6 +1384,175 @@ mod tests {
         assert!(tokenize_shell("/bin/sh -c 'oops").is_err());
     }
 
+    // ── Terminal settings ([terminal] persistence, P3-1) ─────────────────
+
+    #[test]
+    fn terminal_settings_defaults_match_the_brief() {
+        let s = TerminalSettings::default();
+        assert_eq!(s.shell, None, "shell None → env fallback");
+        assert_eq!(s.font_size, 12);
+        assert_eq!(s.scrollback, 5000);
+        assert_eq!(s.drawer_height, 320);
+        assert!(!s.screen_reader_mode);
+        // Missing keys / missing table fall back to the same defaults.
+        assert_eq!(load_terminal_settings_from(Path::new("/nonexistent/config.toml")), s);
+    }
+
+    #[test]
+    fn terminal_settings_dto_is_frozen_camel_case() {
+        let dto = TerminalSettingsDto {
+            shell: None,
+            font_size: 12,
+            scrollback: 5000,
+            drawer_height: 320,
+            screen_reader_mode: false,
+        };
+        let json = serde_json::to_string(&dto).unwrap();
+        assert_eq!(
+            json,
+            r#"{"shell":null,"fontSize":12,"scrollback":5000,"drawerHeight":320,"screenReaderMode":false}"#
+        );
+        let back: TerminalSettingsDto = serde_json::from_str(&json).unwrap();
+        assert_eq!(back, dto);
+        // shell round-trips as string|null.
+        let with_shell = TerminalSettingsDto {
+            shell: Some("/usr/bin/fish".into()),
+            ..dto
+        };
+        let json = serde_json::to_string(&with_shell).unwrap();
+        assert!(
+            json.contains(r#""shell":"/usr/bin/fish""#),
+            "shell stays on the wire when set: {json}"
+        );
+    }
+
+    #[test]
+    fn terminal_settings_sanitize_clamps_junk() {
+        let clamped = TerminalSettings {
+            shell: Some("   ".into()),
+            font_size: 9_999,
+            scrollback: 424_242,
+            drawer_height: 5,
+            screen_reader_mode: true,
+        }
+        .sanitized();
+        assert_eq!(clamped.shell, None, "blank shell = unset");
+        assert_eq!(clamped.font_size, MAX_FONT_SIZE);
+        assert_eq!(clamped.scrollback, MAX_SCROLLBACK);
+        assert_eq!(clamped.drawer_height, MIN_DRAWER_HEIGHT);
+        // …and the low side.
+        let low = TerminalSettings {
+            shell: None,
+            font_size: 1,
+            scrollback: 0,
+            drawer_height: 1,
+            screen_reader_mode: false,
+        }
+        .sanitized();
+        assert_eq!(low.font_size, MIN_FONT_SIZE);
+        assert_eq!(low.scrollback, 0, "scrollback 0 stays legal");
+        assert_eq!(low.drawer_height, MIN_DRAWER_HEIGHT);
+        // Whitespace around a real shell value is trimmed, not dropped.
+        let padded = TerminalSettings {
+            shell: Some("  /usr/bin/fish ".into()),
+            ..TerminalSettings::default()
+        }
+        .sanitized();
+        assert_eq!(padded.shell.as_deref(), Some("/usr/bin/fish"));
+    }
+
+    #[test]
+    fn terminal_settings_round_trip_through_the_toml_store() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = dir.path().join("config.toml");
+        // Missing file → defaults (no error).
+        assert_eq!(load_terminal_settings_from(&path), TerminalSettings::default());
+        let settings = TerminalSettings {
+            shell: Some("/usr/bin/fish".into()),
+            font_size: 14,
+            scrollback: 10_000,
+            drawer_height: 400,
+            screen_reader_mode: true,
+        };
+        save_terminal_settings_to(&path, &settings).expect("save");
+        // Read-back equals what was written (sanitized is a no-op here).
+        assert_eq!(load_terminal_settings_from(&path), settings);
+        // The file landed under the `[terminal]` table with snake_case keys.
+        let text = std::fs::read_to_string(&path).unwrap();
+        assert!(text.contains("[terminal]"), "{text}");
+        assert!(text.contains("font_size = 14"), "{text}");
+        assert!(text.contains("screen_reader_mode = true"), "{text}");
+        assert!(
+            text.contains("shell = \"/usr/bin/fish\""),
+            "set shell lands on disk: {text}"
+        );
+
+        // Overwrite: new values replace, nothing duplicates, and an unset
+        // shell stays off disk entirely (TOML has no null — the key is
+        // skipped so the default fallback applies on load).
+        save_terminal_settings_to(&path, &TerminalSettings::default()).expect("save 2");
+        let text = std::fs::read_to_string(&path).unwrap();
+        assert!(!text.contains("shell"), "unset shell must be skipped: {text}");
+        let reloaded = load_terminal_settings_from(&path);
+        assert_eq!(reloaded, TerminalSettings::default());
+    }
+
+    #[test]
+    fn terminal_settings_store_preserves_unrelated_tables() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = dir.path().join("config.toml");
+        std::fs::write(
+            &path,
+            "model = \"glm-4\"\n\n[notifications]\nwebhook_url = \"https://x\"\n\n[other]\nkey = 1\n",
+        )
+        .unwrap();
+        save_terminal_settings_to(&path, &TerminalSettings::default()).expect("save");
+        let text = std::fs::read_to_string(&path).unwrap();
+        // Flat keys and sibling tables survive the read-modify-write.
+        assert!(text.contains("model = \"glm-4\""), "{text}");
+        assert!(text.contains("[notifications]"), "{text}");
+        assert!(text.contains("webhook_url = \"https://x\""), "{text}");
+        assert!(text.contains("[other]"), "{text}");
+        assert!(text.contains("key = 1"), "{text}");
+        assert!(text.contains("[terminal]"), "{text}");
+    }
+
+    #[test]
+    fn terminal_settings_store_sanitizes_hand_edited_junk_on_load() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = dir.path().join("config.toml");
+        std::fs::write(
+            &path,
+            "[terminal]\nshell = \"   \"\nfont_size = 9999\nscrollback = 424242\ndrawer_height = 5\nunknown_key = true\n",
+        )
+        .unwrap();
+        let loaded = load_terminal_settings_from(&path);
+        assert_eq!(loaded.shell, None);
+        assert_eq!(loaded.font_size, MAX_FONT_SIZE);
+        assert_eq!(loaded.scrollback, MAX_SCROLLBACK);
+        assert_eq!(loaded.drawer_height, MIN_DRAWER_HEIGHT);
+        assert!(!loaded.screen_reader_mode, "missing key → default");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn spawn_shell_precedence_explicit_beats_configured() {
+        let manager = TerminalManager::with_tick(TEST_TICK);
+        let dir = tempfile::tempdir().expect("tempdir");
+        // Explicit argument wins over the configured shell.
+        let explicit = manager
+            .spawn(dir.path(), Some("/bin/sh".into()), Some("/bin/false".into()), None)
+            .expect("spawn explicit");
+        assert_eq!(explicit.shell, "/bin/sh");
+        // No argument → configured shell is used verbatim (recorded in
+        // TerminalInfo, so the test never depends on $SHELL).
+        let configured = manager
+            .spawn(dir.path(), None, Some("/bin/sh".into()), None)
+            .expect("spawn configured");
+        assert_eq!(configured.shell, "/bin/sh");
+        manager.kill_all();
+    }
+
     // ── Lifecycle (unix: real pty + /bin/sh) ─────────────────────────────
 
     #[cfg(unix)]
@@ -1141,7 +1562,7 @@ mod tests {
         let manager = test_manager(&sink);
         let dir = tempfile::tempdir().expect("tempdir");
         let info = manager
-            .spawn(dir.path(), Some("/bin/sh".into()), None)
+            .spawn(dir.path(), Some("/bin/sh".into()), None, None)
             .expect("spawn");
         assert_eq!(
             info.project_dir,
@@ -1172,7 +1593,7 @@ mod tests {
         let manager = test_manager(&sink);
         let dir = tempfile::tempdir().expect("tempdir");
         let info = manager
-            .spawn(dir.path(), Some("/bin/sh".into()), None)
+            .spawn(dir.path(), Some("/bin/sh".into()), None, None)
             .expect("spawn");
         // Direct pending seeding (reader equivalent) + a synchronous pump
         // pass: five bursts within one tick must leave as ONE emission.
@@ -1202,7 +1623,7 @@ mod tests {
         let manager = test_manager(&sink);
         let dir = tempfile::tempdir().expect("tempdir");
         let info = manager
-            .spawn(dir.path(), Some("/bin/sh".into()), None)
+            .spawn(dir.path(), Some("/bin/sh".into()), None, None)
             .expect("spawn");
         manager.resize(&info.terminal_id, 100, 30).expect("resize");
         // `stty size` reports "<rows> <cols>" from the pty winsize.
@@ -1229,7 +1650,7 @@ mod tests {
         // group must take both down.
         let dir = tempfile::tempdir().expect("tempdir");
         let info = manager
-            .spawn(dir.path(), Some("/bin/sh -c 'sleep 30'".into()), None)
+            .spawn(dir.path(), Some("/bin/sh -c 'sleep 30'".into()), None, None)
             .expect("spawn");
         let pid = pid_of(&manager, &info.terminal_id).expect("pid");
         let killed = manager.kill(&info.terminal_id).expect("kill");
@@ -1257,6 +1678,7 @@ mod tests {
             .spawn(
                 dir.path(),
                 Some("/bin/sh -c 'sleep 30'".into()),
+                None,
                 Some("session-aaaa".into()),
             )
             .expect("spawn a");
@@ -1264,6 +1686,7 @@ mod tests {
             .spawn(
                 dir.path(),
                 Some("/bin/sh -c 'sleep 30'".into()),
+                None,
                 Some("session-bbbb".into()),
             )
             .expect("spawn b");
@@ -1304,7 +1727,7 @@ mod tests {
         let manager = test_manager(&sink);
         let dir = tempfile::tempdir().expect("tempdir");
         let info = manager
-            .spawn(dir.path(), Some("/bin/sh -c 'echo bye-now'".into()), None)
+            .spawn(dir.path(), Some("/bin/sh -c 'echo bye-now'".into()), None, None)
             .expect("spawn");
         assert!(sink.wait_for(&info.terminal_id, "bye-now", WAIT));
         // The pump must reap the exited session: list empties and the
@@ -1332,13 +1755,13 @@ mod tests {
         let mut ids = Vec::new();
         for _ in 0..MAX_TERMINALS {
             let info = manager
-                .spawn(dir.path(), Some("/bin/sh -c 'sleep 30'".into()), None)
+                .spawn(dir.path(), Some("/bin/sh -c 'sleep 30'".into()), None, None)
                 .expect("spawn");
             ids.push(info.terminal_id);
         }
         assert_eq!(manager.list().len(), MAX_TERMINALS);
         let err = manager
-            .spawn(dir.path(), Some("/bin/sh -c 'sleep 30'".into()), None)
+            .spawn(dir.path(), Some("/bin/sh -c 'sleep 30'".into()), None, None)
             .unwrap_err();
         assert!(err.contains("terminal limit reached (4)"), "{err}");
         manager.kill_all();
@@ -1360,7 +1783,7 @@ mod tests {
         let mut pids = Vec::new();
         for _ in 0..2 {
             let info = manager
-                .spawn(dir.path(), Some("/bin/sh -c 'sleep 30'".into()), None)
+                .spawn(dir.path(), Some("/bin/sh -c 'sleep 30'".into()), None, None)
                 .expect("spawn");
             pids.push(pid_of(&manager, &info.terminal_id).expect("pid"));
         }
@@ -1378,7 +1801,7 @@ mod tests {
         let manager = test_manager(&sink);
         let dir = tempfile::tempdir().expect("tempdir");
         let info = manager
-            .spawn(dir.path(), Some("/bin/sh -c 'sleep 30'".into()), None)
+            .spawn(dir.path(), Some("/bin/sh -c 'sleep 30'".into()), None, None)
             .expect("spawn");
         let pid = pid_of(&manager, &info.terminal_id).expect("pid");
         assert_eq!(manager.live_pumps(), 1, "exactly one pump thread");
@@ -1401,7 +1824,7 @@ mod tests {
         let manager = test_manager(&sink);
         let dir = tempfile::tempdir().expect("tempdir");
         let info = manager
-            .spawn(dir.path(), Some("/bin/sh".into()), None)
+            .spawn(dir.path(), Some("/bin/sh".into()), None, None)
             .expect("spawn");
         // Five rapid writes inside one tick window — however the pump
         // coalesces them, every byte must arrive exactly once in order.
@@ -1434,7 +1857,7 @@ mod tests {
         let sink = RecordingSink::default();
         let manager = test_manager(&sink);
         let err = manager
-            .spawn(&PathBuf::from("/nonexistent/dir/for/terminal"), None, None)
+            .spawn(&PathBuf::from("/nonexistent/dir/for/terminal"), None, None, None)
             .unwrap_err();
         assert!(err.contains("project dir"), "{err}");
     }
@@ -1487,7 +1910,7 @@ mod tests {
         let manager = test_manager(&sink);
         let dir = tempfile::tempdir().expect("tempdir");
         let info = manager
-            .spawn(dir.path(), Some("/bin/sh -c 'sleep 30'".into()), None)
+            .spawn(dir.path(), Some("/bin/sh -c 'sleep 30'".into()), None, None)
             .expect("spawn");
         // 3 MiB in a single push: the 2 MiB cap drops the oldest 1 MiB and
         // the pump must ship the retained 2 MiB as ≤256 KiB events.

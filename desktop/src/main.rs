@@ -471,6 +471,9 @@ fn main() {
             terminal_commands::terminal_resize,
             terminal_commands::terminal_kill,
             terminal_commands::terminal_list,
+            // P3-1 — terminal settings (`[terminal]` in config.toml).
+            terminal_commands::terminal_get_settings,
+            terminal_commands::terminal_set_settings,
         ])
         // 2026-09-26 round2 §5-1 A — the `artifact://` custom protocol:
         // interactive HTML artifacts are served from a bounded in-memory

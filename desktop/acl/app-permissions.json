@@ -2279,6 +2279,15 @@
       }
     },
     {
+      "identifier": "allow-terminal-get-settings",
+      "description": "Enables the terminal_get_settings command without any pre-configured scope.",
+      "commands": {
+        "allow": [
+          "terminal_get_settings"
+        ]
+      }
+    },
+    {
       "identifier": "allow-terminal-kill",
       "description": "Enables the terminal_kill command without any pre-configured scope.",
       "commands": {
@@ -2302,6 +2311,15 @@
       "commands": {
         "allow": [
           "terminal_resize"
+        ]
+      }
+    },
+    {
+      "identifier": "allow-terminal-set-settings",
+      "description": "Enables the terminal_set_settings command without any pre-configured scope.",
+      "commands": {
+        "allow": [
+          "terminal_set_settings"
         ]
       }
     },
@@ -2894,9 +2912,11 @@
         "allow-preview-start",
         "allow-preview-status",
         "allow-preview-stop",
+        "allow-terminal-get-settings",
         "allow-terminal-kill",
         "allow-terminal-list",
         "allow-terminal-resize",
+        "allow-terminal-set-settings",
         "allow-terminal-spawn",
         "allow-terminal-write"
       ]
