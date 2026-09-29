@@ -189,10 +189,10 @@ impl From<&DeviceEntry> for DeviceEntryFile {
 
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
-struct PairTokenRecord {
-    token: String,
-    issued_at: u64,
-    expires_at: u64,
+pub(crate) struct PairTokenRecord {
+    pub(crate) token: String,
+    pub(crate) issued_at: u64,
+    pub(crate) expires_at: u64,
 }
 
 /// `~/.shannon/mobile-tls/tls-info.json` — written by the gateway when
@@ -228,11 +228,13 @@ pub struct PairTokenResponse {
     pub qr_data_url: String,
 }
 
-/// Mint a one-time pair token + QR. Appends to the tokens file the gateway
-/// consumes; the QR embeds the LAN endpoint + token for the phone (P1.4 parses
-/// this payload).
-#[tauri::command]
-pub async fn mobile_generate_pair_token() -> Result<PairTokenResponse, String> {
+/// Mint a fresh one-time pair token and append it to the tokens JSONL — the
+/// core of the Design-D control channel, shared by the QR flow
+/// ([`mobile_generate_pair_token`]) and the gateway pairing-approval RPC
+/// (`gateway_pairing_pending` / `gateway_pairing_approve`, T9). The gateway
+/// consumes (or, for the read-only pairing list, verifies) the record on the
+/// other side of the file.
+pub(crate) fn mint_pair_token() -> Result<PairTokenRecord, String> {
     let mut bytes = [0u8; 32];
     rand::thread_rng().fill_bytes(&mut bytes);
     let token = URL_SAFE_NO_PAD.encode(bytes);
@@ -282,6 +284,17 @@ pub async fn mobile_generate_pair_token() -> Result<PairTokenResponse, String> {
         .open(&path)
         .map_err(|e| format!("pair token: cannot open {path:?}: {e}"))?;
     writeln!(file, "{line}").map_err(|e| format!("pair token: write failed: {e}"))?;
+    Ok(record)
+}
+
+/// Mint a one-time pair token + QR. Appends to the tokens file the gateway
+/// consumes; the QR embeds the LAN endpoint + token for the phone (P1.4 parses
+/// this payload).
+#[tauri::command]
+pub async fn mobile_generate_pair_token() -> Result<PairTokenResponse, String> {
+    let record = mint_pair_token()?;
+    let token = record.token;
+    let expires_at = record.expires_at;
 
     let (ip, port) = lan_endpoint()?;
 

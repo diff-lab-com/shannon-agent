@@ -443,6 +443,24 @@
       }
     },
     {
+      "identifier": "allow-gateway-pairing-approve",
+      "description": "Enables the gateway_pairing_approve command without any pre-configured scope.",
+      "commands": {
+        "allow": [
+          "gateway_pairing_approve"
+        ]
+      }
+    },
+    {
+      "identifier": "allow-gateway-pairing-pending",
+      "description": "Enables the gateway_pairing_pending command without any pre-configured scope.",
+      "commands": {
+        "allow": [
+          "gateway_pairing_pending"
+        ]
+      }
+    },
+    {
       "identifier": "allow-gateway-read-config",
       "description": "Enables the gateway_read_config command without any pre-configured scope.",
       "commands": {
@@ -2606,6 +2624,8 @@
         "allow-gateway-delete-secret",
         "allow-gateway-get-secret",
         "allow-gateway-has-secret",
+        "allow-gateway-pairing-approve",
+        "allow-gateway-pairing-pending",
         "allow-gateway-read-config",
         "allow-gateway-set-managed",
         "allow-gateway-set-secret",

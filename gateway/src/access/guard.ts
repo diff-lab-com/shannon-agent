@@ -2,6 +2,7 @@ import {
   type ChannelAdapter,
   type Logger,
   type NormalizedInbound,
+  type Platform,
   type ReplyTarget,
 } from "../adapters/types.js";
 import { Allowlist, defaultAllowlistPath } from "./allowlist.js";
@@ -83,34 +84,79 @@ export class AllowlistGuard implements InboundGuard {
     inbound: NormalizedInbound,
     code: string,
   ): { ok: true; record: PairingRecord } | { ok: false; reason: string } {
-    if (!this.allowlist.isAllowed(inbound.platform, inbound.senderId)) {
-      return {
-        ok: false,
-        reason: "Only an already-paired sender can approve a pairing.",
-      };
-    }
-    const pending = this.pairing.peek(code);
-    if (!pending) {
-      return {
-        ok: false,
-        reason:
-          `Unknown or expired pairing code ${code} — ask the requester to DM ` +
-          "the bot again for a fresh one.",
-      };
-    }
-    if (pending.platform === inbound.platform && pending.senderId === inbound.senderId) {
-      return {
-        ok: false,
-        reason: "Pairing cannot be self-approved — a different paired sender must approve it.",
-      };
-    }
-    const consumed = this.pairing.consume(code);
-    if (!consumed) {
-      return { ok: false, reason: `Pairing code ${code} just expired — request a fresh one.` };
-    }
-    this.allowlist.allow(consumed.platform, consumed.senderId);
-    return { ok: true, record: consumed };
+    return approvePairingCode({
+      allowlist: this.allowlist,
+      pairing: this.pairing,
+      code,
+      approver: { platform: inbound.platform, senderId: inbound.senderId },
+    });
   }
+}
+
+/**
+ * Who is approving. An IM approver is the `{platform, senderId}` the `approve
+ * <code>` reply came from; the desktop RPC approver has no IM identity (it is
+ * the gateway owner's device) and passes `undefined`.
+ */
+export interface PairingApprover {
+  platform: Platform;
+  senderId: string;
+}
+
+export type PairingApprovalOutcome =
+  | { ok: true; record: PairingRecord }
+  | { ok: false; reason: string };
+
+/**
+ * THE pairing-approval implementation (T9) — one code path for both channels:
+ * the IM `approve <code>` reply (`AllowlistGuard.approve`) and the desktop's
+ * `shannon/pairing.approve` RPC. Consumes the pending code via the PairingStore
+ * and persists the requester via `Allowlist.allow`.
+ *
+ * With `approver` set (IM reply): the sender must already be allowlisted and
+ * can never approve their own code. Without `approver` (desktop RPC): the
+ * caller has already authenticated as the owner (paired device or a fresh
+ * one-time pair token — see mobile/accessRpc.ts), so only the code check
+ * applies. Never throws; the outcome becomes the channel reply.
+ */
+export function approvePairingCode(opts: {
+  allowlist: Allowlist;
+  pairing: PairingStore;
+  code: string;
+  approver?: PairingApprover;
+}): PairingApprovalOutcome {
+  const { allowlist, pairing, code, approver } = opts;
+  if (approver && !allowlist.isAllowed(approver.platform, approver.senderId)) {
+    return {
+      ok: false,
+      reason: "Only an already-paired sender can approve a pairing.",
+    };
+  }
+  const pending = pairing.peek(code);
+  if (!pending) {
+    return {
+      ok: false,
+      reason:
+        `Unknown or expired pairing code ${code} — ask the requester to DM ` +
+        "the bot again for a fresh one.",
+    };
+  }
+  if (
+    approver &&
+    pending.platform === approver.platform &&
+    pending.senderId === approver.senderId
+  ) {
+    return {
+      ok: false,
+      reason: "Pairing cannot be self-approved — a different paired sender must approve it.",
+    };
+  }
+  const consumed = pairing.consume(code);
+  if (!consumed) {
+    return { ok: false, reason: `Pairing code ${code} just expired — request a fresh one.` };
+  }
+  allowlist.allow(consumed.platform, consumed.senderId);
+  return { ok: true, record: consumed };
 }
 
 /**

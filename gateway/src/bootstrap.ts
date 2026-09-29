@@ -23,6 +23,7 @@ import {
   DeviceRegistry,
   PairTokenStore,
 } from "./mobile/pairing.js";
+import { createPairingAccess } from "./mobile/accessRpc.js";
 import type { EngineClientFactory as MobileEngineClientFactory } from "./mobile/engineBridge.js";
 import { MobileDispatchHub } from "./mobile/hub.js";
 import { createMobileChannelAdapter } from "./mobile/channel.js";
@@ -201,8 +202,9 @@ export async function bootstrap(
   // `approve <code>` in any chat; entries survive restarts via the file.
   const allowlistPath = resolveAllowlistPath(opts.allowlistPath);
   const allowlist = new Allowlist(allowlistPath);
+  const accessPairing = new PairingStore();
   const accessGuard: InboundGuard =
-    opts.accessGuard ?? new AllowlistGuard(allowlist, new PairingStore());
+    opts.accessGuard ?? new AllowlistGuard(allowlist, accessPairing);
   // The `approve <code>` interception only exists on the concrete guard —
   // injected mock guards (tests) skip it.
   const allowlistGuard = accessGuard instanceof AllowlistGuard ? accessGuard : null;
@@ -293,7 +295,10 @@ export async function bootstrap(
   logger.info(`shannon-gateway up: ${registry.size} adapter(s) started`);
 
   const mobile = config.mobile?.enabled
-    ? await startMobileServer(config, logger, opts, dispatchHub!, engineAuthToken)
+    ? await startMobileServer(config, logger, opts, dispatchHub!, engineAuthToken, {
+        allowlist,
+        pairing: accessPairing,
+      })
     : null;
   if (mobile) {
     logger.info(
@@ -341,6 +346,8 @@ async function startMobileServer(
   opts: BootstrapOptions,
   dispatchHub: MobileDispatchHub,
   engineAuthToken: string | null,
+  /** T9: the IM access stores the desktop pairing-approval RPC serves. */
+  access: { allowlist: Allowlist; pairing: PairingStore },
 ): Promise<{ handle: { stop(): Promise<void> }; port: number }> {
   const mobileCfg = config.mobile!;
   const host = mobileCfg.host ?? "0.0.0.0";
@@ -362,6 +369,16 @@ async function startMobileServer(
         `(phones pin it from the QR)`,
     );
   }
+  // T9: desktop pairing approval — same stores the IM `approve <code>` reply
+  // uses (access/guard.ts), served as `shannon/pairing.*` JSON-RPC over the WS
+  // dispatch AND over the HTTP POST skin the Rust desktop calls.
+  const pairingAccess = createPairingAccess({
+    allowlist: access.allowlist,
+    pairing: access.pairing,
+    tokens,
+    registry,
+    logger,
+  });
   const handlers = createMobileHandlers({
     engine: {
       engineWsUrl: config.engine.wsUrl,
@@ -384,6 +401,7 @@ async function startMobileServer(
       // shannon/* RPC (engineBridge) and shannon/task.* alike.
       isDeviceTrusted: (deviceId: string) => registry.has(deviceId),
     }),
+    access: pairingAccess.handlers,
   });
 
   const server = new MobileServer({
@@ -391,6 +409,7 @@ async function startMobileServer(
     port,
     logger,
     handlers,
+    httpApi: pairingAccess.http,
     onContext: (ctx) => dispatchHub.registerConnection(ctx),
     ...(tlsMaterial ? { tls: { key: tlsMaterial.key, cert: tlsMaterial.cert } } : {}),
   });

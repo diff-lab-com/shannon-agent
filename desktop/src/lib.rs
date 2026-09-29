@@ -122,6 +122,10 @@ pub mod commands_diagnostics;
 #[cfg(feature = "tauri")]
 pub mod commands_mobile_pairing;
 pub mod commands_remote;
+/// Desktop approval entry for IM pairing requests (T9) — talks to the running
+/// gateway's mobile listener over its pairing-access HTTP RPC.
+#[cfg(feature = "tauri")]
+pub mod gateway_pairing;
 #[cfg(feature = "tauri")]
 pub mod gateway_supervisor;
 

@@ -66,6 +66,17 @@ export class PairingStore {
     return record;
   }
 
+  /**
+   * Snapshot of the live pending requests, oldest first (T9: the desktop's
+   * `shannon/pairing.pending` reads this — it must see exactly the codes the
+   * IM challenge issued, WITHOUT consuming them). Expired entries are pruned
+   * before listing so a caller can never observe a dead code.
+   */
+  listPending(): PairingRecord[] {
+    this.pruneExpired();
+    return [...this.pending.values()].sort((a, b) => a.createdAt - b.createdAt);
+  }
+
   get pendingCount(): number {
     return this.pending.size;
   }

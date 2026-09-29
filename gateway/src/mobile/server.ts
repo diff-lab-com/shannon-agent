@@ -99,6 +99,18 @@ export interface MobileServerOptions {
    * tests that want the old bare-WS behavior.
    */
   servePage?: boolean;
+  /**
+   * T9: optional POST handler for the desktop-facing RPC skins (the pairing
+   * access endpoints). Called with the request path (query stripped) and the
+   * RAW body (already size-capped). Returning null = "not mine" → the request
+   * falls through to the plain 404. Non-null results are sent verbatim
+   * (status + JSON body). The listener applies the same cross-site Origin
+   * defense to these POSTs as it does to WS upgrades.
+   */
+  httpApi?: (
+    path: string,
+    rawBody: string,
+  ) => Promise<{ status: number; body: string } | null>;
 }
 
 export interface MobileServerHandle {
@@ -126,6 +138,30 @@ export class MobileServer {
       if (servePage && req.method === "GET" && (req.url ?? "/").split("?")[0] === "/") {
         res.writeHead(200, { "content-type": "text/html; charset=utf-8" });
         res.end(MOBILE_PAGE_HTML);
+        return;
+      }
+      if (
+        req.method === "POST" &&
+        this.opts.httpApi &&
+        isOriginAllowed(req)
+      ) {
+        const path = (req.url ?? "/").split("?")[0] ?? "/";
+        const httpApi = this.opts.httpApi;
+        readBody(req, MAX_HTTP_BODY_BYTES)
+          .then((rawBody) => httpApi(path, rawBody))
+          .then((outcome) => {
+            if (outcome) {
+              res.writeHead(outcome.status, { "content-type": "application/json" });
+              res.end(outcome.body);
+              return;
+            }
+            res.writeHead(404, { "content-type": "text/plain; charset=utf-8" });
+            res.end("not found");
+          })
+          .catch(() => {
+            res.writeHead(500, { "content-type": "application/json" });
+            res.end(JSON.stringify({ error: { message: "handler error" } }));
+          });
         return;
       }
       res.writeHead(404, { "content-type": "text/plain; charset=utf-8" });
@@ -239,6 +275,28 @@ export class MobileServer {
 }
 
 // ── helpers ──────────────────────────────────────────────────────────────────
+
+/** Cap for POST bodies (the pairing-access JSON is a token + a 6-digit code). */
+const MAX_HTTP_BODY_BYTES = 64 * 1024;
+
+/** Collect a request body, rejecting early once `max` bytes are exceeded. */
+function readBody(req: IncomingMessage, max: number): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const chunks: Buffer[] = [];
+    let size = 0;
+    req.on("data", (chunk: Buffer) => {
+      size += chunk.length;
+      if (size > max) {
+        req.destroy(); // stop reading; the response write below still works
+        reject(new Error("body too large"));
+        return;
+      }
+      chunks.push(chunk);
+    });
+    req.on("end", () => resolve(Buffer.concat(chunks).toString("utf8")));
+    req.on("error", reject);
+  });
+}
 
 /**
  * Cross-site WebSocket handshake defense. Browsers always send `Origin`;
