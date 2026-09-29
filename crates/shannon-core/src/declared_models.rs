@@ -1,38 +1,38 @@
 //! R2-4 — runtime registry of per-model metadata declarations.
 //!
-//! `providers.toml` v2 [`ProviderProfile`]s can carry a `models` list
-//! ([`ModelSpec`]): per-model pricing, context window, max output and
+//! `providers.toml` v2 `ProviderProfile` (shannon-types)s can carry a `models` list
+//! (`ModelSpec` (shannon-types)): per-model pricing, context window, max output and
 //! capability declarations, authored for exactly the openai-compatible /
 //! proxy endpoints whose models are absent (or wrong) in the curated
 //! catalog. This module is the in-memory layer that makes those
 //! declarations **authoritative** at the engine's existing lookup
 //! boundaries:
 //!
-//! - **Pricing** — [`query_engine::types::find_pricing`] consults
-//!   [`pricing_for`] first, so a declared price beats the catalog, the
+//! - **Pricing** — `query_engine::types::find_pricing` consults
+//!   `pricing_for` first, so a declared price beats the catalog, the
 //!   built-in gap-fillers, the `.shannon-pricing.json` /
 //!   `SHANNON_PRICING_JSON` overlays and the LiteLLM feed. Matching is
 //!   exact-id only, which retires the substring-collision failure class
 //!   (glm-5.3-flash / openai/gpt-5-mini precedents) and with it the
 //!   pricing dual-table drift (review 2026-09-29 §2 item 22).
-//! - **Context window** — [`QueryEngine::resolve_max_context_tokens`]
-//!   consults [`context_window_for`] between the user override and the
+//! - **Context window** — QueryEngine::resolve_max_context_tokens
+//!   consults context_window_for between the user override and the
 //!   model registry, so compaction budgets follow the declared limit.
-//! - **Tier classification** — [`model_registry::tier_label_for_id`]
-//!   consults [`tier_label_for`], feeding declared capabilities through
+//! - **Tier classification** — model_registry::tier_label_for_id
+//!   consults tier_label_for, feeding declared capabilities through
 //!   the same heuristic the catalog entries use.
 //!
 //! ## Lifecycle
 //!
 //! The registry is process-global (one active profile per process, B3
-//! phase-1). [`replace_from_specs`] is called from
-//! [`crate::unified_config::build_client_from_resolved`] — every host
+//! phase-1). replace_from_specs is called from
+//! crate::unified_config::build_client_from_resolved — every host
 //! (CLI, REPL, desktop) builds its client through that funnel, so a
 //! provider/model switch re-registers the declarations of whichever
 //! profile actually drove the client. Registration is *replacement*, not
 //! accumulation: stale declarations never outlive their profile.
 //!
-//! [`QueryEngine::resolve_max_context_tokens`]:
+//! QueryEngine::resolve_max_context_tokens:
 //!     crate::query_engine::engine::QueryEngine::resolve_max_context_tokens
 
 use std::collections::BTreeMap;
@@ -43,7 +43,7 @@ use shannon_types::provider_config::{ModelCapability, ModelSpec, ProviderModelCo
 use crate::model_registry::{ModelCapabilities, TierLabel};
 
 /// Snapshot of one model's declared metadata. Field-for-field the
-/// [`ModelSpec`] payload minus the id (which keys the registry).
+/// `ModelSpec` (shannon-types) payload minus the id (which keys the registry).
 #[derive(Debug, Clone, Default, PartialEq)]
 pub struct DeclaredModelMeta {
     pub display_name: Option<String>,
@@ -55,7 +55,7 @@ pub struct DeclaredModelMeta {
 }
 
 impl DeclaredModelMeta {
-    /// Project a schema [`ModelSpec`] onto the runtime snapshot.
+    /// Project a schema `ModelSpec` (shannon-types) onto the runtime snapshot.
     pub fn from_spec(spec: &ModelSpec) -> Self {
         Self {
             display_name: spec.display_name.clone(),
@@ -126,7 +126,7 @@ pub fn clear() {
 
 /// Re-register declarations for the provider slot with the raw stored id
 /// `slug` (e.g. `"glm"`), from the on-disk `providers.toml`. Falls back to
-/// the slot whose id canonicalizes to the same [`LlmProvider`], so a REPL
+/// the slot whose id canonicalizes to the same LlmProvider, so a REPL
 /// switch to `zhipu` still finds a slot stored as `glm`-style custom ids
 /// only when they genuinely resolve to the same provider. No matching slot
 /// (or no readable file) clears the registry. Read-only on the store.
@@ -138,7 +138,7 @@ pub fn replace_for_provider_slug(slug: &str) {
     replace_for_provider_in(slug, &cfg);
 }
 
-/// [`replace_for_provider_slug`] against an already-loaded config (the
+/// replace_for_provider_slug against an already-loaded config (the
 /// hermetic seam tests use).
 pub fn replace_for_provider_in(slug: &str, cfg: &ProviderModelConfig) {
     let Some(mp) = cfg.profiles.get("default") else {
@@ -165,7 +165,7 @@ pub fn lookup(model: &str) -> Option<DeclaredModelMeta> {
 }
 
 /// Declared pricing for `model`, when both directions are declared.
-/// See [`DeclaredModelMeta::pricing`] for the partial-price rule.
+/// See DeclaredModelMeta::pricing for the partial-price rule.
 pub fn pricing_for(model: &str) -> Option<crate::query_engine::ModelPricing> {
     lookup(model).and_then(|meta| meta.pricing())
 }
@@ -185,7 +185,7 @@ pub fn max_output_for(model: &str) -> Option<usize> {
 }
 
 /// Tier label derived from the declaration's capabilities, run through the
-/// same heuristic as [`crate::model_registry::catalog::ModelInfo::tier_label`]
+/// same heuristic as crate::model_registry::catalog::ModelInfo::tier_label
 /// (cheap/speed → Fast, flagship id markers → Pro, reasoning/coding →
 /// Standard). `None` when the model has no declaration or the declaration
 /// carries no capabilities — the caller falls through to the catalog.
