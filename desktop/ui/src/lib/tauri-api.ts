@@ -788,6 +788,27 @@ export async function openArtifactExternally(title: string, source: string, ext:
   return invoke('open_artifact_externally', { title, source, ext })
 }
 
+// --- 2026-09-29 office Wave 1 (docs/research/2026-09-29-office-scenario-
+// competitive-research.md §10 v2): host-runtime probe + file copy (save-as) ---
+
+/** Availability of host-run tools used by built-in document skills. */
+export interface HostRuntimeProbe {
+  python3: boolean
+  pythonVersion: string | null
+  pandoc: boolean
+  libreoffice: boolean
+}
+
+/** Probe the host for python3/pandoc/libreoffice (short timeouts, no side effects). */
+export async function probeHostRuntime(): Promise<HostRuntimeProbe> {
+  return invoke<HostRuntimeProbe>('probe_host_runtime')
+}
+
+/** Copy a local file to a caller-chosen destination path (save-as). */
+export async function copyFile(srcPath: string, destPath: string): Promise<void> {
+  await invoke('copy_file', { srcPath, destPath })
+}
+
 // --- 2026-09-26 round2 §5-1 A — artifact:// interactive HTML (design doc
 // docs/plans/2026-09-26-desktop-chat-ui-round2-design.md) ---
 

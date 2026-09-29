@@ -277,6 +277,15 @@ let notificationPrefs = {
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 type MockHandler = (args: any) => unknown | Promise<unknown>
 export const handlers: Record<string, MockHandler> = {
+  // --- Office Wave 1: host runtime probe + file copy (save-as) ---
+  async probe_host_runtime() {
+    await delay(40)
+    return { python3: true, pythonVersion: 'Python 3.12.3', pandoc: false, libreoffice: false }
+  },
+  async copy_file() {
+    await delay(60)
+    return null
+  },
   // --- Chat ---
   async send_message() {
     await delay(120)

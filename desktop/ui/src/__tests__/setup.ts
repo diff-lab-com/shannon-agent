@@ -537,6 +537,9 @@ vi.mock('@/lib/tauri-api', async (importOriginal) => ({
   openWithDefaultApp: vi.fn().mockResolvedValue(undefined),
   revealInFolder: vi.fn().mockResolvedValue(undefined),
   openArtifactExternally: vi.fn().mockResolvedValue('/tmp/shannon-artifacts/x.html'),
+  // Office Wave 1 — host runtime probe (Welcome documents card) + save-as.
+  probeHostRuntime: vi.fn().mockResolvedValue({ python3: true, pythonVersion: 'Python 3.12.3', pandoc: false, libreoffice: false }),
+  copyFile: vi.fn().mockResolvedValue(undefined),
   probeUrlFrameable: vi.fn().mockResolvedValue({ frameable: true, status: 200, reason: null }),
   // 2026-09-26 round2 §5-1 A — artifact:// interactive HTML registry.
   // Default: one stable registration; per-test overrides cover rejection /

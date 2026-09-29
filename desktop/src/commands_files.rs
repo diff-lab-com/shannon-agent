@@ -99,6 +99,19 @@ fn attachment_mime(path: &Path) -> String {
         "json" => "application/json",
         "yaml" | "yml" => "application/yaml",
         "toml" => "application/toml",
+        // Office Wave 1 — word processor / spreadsheet / presentation formats
+        // so attachment classification (and downstream tool routing) can tell
+        // office documents apart instead of lumping them into
+        // `application/octet-stream`.
+        "doc" => "application/msword",
+        "docx" => "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+        "xls" => "application/vnd.ms-excel",
+        "xlsx" => "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        "ppt" => "application/vnd.ms-powerpoint",
+        "pptx" => "application/vnd.openxmlformats-officedocument.presentationml.presentation",
+        "odt" => "application/vnd.oasis.opendocument.text",
+        "rtf" => "application/rtf",
+        "csv" => "text/csv",
         _ => "application/octet-stream",
     }
     .to_string()
@@ -257,6 +270,96 @@ pub(crate) async fn save_text_file_inner(
     }
     std::fs::write(&target, content)
         .map_err(|e| FileCommandError::Plain(format!("Failed to write {}: {e}", target.display())))
+}
+
+/// Copy a local file to a caller-chosen destination (office Wave 1
+/// "save-as"). Scope rules are aligned with `open_with_default_app`
+/// (`commands_surface::canonicalized_in_scope`): the source must exist and
+/// canonicalize inside `$HOME/**` or `$TEMP/**` (rejecting `..` traversal
+/// and symlink escapes); the destination must land in the same bases, but
+/// may not exist yet — see [`destination_in_scope`]. Overwriting an
+/// existing destination is allowed; copying onto the source is not.
+#[tauri::command]
+pub async fn copy_file(src_path: String, dest_path: String) -> Result<(), String> {
+    copy_file_inner(&src_path, &dest_path).await
+}
+
+/// Internal helper for [`copy_file`]. Splits out so tests can exercise the
+/// scope + copy logic without a Tauri app handle.
+pub(crate) async fn copy_file_inner(src_path: &str, dest_path: &str) -> Result<(), String> {
+    if src_path == dest_path {
+        return Err(format!(
+            "copy source and destination are the same file: {src_path}"
+        ));
+    }
+    // Same scope contract as the surface side's `open_with_default_app`:
+    // canonicalize + `$HOME`/`$TEMP` base check (also rejects `..` and
+    // symlink escapes, and implies the source exists).
+    let src = crate::commands_surface::canonicalized_in_scope(src_path)?;
+    if !src.is_file() {
+        return Err(format!(
+            "copy source is not a regular file: {}",
+            src.display()
+        ));
+    }
+    let dest = destination_in_scope(dest_path)?;
+    if dest == src {
+        return Err(format!(
+            "copy source and destination are the same file: {src_path}"
+        ));
+    }
+    // A large copy must not occupy an async executor thread — same
+    // spawn_blocking pattern as `get_file_tree`.
+    tokio::task::spawn_blocking(move || {
+        // `std::fs::copy` overwrites an existing destination, which is the
+        // intended save-as semantics.
+        std::fs::copy(&src, &dest).map(|_| ()).map_err(|e| {
+            format!(
+                "failed to copy {} to {}: {e}",
+                src.display(),
+                dest.display()
+            )
+        })
+    })
+    .await
+    .map_err(|e| format!("file copy task failed: {e}"))?
+}
+
+/// Scope check for a copy destination that may not exist yet (save-as
+/// target). For an existing path this is exactly the surface-side check
+/// (`commands_surface::canonicalized_in_scope`, i.e. the
+/// `open_with_default_app` semantics). For a not-yet-existing path the
+/// deepest existing ancestor is canonicalized + scope-checked and the
+/// non-existing tail is appended back; the tail itself is checked
+/// lexically (absolute, no `..`), so a traversal can never smuggle the
+/// destination out of the `$HOME`/`$TEMP` bases.
+fn destination_in_scope(dest: &str) -> Result<std::path::PathBuf, String> {
+    let p = std::path::Path::new(dest);
+    if p.exists() {
+        // Exists → identical semantics to `open_with_default_app`.
+        return crate::commands_surface::canonicalized_in_scope(dest);
+    }
+    if !p.is_absolute() {
+        return Err(format!("path must be absolute: {dest}"));
+    }
+    if p.components().any(|c| c == std::path::Component::ParentDir) {
+        return Err(format!("path must not contain '..': {dest}"));
+    }
+    let mut ancestor = p.parent();
+    while let Some(dir) = ancestor {
+        if dir.exists() {
+            let canonical =
+                crate::commands_surface::canonicalized_in_scope(&dir.to_string_lossy())?;
+            let tail = p
+                .strip_prefix(dir)
+                .expect("existing ancestor is always a prefix of the path");
+            return Ok(canonical.join(tail));
+        }
+        ancestor = dir.parent();
+    }
+    Err(format!(
+        "path outside allowed scope ($HOME/**, $TEMP/**): {dest}"
+    ))
 }
 
 // ---------------------------------------------------------------------------
@@ -986,6 +1089,39 @@ mod tests {
         assert_eq!(attachment_mime(Path::new("a")), "application/octet-stream");
     }
 
+    /// Office Wave 1 — the office-format rows of the MIME table. Extension
+    /// matching is case-insensitive (same code path as the base table).
+    #[test]
+    fn attachment_mime_office_table() {
+        assert_eq!(attachment_mime(Path::new("a.doc")), "application/msword");
+        assert_eq!(
+            attachment_mime(Path::new("a.docx")),
+            "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+        );
+        assert_eq!(
+            attachment_mime(Path::new("a.xls")),
+            "application/vnd.ms-excel"
+        );
+        assert_eq!(
+            attachment_mime(Path::new("a.XLSX")),
+            "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+        );
+        assert_eq!(
+            attachment_mime(Path::new("a.ppt")),
+            "application/vnd.ms-powerpoint"
+        );
+        assert_eq!(
+            attachment_mime(Path::new("a.pptx")),
+            "application/vnd.openxmlformats-officedocument.presentationml.presentation"
+        );
+        assert_eq!(
+            attachment_mime(Path::new("a.odt")),
+            "application/vnd.oasis.opendocument.text"
+        );
+        assert_eq!(attachment_mime(Path::new("a.rtf")), "application/rtf");
+        assert_eq!(attachment_mime(Path::new("a.csv")), "text/csv");
+    }
+
     #[test]
     fn file_diff_round_trips_through_serde() {
         let diff = FileDiff {
@@ -1271,6 +1407,127 @@ mod tests {
             .await
             .expect("empty expected_mtime must skip the conflict check");
         assert_eq!(std::fs::read_to_string(&target).unwrap(), "hello");
+    }
+
+    // ---- office Wave 1: copy_file (save-as) ----
+    //
+    // The scope bases are `$HOME`/`$TEMP` (same as open_with_default_app),
+    // so every disk-touching test stages inside a tempdir, which is always
+    // in scope.
+
+    #[tokio::test]
+    async fn copy_file_copies_within_scope() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let src = dir.path().join("report.docx");
+        std::fs::write(&src, b"office bytes").expect("write src");
+        let dest = dir.path().join("copy-of-report.docx");
+
+        copy_file_inner(&src.to_string_lossy(), &dest.to_string_lossy())
+            .await
+            .expect("in-scope copy must succeed");
+        assert_eq!(std::fs::read(&dest).expect("read dest"), b"office bytes");
+        // Copy, not move.
+        assert!(src.is_file(), "source must survive the copy");
+    }
+
+    #[tokio::test]
+    async fn copy_file_allows_overwriting_existing_destination() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let src = dir.path().join("new.odt");
+        std::fs::write(&src, "fresh").expect("write src");
+        let dest = dir.path().join("existing.odt");
+        std::fs::write(&dest, "stale").expect("write dest");
+
+        copy_file_inner(&src.to_string_lossy(), &dest.to_string_lossy())
+            .await
+            .expect("overwrite copy must succeed");
+        assert_eq!(std::fs::read_to_string(&dest).unwrap(), "fresh");
+    }
+
+    #[tokio::test]
+    async fn copy_file_creates_not_yet_existing_destination_name() {
+        // The save-as case: the destination file itself does not exist yet;
+        // scope is decided on the existing parent directory.
+        let dir = tempfile::tempdir().expect("tempdir");
+        let src = dir.path().join("a.csv");
+        std::fs::write(&src, "x,y").expect("write src");
+        let dest = dir.path().join("brand-new-name.csv");
+
+        copy_file_inner(&src.to_string_lossy(), &dest.to_string_lossy())
+            .await
+            .expect("save-as copy must succeed");
+        assert_eq!(std::fs::read_to_string(&dest).unwrap(), "x,y");
+    }
+
+    #[tokio::test]
+    async fn copy_file_rejects_out_of_scope_source() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let dest = dir.path().join("out.png");
+        // Exists, but outside $HOME/$TEMP — the open_with_default_app
+        // rejection. (`/etc/hosts` exists on macOS and Linux; on Windows the
+        // scope check rejects it just the same.)
+        let err = copy_file_inner("/etc/hosts", &dest.to_string_lossy())
+            .await
+            .expect_err("out-of-scope source must be rejected");
+        assert!(err.contains("outside"), "got: {err}");
+        assert!(!dest.exists(), "nothing may be written");
+    }
+
+    #[tokio::test]
+    async fn copy_file_rejects_out_of_scope_destination() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let src = dir.path().join("a.txt");
+        std::fs::write(&src, "secret").expect("write src");
+        let err = copy_file_inner(
+            &src.to_string_lossy(),
+            "/etc/shannon-copy-should-never-land-here.txt",
+        )
+        .await
+        .expect_err("out-of-scope destination must be rejected");
+        assert!(err.contains("outside"), "got: {err}");
+        assert!(
+            !std::path::Path::new("/etc/shannon-copy-should-never-land-here.txt").exists(),
+            "nothing may be written outside the scope"
+        );
+    }
+
+    #[tokio::test]
+    async fn copy_file_rejects_traversal_in_destination() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let src = dir.path().join("a.txt");
+        std::fs::write(&src, "x").expect("write src");
+        let traversal = dir
+            .path()
+            .join("sub/../../escape.txt")
+            .to_string_lossy()
+            .into_owned();
+        let err = copy_file_inner(&src.to_string_lossy(), &traversal)
+            .await
+            .expect_err("'..' in the destination must be rejected");
+        assert!(err.contains("'..'"), "got: {err}");
+    }
+
+    #[tokio::test]
+    async fn copy_file_rejects_missing_source() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let missing = dir.path().join("ghost.docx");
+        let dest = dir.path().join("out.docx");
+        let err = copy_file_inner(&missing.to_string_lossy(), &dest.to_string_lossy())
+            .await
+            .expect_err("missing source must be rejected");
+        assert!(err.contains("not accessible"), "got: {err}");
+    }
+
+    #[tokio::test]
+    async fn copy_file_rejects_same_source_and_destination() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let src = dir.path().join("same.txt");
+        std::fs::write(&src, "x").expect("write src");
+        let p = src.to_string_lossy().into_owned();
+        let err = copy_file_inner(&p, &p)
+            .await
+            .expect_err("dest == src must be rejected");
+        assert!(err.contains("same"), "got: {err}");
     }
 
     #[test]

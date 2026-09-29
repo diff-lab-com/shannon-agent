@@ -190,6 +190,9 @@ fn main() {
             // open-and-artifact-design.md §4 P0-A / P1-D / P1-E)
             commands_surface::open_external,
             commands_surface::open_with_default_app,
+            // Office Wave 1 — python3/pandoc/LibreOffice availability probe
+            // for the built-in document skills
+            commands_surface::probe_host_runtime,
             commands_surface::reveal_in_folder,
             commands_surface::open_artifact_externally,
             commands_surface::probe_url_frameable,
@@ -287,6 +290,8 @@ fn main() {
             commands_files::get_file_diff,
             commands_files::apply_diff,
             commands_files::save_text_file,
+            // Office Wave 1 — save-as copy for converted office documents
+            commands_files::copy_file,
             commands_mcp::add_mcp_server,
             commands_mcp::remove_mcp_server,
             commands_mcp::restart_mcp_server,
