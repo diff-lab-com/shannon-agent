@@ -455,6 +455,25 @@ fn synthetic_reminder_pins_cover_runtime_user_notices() {
     assert!(!is_synthetic_reminder("Run the test suite"));
 }
 
+/// The turn-N checkpoint reminder (SHANNON_TURN_CHECKPOINT, agent_loop.rs
+/// P-B block) is pushed as user-role text OUTSIDE the user_notices drain,
+/// so it needs its own pin. Its shape is "[Turn {n} reminder] You have used
+/// {n} of your turn budget …" around a variable turn number.
+#[test]
+fn synthetic_reminder_pins_turn_checkpoint_reminder() {
+    assert!(is_synthetic_reminder(
+        "[Turn 12 reminder] You have used 12 of your turn budget and have NOT yet \
+         called Edit or Write. STOP exploring and commit a fix now — a wrong or \
+         partial fix is better than an empty patch. The official harness will \
+         judge correctness; you do not need to verify locally."
+    ));
+    // The generic "[Turn " prefix alone is not enough — a real user prompt
+    // that happens to open with bracketed turn talk must stay a turn opener.
+    assert!(!is_synthetic_reminder(
+        "[Turn 3 of my plan] Please continue with the refactor"
+    ));
+}
+
 /// T15b end-to-end: a drained user notice between turns must not open a
 /// rewind turn — rewinding past it removes the whole exchange including the
 /// notice, exactly like the other synthetic reminders.

@@ -805,6 +805,10 @@ fn is_turn_opener(msg: &Message) -> bool {
 /// machine-generated.
 fn is_synthetic_reminder(text: &str) -> bool {
     text.starts_with("[Token budget at") // P-M 60%/80% context warnings
+        // Turn-N checkpoint commit-now reminder (SHANNON_TURN_CHECKPOINT):
+        // pushed as user-role text OUTSIDE the user_notices drain
+        // (agent_loop.rs P-B block), so the notice pins below don't see it.
+        || (text.starts_with("[Turn ") && text.contains(" reminder] You have used "))
         || text.starts_with("Context is large (") // B.6 targeted-read nudge
         || text == TRUNCATION_CONTINUATION_PROMPT
         || text == THINK_ONLY_NUDGE_PROMPT
