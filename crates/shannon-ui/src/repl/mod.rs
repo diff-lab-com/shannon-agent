@@ -145,6 +145,11 @@ pub struct Repl {
     pub(crate) agent_registry: Option<std::sync::Arc<shannon_agents::SubAgentRegistry>>,
     /// Throttle timestamp for agent refresh (avoids block_on on every tick)
     pub(crate) last_agent_refresh: Option<std::time::Instant>,
+    /// Last task-board summary refresh. The summary is cached on the agent
+    /// dashboard and re-fetched at most every 500ms while the dashboard is
+    /// visible — `TaskBoard::summary()` is async, and blocking on it every
+    /// 50ms tick stalled input latency (review §P1-1).
+    pub(crate) last_task_board_summary: Option<std::time::Instant>,
     /// Coordinator event receiver for agent dashboard live updates
     pub(crate) coordinator_event_rx:
         Option<tokio::sync::broadcast::Receiver<shannon_agents::CoordinatorEvent>>,
@@ -383,6 +388,7 @@ impl Repl {
             team_coordinator: None,
             agent_registry: None,
             last_agent_refresh: None,
+            last_task_board_summary: None,
             coordinator_event_rx: None,
             mcp_pool,
             tool_registry,
@@ -1357,6 +1363,7 @@ impl Repl {
             team_coordinator: shared_coordinator,
             agent_registry: None,
             last_agent_refresh: None,
+            last_task_board_summary: None,
             coordinator_event_rx: None,
             mcp_pool,
             tool_registry,
@@ -1700,12 +1707,31 @@ impl Repl {
             if let Some(ref mut dashboard) = self.state.agent_dashboard {
                 dashboard.sync_from_agents(&self.state.active_agents);
             }
-            // Fetch task board summary for the dashboard (P0-2: task ratio)
-            if let Some(ref coordinator) = self.team_coordinator {
-                if let Some(ref mut dashboard) = self.state.agent_dashboard {
-                    let task_board = coordinator.task_board();
-                    let summary = self.runtime.block_on(task_board.summary());
-                    dashboard.task_summary = Some(summary);
+            // Fetch task board summary for the dashboard (P0-2: task ratio).
+            //
+            // Review P1-1: `TaskBoard::summary()` is async, and the previous
+            // code blocked on it on EVERY loop iteration (50ms tick → up to
+            // 20x/s), stalling input latency. The summary is cached on the
+            // dashboard instead and refreshed at most every 500ms — and only
+            // while a dashboard actually renders (one exists exactly while it
+            // is on screen; it is auto-created with agents and dropped
+            // without them). The async runtime handle is kept; only the
+            // per-frame blocking is gone.
+            const TASK_BOARD_SUMMARY_REFRESH: std::time::Duration =
+                std::time::Duration::from_millis(500);
+            if self.team_coordinator.is_some() && self.state.agent_dashboard.is_some() {
+                let due = self
+                    .last_task_board_summary
+                    .map_or(true, |t| t.elapsed() >= TASK_BOARD_SUMMARY_REFRESH);
+                if due {
+                    if let Some(ref coordinator) = self.team_coordinator {
+                        let task_board = coordinator.task_board();
+                        let summary = self.runtime.block_on(task_board.summary());
+                        if let Some(ref mut dashboard) = self.state.agent_dashboard {
+                            dashboard.task_summary = Some(summary);
+                        }
+                    }
+                    self.last_task_board_summary = Some(std::time::Instant::now());
                 }
             }
             // Auto-remove dashboard when no agents (but keep if expanded)
