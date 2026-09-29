@@ -170,10 +170,10 @@ export default function TurnTimeline({ sessionId }: TurnTimelineProps) {
         >
           <Icon name="arrow_back" />
         </Button>
+        {/* Page title ("时间线") renders in the persistent Header via
+            TITLE_MAP (`header.title.timeline`) — this row keeps only the
+            back affordance, the model subtitle and the summary chips. */}
         <div className="min-w-0">
-          <h1 className="font-title-lg text-lg font-semibold text-on-surface truncate">
-            {t('timeline.title')}
-          </h1>
           <p className="font-label-sm text-label-sm text-on-surface-variant truncate">
             {t('timeline.subtitle', {
               model: timeline.model ?? t('timeline.model.unknown'),

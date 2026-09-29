@@ -74,6 +74,12 @@ export function Layout() {
   // media-query state below. Earlier code rendered two full trees, and the
   // duplicate was responsible for a cascade of CI flakes (Playwright strict-
   // mode duplicate hits, hit-test shadow on the mobile copy).
+  // Why a mobile branch at all: Tauri minWidth=800 (desktop/tauri.conf.json)
+  // keeps the desktop window above the 768px breakpoint, so ≤767px is
+  // unreachable there — this drawer form is retained only for
+  // e2e/mobile-drawer.spec.ts (pins a 375×812 viewport and asserts the
+  // drawer/scrim contract) and pure-browser `pnpm dev`. Don't delete it
+  // without migrating that spec first.
   const [mobileMode, setMobileMode] = useState(false);
   useEffect(() => {
     const mq = window.matchMedia('(max-width: 767px)')
@@ -168,7 +174,10 @@ export function Layout() {
           rail, while <main> paints --color-surface for the content tier. */}
       <div className="text-on-surface font-body-md overflow-hidden min-h-screen">
         {/* Mobile sidebar overlay — scrim (遮罩), not a glass material: the
-            direct backdrop-blur here is intentional and guard-exempt. */}
+            direct backdrop-blur here is intentional and guard-exempt.
+            Reachable only when the ≤767px media query above matches (Tauri
+            minWidth=800 never gets there) — kept for
+            e2e/mobile-drawer.spec.ts, which asserts this scrim's open/close. */}
         {sidebarOpen && (
           <div className="fixed inset-0 z-scrim bg-black/40 backdrop-blur-sm md:hidden" onClick={closeSidebar} />
         )}

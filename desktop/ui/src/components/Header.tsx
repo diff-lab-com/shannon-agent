@@ -27,6 +27,7 @@ const TITLE_MAP: [string, string][] = [
   ['/quickfix', 'header.title.quickfix'],
   ['/welcome', 'header.title.welcome'],
   ['/usage', 'header.title.usage'],
+  ['/timeline', 'header.title.timeline'],
   ['/chat', 'header.title.chat'],
 ]
 
@@ -144,6 +145,10 @@ export function Header() {
           bg-surface/80+[backdrop-filter] that bypassed the utility's inset
           highlight, hairline and contain:paint). */}
       <header className="glass-surface fixed top-0 right-0 z-header flex justify-between items-center h-16 px-lg" style={{ left: 'var(--sidebar-w)' }}>
+        {/* md:hidden hamburger — Tauri minWidth=800 keeps the desktop window
+            above the 768px breakpoint, so this mobile branch is only
+            reachable in pure-browser `pnpm dev` and in
+            e2e/mobile-drawer.spec.ts (pins 375×812), which drives it. */}
         {!isWindowMode && (
           <Button variant="ghost" aria-label={t('header.toggleSidebar.aria')} className="md:hidden p-sm mr-sm text-on-surface-variant hover:text-primary" onClick={toggleSidebar}>
             <span className="material-symbols-outlined icon-lg">menu</span>
