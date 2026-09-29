@@ -2135,10 +2135,39 @@ fn run_verify_script(script: &str, workspace: &Path) -> Result<(), String> {
     ))
 }
 
-/// Windows builds get an explicit dead-end rather than silent skips.
+/// Windows: verify scripts are POSIX shell by contract, so they need `sh`
+/// (Git Bash/WSL) on PATH. With it, run them exactly like unix; without it,
+/// fail with that explicit reason rather than a bare unsupported error.
 #[cfg(not(unix))]
-fn run_verify_script(_script: &str, _workspace: &Path) -> Result<(), String> {
-    Err("verify_script is unsupported on this platform".to_string())
+fn run_verify_script(script: &str, workspace: &Path) -> Result<(), String> {
+    if !shannon_types::shell::has_sh() {
+        return Err(
+            "verify_script needs POSIX `sh` on PATH (install Git for Windows \
+             and restart Shannon); verify scripts are POSIX shell by contract"
+                .to_string(),
+        );
+    }
+    let output = std::process::Command::new("sh")
+        .arg("-c")
+        .arg(script)
+        .current_dir(workspace)
+        .output()
+        .map_err(|e| format!("verify_script could not run: {e}"))?;
+    if output.status.success() {
+        return Ok(());
+    }
+    let mut tail = String::from_utf8_lossy(&output.stderr).to_string();
+    if tail.trim().is_empty() {
+        tail = String::from_utf8_lossy(&output.stdout).to_string();
+    }
+    if tail.chars().count() > 2000 {
+        tail = tail.chars().take(2000).collect();
+    }
+    Err(format!(
+        "verify_script exited with {} (cwd={})\n{tail}",
+        output.status.code().unwrap_or(-1),
+        workspace.display()
+    ))
 }
 
 // ── Dry-run stub executor ──────────────────────────────────────────────
@@ -2357,8 +2386,12 @@ fn apply_stub_tool(tool: &str, input: &Value, workspace: &Path) -> Result<String
                 let mut rels: Vec<String> = Vec::new();
                 walk_files(workspace, Path::new(""), &mut |rel, _| {
                     // Mirror real `find .`: entries render with the `./`
-                    // prefix (matches GNU coreutils output).
-                    rels.push(format!("./{}", rel.display()));
+                    // prefix and `/` separators (matches GNU coreutils
+                    // output on every platform).
+                    rels.push(format!(
+                        "./{}",
+                        rel.display().to_string().replace('\\', "/")
+                    ));
                 });
                 Ok(rels.join("\n"))
             } else {
@@ -2394,7 +2427,9 @@ fn glob_workspace(root: &Path, pattern: &str) -> Result<Vec<String>, String> {
     let mut hits = Vec::new();
     walk_files(root, Path::new(""), &mut |rel, _| {
         if matcher.is_match(rel) {
-            hits.push(rel.to_string_lossy().into_owned());
+            // Forward-slash output is the Glob contract (what the model
+            // sees in the real tool and in the recorded stream).
+            hits.push(rel.to_string_lossy().replace('\\', "/"));
         }
     });
     hits.sort();

@@ -204,11 +204,13 @@ pub fn submit_input(repl: &mut Repl, mut terminal: Option<&mut super::query::Ter
         let shell_cmd = expanded.trim_start_matches('!').trim();
         if !shell_cmd.is_empty() {
             let start = chrono::Utc::now();
-            let output = std::process::Command::new("sh")
-                .arg("-c")
-                .arg(shell_cmd)
-                .current_dir(&repl.state.working_directory)
-                .output();
+            let output = {
+                let (program, args) = shannon_types::shell::local_shell(shell_cmd);
+                std::process::Command::new(program)
+                    .args(&args)
+                    .current_dir(&repl.state.working_directory)
+                    .output()
+            };
             let msg = match &output {
                 Ok(out) => {
                     let stdout = String::from_utf8_lossy(&out.stdout);
@@ -284,11 +286,13 @@ pub fn submit_input_with_text(
         let shell_cmd = expanded.trim_start_matches('!').trim();
         if !shell_cmd.is_empty() {
             let start = chrono::Utc::now();
-            let output = std::process::Command::new("sh")
-                .arg("-c")
-                .arg(shell_cmd)
-                .current_dir(&repl.state.working_directory)
-                .output();
+            let output = {
+                let (program, args) = shannon_types::shell::local_shell(shell_cmd);
+                std::process::Command::new(program)
+                    .args(&args)
+                    .current_dir(&repl.state.working_directory)
+                    .output()
+            };
             let msg = match &output {
                 Ok(out) => {
                     let stdout = String::from_utf8_lossy(&out.stdout);

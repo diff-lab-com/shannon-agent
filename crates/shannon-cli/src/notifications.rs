@@ -3,7 +3,9 @@
 //! Fires OS-native notifications by spawning platform binaries:
 //!   - Linux:   `notify-send`
 //!   - macOS:   `osascript`
-//!   - Windows: `powershell` (BurntToast)
+//!   - Windows: `powershell` (WinForms NotifyIcon balloon — ships with
+//!     Windows; the previous BurntToast default needed a third-party
+//!     PowerShell Gallery module that stock machines don't have)
 //!
 //! Commands are spawned via `std::process::Command` with the args array — never
 //! through a shell — so titles and bodies cannot perform shell injection.
@@ -63,7 +65,25 @@ impl CommandSpec {
                 args: vec![
                     "-NoProfile".into(),
                     "-Command".into(),
-                    "New-BurntToastNotification -Title '{title}' -Message '{body}'".into(),
+                    // WinForms NotifyIcon balloon: ships with Windows (.NET
+                    // Framework), unlike `New-BurntToastNotification` which
+                    // requires a third-party module and silently no-oped on
+                    // stock machines. Mirrors shannon-core's DesktopNotifier
+                    // Windows branch; '{title}'/'{body}' are single-quoted
+                    // and `escape_powershell` doubles embedded quotes. The
+                    // trailing sleep keeps the (fire-and-forget) process
+                    // alive long enough for the balloon to render and
+                    // disposes the tray icon instead of leaving a ghost.
+                    "[System.Reflection.Assembly]::LoadWithPartialName('System.Windows.Forms') \
+                     | Out-Null; \
+                     [System.Reflection.Assembly]::LoadWithPartialName('System.Drawing') \
+                     | Out-Null; \
+                     $n = New-Object System.Windows.Forms.NotifyIcon; \
+                     $n.Icon = [System.Drawing.SystemIcons]::Information; \
+                     $n.Visible = $true; \
+                     $n.ShowBalloonTip(5000, '{title}', '{body}', 'Info'); \
+                     Start-Sleep -Seconds 2; $n.Dispose()"
+                        .into(),
                 ],
             }
         }
@@ -211,7 +231,7 @@ fn escape_applescript(input: &str) -> String {
 ///
 /// Single quotes are doubled (`'` → `''`). Single-quoted strings in PowerShell
 /// are literal — no variable expansion — so this is sufficient to prevent
-/// breakout from `New-BurntToastNotification -Title '...'` contexts.
+/// breakout from the `'{title}'` / `'{body}'` placeholder contexts.
 fn escape_powershell(input: &str) -> String {
     input.replace('\'', "''")
 }

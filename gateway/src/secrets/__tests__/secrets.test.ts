@@ -42,29 +42,53 @@ describe("createChainedSecretProvider", () => {
 });
 
 describe("createCliKeyringProvider", () => {
-  it("trims stdout from the injected exec", async () => {
-    const exec = vi.fn(async () => ({ stdout: "  secret-value\n", stderr: "" }));
+  // `commandFor` deliberately returns `[null, []]` on win32 (no OS keyring
+  // CLI), so the provider short-circuits to null without ever calling
+  // `exec`. The exec-injection semantics below are darwin/linux contracts.
+  it.skipIf(process.platform === "win32")(
+    "trims stdout from the injected exec",
+    async () => {
+      const exec = vi.fn(async () => ({ stdout: "  secret-value\n", stderr: "" }));
+      const p = createCliKeyringProvider({ exec });
+      expect(await p.get("slack/bot-token")).toBe("secret-value");
+      expect(exec).toHaveBeenCalledTimes(1);
+    },
+  );
+
+  it.skipIf(process.platform === "win32")(
+    "splits service/account and passes the account through",
+    async () => {
+      const exec = vi.fn(async (_cmd: string, _args: string[]) => ({ stdout: "v", stderr: "" }));
+      const p = createCliKeyringProvider({ service: "shannon-gateway", exec });
+      await p.get("slack/bot-token");
+      const args = exec.mock.calls[0]![1];
+      expect(args).toContain("slack");
+      expect(args).toContain("bot-token");
+    },
+  );
+
+  it.skipIf(process.platform === "win32")(
+    "uses the default service when the key has no slash",
+    async () => {
+      const exec = vi.fn(async (_cmd: string, _args: string[]) => ({ stdout: "v", stderr: "" }));
+      const p = createCliKeyringProvider({ service: "shannon-gateway", exec });
+      await p.get("standalone-key");
+      const args = exec.mock.calls[0]![1];
+      expect(args).toContain("standalone-key");
+      expect(args).toContain("shannon-gateway");
+    },
+  );
+
+  it("degrades to null on platforms without a keyring CLI (win32)", async () => {
+    const exec = vi.fn(async () => ({ stdout: "x", stderr: "" }));
     const p = createCliKeyringProvider({ exec });
-    expect(await p.get("slack/bot-token")).toBe("secret-value");
-    expect(exec).toHaveBeenCalledTimes(1);
-  });
-
-  it("splits service/account and passes the account through", async () => {
-    const exec = vi.fn(async (_cmd: string, _args: string[]) => ({ stdout: "v", stderr: "" }));
-    const p = createCliKeyringProvider({ service: "shannon-gateway", exec });
-    await p.get("slack/bot-token");
-    const args = exec.mock.calls[0]![1];
-    expect(args).toContain("slack");
-    expect(args).toContain("bot-token");
-  });
-
-  it("uses the default service when the key has no slash", async () => {
-    const exec = vi.fn(async (_cmd: string, _args: string[]) => ({ stdout: "v", stderr: "" }));
-    const p = createCliKeyringProvider({ service: "shannon-gateway", exec });
-    await p.get("standalone-key");
-    const args = exec.mock.calls[0]![1];
-    expect(args).toContain("standalone-key");
-    expect(args).toContain("shannon-gateway");
+    const got = await p.get("slack/bot-token");
+    if (process.platform === "win32") {
+      expect(got).toBeNull();
+      expect(exec).not.toHaveBeenCalled();
+    } else {
+      expect(got).toBe("x");
+    }
   });
 
   it("returns null (does not throw) when exec fails", async () => {

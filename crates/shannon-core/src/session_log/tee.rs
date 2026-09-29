@@ -486,8 +486,19 @@ impl SessionTee {
                 self.record_body(event.body.clone());
             }
             crate::bus::BusInput::Coalesce(coalesce) => match coalesce {
-                crate::bus::CoalesceInput::StepUsage(usage) => self.add_turn_usage(usage.clone()),
-                crate::bus::CoalesceInput::BareTokens(tokens) => self.bare_tokens = Some(*tokens),
+                // Parity with the direct `record_query_event` path: every
+                // Usage / TurnCompleted folds one LLM step into the open
+                // turn. The bus arms previously skipped the counter, so
+                // bus-mode `turn/end.llm_steps` was always 0 while the
+                // bypass path reported the real count.
+                crate::bus::CoalesceInput::StepUsage(usage) => {
+                    self.turn_steps += 1;
+                    self.add_turn_usage(usage.clone());
+                }
+                crate::bus::CoalesceInput::BareTokens(tokens) => {
+                    self.turn_steps += 1;
+                    self.bare_tokens = Some(*tokens);
+                }
                 crate::bus::CoalesceInput::TurnBoundary { reason, error } => {
                     self.close_turn(reason, error.clone());
                 }

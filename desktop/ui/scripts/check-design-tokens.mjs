@@ -25,8 +25,10 @@
 
 import { readFileSync, readdirSync, statSync } from 'node:fs'
 import { join, relative } from 'node:path'
+import { fileURLToPath } from 'node:url'
 
-const ROOT = new URL('../src', import.meta.url).pathname
+// fileURLToPath: the raw URL pathname is `/C:/…` on Windows (see i18n-check.mjs).
+const ROOT = fileURLToPath(new URL('../src', import.meta.url))
 
 const RETIRED_TERMS = [
   '已排程', '分流队列', '并行方案', '聚焦聊天', '单人公司',

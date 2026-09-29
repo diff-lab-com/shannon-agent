@@ -328,27 +328,29 @@ impl super::Repl {
             "approval_mode": self.state.approval_mode_label,
         });
 
-        let result = std::process::Command::new("sh")
-            .arg("-c")
-            .arg(cmd)
-            .stdin(std::process::Stdio::piped())
-            .stdout(std::process::Stdio::piped())
-            .stderr(std::process::Stdio::null())
-            .env("SHANNON_STATUSLINE", "1")
-            .spawn()
-            .ok()
-            .and_then(|mut child| {
-                use std::io::Write;
-                if let Some(ref mut stdin) = child.stdin {
-                    let _ = stdin.write_all(json_payload.to_string().as_bytes());
-                }
-                child.wait().ok().filter(|s| s.success())?;
-                child.stdout.and_then(|mut out| {
-                    let mut buf = String::new();
-                    std::io::Read::read_to_string(&mut out, &mut buf).ok()?;
-                    Some(buf.trim().to_string())
-                })
-            });
+        let result = {
+            let (program, args) = shannon_types::shell::local_shell(cmd);
+            std::process::Command::new(program)
+                .args(&args)
+                .stdin(std::process::Stdio::piped())
+                .stdout(std::process::Stdio::piped())
+                .stderr(std::process::Stdio::null())
+                .env("SHANNON_STATUSLINE", "1")
+                .spawn()
+        }
+        .ok()
+        .and_then(|mut child| {
+            use std::io::Write;
+            if let Some(ref mut stdin) = child.stdin {
+                let _ = stdin.write_all(json_payload.to_string().as_bytes());
+            }
+            child.wait().ok().filter(|s| s.success())?;
+            child.stdout.and_then(|mut out| {
+                let mut buf = String::new();
+                std::io::Read::read_to_string(&mut out, &mut buf).ok()?;
+                Some(buf.trim().to_string())
+            })
+        });
 
         if let Some(output) = result {
             self.state.cached_statusline = Some(output);

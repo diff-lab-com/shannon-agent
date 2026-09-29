@@ -142,6 +142,16 @@ fn count_occurrences(haystack: &str, needle: &str) -> usize {
     haystack.matches(needle).count()
 }
 
+/// Normalize any mix of CRLF/LF line endings in `s` to CRLF.
+fn normalize_crlf(s: &str) -> String {
+    s.replace("\r\n", "\n").replace('\n', "\r\n")
+}
+
+/// Normalize any mix of CRLF/LF line endings in `s` to LF.
+fn normalize_lf(s: &str) -> String {
+    s.replace("\r\n", "\n")
+}
+
 /// Core editing logic — synchronous, testable without async runtime.
 pub fn perform_edit(
     content: &str,
@@ -158,7 +168,19 @@ pub fn perform_edit(
         return Err(EditError::IdenticalStrings);
     }
 
-    if !content.contains(old_string) {
+    // Line-ending normalization: the model supplies LF-only strings (its
+    // normal output form; Read strips CRLF via `lines()`), so on a CRLF
+    // file every multi-line edit would fail with "old_string not found" —
+    // and a matching single-line edit would splice LF lines into a CRLF
+    // file. Normalize needle and replacement to the file's dominant style
+    // before matching, keeping the write-back byte-for-byte consistent.
+    let (old_string, new_string) = if content.contains("\r\n") {
+        (normalize_crlf(old_string), normalize_crlf(new_string))
+    } else {
+        (normalize_lf(old_string), normalize_lf(new_string))
+    };
+
+    if !content.contains(old_string.as_str()) {
         // Build a helpful error message with context snippets
         let mut msg = "old_string not found in file content.".to_string();
         // Show first few lines of file for context
@@ -186,7 +208,7 @@ pub fn perform_edit(
                 old_string.len()
             )
         } else {
-            old_string.to_string()
+            old_string.clone()
         };
         msg.push_str(&format!(
             "\n\nold_string ({} bytes):\n{}",
@@ -196,11 +218,11 @@ pub fn perform_edit(
         return Err(EditError::NotFound(msg));
     }
 
-    let total_matches = count_occurrences(content, old_string);
+    let total_matches = count_occurrences(content, &old_string);
 
     if !replace_all && total_matches > 1 {
         // Report all match locations so the user can disambiguate
-        let offsets = find_all_occurrences(content, old_string);
+        let offsets = find_all_occurrences(content, &old_string);
         let locations: Vec<ReplacementLocation> = offsets
             .iter()
             .map(|&off| {
@@ -231,7 +253,7 @@ pub fn perform_edit(
     if replace_all {
         replacements = total_matches;
         // Build new content tracking positions
-        let offsets = find_all_occurrences(content, old_string);
+        let offsets = find_all_occurrences(content, &old_string);
         locations = offsets
             .iter()
             .map(|&off| {
@@ -239,17 +261,17 @@ pub fn perform_edit(
                 ReplacementLocation { line, column: col }
             })
             .collect();
-        new_content = content.replace(old_string, new_string);
+        new_content = content.replace(&old_string, &new_string);
     } else {
         replacements = 1;
-        let offset = content.find(old_string).ok_or_else(|| {
+        let offset = content.find(old_string.as_str()).ok_or_else(|| {
             EditError::NotFound(
                 "old_string not found (race condition or encoding mismatch)".to_string(),
             )
         })?;
         let (line, col) = byte_offset_to_line_col(content, offset);
         locations = vec![ReplacementLocation { line, column: col }];
-        new_content = content.replacen(old_string, new_string, 1);
+        new_content = content.replacen(&old_string, &new_string, 1);
     };
 
     Ok((new_content, replacements, locations))
@@ -904,6 +926,59 @@ mod tests {
         let result = perform_edit(content, "missing", "replacement", false);
         let err = result.unwrap_err().to_string();
         assert!(err.contains("old_string not found"));
+    }
+
+    #[test]
+    fn test_crlf_multiline_edit_matches_with_lf_input() {
+        // The model supplies LF-only strings; a CRLF file must still match
+        // and the replacement must keep the file's CRLF style.
+        let content = "fn main() {\r\n    let x = 1;\r\n}\r\n";
+        let result = perform_edit(
+            content,
+            "fn main() {\n    let x = 1;\n}",
+            "fn main() {\n    let x = 42;\n}",
+            false,
+        );
+        let (new_content, replacements, _) = result.unwrap();
+        assert_eq!(replacements, 1);
+        assert_eq!(new_content, "fn main() {\r\n    let x = 42;\r\n}\r\n");
+    }
+
+    #[test]
+    fn test_crlf_replace_all_keeps_line_endings() {
+        let content = "a = 1\r\nb = 2\r\nc = 3\r\n";
+        let result = perform_edit(content, " = ", " := ", true);
+        let (new_content, replacements, _) = result.unwrap();
+        assert_eq!(replacements, 3);
+        assert_eq!(new_content, "a := 1\r\nb := 2\r\nc := 3\r\n");
+    }
+
+    #[test]
+    fn test_crlf_input_against_crlf_file_still_matches() {
+        // Strings that already carry CRLF (e.g. round-tripped) are not
+        // double-converted — normalize_crlf folds any mix to plain CRLF.
+        let content = "one\r\ntwo\r\n";
+        let result = perform_edit(content, "one\r\ntwo", "one\r\nTWO", false);
+        let (new_content, replacements, _) = result.unwrap();
+        assert_eq!(replacements, 1);
+        assert_eq!(new_content, "one\r\nTWO\r\n");
+    }
+
+    #[test]
+    fn test_crlf_old_string_against_lf_file_matches() {
+        // The reverse mismatch: CRLF needle on an LF file.
+        let content = "one\ntwo\n";
+        let result = perform_edit(content, "one\r\ntwo", "one\nTWO", false);
+        let (new_content, replacements, _) = result.unwrap();
+        assert_eq!(replacements, 1);
+        assert_eq!(new_content, "one\nTWO\n");
+    }
+
+    #[test]
+    fn test_lf_file_edit_does_not_introduce_cr() {
+        let content = "one\ntwo\n";
+        let (new_content, _, _) = perform_edit(content, "one\ntwo", "one\nTWO", false).unwrap();
+        assert!(!new_content.contains('\r'));
     }
 
     #[test]

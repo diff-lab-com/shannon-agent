@@ -73,6 +73,77 @@ pub struct BackgroundEntry {
     /// the entry had no handle at all and the tool returned success without
     /// sending any signal, leaving the child orphaned).
     pub kill_tx: Arc<Mutex<Option<tokio::sync::oneshot::Sender<()>>>>,
+    /// Windows: kill-on-close Job Object owned by this entry (see
+    /// [`JobGuard`]). Dropping the last reference — kill, re-spawn or
+    /// Shannon shutdown — terminates every descendant still running in the
+    /// spawn tree instead of orphaning grandchildren. Held for its `Drop`
+    /// side effect; never read.
+    #[cfg(windows)]
+    #[allow(dead_code)] // KEEP: the field's only purpose is dropping JobGuard
+    job: Option<JobGuard>,
+}
+
+/// Windows-only RAII owner of a kill-on-close Job Object handle.
+///
+/// The spawned `bash` — and transitively every process it creates — is
+/// assigned to the job at spawn time. Killing the direct child alone leaves
+/// grandchildren alive (`bash -c "npm run dev"` keeps the dev server
+/// running); closing the job handle is what guarantees the whole tree dies.
+#[cfg(windows)]
+#[derive(Debug)]
+struct JobGuard(isize);
+
+#[cfg(windows)]
+impl JobGuard {
+    /// Create a kill-on-close job and assign the child to it. Best-effort:
+    /// returns `None` (no confinement) when there is no raw handle or any
+    /// Job Object call fails — lifecycle tightening must never block the
+    /// spawn itself.
+    fn confine(raw_process_handle: Option<isize>) -> Option<Self> {
+        use windows::Win32::Foundation::{CloseHandle, HANDLE};
+        use windows::Win32::System::JobObjects::{
+            AssignProcessToJobObject, CreateJobObjectW, JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE,
+            JOBOBJECT_EXTENDED_LIMIT_INFORMATION, JobObjectExtendedLimitInformation,
+            SetInformationJobObject,
+        };
+        let raw = raw_process_handle?;
+        // SAFETY: standard Job Object setup — create, set kill-on-close,
+        // assign the freshly spawned child's own process handle.
+        unsafe {
+            let job = CreateJobObjectW(None, None).ok()?;
+            let mut info = JOBOBJECT_EXTENDED_LIMIT_INFORMATION::default();
+            info.BasicLimitInformation.LimitFlags |= JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE;
+            if SetInformationJobObject(
+                job,
+                JobObjectExtendedLimitInformation,
+                &info as *const _ as *const core::ffi::c_void,
+                std::mem::size_of::<JOBOBJECT_EXTENDED_LIMIT_INFORMATION>() as u32,
+            )
+            .is_err()
+            {
+                let _ = CloseHandle(job);
+                return None;
+            }
+            if AssignProcessToJobObject(job, HANDLE(raw as *mut _)).is_err() {
+                let _ = CloseHandle(job);
+                return None;
+            }
+            Some(Self(job.0 as isize))
+        }
+    }
+}
+
+#[cfg(windows)]
+impl Drop for JobGuard {
+    fn drop(&mut self) {
+        use windows::Win32::Foundation::{CloseHandle, HANDLE};
+        // Closing the last job handle fires KILL_ON_JOB_CLOSE: every process
+        // still in the tree is terminated.
+        // SAFETY: closing the handle this guard created and owns.
+        unsafe {
+            let _ = CloseHandle(HANDLE(self.0 as *mut _));
+        }
+    }
 }
 
 /// Lifecycle state of a background entry.
@@ -256,7 +327,12 @@ impl Tool for RunBackgroundTool {
         };
 
         let mut child = self.process.spawn_piped(&spec).await.map_err(|e| {
-            ToolError::ExecutionFailed(format!("Failed to spawn background process: {e}"))
+            // Windows: same Git Bash guidance as the Bash tool paths — the
+            // background registry spawns `bash -c` too.
+            ToolError::ExecutionFailed(format!(
+                "Failed to spawn background process: {}",
+                crate::system::shell_spawn_error("bash", &e)
+            ))
         })?;
 
         let stdout = child.take_stdout().ok_or_else(|| {
@@ -293,6 +369,8 @@ impl Tool for RunBackgroundTool {
             stderr: stderr_buf.clone(),
             exit_code: exit_code.clone(),
             kill_tx: kill_tx.clone(),
+            #[cfg(windows)]
+            job: JobGuard::confine(child.raw_process_handle()),
         });
 
         // Reader task: drain stdout into the ring buffer line by line.

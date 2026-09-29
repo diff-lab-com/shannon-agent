@@ -611,6 +611,17 @@ impl PipedChild for LocalPipedChild {
             success: status.success(),
         })
     }
+
+    fn raw_process_handle(&self) -> Option<isize> {
+        #[cfg(target_os = "windows")]
+        {
+            self.child.raw_handle().map(|h| h as isize)
+        }
+        #[cfg(not(target_os = "windows"))]
+        {
+            None
+        }
+    }
 }
 
 #[cfg(test)]
@@ -831,6 +842,9 @@ mod tests {
 
     // ── §4.12 fork-time world initializer (pre_exec seam) ──────────────
 
+    // fork-init is a unix-only seam; its consumers (and this helper) are
+    // cfg'd out on Windows.
+    #[cfg(unix)]
     struct TouchInit {
         path: std::path::PathBuf,
         /// When set, initialization fails with this raw OS error instead of
@@ -838,6 +852,7 @@ mod tests {
         fail_with_raw: Option<i32>,
     }
 
+    #[cfg(unix)]
     impl ChildWorldInit for TouchInit {
         fn init_child(&self) -> io::Result<()> {
             if let Some(code) = self.fail_with_raw {
