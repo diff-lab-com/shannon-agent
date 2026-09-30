@@ -1448,7 +1448,6 @@
   "settings.models.providers.keySet": "API キー設定済み",
   "settings.models.providers.keyMissing": "API キーなし",
   "settings.models.providers.needKey": "{label} には API キーが設定されていません。編集して追加してください。",
-  "settings.models.providers.reenterKey": "テストするには {label} の API キーを再入力してください。",
   "settings.models.providers.confirmDelete": "{label} を削除しますか？",
   "settings.models.providers.deleteConfirmTitle": "プロバイダーを削除しますか？",
   "settings.models.providers.saved": "プロバイダーを保存しました",

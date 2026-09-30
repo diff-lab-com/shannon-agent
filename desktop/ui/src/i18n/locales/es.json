@@ -1448,7 +1448,6 @@
   "settings.models.providers.keySet": "Clave de API configurada",
   "settings.models.providers.keyMissing": "Sin clave de API",
   "settings.models.providers.needKey": "{label} no tiene clave de API. Edítalo para añadir una.",
-  "settings.models.providers.reenterKey": "Vuelve a introducir la clave de API de {label} para probarla.",
   "settings.models.providers.confirmDelete": "¿Eliminar {label}?",
   "settings.models.providers.deleteConfirmTitle": "¿Eliminar proveedor?",
   "settings.models.providers.saved": "Proveedor guardado",

@@ -1466,7 +1466,6 @@
   "settings.models.providers.keySet": "API key set",
   "settings.models.providers.keyMissing": "No API key",
   "settings.models.providers.needKey": "{label} has no API key set. Edit it to add one.",
-  "settings.models.providers.reenterKey": "Re-enter {label}'s API key to test it.",
   "settings.models.providers.confirmDelete": "Remove {label}?",
   "settings.models.providers.deleteConfirmTitle": "Delete provider?",
   "settings.models.providers.saved": "Provider saved",

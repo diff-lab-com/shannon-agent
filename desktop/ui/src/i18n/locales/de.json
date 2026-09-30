@@ -1448,7 +1448,6 @@
   "settings.models.providers.keySet": "API-Schlüssel gesetzt",
   "settings.models.providers.keyMissing": "Kein API-Schlüssel",
   "settings.models.providers.needKey": "{label} hat keinen API-Schlüssel. Bearbeite ihn, um einen hinzuzufügen.",
-  "settings.models.providers.reenterKey": "Gib den API-Schlüssel von {label} erneut ein, um ihn zu testen.",
   "settings.models.providers.confirmDelete": "{label} entfernen?",
   "settings.models.providers.deleteConfirmTitle": "Provider löschen?",
   "settings.models.providers.saved": "Provider gespeichert",

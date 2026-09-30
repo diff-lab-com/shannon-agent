@@ -53,16 +53,12 @@ export function ProvidersSection({
     }
     setTestingId(conn.id)
     try {
-      // TD-4: the wire type no longer carries the raw api_key — only
-      // `has_api_key: bool`. The backend reads the key from the credential
-      // store; pass an empty string so the prompt-for-key flow triggers
-      // when no key is resolvable.
-      const apiKey = ''
-      if (info?.needsKey && !conn.has_api_key) {
-        toast.error(intl.formatMessage({ id: 'settings.models.providers.reenterKey' }, { label: conn.display_name }))
-        return
-      }
-      const result = await api.testProviderConnection(conn.kind, apiKey, conn.base_url ?? undefined)
+      // P0-7: the wire type no longer carries the raw api_key — only
+      // `has_api_key: bool`. `testProviderCredentials` passes `apiKey: null`
+      // + the connection id, so the backend resolves the STORED credential
+      // (same fallback "Test all" uses) instead of probing with an empty key
+      // and misreporting every saved provider as "Invalid key".
+      const result = await api.testProviderCredentials(conn.kind, conn.base_url ?? null, null, conn.id)
       toastTestResult(intl, result, conn.kind)
     } catch (e) {
       toastError(t('settings.models.testResult.failed'), e)

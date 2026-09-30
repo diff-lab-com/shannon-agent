@@ -1448,7 +1448,6 @@
   "settings.models.providers.keySet": "已設定金鑰",
   "settings.models.providers.keyMissing": "未設定金鑰",
   "settings.models.providers.needKey": "{label} 尚未設定 API 金鑰，請先編輯新增。",
-  "settings.models.providers.reenterKey": "請重新輸入 {label} 的 API 金鑰以進行測試。",
   "settings.models.providers.confirmDelete": "確定要移除 {label} 嗎？",
   "settings.models.providers.deleteConfirmTitle": "刪除服務商？",
   "settings.models.providers.saved": "服務商已儲存",

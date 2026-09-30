@@ -1448,7 +1448,6 @@
   "settings.models.providers.keySet": "API-ключ задан",
   "settings.models.providers.keyMissing": "Нет API-ключа",
   "settings.models.providers.needKey": "У {label} не задан API-ключ. Измените запись, чтобы добавить его.",
-  "settings.models.providers.reenterKey": "Введите API-ключ {label} заново, чтобы проверить его.",
   "settings.models.providers.confirmDelete": "Удалить {label}?",
   "settings.models.providers.deleteConfirmTitle": "Удалить провайдера?",
   "settings.models.providers.saved": "Провайдер сохранён",

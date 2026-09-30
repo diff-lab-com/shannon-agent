@@ -1448,7 +1448,6 @@
   "settings.models.providers.keySet": "API 키 설정됨",
   "settings.models.providers.keyMissing": "API 키 없음",
   "settings.models.providers.needKey": "{label}에 API 키가 설정되어 있지 않습니다. 편집하여 추가하세요.",
-  "settings.models.providers.reenterKey": "테스트하려면 {label}의 API 키를 다시 입력하세요.",
   "settings.models.providers.confirmDelete": "{label}을(를) 제거하시겠습니까?",
   "settings.models.providers.deleteConfirmTitle": "프로바이더를 삭제하시겠습니까?",
   "settings.models.providers.saved": "프로바이더가 저장되었습니다",

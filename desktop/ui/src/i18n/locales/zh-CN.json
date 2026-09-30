@@ -1466,7 +1466,6 @@
   "settings.models.providers.keySet": "已设置密钥",
   "settings.models.providers.keyMissing": "未设置密钥",
   "settings.models.providers.needKey": "{label} 尚未设置 API 密钥，请先编辑添加。",
-  "settings.models.providers.reenterKey": "请重新输入 {label} 的 API 密钥以进行测试。",
   "settings.models.providers.confirmDelete": "确定移除 {label} 吗？",
   "settings.models.providers.deleteConfirmTitle": "删除服务商？",
   "settings.models.providers.saved": "服务商已保存",

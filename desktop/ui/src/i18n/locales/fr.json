@@ -1448,7 +1448,6 @@
   "settings.models.providers.keySet": "Clé d'API définie",
   "settings.models.providers.keyMissing": "Aucune clé d'API",
   "settings.models.providers.needKey": "{label} n'a pas de clé d'API. Modifie-le pour en ajouter une.",
-  "settings.models.providers.reenterKey": "Ressaisis la clé d'API de {label} pour la tester.",
   "settings.models.providers.confirmDelete": "Supprimer {label} ?",
   "settings.models.providers.deleteConfirmTitle": "Supprimer le fournisseur ?",
   "settings.models.providers.saved": "Fournisseur enregistré",
