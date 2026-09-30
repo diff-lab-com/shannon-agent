@@ -22,6 +22,20 @@ export interface PromptQueueItem {
   attachments: string[]
 }
 
+/**
+ * R5-2: an in-stream retry notice surfaced in the conversation as a subtle
+ * system-style line — the engine failed over (R3-1) or rotated the
+ * provider's API key (R4-3) and the request CONTINUED, so this is
+ * informational (muted, small, distinct icon per kind), never an error
+ * banner. `message` is the verbatim engine line; `label` is resolved at
+ * render time from `kind` (i18n).
+ */
+export interface StreamNotice {
+  id: number
+  kind: 'failover' | 'key_rotation'
+  message: string
+}
+
 export interface ChatContextValue {
   messages: ChatMessage[]
   streamingText: string
@@ -43,6 +57,15 @@ export interface ChatContextValue {
    * sends and on session switches. Mirrors what RunStatusLine's pill shows.
    */
   toolProgress: { progress?: number; message?: string } | null
+  /**
+   * R5-2: retry notices (failover / key rotation) observed during the
+   * visible session's CURRENT turn, newest last. Per-session bucketed like
+   * the stream text (a background session's notices never bleed into the
+   * visible list); survives the run's completion so the user can still see
+   * how the answer was served, cleared on the session's next send, on
+   * session switch (projection) and when the session is deleted.
+   */
+  streamNotices: StreamNotice[]
   usage: UsagePayload | null
   /**
    * `options.budgetBypass` is the "continue (ignore once)" choice from the

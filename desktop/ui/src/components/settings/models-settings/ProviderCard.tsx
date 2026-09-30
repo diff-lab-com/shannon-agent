@@ -17,6 +17,8 @@ export function ProviderCard({
   onActivate,
   onEdit,
   onDelete,
+  onKeys,
+  keysOpen = false,
 }: {
   conn: ProviderConnection
   isActive: boolean
@@ -28,6 +30,9 @@ export function ProviderCard({
   onActivate: () => void
   onEdit: () => void
   onDelete: () => void
+  /** R4-3: open/close the inline API-keys management panel. */
+  onKeys: () => void
+  keysOpen?: boolean
 }) {
   const hasKey = conn.has_api_key
   const info = KIND_INFO[conn.kind]
@@ -72,6 +77,22 @@ export function ProviderCard({
             <span className="material-symbols-outlined icon-md">cable</span>
           </Button>
         )}
+        {/* R4-3: per-provider multi-key management affordance. Open state is
+            color + aria-expanded only — an accent-tint bg chip here fails
+            AA on non-default themes (design-token chip rule). */}
+        <Button
+          variant="ghost"
+          className={cn(
+            'px-sm py-xs cursor-pointer',
+            keysOpen ? 'text-primary font-bold' : 'text-on-surface-variant hover:text-primary',
+          )}
+          onClick={onKeys}
+          aria-label={t('settings.models.providers.manageKeys')}
+          data-testid={`provider-keys-toggle-${conn.id}`}
+          aria-expanded={keysOpen}
+        >
+          <span className="material-symbols-outlined icon-md">vpn_key</span>
+        </Button>
         {!isActive ? (
           <Button
             variant="ghost"

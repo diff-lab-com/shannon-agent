@@ -10,25 +10,31 @@ import { toastError } from '@/lib/errorToast'
 import { cn } from '@/lib/utils'
 import {
   isDuplicateName,
+  isDuplicateRename,
+  isLastRemainingProfile,
   needsEmptyConfirm,
+  profileFallbackAfterDelete,
   validateProfileName,
 } from '@/lib/providerProfiles'
 
 /**
  * R3-2 (desktop slice) — Settings → Models "Profiles": the engine store's
  * named model profiles (providers.toml v2 `profiles` map + the
- * `active_profile` pointer). Approved scope: list (name, provider count,
- * active marker), switch (confirm when the target is empty), create (name
- * prompt). NO rename/delete UI this batch.
+ * `active_profile` pointer). R5 completes the approved scope: list (name,
+ * provider count, active marker), switch (confirm when the target is
+ * empty), create (name prompt), rename (inline edit form) and delete
+ * (ConfirmDialog that names the engine's active-pointer fallback when the
+ * target is the ACTIVE profile; `force` semantics are automatic in the
+ * command).
  *
- * Switching refreshes the provider status + catalog through the SAME paths
- * the R2-2 refresh and provider activation use (`refreshModels` +
- * `refreshStatus` via `onSwitched`); the backend re-points the global
- * default by rebuilding the client config.
+ * Switching/renaming-the-active/deleting-the-active refresh the provider
+ * status + catalog through the SAME paths the R2-2 refresh and provider
+ * activation use (`refreshModels` + `refreshStatus` via `onSwitched`); the
+ * backend re-points the global default by rebuilding the client config.
  */
 
 interface ProfilesSectionProps {
-  /** Called after a successful switch so the parent refreshes status + catalog. */
+  /** Called after a successful op that moved the global default so the parent refreshes status + catalog. */
   onSwitched?: () => Promise<void> | void
 }
 
@@ -42,6 +48,15 @@ export function ProfilesSection({ onSwitched }: ProfilesSectionProps) {
   const [nameDraft, setNameDraft] = useState('')
   const [nameError, setNameError] = useState<string | null>(null)
   const [createBusy, setCreateBusy] = useState(false)
+  // R5: inline rename form (non-popup — the create form's pattern), one at
+  // a time. `renaming.name` is the profile being renamed; `draft` mirrors
+  // the input.
+  const [renaming, setRenaming] = useState<{ name: string; draft: string } | null>(null)
+  const [renameError, setRenameError] = useState<string | null>(null)
+  const [renameBusy, setRenameBusy] = useState(false)
+  // R5: pending delete — confirmed through the jsdom-safe ConfirmDialog.
+  const [deleting, setDeleting] = useState<ProviderProfileSummary | null>(null)
+  const [deleteBusy, setDeleteBusy] = useState(false)
   // Pending switch to an EMPTY profile — needs explicit confirmation
   // (the global default degrades to "no active model" until the profile
   // gets providers).
@@ -124,6 +139,73 @@ export function ProfilesSection({ onSwitched }: ProfilesSectionProps) {
     }
   }
 
+  // ── R5: rename (inline form, same validation contract as create) ────────
+
+  const startRename = (row: ProviderProfileSummary) => {
+    setRenaming({ name: row.name, draft: row.name })
+    setRenameError(null)
+    setCreating(false)
+  }
+
+  const submitRename = async () => {
+    if (!renaming) return
+    const { name: current, draft } = renaming
+    const next = draft.trim()
+    // Unchanged (or re-cased to itself) → close without a round trip; the
+    // backend treats old == new as a no-op, and this keeps the success
+    // toast honest.
+    if (next === current) {
+      setRenaming(null)
+      return
+    }
+    const invalid = validateProfileName(next)
+    if (invalid) {
+      setRenameError(invalid)
+      return
+    }
+    if (isDuplicateRename(rows, current, next)) {
+      setRenameError('settings.models.profiles.nameDuplicate')
+      return
+    }
+    setRenameBusy(true)
+    try {
+      const fresh = await api.renameProviderProfile(current, next)
+      setRows(fresh)
+      setRenaming(null)
+      toast.success(t('settings.models.profiles.renamed', { old: current, name: next }))
+      // Renaming the ACTIVE profile re-points the global default's label —
+      // refresh status + catalog like a switch would.
+      if (rows.find((r) => r.name === current)?.active) await onSwitched?.()
+    } catch (e) {
+      // Engine errors (duplicate, unknown source) surface inline + toast.
+      toastError(t('settings.models.profiles.renameFailed'), e)
+    } finally {
+      setRenameBusy(false)
+    }
+  }
+
+  // ── R5: delete (ConfirmDialog; the fallback warning is computed client- ─
+  //    side from the same rule the engine applies) ────────────────────────
+
+  const confirmDelete = async () => {
+    const row = deleting
+    if (!row) return
+    setDeleteBusy(true)
+    try {
+      const outcome = await api.deleteProviderProfile(row.name, true)
+      setRows(outcome.profiles)
+      setDeleting(null)
+      toast.success(t('settings.models.profiles.deleted', { name: row.name }))
+      // Deleting the ACTIVE profile moved the engine's active pointer —
+      // refresh status + catalog (same paths as a switch).
+      if (outcome.became_active) await onSwitched?.()
+    } catch (e) {
+      toastError(t('settings.models.profiles.deleteFailed'), e)
+    } finally {
+      setDeleteBusy(false)
+    }
+  }
+
   return (
     <section
       className="bg-surface-container-lowest border border-outline-variant/30 rounded-xl p-lg shadow-e1"
@@ -194,6 +276,52 @@ export function ProfilesSection({ onSwitched }: ProfilesSectionProps) {
         </form>
       )}
 
+      {renaming && (
+        <form
+          className="mb-md p-md rounded-xl border border-outline-variant/40 bg-surface-container-low/40"
+          onSubmit={(e) => { e.preventDefault(); void submitRename() }}
+          data-testid="profile-rename-form"
+        >
+          <label htmlFor="profile-rename-input" className="font-label-md text-on-surface font-bold block mb-xs">
+            {t('settings.models.profiles.renameTitle', { name: renaming.name })}
+          </label>
+          <div className="flex gap-sm">
+            <input
+              id="profile-rename-input"
+              data-testid="profile-rename-input"
+              autoFocus
+              className="flex-1 px-md py-sm bg-surface text-on-surface border border-outline-variant/50 rounded-lg outline-none focus:ring-2 focus:ring-primary font-body-sm"
+              placeholder={t('settings.models.profiles.namePlaceholder')}
+              value={renaming.draft}
+              onChange={(e) => { setRenaming({ ...renaming, draft: e.target.value }); setRenameError(null) }}
+              aria-invalid={renameError != null}
+              aria-describedby={renameError != null ? 'profile-rename-error' : undefined}
+            />
+            <Button
+              type="submit"
+              disabled={renameBusy || renaming.draft.trim().length === 0}
+              className="h-auto py-sm px-md rounded-lg font-label-md cursor-pointer shrink-0"
+            >
+              {renameBusy ? <Spinner className="text-primary icon-sm" /> : t('settings.models.profiles.confirmRename')}
+            </Button>
+            <Button
+              type="button"
+              variant="ghost"
+              disabled={renameBusy}
+              onClick={() => setRenaming(null)}
+              className="h-auto py-sm px-md rounded-lg font-label-md cursor-pointer shrink-0 text-on-surface-variant"
+            >
+              {t('settings.models.profiles.cancel')}
+            </Button>
+          </div>
+          {renameError && (
+            <p id="profile-rename-error" role="alert" className="mt-xs text-label-sm text-error">
+              {t(renameError)}
+            </p>
+          )}
+        </form>
+      )}
+
       {loading ? (
         <p className="text-body-sm text-on-surface-variant py-md flex items-center gap-sm">
           <Spinner className="text-primary icon-sm" />
@@ -234,18 +362,43 @@ export function ProfilesSection({ onSwitched }: ProfilesSectionProps) {
                     : t('settings.models.profiles.noModel')}
                 </p>
               </div>
-              {!row.active && (
-                <Button
-                  variant="outline"
-                  disabled={switching != null}
-                  onClick={() => { void handleSwitch(row) }}
-                  aria-label={t('settings.models.profiles.switchTo', { name: row.name })}
-                  data-testid={`profile-switch-${row.name}`}
-                  className="h-auto py-sm px-md rounded-lg font-label-md shrink-0 cursor-pointer flex items-center gap-xs"
-                >
-                  {switching === row.name ? <Spinner className="text-primary icon-sm" /> : null}
-                  {t('settings.models.profiles.switchTo', { name: row.name })}
-                </Button>
+              {!renaming && !switching && (
+                <div className="flex items-center gap-xs shrink-0">
+                  {!row.active && (
+                    <Button
+                      variant="outline"
+                      disabled={switching != null}
+                      onClick={() => { void handleSwitch(row) }}
+                      aria-label={t('settings.models.profiles.switchTo', { name: row.name })}
+                      data-testid={`profile-switch-${row.name}`}
+                      className="h-auto py-sm px-md rounded-lg font-label-md cursor-pointer flex items-center gap-xs"
+                    >
+                      {switching === row.name ? <Spinner className="text-primary icon-sm" /> : null}
+                      {t('settings.models.profiles.switchTo', { name: row.name })}
+                    </Button>
+                  )}
+                  <Button
+                    variant="ghost"
+                    disabled={renameBusy || deleteBusy || creating}
+                    onClick={() => startRename(row)}
+                    aria-label={t('settings.models.profiles.renameItem', { name: row.name })}
+                    data-testid={`profile-rename-${row.name}`}
+                    className="h-auto py-sm px-sm rounded-lg text-on-surface-variant hover:text-primary cursor-pointer"
+                  >
+                    <span className="material-symbols-outlined icon-md" aria-hidden="true">edit</span>
+                  </Button>
+                  <Button
+                    variant="ghost"
+                    disabled={renameBusy || deleteBusy || creating || isLastRemainingProfile(rows)}
+                    onClick={() => setDeleting(row)}
+                    aria-label={t('settings.models.profiles.deleteItem', { name: row.name })}
+                    data-testid={`profile-delete-${row.name}`}
+                    title={isLastRemainingProfile(rows) ? t('settings.models.profiles.lastProfile') : undefined}
+                    className="h-auto py-sm px-sm rounded-lg text-on-surface-variant hover:text-error cursor-pointer disabled:opacity-50"
+                  >
+                    <span className="material-symbols-outlined icon-md" aria-hidden="true">delete</span>
+                  </Button>
+                </div>
               )}
             </li>
           ))}
@@ -262,6 +415,30 @@ export function ProfilesSection({ onSwitched }: ProfilesSectionProps) {
         busyLabel={t('settings.models.profiles.switching')}
         onConfirm={() => { void confirmEmptySwitch() }}
         onCancel={() => { if (!confirmBusy) setPendingEmpty(null) }}
+      />
+
+      {/* R5: delete confirmation. Deleting the ACTIVE profile moves the
+          engine's pointer — the message names the fallback profile the
+          engine will pick (client mirror of `remove_model_profile`'s
+          fallback rule), and `force` semantics are automatic backend-side. */}
+      <ConfirmDialog
+        open={deleting != null}
+        destructive
+        title={t('settings.models.profiles.deleteConfirmTitle')}
+        message={
+          deleting?.active
+            ? t('settings.models.profiles.deleteActiveMessage', {
+                name: deleting.name,
+                fallback: profileFallbackAfterDelete(rows, deleting.name) ?? '',
+              })
+            : t('settings.models.profiles.deleteConfirmMessage', { name: deleting?.name ?? '' })
+        }
+        confirmLabel={t('settings.models.profiles.deleteConfirmYes')}
+        cancelLabel={t('settings.models.profiles.cancel')}
+        busy={deleteBusy}
+        busyLabel={t('settings.models.profiles.deleting')}
+        onConfirm={() => { void confirmDelete() }}
+        onCancel={() => { if (!deleteBusy) setDeleting(null) }}
       />
     </section>
   )

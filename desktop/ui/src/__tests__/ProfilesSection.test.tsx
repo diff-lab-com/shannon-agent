@@ -134,4 +134,150 @@ describe('ProfilesSection (R3-2)', () => {
     await waitFor(() => expect(screen.getByRole('alert')).toBeInTheDocument())
     expect(api.createProviderProfile).not.toHaveBeenCalled()
   })
+
+  // ── R5: rename (inline form — no popups) ──────────────────────────────
+
+  it('rename: a valid new name calls the command and closes the form', async () => {
+    const onSwitchedLocal = vi.fn().mockResolvedValue(undefined)
+    const renamed = [
+      { name: 'default', provider_count: 2, active: true, model: 'claude-sonnet-4-6' },
+      { name: 'lab', provider_count: 1, active: false, model: 'gemini-3-pro' },
+    ]
+    vi.mocked(api.renameProviderProfile).mockResolvedValue(renamed)
+    renderSection(onSwitchedLocal)
+    await waitFor(() => expect(screen.getByTestId('profile-rename-research')).toBeInTheDocument())
+    fireEvent.click(screen.getByTestId('profile-rename-research'))
+    const input = await screen.findByTestId('profile-rename-input')
+    expect(input).toHaveValue('research')
+    fireEvent.change(input, { target: { value: 'lab' } })
+    fireEvent.click(screen.getByRole('button', { name: 'Rename' }))
+    await waitFor(() => expect(api.renameProviderProfile).toHaveBeenCalledWith('research', 'lab'))
+    await waitFor(() => expect(screen.queryByTestId('profile-rename-input')).not.toBeInTheDocument())
+    // Rows follow the command's fresh list.
+    await waitFor(() => expect(screen.getByTestId('profile-rename-lab')).toBeInTheDocument())
+    // Non-active rename → no status/catalog refresh.
+    expect(onSwitchedLocal).not.toHaveBeenCalled()
+  })
+
+  it('rename: duplicate target is blocked client-side; invalid name never reaches the api', async () => {
+    renderSection()
+    await waitFor(() => expect(screen.getByTestId('profile-rename-research')).toBeInTheDocument())
+    fireEvent.click(screen.getByTestId('profile-rename-research'))
+    const input = await screen.findByTestId('profile-rename-input')
+    fireEvent.change(input, { target: { value: 'DEFAULT' } })
+    fireEvent.click(screen.getByRole('button', { name: 'Rename' }))
+    await waitFor(() => expect(screen.getByRole('alert').textContent).toContain('already exists'))
+    expect(api.renameProviderProfile).not.toHaveBeenCalled()
+
+    fireEvent.change(input, { target: { value: 'has space' } })
+    fireEvent.click(screen.getByRole('button', { name: 'Rename' }))
+    await waitFor(() => expect(screen.getByRole('alert').textContent).toContain('whitespace'))
+    expect(api.renameProviderProfile).not.toHaveBeenCalled()
+  })
+
+  it('rename: unchanged name closes the form without a round trip', async () => {
+    renderSection()
+    await waitFor(() => expect(screen.getByTestId('profile-rename-research')).toBeInTheDocument())
+    fireEvent.click(screen.getByTestId('profile-rename-research'))
+    const input = await screen.findByTestId('profile-rename-input')
+    fireEvent.change(input, { target: { value: 'research' } })
+    fireEvent.click(screen.getByRole('button', { name: 'Rename' }))
+    await waitFor(() => expect(screen.queryByTestId('profile-rename-input')).not.toBeInTheDocument())
+    expect(api.renameProviderProfile).not.toHaveBeenCalled()
+  })
+
+  it('rename: engine duplicate error surfaces via the error toast path, form stays open', async () => {
+    vi.mocked(api.renameProviderProfile).mockRejectedValue(new Error("A profile named 'x' already exists"))
+    renderSection()
+    await waitFor(() => expect(screen.getByTestId('profile-rename-research')).toBeInTheDocument())
+    fireEvent.click(screen.getByTestId('profile-rename-research'))
+    const input = await screen.findByTestId('profile-rename-input')
+    fireEvent.change(input, { target: { value: 'lab' } })
+    fireEvent.click(screen.getByRole('button', { name: 'Rename' }))
+    await waitFor(() => expect(api.renameProviderProfile).toHaveBeenCalledWith('research', 'lab'))
+    // The form stays open (the user can correct the name).
+    await waitFor(() => expect(screen.getByTestId('profile-rename-input')).toBeInTheDocument())
+  })
+
+  it('rename of the ACTIVE profile refreshes status + catalog', async () => {
+    const onSwitched = vi.fn().mockResolvedValue(undefined)
+    const renamed = [
+      { name: 'main', provider_count: 2, active: true, model: 'claude-sonnet-4-6' },
+      { name: 'research', provider_count: 1, active: false, model: 'gemini-3-pro' },
+    ]
+    vi.mocked(api.renameProviderProfile).mockResolvedValue(renamed)
+    renderSection(onSwitched)
+    await waitFor(() => expect(screen.getByTestId('profile-rename-default')).toBeInTheDocument())
+    fireEvent.click(screen.getByTestId('profile-rename-default'))
+    const input = await screen.findByTestId('profile-rename-input')
+    fireEvent.change(input, { target: { value: 'main' } })
+    fireEvent.click(screen.getByRole('button', { name: 'Rename' }))
+    await waitFor(() => expect(api.renameProviderProfile).toHaveBeenCalledWith('default', 'main'))
+    await waitFor(() => expect(onSwitched).toHaveBeenCalledTimes(1))
+  })
+
+  // ── R5: delete (ConfirmDialog — jsdom-safe, per the established pattern) ─
+
+  it('delete: cancel is a no-op', async () => {
+    renderSection()
+    await waitFor(() => expect(screen.getByTestId('profile-delete-research')).toBeInTheDocument())
+    fireEvent.click(screen.getByTestId('profile-delete-research'))
+    const dialog = await screen.findByRole('alertdialog')
+    expect(dialog.textContent).toContain('research')
+    fireEvent.click(screen.getByRole('button', { name: 'Cancel' }))
+    await waitFor(() => expect(screen.queryByRole('alertdialog')).not.toBeInTheDocument())
+    expect(api.deleteProviderProfile).not.toHaveBeenCalled()
+  })
+
+  it('delete: confirming calls the command with force and swaps the rows', async () => {
+    const remaining = [{ name: 'default', provider_count: 2, active: true, model: 'claude-sonnet-4-6' }]
+    vi.mocked(api.deleteProviderProfile).mockResolvedValue({
+      profiles: remaining,
+      became_active: null,
+    })
+    renderSection()
+    await waitFor(() => expect(screen.getByTestId('profile-delete-research')).toBeInTheDocument())
+    fireEvent.click(screen.getByTestId('profile-delete-research'))
+    await waitFor(() => expect(screen.getByRole('alertdialog')).toBeInTheDocument())
+    fireEvent.click(screen.getByRole('button', { name: 'Delete profile' }))
+    await waitFor(() => expect(api.deleteProviderProfile).toHaveBeenCalledWith('research', true))
+    await waitFor(() => expect(screen.getAllByTestId('profile-row')).toHaveLength(1))
+    // Inactive delete → no pointer move → no refresh.
+    expect(api.setActiveProviderProfile).not.toHaveBeenCalled()
+  })
+
+  it('delete: the ACTIVE profile warning names the engine fallback', async () => {
+    renderSection()
+    await waitFor(() => expect(screen.getByTestId('profile-delete-default')).toBeInTheDocument())
+    fireEvent.click(screen.getByTestId('profile-delete-default'))
+    const dialog = await screen.findByRole('alertdialog')
+    // Client mirror of remove_model_profile's fallback rule: default
+    // survives → 'default' is named as the takeover.
+    expect(dialog.textContent).toContain('default')
+    expect(dialog.textContent).toContain('becomes active')
+    expect(api.deleteProviderProfile).not.toHaveBeenCalled()
+  })
+
+  it('delete: removing the ACTIVE profile triggers the status refresh with the fallback', async () => {
+    const onSwitched = vi.fn().mockResolvedValue(undefined)
+    const remaining = [{ name: 'default', provider_count: 2, active: true, model: 'claude-sonnet-4-6' }]
+    vi.mocked(api.deleteProviderProfile).mockResolvedValue({
+      profiles: remaining,
+      became_active: 'default',
+    })
+    renderSection(onSwitched)
+    await waitFor(() => expect(screen.getByTestId('profile-delete-default')).toBeInTheDocument())
+    fireEvent.click(screen.getByTestId('profile-delete-default'))
+    await waitFor(() => expect(screen.getByRole('alertdialog')).toBeInTheDocument())
+    fireEvent.click(screen.getByRole('button', { name: 'Delete profile' }))
+    await waitFor(() => expect(api.deleteProviderProfile).toHaveBeenCalledWith('default', true))
+    await waitFor(() => expect(onSwitched).toHaveBeenCalledTimes(1))
+  })
+
+  it('delete: the last remaining profile cannot be deleted (affordance disabled)', async () => {
+    seed([{ name: 'default', provider_count: 2, active: true, model: 'claude-sonnet-4-6' }])
+    renderSection()
+    await waitFor(() => expect(screen.getByTestId('profile-delete-default')).toBeInTheDocument())
+    expect(screen.getByTestId('profile-delete-default')).toBeDisabled()
+  })
 })

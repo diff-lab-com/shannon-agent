@@ -13,6 +13,7 @@ import { KIND_INFO } from './types'
 import { toastTestResult } from './utils'
 import { TestAllResultsPanel } from './TestAllResultsPanel'
 import { ProviderCard } from './ProviderCard'
+import { ProviderKeysPanel } from './ProviderKeysPanel'
 
 export function ProvidersSection({
   providersFile,
@@ -34,6 +35,9 @@ export function ProvidersSection({
   const [deleteTarget, setDeleteTarget] = useState<ProviderConnection | null>(null)
   const [testAllRunning, setTestAllRunning] = useState(false)
   const [testAllRows, setTestAllRows] = useState<api.ProviderTestRow[] | null>(null)
+  // R4-3 (desktop slice): the provider whose "API keys" panel is open —
+  // rendered INLINE below the roster (no popup primitives).
+  const [keysTarget, setKeysTarget] = useState<ProviderConnection | null>(null)
   // P0-4: pending activation gated behind the prompt-cache bust warning
   // (only shown when the current chat session already has usage).
   const { currentSessionId } = useSessions()
@@ -126,6 +130,18 @@ export function ProvidersSection({
     toast.success(t('settings.models.providers.saved'))
   }
 
+  // R4-3: a key mutation committed backend-side (add/activate/remove) can
+  // change the provider's key-set presence (first key added) — refresh the
+  // roster + status/catalog through the same paths activation uses.
+  const handleKeysChanged = async () => {
+    try {
+      onChange(await api.listProviders())
+    } catch (e) {
+      console.warn('listProviders after key mutation failed:', e)
+    }
+    await onActivated()
+  }
+
   const handleTestAll = async () => {
     if (testAllRunning) return
     setTestAllRunning(true)
@@ -195,10 +211,22 @@ export function ProvidersSection({
               onActivate={() => handleActivate(conn)}
               onEdit={() => { setEditing(conn); setModalOpen(true) }}
               onDelete={() => setDeleteTarget(conn)}
+              onKeys={() => setKeysTarget(keysTarget?.id === conn.id ? null : conn)}
+              keysOpen={keysTarget?.id === conn.id}
             />
           ))}
         </div>
       )}
+
+      {/* R4-3 (desktop slice): inline per-provider API-keys management —
+          list (active marker + masked hints), add, activate, remove. */}
+      {keysTarget ? (
+        <ProviderKeysPanel
+          conn={keysTarget}
+          onClose={() => setKeysTarget(null)}
+          onKeysChanged={handleKeysChanged}
+        />
+      ) : null}
 
       {testAllRows !== null ? (
         testAllRows.length === 0 ? (

@@ -10,6 +10,8 @@ import type {
   ProvidersFile,
   ProviderInput,
   ProviderProfileSummary,
+  DeleteProfileOutcome,
+  ProviderKeySummary,
   DesktopConfig,
   GatewayConfig,
   GatewayPairingRequest,
@@ -617,6 +619,53 @@ export async function createProviderProfile(name: string): Promise<ProviderProfi
  *  to a profile with no providers. */
 export async function setActiveProviderProfile(name: string): Promise<ProviderProfileSummary[]> {
   return invoke('set_active_provider_profile', { name })
+}
+
+/** R5: rename a model profile. Engine errors (duplicate target, unknown
+ *  source) surface verbatim; the fresh list comes back. When the renamed
+ *  profile was active, the backend re-points the global default and
+ *  re-announces it. */
+export async function renameProviderProfile(
+  oldName: string,
+  newName: string,
+): Promise<ProviderProfileSummary[]> {
+  return invoke('rename_provider_profile', { old: oldName, new: newName })
+}
+
+/** R5: delete a model profile. `force` is the desktop's standing `true` —
+ *  the UI's ConfirmDialog is the consent (and names the fallback when the
+ *  target is active); the backend reports which profile became active. */
+export async function deleteProviderProfile(name: string, force = true): Promise<DeleteProfileOutcome> {
+  return invoke('delete_provider_profile', { name, force })
+}
+
+// --- R4-3 (desktop slice): per-provider multi-key management ---
+
+/** List a provider's stored keys in rotation order (index 0 = ACTIVE).
+ *  Hints are masked server-side; full key material never crosses the wire.
+ *  A provider with no stored key yet lists as empty. */
+export async function listProviderKeys(providerId: string): Promise<ProviderKeySummary[]> {
+  return invoke('list_provider_keys', { providerId })
+}
+
+/** Add a key to a provider's rotation list (plaintext — the same trust
+ *  level as the Add/Edit provider modal). Returns the fresh list. */
+export async function addProviderKey(providerId: string, key: string): Promise<ProviderKeySummary[]> {
+  return invoke('add_provider_key', { providerId, key })
+}
+
+/** Remove the key at `index`. Removing the ACTIVE key promotes the next
+ *  stored one; the last remaining key is refused by the backend. Returns
+ *  the fresh list. */
+export async function removeProviderKey(providerId: string, index: number): Promise<ProviderKeySummary[]> {
+  return invoke('remove_provider_key', { providerId, index })
+}
+
+/** Make the key at `index` the ACTIVE one (swap-to-slot-0 semantics); the
+ *  running client is hot-reloaded when this provider is active. Returns
+ *  the fresh list. */
+export async function activateProviderKey(providerId: string, index: number): Promise<ProviderKeySummary[]> {
+  return invoke('activate_provider_key', { providerId, index })
 }
 
 export async function getTools(): Promise<ToolInfo[]> {

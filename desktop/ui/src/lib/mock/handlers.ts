@@ -335,6 +335,42 @@ function sortDemoProfiles() {
   })
 }
 
+// ── R5 (Agent B): profile rename/delete + per-provider API keys ──────────
+// Demo mirrors of commands_profiles::rename/delete_provider_profile and the
+// commands_keys.rs block. FULL key material lives only in this demo store —
+// every wire response carries masked hints only (mirrors the backend's
+// mask_key contract: head 6 + "…" + tail 4, short keys collapse entirely).
+
+/** Same masking the Rust `mask_key` performs — the demo must not leak full
+ *  keys into the DOM either. */
+function maskKeyHint(key: string): string {
+  if (key.length <= 8) return '…'
+  return `${key.slice(0, 6)}…${key.slice(-4)}`
+}
+
+/** provider id → rotation-ordered key list (slot 0 = ACTIVE). Seeded so the
+ *  panel has both shapes to show: a rotation (Anthropic, 2 keys) and a
+ *  single-key provider (GLM — remove disabled, per the engine's
+ *  last-key-refusal contract). */
+const demoProviderKeys = new Map<string, string[]>([
+  ['prov-anthropic', ['sk-ant-demo03-activekey0000000001', 'sk-ant-demo03-sparekey000000002']],
+  ['prov-glm', ['sk-glm-demo03-onlykey000000000003']],
+])
+
+function demoKeySummaries(providerId: string) {
+  const keys = demoProviderKeys.get(providerId) ?? []
+  return keys.map((k, index) => ({ index, active: index === 0, masked_hint: maskKeyHint(k) }))
+}
+
+/** The active model profile's rename/delete demo twin of the engine's
+ *  fallback rule (default first, else first remaining alphabetically). */
+function demoProfileFallback(name: string): string | null {
+  const remaining = demoProviderProfiles.filter((p) => p.name !== name).map((p) => p.name)
+  if (name !== 'default' && remaining.includes('default')) return 'default'
+  return [...remaining].sort()[0] ?? null
+}
+
+
 // Mutable notification prefs so DND/quiet-hours toggling feels live in demo mode.
 // Audit §P2-3 (round 6): start with events off so the new empty-state
 // guidance card is visible on first visit — instead of the page looking
@@ -536,6 +572,120 @@ export const handlers: Record<string, MockHandler> = {
     // falls back to the seeded status model).
     if (row.model) demoConfig.model = row.model
     return clone(demoProviderProfiles)
+  },
+
+  // ── R5 (Agent B): profile rename/delete (the R3-2 deferred slice) ─────
+  // Same contracts as the Rust commands: shared name validation, duplicate
+  // / not-found refusals, the active pointer follows a rename, and an
+  // active delete falls back (default first, else first remaining).
+  async rename_provider_profile(args: { old: string; new: string }) {
+    await delay(120)
+    const oldName = String(args.old ?? '').trim()
+    const newName = String(args.new ?? '').trim()
+    if (!newName) throw new Error('profile name must not be empty')
+    if (newName.length > 64) throw new Error(`profile name is too long (max 64): '${newName}'`)
+    if (/\s/.test(newName)) throw new Error(`profile name must not contain whitespace: '${newName}'`)
+    const row = demoProviderProfiles.find((p) => p.name === oldName)
+    if (!row) {
+      throw new Error(
+        `profile '${oldName}' not found; available profiles: ${demoProviderProfiles.map((p) => p.name).join(', ')}`,
+      )
+    }
+    if (oldName !== newName) {
+      if (demoProviderProfiles.some((p) => p.name === newName)) {
+        throw new Error(`A profile named '${newName}' already exists`)
+      }
+      // The engine moves the map entry and follows the active pointer; the
+      // demo row IS the entry, and its `active` flag rides along.
+      row.name = newName
+      sortDemoProfiles()
+    }
+    return clone(demoProviderProfiles)
+  },
+  async delete_provider_profile(args: { name: string; force?: boolean }) {
+    await delay(140)
+    const name = String(args.name ?? '').trim()
+    const row = demoProviderProfiles.find((p) => p.name === name)
+    if (!row) {
+      throw new Error(
+        `profile '${name}' not found; available profiles: ${demoProviderProfiles.map((p) => p.name).join(', ')}`,
+      )
+    }
+    if (demoProviderProfiles.length <= 1) {
+      throw new Error(
+        `cannot delete profile '${name}': it is the only profile; create another one first`,
+      )
+    }
+    const wasActive = row.active
+    demoProviderProfiles.splice(demoProviderProfiles.indexOf(row), 1)
+    let becameActive: string | null = null
+    if (wasActive) {
+      becameActive = demoProfileFallback(name)
+      demoProviderProfiles.forEach((p) => { p.active = p.name === becameActive })
+      // The global default follows the fallback profile's model.
+      const fb = demoProviderProfiles.find((p) => p.active)
+      if (fb?.model) demoConfig.model = fb.model
+    }
+    return { profiles: clone(demoProviderProfiles), became_active: becameActive }
+  },
+
+  // ── R5 (Agent B): per-provider multi-key management (R4-3 desktop) ────
+  // Same contracts as commands_keys.rs: rotation order (slot 0 = ACTIVE),
+  // duplicate/blank add refusals, remove promotes the next key (last
+  // remaining refused), activate = swap to slot 0. Wire responses carry
+  // masked hints ONLY.
+  async list_provider_keys(args: { providerId: string }) {
+    await delay()
+    if (!state.providers.providers.some((p) => p.id === args.providerId)) {
+      throw new Error(`provider '${args.providerId}' is not configured — add one in Settings → Models first`)
+    }
+    return demoKeySummaries(args.providerId)
+  },
+  async add_provider_key(args: { providerId: string; key: string }) {
+    await delay(120)
+    const key = String(args.key ?? '').trim()
+    if (!key) throw new Error('cannot add an empty key')
+    if (!state.providers.providers.some((p) => p.id === args.providerId)) {
+      throw new Error(`provider '${args.providerId}' is not configured — add one in Settings → Models first`)
+    }
+    const keys = demoProviderKeys.get(args.providerId) ?? []
+    const existingSlot = keys.indexOf(key)
+    if (existingSlot !== -1) {
+      throw new Error(`key is already registered at slot ${existingSlot}`)
+    }
+    keys.push(key)
+    demoProviderKeys.set(args.providerId, keys)
+    // First key added → the roster's key-set flag flips (the backend's
+    // has_api_key derives from credential-store presence).
+    const conn = state.providers.providers.find((p) => p.id === args.providerId)
+    if (conn) conn.has_api_key = true
+    return demoKeySummaries(args.providerId)
+  },
+  async remove_provider_key(args: { providerId: string; index: number }) {
+    await delay(120)
+    const keys = demoProviderKeys.get(args.providerId) ?? []
+    if (args.index < 0 || args.index >= keys.length) {
+      throw new Error(`key index ${args.index} out of range (provider '${args.providerId}' has ${keys.length} keys)`)
+    }
+    if (keys.length === 1) {
+      throw new Error('cannot remove the last remaining key; delete the credential instead')
+    }
+    keys.splice(args.index, 1)
+    demoProviderKeys.set(args.providerId, keys)
+    return demoKeySummaries(args.providerId)
+  },
+  async activate_provider_key(args: { providerId: string; index: number }) {
+    await delay(120)
+    const keys = demoProviderKeys.get(args.providerId) ?? []
+    if (args.index < 0 || args.index >= keys.length) {
+      throw new Error(`key index ${args.index} out of range (provider '${args.providerId}' has ${keys.length} keys)`)
+    }
+    if (args.index !== 0) {
+      const [promoted] = keys.splice(args.index, 1)
+      keys.unshift(promoted)
+      demoProviderKeys.set(args.providerId, keys)
+    }
+    return demoKeySummaries(args.providerId)
   },
 
   // --- Models & Status ---

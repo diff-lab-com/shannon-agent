@@ -11,11 +11,29 @@
       }
     },
     {
+      "identifier": "allow-activate-provider-key",
+      "description": "Enables the activate_provider_key command without any pre-configured scope.",
+      "commands": {
+        "allow": [
+          "activate_provider_key"
+        ]
+      }
+    },
+    {
       "identifier": "allow-add-mcp-server",
       "description": "Enables the add_mcp_server command without any pre-configured scope.",
       "commands": {
         "allow": [
           "add_mcp_server"
+        ]
+      }
+    },
+    {
+      "identifier": "allow-add-provider-key",
+      "description": "Enables the add_provider_key command without any pre-configured scope.",
+      "commands": {
+        "allow": [
+          "add_provider_key"
         ]
       }
     },
@@ -295,6 +313,15 @@
       "commands": {
         "allow": [
           "delete_provider"
+        ]
+      }
+    },
+    {
+      "identifier": "allow-delete-provider-profile",
+      "description": "Enables the delete_provider_profile command without any pre-configured scope.",
+      "commands": {
+        "allow": [
+          "delete_provider_profile"
         ]
       }
     },
@@ -1343,6 +1370,15 @@
       }
     },
     {
+      "identifier": "allow-list-provider-keys",
+      "description": "Enables the list_provider_keys command without any pre-configured scope.",
+      "commands": {
+        "allow": [
+          "list_provider_keys"
+        ]
+      }
+    },
+    {
       "identifier": "allow-list-provider-profiles",
       "description": "Enables the list_provider_profiles command without any pre-configured scope.",
       "commands": {
@@ -2018,6 +2054,15 @@
       }
     },
     {
+      "identifier": "allow-remove-provider-key",
+      "description": "Enables the remove_provider_key command without any pre-configured scope.",
+      "commands": {
+        "allow": [
+          "remove_provider_key"
+        ]
+      }
+    },
+    {
       "identifier": "allow-remove-task-worktree",
       "description": "Enables the remove_task_worktree command without any pre-configured scope.",
       "commands": {
@@ -2032,6 +2077,15 @@
       "commands": {
         "allow": [
           "rename_project"
+        ]
+      }
+    },
+    {
+      "identifier": "allow-rename-provider-profile",
+      "description": "Enables the rename_provider_profile command without any pre-configured scope.",
+      "commands": {
+        "allow": [
+          "rename_provider_profile"
         ]
       }
     },
@@ -2771,16 +2825,22 @@
       "identifier": "app-config",
       "description": "Provider/model configuration management commands.",
       "permissions": [
+        "allow-activate-provider-key",
+        "allow-add-provider-key",
         "allow-configure",
         "allow-create-provider-profile",
         "allow-delete-provider",
+        "allow-delete-provider-profile",
         "allow-detect-provider-from-env",
         "allow-fetch-provider-models",
         "allow-get-config",
         "allow-get-provider-status",
+        "allow-list-provider-keys",
         "allow-list-provider-profiles",
         "allow-list-providers",
         "allow-refresh-model-catalog",
+        "allow-remove-provider-key",
+        "allow-rename-provider-profile",
         "allow-save-provider",
         "allow-set-active-provider",
         "allow-set-active-provider-profile",
