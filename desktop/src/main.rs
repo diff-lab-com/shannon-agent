@@ -398,6 +398,9 @@ fn main() {
             commands_files::get_working_dir_info,
             commands_files::read_attachment,
             commands_files::read_attachments,
+            // P0-3 preflight — the composer flags refused attachments at
+            // attach time instead of the send silently dropping them.
+            commands_files::check_attachment_paths,
             // 2026-09-25 open pipeline (§4 P0-B / P1-C) — file-ref existence
             // probes and capped text reads for disk artifacts
             commands_files::path_exists,

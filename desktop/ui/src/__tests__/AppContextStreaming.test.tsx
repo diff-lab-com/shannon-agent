@@ -146,6 +146,37 @@ describe('AppContext — §P2-18 per-session streaming buckets', () => {
   })
 })
 
+// G3 P0-3 — refusals ride along with a SUCCESSFUL send (partial success):
+// each one must produce a "«file» was not sent: «reason»" toast without
+// failing or rolling back the message.
+describe('AppContext — P0-3 rejected-attachment toasts', () => {
+  it('toasts per refused attachment from the sendMessage response', async () => {
+    const { result } = renderHook(() => useApp(), { wrapper })
+    await waitFor(() => expect(result.current.loading).toBe(false))
+    await flushUntilRegistered()
+    await act(async () => { await result.current.createSession() })
+
+    vi.mocked(api.sendMessage).mockResolvedValue({
+      query_id: 'q1',
+      rejected_attachments: [
+        { path: '/home/u/Downloads/report.pdf', reason: 'out_of_working_dir' },
+      ],
+    })
+
+    const { toast } = await import('sonner')
+    const warningSpy = vi.spyOn(toast, 'warning').mockImplementation(() => 'x')
+    await act(async () => { await result.current.sendMessage('see attached', ['/home/u/Downloads/report.pdf']) })
+
+    expect(warningSpy).toHaveBeenCalledWith(
+      'report.pdf was not sent: it is outside the working directory Shannon may read',
+    )
+    // Partial success: the send stands (no rollback of the user message).
+    expect(result.current.messages.some(m => m.role === 'user' && m.content === 'see attached')).toBe(true)
+    expect(result.current.error).toBeNull()
+    warningSpy.mockRestore()
+  })
+})
+
 // B0 P1-2 — a failed/cancelled run leaves no ghost streaming bubble: the
 // run's buckets are dropped and, for the visible session, the projections
 // (streamingText / thinkingText / activeToolCalls) reset along with

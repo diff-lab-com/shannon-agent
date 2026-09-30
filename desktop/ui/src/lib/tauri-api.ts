@@ -31,6 +31,7 @@ import type {
   SttConfig,
   TranscriptionResult,
   SendMessageResponse,
+  AttachmentPathCheck,
   HunkAction,
   SessionInfo,
   SessionPlan,
@@ -125,6 +126,16 @@ export async function sendMessage(
     budgetBypass: budgetBypass ?? null,
     sessionId: sessionId ?? null,
   })
+}
+
+/**
+ * P0-3 preflight — classify attachment paths the way `send_message` will,
+ * at attach time, so the composer can flag bad chips before the user hits
+ * send. Always resolves (one entry per path); a rejection here is treated
+ * as "no marking", never as an error toast.
+ */
+export async function checkAttachmentPaths(paths: string[]): Promise<AttachmentPathCheck[]> {
+  return invoke('check_attachment_paths', { paths })
 }
 
 export async function getConversation(): Promise<ChatMessage[]> {

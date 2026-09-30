@@ -13,6 +13,7 @@ import { useState, useEffect, useCallback, useMemo, useRef, type ReactNode } fro
 import { messageFor } from '@/i18n'
 import { listen, type UnlistenFn } from '@tauri-apps/api/event'
 import { isEventForCurrentWindow, parseWindowSession } from '@/lib/windowSession'
+import { reportRejectedAttachments } from '@/lib/attachmentFeedback'
 import * as api from '@/lib/tauri-api'
 import { toast } from 'sonner'
 import { toastError } from '@/lib/errorToast'
@@ -475,12 +476,16 @@ export function AppProvider({ children }: { children: ReactNode }) {
       // session, the main window its current one; the backend never routes
       // via the shared active pointer for these calls. `null` (no session
       // yet) keeps the backend's legacy active fallback.
-      await api.sendMessage(
+      const resp = await api.sendMessage(
         message,
         filePaths,
         options?.budgetBypass,
         targetSessionId ?? undefined,
       )
+      // P0-3: the backend reports refused attachments per file instead of
+      // dropping them silently. Partial success — the send itself stands;
+      // each refusal gets its own "«file» was not sent: «reason»" toast.
+      reportRejectedAttachments(resp.rejected_attachments)
       return true
     } catch (e) {
       // P0-4 fix: the backend rejected the send BEFORE recording the user

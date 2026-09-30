@@ -1,5 +1,6 @@
 import { useState, useRef, useEffect, useLayoutEffect, useId, useCallback } from 'react'
 import { useIntl } from 'react-intl'
+import { useNavigate } from 'react-router-dom'
 import { open } from '@tauri-apps/plugin-dialog'
 import { toast } from 'sonner'
 import { Button } from '@/components/ui/button'
@@ -15,6 +16,7 @@ import PptOutlineDialog from '@/components/chat/PptOutlineDialog'
 import { useComposerDraftListener } from '@/lib/composerBridge'
 import { isSlashQuery, filterSlashCommands, type SlashCommand } from '@/lib/slash/commands'
 import * as api from '@/lib/tauri-api'
+import type { RejectedAttachmentReason } from '@/types'
 import { toastError } from '@/lib/errorToast'
 import { cn } from '@/lib/utils'
 import { modelPickerMeta } from '@/components/settings/models-settings/types'
@@ -22,14 +24,17 @@ import { modelPickerMeta } from '@/components/settings/models-settings/types'
 const IMAGE_EXTENSIONS = new Set(['png', 'jpg', 'jpeg', 'gif', 'webp', 'bmp', 'svg'])
 
 /**
- * Office Wave 1 A1a — extensions whose content the attachment pipeline does
- * NOT parse today (the Rust reader returns opaque bytes for them). The chip
- * is still attached and the path is still sent (parsing lands in the next
- * wave), but the composer must say out loud that the file's CONTENT never
- * reaches the model — attaching a .docx used to look like context when it
- * wasn't. Keep in sync with the reader's supported set.
+ * Office Wave 1 A1a, narrowed by G3 P1-5 — extensions whose content the
+ * attachment pipeline does NOT parse. The backend extracts text for
+ * docx/pptx/xlsx/ods/csv (document_parse.rs OFFICE_EXTENSIONS) and injects
+ * it into the query, so those formats must NOT be listed here — the banner
+ * used to claim the opposite of what the backend does on the formats users
+ * attach most. What remains are the legacy binary/OTF formats with no
+ * parser: the chip still attaches and the path is still sent, but the
+ * composer says out loud that the file's CONTENT never reaches the model.
+ * Keep in sync with document_parse::OFFICE_EXTENSIONS.
  */
-export const UNPARSED_EXTENSIONS = new Set(['doc', 'docx', 'xls', 'xlsx', 'ppt', 'pptx', 'odt', 'rtf'])
+export const UNPARSED_EXTENSIONS = new Set(['doc', 'xls', 'ppt', 'odt', 'rtf'])
 
 /** Lowercased extension without the dot ('' for dotfiles/no extension). */
 export function pathExtension(path: string): string {
@@ -111,6 +116,7 @@ export default function ChatInput({
 }: ChatInputProps) {
   const intl = useIntl()
   const t = (id: string) => intl.formatMessage({ id })
+  const navigate = useNavigate()
   const { config, status, models, refreshConfig, refreshStatus } = useCatalog()
   // Tests (and degraded catalogs) may omit the model list — the chip then
   // falls back to the placeholder and lists nothing.
@@ -135,15 +141,35 @@ export default function ChatInput({
   const slashOpen = slashMatches.length > 0
 
   // Office Wave 1 A1a — honest notice while an unparseable attachment
-  // (.docx/.xlsx/…) rides along. Dismissible, but re-arming: once every
-  // unsupported file is removed the dismissal resets, so a NEW .docx warns
-  // again instead of relying on a stale dismiss.
+  // (.doc/.xls/… legacy format) rides along. Dismissible, but re-arming:
+  // once every unsupported file is removed the dismissal resets, so a NEW
+  // .doc warns again instead of relying on a stale dismiss.
   const hasUnparsedAttachment = attachedFiles.some(p => UNPARSED_EXTENSIONS.has(pathExtension(p)))
   const [unparsedDismissed, setUnparsedDismissed] = useState(false)
   useEffect(() => {
     if (!hasUnparsedAttachment) setUnparsedDismissed(false)
   }, [hasUnparsedAttachment])
   const showUnparsedNotice = hasUnparsedAttachment && !unparsedDismissed
+
+  // P0-3 preflight — at attach time, ask the backend how `send_message`
+  // would treat each path, and flag the chip in place (warning icon +
+  // tooltip) instead of letting the file silently vanish on send. Advisory:
+  // a failed preflight call just means no marking.
+  const [pathIssues, setPathIssues] = useState<Record<string, RejectedAttachmentReason>>({})
+  useEffect(() => {
+    // Prune issues for chips the parent removed (detach-all, edit restore).
+    setPathIssues(prev => {
+      const alive = new Set(attachedFiles)
+      const next: typeof prev = {}
+      let changed = false
+      for (const [p, reason] of Object.entries(prev)) {
+        if (alive.has(p)) next[p] = reason
+        else changed = true
+      }
+      return changed ? next : prev
+    })
+  }, [attachedFiles])
+  const hasNoWorkingDirIssue = Object.values(pathIssues).includes('no_working_dir')
 
   useEffect(() => {
     setSlashActive(0)
@@ -297,6 +323,24 @@ export default function ChatInput({
       return
     }
     onAttach(merged)
+    // P0-3 preflight — flag refused paths on the chips BEFORE the send.
+    // Strictly advisory: a failed call OR a malformed payload (the mocked
+    // invoke in tests resolves `undefined`) must degrade to "no marking",
+    // never break the composer.
+    api.checkAttachmentPaths(paths)
+      .then(checks => {
+        if (!Array.isArray(checks)) return
+        setPathIssues(prev => {
+          const next = { ...prev }
+          for (const c of checks) {
+            if (!c || typeof c.path !== 'string') continue
+            if (c.ok || !c.reason) delete next[c.path]
+            else next[c.path] = c.reason
+          }
+          return next
+        })
+      })
+      .catch(() => {})
     // B9' Files page: index the attachment references so they surface in the
     // reference-style library. Fire-and-forget — a failed index write must
     // never interrupt the attach flow (offline, scope errors, demo mode).
@@ -634,6 +678,35 @@ export default function ChatInput({
         </div>
       )}
 
+      {/* P0-3 — the preflight found NO working directory: the attachment
+          domain is undefined and every chip would be refused on send. Point
+          at Settings (deep link) instead of letting the user hit a wall. */}
+      {hasNoWorkingDirIssue && (
+        <div
+          role="status"
+          data-testid="no-working-dir-banner"
+          className="flex items-start gap-xs px-md py-xs bg-warning-container/60 border-b border-warning/30 rounded-t-2xl text-on-warning-container"
+        >
+          <span className="material-symbols-outlined icon-sm shrink-0 mt-[2px]">folder_off</span>
+          <div className="flex-1 min-w-0">
+            <div className="font-label-sm">{t('chat.attach.noWorkingDir.banner')}</div>
+            <div className="font-label-xs text-on-warning-container/80 mt-[1px]">
+              {t('chat.attach.reason.noWorkingDir')}
+            </div>
+          </div>
+          <Button
+            variant="ghost"
+            size="sm"
+            data-testid="no-working-dir-open-settings"
+            onClick={() => navigate('/settings')}
+            className="rounded-sm hover:bg-warning/20 shrink-0"
+          >
+            <span className="material-symbols-outlined icon-sm">settings</span>
+            {t('chat.attach.noWorkingDir.openSettings')}
+          </Button>
+        </div>
+      )}
+
       {/* A1a — sits above the input box so the honest "content was NOT sent"
           line is read before the user hits send. Same banner shape as the
           plan-mode strip, warning palette. */}
@@ -666,7 +739,12 @@ export default function ChatInput({
         {attachedFiles.length > 0 && (
           <div className="flex flex-wrap items-center gap-xs px-md pt-md">
             {attachedFiles.map((path, i) => (
-              <AttachmentChip key={path} path={path} onRemove={() => onAttach(attachedFiles.filter((_, idx) => idx !== i))} />
+              <AttachmentChip
+                key={path}
+                path={path}
+                issue={pathIssues[path]}
+                onRemove={() => onAttach(attachedFiles.filter((_, idx) => idx !== i))}
+              />
             ))}
             {attachedFiles.length > 1 && (
               <Button variant="link" size="sm" className="text-xs h-auto px-0 text-on-surface-variant hover:text-error ml-xs" onClick={onDetachAll}>

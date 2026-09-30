@@ -158,6 +158,9 @@ class PointerEventMock extends MouseEvent {}
 vi.mock('@/lib/tauri-api', async (importOriginal) => ({
   ...(await importOriginal<typeof import('@/lib/tauri-api')>()),
   sendMessage: vi.fn().mockResolvedValue({ message_id: '1', status: 'sent' }),
+  // P0-3 preflight — default: every path checks clean; chip-flagging tests
+  // override per scenario.
+  checkAttachmentPaths: vi.fn().mockResolvedValue([]),
   getConversation: vi.fn().mockResolvedValue([]),
   cancelQuery: vi.fn().mockResolvedValue(undefined),
   // B0 P0-2 — webview file drag-drop. Default: registration resolves with a

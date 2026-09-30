@@ -21,7 +21,6 @@ use std::sync::Arc;
 use tauri::{Emitter, Manager};
 use tokio::sync::{Mutex, RwLock};
 
-use crate::commands_agents::resolve_working_dir;
 #[cfg(test)]
 use crate::commands_billing::iso_days_ago;
 use crate::commands_permissions::PendingPermission;
@@ -315,7 +314,11 @@ pub struct FileAttachment {
 }
 
 /// Detect media type from file extension.
-fn detect_media_type(path: &str) -> Option<String> {
+///
+/// P0-3: `pub(crate)` — the `check_attachment_paths` preflight reuses this
+/// exact image set so a path the composer marks OK cannot still be refused
+/// by a different extension→mime table on send.
+pub(crate) fn detect_media_type(path: &str) -> Option<String> {
     use std::path::Path;
     let ext = Path::new(path).extension()?.to_str()?;
     match ext.to_lowercase().as_str() {
@@ -340,7 +343,9 @@ const PDF_TEXT_INJECT_LIMIT: usize = 50 * 1024;
 /// Hard cap on PDF attachments on the real send path: a metadata precheck
 /// before the file is read or handed to `pdftotext`. (Images are capped at
 /// the shared `shannon_core::attachments::MAX_IMAGE_BYTES` instead.)
-const MAX_PDF_BYTES: u64 = 100 * 1024 * 1024;
+/// P0-3: `pub(crate)` so the `check_attachment_paths` preflight applies the
+/// exact same caps and never disagrees with the send path.
+pub(crate) const MAX_PDF_BYTES: u64 = 100 * 1024 * 1024;
 
 fn file_to_base64(path: &str) -> Result<(String, String), String> {
     use base64::Engine;
@@ -405,10 +410,46 @@ pub struct ToolInfo {
     pub enabled: bool,
 }
 
+/// P0-3 — why an attachment path was refused by the send pipeline. The
+/// security boundary (`out_of_working_dir`) is the deliberate anti-
+/// exfiltration design; the fix is making the refusal VISIBLE, never
+/// widening the allow-list.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum RejectedAttachmentReason {
+    /// The path resolves outside the configured working directory.
+    OutOfWorkingDir,
+    /// The path does not exist, is unreadable, or has no usable file name.
+    Unresolvable,
+    /// The file exceeds the hard size cap for its type (image 10 MiB,
+    /// PDF 100 MiB).
+    TooLarge,
+    /// Preflight only (`check_attachment_paths`): no working directory is
+    /// configured, so the attachment domain is undefined. The send path
+    /// hard-rejects with an explicit error instead of using this variant.
+    NoWorkingDir,
+}
+
+/// P0-3 — one attachment the send pipeline refused, reported to the frontend
+/// so the user sees a `<file> was not sent: <reason>` toast instead of watching the
+/// chip silently vanish.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct RejectedAttachment {
+    pub path: String,
+    pub reason: RejectedAttachmentReason,
+}
+
 /// Response from send_message containing the query ID.
+///
+/// P0-3: `rejected_attachments` carries the per-file refusals (partial
+/// success — a send with at least one readable in-scope attachment still
+/// goes through). `serde(default)` keeps old payloads / callers that omit
+/// the field deserializable.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SendMessageResponse {
     pub query_id: String,
+    #[serde(default)]
+    pub rejected_attachments: Vec<RejectedAttachment>,
 }
 
 impl Default for AppState {
@@ -642,6 +683,153 @@ impl AppState {
     }
 }
 
+/// P0-3 — the explicit error for "attachments requested but no working
+/// directory configured". Stable leading sentence: the frontend surfaces the
+/// raw backend error in the chat error banner and the composer's preflight
+/// banner offers the Settings deep link.
+pub(crate) const NO_WORKING_DIR_ATTACHMENT_ERROR: &str = "No working directory is set — choose one in Settings before attaching files (attachments are restricted to the working directory)";
+
+/// P0-3 — the working directory the attachment pipeline reads from.
+///
+/// Deliberately NO process-CWD fallback (unlike
+/// [`crate::commands_agents::resolve_working_dir`], whose fallback is fine
+/// for agent discovery): a Dock-launched GUI runs with CWD `/`, so falling
+/// back made the attachment allow-list launch-method dependent and the
+/// user's intent ("attach this file from Downloads") silently break. With
+/// no configured working dir the attachment domain is UNDEFINED — callers
+/// must reject with [`NO_WORKING_DIR_ATTACHMENT_ERROR`].
+pub(crate) fn require_attachment_working_dir(
+    configured: Option<&str>,
+) -> Result<std::path::PathBuf, String> {
+    configured
+        .map(std::path::PathBuf::from)
+        .ok_or_else(|| NO_WORKING_DIR_ATTACHMENT_ERROR.to_string())
+}
+
+/// P0-3 — resolve, gate and read the requested attachment paths.
+///
+/// The send pipeline's refusal bookkeeping, extracted from `send_message`
+/// so the three-state contract (inside / outside / unset-working-dir) is
+/// unit-testable without a Tauri runtime. Two visible behavior changes
+/// against the old loop:
+///   1. NO refusal is silent anymore — every dropped file is reported as a
+///      [`RejectedAttachment`] and travels back to the frontend with the
+///      response ("partial success": a send with at least one readable
+///      in-scope attachment still goes through).
+///   2. The image/PDF size caps refuse the single oversized FILE instead of
+///      hard-failing the whole send.
+///
+/// The security boundary itself is unchanged: paths outside the working
+/// directory are still refused, never widened.
+pub(crate) fn collect_attachments(
+    paths: &[String],
+    working_dir: &std::path::Path,
+) -> (Vec<FileAttachment>, Vec<RejectedAttachment>) {
+    let mut collected = Vec::with_capacity(paths.len());
+    let mut rejected = Vec::new();
+    for path in paths {
+        // Security: reject any attachment path that resolves outside the
+        // working directory. A compromised frontend must not be able to
+        // exfiltrate `~/.ssh/id_rsa`, `~/.shannon/desktop/config.json`, or
+        // any other sensitive file via the attachment pipeline.
+        let canonical = match crate::classify_path_in_working_dir(path, working_dir) {
+            Ok(c) => c,
+            Err(crate::WorkingDirScopeError::OutsideWorkingDir(_)) => {
+                rejected.push(RejectedAttachment {
+                    path: path.clone(),
+                    reason: RejectedAttachmentReason::OutOfWorkingDir,
+                });
+                continue;
+            }
+            // Unresolvable (missing/broken symlink) or an unusable working
+            // directory config — the user cannot tell them apart from the
+            // path alone, both mean "this file could not be read".
+            Err(_) => {
+                rejected.push(RejectedAttachment {
+                    path: path.clone(),
+                    reason: RejectedAttachmentReason::Unresolvable,
+                });
+                continue;
+            }
+        };
+        let canonical_str = canonical.to_string_lossy().into_owned();
+        let Ok(meta) = std::fs::metadata(&canonical) else {
+            rejected.push(RejectedAttachment {
+                path: path.clone(),
+                reason: RejectedAttachmentReason::Unresolvable,
+            });
+            continue;
+        };
+        // Hard size caps: images over the shared 10 MiB limit and PDFs over
+        // 100 MiB are refused per-file. The metadata check fires before any
+        // read; the post-read base64 gate below re-checks what was actually
+        // read.
+        let media_type = detect_media_type(&canonical_str);
+        if media_type
+            .as_deref()
+            .is_some_and(|m| m.starts_with("image/"))
+            && meta.len() > shannon_core::attachments::MAX_IMAGE_BYTES as u64
+        {
+            rejected.push(RejectedAttachment {
+                path: path.clone(),
+                reason: RejectedAttachmentReason::TooLarge,
+            });
+            continue;
+        }
+        let is_pdf = canonical
+            .extension()
+            .and_then(|e| e.to_str())
+            .is_some_and(|e| e.eq_ignore_ascii_case("pdf"));
+        if is_pdf && meta.len() > MAX_PDF_BYTES {
+            rejected.push(RejectedAttachment {
+                path: path.clone(),
+                reason: RejectedAttachmentReason::TooLarge,
+            });
+            continue;
+        }
+        let Some(name_str) = std::path::Path::new(&canonical)
+            .file_name()
+            .and_then(|name| name.to_str())
+        else {
+            rejected.push(RejectedAttachment {
+                path: path.clone(),
+                reason: RejectedAttachmentReason::Unresolvable,
+            });
+            continue;
+        };
+        // Try to read file and convert to base64 for images
+        let (base64_data, media_type) = match file_to_base64(&canonical_str) {
+            Ok(pair) => pair,
+            Err(_) => {
+                rejected.push(RejectedAttachment {
+                    path: path.clone(),
+                    reason: RejectedAttachmentReason::Unresolvable,
+                });
+                continue;
+            }
+        };
+        // Second gate after the read: the base64 payload must still fit the
+        // shared image limit before it can enter the query.
+        if media_type.starts_with("image/")
+            && shannon_core::attachments::validate_base64_size(base64_data.len()).is_err()
+        {
+            rejected.push(RejectedAttachment {
+                path: path.clone(),
+                reason: RejectedAttachmentReason::TooLarge,
+            });
+            continue;
+        }
+        collected.push(FileAttachment {
+            name: name_str.to_string(),
+            path: canonical_str.clone(),
+            size: meta.len(),
+            media_type: Some(media_type),
+            base64_data: Some(base64_data),
+        });
+    }
+    (collected, rejected)
+}
+
 /// Send a user message and stream the AI response via Tauri events.
 ///
 /// P0-4 spike scope: `messages`, `querying`, `cancellation_token` and the
@@ -701,81 +889,21 @@ pub async fn send_message(
     // rejected send must happen before it is taken (mirrors the pre-turn
     // budget guard above). Hard limits live here in the Rust backend — the
     // 25 MiB preview cap in `commands_files` alone never guarded this path.
-    let attachment_working_dir = resolve_working_dir(&state).await;
-    let attachments = match file_paths.as_deref() {
-        None | Some([]) => None,
+    //
+    // P0-3: attachments require a CONFIGURED working directory — the
+    // process-CWD fallback of `resolve_working_dir` is deliberately NOT
+    // applied here (a Dock-launched GUI runs with CWD `/`, which made the
+    // attachment domain launch-method dependent and effectively meaningless).
+    // An unset working_dir is an explicit, actionable error instead.
+    let (attachments, rejected_attachments) = match file_paths.as_deref() {
+        None | Some([]) => (None, Vec::new()),
         Some(paths) => {
-            let mut collected = Vec::with_capacity(paths.len());
-            for path in paths {
-                // Security: reject any attachment path that resolves outside
-                // the working directory. A compromised frontend must not be
-                // able to exfiltrate `~/.ssh/id_rsa`,
-                // `~/.shannon/desktop/config.json`, or any other sensitive
-                // file via the attachment pipeline. (Unresolvable/unreadable
-                // paths stay silently dropped, as before.)
-                let canonical =
-                    match crate::resolve_path_in_working_dir(path, &attachment_working_dir) {
-                        Ok(c) => c,
-                        Err(_) => continue,
-                    };
-                let canonical_str = canonical.to_string_lossy().into_owned();
-                let Ok(meta) = std::fs::metadata(&canonical) else {
-                    continue;
-                };
-                // Hard size caps: images over the shared 10 MiB limit and
-                // PDFs over 100 MiB are rejected outright. The metadata
-                // check fires before any read; the post-read base64 gate
-                // below re-checks what was actually read.
-                let media_type = detect_media_type(&canonical_str);
-                if media_type
-                    .as_deref()
-                    .is_some_and(|m| m.starts_with("image/"))
-                    && meta.len() > shannon_core::attachments::MAX_IMAGE_BYTES as u64
-                {
-                    return Err(format!(
-                        "Image attachment exceeds the 10 MB limit: {canonical_str} ({} bytes)",
-                        meta.len()
-                    ));
-                }
-                let is_pdf = canonical
-                    .extension()
-                    .and_then(|e| e.to_str())
-                    .is_some_and(|e| e.eq_ignore_ascii_case("pdf"));
-                if is_pdf && meta.len() > MAX_PDF_BYTES {
-                    return Err(format!(
-                        "PDF attachment exceeds the 100 MB limit: {canonical_str} ({} bytes)",
-                        meta.len()
-                    ));
-                }
-                let Some(name_str) = std::path::Path::new(&canonical)
-                    .file_name()
-                    .and_then(|name| name.to_str())
-                else {
-                    continue;
-                };
-                // Try to read file and convert to base64 for images
-                let (base64_data, media_type) = match file_to_base64(&canonical_str) {
-                    Ok(pair) => pair,
-                    Err(_) => continue,
-                };
-                // Second gate after the read: the base64 payload must still
-                // fit the shared image limit before it can enter the query.
-                if media_type.starts_with("image/") {
-                    if let Err(e) =
-                        shannon_core::attachments::validate_base64_size(base64_data.len())
-                    {
-                        return Err(format!("Image attachment \"{canonical_str}\": {e}"));
-                    }
-                }
-                collected.push(FileAttachment {
-                    name: name_str.to_string(),
-                    path: canonical_str.clone(),
-                    size: meta.len(),
-                    media_type: Some(media_type),
-                    base64_data: Some(base64_data),
-                });
-            }
-            Some(collected)
+            let working_dir = {
+                let cfg = state.desktop_config.read().await;
+                require_attachment_working_dir(cfg.working_dir.as_deref())
+            }?;
+            let (collected, rejected) = collect_attachments(paths, &working_dir);
+            (Some(collected), rejected)
         }
     };
     // Prevent concurrent queries — check and set in a single lock scope to avoid TOCTOU race
@@ -1687,6 +1815,7 @@ pub async fn send_message(
 
     Ok(SendMessageResponse {
         query_id: return_qid,
+        rejected_attachments,
     })
 }
 
@@ -2236,10 +2365,26 @@ mod tests {
     fn test_send_message_response_serialization() {
         let resp = SendMessageResponse {
             query_id: "abc-123".to_string(),
+            rejected_attachments: vec![RejectedAttachment {
+                path: "/etc/hosts".to_string(),
+                reason: RejectedAttachmentReason::OutOfWorkingDir,
+            }],
         };
         let json = serde_json::to_string(&resp).unwrap();
+        // P0-3: the reason serializes as a snake_case tag the frontend can
+        // switch on.
+        assert!(json.contains("\"reason\":\"out_of_working_dir\""));
         let deserialized: SendMessageResponse = serde_json::from_str(&json).unwrap();
         assert_eq!(deserialized.query_id, "abc-123");
+        assert_eq!(deserialized.rejected_attachments.len(), 1);
+        assert_eq!(
+            deserialized.rejected_attachments[0].reason,
+            RejectedAttachmentReason::OutOfWorkingDir
+        );
+        // Back-compat: payloads / callers from before P0-3 omit the field.
+        let legacy: SendMessageResponse =
+            serde_json::from_str("{\"query_id\":\"abc-123\"}").unwrap();
+        assert!(legacy.rejected_attachments.is_empty());
     }
 
     #[test]
@@ -2558,6 +2703,108 @@ fn resolve_path_in_working_dir_rejects_missing_path() {
     let err = crate::resolve_path_in_working_dir("does_not_exist.rs", tmp.path())
         .expect_err("missing path should fail canonicalize");
     assert!(err.contains("not found"));
+}
+
+// ── P0-3: attachment refusal visibility + working-dir requirement ────
+// Three-state contract of the send pipeline: inside (accepted), outside
+// (refused, reported), unset working dir (hard error, NO process-CWD
+// fallback).
+
+#[test]
+fn classify_path_in_working_dir_distinguishes_unresolvable_from_outside() {
+    let tmp = tempfile::tempdir().unwrap();
+
+    // A path that exists but sits outside the working dir → the boundary
+    // variant (the anti-exfiltration refusal the UI must call out).
+    let outside = crate::classify_path_in_working_dir("/etc/hosts", tmp.path())
+        .expect_err("absolute path outside working dir must be classified");
+    assert!(
+        matches!(outside, crate::WorkingDirScopeError::OutsideWorkingDir(_)),
+        "expected OutsideWorkingDir, got: {outside:?}"
+    );
+
+    // A missing path → Unresolvable, NOT "outside" (the file may simply
+    // have been moved; the message must not accuse the user of exfiltration).
+    let missing = crate::classify_path_in_working_dir("gone.txt", tmp.path())
+        .expect_err("missing path must be classified");
+    assert!(
+        matches!(missing, crate::WorkingDirScopeError::Unresolvable(_)),
+        "expected Unresolvable, got: {missing:?}"
+    );
+
+    // The legacy Display strings are pinned by tests/user-visible errors.
+    assert!(missing.to_string().contains("not found"));
+}
+
+#[test]
+fn collect_attachments_accepts_inside_and_reports_outside_and_missing() {
+    let tmp = tempfile::tempdir().unwrap();
+    let inside = tmp.path().join("notes.txt");
+    std::fs::write(&inside, "hello").unwrap();
+
+    let (collected, rejected) = collect_attachments(
+        &[
+            inside.to_string_lossy().into_owned(),
+            "/etc/hosts".to_string(),
+            tmp.path().join("gone.txt").to_string_lossy().into_owned(),
+        ],
+        tmp.path(),
+    );
+
+    // Partial success: the in-scope file went through…
+    assert_eq!(collected.len(), 1, "inside file must be accepted");
+    assert_eq!(collected[0].name, "notes.txt");
+    // …and BOTH refusals are reported with their reason (never silent).
+    assert_eq!(rejected.len(), 2, "outside + missing must be reported");
+    assert_eq!(rejected[0].path, "/etc/hosts");
+    assert_eq!(
+        rejected[0].reason,
+        RejectedAttachmentReason::OutOfWorkingDir
+    );
+    assert!(rejected[1].path.ends_with("gone.txt"));
+    assert_eq!(rejected[1].reason, RejectedAttachmentReason::Unresolvable);
+}
+
+#[test]
+fn collect_attachments_reports_oversized_image_per_file() {
+    let tmp = tempfile::tempdir().unwrap();
+    // A >10 MiB file with an image extension trips the metadata gate.
+    let big = tmp.path().join("big.png");
+    std::fs::write(
+        &big,
+        vec![0u8; shannon_core::attachments::MAX_IMAGE_BYTES + 1],
+    )
+    .unwrap();
+
+    let (collected, rejected) =
+        collect_attachments(&[big.to_string_lossy().into_owned()], tmp.path());
+
+    assert!(collected.is_empty(), "oversized image must not attach");
+    assert_eq!(rejected.len(), 1);
+    assert_eq!(rejected[0].reason, RejectedAttachmentReason::TooLarge);
+}
+
+#[test]
+fn require_attachment_working_dir_rejects_unset_without_cwd_fallback() {
+    // P0-3: no configured working dir → the attachment domain is UNDEFINED.
+    // The old code fell back to the process CWD (CWD=/ for Dock launches),
+    // making every attach silently fail the scope check. Now: explicit
+    // error pointing at Settings; the process CWD is never consulted.
+    let err = require_attachment_working_dir(None)
+        .expect_err("unset working dir must hard-reject attachments");
+    assert!(
+        err.contains("No working directory is set"),
+        "unexpected error: {err}"
+    );
+    assert!(
+        err.contains("Settings"),
+        "error must point at Settings, got: {err}"
+    );
+    // A configured value passes through untouched.
+    assert_eq!(
+        require_attachment_working_dir(Some("/tmp/proj")).unwrap(),
+        std::path::PathBuf::from("/tmp/proj")
+    );
 }
 
 // --- Review §P0-3: harden the write-target helper the same way ---
