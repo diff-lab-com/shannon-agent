@@ -125,6 +125,10 @@ export default function OPCAgentSwarm({ agents, tasks }: Props) {
           onClick={() => setSpawnOpen(true)}
           aria-label={intl.formatMessage({ id: 'opc.agentSwarm.spawnAgent.aria' })}
         >
+          {/* ADR-0013 D4 (honest naming): this only writes an agent DEFINITION
+              (.claude/agents/<name>.md) — it starts nothing, so the copy says
+              "register a template", not "spawn". The spawn* key ids are kept
+              for diff economy; only the localized values changed. */}
           <span className="material-symbols-outlined icon-sm">add_circle</span>
           {intl.formatMessage({ id: 'opc.agentSwarm.spawn' })}
         </Button>

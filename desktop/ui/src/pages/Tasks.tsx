@@ -342,6 +342,17 @@ export default function Tasks() {
           })}
         </div>
 
+        {/* ADR-0013 D1/D4: the two dev-only tabs ride DIFFERENT automation
+            systems — Routines = scheduled store (clock/webhook, persistent),
+            Pipelines = project hook config (agent lifecycle events). One
+            line under the tab row states trigger + storage, so the tab
+            names stop implying a shared pipeline store. */}
+        {(tab === 'routines' || tab === 'pipelines') && (
+          <p className="text-on-surface-variant font-body-sm max-w-prose mb-lg">
+            {t(`tasks.tab.${tab}.subtitle`)}
+          </p>
+        )}
+
         {tab === 'history' ? (
           <HistoryView
             onGoToActive={() => setTab('active')}

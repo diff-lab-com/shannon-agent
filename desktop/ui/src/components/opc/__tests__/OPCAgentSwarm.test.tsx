@@ -50,9 +50,9 @@ describe('OPCAgentSwarm', () => {
     expect(screen.getByText(/No agents running/)).toBeInTheDocument()
   })
 
-  it('renders Spawn button', () => {
+  it('renders the register-template button', () => {
     renderSwarm()
-    expect(screen.getByRole('button', { name: /Spawn new agent/ })).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: /Register a new agent template/ })).toBeInTheDocument()
   })
 
   it('shows agent count badge', () => {
@@ -90,27 +90,27 @@ describe('OPCAgentSwarm', () => {
     expect(screen.getByRole('menuitem', { name: /Reassign/ })).toBeInTheDocument()
   })
 
-  it('opens Spawn modal on click', () => {
+  it('opens the register-template modal on click', () => {
     renderSwarm()
-    fireEvent.click(screen.getByRole('button', { name: /Spawn new agent/ }))
-    expect(screen.getByRole('heading', { name: /Spawn New Agent/ })).toBeInTheDocument()
+    fireEvent.click(screen.getByRole('button', { name: /Register a new agent template/ }))
+    expect(screen.getByRole('heading', { name: /Register agent template/ })).toBeInTheDocument()
   })
 
-  it('validates name required on Spawn submit', () => {
+  it('validates name required on register submit', () => {
     renderSwarm()
-    fireEvent.click(screen.getByRole('button', { name: /Spawn new agent/ }))
-    fireEvent.click(screen.getByRole('button', { name: /^Create Agent$/ }))
+    fireEvent.click(screen.getByRole('button', { name: /Register a new agent template/ }))
+    fireEvent.click(screen.getByRole('button', { name: /^Register$/ }))
     expect(screen.getByText(/Agent name is required/)).toBeInTheDocument()
   })
 
-  it('closes Spawn modal on Cancel', async () => {
+  it('closes the register-template modal on Cancel', async () => {
     renderSwarm()
-    fireEvent.click(screen.getByRole('button', { name: /Spawn new agent/ }))
+    fireEvent.click(screen.getByRole('button', { name: /Register a new agent template/ }))
     fireEvent.click(screen.getByRole('button', { name: /^Cancel$/ }))
     // Base UI Dialog stays mounted during the close animation; wait for
     // the heading to detach instead of asserting immediate removal.
     await waitFor(() => {
-      expect(screen.queryByRole('heading', { name: /Spawn New Agent/ })).not.toBeInTheDocument()
+      expect(screen.queryByRole('heading', { name: /Register agent template/ })).not.toBeInTheDocument()
     })
   })
 
