@@ -22,9 +22,9 @@ pub mod types;
 pub use error::ApiError;
 
 pub use types::{
-    ClaudeClientConfig, ContentBlock, ContentDelta, ImageSource, LlmClientConfig, LlmProvider,
-    Message, MessageContent, MessageDeltaDelta, MessageRequest, MessageResponse, StreamEvent,
-    SystemContentBlock, ToolDefinition, ToolResultContent, Usage,
+    ClaudeClientConfig, ContentBlock, ContentDelta, FailoverTarget, ImageSource, LlmClientConfig,
+    LlmProvider, Message, MessageContent, MessageDeltaDelta, MessageRequest, MessageResponse,
+    StreamEvent, SystemContentBlock, ToolDefinition, ToolResultContent, Usage,
 };
 
 pub use retry::{RetryConfig, RetryPolicy};

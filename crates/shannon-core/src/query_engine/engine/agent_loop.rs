@@ -41,6 +41,94 @@ fn error_suggestion(
     e.user_suggestion()
 }
 
+/// R3-4 capability gate — the refusal message for image blocks on a model
+/// KNOWN to lack vision. Worded to point at the switch paths (TUI `/model`,
+/// desktop composer picker); the ask-then-send UX lives in the hosts, the
+/// engine's job is to refuse clearly instead of surfacing a raw provider
+/// 400.
+fn vision_gate_message(model_id: &str) -> String {
+    format!(
+        "model `{model_id}` does not support image input — the attachment cannot be sent to it. \
+         Switch models first (/model in the TUI, or the composer's model picker) and re-attach."
+    )
+}
+
+/// Three-state vision lookup for [`vision_gate_violation`]:
+/// `Some(true)` = has vision, `Some(false)` = KNOWN to lack it,
+/// `None` = unknown → never gated (forward-compat with models that are
+/// absent from both the declarations and the catalog).
+///
+/// Lookup order mirrors the engine's other capability boundaries:
+/// 1. `declared_models` (R2-4 providers.toml v2 registry) — a declaration
+///    that lists ANY capabilities is authoritative (exact-id match only);
+///    a capability-less declaration defers to the catalog.
+/// 2. Static catalog — exact id, then prefix/reverse-prefix (same strategy
+///    as `context_window_for_opt`, so dated ids like
+///    `gpt-4o-2024-08-06` resolve to their base entry).
+/// 3. models.dev dynamic overlay — exact id for freshly pulled models.
+fn model_supports_vision(model_id: &str) -> Option<bool> {
+    use shannon_types::provider_config::ModelCapability;
+
+    if let Some(meta) = crate::declared_models::lookup(model_id) {
+        if !meta.capabilities.is_empty() {
+            return Some(
+                meta.capabilities
+                    .iter()
+                    .any(|c| matches!(c, ModelCapability::Vision)),
+            );
+        }
+    }
+    if let Some(info) = crate::model_registry::model_info_for(model_id) {
+        return Some(
+            info.capabilities
+                .has(crate::model_registry::ModelCapabilities::vision()),
+        );
+    }
+    let catalog = crate::model_registry::MODEL_CATALOG;
+    if let Some(info) = catalog.iter().find(|m| m.id.starts_with(model_id)) {
+        return Some(
+            info.capabilities
+                .has(crate::model_registry::ModelCapabilities::vision()),
+        );
+    }
+    if let Some(info) = catalog
+        .iter()
+        .filter(|m| model_id.starts_with(m.id))
+        .max_by_key(|m| m.id.len())
+    {
+        return Some(
+            info.capabilities
+                .has(crate::model_registry::ModelCapabilities::vision()),
+        );
+    }
+    if let Some(info) = crate::model_registry::dynamic::overlay_snapshot()
+        .iter()
+        .find(|m| m.id == model_id)
+    {
+        return Some(
+            info.capabilities
+                .has(crate::model_registry::ModelCapabilities::vision()),
+        );
+    }
+    None
+}
+
+/// R3-4: `Some(message)` when `blocks` carries image content the effective
+/// model provably cannot consume. Text-only attachments and capability-
+/// unknown models pass through untouched.
+fn vision_gate_violation(model_id: &str, blocks: &[ContentBlock]) -> Option<String> {
+    let has_image = blocks
+        .iter()
+        .any(|b| matches!(b, ContentBlock::Image { .. }));
+    if !has_image {
+        return None;
+    }
+    match model_supports_vision(model_id) {
+        Some(false) => Some(vision_gate_message(model_id)),
+        _ => None,
+    }
+}
+
 /// Progress sender that forwards tool output lines as `ToolProgress` events.
 struct ChannelProgressSender {
     tx: EventTx,
@@ -408,6 +496,12 @@ impl QueryEngine {
         let permissions = self.permissions.clone();
         let client_api_key = self.client.api_key().to_string();
         let client_model = self.client.model().to_string();
+        // R3-1: the per-query client below is rebuilt from parts (not
+        // cloned), which used to reset the retry policy to `Default`. The
+        // resolved failover chain (`fallback_models` →
+        // `RetryConfig::fallbacks`) lives in that policy, so it — and every
+        // other retry knob the host configured — must ride along.
+        let client_retry_config = self.client.config().retry_config.clone();
 
         // Resolve model aliases in fast_model and plan_model
         let fast_model = self
@@ -540,6 +634,11 @@ impl QueryEngine {
         // switch the user message to content blocks so multimodal adapters
         // can carry them to the provider; text-only queries keep the plain
         // string form.
+        //
+        // R3-4 capability gate: evaluate the vision verdict HERE, while the
+        // attachments are still owned by this scope — the producer receives
+        // the verdict (an error message or None), never the moved blocks.
+        let vision_violation = vision_gate_violation(&client_model, &user_attachments);
         let user_content = if user_attachments.is_empty() {
             MessageContent::Text(user_message.clone())
         } else {
@@ -679,6 +778,30 @@ impl QueryEngine {
                 serde_json::json!({ "prompt": user_message.clone() }),
             );
 
+            // R3-4 capability gate: a model KNOWN to lack vision (declared
+            // metadata or catalog — never a guess) must not receive image
+            // attachments; that previously surfaced as a raw provider 400.
+            // Refuse here, before any request leaves, with a typed,
+            // well-worded failure naming the switch paths. Capability-
+            // UNKNOWN models pass (forward-compat); the ask-then-send UX is
+            // the hosts' job. (Verdict was computed pre-spawn — see the
+            // attachment conversion above.)
+            if let Some(violation) = vision_violation {
+                tracing::warn!(
+                    model = %client_model,
+                    attachments = attachment_count,
+                    "vision capability gate refused the attachment"
+                );
+                send_event!(
+                    tx,
+                    QueryEvent::Failed {
+                        query_id,
+                        error: violation,
+                    }
+                );
+                return;
+            }
+
             // Create a new client for this task, preserving provider from original config
             let client_config = {
                 // For Ollama models with tiny context (< 4096), cap num_predict
@@ -702,6 +825,11 @@ impl QueryEngine {
                     model: client_model.clone(),
                     max_tokens: capped_max_tokens,
                     provider: client_provider.clone(),
+                    // R3-1: carry the startup-resolved retry policy — the
+                    // failover chain lives in `RetryConfig::fallbacks`, and
+                    // `..Default::default()` would silently drop it (plus
+                    // any host-tuned retry knobs).
+                    retry_config: client_retry_config.clone(),
                     ..Default::default()
                 };
                 // Enable extended thinking with a default budget if configured
@@ -1688,13 +1816,25 @@ impl QueryEngine {
                         // `Fn` closure: clone the handle per invocation so the
                         // returned future owns its own sender.
                         let tx = tx.clone();
-                        let message = format!(
-                            "API retry {}/{} (next try in {:.0}s): {}",
-                            notice.attempt,
-                            notice.total_attempts,
-                            notice.wait.as_secs_f32(),
-                            notice.reason
-                        );
+                        // R3-1: failover pauses render as the explicit
+                        // downgrade line (replayable from the session event
+                        // stream); same-target retries keep the historical
+                        // shape.
+                        let message = match &notice.kind {
+                            shannon_engine::api::retry::RetryNoticeKind::Failover {
+                                model,
+                                provider,
+                            } => {
+                                format!("falling back to {model}@{provider} ({})", notice.reason)
+                            }
+                            shannon_engine::api::retry::RetryNoticeKind::Retry => format!(
+                                "API retry {}/{} (next try in {:.0}s): {}",
+                                notice.attempt,
+                                notice.total_attempts,
+                                notice.wait.as_secs_f32(),
+                                notice.reason
+                            ),
+                        };
                         Box::pin(async move {
                             send_event!(tx, QueryEvent::Progress { query_id, message });
                         }) as futures::future::BoxFuture<'static, ()>
@@ -5257,4 +5397,140 @@ async fn maybe_run_auto_test(
             ),
         }
     );
+}
+
+#[cfg(test)]
+#[allow(clippy::unwrap_used)]
+mod vision_gate_tests {
+    //! R3-4: pure lookups behind the attachment vision gate. The
+    //! producer-level behavior (Failed event before any network traffic,
+    //! pass-through for vision/unknown models) is covered by the
+    //! integration tests in `engine/tests/agent_loop_tests.rs`.
+
+    use super::{model_supports_vision, vision_gate_violation};
+    use shannon_engine::api::{ContentBlock, ImageSource};
+    use shannon_types::provider_config::{ModelCapability, ModelSpec};
+
+    fn image_block() -> ContentBlock {
+        ContentBlock::Image {
+            source: ImageSource::base64("image/png", "aGVsbG8="),
+        }
+    }
+
+    fn text_block() -> ContentBlock {
+        ContentBlock::Text {
+            text: "just words".to_string(),
+        }
+    }
+
+    /// Serializes the process-global declared-models registry across the
+    /// tests that register declarations (same pattern as
+    /// `declared_models::tests::with_registry`).
+    fn with_declarations<T>(specs: &[ModelSpec], f: impl FnOnce() -> T) -> T {
+        crate::declared_models::clear();
+        crate::declared_models::replace_from_specs(specs);
+        let out = f();
+        crate::declared_models::clear();
+        out
+    }
+
+    #[test]
+    fn catalog_known_non_vision_model_gates() {
+        // deepseek-v4-flash: catalog entry carries coding/cheap/speed, no
+        // vision — the gate must fire.
+        let violation = vision_gate_violation("deepseek-v4-flash", &[image_block()]);
+        let message = violation.expect("known non-vision model must be refused");
+        assert!(
+            message.contains("does not support image input"),
+            "message must name the problem: {message}"
+        );
+        assert!(
+            message.contains("deepseek-v4-flash"),
+            "message must name the model: {message}"
+        );
+        assert!(
+            message.contains("/model"),
+            "message must point at the switch paths: {message}"
+        );
+    }
+
+    #[test]
+    fn catalog_vision_model_passes() {
+        assert_eq!(vision_gate_violation("gpt-4o", &[image_block()]), None);
+        assert_eq!(model_supports_vision("gpt-4o"), Some(true));
+    }
+
+    #[test]
+    fn unknown_model_is_never_gated() {
+        assert_eq!(model_supports_vision("shannon-never-heard-of-it"), None);
+        assert_eq!(
+            vision_gate_violation("shannon-never-heard-of-it", &[image_block()]),
+            None,
+            "forward-compat: capability-unknown models pass"
+        );
+    }
+
+    #[test]
+    fn text_only_attachments_are_never_gated() {
+        assert_eq!(
+            vision_gate_violation("deepseek-v4-flash", &[text_block()]),
+            None
+        );
+        assert_eq!(vision_gate_violation("deepseek-v4-flash", &[]), None);
+    }
+
+    #[test]
+    fn image_mixed_with_text_still_gates() {
+        let violation = vision_gate_violation("deepseek-v4-flash", &[text_block(), image_block()]);
+        assert!(violation.is_some(), "one image among text must gate");
+    }
+
+    #[test]
+    fn declared_capabilities_are_authoritative() {
+        let mut with_vision = ModelSpec {
+            id: "shannon-gate-declared-seer".to_string(),
+            display_name: None,
+            context_window: None,
+            max_output: None,
+            cost_per_m_input: None,
+            cost_per_m_output: None,
+            capabilities: vec![ModelCapability::Vision],
+        };
+        let mut without_vision = with_vision.clone();
+        without_vision.id = "shannon-gate-declared-blind".to_string();
+        without_vision.capabilities = vec![ModelCapability::Coding];
+
+        with_declarations(&[with_vision.clone(), without_vision], || {
+            assert_eq!(
+                model_supports_vision("shannon-gate-declared-seer"),
+                Some(true),
+                "declared vision passes even though the catalog is silent"
+            );
+            assert_eq!(
+                model_supports_vision("shannon-gate-declared-blind"),
+                Some(false),
+                "a declaration listing capabilities is authoritative (exact id)"
+            );
+            assert_eq!(
+                vision_gate_violation("shannon-gate-declared-blind", &[image_block()]),
+                Some(super::vision_gate_message("shannon-gate-declared-blind"))
+            );
+        });
+
+        // A capability-LESS declaration defers to the catalog (none here).
+        with_vision.capabilities = Vec::new();
+        with_declarations(&[with_vision], || {
+            assert_eq!(
+                model_supports_vision("shannon-gate-declared-seer"),
+                None,
+                "empty declaration must not fabricate a verdict"
+            );
+        });
+    }
+
+    #[test]
+    fn dated_catalog_ids_resolve_via_prefix_strategies() {
+        // Reverse-prefix: the dated id starts with the catalog entry id.
+        assert_eq!(model_supports_vision("gpt-4o-2024-08-06"), Some(true));
+    }
 }
