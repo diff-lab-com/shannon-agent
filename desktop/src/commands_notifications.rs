@@ -171,9 +171,15 @@ fn webhook_url_blocked(raw: &str) -> Option<String> {
         Err(_) => return Some("not a valid URL".to_string()),
     };
     if url.scheme() != "http" && url.scheme() != "https" {
-        return Some(format!("scheme `{}` is not allowed (http/https only)", url.scheme()));
+        return Some(format!(
+            "scheme `{}` is not allowed (http/https only)",
+            url.scheme()
+        ));
     }
-    let host = url.host_str()?.trim_start_matches('[').trim_end_matches(']');
+    let host = url
+        .host_str()?
+        .trim_start_matches('[')
+        .trim_end_matches(']');
     let h = host.to_ascii_lowercase();
     let private = h == "localhost"
         || h.ends_with(".local")
@@ -182,14 +188,19 @@ fn webhook_url_blocked(raw: &str) -> Option<String> {
         || h.starts_with("192.168.")
         || h.starts_with("169.254.")
         || (h.starts_with("172.")
-            && h.split('.').nth(1).and_then(|o| o.parse::<u8>().ok()).is_some_and(|o| (16..=31).contains(&o)))
+            && h.split('.')
+                .nth(1)
+                .and_then(|o| o.parse::<u8>().ok())
+                .is_some_and(|o| (16..=31).contains(&o)))
         || h.starts_with("0.")
         || h == "::1"
         || h.starts_with("fc00:")
         || h.starts_with("fe80:")
         || h.starts_with("fd");
     if private {
-        return Some(format!("host `{host}` resolves to a private/loopback range"));
+        return Some(format!(
+            "host `{host}` resolves to a private/loopback range"
+        ));
     }
     None
 }
@@ -236,7 +247,7 @@ async fn deliver_test_webhook(
                 success: false,
                 status: None,
                 detail: format!("webhook client build failed: {e}"),
-            }
+            };
         }
     };
     let notification = shannon_core::notifier::Notification {
@@ -863,7 +874,10 @@ mod tests {
         });
     }
 
-    fn webhook_config_for(url: String, template: shannon_core::notifier::WebhookTemplate) -> shannon_core::notifier::WebhookConfig {
+    fn webhook_config_for(
+        url: String,
+        template: shannon_core::notifier::WebhookTemplate,
+    ) -> shannon_core::notifier::WebhookConfig {
         shannon_core::notifier::WebhookConfig {
             url,
             secret: None,
@@ -889,9 +903,13 @@ mod tests {
             ))
             .create_async()
             .await;
-        let config = webhook_config_for(format!("{}/hook", server.url()), shannon_core::notifier::WebhookTemplate::Slack);
+        let config = webhook_config_for(
+            format!("{}/hook", server.url()),
+            shannon_core::notifier::WebhookTemplate::Slack,
+        );
 
-        let result = deliver_test_webhook(&config, "Shannon webhook test".into(), "hello".into()).await;
+        let result =
+            deliver_test_webhook(&config, "Shannon webhook test".into(), "hello".into()).await;
         assert!(result.success, "{result:?}");
         assert_eq!(result.status, Some(200));
         assert!(result.detail.contains("200"));
@@ -908,7 +926,10 @@ mod tests {
             .with_status(404)
             .create_async()
             .await;
-        let config = webhook_config_for(format!("{}/hook", server.url()), shannon_core::notifier::WebhookTemplate::Raw);
+        let config = webhook_config_for(
+            format!("{}/hook", server.url()),
+            shannon_core::notifier::WebhookTemplate::Raw,
+        );
 
         let result = deliver_test_webhook(&config, "t".into(), "b".into()).await;
         assert!(!result.success);
@@ -920,7 +941,10 @@ mod tests {
     #[tokio::test]
     async fn deliver_test_webhook_maps_transport_failure_to_failed_result() {
         // Port 1 on loopback is a reliable connection-refused.
-        let config = webhook_config_for("http://127.0.0.1:1/hook".into(), shannon_core::notifier::WebhookTemplate::Raw);
+        let config = webhook_config_for(
+            "http://127.0.0.1:1/hook".into(),
+            shannon_core::notifier::WebhookTemplate::Raw,
+        );
         let result = deliver_test_webhook(&config, "t".into(), "b".into()).await;
         assert!(!result.success);
         assert!(result.status.is_none());
@@ -939,7 +963,9 @@ mod tests {
             );
             let rt = tokio::runtime::Runtime::new().unwrap();
             rt.block_on(async {
-                let result = test_webhook("t".into(), "b".into()).await.expect("command result");
+                let result = test_webhook("t".into(), "b".into())
+                    .await
+                    .expect("command result");
                 assert!(!result.success);
                 assert!(result.status.is_none());
                 assert!(result.detail.contains("private/loopback"));
@@ -952,18 +978,23 @@ mod tests {
         // P1-7 regression: the ConfigBuilder TOML fallback ignores tables, so
         // the section the settings UI saves was invisible to every reader.
         with_temp_home(|home| {
-            assert!(load_desktop_webhook_config().is_none(), "no config file yet");
+            assert!(
+                load_desktop_webhook_config().is_none(),
+                "no config file yet"
+            );
             write_global_webhook_config(
                 home,
                 "[notifications.webhook]\nurl = \"https://discord.com/api/webhooks/1/2\"\ntemplate = \"discord\"\nsecret = \"s3cret\"\ntimeout_ms = 9000\ninclude_body = true\n",
             );
             let cfg = load_desktop_webhook_config().expect("webhook table must load");
             assert_eq!(cfg.url, "https://discord.com/api/webhooks/1/2");
-            assert_eq!(cfg.template, shannon_core::notifier::WebhookTemplate::Discord);
+            assert_eq!(
+                cfg.template,
+                shannon_core::notifier::WebhookTemplate::Discord
+            );
             assert_eq!(cfg.secret.as_deref(), Some("s3cret"));
             assert_eq!(cfg.timeout_ms, 9000);
             assert!(cfg.include_body);
         });
     }
 }
-

@@ -1140,7 +1140,7 @@ impl WebhookHandler {
 
     /// Single-shot SYNCHRONOUS delivery for the settings "send test" flow.
     ///
-    /// One POST through the same client/signature headers as [`Self::deliver`],
+    /// One POST through the same client/signature headers as `Self::deliver`,
     /// but no retry loop and no spawn: the caller awaits the outcome so a
     /// human-visible verdict (HTTP status or transport error) can be surfaced.
     /// `Ok(status)` carries whatever status the receiver answered with — any
@@ -2112,7 +2112,10 @@ enabled = true
         let rt = tokio::runtime::Runtime::new().unwrap();
         rt.block_on(async {
             let result = h.deliver_once("{}".to_string()).await;
-            assert!(result.is_err(), "connection refused must be Err, got {result:?}");
+            assert!(
+                result.is_err(),
+                "connection refused must be Err, got {result:?}"
+            );
         });
     }
 

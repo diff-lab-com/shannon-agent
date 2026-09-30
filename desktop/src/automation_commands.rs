@@ -356,8 +356,9 @@ pub async fn list_permission_profiles(state: State<'_, AppState>) -> Result<Prof
 fn anchored_profiles_base(working_dir: Option<&str>) -> Result<PathBuf, String> {
     match working_dir.map(str::trim).filter(|s| !s.is_empty()) {
         Some(dir) => Ok(PathBuf::from(dir)),
-        None => dirs::home_dir()
-            .ok_or_else(|| "could not resolve $HOME — cannot anchor profiles directory".to_string()),
+        None => dirs::home_dir().ok_or_else(|| {
+            "could not resolve $HOME — cannot anchor profiles directory".to_string()
+        }),
     }
 }
 
@@ -842,7 +843,11 @@ mod tests {
         let dir = local_profiles_dir(Some(&wd)).expect("resolve");
         assert_eq!(dir, tmp.path().join(".shannon").join("profiles"));
         // Created on resolve so the subsequent save cannot fail on mkdir.
-        assert!(dir.is_dir(), "anchored dir must be created: {}", dir.display());
+        assert!(
+            dir.is_dir(),
+            "anchored dir must be created: {}",
+            dir.display()
+        );
     }
 
     #[test]
@@ -857,7 +862,11 @@ mod tests {
         }
         let dir = dir.expect("resolve");
         assert_eq!(dir, tmp.path().join(".shannon").join("profiles"));
-        assert!(dir.is_dir(), "fallback dir must be created: {}", dir.display());
+        assert!(
+            dir.is_dir(),
+            "fallback dir must be created: {}",
+            dir.display()
+        );
     }
 
     #[test]
