@@ -34,17 +34,11 @@ pub(crate) fn is_pdf_unavailable_placeholder(text: &str) -> bool {
     text.starts_with(PDF_UNAVAILABLE_PREFIX) && text.ends_with(']')
 }
 
-/// Best-effort PDF text extraction. We intentionally avoid pulling in a
-/// heavy PDF crate; the approach is to shell out to `pdftotext` (poppler)
-/// if installed. This keeps the dependency surface flat while still giving
-/// real content for the common case where poppler is available on the
-/// user's PATH.
-///
-/// When extraction fails or poppler is missing, [`pdf_unavailable_placeholder`]
-/// is returned instead of the old raw-bytes UTF-8 lossy decode: lossy-decoding
-/// a PDF pours binary mojibake into the model context, while the placeholder
-/// tells the model (and user) exactly what went wrong.
-pub(crate) async fn extract_pdf_text_best_effort(path: &Path) -> String {
+/// Blocking core of [`extract_pdf_text_best_effort`] — G3b P1-4 split it out
+/// so the preflight can run extraction inside `spawn_blocking` (the async
+/// wrapper awaits nothing itself; the subprocess spawn is blocking either
+/// way).
+pub(crate) fn extract_pdf_text_blocking(path: &Path) -> String {
     use std::process::Command;
 
     let path_str = path.to_string_lossy().into_owned();
@@ -64,14 +58,23 @@ pub(crate) async fn extract_pdf_text_best_effort(path: &Path) -> String {
     }
 }
 
-/// Best-effort PDF page count via `pdfinfo` (poppler). `None` when poppler
-/// is missing, the file is unreadable, or the probe fails — callers must
-/// omit the metadata rather than guess. (Office Wave A2': the send_message
-/// entry point carries no page-range request yet, so `pdftotext` stays
-/// whole-document; this is the honest per-document metadata for the
-/// injection block, and a `-f`/`-l` range plugs in here once a page
-/// parameter exists.)
-pub(crate) async fn pdf_page_count_best_effort(path: &Path) -> Option<u32> {
+/// Best-effort PDF text extraction. We intentionally avoid pulling in a
+/// heavy PDF crate; the approach is to shell out to `pdftotext` (poppler)
+/// if installed. This keeps the dependency surface flat while still giving
+/// real content for the common case where poppler is available on the
+/// user's PATH.
+///
+/// When extraction fails or poppler is missing, [`pdf_unavailable_placeholder`]
+/// is returned instead of the old raw-bytes UTF-8 lossy decode: lossy-decoding
+/// a PDF pours binary mojibake into the model context, while the placeholder
+/// tells the model (and user) exactly what went wrong.
+pub(crate) async fn extract_pdf_text_best_effort(path: &Path) -> String {
+    extract_pdf_text_blocking(path)
+}
+
+/// Blocking core of [`pdf_page_count_best_effort`] (see the split note on
+/// [`extract_pdf_text_blocking`]).
+pub(crate) fn pdf_page_count_blocking(path: &Path) -> Option<u32> {
     use std::process::Command;
 
     let path_str = path.to_string_lossy().into_owned();
@@ -84,6 +87,17 @@ pub(crate) async fn pdf_page_count_best_effort(path: &Path) -> Option<u32> {
         line.strip_prefix("Pages:")
             .and_then(|rest| rest.trim().parse::<u32>().ok())
     })
+}
+
+/// Best-effort PDF page count via `pdfinfo` (poppler). `None` when poppler
+/// is missing, the file is unreadable, or the probe fails — callers must
+/// omit the metadata rather than guess. (Office Wave A2': the send_message
+/// entry point carries no page-range request yet, so `pdftotext` stays
+/// whole-document; this is the honest per-document metadata for the
+/// injection block, and a `-f`/`-l` range plugs in here once a page
+/// parameter exists.)
+pub(crate) async fn pdf_page_count_best_effort(path: &Path) -> Option<u32> {
+    pdf_page_count_blocking(path)
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -240,12 +254,20 @@ pub async fn read_attachments(
 /// `reason` is `None` iff `ok` — the snake_case tag mirrors
 /// [`crate::commands::RejectedAttachmentReason`] so the frontend reuses one
 /// reason → i18n map for both preflight chips and send-time toasts.
+///
+/// G3b P1-4: `extraction` carries the same per-file extraction summary the
+/// send pipeline stamps onto `FileAttachment`s (only for parseable documents
+/// and only when the path passed the classification), so the composer chip
+/// can badge "extracted N sections, first M inlined" / "PDF truncates at
+/// 50 KiB" BEFORE the send. Best-effort: `None` for everything else.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct AttachmentPathCheck {
     pub path: String,
     pub ok: bool,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub reason: Option<crate::commands::RejectedAttachmentReason>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub extraction: Option<crate::commands::AttachmentExtractionReport>,
 }
 
 /// P0-3 preflight — classify attachment paths exactly the way the
@@ -266,7 +288,184 @@ pub async fn check_attachment_paths(
     paths: Vec<String>,
 ) -> Result<Vec<AttachmentPathCheck>, String> {
     let configured = state.desktop_config.read().await.working_dir.clone();
-    Ok(check_attachment_paths_inner(configured, paths))
+    let mut checks = check_attachment_paths_inner(configured, paths);
+    // G3b P1-4 — best-effort extraction summaries for the parseable paths
+    // that passed classification. Runs on the blocking pool (pdftotext
+    // spawn + container parse); a failure or a slow parse can only delay
+    // this advisory response, never fail it: the command keeps its
+    // "always Ok" contract and un-summarized paths degrade to `None`.
+    let parseable: Vec<(usize, PathBuf)> = checks
+        .iter()
+        .enumerate()
+        .filter(|(_, check)| {
+            let p = std::path::Path::new(&check.path);
+            check.ok
+                && crate::document_parse::extension_lowercase(p)
+                    .is_some_and(|e| e == "pdf" || crate::document_parse::is_office_document(p))
+        })
+        .map(|(i, check)| (i, PathBuf::from(&check.path)))
+        .collect();
+    if !parseable.is_empty() {
+        let reports = tokio::task::spawn_blocking(move || {
+            parseable
+                .into_iter()
+                .map(|(i, p)| (i, extraction_report_for_path(&p)))
+                .collect::<Vec<_>>()
+        })
+        .await
+        .unwrap_or_default();
+        for (i, report) in reports {
+            if let (Some(check), Some(report)) = (checks.get_mut(i), report) {
+                check.extraction = Some(report);
+            }
+        }
+    }
+    Ok(checks)
+}
+
+/// G3b P1-4 — the per-file extraction summary for one parseable attachment
+/// path, computed with the SAME helpers the send pipeline uses (so the
+/// preflight badge can never disagree with what the send actually does).
+/// `None` for non-parseable kinds or when basic metadata is unreadable.
+///
+/// Sync + blocking (spawns `pdftotext`/`pdfinfo`, parses containers) —
+/// callers run it inside `spawn_blocking`.
+pub(crate) fn extraction_report_for_path(
+    path: &Path,
+) -> Option<crate::commands::AttachmentExtractionReport> {
+    let ext = crate::document_parse::extension_lowercase(path)?;
+    let name = path.file_name()?.to_str()?.to_string();
+    let size = std::fs::metadata(path).ok()?.len();
+    if crate::document_parse::is_office_document(path) {
+        let outcome = crate::document_parse::office_extraction_for_file(path, &name, size);
+        return Some(crate::commands::AttachmentExtractionReport {
+            path: path.to_string_lossy().into_owned(),
+            kind: ext,
+            extracted: outcome.extracted,
+            sections_total: outcome.sections_total,
+            sections_inlined: outcome.sections_inlined,
+            truncated: outcome.truncated,
+            cache_path: outcome.cache_path,
+        });
+    }
+    if ext == "pdf" {
+        let text = extract_pdf_text_blocking(path);
+        let pages = pdf_page_count_blocking(path);
+        let outcome = crate::commands::pdf_extraction_outcome(&name, path, size, pages, &text);
+        return Some(crate::commands::AttachmentExtractionReport {
+            path: path.to_string_lossy().into_owned(),
+            kind: ext,
+            extracted: outcome.extracted,
+            sections_total: 0,
+            sections_inlined: 0,
+            truncated: outcome.truncated,
+            cache_path: outcome.cache_path,
+        });
+    }
+    None
+}
+
+// ── G3b P1-6: composer clipboard-image paste ────────────────────────────────
+
+/// Directory pasted images are persisted to, honoring `SHANNON_HOME` (same
+/// convention as `document_parse::extracted_cache_dir`). `None` when no home
+/// can be resolved — the command then fails with an explicit error instead
+/// of guessing a location.
+fn pasted_image_dir() -> Option<PathBuf> {
+    if let Ok(home) = std::env::var("SHANNON_HOME") {
+        return Some(PathBuf::from(home).join("cache").join("pasted"));
+    }
+    Some(
+        dirs::home_dir()?
+            .join(".shannon")
+            .join("cache")
+            .join("pasted"),
+    )
+}
+
+/// Normalize a pasted-image extension to the canonical form used for the
+/// persisted file name. Only formats the multimodal pipeline accepts are
+/// allowed (`png`/`jpeg`/`gif`/`webp` — no `svg`: the vision path excludes
+/// it and it has no magic bytes to verify).
+fn normalize_pasted_ext(ext: &str) -> Option<&'static str> {
+    match ext.trim().to_ascii_lowercase().as_str() {
+        "png" => Some("png"),
+        "jpg" | "jpeg" => Some("jpeg"),
+        "gif" => Some("gif"),
+        "webp" => Some("webp"),
+        _ => None,
+    }
+}
+
+/// Whether the decoded bytes start with the magic signature of `ext` — a
+/// mismatched blob (renamed file, text pasted as `image/x` by a hostile
+/// page) must be refused before it lands on disk.
+fn pasted_image_magic_matches(ext: &str, bytes: &[u8]) -> bool {
+    match ext {
+        "png" => bytes.starts_with(&[0x89, b'P', b'N', b'G', 0x0D, 0x0A, 0x1A, 0x0A]),
+        "jpeg" => bytes.starts_with(&[0xFF, 0xD8, 0xFF]),
+        "gif" => bytes.starts_with(b"GIF8"),
+        "webp" => bytes.len() >= 12 && &bytes[0..4] == b"RIFF" && &bytes[8..12] == b"WEBP",
+        _ => false,
+    }
+}
+
+/// Core of [`save_pasted_image`] — pure over `(base_dir, data, ext)` so the
+/// validation ladder is unit-testable without a Tauri runtime. Order:
+/// extension allow-list → shared 10 MiB image cap (pre-decode estimate,
+/// same helper as every attachment entry path) → base64 decode → magic-byte
+/// check → write `<millis>-<rand8>.<ext>` into `base_dir`.
+fn save_pasted_image_inner(
+    base_dir: &Path,
+    data_base64: &str,
+    ext: &str,
+) -> Result<PathBuf, String> {
+    use base64::Engine as _;
+
+    let ext = normalize_pasted_ext(ext).ok_or_else(|| {
+        format!("unsupported pasted image type '{ext}' (allowed: png, jpeg, gif, webp)")
+    })?;
+    shannon_core::attachments::validate_base64_size(data_base64.len())
+        .map_err(|e| format!("pasted image rejected: {e}"))?;
+    let bytes = base64::engine::general_purpose::STANDARD
+        .decode(data_base64.trim())
+        .map_err(|e| format!("pasted image is not valid base64: {e}"))?;
+    if bytes.is_empty() {
+        return Err("pasted image is empty".into());
+    }
+    if !pasted_image_magic_matches(ext, &bytes) {
+        return Err(format!(
+            "pasted image data does not match its declared {ext} format"
+        ));
+    }
+    let millis = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_millis())
+        .unwrap_or(0);
+    let rand8 = uuid::Uuid::new_v4().simple().to_string()[..8].to_string();
+    let target = base_dir.join(format!("{millis}-{rand8}.{ext}"));
+    std::fs::create_dir_all(base_dir)
+        .map_err(|e| format!("failed to create pasted-image cache dir: {e}"))?;
+    std::fs::write(&target, &bytes).map_err(|e| format!("failed to write pasted image: {e}"))?;
+    Ok(target)
+}
+
+/// P1-6 — persist a clipboard image the composer captured via `paste`, so it
+/// can ride the regular attachment pipeline (absolute path → preflight →
+/// multimodal base64 block). The bytes must decode to the declared format
+/// (magic bytes checked) and fit the shared 10 MiB image cap; the file lands
+/// in `~/.shannon/cache/pasted/<timestamp>-<rand>.<ext>` and its ABSOLUTE
+/// path is returned. Non-images never reach this command — the frontend
+/// only calls it for `image/*` clipboard items.
+#[tauri::command]
+pub async fn save_pasted_image(data_base64: String, ext: String) -> Result<String, String> {
+    let dir = pasted_image_dir()
+        .ok_or_else(|| "cannot resolve a home directory for the pasted-image cache".to_string())?;
+    let path =
+        tokio::task::spawn_blocking(move || save_pasted_image_inner(&dir, &data_base64, &ext))
+            .await
+            .map_err(|e| format!("pasted image task failed: {e}"))??;
+    Ok(path.to_string_lossy().into_owned())
 }
 
 /// Internal helper for [`check_attachment_paths`] — pure over
@@ -282,6 +481,7 @@ pub(crate) fn check_attachment_paths_inner(
                 path,
                 ok: false,
                 reason: Some(crate::commands::RejectedAttachmentReason::NoWorkingDir),
+                extraction: None,
             })
             .collect();
     };
@@ -295,11 +495,13 @@ pub(crate) fn check_attachment_paths_inner(
                     path,
                     ok: true,
                     reason: None,
+                    extraction: None,
                 },
                 Some(reason) => AttachmentPathCheck {
                     path,
                     ok: false,
                     reason: Some(reason),
+                    extraction: None,
                 },
             }
         })
@@ -1364,6 +1566,148 @@ mod tests {
         assert_eq!(
             checks[0].reason,
             Some(crate::commands::RejectedAttachmentReason::TooLarge)
+        );
+    }
+
+    // ── G3b P1-4: preflight extraction summaries ────────────────────────
+
+    #[test]
+    fn extraction_report_for_csv_counts_sections_and_caches() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let mut csv = String::from("id,name\n");
+        for i in 0..800 {
+            csv.push_str(&format!("{i},name{i}\n"));
+        }
+        let path = dir.path().join("data.csv");
+        std::fs::write(&path, csv.as_bytes()).unwrap();
+
+        let cache_home = tempfile::tempdir().expect("cache tempdir");
+        let prev_home = std::env::var("SHANNON_HOME").ok();
+        unsafe { std::env::set_var("SHANNON_HOME", cache_home.path()) };
+        let report = extraction_report_for_path(&path);
+        match prev_home {
+            Some(prev) => unsafe { std::env::set_var("SHANNON_HOME", prev) },
+            None => unsafe { std::env::remove_var("SHANNON_HOME") },
+        }
+        let report = report.expect("csv is parseable");
+        assert_eq!(report.kind, "csv");
+        assert!(report.extracted);
+        // 801 rows -> 500/301 = 2 sections; ~9 KiB of text fits the 16 KiB
+        // inline budget, so nothing is truncated.
+        assert_eq!(report.sections_total, 2);
+        assert!(!report.truncated);
+        assert!(report.cache_path.is_some(), "office pipeline always caches");
+        assert!(std::fs::metadata(report.cache_path.expect("path")).is_ok());
+    }
+
+    #[test]
+    fn extraction_report_degrades_for_broken_document_and_skips_other_kinds() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let junk = dir.path().join("broken.docx");
+        std::fs::write(&junk, b"not a zip").unwrap();
+        let report = extraction_report_for_path(&junk).expect("docx is a parseable kind");
+        assert!(!report.extracted);
+        assert_eq!(report.sections_total, 0);
+
+        // Not a parseable kind -> None (no extraction work attempted).
+        let txt = dir.path().join("note.txt");
+        std::fs::write(&txt, "plain").unwrap();
+        assert!(extraction_report_for_path(&txt).is_none());
+        // Missing file -> None (metadata stat fails).
+        assert!(extraction_report_for_path(&dir.path().join("gone.pdf")).is_none());
+    }
+
+    // ── G3b P1-6: save_pasted_image ─────────────────────────────────────
+
+    const TINY_PNG: &[u8] = &[
+        0x89, b'P', b'N', b'G', 0x0D, 0x0A, 0x1A, 0x0A, 0x00, 0x00, 0x00, 0x0D,
+    ];
+
+    fn b64(bytes: &[u8]) -> String {
+        use base64::Engine as _;
+        base64::engine::general_purpose::STANDARD.encode(bytes)
+    }
+
+    #[test]
+    fn pasted_ext_normalization_and_magic_table() {
+        assert_eq!(normalize_pasted_ext("PNG"), Some("png"));
+        assert_eq!(normalize_pasted_ext("jpeg"), Some("jpeg"));
+        assert_eq!(normalize_pasted_ext("jpg"), Some("jpeg"));
+        assert_eq!(normalize_pasted_ext("gif"), Some("gif"));
+        assert_eq!(normalize_pasted_ext("webp"), Some("webp"));
+        assert_eq!(normalize_pasted_ext("svg"), None);
+        assert_eq!(normalize_pasted_ext("exe"), None);
+        assert_eq!(normalize_pasted_ext(""), None);
+
+        assert!(pasted_image_magic_matches("png", TINY_PNG));
+        assert!(pasted_image_magic_matches(
+            "jpeg",
+            &[0xFF, 0xD8, 0xFF, 0xE0]
+        ));
+        assert!(pasted_image_magic_matches("gif", b"GIF89a...."));
+        assert!(pasted_image_magic_matches(
+            "webp",
+            b"RIFF\x00\x00\x00\x00WEBPVP8 "
+        ));
+        // Wrong/mismatched signatures are refused.
+        assert!(!pasted_image_magic_matches("png", b"RIFF....WEBP"));
+        assert!(!pasted_image_magic_matches("jpeg", TINY_PNG));
+        assert!(!pasted_image_magic_matches("gif", b"GIF7"));
+        assert!(!pasted_image_magic_matches("png", b""));
+    }
+
+    #[test]
+    fn save_pasted_image_writes_matching_bytes_to_timestamped_file() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path =
+            save_pasted_image_inner(dir.path(), &b64(TINY_PNG), "png").expect("valid png saves");
+        assert_eq!(path.extension().and_then(|e| e.to_str()), Some("png"));
+        let name = path.file_name().and_then(|n| n.to_str()).expect("name");
+        // <millis>-<8 hex>.png
+        let stem = name.trim_end_matches(".png");
+        let (millis, rand) = stem.split_once('-').expect("timestamp-rand shape");
+        assert!(millis.bytes().all(|b| b.is_ascii_digit()), "{name}");
+        assert_eq!(rand.len(), 8);
+        assert!(rand.bytes().all(|b| b.is_ascii_hexdigit()), "{name}");
+        assert_eq!(std::fs::read(&path).expect("read back"), TINY_PNG);
+    }
+
+    #[test]
+    fn save_pasted_image_rejects_magic_mismatch_and_bad_types() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        // A text blob claiming to be a png is refused before any write.
+        let err = save_pasted_image_inner(dir.path(), &b64(b"hello world"), "png")
+            .expect_err("magic mismatch");
+        assert!(err.contains("does not match"), "{err}");
+        assert_eq!(
+            std::fs::read_dir(dir.path()).expect("read dir").count(),
+            0,
+            "nothing may be written for a rejected payload"
+        );
+
+        let err = save_pasted_image_inner(dir.path(), &b64(TINY_PNG), "svg")
+            .expect_err("svg not allowed");
+        assert!(err.contains("unsupported pasted image type"), "{err}");
+
+        let err =
+            save_pasted_image_inner(dir.path(), "!!!not base64!!!", "png").expect_err("bad base64");
+        assert!(err.contains("base64"), "{err}");
+    }
+
+    #[test]
+    fn save_pasted_image_enforces_the_shared_10mib_cap() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        // Base64 length over the pre-decode estimate of MAX_IMAGE_BYTES —
+        // the same `validate_base64_size` helper every attachment entry path
+        // uses, so no oversized payload is ever decoded.
+        let oversized_len = shannon_core::attachments::MAX_IMAGE_BYTES * 4 / 3 + 4096;
+        let big = "A".repeat(oversized_len);
+        let err = save_pasted_image_inner(dir.path(), &big, "png").expect_err("over limit");
+        assert!(err.contains("pasted image rejected"), "{err}");
+        assert_eq!(
+            std::fs::read_dir(dir.path()).expect("read dir").count(),
+            0,
+            "nothing may be written for an oversized payload"
         );
     }
 

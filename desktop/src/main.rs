@@ -404,6 +404,9 @@ fn main() {
             // P0-3 preflight — the composer flags refused attachments at
             // attach time instead of the send silently dropping them.
             commands_files::check_attachment_paths,
+            // G3b P1-6 — composer clipboard-image paste: validated bytes to
+            // ~/.shannon/cache/pasted, then the normal attachment pipeline.
+            commands_files::save_pasted_image,
             // 2026-09-25 open pipeline (§4 P0-B / P1-C) — file-ref existence
             // probes and capped text reads for disk artifacts
             commands_files::path_exists,

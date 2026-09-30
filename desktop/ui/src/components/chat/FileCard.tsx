@@ -7,6 +7,9 @@ import { Icon } from '@/components/ui/icon'
 import { useT } from '@/i18n'
 import { toastError } from '@/lib/errorToast'
 import { registerFileIndexEntry, copyFile, openWithDefaultApp, revealInFolder } from '@/lib/tauri-api'
+import { extractionMessageParams } from '@/lib/pasteImage'
+import { useIntl } from 'react-intl'
+import type { AttachmentExtractionReport } from '@/types'
 
 // B8b: the pdf.js preview (and its ~1 MB pdfjs-dist chunk) only loads when a
 // preview button is actually clicked — FileCard itself stays on the chat
@@ -57,6 +60,14 @@ export interface FileCardProps {
    * User attachments never carry it.
    */
   onReviewDiff?: () => void
+  /**
+   * G3b P1-4 — extraction summary carried on the message's FileAttachment:
+   * the detail area names what the model received (sections inlined /
+   * PDF truncation) and, when the extracted-text cache was written, shows
+   * its path with a "view extracted text" action (OS default app, same
+   * open pipeline as the file itself).
+   */
+  extraction?: AttachmentExtractionReport
 }
 
 /** 1024-based compact size — one decimal under 10, rounded above. */
@@ -81,11 +92,24 @@ function isCsvPath(path: string): boolean {
   return path.split('.').pop()?.toLowerCase() === 'csv'
 }
 
-export function FileCard({ name, path, sizeBytes, source = 'generated', onReviewDiff }: FileCardProps) {
+export function FileCard({ name, path, sizeBytes, source = 'generated', onReviewDiff, extraction }: FileCardProps) {
   const t = useT()
+  const intl = useIntl()
   const [previewOpen, setPreviewOpen] = useState(false)
   // C2: csv cards grow a "Batch run" affordance (dialog → composer draft).
   const [batchOpen, setBatchOpen] = useState(false)
+
+  // G3b P1-4 — the extraction story for the detail area. A parse failure
+  // still gets a line (honest: the model did NOT receive text).
+  const extractionSummary =
+    extraction && extraction.extracted
+      ? intl.formatMessage(
+          { id: extractionMessageParams(extraction).id },
+          extractionMessageParams(extraction).values,
+        )
+      : extraction && !extraction.extracted
+        ? t('chat.attach.extraction.failed')
+        : null
 
   // B9' Files page: every rendered card is a durable file reference — index
   // it (upsert Rust-side) so the library lists it. Fire-and-forget with a
@@ -96,6 +120,13 @@ export function FileCard({ name, path, sizeBytes, source = 'generated', onReview
 
   const handleOpen = () => {
     openWithDefaultApp(path).catch((err) => toastError(t('link.open.failed'), err))
+  }
+
+  // G3b P1-4 — "view extracted text": opens the cached full text the model
+  // reads from (same OS-open pipeline as the source file).
+  const handleViewExtracted = () => {
+    if (!extraction?.cache_path) return
+    openWithDefaultApp(extraction.cache_path).catch((err) => toastError(t('link.open.failed'), err))
   }
 
   const handleReveal = () => {
@@ -119,24 +150,25 @@ export function FileCard({ name, path, sizeBytes, source = 'generated', onReview
       <div
         data-testid="file-card"
         title={path}
-        className="group/filecard flex w-full max-w-sm items-center gap-sm rounded-lg border border-outline-variant/20 bg-surface-container-low px-sm py-xs transition-colors hover:bg-surface-container"
+        className="group/filecard flex w-full max-w-sm flex-col gap-xs rounded-lg border border-outline-variant/20 bg-surface-container-low px-sm py-xs transition-colors hover:bg-surface-container"
       >
-        <Icon
-          name="draft"
-          size="md"
-          className="shrink-0 text-on-surface-variant transition-colors group-hover/filecard:text-primary"
-        />
-        <div className="min-w-0 flex-1">
-          <span className="block font-label-sm text-on-surface truncate" title={name}>
-            {name}
-          </span>
-          {sizeBytes != null && (
-            <span className="block font-label-xs text-on-surface-variant tabular-nums">
-              {formatFileSize(sizeBytes)}
+        <div className="flex items-center gap-sm">
+          <Icon
+            name="draft"
+            size="md"
+            className="shrink-0 text-on-surface-variant transition-colors group-hover/filecard:text-primary"
+          />
+          <div className="min-w-0 flex-1">
+            <span className="block font-label-sm text-on-surface truncate" title={name}>
+              {name}
             </span>
-          )}
-        </div>
-        <div className="flex shrink-0 items-center gap-xs">
+            {sizeBytes != null && (
+              <span className="block font-label-xs text-on-surface-variant tabular-nums">
+                {formatFileSize(sizeBytes)}
+              </span>
+            )}
+          </div>
+          <div className="flex shrink-0 items-center gap-xs">
           {/* B7' — engine-written files only: dock the single-file diff review
               (RightDock Diff tab). Secondary emphasis next to the OS actions. */}
           {onReviewDiff && (
@@ -213,7 +245,48 @@ export function FileCard({ name, path, sizeBytes, source = 'generated', onReview
           >
             <Icon name="save" />
           </Button>
+          </div>
         </div>
+        {/* G3b P1-4 — extraction detail: what the model received + the cached
+            full text with a "view extracted text" action (OS default app).
+            Only for parseable documents carrying a report. */}
+        {extraction && (
+          <div
+            data-testid="file-card-extraction"
+            className="flex items-start gap-xs rounded-sm bg-surface-container px-xs py-[4px]"
+          >
+            <span className="material-symbols-outlined icon-sm mt-[1px] shrink-0 text-tertiary">text_snippet</span>
+            <div className="min-w-0 flex-1">
+              {extractionSummary && (
+                <span className="block font-label-xs text-on-surface-variant">
+                  {extractionSummary}
+                </span>
+              )}
+              {extraction.cache_path && (
+                <span
+                  className="block truncate font-mono text-[10px] text-on-surface-variant/80"
+                  title={extraction.cache_path}
+                >
+                  {extraction.cache_path}
+                </span>
+              )}
+            </div>
+            {extraction.cache_path && (
+              <Button
+                variant="ghost"
+                size="sm"
+                data-testid="file-card-view-extracted"
+                aria-label={t('chat.attach.extraction.view')}
+                title={t('chat.attach.extraction.view')}
+                onClick={handleViewExtracted}
+                className="gap-xs px-xs py-[2px] text-tertiary hover:bg-tertiary-container/40"
+              >
+                <span className="material-symbols-outlined icon-sm">plagiarism</span>
+                <span className="hidden md:inline">{t('chat.attach.extraction.view')}</span>
+              </Button>
+            )}
+          </div>
+        )}
       </div>
       {/* B8b: inline PDF preview — lazy chunk, mounted only while open. */}
       {previewOpen && (
