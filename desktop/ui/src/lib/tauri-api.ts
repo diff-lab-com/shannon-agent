@@ -1401,11 +1401,20 @@ export async function installAgentFromRepo(
   return invoke('install_agent_from_repo', { pluginName, repo, ref_ })
 }
 
+/**
+ * G1 P1-9: install a native agent as a FLAT `~/.shannon/agents/<name>.toml`
+ * `AgentDefinition` (the shape the runtime loader reads). The catalog
+ * entry's description/system_prompt map onto the definition fields; tool
+ * hints become capabilities.
+ */
 export async function installNativeAgent(
   pluginName: string,
-  body: string,
+  description: string,
+  systemPrompt: string,
+  model: string | null,
+  tools: string[],
 ): Promise<InstallResult> {
-  return invoke('install_native_agent', { pluginName, body })
+  return invoke('install_native_agent', { pluginName, description, systemPrompt, model, tools })
 }
 
 export async function listInstalledAgentPlugins(): Promise<InstalledAgent[]> {

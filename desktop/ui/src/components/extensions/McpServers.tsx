@@ -6,6 +6,7 @@ import { useIntl } from "react-intl";
 import { toast } from "sonner";
 import {
   listMcpServers,
+  restartMcpServer,
   uninstallMcpServer,
 } from "@/lib/tauri-api";
 import { safeErrorMessage } from "@/lib/packageValidation";
@@ -124,6 +125,27 @@ export default function McpServers() {
     }
   }
 
+  // G1 P0-1.4 — per-server restart wired to the existing
+  // `restart_mcp_server` backend (stop + start, tool list re-probed by the
+  // refresh below).
+  async function handleRestart(name: string) {
+    setBusyId(`restart:${name}`);
+    try {
+      await restartMcpServer(name);
+      toast.success(t("extensions.mcp.restarted", { name }));
+    } catch (err) {
+      toast.error(
+        intl.formatMessage(
+          { id: "extensions.mcp.restartFailed" },
+          { error: safeErrorMessage(err, "restart failed") },
+        ),
+      );
+    } finally {
+      setBusyId(null);
+      refreshInstalled();
+    }
+  }
+
   function handleInstalled() {
     refreshInstalled();
   }
@@ -146,6 +168,7 @@ export default function McpServers() {
         onRetry={refreshInstalled}
         busyId={busyId}
         onUninstall={(name) => setRemoveTarget(name)}
+        onRestart={handleRestart}
         onOpenPermissions={(name) =>
           // X3 权限就近直达 — deep link into the permissions page pre-filtered
           // to this server. The page matches rules against `mcp__<name>__*`;
@@ -201,6 +224,7 @@ function InstalledSection({
   onRetry,
   busyId,
   onUninstall,
+  onRestart,
   onOpenPermissions,
 }: {
   servers: McpServerInfo[];
@@ -211,6 +235,7 @@ function InstalledSection({
   onRetry: () => void;
   busyId: string | null;
   onUninstall: (name: string) => void;
+  onRestart: (name: string) => void;
   onOpenPermissions: (name: string) => void;
 }) {
   const intl = useIntl();
@@ -246,6 +271,7 @@ function InstalledSection({
         <div className="border border-outline-variant/30 rounded-2xl overflow-hidden bg-surface-container-lowest/50">
           {servers.map((srv, i) => {
             const isBusy = busyId === `uninstall:${srv.name}`;
+            const isRestarting = busyId === `restart:${srv.name}`;
             // Build a mono preview: command + args (truncated)
             const preview = [srv.command].filter(Boolean).join(" ");
             return (
@@ -300,6 +326,23 @@ function InstalledSection({
                     key
                   </span>
                   {t("extensions.mcp.toolPermissions")}
+                </Button>
+                {/* G1 P0-1.4 — restart the server process (stop + start)
+                    without leaving the page. */}
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  type="button"
+                  aria-label={t("extensions.mcp.restartAria", { name: srv.name })}
+                  title={t("extensions.mcp.restartAria", { name: srv.name })}
+                  onClick={() => onRestart(srv.name)}
+                  disabled={isBusy || isRestarting}
+                  className="text-on-surface-variant hover:text-primary shrink-0"
+                >
+                  <span className="material-symbols-outlined icon-sm" aria-hidden="true">
+                    restart_alt
+                  </span>
+                  {isRestarting ? "…" : t("extensions.mcp.restart")}
                 </Button>
                 <Button
                   variant="ghost"

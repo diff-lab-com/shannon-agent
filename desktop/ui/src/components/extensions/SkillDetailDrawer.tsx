@@ -184,14 +184,21 @@ export default function SkillDetailDrawer({
         </dl>
 
         <div className="mt-xl flex gap-sm">
-          <Button
-            type="button"
-            onClick={onInstall}
-            disabled={busy || installed}
-            className="flex-1 px-md py-sm rounded-lg hover:bg-primary/90 disabled:cursor-not-allowed"
-          >
-            {busy ? '…' : installed ? t('extensions.skills.installedBtn') : t('extensions.skills.installBtn')}
-          </Button>
+          {entry.metadata?.in_development === true ? (
+            // G1 P0-2.3 — planned entry: no stub install, an honest notice.
+            <div className="flex-1 text-label-sm text-on-surface-variant bg-surface-container-high rounded-lg px-md py-sm">
+              {t('extensions.skills.inDevelopmentHint')}
+            </div>
+          ) : (
+            <Button
+              type="button"
+              onClick={onInstall}
+              disabled={busy || installed}
+              className="flex-1 px-md py-sm rounded-lg hover:bg-primary/90 disabled:cursor-not-allowed"
+            >
+              {busy ? '…' : installed ? t('extensions.skills.installedBtn') : t('extensions.skills.installBtn')}
+            </Button>
+          )}
         </div>
       </SidePanelBody>
     </SidePanel>
