@@ -49,6 +49,7 @@ import TaskDetailDrawer from '@/components/tasks/TaskDetailDrawer'
 import RoutineDetailDrawer from '@/components/tasks/RoutineDetailDrawer'
 import CancelTaskModal from '@/components/tasks/CancelTaskModal'
 import TaskExecutionLog from '@/components/tasks/TaskExecutionLog'
+import BackgroundTasksPanel from '@/components/tasks/BackgroundTasksPanel'
 import EfficiencyCard from '@/components/tasks/EfficiencyCard'
 import AgentAllocation from '@/components/tasks/AgentAllocation'
 import HistoryView from '@/components/tasks/HistoryView'
@@ -419,6 +420,11 @@ export default function Tasks() {
         )}
 
         {showFilters && <TasksFilters active={activeFilter} onChange={setActiveFilter} />}
+
+        {/* P1-3: in-flight background tasks in EVERY mode — they used to be
+            visible only in the dev-only Pipelines tab, so a Simple-mode run
+            was created-then-invisible. Renders nothing while idle. */}
+        <BackgroundTasksPanel />
 
         {dagView ? (
           <TaskDAGView tasks={tasks} onSelectTask={setSelectedTaskId} />

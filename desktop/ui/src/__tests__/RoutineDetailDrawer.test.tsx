@@ -30,15 +30,17 @@ describe('RoutineDetailDrawer', () => {
     expect(container).toBeEmptyDOMElement()
   })
 
-  it('renders routine name and prompt', () => {
+  it('renders routine name and prompt as editable basics (P1-1)', () => {
     render(<RoutineDetailDrawer routine={makeRoutine()} routines={[]} onClose={() => {}} />)
-    expect(screen.getByText('Daily Standup')).toBeInTheDocument()
-    expect(screen.getByText('Summarize today')).toBeInTheDocument()
+    // P1-1: name/prompt moved into the RoutineBasicsEditor inputs.
+    expect(screen.getByDisplayValue('Daily Standup')).toBeInTheDocument()
+    expect(screen.getByDisplayValue('Summarize today')).toBeInTheDocument()
   })
 
   it('shows trigger type capitalized', () => {
     render(<RoutineDetailDrawer routine={makeRoutine()} routines={[]} onClose={() => {}} />)
-    expect(screen.getByText('Interval')).toBeInTheDocument()
+    // Both the basics editor radio and the info grid render the trigger.
+    expect(screen.getAllByText('Interval').length).toBeGreaterThan(0)
   })
 
   it('shows Enabled as Yes when enabled true', () => {
@@ -95,8 +97,15 @@ describe('RoutineDetailDrawer', () => {
   it('does not call onClose when inner panel clicked', () => {
     const onClose = vi.fn()
     render(<RoutineDetailDrawer routine={makeRoutine()} routines={[]} onClose={onClose} />)
-    fireEvent.click(screen.getByText('Daily Standup'))
+    fireEvent.click(screen.getByDisplayValue('Daily Standup'))
     expect(onClose).not.toHaveBeenCalled()
+  })
+
+  // P1-1: lifecycle row (pause switch + delete) is embedded in the drawer.
+  it('renders the lifecycle toggle and delete controls', () => {
+    render(<RoutineDetailDrawer routine={makeRoutine()} routines={[]} onClose={() => {}} />)
+    expect(screen.getByTestId('routine-lifecycle-toggle')).toBeInTheDocument()
+    expect(screen.getByTestId('routine-lifecycle-delete')).toBeInTheDocument()
   })
 
   // P2-5: the off-peak execution window editor is embedded in the drawer.

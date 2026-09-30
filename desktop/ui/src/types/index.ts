@@ -870,6 +870,9 @@ export interface UpdateTaskPayload {
   priority?: string
   due_date?: number | null
   execution_mode?: 'serial' | 'parallel'
+  /// P1-3: writes `subject` (the board card title). Lets a caller mint a
+  /// board task through the adhoc path (`.claude/tasks/<adhoc>/{id}.json`).
+  title?: string
 }
 
 // --- OPC analytics ---

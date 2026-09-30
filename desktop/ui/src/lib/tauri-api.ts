@@ -1835,7 +1835,9 @@ export async function deleteScheduledTask(id: string): Promise<boolean> {
   return invoke('delete_scheduled_task', { id })
 }
 
-export async function toggleScheduledTask(id: string, enabled: boolean): Promise<ScheduledRoutine> {
+// P1-1: the backend persists the requested state and returns the persisted
+// bool (read-back fool-proofing — see toggle_scheduled_task).
+export async function toggleScheduledTask(id: string, enabled: boolean): Promise<boolean> {
   return invoke('toggle_scheduled_task', { id, enabled })
 }
 
