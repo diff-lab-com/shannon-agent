@@ -10,7 +10,7 @@
 //! - everything else (including the empty string) is written as **text**.
 //!
 //! Path scoping is identical to `Write`: the target must pass the injected
-//! [`PathSandbox`] (`validate_for_write` semantics — the file may not exist
+//! [`crate::file::sandbox::PathSandbox`] (`validate_for_write` semantics — the file may not exist
 //! yet, but it must canonicalize inside an allowed root). The bytes are
 //! produced in memory and committed through the injected filesystem world
 //! with the same atomic temp-file + rename dance as `Write`, so sandboxed

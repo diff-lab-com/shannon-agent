@@ -537,7 +537,15 @@ fn test_style_extract_frontmatter_and_trigger_words() {
         .when_to_use
         .as_deref()
         .unwrap_or_default();
-    for trigger in [".pptx", ".docx", "theme", "brand", "font", "layout", "match the look"] {
+    for trigger in [
+        ".pptx",
+        ".docx",
+        "theme",
+        "brand",
+        "font",
+        "layout",
+        "match the look",
+    ] {
         assert!(
             when.to_lowercase().contains(trigger),
             "when_to_use should carry trigger word `{trigger}`: {when}"
@@ -671,7 +679,13 @@ fn test_style_extract_smoke_on_a_real_pptx() {
     let md = std::fs::read_to_string(&notes).expect("notes markdown written");
     // Theme fonts, palette hex values, and the layout name from the
     // ppt-outline template must all surface in the notes.
-    for token in ["Theme fonts", "Calibri Light", "Calibri", "#4472C4", "Title and Content"] {
+    for token in [
+        "Theme fonts",
+        "Calibri Light",
+        "Calibri",
+        "#4472C4",
+        "Title and Content",
+    ] {
         assert!(md.contains(token), "notes missing `{token}`");
     }
 
