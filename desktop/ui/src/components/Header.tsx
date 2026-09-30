@@ -140,6 +140,13 @@ export function Header() {
     api.closeSessionWindow(getCurrentWindow().label).catch(e => toastError(t('windowMode.close.failed'), e))
   }
 
+  // G5 P1-11: in-app entry for the companion Quick Capture window — until
+  // now only the tray menu could summon it (the backend command existed and
+  // was registered, with no chrome surface wired to it).
+  const handleOpenCompanion = () => {
+    api.openCompanionWindow().catch(e => toastError(t('header.companion.failed'), e))
+  }
+
   return (
     <>
       {/* G1: persistent chrome bar — glass-surface (was a hand-rolled
@@ -330,6 +337,16 @@ export function Header() {
                 {pendingCount > 9 ? '9+' : pendingCount}
               </span>
             )}
+          </Button>
+          {/* G5 P1-11: open the companion Quick Capture window. */}
+          <Button
+            variant="ghost"
+            aria-label={t('header.companion.aria')}
+            title={t('header.companion.aria')}
+            className="p-sm rounded-lg hover:bg-surface-container-low text-on-surface-variant hover:text-primary transition-colors"
+            onClick={handleOpenCompanion}
+          >
+            <span className="material-symbols-outlined icon-md" aria-hidden="true">picture_in_picture</span>
           </Button>
           <Button variant="ghost" aria-label={t('header.help')} title={t('header.help.aria')} className="p-sm rounded-lg hover:bg-surface-container-low text-on-surface-variant hover:text-primary transition-colors" onClick={() => window.dispatchEvent(new CustomEvent('shannon:toggle-help'))}>
             <span className="material-symbols-outlined icon-md" aria-hidden="true">help</span>

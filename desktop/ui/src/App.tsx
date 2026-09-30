@@ -112,18 +112,15 @@ export function CompanionPromptBridge() {
     // skips the main window when IT is showing the /companion fallback page
     // (its own Send would otherwise navigate itself away mid-capture).
     if (!isMainWindowLocation()) return;
-    if (locationRef.current.pathname === '/chat') {
-      pushComposerDraft(text);
-    } else {
-      // The composer lives on /chat and is not mounted yet — navigate
-      // first, then push once. Single deferred push on purpose: ChatInput
-      // APPENDS drafts, so a retry loop could duplicate the text. The
-      // fixed delay covers the common (already-loaded chunk) case; a cold
-      // lazy-load slower than the delay can drop the draft — accepted for
-      // this wave, see the C3 report.
-      navigate('/chat');
-      window.setTimeout(() => pushComposerDraft(text), 150);
-    }
+    // G5 P1-11b: no timing bet. pushComposerDraft parks the text in the
+    // pending-draft queue whenever the composer is not mounted — any other
+    // route, /chat still lazy-loading, or the main window booting after the
+    // companion — and ChatInput flushes the queue on subscribe. Navigating
+    // to /chat here is what mounts it. ChatInput APPENDS drafts and the
+    // queue is one-shot, so no retry loop is needed and none of the text
+    // can duplicate.
+    if (locationRef.current.pathname !== '/chat') navigate('/chat');
+    pushComposerDraft(text);
   });
   return null;
 }
