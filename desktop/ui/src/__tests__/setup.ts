@@ -1,5 +1,21 @@
 import '@testing-library/jest-dom/vitest'
+import { JSDOM } from 'jsdom'
 import { createElement, type ReactElement } from 'react'
+
+// Node >= 25 exposes an experimental global `localStorage` that stays
+// `undefined` unless --localstorage-file is passed. That own property on
+// globalThis wins over vitest's jsdom global population (which skips keys
+// that already exist on global), so every bare `localStorage` in tests
+// resolves to undefined (Node <= 22 has no such global, which is why CI
+// stays green). Shadow it with a real Storage. `window` is aliased to
+// globalThis under vitest's jsdom environment, so the jsdom-window storage
+// is unreachable from here — build a throwaway JSDOM window instead.
+if (typeof globalThis.localStorage === 'undefined') {
+  const storage = new JSDOM('', { url: 'http://localhost/' }).window.localStorage
+  delete (globalThis as { localStorage?: unknown }).localStorage
+  Object.defineProperty(globalThis, 'localStorage', { configurable: true, value: storage })
+}
+
 
 // Auto-wrap rendered components with I18nProvider so tests don't need to
 // manually wrap every `render()` call. This is global; individual tests

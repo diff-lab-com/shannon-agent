@@ -676,14 +676,41 @@ impl DockerSandbox {
     }
 
     /// Check if Docker is available on this system.
+    ///
+    /// Bounded probe: a `docker` CLI whose daemon is wedged (e.g. Docker
+    /// Desktop not running but its socket file present) can block in a
+    /// socket connect forever, and this runs on every engine query's
+    /// sandbox self-description — so never wait longer than a couple of
+    /// seconds (healthy daemons answer well under that; wedged ones never
+    /// answer at all). Keep the window tight: the blocking probe delays
+    /// the query and must not crowd out wall-clock query budgets.
     pub fn docker_available() -> bool {
-        std::process::Command::new("docker")
+        const PROBE_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(2);
+        let Ok(mut child) = std::process::Command::new("docker")
             .arg("info")
             .stdout(std::process::Stdio::null())
             .stderr(std::process::Stdio::null())
-            .status()
-            .map(|s| s.success())
-            .unwrap_or(false)
+            .stdin(std::process::Stdio::null())
+            .spawn()
+        else {
+            return false; // docker binary not installed
+        };
+        let deadline = std::time::Instant::now() + PROBE_TIMEOUT;
+        loop {
+            match child.try_wait() {
+                Ok(Some(status)) => return status.success(),
+                Ok(None) if std::time::Instant::now() < deadline => {
+                    std::thread::sleep(std::time::Duration::from_millis(50));
+                }
+                Ok(None) => {
+                    // Timed out: treat as unavailable and stop the probe.
+                    let _ = child.kill();
+                    let _ = child.wait();
+                    return false;
+                }
+                Err(_) => return false,
+            }
+        }
     }
 }
 

@@ -22,15 +22,22 @@ function loadNacl(): any {
   return module.exports;
 }
 
-/** Derive the node Ed25519 keypair from the same 32-byte seed TweetNaCl uses. */
+/** Derive the node Ed25519 keypair from the same 32-byte seed TweetNaCl uses.
+ *
+ * The private key is built as an RFC 8410 PKCS#8 blob rather than a
+ * seed-only JWK: Node >= 24 tightened JWK OKP validation and rejects the
+ * `{ x: "", d }` derive-from-d form, while PKCS8 import behaves identically
+ * on every Node line this repo supports (>= 20). */
 function nodeKeyPairFromSeed(seed: Uint8Array): { publicJwkX: string; privateJwk: any } {
-  const d = Buffer.from(seed).toString("base64url");
-  const priv = createPrivateKey({
-    key: { kty: "OKP", crv: "Ed25519", x: "", d },
-    format: "jwk",
-  });
+  const pkcs8 = Buffer.concat([
+    // SEQ { INTEGER 0, SEQ { OID 1.3.101.112 (Ed25519) }, OCTET WRAP { OCTET seed } }
+    Buffer.from("302e020100300506032b657004220420", "hex"),
+    Buffer.from(seed),
+  ]);
+  const priv = createPrivateKey({ key: pkcs8, format: "der", type: "pkcs8" });
   const pub = createPublicKey(priv);
   const x = (pub.export({ format: "jwk" }) as { x: string }).x;
+  const d = Buffer.from(seed).toString("base64url");
   return { publicJwkX: x, privateJwk: { kty: "OKP", crv: "Ed25519", x, d } };
 }
 
@@ -54,9 +61,7 @@ describe("vendored TweetNaCl ↔ node:crypto Ed25519 interop", () => {
     for (let i = 0; i < 8; i++) {
       const seed = randomBytes(32);
       const kp = nacl.sign.keyPair.fromSeed(new Uint8Array(seed));
-      const x = (createPublicKey(
-        createPrivateKey({ key: { kty: "OKP", crv: "Ed25519", x: "", d: Buffer.from(seed).toString("base64url") }, format: "jwk" }),
-      ).export({ format: "jwk" }) as { x: string }).x;
+      const x = nodeKeyPairFromSeed(new Uint8Array(seed)).publicJwkX;
 
       // The canonical pair message: `${pair_token}:${device_public_key}`.
       const pubB64Url = Buffer.from(kp.publicKey).toString("base64url");
@@ -74,8 +79,10 @@ describe("vendored TweetNaCl ↔ node:crypto Ed25519 interop", () => {
   it("node-signed messages verify under nacl (round trip)", () => {
     const nacl = loadNacl();
     const seed = randomBytes(32);
-    const d = Buffer.from(seed).toString("base64url");
-    const priv = createPrivateKey({ key: { kty: "OKP", crv: "Ed25519", x: "", d }, format: "jwk" });
+    const priv = createPrivateKey({
+      key: nodeKeyPairFromSeed(new Uint8Array(seed)).privateJwk,
+      format: "jwk",
+    });
     const msg = new TextEncoder().encode("1746000000000:device-1");
     const sig = cryptoSign(null, Buffer.from(msg), priv);
     const kp = nacl.sign.keyPair.fromSeed(new Uint8Array(seed));

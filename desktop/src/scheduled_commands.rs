@@ -2393,7 +2393,11 @@ mod tests {
     async fn wait_for_session_start(
         container: &std::path::Path,
     ) -> shannon_types::session_event::SessionStartPayload {
-        for _ in 0..250 {
+        // 2000 x 20ms = 40s ceiling: on success this returns in tens of
+        // milliseconds, but the first engine spawn in the process may also
+        // pay one-time startup probes (sandbox backend detection), which on
+        // a machine with a wedged docker CLI costs its bounded-probe window.
+        for _ in 0..2000 {
             if let Some(payload) = read_session_start(container) {
                 return payload;
             }
@@ -2402,13 +2406,45 @@ mod tests {
         panic!("run session log with session/start never appeared");
     }
 
+    /// Restore `SHANNON_HOME` even when an assert fires mid-test.
+    struct RestoreHome(Option<String>);
+    impl Drop for RestoreHome {
+        fn drop(&mut self) {
+            // SAFETY: test process; serialized through CWD_LOCK like the
+            // other env/cwd mutations in this module.
+            unsafe {
+                match &self.0 {
+                    Some(v) => std::env::set_var("SHANNON_HOME", v),
+                    None => std::env::remove_var("SHANNON_HOME"),
+                }
+            }
+        }
+    }
+
     #[tokio::test]
+    #[allow(clippy::await_holding_lock)]
     async fn routine_run_stamps_session_working_dir_and_threads_engine_cwd() {
+        // Both routine_run tests spawn engine futures that read process-global
+        // state (cwd, SHANNON_HOME) and detach finish tasks; serialize them so
+        // shared-process `cargo test` runs are order-independent (nextest
+        // already isolates per process).
+        let _guard = CWD_LOCK
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         let app = tauri::test::mock_app();
         let tmp = tempfile::tempdir().unwrap();
+        // The spawned engine resolves providers/credentials under
+        // SHANNON_HOME; pin it to the fixture so a developer's real
+        // ~/.shannon (e.g. a Keychain-backed provider profile) can't turn
+        // the spawn into a blocking credential lookup on macOS. CWD_LOCK
+        // (taken above) serializes the process-global env mutation.
+        let prev_home = std::env::var("SHANNON_HOME").ok();
+        // SAFETY: see RestoreHome — CWD_LOCK-serialized test process.
+        unsafe { std::env::set_var("SHANNON_HOME", tmp.path()) };
+        let _home_guard = RestoreHome(prev_home);
         let (deps, tasks, runs, _inbox) = scheduler_fixture(tmp.path());
 
-        let routine = ScheduledRoutine::new("scoped run".into(), "p".into(), 60);
+        let routine = ScheduledRoutine::new("scoped run".into(), "stamp-scope-proj".into(), 60);
         tasks.save(&routine).unwrap();
         tasks
             .set_working_dir(&routine.id, Some("/work/scoped-project/"))
@@ -2441,9 +2477,16 @@ mod tests {
         // cwd-mutating bucket tests serialize through CWD_LOCK, and this
         // test must hold it too so no concurrent test moves the cwd under
         // the run.
-        let _guard = CWD_LOCK.lock().unwrap();
+        let _guard = CWD_LOCK
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         let app = tauri::test::mock_app();
         let tmp = tempfile::tempdir().unwrap();
+        // Same SHANNON_HOME isolation as the stamps test above.
+        let prev_home = std::env::var("SHANNON_HOME").ok();
+        // SAFETY: see RestoreHome — CWD_LOCK-serialized test process.
+        unsafe { std::env::set_var("SHANNON_HOME", tmp.path()) };
+        let _home_guard = RestoreHome(prev_home);
         let (deps, tasks, runs, _inbox) = scheduler_fixture(tmp.path());
 
         // The engine tee writes session/start with the process cwd —
@@ -2451,7 +2494,7 @@ mod tests {
         // assert_ne against a never-written sentinel was vacuously true).
         let expected_cwd = std::env::current_dir().unwrap().display().to_string();
 
-        let routine = ScheduledRoutine::new("unhoused run".into(), "p".into(), 60);
+        let routine = ScheduledRoutine::new("unhoused run".into(), "unhoused-proj".into(), 60);
         tasks.save(&routine).unwrap();
 
         let executed = run_due_check_at(&deps, &tasks, &runs, app.handle(), utc_at(12, 0))
@@ -2834,7 +2877,9 @@ mod tests {
 
     #[test]
     fn test_collect_daily_buckets_walks_team_dirs() {
-        let _guard = CWD_LOCK.lock().unwrap();
+        let _guard = CWD_LOCK
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         let tmp = tempfile::tempdir().unwrap();
         let orig = std::env::current_dir().unwrap();
         std::env::set_current_dir(tmp.path()).unwrap();
@@ -2866,7 +2911,9 @@ mod tests {
 
     #[test]
     fn test_collect_daily_buckets_no_tasks_dir_returns_empty_buckets() {
-        let _guard = CWD_LOCK.lock().unwrap();
+        let _guard = CWD_LOCK
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         let tmp = tempfile::tempdir().unwrap();
         let orig = std::env::current_dir().unwrap();
         std::env::set_current_dir(tmp.path()).unwrap();
@@ -2884,7 +2931,9 @@ mod tests {
 
     #[test]
     fn test_append_routine_to_project_toml_creates_file() {
-        let _guard = CWD_LOCK.lock().unwrap();
+        let _guard = CWD_LOCK
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         let tmp = tempfile::tempdir().unwrap();
         let orig = std::env::current_dir().unwrap();
         std::env::set_current_dir(tmp.path()).unwrap();
@@ -2915,7 +2964,9 @@ mod tests {
 
     #[test]
     fn test_append_routine_to_project_toml_appends_to_existing() {
-        let _guard = CWD_LOCK.lock().unwrap();
+        let _guard = CWD_LOCK
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         let tmp = tempfile::tempdir().unwrap();
         let orig = std::env::current_dir().unwrap();
         std::env::set_current_dir(tmp.path()).unwrap();

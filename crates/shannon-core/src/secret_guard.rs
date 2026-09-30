@@ -56,7 +56,7 @@ pub fn audit_wire_and_log(wire: &serde_json::Value) -> usize {
     let count = findings.len();
     // `None` = an external transform manages policy (the built-in guard did
     // not install itself) — its host decides what to tell the user.
-    let mode = ENABLED.get().copied();
+    let mode = enabled_mode();
     for f in findings {
         // Deliberately narrow log: rule id only. The wire body itself is
         // already teed into the L0 session log under the redaction policy.
@@ -135,10 +135,11 @@ pub fn take_redaction_suggestion() -> bool {
     }
 }
 
-/// Test seam: clear the process-global suggestion latches so tests are
-/// order-independent in shared-process runs.
+/// Test seam: clear the process-global suggestion latches (and the latched
+/// guard mode) so tests are order-independent in shared-process runs.
 #[cfg(test)]
 fn reset_redaction_suggestion() {
+    ENABLED.store(0, std::sync::atomic::Ordering::Relaxed);
     AUDIT_HITS.store(0, std::sync::atomic::Ordering::Relaxed);
     SUGGESTION_PENDING.store(false, std::sync::atomic::Ordering::Relaxed);
     SUGGESTION_TAKEN.store(false, std::sync::atomic::Ordering::Relaxed);
@@ -735,7 +736,31 @@ fn decode_hex(s: &str) -> Option<Vec<u8>> {
         .collect()
 }
 
-static ENABLED: std::sync::OnceLock<SecretGuardMode> = std::sync::OnceLock::new();
+// 0 = unset, 1 = Audit, 2 = Redact. An AtomicU8 instead of a OnceLock so the
+// test seam below can reset it: shared-process `cargo test` runs would
+// otherwise let one test's install latch the mode for every later test
+// (nextest's per-process isolation hides this in CI).
+static ENABLED: std::sync::atomic::AtomicU8 = std::sync::atomic::AtomicU8::new(0);
+
+fn enabled_mode() -> Option<SecretGuardMode> {
+    use std::sync::atomic::Ordering::Relaxed;
+    match ENABLED.load(Relaxed) {
+        1 => Some(SecretGuardMode::Audit),
+        2 => Some(SecretGuardMode::Redact),
+        _ => None,
+    }
+}
+
+fn set_enabled_mode(mode: SecretGuardMode) {
+    use std::sync::atomic::Ordering::Relaxed;
+    ENABLED.store(
+        match mode {
+            SecretGuardMode::Audit => 1,
+            SecretGuardMode::Redact => 2,
+        },
+        Relaxed,
+    );
+}
 
 /// Parse `$SHANNON_SECRET_GUARD` (`audit` | `redact`; anything else = off).
 fn mode_from_env() -> Option<SecretGuardMode> {
@@ -779,8 +804,8 @@ fn resolve_mode_with_default(
 }
 
 fn install_mode(mode: SecretGuardMode) -> Option<SecretGuardMode> {
-    if let Some(existing) = ENABLED.get() {
-        return Some(*existing);
+    if let Some(existing) = enabled_mode() {
+        return Some(existing);
     }
     let key = load_or_create_key(&shannon_home())?;
     let exact = crate::session_log::redaction::global_policy()
@@ -788,7 +813,7 @@ fn install_mode(mode: SecretGuardMode) -> Option<SecretGuardMode> {
         .to_vec();
     let guard = HostSecretGuard::new(key, exact, mode == SecretGuardMode::Redact);
     set_context_transform(Some(std::sync::Arc::new(guard)));
-    let _ = ENABLED.set(mode);
+    set_enabled_mode(mode);
     tracing::info!(target: "shannon::secret_guard", ?mode, "secret-guard enabled (built-in transform)");
     Some(mode)
 }
@@ -800,8 +825,8 @@ fn install_mode(mode: SecretGuardMode) -> Option<SecretGuardMode> {
 pub fn init_from_config(
     cfg: Option<&crate::unified_config::SecretGuardSection>,
 ) -> Option<SecretGuardMode> {
-    if let Some(existing) = ENABLED.get() {
-        return Some(*existing);
+    if let Some(existing) = enabled_mode() {
+        return Some(existing);
     }
     let mode = cfg
         .and_then(|c| c.mode.as_deref())
@@ -829,8 +854,8 @@ pub fn init_from_env() -> Option<SecretGuardMode> {
 /// An explicit `$SHANNON_SECRET_GUARD` or `[secret_guard] mode` always
 /// decides — `"off"` disables entirely, `"redact"` enables rewriting.
 pub fn init_from_env_or_config() -> Option<SecretGuardMode> {
-    if let Some(existing) = ENABLED.get() {
-        return Some(*existing);
+    if let Some(existing) = enabled_mode() {
+        return Some(existing);
     }
     let env_raw = std::env::var("SHANNON_SECRET_GUARD").ok();
     let section_mode = crate::unified_config::SecretGuardSection::load().mode;

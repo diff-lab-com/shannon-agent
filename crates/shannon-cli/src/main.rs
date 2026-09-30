@@ -1595,17 +1595,12 @@ struct ResolvedResume {
     cwd_match: bool,
 }
 
-/// Best-effort comparison of a session's recorded project path against the
-/// current working directory. Falls back to exact string equality when either
-/// side cannot be canonicalized; `None` (unrecorded) never matches.
-fn current_cwd_matches(project_path: Option<&str>) -> bool {
-    let Some(recorded) = project_path else {
-        return false;
-    };
+/// Same-directory test: raw spellings first, canonical forms second —
+/// macOS reports the physical cwd (`/private/var/…`) while recorded paths
+/// may carry the `/var/…` alias, and raw equality alone would misroute
+/// `-c` session selection.
+fn same_cwd(recorded: &str, cwd: &std::path::Path) -> bool {
     let recorded_path = std::path::PathBuf::from(recorded);
-    let Ok(cwd) = std::env::current_dir() else {
-        return false;
-    };
     if recorded_path == cwd {
         return true;
     }
@@ -1613,6 +1608,19 @@ fn current_cwd_matches(project_path: Option<&str>) -> bool {
         (Ok(a), Ok(b)) => a == b,
         _ => false,
     }
+}
+
+/// Best-effort comparison of a session's recorded project path against the
+/// current working directory. Falls back to exact string equality when either
+/// side cannot be canonicalized; `None` (unrecorded) never matches.
+fn current_cwd_matches(project_path: Option<&str>) -> bool {
+    let Some(recorded) = project_path else {
+        return false;
+    };
+    let Ok(cwd) = std::env::current_dir() else {
+        return false;
+    };
+    same_cwd(recorded, &cwd)
 }
 
 /// Resolve the session to resume (§4.6 cutover).
@@ -1653,7 +1661,7 @@ fn resolve_resume(session_id_str: Option<&str>) -> Result<Option<ResolvedResume>
         infos.iter().find(|info| {
             info.project_path
                 .as_deref()
-                .is_some_and(|p| std::path::Path::new(p) == cwd.as_path())
+                .is_some_and(|p| same_cwd(p, cwd.as_path()))
         })
     });
     let picked_id = cwd_pick

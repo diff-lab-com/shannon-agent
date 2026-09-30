@@ -372,11 +372,24 @@ fn is_openable_url(url: &str) -> bool {
 /// `canonicalize` returns `\\?\`-prefixed verbatim paths, both of which
 /// would otherwise never `starts_with` the raw base (§review P1-3).
 pub(crate) fn allowed_path_bases() -> Vec<std::path::PathBuf> {
+    // Each base is admitted in BOTH spellings: the canonicalized form
+    // (/private/var/... on macOS) matches canonicalized candidates, and the
+    // raw form (/var/...) matches lexical probes of not-yet-existing paths
+    // under the /tmp|/var aliases — canonicalizing those is impossible and
+    // rejecting them would make /tmp paths unusable on macOS only.
     let mut bases = Vec::new();
-    if let Some(home) = dirs::home_dir() {
-        bases.push(normalized_base(&home));
+    let mut push = |p: std::path::PathBuf| {
+        if !bases.contains(&p) {
+            bases.push(p);
+        }
+    };
+    for raw in [dirs::home_dir(), Some(std::env::temp_dir())]
+        .into_iter()
+        .flatten()
+    {
+        push(strip_windows_verbatim(&raw));
+        push(normalized_base(&raw));
     }
-    bases.push(normalized_base(&std::env::temp_dir()));
     bases
 }
 

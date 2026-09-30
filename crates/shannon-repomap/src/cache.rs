@@ -354,11 +354,31 @@ impl RepoMapCache {
 /// Resolve `path` against `root` and return an absolute path. Returns `None`
 /// when `path` is unrelated to `root` (we silently ignore such events).
 fn absolutize(root: &Path, path: &Path) -> Option<PathBuf> {
-    if path.is_absolute() {
-        Some(path.to_path_buf())
+    let p = if path.is_absolute() {
+        path.to_path_buf()
     } else {
-        Some(root.join(path))
+        root.join(path)
+    };
+    // Track keys under ONE spelling: the cache root is canonicalized at
+    // construction (canonicalize_lossy), so on macOS a raw `/var/...`
+    // spelling must resolve to the same `/private/var/...` key the walk
+    // stored, or update/remove/lookup silently miss.
+    if let Ok(c) = fs::canonicalize(&p) {
+        return Some(c);
     }
+    // Path may not exist (create/remove flows): canonicalize the deepest
+    // existing ancestor and re-join the remainder. The cache-root-relative
+    // branch covers the common case exactly.
+    let root_c = canonicalize_lossy(root);
+    if let Ok(rel) = p.strip_prefix(root) {
+        return Some(root_c.join(rel));
+    }
+    if let Ok(parent) = fs::canonicalize(p.parent().unwrap_or(root)) {
+        if let Some(name) = p.file_name() {
+            return Some(parent.join(name));
+        }
+    }
+    Some(p)
 }
 
 /// Best-effort canonicalize. Falls back to the input path if canonicalize
@@ -642,7 +662,11 @@ mod tests {
         let snapshot_a = cache.pack_snapshot(60);
         let snapshot_b = cache.pack_snapshot(60);
         assert_eq!(snapshot_a, snapshot_b, "snapshots must be stable");
-        assert!(snapshot_a.contains("snap_func_0"));
+        // No content assertion here: the 60-token budget can trim every one
+        // of the 8 identical files, and WHICH files keep symbols depends on
+        // the walk's directory order (read_dir is unsorted and differs
+        // between APFS and ext4). The snapshot == destructive-pack
+        // equivalence and cache-intactness asserts below carry the contract.
 
         // Identical content to the destructive path on an equal cache.
         let mut destructive = RepoMapCache::ephemeral(&root).unwrap();

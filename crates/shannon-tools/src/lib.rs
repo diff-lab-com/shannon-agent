@@ -1093,8 +1093,14 @@ mod tests {
                 "with a relocating backend the echo must be the sandbox view"
             );
         } else {
+            // The tool canonicalizes paths for the echo/history key; on
+            // macOS canonicalize maps /var/... to /private/var/..., so
+            // compare resolved forms rather than raw spellings.
             assert_eq!(
-                echoed, host_str,
+                std::path::Path::new(&echoed).canonicalize().unwrap(),
+                std::path::Path::new(host_str.as_str())
+                    .canonicalize()
+                    .unwrap(),
                 "without a relocating backend the host path is the sandbox view"
             );
         }
