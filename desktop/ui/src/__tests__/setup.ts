@@ -155,6 +155,13 @@ vi.mock('@/lib/tauri-api', async (importOriginal) => ({
     approval_mode: 'normal',
   }),
   configure: vi.fn().mockResolvedValue(undefined),
+  // R3-2: model-profile roster (Settings → Models "Profiles") — one active
+  // "default" row by default; flows override per test.
+  listProviderProfiles: vi.fn().mockResolvedValue([
+    { name: 'default', provider_count: 2, active: true, model: 'claude-sonnet-4-6' },
+  ]),
+  createProviderProfile: vi.fn(),
+  setActiveProviderProfile: vi.fn(),
   // P0-③/P1-⑤: plan dock + tool-duration lookup (both opportunistic reads).
   getSessionPlan: vi.fn().mockResolvedValue(null),
   getTraceTimeline: vi.fn().mockResolvedValue({ session_id: 's', turns: [], cumulative: [] }),

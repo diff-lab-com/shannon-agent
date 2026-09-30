@@ -161,8 +161,17 @@ pub mod commands_memory;
 #[cfg(feature = "tauri")]
 pub mod commands_chat;
 
+/// R3-3 — Plan/Act dual-tier model preference: pure tier-preference +
+/// resolution logic (no Tauri dependency; unit-tested standalone). See the
+/// module docs for the precedence contract.
+pub mod phase_tier;
+
 #[cfg(feature = "tauri")]
 pub mod commands_mcp;
+
+#[cfg(feature = "tauri")]
+/// R3-2 (desktop slice) — provider model-profile list/switch/create.
+pub mod commands_profiles;
 
 #[cfg(feature = "tauri")]
 pub mod commands_notifications;
@@ -203,10 +212,6 @@ pub mod session_registry;
 // P1-1 — session multi-window commands/registry/restore.
 #[cfg(feature = "tauri")]
 pub mod session_window_commands;
-
-// Office Wave 3 C3 — companion Quick Capture window (open/toggle commands).
-#[cfg(feature = "tauri")]
-pub mod companion_window_commands;
 
 #[cfg(feature = "tauri")]
 pub mod commands_usage;

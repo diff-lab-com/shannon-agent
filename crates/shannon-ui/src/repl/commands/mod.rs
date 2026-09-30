@@ -728,6 +728,7 @@ pub fn handle_command(repl: &mut Repl, input: &str) -> Result<()> {
         "models",
         "provider",
         "prov",
+        "profiles",
         "init",
         "config",
         "connect",
@@ -856,6 +857,10 @@ pub fn handle_command(repl: &mut Repl, input: &str) -> Result<()> {
             "quit" | "exit" => handle_quit(repl)?,
             "model" | "models" => config::handle_model(repl, args)?,
             "provider" | "prov" => config::handle_provider(repl, args)?,
+            // R3-2: the provider/model profile manager (plural). /profile
+            // (singular) stays reserved for the permission-profile command
+            // during the R1-6 naming transition — do not alias the two.
+            "profiles" => config::handle_profiles(repl, args)?,
             "init" => config::handle_init(repl)?,
             "config" => config::handle_config(repl, args)?,
             "connect" => config::handle_connect(repl, args)?,

@@ -139,9 +139,11 @@ pub fn replace_for_provider_slug(slug: &str) {
 }
 
 /// replace_for_provider_slug against an already-loaded config (the
-/// hermetic seam tests use).
+/// hermetic seam tests use). R3-2: the slot is looked up in the config's
+/// **active** profile (`active_profile`, `"default"` when unset) so a
+/// profile switch re-binds the registry to that profile's declarations.
 pub fn replace_for_provider_in(slug: &str, cfg: &ProviderModelConfig) {
-    let Some(mp) = cfg.profiles.get("default") else {
+    let Some(mp) = cfg.active_model_profile() else {
         clear();
         return;
     };
@@ -396,6 +398,7 @@ mod tests {
         );
         let pm = ProviderModelConfig {
             version: ProviderModelConfig::VERSION,
+            active_profile: String::new(),
             profiles,
             gateway: Default::default(),
         };
@@ -467,6 +470,7 @@ mod tests {
         );
         let pm = ProviderModelConfig {
             version: ProviderModelConfig::VERSION,
+            active_profile: String::new(),
             profiles,
             gateway: Default::default(),
         };
@@ -483,6 +487,82 @@ mod tests {
             // Unknown slug clears.
             replace_for_provider_in("ghost", &pm);
             assert_eq!(lookup("by-canonical-slug"), None);
+        });
+    }
+
+    /// R3-2: `replace_for_provider_in` must look the slot up in the config's
+    /// **active** profile (`active_profile`, `"default"` when unset) so a
+    /// `/profiles use` switch re-binds the registry to the new profile's
+    /// declarations.
+    #[test]
+    fn replace_for_provider_honors_active_profile() {
+        use shannon_types::provider_config::{
+            ActiveTarget, CredentialRef, CredentialScope, ModelProfile, ProviderKind,
+            ProviderProfile, ProviderTiers, Scope,
+        };
+        use std::collections::HashMap;
+
+        let mk = |id: &str, model: &str, ctx: u32| ProviderProfile {
+            id: id.to_string(),
+            kind: ProviderKind::OpenAiCompatible,
+            display_name: id.to_string(),
+            base_url: "https://x.example/v1".to_string(),
+            models_url: None,
+            credential: CredentialRef::Env {
+                var: "K".to_string(),
+            },
+            extra_headers: HashMap::new(),
+            default_max_tokens: None,
+            fallback_models: Vec::new(),
+            quirks: Default::default(),
+            tiers: ProviderTiers::default(),
+            models: vec![{
+                let mut s = spec(model);
+                s.context_window = Some(ctx);
+                s
+            }],
+        };
+        let profile = |name: &str, provider: ProviderProfile| ModelProfile {
+            name: name.to_string(),
+            active_target: ActiveTarget {
+                provider_id: provider.id.clone(),
+                model_id: "m".to_string(),
+                scope: Scope::Global,
+            },
+            providers: vec![provider],
+            auxiliary: HashMap::new(),
+            credential_scope: CredentialScope::Shared,
+        };
+        let mut pm = ProviderModelConfig {
+            version: ProviderModelConfig::VERSION,
+            active_profile: String::new(),
+            profiles: HashMap::from([
+                (
+                    "default".to_string(),
+                    profile("default", mk("glm", "in-default", 1_000)),
+                ),
+                (
+                    "work".to_string(),
+                    profile("work", mk("openai", "in-work", 2_000)),
+                ),
+            ]),
+            gateway: Default::default(),
+        };
+
+        with_registry(&[], || {
+            // Unset pointer → default profile: the work-only declaration is
+            // invisible and the default one wins.
+            replace_for_provider_in("openai", &pm);
+            assert_eq!(lookup("in-work"), None);
+            replace_for_provider_in("glm", &pm);
+            assert_eq!(context_window_for("in-default"), Some(1_000));
+
+            // Switch the pointer: the same call now binds to `work`.
+            pm.active_profile = "work".to_string();
+            replace_for_provider_in("glm", &pm);
+            assert_eq!(lookup("in-default"), None, "stale profile cleared");
+            replace_for_provider_in("openai", &pm);
+            assert_eq!(context_window_for("in-work"), Some(2_000));
         });
     }
 }

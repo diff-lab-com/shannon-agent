@@ -15,6 +15,7 @@ import { getCurrentWindow } from '@tauri-apps/api/window';
 import { toastError } from '@/lib/errorToast';
 import { useSessionBudget } from '@/hooks/useSessionBudget';
 import { ExecutionModeSwitcher } from '@/components/chat/ExecutionModeSwitcher';
+import { PhaseTierSwitcher } from '@/components/chat/PhaseTierSwitcher';
 
 const TITLE_MAP: [string, string][] = [
   ['/opc/task', 'header.title.opcTask'],
@@ -253,6 +254,10 @@ export function Header() {
           {/* P1-3: execution-mode switcher (严格/平衡/宽松/自定义) — chat
               header only, kept next to the model selector. */}
           {isChat && <ExecutionModeSwitcher />}
+          {/* R3-3: plan/act model-tier pair (规划/执行档位) — chat header
+              only. Global preference; per-session overrides (R2-1) always
+              win over it. */}
+          {isChat && <PhaseTierSwitcher />}
           {/* Model selector — non-chat pages only: on /chat the composer
               model chip is the single surface (issue: 三处模型名重复).
               Both write the same config keys, so switching stays in sync. */}

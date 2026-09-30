@@ -1382,7 +1382,7 @@ fn should_enable_tools(provider: shannon_engine::api::LlmProvider) -> bool {
 /// The copy is in-memory only: the store file is never written back.
 fn graft_model_onto_connected(model_id: &str) -> Option<ProviderModelConfig> {
     let mut pm = shannon_core::provider_config_store::load(None)?;
-    let profile = pm.profiles.get_mut("default")?;
+    let profile = pm.active_model_profile_mut()?;
     profile.active_target.model_id = model_id.to_string();
     // Match `ConfigBuilder::load_connected_profile`, which runs env-var
     // substitution over the connected layer before merging.

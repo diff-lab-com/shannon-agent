@@ -9,6 +9,7 @@ import type {
   ProviderConnection,
   ProvidersFile,
   ProviderInput,
+  ProviderProfileSummary,
   DesktopConfig,
   GatewayConfig,
   GatewayPairingRequest,
@@ -21,7 +22,6 @@ import type {
   MobilePairToken,
   ContainerInfo,
   SessionWindowInfo,
-  CompanionWindowInfo,
   RemoteHealth,
   RemoteTargetListItem,
   SshHostCandidate,
@@ -52,7 +52,6 @@ import type {
   MobileTlsStatus,
   ProjectRecord,
   ProviderStatus,
-  FileIndexEntry,
 } from '@/types'
 import type {
   ScheduledRoutine,
@@ -596,6 +595,28 @@ export async function refreshModelCatalog(): Promise<ModelCatalogRefreshResult> 
   return invoke('refresh_model_catalog')
 }
 
+// --- R3-2 (desktop slice): provider model profiles ---
+
+/** List the engine store's model profiles (`"default"` pinned first, rest
+ *  alphabetical; `active` marks the engine's `active_profile`). */
+export async function listProviderProfiles(): Promise<ProviderProfileSummary[]> {
+  return invoke('list_provider_profiles')
+}
+
+/** Create an empty named model profile (inactive — switching is explicit).
+ *  Returns the refreshed list. Throws on empty/too-long/whitespace names
+ *  (the engine's shared `validate_profile_name` contract) and duplicates. */
+export async function createProviderProfile(name: string): Promise<ProviderProfileSummary[]> {
+  return invoke('create_provider_profile', { name })
+}
+
+/** Switch the engine's active model profile and re-point the global
+ *  default. Returns the refreshed list. The UI confirms before switching
+ *  to a profile with no providers. */
+export async function setActiveProviderProfile(name: string): Promise<ProviderProfileSummary[]> {
+  return invoke('set_active_provider_profile', { name })
+}
+
 export async function getTools(): Promise<ToolInfo[]> {
   return invoke('list_tools')
 }
@@ -763,18 +784,6 @@ export async function revealSessionInMain(sessionId: string): Promise<void> {
   await invoke('reveal_session_in_main', { sessionId })
 }
 
-// --- Office Wave 3 C3 companion Quick Capture window (frozen backend contract) ---
-
-/** Create (or focus) the always-on-top-capable `companion` window. */
-export async function openCompanionWindow(): Promise<CompanionWindowInfo> {
-  return invoke('open_companion_window')
-}
-
-/** Toggle the companion window's stay-on-top flag (only acts on `companion`). */
-export async function setCompanionAlwaysOnTop(enabled: boolean): Promise<void> {
-  await invoke('set_companion_always_on_top', { enabled })
-}
-
 export async function setSessionWorkingDir(id: string, path: string): Promise<void> {
   await invoke('set_session_working_dir', { id, path })
 }
@@ -918,27 +927,6 @@ export async function probeUrlFrameable(url: string): Promise<FrameProbe> {
 /** Existence probe for chat file references (anti-hallucination backstop). */
 export async function pathExists(path: string): Promise<boolean> {
   return invoke('path_exists', { path })
-}
-
-// --- 2026-09-30 office Wave 2 (B9' Files page): reference-style file index.
-// The Rust side owns the on-disk index; these wrappers are the whole
-// frontend contract. Registration is fire-and-forget from the UI (attach
-// flow / FileCard render) — callers swallow rejections so a failed index
-// write can never interrupt a chat.
-
-/** Every indexed file, `registered_at` descending. */
-export async function listFileIndex(): Promise<FileIndexEntry[]> {
-  return invoke('list_file_index')
-}
-
-/** Upsert one file into the index (`source`: 'attachment' | 'generated'). */
-export async function registerFileIndexEntry(path: string, source: string): Promise<void> {
-  await invoke('register_file_index_entry', { path, source })
-}
-
-/** Toggle an entry's favorite flag (persisted Rust-side). */
-export async function setFileIndexFavorite(path: string, favorite: boolean): Promise<void> {
-  await invoke('set_file_index_favorite', { path, favorite })
 }
 
 export interface TextFileContent {
