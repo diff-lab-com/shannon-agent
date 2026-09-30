@@ -409,6 +409,14 @@ pub async fn install_native_skill(
     plugin_name: String,
     body: String,
 ) -> Result<InstallResult, String> {
+    // G1 fix round 1 (Minor-6) — backend guard behind the UI's disabled
+    // button: a planned (in-development) native skill has no runtime, so
+    // installing it would only write a stub SKILL.md.
+    if extensions::skill_catalog::is_native_skill_in_development(&plugin_name) {
+        return Err(format!(
+            "skill '{plugin_name}' is planned but its runtime is not implemented yet — nothing to install"
+        ));
+    }
     let installer = SkillMarkdownInstaller {
         plugin_name: plugin_name.clone(),
         body,

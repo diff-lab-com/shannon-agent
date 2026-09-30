@@ -350,6 +350,20 @@ fn builtin_skills() -> Vec<CatalogEntry> {
     ]
 }
 
+/// Minor-6 — whether a NATIVE catalog entry is flagged in-development
+/// (planned, runtime not implemented). Used by `install_native_skill` as a
+/// backend guard so a direct Tauri invoke cannot bypass the UI's disabled
+/// button and write a stub SKILL.md that does nothing at runtime. Unknown
+/// names (repo/custom entries) are never planned.
+pub fn is_native_skill_in_development(name: &str) -> bool {
+    builtin_skills()
+        .iter()
+        .find(|e| e.name == name)
+        .and_then(|e| e.metadata.get("in_development"))
+        .and_then(|v| v.as_bool())
+        .unwrap_or(false)
+}
+
 fn default_skill_cache_dir() -> Option<PathBuf> {
     dirs::cache_dir().map(|d| d.join("shannon").join("skills"))
 }
@@ -413,6 +427,48 @@ mod tests {
             native_count >= 15,
             "expected at least 15 native entries, got {native_count}"
         );
+    }
+
+    /// G1 P0-2.3 / Minor-6: planned entries are flagged, their descriptions
+    /// no longer carry the raw "[In development]" prefix, and the backend
+    /// install guard agrees with the flags.
+    #[tokio::test]
+    async fn in_development_flags_and_guard_agree() {
+        for planned in [
+            "pdf",
+            "plotly-charts",
+            "data-analysis",
+            "jupyter-session",
+            "documents-open",
+            "documents-convert",
+        ] {
+            assert!(
+                is_native_skill_in_development(planned),
+                "{planned} must be flagged in development"
+            );
+        }
+        for installable in [
+            "git-workflow",
+            "refactor",
+            "sql-builder",
+            "not-a-native-skill",
+        ] {
+            assert!(
+                !is_native_skill_in_development(installable),
+                "{installable} must be installable"
+            );
+        }
+        // The flag replaced the raw prefix.
+        let client = SkillCatalogClient::new(Arc::new(StaticFetch("{}".to_string())));
+        let entries = client.list_skills().await.expect("list");
+        let jupyter = entries
+            .iter()
+            .find(|e| e.name == "jupyter-session")
+            .unwrap();
+        assert!(jupyter.metadata.get("in_development") == Some(&serde_json::json!(true)));
+        assert!(!jupyter.description.contains("[In development]"));
+        let git = entries.iter().find(|e| e.name == "git-workflow").unwrap();
+        assert!(!git.metadata.contains_key("in_development"));
     }
 
     #[tokio::test]
