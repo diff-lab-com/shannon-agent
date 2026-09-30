@@ -25,7 +25,6 @@ export const MOCK_SCHEDULED_ROUTINES: ScheduledRoutine[] = [
       timeout_secs: 600,
       notify_on_failure: true,
       auto_archive_when_empty: false,
-      result_routing: ['slack:#ops'],
     },
     // P-U1/P-U3 demo: housed into a demoProjects registry project so the
     // rail tree nests it and /tasks?project= filters it.
@@ -47,7 +46,6 @@ export const MOCK_SCHEDULED_ROUTINES: ScheduledRoutine[] = [
       timeout_secs: 120,
       notify_on_failure: true,
       auto_archive_when_empty: false,
-      result_routing: ['notification', 'log'],
       // P2-5: off-peak window (00:00–07:00, inclusive hours, machine-local).
       execution_window: { start_hour: 0, end_hour: 6, timezone: null },
     },
@@ -68,7 +66,6 @@ export const MOCK_SCHEDULED_ROUTINES: ScheduledRoutine[] = [
       timeout_secs: 60,
       notify_on_failure: false,
       auto_archive_when_empty: true,
-      result_routing: ['slack:#eng'],
     },
     working_dir: '/home/demo/workspace/website',
   } as unknown as ScheduledRoutine,
@@ -88,7 +85,6 @@ export const MOCK_SCHEDULED_ROUTINES: ScheduledRoutine[] = [
       timeout_secs: 300,
       notify_on_failure: true,
       auto_archive_when_empty: false,
-      result_routing: ['slack:#csm', 'email:csm@company.com'],
     },
   } as unknown as ScheduledRoutine,
   {
@@ -107,7 +103,6 @@ export const MOCK_SCHEDULED_ROUTINES: ScheduledRoutine[] = [
       timeout_secs: 600,
       notify_on_failure: true,
       auto_archive_when_empty: false,
-      result_routing: ['slack:#product', 'notification'],
     },
   } as unknown as ScheduledRoutine,
   {
@@ -126,7 +121,6 @@ export const MOCK_SCHEDULED_ROUTINES: ScheduledRoutine[] = [
       timeout_secs: 30,
       notify_on_failure: true,
       auto_archive_when_empty: false,
-      result_routing: ['log'],
     },
   } as unknown as ScheduledRoutine,
 ]

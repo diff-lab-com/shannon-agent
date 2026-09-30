@@ -23,7 +23,7 @@ export const DEFAULT_POLICY: ExecutionPolicy = {
   notify_on_failure: true,
   budget_usd: null,
   auto_archive_when_empty: false,
-  result_routing: [],
+  // email/notification routing: deferred, needs ExecutionPolicy + SMTP (backlog)
 }
 
 export interface StatusBadge {

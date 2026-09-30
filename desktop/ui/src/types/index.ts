@@ -1039,10 +1039,7 @@ export interface ExecutionPolicy {
   notify_on_failure: boolean
   budget_usd?: number | null
   auto_archive_when_empty: boolean
-  /// P2.3: Result routing channels. Each entry is a target spec like
-  /// "slack:#ops", "email:ops@example.com", "notification", "log".
-  /// Empty array = log only (default behavior).
-  result_routing?: string[]
+  // email/notification routing: deferred, needs ExecutionPolicy + SMTP (backlog)
   /// P2-5: off-peak execution window (frozen contract
   /// `ExecutionPolicy.execution_window`). Hours are inclusive wall-clock
   /// hours in `timezone`; cross-midnight windows (start > end) wrap.

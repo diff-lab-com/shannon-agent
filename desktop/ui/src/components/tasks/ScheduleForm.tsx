@@ -7,7 +7,6 @@
 import { useEffect, useMemo, useState } from 'react'
 import { useIntl } from 'react-intl'
 import { Button } from '@/components/ui/button'
-import ResultRoutingEditor from './ResultRoutingEditor'
 import ScheduleTemplates from './ScheduleTemplates'
 import { weekdayName, DEFAULT_POLICY } from './shared'
 import { parseNlCron, type CronDescription } from '@/lib/nl-cron'
@@ -519,13 +518,6 @@ export default function ScheduleForm({ onSubmit, onCancel }: ScheduleFormProps) 
                 </label>
               </div>
             ) : null}
-          </div>
-
-          <div className="md:col-span-2">
-            <ResultRoutingEditor
-              value={policy.result_routing ?? []}
-              onChange={next => setPolicy({ ...policy, result_routing: next })}
-            />
           </div>
         </div>
       ) : null}

@@ -95,21 +95,6 @@ export default function RoutineDetailDrawer({
           {/* P2-5: off-peak execution window editor + queued status.
               Keyed by routine id so toggles/inputs reset per routine. */}
           <OffpeakWindowEditor key={routine.id} routine={routine} onUpdated={onUpdated} />
-          {routine.policy?.result_routing && routine.policy.result_routing.length > 0 ? (
-            <div>
-              <span className="text-label-sm text-on-surface-variant">{t('tasks.routineDetailDrawer.resultRouting')}</span>
-              <ul className="flex flex-wrap gap-xs mt-xs">
-                {routine.policy.result_routing.map(entry => (
-                  <li
-                    key={entry}
-                    className="font-label-sm text-label-xs bg-tertiary-container text-on-tertiary-container px-sm py-0.5 rounded-full border border-tertiary/30"
-                  >
-                    {entry}
-                  </li>
-                ))}
-              </ul>
-            </div>
-          ) : null}
           <div>
             <div className="flex items-center justify-between mb-sm">
               <span className="text-label-sm text-on-surface-variant uppercase tracking-wider">
