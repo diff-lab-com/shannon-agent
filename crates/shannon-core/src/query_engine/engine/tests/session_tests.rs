@@ -10,6 +10,7 @@ async fn probe_active_health_errors_on_unreachable_endpoint_without_swapping_key
     // without fragile mockito path-matching. send_message (not the _with_retry
     // variant) is single-attempt, so there is no retry backoff to wait out.
     let config = LlmClientConfig {
+        alternate_api_keys: Vec::new(),
         thinking_type: None,
         api_key: "running-client-key".to_string(),
         base_url: "http://127.0.0.1:1".to_string(),

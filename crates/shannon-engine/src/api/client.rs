@@ -1212,6 +1212,8 @@ impl LlmClient {
     ///   unchanged (the pre-R3-1 behavior; Shannon does not route).
     /// - **AuthenticationFailed never fails over.** A bad key fails over
     ///   nowhere useful — surface it so the user fixes the credential.
+    ///   (Exception: R4-3 key rotation below — a bad key CAN be healed by
+    ///   another key of the SAME provider, which is tried first.)
     /// - Only rate-limit (429) and 5xx/529 errors that survived the primary
     ///   target's full retry budget trigger the walk
     ///   ([`RetryConfig::is_failover_eligible`]).
@@ -1224,11 +1226,29 @@ impl LlmClient {
     ///   tracing log: "falling back to <model>@<provider> (<reason>)".
     /// - `RetryConfig::suppress_failover` (session-level model override,
     ///   desktop R2-1) skips the walk entirely — the user pinned the target.
+    ///   It does **NOT** suppress R4-3 key rotation (see below): a pinned
+    ///   *target* still allows rotating credentials *within* that target.
     ///
-    /// The closure receives the client to attempt (primary or fallback), so
-    /// the same shape works for streaming, structured-streaming and plain
-    /// sends. The boxed-future return (lifetime tied to the client argument)
-    /// lets one closure serve both the primary and every fallback hop.
+    /// # R4-3: multi-key rotation (runs BEFORE provider failover)
+    ///
+    /// When the config carries alternate API keys for the same provider
+    /// (`LlmClientConfig::alternate_api_keys`) and the exhausted error is
+    /// rotation-eligible ([`RetryConfig::is_key_rotation_eligible`]:
+    /// 401/403-class auth failures or persistent 429), each remaining key is
+    /// tried in order — **before** any provider failover. Budget discipline
+    /// mirrors the failover walk: each key gets exactly one standard retry
+    /// pass, total rotations are capped at the key count, and every rotation
+    /// emits a [`RetryNoticeKind::KeyRotation`] notice
+    /// ("rotating API key (i/N) for <provider> (<reason>)") through the
+    /// retry observer. If every key is exhausted the last error flows into
+    /// the failover checks below — so a final 401 still surfaces as
+    /// [`ApiError::AuthenticationFailed`] (never provider-fails-over), while
+    /// a final 429 may walk the chain.
+    ///
+    /// The closure receives the client to attempt (primary, rotated-key or
+    /// fallback), so the same shape works for streaming, structured-streaming
+    /// and plain sends. The boxed-future return (lifetime tied to the client
+    /// argument) lets one closure serve all of those hops.
     pub(crate) async fn send_with_failover<T, F>(&self, send: F) -> Result<T, ApiError>
     where
         F: Fn(&LlmClient) -> futures::future::BoxFuture<'_, Result<T, ApiError>>,
@@ -1243,13 +1263,74 @@ impl LlmClient {
             Err(e) => e,
         };
 
+        // ── R4-3: rotate to the next key of THIS provider before any
+        //    provider failover. Deliberately NOT gated on
+        //    `suppress_failover`: a session-level pin means "this exact
+        //    provider/model target", not "this exact credential" — rotating
+        //    keys within the pinned target keeps the user's choice intact
+        //    and can only help.
+        let alternates = self.config.alternate_api_keys.clone();
+        if !alternates.is_empty() && retry_config.is_key_rotation_eligible(&last_err) {
+            let provider = self.config.provider.to_string();
+            let total = (alternates.len() + 1) as u32;
+            for (i, key) in alternates.into_iter().enumerate() {
+                // Visible rotation: the query event stream (via the retry
+                // observer) + the log. Emitted BEFORE the rotated attempt so
+                // the event precedes any of its own retry notices. The key
+                // being switched TO is position i + 2 (1-based; the primary
+                // key is position 1).
+                let notice = RetryNotice {
+                    attempt: 0,
+                    total_attempts: 0,
+                    wait: Duration::ZERO,
+                    reason: last_err.to_string(),
+                    kind: RetryNoticeKind::KeyRotation {
+                        index: (i + 2) as u32,
+                        total,
+                        provider: provider.clone(),
+                    },
+                };
+                tracing::warn!(
+                    "rotating API key ({}/{}) for {} ({})",
+                    i + 2,
+                    total,
+                    provider,
+                    last_err
+                );
+                self.notify_retry(notice).await;
+
+                let rotated = self.build_rotated_client(&key);
+                let rotated_observer = rotated.retry_observer_handle();
+                last_err = match retry_request_with_observer(
+                    &rotated.config.retry_config,
+                    rotated_observer.as_ref(),
+                    || send(&rotated),
+                )
+                .await
+                {
+                    Ok(ok) => return Ok(ok),
+                    Err(e) => e,
+                };
+                // The rotated key burned its standard retry pass. A
+                // non-rotation-eligible error (5xx, 400, timeout, ...) ends
+                // the walk — the next key cannot heal it either.
+                if !retry_config.is_key_rotation_eligible(&last_err) {
+                    break;
+                }
+            }
+        }
+
         // Session-level model override (desktop R2-1): the user explicitly
         // pinned this target — no silent degradation. Documented precedence
-        // on `RetryConfig::suppress_failover`.
+        // on `RetryConfig::suppress_failover`. Key rotation above is
+        // intentionally exempt (same provider, same model — only the
+        // credential changes).
         if retry_config.suppress_failover {
             return Err(last_err);
         }
         // Bad key: switching targets cannot heal it; surface immediately.
+        // (Reaching here means rotation already ran — and exhausted every
+        // key — so this is the spec's "401 with NO remaining keys" case.)
         if matches!(last_err, ApiError::AuthenticationFailed) {
             return Err(last_err);
         }
@@ -1362,6 +1443,30 @@ impl LlmClient {
         client
     }
 
+    /// R4-3: build the same-provider client that sends with the NEXT key in
+    /// the rotation walk. Same shape as [`Self::build_failover_client`] —
+    /// inherits the request tee, the (shared) retry observer and the
+    /// stream-idle override, and is terminal: the rotation loop above owns
+    /// progression, so a rotated client carries no remaining alternates and
+    /// no failover chain (a nested walk would multiply the retry budget).
+    /// Unlike a failover hop, provider/base_url/model are untouched — only
+    /// the credential changes.
+    fn build_rotated_client(&self, api_key: &str) -> LlmClient {
+        let mut cfg = self.config.clone();
+        cfg.api_key = api_key.to_string();
+        cfg.alternate_api_keys = Vec::new();
+        cfg.retry_config.fallbacks = Vec::new();
+        cfg.fallback_provider = None;
+        cfg.fallback_base_url = None;
+        let mut client = match self.request_capture_handle() {
+            Some(capture) => LlmClient::new(cfg).with_request_capture(capture),
+            None => LlmClient::new(cfg),
+        };
+        client.retry_observer = self.retry_observer.clone();
+        client.stream_idle_override = self.stream_idle_override.clone();
+        client
+    }
+
     /// Check Ollama model capabilities via `/api/show`.
     ///
     /// Returns `OllamaModelInfo` on success. Returns `None` if not an Ollama
@@ -1457,6 +1562,7 @@ mod tests {
 
     fn test_config() -> LlmClientConfig {
         LlmClientConfig {
+            alternate_api_keys: Vec::new(),
             thinking_type: None,
             provider: LlmProvider::Anthropic,
             api_key: "test-key".to_string(),
@@ -1478,6 +1584,7 @@ mod tests {
 
     fn ollama_config() -> LlmClientConfig {
         LlmClientConfig {
+            alternate_api_keys: Vec::new(),
             thinking_type: None,
             provider: LlmProvider::Ollama,
             api_key: String::new(),
@@ -1501,6 +1608,7 @@ mod tests {
 
     fn custom_config() -> LlmClientConfig {
         LlmClientConfig {
+            alternate_api_keys: Vec::new(),
             provider: LlmProvider::Custom,
             api_key: "sk-custom-secret".to_string(),
             model: "test-model".to_string(),
@@ -1580,6 +1688,7 @@ mod tests {
     /// so the timeout behavior is observed in isolation.
     fn slow_stream_config(base_url: String) -> LlmClientConfig {
         LlmClientConfig {
+            alternate_api_keys: Vec::new(),
             thinking_type: None,
             provider: LlmProvider::Anthropic,
             api_key: "test-key".to_string(),
@@ -2108,6 +2217,7 @@ mod tests {
     #[test]
     fn test_zhipu_auth_headers_use_jwt() {
         let config = LlmClientConfig {
+            alternate_api_keys: Vec::new(),
             thinking_type: None,
             provider: LlmProvider::Zhipu,
             api_key: "testid.testsecret".to_string(),
@@ -2609,6 +2719,355 @@ mod tests {
         );
         untouched.assert();
         assert!(notices.lock().unwrap().is_empty());
+    }
+
+    // ── R4-3: multi-key rotation ─────────────────────────────────────────
+
+    /// Client with alternate keys (rotation candidates) plus a notice sink.
+    fn rotation_client(
+        base_url: String,
+        alternate_api_keys: Vec<String>,
+        retry_config: RetryConfig,
+    ) -> (
+        LlmClient,
+        std::sync::Arc<std::sync::Mutex<Vec<RetryNotice>>>,
+    ) {
+        let mut cfg = test_config();
+        cfg.base_url = base_url;
+        cfg.api_key = "key-1".to_string();
+        cfg.alternate_api_keys = alternate_api_keys;
+        cfg.retry_config = retry_config;
+        let client = LlmClient::new(cfg);
+        let notices: std::sync::Arc<std::sync::Mutex<Vec<RetryNotice>>> = Default::default();
+        let sink = notices.clone();
+        client.set_retry_observer(Some(std::sync::Arc::new(move |notice: RetryNotice| {
+            sink.lock().unwrap().push(notice);
+            Box::pin(futures::future::ready(())) as futures::future::BoxFuture<'static, ()>
+        })));
+        (client, notices)
+    }
+
+    /// Mock one x-api-key slot on `server`: `key` → `status` (+ optional body).
+    async fn key_mock(
+        server: &mut mockito::ServerGuard,
+        key: &str,
+        status: usize,
+        body: Option<String>,
+    ) -> mockito::Mock {
+        let mut m = server
+            .mock("POST", "/v1/messages")
+            .match_header("x-api-key", key)
+            .with_status(status);
+        m = match body {
+            Some(b) => m.with_body(b),
+            None => m,
+        };
+        m.create_async().await
+    }
+
+    /// 401 on key 1 → rotate to key 2 → 200: exactly one `KeyRotation`
+    /// notice (index 2/2, provider "anthropic", auth reason), and the second
+    /// key's answer is returned.
+    #[tokio::test]
+    async fn key_rotation_on_auth_failure_succeeds_with_next_key() {
+        let mut server = mockito::Server::new_async().await;
+        let dead = key_mock(&mut server, "key-1", 401, None).await;
+        let ok = key_mock(&mut server, "key-2", 200, Some(anthropic_ok("second key"))).await;
+
+        let (client, notices) = rotation_client(
+            server.url(),
+            vec!["key-2".to_string()],
+            fb_retry_config(vec![]),
+        );
+
+        let blocks = client
+            .send_message_with_retry(vec![user_message()], None, None)
+            .await
+            .expect("the second key must answer");
+        let text: String = blocks
+            .iter()
+            .filter_map(|b| match b {
+                ContentBlock::Text { text } => Some(text.as_str()),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(text, "second key");
+
+        dead.assert();
+        ok.assert();
+        let notices = notices.lock().unwrap();
+        assert_eq!(notices.len(), 1, "one notice per rotation: {notices:?}");
+        match &notices[0].kind {
+            RetryNoticeKind::KeyRotation {
+                index,
+                total,
+                provider,
+            } => {
+                assert_eq!(*index, 2);
+                assert_eq!(*total, 2);
+                assert_eq!(provider, "anthropic");
+            }
+            other => panic!("expected KeyRotation kind, got {other:?}"),
+        }
+        assert!(
+            notices[0].reason.contains("Authentication"),
+            "the reason must carry the triggering error: {}",
+            notices[0].reason
+        );
+    }
+
+    /// 401 on every key → each remaining key gets exactly one standard pass
+    /// (rotations capped at the key count), the walk emits one notice per
+    /// rotation in order, and the FINAL error is `AuthenticationFailed` —
+    /// which must NOT fail over to a configured fallback chain.
+    #[tokio::test]
+    async fn key_rotation_exhaustion_surfaces_auth_and_never_fails_over() {
+        let mut server = mockito::Server::new_async().await;
+        let m1 = key_mock(&mut server, "key-1", 401, None).await;
+        let m2 = key_mock(&mut server, "key-2", 401, None).await;
+        let m3 = key_mock(&mut server, "key-3", 401, None).await;
+        let mut hop = mockito::Server::new_async().await;
+        let untouched = hop
+            .mock("POST", "/v1/messages")
+            .expect(0)
+            .create_async()
+            .await;
+
+        let (client, notices) = rotation_client(
+            server.url(),
+            vec!["key-2".to_string(), "key-3".to_string()],
+            fb_retry_config(vec![fb_target("fallback-a", &mut hop).await]),
+        );
+
+        let err = client
+            .send_message_with_retry(vec![user_message()], None, None)
+            .await
+            .expect_err("every key 401s");
+        assert!(
+            matches!(err, ApiError::AuthenticationFailed),
+            "exhausted rotation must surface the auth error, got {err:?}"
+        );
+        m1.assert();
+        m2.assert();
+        m3.assert();
+        untouched.assert();
+
+        let notices = notices.lock().unwrap();
+        let rotations: Vec<(u32, u32)> = notices
+            .iter()
+            .filter_map(|n| match n.kind {
+                RetryNoticeKind::KeyRotation { index, total, .. } => Some((index, total)),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(
+            rotations,
+            vec![(2, 3), (3, 3)],
+            "one notice per rotation, i/N in walk order"
+        );
+    }
+
+    /// Persistent 429 on both keys → rotation runs FIRST, and only after the
+    /// keys are exhausted does the provider failover walk start. Notice
+    /// order proves the precedence: KeyRotation before Failover.
+    #[tokio::test]
+    async fn key_rotation_precedes_provider_failover() {
+        let mut server = mockito::Server::new_async().await;
+        let m1 = key_mock(&mut server, "key-1", 429, None).await;
+        let m2 = key_mock(&mut server, "key-2", 429, None).await;
+        let mut hop = mockito::Server::new_async().await;
+        let ok = hop
+            .mock("POST", "/v1/messages")
+            .with_status(200)
+            .with_body(anthropic_ok("fallback hop"))
+            .expect(1)
+            .create_async()
+            .await;
+
+        let (client, notices) = rotation_client(
+            server.url(),
+            vec!["key-2".to_string()],
+            fb_retry_config(vec![fb_target("fallback-a", &mut hop).await]),
+        );
+
+        let blocks = client
+            .send_message_with_retry(vec![user_message()], None, None)
+            .await
+            .expect("the fallback hop must answer after key exhaustion");
+        let text: String = blocks
+            .iter()
+            .filter_map(|b| match b {
+                ContentBlock::Text { text } => Some(text.as_str()),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(text, "fallback hop");
+
+        m1.assert();
+        m2.assert();
+        ok.assert();
+        let notices = notices.lock().unwrap();
+        assert_eq!(notices.len(), 2, "one rotation + one failover");
+        assert!(
+            matches!(
+                notices[0].kind,
+                RetryNoticeKind::KeyRotation {
+                    index: 2,
+                    total: 2,
+                    ..
+                }
+            ),
+            "rotation must come first: {:?}",
+            notices[0].kind
+        );
+        assert!(
+            matches!(notices[1].kind, RetryNoticeKind::Failover { ref model, .. } if model == "fallback-a"),
+            "failover must follow exhausted keys: {:?}",
+            notices[1].kind
+        );
+    }
+
+    /// `suppress_failover` (session pin) keeps rotation ON: the pinned target
+    /// still rotates its own keys; only cross-provider degradation is
+    /// suppressed. 401 on key 1 + a configured (untouched) fallback chain +
+    /// key 2 answering 200 → the request succeeds via key 2.
+    #[tokio::test]
+    async fn suppress_failover_keeps_key_rotation() {
+        let mut server = mockito::Server::new_async().await;
+        let dead = key_mock(&mut server, "key-1", 401, None).await;
+        let ok = key_mock(
+            &mut server,
+            "key-2",
+            200,
+            Some(anthropic_ok("pinned key 2")),
+        )
+        .await;
+        let mut hop = mockito::Server::new_async().await;
+        let untouched = hop
+            .mock("POST", "/v1/messages")
+            .expect(0)
+            .create_async()
+            .await;
+
+        let mut retry = fb_retry_config(vec![fb_target("fallback-a", &mut hop).await]);
+        retry.suppress_failover = true;
+        let (client, notices) = rotation_client(server.url(), vec!["key-2".to_string()], retry);
+
+        let blocks = client
+            .send_message_with_retry(vec![user_message()], None, None)
+            .await
+            .expect("rotation must run even under suppress_failover");
+        let text: String = blocks
+            .iter()
+            .filter_map(|b| match b {
+                ContentBlock::Text { text } => Some(text.as_str()),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(text, "pinned key 2");
+
+        dead.assert();
+        ok.assert();
+        untouched.assert();
+        let notices = notices.lock().unwrap();
+        assert_eq!(notices.len(), 1);
+        assert!(matches!(
+            notices[0].kind,
+            RetryNoticeKind::KeyRotation { .. }
+        ));
+    }
+
+    /// A deterministic client error on a rotated key (400 → ProviderError)
+    /// stops the walk: further keys cannot heal it, so key 3 is never tried.
+    #[tokio::test]
+    async fn key_rotation_stops_on_non_eligible_error() {
+        let mut server = mockito::Server::new_async().await;
+        let m1 = key_mock(&mut server, "key-1", 401, None).await;
+        let m2 = key_mock(
+            &mut server,
+            "key-2",
+            400,
+            Some(
+                r#"{"type":"error","error":{"type":"invalid_request_error","message":"bad"}}"#
+                    .to_string(),
+            ),
+        )
+        .await;
+        let m3 = server
+            .mock("POST", "/v1/messages")
+            .match_header("x-api-key", "key-3")
+            .expect(0)
+            .create_async()
+            .await;
+
+        let (client, notices) = rotation_client(
+            server.url(),
+            vec!["key-2".to_string(), "key-3".to_string()],
+            fb_retry_config(vec![]),
+        );
+
+        let err = client
+            .send_message_with_retry(vec![user_message()], None, None)
+            .await
+            .expect_err("400 must surface");
+        assert!(matches!(err, ApiError::ProviderError { .. }), "got {err:?}");
+        m1.assert();
+        m2.assert();
+        m3.assert();
+
+        let notices = notices.lock().unwrap();
+        assert_eq!(notices.len(), 1, "only the first rotation happened");
+    }
+
+    /// 5xx never rotates (server-side, key-independent) and still fails over
+    /// exactly as R3-1 defined: alternates present, but the chain is walked
+    /// with the ORIGINAL key.
+    #[tokio::test]
+    async fn server_errors_do_not_rotate_keys() {
+        let mut server = mockito::Server::new_async().await;
+        // No per-key mocks: any key would hit this 500.
+        server
+            .mock("POST", "/v1/messages")
+            .with_status(500)
+            .expect(1)
+            .create_async()
+            .await;
+        let mut hop = mockito::Server::new_async().await;
+        let ok = hop
+            .mock("POST", "/v1/messages")
+            .with_status(200)
+            .with_body(anthropic_ok("hop"))
+            .expect(1)
+            .create_async()
+            .await;
+
+        let (client, notices) = rotation_client(
+            server.url(),
+            vec!["key-2".to_string()],
+            fb_retry_config(vec![fb_target("fallback-a", &mut hop).await]),
+        );
+
+        let blocks = client
+            .send_message_with_retry(vec![user_message()], None, None)
+            .await
+            .expect("the hop must answer");
+        let text: String = blocks
+            .iter()
+            .filter_map(|b| match b {
+                ContentBlock::Text { text } => Some(text.as_str()),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(text, "hop");
+        ok.assert();
+
+        let notices = notices.lock().unwrap();
+        assert!(
+            notices
+                .iter()
+                .all(|n| !matches!(n.kind, RetryNoticeKind::KeyRotation { .. })),
+            "5xx must not rotate keys: {notices:?}"
+        );
     }
 
     /// A session-level model override (desktop R2-1) pins the target:

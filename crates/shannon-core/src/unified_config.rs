@@ -640,6 +640,7 @@ impl From<ShannonConfig> for shannon_engine::api::LlmClientConfig {
         tracing::warn!("No v2 provider resolved — defaulting to Ollama localhost:11434");
         Self {
             api_key: String::new(),
+            alternate_api_keys: Vec::new(),
             base_url: "http://localhost:11434".to_string(),
             model: "llama3".to_string(),
             max_tokens: cfg.max_tokens.map(|v| v as u32).unwrap_or(4096),
@@ -685,7 +686,15 @@ pub fn build_client_from_resolved(
     let provider = rt.provider;
     let base_url = rt.profile.base_url.clone();
     let model = rt.model_id.to_string();
-    let api_key = crate::provider_resolver::resolve_credential(&rt.profile.credential);
+    // R4-3: resolve ALL keys the profile's credential stands for, in
+    // rotation order. `api_key` (slot 0) is the active key — the exact value
+    // the single-key `resolve_credential` used to return, so single-key
+    // behavior is unchanged; the remainder feed the engine's key-rotation
+    // walk. Failover targets below deliberately keep resolving the ACTIVE
+    // key only: rotation is a primary-provider concern.
+    let resolved_keys = crate::provider_resolver::resolve_credential_keys(&rt.profile.credential);
+    let api_key = resolved_keys.first().cloned().unwrap_or_default();
+    let alternate_api_keys = resolved_keys.into_iter().skip(1).collect::<Vec<String>>();
 
     // Decision: explicit config override > profile default > engine fallback.
     let max_tokens = cfg
@@ -720,6 +729,7 @@ pub fn build_client_from_resolved(
 
     LlmClientConfig {
         api_key,
+        alternate_api_keys,
         base_url,
         model,
         max_tokens,

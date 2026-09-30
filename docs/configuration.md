@@ -21,7 +21,7 @@ Per-provider walkthroughs (get a key → connect → verify → troubleshoot) li
 | Location | Written by | Contents |
 |----------|-----------|----------|
 | `~/.shannon/providers.toml` | `/connect`, `/model --save`, `shannon providers add`, desktop | Active provider + model, per-provider profiles (base URL, credential *reference*, per-tier overrides, extra headers). Mode `0600`. Never contains a key. |
-| `~/.shannon/credentials/<service>.json` | `/connect`, `/credentials`, desktop | One file per provider, holding the key. Mode `0600`, atomic writes. |
+| `~/.shannon/credentials/<service>.json` | `/connect`, `/credentials`, desktop | One file per provider, holding one or more keys (active key first; see [Multiple keys per provider](#multiple-keys-per-provider-rotation)). Mode `0600`, atomic writes. |
 | `~/.shannon/config.toml` | `/config set`, hand-edited | Flat behavioral keys: `model`, `provider`, `base_url`, `max_tokens`, `temperature`, `timeout`, `debug`, `max_context_tokens`, `permission_profile`. (`[secret_guard]` has its own loader; full TOML tables are otherwise not read from this file.) |
 | `.shannon.toml` (project root) | hand-edited | Same keys as `config.toml`, scoped to the project. |
 | `~/.shannon/config.json` | `/config`, the agent `Config` tool | A key-value store for tooling. Only allowlisted keys are mirrored into `config.toml`. |
@@ -73,10 +73,13 @@ Dashboard status vocabulary (shared by `/connect`, `/provider`, and the welcome 
 ```
 shannon providers add <ID> --kind <kind> --model <model> [options]
 shannon providers remove <ID>
+shannon providers export [--out <FILE>] [--redact]
+shannon providers import <FILE> [--force] [--set-active <PROFILE>]
 shannon list-providers [--json]
 shannon config                        list stored config keys
 shannon config <key>                  print one key
 shannon config <key>=<value>          set a key (writable keys are mirrored into config.toml)
+shannon config --explain <key>        which layer sets this key, and where to change it
 shannon --dump-config
 ```
 
@@ -91,7 +94,55 @@ shannon --dump-config
 | `--api-key-ref <SERVICE>` | Credential service name (defaults to the provider id). A **reference**, never the secret |
 | `--set-active` | Documented no-op: the added provider always becomes active |
 
-There is intentionally no `--api-key <raw>` flag. For a fully headless setup, store the key as an environment variable and Shannon falls back to it when the credential store has no entry for the provider (see [Credentials](#credentials)). The added provider is persisted to `~/.shannon/providers.toml` and becomes the active target.
+There is intentionally no `--api-key <raw>` flag. For a fully headless setup, store the key as an environment variable and Shannon falls back to it when the credential store has no entry for the provider (see [Credentials](#credentials)). The added provider is persisted to `~/.shannon/providers.toml` and becomes the active target. To manage several keys for one provider, see [Multiple keys per provider](#multiple-keys-per-provider-rotation) (`shannon providers keys …`).
+
+### Export / import provider setup
+
+`shannon providers export` writes a portable snapshot of `~/.shannon/providers.toml` — TOML in, TOML out, because `providers.toml` is TOML. The snapshot carries every profile, the active-profile pointer, active targets, per-tier overrides, per-model metadata declarations, fallback models, and credential **references** — env var names (`env:VAR`) and credential-store service names (`store:SERVICE`) — never secret values. Import restores it on another machine; the references must resolve there, and `import` prints a post-import checklist of which ones need attention.
+
+```
+shannon providers export > providers-snapshot.toml   # stdout by default; summary on stderr
+shannon providers export --out providers-snapshot.toml
+shannon providers export --redact --out review-copy.toml
+shannon providers import providers-snapshot.toml
+```
+
+Import semantics:
+
+- **Merge, not replace.** New profiles land verbatim; existing profiles gain the snapshot's new provider slots. A provider id that already exists is a conflict: the import refuses and lists them (`profile/id` pairs) — re-run with `--force` to replace those slots wholesale, or `shannon providers remove <ID>` first.
+- **Active profile.** `--set-active <PROFILE>` switches after the merge. Without it, the snapshot's pointer is adopted only on a machine with no connected providers yet (the fresh-machine round trip); an established machine keeps its own.
+- **Credentials are never imported.** Only references travel; the credential store (`~/.shannon/credentials/`) is not read or written. The checklist flags `[missing]` references (no stored credential / env var unset) and `[check]` ones (keyring, ephemeral) after importing.
+- **Foreign files are refused** with actionable errors: anything without the `shannon-providers-export/v1` schema marker (including a raw `providers.toml` copy), a payload from an incompatible schema version, or invalid per-model metadata (the same validation `providers.toml` load applies).
+- `--redact` masks every credential reference to `"<redacted>"` for review/sharing copies. Such a file **cannot be re-imported** (the references are gone); export without `--redact` for migration.
+
+Snapshot format (abridged):
+
+```toml
+# Shannon provider setup export — a portable snapshot of ~/.shannon/providers.toml.
+# Import on another machine with: shannon providers import <this-file>
+redacted = false
+schema = "shannon-providers-export/v1"
+
+[config]
+version = 2
+
+[config.profiles.default]
+name = "default"
+
+[config.profiles.default.active_target]
+model_id = "glm-4.6"
+provider_id = "glm"
+scope = "global"
+
+[[config.profiles.default.providers]]
+base_url = "https://open.bigmodel.cn/v1"
+id = "glm"
+kind = "openai-compatible"
+
+[config.profiles.default.providers.credential]
+backend = "store"          # a reference — the value stays in the credential store
+service = "glm"
+```
 
 Other relevant flags: `--model <id|provider/model>`, `--provider <slug>`, `--effort <low|medium|standard|high|max>`, `--dump-config` (JSON snapshot of every config layer and the merged result).
 
@@ -221,6 +272,23 @@ Detailed pages: [Anthropic](providers/anthropic.md) · [OpenAI](providers/openai
   3. Empty → "no key" (queries to auth-required providers fail with `401`).
 - **Rotation** — just run `/connect <provider> <new-key>` again (or update the key in Settings → Models). `/disconnect <provider>` removes the connection but intentionally keeps the stored key.
 
+### Multiple keys per provider (rotation)
+
+A provider's credential-store entry can hold several API keys. The **active key is always the first entry** in the stored list; the rest follow in the order they were added.
+
+- **Storage shape** — the same `~/.shannon/credentials/<service>.json` file (mode `0600`, atomic writes): the active key in `value`, the remaining keys in an `extra_values` list. Older Shannon versions only read `value`, so they keep seeing the active key; single-key files are unchanged.
+- **Automatic rotation (engine)** — when a request fails with an authentication error (401, or a 403-style structured auth error) or a 429 that survived the full retry budget, and the provider has more keys, the engine rotates to the next key **in list order** and retries — once per remaining key, each with one standard retry pass. Every rotation emits a `rotating API key (i/N) for <provider> (<reason>)` event into the session event stream. Order vs. provider failover: all keys of the primary provider are tried **before** any `fallback_models` failover target. If the last key also fails with 401, the authentication error surfaces as usual (it never fails over). A session-pinned model (`suppress_failover`) does **not** disable rotation — the pin fixes the provider/model target, and rotating credentials within it is still allowed.
+- **Manual management (CLI)** —
+
+  ```
+  shannon providers keys <provider> list              # INDEX / ACTIVE / masked KEY (row 0 = active)
+  shannon providers keys <provider> add env:MY_KEY    # or: add store:<other-service>
+  shannon providers keys <provider> activate <index>  # make that key active (picked up on next request)
+  shannon providers keys <provider> remove <index>    # removing index 0 promotes the next key
+  ```
+
+  `add` accepts only a **reference** (`env:VAR_NAME` or `store:SERVICE`) — never a raw key (the CLI never accepts plaintext secrets). Raw keys are entered via `/connect` (REPL) or the desktop Settings, which write the same credential store; re-connecting replaces the active key and keeps the rest of the list. Rotation state is read at request time: `activate` takes effect on the next request, while an already-running session keeps the keys it resolved at start.
+
 ## Configuration files & precedence
 
 `config.toml` / `.shannon.toml` accept these flat keys (project overrides global):
@@ -242,6 +310,8 @@ permission_profile = "balanced"  # strict | balanced | permissive | custom:<name
 `/config set <key> <value>` writes the JSON KV store and mirrors engine-readable keys (`model`, `provider`, `max_tokens`, `temperature`, `timeout`, `debug`) into `~/.shannon/config.toml`, where the next launch picks them up. `/config reset <key>` removes it from both. The CLI is aligned: `shannon config model=deepseek-chat` mirrors the same writable keys into `config.toml`; a key outside the allowlist is stored in `config.json` only (the output says so), and a secret-shaped key (`api_key`, `token`, `secret`, ...) is refused outright — secrets belong in the credential store or the environment.
 
 `shannon --dump-config` prints a JSON ladder — `builtin` → `user-global` → `project` → `env-vars` → `connected` → `cli-overlay` — with each layer's path and the merged result, so you can see exactly which source supplied the active provider/model/credential reference.
+
+For a single key, `shannon config --explain <key>` renders the same ladder in plain language: every layer that defines the key (with its file path or env var name), the winning layer and value, and a hint for where to change it (`model` → `/model`; `max_tokens` → `shannon config max_tokens=…` or `SHANNON_MAX_TOKENS`; anything secret-shaped → `/connect`, since keys never live in the config layers). An unknown key prints the list of known keys. `--explain` is read-only — for the full machine-readable provenance, use `--dump-config`.
 
 ## Environment variable reference
 

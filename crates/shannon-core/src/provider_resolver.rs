@@ -256,6 +256,31 @@ pub fn resolve_credential(cred: &CredentialRef) -> String {
     }
 }
 
+/// R4-3: resolve ALL credential values a [`CredentialRef`] stands for, in
+/// **rotation order** — the active key first, then the remaining keys in the
+/// order they are stored (multi-key store entries; see
+/// `crate::credential_manager::Credential`).
+///
+/// This is the deterministic, observable ordering the engine's key rotation
+/// walks: position 0 is the key that would be used without rotation, and the
+/// engine tries positions 1..n in exactly this order. Blank and duplicate
+/// values are dropped (a blank or repeated key is never a useful rotation
+/// target). Single-key credentials (and every non-Store backend) yield at
+/// most one entry.
+pub fn resolve_credential_keys(cred: &CredentialRef) -> Vec<String> {
+    let mut keys: Vec<String> = match cred {
+        CredentialRef::Store { service } => {
+            crate::credential_manager::read_credential_keys_default(service).unwrap_or_default()
+        }
+        CredentialRef::Env { var } => vec![std::env::var(var).unwrap_or_default()],
+        CredentialRef::InlineLegacy { masked } => vec![masked.clone()],
+        CredentialRef::Keyring { .. } | CredentialRef::Ephemeral => Vec::new(),
+    };
+    keys.retain(|k| !k.is_empty());
+    keys.dedup();
+    keys
+}
+
 /// A resolved [`ModelRef`]: the concrete engine provider plus the (possibly
 /// alias-expanded) model id, with catalog metadata for display/UI.
 ///
@@ -1064,6 +1089,58 @@ mod tests {
                 service: "shannon-definitely-not-a-real-service-9f3a".to_string()
             }),
             ""
+        );
+    }
+
+    // ── R4-3: multi-key resolution ───────────────────────────────────────
+
+    #[test]
+    fn resolve_credential_keys_env_is_single_slot() {
+        // SAFETY: unique key read only by this test thread; no concurrent
+        // set/remove of the same key elsewhere.
+        unsafe { std::env::set_var("R43_TEST_KEY", "one-key") };
+        assert_eq!(
+            resolve_credential_keys(&CredentialRef::Env {
+                var: "R43_TEST_KEY".to_string()
+            }),
+            vec!["one-key".to_string()],
+            "env credentials never rotate (single slot)"
+        );
+        // SAFETY: see above.
+        unsafe { std::env::remove_var("R43_TEST_KEY") };
+        assert!(
+            resolve_credential_keys(&CredentialRef::Env {
+                var: "R43_DEFINITELY_UNSET_9f3a".to_string()
+            })
+            .is_empty()
+        );
+    }
+
+    #[test]
+    fn resolve_credential_keys_inline_legacy_is_single_slot() {
+        assert_eq!(
+            resolve_credential_keys(&CredentialRef::InlineLegacy {
+                masked: "legacy".to_string()
+            }),
+            vec!["legacy".to_string()]
+        );
+    }
+
+    #[test]
+    fn resolve_credential_keys_keyring_ephemeral_and_missing_store_are_empty() {
+        assert!(
+            resolve_credential_keys(&CredentialRef::Keyring {
+                service: "s".to_string(),
+                account: "a".to_string()
+            })
+            .is_empty()
+        );
+        assert!(resolve_credential_keys(&CredentialRef::Ephemeral).is_empty());
+        assert!(
+            resolve_credential_keys(&CredentialRef::Store {
+                service: "shannon-definitely-not-a-real-service-9f3a".to_string()
+            })
+            .is_empty()
         );
     }
 

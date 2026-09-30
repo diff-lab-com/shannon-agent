@@ -1544,6 +1544,7 @@ mod tests {
 
     fn test_config() -> LlmClientConfig {
         LlmClientConfig {
+            alternate_api_keys: Vec::new(),
             thinking_type: None,
             api_key: "test-key".to_string(),
             base_url: "http://localhost:11434".to_string(),
@@ -1958,6 +1959,7 @@ mod tests {
         // When the configured model matches a built-in one, it should not
         // appear twice.
         let config = LlmClientConfig {
+            alternate_api_keys: Vec::new(),
             thinking_type: None,
             api_key: "test-key".to_string(),
             base_url: "http://localhost:11434".to_string(),
@@ -2188,6 +2190,7 @@ mod tests {
 
     fn disconnect_test_config(base_url: String) -> LlmClientConfig {
         LlmClientConfig {
+            alternate_api_keys: Vec::new(),
             thinking_type: None,
             api_key: "test-key".to_string(),
             base_url,

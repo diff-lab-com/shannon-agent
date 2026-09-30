@@ -102,6 +102,7 @@ async fn secret_guard_client_boundary_sends_surrogates_not_secrets() {
     }];
     let to_send = crate::secret_guard::transform_outgoing_messages(messages);
     let config = LlmClientConfig {
+        alternate_api_keys: Vec::new(),
         thinking_type: None,
         api_key: "test-key".to_string(),
         base_url: format!("http://127.0.0.1:{port}"),
@@ -249,6 +250,7 @@ async fn secret_guard_query_loop_completes_with_redacted_wire() {
     let _g = crate::secret_guard::test_support::acquire();
     crate::secret_guard::set_context_transform(Some(std::sync::Arc::new(ReplaceSecret)));
     let config = LlmClientConfig {
+        alternate_api_keys: Vec::new(),
         thinking_type: None,
         api_key: "test-key".to_string(),
         base_url: format!("http://127.0.0.1:{port}"),
@@ -490,6 +492,7 @@ async fn a8_run_query_with(
 ) -> (bool, String, Vec<String>, Vec<String>, Vec<Message>) {
     use futures::StreamExt as _;
     let config = LlmClientConfig {
+        alternate_api_keys: Vec::new(),
         thinking_type: None,
         api_key: "test-key".to_string(),
         base_url: server.base_url.clone(),
@@ -650,6 +653,7 @@ async fn p2_2_hanging_tool_interrupted_into_error_tool_result() {
     let server = TurnRetryMockServer::start(responder);
 
     let config = LlmClientConfig {
+        alternate_api_keys: Vec::new(),
         thinking_type: None,
         api_key: "test-key".to_string(),
         base_url: server.base_url.clone(),
@@ -1863,6 +1867,7 @@ fn compaction_summarizer_wire_carries_surrogates_not_secrets() {
     });
 
     let config = LlmClientConfig {
+        alternate_api_keys: Vec::new(),
         thinking_type: None,
         api_key: "test-key".to_string(),
         base_url: format!("http://127.0.0.1:{port}"),
@@ -2014,6 +2019,7 @@ async fn secret_guard_system_prompt_redacted_on_wire() {
     let _g = crate::secret_guard::test_support::acquire();
     crate::secret_guard::set_context_transform(Some(std::sync::Arc::new(ReplaceSecret)));
     let config = LlmClientConfig {
+        alternate_api_keys: Vec::new(),
         thinking_type: None,
         api_key: "test-key".to_string(),
         base_url: format!("http://127.0.0.1:{port}"),
@@ -2221,6 +2227,7 @@ async fn run_query_with_recovery_bookkeeping(
 ) {
     use futures::StreamExt as _;
     let config = LlmClientConfig {
+        alternate_api_keys: Vec::new(),
         thinking_type: None,
         api_key: "test-key".to_string(),
         base_url: server.base_url.clone(),
@@ -2616,6 +2623,7 @@ async fn run_gate_query(
     use futures::StreamExt as _;
     let server = TurnRetryMockServer::start(std::sync::Arc::new(|_| a8_text_sse("gate-ok")));
     let config = LlmClientConfig {
+        alternate_api_keys: Vec::new(),
         thinking_type: None,
         api_key: "test-key".to_string(),
         base_url: server.base_url.clone(),
@@ -2750,6 +2758,7 @@ async fn failover_event_lands_in_query_stream_and_answer_flows() {
         TurnRetryMockServer::start(std::sync::Arc::new(|_| a8_text_sse("fallback-answer")));
 
     let config = LlmClientConfig {
+        alternate_api_keys: Vec::new(),
         thinking_type: None,
         api_key: "test-key".to_string(),
         base_url: primary.base_url.clone(),
