@@ -33,11 +33,17 @@ use common::handler_inventory;
 const MAIN: &str = "main";
 const SESSION: &str = "session-00000000-0000-0000-0000-000000000000";
 
-/// One `tauri::Context` per check — `generate_context!` embeds the ACL
-/// resolved from the build script's OUT_DIR artifacts, so assertions run
-/// against exactly what production will enforce.
+/// Single `generate_context!` expansion for this test binary: every
+/// expansion of the macro embeds a `_EMBED_INFO_PLIST` static (macOS
+/// Info.plist link section), and two of them collide at link time. All
+/// checks funnel through this one expansion; assertions run against
+/// exactly what production will enforce.
+fn fresh_context() -> tauri::Context<tauri::Wry> {
+    tauri::generate_context!()
+}
+
 fn allows(cmd: &str, window: &str, origin: Origin) -> bool {
-    let mut context: tauri::Context<tauri::Wry> = tauri::generate_context!();
+    let mut context = fresh_context();
     context
         .runtime_authority_mut()
         .resolve_access(cmd, window, window, &origin)
@@ -119,7 +125,7 @@ fn every_app_command_allowed_on_main_and_session_windows() {
         inventory.len()
     );
     // single context: 255 commands x 2 windows against one compiled ACL
-    let mut context: tauri::Context<tauri::Wry> = tauri::generate_context!();
+    let mut context = fresh_context();
     let authority = context.runtime_authority_mut();
     for cmd in &inventory {
         for window in [MAIN, SESSION] {

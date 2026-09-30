@@ -708,14 +708,19 @@ mod tests {
         let out = proc_world.run_blocking(&req).expect("run");
         assert_eq!(out.exit.code, Some(7));
         assert!(!out.exit.success);
-        assert!(
-            out.stdout
-                .starts_with(dir.path().to_str().expect("utf8").as_bytes())
+        // The child's getcwd() reports the physical path — on macOS that is
+        // /private/var/… while TempDir hands out the /var/… alias, so compare
+        // canonical forms instead of raw prefixes.
+        let stdout = String::from_utf8(out.stdout).expect("utf8");
+        let reported_cwd = stdout.lines().next().expect("pwd output");
+        assert_eq!(
+            std::fs::canonicalize(reported_cwd).expect("canonicalize reported cwd"),
+            std::fs::canonicalize(dir.path()).expect("canonicalize expected cwd"),
+            "child must run with the requested cwd"
         );
         assert!(
-            String::from_utf8(out.stdout)
-                .expect("utf8")
-                .contains("env-ok")
+            stdout.contains("env-ok"),
+            "env must be visible to the child, got {stdout:?}"
         );
     }
 
@@ -868,7 +873,8 @@ mod tests {
         let dir = tempdir();
         let marker = dir.path().join("boundary-marker");
         let host = host_with_init(marker.clone(), None);
-        host.run_blocking(&ProcessRequest::new("/bin/true", &[]))
+        // macOS ships true at /usr/bin/true only (/bin/true is a Linux path).
+        host.run_blocking(&ProcessRequest::new("/usr/bin/true", &[]))
             .expect("child with boundary installed");
         assert!(
             marker.exists(),
@@ -885,7 +891,8 @@ mod tests {
         let dir = tempdir();
         let marker = dir.path().join("never");
         let host = host_with_init(marker.clone(), Some(13)); // EACCES
-        let err = match host.run_blocking(&ProcessRequest::new("/bin/true", &[])) {
+        // macOS ships true at /usr/bin/true only (/bin/true is a Linux path).
+        let err = match host.run_blocking(&ProcessRequest::new("/usr/bin/true", &[])) {
             Ok(_) => panic!("failing initializer must abort the spawn"),
             Err(e) => e,
         };

@@ -876,12 +876,32 @@ mod tests {
     /// preview_commands helper).
     #[cfg(unix)]
     fn process_gone(pid: u32) -> bool {
-        match std::fs::read_to_string(format!("/proc/{pid}/stat")) {
-            Err(_) => unsafe { libc::kill(pid as i32, 0) != 0 },
-            Ok(stat) => stat
-                .split_once(')')
-                .and_then(|(_, rest)| rest.trim_start().chars().next())
-                .is_some_and(|state| state == 'Z'),
+        // "Gone" = the kernel no longer runs the process: exited-and-reaped
+        // or exited-but-unreaped (zombie). Linux reads /proc/<pid>/stat for
+        // the 'Z' state; macOS has no /proc and kill(pid, 0) still succeeds
+        // on zombies, so WNOHANG-waitpid both observes and clears the
+        // zombie the PTY pump may leave behind on teardown paths (this test
+        // process is the child's parent).
+        #[cfg(target_os = "linux")]
+        {
+            match std::fs::read_to_string(format!("/proc/{pid}/stat")) {
+                Err(_) => unsafe { libc::kill(pid as i32, 0) != 0 },
+                Ok(stat) => stat
+                    .split_once(')')
+                    .and_then(|(_, rest)| rest.trim_start().chars().next())
+                    .is_some_and(|state| state == 'Z'),
+            }
+        }
+        #[cfg(target_os = "macos")]
+        {
+            let mut status: libc::c_int = 0;
+            let rc = unsafe { libc::waitpid(pid as libc::pid_t, &mut status, libc::WNOHANG) };
+            rc == pid as libc::pid_t
+                || (rc < 0 && unsafe { *libc::__error() } == libc::ECHILD)
+        }
+        #[cfg(not(any(target_os = "linux", target_os = "macos")))]
+        {
+            unsafe { libc::kill(pid as i32, 0) != 0 }
         }
     }
 
@@ -1212,8 +1232,10 @@ mod tests {
             );
         }
         // …and the shell must have consumed the echo'd prompt marker too.
+        // Prompt glyph is shell-specific: `$` on sh/bash, `%` on zsh (the
+        // macOS default $SHELL), `#` for root.
         assert!(
-            text.contains('$'),
+            text.contains('$') || text.contains('%') || text.contains('#'),
             "interactive shell prompt visible: {text}"
         );
         manager.kill(&info.terminal_id).expect("kill");

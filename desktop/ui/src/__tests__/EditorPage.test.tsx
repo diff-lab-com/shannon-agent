@@ -9,7 +9,7 @@ import { MemoryRouter, createMemoryRouter, RouterProvider } from 'react-router-d
 import type * as TauriApi from '@/lib/tauri-api'
 import { I18nProvider } from '@/i18n'
 import { open as openDialog } from '@tauri-apps/plugin-dialog'
-import Editor from '@/pages/Editor'
+import Editor from '@/pages/EditorPage'
 
 const readSourceFile = vi.hoisted(() => vi.fn())
 const runFileDiagnostics = vi.hoisted(() => vi.fn())

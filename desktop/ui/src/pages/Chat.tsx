@@ -24,7 +24,7 @@ import {
   InlinePanelModal,
   MessageArea,
   ComposerContext,
-} from './chat'
+} from './chat/index'
 import { VIRTUALIZE_THRESHOLD } from './chat/MessageArea'
 import type { EditingMessageState } from './chat/ComposerContext'
 import type { ProviderStatus } from '@/types'
@@ -33,7 +33,7 @@ import type { ProviderStatus } from '@/types'
 // no standalone route); the Editor exists both inline and as a standalone
 // route (palette / mod+5). Lazy-loaded so the main chat bundle stays small.
 const QuickFixPanel = lazy(() => import('@/pages/QuickFix'))
-const EditorPanel = lazy(() => import('@/pages/Editor'))
+const EditorPanel = lazy(() => import('@/pages/EditorPage'))
 
 // ── B1 §4-11 per-session draft storage ───────────────────────────────────
 const DRAFT_KEY_PREFIX = 'shannon.draft.'

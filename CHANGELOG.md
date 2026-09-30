@@ -4,6 +4,52 @@ All notable changes to Shannon Code are documented here. Entries are grouped by 
 
 ## [Unreleased] — §4.14 W1-P2 · OTLP bridge + full RedactionPolicy + desktop Turn Timeline
 
+### macOS real-machine verification batch (2026-09-30)
+
+Full-workspace verification on macOS 15.5 arm64 (CI only runs `cargo check`
+there; nightly covers just core+tools) — spec + results in
+[docs/qa/2026-09-30-macos-verification-spec.md](docs/qa/2026-09-30-macos-verification-spec.md).
+Four product-level defects found and fixed, all invisible to Linux CI:
+
+- **Directory watchers were silently dead on macOS**: `notify`'s
+  `macos_kqueue` feature (core/ui/desktop) swaps FSEvents for kqueue, which
+  cannot watch directory contents — `.shannon.toml` change hooks, the REPL
+  SourceWatcher and the desktop agent-message watcher never fired. Feature
+  removed; default FSEvents backend restored.
+- **Engine queries could hang forever**: `DockerSandbox::docker_available`
+  probed `docker info` with no timeout; a wedged Docker Desktop CLI blocks
+  indefinitely and the probe runs on every query. Now bounded (2 s, kill +
+  treat as unavailable).
+- **`-c`/`--continue` could resume the wrong session on macOS**: session
+  selection compared recorded cwd as a raw string; macOS reports the
+  physical `/private/var/...` spelling while recorded paths carry the
+  `/var/...` alias. Selection now compares canonicalized paths
+  (`same_cwd`, shared with the mismatch guard).
+- **repomap cache updates silently missed on macOS**: the cache canonicalizes
+  its root at construction but `update_file`/`remove_file`/lookups accepted raw
+  spellings, so `/tmp`-alias paths never matched stored keys. `absolutize` now
+  resolves to the cache's canonical spelling (missing files resolve through the
+  canonical root).
+- **desktop path-scope checks rejected `/tmp` and `/var` spellings**:
+  `allowed_path_bases` kept only canonicalized bases (`/private/...`), so
+  lexical probes of not-yet-existing `/tmp`-alias paths failed. Bases now
+  admit both spellings.
+
+Test-infrastructure fixes (nextest's per-process isolation hid them all from
+CI, they break shared-process `cargo test` and/or real machines): desktop/ui
+vitest on Node ≥ 25 (experimental global `localStorage` shadows the jsdom
+injection — setup shim), `pages/Editor.tsx`+`editor/` and `pages/Chat.tsx`+
+`chat/` case-collisions that self-import on case-insensitive filesystems
+(renamed/ disambiguated, plus a new `check-import-case-collisions` lint
+guard), gateway Ed25519 interop tests migrated off the `{x: "", d}` JWK form
+Node ≥ 24 rejects (RFC 8410 PKCS#8 derivation), `session_window_acl` duplicate
+`_EMBED_INFO_PLIST` link symbols (single `generate_context!` expansion),
+terminal-test `process_gone` treating unreaped zombies as alive on macOS
+(`WNOHANG` waitpid), a bash-only prompt-glyph assertion, secret_guard's
+`ENABLED` latch made test-resettable (AtomicU8), `routine_run` engine tests
+pinned to a fixture `SHANNON_HOME` (they read/wrote the real `~/.shannon`),
+`/bin/true` and `/private`-alias assumptions in providers tests.
+
 ### Followups S1-S3 (2026-09-28)
 
 All 15 approved followup tasks from the comprehensive review roadmap landed:

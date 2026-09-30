@@ -2767,9 +2767,17 @@ mod tests {
         let args = sandbox
             .build_args("ls", Some("/tmp"), None)
             .expect("build_args must succeed");
+        // build_args canonicalizes the workspace before binding, so on macOS
+        // the bind source is /private/tmp — find the mount by the canonical
+        // spelling or the raw /tmp: finder also matches the container's
+        // /tmp tmpfs entry (/tmp:rw,...) instead of the workspace bind.
+        let workspace = std::path::Path::new("/tmp")
+            .canonicalize()
+            .map(|p| p.to_string_lossy().to_string())
+            .unwrap_or_else(|_| "/tmp".to_string());
         let mount = args
             .iter()
-            .find(|a| a.starts_with("/tmp:"))
+            .find(|a| a.starts_with(&format!("{workspace}:")))
             .expect("workspace mount must be present");
         assert!(
             mount.ends_with(":ro"),
