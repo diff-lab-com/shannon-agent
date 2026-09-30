@@ -7,19 +7,51 @@
 // explicitly approved. Implemented as a plain window CustomEvent so any
 // component (dialogs, pages, future entry points) can push without prop
 // drilling through the chat tree.
+//
+// G5 P0-6 — pending-draft one-shot queue: the composer only exists on /chat,
+// so a push from anywhere else (DataSources "add to chat", the companion
+// Quick Capture window while the main window is on another route or still
+// booting) used to fire the event with nobody listening and vanish. Now a
+// push made while no composer is subscribed parks in {@link pendingDrafts}
+// and flushes the moment ChatInput mounts (callers navigate to /chat to make
+// that happen). This replaces the old 150ms setTimeout bet in App.tsx.
 
 import { useEffect, useRef } from 'react'
 
 /** Window event name carrying `{ detail: { text } }` composer drafts. */
 export const COMPOSER_DRAFT_EVENT = 'shannon:composer-draft'
 
-/** Push `text` into the composer as a draft. Never sends. */
-export function pushComposerDraft(text: string): void {
+/** Drafts pushed while no composer was mounted; flushed on subscribe. */
+const pendingDrafts: string[] = []
+
+/** Whether a `useComposerDraftListener` subscriber is currently mounted. */
+let composerSubscribed = false
+
+function dispatchDraft(text: string): void {
   window.dispatchEvent(new CustomEvent(COMPOSER_DRAFT_EVENT, { detail: { text } }))
 }
 
 /**
+ * Push `text` into the composer as a draft. Never sends.
+ *
+ * Delivery is one-shot: with the composer subscribed the event lands
+ * directly; otherwise the text waits in the pending queue and is delivered
+ * exactly once, when the composer next mounts. Callers that may run while
+ * /chat is not mounted should navigate there after pushing (ChatInput
+ * flushes the queue on subscribe).
+ */
+export function pushComposerDraft(text: string): void {
+  dispatchDraft(text)
+  if (!composerSubscribed) pendingDrafts.push(text)
+}
+
+/**
  * Subscribe to composer drafts pushed by {@link pushComposerDraft}.
+ *
+ * Mounting a subscription ALSO flushes the pending queue (after this
+ * listener is attached, so flushed drafts arrive through the normal event
+ * path). ChatInput appends drafts, and the queue drains once, so a flush
+ * cannot duplicate text.
  *
  * The subscription outlives renders: `onDraft` is read through a latest-ref,
  * so callers may pass an inline closure that closes over changing state
@@ -37,6 +69,21 @@ export function useComposerDraftListener(onDraft: (text: string) => void): void 
       if (typeof text === 'string') onDraftRef.current(text)
     }
     window.addEventListener(COMPOSER_DRAFT_EVENT, handler)
-    return () => window.removeEventListener(COMPOSER_DRAFT_EVENT, handler)
+    composerSubscribed = true
+    const queued = pendingDrafts.splice(0)
+    for (const text of queued) dispatchDraft(text)
+    return () => {
+      window.removeEventListener(COMPOSER_DRAFT_EVENT, handler)
+      composerSubscribed = false
+    }
   }, [])
+}
+
+/**
+ * Test seam: drop any queued drafts and clear the subscription flag, so
+ * jsdom tests start from a clean bridge state.
+ */
+export function resetPendingComposerDraftsForTests(): void {
+  pendingDrafts.length = 0
+  composerSubscribed = false
 }
