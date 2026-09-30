@@ -401,6 +401,77 @@ pub(crate) async fn save_text_file_inner(
         .map_err(|e| FileCommandError::Plain(format!("Failed to write {}: {e}", target.display())))
 }
 
+/// Save text to a path the user picks in a NATIVE save dialog opened by the
+/// backend (G5 P0-8: the timeline HTML export). Unlike [`save_text_file`] —
+/// which is deliberately scoped to the working directory — the user's pick
+/// in a native dialog IS the explicit authorization, so Downloads/Documents
+/// destinations work. `resolve_write_target_in_working_dir` is left
+/// untouched for its other callers.
+///
+/// Split into the dialog half (`pick_save_path_via_dialog`, needs an
+/// `AppHandle`) and the write half (`write_text_file_at`, plain fs) so
+/// unit tests can cover the write path without mocking Tauri dialogs.
+///
+/// Returns the final path written, or `None` when the user cancelled the
+/// dialog (cancelling is a decision, not an error).
+#[tauri::command]
+pub async fn save_text_file_via_dialog(
+    app: tauri::AppHandle,
+    content: String,
+    default_name: String,
+) -> Result<Option<String>, String> {
+    let path = pick_save_path_via_dialog(&app, &default_name).await?;
+    let Some(path) = path else {
+        return Ok(None);
+    };
+    write_text_file_at(&path, &content).await?;
+    Ok(Some(path.to_string_lossy().into_owned()))
+}
+
+/// Dialog half of [`save_text_file_via_dialog`]: open the native save dialog
+/// pre-filled with `default_name` (filtered to its extension, when it has
+/// one) and resolve to the chosen path. `blocking_save_file` must not run on
+/// the main thread — same `spawn_blocking` pattern as `copy_file`.
+async fn pick_save_path_via_dialog(
+    app: &tauri::AppHandle,
+    default_name: &str,
+) -> Result<Option<std::path::PathBuf>, String> {
+    use tauri_plugin_dialog::DialogExt;
+
+    let app = app.clone();
+    let default_name = default_name.to_string();
+    tauri::async_runtime::spawn_blocking(move || {
+        let mut dialog = app.dialog().file().set_file_name(&default_name);
+        if let Some((_, ext)) = default_name.rsplit_once('.') {
+            if !ext.is_empty() {
+                let upper = ext.to_ascii_uppercase();
+                dialog = dialog.add_filter(upper, &[ext]);
+            }
+        }
+        dialog
+            .blocking_save_file()
+            .map(|fp| fp.into_path())
+            .transpose()
+            .map_err(|e| format!("save dialog returned an unusable path: {e}"))
+    })
+    .await
+    .map_err(|e| format!("save dialog task failed: {e}"))?
+}
+
+/// Write half of [`save_text_file_via_dialog`]: create the parent directory
+/// when needed, then write. The path came from the user's own dialog pick,
+/// so no working-directory scoping applies here.
+pub(crate) async fn write_text_file_at(path: &Path, content: &str) -> Result<(), String> {
+    if let Some(parent) = path.parent() {
+        tokio::fs::create_dir_all(parent)
+            .await
+            .map_err(|e| format!("Failed to create {}: {e}", parent.display()))?;
+    }
+    tokio::fs::write(path, content)
+        .await
+        .map_err(|e| format!("Failed to write {}: {e}", path.display()))
+}
+
 /// Copy a local file to a caller-chosen destination (office Wave 1
 /// "save-as"). Scope rules are aligned with `open_with_default_app`
 /// (`commands_surface::canonicalized_in_scope`): the source must exist and
@@ -1571,6 +1642,55 @@ mod tests {
             .await
             .expect("in-tree write should succeed");
         assert_eq!(std::fs::read_to_string(&target).unwrap(), "hello");
+    }
+
+    // ---- G5 P0-8: backend-driven save dialog export (write half) ----
+
+    #[tokio::test]
+    async fn write_text_file_at_writes_outside_any_working_dir() {
+        // The whole point of the dialog flow: the user's pick authorizes
+        // destinations OUTSIDE the session working directory (Downloads,
+        // Documents, …) that `save_text_file` must keep rejecting.
+        let working_dir = tempfile::tempdir().expect("tempdir");
+        let destination = tempfile::tempdir().expect("tempdir");
+        let target = destination.path().join("timeline-abc.html");
+
+        write_text_file_at(&target, "<html>hi</html>")
+            .await
+            .expect("dialog-picked write should succeed");
+
+        assert_eq!(std::fs::read_to_string(&target).unwrap(), "<html>hi</html>");
+        let _ = std::fs::remove_file(&target);
+        let _ = working_dir;
+    }
+
+    #[tokio::test]
+    async fn write_text_file_at_creates_missing_parent_dirs() {
+        let destination = tempfile::tempdir().expect("tempdir");
+        let target = destination.path().join("a/b/export.html");
+
+        write_text_file_at(&target, "x")
+            .await
+            .expect("write should succeed");
+        assert_eq!(std::fs::read_to_string(&target).unwrap(), "x");
+    }
+
+    #[tokio::test]
+    async fn write_text_file_at_reports_io_errors() {
+        let destination = tempfile::tempdir().expect("tempdir");
+        // A regular FILE in the way of the parent directory makes
+        // create_dir_all fail.
+        let blocker = destination.path().join("blocker");
+        std::fs::write(&blocker, "not a dir").unwrap();
+        let target = blocker.join("export.html");
+
+        let err = write_text_file_at(&target, "x")
+            .await
+            .expect_err("write through a file parent must fail");
+        assert!(
+            err.contains("Failed to create") || err.contains("Failed to write"),
+            "expected an io error message, got: {err}"
+        );
     }
 
     // ---- review §P2-20: bounded file-tree walk ----

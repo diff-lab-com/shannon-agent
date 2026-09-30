@@ -16,9 +16,8 @@
 
 import { useEffect, useMemo, useState } from 'react'
 import { useNavigate, useParams } from 'react-router-dom'
-import { save } from '@tauri-apps/plugin-dialog'
 import { toast } from 'sonner'
-import { getTraceTimeline, saveTextFile } from '@/lib/tauri-api'
+import { getTraceTimeline, saveTextFileViaDialog } from '@/lib/tauri-api'
 import { timelineToHtml } from '@/lib/timelineExport'
 import type { TimelineCumulativePoint, TimelineTurn, TurnTimeline } from '@/types'
 import { Button } from '@/components/ui/button'
@@ -146,20 +145,22 @@ export default function TurnTimeline({ sessionId }: TurnTimelineProps) {
     .reverse()
     .find(p => p.cost_total_usd != null)?.cost_total_usd
 
-  // C6: export the loaded projection to a self-contained HTML file at a
-  // user-chosen path (save dialog + saveTextFile). Cancelling the dialog
-  // (null) backs out silently; a write failure toasts the cause.
+  // C6: export the loaded projection to a self-contained HTML file. G5 P0-8:
+  // the BACKEND opens the native save dialog and writes the user-picked path
+  // itself — the frontend `save()` + `saveTextFile()` pair used to fail for
+  // every Downloads/Documents pick, because `save_text_file` is scoped to
+  // the working directory. Cancelling the dialog (null) backs out silently;
+  // a write failure toasts the cause.
   const [exporting, setExporting] = useState(false)
   const handleExportHtml = async () => {
     if (!timeline) return
     setExporting(true)
     try {
-      const path = await save({
-        defaultPath: `timeline-${timeline.session_id || id || 'session'}.html`,
-        filters: [{ name: 'HTML', extensions: ['html'] }],
-      })
-      if (!path) return
-      await saveTextFile(path, timelineToHtml(timeline))
+      const savedPath = await saveTextFileViaDialog(
+        timelineToHtml(timeline),
+        `timeline-${timeline.session_id || id || 'session'}.html`,
+      )
+      if (savedPath == null) return
       toast.success(t('office.timeline.exported'))
     } catch (err) {
       toastError(t('chat.artifact.exportFailed'), err)

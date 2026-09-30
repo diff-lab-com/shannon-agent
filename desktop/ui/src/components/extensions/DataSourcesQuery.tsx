@@ -1,5 +1,6 @@
 import { useState, useEffect } from "react";
 import { useIntl } from 'react-intl'
+import { useNavigate } from "react-router-dom";
 import { toast } from 'sonner'
 import {
   queryDataSource,
@@ -229,6 +230,7 @@ function ResultCard({
   sourcePath: string;
 }) {
   const intl = useIntl()
+  const navigate = useNavigate()
   const t = (id: string, values?: Record<string, string | number>) => intl.formatMessage({ id }, values)
 
   const formatDate = (value: string | null | undefined) => {
@@ -241,11 +243,17 @@ function ResultCard({
   // context block:
   //   [Source: <title|name>] (<url|path>)
   //   <body excerpt, capped at MAX_EXCERPT_CHARS>
+  // G5 P0-6: the composer only exists on /chat. Pushing from
+  // /extensions/datasources used to fire the draft event with nobody
+  // listening — silent loss behind a success toast. The bridge now parks the
+  // draft in its pending queue when no composer is mounted, and navigating
+  // to /chat mounts ChatInput, which flushes the queue on subscribe.
   const handleAddToChat = () => {
     const label = item.title || sourceName;
     const location = item.url || sourcePath;
     const excerpt = (item.body ?? '').slice(0, MAX_EXCERPT_CHARS);
     pushComposerDraft(`[Source: ${label}] (${location})\n${excerpt}`);
+    navigate('/chat');
     toast.success(t('office.sources.added'));
   };
 

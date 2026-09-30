@@ -3,12 +3,12 @@
 // with tool waterfall rows (incl. interrupted-call error marking), the
 // cumulative curve card, the i18n-driven empty state, and the load-failure
 // state. (The page title itself lives in the Header's TITLE_MAP.)
-// office Wave 3 C6 adds the Export-as-HTML flow (save dialog + saveTextFile).
+// office Wave 3 C6 adds the Export-as-HTML flow; G5 P0-8 moved the save
+// dialog + write into the backend (`saveTextFileViaDialog`).
 
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { render, screen, waitFor, fireEvent } from '@testing-library/react'
 import { MemoryRouter, Route, Routes } from 'react-router-dom'
-import { save } from '@tauri-apps/plugin-dialog'
 import type * as TauriApi from '@/lib/tauri-api'
 import { I18nProvider } from '@/i18n'
 import TurnTimeline from '@/pages/TurnTimeline'
@@ -16,14 +16,14 @@ import { timelineToHtml } from '@/lib/timelineExport'
 import type { TurnTimeline } from '@/types'
 
 const getTraceTimeline = vi.hoisted(() => vi.fn())
-const saveTextFile = vi.hoisted(() => vi.fn())
+const saveTextFileViaDialog = vi.hoisted(() => vi.fn())
 
 vi.mock('@/lib/tauri-api', async () => {
   const actual = await vi.importActual<typeof TauriApi>('@/lib/tauri-api')
   return {
     ...actual,
     getTraceTimeline: (...args: unknown[]) => getTraceTimeline(...args),
-    saveTextFile: (...args: unknown[]) => saveTextFile(...args),
+    saveTextFileViaDialog: (...args: unknown[]) => saveTextFileViaDialog(...args),
   }
 })
 
@@ -88,11 +88,9 @@ function renderAt(path = '/timeline/sess-001') {
 
 beforeEach(() => {
   getTraceTimeline.mockReset()
-  saveTextFile.mockReset()
-  saveTextFile.mockResolvedValue(undefined)
-  // The dialog `save` mock comes from the global setup (default: null, i.e.
-  // the user cancels). Clear the call history the C6 tests assert against.
-  vi.mocked(save).mockClear()
+  saveTextFileViaDialog.mockReset()
+  // Default: the backend dialog "wrote" the file and reports the path.
+  saveTextFileViaDialog.mockResolvedValue('/tmp/export/timeline-sess-001.html')
 })
 
 describe('TurnTimeline', () => {
@@ -227,21 +225,21 @@ describe('TurnTimeline — reason badges and locale (B4 §7-28)', () => {
   })
 })
 
-// ─── office Wave 3 C6: Export as HTML (save dialog + saveTextFile) ───
+// ─── office Wave 3 C6: Export as HTML (G5 P0-8 backend dialog flow) ───
 
 describe('TurnTimeline — Export as HTML (office Wave 3 C6)', () => {
-  it('the export button writes self-contained HTML with the step text to the chosen path', async () => {
+  it('exports self-contained HTML through the backend save-dialog command', async () => {
     getTraceTimeline.mockResolvedValue(FIXTURE)
-    vi.mocked(save).mockResolvedValueOnce('/tmp/export/timeline-sess-001.html')
+    saveTextFileViaDialog.mockResolvedValueOnce('/home/user/Downloads/timeline-sess-001.html')
     renderAt()
 
     await screen.findByText('Turn 1')
     fireEvent.click(screen.getByTestId('timeline-export-html'))
     await waitFor(() => {
-      expect(saveTextFile).toHaveBeenCalledTimes(1)
+      expect(saveTextFileViaDialog).toHaveBeenCalledTimes(1)
     })
-    const [path, html] = saveTextFile.mock.calls[0] as [string, string]
-    expect(path).toBe('/tmp/export/timeline-sess-001.html')
+    const [html, defaultName] = saveTextFileViaDialog.mock.calls[0] as [string, string]
+    expect(defaultName).toBe('timeline-sess-001.html')
     // Self-contained document carrying the timeline's step content.
     expect(html).toContain('<!DOCTYPE html>')
     expect(html).toContain('Turn 1')
@@ -256,14 +254,28 @@ describe('TurnTimeline — Export as HTML (office Wave 3 C6)', () => {
 
   it('cancelling the save dialog never writes a file', async () => {
     getTraceTimeline.mockResolvedValue(FIXTURE)
-    vi.mocked(save).mockResolvedValueOnce(null)
+    saveTextFileViaDialog.mockResolvedValueOnce(null)
     renderAt()
     await screen.findByText('Turn 1')
     fireEvent.click(screen.getByTestId('timeline-export-html'))
     await waitFor(() => {
-      expect(save).toHaveBeenCalledTimes(1)
+      expect(saveTextFileViaDialog).toHaveBeenCalledTimes(1)
     })
-    expect(saveTextFile).not.toHaveBeenCalled()
+    // Cancel (null) backs out silently — no toast, no retry.
+    expect(saveTextFileViaDialog).toHaveBeenCalledTimes(1)
+  })
+
+  it('a backend write failure surfaces as the export-failed toast path', async () => {
+    getTraceTimeline.mockResolvedValue(FIXTURE)
+    saveTextFileViaDialog.mockRejectedValueOnce(new Error('disk full'))
+    renderAt()
+    await screen.findByText('Turn 1')
+    fireEvent.click(screen.getByTestId('timeline-export-html'))
+    // Must not throw out of the handler; the catch turns it into a toast.
+    await waitFor(() => {
+      expect(saveTextFileViaDialog).toHaveBeenCalledTimes(1)
+    })
+    expect(screen.getByTestId('timeline-export-html')).toBeEnabled()
   })
 
   it('timelineToHtml escapes HTML-sensitive tool names', () => {

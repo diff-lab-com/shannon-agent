@@ -565,7 +565,13 @@ export default function ChatInput({
   })
   useComposerDraftListener(text => {
     const current = valueRef.current
-    onChange(current.trim() ? `${current.replace(/\s+$/, '')}\n\n${text}` : text)
+    const next = current.trim() ? `${current.replace(/\s+$/, '')}\n\n${text}` : text
+    // Sync the ref immediately: the pending-draft queue (G5 P0-6) can flush
+    // several drafts in one tick, before React re-renders with the first
+    // onChange — without this, draft #2 would read the stale value and
+    // overwrite draft #1 instead of appending after it.
+    valueRef.current = next
+    onChange(next)
     textareaRef.current?.focus()
   })
 

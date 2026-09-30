@@ -153,6 +153,7 @@ const UNMOCKED_ALLOWLIST: Record<string, string> = {
   path_exists: 'OS/updater/file surface — browser cannot perform it',
   read_text_file: 'OS/updater/file surface — browser cannot perform it',
   save_text_file: 'OS/updater/file surface — browser cannot perform it',
+  save_text_file_via_dialog: 'OS/native save dialog + fs write — browser cannot perform it',
   reveal_in_folder: 'OS/updater/file surface — browser cannot perform it',
   run_file_diagnostics: 'OS/updater/file surface — browser cannot perform it',
   send_notification: 'OS/updater/file surface — browser cannot perform it',

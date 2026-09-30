@@ -930,6 +930,15 @@ export async function saveTextFile(path: string, content: string, expectedMtime?
   await invoke('save_text_file', { path, content, expectedMtime })
 }
 
+// G5 P0-8: save text via a BACKEND-driven native save dialog. The user's
+// pick in the dialog is the explicit authorization, so destinations outside
+// the working directory (Downloads, Documents, …) work — `save_text_file`
+// is working-dir-scoped by design and would reject them. Resolves to the
+// final path written, or null when the user cancelled the dialog.
+export async function saveTextFileViaDialog(content: string, defaultName: string): Promise<string | null> {
+  return invoke<string | null>('save_text_file_via_dialog', { content, defaultName })
+}
+
 // --- 2026-09-25 open pipeline (docs/plans/2026-09-25-desktop-chat-ui-
 // open-and-artifact-design.md §4 P0-A / P0-B / P1-C / P1-D / P1-E) ---
 

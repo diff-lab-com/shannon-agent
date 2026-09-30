@@ -51,6 +51,11 @@ export default function CommandPalette({ open, onClose }: { open: boolean; onClo
           if (!currentSessionId) { toast.info(t('slash.needsSession')); return }
           void exportSessionAsMarkdown(currentSessionId, sessions, t)
         } },
+      // G5 P1-11: the companion Quick Capture window was tray-only before —
+      // the palette is the second in-app entry (the header icon is the first).
+      { id: 'a-open-companion', label: t('palette.action.openCompanion'), icon: 'picture_in_picture', category: t('palette.category.actions'), action: () => {
+          api.openCompanionWindow().catch(e => toastError(t('header.companion.failed'), e))
+        } },
     ]
     const pages: PaletteItem[] = [
       { id: 'p-chat', label: t('nav.chat'), icon: 'chat_bubble', category: t('palette.category.pages'), action: () => navigate('/chat') },

@@ -316,6 +316,9 @@ fn main() {
             commands_files::get_file_diff,
             commands_files::apply_diff,
             commands_files::save_text_file,
+            // G5 P0-8 — backend-driven save dialog + write (timeline export
+            // to user-chosen paths outside the working directory).
+            commands_files::save_text_file_via_dialog,
             // Office Wave 1 — save-as copy for converted office documents
             commands_files::copy_file,
             // Office Wave 2 B9' — registered-files shelf (~/.shannon/desktop/file-index.json)
