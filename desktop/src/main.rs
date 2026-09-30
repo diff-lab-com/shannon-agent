@@ -626,18 +626,28 @@ fn main() {
                 shannon_desktop::config::migrate_legacy_mcp_servers();
                 shannon_desktop::extensions::migrate_legacy_agent_dirs();
 
-                // G1 P0-1.2 — seed the MCP process pool so configured
-                // servers are connected (and their tools discoverable)
-                // before the first chat turn. Single-server failures are
-                // log-only inside.
-                let mcp_servers = shannon_desktop::config::load_mcp_servers();
+                // G1 P0-1.2 — seed the MCP process pool in the BACKGROUND.
+                // Startup must not block on server handshakes: a single
+                // hung server would hold the first window for up to the
+                // pool's connection timeout (30s) per server. Timing
+                // semantics: setup does NOT wait for the pool; a chat turn
+                // sent before seeding finishes simply assembles zero MCP
+                // tools (assemble_mcp_tools no-ops on a cold pool), and the
+                // next turn after the pool is up registers them.
                 let pool = state_ref.mcp_pool();
-                let seed = shannon_desktop::mcp::seed_pool_from_config(&pool, mcp_servers).await;
-                tracing::info!(
-                    servers = seed.servers_started.len(),
-                    tools = seed.total_tools,
-                    "MCP process pool seeded"
-                );
+                tauri::async_runtime::spawn(async move {
+                    let mcp_servers = shannon_desktop::config::load_mcp_servers();
+                    if mcp_servers.is_empty() {
+                        return;
+                    }
+                    let seed =
+                        shannon_desktop::mcp::seed_pool_from_config(&pool, mcp_servers).await;
+                    tracing::info!(
+                        servers = seed.servers_started.len(),
+                        tools = seed.total_tools,
+                        "MCP process pool seeded (background)"
+                    );
+                });
 
                 // Q4-A — before hosting our own loopback engine API server,
                 // probe 127.0.0.1:33420. If another engine (typically the
