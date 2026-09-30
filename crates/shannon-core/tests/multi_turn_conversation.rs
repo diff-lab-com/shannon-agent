@@ -3060,6 +3060,7 @@ mod integration_tests {
 
     fn create_engine(mock_url: &str) -> QueryEngine {
         let config = LlmClientConfig {
+            alternate_api_keys: Vec::new(),
             thinking_type: None,
             api_key: "test-key".to_string(),
             base_url: mock_url.to_string(),

@@ -32,13 +32,37 @@ use std::os::unix::fs::PermissionsExt;
 use fs2::FileExt;
 use shannon_engine::api::LlmProvider;
 use shannon_types::provider_config::{
-    CredentialRef, ProviderKind, ProviderModelConfig, ProviderProfile, ProviderTiers,
+    CredentialRef, GatewayConfig, ProviderKind, ProviderModelConfig, ProviderProfile, ProviderTiers,
 };
 use tracing::{debug, warn};
 
 /// `~/.shannon/providers.toml`; `None` if the home directory is unknowable.
 pub fn default_path() -> Option<PathBuf> {
     Some(dirs::home_dir()?.join(".shannon").join("providers.toml"))
+}
+
+/// R4-2: one provider slot a snapshot import would overwrite —
+/// `(profile name, provider id)`. Sorted by `Self::import_conflicts` so
+/// conflict listings are deterministic.
+pub type ImportConflict = (String, String);
+
+/// R4-2: in-memory result of [`ProviderConfigStore::apply_import_snapshot`].
+/// Counts and the resulting active-profile pointer; persistence is the
+/// caller's (service) job.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct ImportSummary {
+    /// Model profiles created wholesale by the import (sorted).
+    pub profiles_added: Vec<String>,
+    /// Provider slots appended (new ids, plus every slot of a created profile).
+    pub providers_added: usize,
+    /// Provider slots replaced wholesale (`--force` over an existing id).
+    pub providers_replaced: usize,
+    /// The active-profile pointer after the import (never empty: `"default"`
+    /// when unset).
+    pub active_profile: String,
+    /// Whether the import moved the active-profile pointer (`--set-active`,
+    /// or the fresh-machine adoption of the snapshot's pointer).
+    pub active_pointer_applied: bool,
 }
 
 /// Sibling sidecar lockfile for cross-process `flock(LOCK_EX)` on
@@ -873,6 +897,185 @@ impl ProviderConfigStore {
     /// listing renders. Read-only.
     pub fn model_profile_names(&self) -> Vec<String> {
         self.config.profile_names()
+    }
+
+    // ── R4-2: config export/import (portable provider snapshots) ─────────
+
+    /// Provider slots an import of `incoming` would overwrite: sorted
+    /// `(profile name, provider id)` pairs. Empty when the import is purely
+    /// additive. Read-only; callers refuse on a non-empty list unless the
+    /// user opted into replacement (`--force`).
+    pub fn import_conflicts(&self, incoming: &ProviderModelConfig) -> Vec<ImportConflict> {
+        let mut out = Vec::new();
+        for (name, mp) in &incoming.profiles {
+            if let Some(live_mp) = self.config.profiles.get(name) {
+                for provider in &mp.providers {
+                    if live_mp.providers.iter().any(|p| p.id == provider.id) {
+                        out.push((name.clone(), provider.id.clone()));
+                    }
+                }
+            }
+        }
+        out.sort();
+        out
+    }
+
+    /// Overlay the portable snapshot `incoming` onto this store (R4-2
+    /// `shannon providers import`). **Pure in-memory** — nothing is
+    /// persisted; the caller saves through
+    /// [`crate::provider_config_service::ProviderConfigService`], the single
+    /// semantic write path for `providers.toml`.
+    ///
+    /// Merge policy (additive by default):
+    /// - a profile missing here is inserted **verbatim** (providers, active
+    ///   target, auxiliary roles, credential scope — the whole
+    ///   [`shannon_types::provider_config::ModelProfile`]);
+    /// - an existing profile is merged per provider slot: snapshot providers
+    ///   with an absent id are appended, ones whose id already exists replace
+    ///   the slot wholesale. Replacement is the explicit `--force` contract:
+    ///   with `force = false` any conflict (see `Self::import_conflicts`)
+    ///   is refused with `AlreadyExists` before anything is touched;
+    /// - an existing profile's **blank** `active_target` is filled from the
+    ///   snapshot's (fresh-machine fidelity); an already-set target is never
+    ///   repointed by the merge itself;
+    /// - auxiliary roles from the snapshot override same-role entries;
+    /// - the active-profile pointer: `set_active` wins when given (validated
+    ///   up front: the merged config must contain that profile with at least
+    ///   one provider slot); otherwise the snapshot's pointer is adopted only
+    ///   when this store had no connected provider before the import (the
+    ///   fresh-machine round-trip) — an established machine keeps its own
+    ///   pointer;
+    /// - `[gateway]` routing (B3) is adopted when this store still carries
+    ///   the default-off config, and never overwritten otherwise.
+    ///
+    /// Credentials are untouched by definition: a snapshot carries only
+    /// [`CredentialRef`] references (decision A1), and this method writes
+    /// `providers.toml` only — never the credential store.
+    pub fn apply_import_snapshot(
+        &mut self,
+        incoming: &ProviderModelConfig,
+        force: bool,
+        set_active: Option<&str>,
+    ) -> io::Result<ImportSummary> {
+        let conflicts = self.import_conflicts(incoming);
+        if !force && !conflicts.is_empty() {
+            let list = conflicts
+                .iter()
+                .map(|(profile, id)| format!("{profile}/{id}"))
+                .collect::<Vec<_>>()
+                .join(", ");
+            return Err(io::Error::new(
+                io::ErrorKind::AlreadyExists,
+                format!(
+                    "refusing to import: these provider ids already exist: {list}; \
+                     re-run with --force to replace them"
+                ),
+            ));
+        }
+
+        // `--set-active` pre-validation: the name must resolve to a profile
+        // with at least one provider slot once the merge lands (in `incoming`
+        // or already here). Checking before mutating keeps the refusal clean.
+        if let Some(name) = set_active {
+            let incoming_ok = incoming
+                .profiles
+                .get(name)
+                .is_some_and(|mp| !mp.providers.is_empty());
+            let live_ok = self
+                .config
+                .profiles
+                .get(name)
+                .is_some_and(|mp| !mp.providers.is_empty());
+            if !incoming_ok && !live_ok {
+                let mut names = self.config.profile_names();
+                for n in incoming.profile_names() {
+                    if !names.contains(&n) {
+                        names.push(n);
+                    }
+                }
+                names.sort();
+                return Err(io::Error::new(
+                    io::ErrorKind::InvalidData,
+                    format!(
+                        "--set-active '{name}': no such profile in the merged configuration, \
+                         or it has no provider slots; available: {}",
+                        names.join(", ")
+                    ),
+                ));
+            }
+        }
+
+        let pre_pointer = self.config.active_profile_key().to_string();
+        let live_had_providers = self
+            .config
+            .profiles
+            .values()
+            .any(|mp| !mp.providers.is_empty());
+
+        let mut summary = ImportSummary::default();
+        // `profile_names()` is sorted — deterministic file shape regardless of
+        // the snapshot's HashMap iteration order.
+        for name in incoming.profile_names() {
+            let Some(mp) = incoming.profiles.get(&name) else {
+                continue;
+            };
+            if let Some(live_mp) = self.config.profiles.get_mut(&name) {
+                // Set when a force-replaced slot is the one the live
+                // active_target points at: the selection's slot was swapped
+                // wholesale, so the target follows the snapshot's own
+                // selection instead of naming a model the new slot no longer
+                // declares.
+                let mut replaced_live_target = false;
+                for provider in &mp.providers {
+                    if let Some(slot) = live_mp.providers.iter_mut().find(|p| p.id == provider.id) {
+                        replaced_live_target |= live_mp.active_target.provider_id == provider.id;
+                        *slot = provider.clone();
+                        summary.providers_replaced += 1;
+                    } else {
+                        live_mp.providers.push(provider.clone());
+                        summary.providers_added += 1;
+                    }
+                }
+                // Adopt the snapshot's selection when the live target is
+                // blank (fresh-machine fidelity), or when the slot the live
+                // target points at was just force-replaced (otherwise the
+                // selection would name a model the new slot no longer
+                // declares). A live target on an untouched slot is never
+                // repointed.
+                let blank_target = live_mp.active_target.provider_id.is_empty()
+                    && live_mp.active_target.model_id.is_empty();
+                if (blank_target || replaced_live_target)
+                    && !mp.active_target.provider_id.is_empty()
+                {
+                    live_mp.active_target = mp.active_target.clone();
+                }
+                for (role, target) in &mp.auxiliary {
+                    live_mp.auxiliary.insert(*role, target.clone());
+                }
+            } else {
+                self.config.profiles.insert(name.clone(), mp.clone());
+                summary.profiles_added.push(name);
+                summary.providers_added += mp.providers.len();
+            }
+        }
+
+        if self.config.gateway == GatewayConfig::default()
+            && incoming.gateway != GatewayConfig::default()
+        {
+            self.config.gateway = incoming.gateway.clone();
+        }
+
+        if let Some(name) = set_active {
+            self.set_active_profile_key(name);
+        } else if !live_had_providers {
+            // Fresh machine: reproduce the snapshot's active profile so the
+            // import round-trips (modulo credential availability).
+            self.set_active_profile_key(incoming.active_profile_key());
+        }
+
+        summary.active_profile = self.config.active_profile_key().to_string();
+        summary.active_pointer_applied = summary.active_profile != pre_pointer;
+        Ok(summary)
     }
 
     /// Atomically persist to the cached path (or [`default_path`]).
@@ -2211,5 +2414,229 @@ service = "glm-plan"
         );
 
         let _ = fs::remove_dir_all(dir.path());
+    }
+
+    // ── R4-2: config export/import ───────────────────────────────────────
+
+    fn import_profile(id: &str, base_url: &str, model: &str) -> ProviderProfile {
+        ProviderProfile {
+            id: id.to_string(),
+            kind: ProviderKind::OpenAiCompatible,
+            display_name: id.to_string(),
+            base_url: base_url.to_string(),
+            models_url: None,
+            credential: CredentialRef::Store {
+                service: id.to_string(),
+            },
+            extra_headers: HashMap::new(),
+            default_max_tokens: None,
+            fallback_models: Vec::new(),
+            quirks: Default::default(),
+            tiers: ProviderTiers {
+                standard: Some(model.to_string()),
+                ..Default::default()
+            },
+            models: Vec::new(),
+        }
+    }
+
+    fn import_config(
+        active: &str,
+        profiles: &[(&str, Vec<ProviderProfile>, &str)],
+    ) -> ProviderModelConfig {
+        let mut map = HashMap::new();
+        for (name, providers, model) in profiles {
+            map.insert(
+                name.to_string(),
+                ModelProfile {
+                    name: name.to_string(),
+                    active_target: ActiveTarget {
+                        provider_id: providers[0].id.clone(),
+                        model_id: model.to_string(),
+                        scope: Scope::Global,
+                    },
+                    providers: providers.clone(),
+                    auxiliary: HashMap::new(),
+                    credential_scope: CredentialScope::Shared,
+                },
+            );
+        }
+        ProviderModelConfig {
+            version: ProviderModelConfig::VERSION,
+            active_profile: active.to_string(),
+            profiles: map,
+            gateway: Default::default(),
+        }
+    }
+
+    #[test]
+    fn import_conflicts_list_is_sorted_and_deterministic() {
+        let mut store = ProviderConfigStore::default();
+        store.upsert_profile(import_profile("zeta", "https://z", "m"), "m");
+        store.upsert_profile(import_profile("alpha", "https://a", "m"), "m");
+        let incoming = import_config(
+            "",
+            &[
+                (
+                    "default",
+                    vec![
+                        import_profile("zeta", "https://z2", "m2"),
+                        import_profile("alpha", "https://a2", "m2"),
+                        import_profile("new", "https://n", "m"),
+                    ],
+                    "m2",
+                ),
+                (
+                    "brand-new",
+                    vec![import_profile("x", "https://x", "m")],
+                    "m",
+                ),
+            ],
+        );
+        let conflicts = store.import_conflicts(&incoming);
+        assert_eq!(
+            conflicts,
+            vec![
+                ("default".to_string(), "alpha".to_string()),
+                ("default".to_string(), "zeta".to_string()),
+            ],
+            "sorted (profile, id) pairs; new ids and new profiles never conflict"
+        );
+    }
+
+    #[test]
+    fn import_refuses_conflicts_without_force_then_replaces_with_force() {
+        let mut store = ProviderConfigStore::default();
+        store.upsert_profile(import_profile("glm", "https://old", "old"), "old");
+        let incoming = import_config(
+            "",
+            &[(
+                "default",
+                vec![import_profile("glm", "https://new", "new")],
+                "new",
+            )],
+        );
+
+        let err = store
+            .apply_import_snapshot(&incoming, false, None)
+            .expect_err("conflict refuses without force");
+        assert_eq!(err.kind(), io::ErrorKind::AlreadyExists);
+        assert!(
+            err.to_string().contains("default/glm") && err.to_string().contains("--force"),
+            "{err}"
+        );
+        assert_eq!(
+            store.config().profiles["default"].providers[0].base_url,
+            "https://old",
+            "refusal leaves the store untouched"
+        );
+
+        store
+            .apply_import_snapshot(&incoming, true, None)
+            .expect("force replaces");
+        let default = &store.config().profiles["default"];
+        assert_eq!(default.providers[0].base_url, "https://new");
+        assert_eq!(
+            default.active_target.model_id, "new",
+            "target follows force replace"
+        );
+    }
+
+    #[test]
+    fn import_additive_merge_keeps_existing_selection_and_fills_blanks() {
+        let mut store = ProviderConfigStore::default();
+        store.upsert_profile(import_profile("glm", "https://glm", "glm-4.6"), "glm-4.6");
+        let incoming = import_config(
+            "",
+            &[(
+                "default",
+                vec![import_profile("kimi", "https://kimi", "k2")],
+                "k2",
+            )],
+        );
+        let summary = store
+            .apply_import_snapshot(&incoming, false, None)
+            .expect("additive merge");
+        assert_eq!(summary.profiles_added, Vec::<String>::new());
+        assert_eq!(summary.providers_added, 1);
+        assert_eq!(summary.providers_replaced, 0);
+        assert!(
+            !summary.active_pointer_applied,
+            "established machine keeps its active pointer/target"
+        );
+        let default = &store.config().profiles["default"];
+        assert_eq!(default.active_target.provider_id, "glm");
+        assert_eq!(
+            default.active_target.model_id, "glm-4.6",
+            "existing selection is never repointed by the merge"
+        );
+
+        // A profile whose active target is blank gets the snapshot's filled in.
+        store.insert_model_profile("empty").expect("scaffold");
+        let incoming2 = import_config(
+            "",
+            &[(
+                "empty",
+                vec![import_profile("deep", "https://deep", "d1")],
+                "d1",
+            )],
+        );
+        let summary2 = store
+            .apply_import_snapshot(&incoming2, false, None)
+            .expect("merge into empty profile");
+        assert_eq!(summary2.providers_added, 1);
+        let empty = &store.config().profiles["empty"];
+        assert_eq!(empty.providers.len(), 1);
+        assert_eq!(
+            empty.active_target.model_id, "d1",
+            "blank target filled from the snapshot"
+        );
+    }
+
+    #[test]
+    fn import_on_fresh_store_adopts_snapshot_pointer_and_verbatim_profile() {
+        let mut store = ProviderConfigStore::default();
+        let incoming = import_config(
+            "work",
+            &[("work", vec![import_profile("glm", "https://glm", "m")], "m")],
+        );
+        let summary = store
+            .apply_import_snapshot(&incoming, false, None)
+            .expect("fresh-machine import");
+        assert_eq!(summary.profiles_added, vec!["work".to_string()]);
+        assert!(summary.active_pointer_applied);
+        assert_eq!(store.config().active_profile_key(), "work");
+        assert_eq!(
+            store.config().profiles["work"].providers[0].credential,
+            CredentialRef::Store {
+                service: "glm".to_string()
+            },
+            "profile lands verbatim (credential ref included)"
+        );
+    }
+
+    #[test]
+    fn import_set_active_validates_and_switches() {
+        let mut store = ProviderConfigStore::default();
+        store.upsert_profile(import_profile("glm", "https://glm", "m"), "m");
+        let incoming = import_config(
+            "",
+            &[(
+                "work",
+                vec![import_profile("kimi", "https://kimi", "k")],
+                "k",
+            )],
+        );
+
+        let err = store
+            .apply_import_snapshot(&incoming, false, Some("ghost"))
+            .expect_err("unknown --set-active refuses");
+        assert_eq!(err.kind(), io::ErrorKind::InvalidData);
+        assert!(err.to_string().contains("ghost"), "{err}");
+
+        store
+            .apply_import_snapshot(&incoming, false, Some("work"))
+            .expect("valid --set-active");
+        assert_eq!(store.config().active_profile_key(), "work");
     }
 }

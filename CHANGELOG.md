@@ -4,6 +4,43 @@ All notable changes to Shannon Code are documented here. Entries are grouped by 
 
 ## [Unreleased] — §4.14 W1-P2 · OTLP bridge + full RedactionPolicy + desktop Turn Timeline
 
+### Provider followups R4 (2026-09-30)
+
+- **R4-3 multi-key rotation (engine + CLI):** a provider's credential-store
+  entry can hold several API keys (active key always first; single-key files
+  unchanged, older readers keep seeing the active key). On a 401/403-class
+  auth failure or a persistent 429 the engine rotates to the next key of the
+  same provider — once per remaining key, capped at the key count — emitting
+  `rotating API key (i/N) for <provider> (<reason>)` into the session event
+  stream. Rotation runs **before** provider failover; a session-pinned model
+  (`suppress_failover`) still rotates keys within the pinned target. New CLI:
+  `shannon providers keys <provider> list|add env:VAR|store:SVC|remove
+  <index>|activate <index>` (references only — raw keys still go through
+  `/connect`/TUI). Desktop UI for the key list is deferred.
+- **R4-2 provider setup export/import (CLI):** `shannon providers export
+  [--out <FILE>] [--redact]` writes a portable TOML snapshot of
+  `~/.shannon/providers.toml` (profiles, active-profile pointer, active
+  targets, tiers, per-model metadata, fallback models, gateway routing — and
+  credential **references** only: env var names / credential-store service
+  names, never secret values). `shannon providers import <FILE>
+  [--force] [--set-active <PROFILE>]` merges the snapshot back in through
+  `ProviderConfigService`: additive by default, refuses overlapping provider
+  ids unless `--force` replaces them, adopts the snapshot's active profile
+  only on a machine with no connected providers, never touches the
+  credential store, and prints a post-import checklist flagging which
+  credential references resolve on the importing machine and which need
+  attention. `--redact` masks every reference to `"<redacted>"` for
+  review/sharing copies (such files are refused on import); foreign or
+  invalid files are refused with actionable errors. A fresh-machine
+  export→wipe→import round trip reproduces the original configuration.
+- **R4-4a `shannon config --explain <key>` (CLI, read-only):** the
+  human-readable counterpart of `--dump-config` for one key — prints every
+  config layer that defines it with its file path / env var name, the
+  winning layer and value, and a where-to-change hint (`model` → `/model`;
+  credentials → `/connect`). Unknown keys print the known-key list. Reuses
+  the `config_dump` layer-snapshot provenance, so the two surfaces cannot
+  disagree.
+
 ### Office Wave 3 — differentiation pass (2026-09-29)
 
 - **C2** batch table runs: CSV file cards gain "Batch run" — a per-row

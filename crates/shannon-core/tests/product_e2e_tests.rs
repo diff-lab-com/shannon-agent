@@ -51,6 +51,7 @@ impl Drop for AnthropicKeyGuard {
 
 fn make_client(server: &ServerGuard, provider: LlmProvider) -> LlmClient {
     let config = LlmClientConfig {
+        alternate_api_keys: Vec::new(),
         thinking_type: None,
         api_key: "test-key".to_string(),
         base_url: server.url(),

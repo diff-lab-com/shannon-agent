@@ -3,6 +3,7 @@ use clap::Parser;
 use clap::Subcommand;
 use futures::StreamExt;
 
+mod commands_config_explain;
 mod commands_providers;
 mod crash_hook;
 mod eval_cmd;
@@ -932,6 +933,13 @@ enum Commands {
         /// `key` to get, or `key=value` to set
         #[arg(short, long)]
         setting: Option<String>,
+
+        /// Explain where KEY currently comes from (R4-4a): print every
+        /// config layer that defines it with its file path / env var name,
+        /// the winning layer + value, and where to change it. Human-readable
+        /// counterpart of `shannon --dump-config` (which emits JSON).
+        #[arg(long = "explain", value_name = "KEY", conflicts_with = "setting")]
+        explain: Option<String>,
     },
 
     /// Execute a query directly (non-interactive mode)
@@ -1143,6 +1151,119 @@ enum ProvidersSubcommand {
     /// pricing feed. Omitted flags keep the existing entry's values;
     /// `--remove` deletes the entry.
     ModelMeta(ProvidersModelMetaArgs),
+
+    /// Manage multiple API keys for one provider (R4-3 rotation).
+    ///
+    /// `shannon providers keys <PROVIDER> list|add <REF>|remove <INDEX>|
+    /// activate <INDEX>` operates on the provider's credential-store entry
+    /// (`~/.shannon/credentials/<service>.json`, 0600). The ACTIVE key is
+    /// always the first in the stored list; when a request fails with a 401
+    /// (or a persistent 429), the engine rotates through the remaining keys
+    /// in list order before any provider failover.
+    ///
+    /// Decision A1 (no plaintext): `add` accepts a credential REFERENCE —
+    /// `env:VAR_NAME` or `store:SERVICE` — never a raw key. Raw keys are
+    /// entered via `/connect` (REPL) or the desktop TUI, which write the
+    /// credential store directly.
+    Keys(ProvidersKeysArgs),
+
+    /// Export a portable snapshot of `~/.shannon/providers.toml` (R4-2).
+    ///
+    /// The snapshot (TOML — the same format as the file itself) carries all
+    /// profiles, the active-profile pointer, active targets, tiers, per-model
+    /// metadata, fallback models and credential REFERENCES (env var names /
+    /// credential-store service names) — never plaintext secret values.
+    /// Default output is stdout; `--out <FILE>` writes a file (0600) instead.
+    /// `shannon providers import` restores it on another machine.
+    Export(ProvidersExportArgs),
+
+    /// Import a snapshot written by `shannon providers export` (R4-2),
+    /// merging it into the live `~/.shannon/providers.toml`.
+    ///
+    /// Default: refuses to overwrite provider ids that already exist (lists
+    /// the conflicts; `--force` replaces those slots). Credentials are never
+    /// imported — only their references, which must resolve on this machine;
+    /// a post-import checklist flags the ones that do not.
+    Import(ProvidersImportArgs),
+}
+
+/// Args for `shannon providers export [--out FILE] [--redact]` (R4-2).
+#[derive(clap::Args, Debug)]
+struct ProvidersExportArgs {
+    /// Write the snapshot to FILE instead of stdout.
+    #[arg(long, value_name = "FILE")]
+    out: Option<std::path::PathBuf>,
+
+    /// Mask credential references to `"<redacted>"` (review/sharing copy — the
+    /// result can no longer be imported, since the references are gone).
+    #[arg(long = "redact")]
+    redact: bool,
+}
+
+/// Args for `shannon providers import <FILE> [--force] [--set-active PROFILE]`
+/// (R4-2).
+#[derive(clap::Args, Debug)]
+struct ProvidersImportArgs {
+    /// Path to the snapshot file (as written by `shannon providers export`).
+    #[arg(value_name = "FILE")]
+    file: String,
+
+    /// Replace provider slots whose ids already exist in providers.toml
+    /// instead of refusing (new ids are always added).
+    #[arg(long = "force")]
+    force: bool,
+
+    /// After the merge, make PROFILE the active profile. Without it, the
+    /// snapshot's active profile is adopted only when this machine has no
+    /// connected providers yet.
+    #[arg(long = "set-active", value_name = "PROFILE")]
+    set_active: Option<String>,
+}
+
+/// Args for `shannon providers keys <PROVIDER> <COMMAND>` (R4-3).
+#[derive(clap::Args, Debug)]
+struct ProvidersKeysArgs {
+    /// Provider id (positional) — the raw stored `ProviderProfile.id`, as
+    /// shown by `shannon list-providers`.
+    #[arg(value_name = "PROVIDER")]
+    provider: String,
+
+    #[command(subcommand)]
+    command: ProvidersKeysCommand,
+}
+
+/// Subcommands for `shannon providers keys <PROVIDER> …`.
+#[derive(Subcommand, Debug)]
+enum ProvidersKeysCommand {
+    /// List the provider's keys in rotation order (active first).
+    List,
+    /// Add a key by credential reference (`env:VAR_NAME` or `store:SERVICE`).
+    ///
+    /// The referenced value is resolved now and appended to the provider's
+    /// credential-store entry (the only place plaintext keys live, mode
+    /// 0600). Duplicate keys are rejected.
+    Add {
+        /// Credential reference: `env:VAR_NAME` or `store:SERVICE`.
+        #[arg(value_name = "REF")]
+        key_ref: String,
+    },
+    /// Remove the key at INDEX (0-based rotation position; see `list`).
+    ///
+    /// Removing the active key (0) promotes the next stored key. The last
+    /// remaining key cannot be removed — delete the whole provider with
+    /// `shannon providers remove` instead.
+    Remove {
+        #[arg(value_name = "INDEX")]
+        index: usize,
+    },
+    /// Make the key at INDEX the active one (0-based; see `list`).
+    ///
+    /// The engine picks the new key up on the next request; a running
+    /// session keeps the keys it resolved at start.
+    Activate {
+        #[arg(value_name = "INDEX")]
+        index: usize,
+    },
 }
 
 /// Args for `shannon providers model-meta <PROVIDER> <MODEL> [--flags]`.
@@ -5851,43 +5972,59 @@ fn run_with_cli(cli: Cli) -> Result<()> {
                 println!("Features: mcp, multi-agent, tools");
             }
         }
-        Some(Commands::Config { setting }) => {
-            use shannon_tools::config::ConfigManager;
-            let mut manager = ConfigManager::new();
-            if let Err(e) = manager.load() {
-                eprintln!("Warning: could not load config: {e}");
-            }
-
-            match setting {
-                None => {
-                    // List all config keys
-                    let keys = manager.list(None);
-                    if keys.is_empty() {
-                        println!(
-                            "No configuration set. Config file: {}",
-                            manager.config_path().display()
-                        );
-                    } else {
-                        println!("Configuration ({} key(s)):", keys.len());
-                        for key in &keys {
-                            let val = manager.get(key).unwrap_or(serde_json::Value::Null);
-                            println!("  {key} = {val}");
-                        }
-                        println!("\nConfig file: {}", manager.config_path().display());
+        Some(Commands::Config { setting, explain }) => {
+            // ── --explain <key>: layered provenance, human-readable (R4-4a) ──
+            // Same layer plumbing as --dump-config, rendered for one key.
+            if let Some(key) = explain {
+                match commands_config_explain::run(
+                    cli.model.as_deref(),
+                    cli.provider.as_deref(),
+                    &key,
+                ) {
+                    Ok(text) => print!("{text}"),
+                    Err(e) => {
+                        eprintln!("config --explain failed: {e:#}");
+                        std::process::exit(1);
                     }
                 }
-                Some(key) => {
-                    // Support "key=value" syntax for setting, or plain key for getting
-                    if let Some((k, v)) = key.split_once('=') {
-                        let k = k.trim();
-                        let v = v.trim();
-                        let outcome = apply_config_set(&mut manager, k, v, None);
-                        print_config_set_outcome(&manager, k, outcome);
-                    } else {
-                        // Get a specific key
-                        match manager.get(key.trim()) {
-                            Some(val) => println!("{key} = {val}"),
-                            None => println!("Config key not found: {key}"),
+            } else {
+                use shannon_tools::config::ConfigManager;
+                let mut manager = ConfigManager::new();
+                if let Err(e) = manager.load() {
+                    eprintln!("Warning: could not load config: {e}");
+                }
+
+                match setting {
+                    None => {
+                        // List all config keys
+                        let keys = manager.list(None);
+                        if keys.is_empty() {
+                            println!(
+                                "No configuration set. Config file: {}",
+                                manager.config_path().display()
+                            );
+                        } else {
+                            println!("Configuration ({} key(s)):", keys.len());
+                            for key in &keys {
+                                let val = manager.get(key).unwrap_or(serde_json::Value::Null);
+                                println!("  {key} = {val}");
+                            }
+                            println!("\nConfig file: {}", manager.config_path().display());
+                        }
+                    }
+                    Some(key) => {
+                        // Support "key=value" syntax for setting, or plain key for getting
+                        if let Some((k, v)) = key.split_once('=') {
+                            let k = k.trim();
+                            let v = v.trim();
+                            let outcome = apply_config_set(&mut manager, k, v, None);
+                            print_config_set_outcome(&manager, k, outcome);
+                        } else {
+                            // Get a specific key
+                            match manager.get(key.trim()) {
+                                Some(val) => println!("{key} = {val}"),
+                                None => println!("Config key not found: {key}"),
+                            }
                         }
                     }
                 }
@@ -6145,6 +6282,76 @@ fn run_with_cli(cli: Cli) -> Result<()> {
                 if let Err(e) = commands_providers::run_providers_model_meta(&mut store, &meta_args)
                 {
                     eprintln!("providers model-meta failed: {e:?}");
+                    std::process::exit(1);
+                }
+            }
+            ProvidersSubcommand::Keys(keys_args) => {
+                let store =
+                    shannon_core::provider_config_store::ProviderConfigStore::load_or_default();
+                commands_providers::warn_if_providers_toml_unparseable();
+                // Default credential-store dir (`~/.shannon/credentials`);
+                // both this command and the engine read the same 0600 files.
+                let credentials = shannon_core::credential_manager::CredentialManager::new();
+                let mut credentials = match credentials {
+                    Ok(m) => m,
+                    Err(e) => {
+                        eprintln!("providers keys failed: cannot open credential store: {e}");
+                        std::process::exit(1);
+                    }
+                };
+                let command = match keys_args.command {
+                    ProvidersKeysCommand::List => commands_providers::ProvidersKeysAction::List,
+                    ProvidersKeysCommand::Add { key_ref } => {
+                        commands_providers::ProvidersKeysAction::Add { key_ref }
+                    }
+                    ProvidersKeysCommand::Remove { index } => {
+                        commands_providers::ProvidersKeysAction::Remove { index }
+                    }
+                    ProvidersKeysCommand::Activate { index } => {
+                        commands_providers::ProvidersKeysAction::Activate { index }
+                    }
+                };
+                if let Err(e) = commands_providers::run_providers_keys(
+                    &store,
+                    &mut credentials,
+                    &keys_args.provider,
+                    &command,
+                ) {
+                    eprintln!("providers keys failed: {e:#}");
+                    std::process::exit(1);
+                }
+            }
+            ProvidersSubcommand::Export(export_args) => {
+                let store =
+                    shannon_core::provider_config_store::ProviderConfigStore::load_or_default();
+                commands_providers::warn_if_providers_toml_unparseable();
+                let args = commands_providers::ExportArgs {
+                    out: export_args.out.clone(),
+                    redact: export_args.redact,
+                };
+                if let Err(e) = commands_providers::run_providers_export(&store, &args) {
+                    eprintln!("providers export failed: {e:#}");
+                    std::process::exit(1);
+                }
+            }
+            ProvidersSubcommand::Import(import_args) => {
+                let mut store =
+                    shannon_core::provider_config_store::ProviderConfigStore::load_or_default();
+                commands_providers::warn_if_providers_toml_unparseable();
+                let args = commands_providers::ImportArgs {
+                    file: import_args.file.clone(),
+                    force: import_args.force,
+                    set_active: import_args.set_active.clone(),
+                };
+                // Default credential-store dir (`~/.shannon/credentials`) —
+                // the checklist resolves `store:` refs against the SAME store
+                // the engine reads. `None` defers to
+                // `read_credential_value_default` inside the command.
+                let cred_dir = None;
+                if let Err(e) =
+                    commands_providers::run_providers_import(&mut store, &args, cred_dir)
+                {
+                    eprintln!("providers import failed: {e:#}");
                     std::process::exit(1);
                 }
             }
@@ -6950,8 +7157,9 @@ def456  shannon-x86_64-unknown-linux-gnu.tar.gz
     fn test_cli_parse_config_with_setting() {
         let cli = Cli::try_parse_from(["shannon", "config", "-s", "model"]).unwrap();
         match cli.command {
-            Some(Commands::Config { setting }) => {
+            Some(Commands::Config { setting, explain }) => {
                 assert_eq!(setting.as_deref(), Some("model"));
+                assert!(explain.is_none(), "--explain unset on -s parse");
             }
             _ => panic!("Expected Config command"),
         }
@@ -6961,10 +7169,87 @@ def456  shannon-x86_64-unknown-linux-gnu.tar.gz
     fn test_cli_parse_config_no_setting() {
         let cli = Cli::try_parse_from(["shannon", "config"]).unwrap();
         match cli.command {
-            Some(Commands::Config { setting }) => {
+            Some(Commands::Config { setting, explain }) => {
                 assert!(setting.is_none());
+                assert!(explain.is_none());
             }
             _ => panic!("Expected Config command"),
+        }
+    }
+
+    #[test]
+    fn test_cli_parse_config_explain_flag() {
+        // R4-4a: `shannon config --explain <key>` parses standalone.
+        let cli = Cli::try_parse_from(["shannon", "config", "--explain", "max_tokens"]).unwrap();
+        match cli.command {
+            Some(Commands::Config { setting, explain }) => {
+                assert!(setting.is_none());
+                assert_eq!(explain.as_deref(), Some("max_tokens"));
+            }
+            _ => panic!("Expected Config command"),
+        }
+    }
+
+    #[test]
+    fn test_cli_parse_config_explain_conflicts_with_setting() {
+        // --explain and -s are mutually exclusive by construction.
+        assert!(
+            Cli::try_parse_from(["shannon", "config", "--explain", "model", "-s", "model"])
+                .is_err(),
+            "--explain + --setting must be a clap conflict error"
+        );
+    }
+
+    #[test]
+    fn test_cli_parse_providers_export_import_flags() {
+        // R4-2: export parses bare, with --out, and with --redact.
+        let cli = Cli::try_parse_from(["shannon", "providers", "export"]).unwrap();
+        match cli.command {
+            Some(Commands::Providers {
+                command: ProvidersSubcommand::Export(args),
+            }) => {
+                assert!(args.out.is_none() && !args.redact);
+            }
+            other => panic!("Expected Providers Export, got {other:?}"),
+        }
+        let cli = Cli::try_parse_from([
+            "shannon",
+            "providers",
+            "export",
+            "--out",
+            "snap.toml",
+            "--redact",
+        ])
+        .unwrap();
+        match cli.command {
+            Some(Commands::Providers {
+                command: ProvidersSubcommand::Export(args),
+            }) => {
+                assert_eq!(args.out.as_deref(), Some(std::path::Path::new("snap.toml")));
+                assert!(args.redact);
+            }
+            other => panic!("Expected Providers Export, got {other:?}"),
+        }
+        // Import parses with its flags.
+        let cli = Cli::try_parse_from([
+            "shannon",
+            "providers",
+            "import",
+            "snap.toml",
+            "--force",
+            "--set-active",
+            "work",
+        ])
+        .unwrap();
+        match cli.command {
+            Some(Commands::Providers {
+                command: ProvidersSubcommand::Import(args),
+            }) => {
+                assert_eq!(args.file, "snap.toml");
+                assert!(args.force);
+                assert_eq!(args.set_active.as_deref(), Some("work"));
+            }
+            other => panic!("Expected Providers Import, got {other:?}"),
         }
     }
 
@@ -7785,6 +8070,42 @@ profile_routes = []
         assert_eq!(
             llm.api_key, "sk-test-minimax",
             "Store credential must resolve"
+        );
+        assert!(
+            llm.alternate_api_keys.is_empty(),
+            "single-key store file must yield no rotation candidates: {:?}",
+            llm.alternate_api_keys
+        );
+    }
+
+    /// R4-3: a multi-key store entry (active key first) must flow through
+    /// client construction — `api_key` = the active key, `alternate_api_keys`
+    /// = the remaining keys in stored (rotation) order. This is the exact
+    /// list the engine's rotation walk consumes.
+    #[test]
+    fn test_multi_key_store_entry_feeds_rotation_candidates() {
+        let _guard = home_swap_lock();
+        let (dir, saved) = temp_home_with_connected_minimax();
+        // Upgrade the seeded single-key file to a multi-key entry (active
+        // first): active key-2, then key-1, then key-3.
+        let shannon = dir.path().join(".shannon");
+        std::fs::write(
+            shannon.join("credentials").join("minimax.json"),
+            r#"{"id":"t1","name":"minimax","service":"minimax","value":"sk-key-2-active","extra_values":["sk-key-1-old-active","sk-key-3-newest"],"created_at":"2026-08-21T00:00:00Z","updated_at":"2026-08-21T00:00:00Z","metadata":{}}"#,
+        )
+        .expect("write multi-key credential");
+
+        let config = build_cli_config(None, None, None, None, None, false, HashMap::new());
+        let llm = build_llm_config_from_builder(&config);
+        restore_home(saved);
+        assert_eq!(llm.api_key, "sk-key-2-active", "slot 0 is the active key");
+        assert_eq!(
+            llm.alternate_api_keys,
+            vec![
+                "sk-key-1-old-active".to_string(),
+                "sk-key-3-newest".to_string()
+            ],
+            "rotation order is the stored list order"
         );
     }
 

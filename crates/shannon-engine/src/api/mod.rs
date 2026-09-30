@@ -179,6 +179,7 @@ mod tests {
     #[test]
     fn test_client_creation() {
         let config = LlmClientConfig {
+            alternate_api_keys: Vec::new(),
             thinking_type: None,
             api_key: "test-key".to_string(),
             provider: LlmProvider::Anthropic,
@@ -223,6 +224,7 @@ mod tests {
     #[test]
     fn test_auth_headers_anthropic() {
         let client = LlmClient::new(LlmClientConfig {
+            alternate_api_keys: Vec::new(),
             thinking_type: None,
             api_key: "sk-ant-test".to_string(),
             api_version: "2023-06-01".to_string(),
@@ -245,6 +247,7 @@ mod tests {
     #[test]
     fn test_auth_headers_openai() {
         let client = LlmClient::new(LlmClientConfig {
+            alternate_api_keys: Vec::new(),
             thinking_type: None,
             api_key: "sk-oai-test".to_string(),
             provider: LlmProvider::OpenAI,
@@ -417,6 +420,7 @@ mod tests {
     #[test]
     fn test_backward_compat_claude_client() {
         let client: ClaudeClient = ClaudeClient::new(LlmClientConfig {
+            alternate_api_keys: Vec::new(),
             thinking_type: None,
             api_key: "test".to_string(),
             ..Default::default()
