@@ -171,7 +171,7 @@ impl AddonInstaller for AgentRepoInstaller {
                         );
                         continue;
                     };
-                    if write_flat_agent_toml(
+                    if let Some(file_name) = write_flat_agent_toml(
                         &root,
                         &plugin,
                         agent_name,
@@ -184,7 +184,7 @@ impl AddonInstaller for AgentRepoInstaller {
                         def.model.as_deref(),
                         &def.capabilities,
                     ) {
-                        flat_files.push(format!("{plugin}-{agent_name}.toml"));
+                        flat_files.push(file_name);
                     }
                 }
             }
@@ -198,7 +198,7 @@ impl AddonInstaller for AgentRepoInstaller {
                 }) {
                 Ok(manifest) => {
                     for agent in manifest.agents {
-                        if write_flat_agent_toml(
+                        if let Some(file_name) = write_flat_agent_toml(
                             &root,
                             &plugin,
                             &agent.name,
@@ -207,7 +207,7 @@ impl AddonInstaller for AgentRepoInstaller {
                             agent.model.as_deref(),
                             &agent.tools,
                         ) {
-                            flat_files.push(format!("{plugin}-{}.toml", agent.name));
+                            flat_files.push(file_name);
                         }
                     }
                 }
@@ -497,7 +497,10 @@ pub fn remove_installed_agent(name: &str) -> Result<(), InstallError> {
 
 /// Write one flat `<root>/<plugin>-<agent>.toml` definition (G1 Imp-4a).
 /// Existing flat files win (idempotent); unsafe agent names are rejected.
-/// Returns `true` when a file was written.
+/// Returns the ACTUAL written file name — the agent name is slugified by
+/// [`safe_plugin_name`], so the sidecar must record this (recording the raw
+/// name would not match the on-disk file and uninstall would leak the flat
+/// definition), or `None` when nothing was written.
 fn write_flat_agent_toml(
     root: &Path,
     plugin: &str,
@@ -506,25 +509,26 @@ fn write_flat_agent_toml(
     system_prompt: &str,
     model: Option<&str>,
     tools: &[String],
-) -> bool {
+) -> Option<String> {
     let agent_slug = match safe_plugin_name(agent_name) {
         Ok(s) => s,
         Err(e) => {
             tracing::warn!(agent = %agent_name, error = %e, "unsafe repo agent name — skipping");
-            return false;
+            return None;
         }
     };
     let flat_name = format!("{plugin}-{agent_slug}");
-    let target = root.join(format!("{flat_name}.toml"));
+    let file_name = format!("{flat_name}.toml");
+    let target = root.join(&file_name);
     if target.exists() {
-        return false; // existing definition wins
+        return None; // existing definition wins
     }
     let body = agent_definition_toml(&flat_name, description, system_prompt, model, tools);
     if let Err(e) = std::fs::write(&target, body) {
         tracing::warn!(path = %target.display(), error = %e, "flat agent write failed");
-        return false;
+        return None;
     }
-    true
+    Some(file_name)
 }
 
 /// Serialize the sidecar listing (`Vec<String>` of file names, basename
@@ -822,7 +826,7 @@ mod tests {
         let root = tmp.path().join("agents");
         std::fs::create_dir_all(&root).unwrap();
 
-        assert!(write_flat_agent_toml(
+        let written = write_flat_agent_toml(
             &root,
             "myrepo",
             "Code Reviewer",
@@ -830,7 +834,11 @@ mod tests {
             "You are a code reviewer.",
             Some("claude-sonnet-4-6"),
             &["read".to_string(), "grep".to_string()],
-        ));
+        );
+        // The returned name is the SLUGIFIED one and matches the on-disk
+        // file — the sidecar must record this, not the raw agent name.
+        assert_eq!(written.as_deref(), Some("myrepo-code-reviewer.toml"));
+        assert!(root.join("myrepo-code-reviewer.toml").exists());
         let def =
             shannon_agents::AgentDefinition::from_file(&root.join("myrepo-code-reviewer.toml"))
                 .expect("flat toml loads");
@@ -842,15 +850,18 @@ mod tests {
         assert_eq!(def.capabilities, vec!["read", "grep"]);
 
         // Existing flat file wins (idempotent).
-        assert!(!write_flat_agent_toml(
-            &root,
-            "myrepo",
-            "code-reviewer",
-            "other",
-            "other prompt",
-            None,
-            &[],
-        ));
+        assert_eq!(
+            write_flat_agent_toml(
+                &root,
+                "myrepo",
+                "code-reviewer",
+                "other",
+                "other prompt",
+                None,
+                &[],
+            ),
+            None
+        );
         let def =
             shannon_agents::AgentDefinition::from_file(&root.join("myrepo-code-reviewer.toml"))
                 .unwrap();
@@ -860,16 +871,72 @@ mod tests {
         );
 
         // Unsafe agent names are rejected without writing.
-        assert!(!write_flat_agent_toml(
-            &root,
-            "myrepo",
-            "../../escape",
-            "x",
-            "",
-            None,
-            &[],
-        ));
+        assert_eq!(
+            write_flat_agent_toml(&root, "myrepo", "../../escape", "x", "", None, &[],),
+            None
+        );
         assert!(!root.join("myrepo-escape.toml").exists());
+    }
+
+    /// Fix round 2: the sidecar must record the SLUGIFIED file name a
+    /// non-kebab-case agent landed under — a sidecar carrying the raw name
+    /// (`myrepo-Code Reviewer.toml`) matches nothing on disk, so uninstall
+    /// leaked the flat definition and the agent stayed loader-visible.
+    #[test]
+    fn sidecar_records_slugified_names_so_uninstall_cleans_them() {
+        let tmp = tempfile::tempdir().expect("tmp");
+        let root = tmp.path().join("agents");
+        std::fs::create_dir_all(&root).unwrap();
+
+        // Simulate the install path: write via the helper, record exactly
+        // what it returned (this is what install now does for both the .md
+        // and the manifest routes).
+        let mut flat_files = Vec::new();
+        flat_files.push(
+            write_flat_agent_toml(
+                &root,
+                "myrepo",
+                "Code Reviewer",
+                "Reviews code.",
+                "prompt-a",
+                None,
+                &[],
+            )
+            .expect("Code Reviewer must materialize"),
+        );
+        flat_files.push(
+            write_flat_agent_toml(
+                &root,
+                "myrepo",
+                "QA Tester v2!",
+                "Tests things.",
+                "prompt-b",
+                None,
+                &[],
+            )
+            .expect("QA Tester v2! must materialize"),
+        );
+        assert_eq!(
+            flat_files,
+            vec![
+                "myrepo-code-reviewer.toml".to_string(),
+                "myrepo-qa-tester-v2.toml".to_string()
+            ]
+        );
+
+        // Plugin dir carries the sidecar, uninstall removes the slug files.
+        let plugin_dir = root.join("myrepo");
+        std::fs::create_dir_all(&plugin_dir).unwrap();
+        std::fs::write(
+            plugin_dir.join(FLAT_AGENTS_SIDECAR),
+            json_sidecar(&flat_files),
+        )
+        .unwrap();
+
+        remove_installed_agent_in(&root, "myrepo").expect("remove");
+        assert!(!root.join("myrepo-code-reviewer.toml").exists());
+        assert!(!root.join("myrepo-qa-tester-v2.toml").exists());
+        assert!(!plugin_dir.exists());
     }
 
     /// Imp-4a: uninstalling a repo plugin removes the flat tomls recorded in
