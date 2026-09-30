@@ -25,6 +25,7 @@ mod appearance;
 mod config_kv;
 mod connect;
 mod model;
+mod profiles;
 mod provider;
 
 pub(crate) use appearance::{
@@ -36,6 +37,7 @@ pub(crate) use config_kv::{
 };
 pub(crate) use connect::{handle_connect, handle_disconnect};
 pub(crate) use model::handle_model;
+pub(crate) use profiles::handle_profiles;
 pub(crate) use provider::handle_provider;
 
 /// Resolve a `/model` argument into `(model_id, optional provider)` (ADR-0005

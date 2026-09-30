@@ -110,8 +110,9 @@ fn handle_model_refresh(repl: &mut Repl) -> Result<()> {
 
 /// Format a resolved context window for user-facing labels. `None` (unknown)
 /// renders as the localized "unknown" string instead of fabricating a number
-/// (Phase E).
-fn format_context_label(ctx: Option<usize>) -> String {
+/// (Phase E). `pub(super)` so the `/profiles` switch path renders the same
+/// label style (R3-2).
+pub(super) fn format_context_label(ctx: Option<usize>) -> String {
     match ctx {
         Some(n) if n >= 1_000_000 => format!("{}M", n / 1_000_000),
         Some(n) if n >= 1_000 => format!("{}K", n / 1_000),
@@ -312,18 +313,19 @@ fn handle_model_tier(repl: &mut Repl, args: &str) -> Result<()> {
 /// Load the persisted per-tier model overrides for a provider from
 /// `~/.shannon/providers.toml` (ADR-0005 Phase 4 read-back).
 ///
-/// Returns the provider's `ProviderTiers` when a `"default"` profile with that
-/// provider slot exists, else an empty `ProviderTiers` so `resolve_tier`
-/// falls back to the static catalog. A corrupt/missing file degrades to empty
-/// — same graceful contract as [`ProviderConfigStore::load_or_default`].
+/// Reads the **active** model profile (`active_profile`, R3-2 — `"default"`
+/// when unset) so a tier resolution in a non-default profile sees that
+/// profile's overrides. Returns the provider's `ProviderTiers` when a slot
+/// for the provider exists, else an empty `ProviderTiers` so `resolve_tier`
+/// falls back to the static catalog. A corrupt/missing file degrades to
+/// empty — same graceful contract as [`ProviderConfigStore::load_or_default`].
 fn load_provider_tiers(provider: &LlmProvider) -> ProviderTiers {
     use shannon_core::provider_config_store::ProviderConfigStore;
 
     let id = shannon_core::provider_resolver::llm_provider_id(provider);
     ProviderConfigStore::load_or_default()
         .config()
-        .profiles
-        .get("default")
+        .active_model_profile()
         .and_then(|p| p.providers.iter().find(|pr| pr.id == id))
         .map(|pr| pr.tiers.clone())
         .unwrap_or_default()

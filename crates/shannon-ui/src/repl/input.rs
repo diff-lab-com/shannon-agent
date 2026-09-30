@@ -1145,6 +1145,9 @@ pub(crate) fn complete_command_args(cmd_name: &str, prefix: &str) -> Vec<String>
         // /perm.
         "permissions" => &["list", "show", "set", "create"],
         "perm" | "perms" => &["allow", "deny", "reset", "status"],
+        // R3-2: the provider/model profile manager (plural). /profile
+        // (singular) stays reserved for the permission-profile transition.
+        "profiles" => &["use", "new", "rename", "delete"],
         "plan" => &["create", "approve", "reject", "done", "status"],
         "review" => &["HEAD~1", "main...HEAD", "--staged", "--full"],
         "history" => &["--export"],
@@ -3008,6 +3011,7 @@ mod tests {
             "ci",
             "compact",
             "permissions",
+            "profiles",
             "plan",
             "review",
             "history",

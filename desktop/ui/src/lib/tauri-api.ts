@@ -9,6 +9,7 @@ import type {
   ProviderConnection,
   ProvidersFile,
   ProviderInput,
+  ProviderProfileSummary,
   DesktopConfig,
   GatewayConfig,
   GatewayPairingRequest,
@@ -594,6 +595,28 @@ export interface ModelCatalogRefreshResult {
  *  `/model refresh`). Throws with the upstream failure reason. */
 export async function refreshModelCatalog(): Promise<ModelCatalogRefreshResult> {
   return invoke('refresh_model_catalog')
+}
+
+// --- R3-2 (desktop slice): provider model profiles ---
+
+/** List the engine store's model profiles (`"default"` pinned first, rest
+ *  alphabetical; `active` marks the engine's `active_profile`). */
+export async function listProviderProfiles(): Promise<ProviderProfileSummary[]> {
+  return invoke('list_provider_profiles')
+}
+
+/** Create an empty named model profile (inactive — switching is explicit).
+ *  Returns the refreshed list. Throws on empty/too-long/whitespace names
+ *  (the engine's shared `validate_profile_name` contract) and duplicates. */
+export async function createProviderProfile(name: string): Promise<ProviderProfileSummary[]> {
+  return invoke('create_provider_profile', { name })
+}
+
+/** Switch the engine's active model profile and re-point the global
+ *  default. Returns the refreshed list. The UI confirms before switching
+ *  to a profile with no providers. */
+export async function setActiveProviderProfile(name: string): Promise<ProviderProfileSummary[]> {
+  return invoke('set_active_provider_profile', { name })
 }
 
 export async function getTools(): Promise<ToolInfo[]> {

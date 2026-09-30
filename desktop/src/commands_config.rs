@@ -126,11 +126,16 @@ async fn land_profile_in_engine_store(
 /// route write paths through the store without touching the legacy
 /// `DesktopConfig.{provider,api_key,base_url,model}` mirror fields
 /// (P1.2-A — the A1 fix).
+///
+/// R3-2: reads the **active** model profile (`active_profile_key()`,
+/// `"default"` when unset) — the same roster `resolve_active_target`
+/// builds the global client config from — so configure keeps hitting the
+/// profile the user switched to instead of a hardcoded key.
 fn active_provider_id_and_kind(
     store: &shannon_core::provider_config_store::ProviderConfigStore,
 ) -> Option<(String, String)> {
     let cfg = store.config();
-    let pf = cfg.profiles.get("default")?;
+    let pf = cfg.active_model_profile()?;
     let id = pf.active_target.provider_id.clone();
     if id.is_empty() {
         return None;
@@ -144,12 +149,14 @@ fn active_provider_id_and_kind(
 /// id is the current `active_target.model_id` (preserved across the
 /// switch so a `/model X` followed by `configure('provider', Y)`
 /// keeps the chosen model in the new provider's default slot).
+/// R3-2: searched in the ACTIVE model profile (see
+/// [`active_provider_id_and_kind`]).
 fn find_provider_by_kind(
     store: &shannon_core::provider_config_store::ProviderConfigStore,
     kind_str: &str,
 ) -> Option<(String, String)> {
     let cfg = store.config();
-    let pf = cfg.profiles.get("default")?;
+    let pf = cfg.active_model_profile()?;
     let profile = pf
         .providers
         .iter()
@@ -194,7 +201,10 @@ pub(crate) fn provider_kind_slug(k: &shannon_types::provider_config::ProviderKin
 /// overrides, so this just locks, computes, and writes
 /// `state.client_config` in place. Drops both locks before
 /// returning.
-async fn rebuild_client_config_from_store(
+/// Rebuild `AppState::client_config` from the engine store's active target
+/// (`pub(crate)` so the R3-2 `set_active_provider_profile` command re-points
+/// the global default at the freshly-switched profile).
+pub(crate) async fn rebuild_client_config_from_store(
     state: &tauri::State<'_, AppState>,
 ) -> Result<(), String> {
     let overrides = {
@@ -641,6 +651,35 @@ pub async fn configure(
                 events::ConfigUpdatedPayload {
                     key: "approval_mode".into(),
                     value: update.value,
+                },
+            );
+
+            Ok(())
+        }
+        // R3-3 — plan/act phase-tier preferences (frozen keys `plan_tier` /
+        // `act_tier`). `inherit` / empty clears the preference (stored as
+        // None); a canonical tier name stores canonically; anything else is
+        // rejected so a typo can never silently disable the feature.
+        // Consulted per query by `resolve_client_config_for_session`.
+        "plan_tier" | "act_tier" => {
+            let validated = crate::phase_tier::validate_tier_pref_value(&update.value)?;
+            let mut desktop_cfg = state.desktop_config.write().await;
+            let validated_write = validated.clone();
+            if update.key == "plan_tier" {
+                desktop_cfg.plan_tier = validated;
+            } else {
+                desktop_cfg.act_tier = validated;
+            }
+
+            drop(desktop_cfg);
+            let desktop_cfg = state.desktop_config.read().await;
+            config::save_config(&desktop_cfg)?;
+
+            let _ = app_handle.emit(
+                event_names::CONFIG_UPDATED,
+                events::ConfigUpdatedPayload {
+                    key: update.key.clone(),
+                    value: validated_write.unwrap_or_else(|| "inherit".into()),
                 },
             );
 

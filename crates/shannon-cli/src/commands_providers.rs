@@ -170,11 +170,12 @@ fn describe_credential(cred: &CredentialRef) -> (bool, Option<String>) {
     }
 }
 
-/// Collect the rows for the configured `default` model profile, in insertion
+/// Collect the rows for the **active** model profile
+/// (`config.active_profile`, R3-2 — `"default"` when unset), in insertion
 /// order. Returns an empty Vec when the profile has no providers.
 fn collect_rows(store: &ProviderConfigStore) -> (Vec<ProviderRow>, Option<ActiveTargetJson>) {
     let config = store.config();
-    let default = match config.profiles.get("default") {
+    let default = match config.active_model_profile() {
         Some(p) => p,
         None => return (Vec::new(), None),
     };

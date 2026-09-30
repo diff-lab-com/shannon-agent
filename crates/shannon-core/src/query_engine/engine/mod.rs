@@ -1121,6 +1121,12 @@ impl QueryEngine {
     /// ADR-0005 spec §11: Shannon ships no model router). Used by `/provider
     /// health` to populate the multi-provider table and the active-provider
     /// switch hint.
+    ///
+    /// Clarification (R3-1): "no model router" bars *implicit* target
+    /// selection — Shannon never picks a model for you. Explicit,
+    /// user-configured failover (a profile's `fallback_models` chain, walked
+    /// in order on rate-limit/5xx after retries) is not a router: the user
+    /// authored every target, the engine only follows the list.
     pub async fn probe_all_health(
         &self,
         per_provider_timeout: std::time::Duration,

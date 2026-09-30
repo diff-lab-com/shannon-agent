@@ -494,6 +494,31 @@ impl Default for LlmClientConfig {
     }
 }
 
+/// R3-1: one explicit failover target resolved from a provider profile's
+/// `fallback_models` list (providers.toml v2).
+///
+/// Failover is **opt-in and user-authored**: Shannon never picks targets on
+/// its own (the engine's declared non-goal — no model router). A target is
+/// only ever created because the user listed the model (optionally
+/// `provider/model`-qualified) in the active profile's `fallback_models`.
+/// The client walks the chain in order when the primary target dies with a
+/// transient error (rate limit / 5xx / 529 after its retry budget is
+/// exhausted); see `RetryConfig::fallbacks`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct FailoverTarget {
+    /// Model id exactly as sent to the API on the fallback hop.
+    pub model: String,
+    /// Provider serving the model (drives wire format + endpoint path).
+    pub provider: LlmProvider,
+    /// Base URL for the fallback hop (same-provider targets reuse the
+    /// primary profile's; qualified targets take the named provider's).
+    pub base_url: String,
+    /// Credential resolved from the owning profile. Empty means "inherit
+    /// the primary client's key" (same-provider chain where the key is
+    /// shared); the failover walk skips overwriting in that case.
+    pub api_key: String,
+}
+
 /// Read the explicit thinking toggle from `SHANNON_THINKING`.
 /// `enabled|on|true` → `Some("enabled")`; `disabled|off|false|0` →
 /// `Some("disabled")`; unset or unrecognized → `None` (provider default

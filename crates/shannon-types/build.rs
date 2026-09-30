@@ -649,10 +649,18 @@ pub struct ModelProfile {
 #[derive(Debug, Clone, PartialEq, JsonSchema, Serialize, Deserialize)]
 pub struct ProviderModelConfig {
     pub version: u32,
+    /// R3-2: the named profile in-process resolution uses (must mirror src/;
+    /// skipped when empty so pre-R3-2 files keep their exact shape).
+    #[serde(default, skip_serializing_if = "is_default_active_profile")]
+    pub active_profile: String,
     pub profiles: HashMap<String, ModelProfile>,
     /// B3 契约：网关多 profile 路由（默认 off，字节级等同单 profile）
     #[serde(default)]
     pub gateway: GatewayConfig,
+}
+
+fn is_default_active_profile(s: &String) -> bool {
+    s.is_empty() || s == "default"
 }
 
 /// C1 两层凭据解析：默认 Shared（沿用旧单 profile 语义）

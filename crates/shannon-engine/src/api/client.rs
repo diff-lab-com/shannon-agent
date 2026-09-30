@@ -6,7 +6,7 @@ use std::time::Duration;
 
 use super::adapter::{OpenaiStreamState, normalize_sse_event};
 use super::error::ApiError;
-use super::retry::{RetryNotice, RetryObserver, retry_request_with_observer};
+use super::retry::{RetryNotice, RetryNoticeKind, RetryObserver, retry_request_with_observer};
 use super::streaming::MessageStream;
 use super::types::*;
 use crate::testing::record_replay::{RecordedExchange, RecordedRequest, RecordedResponse};
@@ -1156,54 +1156,13 @@ impl LlmClient {
         tools: Option<Vec<ToolDefinition>>,
         system: Option<String>,
     ) -> Result<Vec<ContentBlock>, ApiError> {
-        let retry_config = &self.config.retry_config;
-        let retry_observer = self.retry_observer_handle();
-        let result = retry_request_with_observer(retry_config, retry_observer.as_ref(), || {
-            self.send_message(messages.clone(), tools.clone(), system.clone())
+        self.send_with_failover(|client| {
+            let messages = messages.clone();
+            let tools = tools.clone();
+            let system = system.clone();
+            Box::pin(async move { client.send_message(messages, tools, system).await })
         })
-        .await;
-
-        match result {
-            Ok(blocks) => Ok(blocks),
-            Err(primary_err) => {
-                // Try fallback provider if configured
-                if let (Some(fallback_provider), Some(fallback_base_url)) = (
-                    &self.config.fallback_provider,
-                    &self.config.fallback_base_url,
-                ) {
-                    tracing::warn!(
-                        "Primary provider {} failed: {}. Falling back to {} at {}",
-                        self.config.provider,
-                        primary_err,
-                        fallback_provider,
-                        fallback_base_url,
-                    );
-                    let mut fallback_config = self.config.clone();
-                    fallback_config.provider = fallback_provider.clone();
-                    fallback_config.base_url = fallback_base_url.clone();
-                    // Inherit retry config
-                    let fallback_retry = fallback_config.retry_config.clone();
-                    // Keep the request observer attached across failover so
-                    // the session log records fallback envelopes too.
-                    let fallback_client = match self.request_capture_handle() {
-                        Some(capture) => Self::new(fallback_config).with_request_capture(capture),
-                        None => Self::new(fallback_config),
-                    }
-                    .with_retry_observer(self.retry_observer_handle());
-                    let fallback_observer = fallback_client.retry_observer_handle();
-                    retry_request_with_observer(&fallback_retry, fallback_observer.as_ref(), || {
-                        fallback_client.send_message(
-                            messages.clone(),
-                            tools.clone(),
-                            system.clone(),
-                        )
-                    })
-                    .await
-                } else {
-                    Err(primary_err)
-                }
-            }
-        }
+        .await
     }
 
     /// Send a streaming message with retry logic and optional provider fallback.
@@ -1213,52 +1172,13 @@ impl LlmClient {
         tools: Option<Vec<ToolDefinition>>,
         system: Option<String>,
     ) -> Result<MessageStream, ApiError> {
-        let retry_config = &self.config.retry_config;
-        let retry_observer = self.retry_observer_handle();
-        let result = retry_request_with_observer(retry_config, retry_observer.as_ref(), || {
-            self.send_message_stream(messages.clone(), tools.clone(), system.clone())
+        self.send_with_failover(|client| {
+            let messages = messages.clone();
+            let tools = tools.clone();
+            let system = system.clone();
+            Box::pin(async move { client.send_message_stream(messages, tools, system).await })
         })
-        .await;
-
-        match result {
-            Ok(stream) => Ok(stream),
-            Err(primary_err) => {
-                if let (Some(fallback_provider), Some(fallback_base_url)) = (
-                    &self.config.fallback_provider,
-                    &self.config.fallback_base_url,
-                ) {
-                    tracing::warn!(
-                        "Primary provider {} stream failed: {}. Falling back to {} at {}",
-                        self.config.provider,
-                        primary_err,
-                        fallback_provider,
-                        fallback_base_url,
-                    );
-                    let mut fallback_config = self.config.clone();
-                    fallback_config.provider = fallback_provider.clone();
-                    fallback_config.base_url = fallback_base_url.clone();
-                    let fallback_retry = fallback_config.retry_config.clone();
-                    // Keep the request observer attached across failover so
-                    // the session log records fallback envelopes too.
-                    let fallback_client = match self.request_capture_handle() {
-                        Some(capture) => Self::new(fallback_config).with_request_capture(capture),
-                        None => Self::new(fallback_config),
-                    }
-                    .with_retry_observer(self.retry_observer_handle());
-                    let fallback_observer = fallback_client.retry_observer_handle();
-                    retry_request_with_observer(&fallback_retry, fallback_observer.as_ref(), || {
-                        fallback_client.send_message_stream(
-                            messages.clone(),
-                            tools.clone(),
-                            system.clone(),
-                        )
-                    })
-                    .await
-                } else {
-                    Err(primary_err)
-                }
-            }
-        }
+        .await
     }
 
     /// Send a structured streaming message with retry logic and optional provider fallback.
@@ -1268,56 +1188,178 @@ impl LlmClient {
         tools: Option<Vec<ToolDefinition>>,
         system_blocks: Vec<super::types::SystemContentBlock>,
     ) -> Result<MessageStream, ApiError> {
-        let retry_config = &self.config.retry_config;
-        let retry_observer = self.retry_observer_handle();
-        let result = retry_request_with_observer(retry_config, retry_observer.as_ref(), || {
-            self.send_message_stream_structured(
-                messages.clone(),
-                tools.clone(),
-                system_blocks.clone(),
-            )
-        })
-        .await;
-
-        match result {
-            Ok(stream) => Ok(stream),
-            Err(primary_err) => {
-                if let (Some(fallback_provider), Some(fallback_base_url)) = (
-                    &self.config.fallback_provider,
-                    &self.config.fallback_base_url,
-                ) {
-                    tracing::warn!(
-                        "Primary provider {} structured stream failed: {}. Falling back to {} at {}",
-                        self.config.provider,
-                        primary_err,
-                        fallback_provider,
-                        fallback_base_url,
-                    );
-                    let mut fallback_config = self.config.clone();
-                    fallback_config.provider = fallback_provider.clone();
-                    fallback_config.base_url = fallback_base_url.clone();
-                    let fallback_retry = fallback_config.retry_config.clone();
-                    // Keep the request observer attached across failover so
-                    // the session log records fallback envelopes too.
-                    let fallback_client = match self.request_capture_handle() {
-                        Some(capture) => Self::new(fallback_config).with_request_capture(capture),
-                        None => Self::new(fallback_config),
-                    }
-                    .with_retry_observer(self.retry_observer_handle());
-                    let fallback_observer = fallback_client.retry_observer_handle();
-                    retry_request_with_observer(&fallback_retry, fallback_observer.as_ref(), || {
-                        fallback_client.send_message_stream_structured(
-                            messages.clone(),
-                            tools.clone(),
-                            system_blocks.clone(),
-                        )
-                    })
+        self.send_with_failover(|client| {
+            let messages = messages.clone();
+            let tools = tools.clone();
+            let system_blocks = system_blocks.clone();
+            Box::pin(async move {
+                client
+                    .send_message_stream_structured(messages, tools, system_blocks)
                     .await
-                } else {
-                    Err(primary_err)
-                }
+            })
+        })
+        .await
+    }
+
+    // ── R3-1: explicit failover walk ─────────────────────────────────────
+
+    /// Run `send` against `self` with the standard retry budget, then — only
+    /// when the user authored an explicit fallback chain and the failure is
+    /// failover-eligible — walk that chain in order.
+    ///
+    /// Semantics (roadmap R3-1, review C15):
+    /// - **Opt-in only.** No chain configured → the primary error surfaces
+    ///   unchanged (the pre-R3-1 behavior; Shannon does not route).
+    /// - **AuthenticationFailed never fails over.** A bad key fails over
+    ///   nowhere useful — surface it so the user fixes the credential.
+    /// - Only rate-limit (429) and 5xx/529 errors that survived the primary
+    ///   target's full retry budget trigger the walk
+    ///   ([`RetryConfig::is_failover_eligible`]).
+    /// - Each fallback target gets the standard retry budget exactly once,
+    ///   at most [`MAX_FAILOVER_TARGETS`] hops (enforced again here, not
+    ///   only at resolution time — the config is user-editable data).
+    /// - Every hop emits a [`RetryNotice`] with
+    ///   [`RetryNoticeKind::Failover`] through the retry observer, so the
+    ///   downgrade lands in the query event stream (replayable) plus the
+    ///   tracing log: "falling back to <model>@<provider> (<reason>)".
+    /// - `RetryConfig::suppress_failover` (session-level model override,
+    ///   desktop R2-1) skips the walk entirely — the user pinned the target.
+    ///
+    /// The closure receives the client to attempt (primary or fallback), so
+    /// the same shape works for streaming, structured-streaming and plain
+    /// sends. The boxed-future return (lifetime tied to the client argument)
+    /// lets one closure serve both the primary and every fallback hop.
+    pub(crate) async fn send_with_failover<T, F>(&self, send: F) -> Result<T, ApiError>
+    where
+        F: Fn(&LlmClient) -> futures::future::BoxFuture<'_, Result<T, ApiError>>,
+    {
+        let retry_config = self.config.retry_config.clone();
+        let observer = self.retry_observer_handle();
+        let primary_err =
+            retry_request_with_observer(&retry_config, observer.as_ref(), || send(self)).await;
+
+        let mut last_err = match primary_err {
+            Ok(ok) => return Ok(ok),
+            Err(e) => e,
+        };
+
+        // Session-level model override (desktop R2-1): the user explicitly
+        // pinned this target — no silent degradation. Documented precedence
+        // on `RetryConfig::suppress_failover`.
+        if retry_config.suppress_failover {
+            return Err(last_err);
+        }
+        // Bad key: switching targets cannot heal it; surface immediately.
+        if matches!(last_err, ApiError::AuthenticationFailed) {
+            return Err(last_err);
+        }
+        if !retry_config.is_failover_eligible(&last_err) {
+            return Err(last_err);
+        }
+
+        let chain = self.failover_chain();
+        if chain.is_empty() {
+            return Err(last_err);
+        }
+
+        for target in chain
+            .into_iter()
+            .take(crate::api::retry::MAX_FAILOVER_TARGETS)
+        {
+            // Visible downgrade: the query event stream (via the retry
+            // observer) + the log. Emitted BEFORE the hop so the event
+            // precedes any of the hop's own retry notices.
+            let notice = RetryNotice {
+                attempt: 0,
+                total_attempts: 0,
+                wait: Duration::ZERO,
+                reason: last_err.to_string(),
+                kind: RetryNoticeKind::Failover {
+                    model: target.model.clone(),
+                    provider: target.provider.to_string(),
+                },
+            };
+            tracing::warn!(
+                "falling back to {}@{} ({})",
+                target.model,
+                target.provider,
+                last_err
+            );
+            self.notify_retry(notice).await;
+
+            let fallback_client = self.build_failover_client(&target);
+            let hop_observer = fallback_client.retry_observer_handle();
+            last_err = match retry_request_with_observer(
+                &fallback_client.config.retry_config,
+                hop_observer.as_ref(),
+                || send(&fallback_client),
+            )
+            .await
+            {
+                Ok(ok) => return Ok(ok),
+                Err(e) => e,
+            };
+            // The hop failed with its full retry budget spent — try the next
+            // target with the freshest error as the reason. AuthenticationFailed
+            // from a HOP only disqualifies that hop (its own credential); the
+            // next hop may carry a different provider's key.
+        }
+        Err(last_err)
+    }
+
+    /// The effective failover chain for this client: the resolved
+    /// `fallback_models` chain, or — for configs authored before R3-1 — a
+    /// single-hop chain synthesized from the legacy
+    /// `fallback_provider`/`fallback_base_url` pair (model and key
+    /// unchanged). Already capped at [`MAX_FAILOVER_TARGETS`] by the walk.
+    fn failover_chain(&self) -> Vec<FailoverTarget> {
+        let mut chain = self.config.retry_config.fallbacks.clone();
+        if chain.is_empty() {
+            if let (Some(provider), Some(base_url)) = (
+                &self.config.fallback_provider,
+                &self.config.fallback_base_url,
+            ) {
+                chain.push(FailoverTarget {
+                    model: self.config.model.clone(),
+                    provider: provider.clone(),
+                    base_url: base_url.clone(),
+                    api_key: String::new(), // inherit the primary key
+                });
             }
         }
+        chain
+    }
+
+    /// Build the per-hop failover client: the primary config re-targeted at
+    /// `target`. Inherits the session-log tee, the (shared) retry observer
+    /// and the stream-idle override cell like [`Self::reconnect_clone`] —
+    /// but deliberately carries an EMPTY chain: hop progression is owned by
+    /// the [`Self::send_with_failover`] loop, and a nested walk would
+    /// multiply the retry budget.
+    fn build_failover_client(&self, target: &FailoverTarget) -> LlmClient {
+        let mut cfg = self.config.clone();
+        cfg.provider = target.provider.clone();
+        cfg.base_url = target.base_url.clone();
+        cfg.model = target.model.clone();
+        if !target.api_key.is_empty() {
+            cfg.api_key = target.api_key.clone();
+        }
+        cfg.api_version = if cfg.provider == LlmProvider::Anthropic {
+            "2023-06-01".to_string()
+        } else {
+            String::new()
+        };
+        // Terminal hop: no further failover from inside a failover hop.
+        cfg.retry_config.fallbacks = Vec::new();
+        cfg.fallback_provider = None;
+        cfg.fallback_base_url = None;
+        let mut client = match self.request_capture_handle() {
+            Some(capture) => LlmClient::new(cfg).with_request_capture(capture),
+            None => LlmClient::new(cfg),
+        };
+        client.retry_observer = self.retry_observer.clone();
+        client.stream_idle_override = self.stream_idle_override.clone();
+        client
     }
 
     /// Check Ollama model capabilities via `/api/show`.
@@ -1411,6 +1453,7 @@ pub type ClaudeClient = LlmClient;
 #[allow(clippy::unwrap_used)]
 mod tests {
     use super::*;
+    use crate::api::RetryConfig;
 
     fn test_config() -> LlmClientConfig {
         LlmClientConfig {
@@ -2396,5 +2439,385 @@ mod tests {
             );
         }
         assert_eq!(text, "partial before the cutafter reconnect");
+    }
+
+    // ── R3-1: explicit failover walk ────────────────────────────────────
+
+    /// A minimal valid Anthropic non-streaming response body.
+    fn anthropic_ok(text: &str) -> String {
+        format!(
+            r#"{{"id":"msg_fb","role":"assistant","content":[{{"type":"text","text":"{text}"}}],"model":"test-model","stop_reason":"end_turn","usage":{{"input_tokens":1,"output_tokens":1}}}}"#
+        )
+    }
+
+    /// A full, terminal Anthropic SSE stream delivering `text`.
+    fn anthropic_sse(text: &str) -> String {
+        let delta = format!(
+            r#"{{"type":"content_block_delta","index":0,"delta":{{"type":"text_delta","text":"{text}"}}}}"#
+        );
+        format!(
+            "data: {}\n\ndata: {}\n\ndata: {}\n\ndata: [DONE]\n\n",
+            r#"{"type":"message_start","message":{"id":"msg_fb_stream","role":"assistant","content":[],"model":"test-model","stop_reason":null,"usage":{"input_tokens":1,"output_tokens":0}}}"#,
+            delta,
+            r#"{"type":"message_delta","delta":{"stop_reason":"end_turn"},"usage":{"input_tokens":1,"output_tokens":1}}"#,
+        )
+    }
+
+    /// Failover target against a local mockito server (Anthropic wire).
+    async fn fb_target(model: &str, server: &mut mockito::ServerGuard) -> FailoverTarget {
+        FailoverTarget {
+            model: model.to_string(),
+            provider: LlmProvider::Anthropic,
+            base_url: server.url(),
+            api_key: "fb-key".to_string(),
+        }
+    }
+
+    /// Client with a no-retry budget (failover semantics get tested in
+    /// isolation from the retry loop) plus a notice sink.
+    fn fb_client(
+        base_url: String,
+        retry_config: RetryConfig,
+    ) -> (
+        LlmClient,
+        std::sync::Arc<std::sync::Mutex<Vec<RetryNotice>>>,
+    ) {
+        let mut cfg = test_config();
+        cfg.base_url = base_url;
+        cfg.retry_config = retry_config;
+        let client = LlmClient::new(cfg);
+        let notices: std::sync::Arc<std::sync::Mutex<Vec<RetryNotice>>> = Default::default();
+        let sink = notices.clone();
+        client.set_retry_observer(Some(std::sync::Arc::new(move |notice: RetryNotice| {
+            sink.lock().unwrap().push(notice);
+            Box::pin(futures::future::ready(())) as futures::future::BoxFuture<'static, ()>
+        })));
+        (client, notices)
+    }
+
+    fn fb_retry_config(fallbacks: Vec<FailoverTarget>) -> RetryConfig {
+        RetryConfig {
+            max_retries: 0,
+            initial_backoff_ms: 1,
+            max_backoff_ms: 1,
+            fallbacks,
+            ..RetryConfig::default()
+        }
+    }
+
+    /// Primary 429 → hop 1 429 → hop 2 200: the walk degrades in order and
+    /// each hop emits exactly one `Failover` notice naming the target it is
+    /// degrading TO, with the triggering error as the reason.
+    #[tokio::test]
+    async fn failover_walks_chain_in_order_and_emits_notices() {
+        let mut primary = mockito::Server::new_async().await;
+        primary
+            .mock("POST", "/v1/messages")
+            .with_status(429)
+            .create_async()
+            .await;
+        let mut hop1 = mockito::Server::new_async().await;
+        hop1.mock("POST", "/v1/messages")
+            .with_status(429)
+            .expect(1)
+            .create_async()
+            .await;
+        let mut hop2 = mockito::Server::new_async().await;
+        let ok = hop2
+            .mock("POST", "/v1/messages")
+            .with_status(200)
+            .with_body(anthropic_ok("third hop"))
+            .expect(1)
+            .create_async()
+            .await;
+
+        let (client, notices) = fb_client(
+            primary.url(),
+            fb_retry_config(vec![
+                fb_target("fallback-a", &mut hop1).await,
+                fb_target("fallback-b", &mut hop2).await,
+            ]),
+        );
+
+        let blocks = client
+            .send_message_with_retry(vec![user_message()], None, None)
+            .await
+            .expect("the third hop must answer");
+        let text: String = blocks
+            .iter()
+            .filter_map(|b| match b {
+                ContentBlock::Text { text } => Some(text.as_str()),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(text, "third hop");
+
+        ok.assert();
+        let notices = notices.lock().unwrap();
+        let failovers: Vec<&RetryNotice> = notices
+            .iter()
+            .filter(|n| matches!(n.kind, RetryNoticeKind::Failover { .. }))
+            .collect();
+        assert_eq!(failovers.len(), 2, "one Failover notice per hop");
+        match &failovers[0].kind {
+            RetryNoticeKind::Failover { model, provider } => {
+                assert_eq!(model, "fallback-a");
+                assert_eq!(provider, "anthropic");
+            }
+            other => panic!("expected Failover kind, got {other:?}"),
+        }
+        match &failovers[1].kind {
+            RetryNoticeKind::Failover { model, .. } => assert_eq!(model, "fallback-b"),
+            other => panic!("expected Failover kind, got {other:?}"),
+        }
+        assert!(
+            failovers[0].reason.contains("Rate limit"),
+            "the reason must carry the triggering error: {}",
+            failovers[0].reason
+        );
+    }
+
+    /// 401 fails over NOWHERE: the credential error surfaces unchanged, no
+    /// fallback server is contacted, no Failover notice is emitted.
+    #[tokio::test]
+    async fn no_failover_on_authentication_failure() {
+        let mut primary = mockito::Server::new_async().await;
+        primary
+            .mock("POST", "/v1/messages")
+            .with_status(401)
+            .create_async()
+            .await;
+        let mut hop1 = mockito::Server::new_async().await;
+        let untouched = hop1
+            .mock("POST", "/v1/messages")
+            .expect(0)
+            .create_async()
+            .await;
+
+        let (client, notices) = fb_client(
+            primary.url(),
+            fb_retry_config(vec![fb_target("fallback-a", &mut hop1).await]),
+        );
+
+        let err = client
+            .send_message_with_retry(vec![user_message()], None, None)
+            .await
+            .expect_err("401 must surface");
+        assert!(
+            matches!(err, ApiError::AuthenticationFailed),
+            "the auth error must surface verbatim, got {err:?}"
+        );
+        untouched.assert();
+        assert!(notices.lock().unwrap().is_empty());
+    }
+
+    /// A session-level model override (desktop R2-1) pins the target:
+    /// `suppress_failover` skips the walk even for an eligible 429.
+    #[tokio::test]
+    async fn session_override_suppression_blocks_failover() {
+        let mut primary = mockito::Server::new_async().await;
+        primary
+            .mock("POST", "/v1/messages")
+            .with_status(429)
+            .create_async()
+            .await;
+        let mut hop1 = mockito::Server::new_async().await;
+        let untouched = hop1
+            .mock("POST", "/v1/messages")
+            .expect(0)
+            .create_async()
+            .await;
+
+        let mut retry = fb_retry_config(vec![fb_target("fallback-a", &mut hop1).await]);
+        retry.suppress_failover = true;
+        let (client, notices) = fb_client(primary.url(), retry);
+
+        let err = client
+            .send_message_with_retry(vec![user_message()], None, None)
+            .await
+            .expect_err("suppressed failover must surface the primary error");
+        assert!(
+            matches!(err, ApiError::RateLimitExceeded { .. }),
+            "got {err:?}"
+        );
+        untouched.assert();
+        assert!(notices.lock().unwrap().is_empty());
+    }
+
+    /// Deterministic client errors (400 → ProviderError) are not
+    /// failover-eligible: another target would repeat the same request
+    /// problem, so the error surfaces and the chain stays untouched.
+    #[tokio::test]
+    async fn client_error_does_not_failover() {
+        let mut primary = mockito::Server::new_async().await;
+        primary
+            .mock("POST", "/v1/messages")
+            .with_status(400)
+            .with_body(
+                r#"{"type":"error","error":{"type":"invalid_request_error","message":"bad"}}"#,
+            )
+            .create_async()
+            .await;
+        let mut hop1 = mockito::Server::new_async().await;
+        let untouched = hop1
+            .mock("POST", "/v1/messages")
+            .expect(0)
+            .create_async()
+            .await;
+
+        let (client, _) = fb_client(
+            primary.url(),
+            fb_retry_config(vec![fb_target("fallback-a", &mut hop1).await]),
+        );
+
+        let err = client
+            .send_message_with_retry(vec![user_message()], None, None)
+            .await
+            .expect_err("400 must surface");
+        assert!(matches!(err, ApiError::ProviderError { .. }), "got {err:?}");
+        untouched.assert();
+    }
+
+    /// The walk is hard-capped at [`MAX_FAILOVER_TARGETS`] hops even when
+    /// the configured chain is longer; the final hop's error surfaces.
+    #[tokio::test]
+    async fn failover_is_capped_at_three_hops() {
+        let mut primary = mockito::Server::new_async().await;
+        primary
+            .mock("POST", "/v1/messages")
+            .with_status(500)
+            .create_async()
+            .await;
+        let mut hops = Vec::new();
+        for _ in 0..4 {
+            let mut server = mockito::Server::new_async().await;
+            server
+                .mock("POST", "/v1/messages")
+                .with_status(500)
+                .create_async()
+                .await;
+            hops.push(server);
+        }
+
+        let mut targets = Vec::new();
+        for (i, server) in hops.iter_mut().enumerate().take(4) {
+            targets.push(fb_target(&format!("fallback-{i}"), server).await);
+        }
+        let (client, notices) = fb_client(primary.url(), fb_retry_config(targets));
+
+        let err = client
+            .send_message_with_retry(vec![user_message()], None, None)
+            .await
+            .expect_err("every hop 500s");
+        match err {
+            ApiError::ApiError { status: 500, .. } => {}
+            other => panic!("expected the last hop's 500, got {other:?}"),
+        }
+
+        let notices = notices.lock().unwrap();
+        let failovers: Vec<&RetryNotice> = notices
+            .iter()
+            .filter(|n| matches!(n.kind, RetryNoticeKind::Failover { .. }))
+            .collect();
+        assert_eq!(
+            failovers.len(),
+            crate::api::retry::MAX_FAILOVER_TARGETS,
+            "the fourth configured target must never be tried"
+        );
+        match &failovers[2].kind {
+            RetryNoticeKind::Failover { model, .. } => assert_eq!(model, "fallback-2"),
+            other => panic!("expected Failover kind, got {other:?}"),
+        }
+    }
+
+    /// The pre-R3-1 `fallback_provider`/`fallback_base_url` pair still
+    /// works: synthesized as a single hop carrying the SAME model and the
+    /// primary's key.
+    #[tokio::test]
+    async fn legacy_fallback_pair_synthesizes_single_hop() {
+        let mut primary = mockito::Server::new_async().await;
+        primary
+            .mock("POST", "/v1/messages")
+            .with_status(500)
+            .create_async()
+            .await;
+        let mut hop1 = mockito::Server::new_async().await;
+        let ok = hop1
+            .mock("POST", "/v1/messages")
+            .with_status(200)
+            .with_body(anthropic_ok("legacy hop"))
+            .expect(1)
+            .create_async()
+            .await;
+
+        let mut cfg = test_config();
+        cfg.base_url = primary.url();
+        cfg.retry_config = RetryConfig {
+            max_retries: 0,
+            initial_backoff_ms: 1,
+            max_backoff_ms: 1,
+            ..RetryConfig::default()
+        };
+        cfg.fallback_provider = Some(LlmProvider::Anthropic);
+        cfg.fallback_base_url = Some(hop1.url());
+        let client = LlmClient::new(cfg);
+
+        let blocks = client
+            .send_message_with_retry(vec![user_message()], None, None)
+            .await
+            .expect("the legacy hop must answer");
+        let text: String = blocks
+            .iter()
+            .filter_map(|b| match b {
+                ContentBlock::Text { text } => Some(text.as_str()),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(text, "legacy hop");
+        ok.assert();
+    }
+
+    /// The streaming `*_with_retry` entry walks the chain too: primary 429 →
+    /// fallback answers with a full SSE stream.
+    #[tokio::test]
+    async fn streaming_failover_walks_chain() {
+        use futures::StreamExt;
+
+        let mut primary = mockito::Server::new_async().await;
+        primary
+            .mock("POST", "/v1/messages")
+            .with_status(429)
+            .create_async()
+            .await;
+        let mut hop1 = mockito::Server::new_async().await;
+        hop1.mock("POST", "/v1/messages")
+            .with_status(200)
+            .with_header("content-type", "text/event-stream")
+            .with_body(anthropic_sse("fallback stream"))
+            .expect(1)
+            .create_async()
+            .await;
+
+        let (client, notices) = fb_client(
+            primary.url(),
+            fb_retry_config(vec![fb_target("fallback-a", &mut hop1).await]),
+        );
+
+        let mut stream = client
+            .send_message_stream_with_retry(vec![user_message()], None, None)
+            .await
+            .expect("the fallback stream must open");
+        let mut text = String::new();
+        while let Some(event) = stream.next().await {
+            if let Ok(StreamEvent::ContentBlockDelta {
+                delta: ContentDelta::TextDelta { text: t },
+                ..
+            }) = event
+            {
+                text.push_str(&t);
+            }
+        }
+        assert_eq!(text, "fallback stream");
+        assert_eq!(notices.lock().unwrap().len(), 1, "one Failover notice");
     }
 }
