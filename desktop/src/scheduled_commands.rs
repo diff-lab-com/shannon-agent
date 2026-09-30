@@ -790,7 +790,7 @@ pub async fn toggle_scheduled_task(
 /// Fire a task immediately, bypassing the schedule. Returns the new run_id.
 ///
 /// P0-4: executes the routine's prompt through the shared unattended
-/// executor ([`crate::inbox_commands::spawn_routine_run`]) — the same path
+/// executor (`crate::inbox_commands::spawn_routine_run`) — the same path
 /// the scheduler loop, `rerun_inbox_item`, and the loopback trigger use —
 /// so the run lands in History (SQLite `routine_runs`, D6) and terminates
 /// (succeeded/failed) with an inbox item, exactly like a scheduled fire.
