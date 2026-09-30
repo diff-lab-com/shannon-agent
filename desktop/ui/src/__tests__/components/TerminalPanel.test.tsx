@@ -852,6 +852,26 @@ describe('TerminalPanel (scrollback replay — US6)', () => {
     await waitFor(() => expect(rendered(h.terminals[0])).toBe('HISTSEQD-LEGACY'))
   })
 
+  it('writes the replay truncation notice BEFORE the history bytes when truncated', async () => {
+    // Additive `truncated` flag: the backend ring evicted older scrollback,
+    // so the replay must not restore silently — the dim in-stream notice
+    // goes out as its own write BEFORE the history bytes (order observable
+    // per mocked write call), and `data` stays pure bytes (never baked into
+    // the notice).
+    vi.mocked(api.terminalHistory).mockResolvedValue({
+      data: encode('TAIL-ONLY'), endSeq: 9, truncated: true,
+    })
+    await openPanel()
+    await waitFor(() => expect(h.terminals.length).toBe(1))
+    await waitFor(() => expect(h.terminals[0].written.length).toBe(2))
+    const notice = new TextDecoder().decode(h.terminals[0].written[0]!)
+    const history = new TextDecoder().decode(h.terminals[0].written[1]!)
+    expect(notice).toBe(
+      '\r\n\u{1b}[2m[shannon: replayed only the most recent output — earlier scrollback was dropped]\u{1b}[0m\r\n',
+    )
+    expect(history).toBe('TAIL-ONLY')
+  })
+
   it('issues the history fetch only after both terminal listeners resolved', async () => {
     // Review fix (loss window): the fetch used to be issued before the
     // listen promises resolved, so output between the backend's ring

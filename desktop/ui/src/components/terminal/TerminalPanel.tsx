@@ -84,6 +84,17 @@ const COMPOSER_PREFILL_EVENT = 'shannon:composer-prefill';
 const DEFAULT_FONT_SIZE = 12;
 const DEFAULT_SCROLLBACK = 5000;
 
+/**
+ * US6 follow-up: in-stream dim notice written BEFORE the replayed history
+ * bytes when the backend's snapshot reports `truncated: true` (the 1 MiB
+ * replay ring evicted older scrollback). Mirrors the backend's own
+ * in-stream notices (ASCII text + SGR-dim wrap, established pattern in
+ * `terminal_commands.rs`) — deliberately NOT baked into `data`, whose
+ * decoded length keys the replay drop predicate.
+ */
+const REPLAY_TRUNCATION_NOTICE =
+  '\r\n\u{1b}[2m[shannon: replayed only the most recent output — earlier scrollback was dropped]\u{1b}[0m\r\n';
+
 /** Monospace fallback stack (brief: 字体回退等宽栈). */
 const FONT_FAMILY =
   "'JetBrains Mono', 'Fira Code', 'Cascadia Code', Menlo, Consolas, 'DejaVu Sans Mono', monospace";
@@ -362,7 +373,7 @@ export function TerminalPanel({ projectDir }: TerminalPanelProps) {
     void (async () => {
       await Promise.all([outputReady, exitReady]);
       if (disposed) return;
-      let history: { data: string; endSeq?: number } | null = null;
+      let history: { data: string; endSeq?: number; truncated?: boolean } | null = null;
       try {
         history = await api.terminalHistory(info.terminalId);
       } catch {
@@ -374,6 +385,10 @@ export function TerminalPanel({ projectDir }: TerminalPanelProps) {
       const decodedHistory = history
         ? decodeTerminalOutput(history.data)
         : new Uint8Array(0);
+      // Truncated ring (additive flag): announce the evicted scrollback
+      // BEFORE the replayed tail — in-stream, mirroring the backend's own
+      // dim notices, never baked into `data`.
+      if (history?.truncated) term.write(REPLAY_TRUNCATION_NOTICE);
       if (decodedHistory.length > 0) term.write(decodedHistory);
       const endSeq = history?.endSeq;
       const queued = entry.pendingLive;
