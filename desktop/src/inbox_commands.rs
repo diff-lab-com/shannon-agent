@@ -312,8 +312,9 @@ where
 /// keys on the run id, so re-running (every startup) never duplicates.
 ///
 /// JSONL rows still in `running` are **skipped**: they are ghosts (a
-/// `trigger_task_now` placeholder or a drained placeholder whose process
-/// died between drain and retire). A run that truly started already owns
+/// drained placeholder whose process died between drain and retire —
+/// since P0-4 `trigger_task_now` spawns real runs and writes no
+/// placeholder anymore). A run that truly started already owns
 /// its SQLite row (`record_run_start` at spawn time), so nothing genuine is
 /// lost — and importing ghosts would both show fake `running` history and
 /// trip the scheduler's 24h in-flight guard for the task.
@@ -2025,8 +2026,8 @@ mod tests {
         let cancelled_id = cancelled.run_id.clone();
         jsonl.record(&cancelled).unwrap();
         expected.push(cancelled_id);
-        // A `running` ghost (trigger_task_now placeholder / crashed drain)
-        // must be skipped — see backfill_runs_from_jsonl docs. The JSONL
+        // A `running` ghost (crashed drain / legacy placeholder) must be
+        // skipped — see backfill_runs_from_jsonl docs. The JSONL
         // store thus holds `expected.len() + 1` distinct runs.
         jsonl.start_run("task-1", "Alpha").unwrap();
 

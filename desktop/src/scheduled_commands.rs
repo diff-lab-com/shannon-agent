@@ -789,24 +789,50 @@ pub async fn toggle_scheduled_task(
 
 /// Fire a task immediately, bypassing the schedule. Returns the new run_id.
 ///
-/// Sprint 2 returns a `Running` run; the actual prompt execution wiring
-/// (via `QueryEngine`) lands in Sprint 3.
+/// P0-4: executes the routine's prompt through the shared unattended
+/// executor ([`crate::inbox_commands::spawn_routine_run`]) — the same path
+/// the scheduler loop, `rerun_inbox_item`, and the loopback trigger use —
+/// so the run lands in History (SQLite `routine_runs`, D6) and terminates
+/// (succeeded/failed) with an inbox item, exactly like a scheduled fire.
+/// No `Running` JSONL placeholder is written anymore: the executor mints
+/// the run id itself (SQLite-first) and finalizes that row.
+///
+/// Immediate triggers are NOT gated by the routine's off-peak execution
+/// window — only `spawn_routine_run`'s in-window model override applies,
+/// identical to the loopback trigger / rerun.
 #[tauri::command]
 pub async fn trigger_task_now(
     state: tauri::State<'_, AppState>,
+    app_handle: tauri::AppHandle,
     id: String,
 ) -> Result<TriggerResponse, String> {
-    let store = state.scheduled_task_store();
-    let runs = state.scheduled_runs_store();
-
-    let routine = store
+    let routine = state
+        .scheduled_task_store()
         .load(&id)
         .map_err(|e| e.to_string())?
         .ok_or_else(|| format!("task not found: {id}"))?;
 
-    let run_id = runs
-        .start_run(&routine.id, &routine.name)
-        .map_err(|e| e.to_string())?;
+    let deps = RoutineRunDeps::from_state(&state);
+    trigger_routine_with_deps(&deps, app_handle, routine).await
+}
+
+/// Testable core of [`trigger_task_now`] (Tauri-state-free): fire an
+/// already-loaded routine through [`spawn_routine_run`] and shape the
+/// [`TriggerResponse`]. Spawn failures propagate as `Err` so the frontend
+/// shows the failure instead of toasting success.
+pub(crate) async fn trigger_routine_with_deps<R: tauri::Runtime>(
+    deps: &RoutineRunDeps,
+    app: tauri::AppHandle<R>,
+    routine: ScheduledRoutine,
+) -> Result<TriggerResponse, String> {
+    let run_id = spawn_routine_run(
+        deps,
+        app,
+        routine.clone(),
+        shannon_core::inbox_store::SOURCE_TRIGGER,
+        None,
+    )
+    .await?;
 
     Ok(TriggerResponse {
         run_id,
@@ -3477,6 +3503,89 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(executed, 0);
+    }
+
+    // ── P0-4: trigger_task_now executes for real ─────────────────────────
+
+    /// Wait (bounded) for the spawned engine future to finalize the run,
+    /// then return its terminal `routine_runs` row.
+    async fn wait_for_terminal_run(
+        inbox: &InboxStore,
+        run_id: &str,
+    ) -> shannon_core::inbox_store::RunRecord {
+        // 2000 x 20ms = 40s ceiling (same budget as wait_for_session_start).
+        for _ in 0..2000 {
+            if let Some(row) = inbox
+                .list_runs(50)
+                .unwrap()
+                .into_iter()
+                .find(|r| r.id == run_id && (r.status == "succeeded" || r.status == "failed"))
+            {
+                return row;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+        }
+        panic!("run {run_id} never reached a terminal status (succeeded/failed)");
+    }
+
+    #[tokio::test]
+    async fn trigger_now_run_reaches_a_terminal_status_and_yields_an_inbox_item() {
+        let app = tauri::test::mock_app();
+        let tmp = tempfile::tempdir().unwrap();
+        let (deps, tasks, _runs, inbox) = scheduler_fixture(tmp.path());
+
+        // Deterministic engine failure without DNS/network: the spawned run
+        // connects to a closed loopback port (instant ECONNREFUSED) with
+        // retries off. A live backend would instead finish "succeeded" —
+        // either terminal status satisfies the contract under test.
+        *deps.client_config.write().await = LlmClientConfig {
+            base_url: "http://127.0.0.1:9".into(),
+            retry_config: shannon_engine::api::retry::RetryConfig {
+                max_retries: 0,
+                ..shannon_engine::api::retry::RetryConfig::default()
+            },
+            ..LlmClientConfig::default()
+        };
+
+        let routine = ScheduledRoutine::new("manual fire".into(), "say hi".into(), 3600);
+        let id = routine.id.clone();
+        tasks.save(&routine).unwrap();
+
+        let resp = trigger_routine_with_deps(&deps, app.handle().clone(), routine)
+            .await
+            .expect("trigger must kick off the run");
+        assert_eq!(resp.task_id, id);
+        assert_eq!(resp.task_name, "manual fire");
+        assert!(!resp.run_id.is_empty());
+
+        // The executor mints the run row synchronously (SQLite-first, D6);
+        // no separate `Running` JSONL placeholder is written anymore.
+        let running = inbox
+            .list_runs(50)
+            .unwrap()
+            .into_iter()
+            .find(|r| r.id == resp.run_id)
+            .expect("run row exists right after trigger");
+        assert_eq!(running.status, "running");
+        assert_eq!(running.task_id, id);
+
+        // The spawned engine finalizes the run — here: failed (offline
+        // fixture), and the row is never stuck in `running`.
+        let finished = wait_for_terminal_run(&inbox, &resp.run_id).await;
+        assert_eq!(finished.status, "failed");
+        assert!(finished.error.is_some(), "failure reason recorded");
+
+        // And the run produced its inbox item, exactly like the loopback
+        // trigger path (source=trigger, linked to the routine).
+        let items = inbox
+            .list(None, Some(shannon_core::inbox_store::SOURCE_TRIGGER), 50)
+            .unwrap();
+        assert!(
+            items
+                .iter()
+                .any(|i| i.source_id.as_deref() == Some(id.as_str())),
+            "trigger run must append an inbox item (source=trigger)"
+        );
     }
 
     #[test]
