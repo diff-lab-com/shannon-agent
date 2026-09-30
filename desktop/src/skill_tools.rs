@@ -119,6 +119,24 @@ pub fn register_for_state(state: &crate::commands::AppState) -> usize {
     register_skills_as_chat_tools(&state.tools, &state.skill_registry)
 }
 
+/// Imp-3 — the system-prompt block advertising installed skills: the same
+/// `format_skills_for_llm()` listing the REPL injects via its skill bridge,
+/// plus the `/name` ↔ `skill_<name>` tool mapping the desktop needs so a
+/// user's `/trigger` text resolves to the registered tool. Empty when no
+/// skills are available.
+pub fn skills_for_chat_prompt(skill_registry: &SkillRegistry) -> String {
+    let mut block = skill_registry.format_skills_for_llm();
+    if block.is_empty() {
+        return block;
+    }
+    block.push_str(
+        "\nWhen the user's message is one of these slash triggers (optionally followed by \
+         arguments), invoke the matching `skill_<name>` tool with the remaining text as \
+         its `args` input instead of answering the raw text directly.",
+    );
+    block
+}
+
 /// Load installed skills (hub-installed home skills + project skills, plus
 /// the compile-time bundled set) and register every user-invocable one as a
 /// `skill_<id>` tool in the chat registry.
@@ -142,6 +160,11 @@ pub fn register_skills_as_chat_tools(
     for skill in bundled.list() {
         if !skill.is_user_invocable() {
             continue;
+        }
+        // Imp-3: bundled skills join the LLM-visible registry too, so the
+        // chat system prompt advertises the full surface (tools + list).
+        if let Err(e) = skill_registry.register(skill.clone()) {
+            debug!("bundled skill registry entry skipped: {e}");
         }
         match registry.register(Box::new(DesktopSkillToolAdapter::new(skill))) {
             Ok(()) => count += 1,
@@ -222,5 +245,29 @@ mod tests {
         let skill_registry = SkillRegistry::new();
         let count = register_skills_as_chat_tools(&registry, &skill_registry);
         assert!(count > 0, "expected bundled skills to register");
+    }
+
+    /// Imp-3: bundled skills join the LLM-visible registry, and the prompt
+    /// block lists them with triggers plus the `skill_<name>` mapping note.
+    #[test]
+    fn skills_for_chat_prompt_lists_skills_and_tool_mapping() {
+        let registry = ToolRegistry::new();
+        let skill_registry = SkillRegistry::new();
+        register_skills_as_chat_tools(&registry, &skill_registry);
+
+        let block = skills_for_chat_prompt(&skill_registry);
+        assert!(block.starts_with("Available skills"), "{block}");
+        assert!(
+            block.contains("skill_<name>"),
+            "mapping note missing: {block}"
+        );
+        // Bundled skills are part of the advertised surface.
+        assert!(block.contains("commit"), "{block}");
+    }
+
+    #[test]
+    fn skills_for_chat_prompt_empty_when_no_skills() {
+        let empty = SkillRegistry::new();
+        assert_eq!(skills_for_chat_prompt(&empty), "");
     }
 }

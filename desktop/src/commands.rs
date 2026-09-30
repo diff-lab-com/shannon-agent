@@ -1057,6 +1057,15 @@ pub async fn send_message(
         QueryEngine::with_defaults_arc(client, tools, permissions, StateManager::new()),
         &state.memory_store,
     );
+    // G1 Imp-3 — advertise installed skills in the system prompt: the same
+    // `format_skills_for_llm()` listing the REPL injects, plus the
+    // `/name` ↔ `skill_<name>` tool mapping, so a user's `/trigger` text
+    // resolves to the tool registered at startup. The engine is rebuilt per
+    // turn, so this never accumulates.
+    let skills_block = crate::skill_tools::skills_for_chat_prompt(&state.skill_registry);
+    if !skills_block.is_empty() {
+        engine.append_system_prompt(&skills_block);
+    }
     // Bind the engine to the REAL session and restore prior turns. Both the
     // L0 tee (events.jsonl path) and the conversation clone at the top of
     // process_query key off engine state — a fresh engine with a random id
