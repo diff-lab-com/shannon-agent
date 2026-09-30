@@ -1,7 +1,8 @@
-// Office Wave 1 A1a — the composer must say out loud when an attachment's
-// content will NOT be parsed (.docx/.xlsx/…). The chip still attaches and
-// the path is still sent; only the notice is new. See ChatInput.tsx
-// UNPARSED_EXTENSIONS.
+// Office Wave 1 A1a, narrowed by G3 P1-5 — the composer must say out loud
+// when an attachment's content will NOT be parsed (legacy .doc/.xls/…
+// formats only; docx/xlsx/pptx ARE parsed backend-side and must not warn).
+// The chip still attaches and the path is still sent; only the notice is
+// new. See ChatInput.tsx UNPARSED_EXTENSIONS.
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { render, screen, fireEvent, waitFor, act } from '@testing-library/react'
 import { I18nProvider } from '@/i18n'
@@ -9,8 +10,8 @@ import ChatInput, { UNPARSED_EXTENSIONS, pathExtension } from '@/components/chat
 import type * as ReactRouterDom from 'react-router-dom'
 import type { WebviewFileDropEvent } from '@/lib/tauri-api'
 
-const UNSUPPORTED_MAIN = "This file type isn't parsed yet — its content was NOT sent to the model."
-const UNSUPPORTED_HINT = 'Convert to PDF/TXT/Markdown, or install Python 3 so built-in skills can read office files.'
+const UNSUPPORTED_MAIN = "This legacy format isn't parsed — its content was NOT sent to the model."
+const UNSUPPORTED_HINT = 'Convert it to docx/xlsx/pptx/PDF or export the text, then attach that instead.'
 
 // B0 P0-2 pattern (ChatInput.test.tsx): capture the drag-drop handler so the
 // Tauri v2 drop flow can be driven from tests.
@@ -35,6 +36,7 @@ vi.mock('@/lib/tauri-api', async () => {
   return {
     ...actual,
     configure: vi.fn().mockResolvedValue(undefined),
+    checkAttachmentPaths: vi.fn().mockResolvedValue([]),
     onWebviewFileDrop: vi.fn((handler: (e: unknown) => void) => {
       dragDrop.handler = handler
       return Promise.resolve(() => { dragDrop.handler = null })
@@ -74,12 +76,14 @@ describe('ChatInput — unsupported attachment notice (A1a)', () => {
     dragDrop.handler = null
   })
 
-  it('keeps the declared office extensions unparsed (doc/xls/ppt family)', () => {
-    for (const ext of ['doc', 'docx', 'xls', 'xlsx', 'ppt', 'pptx', 'odt', 'rtf']) {
+  it('keeps only the truly-unparsed legacy formats flagged (G3 P1-5)', () => {
+    // docx/xlsx/pptx ARE parsed backend-side (document_parse::OFFICE_EXTENSIONS
+    // extracts their text) — flagging them was the banner lying.
+    for (const ext of ['doc', 'xls', 'ppt', 'odt', 'rtf']) {
       expect(UNPARSED_EXTENSIONS.has(ext), ext).toBe(true)
     }
-    // Supported types must NOT be flagged.
-    for (const ext of ['pdf', 'txt', 'md', 'csv', 'png']) {
+    // Parsed formats and everything else must NOT be flagged.
+    for (const ext of ['docx', 'xlsx', 'pptx', 'ods', 'csv', 'pdf', 'txt', 'md', 'png']) {
       expect(UNPARSED_EXTENSIONS.has(ext), ext).toBe(false)
     }
   })
@@ -92,9 +96,9 @@ describe('ChatInput — unsupported attachment notice (A1a)', () => {
     expect(pathExtension('/tmp/noext')).toBe('')
   })
 
-  it('shows the notice when a .docx is attached (chip still present)', () => {
-    renderChatInput({ attachedFiles: ['/home/u/Downloads/report.docx'] })
-    expect(screen.getByText('report.docx')).toBeInTheDocument() // chip unchanged
+  it('shows the notice when a legacy .doc is attached (chip still present)', () => {
+    renderChatInput({ attachedFiles: ['/home/u/Downloads/report.doc'] })
+    expect(screen.getByText('report.doc')).toBeInTheDocument() // chip unchanged
     expect(screen.getByText(UNSUPPORTED_MAIN)).toBeInTheDocument()
     expect(screen.getByText(UNSUPPORTED_HINT)).toBeInTheDocument()
   })
@@ -104,19 +108,27 @@ describe('ChatInput — unsupported attachment notice (A1a)', () => {
     expect(screen.queryByText(UNSUPPORTED_MAIN)).not.toBeInTheDocument()
   })
 
-  it('flags .xlsx/.ppt/.rtf/odt like .docx', () => {
-    const { unmount } = renderChatInput({ attachedFiles: ['/tmp/sheet.xlsx'] })
+  it('does not lie about parsed formats: no notice for .docx/.xlsx/.pptx (G3 P1-5)', () => {
+    for (const p of ['/tmp/report.docx', '/tmp/sheet.xlsx', '/tmp/deck.pptx']) {
+      const { unmount } = renderChatInput({ attachedFiles: [p] })
+      expect(screen.queryByText(UNSUPPORTED_MAIN)).not.toBeInTheDocument()
+      unmount()
+    }
+  })
+
+  it('flags .ppt/.odt/.rtf like .doc', () => {
+    const { unmount } = renderChatInput({ attachedFiles: ['/tmp/deck.ppt'] })
     expect(screen.getByText(UNSUPPORTED_MAIN)).toBeInTheDocument()
     unmount()
-    renderChatInput({ attachedFiles: ['/tmp/deck.ppt'] })
+    renderChatInput({ attachedFiles: ['/tmp/doc.odt'] })
     expect(screen.getByText(UNSUPPORTED_MAIN)).toBeInTheDocument()
   })
 
-  it('shows for a mixed .txt + .docx set and auto-hides once the .docx is removed', () => {
-    const { rerender } = renderChatInput({ attachedFiles: ['/tmp/notes.txt', '/tmp/report.docx'] })
+  it('shows for a mixed .txt + .doc set and auto-hides once the .doc is removed', () => {
+    const { rerender } = renderChatInput({ attachedFiles: ['/tmp/notes.txt', '/tmp/report.doc'] })
     expect(screen.getByText(UNSUPPORTED_MAIN)).toBeInTheDocument()
 
-    // Parent removes the .docx — the notice disappears with it, and the
+    // Parent removes the .doc — the notice disappears with it, and the
     // dismissal state re-arms.
     rerender(
       <I18nProvider>
@@ -139,7 +151,7 @@ describe('ChatInput — unsupported attachment notice (A1a)', () => {
   })
 
   it('can be closed manually and re-arms for a newly attached unsupported file', () => {
-    const { rerender } = renderChatInput({ attachedFiles: ['/tmp/report.docx'] })
+    const { rerender } = renderChatInput({ attachedFiles: ['/tmp/report.doc'] })
     fireEvent.click(screen.getByRole('button', { name: 'Close' }))
     expect(screen.queryByText(UNSUPPORTED_MAIN)).not.toBeInTheDocument()
 
@@ -163,7 +175,7 @@ describe('ChatInput — unsupported attachment notice (A1a)', () => {
     )
     expect(screen.queryByText(UNSUPPORTED_MAIN)).not.toBeInTheDocument()
 
-    // ...so the NEXT .docx warns again.
+    // ...so the NEXT .doc warns again.
     rerender(
       <I18nProvider>
         <ChatInput
@@ -171,7 +183,7 @@ describe('ChatInput — unsupported attachment notice (A1a)', () => {
           onChange={vi.fn()}
           onSend={vi.fn()}
           onExecuteSlash={vi.fn()}
-          attachedFiles={['/tmp/other.docx']}
+          attachedFiles={['/tmp/other.doc']}
           onAttach={vi.fn()}
           onDetachAll={vi.fn()}
           isQuerying={false}

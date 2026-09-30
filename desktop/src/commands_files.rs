@@ -4,7 +4,7 @@
 //! More file commands will move here in future extractions.
 
 use serde::{Deserialize, Serialize};
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use base64::Engine;
 
@@ -234,6 +234,113 @@ pub async fn read_attachments(
         out.push(read_attachment_inner(&working_dir, &p).await?);
     }
     Ok(out)
+}
+
+/// One path's verdict from the [`check_attachment_paths`] preflight.
+/// `reason` is `None` iff `ok` — the snake_case tag mirrors
+/// [`crate::commands::RejectedAttachmentReason`] so the frontend reuses one
+/// reason → i18n map for both preflight chips and send-time toasts.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct AttachmentPathCheck {
+    pub path: String,
+    pub ok: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reason: Option<crate::commands::RejectedAttachmentReason>,
+}
+
+/// P0-3 preflight — classify attachment paths exactly the way the
+/// `send_message` pipeline will, BEFORE the user hits send, so a refusal is
+/// never a surprise: the composer flags each bad chip (warning icon +
+/// tooltip) while the file list is being built. Advisory by contract: the
+/// command always returns `Ok` (one entry per input path) and the frontend
+/// treats a failed call as "no marking", never as an error.
+///
+/// Same boundary, same verdicts: paths outside the working directory are
+/// refused (`out_of_working_dir`), never silently accepted and never
+/// silently dropped. With no configured working directory the attachment
+/// domain is UNDEFINED — every path reports `no_working_dir` so the UI can
+/// point at Settings instead of pretending the files will be read.
+#[tauri::command]
+pub async fn check_attachment_paths(
+    state: tauri::State<'_, AppState>,
+    paths: Vec<String>,
+) -> Result<Vec<AttachmentPathCheck>, String> {
+    let configured = state.desktop_config.read().await.working_dir.clone();
+    Ok(check_attachment_paths_inner(configured, paths))
+}
+
+/// Internal helper for [`check_attachment_paths`] — pure over
+/// (configured working dir, paths) so tests drive it without app state.
+pub(crate) fn check_attachment_paths_inner(
+    configured_working_dir: Option<String>,
+    paths: Vec<String>,
+) -> Vec<AttachmentPathCheck> {
+    let Some(working_dir) = configured_working_dir else {
+        return paths
+            .into_iter()
+            .map(|path| AttachmentPathCheck {
+                path,
+                ok: false,
+                reason: Some(crate::commands::RejectedAttachmentReason::NoWorkingDir),
+            })
+            .collect();
+    };
+    let working_dir = PathBuf::from(working_dir);
+    paths
+        .into_iter()
+        .map(|path| {
+            let reason = classify_attachment_path(&path, &working_dir);
+            match reason {
+                None => AttachmentPathCheck {
+                    path,
+                    ok: true,
+                    reason: None,
+                },
+                Some(reason) => AttachmentPathCheck {
+                    path,
+                    ok: false,
+                    reason: Some(reason),
+                },
+            }
+        })
+        .collect()
+}
+
+/// Shared verdict logic of the preflight: `None` = `send_message` will
+/// accept this path; `Some(reason)` = the refusal the user will (now) see.
+/// Mirrors `collect_attachments` gate-for-gate on purpose — the two must
+/// never disagree about a path.
+fn classify_attachment_path(
+    path: &str,
+    working_dir: &Path,
+) -> Option<crate::commands::RejectedAttachmentReason> {
+    use crate::commands::RejectedAttachmentReason;
+    let canonical = match crate::classify_path_in_working_dir(path, working_dir) {
+        Ok(c) => c,
+        Err(crate::WorkingDirScopeError::OutsideWorkingDir(_)) => {
+            return Some(RejectedAttachmentReason::OutOfWorkingDir);
+        }
+        Err(_) => return Some(RejectedAttachmentReason::Unresolvable),
+    };
+    let Ok(meta) = std::fs::metadata(&canonical) else {
+        return Some(RejectedAttachmentReason::Unresolvable);
+    };
+    // Same size caps as the send path (see `collect_attachments`), with the
+    // same image detection so the preflight never disagrees with the gate
+    // that fires on send.
+    let is_image = crate::commands::detect_media_type(&canonical.to_string_lossy())
+        .is_some_and(|m| m.starts_with("image/"));
+    if (is_image && meta.len() > shannon_core::attachments::MAX_IMAGE_BYTES as u64)
+        || (!is_image
+            && canonical
+                .extension()
+                .and_then(|e| e.to_str())
+                .is_some_and(|e| e.eq_ignore_ascii_case("pdf"))
+            && meta.len() > crate::commands::MAX_PDF_BYTES)
+    {
+        return Some(RejectedAttachmentReason::TooLarge);
+    }
+    None
 }
 
 /// Write a text file. The target must resolve to a path inside the active
@@ -1117,6 +1224,73 @@ fn get_working_dir_info_inner(working_dir: &Path) -> WorkingDirInfo {
 mod tests {
     use super::*;
     use std::io::Write;
+
+    // ── P0-3: check_attachment_paths preflight ──────────────────────────
+    // The preflight must agree with the send path gate-for-gate: same
+    // boundary (working dir), same caps, and the unset-working-dir state
+    // reported per path (never a silent "everything is fine").
+
+    #[test]
+    fn preflight_reports_no_working_dir_for_every_path() {
+        let checks = check_attachment_paths_inner(
+            None,
+            vec!["/home/u/Downloads/a.txt".into(), "/etc/hosts".into()],
+        );
+        assert_eq!(checks.len(), 2);
+        for c in checks {
+            assert!(!c.ok);
+            assert_eq!(
+                c.reason,
+                Some(crate::commands::RejectedAttachmentReason::NoWorkingDir)
+            );
+        }
+    }
+
+    #[test]
+    fn preflight_accepts_inside_and_rejects_outside_and_missing() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let inside = dir.path().join("notes.txt");
+        std::fs::write(&inside, "hello").unwrap();
+
+        let checks = check_attachment_paths_inner(
+            Some(dir.path().to_string_lossy().into_owned()),
+            vec![
+                inside.to_string_lossy().into_owned(),
+                "/etc/hosts".into(),
+                dir.path().join("gone.txt").to_string_lossy().into_owned(),
+            ],
+        );
+
+        assert!(checks[0].ok, "inside file must preflight clean");
+        assert_eq!(checks[0].reason, None);
+        assert!(!checks[1].ok);
+        assert_eq!(
+            checks[1].reason,
+            Some(crate::commands::RejectedAttachmentReason::OutOfWorkingDir)
+        );
+        assert!(!checks[2].ok);
+        assert_eq!(
+            checks[2].reason,
+            Some(crate::commands::RejectedAttachmentReason::Unresolvable)
+        );
+    }
+
+    #[test]
+    fn preflight_flags_oversized_image_like_the_send_path() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let big = dir.path().join("big.png");
+        std::fs::write(&big, vec![0u8; shannon_core::attachments::MAX_IMAGE_BYTES + 1]).unwrap();
+
+        let checks = check_attachment_paths_inner(
+            Some(dir.path().to_string_lossy().into_owned()),
+            vec![big.to_string_lossy().into_owned()],
+        );
+        assert!(!checks[0].ok);
+        assert_eq!(
+            checks[0].reason,
+            Some(crate::commands::RejectedAttachmentReason::TooLarge)
+        );
+    }
 
     // Each disk-touching test gets its own TempDir so a sibling's cleanup
     // can never remove a file this test still needs. The old shared

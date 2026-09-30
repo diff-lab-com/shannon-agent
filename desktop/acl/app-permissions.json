@@ -1874,6 +1874,15 @@
       }
     },
     {
+      "identifier": "allow-check-attachment-paths",
+      "description": "Enables the check_attachment_paths command without any pre-configured scope.",
+      "commands": {
+        "allow": [
+          "check_attachment_paths"
+        ]
+      }
+    },
+    {
       "identifier": "allow-read-data-source-config",
       "description": "Enables the read_data_source_config command without any pre-configured scope.",
       "commands": {
@@ -2974,6 +2983,7 @@
       "permissions": [
         "allow-apply-code-action",
         "allow-apply-diff",
+        "allow-check-attachment-paths",
         "allow-copy-file",
         "allow-get-file-diff",
         "allow-get-file-tree",

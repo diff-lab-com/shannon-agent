@@ -643,8 +643,35 @@ export interface TranscriptionResult {
   text: string
 }
 
+/**
+ * P0-3 — why the backend refused an attachment path. Mirrors the Rust
+ * `RejectedAttachmentReason` (snake_case serde tags). `no_working_dir`
+ * comes from the `check_attachment_paths` preflight only; the send path
+ * hard-rejects that state with an explicit error instead.
+ */
+export type RejectedAttachmentReason =
+  | 'out_of_working_dir'
+  | 'unresolvable'
+  | 'too_large'
+  | 'no_working_dir'
+
+/** P0-3 — one attachment the send pipeline refused (partial success). */
+export interface RejectedAttachment {
+  path: string
+  reason: RejectedAttachmentReason
+}
+
+/** P0-3 — one path's verdict from the `check_attachment_paths` preflight. */
+export interface AttachmentPathCheck {
+  path: string
+  ok: boolean
+  reason?: RejectedAttachmentReason
+}
+
 export interface SendMessageResponse {
   query_id: string
+  /** P0-3 — files that were NOT sent, reported per file instead of dropped. */
+  rejected_attachments?: RejectedAttachment[]
 }
 
 // --- Session multi-window (P1-1) ---

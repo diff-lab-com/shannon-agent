@@ -18,6 +18,69 @@ pub mod mcp;
 pub mod provider_read_snapshot;
 pub mod routine_templates;
 
+/// Typed failure of a working-dir scope check (P0-3).
+///
+/// The string-typed [`resolve_path_in_working_dir`] predates it and stays as
+/// the thin wrapper most callers keep using. Callers that must TELL THE USER
+/// why a path was rejected (the attachment pipeline) match on the variant
+/// instead of parsing the `Display` string.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum WorkingDirScopeError {
+    /// The path (or its symlink target) does not exist or cannot be
+    /// canonicalized.
+    Unresolvable(String),
+    /// The configured working directory itself cannot be canonicalized.
+    InvalidWorkingDir(String),
+    /// The path resolves outside the working directory — the deliberate
+    /// anti-exfiltration boundary, never widened by call sites.
+    OutsideWorkingDir(String),
+}
+
+impl std::fmt::Display for WorkingDirScopeError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            // Keep the exact legacy strings — tests and user-visible errors
+            // are pinned to them.
+            WorkingDirScopeError::Unresolvable(e) => write!(f, "path not found: {e}"),
+            WorkingDirScopeError::InvalidWorkingDir(e) => {
+                write!(f, "invalid working directory: {e}")
+            }
+            WorkingDirScopeError::OutsideWorkingDir(p) => {
+                write!(f, "path '{p}' is outside the working directory")
+            }
+        }
+    }
+}
+
+/// Typed variant of [`resolve_path_in_working_dir`] — same resolution and
+/// the same security boundary, but the caller can classify the rejection.
+pub(crate) fn classify_path_in_working_dir(
+    path: &str,
+    working_dir: &Path,
+) -> Result<PathBuf, WorkingDirScopeError> {
+    let resolved = if Path::new(path).is_absolute() {
+        PathBuf::from(path)
+    } else {
+        working_dir.join(path)
+    };
+    // `canonicalize` resolves `..`, symlinks, and case-insensitive roots.
+    // We require the target to exist so callers get a meaningful "not found"
+    // error before any write attempt; commands that need to create new files
+    // should canonicalize the parent directory instead.
+    let canonical = resolved
+        .canonicalize()
+        .map_err(|e| WorkingDirScopeError::Unresolvable(format!("{e}")))?;
+    let canonical_cwd = working_dir
+        .canonicalize()
+        .map_err(|e| WorkingDirScopeError::InvalidWorkingDir(format!("{e}")))?;
+    if !canonical.starts_with(&canonical_cwd) {
+        return Err(WorkingDirScopeError::OutsideWorkingDir(
+            canonical.display().to_string(),
+        ));
+    }
+    Ok(canonical)
+}
+
 /// Resolve `path` relative to `working_dir` (or use it as-is if absolute),
 /// then canonicalize both and ensure the resolved path is inside the working
 /// directory. Rejects path traversal (`..`), absolute paths outside the
@@ -33,28 +96,7 @@ pub(crate) fn resolve_path_in_working_dir(
     path: &str,
     working_dir: &Path,
 ) -> Result<PathBuf, String> {
-    let resolved = if Path::new(path).is_absolute() {
-        PathBuf::from(path)
-    } else {
-        working_dir.join(path)
-    };
-    // `canonicalize` resolves `..`, symlinks, and case-insensitive roots.
-    // We require the target to exist so callers get a meaningful "not found"
-    // error before any write attempt; commands that need to create new files
-    // should canonicalize the parent directory instead.
-    let canonical = resolved
-        .canonicalize()
-        .map_err(|e| format!("path not found: {e}"))?;
-    let canonical_cwd = working_dir
-        .canonicalize()
-        .map_err(|e| format!("invalid working directory: {e}"))?;
-    if !canonical.starts_with(&canonical_cwd) {
-        return Err(format!(
-            "path '{}' is outside the working directory",
-            canonical.display()
-        ));
-    }
-    Ok(canonical)
+    classify_path_in_working_dir(path, working_dir).map_err(|e| e.to_string())
 }
 
 /// Validate that `path` would write inside `working_dir`, allowing

@@ -962,6 +962,13 @@ export const handlers: Record<string, MockHandler> = {
     const entry = demoFileIndex.find(f => f.path === args.path)
     if (entry) entry.favorite = args.favorite
   },
+  // P0-3 attachment preflight — demo mode has no real working-directory
+  // boundary, so every demo path checks clean and the composer's chips
+  // never show refusal flags.
+  async check_attachment_paths(args: { paths: string[] }) {
+    await delay(10)
+    return args.paths.map(path => ({ path, ok: true }))
+  },
   // office Wave 2: the Files page's missing-detection probe (and FileRefChip's
   // anti-hallucination backstop) — in demo mode only indexed demo paths exist.
   async path_exists(args: { path: string }) {
