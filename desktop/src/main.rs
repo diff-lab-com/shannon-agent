@@ -596,6 +596,11 @@ fn main() {
             // AppHandle (attached as early as possible so a shell spawned
             // before any command runs can already stream).
             terminal_commands::attach_sink(&state, app.handle().clone());
+            // G1 P0-2.1 — installed (hub + project) and bundled skills become
+            // model-callable `skill_<id>` tools before the first message.
+            // Log-and-skip inside; never fatal.
+            let skill_tools = shannon_desktop::skill_tools::register_for_state(&state);
+            tracing::info!(count = skill_tools, "startup skill tool registration complete");
             app.manage(state);
 
             // P1-1 — reopen the session windows that were open at last
@@ -612,6 +617,28 @@ fn main() {
             // `async move` capture moves the original by value).
             let app_handle_for_block = app_handle.clone();
             tauri::async_runtime::block_on(async move {
+                // G1 P0-1.1 / P1-9 — one-time, idempotent migrations before
+                // anything reads the stores: legacy
+                // `~/.shannon/desktop/mcp-servers.json` → unified
+                // `settings.json#mcpServers`, and legacy
+                // `~/.shannon/agents/<plugin>/agent.md` directories → flat
+                // `<plugin>.toml` definitions. Both never fatal.
+                shannon_desktop::config::migrate_legacy_mcp_servers();
+                shannon_desktop::extensions::migrate_legacy_agent_dirs();
+
+                // G1 P0-1.2 — seed the MCP process pool so configured
+                // servers are connected (and their tools discoverable)
+                // before the first chat turn. Single-server failures are
+                // log-only inside.
+                let mcp_servers = shannon_desktop::config::load_mcp_servers();
+                let pool = state_ref.mcp_pool();
+                let seed = shannon_desktop::mcp::seed_pool_from_config(&pool, mcp_servers).await;
+                tracing::info!(
+                    servers = seed.servers_started.len(),
+                    tools = seed.total_tools,
+                    "MCP process pool seeded"
+                );
+
                 // Q4-A — before hosting our own loopback engine API server,
                 // probe 127.0.0.1:33420. If another engine (typically the
                 // shannon CLI REPL or another desktop instance) is already
