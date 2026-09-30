@@ -557,11 +557,31 @@ export interface DesktopConfig {
   sandbox?: SandboxConfig
   /** P2-5: off-peak execution settings — frozen key path `offpeak.model_override`. */
   offpeak?: OffpeakConfig
+  /** R3-3: plan-phase model tier (`fast` | `standard` | `pro`). null/undefined
+   *  = inherit — the plan phase uses the global default model. */
+  plan_tier?: string | null
+  /** R3-3: act-phase model tier — same contract as `plan_tier` for the
+   *  execution phase (every approval mode except `plan`). */
+  act_tier?: string | null
 }
 
 /** P1-3: `sandbox.mode` payload. Engine vocabulary: off | local | landlock. */
 export interface SandboxConfig {
   mode?: 'off' | 'local' | 'landlock' | null
+}
+
+/**
+ * R3-2 (desktop slice): one row of the Settings → Models "Profiles" list —
+ * a named providers.toml v2 `ModelProfile`. `active` mirrors the engine's
+ * `active_profile` pointer; a freshly created profile has `provider_count: 0`
+ * (the UI asks for confirmation before switching to it).
+ */
+export interface ProviderProfileSummary {
+  name: string
+  provider_count: number
+  active: boolean
+  /** The profile's `active_target.model_id` when set; null for an empty profile. */
+  model?: string | null
 }
 
 /** P2-5: `offpeak` config payload. Empty/missing `model_override` = disabled. */

@@ -305,15 +305,97 @@ pub struct ModelProfile {
 #[derive(Debug, Clone, PartialEq, JsonSchema, Serialize, Deserialize)]
 pub struct ProviderModelConfig {
     pub version: u32, // = VERSION
+    /// R3-2: which named profile (a key into `profiles`) in-process
+    /// resolution uses (engine launch, `/model`, `/connect`, credentials).
+    /// Empty (or absent) means [`Self::DEFAULT_PROFILE`] — B3 phase-1 files
+    /// round-trip byte-identically because the key is skipped when default.
+    /// Must appear **before** `profiles` in field order: TOML requires
+    /// scalar values ahead of the `[profiles.*]` tables.
+    #[serde(default, skip_serializing_if = "is_default_active_profile")]
+    pub active_profile: String,
     pub profiles: HashMap<String, ModelProfile>,
     /// B3 契约：网关多 profile 路由（默认 off，字节级等同单 profile）
     #[serde(default)]
     pub gateway: GatewayConfig,
 }
 
+/// `skip_serializing_if` predicate for [`ProviderModelConfig::active_profile`]:
+/// the key is omitted when unset or pointed at `"default"`, so v2 files
+/// written before R3-2 (and single-profile users) keep their exact shape.
+fn is_default_active_profile(s: &String) -> bool {
+    s.is_empty() || s == ProviderModelConfig::DEFAULT_PROFILE
+}
+
+/// Validate a user-supplied profile name (R3-2 `/profiles new|rename`). The
+/// name is the `profiles` map key (a TOML table key and the `/profiles use`
+/// argument), so it must be a single friendly token. Returns the trimmed
+/// name or a human-readable error. Shared by the service, the REPL command
+/// and the desktop so every front-end rejects the same input.
+pub fn validate_profile_name(name: &str) -> Result<String, String> {
+    let trimmed = name.trim();
+    if trimmed.is_empty() {
+        return Err("profile name must not be empty".to_string());
+    }
+    if trimmed.len() > 64 {
+        return Err(format!(
+            "profile name is too long ({} chars; max 64): '{}'",
+            trimmed.len(),
+            trimmed
+        ));
+    }
+    if trimmed.chars().any(char::is_whitespace) {
+        return Err(format!(
+            "profile name must not contain whitespace: '{trimmed}'"
+        ));
+    }
+    if trimmed.chars().any(|c| c.is_control()) {
+        return Err(format!(
+            "profile name must not contain control characters: '{trimmed}'"
+        ));
+    }
+    Ok(trimmed.to_string())
+}
+
 impl ProviderModelConfig {
     /// Current schema version. `ProviderModelConfig::version` 字段必须等于此常量。
     pub const VERSION: u32 = 2;
+
+    /// The profile key used when [`Self::active_profile`] is empty — the B3
+    /// phase-1 single-profile name every pre-R3-2 file implicitly targets.
+    pub const DEFAULT_PROFILE: &'static str = "default";
+
+    /// The profile key in-process resolution uses: `active_profile` when
+    /// set, else [`Self::DEFAULT_PROFILE`]. Never empty — callers can index
+    /// `profiles` with it directly.
+    pub fn active_profile_key(&self) -> &str {
+        if self.active_profile.is_empty() {
+            Self::DEFAULT_PROFILE
+        } else {
+            &self.active_profile
+        }
+    }
+
+    /// Borrow the active [`ModelProfile`] (per [`Self::active_profile_key`]).
+    /// `None` when the pointer dangles (the named profile was deleted by a
+    /// hand edit / another writer) — callers fall back to synthesis.
+    pub fn active_model_profile(&self) -> Option<&ModelProfile> {
+        self.profiles.get(self.active_profile_key())
+    }
+
+    /// Mutable twin of [`Self::active_model_profile`].
+    pub fn active_model_profile_mut(&mut self) -> Option<&mut ModelProfile> {
+        let key = self.active_profile_key().to_string();
+        self.profiles.get_mut(&key)
+    }
+
+    /// All profile names, sorted. HashMap iteration order is nondeterministic,
+    /// so every listing surface (REPL `/profiles`, CLI, desktop) goes through
+    /// this to render a stable order.
+    pub fn profile_names(&self) -> Vec<String> {
+        let mut names: Vec<String> = self.profiles.keys().cloned().collect();
+        names.sort();
+        names
+    }
 
     /// Validate every profile's per-model declarations (R2-4). The store's
     /// `load` refuses files that fail this — same graceful-degradation
@@ -338,6 +420,7 @@ impl Default for ProviderModelConfig {
     fn default() -> Self {
         Self {
             version: Self::VERSION,
+            active_profile: String::new(),
             profiles: HashMap::new(),
             gateway: Default::default(),
         }
@@ -772,6 +855,121 @@ mod tier_name_tests {
         let profile = openai_compat_profile_with(vec![dup(), dup()]);
         let err = profile.validate_models().expect_err("dup must fail");
         assert!(err.contains("duplicate") && err.contains("same"), "{err}");
+    }
+
+    // ── R3-2: active_profile key + helpers ──────────────────────────────
+
+    fn pm_config_with(profiles: &[(&str, ModelProfile)]) -> ProviderModelConfig {
+        let mut map = HashMap::new();
+        for (name, mp) in profiles {
+            map.insert((*name).to_string(), mp.clone());
+        }
+        ProviderModelConfig {
+            version: ProviderModelConfig::VERSION,
+            active_profile: String::new(),
+            profiles: map,
+            gateway: Default::default(),
+        }
+    }
+
+    fn empty_model_profile(name: &str) -> ModelProfile {
+        ModelProfile {
+            name: name.to_string(),
+            active_target: ActiveTarget {
+                provider_id: String::new(),
+                model_id: String::new(),
+                scope: Scope::Global,
+            },
+            providers: Vec::new(),
+            auxiliary: HashMap::new(),
+            credential_scope: CredentialScope::Shared,
+        }
+    }
+
+    #[test]
+    fn active_profile_key_defaults_to_default_when_unset() {
+        let pm = pm_config_with(&[]);
+        assert_eq!(pm.active_profile_key(), "default");
+        assert!(pm.active_model_profile().is_none());
+    }
+
+    #[test]
+    fn active_profile_key_honors_explicit_pointer() {
+        let mut pm = pm_config_with(&[("work", empty_model_profile("work"))]);
+        pm.active_profile = "work".to_string();
+        assert_eq!(pm.active_profile_key(), "work");
+        assert!(pm.active_model_profile().is_some());
+        assert_eq!(pm.active_model_profile().unwrap().name, "work");
+        // Mutable twin sees the same entry.
+        pm.active_model_profile_mut().unwrap().name = "renamed".into();
+        assert_eq!(pm.profiles["work"].name, "renamed");
+    }
+
+    #[test]
+    fn active_profile_key_dangling_pointer_is_none() {
+        let mut pm = pm_config_with(&[]);
+        pm.active_profile = "ghost".to_string();
+        assert_eq!(pm.active_profile_key(), "ghost");
+        assert!(pm.active_model_profile().is_none());
+    }
+
+    #[test]
+    fn profile_names_are_sorted_and_stable() {
+        let pm = pm_config_with(&[
+            ("zeta", empty_model_profile("zeta")),
+            ("alpha", empty_model_profile("alpha")),
+            ("mid", empty_model_profile("mid")),
+        ]);
+        assert_eq!(pm.profile_names(), vec!["alpha", "mid", "zeta"]);
+    }
+
+    #[test]
+    fn active_profile_toml_round_trips_and_is_skipped_when_default() {
+        let mut pm = pm_config_with(&[("default", empty_model_profile("default"))]);
+        // Unset → the key is omitted entirely (byte-compat with pre-R3-2 files).
+        let toml_str = toml::to_string(&pm).expect("serialize");
+        assert!(
+            !toml_str.contains("active_profile"),
+            "default/unset active_profile must be skipped:\n{toml_str}"
+        );
+        let parsed: ProviderModelConfig = toml::from_str(&toml_str).expect("deserialize");
+        assert_eq!(parsed.active_profile, "");
+        assert_eq!(parsed, pm);
+
+        // Explicit non-default → the key survives a round-trip, and an old
+        // reader-free hand-written file without the key still parses.
+        pm.active_profile = "work".to_string();
+        let toml_str = toml::to_string(&pm).expect("serialize");
+        assert!(toml_str.contains("active_profile = \"work\""), "{toml_str}");
+        let parsed: ProviderModelConfig = toml::from_str(&toml_str).expect("deserialize");
+        assert_eq!(parsed.active_profile_key(), "work");
+
+        let legacy = r#"version = 2
+
+[profiles.default]
+name = "default"
+
+[profiles.default.active_target]
+provider_id = "anthropic"
+model_id = "claude-sonnet-4-20250514"
+scope = "global"
+"#;
+        let parsed: ProviderModelConfig = toml::from_str(legacy).expect("legacy file parses");
+        assert_eq!(parsed.active_profile_key(), "default");
+    }
+
+    #[test]
+    fn validate_profile_name_trims_and_rejects_bad_input() {
+        assert_eq!(
+            validate_profile_name("  work  ").unwrap(),
+            "work".to_string()
+        );
+        assert!(validate_profile_name("").is_err());
+        assert!(validate_profile_name("   ").is_err());
+        assert!(validate_profile_name("two words").is_err());
+        assert!(validate_profile_name("tab\tname").is_err());
+        assert!(validate_profile_name(&"x".repeat(65)).is_err());
+        assert_eq!(validate_profile_name(&"x".repeat(64)).unwrap().len(), 64);
     }
 
     #[test]

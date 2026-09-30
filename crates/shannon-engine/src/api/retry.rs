@@ -8,10 +8,39 @@
 //! / `retry_operation()` async wrappers.
 
 use crate::api::error::ApiError;
+use crate::api::types::FailoverTarget;
 use futures::future::BoxFuture;
 use std::sync::Arc;
 use std::time::Duration;
 use tokio::time::sleep;
+
+/// R3-1: hard cap on failover hops per request. Each configured fallback
+/// target gets the standard retry budget exactly once, and at most this many
+/// targets are tried — a long `fallback_models` list can never turn one
+/// request into an unbounded retry storm (roadmap risk note: "failover 与
+/// 重试/退避叠加 → 降级计数上限").
+pub const MAX_FAILOVER_TARGETS: usize = 3;
+
+/// What kind of pause a [`RetryNotice`] describes. The engine's event-stream
+/// observer renders the two kinds differently: [`RetryNoticeKind::Retry`]
+/// keeps the historical "API retry i/n (next try in Xs)" shape, while
+/// [`RetryNoticeKind::Failover`] renders the user-visible downgrade line
+/// "`falling back to <model>@<provider> (<reason>)`" (R3-1 — the downgrade
+/// must be visible AND replayable from the session event stream).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum RetryNoticeKind {
+    /// Another attempt of the SAME target follows after `wait`.
+    Retry,
+    /// The current target is being abandoned and the NEXT configured
+    /// failover target is about to be tried (R3-1). Carries the target the
+    /// walk is degrading TO.
+    Failover {
+        /// Model id of the fallback target.
+        model: String,
+        /// Provider slug of the fallback target (e.g. `"anthropic"`).
+        provider: String,
+    },
+}
 
 /// Details of one retry that is about to happen after a failed attempt.
 ///
@@ -28,6 +57,8 @@ pub struct RetryNotice {
     pub wait: Duration,
     /// Short display of what went wrong with the attempt.
     pub reason: String,
+    /// Whether the next step is another same-target retry or a failover hop.
+    pub kind: RetryNoticeKind,
 }
 
 /// Observer invoked before each retry sleep.
@@ -50,6 +81,24 @@ pub struct RetryConfig {
     pub max_backoff_ms: u64,
     /// HTTP status codes that are retryable.
     pub retryable_status_codes: Vec<u16>,
+    /// R3-1: explicit, user-authored failover chain (in order). Populated by
+    /// `shannon-core`'s `build_client_from_resolved` from the active
+    /// provider profile's `fallback_models` (bare ids stay on the same
+    /// provider; `provider/model`-qualified ids switch to that provider's
+    /// profile when it is connected). Empty = failover disabled — the
+    /// historical behavior. Never populated implicitly; Shannon does not
+    /// route.
+    pub fallbacks: Vec<FailoverTarget>,
+    /// R3-1: host-set suppression switch. When `true` the failover walk is
+    /// skipped entirely and the primary error surfaces as-is.
+    ///
+    /// Precedence contract with the desktop's session-level model override
+    /// (R2-1, `apply_session_override`): a session override means the user
+    /// explicitly pinned THIS model for THIS session, so silently degrading
+    /// to a different model would betray the pin. Hosts that re-target the
+    /// client config from a session override must set this flag (the engine
+    /// cannot infer "pinned" from a plain config value).
+    pub suppress_failover: bool,
 }
 
 impl Default for RetryConfig {
@@ -59,6 +108,8 @@ impl Default for RetryConfig {
             initial_backoff_ms: 1000,
             max_backoff_ms: 30_000,
             retryable_status_codes: vec![429, 500, 502, 503, 504, 529],
+            fallbacks: Vec::new(),
+            suppress_failover: false,
         }
     }
 }
@@ -71,6 +122,31 @@ impl RetryConfig {
             initial_backoff_ms,
             max_backoff_ms,
             retryable_status_codes: vec![429, 500, 502, 503, 504, 529],
+            fallbacks: Vec::new(),
+            suppress_failover: false,
+        }
+    }
+
+    /// R3-1: which exhausted-retries errors warrant trying the failover
+    /// chain. Deliberately narrow (roadmap R3-1: "429/5xx/529 按序重试"):
+    ///
+    /// - `RateLimitExceeded` (429) — the retry budget bought nothing; the
+    ///   quota may be per-model, so another model can still succeed.
+    /// - `ApiError` with status ≥ 500 — server-side failure, 529
+    ///   (Anthropic `overloaded_error`) included.
+    ///
+    /// Everything else fails over NOWHERE:
+    /// - `AuthenticationFailed` (401) — a bad key is not healed by switching
+    ///   models; surface it so the user fixes the credential.
+    /// - timeouts / connect errors — the agent loop's A8 recovery ladder
+    ///   owns those (escalation + in-place continuation).
+    /// - `ProviderError` / 4xx — deterministic request problems; another
+    ///   target would just repeat them.
+    pub fn is_failover_eligible(&self, error: &ApiError) -> bool {
+        match error {
+            ApiError::RateLimitExceeded { .. } => true,
+            ApiError::ApiError { status, .. } => *status >= 500,
+            _ => false,
         }
     }
 
@@ -339,6 +415,7 @@ where
                         total_attempts: config.max_retries + 1,
                         wait,
                         reason: e.to_string(),
+                        kind: RetryNoticeKind::Retry,
                     })
                     .await;
                 }
@@ -374,6 +451,73 @@ mod tests {
         assert_eq!(config.max_retries, 5);
         assert_eq!(config.initial_backoff_ms, 500);
         assert_eq!(config.max_backoff_ms, 60_000);
+    }
+
+    // ── R3-1: failover policy on RetryConfig ─────────────────────────────
+
+    #[test]
+    fn retry_config_defaults_have_no_failover() {
+        let config = RetryConfig::default();
+        assert!(
+            config.fallbacks.is_empty(),
+            "failover must be opt-in: default chain is empty"
+        );
+        assert!(
+            !config.suppress_failover,
+            "suppression defaults off (no session override)"
+        );
+    }
+
+    #[test]
+    fn failover_eligible_for_rate_limit_and_5xx() {
+        let config = RetryConfig::default();
+        assert!(config.is_failover_eligible(&ApiError::RateLimitExceeded {
+            retry_after_secs: None,
+        }));
+        for status in [500, 502, 503, 504, 529] {
+            assert!(
+                config.is_failover_eligible(&ApiError::ApiError {
+                    status,
+                    message: "server trouble".to_string(),
+                }),
+                "HTTP {status} must be failover-eligible"
+            );
+        }
+    }
+
+    #[test]
+    fn failover_never_triggered_by_auth_or_client_errors() {
+        let config = RetryConfig::default();
+        // 401: a bad key fails over nowhere useful — surface it.
+        assert!(!config.is_failover_eligible(&ApiError::AuthenticationFailed));
+        // Deterministic 4xx.
+        assert!(!config.is_failover_eligible(&ApiError::ApiError {
+            status: 400,
+            message: "bad request".to_string(),
+        }));
+        // Provider-reported errors and malformed responses.
+        assert!(!config.is_failover_eligible(&ApiError::ProviderError {
+            provider: "openai".to_string(),
+            error_type: "invalid_request_error".to_string(),
+            message: "nope".to_string(),
+        }));
+        assert!(!config.is_failover_eligible(&ApiError::InvalidResponse("bad".to_string())));
+    }
+
+    #[test]
+    fn failover_target_chain_round_trips_through_retry_config() {
+        use crate::api::LlmProvider;
+        let mut config = RetryConfig::default();
+        config.fallbacks.push(FailoverTarget {
+            model: "glm-5-flash".to_string(),
+            provider: LlmProvider::Zhipu,
+            base_url: "https://open.bigmodel.cn/api/paas/v4".to_string(),
+            api_key: "k".to_string(),
+        });
+        let cloned = config.clone();
+        assert_eq!(cloned.fallbacks.len(), 1);
+        assert_eq!(cloned.fallbacks[0].provider, LlmProvider::Zhipu);
+        assert_eq!(cloned.fallbacks[0].model, "glm-5-flash");
     }
 
     #[test]

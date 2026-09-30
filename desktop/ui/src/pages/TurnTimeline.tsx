@@ -212,15 +212,7 @@ export default function TurnTimeline({ sessionId }: TurnTimelineProps) {
             })}
           </p>
         </div>
-        {/* role=group + labelled container with plain spans — the axe-clean
-            pattern: aria-label on a bare div makes axe scan the subtree and
-            flag listitem chips (aria-required-parent), role=list flips it
-            to aria-required-children. */}
-        <div
-          className="ml-auto flex items-center gap-1.5 shrink-0"
-          role="group"
-          aria-label={t('timeline.summary.aria')}
-        >
+        <div className="ml-auto flex items-center gap-1.5 shrink-0">
           {/* C6: self-contained HTML export of the loaded projection. */}
           <Button
             variant="ghost"
@@ -234,12 +226,17 @@ export default function TurnTimeline({ sessionId }: TurnTimelineProps) {
           >
             <Icon name="download" size="sm" />
           </Button>
-          <SummaryChip icon="schema" label={t('timeline.stat.turns', { count: timeline.turns.length })} />
-          <SummaryChip icon="build" label={t('timeline.stat.tools', { count: totalTools })} />
-          <SummaryChip icon="token" label={nf.format(totalOutputTokens)} />
-          {totalCost != null && (
-            <SummaryChip icon="payments" label={COST_FORMAT.format(totalCost)} />
-          )}
+          {/* role="list" wraps ONLY the chips: axe requires every child of a
+              list to be a listitem (aria-required-parent/children gates in
+              the walkthrough), so the export button stays outside it. */}
+          <div role="list" className="flex items-center gap-1.5">
+            <SummaryChip icon="schema" label={t('timeline.stat.turns', { count: timeline.turns.length })} />
+            <SummaryChip icon="build" label={t('timeline.stat.tools', { count: totalTools })} />
+            <SummaryChip icon="token" label={nf.format(totalOutputTokens)} />
+            {totalCost != null && (
+              <SummaryChip icon="payments" label={COST_FORMAT.format(totalCost)} />
+            )}
+          </div>
         </div>
       </div>
 

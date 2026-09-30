@@ -96,6 +96,12 @@ fn list_models_for(
         .into_iter()
         .map(|m| {
             let pricing = pricing_for_model_opt(m.id);
+            // R3-3: surface the catalog's tier classification on the wire so
+            // the plan/act tier controls (header switcher, Settings →
+            // Models) can show WHICH model each tier resolves to with the
+            // same data the picker lists. `Unknown` stays `None` — the UI
+            // renders no tier badge rather than guessing (honest metadata).
+            let tier_label = shannon_core::model_registry::tier_label_for_id(m.id);
             ModelInfo {
                 id: m.id.to_string(),
                 name: m.display_name.to_string(),
@@ -103,7 +109,8 @@ fn list_models_for(
                 context_window: m.context_window,
                 price_in: pricing.as_ref().map(|p| p.input_price_per_mtok),
                 price_out: pricing.as_ref().map(|p| p.output_price_per_mtok),
-                tier: None,
+                tier: (tier_label != shannon_core::model_registry::TierLabel::Unknown)
+                    .then(|| tier_label.as_str().to_string()),
                 dynamic: None,
                 // R2-3: the merged catalog carries real capability data for
                 // both static entries (curated table) and dynamic overlay
@@ -262,18 +269,25 @@ pub async fn list_tools(state: tauri::State<'_, AppState>) -> Result<Vec<ToolInf
 
 /// Resolve the effective client config for a query on `session`:
 /// the session override re-resolved against the engine store when one is
-/// set, the global `client_config` otherwise.
+/// set, the global `client_config` (possibly upgraded to the R3-3 phase
+/// tier model) otherwise.
 ///
 /// Resolution failure (the overridden provider was deleted from the engine
 /// store since the override was written) degrades to the global config with
 /// a warning — a stale override must never block a send.
+///
+/// R3-3 precedence: **session override > phase tier > global default** —
+/// the phase tier (`plan_tier` / `act_tier` desktop config keys) only kicks
+/// in when THIS session has no explicit override.
 pub(crate) async fn resolve_client_config_for_session(
     state: &AppState,
     session: &crate::session_registry::SessionState,
 ) -> shannon_engine::api::LlmClientConfig {
     let base = state.client_config.read().await.clone();
     let Some(ov) = session.model_override_snapshot() else {
-        return base;
+        // R3-3: no explicit session override — the phase tier (plan/act)
+        // preference applies, if one is configured and resolves.
+        return apply_phase_tier_to_base(state, base).await;
     };
     let store_config = {
         let store = state.provider_store.lock().await;
@@ -292,13 +306,88 @@ pub(crate) async fn resolve_client_config_for_session(
     }
 }
 
+/// R3-3: apply the plan/act phase-tier preference to the global base config.
+///
+/// The tier (if any) is chosen from the desktop config's `plan_tier` /
+/// `act_tier` keys by the current approval mode (`plan` ⇒ plan phase), then
+/// resolved to a concrete model via the engine tier resolution. Any failure
+/// to resolve (tier unset/invalid, provider absent from the store, no
+/// catalog match) degrades silently to the unmodified global default — a
+/// tier preference must never block a send.
+async fn apply_phase_tier_to_base(
+    state: &AppState,
+    base: shannon_engine::api::LlmClientConfig,
+) -> shannon_engine::api::LlmClientConfig {
+    let (plan_tier, act_tier, approval_mode) = {
+        let dc = state.desktop_config.read().await;
+        (
+            dc.plan_tier.clone(),
+            dc.act_tier.clone(),
+            dc.approval_mode.clone(),
+        )
+    };
+    let Some(tier) = crate::phase_tier::effective_phase_tier(
+        approval_mode.as_deref(),
+        plan_tier.as_deref(),
+        act_tier.as_deref(),
+    ) else {
+        return base;
+    };
+    let store_config = {
+        let store = state.provider_store.lock().await;
+        store.config().clone()
+    };
+    match apply_tier_override(&base, &store_config, tier) {
+        Some(cc) => cc,
+        None => {
+            tracing::debug!(
+                tier = tier.as_str(),
+                provider = %base.provider,
+                "phase tier did not resolve for the active provider — using global default model"
+            );
+            base
+        }
+    }
+}
+
+/// Pure body of [`apply_phase_tier_to_base`]: swap the base config's model
+/// for `tier`'s resolved concrete model.
+///
+/// The tier resolves **for the provider already in use** (`base.provider`,
+/// the engine store's active target) so phase switching stays inside the
+/// configured provider — matching the tier vocabulary (`fast`/`standard`/
+/// `pro`) the Add Provider modal exposes per connection. The profile's
+/// persisted `tiers` table (providers.toml v2, the same source the TUI's
+/// `/model --tier --save` writes) feeds the resolution first; catalog
+/// inference with the cost tie-break comes second. Returns `None` when the
+/// active target or its provider slot is missing, or the tier doesn't
+/// resolve — the caller keeps the base config unchanged.
+pub(crate) fn apply_tier_override(
+    base: &shannon_engine::api::LlmClientConfig,
+    config: &shannon_types::provider_config::ProviderModelConfig,
+    tier: crate::phase_tier::PhaseTier,
+) -> Option<shannon_engine::api::LlmClientConfig> {
+    let profile = config.active_model_profile()?;
+    let active_id = profile.active_target.provider_id.trim();
+    if active_id.is_empty() {
+        return None;
+    }
+    let entry = profile.providers.iter().find(|p| p.id == active_id)?;
+    let model = crate::phase_tier::resolve_tier_model(tier, base.provider.clone(), &entry.tiers)?;
+    let mut out = base.clone();
+    out.model = model;
+    Some(out)
+}
+
 /// Pure body of [`resolve_client_config_for_session`]: apply a
 /// `(provider_slug, model_id)` override on top of the global client config,
 /// resolving provider identity, base URL and credential from the engine
-/// store's `"default"` profile roster (the same source
-/// `AppState::build_client_config` uses for the global target — swapping
-/// only provider/model on the global config would keep the OLD provider's
-/// base_url and API key, which fails for any cross-provider override).
+/// store's **active** profile roster (`active_profile_key()` — `"default"`
+/// when unset; R3-2 renamed the old hardcoded `"default"` lookup so a
+/// session override keeps resolving against the same roster the global
+/// target was built from) — swapping only provider/model on the global
+/// config would keep the OLD provider's base_url and API key, which fails
+/// for any cross-provider override.
 ///
 /// Returns `None` when no managed provider matches `provider_slug` — the
 /// caller falls back to the global config. Behavioural overrides
@@ -314,8 +403,7 @@ pub(crate) fn apply_session_override(
 
     let slug = provider_slug.trim().to_lowercase();
     let profile = config
-        .profiles
-        .get("default")?
+        .active_model_profile()?
         .providers
         .iter()
         // Match on both slug vocabularies the codebase speaks: the
@@ -337,6 +425,11 @@ pub(crate) fn apply_session_override(
     out.api_key = resolve_credential(&profile.credential);
     out.model = model_id.to_string();
     out.extra_headers = profile.extra_headers.clone();
+    // R2-1 × R3-1 contract: an explicitly pinned session target is the user
+    // telling the engine exactly where to send traffic — failover must not
+    // second-guess it (documented precedence: session override > phase tier
+    // > global default, and pinned targets don't fail over).
+    out.retry_config.suppress_failover = true;
     Some(out)
 }
 
@@ -372,7 +465,9 @@ pub async fn set_session_model(
     let engine_provider = {
         let store = state.provider_store.lock().await;
         let config = store.config();
-        let kind_ok = config.profiles.get("default").is_some_and(|pf| {
+        // Same roster `apply_session_override` resolves against: the ACTIVE
+        // model profile (R3-2), `"default"` when the pointer is unset.
+        let kind_ok = config.active_model_profile().is_some_and(|pf| {
             pf.providers
                 .iter()
                 .any(|p| crate::commands_config::provider_kind_slug(&p.kind) == provider_clean)
@@ -560,6 +655,7 @@ mod tests {
             );
             ProviderConfigStore::from_config(ProviderModelConfig {
                 version: ProviderModelConfig::VERSION,
+                active_profile: String::new(),
                 profiles,
                 gateway: Default::default(),
             })
@@ -695,19 +791,200 @@ mod tests {
             assert_eq!(resolved.provider, base.provider);
         }
 
-        /// Without an override the resolution is the identity — the global
-        /// config passes through untouched (new chats inherit the default).
+        /// Without an override and without any phase-tier preference the
+        /// resolution is the identity — the global config passes through
+        /// untouched (new chats inherit the default).
         #[tokio::test]
         async fn resolve_client_config_without_override_is_identity() {
             let state = AppState::new();
             let key = state.registry.create();
             let session = state.registry.get(key).unwrap();
             assert!(session.model_override_snapshot().is_none());
+            // R3-3: pin the phase-tier prefs off — `AppState::new()` loads
+            // the ambient on-disk config, which is free to carry them.
+            {
+                let mut cfg = state.desktop_config.write().await;
+                cfg.plan_tier = None;
+                cfg.act_tier = None;
+            }
 
             let resolved = super::super::resolve_client_config_for_session(&state, &session).await;
             let base = state.client_config.read().await.clone();
             assert_eq!(resolved.model, base.model);
             assert_eq!(resolved.provider, base.provider);
+        }
+
+        // === R3-3: plan/act phase-tier preference ===
+
+        use crate::phase_tier::PhaseTier;
+
+        /// The tier→model resolution the assertion expects for the fixture's
+        /// active provider (anthropic, default `ProviderTiers`).
+        fn expected_tier_model(base: &LlmClientConfig, tier: PhaseTier) -> Option<String> {
+            let store = fixture_store();
+            let profile = store.config().profiles.get("default").unwrap();
+            let entry = profile
+                .providers
+                .iter()
+                .find(|p| p.id == profile.active_target.provider_id)
+                .unwrap();
+            crate::phase_tier::resolve_tier_model(tier, base.provider.clone(), &entry.tiers)
+        }
+
+        /// Act tier applies outside plan mode: the provider stays, the model
+        /// becomes the act tier's resolution.
+        #[tokio::test]
+        async fn resolve_client_config_applies_act_tier_outside_plan_mode() {
+            let state = AppState::new();
+            *state.client_config.write().await = base_config();
+            {
+                let mut store = state.provider_store.lock().await;
+                *store = fixture_store();
+            }
+            let key = state.registry.create();
+            let session = state.registry.get(key).unwrap();
+            {
+                let mut cfg = state.desktop_config.write().await;
+                cfg.approval_mode = Some("suggest".into());
+                cfg.plan_tier = Some("pro".into()); // must be ignored outside plan mode
+                cfg.act_tier = Some("fast".into());
+            }
+
+            let resolved = super::super::resolve_client_config_for_session(&state, &session).await;
+            let base = state.client_config.read().await.clone();
+            assert_eq!(resolved.provider, base.provider, "tier stays in-provider");
+            assert_eq!(
+                Some(resolved.model.as_str()),
+                expected_tier_model(&base, PhaseTier::Fast).as_deref(),
+                "act tier (fast) resolved through the engine tier logic"
+            );
+            assert_ne!(resolved.model, base.model, "fast tier ≠ the sonnet default");
+        }
+
+        /// Plan mode (approval_mode == "plan") resolves through the PLAN
+        /// tier, not the act tier.
+        #[tokio::test]
+        async fn resolve_client_config_plan_mode_uses_plan_tier() {
+            let state = AppState::new();
+            *state.client_config.write().await = base_config();
+            {
+                let mut store = state.provider_store.lock().await;
+                *store = fixture_store();
+            }
+            let key = state.registry.create();
+            let session = state.registry.get(key).unwrap();
+            {
+                let mut cfg = state.desktop_config.write().await;
+                cfg.approval_mode = Some("plan".into());
+                cfg.plan_tier = Some("pro".into());
+                cfg.act_tier = Some("fast".into());
+            }
+
+            let resolved = super::super::resolve_client_config_for_session(&state, &session).await;
+            let base = state.client_config.read().await.clone();
+            assert_eq!(
+                Some(resolved.model.as_str()),
+                expected_tier_model(&base, PhaseTier::Pro).as_deref(),
+                "plan phase resolves through the plan tier"
+            );
+            assert_ne!(
+                Some(resolved.model.as_str()),
+                expected_tier_model(&base, PhaseTier::Fast).as_deref(),
+                "the act tier must not leak into the plan phase"
+            );
+        }
+
+        /// Precedence: an explicit R2-1 session override beats the phase
+        /// tier, and an unresolvable tier keeps the global default.
+        #[tokio::test]
+        async fn resolve_client_config_session_override_beats_phase_tier() {
+            let state = AppState::new();
+            *state.client_config.write().await = base_config();
+            {
+                let mut store = state.provider_store.lock().await;
+                *store = fixture_store();
+            }
+            let key = state.registry.create();
+            let session = state.registry.get(key).unwrap();
+            *session.model_override.lock().unwrap() =
+                Some(crate::session_registry::SessionModelOverride {
+                    provider: "anthropic".into(),
+                    model: "claude-opus-4-7".into(),
+                });
+            {
+                let mut cfg = state.desktop_config.write().await;
+                cfg.approval_mode = Some("plan".into());
+                cfg.plan_tier = Some("fast".into());
+                cfg.act_tier = Some("fast".into());
+            }
+
+            let resolved = super::super::resolve_client_config_for_session(&state, &session).await;
+            assert_eq!(
+                resolved.model, "claude-opus-4-7",
+                "session override wins over the phase tier"
+            );
+        }
+
+        #[test]
+        fn apply_tier_override_swaps_only_the_model() {
+            let store = fixture_store();
+            let base = base_config();
+            let out = super::super::apply_tier_override(&base, store.config(), PhaseTier::Fast)
+                .expect("anthropic resolves a fast tier");
+            assert_eq!(out.provider, base.provider);
+            assert_eq!(out.base_url, base.base_url, "endpoint untouched");
+            assert_eq!(out.api_key, base.api_key, "credential untouched");
+            assert_eq!(
+                out.max_tokens, base.max_tokens,
+                "behavioural fields untouched"
+            );
+            assert!(
+                out.model.contains("haiku"),
+                "fast tier → haiku family, got {}",
+                out.model
+            );
+        }
+
+        #[test]
+        fn apply_tier_override_persisted_tier_table_wins_over_catalog() {
+            // The profile's persisted `tiers` table (providers.toml v2, the
+            // `/model --tier --save` write-back target) beats catalog
+            // inference — same resolution the TUI performs.
+            let store = fixture_store();
+            let mut cfg = store.config().clone();
+            {
+                let profile = cfg.profiles.get_mut("default").unwrap();
+                let entry = profile
+                    .providers
+                    .iter_mut()
+                    .find(|p| p.id == profile.active_target.provider_id)
+                    .unwrap();
+                entry.tiers = ProviderTiers {
+                    fast: Some("my-custom-fast".into()),
+                    standard: None,
+                    pro: None,
+                };
+            }
+            let base = base_config();
+            let out = super::super::apply_tier_override(&base, &cfg, PhaseTier::Fast)
+                .expect("explicit tier override resolves");
+            assert_eq!(out.model, "my-custom-fast");
+        }
+
+        #[test]
+        fn apply_tier_override_returns_none_without_active_target() {
+            // An empty store (no profiles at all) has no active target — the
+            // tier contributes nothing and the caller keeps the base model.
+            let store = ProviderConfigStore::from_config(ProviderModelConfig {
+                version: ProviderModelConfig::VERSION,
+                active_profile: String::new(),
+                profiles: HashMap::new(),
+                gateway: Default::default(),
+            });
+            let base = base_config();
+            assert!(
+                super::super::apply_tier_override(&base, store.config(), PhaseTier::Fast).is_none()
+            );
         }
     }
 

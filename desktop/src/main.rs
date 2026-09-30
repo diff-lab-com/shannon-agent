@@ -24,6 +24,7 @@ fn main() {
     use shannon_desktop::commands_onboarding;
     use shannon_desktop::commands_permissions;
     use shannon_desktop::commands_plugins;
+    use shannon_desktop::commands_profiles;
     use shannon_desktop::commands_projects;
     use shannon_desktop::commands_remote;
     use shannon_desktop::commands_rewind;
@@ -165,6 +166,11 @@ fn main() {
             commands_config::save_provider,
             commands_config::delete_provider,
             commands_config::set_active_provider,
+            // R3-2 (desktop slice) — provider model-profile list / switch /
+            // create in Settings → Models (rename/delete UI deferred).
+            commands_profiles::list_provider_profiles,
+            commands_profiles::create_provider_profile,
+            commands_profiles::set_active_provider_profile,
             // T5 — gateway social connections (OS keyring + gateway config.json)
             commands_connections::gateway_set_secret,
             commands_connections::gateway_get_secret,

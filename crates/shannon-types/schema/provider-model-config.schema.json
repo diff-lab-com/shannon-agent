@@ -441,6 +441,10 @@
     }
   },
   "properties": {
+    "active_profile": {
+      "description": "R3-2: the named profile in-process resolution uses (must mirror src/; skipped when empty so pre-R3-2 files keep their exact shape).",
+      "type": "string"
+    },
     "gateway": {
       "allOf": [
         {

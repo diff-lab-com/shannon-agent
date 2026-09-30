@@ -6,7 +6,7 @@ import { MOCK_TASKS, MOCK_AGENTS, MOCK_AGENT_DEFINITIONS, MOCK_SESSIONS, MOCK_ME
 import { MOCK_SCHEDULED_ROUTINES, MOCK_TRIGGERED_ROUTINES, MOCK_HOOK_EVENTS, MOCK_PROFILES } from './data/automation'
 import { MOCK_INBOX_ITEMS, MOCK_OPC_METRICS, MOCK_PERF_TRACES, MOCK_DIAGNOSTICS,
   MOCK_CODE_ACTIONS, MOCK_GOALS } from './data/analytics'
-import { MOCK_CONFIG, MOCK_MODELS, MOCK_STATUS, MOCK_TOOLS, MOCK_PROVIDERS } from './data/config'
+import { MOCK_CONFIG, MOCK_MODELS, MOCK_STATUS, MOCK_TOOLS, MOCK_PROVIDERS, MOCK_PROVIDER_PROFILES } from './data/config'
 import type { InboxItem, ProviderInput, SessionInfo, TerminalInfo, TerminalSettings, FileIndexEntry } from '@/types'
 import { MOCK_TERMINAL_OUTPUT_EVENT, MOCK_TERMINAL_EXIT_EVENT } from '../runtime/terminalEvents'
 import { MOCK_MEMORIES, MOCK_MEMORY_PROJECTS, MOCK_MEMORY_STATS, MOCK_FEATURED_VENDORS } from './data/memory'
@@ -323,6 +323,18 @@ const demoSessionKey = (id?: string | null) => id ?? '__active__'
 // the Settings button's success payload visibly changes.
 let demoCatalogGeneration = 1
 
+// R3-2: demo model-profile roster — same ordering contract as the backend
+// ("default" pinned first, rest alphabetical).
+const demoProviderProfiles = clone(MOCK_PROVIDER_PROFILES)
+function sortDemoProfiles() {
+  demoProviderProfiles.sort((a, b) => {
+    const aDefault = a.name === 'default' ? 1 : 0
+    const bDefault = b.name === 'default' ? 1 : 0
+    if (aDefault !== bDefault) return bDefault - aDefault
+    return a.name.localeCompare(b.name)
+  })
+}
+
 // Mutable notification prefs so DND/quiet-hours toggling feels live in demo mode.
 // Audit §P2-3 (round 6): start with events off so the new empty-state
 // guidance card is visible on first visit — instead of the page looking
@@ -393,6 +405,18 @@ export const handlers: Record<string, MockHandler> = {
     } else if (key === 'effort_level') {
       // Audit D8: reasoning-effort picker persists the same key as the CLI.
       (demoConfig as Record<string, unknown>).effort_level = value
+    } else if (key === 'plan_tier' || key === 'act_tier') {
+      // R3-3: plan/act phase tiers — 'inherit'/empty clears (stored null),
+      // canonical tier names store verbatim, anything else is rejected
+      // (the backend validates the same way).
+      const tier = String(value ?? '').trim().toLowerCase()
+      if (tier === '' || tier === 'inherit') {
+        demoConfig[key] = null
+      } else if (tier === 'fast' || tier === 'standard' || tier === 'pro') {
+        demoConfig[key] = tier
+      } else {
+        throw new Error(`invalid phase tier \`${value}\` — expected inherit, fast, standard or pro`)
+      }
     } else if (key === 'offpeak.model_override') {
       // P2-5: frozen config key — empty value disables the override.
       const trimmed = String(value ?? '').trim()
@@ -474,6 +498,44 @@ export const handlers: Record<string, MockHandler> = {
   async set_active_provider(args: { id: string }) {
     await delay(150)
     state.providers.active_provider_id = args.id
+  },
+
+  // --- R3-2: provider model profiles (Settings → Models "Profiles") ---
+  // Demo mirror of the engine providers.toml v2 profiles map + the
+  // active_profile pointer: list / create / switch against mutable demo
+  // state, with the same validation contract as the backend (shared
+  // validate_profile_name rules; empty-profile switch allowed).
+  async list_provider_profiles() {
+    await delay()
+    return clone(demoProviderProfiles)
+  },
+  async create_provider_profile(args: { name: string }) {
+    await delay(120)
+    const name = String(args.name ?? '').trim()
+    if (!name) throw new Error('profile name must not be empty')
+    if (name.length > 64) throw new Error(`profile name is too long (max 64): '${name}'`)
+    if (/\s/.test(name)) throw new Error(`profile name must not contain whitespace: '${name}'`)
+    if (demoProviderProfiles.some((p) => p.name.toLowerCase() === name.toLowerCase())) {
+      throw new Error(`A profile named '${name}' already exists`)
+    }
+    demoProviderProfiles.push({ name, provider_count: 0, active: false, model: null })
+    sortDemoProfiles()
+    return clone(demoProviderProfiles)
+  },
+  async set_active_provider_profile(args: { name: string }) {
+    await delay(150)
+    const row = demoProviderProfiles.find((p) => p.name === args.name)
+    if (!row) {
+      throw new Error(
+        `profile '${args.name}' not found; available profiles: ${demoProviderProfiles.map((p) => p.name).join(', ')}`,
+      )
+    }
+    demoProviderProfiles.forEach((p) => { p.active = p.name === row.name })
+    // Mirrors the backend's client-config rebuild: the global default model
+    // follows the switched profile (null when it has none — get_status then
+    // falls back to the seeded status model).
+    if (row.model) demoConfig.model = row.model
+    return clone(demoProviderProfiles)
   },
 
   // --- Models & Status ---
