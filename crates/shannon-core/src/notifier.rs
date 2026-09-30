@@ -1137,6 +1137,31 @@ impl WebhookHandler {
         });
         Ok(())
     }
+
+    /// Single-shot SYNCHRONOUS delivery for the settings "send test" flow.
+    ///
+    /// One POST through the same client/signature headers as [`Self::deliver`],
+    /// but no retry loop and no spawn: the caller awaits the outcome so a
+    /// human-visible verdict (HTTP status or transport error) can be surfaced.
+    /// `Ok(status)` carries whatever status the receiver answered with — any
+    /// non-2xx is the caller's cue to report failure; `Err` is a transport
+    /// failure (DNS, connect, timeout, TLS).
+    pub async fn deliver_once(&self, body: String) -> Result<u16, String> {
+        let sig = self.sign(&body).map_err(|e| e.to_string())?;
+        let mut req = self
+            .client
+            .post(&self.config.url)
+            .header("Content-Type", "application/json")
+            .body(body);
+        if !sig.is_empty() {
+            req = req.header("X-Shannon-Signature", format!("sha256={sig}"));
+        }
+        let resp = req
+            .send()
+            .await
+            .map_err(|e| format!("webhook request failed: {e}"))?;
+        Ok(resp.status().as_u16())
+    }
 }
 
 /// Bounded-retry POST shared by every webhook payload shape.
@@ -1980,6 +2005,115 @@ enabled = true
     #[test]
     fn webhook_default_timeout_is_five_seconds() {
         assert_eq!(WebhookConfig::default_timeout_ms(), 5000);
+    }
+
+    // -- WebhookHandler::deliver_once (settings "send test" flow) ------------
+
+    #[test]
+    fn webhook_deliver_once_returns_success_status_and_posts_template_body() {
+        use mockito::Server;
+
+        let rt = tokio::runtime::Runtime::new().unwrap();
+        rt.block_on(async {
+            let mut server = Server::new_async().await;
+            let mock = server
+                .mock("POST", "/hook")
+                .with_status(200)
+                .match_header("content-type", "application/json")
+                .match_body(mockito::Matcher::PartialJson(
+                    serde_json::json!({ "text": "Build complete" }),
+                ))
+                .create_async()
+                .await;
+
+            let config = WebhookConfig {
+                url: format!("{}/hook", server.url()),
+                ..webhook_config(WebhookTemplate::Slack, false)
+            };
+            let h = WebhookHandler::new(config).unwrap();
+            let body = h.render_body(&sample_notification());
+            let status = h.deliver_once(body).await.unwrap();
+            assert_eq!(status, 200);
+            mock.assert();
+        });
+    }
+
+    #[test]
+    fn webhook_deliver_once_surfaces_non_2xx_status_without_retrying() {
+        use mockito::Server;
+
+        let rt = tokio::runtime::Runtime::new().unwrap();
+        rt.block_on(async {
+            let mut server = Server::new_async().await;
+            let mock = server
+                .mock("POST", "/hook")
+                .with_status(500)
+                .create_async()
+                .await;
+
+            let config = WebhookConfig {
+                url: format!("{}/hook", server.url()),
+                ..webhook_config(WebhookTemplate::Slack, false)
+            };
+            let h = WebhookHandler::new(config).unwrap();
+            let body = h.render_body(&sample_notification());
+            // Single shot: the 500 comes back as Ok(500) — the caller decides
+            // it's a failure — and exactly ONE request hits the server.
+            let status = h.deliver_once(body).await.unwrap();
+            assert_eq!(status, 500);
+            mock.assert();
+        });
+    }
+
+    #[test]
+    fn webhook_deliver_once_signs_with_hmac_header_when_secret_set() {
+        use hmac::{Hmac, Mac};
+        use mockito::Server;
+        use sha2::Sha256;
+
+        let rt = tokio::runtime::Runtime::new().unwrap();
+        rt.block_on(async {
+            let mut server = Server::new_async().await;
+
+            let config = WebhookConfig {
+                url: format!("{}/hook", server.url()),
+                secret: Some("test-secret".into()),
+                ..webhook_config(WebhookTemplate::Raw, false)
+            };
+            let h = WebhookHandler::new(config).unwrap();
+            let body = h.render_body(&sample_notification());
+
+            // The header must carry the HMAC-SHA256 of exactly the sent body;
+            // an absent/wrong signature leaves the mock unmatched.
+            let mut mac = <Hmac<Sha256> as Mac>::new_from_slice(b"test-secret").unwrap();
+            mac.update(body.as_bytes());
+            let expected = format!("sha256={}", hex::encode(mac.finalize().into_bytes()));
+            let mock = server
+                .mock("POST", "/hook")
+                .with_status(204)
+                .match_header("x-shannon-signature", expected.as_str())
+                .create_async()
+                .await;
+
+            let status = h.deliver_once(body).await.unwrap();
+            assert_eq!(status, 204);
+            mock.assert();
+        });
+    }
+
+    #[test]
+    fn webhook_deliver_once_maps_transport_failure_to_err() {
+        // Port 1 on localhost is a reliable "connection refused" — no server.
+        let config = WebhookConfig {
+            url: "http://127.0.0.1:1/hook".into(),
+            ..webhook_config(WebhookTemplate::Slack, false)
+        };
+        let h = WebhookHandler::new(config).unwrap();
+        let rt = tokio::runtime::Runtime::new().unwrap();
+        rt.block_on(async {
+            let result = h.deliver_once("{}".to_string()).await;
+            assert!(result.is_err(), "connection refused must be Err, got {result:?}");
+        });
     }
 
     // -- NotifPreset ---------------------------------------------------------
