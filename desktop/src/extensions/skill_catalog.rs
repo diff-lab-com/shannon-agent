@@ -204,14 +204,30 @@ fn manifest_to_entry(skill: SkillManifestEntry, upstream: &SkillUpstream) -> Cat
 
 /// Shannon built-in skills — always available, no upstream fetch needed.
 fn builtin_skills() -> Vec<CatalogEntry> {
-    let native = |name: &str, description: &str, trigger: &str, tags: &[&str]| {
+    let native = |name: &str, description: &str, trigger: &str, tags: &[&str], in_dev: bool| {
         let mut metadata = std::collections::HashMap::new();
         metadata.insert("trigger".to_string(), serde_json::json!(trigger));
+        // G1 P0-2.3 directory honesty: entries whose runtime does not exist
+        // yet are flagged so the UI renders them as "planned — not
+        // installable" instead of writing a stub SKILL.md that does nothing.
+        // The legacy "[In development] " description prefix is dropped — the
+        // badge replaces it.
+        if in_dev {
+            metadata.insert("in_development".to_string(), serde_json::json!(true));
+        }
+        let description = if in_dev {
+            description
+                .strip_prefix("[In development] ")
+                .unwrap_or(description)
+                .to_string()
+        } else {
+            description.to_string()
+        };
         CatalogEntry {
             id: format!("native:skill-{name}"),
             kind: AddonKind::Skill,
             name: name.to_string(),
-            description: description.to_string(),
+            description,
             author: Some("Shannon".into()),
             version: Some(env!("CARGO_PKG_VERSION").into()),
             homepage_url: None,
@@ -231,90 +247,105 @@ fn builtin_skills() -> Vec<CatalogEntry> {
             "[In development] Read, search, and extract content from PDF documents.",
             "/pdf",
             &["pdf", "native", "documents"],
+            true,
         ),
         native(
             "git-workflow",
             "Branch, commit, and PR automation helpers.",
             "/git",
             &["git", "native", "vcs"],
+            false,
         ),
         native(
             "doc-builder",
             "Generate architecture docs, API references, and ADRs from code scans.",
             "/doc",
             &["docs", "native", "automation"],
+            false,
         ),
         native(
             "test-scaffolder",
             "Scaffold unit/integration tests following the project's existing patterns.",
             "/test",
             &["testing", "native", "automation"],
+            false,
         ),
         native(
             "refactor",
             "Scope-safe refactors: extract function, inline variable, rename symbol across module.",
             "/refactor",
             &["refactor", "native", "code"],
+            false,
         ),
         native(
             "debugger",
             "Systematic debugging: bisect, capture state, isolate root cause.",
             "/debug",
             &["debug", "native", "diagnostics"],
+            false,
         ),
         native(
             "security-review",
             "Audit code for OWASP top 10, credential leaks, injection, and unsafe patterns.",
             "/sec",
             &["security", "native", "audit"],
+            false,
         ),
         native(
             "perf-profiler",
             "Profile hot paths, suggest algorithmic improvements, benchmark before/after.",
             "/perf",
             &["performance", "native", "profiling"],
+            false,
         ),
         native(
             "i18n-helper",
             "Extract user-visible strings, enforce locale-file conventions, machine-translate drafts.",
             "/i18n",
             &["i18n", "native", "localization"],
+            false,
         ),
         native(
             "sql-builder",
             "Build and explain SQL queries with parameter binding and schema-aware completion.",
             "/sql",
             &["sql", "native", "database"],
+            false,
         ),
         native(
             "plotly-charts",
             "[In development] Generate Plotly figures from data. Returns a JSON chart spec compatible with the chat chart renderer, or an interactive HTML file for richer figures.",
             "/plotly",
             &["python", "plotly", "charts", "data-analysis"],
+            true,
         ),
         native(
             "data-analysis",
             "[In development] Load CSV/JSON/parquet via pandas, summarise distributions, surface outliers, and produce a markdown report with embedded charts.",
             "/analyze",
             &["python", "pandas", "data-analysis", "statistics"],
+            true,
         ),
         native(
             "jupyter-session",
             "[In development] Persistent Python kernel session: keep variables across turns, render matplotlib/plotly figures inline.",
             "/py",
             &["python", "jupyter", "kernel", "data-analysis"],
+            true,
         ),
         native(
             "documents-open",
             "[In development] Open DOCX/PPTX/XLSX/PDF documents in the host's installed editor (LibreOffice, Word, Excel). Detects editors via `which`/`where`; if none is found, recommends `apt install libreoffice` (Linux), `brew install --cask libreoffice` (macOS), or `winget install TheDocumentFoundation.LibreOffice` (Windows) instead of aborting.",
             "/documents-open",
             &["documents", "native", "host"],
+            true,
         ),
         native(
             "documents-convert",
             "[In development] Convert between document formats (md↔docx, docx↔pdf, html↔pdf) via the host's pandoc. If pandoc is missing, the skill recommends installation and returns the input unchanged rather than aborting the agent run.",
             "/documents-convert",
             &["documents", "native", "pandoc"],
+            true,
         ),
     ]
 }

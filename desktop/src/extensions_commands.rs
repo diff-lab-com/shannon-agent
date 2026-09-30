@@ -521,15 +521,25 @@ pub async fn install_agent_from_repo(
     })
 }
 
-/// Write a built-in agent's `.md` body to `~/.shannon/agents/<plugin>/agent.md`.
+/// Write a built-in agent as a **flat** `~/.shannon/agents/<name>.toml`
+/// `AgentDefinition` (G1 P1-9: the runtime loader only reads flat TOML — the
+/// old `<plugin>/agent.md` subdirectory shape was never loaded). The
+/// catalog page's description/system_prompt semantics map onto the
+/// definition fields; tool hints become capabilities.
 #[tauri::command]
 pub async fn install_native_agent(
     plugin_name: String,
-    body: String,
+    description: String,
+    system_prompt: String,
+    model: Option<String>,
+    tools: Vec<String>,
 ) -> Result<InstallResult, String> {
     let installer = AgentMarkdownInstaller {
         plugin_name: plugin_name.clone(),
-        body,
+        description,
+        system_prompt,
+        model,
+        tools,
         root_override: None,
     };
     let entry = extensions::CatalogEntry {

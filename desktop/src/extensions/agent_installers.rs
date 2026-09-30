@@ -3,7 +3,16 @@
 //! Two installers handle different agent entry shapes:
 //! - `AgentRepoInstaller` — clones a repo with a `.claude/agents/*.md` style
 //!   collection into `~/.shannon/agents/<plugin>/`.
-//! - `AgentMarkdownInstaller` — installs a single agent `.md` file.
+//! - `AgentMarkdownInstaller` — installs a single agent as a **flat**
+//!   `~/.shannon/agents/<name>.toml` [`AgentDefinition`].
+//!
+//! G1 P1-9 format unification: the runtime loader
+//! (`shannon_agents::AgentDefinitionRegistry::load_from_dirs`) only reads
+//! flat `~/.shannon/agents/*.toml` (plus the Claude-compatible md dirs) —
+//! the old `<plugin>/agent.md` subdirectory shape was never loaded, so
+//! desktop-installed agents were invisible at runtime. New installs write
+//! the flat TOML shape; `migrate_legacy_agent_dirs` converts old
+//! subdirectory entries at startup (idempotent).
 
 use std::path::{Path, PathBuf};
 
@@ -17,7 +26,8 @@ use super::types::{
     ProgressSink, TrustLevel,
 };
 
-/// Where agent definitions live. Today: `~/.shannon/agents/<plugin>/`.
+/// Where agent definitions live. Today: `~/.shannon/agents/` (flat `.toml`
+/// files the runtime loader reads; legacy subdirectories are migrated).
 fn shannon_agents_root() -> PathBuf {
     dirs::home_dir()
         .map(|h| h.join(".shannon").join("agents"))
@@ -191,14 +201,63 @@ impl AddonInstaller for AgentRepoInstaller {
     }
 }
 
-/// Single-file agent installer — writes one `.md` file with frontmatter
-/// to `~/.shannon/agents/<plugin>/agent.md`.
+/// Single-agent installer — writes a **flat** `~/.shannon/agents/<name>.toml`
+/// [`shannon_agents::AgentDefinition`] the runtime loader actually reads.
+///
+/// The catalog page's `description` / `system_prompt` semantics map onto the
+/// definition fields; catalog tool hints become capabilities (freeform), so
+/// the agent keeps the default all-tools surface instead of a mismatched
+/// lowercase allowlist that would filter to nothing.
 pub struct AgentMarkdownInstaller {
     pub plugin_name: String,
-    pub body: String,
+    pub description: String,
+    pub system_prompt: String,
+    pub model: Option<String>,
+    pub tools: Vec<String>,
     /// Test-only override for the agents root. Production leaves this `None`
     /// (resolve `~/.shannon/agents` from HOME); tests set it to a tempdir.
     pub root_override: Option<PathBuf>,
+}
+
+/// Serialize the definition into the flat TOML shape
+/// `AgentDefinition::from_file` parses. Written by hand (no new deps) with
+/// basic TOML string escaping for the prompt/description values.
+fn agent_definition_toml(
+    name: &str,
+    description: &str,
+    system_prompt: &str,
+    model: Option<&str>,
+    tools: &[String],
+) -> String {
+    fn toml_str(value: &str) -> String {
+        let mut out = String::with_capacity(value.len() + 2);
+        out.push('"');
+        for ch in value.chars() {
+            match ch {
+                '"' => out.push_str("\\\""),
+                '\\' => out.push_str("\\\\"),
+                '\n' => out.push_str("\\n"),
+                '\r' => out.push_str("\\r"),
+                '\t' => out.push_str("\\t"),
+                c => out.push(c),
+            }
+        }
+        out.push('"');
+        out
+    }
+
+    let mut toml = String::new();
+    toml.push_str(&format!("name = {}\n", toml_str(name)));
+    toml.push_str(&format!("description = {}\n", toml_str(description)));
+    toml.push_str(&format!("system_prompt = {}\n", toml_str(system_prompt)));
+    if let Some(model) = model {
+        toml.push_str(&format!("model = {}\n", toml_str(model)));
+    }
+    let capabilities: Vec<String> = tools.iter().map(|t| toml_str(t)).collect();
+    if !capabilities.is_empty() {
+        toml.push_str(&format!("capabilities = [{}]\n", capabilities.join(", ")));
+    }
+    toml
 }
 
 #[async_trait]
@@ -230,10 +289,17 @@ impl AddonInstaller for AgentMarkdownInstaller {
         // B0 P0-6: same sanitization as the repo installer — a polluted
         // native entry must not escape the agents root either.
         let plugin = safe_plugin_name(&self.plugin_name)?;
-        let dir = resolve_agents_root(self.root_override.as_deref()).join(&plugin);
-        std::fs::create_dir_all(&dir)?;
-        let agent_md = dir.join("agent.md");
-        std::fs::write(&agent_md, &self.body)?;
+        let root = resolve_agents_root(self.root_override.as_deref());
+        std::fs::create_dir_all(&root)?;
+        let agent_toml = root.join(format!("{plugin}.toml"));
+        let body = agent_definition_toml(
+            &plugin,
+            &self.description,
+            &self.system_prompt,
+            self.model.as_deref(),
+            &self.tools,
+        );
+        std::fs::write(&agent_toml, body)?;
 
         progress.emit(super::types::ProgressEvent::Finished).await;
 
@@ -241,7 +307,7 @@ impl AddonInstaller for AgentMarkdownInstaller {
             id: entry.id.clone(),
             kind: entry.kind,
             name: plugin.clone(),
-            install_path: Some(agent_md.display().to_string()),
+            install_path: Some(agent_toml.display().to_string()),
             installed_at: Some(Utc::now()),
             version: entry.version.clone(),
             enabled: true,
@@ -249,9 +315,15 @@ impl AddonInstaller for AgentMarkdownInstaller {
     }
 
     async fn uninstall(&self, addon_id: &str) -> Result<(), InstallError> {
-        let dir = resolve_agents_root(self.root_override.as_deref()).join(addon_id);
-        if dir.exists() {
-            std::fs::remove_dir_all(&dir)?;
+        let root = resolve_agents_root(self.root_override.as_deref());
+        let toml_path = root.join(format!("{addon_id}.toml"));
+        if toml_path.exists() {
+            std::fs::remove_file(&toml_path)?;
+        }
+        // Legacy subdirectory installs (pre-G1 shape) are cleaned too.
+        let legacy_dir = root.join(addon_id);
+        if legacy_dir.is_dir() {
+            std::fs::remove_dir_all(&legacy_dir)?;
         }
         Ok(())
     }
@@ -275,8 +347,11 @@ pub fn is_agent_installed(plugin_name: &str) -> bool {
 /// `is_agent_installed` against an explicit agents `root` (see
 /// [`AgentRepoInstaller`] / [`AgentMarkdownInstaller`] `root_override` for why
 /// tests avoid `$HOME`).
+///
+/// True for both the flat `<name>.toml` shape (G1) and a legacy `<name>/`
+/// subdirectory (unmigrated repo install).
 pub fn is_agent_installed_in(root: &Path, plugin_name: &str) -> bool {
-    root.join(plugin_name).exists()
+    root.join(format!("{plugin_name}.toml")).is_file() || root.join(plugin_name).is_dir()
 }
 
 /// Wire type for listing installed agent plugins.
@@ -292,30 +367,39 @@ pub fn list_installed_agents() -> Vec<InstalledAgent> {
     list_installed_agents_in(&shannon_agents_root())
 }
 
-/// `list_installed_agents` against an explicit agents `root`.
+/// `list_installed_agents` against an explicit agents `root`. Sees both the
+/// flat `.toml` files (G1 shape) and legacy plugin subdirectories.
 pub fn list_installed_agents_in(root: &Path) -> Vec<InstalledAgent> {
     let mut out = Vec::new();
-    if let Ok(entries) = std::fs::read_dir(root) {
-        for entry in entries.flatten() {
-            if entry.file_type().map(|t| t.is_dir()).unwrap_or(false) {
-                let path = entry.path();
-                let installed_at = entry
-                    .metadata()
-                    .and_then(|m| m.modified())
-                    .ok()
-                    .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
-                    .map(|d| {
-                        DateTime::<Utc>::from_timestamp(d.as_secs() as i64, 0)
-                            .map(|dt| dt.to_rfc3339())
-                            .unwrap_or_default()
-                    });
-                out.push(InstalledAgent {
-                    name: entry.file_name().to_string_lossy().into_owned(),
-                    path: path.display().to_string(),
-                    installed_at,
-                });
-            }
+    let Ok(entries) = std::fs::read_dir(root) else {
+        return out;
+    };
+    for entry in entries.flatten() {
+        let is_dir = entry.file_type().map(|t| t.is_dir()).unwrap_or(false);
+        let is_toml = entry.path().extension().is_some_and(|x| x == "toml");
+        if !is_dir && !is_toml {
+            continue;
         }
+        let path = entry.path();
+        let installed_at = entry
+            .metadata()
+            .and_then(|m| m.modified())
+            .ok()
+            .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+            .map(|d| {
+                DateTime::<Utc>::from_timestamp(d.as_secs() as i64, 0)
+                    .map(|dt| dt.to_rfc3339())
+                    .unwrap_or_default()
+            });
+        out.push(InstalledAgent {
+            name: entry
+                .path()
+                .file_stem()
+                .map(|s| s.to_string_lossy().into_owned())
+                .unwrap_or_else(|| entry.file_name().to_string_lossy().into_owned()),
+            path: path.display().to_string(),
+            installed_at,
+        });
     }
     out
 }
@@ -325,26 +409,101 @@ pub fn remove_installed_agent(name: &str) -> Result<(), InstallError> {
     remove_installed_agent_in(&shannon_agents_root(), name)
 }
 
-/// `remove_installed_agent` against an explicit agents `root`.
+/// `remove_installed_agent` against an explicit agents `root`. Removes the
+/// flat `<name>.toml` and/or the legacy `<name>/` subdirectory; an unknown
+/// name is an error.
 pub fn remove_installed_agent_in(root: &Path, name: &str) -> Result<(), InstallError> {
+    let toml_path = root.join(format!("{name}.toml"));
     let dir = root.join(name);
-    if !dir.exists() {
+    if !toml_path.exists() && !dir.exists() {
         return Err(InstallError::Io(format!("{name} is not installed")));
     }
     let canonical_root = root
         .canonicalize()
         .map_err(|e| InstallError::Io(format!("canonicalize root: {e}")))?;
-    let canonical_target = dir
-        .canonicalize()
-        .map_err(|e| InstallError::Io(format!("canonicalize target: {e}")))?;
-    if !canonical_target.starts_with(&canonical_root) {
-        return Err(InstallError::Format(format!(
-            "refusing to remove path outside agents root: {}",
-            canonical_target.display()
-        )));
+    if toml_path.exists() {
+        let canonical_target = toml_path
+            .canonicalize()
+            .map_err(|e| InstallError::Io(format!("canonicalize target: {e}")))?;
+        if !canonical_target.starts_with(&canonical_root) {
+            return Err(InstallError::Format(format!(
+                "refusing to remove path outside agents root: {}",
+                canonical_target.display()
+            )));
+        }
+        std::fs::remove_file(&canonical_target)?;
     }
-    std::fs::remove_dir_all(&canonical_target)?;
+    if dir.is_dir() {
+        let canonical_target = dir
+            .canonicalize()
+            .map_err(|e| InstallError::Io(format!("canonicalize target: {e}")))?;
+        if !canonical_target.starts_with(&canonical_root) {
+            return Err(InstallError::Format(format!(
+                "refusing to remove path outside agents root: {}",
+                canonical_target.display()
+            )));
+        }
+        std::fs::remove_dir_all(&canonical_target)?;
+    }
     Ok(())
+}
+
+/// One-time, idempotent migration of legacy `<plugin>/agent.md`
+/// subdirectory installs into flat `<plugin>.toml` definitions the runtime
+/// loader reads. Existing flat files win (re-runs are no-ops); the legacy
+/// directories are left on disk (uninstall cleans them). Returns the number
+/// of migrated agents.
+pub fn migrate_legacy_agent_dirs() -> usize {
+    migrate_legacy_agent_dirs_in(&shannon_agents_root())
+}
+
+/// `migrate_legacy_agent_dirs` against an explicit agents root (tests pass a
+/// tempdir so they never touch the user's HOME).
+pub fn migrate_legacy_agent_dirs_in(root: &Path) -> usize {
+    let Ok(entries) = std::fs::read_dir(root) else {
+        return 0;
+    };
+    let mut migrated = 0usize;
+    for entry in entries.flatten() {
+        if !entry.file_type().map(|t| t.is_dir()).unwrap_or(false) {
+            continue;
+        }
+        let name = entry.file_name().to_string_lossy().into_owned();
+        let Ok(sanitized) = safe_plugin_name(&name) else {
+            continue;
+        };
+        let target = root.join(format!("{sanitized}.toml"));
+        if target.exists() {
+            continue; // already migrated / user-authored flat file wins
+        }
+        // The AgentMarkdownInstaller shape wrote `<plugin>/agent.md`.
+        let md = entry.path().join("agent.md");
+        if !md.is_file() {
+            continue;
+        }
+        let Ok(def) = shannon_agents::AgentDefinition::from_markdown_file(&md) else {
+            tracing::warn!(path = %md.display(), "legacy agent.md unreadable — skipping migration");
+            continue;
+        };
+        let toml_body = agent_definition_toml(
+            &sanitized,
+            &if def.description.is_empty() {
+                sanitized.clone()
+            } else {
+                def.description
+            },
+            def.system_prompt.as_deref().unwrap_or(""),
+            def.model.as_deref(),
+            &def.capabilities,
+        );
+        if let Err(e) = std::fs::write(&target, toml_body) {
+            tracing::warn!(path = %target.display(), error = %e, "agent migration write failed");
+            continue;
+        }
+        tracing::info!(agent = %sanitized, "migrated legacy agent directory to flat definition");
+        migrated += 1;
+    }
+    migrated
 }
 
 #[cfg(test)]
@@ -372,7 +531,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn markdown_installer_writes_agent_file() {
+    async fn markdown_installer_writes_flat_toml_definition() {
         // Agents root is an isolated tempdir — no HOME mutation. The old form
         // set HOME via a lock-guarded env override, which is process-global
         // and raced with unrelated tests reading dirs::home_dir() under
@@ -382,7 +541,10 @@ mod tests {
 
         let installer = AgentMarkdownInstaller {
             plugin_name: "test-agent".into(),
-            body: "---\nname: test\n---\n# Test Agent\n".into(),
+            description: "Test agent".into(),
+            system_prompt: "You are a test agent.\nBe thorough.".into(),
+            model: Some("claude-sonnet-4-6".into()),
+            tools: vec!["read".into(), "grep".into()],
             root_override: Some(root.clone()),
         };
         let entry = fixture_entry();
@@ -396,17 +558,106 @@ mod tests {
             )
             .await
             .expect("install");
+        let toml_path = root.join("test-agent.toml");
         assert!(
             installed
                 .install_path
                 .as_deref()
                 .unwrap()
-                .ends_with("test-agent/agent.md")
+                .ends_with("test-agent.toml")
         );
         assert!(is_agent_installed_in(&root, "test-agent"));
 
+        // G1 P1-9 acceptance: the runtime loader must be able to read the
+        // written file back as an AgentDefinition.
+        let def = shannon_agents::AgentDefinition::from_file(&toml_path).expect("load toml");
+        assert_eq!(def.name, "test-agent");
+        assert_eq!(def.description, "Test agent");
+        assert_eq!(
+            def.system_prompt.as_deref(),
+            Some("You are a test agent.\nBe thorough.")
+        );
+        assert_eq!(def.model.as_deref(), Some("claude-sonnet-4-6"));
+        assert_eq!(def.capabilities, vec!["read", "grep"]);
+
         installer.uninstall("test-agent").await.expect("uninstall");
         assert!(!is_agent_installed_in(&root, "test-agent"));
+    }
+
+    #[test]
+    fn agent_definition_toml_escapes_quotes_and_newlines() {
+        let body = agent_definition_toml(
+            "quoted",
+            "has \"quotes\" and\nnewlines",
+            "prompt with \\ backslash",
+            None,
+            &[],
+        );
+        let parsed: shannon_agents::AgentDefinition =
+            toml::from_str(&body).expect("escaped toml must parse");
+        assert_eq!(parsed.description, "has \"quotes\" and\nnewlines");
+        assert_eq!(
+            parsed.system_prompt.as_deref(),
+            Some("prompt with \\ backslash")
+        );
+    }
+
+    #[test]
+    fn migrate_legacy_agent_dir_writes_flat_toml_and_is_idempotent() {
+        let tmp = tempfile::tempdir().expect("tmp");
+        let root = tmp.path().join(".shannon").join("agents");
+        let legacy = root.join("old-agent");
+        std::fs::create_dir_all(&legacy).unwrap();
+        std::fs::write(
+            legacy.join("agent.md"),
+            "---\nmodel: claude-opus\n---\nYou are a legacy agent.",
+        )
+        .unwrap();
+
+        let migrated = migrate_legacy_agent_dirs_in(&root);
+        assert_eq!(migrated, 1);
+        let def = shannon_agents::AgentDefinition::from_file(&root.join("old-agent.toml"))
+            .expect("migrated toml loads");
+        assert_eq!(def.name, "old-agent");
+        assert_eq!(def.model.as_deref(), Some("claude-opus"));
+        assert_eq!(
+            def.system_prompt.as_deref(),
+            Some("You are a legacy agent.")
+        );
+
+        // Idempotent: second run migrates nothing; the flat file wins.
+        assert_eq!(migrate_legacy_agent_dirs_in(&root), 0);
+
+        // Migration leaves the legacy directory in place (uninstall cleans).
+        assert!(legacy.is_dir());
+
+        // Uninstall removes BOTH the flat toml and the legacy dir.
+        remove_installed_agent_in(&root, "old-agent").expect("remove");
+        assert!(!root.join("old-agent.toml").exists());
+        assert!(!legacy.exists());
+    }
+
+    #[test]
+    fn list_installed_agents_sees_flat_toml() {
+        let tmp = tempfile::tempdir().expect("tmp");
+        let root = tmp.path().join(".shannon").join("agents");
+        std::fs::create_dir_all(&root).unwrap();
+        std::fs::write(root.join("flat-agent.toml"), "name = \"flat-agent\"\n").unwrap();
+        let rows = list_installed_agents_in(&root);
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].name, "flat-agent");
+        assert!(rows[0].path.ends_with("flat-agent.toml"));
+        assert!(is_agent_installed_in(&root, "flat-agent"));
+    }
+
+    #[test]
+    fn remove_installed_agent_handles_flat_toml() {
+        let tmp = tempfile::tempdir().expect("tmp");
+        let root = tmp.path().join(".shannon").join("agents");
+        std::fs::create_dir_all(&root).unwrap();
+        std::fs::write(root.join("flat.toml"), "name = \"flat\"\n").unwrap();
+        remove_installed_agent_in(&root, "flat").expect("remove");
+        assert!(!root.join("flat.toml").exists());
     }
 
     #[test]
@@ -467,7 +718,10 @@ mod tests {
         ] {
             let installer = AgentMarkdownInstaller {
                 plugin_name: name.into(),
-                body: "---\nname: x\n---\n".into(),
+                description: "x".into(),
+                system_prompt: "---\nname: x\n---\n".into(),
+                model: None,
+                tools: vec![],
                 root_override: Some(root.clone()),
             };
             let entry = fixture_entry();
@@ -521,7 +775,10 @@ mod tests {
 
         let installer = AgentMarkdownInstaller {
             plugin_name: "My Agent v2!".into(),
-            body: "---\nname: x\n---\n".into(),
+            description: "x".into(),
+            system_prompt: "---\nname: x\n---\n".into(),
+            model: None,
+            tools: vec![],
             root_override: Some(root.clone()),
         };
         let entry = fixture_entry();
@@ -534,6 +791,6 @@ mod tests {
             .await
             .expect("safe name must install");
         assert_eq!(installed.name, "my-agent-v2");
-        assert!(root.join("my-agent-v2").join("agent.md").exists());
+        assert!(root.join("my-agent-v2.toml").exists());
     }
 }

@@ -24,7 +24,7 @@ pub use agent_catalog::{
 };
 pub use agent_installers::{
     AgentMarkdownInstaller, AgentRepoInstaller, InstalledAgent, is_agent_installed,
-    list_installed_agents, remove_installed_agent,
+    list_installed_agents, migrate_legacy_agent_dirs, remove_installed_agent,
 };
 pub use aggregator::{InstalledAddonSummary, aggregate_installed};
 pub use catalog::{
