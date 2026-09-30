@@ -47,6 +47,11 @@ pub struct UpdateTaskPayload {
     pub due_date: Option<i64>,
     /// When set, writes `executionMode` to the task JSON.
     pub execution_mode: Option<String>,
+    /// P1-3: when set, writes `subject` — the field `list_tasks` projects to
+    /// `TaskInfo.title`. Lets a caller mint a board task through the adhoc
+    /// path (`.claude/tasks/<adhoc>/{id}.json`) instead of only editing an
+    /// existing one.
+    pub title: Option<String>,
 }
 
 /// List tasks from .claude/tasks/ directory (team task system).
@@ -253,6 +258,11 @@ pub async fn update_task(payload: UpdateTaskPayload) -> Result<TaskInfo, String>
         .unwrap_or_else(|| serde_json::json!({}));
     if doc.get("id").is_none() {
         doc["id"] = serde_json::Value::String(payload.id.clone());
+    }
+    // P1-3: adhoc minting — a brand-new task file must carry a `subject`, or
+    // `list_tasks` renders it as "Untitled" on the board.
+    if let Some(title) = payload.title {
+        doc["subject"] = serde_json::Value::String(title);
     }
     if let Some(status) = payload.status {
         doc["status"] = serde_json::Value::String(status);
