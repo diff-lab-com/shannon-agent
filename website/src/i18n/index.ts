@@ -67,6 +67,7 @@ const translations = {
         { num: '06', title: 'Native Desktop App', desc: 'Tauri 2 + React 19, not Electron. Simple mode for everyone, advanced mode with multi-panel workspace, integrated terminal, and memory graph.' },
         { num: '07', title: 'IM & Mobile Dispatch', desc: 'Dispatch tasks from Telegram, Discord, Slack, Feishu, or DingTalk; approve from your phone via QR pairing. Results push back to the original chat.' },
         { num: '08', title: 'Engineering Discipline', desc: '11,752+ automated tests, zero clippy warnings, cargo-deny and semver gates in CI. Published eval harness on SWE-bench Verified and Terminal-Bench.' },
+        { num: '09', title: 'Office Deliverables', desc: 'Schedules that hand you real files: built-in document skills turn routines into .docx reports, .xlsx tables, and .pptx decks — generated on your machine, ready to open in Office.' },
       ],
     },
     comparison: {
@@ -162,6 +163,7 @@ const translations = {
         { num: '06', title: '原生桌面应用', desc: 'Tauri 2 + React 19，而非 Electron。Simple 模式人人会用，Advanced 模式带多面板工作区、集成终端与记忆图谱。' },
         { num: '07', title: 'IM 与手机派活', desc: '从 Telegram、Discord、Slack、飞书、钉钉派任务；扫码配对后在手机上审批。结果回推原会话。' },
         { num: '08', title: '工程纪律', desc: '11,752+ 个自动化测试、零 clippy 告警、CI 中 cargo-deny 与 semver 门禁。公开 SWE-bench Verified 与 Terminal-Bench 评测管线。' },
+        { num: '09', title: 'Office 交付物', desc: '定时任务交付真文件：内置文档技能把例程变成 .docx 报告、.xlsx 表格、.pptx 幻灯片——全部本地生成，直接用 Office 打开。' },
       ],
     },
     comparison: {

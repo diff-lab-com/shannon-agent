@@ -153,7 +153,7 @@ export default function PlanPanel({ workingDir, planModeActive }: PlanPanelProps
           {t('chat.plan.title')}
         </h3>
         {shown && (
-          <Badge size="sm" variant={approved ? 'primary' : 'neutral'} className={approved ? 'bg-primary/10 text-primary' : 'bg-surface-container-high text-on-surface-variant'}>
+          <Badge size="sm" variant={approved ? 'primary' : 'neutral'} className={approved ? 'bg-primary-container text-on-primary-container' : 'bg-surface-container-high text-on-surface-variant'}>
             <span className="material-symbols-outlined icon-xs mr-[2px]" aria-hidden="true">{approved ? 'check_circle' : 'pending'}</span>
             {t(approved ? 'chat.plan.status.approved' : 'chat.plan.status.pending')}
           </Badge>

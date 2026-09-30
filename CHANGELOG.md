@@ -4,6 +4,162 @@ All notable changes to Shannon Code are documented here. Entries are grouped by 
 
 ## [Unreleased] — §4.14 W1-P2 · OTLP bridge + full RedactionPolicy + desktop Turn Timeline
 
+### Office Wave 3 — differentiation pass (2026-09-29)
+
+- **C2** batch table runs: CSV file cards gain "Batch run" — a per-row
+  instruction dialog that drafts a structured row-by-row prompt (results land
+  in `<name>-enriched.<ext>`).
+- **C3** companion window (Quick Capture): tray-menu-launched always-on-top
+  420x320 window; prompts cross to the main window via targeted Tauri events
+  and land as composer drafts. Minimal capability (`core:event`) for the
+  companion window; ACL coverage extended. Global hotkey wiring left for the
+  existing shortcuts system.
+- **C4** session sources: RightDock context tab gains a per-session source
+  list (paths/URLs) with one-click cited references into the composer.
+- **C5** `style-extract` bundled skill: extracts theme fonts / color scheme /
+  layouts / header-footer facts from an existing .pptx or .docx into brand
+  notes (python-stdlib read-only, honest degradation; v1 extracts, does not
+  restyle).
+- **C6** timeline HTML export: self-contained standalone export of a turn
+  timeline (inline styles, escaped content) via the save dialog.
+- **C7** Extensions skills page: Productivity grouping pinned to the top of
+  the catalog grid.
+- **C8** citation pills: `[Source: name] (ref)` lines render as clickable
+  pills (path → open, URL → browser), quote/code contexts untouched.
+- **C1** product narrative: `docs/product/office-agent-story.md` plus a
+  website feature entry and README office sections (no email-sending claims).
+- Per review decision, per-page PPT regeneration (C9) remains future work.
+
+### Office Wave 2 — delivery loop: generation, data sources, routing, files (2026-09-29)
+
+- **B1** native `write_xlsx` tool (rust_xlsxwriter 0.99, pure-Rust deflate):
+  model writes real spreadsheets with formulas and typed cells — no host
+  Python required. `xlsx-table` skill now prefers the tool and keeps the
+  stdlib runbook as fallback.
+- **B2 v1** PPT outline builder: composer "+" menu dialog (editable outline,
+  one slide per line) that drops a structured draft into the composer for
+  the user to send — generation itself stays with the ppt skill.
+- **B3 v1** data sources go live: real Obsidian fetcher (vault walk,
+  keyword/recency ranking, hidden-dir/symlink guards) and IMAP fetcher
+  (rustls via rustls-connector on the workspace rustls 0.23 line, timeouts
+  at the socket layer, mailparse body decoding, draft RFC822 builder).
+  Query dispatch now reads `kind` from the `[data_source]` section —
+  previously it read `[config]`, so every data-source query failed with
+  "missing kind" (pre-existing bug, all kinds). Badges: Obsidian/IMAP are
+  genuinely "Verified" again; results gain "Add to chat" (context block
+  into the composer draft) and installed cards a "Fetch now" action.
+- **B4'** `meeting-minutes` bundled skill: .srt/.vtt/.txt transcripts →
+  minutes with decisions/action items (recording pipelines explicitly out
+  of scope).
+- **B5** three productivity routine templates: weekly-report,
+  daily-news-briefing, meeting-notes-archive.
+- **B6'** scheduled routines can notify a configured webhook on completion
+  (`notify_webhook` flag, reuses the desktop webhook config; skipped with
+  a run-log note when unconfigured).
+- **B7'** generated-file cards gain a "Review changes" action wired to the
+  existing RightDock diff view.
+- **B9'** reference-style file library: `/files` page over an append-only
+  index (`~/.shannon/desktop/file-index.json`, scoped + atomic), favorite
+  toggles, missing-file detection, zero data duplication.
+
+### Office Wave 1.5 — minimal document parsing + paginated injection + PDF preview (2026-09-29)
+
+- **A2'** new `document_parse` module: extracts sectioned text from
+  docx/pptx (zip + roxmltree), xlsx/ods (calamine 0.26, formula cache
+  values), csv (csv crate). Extracted text is cached at
+  `~/.shannon/cache/extracted/<hash>.txt`; `send_message` injects a bounded
+  summary block with explicit truncation ranges and the cache path so the
+  model can page through with Read/Grep — no new tools. Guardrails: zip
+  entry/count/ratio bombs, XML/container/csv size caps, all failure paths
+  return placeholder blocks.
+- **PDF injection fixed**: the media-type filter never matched PDFs
+  (detect_media_type only knew images), so the whole PDF text-injection
+  path was dead code — switched to extension matching and added page-count
+  metadata (pdfinfo) to the injected block.
+- **B8b** PDF inline preview: `pdfjs-dist` 4.10.38 in a lazy-loaded
+  `PdfPreview` modal (worker via `?url` import), page navigation with a
+  200-page cap and an "open externally" escape hatch; FileCard gains a
+  Preview action for .pdf attachments.
+
+### Office Wave 1 — honest office-document surface (2026-09-29)
+
+Plan: `docs/research/2026-09-29-office-scenario-competitive-research.md` §10 v2
+(reviewed in `docs/reviews/2026-09-29-office-plan-adversarial-review.md`).
+
+- **A1a** chat: dragging an office file (doc/xls/ppt/odt/rtf family) now shows a
+  dismissible composer notice that its content is NOT sent to the model (the
+  attachment used to disappear into a display-only chip silently); MIME table
+  covers the office types.
+- **A5/B8a** chat: new `FileCard` for non-image attachments and for completed
+  file-mutating tool calls — open / reveal-in-folder / save-as (new
+  `copy_file` command, `$HOME`/`$TEMP`-scoped).
+- **A3'** Welcome: the fake "install document skills" section (unpublished
+  repos) is replaced by a self-probing capabilities card — lists the built-in
+  `/docx-report` `/xlsx-table` `/ppt-outline` when the host has python3,
+  shows an install hint otherwise, renders nothing if the probe fails
+  (new `probe_host_runtime` command).
+- **A4'** honesty: Obsidian/IMAP data sources no longer claim "Verified"
+  (query is still in development — badge now says so); six native skill
+  catalog entries with stub runbooks are marked "[In development]";
+  `inbox-triage-hourly` template annotated as preview; desktop README no
+  longer claims email drafting.
+
+
+
+### Terminal (desktop + CLI) (2026-09-29)
+
+The 2026-09-29 terminal deep-review delivery
+(`docs/plans/2026-09-29-terminal-review-and-improvement-plan.md`): the two
+UI-freezing CLI bugs are fixed, the desktop integrated terminal is completed
+(settings, accessibility, agent integration) and the retired workspace-grid
+leftovers are gone. The PTY terminal item in `ROADMAP.md` moves from
+"genuinely-pending" to partially delivered. (The `### Terminal UI` section
+under v0.1.0 below covers the CLI REPL only — that naming predates the
+desktop terminal.)
+
+**Added — desktop integrated terminal** (PTY backend shipped 2026-09-06;
+this entry is its first changelog appearance plus this branch's completion
+work):
+
+- The chat page has a bottom-drawer terminal (``Ctrl+` `` toggles it; the
+  shortcut is listed in Keyboard Shortcuts Help): a portable-pty session
+  with byte-faithful xterm.js output, at most 4 concurrent terminals, a
+  theme that follows the app, and a confirmation before a multi-line paste
+  (a pasted newline executes in a shell).
+- **Settings → Advanced** gains a Terminal card over the new `[terminal]`
+  table in `~/.shannon/config.toml` (`shell`, `fontSize`, `scrollback`,
+  `drawerHeight`, `screenReaderMode`). A failed settings load now blocks
+  saving instead of silently overwriting the file with defaults.
+- Agent integration: fenced code blocks in chat get a "Run in terminal"
+  button, and a terminal selection can be sent to the composer as a
+  prefill ("send to agent").
+- Lifecycle: process exits emit a machine-readable `terminal:exit` event
+  (the frontend no longer infers exit from output); the last 1 MiB of raw
+  output per terminal is kept in memory and replayed when the panel
+  remounts or reconnects (`terminal_history`); PTYs spawned by a session
+  window are reaped when that window closes; the per-terminal base64
+  decode is guarded; tabs are filtered to the current project; the tablist
+  is keyboard navigable with live-region announcements.
+
+**Fixed — CLI TUI**
+
+- `!shell` no longer runs on the UI thread: it executes in the background
+  with a 30 s timeout (`SHANNON_INLINE_SHELL_TIMEOUT` overrides, bad values
+  fall back to the default) and Esc cancels a running job — open overlays
+  take Esc precedence first. `!sleep infinity` no longer freezes the
+  interface.
+- A statusline script can no longer deadlock the UI (wait-then-read
+  replaced with a concurrent read, 2 s timeout, 32 KiB capture cap); the
+  agent-board summary `block_on` is throttled off the per-frame path; idle
+  frames skip redraws via a dirty flag + heartbeat.
+- Reduced motion is decoupled from `NO_COLOR`: opt in via
+  `SHANNON_REDUCED_MOTION` or the session-scoped `/accessibility` toggle.
+- Previously hardcoded paste/diagnostics/pipe/exit strings are i18n'd.
+
+**Removed**
+
+- The retired workspace-grid feature: panel variant, workspace layout
+  commands + persistence, ACL entries, mocks, and 2 i18n keys.
 ### Followups S1-S3 (2026-09-28)
 
 All 15 approved followup tasks from the comprehensive review roadmap landed:

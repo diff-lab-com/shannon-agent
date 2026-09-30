@@ -368,6 +368,7 @@ pub fn synthesize_default_profile(
         fallback_models: Vec::new(),
         quirks: Default::default(),
         tiers: ProviderTiers::default(),
+        models: Vec::new(),
     };
 
     Some(ProviderModelConfig {
@@ -396,6 +397,7 @@ fn ollama_default_profile(model_id: &str) -> ProviderModelConfig {
         fallback_models: Vec::new(),
         quirks: Default::default(),
         tiers: ProviderTiers::default(),
+        models: Vec::new(),
     };
     ProviderModelConfig {
         version: ProviderModelConfig::VERSION,
@@ -492,6 +494,7 @@ mod tests {
             fallback_models: Vec::new(),
             quirks: Default::default(),
             tiers: ProviderTiers::default(),
+            models: Vec::new(),
         }
     }
 

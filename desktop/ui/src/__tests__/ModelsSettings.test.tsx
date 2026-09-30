@@ -308,3 +308,31 @@ describe('ModelsSettings', () => {
     expect(screen.queryByTestId('test-all-results')).toBeNull()
   })
 })
+
+// R2-2 — Settings "Refresh model catalog": the models.dev overlay refresh
+// (previously CLI-only `/model refresh`) gets a button with spinner →
+// success (model count) / inline failure reason.
+describe('ModelsSettings — refresh model catalog (R2-2)', () => {
+  it('renders the refresh button near the catalog list', () => {
+    render(wrap(<ModelsSettings />))
+    expect(
+      screen.getByRole('button', { name: /Refresh the model catalog from models.dev/i }),
+    ).toBeInTheDocument()
+  })
+
+  it('shows the success line with the model count after a refresh', async () => {
+    vi.mocked(api.refreshModelCatalog).mockResolvedValueOnce({ count: 42, generation: 2 })
+    render(wrap(<ModelsSettings />))
+    fireEvent.click(screen.getByRole('button', { name: /Refresh the model catalog from models.dev/i }))
+    const line = await screen.findByTestId('refresh-model-catalog-result')
+    expect(line).toHaveTextContent('42')
+  })
+
+  it('shows the upstream failure reason inline when the refresh fails', async () => {
+    vi.mocked(api.refreshModelCatalog).mockRejectedValueOnce(new Error('network down'))
+    render(wrap(<ModelsSettings />))
+    fireEvent.click(screen.getByRole('button', { name: /Refresh the model catalog from models.dev/i }))
+    const line = await screen.findByTestId('refresh-model-catalog-result')
+    expect(line).toHaveTextContent('network down')
+  })
+})

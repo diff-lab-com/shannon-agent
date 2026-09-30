@@ -105,6 +105,11 @@ pub(crate) fn resolve_write_target_in_working_dir(
 pub mod agent_message_watcher;
 pub mod commands;
 
+/// Office Wave A2' — docx/pptx/xlsx/ods/csv text extraction, guard rails,
+/// extracted-text cache and the send_message injection-block builder. No
+/// Tauri dependency; every failure is a `Result`, never a panic.
+pub mod document_parse;
+
 #[cfg(feature = "tauri")]
 pub mod commands_agents;
 
@@ -199,6 +204,10 @@ pub mod session_registry;
 #[cfg(feature = "tauri")]
 pub mod session_window_commands;
 
+// Office Wave 3 C3 — companion Quick Capture window (open/toggle commands).
+#[cfg(feature = "tauri")]
+pub mod companion_window_commands;
+
 #[cfg(feature = "tauri")]
 pub mod commands_usage;
 
@@ -240,12 +249,6 @@ pub mod preview_commands;
 /// the throttled `terminal:output` event.
 #[cfg(feature = "tauri")]
 pub mod terminal_commands;
-
-/// P1-5 C-2 — draggable panel workspace: per-project layout persistence
-/// (`~/.shannon/desktop/workspace-layouts.json`), frozen `workspace_*`
-/// command contract. Pure file storage; no engine interaction.
-#[cfg(feature = "tauri")]
-pub mod workspace_commands;
 
 /// P0-4 — cost observability: session budget, context breakdown and
 /// per-session usage aggregation commands.

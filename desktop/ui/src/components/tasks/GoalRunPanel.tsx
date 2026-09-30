@@ -17,13 +17,13 @@ import type { GoalRunDto, GoalRunStatus } from '@/types'
 function goalStatusBadge(status: GoalRunStatus): { bg: string; dot: string; icon: string; labelId: string } {
   switch (status) {
     case 'running':
-      return { bg: 'bg-primary/10 text-primary border-primary/20', dot: 'bg-primary animate-pulse', icon: 'autorenew', labelId: 'goal.status.running' }
+      return { bg: 'bg-primary-container text-on-primary-container border-primary/20', dot: 'bg-primary animate-pulse', icon: 'autorenew', labelId: 'goal.status.running' }
     case 'paused':
-      return { bg: 'bg-tertiary/10 text-tertiary border-tertiary/20', dot: 'bg-tertiary', icon: 'pause_circle', labelId: 'goal.status.paused' }
+      return { bg: 'bg-tertiary-container text-on-tertiary-container border-tertiary/20', dot: 'bg-tertiary', icon: 'pause_circle', labelId: 'goal.status.paused' }
     case 'completed':
-      return { bg: 'bg-success/10 text-success border-success/20', dot: 'bg-success', icon: 'check_circle', labelId: 'goal.status.completed' }
+      return { bg: 'bg-success-container text-on-success-container border-success/20', dot: 'bg-success', icon: 'check_circle', labelId: 'goal.status.completed' }
     case 'blocked':
-      return { bg: 'bg-error/10 text-error border-error/20', dot: 'bg-error', icon: 'block', labelId: 'goal.status.blocked' }
+      return { bg: 'bg-error-container text-on-error-container border-error/20', dot: 'bg-error', icon: 'block', labelId: 'goal.status.blocked' }
     case 'stopped':
       return { bg: 'bg-surface-container-high text-on-surface-variant border-outline-variant/30', dot: 'bg-outline-variant', icon: 'stop_circle', labelId: 'goal.status.stopped' }
     case 'interrupted':
@@ -67,7 +67,7 @@ export function GoalRunCard({ run, onPause, onResume, onStop, onUpdateObjective,
     >
       <div className="flex items-start justify-between gap-md">
         <div className="flex items-start gap-md min-w-0">
-          <div className="w-10 h-10 rounded-xl bg-primary/10 flex items-center justify-center text-primary shrink-0">
+          <div className="w-10 h-10 rounded-xl bg-primary-container flex items-center justify-center text-on-primary-container shrink-0">
             <span className="material-symbols-outlined icon-lg">flag</span>
           </div>
           <div className="min-w-0">

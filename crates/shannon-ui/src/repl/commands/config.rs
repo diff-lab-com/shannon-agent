@@ -134,6 +134,15 @@ pub(crate) fn apply_model_selection(
     // consolidates the four former panic-swallow sites into one, and now
     // logs at ERROR instead of failing silently (ADR-0008 / plan P2-6).
     let effective_model = repl.state.model.clone().unwrap_or_default();
+    // R2-4: the switched-to provider owns the per-model metadata registry
+    // (declared pricing / context / tier). Re-registration happens here —
+    // the single mutation path for switches — because only client
+    // *construction* funnels through `build_client_from_resolved`, and a
+    // session switch mutates the engine in place. Read-only; a provider
+    // with no declarations simply clears the registry.
+    shannon_core::declared_models::replace_for_provider_slug(
+        &shannon_core::provider_resolver::llm_provider_id(&provider),
+    );
     let ctx_opt = if let Some(ref mut engine) = repl.query_engine {
         engine.set_model_for_provider(effective_model.clone(), provider.clone());
         let panicked = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {

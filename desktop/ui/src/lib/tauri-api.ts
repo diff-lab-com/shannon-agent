@@ -21,6 +21,7 @@ import type {
   MobilePairToken,
   ContainerInfo,
   SessionWindowInfo,
+  CompanionWindowInfo,
   RemoteHealth,
   RemoteTargetListItem,
   SshHostCandidate,
@@ -43,6 +44,7 @@ import type {
   FileDiff,
   FileNode,
   TerminalInfo,
+  TerminalSettings,
   WorkingDirInfo,
   CatalogEntry,
   PluginBundleSummary,
@@ -50,6 +52,7 @@ import type {
   MobileTlsStatus,
   ProjectRecord,
   ProviderStatus,
+  FileIndexEntry,
 } from '@/types'
 import type {
   ScheduledRoutine,
@@ -542,6 +545,57 @@ export async function getStatus(): Promise<StatusResponse> {
   return invoke('get_status')
 }
 
+// --- R2-1: session-level model override (composer chip) ---
+
+/** A per-session model override (R2-1). `provider` is the desktop
+ *  provider-kind slug (`anthropic` | `openai` | … | `openai-compatible`),
+ *  `model` the canonical catalog id. `null` results mean "session inherits
+ *  the global default". */
+export interface SessionModelOverride {
+  provider: string
+  model: string
+}
+
+/** Pin the CURRENT session's model: subsequent queries of this session use
+ *  `provider` + `model`; other sessions and new chats keep the global
+ *  default. The chip's "Set as default" action goes through `configure`
+ *  instead (global semantics). */
+export async function setSessionModel(
+  sessionId: string | null | undefined,
+  provider: string,
+  model: string,
+): Promise<void> {
+  await invoke('set_session_model', { sessionId: sessionId ?? null, provider, model })
+}
+
+/** Clear the session override — the session inherits the global default
+ *  again (including future default changes). Idempotent. */
+export async function clearSessionModel(sessionId: string | null | undefined): Promise<void> {
+  await invoke('clear_session_model', { sessionId: sessionId ?? null })
+}
+
+/** Read the session's model override, `null` when none is set. */
+export async function getSessionModel(
+  sessionId: string | null | undefined,
+): Promise<SessionModelOverride | null> {
+  return invoke<SessionModelOverride | null>('get_session_model', { sessionId: sessionId ?? null })
+}
+
+// --- R2-2: Settings "Refresh model catalog" ---
+
+/** Result of `refresh_model_catalog`: how many models the dynamic
+ *  models.dev overlay now carries + its monotonic generation counter. */
+export interface ModelCatalogRefreshResult {
+  count: number
+  generation: number
+}
+
+/** Re-fetch the models.dev dynamic catalog (same path as CLI
+ *  `/model refresh`). Throws with the upstream failure reason. */
+export async function refreshModelCatalog(): Promise<ModelCatalogRefreshResult> {
+  return invoke('refresh_model_catalog')
+}
+
 export async function getTools(): Promise<ToolInfo[]> {
   return invoke('list_tools')
 }
@@ -709,6 +763,18 @@ export async function revealSessionInMain(sessionId: string): Promise<void> {
   await invoke('reveal_session_in_main', { sessionId })
 }
 
+// --- Office Wave 3 C3 companion Quick Capture window (frozen backend contract) ---
+
+/** Create (or focus) the always-on-top-capable `companion` window. */
+export async function openCompanionWindow(): Promise<CompanionWindowInfo> {
+  return invoke('open_companion_window')
+}
+
+/** Toggle the companion window's stay-on-top flag (only acts on `companion`). */
+export async function setCompanionAlwaysOnTop(enabled: boolean): Promise<void> {
+  await invoke('set_companion_always_on_top', { enabled })
+}
+
 export async function setSessionWorkingDir(id: string, path: string): Promise<void> {
   await invoke('set_session_working_dir', { id, path })
 }
@@ -788,6 +854,27 @@ export async function openArtifactExternally(title: string, source: string, ext:
   return invoke('open_artifact_externally', { title, source, ext })
 }
 
+// --- 2026-09-29 office Wave 1 (docs/research/2026-09-29-office-scenario-
+// competitive-research.md §10 v2): host-runtime probe + file copy (save-as) ---
+
+/** Availability of host-run tools used by built-in document skills. */
+export interface HostRuntimeProbe {
+  python3: boolean
+  pythonVersion: string | null
+  pandoc: boolean
+  libreoffice: boolean
+}
+
+/** Probe the host for python3/pandoc/libreoffice (short timeouts, no side effects). */
+export async function probeHostRuntime(): Promise<HostRuntimeProbe> {
+  return invoke<HostRuntimeProbe>('probe_host_runtime')
+}
+
+/** Copy a local file to a caller-chosen destination path (save-as). */
+export async function copyFile(srcPath: string, destPath: string): Promise<void> {
+  await invoke('copy_file', { srcPath, destPath })
+}
+
 // --- 2026-09-26 round2 §5-1 A — artifact:// interactive HTML (design doc
 // docs/plans/2026-09-26-desktop-chat-ui-round2-design.md) ---
 
@@ -831,6 +918,27 @@ export async function probeUrlFrameable(url: string): Promise<FrameProbe> {
 /** Existence probe for chat file references (anti-hallucination backstop). */
 export async function pathExists(path: string): Promise<boolean> {
   return invoke('path_exists', { path })
+}
+
+// --- 2026-09-30 office Wave 2 (B9' Files page): reference-style file index.
+// The Rust side owns the on-disk index; these wrappers are the whole
+// frontend contract. Registration is fire-and-forget from the UI (attach
+// flow / FileCard render) — callers swallow rejections so a failed index
+// write can never interrupt a chat.
+
+/** Every indexed file, `registered_at` descending. */
+export async function listFileIndex(): Promise<FileIndexEntry[]> {
+  return invoke('list_file_index')
+}
+
+/** Upsert one file into the index (`source`: 'attachment' | 'generated'). */
+export async function registerFileIndexEntry(path: string, source: string): Promise<void> {
+  await invoke('register_file_index_entry', { path, source })
+}
+
+/** Toggle an entry's favorite flag (persisted Rust-side). */
+export async function setFileIndexFavorite(path: string, favorite: boolean): Promise<void> {
+  await invoke('set_file_index_favorite', { path, favorite })
 }
 
 export interface TextFileContent {
@@ -2695,11 +2803,35 @@ export async function terminalList(): Promise<TerminalInfo[]> {
   return invoke('terminal_list')
 }
 
-// Draggable panel workspace (P1-5 C-2 — frozen contract) was retired in
-// e786ec25 alongside the WorkspaceGrid / Toolbar components. The
-// workspace_get_layout / workspace_set_layout Tauri commands and their
-// types still live on disk but are no longer wired into the chat page.
-// Keep the mock layer aware so existing data files don't trip type-check.
+/**
+ * P3-1: persisted terminal preferences (`[terminal]` in
+ * `~/.shannon/config.toml`). The backend clamps numerics (fontSize 8–32,
+ * scrollback 0–100000, drawerHeight 120–1200) and blanks the shell —
+ * callers must render the values returned here, not what they sent.
+ */
+export async function terminalGetSettings(): Promise<TerminalSettings> {
+  return invoke('terminal_get_settings')
+}
+
+/** Persist preferences; returns the sanitized (effective) values. */
+export async function terminalSetSettings(settings: TerminalSettings): Promise<TerminalSettings> {
+  return invoke('terminal_set_settings', { settings })
+}
+
+/**
+ * Replay bytes for one session, base64 (US6). Empty string when the id is
+ * unknown or the session already ended — the frontend calls it
+ * speculatively on reconnect, so a missing ring must not be an error.
+ * `endSeq` (additive, review fix) is the highest output-chunk seq fully
+ * contained in `data`: the replay consumer drops queued `terminal:output`
+ * events with `seq <= endSeq` and flushes the rest, so the snapshot and
+ * the live stream stitch without loss or duplication. Absent on the demo
+ * backend → flush-everything fallback.
+ */
+export async function terminalHistory(terminalId: string): Promise<{ data: string; endSeq?: number }> {
+  return invoke('terminal_history', { terminalId })
+}
+
 // --- P-E3 project registry (projects.db, adopt-not-migrate) ---
 
 /** Every registered project, path-ascending. Archived rows are included

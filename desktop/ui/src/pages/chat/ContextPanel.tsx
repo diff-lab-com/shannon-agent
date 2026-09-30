@@ -1,11 +1,14 @@
 import { useState } from 'react'
+import { toast } from 'sonner'
 import type { ToolCall, UsagePayload } from '@/types'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
+import { Input } from '@/components/ui/input'
 import { cn } from '@/lib/utils'
 import { useT } from '@/i18n'
 import { useSessions } from '@/context/SessionContext'
 import { useSessionBudget } from '@/hooks/useSessionBudget'
+import { pushComposerDraft } from '@/lib/composerBridge'
 import ContextBreakdownCard from '@/components/chat/ContextBreakdownCard'
 import BudgetDialog from '@/components/chat/BudgetDialog'
 
@@ -16,10 +19,9 @@ import BudgetDialog from '@/components/chat/BudgetDialog'
  */
 export function ContextPanelContent({ usage, activeToolCalls }: { usage: UsagePayload | null; activeToolCalls: ToolCall[] }) {
   const t = useT()
-  const { currentSessionId } = useSessions()
+  const { currentSessionId, sessionSources, addSessionSource, removeSessionSource } = useSessions()
   const { budget, usage: sessionUsage, refresh: refreshBudget } = useSessionBudget(currentSessionId)
   const [budgetOpen, setBudgetOpen] = useState(false)
-
   // Budget progress (spent/budget) — only rendered while a cap is set.
   const budgetSpent = sessionUsage?.cost_usd ?? 0
   const budgetPct = budget != null && budget > 0 ? Math.min(100, (budgetSpent / budget) * 100) : null
@@ -99,6 +101,18 @@ export function ContextPanelContent({ usage, activeToolCalls }: { usage: UsagePa
         </div>
       </section>
 
+      {/* office Wave 3 C4: session-scoped source scratchpad. Draft-board
+          semantics — in-memory, per session, one click cites into the
+          composer draft; NOT wired into the send pipeline. */}
+      <SessionSourcesSection
+        sessionId={currentSessionId}
+        // Optional chain: the slice is new — test harnesses (and any stale
+        // provider) may hand back a partial session context.
+        sources={currentSessionId ? sessionSources?.[currentSessionId] ?? [] : []}
+        onAdd={item => { if (currentSessionId) addSessionSource?.(currentSessionId, item) }}
+        onRemove={item => { if (currentSessionId) removeSessionSource?.(currentSessionId, item) }}
+      />
+
       {/* Active Tool Calls */}
       {activeToolCalls.length > 0 && (
         <section>
@@ -132,3 +146,124 @@ export function ContextPanelContent({ usage, activeToolCalls }: { usage: UsagePa
 // gone — the chat page hosts `ContextPanelContent` inside RightDock's
 // Context tab and nothing rendered the wrapper. Only the content component
 // remains.
+
+/* ────────────────  office Wave 3 C4: Session sources  ──────────────── */
+
+/**
+ * The "Session sources" scratchpad block. Add accepts a file path or URL;
+ * each row can be cited into the composer draft as a single
+ * `[Source] <item>` line (pushComposerDraft — never sent) or removed.
+ * v1 is intentionally a draft board: in-memory per session, cleared on
+ * refresh, no send_message injection.
+ */
+export function SessionSourcesSection({
+  sessionId,
+  sources,
+  onAdd,
+  onRemove,
+}: {
+  sessionId: string | null
+  sources: string[]
+  onAdd: (item: string) => void
+  onRemove: (item: string) => void
+}) {
+  const t = useT()
+  const [draft, setDraft] = useState('')
+
+  const submit = () => {
+    if (!draft.trim()) return
+    onAdd(draft)
+    setDraft('')
+  }
+
+  const cite = (item: string) => {
+    pushComposerDraft(`[Source] ${item}`)
+    toast.success(t('office.sources.added'))
+  }
+
+  const isUrl = (item: string) => /^https?:\/\//i.test(item)
+
+  return (
+    <section aria-label={t('office.sources.panelTitle')} data-testid="session-sources">
+      <h3 className="font-label-md text-on-surface uppercase tracking-wider opacity-60 mb-md">{t('office.sources.panelTitle')}</h3>
+      <div className="p-md bg-surface-container rounded-xl border border-outline-variant/10 space-y-sm">
+        <form
+          className="flex items-center gap-xs"
+          onSubmit={e => {
+            e.preventDefault()
+            submit()
+          }}
+        >
+          <Input
+            value={draft}
+            onChange={e => setDraft(e.target.value)}
+            placeholder={t('office.sources.addPlaceholder')}
+            aria-label={t('office.sources.addPlaceholder')}
+            data-testid="session-source-input"
+            disabled={!sessionId}
+            className="flex-1 min-w-0 h-8 rounded-lg bg-surface-container-lowest/70"
+          />
+          <Button
+            type="submit"
+            variant="outline"
+            size="sm"
+            data-testid="session-source-add"
+            disabled={!sessionId || !draft.trim()}
+            className="shrink-0 px-sm py-xs rounded-lg font-label-md border-outline-variant/30 bg-surface-container-lowest/60 hover:bg-surface-container-low"
+          >
+            {t('office.sources.add')}
+          </Button>
+        </form>
+        {sources.length === 0 ? (
+          <p className="text-label-sm text-on-surface-variant" data-testid="session-sources-empty">
+            {t('office.sources.empty')}
+          </p>
+        ) : (
+          <ul className="space-y-xs">
+            {sources.map(item => (
+              <li
+                key={item}
+                data-testid="session-source-item"
+                className="flex items-center gap-xs px-xs py-[3px] rounded-lg bg-surface-container-lowest/60 border border-outline-variant/10"
+              >
+                <span
+                  className="material-symbols-outlined icon-sm text-on-surface-variant shrink-0"
+                  aria-hidden="true"
+                >
+                  {isUrl(item) ? 'link' : 'draft'}
+                </span>
+                <span className="flex-1 min-w-0 truncate font-label-sm text-on-surface" title={item}>
+                  {item}
+                </span>
+                <Button
+                  type="button"
+                  variant="ghost"
+                  size="sm"
+                  onClick={() => cite(item)}
+                  title={t('office.sources.addToChat')}
+                  aria-label={`${t('office.sources.addToChat')}: ${item}`}
+                  data-testid="session-source-cite"
+                  className="shrink-0 gap-xs px-xs py-[2px] text-tertiary hover:bg-tertiary-container/40"
+                >
+                  <span className="material-symbols-outlined icon-sm" aria-hidden="true">format_quote</span>
+                  <span className="hidden xl:inline">{t('office.sources.addToChat')}</span>
+                </Button>
+                <Button
+                  type="button"
+                  variant="ghost"
+                  size="icon-sm"
+                  onClick={() => onRemove(item)}
+                  aria-label={`${t('extensions.datasources.remove')}: ${item}`}
+                  data-testid="session-source-remove"
+                  className="shrink-0 text-on-surface-variant hover:text-error hover:bg-surface-container"
+                >
+                  <span className="material-symbols-outlined icon-sm" aria-hidden="true">close</span>
+                </Button>
+              </li>
+            ))}
+          </ul>
+        )}
+      </div>
+    </section>
+  )
+}

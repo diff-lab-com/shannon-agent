@@ -7,11 +7,10 @@ import { MOCK_SCHEDULED_ROUTINES, MOCK_TRIGGERED_ROUTINES, MOCK_HOOK_EVENTS, MOC
 import { MOCK_INBOX_ITEMS, MOCK_OPC_METRICS, MOCK_PERF_TRACES, MOCK_DIAGNOSTICS,
   MOCK_CODE_ACTIONS, MOCK_GOALS } from './data/analytics'
 import { MOCK_CONFIG, MOCK_MODELS, MOCK_STATUS, MOCK_TOOLS, MOCK_PROVIDERS } from './data/config'
-import type { InboxItem, ProviderInput, SessionInfo, TerminalInfo } from '@/types'
-import { MOCK_TERMINAL_OUTPUT_EVENT } from '../runtime/terminalEvents'
+import type { InboxItem, ProviderInput, SessionInfo, TerminalInfo, TerminalSettings, FileIndexEntry } from '@/types'
+import { MOCK_TERMINAL_OUTPUT_EVENT, MOCK_TERMINAL_EXIT_EVENT } from '../runtime/terminalEvents'
 import { MOCK_MEMORIES, MOCK_MEMORY_PROJECTS, MOCK_MEMORY_STATS, MOCK_FEATURED_VENDORS } from './data/memory'
 import type { MemoryGraph } from '@/lib/tauri-api'
-import type { WorkspaceLayout } from '@/lib/types/workspaceLayout'
 import {
   MOCK_SKILL_CATALOG,
   MOCK_AGENT_CATALOG,
@@ -54,6 +53,37 @@ let nextInboxId = Math.max(...MOCK_INBOX_ITEMS.map(i => i.id)) + 1
 // P0-4: demo session budget — null = no cap; set via the budget control.
 let demoBudgetUsd: number | null = null
 
+// office Wave 2 B9' — demo file index (list_file_index / register /
+// favorite). Newest first is enforced by the list handler; this seed is
+// already ordered that way. `old-deck.md` intentionally dangles so the
+// missing-file state is demoable.
+const demoFileIndex: FileIndexEntry[] = [
+  {
+    path: '/Users/demo/Documents/q3-review.pptx',
+    name: 'q3-review.pptx',
+    size_bytes: 2_483_112,
+    registered_at: new Date(Date.now() - 2 * 3600_000).toISOString(),
+    favorite: true,
+    source: 'generated',
+  },
+  {
+    path: '/Users/demo/Downloads/notes.md',
+    name: 'notes.md',
+    size_bytes: 8_210,
+    registered_at: new Date(Date.now() - 26 * 3600_000).toISOString(),
+    favorite: false,
+    source: 'attachment',
+  },
+  {
+    path: '/Users/demo/Documents/old-deck.md',
+    name: 'old-deck.md',
+    size_bytes: null,
+    registered_at: new Date(Date.now() - 72 * 3600_000).toISOString(),
+    favorite: false,
+    source: 'generated',
+  },
+]
+
 // P1-5 C-1: demo live-preview lifecycle (single instance, like the backend).
 const demoPreview = {
   running: false,
@@ -66,14 +96,23 @@ const PREVIEW_PNG = 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mN
 
 // P1-5 D: demo PTY sessions + a tiny simulated shell. Output rides the same
 // shape as the real `terminal:output` event (base64 data) re-dispatched as a
-// window CustomEvent — `runtime/terminalEvents.listenTerminalOutput` is the
-// single subscriber that knows about this transport.
+// window CustomEvent, and process exit re-dispatches `terminal:exit`
+// (`{ terminalId }`) — `runtime/terminalEvents.listenTerminalOutput` /
+// `.listenTerminalExit` are the subscribers that know about this transport.
 const demoTerminals = new Map<string, TerminalInfo & { buffer: string }>()
 let nextTerminalSeq = 1
 
-// P1-5 C-2: per-project workspace layouts, session-scoped (in-memory stand-in
-// for ~/.shannon/desktop/workspace-layouts.json).
-const demoWorkspaceLayouts = new Map<string, WorkspaceLayout>()
+// P3-1: demo stand-in for the persisted `[terminal]` config table. Same
+// clamp ranges as the backend's `TerminalSettings::sanitized` so the
+// settings card shows the same effective-value behavior in demo mode.
+const demoTerminalSettings: TerminalSettings = {
+  shell: null,
+  fontSize: 12,
+  scrollback: 5000,
+  drawerHeight: 320,
+  screenReaderMode: false,
+}
+const clamp = (v: number, lo: number, hi: number) => Math.min(hi, Math.max(lo, Math.floor(v)))
 
 // P-E3/P-U2: in-memory stand-in for the engine project registry
 // (~/.shannon/projects.db). Same wire shape as the Rust ProjectRecord
@@ -156,7 +195,17 @@ function demoShellRun(terminalId: string, input: string) {
       out = `sh: command not found: ${line.split(/\s+/)[0]}\r\n$ `
     }
     demoTerminalEmit(terminalId, out)
-    if (out.includes('process exited')) demoTerminals.delete(terminalId)
+    if (out.includes('process exited')) {
+      demoTerminals.delete(terminalId)
+      // P3-6: the printed notice is for humans only — the tab is ended by
+      // the dedicated `terminal:exit` event, exactly like the real backend.
+      // Fired after the output emit so the exit text renders first.
+      setTimeout(() => {
+        window.dispatchEvent(new CustomEvent(MOCK_TERMINAL_EXIT_EVENT, {
+          detail: { terminalId },
+        }))
+      }, 120 + Math.random() * 60)
+    }
   }
 }
 
@@ -261,6 +310,19 @@ function findTask(id: string) {
   return state.tasks.find(t => t.id === id)
 }
 
+// R2-1: per-session model override demo state — mirrors the backend's
+// `SessionState.model_override` (in-memory, keyed by session id). The
+// composer chip writes via set_session_model and reads back via
+// get_session_model, so demo switches stay visible per session. A null
+// sessionId resolves to the active session backend-side; demo mirrors that
+// with an `__active__` bucket.
+const demoSessionModels = new Map<string, { provider: string; model: string }>()
+const demoSessionKey = (id?: string | null) => id ?? '__active__'
+
+// R2-2: fake models.dev overlay generation — bumped on every demo refresh so
+// the Settings button's success payload visibly changes.
+let demoCatalogGeneration = 1
+
 // Mutable notification prefs so DND/quiet-hours toggling feels live in demo mode.
 // Audit §P2-3 (round 6): start with events off so the new empty-state
 // guidance card is visible on first visit — instead of the page looking
@@ -277,6 +339,26 @@ let notificationPrefs = {
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 type MockHandler = (args: any) => unknown | Promise<unknown>
 export const handlers: Record<string, MockHandler> = {
+  // --- Office Wave 1: host runtime probe + file copy (save-as) ---
+  async probe_host_runtime() {
+    await delay(40)
+    return { python3: true, pythonVersion: 'Python 3.12.3', pandoc: false, libreoffice: false }
+  },
+  async copy_file() {
+    await delay(60)
+    return null
+  },
+  // --- Office Wave 3 C3: companion Quick Capture window ---
+  // Demo mode has no real webview to spawn — the mock just reports the
+  // fixed label the Rust command would return.
+  async open_companion_window() {
+    await delay(40)
+    return { label: 'companion' }
+  },
+  async set_companion_always_on_top() {
+    await delay(30)
+    return null
+  },
   // --- Chat ---
   async send_message() {
     await delay(120)
@@ -396,6 +478,28 @@ export const handlers: Record<string, MockHandler> = {
 
   // --- Models & Status ---
   async list_models() { await delay(); return clone(MOCK_MODELS) },
+  // R2-1: session-scoped model override (composer chip). Writes/reads the
+  // per-session demo map; null sessionId → the active-session bucket, like
+  // the backend's `resolve_explicit_or_active(None)` fallback.
+  async set_session_model(args: { sessionId?: string | null; provider: string; model: string }) {
+    await delay(60)
+    demoSessionModels.set(demoSessionKey(args.sessionId), { provider: args.provider, model: args.model })
+  },
+  async clear_session_model(args: { sessionId?: string | null }) {
+    await delay(30)
+    demoSessionModels.delete(demoSessionKey(args.sessionId))
+  },
+  async get_session_model(args: { sessionId?: string | null }) {
+    await delay()
+    return demoSessionModels.get(demoSessionKey(args.sessionId)) ?? null
+  },
+  // R2-2: demo refresh pretends to re-fetch models.dev — reports the seeded
+  // catalog size and bumps the generation so the success line moves.
+  async refresh_model_catalog() {
+    await delay(600)
+    demoCatalogGeneration += 1
+    return { count: MOCK_MODELS.length, generation: demoCatalogGeneration }
+  },
   // Status mirrors demoConfig so model switching (composer chip / header)
   // visibly updates both selectors in the demo — they stay in sync the way
   // the real engine does.
@@ -612,6 +716,46 @@ export const handlers: Record<string, MockHandler> = {
     }
   },
   async apply_diff() { await delay(100) },
+  // office Wave 2 B9' — reference-style file index. Mutable demo state so
+  // favorite toggles and attach-time registrations feel live; the third
+  // entry points at a path that does not exist so the "moved or deleted"
+  // treatment is visible in the demo Files page.
+  async list_file_index() {
+    await delay()
+    return clone(
+      [...demoFileIndex].sort(
+        (a, b) => new Date(b.registered_at).getTime() - new Date(a.registered_at).getTime(),
+      ),
+    )
+  },
+  async register_file_index_entry(args: { path: string; source: string }) {
+    await delay(20)
+    const existing = demoFileIndex.find(f => f.path === args.path)
+    if (existing) {
+      existing.source = args.source
+      return
+    }
+    const name = args.path.split('/').pop() ?? args.path
+    demoFileIndex.push({
+      path: args.path,
+      name,
+      size_bytes: 12_400,
+      registered_at: new Date().toISOString(),
+      favorite: false,
+      source: args.source,
+    })
+  },
+  async set_file_index_favorite(args: { path: string; favorite: boolean }) {
+    await delay(20)
+    const entry = demoFileIndex.find(f => f.path === args.path)
+    if (entry) entry.favorite = args.favorite
+  },
+  // office Wave 2: the Files page's missing-detection probe (and FileRefChip's
+  // anti-hallucination backstop) — in demo mode only indexed demo paths exist.
+  async path_exists(args: { path: string }) {
+    await delay(10)
+    return demoFileIndex.some(f => f.path === args.path)
+  },
   async get_file_tree() {
     await delay()
     return {
@@ -1525,15 +1669,30 @@ export const handlers: Record<string, MockHandler> = {
     await delay()
     return [...demoTerminals.values()].map(({ buffer: _buffer, ...info }) => info)
   },
-
-  // --- Draggable panel workspace (P1-5 C-2, per-project, session-scoped) ---
-  async workspace_get_layout(args: { projectKey: string }) {
+  async terminal_get_settings() {
     await delay()
-    return clone(demoWorkspaceLayouts.get(args.projectKey) ?? null)
+    return clone(demoTerminalSettings)
   },
-  async workspace_set_layout(args: { projectKey: string; layout: WorkspaceLayout }) {
+  async terminal_set_settings(args: { settings: TerminalSettings }) {
     await delay()
-    demoWorkspaceLayouts.set(args.projectKey, clone(args.layout))
+    const s = args?.settings
+    if (!s || typeof s !== 'object') throw new Error('invalid terminal settings')
+    const shell = (s.shell ?? '').trim()
+    Object.assign(demoTerminalSettings, {
+      shell: shell === '' ? null : shell,
+      fontSize: clamp(Number(s.fontSize) || 0, 8, 32),
+      scrollback: clamp(Number(s.scrollback) || 0, 0, 100000),
+      drawerHeight: clamp(Number(s.drawerHeight) || 0, 120, 1200),
+      screenReaderMode: s.screenReaderMode === true,
+    })
+    return clone(demoTerminalSettings)
+  },
+  async terminal_history(_args: { terminalId: string }) {
+    await delay()
+    // The demo shell keeps no replay ring — empty payload, same "unknown
+    // id is not an error" contract as the real command (Task 6 wires the
+    // consumer flow).
+    return { data: '' }
   },
 
   async discard_batch_run(args: { batchId: string }) {

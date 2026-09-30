@@ -177,7 +177,7 @@ export default function SkillProposalReviewPanel({
           {current.trigger_patterns.map((pattern, i) => (
             <span
               key={i}
-              className="px-sm py-xs bg-primary/10 text-primary text-xs rounded-md"
+              className="px-sm py-xs bg-primary-container text-on-primary-container text-xs rounded-md"
             >
               {pattern}
             </span>

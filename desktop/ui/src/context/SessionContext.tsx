@@ -31,6 +31,18 @@ export interface SessionContextValue {
   deleteSession: (id: string) => Promise<void>
   renameSession: (id: string, title: string) => Promise<void>
   refreshSessions: () => Promise<void>
+  /**
+   * office Wave 3 C4: per-session scratchpad of source references (file
+   * paths / URLs) kept by the RightDock Context tab's "Session sources"
+   * block. Draft-board semantics on purpose — in-memory only (a refresh
+   * clears it), it never touches the send_message pipeline; the real
+   * always-injected source set is a later wave. Keyed by session id.
+   */
+  sessionSources: Record<string, string[]>
+  /** Append one source (trimmed, deduped) to a session's list. */
+  addSessionSource: (sessionId: string, item: string) => void
+  /** Remove one source (by value) from a session's list. */
+  removeSessionSource: (sessionId: string, item: string) => void
 }
 
 export const SessionContext = createContext<SessionContextValue | null>(null)

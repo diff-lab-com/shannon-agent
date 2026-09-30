@@ -70,6 +70,9 @@ export default function ComposerPanel({ setQuickFixOpen, setEditorOpen }: Compos
             onOpenEditor={() => setEditorOpen(true)}
             sessionWorkingDir={sessionWorkingDir}
             usageTick={usage}
+            // R2-1: model-chip switches scope to THIS session; the chip's
+            // "Set as default" stays the global write.
+            sessionId={currentSessionId}
           />
         </div>
         {/* Single-child row — plain start alignment (the old justify-between

@@ -15,7 +15,7 @@ import { TaskStep } from './welcome/TaskStep'
 import { ModelStep } from './welcome/ModelStep'
 import { DoneStep } from './welcome/DoneStep'
 import MigrationWizard from '@/components/migration/MigrationWizard'
-import { TASKS, type TaskId, type DocumentsSkill } from './welcome/constants'
+import { TASKS, type TaskId } from './welcome/constants'
 import type { ProvidersFile } from '@/types'
 
 export const WELCOME_SEEN_KEY = 'shannon.hasSeenWelcome'
@@ -55,9 +55,6 @@ export default function Welcome() {
   const envCheckedRef = useRef(false)
   const [providerSaved, setProviderSaved] = useState(false)
   const [showAddProviderModal, setShowAddProviderModal] = useState(false)
-  const [skillState, setSkillState] = useState<
-    Record<string, { status: 'idle' | 'installing' | 'installed' | 'failed'; error?: string }>
-  >({})
   // P1-6 — migration wizard overlay (import from Claude Code / ZCode),
   // reachable from the final Welcome step.
   const [migrationOpen, setMigrationOpen] = useState(false)
@@ -158,24 +155,6 @@ export default function Welcome() {
     setStep(1)
   }
 
-  const installDocumentsSkill = async (skill: DocumentsSkill) => {
-    setSkillState(prev => ({ ...prev, [skill.id]: { status: 'installing' } }))
-    try {
-      await api.installSkillFromRepo(skill.id, skill.repo, skill.ref)
-      setSkillState(prev => ({ ...prev, [skill.id]: { status: 'installed' } }))
-      toast.success(intl.formatMessage({ id: 'welcome.skills.toast.installed' }, { name: intl.formatMessage({ id: skill.labelKey }) }))
-    } catch (e) {
-      const msg = e instanceof Error ? e.message : String(e)
-      setSkillState(prev => ({ ...prev, [skill.id]: { status: 'failed', error: msg } }))
-      toastError(intl.formatMessage({ id: 'welcome.skills.toast.failed' }, { name: intl.formatMessage({ id: skill.labelKey }) }), e)
-    }
-  }
-
-  const openFeaturedSkills = () => {
-    markWelcomeSeen()
-    navigate('/extensions/featured')
-  }
-
   return (
     <div className="min-h-screen bg-background text-on-surface flex flex-col">
       {/* 2026-09 review: the hero used to be only the brand mark + skip
@@ -250,12 +229,9 @@ export default function Welcome() {
               fallbackWorkingDir={config?.working_dir ?? null}
               devMode={devMode}
               setDevMode={setDevMode}
-              skillState={skillState}
               onPickDirectory={pickDirectory}
               onBack={() => setStep(0)}
               onFinish={finish}
-              onInstallSkill={installDocumentsSkill}
-              onBrowseFeaturedSkills={openFeaturedSkills}
               onOpenMigration={() => setMigrationOpen(true)}
             />
           )}

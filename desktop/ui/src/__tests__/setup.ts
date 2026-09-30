@@ -283,6 +283,13 @@ vi.mock('@/lib/tauri-api', async (importOriginal) => ({
   listModels: vi.fn().mockResolvedValue([
     { id: 'claude-sonnet-4-6', name: 'Claude Sonnet', provider: 'anthropic', context_window: 200000 },
   ]),
+  // R2-1 — session model override (composer chip). Default: no override on
+  // any session; per-test `vi.mocked(...)` overrides cover the active paths.
+  setSessionModel: vi.fn().mockResolvedValue(undefined),
+  clearSessionModel: vi.fn().mockResolvedValue(undefined),
+  getSessionModel: vi.fn().mockResolvedValue(null),
+  // R2-2 — Settings "Refresh model catalog". Default: no-op success.
+  refreshModelCatalog: vi.fn().mockResolvedValue({ count: 0, generation: 1 }),
   // ADR-0005 P4.9 — provider allowlist. Default: no override (returns
   // env-var state or null).
   getProviderAllowlist: vi.fn().mockResolvedValue(null),
@@ -537,6 +544,9 @@ vi.mock('@/lib/tauri-api', async (importOriginal) => ({
   openWithDefaultApp: vi.fn().mockResolvedValue(undefined),
   revealInFolder: vi.fn().mockResolvedValue(undefined),
   openArtifactExternally: vi.fn().mockResolvedValue('/tmp/shannon-artifacts/x.html'),
+  // Office Wave 1 — host runtime probe (Welcome documents card) + save-as.
+  probeHostRuntime: vi.fn().mockResolvedValue({ python3: true, pythonVersion: 'Python 3.12.3', pandoc: false, libreoffice: false }),
+  copyFile: vi.fn().mockResolvedValue(undefined),
   probeUrlFrameable: vi.fn().mockResolvedValue({ frameable: true, status: 200, reason: null }),
   // 2026-09-26 round2 §5-1 A — artifact:// interactive HTML registry.
   // Default: one stable registration; per-test overrides cover rejection /
@@ -561,4 +571,12 @@ vi.mock('@/lib/tauri-api', async (importOriginal) => ({
   terminalWrite: vi.fn().mockResolvedValue(undefined),
   terminalResize: vi.fn().mockResolvedValue(undefined),
   terminalKill: vi.fn().mockResolvedValue(undefined),
+  // P3-1 — terminal settings card (AdvancedSettings mounts it on every
+  // render). set-settings echoes its input like the backend's effective
+  // response; history stays an empty replay payload.
+  terminalGetSettings: vi.fn().mockResolvedValue({
+    shell: null, fontSize: 12, scrollback: 5000, drawerHeight: 320, screenReaderMode: false,
+  }),
+  terminalSetSettings: vi.fn().mockImplementation((settings: unknown) => Promise.resolve(settings)),
+  terminalHistory: vi.fn().mockResolvedValue({ data: '' }),
 }))

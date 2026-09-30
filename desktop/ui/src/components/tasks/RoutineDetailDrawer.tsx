@@ -102,7 +102,7 @@ export default function RoutineDetailDrawer({
                 {routine.policy.result_routing.map(entry => (
                   <li
                     key={entry}
-                    className="font-label-sm text-label-xs bg-tertiary/10 text-tertiary px-sm py-0.5 rounded-full border border-tertiary/30"
+                    className="font-label-sm text-label-xs bg-tertiary-container text-on-tertiary-container px-sm py-0.5 rounded-full border border-tertiary/30"
                   >
                     {entry}
                   </li>

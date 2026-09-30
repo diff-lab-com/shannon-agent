@@ -1581,8 +1581,12 @@ pub fn detect_sandbox_provider() -> Box<dyn SandboxProvider> {
     // Windows: the Job Object baseline is always present (no external
     // binary). Checked before Docker, matching `detect_sandboxer` — the
     // Docker command template is bash-based and cannot run on stock
-    // Windows anyway.
-    if cfg!(target_os = "windows") {
+    // Windows anyway. Compile-time gated: `WindowsJobSandbox` only exists
+    // on Windows targets, so a runtime `cfg!` here would break the
+    // linux/macos builds (E0425) — the exact class of defect the
+    // cross-platform CI gate exists for.
+    #[cfg(target_os = "windows")]
+    {
         tracing::info!("Sandbox: using windows-job (kill-on-close lifecycle confinement)");
         return Box::new(WindowsJobSandbox);
     }

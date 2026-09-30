@@ -134,6 +134,7 @@ impl<R: tauri::Runtime> TriggerState<R> {
         RoutineRunDeps {
             inbox: self.inbox.clone(),
             runs_store: self.runs_store.clone(),
+            webhook: std::sync::Arc::new(crate::inbox_commands::DesktopWebhookPort),
             usage_store: self.usage_store.clone(),
             client_config: self.client_config.clone(),
             desktop_config: self.desktop_config.clone(),

@@ -61,7 +61,7 @@ test.describe('ZCode delta features (P0/P1)', () => {
     await expect(page.getByText('Approved')).toBeVisible({ timeout: 15000 })
   })
 
-  test('③ composer model chip commits a switch and syncs the header', async ({ page }) => {
+  test('③ composer model chip: session-scoped switch with a visible override, "Set as default" writes global', async ({ page }) => {
     await page.goto('/chat')
     await waitForChat(page)
     const chip = page.getByRole('combobox', { name: 'Model' })
@@ -70,19 +70,30 @@ test.describe('ZCode delta features (P0/P1)', () => {
     // id to its display name.
     await expect(chip).toContainText('Claude Sonnet 4.6', { timeout: 15000 })
 
+    // R2-1: picking a model scopes it to THIS session — the chip shows the
+    // override with the never-silent "· session" suffix. Rows carry R2-3
+    // meta text, so the pick uses the stable per-model test id.
     await chip.click()
-    const opt = page.getByRole('option', { name: 'GPT-5', exact: true })
+    const opt = page.getByTestId('model-option-gpt-5')
     await opt.waitFor({ timeout: 15000 })
     await opt.click()
     await expect(chip).toContainText('GPT-5', { timeout: 15000 })
-    // The Header selector is hidden on /chat by design (模型名去重: the
-    // composer chip is the single surface there); the commit still lands in
-    // the shared config, so the Header shows it on a non-chat page. Navigate
-    // via the SPA link — a full reload resets the mock's in-memory config.
+    await expect(chip).toContainText('session', { timeout: 15000 })
+
+    // The menu's "Set as default" performs the pre-R2-1 GLOBAL write. The
+    // Header selector is hidden on /chat by design (模型名去重), so the
+    // promoted default is asserted on the Settings page: demo get_status
+    // mirrors the demo config, which now carries the canonical catalog id
+    // (gpt-5). Navigate via the SPA link — a full reload resets the mock's
+    // in-memory state (and would drop the session override itself).
+    await chip.click()
+    await page.getByTestId('model-action-set-default').waitFor({ timeout: 15000 })
+    await page.getByTestId('model-action-set-default').click()
     await page.getByRole('link', { name: 'Settings' }).click()
-    await expect(page.getByRole('button', { name: 'Select model' })).toContainText('GPT-5', {
-      timeout: 15000,
-    })
+    await expect(page.getByRole('button', { name: 'Select model' })).toContainText(
+      /gpt-5/i,
+      { timeout: 15000 },
+    )
   })
 
   test('⑥ agent_spawn renders as a first-class subagent block', async ({ page }) => {

@@ -3,22 +3,27 @@
 // with tool waterfall rows (incl. interrupted-call error marking), the
 // cumulative curve card, the i18n-driven empty state, and the load-failure
 // state. (The page title itself lives in the Header's TITLE_MAP.)
+// office Wave 3 C6 adds the Export-as-HTML flow (save dialog + saveTextFile).
 
 import { describe, it, expect, vi, beforeEach } from 'vitest'
-import { render, screen, waitFor } from '@testing-library/react'
+import { render, screen, waitFor, fireEvent } from '@testing-library/react'
 import { MemoryRouter, Route, Routes } from 'react-router-dom'
+import { save } from '@tauri-apps/plugin-dialog'
 import type * as TauriApi from '@/lib/tauri-api'
 import { I18nProvider } from '@/i18n'
 import TurnTimeline from '@/pages/TurnTimeline'
+import { timelineToHtml } from '@/lib/timelineExport'
 import type { TurnTimeline } from '@/types'
 
 const getTraceTimeline = vi.hoisted(() => vi.fn())
+const saveTextFile = vi.hoisted(() => vi.fn())
 
 vi.mock('@/lib/tauri-api', async () => {
   const actual = await vi.importActual<typeof TauriApi>('@/lib/tauri-api')
   return {
     ...actual,
     getTraceTimeline: (...args: unknown[]) => getTraceTimeline(...args),
+    saveTextFile: (...args: unknown[]) => saveTextFile(...args),
   }
 })
 
@@ -83,6 +88,11 @@ function renderAt(path = '/timeline/sess-001') {
 
 beforeEach(() => {
   getTraceTimeline.mockReset()
+  saveTextFile.mockReset()
+  saveTextFile.mockResolvedValue(undefined)
+  // The dialog `save` mock comes from the global setup (default: null, i.e.
+  // the user cancels). Clear the call history the C6 tests assert against.
+  vi.mocked(save).mockClear()
 })
 
 describe('TurnTimeline', () => {
@@ -176,7 +186,8 @@ describe('TurnTimeline — reason badges and locale (B4 §7-28)', () => {
     getTraceTimeline.mockResolvedValue(fixtureWithReason('failed'))
     renderAt()
     const badge = await screen.findByText('Failed')
-    expect(badge.className).toContain('bg-error/10')
+    // G7 2026-09-30: error tone = MD3 container pair (was bg-error/10 tint).
+    expect(badge.className).toContain('bg-error-container')
   })
 
   it('renders neutral stopping reasons (interrupted) without error styling', async () => {
@@ -213,5 +224,61 @@ describe('TurnTimeline — reason badges and locale (B4 §7-28)', () => {
     } finally {
       window.localStorage.removeItem('shannon.locale')
     }
+  })
+})
+
+// ─── office Wave 3 C6: Export as HTML (save dialog + saveTextFile) ───
+
+describe('TurnTimeline — Export as HTML (office Wave 3 C6)', () => {
+  it('the export button writes self-contained HTML with the step text to the chosen path', async () => {
+    getTraceTimeline.mockResolvedValue(FIXTURE)
+    vi.mocked(save).mockResolvedValueOnce('/tmp/export/timeline-sess-001.html')
+    renderAt()
+
+    await screen.findByText('Turn 1')
+    fireEvent.click(screen.getByTestId('timeline-export-html'))
+    await waitFor(() => {
+      expect(saveTextFile).toHaveBeenCalledTimes(1)
+    })
+    const [path, html] = saveTextFile.mock.calls[0] as [string, string]
+    expect(path).toBe('/tmp/export/timeline-sess-001.html')
+    // Self-contained document carrying the timeline's step content.
+    expect(html).toContain('<!DOCTYPE html>')
+    expect(html).toContain('Turn 1')
+    expect(html).toContain('Turn 2')
+    expect(html).toContain('Read')
+    expect(html).toContain('Grep')
+    expect(html).toContain('sess-001')
+    // Inline styles only — no scripts or external resources.
+    expect(html).not.toContain('<script')
+    expect(html).not.toContain('src=')
+  })
+
+  it('cancelling the save dialog never writes a file', async () => {
+    getTraceTimeline.mockResolvedValue(FIXTURE)
+    vi.mocked(save).mockResolvedValueOnce(null)
+    renderAt()
+    await screen.findByText('Turn 1')
+    fireEvent.click(screen.getByTestId('timeline-export-html'))
+    await waitFor(() => {
+      expect(save).toHaveBeenCalledTimes(1)
+    })
+    expect(saveTextFile).not.toHaveBeenCalled()
+  })
+
+  it('timelineToHtml escapes HTML-sensitive tool names', () => {
+    const html = timelineToHtml({
+      ...FIXTURE,
+      turns: [
+        {
+          ...FIXTURE.turns[0],
+          tools: [
+            { tool_use_id: 'tu-x', tool_name: '<script>', start_ts_ns: ns(1), end_ts_ns: ns(2), duration_ms: 10, is_error: false },
+          ],
+        },
+      ],
+    })
+    expect(html).toContain('&lt;script&gt;')
+    expect(html).not.toContain('<script>')
   })
 })

@@ -37,6 +37,7 @@ fn main() {
     use shannon_desktop::commands_usage;
     use shannon_desktop::commands_voice;
     use shannon_desktop::commands_voice_models;
+    use shannon_desktop::companion_window_commands;
     use shannon_desktop::desktop_logging;
     use shannon_desktop::engine_discovery;
     use shannon_desktop::engine_discovery_commands as commands_engine_discovery;
@@ -49,7 +50,6 @@ fn main() {
     use shannon_desktop::session_window_commands;
     use shannon_desktop::skill_pattern_detection;
     use shannon_desktop::terminal_commands;
-    use shannon_desktop::workspace_commands;
     use tauri::{Emitter, Listener, Manager};
     use tauri::{
         menu::{MenuBuilder, MenuItemBuilder},
@@ -141,11 +141,20 @@ fn main() {
             commands_chat::get_status,
             commands_chat::cancel_query,
             commands_chat::list_tools,
+            // R2-1 — session-level model override (composer chip): picking a
+            // model in the chip only re-targets the current session; the
+            // chip's "Set as default" keeps using the global `configure`.
+            commands_chat::set_session_model,
+            commands_chat::clear_session_model,
+            commands_chat::get_session_model,
             commands_config::configure,
             commands_config::get_config,
             commands_config::detect_provider_from_env,
             commands_config::test_provider_connection,
             commands_config::test_all_providers,
+            // R2-2 — Settings "Refresh model catalog" (models.dev overlay,
+            // same path as the CLI `/model refresh`).
+            commands_config::refresh_model_catalog,
             // 2026-09-29 provider review §3-A/B — reliable activation signal
             // for the UI gates (config.provider is dead, ADR-0005), in-modal
             // credential test, and live /models listing for the modal.
@@ -190,6 +199,9 @@ fn main() {
             // open-and-artifact-design.md §4 P0-A / P1-D / P1-E)
             commands_surface::open_external,
             commands_surface::open_with_default_app,
+            // Office Wave 1 — python3/pandoc/LibreOffice availability probe
+            // for the built-in document skills
+            commands_surface::probe_host_runtime,
             commands_surface::reveal_in_folder,
             commands_surface::open_artifact_externally,
             commands_surface::probe_url_frameable,
@@ -287,6 +299,12 @@ fn main() {
             commands_files::get_file_diff,
             commands_files::apply_diff,
             commands_files::save_text_file,
+            // Office Wave 1 — save-as copy for converted office documents
+            commands_files::copy_file,
+            // Office Wave 2 B9' — registered-files shelf (~/.shannon/desktop/file-index.json)
+            commands_files::list_file_index,
+            commands_files::register_file_index_entry,
+            commands_files::set_file_index_favorite,
             commands_mcp::add_mcp_server,
             commands_mcp::remove_mcp_server,
             commands_mcp::restart_mcp_server,
@@ -421,6 +439,9 @@ fn main() {
             session_window_commands::list_session_windows,
             session_window_commands::close_session_window,
             session_window_commands::reveal_session_in_main,
+            // Office Wave 3 C3 — companion Quick Capture window (frozen contract)
+            companion_window_commands::open_companion_window,
+            companion_window_commands::set_companion_always_on_top,
             // Automation: hook-event catalog + custom permission profiles
             shannon_desktop::automation_commands::list_hook_events,
             shannon_desktop::automation_commands::list_permission_profiles,
@@ -483,9 +504,11 @@ fn main() {
             terminal_commands::terminal_resize,
             terminal_commands::terminal_kill,
             terminal_commands::terminal_list,
-            // P1-5 C-2 — draggable panel workspace (frozen contract).
-            workspace_commands::workspace_get_layout,
-            workspace_commands::workspace_set_layout,
+            // P3-1 — terminal settings (`[terminal]` in config.toml).
+            terminal_commands::terminal_get_settings,
+            terminal_commands::terminal_set_settings,
+            // US6 — per-terminal replay history (in-memory ring).
+            terminal_commands::terminal_history,
         ])
         // 2026-09-26 round2 §5-1 A — the `artifact://` custom protocol:
         // interactive HTML artifacts are served from a bounded in-memory
@@ -536,6 +559,15 @@ fn main() {
                 tauri::async_runtime::spawn(async move {
                     if let Some(state) = app.try_state::<commands::AppState>() {
                         session_window_commands::cleanup_destroyed_window(&state, &label).await;
+                        // P3-2 — a destroyed session window must not leak
+                        // the PTYs its terminal panel spawned: reap every
+                        // session attributed to this window label. The
+                        // main window's own destroyed path already does
+                        // `kill_all` above.
+                        let killed = terminal_commands::kill_window_sessions(&state, &label);
+                        if killed > 0 {
+                            tracing::info!(%label, killed, "reaped terminals of destroyed session window");
+                        }
                     }
                 });
             }
@@ -738,13 +770,26 @@ fn main() {
             let show_item = MenuItemBuilder::with_id("show", "Show Shannon").build(app)?;
             let new_session_item =
                 MenuItemBuilder::with_id("new-session", "New Session").build(app)?;
+            // Office Wave 3 C3 — companion Quick Capture entry. The frontend
+            // has no main-window chrome surface for it this wave (the global
+            // shortcut belongs to useKeyboardShortcuts, another owner), so
+            // the tray is the summon path; `open_companion_window` stays
+            // invocable for the future shortcut/UI wiring.
+            let companion_item =
+                MenuItemBuilder::with_id("companion", "Quick Capture").build(app)?;
             let status_item = MenuItemBuilder::with_id("status", initial_label.clone())
                 .enabled(false)
                 .build(app)?;
             let quit_item = MenuItemBuilder::with_id("quit", "Quit").build(app)?;
 
             let menu = MenuBuilder::new(app)
-                .items(&[&status_item, &show_item, &new_session_item, &quit_item])
+                .items(&[
+                    &status_item,
+                    &show_item,
+                    &new_session_item,
+                    &companion_item,
+                    &quit_item,
+                ])
                 .build()?;
 
             let _tray = TrayIconBuilder::with_id(TRAY_ID)
@@ -761,6 +806,15 @@ fn main() {
                     "new-session" => {
                         // Trigger new session via event
                         let _ = app.emit("new-session", ());
+                    }
+                    "companion" => {
+                        // Office Wave 3 C3 — create or focus the companion
+                        // Quick Capture window (dedupe lives in the command's
+                        // inner helper; failures are log-only here).
+                        if let Err(e) = companion_window_commands::open_companion_window_inner(app)
+                        {
+                            tracing::warn!(error = %e, "failed to open companion window");
+                        }
                     }
                     "quit" => {
                         // Audit P1-5: a tray Quit must also stop the managed

@@ -677,6 +677,11 @@ pub fn build_client_from_resolved(
 ) -> shannon_engine::api::LlmClientConfig {
     use shannon_engine::api::{LlmClientConfig, LlmProvider, RetryConfig};
 
+    // R2-4: whichever profile actually drove this client construction owns
+    // the per-model metadata registry (pricing / context / tier overrides).
+    // Replacement, not accumulation — a provider switch re-registers here.
+    crate::declared_models::replace_from_specs(&rt.profile.models);
+
     let provider = rt.provider;
     let base_url = rt.profile.base_url.clone();
     let model = rt.model_id.to_string();
@@ -802,7 +807,47 @@ mod tests {
             fallback_models: Vec::new(),
             quirks: Default::default(),
             tiers: ProviderTiers::default(),
+            models: Vec::new(),
         }
+    }
+
+    /// R2-4: building a client from a resolved target must (re)register that
+    /// profile's per-model declarations — this is the binding that makes the
+    /// declared pricing/context values authoritative at the engine's lookup
+    /// boundaries for whichever provider actually drives the session.
+    #[test]
+    fn build_client_from_resolved_registers_declared_models() {
+        use shannon_types::provider_config::ModelSpec;
+        let mut profile = anthropic_profile("K");
+        profile.models.push(ModelSpec {
+            id: "shannon-binding-test-model".to_string(),
+            display_name: None,
+            context_window: Some(77_777),
+            max_output: None,
+            cost_per_m_input: Some(1.25),
+            cost_per_m_output: Some(10.0),
+            capabilities: vec![],
+        });
+        let cfg = ShannonConfig {
+            provider_model: v2_default_profile(profile, "shannon-binding-test-model"),
+            ..Default::default()
+        };
+        let rt = crate::provider_resolver::resolve_active_target(&cfg.provider_model)
+            .expect("active target resolves");
+        crate::declared_models::clear();
+        let _client = build_client_from_resolved(&cfg, rt);
+        // Registered: pricing + context lookups now see the declaration.
+        assert_eq!(
+            crate::declared_models::context_window_for("shannon-binding-test-model"),
+            Some(77_777)
+        );
+        assert!(
+            crate::declared_models::pricing_for("shannon-binding-test-model").is_some(),
+            "declared pricing must be registered by client construction"
+        );
+        // A model absent from the declaration is not registered.
+        assert_eq!(crate::declared_models::lookup("other-model"), None);
+        crate::declared_models::clear();
     }
 
     #[test]
@@ -994,6 +1039,7 @@ mod tests {
             fallback_models: Vec::new(),
             quirks: Default::default(),
             tiers: ProviderTiers::default(),
+            models: Vec::new(),
         };
         let cfg = ShannonConfig {
             provider_model: v2_default_profile(provider, "glm-4"),

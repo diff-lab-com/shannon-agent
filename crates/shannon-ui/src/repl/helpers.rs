@@ -328,29 +328,12 @@ impl super::Repl {
             "approval_mode": self.state.approval_mode_label,
         });
 
-        let result = {
-            let (program, args) = shannon_types::shell::local_shell(cmd);
-            std::process::Command::new(program)
-                .args(&args)
-                .stdin(std::process::Stdio::piped())
-                .stdout(std::process::Stdio::piped())
-                .stderr(std::process::Stdio::null())
-                .env("SHANNON_STATUSLINE", "1")
-                .spawn()
-        }
-        .ok()
-        .and_then(|mut child| {
-            use std::io::Write;
-            if let Some(ref mut stdin) = child.stdin {
-                let _ = stdin.write_all(json_payload.to_string().as_bytes());
-            }
-            child.wait().ok().filter(|s| s.success())?;
-            child.stdout.and_then(|mut out| {
-                let mut buf = String::new();
-                std::io::Read::read_to_string(&mut out, &mut buf).ok()?;
-                Some(buf.trim().to_string())
-            })
-        });
+        // P0-2: bounded, concurrent-read execution — see
+        // `run_statusline_command`. On timeout or failure the result is
+        // `None` and the previous cached statusline is kept, exactly like
+        // the old failure path.
+        let result =
+            run_statusline_command(cmd, &json_payload.to_string(), STATUSLINE_DEFAULT_TIMEOUT);
 
         if let Some(output) = result {
             self.state.cached_statusline = Some(output);
@@ -423,5 +406,200 @@ impl super::Repl {
         }
 
         self.state.persisted_ui_state = Some(state);
+    }
+}
+
+// ── Custom statusline execution (P0-2) ──────────────────────────────────
+//
+// The old runner wrote the payload to stdin and then `wait()`ed BEFORE
+// reading stdout: any script emitting more than the ~64KiB pipe buffer
+// deadlocked both sides, a hung script hung the UI thread forever, and
+// stdin was never closed (dropped only at scope end), so scripts reading
+// stdin to EOF hung too. `run_statusline_command` fixes all three with
+// `wait_with_output` semantics plus a hard wall-clock budget.
+
+/// Hard wall-clock budget for one statusline run. The tick loop calls this
+/// synchronously (throttled to ~5s), so the budget bounds the worst-case UI
+/// stall. Parameterized on `run_statusline_command` so tests can inject a
+/// shorter deadline.
+const STATUSLINE_DEFAULT_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(2);
+
+/// Cap captured statusline stdout at 32KiB: a statusline renders one line,
+/// so larger output is truncated. The pipe is still drained to EOF (a
+/// mid-run EPIPE would kill an otherwise successful script) — only the
+/// first `STATUSLINE_MAX_CAPTURE_BYTES` are retained.
+const STATUSLINE_MAX_CAPTURE_BYTES: usize = 32 * 1024;
+
+/// Run the custom statusline command under a hard wall-clock budget.
+///
+/// stdin is written fully and CLOSED before waiting, and stdout is drained
+/// to EOF on a helper thread concurrently with the wait (`wait_with_output`
+/// semantics), so a chatty script can always exit. On timeout the child is
+/// killed and `None` is returned; the caller keeps the previous cached
+/// statusline. The `SHANNON_STATUSLINE=1` env marker and the exit-success
+/// filter preserve the original contract.
+fn run_statusline_command(
+    cmd: &str,
+    payload: &str,
+    timeout: std::time::Duration,
+) -> Option<String> {
+    // Windows fallback (PR #166): resolve the platform shell instead of a
+    // hardcoded `sh`, which does not exist on stock Windows.
+    let (program, args) = shannon_types::shell::local_shell(cmd);
+    let mut child = std::process::Command::new(program)
+        .args(&args)
+        .stdin(std::process::Stdio::piped())
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::null())
+        .env("SHANNON_STATUSLINE", "1")
+        .spawn()
+        .ok()?;
+
+    // Concurrent stdout drain — the fix for the >pipe-buffer deadlock: the
+    // child can write until it exits while we wait. `None` means the pipe
+    // was unexpectedly missing (legacy behavior: overall failure).
+    let stdout_pipe = child.stdout.take();
+    let (captured_tx, captured_rx) = std::sync::mpsc::channel::<Option<String>>();
+    std::thread::spawn(move || {
+        let _ = captured_tx.send(read_capped_to_string(
+            stdout_pipe,
+            STATUSLINE_MAX_CAPTURE_BYTES,
+        ));
+    });
+
+    // wait_with_output semantics: write stdin fully and close it (drop at
+    // block end) BEFORE waiting, so scripts reading stdin to EOF terminate.
+    // The payload is far below the pipe buffer, so the write cannot block.
+    if let Some(mut stdin) = child.stdin.take() {
+        use std::io::Write;
+        let _ = stdin.write_all(payload.as_bytes());
+    }
+
+    let deadline = std::time::Instant::now() + timeout;
+    let outcome: Option<(std::process::ExitStatus, Option<String>)> = loop {
+        match child.try_wait() {
+            Ok(Some(status)) => {
+                // Bound the reader join by the remaining budget: a
+                // grandchild holding the pipe open must not extend it.
+                let remaining = deadline
+                    .saturating_duration_since(std::time::Instant::now())
+                    .max(std::time::Duration::from_millis(1));
+                break match captured_rx.recv_timeout(remaining) {
+                    Ok(captured) => Some((status, captured)),
+                    Err(_) => None, // reader overran the budget
+                };
+            }
+            Ok(None) if std::time::Instant::now() >= deadline => {
+                // Budget expired: kill the child, reap it, report failure.
+                let _ = child.kill();
+                let _ = child.wait();
+                break None;
+            }
+            Ok(None) => std::thread::sleep(std::time::Duration::from_millis(10)),
+            Err(_) => {
+                let _ = child.kill();
+                let _ = child.wait();
+                break None;
+            }
+        }
+    };
+
+    let (status, captured) = outcome?;
+    if !status.success() {
+        return None; // same success filter as the legacy runner
+    }
+    captured.map(|s| s.trim().to_string())
+}
+
+/// Read `reader` to EOF, retaining only the first `cap` bytes — output
+/// beyond the cap is drained and discarded (truncation, not failure). The
+/// full drain matters: closing early would hand a still-writing script an
+/// EPIPE and turn a success into a failure. `None` reader (pipe missing)
+/// yields `None`, matching the legacy failure shape.
+fn read_capped_to_string<R: std::io::Read>(mut reader: Option<R>, cap: usize) -> Option<String> {
+    let reader = reader.as_mut()?;
+    let mut kept: Vec<u8> = Vec::with_capacity(cap.min(64 * 1024));
+    let mut chunk = [0u8; 8192];
+    loop {
+        match reader.read(&mut chunk) {
+            Ok(0) => break, // EOF — pipe fully drained
+            Ok(n) => {
+                if kept.len() < cap {
+                    let take = (cap - kept.len()).min(n);
+                    kept.extend_from_slice(&chunk[..take]);
+                }
+            }
+            Err(_) => break,
+        }
+    }
+    Some(String::from_utf8_lossy(&kept).into_owned())
+}
+
+// ── Statusline (P0-2) tests — real `/bin/sh`, per repo precedent ────────
+#[cfg(test)]
+mod statusline_tests {
+    use super::{STATUSLINE_MAX_CAPTURE_BYTES, run_statusline_command};
+    use std::time::{Duration, Instant};
+
+    #[test]
+    fn statusline_normal_output_passes_through_trimmed() {
+        let out = run_statusline_command("echo ' main * 12k '", "{}", Duration::from_secs(5));
+        assert_eq!(out.as_deref(), Some("main * 12k"));
+    }
+
+    #[test]
+    fn statusline_large_output_returns_truncated_well_under_timeout() {
+        // ~200KiB — three times the capture cap and well beyond the ~64KiB
+        // pipe buffer that used to deadlock the old wait-then-read runner.
+        let began = Instant::now();
+        let out = run_statusline_command(
+            "head -c 200000 /dev/zero | tr '\\0' 'x'",
+            "{}",
+            Duration::from_secs(5),
+        );
+        let elapsed = began.elapsed();
+        let out = out.expect("large-output script must still succeed");
+        assert_eq!(out.len(), STATUSLINE_MAX_CAPTURE_BYTES, "capped at 32KiB");
+        assert!(
+            out.chars().all(|c| c == 'x'),
+            "truncated tail kept, not garbage"
+        );
+        assert!(
+            elapsed < Duration::from_secs(5),
+            "returned well under the injected timeout: {elapsed:?}"
+        );
+    }
+
+    #[test]
+    fn statusline_hung_script_times_out_and_returns_none() {
+        let began = Instant::now();
+        let out = run_statusline_command("sleep 30", "{}", Duration::from_millis(500));
+        let elapsed = began.elapsed();
+        assert!(out.is_none(), "hung script must return None");
+        assert!(elapsed >= Duration::from_millis(500), "budget respected");
+        assert!(
+            elapsed < Duration::from_secs(3),
+            "returned near the budget, not at script end: {elapsed:?}"
+        );
+    }
+
+    #[test]
+    fn statusline_failing_script_returns_none() {
+        // The legacy success filter: non-zero exit → None, cache untouched.
+        let out = run_statusline_command("echo partial; exit 3", "{}", Duration::from_secs(5));
+        assert!(out.is_none());
+    }
+
+    #[test]
+    fn statusline_closes_stdin_and_sets_shannon_statusline_env() {
+        // `cat` terminates only because stdin is closed after the payload is
+        // written (wait_with_output semantics); the script must also see the
+        // SHANNON_STATUSLINE=1 marker from the original contract.
+        let out = run_statusline_command(
+            "payload=$(cat); printf '%s' \"$SHANNON_STATUSLINE:$payload\"",
+            "{\"k\":1}",
+            Duration::from_secs(5),
+        );
+        assert_eq!(out.as_deref(), Some("1:{\"k\":1}"));
     }
 }

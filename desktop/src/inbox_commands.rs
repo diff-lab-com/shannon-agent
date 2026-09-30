@@ -432,6 +432,51 @@ impl RunMirror for shannon_core::scheduled_runs::ScheduledRunsStore {
     }
 }
 
+/// The routine-finish webhook seam (office Wave 2 B6'). When a routine has
+/// `notify_webhook` set, [`finalize_run`] asks this port whether the user has
+/// a webhook sink configured and, if so, hands it the run-finish
+/// notification (task name + status + output summary). Object-safe so tests
+/// can record deliveries instead of posting to the network.
+pub(crate) trait RoutineWebhookPort: Send + Sync {
+    /// Whether a `[notifications.webhook]` sink is configured.
+    fn is_configured(&self) -> bool;
+    /// Fire-and-forget delivery of the run-finish notification.
+    fn deliver(&self, notification: &shannon_core::notifier::Notification);
+}
+
+/// Production port. Resolves `[notifications.webhook]` through the same
+/// read path as the webhook settings commands
+/// ([`crate::commands_notifications::load_desktop_webhook_config`]) and
+/// delivers via core's [`shannon_core::notifier::WebhookHandler`] — the
+/// existing template/signing/fire-and-forget machinery, nothing new on the
+/// wire.
+pub(crate) struct DesktopWebhookPort;
+
+impl RoutineWebhookPort for DesktopWebhookPort {
+    fn is_configured(&self) -> bool {
+        crate::commands_notifications::load_desktop_webhook_config().is_some()
+    }
+
+    fn deliver(&self, notification: &shannon_core::notifier::Notification) {
+        use shannon_core::notifier::NotificationHandler as _;
+        let Some(cfg) = crate::commands_notifications::load_desktop_webhook_config() else {
+            return;
+        };
+        let handler = match shannon_core::notifier::WebhookHandler::new(cfg) {
+            Ok(h) => h,
+            Err(e) => {
+                tracing::warn!(error = %e, "routine webhook: handler construction failed");
+                return;
+            }
+        };
+        // WebhookHandler::send is fire-and-forget by contract (it spawns its
+        // own delivery task); errors here are client-construction level only.
+        if let Err(e) = handler.send(notification) {
+            tracing::warn!(error = %e, "routine webhook: delivery failed");
+        }
+    }
+}
+
 /// The state slices `spawn_routine_run` needs, Arc-cloned so the spawned
 /// task owns its inputs. Constructed from [`AppState`] (Tauri commands) or
 /// from the loopback trigger endpoint's state.
@@ -439,6 +484,9 @@ pub(crate) struct RoutineRunDeps {
     pub(crate) inbox: std::sync::Arc<shannon_core::inbox_store::InboxStore>,
     /// Legacy JSONL history mirror (best-effort — see `spawn_routine_run`).
     pub(crate) runs_store: std::sync::Arc<dyn RunMirror>,
+    /// Routine-finish webhook routing (B6'). Production default is
+    /// [`DesktopWebhookPort`]; tests inject recording mocks.
+    pub(crate) webhook: std::sync::Arc<dyn RoutineWebhookPort>,
     pub(crate) usage_store: std::sync::Arc<crate::commands_usage::UsageStore>,
     pub(crate) client_config: std::sync::Arc<RwLock<shannon_engine::api::types::LlmClientConfig>>,
     pub(crate) desktop_config: std::sync::Arc<RwLock<DesktopConfig>>,
@@ -461,6 +509,7 @@ impl RoutineRunDeps {
         Self {
             inbox: state.inbox_store(),
             runs_store: state.scheduled_runs_store.clone(),
+            webhook: std::sync::Arc::new(DesktopWebhookPort),
             usage_store: state.usage_store.clone(),
             client_config: state.client_config.clone(),
             desktop_config: state.desktop_config.clone(),
@@ -482,6 +531,9 @@ pub(crate) struct RunFinishContext {
     pub(crate) source: String,
     pub(crate) note: Option<String>,
     pub(crate) started_ms: i64,
+    /// The routine's `notify_webhook` flag (B6'). When true, the finish
+    /// path routes a status notification through [`RoutineWebhookPort`].
+    pub(crate) notify_webhook: bool,
 }
 
 /// What the engine phase of a run produced. `session_id` is `None` when the
@@ -607,6 +659,7 @@ pub(crate) async fn spawn_routine_run<R: tauri::Runtime>(
     let finish_deps = RoutineRunDeps {
         inbox: deps.inbox.clone(),
         runs_store: deps.runs_store.clone(),
+        webhook: deps.webhook.clone(),
         usage_store: deps.usage_store.clone(),
         client_config: deps.client_config.clone(),
         desktop_config: deps.desktop_config.clone(),
@@ -622,6 +675,7 @@ pub(crate) async fn spawn_routine_run<R: tauri::Runtime>(
         source: inbox_source.to_string(),
         note,
         started_ms: chrono::Utc::now().timestamp_millis(),
+        notify_webhook: routine.notify_webhook,
     };
 
     // Owned copy for the engine future (the closure must be 'static; `deps`
@@ -880,13 +934,24 @@ fn finalize_run<R: tauri::Runtime>(
         );
     }
 
-    // 2. Inbox item + 3. SQLite run back-link.
-    let summary = build_summary(
+    // 2. Completion webhook routing (B6'). Fired before the inbox item so a
+    // "sink not configured" skip can be annotated in the run record itself.
+    // The delivery is fire-and-forget; only a *skipped* delivery (flag on,
+    // no sink configured) comes back as a note — delivery failures stay in
+    // the logs, mirroring WebhookHandler's own contract.
+    let webhook_note = deliver_routine_webhook(deps, &ctx, &outcome);
+
+    // 3. Inbox item + 4. SQLite run back-link. The summary doubles as the
+    // durable run record, so the skipped-webhook note lands in it.
+    let mut summary = build_summary(
         ctx.note.as_deref(),
         duration_secs,
         &outcome.output,
         run_error.is_some(),
     );
+    if let Some(note) = &webhook_note {
+        summary = truncate_chars(&format!("{summary} · {note}"), SUMMARY_MAX_CHARS);
+    }
     let item = deps
         .inbox
         .append_item(InboxItemNew {
@@ -912,8 +977,72 @@ fn finalize_run<R: tauri::Runtime>(
         tracing::warn!(run_id = %ctx.run_id, error = %e, "inbox: failed to finish run record");
     }
 
-    // 4. Refresh signal.
+    // 5. Refresh signal.
     let _ = app.emit(event_names::INBOX_UPDATED, ctx.run_id);
+}
+
+/// Cap on the run-output summary forwarded in the webhook body. The handler
+/// sanitizes and re-truncates per template anyway; this keeps the pre-sanitize
+/// string bounded.
+const WEBHOOK_BODY_MAX_CHARS: usize = 500;
+
+/// Route a finished run through the configured webhook sink (B6').
+///
+/// Semantics per the flag + config matrix:
+///
+/// - flag off → no-op (returns `None`);
+/// - flag on, sink configured → deliver `{task name} — {status}` with the
+///   output summary (or the error, for failed runs) as the body, fire-and-
+///   forget, and return `None`;
+/// - flag on, no sink → **silently skip**: no error, no triage item — the
+///   caller annotates the run record with the returned note so the History
+///   view shows why nothing was delivered.
+///
+/// Returns the run-record annotation for a skipped delivery, if any.
+fn deliver_routine_webhook(
+    deps: &RoutineRunDeps,
+    ctx: &RunFinishContext,
+    outcome: &RunOutcome,
+) -> Option<String> {
+    if !ctx.notify_webhook {
+        return None;
+    }
+    if !deps.webhook.is_configured() {
+        tracing::info!(
+            run_id = %ctx.run_id,
+            task_id = %ctx.task_id,
+            "routine finish: notify_webhook enabled but no webhook configured — skipped"
+        );
+        return Some("webhook notification skipped (not configured)".to_string());
+    }
+    let status_word = if outcome.failed {
+        "failed"
+    } else {
+        "succeeded"
+    };
+    let body = match &outcome.error {
+        Some(err) => truncate_chars(err, WEBHOOK_BODY_MAX_CHARS),
+        None => truncate_chars(
+            first_line_snapshot(&outcome.output, outcome.failed).trim(),
+            WEBHOOK_BODY_MAX_CHARS,
+        ),
+    };
+    let notification = shannon_core::notifier::Notification {
+        title: format!("{} — {}", ctx.task_name, status_word),
+        body,
+        level: if outcome.failed {
+            shannon_core::notifier::NotificationLevel::Error
+        } else {
+            shannon_core::notifier::NotificationLevel::Info
+        },
+        id: uuid::Uuid::new_v4().to_string(),
+        timestamp: chrono::Utc::now(),
+        source: Some("routine_finish".to_string()),
+        action_id: None,
+    };
+    deps.webhook.deliver(&notification);
+    tracing::debug!(run_id = %ctx.run_id, "routine finish: webhook notification dispatched");
+    None
 }
 
 /// Truncate to at most `max` chars without splitting a UTF-8 codepoint, and
@@ -1204,6 +1333,7 @@ mod tests {
         let deps = RoutineRunDeps {
             inbox: inbox.clone(),
             runs_store: std::sync::Arc::new(FailingRunMirror::new()),
+            webhook: std::sync::Arc::new(RecordingWebhookPort::default()),
             usage_store: std::sync::Arc::new(crate::commands_usage::UsageStore::with_path(
                 tmp.join("usage.jsonl"),
             )),
@@ -1233,6 +1363,7 @@ mod tests {
             source: shannon_core::inbox_store::SOURCE_ROUTINE.into(),
             note: None,
             started_ms,
+            notify_webhook: false,
         }
     }
 
@@ -1369,6 +1500,229 @@ mod tests {
         assert_eq!(items.len(), 1);
         assert_eq!(items[0].status, "pending");
         assert_eq!(items[0].error.as_deref(), Some("provider unreachable"));
+    }
+
+    // ── B6': routine-finish webhook routing ─────────────────────────────
+
+    /// Recording double for the [`RoutineWebhookPort`] seam.
+    #[derive(Default)]
+    struct RecordingWebhookPort {
+        configured: std::sync::atomic::AtomicBool,
+        deliveries: std::sync::Mutex<Vec<shannon_core::notifier::Notification>>,
+    }
+
+    impl RecordingWebhookPort {
+        fn with_configured(configured: bool) -> std::sync::Arc<Self> {
+            let port = Self::default();
+            port.configured
+                .store(configured, std::sync::atomic::Ordering::SeqCst);
+            std::sync::Arc::new(port)
+        }
+
+        fn deliveries(&self) -> Vec<shannon_core::notifier::Notification> {
+            self.deliveries.lock().unwrap().clone()
+        }
+    }
+
+    impl RoutineWebhookPort for RecordingWebhookPort {
+        fn is_configured(&self) -> bool {
+            self.configured.load(std::sync::atomic::Ordering::SeqCst)
+        }
+
+        fn deliver(&self, notification: &shannon_core::notifier::Notification) {
+            self.deliveries.lock().unwrap().push(notification.clone());
+        }
+    }
+
+    /// Deps with a recording webhook port under the caller's control.
+    fn webhook_deps(
+        tmp: &std::path::Path,
+        port: std::sync::Arc<RecordingWebhookPort>,
+    ) -> (
+        RoutineRunDeps,
+        std::sync::Arc<shannon_core::inbox_store::InboxStore>,
+    ) {
+        let inbox: std::sync::Arc<shannon_core::inbox_store::InboxStore> = std::sync::Arc::new(
+            shannon_core::inbox_store::InboxStore::open_with_legacy(&tmp.join("inbox.db"), None)
+                .unwrap(),
+        );
+        let deps = RoutineRunDeps {
+            inbox: inbox.clone(),
+            runs_store: std::sync::Arc::new(ScheduledRunsStore::with_base(tmp.join("runs"))),
+            webhook: port,
+            usage_store: std::sync::Arc::new(crate::commands_usage::UsageStore::with_path(
+                tmp.join("usage.jsonl"),
+            )),
+            client_config: std::sync::Arc::new(RwLock::new(
+                shannon_engine::api::types::LlmClientConfig::default(),
+            )),
+            desktop_config: std::sync::Arc::new(RwLock::new(DesktopConfig::default())),
+            tools: std::sync::Arc::new(shannon_core::tools::ToolRegistry::new()),
+            memory_store: std::sync::Arc::new(std::sync::RwLock::new(
+                shannon_core::MemoryStore::new(tmp.join("memories")),
+            )),
+            scheduled_tasks: std::sync::Arc::new(
+                shannon_core::scheduled_task_store::ScheduledTaskStore::with_base(
+                    tmp.join("tasks"),
+                ),
+            ),
+            sessions_dir: tmp.join("sessions"),
+        };
+        (deps, inbox)
+    }
+
+    #[test]
+    fn notify_webhook_flag_serialization_roundtrip_and_legacy_default() {
+        // Roundtrip: a routine with the flag set keeps it across save/load JSON.
+        let mut routine = ScheduledRoutine::new("hooked".into(), "p".into(), 60);
+        routine.notify_webhook = true;
+        let json = serde_json::to_string(&routine).unwrap();
+        assert!(json.contains("\"notify_webhook\":true"), "{json}");
+        let back: ScheduledRoutine = serde_json::from_str(&json).unwrap();
+        assert!(back.notify_webhook);
+
+        // Legacy: JSON written before the field existed loads with false.
+        let legacy: ScheduledRoutine =
+            serde_json::from_str(r#"{"id":"old","name":"n","prompt":"p","created_at":"2026-01-01T00:00:00Z","enabled":true}"#).unwrap();
+        assert!(!legacy.notify_webhook);
+    }
+
+    #[test]
+    fn webhook_delivers_task_name_status_and_summary_when_configured() {
+        let app = tauri::test::mock_app();
+        let tmp = tempfile::tempdir().unwrap();
+        let port = RecordingWebhookPort::with_configured(true);
+        let (deps, inbox) = webhook_deps(tmp.path(), port.clone());
+
+        let run_id = deps.inbox.record_run_start("task-1", "Task One").unwrap();
+        let mut ctx = finish_ctx(&run_id, chrono::Utc::now().timestamp_millis() - 1_000);
+        ctx.notify_webhook = true;
+
+        finalize_run(
+            &deps,
+            app.handle(),
+            ctx,
+            RunOutcome {
+                failed: false,
+                error: None,
+                output: "weekly numbers are in\nsecond line".into(),
+                session_id: Some("0195abcd-0000-7000-8000-000000000002".into()),
+            },
+        );
+
+        let deliveries = port.deliveries();
+        assert_eq!(deliveries.len(), 1, "exactly one webhook delivery");
+        assert_eq!(deliveries[0].title, "Task One — succeeded");
+        assert_eq!(deliveries[0].body, "weekly numbers are in");
+        // The run record carries no skip note when delivery happened.
+        let items = inbox.list(None, None, 10).unwrap();
+        assert_eq!(items.len(), 1);
+        assert!(
+            !items[0].summary.contains("webhook"),
+            "no skip annotation expected: {}",
+            items[0].summary
+        );
+    }
+
+    #[test]
+    fn webhook_failure_uses_error_as_body_and_error_level() {
+        let app = tauri::test::mock_app();
+        let tmp = tempfile::tempdir().unwrap();
+        let port = RecordingWebhookPort::with_configured(true);
+        let (deps, _inbox) = webhook_deps(tmp.path(), port.clone());
+
+        let run_id = deps.inbox.record_run_start("task-1", "Task One").unwrap();
+        let mut ctx = finish_ctx(&run_id, chrono::Utc::now().timestamp_millis());
+        ctx.notify_webhook = true;
+
+        finalize_run(
+            &deps,
+            app.handle(),
+            ctx,
+            RunOutcome {
+                failed: true,
+                error: Some("provider unreachable".into()),
+                output: String::new(),
+                session_id: None,
+            },
+        );
+
+        let deliveries = port.deliveries();
+        assert_eq!(deliveries.len(), 1);
+        assert_eq!(deliveries[0].title, "Task One — failed");
+        assert_eq!(deliveries[0].body, "provider unreachable");
+        assert!(matches!(
+            deliveries[0].level,
+            shannon_core::notifier::NotificationLevel::Error
+        ));
+    }
+
+    #[test]
+    fn webhook_skips_silently_with_run_record_note_when_not_configured() {
+        let app = tauri::test::mock_app();
+        let tmp = tempfile::tempdir().unwrap();
+        let port = RecordingWebhookPort::with_configured(false);
+        let (deps, inbox) = webhook_deps(tmp.path(), port.clone());
+
+        let run_id = deps.inbox.record_run_start("task-1", "Task One").unwrap();
+        let mut ctx = finish_ctx(&run_id, chrono::Utc::now().timestamp_millis());
+        ctx.notify_webhook = true;
+
+        finalize_run(
+            &deps,
+            app.handle(),
+            ctx,
+            RunOutcome {
+                failed: false,
+                error: None,
+                output: "did the thing".into(),
+                session_id: None,
+            },
+        );
+
+        // Nothing delivered, nothing raised — but the run record notes why.
+        assert!(port.deliveries().is_empty(), "no delivery without a sink");
+        let items = inbox.list(None, None, 10).unwrap();
+        assert_eq!(items.len(), 1);
+        assert!(
+            items[0]
+                .summary
+                .contains("webhook notification skipped (not configured)"),
+            "skip note must annotate the run record: {}",
+            items[0].summary
+        );
+        assert_eq!(items[0].error, None, "the skip is not an error");
+    }
+
+    #[test]
+    fn webhook_flag_off_never_touches_the_port() {
+        let app = tauri::test::mock_app();
+        let tmp = tempfile::tempdir().unwrap();
+        let port = RecordingWebhookPort::with_configured(true);
+        let (deps, inbox) = webhook_deps(tmp.path(), port.clone());
+
+        let run_id = deps.inbox.record_run_start("task-1", "Task One").unwrap();
+        // finish_ctx leaves notify_webhook = false.
+        finalize_run(
+            &deps,
+            app.handle(),
+            finish_ctx(&run_id, chrono::Utc::now().timestamp_millis()),
+            RunOutcome {
+                failed: false,
+                error: None,
+                output: "plain run".into(),
+                session_id: None,
+            },
+        );
+
+        assert!(port.deliveries().is_empty(), "flag off = no delivery");
+        let items = inbox.list(None, None, 10).unwrap();
+        assert_eq!(items.len(), 1);
+        assert!(
+            !items[0].summary.contains("webhook"),
+            "no annotation when the flag is off: {}",
+            items[0].summary
+        );
     }
 
     /// A stand-in for the engine future that panics instead of returning.

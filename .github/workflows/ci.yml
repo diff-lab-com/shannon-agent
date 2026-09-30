@@ -52,6 +52,31 @@ jobs:
   # Fail-open semantics: if this triage job itself errors, every downstream
   # `needs.changes.result != 'success'` clause goes true and the full suite
   # runs — a broken triage must never silently widen the skip window.
+  #
+  # PR-vs-push coverage matrix (documented 2026-09-30, R1-3 of the
+  # provider-followups roadmap — decision ① "CI covers dev direct pushes"):
+  #   • push / tag (main, dev, v*.*.*): EVERY job below runs the full suite.
+  #     Each job's `if:` short-circuits on its first clause
+  #     (`github.event_name != 'pull_request'`), so this triage job and the
+  #     path filters it computes can only ever NARROW pull_request runs —
+  #     never a push. A desktop/ui-only or gateway-only direct push to dev
+  #     therefore still runs desktop-unit (lint + vitest), Desktop E2E and
+  #     Desktop Visual Audit alongside every Rust job.
+  #   • pull_request: this job classifies changed paths and each downstream
+  #     job runs only when its output matched:
+  #       rust        → facade-facts, test, test-features, eval-dry-run,
+  #                     clippy, fmt, guard-headless, audit, rustsec-audit,
+  #                     doc, metrics, cross-platform, check-linux-musl,
+  #                     semver-check
+  #       desktop-ui  → desktop-e2e, desktop-visual-audit, desktop-unit
+  #       gateway     → gateway
+  #       website     → website
+  #       ci          → everything below (workflow edits re-run the full gate)
+  #     (the desktop-* and gateway jobs additionally run on rust: desktop/**
+  #     outside desktop/ui and Cargo-level changes rebuild the Tauri shell.
+  #     website runs on website/ci only.)
+  #     Non-matching jobs conclude "skipped", which branch protection accepts
+  #     (see above) — the docs-only/website-only PR fast path.
   changes:
     name: PR path triage
     if: github.event_name == 'pull_request'
@@ -400,19 +425,22 @@ jobs:
         # material + tokyo-night and fails on any critical/serious axe
         # violation. Serves the production build via `vite preview`
         # (playwright.walkthrough.config.ts) — no dev server needed.
+        # --workers=1: one worker = one deterministic screenshot set and a
+        # single axe-report-worker0.md (the spec writes one report file per
+        # worker process; parallel workers would shard both across files).
         working-directory: desktop/ui
         env:
           WALKTHROUGH: "1"
           VITE_MOCK_MODE: "1"
           CI: "1"
-        run: pnpm exec playwright test -c playwright.walkthrough.config.ts
+        run: pnpm exec playwright test -c playwright.walkthrough.config.ts --workers=1
 
   desktop-unit:
     name: Desktop Unit Tests
     runs-on: ubuntu-latest
     needs: changes
     if: github.event_name != 'pull_request' || needs.changes.result != 'success' || needs.changes.outputs.rust == 'true' || needs.changes.outputs['desktop-ui'] == 'true' || needs.changes.outputs.ci == 'true'
-    timeout-minutes: 20
+    timeout-minutes: 45
     steps:
       - uses: actions/checkout@f548e57e544e1ff5a4c46bf1e1b8685f8e4a348a
       - uses: actions/setup-node@e51e5fe84fc33b4c73ebe40526b2694712b5b858

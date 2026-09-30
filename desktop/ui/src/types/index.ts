@@ -266,6 +266,10 @@ export interface ModelInfo {
   /** Whether this entry comes from the dynamic models.dev overlay (vs the
    *  static catalog). Surfaces a freshness indicator in the UI. */
   dynamic?: boolean
+  /** Vision (image input) capability from the catalog metadata. `undefined`
+   *  / null = unknown — the UI renders no capability dot rather than
+   *  guessing (R2-3, honest metadata). */
+  vision?: boolean | null
 }
 
 export interface ToolInfo {
@@ -595,6 +599,13 @@ export interface SessionWindowInfo {
   sessionId: string
 }
 
+// --- Companion Quick Capture window (Office Wave 3 C3) ---
+
+/** Result of `open_companion_window` (fixed `companion` label). */
+export interface CompanionWindowInfo {
+  label: string
+}
+
 // --- Diff Types ---
 
 export interface FileDiff {
@@ -624,6 +635,25 @@ export interface HunkAction {
   line_start: number
   line_end: number
   action: 'accept' | 'reject'
+}
+
+// --- File Index Types (office Wave 2 B9' — reference-style file library) ---
+
+/** How an entry entered the index — from the composer's attach flow or an
+ *  engine-generated file card. Wire format is a plain string so the Rust
+ *  side can extend it without a frontend migration. */
+export type FileIndexSource = 'attachment' | 'generated'
+
+/// One row of `list_file_index` — every file the user has ever attached or
+/// the agent produced, newest first. `size_bytes` is null when the file has
+/// since vanished; `registered_at` is RFC3339.
+export interface FileIndexEntry {
+  path: string
+  name: string
+  size_bytes: number | null
+  registered_at: string
+  favorite: boolean
+  source: string
 }
 
 // --- MCP Types ---
@@ -999,6 +1029,10 @@ export interface ScheduledRoutine {
   /// `working_dir` sidecar, flattened onto this shape by the desktop
   /// `RoutineDto`). null/undefined = no project.
   working_dir?: string | null
+  /// office B6' routing: when true the run-finished notification is also
+  /// delivered to the configured webhook (Settings → Notifications).
+  /// Absent = false (no webhook copy).
+  notify_webhook?: boolean
 }
 
 /// Payload for `create_scheduled_task`.
@@ -1014,6 +1048,9 @@ export interface CreateTaskPayload {
   policy?: ExecutionPolicy
   /// P-E1: project directory; stored as the routine's working_dir sidecar.
   working_dir?: string | null
+  /// office B6' routing: deliver the run-finished notification to the
+  /// configured webhook as well. Default false.
+  notify_webhook?: boolean
 }
 
 /// Payload for `update_scheduled_task`. All fields optional except `id`.
@@ -1029,6 +1066,9 @@ export interface UpdateTaskPayload {
   expires_at?: number
   max_fires?: number
   policy?: ExecutionPolicy
+  /// office B6' routing — same field as the create payload; omitted leaves
+  /// the routine's current setting unchanged.
+  notify_webhook?: boolean
   /// Replaces dependency list. Send the full list (add or remove); empty clears.
   depends_on?: string[]
   /// P-E1: non-empty replaces the routine's project, empty string clears it,
@@ -1343,6 +1383,13 @@ export const EVENT_NAMES = {
   SUBAGENT_STOP: 'subagent:stop',
   /** P1-5 D: PTY output for the integrated terminal (data is base64). */
   TERMINAL_OUTPUT: 'terminal:output',
+  /**
+   * P3-6: the terminal's process exited (backend emission lands with the
+   * Task-4 pump change). Authoritative exit signal — the in-stream
+   * "[shannon: process exited …" notice is display text only and must not
+   * be parsed.
+   */
+  TERMINAL_EXIT: 'terminal:exit',
 } as const
 
 export type EventName = (typeof EVENT_NAMES)[keyof typeof EVENT_NAMES]
@@ -1353,6 +1400,15 @@ export type EventName = (typeof EVENT_NAMES)[keyof typeof EVENT_NAMES]
 export interface TerminalInfo {
   terminalId: string
   projectDir: string
+  /**
+   * Additive (review fix): the project dir EXACTLY as the spawn request
+   * carried it, before the backend canonicalized `projectDir`. The
+   * per-project tab filter matches this first — canonical-vs-raw
+   * mismatches (symlinked segments on Unix, `\\?\C:\…` verbatim prefixes
+   * on Windows) used to make a freshly spawned tab vanish into the empty
+   * state. Absent/null on legacy payloads: fall back to `projectDir`.
+   */
+  projectDirRaw?: string | null
   shell: string
   startedAtMs: number
 }
@@ -1361,6 +1417,36 @@ export interface TerminalInfo {
 export interface TerminalOutputPayload {
   terminalId: string
   data: string
+  /**
+   * Additive (review fix): per-session monotonic chunk number assigned by
+   * the backend pump in stream order. Replay stitching drops queued
+   * events with `seq <= terminal_history.endSeq` (already replayed) and
+   * flushes the rest — no loss, no duplication around (re)connect.
+   * Absent on legacy/demo payloads: the consumer falls back to
+   * flush-everything.
+   */
+  seq?: number
+}
+
+/** `terminal:exit` payload — the terminal's process has exited. */
+export interface TerminalExitPayload {
+  terminalId: string
+}
+
+/**
+ * P3-1: persisted terminal preferences (`[terminal]` in
+ * `~/.shannon/config.toml`; camelCase over the wire, frozen shape).
+ * The backend clamps `fontSize` (8–32), `scrollback` (0–100000) and
+ * `drawerHeight` (120–1200) and blanks the shell on read AND write —
+ * after a set, render the values the response carries, not the ones the
+ * caller sent.
+ */
+export interface TerminalSettings {
+  shell: string | null
+  fontSize: number
+  scrollback: number
+  drawerHeight: number
+  screenReaderMode: boolean
 }
 
 // --- Inter-agent message history (Phase D C3) ---

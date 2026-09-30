@@ -163,7 +163,11 @@ fn find_provider_by_kind(
 /// mirror in the reverse direction). The wire format is also kebab-case
 /// per `#[serde(rename_all = "kebab-case")]` on the enum, so this stays
 /// the one canonical mapping the desktop needs.
-fn provider_kind_slug(k: &shannon_types::provider_config::ProviderKind) -> &'static str {
+///
+/// `pub(crate)` so the R2-1 session-model override resolution
+/// (`commands_chat::apply_session_override`) matches provider profiles
+/// against the same slug vocabulary the UI sends.
+pub(crate) fn provider_kind_slug(k: &shannon_types::provider_config::ProviderKind) -> &'static str {
     use shannon_types::provider_config::ProviderKind as K;
     match k {
         K::Anthropic => "anthropic",
@@ -367,6 +371,10 @@ where
 /// B1-8 [R1-4] (review decision 1): normalize a `configure('model')` value
 /// to the canonical catalog id for the given provider.
 ///
+/// `pub(crate)` so the R2-1 `set_session_model` command applies the
+/// identical normalization to a session override — one legacy-name repair,
+/// two entry points.
+///
 /// The Header historically wrote the display NAME (`model.name`) into this
 /// key, so existing `providers.toml` files carry display names (or aliases)
 /// in `active_target.model_id` — and `provider_resolver` passes that stored
@@ -379,7 +387,10 @@ where
 ///   provider → rewritten to that model's id;
 /// - anything else (unknown / custom ids, local ollama tags) → unchanged,
 ///   preserving the resolver's passthrough contract.
-fn normalize_model_id(provider: shannon_engine::api::LlmProvider, value: &str) -> String {
+pub(crate) fn normalize_model_id(
+    provider: shannon_engine::api::LlmProvider,
+    value: &str,
+) -> String {
     let models = shannon_core::model_registry::merged_models_for_provider(provider);
     // Exact id: pass through untouched (the hot path post-decision-1).
     if models.iter().any(|m| m.id == value) {
@@ -1454,6 +1465,39 @@ pub async fn fetch_provider_models(
     Ok(extract_model_ids(&body))
 }
 
+/// Result of [`refresh_model_catalog`] — the R2-2 Settings "Refresh model
+/// catalog" button payload. `count` is the number of models the dynamic
+/// overlay now carries; `generation` is the overlay's monotonically
+/// increasing revision (so the UI can tell a no-op re-refresh from a real
+/// bump) and doubles as a cheap "last changed" signal.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ModelCatalogRefreshResult {
+    pub count: usize,
+    pub generation: u64,
+}
+
+/// Re-fetch the models.dev dynamic model catalog (roadmap R2-2).
+///
+/// The dynamic overlay (`shannon_core::model_registry::dynamic`) previously
+/// refreshed only via the CLI `/model refresh` command; this command wires
+/// the SAME refresh path into the desktop Settings → Models surface:
+/// fetch → persist the on-disk cache → rebuild the in-memory overlay.
+/// On failure the existing overlay/static catalog is left untouched
+/// (fail-open) and the error string is surfaced verbatim so the UI can
+/// show the failure reason inline.
+#[tauri::command]
+pub async fn refresh_model_catalog() -> Result<ModelCatalogRefreshResult, String> {
+    let count = shannon_core::model_registry::dynamic::refresh_overlay_async(
+        std::time::Duration::from_secs(20),
+    )
+    .await
+    .map_err(|e| e.to_string())?;
+    Ok(ModelCatalogRefreshResult {
+        count,
+        generation: shannon_core::model_registry::dynamic::overlay_generation(),
+    })
+}
+
 /// One row in the response from [`test_all_providers`]. Carries enough
 /// identifying info that the Settings → Models "Test all providers" UI
 /// can render a per-row status without re-fetching the provider list.
@@ -2065,7 +2109,10 @@ pub async fn set_active_provider(
 /// collapses to `OpenAI` for catalog walking — the real provider is
 /// whatever the user's `base_url` points at (served through the desktop
 /// singular config above).
-fn llm_provider_for_active_mirror(s: &str) -> Option<shannon_engine::api::LlmProvider> {
+///
+/// `pub(crate)` so the R2-1 `set_session_model` command resolves the
+/// catalog-walking provider for `normalize_model_id` from the same mapping.
+pub(crate) fn llm_provider_for_active_mirror(s: &str) -> Option<shannon_engine::api::LlmProvider> {
     use shannon_engine::api::LlmProvider;
     match s {
         "anthropic" => Some(LlmProvider::Anthropic),
@@ -2735,6 +2782,7 @@ mod tests {
             fallback_models: Vec::new(),
             quirks: Default::default(),
             tiers: ProviderTiers::default(),
+            models: Vec::new(),
         };
         store.upsert_profile(profile, model_id);
     }
@@ -2886,6 +2934,7 @@ mod tests {
                 standard: Some("sonnet-model".into()),
                 pro: Some("opus-model".into()),
             },
+            models: Vec::new(),
         };
         store.upsert_profile(profile, "claude-sonnet-4-20250514");
 
@@ -2948,6 +2997,7 @@ mod tests {
                 fallback_models: Vec::new(),
                 quirks: Default::default(),
                 tiers: ProviderTiers::default(),
+                models: Vec::new(),
             },
             model_id,
         );

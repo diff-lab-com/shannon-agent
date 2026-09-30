@@ -24,13 +24,13 @@ type Priority = (typeof PRIORITIES)[number]
 function priorityBadge(p: string): { bg: string; label: string } {
   switch (p) {
     case 'critical':
-      return { bg: 'bg-error/15 text-error border-error/30', label: 'CRIT' }
+      return { bg: 'bg-error-container text-on-error-container border-error/30', label: 'CRIT' }
     case 'high':
-      return { bg: 'bg-primary/15 text-primary border-primary/30', label: 'HIGH' }
+      return { bg: 'bg-primary-container text-on-primary-container border-primary/30', label: 'HIGH' }
     case 'low':
       return { bg: 'bg-surface-container-high text-on-surface-variant border-outline-variant', label: 'LOW' }
     default:
-      return { bg: 'bg-tertiary/15 text-tertiary border-tertiary/30', label: 'NORM' }
+      return { bg: 'bg-tertiary-container text-on-tertiary-container border-tertiary/30', label: 'NORM' }
   }
 }
 
@@ -225,7 +225,7 @@ export default function AgentMessagesPanel({ team, limit = 100 }: AgentMessagesP
       {loading ? (
         <ListSkeleton count={4} />
       ) : error ? (
-        <div className="rounded-xl border border-error/30 bg-error/10 px-md py-md text-error font-body-md">
+        <div className="rounded-xl border border-error/30 bg-error-container px-md py-md text-on-error-container font-body-md">
           {error}
         </div>
       ) : empty ? (

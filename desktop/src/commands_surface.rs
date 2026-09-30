@@ -463,6 +463,111 @@ pub async fn open_with_default_app(app: tauri::AppHandle, path: String) -> Resul
         .map_err(|e| format!("failed to open path: {e}"))
 }
 
+// ---------------------------------------------------------------------------
+// Office Wave 1 — host runtime probe. The built-in document skills
+// (markdown → docx/xlsx/pdf conversion) shell out to python3/pandoc/
+// LibreOffice; this command tells the UI which of them are actually
+// installed before it offers those actions.
+// ---------------------------------------------------------------------------
+
+/// Availability of the host-run tools the built-in document skills need.
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct HostRuntimeProbe {
+    /// A Python interpreter answered `--version` (`python3`, falling back
+    /// to `python` for distros that only ship the bare name).
+    pub python3: bool,
+    /// First version line the interpreter printed (e.g. `Python 3.12.3`),
+    /// `None` when no interpreter was found.
+    pub python_version: Option<String>,
+    pub pandoc: bool,
+    pub libreoffice: bool,
+}
+
+/// Wall-clock budget per probed binary. Version banners are instant; the
+/// budget only exists so a wedged wrapper script can never pin the probe.
+const PROBE_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(2);
+
+/// Run `cmd args` and return the first non-empty output line — stdout
+/// first, stderr as fallback (older CPythons print `--version` to stderr).
+/// `None` when the binary is missing, exits non-zero, or hangs past
+/// [`PROBE_TIMEOUT`]. Never panics; split out so tests can exercise it
+/// with binaries that exist on any dev machine.
+fn probe_bin(cmd: &str, args: &[&str]) -> Option<String> {
+    use std::io::Read;
+    use std::process::{Command, Stdio};
+    use std::time::{Duration, Instant};
+
+    let mut child = Command::new(cmd)
+        .args(args)
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .ok()?; // binary missing / not executable → silent false
+    let deadline = Instant::now() + PROBE_TIMEOUT;
+    let status = loop {
+        match child.try_wait() {
+            Ok(Some(status)) => break status,
+            Ok(None) => {
+                if Instant::now() >= deadline {
+                    let _ = child.kill();
+                    let _ = child.wait();
+                    return None;
+                }
+                std::thread::sleep(Duration::from_millis(10));
+            }
+            Err(_) => return None,
+        }
+    };
+    if !status.success() {
+        return None;
+    }
+    // Version banners sit far below the OS pipe buffer, so reading after
+    // exit cannot block; anything bigger would starve the child and hit
+    // the timeout above instead.
+    let mut out = Vec::new();
+    if let Some(pipe) = child.stdout.as_mut() {
+        let _ = pipe.read_to_end(&mut out);
+    }
+    let mut err = Vec::new();
+    if let Some(pipe) = child.stderr.as_mut() {
+        let _ = pipe.read_to_end(&mut err);
+    }
+    let first_line = |bytes: &[u8]| {
+        String::from_utf8_lossy(bytes)
+            .lines()
+            .map(str::trim)
+            .find(|line| !line.is_empty())
+            .map(String::from)
+    };
+    first_line(&out).or_else(|| first_line(&err))
+}
+
+/// Probe the host for python3/pandoc/LibreOffice. Purely informational:
+/// every probe is a `--version` invocation with a short timeout, a missing
+/// binary degrades to `false`/`None`, and the command never fails.
+#[tauri::command]
+pub async fn probe_host_runtime() -> Result<HostRuntimeProbe, String> {
+    // Three probes × up to PROBE_TIMEOUT each — run the sweep on the
+    // blocking pool so a slow tool never occupies an async executor thread
+    // (same pattern as the bounded file-tree walk).
+    tokio::task::spawn_blocking(|| {
+        // `python3 --version` first; fall back to bare `python` (older
+        // CPythons print the banner to stderr — probe_bin reads both).
+        let python_version =
+            probe_bin("python3", &["--version"]).or_else(|| probe_bin("python", &["--version"]));
+        Ok(HostRuntimeProbe {
+            python3: python_version.is_some(),
+            python_version,
+            pandoc: probe_bin("pandoc", &["--version"]).is_some(),
+            libreoffice: probe_bin("soffice", &["--version"]).is_some(),
+        })
+    })
+    .await
+    .map_err(|e| format!("host runtime probe task failed: {e}"))?
+}
+
 /// Show a local file in the OS file manager.
 #[tauri::command]
 pub async fn reveal_in_folder(app: tauri::AppHandle, path: String) -> Result<(), String> {
@@ -629,9 +734,9 @@ pub async fn probe_url_frameable(url: String) -> Result<FrameProbe, String> {
 #[cfg(test)]
 mod tests {
     use super::{
-        ARTIFACT_EXPORT_EXTS, artifact_temp_file_name, canonicalized_in_scope,
+        ARTIFACT_EXPORT_EXTS, HostRuntimeProbe, artifact_temp_file_name, canonicalized_in_scope,
         headers_allow_framing, is_official_release_url, is_openable_url, is_probable_path_in_scope,
-        slugify_title, version_is_newer,
+        probe_bin, slugify_title, version_is_newer,
     };
 
     #[test]
@@ -811,5 +916,54 @@ mod tests {
 
         let (frameable, _) = headers_allow_framing(None, &["default-src 'self'"]);
         assert!(frameable);
+    }
+
+    // -- office Wave 1: host runtime probe ----------------------------------
+
+    #[test]
+    fn probe_bin_reads_first_line_of_stdout() {
+        // `rustc` exists on every machine that can compile this test, so
+        // the helper is testable without assuming python3/pandoc/soffice.
+        let version = probe_bin("rustc", &["--version"]).expect("rustc must be probeable");
+        assert!(version.starts_with("rustc "), "got: {version}");
+        assert!(!version.contains('\n'), "first line only, got: {version}");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn probe_bin_falls_back_to_stderr() {
+        // Older CPythons print their version banner to stderr — the helper
+        // must still surface it. `sh` exists on every Unix.
+        let line = probe_bin("sh", &["-c", "echo banner-to-stderr 1>&2"])
+            .expect("stderr-only output must be returned");
+        assert_eq!(line, "banner-to-stderr");
+    }
+
+    #[test]
+    fn probe_bin_returns_none_for_missing_binary() {
+        assert!(probe_bin("shannon-not-a-real-binary-xyz", &["--version"]).is_none());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn probe_bin_returns_none_for_non_zero_exit() {
+        assert!(probe_bin("sh", &["-c", "echo boom >&2; exit 3"]).is_none());
+    }
+
+    #[test]
+    fn host_runtime_probe_serializes_camel_case() {
+        // The frontend's `HostRuntimeProbe` interface reads `pythonVersion`
+        // — the wire shape must stay camelCase.
+        let json = serde_json::to_value(HostRuntimeProbe {
+            python3: true,
+            python_version: Some("Python 3.12.3".to_string()),
+            pandoc: false,
+            libreoffice: false,
+        })
+        .unwrap();
+        assert_eq!(json["python3"], true);
+        assert_eq!(json["pythonVersion"], "Python 3.12.3");
+        assert_eq!(json["pandoc"], false);
+        assert_eq!(json["libreoffice"], false);
     }
 }

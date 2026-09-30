@@ -16,7 +16,10 @@
 
 import { useEffect, useMemo, useState } from 'react'
 import { useNavigate, useParams } from 'react-router-dom'
-import { getTraceTimeline } from '@/lib/tauri-api'
+import { save } from '@tauri-apps/plugin-dialog'
+import { toast } from 'sonner'
+import { getTraceTimeline, saveTextFile } from '@/lib/tauri-api'
+import { timelineToHtml } from '@/lib/timelineExport'
 import type { TimelineCumulativePoint, TimelineTurn, TurnTimeline } from '@/types'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
@@ -25,6 +28,7 @@ import { CardSkeleton } from '@/components/SkeletonLoader'
 import ErrorState from '@/components/ui/error-state'
 import { Icon } from '@/components/ui/icon'
 import { cn } from '@/lib/utils'
+import { toastError } from '@/lib/errorToast'
 import { useT } from '@/i18n'
 import { useIntl } from 'react-intl'
 
@@ -67,14 +71,20 @@ function formatTime(tsNs: number, locale: string): string {
   })
 }
 
-const nf = new Intl.NumberFormat()
-// The engine's usage ledger reports costs in USD; format them as USD
-// regardless of OS locale — the currency is a property of the data,
-// not of the user's locale.
+/* ────────────────────  office Wave 3 C6: HTML export  ──────────────────── */
+
+/**
+ * C6: serialize the already-loaded timeline projection into a self-contained
+ * HTML document — inline styles only, no scripts, fonts or network calls.
+ * One section per turn (timestamp range + reason status color + usage chips
+ * + tool waterfall rows as a plain list). Exported for tests.
+ */
 const COST_FORMAT = new Intl.NumberFormat(undefined, {
   style: 'currency',
   currency: 'USD',
 })
+
+const nf = new Intl.NumberFormat()
 
 export interface TurnTimelineProps {
   /** Session id override (embeddable reuse); defaults to the route param. */
@@ -136,6 +146,28 @@ export default function TurnTimeline({ sessionId }: TurnTimelineProps) {
     .reverse()
     .find(p => p.cost_total_usd != null)?.cost_total_usd
 
+  // C6: export the loaded projection to a self-contained HTML file at a
+  // user-chosen path (save dialog + saveTextFile). Cancelling the dialog
+  // (null) backs out silently; a write failure toasts the cause.
+  const [exporting, setExporting] = useState(false)
+  const handleExportHtml = async () => {
+    if (!timeline) return
+    setExporting(true)
+    try {
+      const path = await save({
+        defaultPath: `timeline-${timeline.session_id || id || 'session'}.html`,
+        filters: [{ name: 'HTML', extensions: ['html'] }],
+      })
+      if (!path) return
+      await saveTextFile(path, timelineToHtml(timeline))
+      toast.success(t('office.timeline.exported'))
+    } catch (err) {
+      toastError(t('chat.artifact.exportFailed'), err)
+    } finally {
+      setExporting(false)
+    }
+  }
+
   if (loading) {
     return (
       <div className="p-lg space-y-3" aria-busy="true">
@@ -180,7 +212,20 @@ export default function TurnTimeline({ sessionId }: TurnTimelineProps) {
             })}
           </p>
         </div>
-        <div className="ml-auto flex items-center gap-1.5 shrink-0" role="list" aria-label={t('timeline.summary.aria')}>
+        <div className="ml-auto flex items-center gap-1.5 shrink-0">
+          {/* C6: self-contained HTML export of the loaded projection. */}
+          <Button
+            variant="ghost"
+            size="sm"
+            data-testid="timeline-export-html"
+            aria-label={t('office.timeline.exportHtml')}
+            title={t('office.timeline.exportHtml')}
+            disabled={exporting}
+            onClick={() => void handleExportHtml()}
+            className="text-on-surface-variant hover:text-primary hover:bg-surface-container"
+          >
+            <Icon name="download" size="sm" />
+          </Button>
           <SummaryChip icon="schema" label={t('timeline.stat.turns', { count: timeline.turns.length })} />
           <SummaryChip icon="build" label={t('timeline.stat.tools', { count: totalTools })} />
           <SummaryChip icon="token" label={nf.format(totalOutputTokens)} />
@@ -359,8 +404,8 @@ function TurnCard({
             <span
               className={cn(
                 'inline-flex items-center gap-xs rounded-full px-sm py-0.5 font-label-xs text-xs border',
-                tone === 'success' && 'bg-primary/10 text-primary border-primary/30',
-                tone === 'error' && 'bg-error/10 text-error border-error/30',
+                tone === 'success' && 'bg-primary-container text-on-primary-container border-primary/30',
+                tone === 'error' && 'bg-error-container text-on-error-container border-error/30',
                 tone === 'neutral' && 'bg-surface-container-high text-on-surface-variant border-outline-variant/30',
               )}
             >

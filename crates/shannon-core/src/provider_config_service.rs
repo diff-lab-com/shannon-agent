@@ -348,6 +348,27 @@ impl ProviderConfigService {
         locked.set_max_tokens(provider, max_tokens)
     }
 
+    /// Insert or replace one per-model metadata declaration (R2-4) on the
+    /// provider slot with the raw stored id `provider_id` and persist.
+    /// Errors when no such slot exists or the spec is invalid.
+    pub fn set_model_meta(
+        &mut self,
+        provider_id: &str,
+        spec: shannon_types::provider_config::ModelSpec,
+    ) -> io::Result<PathBuf> {
+        let mut locked = self.lock()?;
+        locked.reload_locked()?;
+        locked.set_model_meta(provider_id, spec)
+    }
+
+    /// Remove the per-model declaration `model_id` from provider slot
+    /// `provider_id` and persist (when something was removed). Idempotent.
+    pub fn remove_model_meta(&mut self, provider_id: &str, model_id: &str) -> io::Result<PathBuf> {
+        let mut locked = self.lock()?;
+        locked.reload_locked()?;
+        locked.remove_model_meta(provider_id, model_id)
+    }
+
     /// Hand back the underlying store for callers that need raw access
     /// (desktop low-level paths).
     pub fn into_inner(self) -> ProviderConfigStore {
@@ -535,6 +556,35 @@ impl<'a> LockedService<'a> {
         self.svc.store.save_locked()
     }
 
+    /// Insert or replace one per-model metadata declaration (R2-4) and
+    /// persist. The flock is already held by this guard.
+    pub fn set_model_meta(
+        &mut self,
+        provider_id: &str,
+        spec: shannon_types::provider_config::ModelSpec,
+    ) -> io::Result<PathBuf> {
+        self.svc.store.set_model_meta(provider_id, spec)?;
+        self.svc.store.save_locked()
+    }
+
+    /// Remove one per-model metadata declaration (R2-4) and persist — only
+    /// when an entry was actually removed (idempotent no-op otherwise).
+    pub fn remove_model_meta(&mut self, provider_id: &str, model_id: &str) -> io::Result<PathBuf> {
+        if self.svc.store.remove_model_meta(provider_id, model_id)? {
+            self.svc.store.save_locked()
+        } else {
+            // Nothing changed; hand back the pinned path without touching
+            // the file (matches disconnect_by_slug's "no write on no-op").
+            self.svc
+                .store
+                .last_path()
+                .map(Path::to_path_buf)
+                .ok_or_else(|| {
+                    io::Error::new(io::ErrorKind::NotFound, "no providers.toml path pinned")
+                })
+        }
+    }
+
     /// Persist whatever is in the in-memory config to disk. **The
     /// caller MUST hold the flock** (typically via
     /// [`ProviderConfigService::lock`]); this does not re-acquire it.
@@ -569,6 +619,7 @@ fn build_profile_for_provider(
         fallback_models: Vec::new(),
         quirks: Default::default(),
         tiers: ProviderTiers::default(),
+        models: Vec::new(),
     }
 }
 
@@ -716,6 +767,7 @@ mod tests {
             fallback_models: Vec::new(),
             quirks: Default::default(),
             tiers: ProviderTiers::default(),
+            models: Vec::new(),
         };
         svc.upsert(custom, "gpt-4o", true)
             .expect("upsert must succeed");
@@ -853,6 +905,7 @@ mod tests {
             fallback_models: Vec::new(),
             quirks: Default::default(),
             tiers: ProviderTiers::default(),
+            models: Vec::new(),
         };
         svc.upsert(custom, "gpt-4o", true)
             .expect("upsert must succeed");
@@ -902,6 +955,7 @@ mod tests {
             fallback_models: Vec::new(),
             quirks: Default::default(),
             tiers: ProviderTiers::default(),
+            models: Vec::new(),
         };
         svc.upsert(custom, "gpt-4o", false)
             .expect("upsert must succeed");
@@ -1324,5 +1378,92 @@ service = "glm-plan"
         // At least one OpenAI + the seeded Anthropic must be present.
         assert!(on_disk.contains("anthropic"));
         assert!(on_disk.contains("openai"));
+    }
+
+    // ===== Per-model metadata declarations (R2-4) =====
+
+    fn meta_spec(
+        id: &str,
+        context_window: u32,
+        cost_in: f64,
+        cost_out: f64,
+    ) -> shannon_types::provider_config::ModelSpec {
+        shannon_types::provider_config::ModelSpec {
+            id: id.to_string(),
+            display_name: None,
+            context_window: Some(context_window),
+            max_output: Some(8_192),
+            cost_per_m_input: Some(cost_in),
+            cost_per_m_output: Some(cost_out),
+            capabilities: vec![shannon_types::provider_config::ModelCapability::Vision],
+        }
+    }
+
+    #[test]
+    fn set_model_meta_persists_through_service_write_path() {
+        let (mut svc, dir) = service();
+        let _ = svc
+            .connect(LlmProvider::Anthropic, None, None, true)
+            .expect("connect must succeed");
+        // Raw stored id (== llm_provider_id for the canonical connect path).
+        let saved = svc
+            .set_model_meta("anthropic", meta_spec("claude-custom", 200_000, 3.0, 15.0))
+            .expect("set_model_meta must persist");
+        assert!(saved.exists());
+
+        // Reload from disk: the declaration survives, with values intact.
+        let reloaded = ProviderConfigService::load_at(&dir.path().join("providers.toml"));
+        let models = &reloaded.store().config().profiles["default"].providers[0].models;
+        assert_eq!(models.len(), 1);
+        assert_eq!(models[0].id, "claude-custom");
+        assert_eq!(models[0].context_window, Some(200_000));
+        assert_eq!(models[0].cost_per_m_input, Some(3.0));
+    }
+
+    #[test]
+    fn set_model_meta_replaces_entry_with_same_id() {
+        let (mut svc, _dir) = service();
+        let _ = svc
+            .connect(LlmProvider::Anthropic, None, None, true)
+            .expect("connect must succeed");
+        svc.set_model_meta("anthropic", meta_spec("m", 100_000, 1.0, 2.0))
+            .expect("first set");
+        svc.set_model_meta("anthropic", meta_spec("m", 128_000, 0.5, 1.5))
+            .expect("second set replaces");
+        let models = &svc.store().config().profiles["default"].providers[0].models;
+        assert_eq!(models.len(), 1, "ids stay unique through the service");
+        assert_eq!(models[0].context_window, Some(128_000));
+    }
+
+    #[test]
+    fn set_model_meta_unknown_provider_is_an_error() {
+        let (mut svc, _dir) = service();
+        let _ = svc
+            .connect(LlmProvider::Anthropic, None, None, true)
+            .expect("connect must succeed");
+        let err = svc
+            .set_model_meta("ghost-provider", meta_spec("m", 1, 0.0, 0.0))
+            .expect_err("unknown provider must error");
+        assert_eq!(err.kind(), std::io::ErrorKind::NotFound);
+    }
+
+    #[test]
+    fn remove_model_meta_is_idempotent_and_persists_only_on_removal() {
+        let (mut svc, dir) = service();
+        let _ = svc
+            .connect(LlmProvider::Anthropic, None, None, true)
+            .expect("connect must succeed");
+        svc.set_model_meta("anthropic", meta_spec("m", 1_000, 0.0, 0.0))
+            .expect("set");
+        let saved = svc
+            .remove_model_meta("anthropic", "m")
+            .expect("remove must persist");
+        assert!(saved.exists());
+        // Second remove: no-op, no error.
+        svc.remove_model_meta("anthropic", "m")
+            .expect("idempotent remove");
+        let reloaded = ProviderConfigService::load_at(&dir.path().join("providers.toml"));
+        let models = &reloaded.store().config().profiles["default"].providers[0].models;
+        assert!(models.is_empty());
     }
 }

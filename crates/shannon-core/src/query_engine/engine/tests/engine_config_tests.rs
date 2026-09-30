@@ -408,6 +408,42 @@ fn test_resolve_max_context_unknown_model_fallback() {
 }
 
 #[test]
+fn test_resolve_max_context_declared_metadata_wins_over_registry() {
+    // R2-4: a declaration from the active providers.toml v2 profile beats the
+    // catalog/registry value (and the 200K fallback) for the declared id.
+    use shannon_types::provider_config::ModelSpec;
+    let spec = ModelSpec {
+        id: "shannon-ctx-test-model".to_string(),
+        display_name: None,
+        context_window: Some(65_536),
+        max_output: None,
+        cost_per_m_input: None,
+        cost_per_m_output: None,
+        capabilities: vec![],
+    };
+    crate::declared_models::clear();
+    crate::declared_models::replace_from_specs(&[spec]);
+    let declared = QueryEngine::resolve_max_context_tokens("shannon-ctx-test-model", None);
+    crate::declared_models::clear();
+    assert_eq!(declared, 65_536, "declared context_window must win");
+    // And the user override still wins over the declaration.
+    let spec2 = ModelSpec {
+        id: "shannon-ctx-test-model-2".to_string(),
+        display_name: None,
+        context_window: Some(65_536),
+        max_output: None,
+        cost_per_m_input: None,
+        cost_per_m_output: None,
+        capabilities: vec![],
+    };
+    crate::declared_models::replace_from_specs(&[spec2]);
+    let overridden =
+        QueryEngine::resolve_max_context_tokens("shannon-ctx-test-model-2", Some(1_024));
+    crate::declared_models::clear();
+    assert_eq!(overridden, 1_024, "user override must beat the declaration");
+}
+
+#[test]
 fn test_resolve_max_context_zero_override_prevents_division_by_zero() {
     // Even a zero override should not crash — the compression guard uses .max(1)
     let result = QueryEngine::resolve_max_context_tokens("any-model", Some(0));

@@ -80,6 +80,10 @@ toml = "0.8"
 # session the builtin browser_* tools drive
 shannon-browser = { path = "../shannon-browser" }
 
+# Office Wave 2 (B1): engine-native xlsx generation for the `write_xlsx` tool.
+# Pure-Rust (no zlib feature → rust deflate backend), MIT/Apache-2.0.
+rust_xlsxwriter = { workspace = true }
+
 
 # Landlock backend for the Linux kernel-enforced execution world (§4.12)
 [target.'cfg(target_os = "linux")'.dependencies]
@@ -189,6 +193,11 @@ regex = "1"
 ignore = "0.4"
 proptest = { workspace = true }
 insta = { workspace = true }
+# write_xlsx tests: calamine reads generated workbooks back with real types,
+# zip unwraps the package to assert formula parts. Both already live in the
+# workspace (desktop uses them for the A2' parsing pipeline).
+calamine = { workspace = true }
+zip = { workspace = true }
 
 [[bench]]
 name = "tool_benchmarks"

@@ -61,7 +61,7 @@ export default function FileLoadForm({
       </Button>
       {loadError ? (
         <div
-          className="bg-error/10 border border-error/30 rounded-lg p-sm font-label-sm text-error"
+          className="bg-error-container border border-error/30 rounded-lg p-sm font-label-sm text-on-error-container"
           role="alert"
         >
           {loadError}

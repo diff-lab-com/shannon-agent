@@ -346,7 +346,7 @@ export default function PermissionsSettings() {
                 <h3 className="font-title-sm text-on-surface font-semibold">
                   {t('settings.permissions.scope.resultsTitle', { scope: rawScope })}
                 </h3>
-                <span className="inline-flex items-center gap-xs px-sm py-xs rounded-full bg-primary/10 text-primary font-label-sm text-label-xs font-bold">
+                <span className="inline-flex items-center gap-xs px-sm py-xs rounded-full bg-primary-container text-on-primary-container font-label-sm text-label-xs font-bold">
                   <span className="material-symbols-outlined icon-sm" aria-hidden="true">
                     filter_alt
                   </span>
@@ -442,7 +442,7 @@ export default function PermissionsSettings() {
                       <div className="flex items-center gap-sm">
                         <span className="font-title-sm text-on-surface font-semibold truncate">{p.name}</span>
                         {activeProfile === p.name && (
-                          <span className="px-sm py-xs rounded-full bg-primary/10 text-primary font-label-sm text-label-xs font-bold uppercase tracking-wider">
+                          <span className="px-sm py-xs rounded-full bg-primary-container text-on-primary-container font-label-sm text-label-xs font-bold uppercase tracking-wider">
                             {t('settings.permissions.activeBadge')}
                           </span>
                         )}
@@ -490,7 +490,7 @@ export default function PermissionsSettings() {
                         className={cn(
                           'px-md py-sm rounded-lg font-label-md',
                           activeProfile === p.name
-                            ? 'bg-primary/10 text-primary'
+                            ? 'bg-primary-container text-on-primary-container'
                             : 'bg-primary text-on-primary',
                         )}
                         disabled={activeProfile === p.name || activating != null}
@@ -614,7 +614,7 @@ function BuiltinCard({
         </span>
         <span className="font-title-sm text-on-surface font-semibold capitalize">{profile.id}</span>
         {active && (
-          <span className="ml-auto px-sm py-xs rounded-full bg-primary/10 text-primary font-label-sm text-label-xs font-bold uppercase tracking-wider">
+          <span className="ml-auto px-sm py-xs rounded-full bg-primary-container text-on-primary-container font-label-sm text-label-xs font-bold uppercase tracking-wider">
             {t('settings.permissions.activeBadge')}
           </span>
         )}
@@ -638,7 +638,7 @@ function BuiltinCard({
       <Button
         className={cn(
           'mt-auto px-md py-sm rounded-lg font-label-md',
-          active ? 'bg-primary/10 text-primary' : 'bg-primary text-on-primary',
+          active ? 'bg-primary-container text-on-primary-container' : 'bg-primary text-on-primary',
         )}
         disabled={active || busy}
         onClick={onActivate}
