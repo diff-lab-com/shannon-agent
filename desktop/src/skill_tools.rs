@@ -1,6 +1,6 @@
 //! Desktop skill → tool bridge (G1 P0-2.1).
 //!
-//! The desktop chat engine shares the [`ToolRegistry`] with MCP tools but,
+//! The desktop chat engine shares the `ToolRegistry` with MCP tools but,
 //! unlike the REPL, never registered installed skills as model-callable
 //! tools — a hub-installed skill was browsable in the UI yet invisible in
 //! chat. This module ports the REPL bridge

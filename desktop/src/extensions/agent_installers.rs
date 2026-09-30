@@ -4,7 +4,7 @@
 //! - `AgentRepoInstaller` — clones a repo with a `.claude/agents/*.md` style
 //!   collection into `~/.shannon/agents/<plugin>/`.
 //! - `AgentMarkdownInstaller` — installs a single agent as a **flat**
-//!   `~/.shannon/agents/<name>.toml` [`AgentDefinition`].
+//!   `~/.shannon/agents/<name>.toml` `AgentDefinition` (shannon-agents).
 //!
 //! G1 P1-9 format unification: the runtime loader
 //! (`shannon_agents::AgentDefinitionRegistry::load_from_dirs`) only reads
@@ -288,7 +288,7 @@ impl AddonInstaller for AgentRepoInstaller {
 }
 
 /// Single-agent installer — writes a **flat** `~/.shannon/agents/<name>.toml`
-/// [`shannon_agents::AgentDefinition`] the runtime loader actually reads.
+/// `shannon_agents::AgentDefinition` the runtime loader actually reads.
 ///
 /// The catalog page's `description` / `system_prompt` semantics map onto the
 /// definition fields; catalog tool hints become capabilities (freeform), so
