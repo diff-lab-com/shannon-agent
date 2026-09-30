@@ -483,6 +483,8 @@ fn main() {
             commands_notifications::get_webhook_config,
             commands_notifications::save_webhook_config,
             commands_notifications::clear_webhook_config,
+            // P1-7 — one-shot test payload to the configured webhook
+            commands_notifications::test_webhook,
             // P0-c — billing demo data (UI shows "Demo mode" banner)
             commands_billing::get_billing_plan,
             commands_billing::get_cost_history,

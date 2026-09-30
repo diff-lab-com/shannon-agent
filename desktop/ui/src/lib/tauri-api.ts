@@ -382,6 +382,22 @@ export type TestConnectionResult =
   | { kind: 'network_unreachable' }
   | { kind: 'unknown'; message: string }
 
+/// Outcome of the settings "send test webhook" button (P1-7). `status` is the
+/// HTTP status the receiver answered with (null on transport failure / URL
+/// block); `detail` is a human-readable summary line for the failure toast.
+export interface WebhookTestResult {
+  success: boolean
+  status: number | null
+  detail: string
+}
+
+/// Fire one test payload at the currently configured webhook URL (P1-7).
+/// Uses the saved preset template/secret/timeout and a single synchronous
+/// POST (no retries) so the UI can show an immediate verdict.
+export async function testWebhook(title: string, body: string): Promise<WebhookTestResult> {
+  return invoke('test_webhook', { title, body })
+}
+
 export async function testProviderConnection(
   provider: string,
   apiKey: string,

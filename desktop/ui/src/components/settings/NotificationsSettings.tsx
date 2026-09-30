@@ -5,6 +5,7 @@ import { toast } from 'sonner'
 import { toastError } from '@/lib/errorToast'
 import { Button } from '@/components/ui/button'
 import { Switch } from '@/components/ui/switch'
+import { useNotification } from '@/hooks/useNotification'
 import {
   Select,
   SelectContent,
@@ -16,9 +17,9 @@ import { validateWebhookUrl } from '@/lib/packageValidation'
 import * as api from '@/lib/tauri-api'
 import { cn } from '@/lib/utils'
 /** Channel preset id — stored as the webhook `template` discriminator. */
-type WebhookPreset = 'feishu' | 'dingtalk' | 'wechat' | 'slack' | 'custom'
+type WebhookPreset = 'feishu' | 'dingtalk' | 'wechat' | 'slack' | 'discord' | 'custom'
 
-const PRESET_IDS: WebhookPreset[] = ['feishu', 'dingtalk', 'wechat', 'slack', 'custom']
+const PRESET_IDS: WebhookPreset[] = ['feishu', 'dingtalk', 'wechat', 'slack', 'discord', 'custom']
 
 const PRESET_META: Record<
   WebhookPreset,
@@ -48,6 +49,12 @@ const PRESET_META: Record<
     urlHintKey: 'settings.notifications.preset.urlHint.slack',
     labelKey: 'settings.notifications.preset.slack',
   },
+  discord: {
+    icon: 'forum',
+    urlPlaceholder: 'https://discord.com/api/webhooks/<id>/<token>',
+    urlHintKey: 'settings.notifications.preset.urlHint.discord',
+    labelKey: 'settings.notifications.preset.discord',
+  },
   custom: {
     icon: 'tune',
     urlPlaceholder: 'https://example.com/webhook',
@@ -69,6 +76,8 @@ function WebhookSection({ onSaved }: { onSaved?: () => void } = {}) {
   const [loading, setLoading] = useState(true)
   const [saving, setSaving] = useState(false)
   const [clearing, setClearing] = useState(false)
+  // P1-7: one-shot test send against the configured webhook.
+  const [testingWebhook, setTestingWebhook] = useState(false)
   const [url, setUrl] = useState('')
   const [preset, setPreset] = useState<WebhookPreset>('custom')
   const [customBody, setCustomBody] = useState('')
@@ -164,6 +173,35 @@ function WebhookSection({ onSaved }: { onSaved?: () => void } = {}) {
       toastError(t('settings.notifications.error.clearFailed'), e)
     }
     setClearing(false)
+  }
+
+  // P1-7: the timeout had state that participated in saves but no control —
+  // expose it. Non-positive / non-numeric input is ignored (keeps the last
+  // valid value) so the saved `timeout_ms` can never degrade to 0.
+  const handleTimeoutChange = (raw: string) => {
+    const n = Number.parseInt(raw, 10)
+    if (Number.isFinite(n) && n > 0) setTimeoutMs(n)
+  }
+
+  // P1-7: send a one-shot test payload through the saved webhook config
+  // (preset template + secret + timeout) and surface the verdict.
+  const handleTestWebhook = async () => {
+    setTestingWebhook(true)
+    try {
+      const result = await api.testWebhook(
+        t('settings.notifications.webhookTest.title'),
+        t('settings.notifications.webhookTest.body'),
+      )
+      if (result.success) {
+        toast.success(t('settings.notifications.webhookTest.success', { status: result.status ?? '?' }))
+      } else {
+        toast.error(t('settings.notifications.webhookTest.failedWithReason', { reason: result.detail }))
+      }
+    } catch (e) {
+      // Command-level rejection (e.g. nothing configured yet).
+      toastError(t('settings.notifications.webhookTest.failed'), e)
+    }
+    setTestingWebhook(false)
   }
 
   if (loading) {
@@ -273,6 +311,37 @@ function WebhookSection({ onSaved }: { onSaved?: () => void } = {}) {
         <p className="mt-xs text-on-surface-variant font-body-sm">{t('settings.notifications.secretHint')}</p>
       </div>
 
+      {/* P1-7: timeout_ms / include_body always participated in saves but had
+          no controls — every save reset them to the defaults. Both are now
+          exposed so the round-trip is lossless. */}
+      <div className="flex flex-wrap items-end gap-md">
+        <div>
+          <label htmlFor="webhook-timeout" className="block font-label-lg text-on-surface mb-sm">
+            {t('settings.notifications.timeoutMs')}
+          </label>
+          <input
+            id="webhook-timeout"
+            type="number"
+            min={500}
+            step={500}
+            value={timeoutMs}
+            onChange={(e) => handleTimeoutChange(e.target.value)}
+            className="w-40 px-md py-sm rounded-md border border-outline bg-surface text-on-surface focus-visible:border-primary focus-visible:ring-2 focus-visible:ring-primary/30 font-mono"
+          />
+        </div>
+        <div className="flex items-center justify-between gap-md pb-sm">
+          <span className="font-label-md text-on-surface">
+            {t('settings.notifications.includeBody')}
+          </span>
+          <Switch
+            checked={includeBody}
+            onCheckedChange={setIncludeBody}
+            aria-label={t('settings.notifications.includeBody')}
+            className="shrink-0"
+          />
+        </div>
+      </div>
+
       {preset === 'custom' && (
         <div>
           <label htmlFor="webhook-custom-body" className="block font-label-lg text-on-surface mb-sm">
@@ -290,7 +359,7 @@ function WebhookSection({ onSaved }: { onSaved?: () => void } = {}) {
         </div>
       )}
 
-      <div className="flex gap-sm pt-md">
+      <div className="flex flex-wrap gap-sm pt-md">
         {/* P1-15: saving the Custom preset with an empty body would overwrite
             whatever template is currently stored with an empty payload — the
             save is blocked until a body is provided. */}
@@ -299,6 +368,16 @@ function WebhookSection({ onSaved }: { onSaved?: () => void } = {}) {
           disabled={saving || !url.trim() || !validateWebhookUrl(url.trim()).ok || (preset === 'custom' && customBody.trim() === '')}
         >
           {saving ? t('settings.notifications.saving') : t('settings.notifications.save')}
+        </Button>
+        {/* P1-7: one-shot test send — uses the SAVED config, so save first. */}
+        <Button
+          variant="outline"
+          onClick={handleTestWebhook}
+          disabled={testingWebhook || !url.trim()}
+        >
+          {testingWebhook
+            ? t('settings.notifications.sending')
+            : t('settings.notifications.webhookTest.button')}
         </Button>
       </div>
 
@@ -323,11 +402,16 @@ function WebhookSection({ onSaved }: { onSaved?: () => void } = {}) {
 }
 
 /** Desktop-notification master switch + Do-Not-Disturb quiet-hours window.
- * Desktop-local: webhooks still deliver while DND suppresses OS popups. */
+ * Desktop-local: webhooks still deliver while DND suppresses OS popups.
+ * P1-7: also hosts the "send test notification" button, moved here from the
+ * General page so every notification affordance lives on this page. */
 function DndSection({ onSaved }: { onSaved?: () => void } = {}) {
   const t = useT()
+  const notify = useNotification()
   const [loading, setLoading] = useState(true)
   const [saving, setSaving] = useState(false)
+  // P1-7: desktop-notification test send (relocated from GeneralSettings).
+  const [testingNotification, setTestingNotification] = useState(false)
   const [master, setMaster] = useState(true)
   const [dnd, setDnd] = useState(false)
   const [start, setStart] = useState('22:00')
@@ -377,6 +461,22 @@ function DndSection({ onSaved }: { onSaved?: () => void } = {}) {
   }
 
   const windowDisabled = loading || !master
+
+  // P1-7: fire a native OS notification to verify the renderer is wired up.
+  const handleTestNotification = async () => {
+    setTestingNotification(true)
+    try {
+      await notify({
+        title: t('settings.notifications.testTitle'),
+        body: t('settings.notifications.testBody'),
+        level: 'info',
+      })
+      toast.success(t('settings.notifications.testSent'))
+    } catch (e) {
+      toastError(t('settings.notifications.testFailed'), e)
+    }
+    setTestingNotification(false)
+  }
 
   return (
     <section className="rounded-xl border border-outline-variant/30 bg-surface-container-lowest p-lg space-y-md">
@@ -490,9 +590,20 @@ function DndSection({ onSaved }: { onSaved?: () => void } = {}) {
         </div>
       )}
 
-      <div>
+      <div className="flex flex-wrap items-center gap-sm pt-xs">
         <Button onClick={handleSave} disabled={loading || saving}>
           {saving ? t('settings.notifications.dnd.saving') : t('settings.notifications.dnd.save')}
+        </Button>
+        {/* P1-7: relocated from the General page — fires a native OS
+            notification to verify the desktop channel end-to-end. */}
+        <Button
+          variant="outline"
+          onClick={handleTestNotification}
+          disabled={testingNotification}
+        >
+          {testingNotification
+            ? t('settings.notifications.sending')
+            : t('settings.notifications.testButton')}
         </Button>
       </div>
     </section>

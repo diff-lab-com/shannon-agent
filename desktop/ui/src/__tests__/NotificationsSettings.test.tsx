@@ -15,6 +15,7 @@ const saveWebhookConfig = vi.mocked(api.saveWebhookConfig)
 const clearWebhookConfig = vi.mocked(api.clearWebhookConfig)
 const getNotificationPrefs = vi.mocked(api.getNotificationPrefs)
 const setNotificationPrefs = vi.mocked(api.setNotificationPrefs)
+const testWebhook = vi.mocked(api.testWebhook)
 
 vi.mock('sonner', () => ({
   toast: {
@@ -54,11 +55,15 @@ async function waitForDndLoaded() {
 beforeEach(() => {
   // Use mockReset so the setup.ts defaults are wiped, then re-establish
   // baseline values — `mockReset` alone leaves `vi.fn()` returning undefined.
+  // clearAllMocks first also wipes sonner toast history, so the
+  // not.toHaveBeenCalled assertions below stay per-test.
+  vi.clearAllMocks()
   getWebhookConfig.mockReset()
   saveWebhookConfig.mockReset()
   clearWebhookConfig.mockReset()
   getNotificationPrefs.mockReset()
   setNotificationPrefs.mockReset()
+  testWebhook.mockReset()
   getWebhookConfig.mockResolvedValue(null)
   saveWebhookConfig.mockResolvedValue(undefined)
   clearWebhookConfig.mockResolvedValue(undefined)
@@ -71,6 +76,7 @@ beforeEach(() => {
     on_failed: true,
   })
   setNotificationPrefs.mockResolvedValue(undefined)
+  testWebhook.mockResolvedValue({ success: true, status: 200, detail: 'HTTP 200' })
 })
 
 describe('NotificationsSettings — layout', () => {
@@ -120,12 +126,12 @@ describe('NotificationsSettings — webhook loading', () => {
     })
     render(<NotificationsSettings />)
     await waitForWebhookLoaded()
-    // No timeout input is rendered; verify the URL seeds and the Save button
-    // enables, which together imply the underlying timeoutMs state defaulted
-    // back to 5000 (or the user would need to re-enable to save).
+    // P1-7: the timeout now has a control — verify the underlying timeoutMs
+    // state defaulted back to 5000 (0 from the wire is treated as unset).
     const section = getWebhookSection()
     const urlInput = within(section).getByLabelText(/Webhook URL/) as HTMLInputElement
     expect(urlInput.value).toBe('https://example.com/webhook')
+    expect((within(section).getByLabelText(/Timeout \(ms\)/) as HTMLInputElement).value).toBe('5000')
     expect(within(section).getByText('Valid URL')).toBeInTheDocument()
   })
 
@@ -364,6 +370,145 @@ describe('NotificationsSettings — webhook clear', () => {
     )
     expect(within(section).getByRole('button', { name: /Clearing/ })).toBeDisabled()
     resolveClear?.()
+  })
+})
+
+describe('NotificationsSettings — webhook timeout / include-body controls (P1-7)', () => {
+  it('seeds and saves the timeout and include-body values they always carried', async () => {
+    getWebhookConfig.mockResolvedValue({
+      url: 'https://hooks.slack.com/services/T/B/X',
+      template: 'slack',
+      secret: null,
+      timeout_ms: 7500,
+      include_body: true,
+    })
+    render(<NotificationsSettings />)
+    await waitForWebhookLoaded()
+    const section = getWebhookSection()
+    const timeoutInput = within(section).getByLabelText(/Timeout \(ms\)/) as HTMLInputElement
+    expect(timeoutInput.value).toBe('7500')
+    expect(within(section).getByLabelText(/Include body in payload/)).toBeChecked()
+    // Edit both and save — the values must survive the round-trip.
+    fireEvent.change(timeoutInput, { target: { value: '9000' } })
+    fireEvent.click(within(section).getByLabelText(/Include body in payload/))
+    fireEvent.click(within(section).getByRole('button', { name: /^Save$/ }))
+    await waitFor(() => expect(saveWebhookConfig).toHaveBeenCalledTimes(1))
+    const dto = saveWebhookConfig.mock.calls[0]![0]
+    expect(dto.timeout_ms).toBe(9000)
+    expect(dto.include_body).toBe(false)
+  })
+
+  it('ignores non-positive / non-numeric timeout input instead of saving 0', async () => {
+    getWebhookConfig.mockResolvedValue({
+      url: 'https://hooks.slack.com/services/T/B/X',
+      template: 'slack',
+      secret: null,
+      timeout_ms: 5000,
+      include_body: false,
+    })
+    render(<NotificationsSettings />)
+    await waitForWebhookLoaded()
+    const section = getWebhookSection()
+    const timeoutInput = within(section).getByLabelText(/Timeout \(ms\)/) as HTMLInputElement
+    fireEvent.change(timeoutInput, { target: { value: 'garbage' } })
+    fireEvent.click(within(section).getByRole('button', { name: /^Save$/ }))
+    await waitFor(() => expect(saveWebhookConfig).toHaveBeenCalledTimes(1))
+    expect(saveWebhookConfig.mock.calls[0]![0].timeout_ms).toBe(5000)
+  })
+
+  it('round-trips a stored discord template through the preset and save', async () => {
+    getWebhookConfig.mockResolvedValue({
+      url: 'https://discord.com/api/webhooks/12/abc',
+      template: 'discord',
+      secret: null,
+      timeout_ms: 5000,
+      include_body: false,
+    })
+    render(<NotificationsSettings />)
+    await waitForWebhookLoaded()
+    const section = getWebhookSection()
+    // No custom body is required for a preset template — save is enabled.
+    const save = within(section).getByRole('button', { name: /^Save$/ })
+    await waitFor(() => expect(save).not.toBeDisabled())
+    fireEvent.click(save)
+    await waitFor(() => expect(saveWebhookConfig).toHaveBeenCalledTimes(1))
+    expect(saveWebhookConfig.mock.calls[0]![0].template).toBe('discord')
+  })
+})
+
+describe('NotificationsSettings — send test webhook (P1-7)', () => {
+  it('disables the test button while the URL is empty', async () => {
+    render(<NotificationsSettings />)
+    await waitForWebhookLoaded()
+    expect(within(getWebhookSection()).getByRole('button', { name: /Send test webhook/ })).toBeDisabled()
+  })
+
+  it('toasts success with the HTTP status on a 2xx verdict', async () => {
+    const { toast } = await import('sonner')
+    testWebhook.mockResolvedValue({ success: true, status: 204, detail: 'HTTP 204' })
+    getWebhookConfig.mockResolvedValue({
+      url: 'https://hooks.slack.com/services/T/B/X',
+      template: 'slack',
+      secret: null,
+      timeout_ms: 5000,
+      include_body: false,
+    })
+    render(<NotificationsSettings />)
+    await waitForWebhookLoaded()
+    fireEvent.click(within(getWebhookSection()).getByRole('button', { name: /Send test webhook/ }))
+    await waitFor(() => expect(testWebhook).toHaveBeenCalledTimes(1))
+    // The payload title/body come from the locale so the test message reads
+    // in the user's language on the receiving channel.
+    expect(testWebhook.mock.calls[0]![0]).toContain('Shannon')
+    await waitFor(() => expect(toast.success).toHaveBeenCalled())
+    expect(toast.error).not.toHaveBeenCalled()
+  })
+
+  it('toasts the failure reason on a non-2xx verdict', async () => {
+    const { toast } = await import('sonner')
+    testWebhook.mockResolvedValue({ success: false, status: 500, detail: 'HTTP 500' })
+    getWebhookConfig.mockResolvedValue({
+      url: 'https://hooks.slack.com/services/T/B/X',
+      template: 'slack',
+      secret: null,
+      timeout_ms: 5000,
+      include_body: false,
+    })
+    render(<NotificationsSettings />)
+    await waitForWebhookLoaded()
+    fireEvent.click(within(getWebhookSection()).getByRole('button', { name: /Send test webhook/ }))
+    await waitFor(() => expect(toast.error).toHaveBeenCalled())
+    expect(toast.success).not.toHaveBeenCalled()
+  })
+
+  it('toasts an error when the command rejects (nothing configured)', async () => {
+    const { toast } = await import('sonner')
+    testWebhook.mockRejectedValue(new Error('no webhook configured — save a webhook URL first'))
+    getWebhookConfig.mockResolvedValue({
+      url: 'https://hooks.slack.com/services/T/B/X',
+      template: 'slack',
+      secret: null,
+      timeout_ms: 5000,
+      include_body: false,
+    })
+    render(<NotificationsSettings />)
+    await waitForWebhookLoaded()
+    fireEvent.click(within(getWebhookSection()).getByRole('button', { name: /Send test webhook/ }))
+    await waitFor(() => expect(toast.error).toHaveBeenCalled())
+  })
+})
+
+describe('NotificationsSettings — desktop-notification test button (P1-7, moved from General)', () => {
+  it('fires a native OS notification and toasts success', async () => {
+    const { toast } = await import('sonner')
+    render(<NotificationsSettings />)
+    await waitForDndLoaded()
+    const section = getDndSection()
+    fireEvent.click(within(section).getByRole('button', { name: /Send test notification/ }))
+    // useNotification → invoke('send_notification') — the global core mock
+    // resolves, so the success toast is the observable outcome.
+    await waitFor(() => expect(toast.success).toHaveBeenCalled())
+    expect(toast.error).not.toHaveBeenCalled()
   })
 })
 

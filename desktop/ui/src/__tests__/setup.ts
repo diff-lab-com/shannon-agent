@@ -288,6 +288,8 @@ vi.mock('@/lib/tauri-api', async (importOriginal) => ({
     expiresAt: Date.now() + 300_000,
   })),
   testProviderConnection: vi.fn().mockResolvedValue({ kind: 'success' }),
+  // P1-7 — settings "send test webhook" one-shot probe.
+  testWebhook: vi.fn().mockResolvedValue({ success: true, status: 200, detail: 'HTTP 200' }),
   // 2026-09-29 provider review — in-modal probe + live model listing.
   // Defaults mirror the getConfig default below (a configured provider) so
   // existing gate-dependent tests keep today's behavior; per-test

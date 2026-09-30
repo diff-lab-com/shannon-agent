@@ -7,7 +7,6 @@ import { Button } from '@/components/ui/button'
 import { cn } from '@/lib/utils'
 import { useCatalog } from '@/context/CatalogContext'
 import { useI18n, SUPPORTED_LOCALES, type Locale } from '@/i18n'
-import { useNotification } from '@/hooks/useNotification'
 import * as api from '@/lib/tauri-api'
 import { toastError } from '@/lib/errorToast'
 import { readDensityPref, setDensityPref, type DensityPref } from '@/lib/density'
@@ -61,31 +60,14 @@ export default function GeneralSettings() {
     setLinkTargetPref(next)
   }
   const { locale, setLocale } = useI18n()
-  const notify = useNotification()
   const [approvalMode, setApprovalMode] = useState<number>(2) // default to "plan"
   const [saving, setSaving] = useState(false)
-  const [testingNotification, setTestingNotification] = useState(false)
   // P1-6 — migration wizard (import from Claude Code / ZCode).
   const [migrationOpen, setMigrationOpen] = useState(false)
 
   const handleRerunWizard = () => {
     window.localStorage.removeItem(WELCOME_SEEN_KEY)
     navigate('/welcome')
-  }
-
-  const handleTestNotification = async () => {
-    setTestingNotification(true)
-    try {
-      await notify({
-        title: intl.formatMessage({ id: 'settings.notifications.testTitle' }),
-        body: intl.formatMessage({ id: 'settings.notifications.testBody' }),
-        level: 'info',
-      })
-      toast.success(intl.formatMessage({ id: 'settings.notifications.testSent' }))
-    } catch (e) {
-      toastError(intl.formatMessage({ id: 'settings.notifications.testFailed' }), e)
-    }
-    setTestingNotification(false)
   }
 
   const handleLocaleChange = (next: Locale) => {
@@ -273,24 +255,6 @@ export default function GeneralSettings() {
               <span className="font-label-md text-on-surface font-bold font-mono text-sm truncate max-w-[300px]">{config?.working_dir ?? t('settings.general.sessionInfo.notSet')}</span>
             </div>
           </div>
-        </section>
-
-        {/* Notifications */}
-        <section className="bg-surface-container-lowest rounded-xl border border-outline-variant/30 p-xl shadow-e1">
-          <div className="flex items-center gap-md mb-xs">
-            <span className="material-symbols-outlined text-primary" style={{fontVariationSettings: "'FILL' 1"}}>notifications</span>
-            <h3 className="font-headline-md text-headline-md">{intl.formatMessage({ id: 'settings.notifications.label' })}</h3>
-          </div>
-          <p className="font-body-sm text-on-surface-variant mb-xl">{intl.formatMessage({ id: 'settings.notifications.help' })}</p>
-          <Button
-            onClick={handleTestNotification}
-            disabled={testingNotification}
-            className="px-lg py-sm rounded-lg font-label-md cursor-pointer transition-all bg-primary text-on-primary hover:bg-primary/90 disabled:opacity-50 disabled:cursor-not-allowed focus-visible:outline focus-visible:outline-2 focus-visible:outline-primary"
-          >
-            {testingNotification
-              ? intl.formatMessage({ id: 'settings.notifications.sending' })
-              : intl.formatMessage({ id: 'settings.notifications.testButton' })}
-          </Button>
         </section>
 
         {/* PM-12: persisted message ratings, aggregated per session */}

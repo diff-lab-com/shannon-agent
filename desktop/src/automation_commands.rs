@@ -316,8 +316,16 @@ fn builtin_profile_infos() -> Vec<BuiltinProfileInfo> {
 /// Custom profiles are loaded fresh from disk on every call so newly created
 /// files show up immediately in the UI.
 #[tauri::command]
-pub async fn list_permission_profiles(_state: State<'_, AppState>) -> Result<ProfilesList, String> {
-    let registry = shannon_engine::custom_profiles::CustomProfileRegistry::load_from_dirs();
+pub async fn list_permission_profiles(state: State<'_, AppState>) -> Result<ProfilesList, String> {
+    let working_dir = configured_working_dir(&state).await;
+    let mut registry = shannon_engine::custom_profiles::CustomProfileRegistry::load_from_dirs();
+    // P1-10: also read the anchored dir so profiles saved by this app show up
+    // even when the process CWD differs from the anchor (`load_from_dirs`'
+    // project-local lookups are CWD-relative). Loaded LAST, so the anchored
+    // copy overrides same-name profiles from other search dirs.
+    if let Ok(dir) = local_profiles_dir(working_dir.as_deref()) {
+        registry.load_from_dir(&dir);
+    }
     let custom = registry
         .all()
         .values()
@@ -337,22 +345,50 @@ pub async fn list_permission_profiles(_state: State<'_, AppState>) -> Result<Pro
     })
 }
 
-/// Resolve the project-local profiles directory (`.shannon/profiles/`),
-/// creating it if missing.
-fn local_profiles_dir() -> Result<PathBuf, String> {
-    let dir = PathBuf::from(".shannon").join("profiles");
+/// Resolve the base directory custom permission profiles are anchored to
+/// (P1-10): `desktop_config.working_dir` when set (CLI project semantics —
+/// the same `.shannon/profiles` the engine discovers when a session runs in
+/// that project), otherwise `~` (user-global — the first dir
+/// `CustomProfileRegistry::load_from_dirs` reads). The desktop process CWD
+/// is uncontrollable (macOS launches with CWD=/), so a CWD-relative
+/// `.shannon/profiles` either failed to create or scattered files wherever
+/// the app happened to start.
+fn anchored_profiles_base(working_dir: Option<&str>) -> Result<PathBuf, String> {
+    match working_dir.map(str::trim).filter(|s| !s.is_empty()) {
+        Some(dir) => Ok(PathBuf::from(dir)),
+        None => dirs::home_dir().ok_or_else(|| {
+            "could not resolve $HOME — cannot anchor profiles directory".to_string()
+        }),
+    }
+}
+
+/// Resolve the anchored custom-profiles directory (`.shannon/profiles/`
+/// under the anchor), creating it if missing. All custom-profile call
+/// points (create / rename-by-delete+save / delete / list) go through here.
+fn local_profiles_dir(working_dir: Option<&str>) -> Result<PathBuf, String> {
+    let dir = anchored_profiles_base(working_dir)?
+        .join(".shannon")
+        .join("profiles");
     std::fs::create_dir_all(&dir).map_err(|e| format!("create {}: {e}", dir.display()))?;
     Ok(dir)
 }
 
-/// Persist a custom profile to `.shannon/profiles/<name>.toml`.
+/// Read the `working_dir` the profile commands anchor to.
+async fn configured_working_dir(state: &State<'_, AppState>) -> Option<String> {
+    state.desktop_config.read().await.working_dir.clone()
+}
+
+/// Persist a custom profile to the anchored `.shannon/profiles/<name>.toml`
+/// (P1-10: `<working_dir>/.shannon/profiles/`, or `~/.shannon/profiles/`
+/// when no working_dir is set — never the process CWD). The absolute file
+/// location is reported back via `source_path`.
 ///
 /// Overwrites existing files with the same name. The `name` field on the
 /// payload is ignored — the filename is the source of truth — so callers
 /// can rename safely by delete + save.
 #[tauri::command]
 pub async fn save_custom_profile(
-    _state: State<'_, AppState>,
+    state: State<'_, AppState>,
     name: String,
     description: Option<String>,
     auto_approve: Vec<String>,
@@ -370,7 +406,8 @@ pub async fn save_custom_profile(
         return Err("profile name may only contain letters, digits, '-' and '_'".into());
     }
 
-    let dir = local_profiles_dir()?;
+    let working_dir = configured_working_dir(&state).await;
+    let dir = local_profiles_dir(working_dir.as_deref())?;
     let path = dir.join(format!("{trimmed}.toml"));
 
     let description = description.unwrap_or_default();
@@ -449,12 +486,13 @@ fn toml_string_array(items: &[String]) -> String {
 
 /// Delete a custom profile file.
 ///
-/// Searches both `.shannon/profiles/` and `.claude/profiles/`. Returns the
-/// paths that were removed (usually one; zero if the profile didn't exist
-/// in a writable location).
+/// Searches the anchored `.shannon/profiles/` and `.claude/profiles/`
+/// (P1-10: anchored to `working_dir`, or `~` when unset — never the
+/// process CWD). Returns the paths that were removed (usually one; zero if
+/// the profile didn't exist in a writable location).
 #[tauri::command]
 pub async fn delete_custom_profile(
-    _state: State<'_, AppState>,
+    state: State<'_, AppState>,
     name: String,
 ) -> Result<Vec<String>, String> {
     let trimmed = name.trim();
@@ -462,11 +500,13 @@ pub async fn delete_custom_profile(
         return Err("profile name must not be empty".into());
     }
 
+    let working_dir = configured_working_dir(&state).await;
+    let base = anchored_profiles_base(working_dir.as_deref())?;
     let candidates = [
-        PathBuf::from(".shannon")
+        base.join(".shannon")
             .join("profiles")
             .join(format!("{trimmed}.toml")),
-        PathBuf::from(".claude")
+        base.join(".claude")
             .join("profiles")
             .join(format!("{trimmed}.toml")),
     ];
@@ -792,5 +832,68 @@ mod tests {
         let mut mgr = shannon_engine::permissions::PermissionManager::new();
         apply_active_profile(&mut mgr, Some("ghost-profile"));
         assert!(mgr.active_profile().is_none());
+    }
+
+    // ── local_profiles_dir anchoring (P1-10) ────────────────────────────────
+
+    #[test]
+    fn local_profiles_dir_prefers_working_dir_when_set() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let wd = tmp.path().to_str().expect("utf8 path").to_string();
+        let dir = local_profiles_dir(Some(&wd)).expect("resolve");
+        assert_eq!(dir, tmp.path().join(".shannon").join("profiles"));
+        // Created on resolve so the subsequent save cannot fail on mkdir.
+        assert!(
+            dir.is_dir(),
+            "anchored dir must be created: {}",
+            dir.display()
+        );
+    }
+
+    #[test]
+    fn local_profiles_dir_falls_back_to_home_when_unset() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let prev = std::env::var("HOME").ok();
+        unsafe { std::env::set_var("HOME", tmp.path()) };
+        let dir = local_profiles_dir(None);
+        match prev {
+            Some(prev) => unsafe { std::env::set_var("HOME", prev) },
+            None => unsafe { std::env::remove_var("HOME") },
+        }
+        let dir = dir.expect("resolve");
+        assert_eq!(dir, tmp.path().join(".shannon").join("profiles"));
+        assert!(
+            dir.is_dir(),
+            "fallback dir must be created: {}",
+            dir.display()
+        );
+    }
+
+    #[test]
+    fn local_profiles_dir_treats_blank_working_dir_as_unset() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let prev = std::env::var("HOME").ok();
+        unsafe { std::env::set_var("HOME", tmp.path()) };
+        let dir = local_profiles_dir(Some("   "));
+        match prev {
+            Some(prev) => unsafe { std::env::set_var("HOME", prev) },
+            None => unsafe { std::env::remove_var("HOME") },
+        }
+        assert_eq!(
+            dir.expect("resolve"),
+            tmp.path().join(".shannon").join("profiles"),
+            "blank working_dir must fall back to ~"
+        );
+    }
+
+    #[test]
+    fn delete_candidates_are_anchored_not_cwd_relative() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let wd = tmp.path().to_str().expect("utf8 path").to_string();
+        let base = anchored_profiles_base(Some(&wd)).expect("resolve");
+        let shannon_candidate = base.join(".shannon").join("profiles").join("x.toml");
+        let claude_candidate = base.join(".claude").join("profiles").join("x.toml");
+        assert!(shannon_candidate.starts_with(tmp.path()));
+        assert!(claude_candidate.starts_with(tmp.path()));
     }
 }
