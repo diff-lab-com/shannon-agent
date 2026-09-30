@@ -756,16 +756,10 @@ fn mcp_server_config_from_json(name: &str, value: &serde_json::Value) -> Option<
 }
 
 /// Serialize a [`McpServerConfig`] into the `mcpServers.<name>` JSON entry
-/// shape shared with the CLI. Url-only rows (empty `command`) are stored as
-/// a marker object so the unified store can round-trip them without
-/// pretending they are stdio servers.
+/// shape shared with the CLI. Only stdio rows are serializable — url-only
+/// entries (`url`/`type` fields) never enter this lossy struct, so saves
+/// skip them and their original JSON blob in the store stays untouched.
 fn mcp_server_config_to_json(config: &McpServerConfig) -> serde_json::Value {
-    if config.command.is_empty() {
-        return serde_json::json!({
-            "enabled": config.enabled,
-            "shannon:list_only": true,
-        });
-    }
     serde_json::json!({
         "command": config.command,
         "args": config.args,
@@ -774,9 +768,54 @@ fn mcp_server_config_to_json(config: &McpServerConfig) -> serde_json::Value {
     })
 }
 
+/// Atomically replace `path` with the pretty-printed JSON `root`:
+/// write a temp file in the same directory, then rename over the target.
+/// A crash mid-write can never leave a truncated/corrupt settings.json.
+fn write_settings_json_atomic(
+    path: &std::path::Path,
+    root: &serde_json::Value,
+) -> Result<(), String> {
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent).map_err(|e| e.to_string())?;
+    }
+    let content = serde_json::to_string_pretty(root).map_err(|e| e.to_string())?;
+    let file_name = path
+        .file_name()
+        .map(|n| n.to_string_lossy().into_owned())
+        .unwrap_or_else(|| "settings.json".to_string());
+    let tmp = path.with_file_name(format!(".{file_name}.tmp"));
+    std::fs::write(&tmp, content).map_err(|e| e.to_string())?;
+    // Best-effort restrictive perms before the rename becomes visible.
+    crate::file_permissions::restrict_to_owner(&tmp);
+    std::fs::rename(&tmp, path).map_err(|e| {
+        let _ = std::fs::remove_file(&tmp);
+        e.to_string()
+    })?;
+    crate::file_permissions::restrict_to_owner(path);
+    Ok(())
+}
+
+/// Read and parse the settings.json root. A missing file starts empty
+/// (`Ok(None)`-style via `json!({})`); a present-but-corrupt file is an
+/// error — silently starting from `{}` here would make the next save reset
+/// the whole file (permissions, provider mirrors, everything) to just
+/// `mcpServers`.
+fn read_settings_json_root(path: &std::path::Path) -> Result<serde_json::Value, String> {
+    match std::fs::read_to_string(path) {
+        Ok(content) => serde_json::from_str(&content)
+            .map_err(|e| format!("settings.json parse ({}): {e}", path.display())),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(serde_json::json!({})),
+        Err(e) => Err(format!("settings.json read ({}): {e}", path.display())),
+    }
+}
+
 /// Save MCP server configs into the unified store
 /// (`~/.shannon/settings.json#mcpServers`), preserving every other
-/// top-level key in the file.
+/// top-level key in the file. Url-only rows (empty `command`) cannot be
+/// represented by [`McpServerConfig`] and are skipped — their existing
+/// store entry (if any) is left untouched. Writes are atomic
+/// (temp-file + rename); a corrupt existing file is an error, never a
+/// silent reset.
 pub fn save_mcp_servers(servers: &[McpServerConfig]) -> Result<(), String> {
     save_mcp_servers_to(&user_settings_path(), servers)
 }
@@ -787,10 +826,7 @@ pub fn save_mcp_servers_to(
     path: &std::path::Path,
     servers: &[McpServerConfig],
 ) -> Result<(), String> {
-    let mut root: serde_json::Value = match std::fs::read_to_string(path) {
-        Ok(content) => serde_json::from_str(&content).unwrap_or_else(|_| serde_json::json!({})),
-        Err(_) => serde_json::json!({}),
-    };
+    let mut root = read_settings_json_root(path)?;
     let map = root
         .as_object_mut()
         .ok_or_else(|| format!("settings.json is not a JSON object: {}", path.display()))?;
@@ -801,15 +837,15 @@ pub fn save_mcp_servers_to(
         return Err("settings.json#mcpServers is not an object".to_string());
     };
     for config in servers {
+        if config.command.is_empty() {
+            // Url-only row: the struct cannot round-trip `url`/`type`, so
+            // writing it would replace the real entry with a lossy stub.
+            // Skip — whatever the store already holds stays intact.
+            continue;
+        }
         mcp_obj.insert(config.name.clone(), mcp_server_config_to_json(config));
     }
-    if let Some(parent) = path.parent() {
-        std::fs::create_dir_all(parent).map_err(|e| e.to_string())?;
-    }
-    let content = serde_json::to_string_pretty(&root).map_err(|e| e.to_string())?;
-    std::fs::write(path, content).map_err(|e| e.to_string())?;
-    crate::file_permissions::restrict_to_owner(path);
-    Ok(())
+    write_settings_json_atomic(path, &root)
 }
 
 /// Remove one MCP server entry from the unified store by name. Returns
@@ -820,21 +856,14 @@ pub fn remove_mcp_server_entry(name: &str) -> Result<bool, String> {
 
 /// `remove_mcp_server_entry` against an explicit `settings.json` path.
 pub fn remove_mcp_server_entry_from(path: &std::path::Path, name: &str) -> Result<bool, String> {
-    let content = match std::fs::read_to_string(path) {
-        Ok(c) => c,
-        Err(_) => return Ok(false),
-    };
-    let mut root: serde_json::Value =
-        serde_json::from_str(&content).map_err(|e| format!("settings.json parse: {e}"))?;
+    let mut root = read_settings_json_root(path)?;
     let removed = root
         .get_mut("mcpServers")
         .and_then(|m| m.as_object_mut())
         .and_then(|m| m.remove(name))
         .is_some();
     if removed {
-        let bytes = serde_json::to_string_pretty(&root).map_err(|e| e.to_string())?;
-        std::fs::write(path, bytes).map_err(|e| e.to_string())?;
-        crate::file_permissions::restrict_to_owner(path);
+        write_settings_json_atomic(path, &root)?;
     }
     Ok(removed)
 }
@@ -1576,5 +1605,99 @@ mod tests {
         assert_eq!(migrate_legacy_mcp_servers_to(&settings, &corrupt), 0);
         // Corrupt legacy file did not create a settings.json.
         assert!(!settings.exists());
+    }
+
+    /// Imp-1: a corrupt settings.json must NEVER be silently reset by a
+    /// save — the error propagates and the original bytes stay untouched
+    /// (permissions & co. survive a transient parse failure).
+    #[test]
+    fn save_on_corrupt_settings_returns_err_and_leaves_file_untouched() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = tmp_settings(dir.path());
+        let original = r#"{"permissions":{"deny":"oops"},,,"mcpServers":{"keep":{"command":"x"}}}"#;
+        std::fs::write(&path, original).unwrap();
+
+        let result = save_mcp_servers_to(
+            &path,
+            &[McpServerConfig {
+                name: "new".into(),
+                command: "npx".into(),
+                args: vec![],
+                env: Default::default(),
+                enabled: true,
+            }],
+        );
+        assert!(result.is_err(), "corrupt settings.json must fail the save");
+        assert_eq!(
+            std::fs::read_to_string(&path).unwrap(),
+            original,
+            "failed save must not touch the original file"
+        );
+        // Remove is equally honest (parse error → Err, file untouched).
+        assert!(remove_mcp_server_entry_from(&path, "keep").is_err());
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), original);
+    }
+
+    /// Imp-1: saves are atomic — no `.tmp` sibling is left behind, and a
+    /// successful save keeps foreign keys intact.
+    #[test]
+    fn save_leaves_no_temp_file_behind() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = tmp_settings(dir.path());
+        save_mcp_servers_to(
+            &path,
+            &[McpServerConfig {
+                name: "fs".into(),
+                command: "npx".into(),
+                args: vec![],
+                env: Default::default(),
+                enabled: true,
+            }],
+        )
+        .unwrap();
+        assert!(path.exists());
+        let leftovers: Vec<_> = std::fs::read_dir(dir.path())
+            .unwrap()
+            .filter_map(|e| e.ok())
+            .filter(|e| e.file_name().to_string_lossy().ends_with(".tmp"))
+            .collect();
+        assert!(leftovers.is_empty(), "temp file leaked: {leftovers:?}");
+    }
+
+    /// Minor-5: saving never writes a lossy marker over a url-only entry —
+    /// the original blob (url/type/enabled) survives untouched.
+    #[test]
+    fn save_skips_url_only_rows_instead_of_clobbering_them() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = tmp_settings(dir.path());
+        std::fs::write(
+            &path,
+            r#"{"mcpServers":{"notion":{"type":"http","url":"https://mcp.example","enabled":true}}}"#,
+        )
+        .unwrap();
+
+        // A save that re-lists the url-only row (empty command) must not
+        // replace it with a marker stub.
+        save_mcp_servers_to(
+            &path,
+            &[McpServerConfig {
+                name: "notion".into(),
+                command: String::new(),
+                args: vec![],
+                env: Default::default(),
+                enabled: true,
+            }],
+        )
+        .unwrap();
+        let root: serde_json::Value =
+            serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
+        assert_eq!(root["mcpServers"]["notion"]["url"], "https://mcp.example");
+        assert_eq!(root["mcpServers"]["notion"]["type"], "http");
+        assert!(
+            root["mcpServers"]["notion"]
+                .get("shannon:list_only")
+                .is_none(),
+            "private list_only marker must not exist"
+        );
     }
 }
