@@ -40,6 +40,60 @@ pub const QUERY_ERROR_KIND_AUTH: &str = "auth";
 /// rate limit, provider outage, engine bug, …). Rendered as today.
 pub const QUERY_ERROR_KIND_OTHER: &str = "other";
 
+// === R5-2 — failover / key-rotation notices on the wire ===
+//
+// The engine's retry observer (R3-1 / R4-3) renders its notices into
+// `QueryEvent::Progress` messages ("falling back to X@Y (reason)" /
+// "rotating API key (i/N) for P (reason)" — wording pinned by
+// `agent_loop::format_retry_notice_message` tests). The desktop send loop
+// used to drop Progress events entirely, so a successful failover looked
+// like a silent stall. This desktop-local event (same pattern as
+// `SESSION_AUTO_UNARCHIVED_EVENT`: no engine wire change) carries the
+// recognized notices to the chat UI, which renders them as subtle
+// system-style lines — NOT error banners; the request continued.
+
+/// Desktop event name for in-stream retry notices (`query:notice`).
+pub const QUERY_NOTICE_EVENT: &str = "query:notice";
+
+/// Notice kind: the engine failed over to a fallback model/provider
+/// (`R3-1`) and the request continued on the new target.
+pub const QUERY_NOTICE_KIND_FAILOVER: &str = "failover";
+/// Notice kind: the engine rotated to the provider's next API key
+/// (`R4-3`) and the request continued.
+pub const QUERY_NOTICE_KIND_KEY_ROTATION: &str = "key_rotation";
+
+/// Classify an engine `QueryEvent::Progress` message into a desktop notice
+/// kind, or `None` when the message is not a retry notice (plain progress
+/// stays dropped, as before). Matches the engine's rendered line prefixes —
+/// the exact wordings are pinned engine-side
+/// (`agent_loop::format_retry_notice_message`), so prefix matching on the
+/// lowercased text is stable.
+pub(crate) fn classify_retry_notice(message: &str) -> Option<&'static str> {
+    let lower = message.trim_start().to_lowercase();
+    if lower.starts_with("falling back to ") {
+        Some(QUERY_NOTICE_KIND_FAILOVER)
+    } else if lower.starts_with("rotating api key (") {
+        Some(QUERY_NOTICE_KIND_KEY_ROTATION)
+    } else {
+        None
+    }
+}
+
+/// Desktop `query:notice` wire payload — the engine's raw notice line plus
+/// the machine-readable kind the UI needs to pick icon + localized label.
+/// `message` is the verbatim engine text (replayable from the L0 log).
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct QueryNoticePayload {
+    pub query_id: String,
+    /// One of [`QUERY_NOTICE_KIND_FAILOVER`] / [`QUERY_NOTICE_KIND_KEY_ROTATION`].
+    pub kind: &'static str,
+    /// The verbatim engine notice line, e.g.
+    /// `falling back to glm-5.3-flash@zhipu (rate limited)`.
+    pub message: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub session_id: Option<String>,
+}
+
 /// Classify a query-failure error string into the machine-readable
 /// `error_kind` carried on the desktop `query:failed` payload.
 ///
@@ -309,5 +363,67 @@ mod tests {
         let json = serde_json::to_string(&p).unwrap();
         assert!(!json.contains("session_id"), "{json}");
         assert!(json.contains("\"error_kind\":\"other\""), "{json}");
+    }
+
+    // === R5-2: retry-notice classification (failover / key rotation) ===
+
+    #[test]
+    fn classify_retry_notice_recognizes_engine_failover_line() {
+        // Exact renderings from `agent_loop::format_retry_notice_message`.
+        assert_eq!(
+            classify_retry_notice("falling back to glm-5.3-flash@zhipu (rate limited)"),
+            Some(QUERY_NOTICE_KIND_FAILOVER)
+        );
+        // Case/padding tolerance for future rewording drift.
+        assert_eq!(
+            classify_retry_notice("  Falling Back to gpt-5@openai (5xx)"),
+            Some(QUERY_NOTICE_KIND_FAILOVER)
+        );
+    }
+
+    #[test]
+    fn classify_retry_notice_recognizes_engine_key_rotation_line() {
+        assert_eq!(
+            classify_retry_notice("rotating API key (2/3) for openai (429 rate limited)"),
+            Some(QUERY_NOTICE_KIND_KEY_ROTATION)
+        );
+    }
+
+    #[test]
+    fn classify_retry_notice_leaves_plain_progress_unclassified() {
+        // Plain API retries, engine bookkeeping lines and junk stay dropped
+        // (unchanged pre-R5-2 behaviour for non-notice progress).
+        assert_eq!(
+            classify_retry_notice("API retry 1/5 (next try in 2s): rate limited"),
+            None
+        );
+        assert_eq!(
+            classify_retry_notice("Truncated history to 10 messages"),
+            None
+        );
+        assert_eq!(classify_retry_notice(""), None);
+        assert_eq!(classify_retry_notice("fallback plan engaged"), None);
+    }
+
+    #[test]
+    fn query_notice_payload_serializes_kind_and_raw_line() {
+        let p = QueryNoticePayload {
+            query_id: "q-1".into(),
+            kind: QUERY_NOTICE_KIND_FAILOVER,
+            message: "falling back to glm-5.3-flash@zhipu (rate limited)".into(),
+            session_id: Some("s1".into()),
+        };
+        let json = serde_json::to_string(&p).unwrap();
+        assert!(json.contains("\"kind\":\"failover\""), "{json}");
+        assert!(json.contains("falling back to"), "{json}");
+        // session_id follows the engine payloads' omit-when-none contract.
+        let no_session = QueryNoticePayload {
+            query_id: "q-1".into(),
+            kind: QUERY_NOTICE_KIND_KEY_ROTATION,
+            message: "rotating API key (1/2) for anthropic (401)".into(),
+            session_id: None,
+        };
+        let json = serde_json::to_string(&no_session).unwrap();
+        assert!(!json.contains("session_id"), "{json}");
     }
 }

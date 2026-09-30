@@ -15,6 +15,28 @@
 //! session model override (R2-1)  >  phase tier  >  global default
 //! ```
 //!
+//! R5-5 — the full table across the three run classes (pinned by
+//! `commands_chat::tests::unattended_paths_pin_global_config`):
+//!
+//! ```text
+//! run class             phase tier applied?   session override applied?
+//! ────────────────────  ────────────────────  ─────────────────────────
+//! interactive session   yes (this module)     yes (R2-1, beats tier)
+//! unattended            NO                    NO
+//!   (goal / batch /
+//!   routine / dream /
+//!   skill loop)
+//! desktop global        —                     —
+//! ```
+//!
+//! Unattended runs resolve their client config by reading
+//! `AppState::client_config` (the global default) DIRECTLY — they never
+//! route through `resolve_client_config_for_session`, so neither the phase
+//! preference (`effective_phase_tier` below is consulted only there) nor a
+//! session override can leak into an unattended run. That is the intended
+//! semantics: an unattended run must track the user's global target, not
+//! whatever chat session happened to be focused when it fired.
+//!
 //! The phase is derived from the session's approval mode, which the desktop
 //! already tracks as the global `approval_mode` config key (`plan` when the
 //! composer's plan mode is active): when `approval_mode == "plan"` the

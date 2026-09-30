@@ -17,6 +17,7 @@ fn main() {
     use shannon_desktop::commands_dream;
     use shannon_desktop::commands_feedback;
     use shannon_desktop::commands_files;
+    use shannon_desktop::commands_keys;
     use shannon_desktop::commands_mcp;
     use shannon_desktop::commands_memory;
     use shannon_desktop::commands_mobile_pairing;
@@ -167,10 +168,20 @@ fn main() {
             commands_config::delete_provider,
             commands_config::set_active_provider,
             // R3-2 (desktop slice) — provider model-profile list / switch /
-            // create in Settings → Models (rename/delete UI deferred).
+            // create in Settings → Models. R5 adds the deferred rename +
+            // delete slices.
             commands_profiles::list_provider_profiles,
             commands_profiles::create_provider_profile,
             commands_profiles::set_active_provider_profile,
+            commands_profiles::rename_provider_profile,
+            commands_profiles::delete_provider_profile,
+            // R4-3 (desktop slice) — per-provider multi-key management
+            // (Settings → Models "API keys" panel; same credential store
+            // the CLI's `providers keys` drives).
+            commands_keys::list_provider_keys,
+            commands_keys::add_provider_key,
+            commands_keys::remove_provider_key,
+            commands_keys::activate_provider_key,
             // T5 — gateway social connections (OS keyring + gateway config.json)
             commands_connections::gateway_set_secret,
             commands_connections::gateway_get_secret,
