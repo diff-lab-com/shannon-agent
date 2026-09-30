@@ -632,12 +632,25 @@ fn config_path() -> PathBuf {
     home.join(".shannon").join("desktop").join("config.json")
 }
 
-/// Resolve the MCP servers config file path: `~/.shannon/desktop/mcp-servers.json`
+/// Resolve the legacy MCP servers store path:
+/// `~/.shannon/desktop/mcp-servers.json`.
+///
+/// G1 split-brain fix: this file is legacy-only. The single source of truth
+/// for desktop-installed MCP servers is `~/.shannon/settings.json#mcpServers`
+/// (the same blob the CLI and the extensions-hub installers read/write). At
+/// startup `migrate_legacy_mcp_servers` copies any entries still living here
+/// into settings.json — the file itself is never rewritten or deleted.
 fn mcp_servers_path() -> PathBuf {
     let home = dirs_home().unwrap_or_else(|| PathBuf::from("."));
     home.join(".shannon")
         .join("desktop")
         .join("mcp-servers.json")
+}
+
+/// Resolve the unified MCP store path: `~/.shannon/settings.json`.
+fn user_settings_path() -> PathBuf {
+    let home = dirs_home().unwrap_or_else(|| PathBuf::from("."));
+    home.join(".shannon").join("settings.json")
 }
 
 fn dirs_home() -> Option<PathBuf> {
@@ -668,25 +681,242 @@ pub fn save_config(config: &DesktopConfig) -> Result<(), String> {
     Ok(())
 }
 
-/// Load MCP server configs from disk.
+/// Load MCP server configs from the unified store
+/// (`~/.shannon/settings.json#mcpServers`).
+///
+/// G1 split-brain fix: previously this read the legacy
+/// `~/.shannon/desktop/mcp-servers.json` while the extensions hub wrote
+/// `~/.shannon/settings.json#mcpServers` — servers installed from the hub
+/// never showed up (and vice versa). Entries that are not stdio-startable
+/// (no `command`, e.g. `url`-only OAuth/HTTP servers) are still listed so
+/// the UI shows them; the process pool skips them.
 pub fn load_mcp_servers() -> Vec<McpServerConfig> {
-    let path = mcp_servers_path();
-    match std::fs::read_to_string(&path) {
-        Ok(content) => serde_json::from_str(&content).unwrap_or_default(),
-        Err(_) => Vec::new(),
-    }
+    load_mcp_servers_from(&user_settings_path())
 }
 
-/// Save MCP server configs to disk.
+/// `load_mcp_servers` against an explicit `settings.json` path (tests inject
+/// a tempdir so they never touch the user's HOME).
+pub fn load_mcp_servers_from(path: &std::path::Path) -> Vec<McpServerConfig> {
+    let Ok(content) = std::fs::read_to_string(path) else {
+        return Vec::new();
+    };
+    let Ok(root) = serde_json::from_str::<serde_json::Value>(&content) else {
+        return Vec::new();
+    };
+    let Some(map) = root.get("mcpServers").and_then(|m| m.as_object()) else {
+        return Vec::new();
+    };
+    let mut servers: Vec<McpServerConfig> = map
+        .iter()
+        .filter_map(|(name, value)| mcp_server_config_from_json(name, value))
+        .collect();
+    servers.sort_by(|a, b| a.name.cmp(&b.name));
+    servers
+}
+
+/// Convert one `mcpServers.<name>` JSON entry into a [`McpServerConfig`].
+///
+/// `None` = not listable as a config row (e.g. the value is not an object).
+/// Stdio `command` is the only hard requirement for the *pool*, but
+/// url-only servers are surfaced too (`command` empty, `enabled` from the
+/// `enabled` flag) so `list_mcp_servers` shows what the user installed.
+fn mcp_server_config_from_json(name: &str, value: &serde_json::Value) -> Option<McpServerConfig> {
+    let obj = value.as_object()?;
+    let command = obj
+        .get("command")
+        .and_then(|c| c.as_str())
+        .unwrap_or_default()
+        .to_string();
+    let args = obj
+        .get("args")
+        .and_then(|a| a.as_array())
+        .map(|a| {
+            a.iter()
+                .filter_map(|v| v.as_str().map(str::to_string))
+                .collect()
+        })
+        .unwrap_or_default();
+    let env = obj
+        .get("env")
+        .and_then(|e| e.as_object())
+        .map(|o| {
+            o.iter()
+                .filter_map(|(k, v)| v.as_str().map(|s| (k.clone(), s.to_string())))
+                .collect()
+        })
+        .unwrap_or_default();
+    let enabled = obj.get("enabled").and_then(|e| e.as_bool()).unwrap_or(true);
+    Some(McpServerConfig {
+        name: name.to_string(),
+        command,
+        args,
+        env,
+        enabled,
+    })
+}
+
+/// Serialize a [`McpServerConfig`] into the `mcpServers.<name>` JSON entry
+/// shape shared with the CLI. Url-only rows (empty `command`) are stored as
+/// a marker object so the unified store can round-trip them without
+/// pretending they are stdio servers.
+fn mcp_server_config_to_json(config: &McpServerConfig) -> serde_json::Value {
+    if config.command.is_empty() {
+        return serde_json::json!({
+            "enabled": config.enabled,
+            "shannon:list_only": true,
+        });
+    }
+    serde_json::json!({
+        "command": config.command,
+        "args": config.args,
+        "env": config.env,
+        "enabled": config.enabled,
+    })
+}
+
+/// Save MCP server configs into the unified store
+/// (`~/.shannon/settings.json#mcpServers`), preserving every other
+/// top-level key in the file.
 pub fn save_mcp_servers(servers: &[McpServerConfig]) -> Result<(), String> {
-    let path = mcp_servers_path();
+    save_mcp_servers_to(&user_settings_path(), servers)
+}
+
+/// `save_mcp_servers` against an explicit `settings.json` path (see
+/// [`load_mcp_servers_from`]).
+pub fn save_mcp_servers_to(
+    path: &std::path::Path,
+    servers: &[McpServerConfig],
+) -> Result<(), String> {
+    let mut root: serde_json::Value = match std::fs::read_to_string(path) {
+        Ok(content) => serde_json::from_str(&content).unwrap_or_else(|_| serde_json::json!({})),
+        Err(_) => serde_json::json!({}),
+    };
+    let map = root
+        .as_object_mut()
+        .ok_or_else(|| format!("settings.json is not a JSON object: {}", path.display()))?;
+    let mcp = map
+        .entry("mcpServers")
+        .or_insert_with(|| serde_json::json!({}));
+    let Some(mcp_obj) = mcp.as_object_mut() else {
+        return Err("settings.json#mcpServers is not an object".to_string());
+    };
+    for config in servers {
+        mcp_obj.insert(config.name.clone(), mcp_server_config_to_json(config));
+    }
     if let Some(parent) = path.parent() {
         std::fs::create_dir_all(parent).map_err(|e| e.to_string())?;
     }
-    let content = serde_json::to_string_pretty(servers).map_err(|e| e.to_string())?;
-    std::fs::write(&path, content).map_err(|e| e.to_string())?;
-    crate::file_permissions::restrict_to_owner(&path);
+    let content = serde_json::to_string_pretty(&root).map_err(|e| e.to_string())?;
+    std::fs::write(path, content).map_err(|e| e.to_string())?;
+    crate::file_permissions::restrict_to_owner(path);
     Ok(())
+}
+
+/// Remove one MCP server entry from the unified store by name. Returns
+/// `Ok(false)` when no entry with that name existed.
+pub fn remove_mcp_server_entry(name: &str) -> Result<bool, String> {
+    remove_mcp_server_entry_from(&user_settings_path(), name)
+}
+
+/// `remove_mcp_server_entry` against an explicit `settings.json` path.
+pub fn remove_mcp_server_entry_from(path: &std::path::Path, name: &str) -> Result<bool, String> {
+    let content = match std::fs::read_to_string(path) {
+        Ok(c) => c,
+        Err(_) => return Ok(false),
+    };
+    let mut root: serde_json::Value =
+        serde_json::from_str(&content).map_err(|e| format!("settings.json parse: {e}"))?;
+    let removed = root
+        .get_mut("mcpServers")
+        .and_then(|m| m.as_object_mut())
+        .and_then(|m| m.remove(name))
+        .is_some();
+    if removed {
+        let bytes = serde_json::to_string_pretty(&root).map_err(|e| e.to_string())?;
+        std::fs::write(path, bytes).map_err(|e| e.to_string())?;
+        crate::file_permissions::restrict_to_owner(path);
+    }
+    Ok(removed)
+}
+
+/// One-time, idempotent migration of the legacy
+/// `~/.shannon/desktop/mcp-servers.json` store into the unified
+/// `~/.shannon/settings.json#mcpServers`. Entries already present in the
+/// unified store (by name) are left untouched; the legacy file is never
+/// modified or deleted. Returns the number of migrated entries.
+pub fn migrate_legacy_mcp_servers() -> usize {
+    migrate_legacy_mcp_servers_to(&user_settings_path(), &mcp_servers_path())
+}
+
+/// `migrate_legacy_mcp_servers` against explicit paths (tests inject
+/// tempdir paths so they never touch the user's HOME).
+pub fn migrate_legacy_mcp_servers_to(
+    settings_path: &std::path::Path,
+    legacy_path: &std::path::Path,
+) -> usize {
+    let Ok(content) = std::fs::read_to_string(legacy_path) else {
+        return 0;
+    };
+    let legacy: serde_json::Value = match serde_json::from_str(&content) {
+        Ok(v) => v,
+        Err(e) => {
+            tracing::warn!(
+                path = %legacy_path.display(),
+                error = %e,
+                "legacy mcp-servers.json is not valid JSON — skipping migration"
+            );
+            return 0;
+        }
+    };
+    let Some(rows) = legacy.as_array() else {
+        return 0;
+    };
+
+    // Existing unified entries win (idempotent re-runs are no-ops).
+    let existing: std::collections::HashSet<String> = load_mcp_servers_from(settings_path)
+        .into_iter()
+        .map(|s| s.name)
+        .collect();
+
+    let mut configs = Vec::new();
+    for row in rows {
+        let Some(name) = row.get("name").and_then(|n| n.as_str()) else {
+            continue;
+        };
+        if existing.contains(name) {
+            continue;
+        }
+        configs.push(McpServerConfig {
+            name: name.to_string(),
+            command: row
+                .get("command")
+                .and_then(|c| c.as_str())
+                .unwrap_or_default()
+                .to_string(),
+            args: row
+                .get("args")
+                .map(|a| serde_json::from_value(a.clone()).unwrap_or_default())
+                .unwrap_or_default(),
+            env: row
+                .get("env")
+                .map(|e| serde_json::from_value(e.clone()).unwrap_or_default())
+                .unwrap_or_default(),
+            enabled: row.get("enabled").and_then(|e| e.as_bool()).unwrap_or(true),
+        });
+    }
+    if configs.is_empty() {
+        return 0;
+    }
+    let migrated = configs.len();
+    if let Err(e) = save_mcp_servers_to(settings_path, &configs) {
+        tracing::warn!(error = %e, "legacy MCP server migration write failed");
+        return 0;
+    }
+    tracing::info!(
+        count = migrated,
+        "migrated legacy MCP servers into settings.json"
+    );
+    migrated
 }
 
 #[cfg(test)]
@@ -1225,5 +1455,126 @@ mod tests {
             padded.offpeak.effective_model_override(),
             Some("glm-4-flash")
         );
+    }
+
+    // ---- G1: unified MCP store (settings.json#mcpServers) ----
+
+    fn tmp_settings(dir: &std::path::Path) -> PathBuf {
+        dir.join("settings.json")
+    }
+
+    #[test]
+    fn unified_mcp_store_round_trips_and_preserves_foreign_keys() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = tmp_settings(dir.path());
+
+        // Start with a settings.json carrying an unrelated key + an OAuth
+        // (url-only) server installed by the hub.
+        std::fs::write(
+            &path,
+            r#"{"permissions":{"allow":["Bash"]},"mcpServers":{"notion":{"type":"http","url":"https://mcp.example"}}}"#,
+        )
+        .unwrap();
+
+        // Upsert a stdio row — foreign keys and the url entry survive.
+        save_mcp_servers_to(
+            &path,
+            &[McpServerConfig {
+                name: "everything".into(),
+                command: "npx".into(),
+                args: vec![
+                    "-y".into(),
+                    "@modelcontextprotocol/server-everything".into(),
+                ],
+                env: [("K".to_string(), "v".to_string())].into_iter().collect(),
+                enabled: true,
+            }],
+        )
+        .unwrap();
+
+        let root: serde_json::Value =
+            serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
+        assert_eq!(root["permissions"]["allow"][0], "Bash");
+        assert_eq!(root["mcpServers"]["notion"]["url"], "https://mcp.example");
+
+        // Load sees both entries (url-only listed with empty command).
+        let servers = load_mcp_servers_from(&path);
+        assert_eq!(servers.len(), 2);
+        let everything = servers.iter().find(|s| s.name == "everything").unwrap();
+        assert_eq!(everything.command, "npx");
+        assert_eq!(everything.args.len(), 2);
+        assert_eq!(everything.env.get("K").map(String::as_str), Some("v"));
+        assert!(everything.enabled);
+        let notion = servers.iter().find(|s| s.name == "notion").unwrap();
+        assert!(notion.command.is_empty());
+
+        // Removal drops only the target row.
+        assert!(remove_mcp_server_entry_from(&path, "everything").unwrap());
+        assert!(!remove_mcp_server_entry_from(&path, "everything").unwrap());
+        let servers = load_mcp_servers_from(&path);
+        assert_eq!(servers.len(), 1);
+        assert_eq!(servers[0].name, "notion");
+        // Foreign key still intact after removal.
+        let root: serde_json::Value =
+            serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
+        assert!(root["permissions"].is_object());
+    }
+
+    #[test]
+    fn legacy_mcp_migration_is_idempotent_and_existing_entries_win() {
+        let dir = tempfile::tempdir().unwrap();
+        let settings = tmp_settings(dir.path());
+        let legacy_dir = dir.path().join("desktop");
+        std::fs::create_dir_all(&legacy_dir).unwrap();
+        let legacy = legacy_dir.join("mcp-servers.json");
+        std::fs::write(
+            &legacy,
+            r#"[
+                {"name":"fs","command":"npx","args":["-y","server-fs"],"env":{},"enabled":true},
+                {"name":"shared","command":"legacy-cmd","args":[],"env":{},"enabled":true}
+            ]"#,
+        )
+        .unwrap();
+
+        // A pre-existing unified entry with the same name must win.
+        save_mcp_servers_to(
+            &settings,
+            &[McpServerConfig {
+                name: "shared".into(),
+                command: "unified-cmd".into(),
+                args: vec![],
+                env: Default::default(),
+                enabled: true,
+            }],
+        )
+        .unwrap();
+
+        let migrated = migrate_legacy_mcp_servers_to(&settings, &legacy);
+        assert_eq!(migrated, 1, "only 'fs' migrates; 'shared' already exists");
+
+        let servers = load_mcp_servers_from(&settings);
+        assert_eq!(servers.len(), 2);
+        let shared = servers.iter().find(|s| s.name == "shared").unwrap();
+        assert_eq!(shared.command, "unified-cmd");
+        assert!(servers.iter().any(|s| s.name == "fs" && s.command == "npx"));
+
+        // Idempotent: a second run migrates nothing.
+        assert_eq!(migrate_legacy_mcp_servers_to(&settings, &legacy), 0);
+        // The legacy file is untouched.
+        assert!(legacy.exists());
+    }
+
+    #[test]
+    fn legacy_mcp_migration_handles_missing_and_corrupt_files() {
+        let dir = tempfile::tempdir().unwrap();
+        let settings = tmp_settings(dir.path());
+        let missing = dir.path().join("does-not-exist.json");
+        assert_eq!(migrate_legacy_mcp_servers_to(&settings, &missing), 0);
+
+        let corrupt = dir.path().join("corrupt.json");
+        std::fs::write(&corrupt, "{not json").unwrap();
+        assert_eq!(migrate_legacy_mcp_servers_to(&settings, &corrupt), 0);
+        // Corrupt legacy file did not create a settings.json.
+        assert!(!settings.exists());
     }
 }
