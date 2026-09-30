@@ -1279,7 +1279,11 @@ mod tests {
     fn preflight_flags_oversized_image_like_the_send_path() {
         let dir = tempfile::tempdir().expect("tempdir");
         let big = dir.path().join("big.png");
-        std::fs::write(&big, vec![0u8; shannon_core::attachments::MAX_IMAGE_BYTES + 1]).unwrap();
+        std::fs::write(
+            &big,
+            vec![0u8; shannon_core::attachments::MAX_IMAGE_BYTES + 1],
+        )
+        .unwrap();
 
         let checks = check_attachment_paths_inner(
             Some(dir.path().to_string_lossy().into_owned()),

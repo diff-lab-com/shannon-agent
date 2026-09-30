@@ -431,7 +431,7 @@ pub enum RejectedAttachmentReason {
 }
 
 /// P0-3 — one attachment the send pipeline refused, reported to the frontend
-/// so the user sees "<file> was not sent: <reason>" instead of watching the
+/// so the user sees a `<file> was not sent: <reason>` toast instead of watching the
 /// chip silently vanish.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct RejectedAttachment {
@@ -2719,18 +2719,14 @@ fn classify_path_in_working_dir_distinguishes_unresolvable_from_outside() {
     let outside = crate::classify_path_in_working_dir("/etc/hosts", tmp.path())
         .expect_err("absolute path outside working dir must be classified");
     assert!(
-        matches!(
-            outside,
-            crate::WorkingDirScopeError::OutsideWorkingDir(_)
-        ),
+        matches!(outside, crate::WorkingDirScopeError::OutsideWorkingDir(_)),
         "expected OutsideWorkingDir, got: {outside:?}"
     );
 
     // A missing path → Unresolvable, NOT "outside" (the file may simply
     // have been moved; the message must not accuse the user of exfiltration).
-    let missing =
-        crate::classify_path_in_working_dir("gone.txt", tmp.path())
-            .expect_err("missing path must be classified");
+    let missing = crate::classify_path_in_working_dir("gone.txt", tmp.path())
+        .expect_err("missing path must be classified");
     assert!(
         matches!(missing, crate::WorkingDirScopeError::Unresolvable(_)),
         "expected Unresolvable, got: {missing:?}"
@@ -2766,10 +2762,7 @@ fn collect_attachments_accepts_inside_and_reports_outside_and_missing() {
         RejectedAttachmentReason::OutOfWorkingDir
     );
     assert!(rejected[1].path.ends_with("gone.txt"));
-    assert_eq!(
-        rejected[1].reason,
-        RejectedAttachmentReason::Unresolvable
-    );
+    assert_eq!(rejected[1].reason, RejectedAttachmentReason::Unresolvable);
 }
 
 #[test]
@@ -2777,9 +2770,14 @@ fn collect_attachments_reports_oversized_image_per_file() {
     let tmp = tempfile::tempdir().unwrap();
     // A >10 MiB file with an image extension trips the metadata gate.
     let big = tmp.path().join("big.png");
-    std::fs::write(&big, vec![0u8; shannon_core::attachments::MAX_IMAGE_BYTES + 1]).unwrap();
+    std::fs::write(
+        &big,
+        vec![0u8; shannon_core::attachments::MAX_IMAGE_BYTES + 1],
+    )
+    .unwrap();
 
-    let (collected, rejected) = collect_attachments(&[big.to_string_lossy().into_owned()], tmp.path());
+    let (collected, rejected) =
+        collect_attachments(&[big.to_string_lossy().into_owned()], tmp.path());
 
     assert!(collected.is_empty(), "oversized image must not attach");
     assert_eq!(rejected.len(), 1);
