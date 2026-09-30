@@ -1146,9 +1146,15 @@ export const handlers: Record<string, MockHandler> = {
     if (r) (r as { enabled: boolean }).enabled = args.enabled
     return r ? clone(r) : null
   },
-  async trigger_task_now() {
+  async trigger_task_now(args: { id: string }) {
     await delay(200)
-    return { triggered: true, message: 'Task triggered. Result will appear shortly.' }
+    // Same shape as the real TriggerResponse { run_id, task_id, task_name }.
+    const r = state.scheduled.find(x => x.id === args.id)
+    return {
+      run_id: `mock-run-${Date.now()}`,
+      task_id: args.id,
+      task_name: r?.name ?? args.id,
+    }
   },
   async preview_cron(args: { expr: string }) {
     await delay(40)
