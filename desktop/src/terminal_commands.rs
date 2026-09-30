@@ -26,7 +26,7 @@
 //! `$SHELL` > `/bin/sh` (PowerShell on Windows).
 //!
 //! Additive replay surface (US6): `terminal_history({terminalId}) ->
-//! { data, endSeq }` returns the base64 of the session's newest
+//! { data, endSeq, truncated }` returns the base64 of the session's newest
 //! [`crate::terminal_commands::TERMINAL_HISTORY_CAP`] raw output bytes (in-memory ring only — it
 //! dies with the session; unknown id → empty string, not an error) plus
 //! `endSeq`, the highest output-chunk seq fully contained in the returned
@@ -186,12 +186,20 @@ pub struct TerminalOutputPayload {
 /// [`TerminalOutputPayload`]). Empty string when the id is unknown or the
 /// session already ended: the frontend calls it speculatively on
 /// reconnect, so a missing ring must not be an error.
+///
+/// `truncated` (additive, follow-up) is true when the ring evicted older
+/// bytes past [`TERMINAL_HISTORY_CAP`] — the replayed tail is the newest
+/// 1 MiB, not the full output, and the frontend prepends an in-stream
+/// dim notice so the gap is visible. `#[serde(default)]` keeps legacy
+/// payloads (which never carried the field) deserializable.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(rename_all = "camelCase")]
 pub struct TerminalHistoryResponse {
     pub data: String,
     #[serde(default)]
     pub end_seq: u64,
+    #[serde(default)]
+    pub truncated: bool,
 }
 
 // ── Shell resolution ─────────────────────────────────────────────────────
@@ -630,10 +638,14 @@ fn kill_process_tree(child: &mut Box<dyn portable_pty::Child + Send + Sync>) {
 /// [`TerminalOutputPayload`]). Ring and watermark always mutate together
 /// under the one lock: a reader must never observe new ring bytes without
 /// their seq (that would duplicate them) or an advanced seq without the
-/// bytes (that would lose them).
+/// bytes (that would lose them). `evicted_bytes` accumulates every byte
+/// dropped oldest-first past [`TERMINAL_HISTORY_CAP`] — the response's
+/// additive `truncated` flag is `evicted_bytes > 0` at snapshot time, so
+/// the frontend can announce the gap instead of replaying silently.
 struct HistoryRing {
     bytes: VecDeque<u8>,
     end_seq: u64,
+    evicted_bytes: u64,
 }
 
 impl HistoryRing {
@@ -641,6 +653,7 @@ impl HistoryRing {
         Self {
             bytes: VecDeque::with_capacity(4096),
             end_seq: 0,
+            evicted_bytes: 0,
         }
     }
 }
@@ -649,8 +662,9 @@ impl HistoryRing {
 /// newest [`TERMINAL_HISTORY_CAP`] bytes (same oldest-dropped discipline
 /// as [`PendingBuffer::push`], minus the truncation notice — replay is a
 /// best-effort scrollback, not a guaranteed log), and publish `last_seq`
-/// as the snapshot watermark in the same critical section. A no-op for an
-/// empty batch (the watermark only ever advances over bytes actually
+/// as the snapshot watermark in the same critical section. Every evicted
+/// byte is counted on `evicted_bytes` (both branches below). A no-op for
+/// an empty batch (the watermark only ever advances over bytes actually
 /// present in the ring).
 fn append_history(ring: &StdMutex<HistoryRing>, bytes: &[u8], last_seq: u64) {
     if bytes.is_empty() {
@@ -660,6 +674,7 @@ fn append_history(ring: &StdMutex<HistoryRing>, bytes: &[u8], last_seq: u64) {
     if bytes.len() >= TERMINAL_HISTORY_CAP {
         // A single batch at/over the cap: everything retained so far is
         // stale by definition — keep only the batch's tail.
+        ring.evicted_bytes += (ring.bytes.len() + bytes.len() - TERMINAL_HISTORY_CAP) as u64;
         ring.bytes.clear();
         ring.bytes
             .extend(bytes[bytes.len() - TERMINAL_HISTORY_CAP..].iter().copied());
@@ -668,6 +683,7 @@ fn append_history(ring: &StdMutex<HistoryRing>, bytes: &[u8], last_seq: u64) {
     }
     let overflow = (ring.bytes.len() + bytes.len()).saturating_sub(TERMINAL_HISTORY_CAP);
     if overflow > 0 {
+        ring.evicted_bytes += overflow as u64;
         ring.bytes.drain(..overflow);
     }
     ring.bytes.extend(bytes.iter().copied());
@@ -917,17 +933,23 @@ impl TerminalManager {
     /// `terminal_history` core (US6): the session's retained replay bytes
     /// in stream order plus `end_seq` — the highest emit-chunk seq fully
     /// contained in those bytes (read atomically with the ring so the
-    /// frontend's snapshot ⊕ events stitch is exact). Unknown /
-    /// already-ended id → empty (the frontend calls speculatively on
-    /// reconnect; absence is normal, not an error). The ring dies with the
-    /// session — kill/reap removed it from the map, so this naturally
-    /// returns empty afterwards.
-    pub fn history(&self, terminal_id: &str) -> (Vec<u8>, u64) {
+    /// frontend's snapshot ⊕ events stitch is exact) — and the additive
+    /// `truncated` flag (`evicted_bytes > 0`, same lock: the flag can
+    /// never describe a different snapshot than the returned bytes).
+    /// Unknown / already-ended id → empty (the frontend calls
+    /// speculatively on reconnect; absence is normal, not an error). The
+    /// ring dies with the session — kill/reap removed it from the map, so
+    /// this naturally returns empty afterwards.
+    pub fn history(&self, terminal_id: &str) -> (Vec<u8>, u64, bool) {
         let Ok(session) = self.session(terminal_id) else {
-            return (Vec::new(), 0);
+            return (Vec::new(), 0, false);
         };
         let ring = session.history.lock().unwrap_or_else(|p| p.into_inner());
-        (ring.bytes.iter().copied().collect(), ring.end_seq)
+        (
+            ring.bytes.iter().copied().collect(),
+            ring.end_seq,
+            ring.evicted_bytes > 0,
+        )
     }
 
     /// Kill every session (app-exit hook / `Drop` backstop).
@@ -1275,23 +1297,27 @@ pub async fn terminal_set_settings(
     Ok(TerminalSettingsDto::from(effective))
 }
 
-/// `terminal_history({terminalId}) -> { data, endSeq }` (US6) — base64 of
-/// the session's retained replay bytes (newest 1 MiB, see
+/// `terminal_history({terminalId}) -> { data, endSeq, truncated }` (US6)
+/// — base64 of the session's retained replay bytes (newest 1 MiB, see
 /// [`TERMINAL_HISTORY_CAP`]) plus `endSeq`, the highest output-chunk seq
 /// fully included in the snapshot (review fix — the frontend drops the
 /// queued events it already replayed, see [`TerminalOutputPayload`]).
-/// Unknown or already-ended id → `{ data: "", endSeq: 0 }`,
-/// deliberately not an error: the frontend calls speculatively on
-/// reconnect. No persistence — the ring dies with its session.
+/// `truncated` (additive) is true when older bytes were evicted past the
+/// cap — the frontend prepends an in-stream dim notice to the replay so
+/// the loss is visible. Unknown or already-ended id →
+/// `{ data: "", endSeq: 0, truncated: false }`, deliberately not an
+/// error: the frontend calls speculatively on reconnect. No persistence —
+/// the ring dies with its session.
 #[tauri::command]
 pub async fn terminal_history(
     state: tauri::State<'_, crate::commands::AppState>,
     terminal_id: String,
 ) -> Result<TerminalHistoryResponse, String> {
-    let (bytes, end_seq) = state.terminals.history(&terminal_id);
+    let (bytes, end_seq, truncated) = state.terminals.history(&terminal_id);
     Ok(TerminalHistoryResponse {
         data: base64::engine::general_purpose::STANDARD.encode(bytes),
         end_seq,
+        truncated,
     })
 }
 
@@ -1815,20 +1841,27 @@ mod tests {
     fn history_response_is_frozen_camel_case() {
         // Review fix: the additive `endSeq` watermark rides next to `data`
         // (the frontend drops queued events with seq ≤ endSeq).
+        // Follow-up: the additive `truncated` flag rides along too — true
+        // when the ring evicted older bytes past the cap.
         let resp = TerminalHistoryResponse {
             data: "aGk=".into(),
             end_seq: 7,
+            truncated: true,
         };
         let json = serde_json::to_string(&resp).unwrap();
-        assert_eq!(json, r#"{"data":"aGk=","endSeq":7}"#);
+        assert_eq!(json, r#"{"data":"aGk=","endSeq":7,"truncated":true}"#);
         let back: TerminalHistoryResponse = serde_json::from_str(&json).unwrap();
         assert_eq!(back.data, "aGk=");
         assert_eq!(back.end_seq, 7);
-        // Legacy shape (no endSeq) still parses — defaults to 0, i.e.
-        // "the snapshot covers nothing" → the frontend flushes everything.
+        assert!(back.truncated);
+        // Legacy shape (no endSeq, no truncated) still parses — endSeq
+        // defaults to 0, i.e. "the snapshot covers nothing" → the frontend
+        // flushes everything; truncated defaults to false (nothing known
+        // to be lost → no notice).
         let legacy: TerminalHistoryResponse =
             serde_json::from_str(r#"{"data":"aGk="}"#).expect("legacy response parses");
         assert_eq!(legacy.end_seq, 0);
+        assert!(!legacy.truncated);
     }
 
     #[test]
@@ -1839,9 +1872,12 @@ mod tests {
         let held: Vec<u8> = ring.lock().unwrap().bytes.iter().copied().collect();
         assert_eq!(held.len(), 128, "under the cap everything is retained");
         assert_eq!(ring.lock().unwrap().end_seq, 1, "watermark = last batch");
+        assert_eq!(ring.lock().unwrap().evicted_bytes, 0, "nothing evicted");
 
         // A cap-sized batch evicts everything older in one step (the
         // "batch at/over the cap" branch) and keeps only its own tail.
+        // The 128 previously-retained bytes + the batch's own head
+        // (len - cap) all count as evicted.
         append_history(&ring, &[b'c'; TERMINAL_HISTORY_CAP], 2);
         let held: Vec<u8> = ring.lock().unwrap().bytes.iter().copied().collect();
         assert_eq!(held.len(), TERMINAL_HISTORY_CAP);
@@ -1849,6 +1885,7 @@ mod tests {
             held.iter().all(|&b| b == b'c'),
             "a cap-sized batch evicts everything older"
         );
+        assert_eq!(ring.lock().unwrap().evicted_bytes, 128);
 
         // A batch larger than the cap itself keeps only its own tail.
         let ring: StdMutex<HistoryRing> = StdMutex::new(HistoryRing::new());
@@ -1857,6 +1894,11 @@ mod tests {
         assert_eq!(held.len(), TERMINAL_HISTORY_CAP);
         assert!(held.iter().all(|&b| b == b'x'));
         assert_eq!(ring.lock().unwrap().end_seq, 9);
+        assert_eq!(
+            ring.lock().unwrap().evicted_bytes,
+            5,
+            "the batch's own head is evicted too"
+        );
         // …and appending afterwards still preserves stream order.
         append_history(&ring, b"tail", 10);
         let held: Vec<u8> = ring.lock().unwrap().bytes.iter().copied().collect();
@@ -1867,6 +1909,19 @@ mod tests {
         // bytes actually present in the ring.
         append_history(&ring, b"", 99);
         assert_eq!(ring.lock().unwrap().end_seq, 10);
+
+        // The drain-overflow branch counts its evictions too: fill the
+        // ring to exactly the cap, then one more byte drains the oldest.
+        let ring: StdMutex<HistoryRing> = StdMutex::new(HistoryRing::new());
+        append_history(&ring, &[b'a'; TERMINAL_HISTORY_CAP / 2], 0);
+        append_history(&ring, &[b'b'; TERMINAL_HISTORY_CAP / 2], 1);
+        assert_eq!(ring.lock().unwrap().evicted_bytes, 0);
+        append_history(&ring, b"c", 2);
+        assert_eq!(
+            ring.lock().unwrap().evicted_bytes,
+            1,
+            "oldest byte drained past the cap"
+        );
     }
 
     #[test]
@@ -1875,6 +1930,8 @@ mod tests {
         let manager = test_manager(&sink);
         assert!(manager.history("no-such-terminal").0.is_empty());
         assert_eq!(manager.history("no-such-terminal").1, 0);
+        // Additive `truncated` flag: nothing evicted (no ring at all).
+        assert!(!manager.history("no-such-terminal").2);
     }
 
     #[cfg(unix)]
@@ -1888,7 +1945,7 @@ mod tests {
             .expect("spawn");
         manager.test_push_pending(&info.terminal_id, b"echo replay-marker-99\n");
         manager.pump_once_for_test();
-        let (bytes, end_seq) = manager.history(&info.terminal_id);
+        let (bytes, end_seq, truncated) = manager.history(&info.terminal_id);
         assert!(
             String::from_utf8_lossy(&bytes).contains("replay-marker-99"),
             "drained output must land in the ring, got: {}",
@@ -1896,6 +1953,8 @@ mod tests {
         );
         // The snapshot watermark covers exactly what the pump appended.
         assert_eq!(end_seq, 0, "one drain = one chunk = seq 0");
+        // Nothing evicted → the additive truncated flag stays false.
+        assert!(!truncated);
         // …and the ring dies with the session.
         manager.kill(&info.terminal_id).expect("kill");
         assert!(
@@ -1918,13 +1977,16 @@ mod tests {
         let flood = vec![b'f'; TERMINAL_HISTORY_CAP + TERMINAL_HISTORY_CAP / 2];
         manager.test_push_pending(&info.terminal_id, &flood);
         manager.pump_once_for_test();
-        let (bytes, end_seq) = manager.history(&info.terminal_id);
+        let (bytes, end_seq, truncated) = manager.history(&info.terminal_id);
         assert_eq!(bytes.len(), TERMINAL_HISTORY_CAP, "cap enforced");
         assert!(bytes.iter().all(|&b| b == b'f'), "newest tail kept");
         // The watermark names the LAST chunk of the drain (the eviction
         // only dropped older bytes, never the watermark's own chunk).
         let expected_chunks = (flood.len() as u64).div_ceil(MAX_EMIT_CHUNK as u64);
         assert_eq!(end_seq, expected_chunks - 1, "endSeq = last chunk seq");
+        // Eviction happened → the response must say so (the frontend
+        // prepends the in-stream replay notice from this flag).
+        assert!(truncated, "eviction through the pump must set truncated");
         manager.kill(&info.terminal_id).expect("kill");
     }
 
@@ -2023,7 +2085,7 @@ mod tests {
         manager.test_push_pending(&id, &a);
         manager.pump_once_for_test();
         assert!(wait_until(WAIT, || sink.count_for(&id) >= 3));
-        let (snapshot, end_seq) = manager.history(&id);
+        let (snapshot, end_seq, _) = manager.history(&id);
         assert_eq!(snapshot, a, "ring holds the full drain (under the cap)");
         assert_eq!(end_seq, 2, "watermark = last of the 3 chunks");
 
@@ -2046,7 +2108,7 @@ mod tests {
 
         // A SECOND snapshot taken now carries the advanced watermark, and
         // stitching against it (nothing new emitted) stays lossless.
-        let (snapshot2, end_seq2) = manager.history(&id);
+        let (snapshot2, end_seq2, _) = manager.history(&id);
         assert_eq!(end_seq2, 4);
         let mut stitched2 = snapshot2;
         for (tid, seq, bytes) in sink.emissions.lock().unwrap().iter() {

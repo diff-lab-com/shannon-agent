@@ -2596,3 +2596,230 @@ async fn max_turns_exhaustion_reports_turn_budget_exhausted() {
         "max-turns exhaustion must report outcome=turn_budget_exhausted"
     );
 }
+
+// ── R3-4: vision capability gate (producer level) ────────────────────────
+
+fn gate_image_attachment() -> shannon_engine::api::ContentBlock {
+    shannon_engine::api::ContentBlock::Image {
+        source: shannon_engine::api::ImageSource::base64("image/png", "aGVsbG8="),
+    }
+}
+
+/// Drive one full `process_query` with the given model + attachments against
+/// an always-answering text mock. Returns (completed, failed_error, wire
+/// request bodies seen by the mock).
+#[allow(clippy::type_complexity)]
+async fn run_gate_query(
+    model: &str,
+    attachments: Vec<shannon_engine::api::ContentBlock>,
+) -> (bool, String, Vec<String>) {
+    use futures::StreamExt as _;
+    let server = TurnRetryMockServer::start(std::sync::Arc::new(|_| a8_text_sse("gate-ok")));
+    let config = LlmClientConfig {
+        thinking_type: None,
+        api_key: "test-key".to_string(),
+        base_url: server.base_url.clone(),
+        model: model.to_string(),
+        provider: shannon_engine::api::LlmProvider::Anthropic,
+        ..Default::default()
+    };
+    let engine = QueryEngine::new(
+        LlmClient::new(config),
+        ToolRegistry::new(),
+        PermissionManager::new(),
+        StateManager::new(),
+        QueryEngineConfig::default(),
+    );
+    let context = QueryContext {
+        query_id: uuid::Uuid::new_v4(),
+        session_id: uuid::Uuid::new_v4(),
+        user_message: "what is in this image?".to_string(),
+        attachments,
+        metadata: QueryMetadata {
+            timestamp: chrono::Utc::now(),
+            tools_allowed: false,
+            max_tokens: None,
+            model: model.to_string(),
+            temperature: None,
+            top_p: None,
+        },
+    };
+    let mut stream = engine.process_query(context, None).await;
+    let mut completed = false;
+    let mut failed = String::new();
+    while let Some(ev) = stream.next().await {
+        match ev {
+            Ok(QueryEvent::Completed { .. }) => {
+                completed = true;
+                break;
+            }
+            Ok(QueryEvent::Failed { error, .. }) => {
+                failed = error;
+                break;
+            }
+            Err(e) => {
+                failed = e.to_string();
+                break;
+            }
+            _ => {}
+        }
+    }
+    (completed, failed, server.bodies())
+}
+
+/// A model the catalog KNOWS lacks vision must have its image attachment
+/// refused before any request leaves the process — with a message naming
+/// the model and the switch paths, not a raw provider 400.
+#[tokio::test]
+async fn vision_gate_blocks_known_non_vision_model_before_any_request() {
+    let (completed, failed, bodies) =
+        run_gate_query("deepseek-v4-flash", vec![gate_image_attachment()]).await;
+    assert!(!completed, "the gated query must not complete");
+    assert!(
+        failed.contains("does not support image input"),
+        "typed gate message expected, got: {failed}"
+    );
+    assert!(failed.contains("deepseek-v4-flash"), "got: {failed}");
+    assert!(failed.contains("/model"), "got: {failed}");
+    assert!(
+        bodies.is_empty(),
+        "the gate must fire BEFORE any network traffic, got {} requests",
+        bodies.len()
+    );
+}
+
+/// A vision-capable model receives the attachment: the query completes and
+/// the image rides the wire.
+#[tokio::test]
+async fn vision_gate_passes_vision_model_with_image() {
+    let (completed, failed, bodies) = run_gate_query("gpt-4o", vec![gate_image_attachment()]).await;
+    assert!(
+        failed.is_empty(),
+        "vision model must not be gated, got: {failed}"
+    );
+    assert!(completed, "the query must complete");
+    assert_eq!(bodies.len(), 1);
+    assert!(
+        bodies[0].contains("aGVsbG8="),
+        "the image base64 must ride the wire request"
+    );
+}
+
+/// Capability-UNKNOWN models are never gated (forward-compat): the
+/// attachment flows and the query completes.
+#[tokio::test]
+async fn vision_gate_passes_unknown_model_with_image() {
+    let (completed, failed, bodies) =
+        run_gate_query("shannon-gate-unknown-model", vec![gate_image_attachment()]).await;
+    assert!(
+        failed.is_empty(),
+        "unknown models must pass the gate, got: {failed}"
+    );
+    assert!(completed);
+    assert_eq!(bodies.len(), 1);
+}
+
+/// Text-only queries on a non-vision model are untouched by the gate.
+#[tokio::test]
+async fn vision_gate_ignores_text_only_query() {
+    let (completed, failed, bodies) = run_gate_query("deepseek-v4-flash", Vec::new()).await;
+    assert!(failed.is_empty(), "got: {failed}");
+    assert!(completed);
+    assert_eq!(bodies.len(), 1);
+}
+
+// ── R3-1: failover end-to-end (event lands in the query stream) ──────────
+
+/// Full-loop proof: the startup-resolved chain survives the per-query
+/// client rebuild, the primary's exhausted 500 degrades to the fallback,
+/// and the replayable "falling back to <model>@<provider> (<reason>)"
+/// Progress event precedes the completed answer in the SAME stream.
+#[tokio::test]
+async fn failover_event_lands_in_query_stream_and_answer_flows() {
+    use futures::StreamExt as _;
+    // Primary: always 500 (server error → retry-exhausted → eligible).
+    let primary = TurnRetryMockServer::start(std::sync::Arc::new(|_| {
+        a8_http_response(
+            "500 Internal Server Error",
+            "application/json",
+            r#"{"type":"error","error":{"type":"api_error","message":"overloaded"}}"#,
+        )
+    }));
+    // Fallback: a complete text answer.
+    let fallback =
+        TurnRetryMockServer::start(std::sync::Arc::new(|_| a8_text_sse("fallback-answer")));
+
+    let config = LlmClientConfig {
+        thinking_type: None,
+        api_key: "test-key".to_string(),
+        base_url: primary.base_url.clone(),
+        model: "primary-model".to_string(),
+        provider: shannon_engine::api::LlmProvider::Anthropic,
+        retry_config: shannon_engine::api::RetryConfig {
+            max_retries: 0,
+            initial_backoff_ms: 1,
+            max_backoff_ms: 1,
+            fallbacks: vec![shannon_engine::api::FailoverTarget {
+                model: "fb-model".to_string(),
+                provider: shannon_engine::api::LlmProvider::Anthropic,
+                base_url: fallback.base_url.clone(),
+                api_key: "fb-key".to_string(),
+            }],
+            ..shannon_engine::api::RetryConfig::default()
+        },
+        ..Default::default()
+    };
+    let engine = QueryEngine::new(
+        LlmClient::new(config),
+        ToolRegistry::new(),
+        PermissionManager::new(),
+        StateManager::new(),
+        QueryEngineConfig::default(),
+    );
+    let context = QueryContext {
+        query_id: uuid::Uuid::new_v4(),
+        session_id: uuid::Uuid::new_v4(),
+        user_message: "say something".to_string(),
+        attachments: Vec::new(),
+        metadata: QueryMetadata {
+            timestamp: chrono::Utc::now(),
+            tools_allowed: false,
+            max_tokens: None,
+            model: "primary-model".to_string(),
+            temperature: None,
+            top_p: None,
+        },
+    };
+    let mut stream = engine.process_query(context, None).await;
+    let mut saw_fallback_notice = false;
+    let mut answer = String::new();
+    let mut completed = false;
+    while let Some(ev) = stream.next().await {
+        match ev {
+            Ok(QueryEvent::Progress { message, .. }) => {
+                if message.starts_with("falling back to fb-model@anthropic (") {
+                    saw_fallback_notice = true;
+                }
+            }
+            Ok(QueryEvent::Text { content, .. }) => answer.push_str(&content),
+            Ok(QueryEvent::Completed { .. }) => {
+                completed = true;
+                break;
+            }
+            Ok(QueryEvent::Failed { error, .. }) => {
+                panic!("failover must rescue the query, got: {error}");
+            }
+            Err(e) => panic!("failover must rescue the query, got: {e}"),
+            _ => {}
+        }
+    }
+    assert!(
+        saw_fallback_notice,
+        "the downgrade line must appear in the query event stream"
+    );
+    assert!(completed);
+    assert_eq!(answer, "fallback-answer");
+    // Exactly one request per target: primary died once, fallback answered.
+    assert_eq!(primary.bodies().len(), 1);
+    assert_eq!(fallback.bodies().len(), 1);
+}

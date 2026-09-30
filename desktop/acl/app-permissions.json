@@ -218,6 +218,15 @@
       }
     },
     {
+      "identifier": "allow-create-provider-profile",
+      "description": "Enables the create_provider_profile command without any pre-configured scope.",
+      "commands": {
+        "allow": [
+          "create_provider_profile"
+        ]
+      }
+    },
+    {
       "identifier": "allow-create-scheduled-task",
       "description": "Enables the create_scheduled_task command without any pre-configured scope.",
       "commands": {
@@ -326,15 +335,6 @@
       }
     },
     {
-      "identifier": "allow-fetch-provider-models",
-      "description": "Enables the fetch_provider_models command without any pre-configured scope.",
-      "commands": {
-        "allow": [
-          "fetch_provider_models"
-        ]
-      }
-    },
-    {
       "identifier": "allow-detect-slash",
       "description": "Enables the detect_slash command without any pre-configured scope.",
       "commands": {
@@ -439,6 +439,15 @@
       "commands": {
         "allow": [
           "featured_vendor_to_entry"
+        ]
+      }
+    },
+    {
+      "identifier": "allow-fetch-provider-models",
+      "description": "Enables the fetch_provider_models command without any pre-configured scope.",
+      "commands": {
+        "allow": [
+          "fetch_provider_models"
         ]
       }
     },
@@ -902,6 +911,15 @@
       }
     },
     {
+      "identifier": "allow-inspect-plugin-source",
+      "description": "Enables the inspect_plugin_source command without any pre-configured scope.",
+      "commands": {
+        "allow": [
+          "inspect_plugin_source"
+        ]
+      }
+    },
+    {
       "identifier": "allow-install-agent-from-repo",
       "description": "Enables the install_agent_from_repo command without any pre-configured scope.",
       "commands": {
@@ -1006,15 +1024,6 @@
       "commands": {
         "allow": [
           "install_plugin_from_git"
-        ]
-      }
-    },
-    {
-      "identifier": "allow-inspect-plugin-source",
-      "description": "Enables the inspect_plugin_source command without any pre-configured scope.",
-      "commands": {
-        "allow": [
-          "inspect_plugin_source"
         ]
       }
     },
@@ -1334,6 +1343,15 @@
       }
     },
     {
+      "identifier": "allow-list-provider-profiles",
+      "description": "Enables the list_provider_profiles command without any pre-configured scope.",
+      "commands": {
+        "allow": [
+          "list_provider_profiles"
+        ]
+      }
+    },
+    {
       "identifier": "allow-list-providers",
       "description": "Enables the list_providers command without any pre-configured scope.",
       "commands": {
@@ -1631,6 +1649,15 @@
       }
     },
     {
+      "identifier": "allow-open-session-window",
+      "description": "Enables the open_session_window command without any pre-configured scope.",
+      "commands": {
+        "allow": [
+          "open_session_window"
+        ]
+      }
+    },
+    {
       "identifier": "allow-open-with-default-app",
       "description": "Enables the open_with_default_app command without any pre-configured scope.",
       "commands": {
@@ -1645,60 +1672,6 @@
       "commands": {
         "allow": [
           "path_exists"
-        ]
-      }
-    },
-    {
-      "identifier": "allow-probe-host-runtime",
-      "description": "Enables the probe_host_runtime command without any pre-configured scope.",
-      "commands": {
-        "allow": [
-          "probe_host_runtime"
-        ]
-      }
-    },
-    {
-      "identifier": "allow-probe-url-frameable",
-      "description": "Enables the probe_url_frameable command without any pre-configured scope.",
-      "commands": {
-        "allow": [
-          "probe_url_frameable"
-        ]
-      }
-    },
-    {
-      "identifier": "allow-read-text-file",
-      "description": "Enables the read_text_file command without any pre-configured scope.",
-      "commands": {
-        "allow": [
-          "read_text_file"
-        ]
-      }
-    },
-    {
-      "identifier": "allow-register-interactive-artifact",
-      "description": "Enables the register_interactive_artifact command without any pre-configured scope.",
-      "commands": {
-        "allow": [
-          "register_interactive_artifact"
-        ]
-      }
-    },
-    {
-      "identifier": "allow-reveal-in-folder",
-      "description": "Enables the reveal_in_folder command without any pre-configured scope.",
-      "commands": {
-        "allow": [
-          "reveal_in_folder"
-        ]
-      }
-    },
-    {
-      "identifier": "allow-open-session-window",
-      "description": "Enables the open_session_window command without any pre-configured scope.",
-      "commands": {
-        "allow": [
-          "open_session_window"
         ]
       }
     },
@@ -1802,6 +1775,24 @@
       }
     },
     {
+      "identifier": "allow-probe-host-runtime",
+      "description": "Enables the probe_host_runtime command without any pre-configured scope.",
+      "commands": {
+        "allow": [
+          "probe_host_runtime"
+        ]
+      }
+    },
+    {
+      "identifier": "allow-probe-url-frameable",
+      "description": "Enables the probe_url_frameable command without any pre-configured scope.",
+      "commands": {
+        "allow": [
+          "probe_url_frameable"
+        ]
+      }
+    },
+    {
       "identifier": "allow-promote-memory-to-instruction",
       "description": "Enables the promote_memory_to_instruction command without any pre-configured scope.",
       "commands": {
@@ -1883,6 +1874,15 @@
       }
     },
     {
+      "identifier": "allow-read-text-file",
+      "description": "Enables the read_text_file command without any pre-configured scope.",
+      "commands": {
+        "allow": [
+          "read_text_file"
+        ]
+      }
+    },
+    {
       "identifier": "allow-record-agent-message",
       "description": "Enables the record_agent_message command without any pre-configured scope.",
       "commands": {
@@ -1901,6 +1901,15 @@
       }
     },
     {
+      "identifier": "allow-refine-skill-candidate",
+      "description": "Enables the refine_skill_candidate command without any pre-configured scope.",
+      "commands": {
+        "allow": [
+          "refine_skill_candidate"
+        ]
+      }
+    },
+    {
       "identifier": "allow-refresh-model-catalog",
       "description": "Enables the refresh_model_catalog command without any pre-configured scope.",
       "commands": {
@@ -1910,20 +1919,20 @@
       }
     },
     {
+      "identifier": "allow-register-interactive-artifact",
+      "description": "Enables the register_interactive_artifact command without any pre-configured scope.",
+      "commands": {
+        "allow": [
+          "register_interactive_artifact"
+        ]
+      }
+    },
+    {
       "identifier": "allow-register-project",
       "description": "Enables the register_project command without any pre-configured scope.",
       "commands": {
         "allow": [
           "register_project"
-        ]
-      }
-    },
-    {
-      "identifier": "allow-refine-skill-candidate",
-      "description": "Enables the refine_skill_candidate command without any pre-configured scope.",
-      "commands": {
-        "allow": [
-          "refine_skill_candidate"
         ]
       }
     },
@@ -2086,6 +2095,15 @@
       "commands": {
         "allow": [
           "resume_goal_run"
+        ]
+      }
+    },
+    {
+      "identifier": "allow-reveal-in-folder",
+      "description": "Enables the reveal_in_folder command without any pre-configured scope.",
+      "commands": {
+        "allow": [
+          "reveal_in_folder"
         ]
       }
     },
@@ -2275,6 +2293,15 @@
       "commands": {
         "allow": [
           "set_active_provider"
+        ]
+      }
+    },
+    {
+      "identifier": "allow-set-active-provider-profile",
+      "description": "Enables the set_active_provider_profile command without any pre-configured scope.",
+      "commands": {
+        "allow": [
+          "set_active_provider_profile"
         ]
       }
     },
@@ -2603,15 +2630,6 @@
       }
     },
     {
-      "identifier": "allow-unregister-interactive-artifact",
-      "description": "Enables the unregister_interactive_artifact command without any pre-configured scope.",
-      "commands": {
-        "allow": [
-          "unregister_interactive_artifact"
-        ]
-      }
-    },
-    {
       "identifier": "allow-uninstall-agent-plugin",
       "description": "Enables the uninstall_agent_plugin command without any pre-configured scope.",
       "commands": {
@@ -2653,6 +2671,15 @@
       "commands": {
         "allow": [
           "uninstall_skill_plugin"
+        ]
+      }
+    },
+    {
+      "identifier": "allow-unregister-interactive-artifact",
+      "description": "Enables the unregister_interactive_artifact command without any pre-configured scope.",
+      "commands": {
+        "allow": [
+          "unregister_interactive_artifact"
         ]
       }
     },
@@ -2745,15 +2772,18 @@
       "description": "Provider/model configuration management commands.",
       "permissions": [
         "allow-configure",
+        "allow-create-provider-profile",
         "allow-delete-provider",
         "allow-detect-provider-from-env",
         "allow-fetch-provider-models",
         "allow-get-config",
         "allow-get-provider-status",
+        "allow-list-provider-profiles",
         "allow-list-providers",
         "allow-refresh-model-catalog",
         "allow-save-provider",
         "allow-set-active-provider",
+        "allow-set-active-provider-profile",
         "allow-test-all-providers",
         "allow-test-provider-connection",
         "allow-test-provider-credentials"

@@ -32,11 +32,70 @@ pub struct ResolvedTarget<'a> {
     pub model_id: &'a str,
 }
 
-/// Resolve the active target of the `"default"` profile (B3 phase-1:
-/// single-active-profile).
+/// Why an active-target resolution failed (R3-2).
 ///
-/// Returns `None` when there is no `"default"` profile, or its `active_target`
-/// points at a provider id absent from `providers`.
+/// The graceful `Option`-returning [`resolve_active_target`] collapses these
+/// into `None` (launch must never fail — the synthesis fallback applies).
+/// Interactive surfaces (`/profiles use`, the desktop's `set_active_profile`)
+/// use [`resolve_active_target_checked`] to tell the user *what* is wrong.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ActiveTargetError {
+    /// No profile exists under the config's `active_profile` key (a dangling
+    /// pointer — the named profile was never created or was deleted).
+    ProfileNotFound {
+        /// The key resolution looked for (never empty; `"default"` when unset).
+        requested: String,
+        /// Every profile that does exist, sorted — rendered into the error.
+        available: Vec<String>,
+    },
+    /// The active profile exists but has no usable target: it either has no
+    /// provider slots at all (empty profile) or its `active_target` names a
+    /// provider id absent from `providers`.
+    NoActiveTarget {
+        /// The profile that was looked into.
+        profile: String,
+    },
+}
+
+impl std::fmt::Display for ActiveTargetError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::ProfileNotFound {
+                requested,
+                available,
+            } => {
+                if available.is_empty() {
+                    write!(
+                        f,
+                        "profile '{requested}' not found (no profiles configured)"
+                    )
+                } else {
+                    write!(
+                        f,
+                        "profile '{requested}' not found; available profiles: {}",
+                        available.join(", ")
+                    )
+                }
+            }
+            Self::NoActiveTarget { profile } => write!(
+                f,
+                "profile '{profile}' has no active model — connect a provider \
+                 first (/connect) or pick one (/model)"
+            ),
+        }
+    }
+}
+
+impl std::error::Error for ActiveTargetError {}
+
+/// Resolve the active target of the config's `active_profile` (R3-2: the
+/// named pointer replaces the hardcoded `"default"`; an empty pointer keeps
+/// meaning `"default"` for pre-R3-2 files).
+///
+/// Error-bearing twin of [`resolve_active_target`]: the graceful wrapper
+/// collapses both failure modes to `None` (launch paths + synthesis
+/// fallback), while interactive surfaces render the message — it names the
+/// requested profile and lists the available ones.
 ///
 /// The provider identity is recovered in this order (preserving the
 /// pre-N1 explicit-name behaviour, where a user `--provider groq` flows
@@ -46,19 +105,46 @@ pub struct ResolvedTarget<'a> {
 ///    unconditionally (preserves the user's explicit intent).
 /// 2. **fall back to [`resolve_provider`]** — base_url-driven detection
 ///    for unknown ids, then the coarse `ProviderKind` fallback.
-pub fn resolve_active_target(pm: &ProviderModelConfig) -> Option<ResolvedTarget<'_>> {
-    let profile = pm.profiles.get("default")?;
+pub fn resolve_active_target_checked(
+    pm: &ProviderModelConfig,
+) -> Result<ResolvedTarget<'_>, ActiveTargetError> {
+    let key = pm.active_profile_key();
+    let profile = pm.profiles.get(key).ok_or_else(|| {
+        let mut available = pm.profile_names();
+        // The requested key is by definition not among them.
+        available.retain(|n| n != key);
+        ActiveTargetError::ProfileNotFound {
+            requested: key.to_string(),
+            available,
+        }
+    })?;
     let active = profile
         .providers
         .iter()
-        .find(|p| p.id == profile.active_target.provider_id)?;
+        .find(|p| p.id == profile.active_target.provider_id)
+        .ok_or_else(|| ActiveTargetError::NoActiveTarget {
+            profile: key.to_string(),
+        })?;
     let provider = llm_provider_from_id(&active.id)
         .unwrap_or_else(|| resolve_provider(&active.kind, &active.base_url));
-    Some(ResolvedTarget {
+    Ok(ResolvedTarget {
         provider,
         profile: active,
         model_id: &profile.active_target.model_id,
     })
+}
+
+/// Resolve the active target of the config's `active_profile` (R3-2:
+/// honors [`ProviderModelConfig::active_profile`]; an empty/unset pointer
+/// keeps the B3 phase-1 `"default"` behaviour).
+///
+/// Returns `None` when there is no profile under that key, or its
+/// `active_target` points at a provider id absent from `providers` — the
+/// same graceful contract as before R3-2 (launch falls back to synthesis).
+/// Interactive surfaces that need to say *why* use
+/// [`resolve_active_target_checked`].
+pub fn resolve_active_target(pm: &ProviderModelConfig) -> Option<ResolvedTarget<'_>> {
+    resolve_active_target_checked(pm).ok()
 }
 
 /// Reverse of [`llm_provider_id`]: map a profile id slug (e.g. `"groq"`,
@@ -373,6 +459,7 @@ pub fn synthesize_default_profile(
 
     Some(ProviderModelConfig {
         version: ProviderModelConfig::VERSION,
+        active_profile: String::new(),
         profiles: build_default_profiles_map(profile, &model_id),
         gateway: Default::default(),
     })
@@ -401,6 +488,7 @@ fn ollama_default_profile(model_id: &str) -> ProviderModelConfig {
     };
     ProviderModelConfig {
         version: ProviderModelConfig::VERSION,
+        active_profile: String::new(),
         profiles: build_default_profiles_map(profile, model_id),
         gateway: Default::default(),
     }
@@ -516,6 +604,7 @@ mod tests {
         );
         ProviderModelConfig {
             version: ProviderModelConfig::VERSION,
+            active_profile: String::new(),
             profiles,
             gateway: Default::default(),
         }
@@ -631,10 +720,196 @@ mod tests {
     fn none_when_no_default_profile() {
         let pm = ProviderModelConfig {
             version: ProviderModelConfig::VERSION,
+            active_profile: String::new(),
             profiles: HashMap::new(),
             gateway: Default::default(),
         };
         assert!(resolve_active_target(&pm).is_none());
+    }
+
+    // ── R3-2: multi-profile resolution ──────────────────────────────────
+
+    /// Two named profiles (`default` → anthropic, `work` → openai) with
+    /// `active_profile` controlling which one wins.
+    fn two_profile_config(active: &str) -> ProviderModelConfig {
+        let mut profiles = HashMap::new();
+        profiles.insert(
+            "default".to_string(),
+            ModelProfile {
+                name: "default".to_string(),
+                active_target: ActiveTarget {
+                    provider_id: "anthropic".to_string(),
+                    model_id: "claude-sonnet-4-20250514".to_string(),
+                    scope: Scope::Global,
+                },
+                providers: vec![profile(
+                    "anthropic",
+                    ProviderKind::Anthropic,
+                    "https://api.anthropic.com",
+                    "K",
+                )],
+                auxiliary: HashMap::new(),
+                credential_scope: CredentialScope::Shared,
+            },
+        );
+        profiles.insert(
+            "work".to_string(),
+            ModelProfile {
+                name: "work".to_string(),
+                active_target: ActiveTarget {
+                    provider_id: "openai".to_string(),
+                    model_id: "gpt-4o".to_string(),
+                    scope: Scope::Global,
+                },
+                providers: vec![profile(
+                    "openai",
+                    ProviderKind::OpenAi,
+                    "https://api.openai.com/v1",
+                    "K2",
+                )],
+                auxiliary: HashMap::new(),
+                credential_scope: CredentialScope::Shared,
+            },
+        );
+        ProviderModelConfig {
+            version: ProviderModelConfig::VERSION,
+            active_profile: active.to_string(),
+            profiles,
+            gateway: Default::default(),
+        }
+    }
+
+    #[test]
+    fn empty_active_profile_still_resolves_default() {
+        // B3 phase-1 compat: an unset pointer means "default".
+        let pm = two_profile_config("");
+        let r = resolve_active_target(&pm).unwrap();
+        assert_eq!(r.provider, LlmProvider::Anthropic);
+        assert_eq!(r.model_id, "claude-sonnet-4-20250514");
+    }
+
+    #[test]
+    fn active_profile_switches_resolution_target() {
+        let pm = two_profile_config("work");
+        let r = resolve_active_target(&pm).unwrap();
+        assert_eq!(r.provider, LlmProvider::OpenAI);
+        assert_eq!(r.model_id, "gpt-4o");
+        assert_eq!(r.profile.base_url, "https://api.openai.com/v1");
+        // And back.
+        let pm = two_profile_config("default");
+        let r = resolve_active_target(&pm).unwrap();
+        assert_eq!(r.provider, LlmProvider::Anthropic);
+    }
+
+    #[test]
+    fn dangling_active_profile_is_an_error_listing_available() {
+        let pm = two_profile_config("ghost");
+        assert!(
+            resolve_active_target(&pm).is_none(),
+            "graceful path stays None"
+        );
+        let err = resolve_active_target_checked(&pm).unwrap_err();
+        match &err {
+            ActiveTargetError::ProfileNotFound {
+                requested,
+                available,
+            } => {
+                assert_eq!(requested, "ghost");
+                assert_eq!(*available, vec!["default".to_string(), "work".to_string()]);
+            }
+            other => panic!("expected ProfileNotFound, got {other:?}"),
+        }
+        let msg = err.to_string();
+        assert!(
+            msg.contains("ghost") && msg.contains("default") && msg.contains("work"),
+            "error must list available profiles: {msg}"
+        );
+    }
+
+    #[test]
+    fn empty_profile_resolves_to_none_but_names_the_profile() {
+        // "Profile found but empty → same behavior as an empty default
+        // today": the Option contract degrades to None; the checked variant
+        // explains that the profile exists but has nothing to activate.
+        let mut pm = two_profile_config("");
+        pm.profiles.insert(
+            "empty".to_string(),
+            ModelProfile {
+                name: "empty".to_string(),
+                active_target: ActiveTarget {
+                    provider_id: String::new(),
+                    model_id: String::new(),
+                    scope: Scope::Global,
+                },
+                providers: Vec::new(),
+                auxiliary: HashMap::new(),
+                credential_scope: CredentialScope::Shared,
+            },
+        );
+        pm.active_profile = "empty".to_string();
+        assert!(resolve_active_target(&pm).is_none());
+        let err = resolve_active_target_checked(&pm).unwrap_err();
+        assert_eq!(
+            err,
+            ActiveTargetError::NoActiveTarget {
+                profile: "empty".to_string()
+            }
+        );
+        assert!(err.to_string().contains("empty"), "{err}");
+    }
+
+    #[test]
+    fn profile_with_targeting_gap_is_no_active_target_error() {
+        // A profile whose active_target names a provider id absent from its
+        // providers list — the "empty default today" contract too.
+        let mut pm = two_profile_config("work");
+        pm.profiles
+            .get_mut("work")
+            .unwrap()
+            .active_target
+            .provider_id = "ghost".to_string();
+        assert!(resolve_active_target(&pm).is_none());
+        assert_eq!(
+            resolve_active_target_checked(&pm).unwrap_err(),
+            ActiveTargetError::NoActiveTarget {
+                profile: "work".to_string()
+            }
+        );
+    }
+
+    #[test]
+    fn checked_resolution_reports_custom_slug_identity() {
+        // A custom openai-compatible slot (id not in the slug table) resolves
+        // via base_url detection, same as the phase-1 path.
+        let mut profiles = HashMap::new();
+        profiles.insert(
+            "proxy".to_string(),
+            ModelProfile {
+                name: "proxy".to_string(),
+                active_target: ActiveTarget {
+                    provider_id: "my-gateway".to_string(),
+                    model_id: "some-model".to_string(),
+                    scope: Scope::Global,
+                },
+                providers: vec![profile(
+                    "my-gateway",
+                    ProviderKind::OpenAiCompatible,
+                    "https://my-proxy.example.com/v1",
+                    "K",
+                )],
+                auxiliary: HashMap::new(),
+                credential_scope: CredentialScope::Shared,
+            },
+        );
+        let pm = ProviderModelConfig {
+            version: ProviderModelConfig::VERSION,
+            active_profile: "proxy".to_string(),
+            profiles,
+            gateway: Default::default(),
+        };
+        let r = resolve_active_target_checked(&pm).unwrap();
+        assert_eq!(r.provider, LlmProvider::OpenAI);
+        assert_eq!(r.model_id, "some-model");
     }
 
     #[test]

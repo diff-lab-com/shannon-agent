@@ -2858,6 +2858,9 @@ mod build_client_config_tests {
         );
         ProviderConfigStore::from_config(ProviderModelConfig {
             version: ProviderModelConfig::VERSION,
+            // R3-2: the engine grew an `active_profile` pointer (empty =
+            // `"default"`) — this fixture targets the default profile.
+            active_profile: String::new(),
             profiles,
             gateway: Default::default(),
         })

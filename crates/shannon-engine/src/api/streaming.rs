@@ -657,6 +657,7 @@ impl ResumableSseStream {
             total_attempts: self.initial_reconnects + 1,
             wait: std::time::Duration::from_secs(backoff_secs),
             reason: "stream dropped mid-response; reconnecting".to_string(),
+            kind: super::retry::RetryNoticeKind::Retry,
         };
 
         let (tx, rx) = tokio::sync::oneshot::channel();

@@ -178,6 +178,19 @@ pub struct DesktopConfig {
     /// posture until the user configures an explicit window.
     #[serde(default)]
     pub session_retention_days: Option<u32>,
+    /// R3-3: plan-phase model tier — `fast` | `standard` | `pro`. `None`
+    /// (and any legacy junk value, which the reader normalizes away) means
+    /// **inherit**: the plan phase uses the global default model. Written by
+    /// `configure('plan_tier')`; consulted at query time by
+    /// `commands_chat::resolve_client_config_for_session` under the
+    /// precedence **session override (R2-1) > phase tier > global default**.
+    /// Global preference, deliberately NOT per session.
+    #[serde(default)]
+    pub plan_tier: Option<String>,
+    /// R3-3: act-phase model tier — same contract as [`DesktopConfig::plan_tier`]
+    /// for the execution phase (every approval mode except `plan`).
+    #[serde(default)]
+    pub act_tier: Option<String>,
 }
 
 /// P2-5: payload of the desktop `offpeak.model_override` config key.
@@ -607,6 +620,8 @@ impl Default for DesktopConfig {
             agent_teams_enabled: false,
             session_gc_enabled: false,
             session_retention_days: None,
+            plan_tier: None,
+            act_tier: None,
         }
     }
 }
@@ -818,6 +833,30 @@ mod tests {
         assert_eq!(cfg.session_retention_days, Some(90));
         let back = serde_json::to_string(&cfg).unwrap();
         assert!(back.contains("\"session_retention_days\":90"), "{back}");
+    }
+
+    #[test]
+    fn phase_tier_fields_default_and_round_trip() {
+        // R3-3: the phase-tier pair is new keys — config.json files written
+        // before them must load with both unset (inherit).
+        assert_eq!(DesktopConfig::default().plan_tier, None);
+        assert_eq!(DesktopConfig::default().act_tier, None);
+        let legacy: DesktopConfig = serde_json::from_str(
+            r#"{"working_dir":null,"theme":null,"mcp_servers":[],"approval_mode":null}"#,
+        )
+        .expect("legacy config must deserialize");
+        assert_eq!(legacy.plan_tier, None);
+        assert_eq!(legacy.act_tier, None);
+
+        // Explicit values round-trip.
+        let cfg: DesktopConfig =
+            serde_json::from_str(r#"{"mcp_servers":[],"plan_tier":"fast","act_tier":"pro"}"#)
+                .unwrap();
+        assert_eq!(cfg.plan_tier.as_deref(), Some("fast"));
+        assert_eq!(cfg.act_tier.as_deref(), Some("pro"));
+        let back = serde_json::to_string(&cfg).unwrap();
+        assert!(back.contains("\"plan_tier\":\"fast\""), "{back}");
+        assert!(back.contains("\"act_tier\":\"pro\""), "{back}");
     }
 
     #[test]

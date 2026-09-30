@@ -9,6 +9,7 @@ import type {
   ProviderConnection,
   ProvidersFile,
   ProviderInput,
+  ProviderProfileSummary,
   DesktopConfig,
   GatewayConfig,
   GatewayPairingRequest,
@@ -594,6 +595,28 @@ export interface ModelCatalogRefreshResult {
  *  `/model refresh`). Throws with the upstream failure reason. */
 export async function refreshModelCatalog(): Promise<ModelCatalogRefreshResult> {
   return invoke('refresh_model_catalog')
+}
+
+// --- R3-2 (desktop slice): provider model profiles ---
+
+/** List the engine store's model profiles (`"default"` pinned first, rest
+ *  alphabetical; `active` marks the engine's `active_profile`). */
+export async function listProviderProfiles(): Promise<ProviderProfileSummary[]> {
+  return invoke('list_provider_profiles')
+}
+
+/** Create an empty named model profile (inactive — switching is explicit).
+ *  Returns the refreshed list. Throws on empty/too-long/whitespace names
+ *  (the engine's shared `validate_profile_name` contract) and duplicates. */
+export async function createProviderProfile(name: string): Promise<ProviderProfileSummary[]> {
+  return invoke('create_provider_profile', { name })
+}
+
+/** Switch the engine's active model profile and re-point the global
+ *  default. Returns the refreshed list. The UI confirms before switching
+ *  to a profile with no providers. */
+export async function setActiveProviderProfile(name: string): Promise<ProviderProfileSummary[]> {
+  return invoke('set_active_provider_profile', { name })
 }
 
 export async function getTools(): Promise<ToolInfo[]> {
@@ -2827,8 +2850,13 @@ export async function terminalSetSettings(settings: TerminalSettings): Promise<T
  * events with `seq <= endSeq` and flushes the rest, so the snapshot and
  * the live stream stitch without loss or duplication. Absent on the demo
  * backend → flush-everything fallback.
+ *
+ * `truncated` (additive) is true when the backend's 1 MiB replay ring
+ * evicted older bytes: `data` is only the newest tail, and the replay
+ * consumer prepends an in-stream dim notice so the gap is visible.
+ * Absent on legacy/demo payloads → treated as false (nothing known lost).
  */
-export async function terminalHistory(terminalId: string): Promise<{ data: string; endSeq?: number }> {
+export async function terminalHistory(terminalId: string): Promise<{ data: string; endSeq?: number; truncated?: boolean }> {
   return invoke('terminal_history', { terminalId })
 }
 

@@ -11,6 +11,8 @@ import type { ProvidersFile } from '@/types'
 import { formatPrice } from './models-settings/types'
 import { ProvidersSection } from './models-settings/ProvidersSection'
 import { ProviderVisibilitySection } from './models-settings/ProviderVisibilitySection'
+import { PhaseTierSection } from './models-settings/PhaseTierSection'
+import { ProfilesSection } from './models-settings/ProfilesSection'
 import { ParameterSlider } from './models-settings/ParameterSlider'
 import { ComboboxSelect } from '@/components/ui/combobox-select'
 
@@ -167,6 +169,15 @@ export default function ModelsSettings() {
             />
           </div>
         </section>
+
+        {/* R3-3: plan/act model tiers (global preference; the chat header's
+            compact pair writes the same config keys). */}
+        <PhaseTierSection />
+
+        {/* R3-2: named provider model profiles (list / switch / create —
+            rename & delete deferred). A switch refreshes provider status +
+            catalog through the same paths provider activation uses. */}
+        <ProfilesSection onSwitched={async () => { await Promise.all([refreshModels(), refreshStatus()]) }} />
 
         {/* Providers (managed, Models P2) */}
         <ProvidersSection

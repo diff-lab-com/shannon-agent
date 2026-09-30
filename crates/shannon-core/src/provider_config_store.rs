@@ -503,24 +503,22 @@ impl ProviderConfigStore {
         Ok(())
     }
 
-    /// Get-or-create the profile for the given provider, mutating the
-    /// `"default"` [`shannon_types::provider_config::ModelProfile`] in place.
+    /// Get-or-create the provider slot on the **active** model profile
+    /// (`config.active_profile`, R3-2 — `"default"` when unset, so
+    /// single-profile behavior is unchanged).
     ///
     /// Returns `&mut ProviderProfile` so callers can set per-tier overrides
     /// (e.g. `/model --tier fast gpt-4o --save` writes
-    /// `providers[0].tiers.fast = "gpt-4o"`). If no `default` profile exists
-    /// yet, creates one with a single synthetic provider slot.
+    /// `providers[0].tiers.fast = "gpt-4o"`). If the active profile does not
+    /// exist yet, creates one (empty scaffold under its name) so the write
+    /// lands in the profile resolution actually reads.
     ///
     /// `ProviderProfile` has no `Default` impl (required fields like
     /// `base_url` and `credential` have no universal default), so we
     /// synthesize the slot from the provider's known canonical base URL.
     pub fn ensure_provider(&mut self, provider: &LlmProvider) -> &mut ProviderProfile {
         let id = crate::provider_resolver::llm_provider_id(provider);
-        let profile = self
-            .config
-            .profiles
-            .entry("default".to_string())
-            .or_insert_with(default_model_profile);
+        let profile = self.active_model_profile_or_insert();
 
         if let Some(idx) = profile.providers.iter().position(|p| p.id == id) {
             return &mut profile.providers[idx];
@@ -531,6 +529,20 @@ impl ProviderConfigStore {
             provider.default_base_url(),
         ));
         profile.providers.last_mut().expect("just pushed")
+    }
+
+    /// Get-or-create the **active** [`ModelProfile`] (the
+    /// `config.active_profile` entry; `"default"` when unset). The scaffold
+    /// is named after the key so `ModelProfile.name` and the map key never
+    /// drift.
+    fn active_model_profile_or_insert(
+        &mut self,
+    ) -> &mut shannon_types::provider_config::ModelProfile {
+        let key = self.config.active_profile_key().to_string();
+        self.config
+            .profiles
+            .entry(key.clone())
+            .or_insert_with(|| default_model_profile(&key))
     }
 
     /// Set a per-tier model override on the given provider. Writes through
@@ -564,8 +576,9 @@ impl ProviderConfigStore {
         self
     }
 
-    /// Set the active provider + model on the `"default"` profile. The engine
-    /// read-back ([`crate::provider_resolver::resolve_active_target`]) reads
+    /// Set the active provider + model on the **active** model profile
+    /// (`config.active_profile`, R3-2). The engine read-back
+    /// ([`crate::provider_resolver::resolve_active_target`]) reads
     /// `active_target` — **not** the per-tier overrides written by `set_tier`
     /// — so calling this is what makes a `/model --tier ... --save` choice
     /// actually survive a restart (ADR-0005 Phase 4). Reuses `ensure_provider`
@@ -574,7 +587,7 @@ impl ProviderConfigStore {
     pub fn set_active(&mut self, provider: &LlmProvider, model_id: &str) -> &mut Self {
         let id = crate::provider_resolver::llm_provider_id(provider);
         self.ensure_provider(provider);
-        if let Some(profile) = self.config.profiles.get_mut("default") {
+        if let Some(profile) = self.config.active_model_profile_mut() {
             profile.active_target.provider_id = id;
             profile.active_target.model_id = model_id.to_string();
         }
@@ -624,15 +637,14 @@ impl ProviderConfigStore {
         }
         let profile = self
             .config
-            .profiles
-            .get_mut("default")
+            .active_model_profile_mut()
             .and_then(|mp| mp.providers.iter_mut().find(|p| p.id == provider_id))
             .ok_or_else(|| {
                 io::Error::new(
                     io::ErrorKind::NotFound,
                     format!(
-                        "no provider slot with id '{provider_id}' in providers.toml; \
-                         run `shannon list-providers` to see configured ids"
+                        "no provider slot with id '{provider_id}' in the active profile of \
+                         providers.toml; run `shannon list-providers` to see configured ids"
                     ),
                 )
             })?;
@@ -650,13 +662,12 @@ impl ProviderConfigStore {
     pub fn remove_model_meta(&mut self, provider_id: &str, model_id: &str) -> io::Result<bool> {
         let profile = self
             .config
-            .profiles
-            .get_mut("default")
+            .active_model_profile_mut()
             .and_then(|mp| mp.providers.iter_mut().find(|p| p.id == provider_id))
             .ok_or_else(|| {
                 io::Error::new(
                     io::ErrorKind::NotFound,
-                    format!("no provider slot with id '{provider_id}' in providers.toml"),
+                    format!("no provider slot with id '{provider_id}' in the active profile"),
                 )
             })?;
         let before = profile.models.len();
@@ -665,7 +676,8 @@ impl ProviderConfigStore {
     }
 
     /// Insert or replace a fully-built [`ProviderProfile`] under the
-    /// `"default"` model profile, keyed by `profile.id`. The desktop uses
+    /// **active** model profile (`config.active_profile`, R3-2 — `"default"`
+    /// when unset), keyed by `profile.id`. The desktop uses
     /// this to land managed connections (e.g. two distinct
     /// `openai-compatible` endpoints like `glm` and `kimi`) without
     /// collapsing them to the engine's `OpenAI` slot — unlike
@@ -680,7 +692,7 @@ impl ProviderConfigStore {
     ///   existing fields must read them out first.
     /// - If absent, the profile is appended and `active_target` is
     ///   repointed at the new id with `model_id`.
-    /// - Other slots in `default.providers` are left untouched.
+    /// - Other slots in the active model profile are left untouched.
     ///
     /// This is the write path the desktop shell uses for managed
     /// provider connections (ADR-0005 Phase 2 task 4 — full
@@ -690,11 +702,7 @@ impl ProviderConfigStore {
     /// semantics.
     pub fn upsert_profile(&mut self, profile: ProviderProfile, model_id: &str) -> &mut Self {
         let profile_id = profile.id.clone();
-        let model_profile = self
-            .config
-            .profiles
-            .entry("default".to_string())
-            .or_insert_with(default_model_profile);
+        let model_profile = self.active_model_profile_or_insert();
 
         if let Some(idx) = model_profile
             .providers
@@ -712,13 +720,13 @@ impl ProviderConfigStore {
     }
 
     /// Remove the provider slot whose `id` matches `profile_id` from the
-    /// `"default"` model profile. If that slot was the active target, the
-    /// active pointer is cleared to `""` (the resolver will then fall
-    /// back to synthesis on the next request). No-op if no slot matches
-    /// — the desktop's `delete_provider` flow needs idempotence, not a
-    /// 404.
+    /// **active** model profile (`config.active_profile`, R3-2). If that slot
+    /// was the active target, the active pointer is cleared to `""` (the
+    /// resolver will then fall back to synthesis on the next request). No-op
+    /// if no slot matches — the desktop's `delete_provider` flow needs
+    /// idempotence, not a 404.
     pub fn remove_profile(&mut self, profile_id: &str) -> &mut Self {
-        if let Some(model_profile) = self.config.profiles.get_mut("default") {
+        if let Some(model_profile) = self.config.active_model_profile_mut() {
             model_profile.providers.retain(|p| p.id != profile_id);
             if model_profile.active_target.provider_id == profile_id {
                 model_profile.active_target.provider_id = String::new();
@@ -726,6 +734,145 @@ impl ProviderConfigStore {
             }
         }
         self
+    }
+
+    // ── R3-2: named model-profile management (store-level mutators) ─────
+    //
+    // In-memory primitives behind `ProviderConfigService`'s persisted
+    // `create` / `rename` / `delete` / `set-active` flows. They mutate
+    // `self.config` only — persistence is the caller's (locked) job, same
+    // split as `ensure_provider` vs `save_locked`.
+
+    /// Insert an empty named model profile scaffold (no providers, no active
+    /// target — the same starting point `default_model_profile` gives a fresh
+    /// store). Errors (`AlreadyExists`) when the name is taken; the name is
+    /// validated by the service layer before reaching here.
+    pub fn insert_model_profile(&mut self, name: &str) -> io::Result<()> {
+        if self.config.profiles.contains_key(name) {
+            return Err(io::Error::new(
+                io::ErrorKind::AlreadyExists,
+                format!("profile '{name}' already exists"),
+            ));
+        }
+        self.config
+            .profiles
+            .insert(name.to_string(), default_model_profile(name));
+        Ok(())
+    }
+
+    /// Rename a model profile: moves the map entry, rewrites the profile's
+    /// own `name` field, and **follows the active pointer** when the renamed
+    /// profile was the active one (a rename must never change which profile
+    /// is live). Errors: `NotFound` (unknown `old`, message lists what
+    /// exists), `AlreadyExists` (`new` taken).
+    pub fn rename_model_profile(&mut self, old: &str, new: &str) -> io::Result<()> {
+        if !self.config.profiles.contains_key(old) {
+            return Err(io::Error::new(
+                io::ErrorKind::NotFound,
+                format!(
+                    "profile '{old}' not found; available profiles: {}",
+                    self.config.profile_names().join(", ")
+                ),
+            ));
+        }
+        if self.config.profiles.contains_key(new) {
+            return Err(io::Error::new(
+                io::ErrorKind::AlreadyExists,
+                format!("profile '{new}' already exists"),
+            ));
+        }
+        // HashMap::rename is not a thing — remove + reinsert preserves the
+        // value wholesale (providers, tiers, auxiliary, credential_scope).
+        let mut mp = self.config.profiles.remove(old).expect("checked above");
+        mp.name = new.to_string();
+        self.config.profiles.insert(new.to_string(), mp);
+        if self.config.active_profile_key() == old {
+            self.set_active_profile_key(new);
+        }
+        Ok(())
+    }
+
+    /// Delete a named model profile. Guards:
+    /// - `NotFound` when the name is unknown (message lists what exists).
+    /// - `InvalidData` when it is the **last** profile — a config must keep
+    ///   at least one.
+    /// - `InvalidData` when it is the **active** profile and `force` is
+    ///   false — the caller decides (REPL: "pass --force").
+    ///
+    /// With `force`, the active pointer falls back to `"default"` when that
+    /// profile exists and is not the one being deleted, else to the first
+    /// remaining profile (sorted), else the pointer is cleared (resolution
+    /// degrades to synthesis — the same contract as a dangling pointer).
+    /// Returns the fallback profile name when the pointer moved, `None` when
+    /// the deleted profile was not active.
+    pub fn remove_model_profile(&mut self, name: &str, force: bool) -> io::Result<Option<String>> {
+        if !self.config.profiles.contains_key(name) {
+            return Err(io::Error::new(
+                io::ErrorKind::NotFound,
+                format!(
+                    "profile '{name}' not found; available profiles: {}",
+                    self.config.profile_names().join(", ")
+                ),
+            ));
+        }
+        if self.config.profiles.len() == 1 {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                format!(
+                    "cannot delete profile '{name}': it is the only profile; \
+                     create another one first (/profiles new <name>)"
+                ),
+            ));
+        }
+        let was_active = self.config.active_profile_key() == name;
+        if was_active && !force {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                format!(
+                    "refusing to delete the active profile '{name}'; switch first \
+                     (/profiles use <name>) or pass --force"
+                ),
+            ));
+        }
+        self.config.profiles.remove(name);
+        if !was_active {
+            return Ok(None);
+        }
+        let fallback = if name != ProviderModelConfig::DEFAULT_PROFILE
+            && self
+                .config
+                .profiles
+                .contains_key(ProviderModelConfig::DEFAULT_PROFILE)
+        {
+            Some(ProviderModelConfig::DEFAULT_PROFILE.to_string())
+        } else {
+            self.config.profile_names().into_iter().next()
+        };
+        match &fallback {
+            Some(fb) => self.set_active_profile_key(fb),
+            None => self.config.active_profile.clear(),
+        }
+        Ok(fallback)
+    }
+
+    /// Point `active_profile` at `name`. No switchability validation here —
+    /// the store is the in-memory mutator; the service layers the
+    /// exists/has-providers checks on before calling this. The persisted
+    /// key is cleared (not written as `"default"`) when `name` **is**
+    /// `"default"`, keeping the file shape canonical.
+    pub fn set_active_profile_key(&mut self, name: &str) {
+        if name == ProviderModelConfig::DEFAULT_PROFILE {
+            self.config.active_profile.clear();
+        } else {
+            self.config.active_profile = name.to_string();
+        }
+    }
+
+    /// The current active profile key, sorted list of all profile names, and
+    /// per-name slot counts — the raw material every `/profiles`-style
+    /// listing renders. Read-only.
+    pub fn model_profile_names(&self) -> Vec<String> {
+        self.config.profile_names()
     }
 
     /// Atomically persist to the cached path (or [`default_path`]).
@@ -817,14 +964,16 @@ fn synthesize_provider_profile(
     }
 }
 
-/// Empty `ModelProfile` scaffold used when `ensure_provider` boots a fresh
-/// store. The caller fills `active_target` and `providers` via
-/// `ensure_provider` / direct mutation; leaving the active target blank is
-/// intentional (the engine falls back to synthesis).
-fn default_model_profile() -> shannon_types::provider_config::ModelProfile {
+/// Empty `ModelProfile` scaffold used when `ensure_provider` / the R3-2
+/// profile-management ops boot a fresh (or newly named) profile. The caller
+/// fills `active_target` and `providers` via `ensure_provider` / direct
+/// mutation; leaving the active target blank is intentional (the engine
+/// falls back to synthesis). `name` keeps the map key and `ModelProfile.name`
+/// in lockstep.
+fn default_model_profile(name: &str) -> shannon_types::provider_config::ModelProfile {
     use shannon_types::provider_config::{ActiveTarget, CredentialScope, Scope};
     shannon_types::provider_config::ModelProfile {
-        name: "default".to_string(),
+        name: name.to_string(),
         active_target: ActiveTarget {
             provider_id: String::new(),
             model_id: String::new(),
@@ -880,6 +1029,7 @@ mod tests {
         );
         ProviderModelConfig {
             version: ProviderModelConfig::VERSION,
+            active_profile: String::new(),
             profiles,
             gateway: Default::default(),
         }

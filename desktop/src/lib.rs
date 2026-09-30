@@ -161,8 +161,17 @@ pub mod commands_memory;
 #[cfg(feature = "tauri")]
 pub mod commands_chat;
 
+/// R3-3 — Plan/Act dual-tier model preference: pure tier-preference +
+/// resolution logic (no Tauri dependency; unit-tested standalone). See the
+/// module docs for the precedence contract.
+pub mod phase_tier;
+
 #[cfg(feature = "tauri")]
 pub mod commands_mcp;
+
+#[cfg(feature = "tauri")]
+/// R3-2 (desktop slice) — provider model-profile list/switch/create.
+pub mod commands_profiles;
 
 #[cfg(feature = "tauri")]
 pub mod commands_notifications;

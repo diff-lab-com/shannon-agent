@@ -2,6 +2,7 @@
 import type {
   DesktopConfig,
   ModelInfo,
+  ProviderProfileSummary,
   ProvidersFile,
   StatusResponse,
   ToolInfo,
@@ -31,6 +32,9 @@ export const MOCK_CONFIG: DesktopConfig = {
   // P2-5: off-peak model override (frozen key `offpeak.model_override`).
   // Empty = disabled in the demo.
   offpeak: { model_override: '' },
+  // R3-3: plan/act phase tiers — null = inherit (no phase override).
+  plan_tier: null,
+  act_tier: null,
   // B2: real sub-agent execution — off in the demo (no live bridge).
   agent_teams_enabled: false,
 }
@@ -62,14 +66,25 @@ export const MOCK_PROVIDERS: ProvidersFile = {
 export const MOCK_MODELS: ModelInfo[] = [
   // R2-3: prices + vision ride along so the composer picker's context/price/
   // capability enrichment is exercisable in demo mode and e2e. Unknown stays
-  // represented as null (renders "—").
-  { id: 'claude-opus-4-7', name: 'Claude Opus 4.7', provider: 'anthropic', context_window: 200_000, price_in: 15, price_out: 75, vision: true },
-  { id: 'claude-sonnet-4-6', name: 'Claude Sonnet 4.6', provider: 'anthropic', context_window: 200_000, price_in: 3, price_out: 15, vision: true },
-  { id: 'claude-haiku-4-5-20251001', name: 'Claude Haiku 4.5', provider: 'anthropic', context_window: 200_000, price_in: 0.8, price_out: 4, vision: false },
-  { id: 'gpt-5', name: 'GPT-5', provider: 'openai', context_window: 256_000, price_in: 1.25, price_out: 10, vision: true },
-  { id: 'gpt-5-mini', name: 'GPT-5 Mini', provider: 'openai', context_window: 128_000, price_in: 0.25, price_out: 2 },
-  { id: 'gemini-3-pro', name: 'Gemini 3 Pro', provider: 'google', context_window: 2_000_000, price_in: 1.25, price_out: 10, vision: true },
-  { id: 'llama-4-70b', name: 'Llama 4 70B (local)', provider: 'ollama', context_window: 32_000, price_in: 0, price_out: 0, vision: false },
+  // represented as null (renders "—"). R3-3: the catalog `tier` label rides
+  // along too — the real backend populates it from the same classification
+  // the plan/act tier controls resolve with.
+  { id: 'claude-opus-4-7', name: 'Claude Opus 4.7', provider: 'anthropic', context_window: 200_000, price_in: 15, price_out: 75, vision: true, tier: 'pro' },
+  { id: 'claude-sonnet-4-6', name: 'Claude Sonnet 4.6', provider: 'anthropic', context_window: 200_000, price_in: 3, price_out: 15, vision: true, tier: 'standard' },
+  { id: 'claude-haiku-4-5-20251001', name: 'Claude Haiku 4.5', provider: 'anthropic', context_window: 200_000, price_in: 0.8, price_out: 4, vision: false, tier: 'fast' },
+  { id: 'gpt-5', name: 'GPT-5', provider: 'openai', context_window: 256_000, price_in: 1.25, price_out: 10, vision: true, tier: 'pro' },
+  { id: 'gpt-5-mini', name: 'GPT-5 Mini', provider: 'openai', context_window: 128_000, price_in: 0.25, price_out: 2, tier: 'fast' },
+  { id: 'gemini-3-pro', name: 'Gemini 3 Pro', provider: 'google', context_window: 2_000_000, price_in: 1.25, price_out: 10, vision: true, tier: 'pro' },
+  { id: 'llama-4-70b', name: 'Llama 4 70B (local)', provider: 'ollama', context_window: 32_000, price_in: 0, price_out: 0, vision: false, tier: 'standard' },
+]
+
+// R3-2: demo model-profile roster (mirrors the engine providers.toml v2
+// `profiles` map — name, provider slots, active pointer). "default" mirrors
+// the MOCK_PROVIDERS roster; the second profile exists so the switch flow
+// (and its refresh of provider status + catalog) is exercisable in demo/e2e.
+export const MOCK_PROVIDER_PROFILES: ProviderProfileSummary[] = [
+  { name: 'default', provider_count: 2, active: true, model: 'claude-sonnet-4-6' },
+  { name: 'research', provider_count: 1, active: false, model: 'gemini-3-pro' },
 ]
 
 export const MOCK_STATUS: StatusResponse = {

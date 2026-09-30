@@ -31,8 +31,13 @@ Shannon is in active development with 11,752+ automated tests and 418K+ lines of
 
 ## In Progress
 
-- Desktop app (Tauri) — currently scaffolded
 - Plugin marketplace
+
+## Desktop App
+
+The Tauri desktop app ships alongside the CLI: a chat workspace over the
+same engine, with sessions per project and an integrated terminal
+(persisted settings, replayable scrollback, per-project tabs).
 
 ## Planned
 

@@ -75,6 +75,7 @@ mod config_precedence_tests {
         );
         ProviderModelConfig {
             version: ProviderModelConfig::VERSION,
+            active_profile: String::new(),
             profiles,
             gateway: Default::default(),
         }

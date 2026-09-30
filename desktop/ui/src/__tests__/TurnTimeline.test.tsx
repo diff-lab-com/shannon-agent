@@ -113,10 +113,10 @@ describe('TurnTimeline', () => {
     expect(screen.getByText('Bash')).toBeInTheDocument()
     expect(screen.getByText('Grep')).toBeInTheDocument()
 
-    // Summary chip labels resolve through ICU plurals.
-    expect(screen.getByLabelText('Session summary')).toHaveTextContent(
-      /2 turns/,
-    )
+    // Summary chip labels resolve through ICU plurals. The chips live in a
+    // role="list" container (office wave 3 moved the section title into the
+    // persistent Header, removing the old "Session summary" label).
+    expect(screen.getByRole('list')).toHaveTextContent(/2 turns/)
     expect(getTraceTimeline).toHaveBeenCalledWith('sess-001')
   })
 
