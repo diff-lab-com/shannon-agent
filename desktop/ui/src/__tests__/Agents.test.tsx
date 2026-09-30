@@ -52,6 +52,9 @@ const nativeAgent = {
   metadata: {
     model: 'claude-sonnet-4-6',
     tools: ['read', 'grep', 'glob'],
+    // G1 P1-9: native entries carry a system_prompt that the install maps
+    // into the flat AgentDefinition TOML.
+    system_prompt: 'You are a code reviewer.',
   },
   tags: ['code', 'review', 'native'],
 }
@@ -147,13 +150,13 @@ describe('Agents (P4 federated catalog)', () => {
     })
   })
 
-  it('installs native agent with model and tools in frontmatter', async () => {
+  it('installs native agent as a flat AgentDefinition (G1 P1-9)', async () => {
     listAgentCatalog.mockResolvedValue([nativeAgent])
     listInstalledAgentPlugins.mockResolvedValue([])
     installNativeAgent.mockResolvedValue({
       id: 'native:agent-code-reviewer',
       name: 'code-reviewer',
-      install_path: '/home/user/.shannon/agents/code-reviewer/agent.md',
+      install_path: '/home/user/.shannon/agents/code-reviewer.toml',
     })
     renderWithRouter()
     await waitFor(() => {
@@ -163,11 +166,38 @@ describe('Agents (P4 federated catalog)', () => {
     await waitFor(() => {
       expect(installNativeAgent).toHaveBeenCalled()
     })
+    // New structured signature: (name, description, systemPrompt, model, tools)
+    // — no more ad-hoc markdown body.
     expect(installNativeAgent.mock.calls[0][0]).toBe('code-reviewer')
-    const body = installNativeAgent.mock.calls[0][1] as string
-    expect(body).toContain('name: code-reviewer')
-    expect(body).toContain('model: claude-sonnet-4-6')
-    expect(body).toContain('tools: [read, grep, glob]')
+    expect(installNativeAgent.mock.calls[0][1]).toBe(
+      'Reviews code for bugs, security issues, and best practices.',
+    )
+    expect(installNativeAgent.mock.calls[0][2]).toBe('You are a code reviewer.')
+    expect(installNativeAgent.mock.calls[0][3]).toBe('claude-sonnet-4-6')
+    expect(installNativeAgent.mock.calls[0][4]).toEqual(['read', 'grep', 'glob'])
+  })
+
+  it('falls back to the description when a catalog entry lacks system_prompt', async () => {
+    const bodyless = {
+      ...nativeAgent,
+      metadata: { model: 'claude-sonnet-4-6', tools: ['read'] },
+    }
+    listAgentCatalog.mockResolvedValue([bodyless])
+    listInstalledAgentPlugins.mockResolvedValue([])
+    installNativeAgent.mockResolvedValue({
+      id: 'native:agent-code-reviewer',
+      name: 'code-reviewer',
+      install_path: '/home/user/.shannon/agents/code-reviewer.toml',
+    })
+    renderWithRouter()
+    await waitFor(() => {
+      expect(screen.getByText('code-reviewer')).toBeInTheDocument()
+    })
+    fireEvent.click(screen.getByText('Install'))
+    await waitFor(() => {
+      expect(installNativeAgent).toHaveBeenCalled()
+    })
+    expect(installNativeAgent.mock.calls[0][2]).toBe(bodyless.description)
   })
 
   it('installs repo agent via installAgentFromRepo', async () => {

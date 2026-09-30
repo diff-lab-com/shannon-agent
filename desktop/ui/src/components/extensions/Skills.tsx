@@ -46,6 +46,17 @@ export function isProductivitySkill(entry: { tags: string[] }): boolean {
   return entry.tags.some((t) => PRODUCTIVITY_TAGS.has(t.toLowerCase()));
 }
 
+/**
+ * G1 P0-2.3 directory honesty: a native entry the runtime cannot execute
+ * yet (backend flags it `in_development`). Installing it would only write a
+ * stub SKILL.md, so the UI renders it as "planned — not installable".
+ */
+export function isInDevelopmentSkill(entry: {
+  metadata?: Record<string, unknown> | null
+}): boolean {
+  return entry.metadata?.in_development === true;
+}
+
 /** P1-22: a catalog description with newlines could inject extra YAML
  *  frontmatter fields — collapse it to a single line before interpolating. */
 function singleLine(text: string): string {
@@ -159,6 +170,12 @@ export default function Skills() {
   }, []);
 
   async function handleInstall(entry: SkillCatalogEntry) {
+    // G1 P0-2.3 — backend-level guard behind the disabled button: a planned
+    // skill must never install (its runtime does not exist yet).
+    if (isInDevelopmentSkill(entry)) {
+      setFeedback({ id: entry.id, msg: t('extensions.skills.inDevelopmentHint'), ok: false });
+      return;
+    }
     if (!SAFE_NAME_RE.test(entry.name)) {
       setFeedback({ id: entry.id, msg: t('extensions.skills.invalidName', { name: entry.name }), ok: false });
       return;
@@ -215,13 +232,17 @@ export default function Skills() {
   // C7: office/productivity entries are pinned to the top of the catalog
   // under their own group heading; the rest keep the original order. The
   // pagination slices the reordered list, so "Show more" semantics hold.
+  // G1 P0-2.3: the pinned group only holds INSTALLABLE skills — planned
+  // entries keep the original (unpinned) position below.
+  const isInstallableProductivity = (e: SkillCatalogEntry) =>
+    isProductivitySkill(e) && !isInDevelopmentSkill(e);
   const ordered =
-    filtered.some(isProductivitySkill)
-      ? [...filtered.filter(isProductivitySkill), ...filtered.filter((e) => !isProductivitySkill(e))]
+    filtered.some(isInstallableProductivity)
+      ? [...filtered.filter(isInstallableProductivity), ...filtered.filter((e) => !isInstallableProductivity(e))]
       : filtered;
 
   const catalogPage = usePagedVisible(ordered, CATALOG_PAGE_SIZE);
-  const firstProductivityIdx = catalogPage.slice.findIndex(isProductivitySkill);
+  const firstProductivityIdx = catalogPage.slice.findIndex(isInstallableProductivity);
 
   return (
     <div className="p-lg max-w-medium mx-auto space-y-xl">
@@ -267,7 +288,7 @@ export default function Skills() {
                             {t('extensions.skills.group.productivity')}
                           </h4>
                           <span className="text-label-xs text-on-surface-variant">
-                            {filtered.filter(isProductivitySkill).length}
+                            {filtered.filter(isInstallableProductivity).length}
                           </span>
                         </div>
                       )}
@@ -278,8 +299,7 @@ export default function Skills() {
                         feedback={feedback?.id === entry.id ? feedback : null}
                         onInstall={() => handleInstall(entry)}
                         onOpenDetail={() => setDetailEntry(entry)}
-                      />
-                    </Fragment>
+                      />                    </Fragment>
                   ))}
                 </div>
                 {catalogPage.hasMore && (
@@ -443,6 +463,9 @@ function SkillCard({
   const t = (id: string) => intl.formatMessage({ id })
 
   const trustLabel = TRUST_LABELS[entry.trust];
+  // G1 P0-2.3 — planned entries are not installable: no stub SKILL.md that
+  // would silently do nothing at runtime.
+  const inDevelopment = isInDevelopmentSkill(entry);
   return (
     <div className="border border-outline-variant/30 rounded-2xl p-md bg-surface-container-low/40 flex flex-col">
       <div className="flex items-start justify-between mb-xs gap-xs">
@@ -455,9 +478,15 @@ function SkillCard({
         >
           <h4 className="font-bold text-label-md text-on-surface hover:underline truncate">{entry.name}</h4>
         </Button>
-        <span className={cn("text-label-xs px-xs py-[1px] rounded-full font-bold shrink-0", trustLabel.cls)}>
-          {t(trustLabel.key)}
-        </span>
+        {inDevelopment ? (
+          <span className="text-label-xs px-xs py-[1px] rounded-full font-bold shrink-0 bg-surface-container-highest text-on-surface-variant">
+            {t('extensions.skills.inDevelopment')}
+          </span>
+        ) : (
+          <span className={cn("text-label-xs px-xs py-[1px] rounded-full font-bold shrink-0", trustLabel.cls)}>
+            {t(trustLabel.key)}
+          </span>
+        )}
       </div>
       <Button
         variant="ghost"
@@ -492,15 +521,21 @@ function SkillCard({
             {t('extensions.skills.view')}
           </a>
         )}
-        <Button
-          type="button"
-          size="sm"
-          onClick={onInstall}
-          disabled={busy || installed}
-          className="disabled:cursor-not-allowed"
-        >
-          {busy ? "…" : installed ? t('extensions.skills.installed') : t('extensions.skills.install')}
-        </Button>
+        {inDevelopment ? (
+          <div className="text-label-xs text-on-surface-variant self-center">
+            {t('extensions.skills.inDevelopmentHint')}
+          </div>
+        ) : (
+          <Button
+            type="button"
+            size="sm"
+            onClick={onInstall}
+            disabled={busy || installed}
+            className="disabled:cursor-not-allowed"
+          >
+            {busy ? "…" : installed ? t('extensions.skills.installed') : t('extensions.skills.install')}
+          </Button>
+        )}
       </div>
     </div>
   );

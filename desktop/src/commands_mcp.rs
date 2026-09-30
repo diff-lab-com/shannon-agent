@@ -2,8 +2,10 @@
 //!
 //! Extracted from `commands.rs` as part of S2 P1.1 (commands.rs split).
 //! Domain spans: MCP server lifecycle, skill discovery, installed-addon
-//! aggregation. Backed by `~/.shannon/desktop/mcp-servers.json` for MCP
-//! configs and the `shannon_skills` / `shannon_mcp` registries on AppState.
+//! aggregation. MCP configs live in the unified
+//! `~/.shannon/settings.json#mcpServers` store (G1 split-brain fix — the
+//! same blob the CLI and the extensions hub read/write), plus the
+//! `shannon_skills` / `shannon_mcp` registries on AppState.
 
 use std::collections::HashMap;
 
@@ -71,9 +73,10 @@ pub async fn add_mcp_server(
         enabled: true,
     };
 
-    let mut servers = config::load_mcp_servers();
-    servers.push(server_config.clone());
-    config::save_mcp_servers(&servers).map_err(|e| e.to_string())?;
+    // G1: single source of truth is `~/.shannon/settings.json#mcpServers`
+    // (shared with the CLI and the extensions hub). save is an upsert of
+    // this one row — other entries in the unified store are untouched.
+    config::save_mcp_servers(std::slice::from_ref(&server_config)).map_err(|e| e.to_string())?;
 
     // Start the server process
     let pool = state.mcp_pool.clone();
@@ -109,13 +112,9 @@ pub async fn remove_mcp_server(
     let pool = state.mcp_pool.clone();
     let _ = pool.stop_server(&name).await;
 
-    // Load servers, remove matching one, save
-    let mut servers = config::load_mcp_servers();
-    let original_len = servers.len();
-    servers.retain(|s| s.name != name);
-
-    if servers.len() < original_len {
-        config::save_mcp_servers(&servers).map_err(|e| e.to_string())?;
+    // G1: delete from the unified settings.json store (insert-only saves
+    // never drop rows, so removal is an explicit delete).
+    if config::remove_mcp_server_entry(&name).map_err(|e| e.to_string())? {
         Ok(true)
     } else {
         Err(format!("Server not found: {name}"))
@@ -240,26 +239,35 @@ pub async fn list_installed_addons() -> Result<Vec<crate::extensions::InstalledA
 }
 
 /// List all available skills from shannon-skills registry.
+///
+/// G1 P0-2.2: merges the user-global home skill directory (where the
+/// extensions hub installs, `~/.shannon/skills`) with the cwd project
+/// directories. Previously only the cwd was read, so hub-installed skills
+/// never showed up in the slash completion.
 #[tauri::command]
 pub async fn list_skills(state: tauri::State<'_, AppState>) -> Result<Vec<SkillInfo>, String> {
+    use shannon_skills::SkillSource;
+    use std::path::PathBuf;
+
     let registry = state.skill_registry.clone();
 
-    // Load skills from standard directories
-    let cwd = std::env::current_dir().map_err(|e| e.to_string())?;
-
-    // Load from .shannon/skills/ and .claude/commands/
-    let shannon_skills_dir = cwd.join(".shannon/skills");
-    let claude_commands_dir = cwd.join(".claude/commands");
-
-    if shannon_skills_dir.exists() {
-        use shannon_skills::SkillSource;
-        let _ = registry.load_from_directory(&shannon_skills_dir, &SkillSource::Project);
+    let mut roots: Vec<(PathBuf, SkillSource)> = Vec::new();
+    if let Some(home) = dirs::home_dir() {
+        roots.push((home.join(".shannon").join("skills"), SkillSource::User));
     }
+    let cwd = std::env::current_dir().map_err(|e| e.to_string())?;
+    roots.push((cwd.join(".shannon").join("skills"), SkillSource::Project));
+    roots.push((cwd.join(".claude").join("skills"), SkillSource::Project));
+    roots.push((
+        cwd.join(".claude").join("commands"),
+        SkillSource::CommandsDeprecated,
+    ));
 
-    if claude_commands_dir.exists() {
-        use shannon_skills::SkillSource;
-        let _ =
-            registry.load_from_directory(&claude_commands_dir, &SkillSource::CommandsDeprecated);
+    for (dir, source) in roots {
+        if !dir.exists() {
+            continue;
+        }
+        let _ = registry.load_from_directory(&dir, &source);
     }
 
     // Get all available skills

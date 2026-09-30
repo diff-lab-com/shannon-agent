@@ -469,6 +469,13 @@ impl AppState {
         )
     }
 
+    /// G1 P0-1.2 — the shared MCP process pool handle. `pub` accessor so the
+    /// bin crate's `main.rs` setup can seed the pool at startup (the field
+    /// itself stays crate-private).
+    pub fn mcp_pool(&self) -> Arc<McpProcessPool> {
+        self.mcp_pool.clone()
+    }
+
     /// Create a new AppState, initializing the LLM client from env/config.
     pub fn new() -> Self {
         let desktop_config = config::load_config();
@@ -1115,6 +1122,19 @@ pub async fn send_message(
     let client = LlmClient::new(client_config);
     let tools = state.tools.clone();
 
+    // G1 P0-1.3 — chat tool assembly: register every connected MCP server's
+    // tools (`tools/list`) into the shared registry as
+    // `mcp__<server>__<tool>`. The pool is seeded at app setup; when it is
+    // cold or has no healthy servers this is a zero-cost no-op (identical
+    // behavior to before). Repeat turns skip already-registered names.
+    let mcp_tools_registered = crate::mcp::assemble_mcp_tools(&state.mcp_pool, &tools).await;
+    if mcp_tools_registered > 0 {
+        tracing::debug!(
+            count = mcp_tools_registered,
+            "assembled MCP tools into chat registry"
+        );
+    }
+
     // Create PermissionManager from shared state with config-based approval mode
     let desktop_cfg = state.desktop_config.read().await;
     let approval_mode_str = desktop_cfg.approval_mode.as_deref().unwrap_or("confirm");
@@ -1165,6 +1185,15 @@ pub async fn send_message(
         QueryEngine::with_defaults_arc(client, tools, permissions, StateManager::new()),
         &state.memory_store,
     );
+    // G1 Imp-3 — advertise installed skills in the system prompt: the same
+    // `format_skills_for_llm()` listing the REPL injects, plus the
+    // `/name` ↔ `skill_<name>` tool mapping, so a user's `/trigger` text
+    // resolves to the tool registered at startup. The engine is rebuilt per
+    // turn, so this never accumulates.
+    let skills_block = crate::skill_tools::skills_for_chat_prompt(&state.skill_registry);
+    if !skills_block.is_empty() {
+        engine.append_system_prompt(&skills_block);
+    }
     // Bind the engine to the REAL session and restore prior turns. Both the
     // L0 tee (events.jsonl path) and the conversation clone at the top of
     // process_query key off engine state — a fresh engine with a random id

@@ -409,6 +409,14 @@ pub async fn install_native_skill(
     plugin_name: String,
     body: String,
 ) -> Result<InstallResult, String> {
+    // G1 fix round 1 (Minor-6) — backend guard behind the UI's disabled
+    // button: a planned (in-development) native skill has no runtime, so
+    // installing it would only write a stub SKILL.md.
+    if extensions::skill_catalog::is_native_skill_in_development(&plugin_name) {
+        return Err(format!(
+            "skill '{plugin_name}' is planned but its runtime is not implemented yet — nothing to install"
+        ));
+    }
     let installer = SkillMarkdownInstaller {
         plugin_name: plugin_name.clone(),
         body,
@@ -521,15 +529,25 @@ pub async fn install_agent_from_repo(
     })
 }
 
-/// Write a built-in agent's `.md` body to `~/.shannon/agents/<plugin>/agent.md`.
+/// Write a built-in agent as a **flat** `~/.shannon/agents/<name>.toml`
+/// `AgentDefinition` (G1 P1-9: the runtime loader only reads flat TOML — the
+/// old `<plugin>/agent.md` subdirectory shape was never loaded). The
+/// catalog page's description/system_prompt semantics map onto the
+/// definition fields; tool hints become capabilities.
 #[tauri::command]
 pub async fn install_native_agent(
     plugin_name: String,
-    body: String,
+    description: String,
+    system_prompt: String,
+    model: Option<String>,
+    tools: Vec<String>,
 ) -> Result<InstallResult, String> {
     let installer = AgentMarkdownInstaller {
         plugin_name: plugin_name.clone(),
-        body,
+        description,
+        system_prompt,
+        model,
+        tools,
         root_override: None,
     };
     let entry = extensions::CatalogEntry {

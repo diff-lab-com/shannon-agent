@@ -1139,7 +1139,7 @@ fn import_mcp(
             }
             match conflict_choice {
                 "overwrite" => {
-                    *cur = spec;
+                    *cur = spec.clone();
                 }
                 "rename" => {
                     let renamed = format!("{}-imported", asset.name);
@@ -1158,12 +1158,22 @@ fn import_mcp(
                 _ => return Ok(AssetOutcome::Skipped), // "skip"
             }
         }
-        None => store.push(spec),
+        None => store.push(spec.clone()),
     }
     save_mcp_store(roots, &store)?;
+    // G1 split-brain fix: mirror the imported server into the unified
+    // `~/.shannon/settings.json#mcpServers` store so it is visible to the
+    // MCP page and the chat tool assembly without waiting for the next
+    // startup's legacy-store migration.
+    crate::config::save_mcp_servers_to(&mcp_settings_path(roots), &[spec])?;
     Ok(AssetOutcome::Imported {
         final_name: asset.name.clone(),
     })
+}
+
+/// Unified MCP store path for these roots (`<home>/.shannon/settings.json`).
+fn mcp_settings_path(roots: &Roots) -> PathBuf {
+    roots.home.join(".shannon").join("settings.json")
 }
 
 fn import_skill(

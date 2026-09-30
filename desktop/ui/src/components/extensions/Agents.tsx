@@ -33,7 +33,8 @@ function singleLine(text: string): string {
  * Lists agents from native built-ins + community GitHub upstreams
  * (VoltAgent/awesome-claude-code-agents, rohitg00/claude-code-agents).
  * Each entry has an Install button that either:
- * - Native: writes agent.md directly via install_native_agent
+ * - Native: writes a flat ~/.shannon/agents/<name>.toml AgentDefinition via
+ *   install_native_agent (G1 P1-9 — the shape the runtime loader reads)
  * - GitHub: git clones into ~/.shannon/agents/<plugin>/ via install_agent_from_repo
  */
 export default function Agents() {
@@ -101,12 +102,25 @@ export default function Agents() {
     setFeedback(null);
     try {
       if (entry.source.type === 'native') {
-        const model = singleLine((entry.metadata.model as string | undefined) ?? 'claude-sonnet-4-6');
+        // G1 P1-9: native entries install as a FLAT
+        // `~/.shannon/agents/<name>.toml` AgentDefinition — the shape the
+        // runtime loader reads. The catalog's system_prompt is required
+        // (entries carry one since the format unification); falling back to
+        // the description keeps a bodyless install from producing an agent
+        // the engine cannot steer.
+        const model = (entry.metadata.model as string | undefined) ?? 'claude-sonnet-4-6';
         const tools = Array.isArray(entry.metadata.tools) ? entry.metadata.tools : [];
-        const toolsYaml = tools.length > 0 ? `\ntools: [${tools.join(', ')}]` : '';
-        const description = singleLine(entry.description);
-        const body = `---\nname: ${entry.name}\ndescription: ${description}\nmodel: ${model}${toolsYaml}\n---\n# ${entry.name}\n\n${entry.description}\n`;
-        await installNativeAgent(entry.name, body);
+        const systemPrompt =
+          typeof entry.metadata.system_prompt === 'string' && entry.metadata.system_prompt.trim()
+            ? entry.metadata.system_prompt
+            : entry.description;
+        await installNativeAgent(
+          entry.name,
+          singleLine(entry.description),
+          systemPrompt,
+          model,
+          tools,
+        );
       } else if (entry.source.type === 'git_hub_repo') {
         const repo = entry.source.repo;
         const ref_ = entry.source.ref_ ?? 'main';
