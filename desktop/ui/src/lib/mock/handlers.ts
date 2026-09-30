@@ -1721,6 +1721,12 @@ export const handlers: Record<string, MockHandler> = {
     await delay()
     notificationPrefs = { ...args.prefs }
   },
+  // P1-7 — settings "send test webhook" one-shot probe. Demo has no real
+  // receiver, so the mock answers with a successful verdict.
+  async test_webhook(args: { title: string; body: string }) {
+    await delay()
+    return { success: true, status: 200, detail: 'HTTP 200', ...args }
+  },
 
   // --- Extensions Hub: Featured ---
   async list_featured_vendors() { await delay(); return clone(MOCK_FEATURED_VENDORS) },
