@@ -46,6 +46,43 @@ fn error_suggestion(
 /// desktop composer picker); the ask-then-send UX lives in the hosts, the
 /// engine's job is to refuse clearly instead of surfacing a raw provider
 /// 400.
+/// R3-1/R4-3: render a [`shannon_engine::api::retry::RetryNotice`] as the
+/// user-visible progress line the query event stream carries.
+///
+/// - `Retry` keeps the historical "API retry i/n (next try in Xs)" shape;
+/// - `Failover` renders the explicit R3-1 downgrade line
+///   `falling back to <model>@<provider> (<reason>)`;
+/// - `KeyRotation` renders the R4-3 line
+///   `rotating API key (i/N) for <provider> (<reason>)`.
+///
+/// Extracted from the retry-observer closure so the exact wording is unit
+/// testable (the notices are replayable from the session event log).
+fn format_retry_notice_message(notice: &shannon_engine::api::retry::RetryNotice) -> String {
+    use shannon_engine::api::retry::RetryNoticeKind;
+    match &notice.kind {
+        RetryNoticeKind::Failover { model, provider } => {
+            format!("falling back to {model}@{provider} ({})", notice.reason)
+        }
+        RetryNoticeKind::KeyRotation {
+            index,
+            total,
+            provider,
+        } => {
+            format!(
+                "rotating API key ({index}/{total}) for {provider} ({})",
+                notice.reason
+            )
+        }
+        RetryNoticeKind::Retry => format!(
+            "API retry {}/{} (next try in {:.0}s): {}",
+            notice.attempt,
+            notice.total_attempts,
+            notice.wait.as_secs_f32(),
+            notice.reason
+        ),
+    }
+}
+
 fn vision_gate_message(model_id: &str) -> String {
     format!(
         "model `{model_id}` does not support image input — the attachment cannot be sent to it. \
@@ -820,6 +857,7 @@ impl QueryEngine {
                     client_max_tokens
                 };
                 let mut cfg = shannon_engine::api::LlmClientConfig {
+                    alternate_api_keys: Vec::new(),
                     api_key: client_api_key,
                     base_url: client_base_url,
                     model: client_model.clone(),
@@ -1816,25 +1854,10 @@ impl QueryEngine {
                         // `Fn` closure: clone the handle per invocation so the
                         // returned future owns its own sender.
                         let tx = tx.clone();
-                        // R3-1: failover pauses render as the explicit
-                        // downgrade line (replayable from the session event
-                        // stream); same-target retries keep the historical
-                        // shape.
-                        let message = match &notice.kind {
-                            shannon_engine::api::retry::RetryNoticeKind::Failover {
-                                model,
-                                provider,
-                            } => {
-                                format!("falling back to {model}@{provider} ({})", notice.reason)
-                            }
-                            shannon_engine::api::retry::RetryNoticeKind::Retry => format!(
-                                "API retry {}/{} (next try in {:.0}s): {}",
-                                notice.attempt,
-                                notice.total_attempts,
-                                notice.wait.as_secs_f32(),
-                                notice.reason
-                            ),
-                        };
+                        // R3-1 failover / R4-3 key rotation / plain retries
+                        // each render their own line (replayable from the
+                        // session event stream).
+                        let message = format_retry_notice_message(&notice);
                         Box::pin(async move {
                             send_event!(tx, QueryEvent::Progress { query_id, message });
                         }) as futures::future::BoxFuture<'static, ()>
@@ -5532,5 +5555,52 @@ mod vision_gate_tests {
     fn dated_catalog_ids_resolve_via_prefix_strategies() {
         // Reverse-prefix: the dated id starts with the catalog entry id.
         assert_eq!(model_supports_vision("gpt-4o-2024-08-06"), Some(true));
+    }
+}
+
+#[cfg(test)]
+#[allow(clippy::unwrap_used)]
+mod retry_notice_render_tests {
+    //! R3-1/R4-3: the user-visible wording of retry-observer notices. These
+    //! lines land in the query event stream (and the session log), so the
+    //! exact shape is contract.
+
+    use super::format_retry_notice_message;
+    use shannon_engine::api::retry::{RetryNotice, RetryNoticeKind};
+    use std::time::Duration;
+
+    fn notice(kind: RetryNoticeKind) -> RetryNotice {
+        RetryNotice {
+            attempt: 1,
+            total_attempts: 4,
+            wait: Duration::from_secs(2),
+            reason: "rate limited".to_string(),
+            kind,
+        }
+    }
+
+    #[test]
+    fn key_rotation_renders_rotating_line() {
+        let msg = format_retry_notice_message(&notice(RetryNoticeKind::KeyRotation {
+            index: 2,
+            total: 3,
+            provider: "anthropic".to_string(),
+        }));
+        assert_eq!(msg, "rotating API key (2/3) for anthropic (rate limited)");
+    }
+
+    #[test]
+    fn failover_renders_downgrade_line() {
+        let msg = format_retry_notice_message(&notice(RetryNoticeKind::Failover {
+            model: "glm-5-flash".to_string(),
+            provider: "zhipu".to_string(),
+        }));
+        assert_eq!(msg, "falling back to glm-5-flash@zhipu (rate limited)");
+    }
+
+    #[test]
+    fn plain_retry_keeps_historical_shape() {
+        let msg = format_retry_notice_message(&notice(RetryNoticeKind::Retry));
+        assert_eq!(msg, "API retry 1/4 (next try in 2s): rate limited");
     }
 }

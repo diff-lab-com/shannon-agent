@@ -390,6 +390,14 @@ impl std::fmt::Display for LlmProvider {
 #[derive(Clone)]
 pub struct LlmClientConfig {
     pub api_key: String,
+    /// R4-3: the remaining API keys of the SAME provider, in rotation order
+    /// (the active key is `api_key`, slot 0; these are slots 1..n). When a
+    /// request dies with an authentication failure or a persistent 429, the
+    /// client rotates through these before any provider failover — see
+    /// `LlmClient::send_with_failover` and
+    /// `RetryConfig::is_key_rotation_eligible`. Empty = single-key credential
+    /// (the default; rotation disabled, historical behavior).
+    pub alternate_api_keys: Vec<String>,
     pub base_url: String,
     pub model: String,
     pub max_tokens: u32,
@@ -471,6 +479,7 @@ impl Default for LlmClientConfig {
 
         Self {
             api_key,
+            alternate_api_keys: Vec::new(),
             base_url,
             model,
             max_tokens: 4096,
@@ -644,6 +653,7 @@ impl LlmClientConfig {
     pub fn ollama_default() -> Self {
         Self {
             api_key: String::new(),
+            alternate_api_keys: Vec::new(),
             base_url: "http://localhost:11434".to_string(),
             model: "llama3".to_string(),
             max_tokens: 4096,
@@ -670,6 +680,7 @@ impl LlmClientConfig {
         let model = std::env::var("OPENAI_MODEL").unwrap_or_else(|_| "gpt-4o".to_string());
         Self {
             api_key,
+            alternate_api_keys: Vec::new(),
             base_url,
             model,
             max_tokens: 4096,
@@ -697,6 +708,7 @@ impl LlmClientConfig {
             std::env::var("GEMINI_MODEL").unwrap_or_else(|_| "gemini-2.0-flash".to_string());
         Self {
             api_key,
+            alternate_api_keys: Vec::new(),
             base_url: "https://generativelanguage.googleapis.com".to_string(),
             model,
             max_tokens: 8192,
@@ -723,6 +735,7 @@ impl LlmClientConfig {
         let model = std::env::var("AZURE_OPENAI_MODEL").unwrap_or_else(|_| "gpt-4o".to_string());
         Self {
             api_key,
+            alternate_api_keys: Vec::new(),
             base_url,
             model,
             max_tokens: 4096,
@@ -750,6 +763,7 @@ impl LlmClientConfig {
             .unwrap_or_else(|_| "us-east-1".to_string());
         Self {
             api_key: String::new(), // Bedrock uses SigV4, not API keys
+            alternate_api_keys: Vec::new(),
             base_url: format!("https://bedrock-runtime.{region}.amazonaws.com"),
             model,
             max_tokens: 4096,
@@ -775,6 +789,7 @@ impl LlmClientConfig {
             std::env::var("MISTRAL_MODEL").unwrap_or_else(|_| "mistral-large-latest".to_string());
         Self {
             api_key,
+            alternate_api_keys: Vec::new(),
             base_url: "https://api.mistral.ai".to_string(),
             model,
             max_tokens: 4096,
@@ -799,6 +814,7 @@ impl LlmClientConfig {
         let model = std::env::var("DEEPSEEK_MODEL").unwrap_or_else(|_| "deepseek-chat".to_string());
         Self {
             api_key,
+            alternate_api_keys: Vec::new(),
             base_url: "https://api.deepseek.com".to_string(),
             model,
             max_tokens: 4096,
@@ -824,6 +840,7 @@ impl LlmClientConfig {
             std::env::var("GROQ_MODEL").unwrap_or_else(|_| "llama-3.3-70b-versatile".to_string());
         Self {
             api_key,
+            alternate_api_keys: Vec::new(),
             base_url: "https://api.groq.com".to_string(),
             model,
             max_tokens: 4096,
@@ -849,6 +866,7 @@ impl LlmClientConfig {
             .unwrap_or_else(|_| "meta-llama/Llama-3.3-70B-Instruct-Turbo".to_string());
         Self {
             api_key,
+            alternate_api_keys: Vec::new(),
             base_url: "https://api.together.xyz".to_string(),
             model,
             max_tokens: 4096,
@@ -1297,6 +1315,7 @@ mod tests {
         // F19 regression: the derived Debug used to render the plaintext
         // api_key into every log/tracing line that printed the config.
         let mut config = LlmClientConfig {
+            alternate_api_keys: Vec::new(),
             api_key: "sk-ant-api11-supersecret-value-9f8e7d6c".to_string(),
             ..LlmClientConfig::default()
         };
@@ -2251,6 +2270,7 @@ mod tests {
     #[test]
     fn test_validate_valid_config() {
         let cfg = LlmClientConfig {
+            alternate_api_keys: Vec::new(),
             api_key: "sk-test".to_string(),
             base_url: "https://api.openai.com".to_string(),
             model: "gpt-4o".to_string(),
@@ -2282,6 +2302,7 @@ mod tests {
     #[test]
     fn test_validate_fails_with_empty_base_url() {
         let cfg = LlmClientConfig {
+            alternate_api_keys: Vec::new(),
             api_key: "sk-test".to_string(),
             base_url: "  ".to_string(),
             model: "gpt-4o".to_string(),
@@ -2310,6 +2331,7 @@ mod tests {
     #[test]
     fn test_validate_fails_with_missing_api_key_for_auth_provider() {
         let cfg = LlmClientConfig {
+            alternate_api_keys: Vec::new(),
             api_key: String::new(),
             base_url: "https://api.anthropic.com".to_string(),
             model: "claude-sonnet-4-20250514".to_string(),
@@ -2342,6 +2364,7 @@ mod tests {
     #[test]
     fn test_validate_fails_with_empty_model() {
         let cfg = LlmClientConfig {
+            alternate_api_keys: Vec::new(),
             api_key: "sk-test".to_string(),
             base_url: "https://api.openai.com".to_string(),
             model: "  ".to_string(),

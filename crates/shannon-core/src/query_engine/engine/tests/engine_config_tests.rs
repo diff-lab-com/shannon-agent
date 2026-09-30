@@ -485,6 +485,7 @@ fn test_effective_max_context_with_user_override() {
 #[test]
 fn test_effective_max_context_with_known_model() {
     let config = LlmClientConfig {
+        alternate_api_keys: Vec::new(),
         thinking_type: None,
         api_key: "test".to_string(),
         base_url: "http://localhost:11434".to_string(),
@@ -621,6 +622,7 @@ fn test_resolved_context_window_with_user_config() {
 fn test_resolved_context_window_ollama_fallback_chain() {
     // Ollama provider with no cached info → falls back to effective_max_context_tokens
     let config = LlmClientConfig {
+        alternate_api_keys: Vec::new(),
         thinking_type: None,
         api_key: "test".to_string(),
         base_url: "http://localhost:11434".to_string(),

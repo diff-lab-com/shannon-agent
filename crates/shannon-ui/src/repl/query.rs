@@ -1686,6 +1686,7 @@ pub fn handle_query(repl: &mut Repl, input: &str, terminal: &mut Option<&mut Ter
     if repl.query_engine.is_none() {
         let config = shannon_engine::api::LlmClientConfig {
             api_key: String::new(),
+            alternate_api_keys: Vec::new(),
             base_url: String::new(),
             model: repl.state.model.clone().unwrap_or_default(),
             max_tokens: 8192,
@@ -1799,6 +1800,7 @@ mod tests {
     fn create_test_engine() -> QueryEngine {
         let config = LlmClientConfig {
             api_key: "test".to_string(),
+            alternate_api_keys: Vec::new(),
             base_url: "http://localhost:1".to_string(), // unreachable
             model: "test-model".to_string(),
             max_tokens: 100,

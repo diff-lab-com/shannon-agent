@@ -120,6 +120,7 @@ mod tool_use_tests {
 
     fn create_engine(mock_url: &str, registry: ToolRegistry) -> QueryEngine {
         let config = LlmClientConfig {
+            alternate_api_keys: Vec::new(),
             thinking_type: None,
             api_key: "test-key".to_string(),
             base_url: mock_url.to_string(),
@@ -695,6 +696,7 @@ mod openai_trailing_usage_tests {
                 .create();
         }
         let config = LlmClientConfig {
+            alternate_api_keys: Vec::new(),
             thinking_type: None,
             api_key: "test-key".to_string(),
             base_url: server.url(),
@@ -875,6 +877,7 @@ mod openai_truncation_continuation_tests {
             );
         }
         let config = LlmClientConfig {
+            alternate_api_keys: Vec::new(),
             thinking_type: None,
             api_key: "test-key".to_string(),
             base_url: server.url(),
@@ -1170,6 +1173,7 @@ mod zhipu_tool_use_broadcast_tests {
                 .create();
         }
         let config = LlmClientConfig {
+            alternate_api_keys: Vec::new(),
             thinking_type: None,
             api_key: "test-key".to_string(),
             base_url: server.url(),

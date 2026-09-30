@@ -117,6 +117,7 @@ mod session_log_tee {
 
     fn make_engine(mock_url: &str, session_id: Uuid) -> QueryEngine {
         let config = LlmClientConfig {
+            alternate_api_keys: Vec::new(),
             thinking_type: None,
             api_key: "test-key".to_string(),
             base_url: mock_url.to_string(),
@@ -476,6 +477,7 @@ mod session_log_tee {
             .create();
 
         let config = LlmClientConfig {
+            alternate_api_keys: Vec::new(),
             thinking_type: None,
             api_key: "test-key".to_string(),
             base_url: mock_url.clone(),

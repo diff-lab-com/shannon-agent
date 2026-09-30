@@ -849,6 +849,7 @@ mod e2e_client_tests {
     /// Create an LlmClient pointing at the mock server.
     fn make_client(server: &ServerGuard, provider: LlmProvider) -> LlmClient {
         let config = LlmClientConfig {
+            alternate_api_keys: Vec::new(),
             thinking_type: None,
             api_key: "test-key".to_string(),
             base_url: server.url(),
@@ -1220,6 +1221,7 @@ mod retry_tests {
         max_retries: u32,
     ) -> LlmClient {
         let config = LlmClientConfig {
+            alternate_api_keys: Vec::new(),
             thinking_type: None,
             api_key: "test-key".to_string(),
             base_url: server.url(),
@@ -1242,6 +1244,7 @@ mod retry_tests {
 
     fn make_client_with_fallback(primary: &ServerGuard, fallback: &ServerGuard) -> LlmClient {
         let config = LlmClientConfig {
+            alternate_api_keys: Vec::new(),
             thinking_type: None,
             api_key: "test-key".to_string(),
             base_url: primary.url(),
@@ -1503,6 +1506,7 @@ mod query_pipeline_tests {
 
     fn make_client(server: &ServerGuard) -> LlmClient {
         let config = LlmClientConfig {
+            alternate_api_keys: Vec::new(),
             thinking_type: None,
             api_key: "test-key".to_string(),
             base_url: server.url(),

@@ -207,6 +207,7 @@ fn replay_rendering_matches_live_broadcast_content_and_snaps() {
         registry.register(Box::new(Echo)).unwrap();
 
         let client_cfg = LlmClientConfig {
+            alternate_api_keys: Vec::new(),
             thinking_type: None,
             api_key: "k".into(),
             base_url: server.url(),

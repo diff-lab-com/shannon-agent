@@ -63,11 +63,12 @@ use std::path::{Path, PathBuf};
 
 use shannon_engine::api::LlmProvider;
 use shannon_types::provider_config::{
-    CredentialRef, ProviderProfile, ProviderTiers, TierName, validate_profile_name,
+    CredentialRef, ProviderModelConfig, ProviderProfile, ProviderTiers, TierName,
+    validate_profile_name,
 };
 
 use crate::model_registry::models_for_provider;
-use crate::provider_config_store::ProviderConfigStore;
+use crate::provider_config_store::{ImportConflict, ProviderConfigStore};
 use crate::provider_resolver::{llm_provider_from_slug, llm_provider_id, llm_provider_to_kind};
 
 /// Outcome of [`ProviderConfigService::connect`] — what the caller needs to
@@ -179,6 +180,17 @@ pub struct DeletedProfile {
     /// remaining by name). `None` when the active pointer was untouched or
     /// nothing remained to fall back to.
     pub fallback: Option<String>,
+    /// Where `providers.toml` was written.
+    pub saved_path: PathBuf,
+}
+
+/// R4-2 (config export/import): outcome of
+/// [`ProviderConfigService::import_snapshot`] — what the merge did plus
+/// where it persisted.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ImportOutcome {
+    /// Counts and the resulting active-profile pointer.
+    pub summary: crate::provider_config_store::ImportSummary,
     /// Where `providers.toml` was written.
     pub saved_path: PathBuf,
 }
@@ -549,6 +561,40 @@ impl ProviderConfigService {
         locked.delete_profile(name, force)
     }
 
+    /// R4-2 (config export/import): provider slots an import of `snapshot`
+    /// would overwrite — sorted `(profile, provider id)` pairs. Read-only
+    /// over the in-memory snapshot; call before [`Self::import_snapshot`] to
+    /// implement the default refuse-on-conflict contract and list the
+    /// conflicts for the user.
+    pub fn import_conflicts(&self, snapshot: &ProviderModelConfig) -> Vec<ImportConflict> {
+        self.store.import_conflicts(snapshot)
+    }
+
+    /// R4-2 (config export/import): overlay a portable snapshot (the
+    /// `ProviderModelConfig` payload of `shannon providers export`) onto the
+    /// live `providers.toml` and persist — the one semantic write for imports,
+    /// same lock → reload → mutate → save sequence as every other write so a
+    /// concurrent desktop/CLI writer cannot be clobbered. Conflict detection
+    /// runs **after** the reload, so the refusal (without `force`) reflects
+    /// the freshest committed state.
+    ///
+    /// `set_active` switches the active-profile pointer after the merge (the
+    /// profile must exist with at least one provider slot); `None` adopts the
+    /// snapshot's pointer only on a fresh machine (no connected providers
+    /// before the import). See
+    /// [`crate::provider_config_store::ProviderConfigStore::apply_import_snapshot`]
+    /// for the full merge policy. Credentials are never touched.
+    pub fn import_snapshot(
+        &mut self,
+        snapshot: &ProviderModelConfig,
+        force: bool,
+        set_active: Option<&str>,
+    ) -> io::Result<ImportOutcome> {
+        let mut locked = self.lock()?;
+        locked.reload_locked()?;
+        locked.import_snapshot(snapshot, force, set_active)
+    }
+
     /// Acquire an exclusive `flock` on the underlying `providers.toml`
     /// and return a [`LockedService`] that mutates + persists **without**
     /// re-acquiring the lock. The flock is released when the
@@ -847,6 +893,26 @@ impl<'a> LockedService<'a> {
         Ok(DeletedProfile {
             removed: name.to_string(),
             fallback,
+            saved_path,
+        })
+    }
+
+    /// R4-2: overlay a portable snapshot onto the store and persist, inside
+    /// the flock this guard holds. See
+    /// [`ProviderConfigService::import_snapshot`] for the contract.
+    pub fn import_snapshot(
+        &mut self,
+        snapshot: &ProviderModelConfig,
+        force: bool,
+        set_active: Option<&str>,
+    ) -> io::Result<ImportOutcome> {
+        let summary = self
+            .svc
+            .store
+            .apply_import_snapshot(snapshot, force, set_active)?;
+        let saved_path = self.svc.store.save_locked()?;
+        Ok(ImportOutcome {
+            summary,
             saved_path,
         })
     }
@@ -2123,6 +2189,130 @@ service = "glm-plan"
             "explicit pointer persists:\n{on_disk}"
         );
         let reloaded = ProviderConfigService::load_at(&path);
+        assert_eq!(reloaded.list_profiles().active_profile, "work");
+    }
+
+    // ── R4-2: config export/import ───────────────────────────────────────
+
+    fn import_profile(id: &str, base_url: &str, model: &str) -> ProviderProfile {
+        ProviderProfile {
+            id: id.to_string(),
+            kind: shannon_types::provider_config::ProviderKind::OpenAiCompatible,
+            display_name: id.to_string(),
+            base_url: base_url.to_string(),
+            models_url: None,
+            credential: CredentialRef::Store {
+                service: id.to_string(),
+            },
+            extra_headers: std::collections::HashMap::new(),
+            default_max_tokens: None,
+            fallback_models: Vec::new(),
+            quirks: Default::default(),
+            tiers: ProviderTiers {
+                standard: Some(model.to_string()),
+                ..Default::default()
+            },
+            models: Vec::new(),
+        }
+    }
+
+    #[test]
+    fn import_snapshot_persists_and_conflicts_recheck_under_lock() {
+        let (mut svc, dir) = service();
+        let _ = svc
+            .connect(LlmProvider::Anthropic, None, None, true)
+            .expect("seed");
+
+        // Snapshot carrying an anthropic slot that conflicts with the live
+        // one (same id) plus a brand-new glm slot.
+        let snapshot = ProviderModelConfig {
+            version: ProviderModelConfig::VERSION,
+            active_profile: String::new(),
+            profiles: std::iter::once((
+                "default".to_string(),
+                shannon_types::provider_config::ModelProfile {
+                    name: "default".to_string(),
+                    active_target: shannon_types::provider_config::ActiveTarget {
+                        provider_id: "anthropic".to_string(),
+                        model_id: "claude-from-snapshot".to_string(),
+                        scope: shannon_types::provider_config::Scope::Global,
+                    },
+                    providers: vec![
+                        import_profile(
+                            "anthropic",
+                            "https://api.anthropic.com",
+                            "claude-from-snapshot",
+                        ),
+                        import_profile("glm", "https://open.bigmodel.cn/v1", "glm-4.6"),
+                    ],
+                    auxiliary: std::collections::HashMap::new(),
+                    credential_scope: shannon_types::provider_config::CredentialScope::Shared,
+                },
+            ))
+            .collect(),
+            gateway: Default::default(),
+        };
+
+        // Without force: refused, listing the conflict.
+        assert!(!svc.import_conflicts(&snapshot).is_empty());
+        let err = svc
+            .import_snapshot(&snapshot, false, None)
+            .expect_err("conflict refuses");
+        assert_eq!(err.kind(), io::ErrorKind::AlreadyExists);
+
+        // With force: the anthropic slot is replaced, glm added, persisted.
+        let outcome = svc
+            .import_snapshot(&snapshot, true, None)
+            .expect("forced import");
+        assert_eq!(outcome.summary.providers_replaced, 1);
+        assert_eq!(outcome.summary.providers_added, 1);
+        // The snapshot's active target followed the force-replaced slot.
+        assert_eq!(
+            outcome.summary.active_profile, "default",
+            "pointer unchanged (was already default)"
+        );
+        assert!(!outcome.summary.active_pointer_applied);
+
+        // The write landed on disk (a fresh reader sees it).
+        let reloaded = ProviderConfigService::load_at(&dir.path().join("providers.toml"));
+        assert!(reloaded.connected_slugs().contains("glm"));
+        assert!(reloaded.connected_slugs().contains("anthropic"));
+    }
+
+    #[test]
+    fn import_snapshot_fresh_machine_adopts_snapshot_pointer() {
+        let (mut svc, _dir) = service();
+        let snapshot = ProviderModelConfig {
+            version: ProviderModelConfig::VERSION,
+            active_profile: "work".to_string(),
+            profiles: std::iter::once((
+                "work".to_string(),
+                shannon_types::provider_config::ModelProfile {
+                    name: "work".to_string(),
+                    active_target: shannon_types::provider_config::ActiveTarget {
+                        provider_id: "glm".to_string(),
+                        model_id: "glm-4.6".to_string(),
+                        scope: shannon_types::provider_config::Scope::Global,
+                    },
+                    providers: vec![import_profile(
+                        "glm",
+                        "https://open.bigmodel.cn/v1",
+                        "glm-4.6",
+                    )],
+                    auxiliary: std::collections::HashMap::new(),
+                    credential_scope: shannon_types::provider_config::CredentialScope::Shared,
+                },
+            ))
+            .collect(),
+            gateway: Default::default(),
+        };
+        let outcome = svc
+            .import_snapshot(&snapshot, false, None)
+            .expect("fresh import");
+        assert!(outcome.summary.active_pointer_applied);
+        assert_eq!(outcome.summary.active_profile, "work");
+
+        let reloaded = ProviderConfigService::load_at(&_dir.path().join("providers.toml"));
         assert_eq!(reloaded.list_profiles().active_profile, "work");
     }
 }

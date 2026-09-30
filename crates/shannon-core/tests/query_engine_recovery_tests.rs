@@ -23,6 +23,7 @@ mod engine_recovery_tests {
     /// Create a QueryEngine pointing at a mock server.
     fn create_engine(mock_url: &str) -> QueryEngine {
         let config = LlmClientConfig {
+            alternate_api_keys: Vec::new(),
             thinking_type: None,
             api_key: "test-key".to_string(),
             base_url: mock_url.to_string(),
@@ -790,6 +791,7 @@ mod engine_recovery_tests {
     /// Create a QueryEngine configured for Ollama pointing at a mock server.
     fn create_ollama_engine(mock_url: &str) -> QueryEngine {
         let config = LlmClientConfig {
+            alternate_api_keys: Vec::new(),
             thinking_type: None,
             api_key: String::new(),
             base_url: mock_url.to_string(),

@@ -27,6 +27,8 @@ pub const MAX_FAILOVER_TARGETS: usize = 3;
 /// [`RetryNoticeKind::Failover`] renders the user-visible downgrade line
 /// "`falling back to <model>@<provider> (<reason>)`" (R3-1 — the downgrade
 /// must be visible AND replayable from the session event stream).
+/// [`RetryNoticeKind::KeyRotation`] renders
+/// "`rotating API key (i/N) for <provider> (<reason>)`" (R4-3).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum RetryNoticeKind {
     /// Another attempt of the SAME target follows after `wait`.
@@ -38,6 +40,20 @@ pub enum RetryNoticeKind {
         /// Model id of the fallback target.
         model: String,
         /// Provider slug of the fallback target (e.g. `"anthropic"`).
+        provider: String,
+    },
+    /// R4-3: the current API key just failed with an auth/rate-limit error
+    /// and the NEXT key of the SAME provider is about to be tried. Emitted
+    /// before the rotated attempt so the event stream shows which key
+    /// position is in play.
+    KeyRotation {
+        /// 1-based position (within the provider's key list) of the key
+        /// being switched TO. Position 1 is the key the request started
+        /// with, so the first rotation emits `index = 2`.
+        index: u32,
+        /// Total number of keys available on the provider.
+        total: u32,
+        /// Provider slug the keys belong to (e.g. `"anthropic"`).
         provider: String,
     },
 }
@@ -146,6 +162,55 @@ impl RetryConfig {
         match error {
             ApiError::RateLimitExceeded { .. } => true,
             ApiError::ApiError { status, .. } => *status >= 500,
+            _ => false,
+        }
+    }
+
+    /// R4-3: which exhausted-retries errors warrant rotating to the NEXT API
+    /// key of the same provider. Deliberately narrow:
+    ///
+    /// - `AuthenticationFailed` (401) — the key itself is dead or over its
+    ///   quota; a different key can succeed. This is the Cherry-Studio-style
+    ///   trigger.
+    /// - `RateLimitExceeded` (429) that survived the full retry budget — a
+    ///   per-key quota may be exhausted while another key still has headroom.
+    /// - Auth-flavoured `ProviderError`s — several providers answer a bad or
+    ///   forbidden key with HTTP 403 and a structured body, which maps to
+    ///   `ProviderError` (not `AuthenticationFailed`). Only auth-ish error
+    ///   types/messages qualify; deterministic request errors (400/404, bad
+    ///   model id, ...) never rotate.
+    ///
+    /// Everything else stays on the current key: timeouts/connect errors are
+    /// the agent loop's business (and another key would not heal them);
+    /// 5xx/529 are server-side and key-independent.
+    ///
+    /// Note the asymmetry with [`Self::is_failover_eligible`]: rotation IS
+    /// triggered by authentication failures, failover is NOT — a bad key
+    /// cannot be healed by switching models, but it can be healed by
+    /// switching to another key of the same provider.
+    pub fn is_key_rotation_eligible(&self, error: &ApiError) -> bool {
+        match error {
+            ApiError::AuthenticationFailed | ApiError::RateLimitExceeded { .. } => true,
+            ApiError::ProviderError {
+                error_type,
+                message,
+                ..
+            } => {
+                let t = error_type.to_lowercase();
+                let m = message.to_lowercase();
+                let type_hit = t.contains("auth")
+                    || t.contains("forbidden")
+                    || t.contains("permission")
+                    || t.contains("invalid_api_key")
+                    || t.contains("unauthorized");
+                let msg_hit = m.contains("invalid api key")
+                    || m.contains("api key invalid")
+                    || m.contains("incorrect api key")
+                    || m.contains("unauthorized")
+                    || m.contains("forbidden")
+                    || m.contains("api key not valid");
+                type_hit || msg_hit
+            }
             _ => false,
         }
     }
@@ -502,6 +567,74 @@ mod tests {
             message: "nope".to_string(),
         }));
         assert!(!config.is_failover_eligible(&ApiError::InvalidResponse("bad".to_string())));
+    }
+
+    // ── R4-3: key-rotation policy ─────────────────────────────────────────
+
+    #[test]
+    fn key_rotation_eligible_for_auth_and_rate_limit() {
+        let config = RetryConfig::default();
+        assert!(
+            config.is_key_rotation_eligible(&ApiError::AuthenticationFailed),
+            "401 is THE rotation trigger"
+        );
+        assert!(
+            config.is_key_rotation_eligible(&ApiError::RateLimitExceeded {
+                retry_after_secs: None,
+            })
+        );
+    }
+
+    #[test]
+    fn key_rotation_eligible_for_auth_flavoured_provider_errors() {
+        let config = RetryConfig::default();
+        // 403-class: structured auth errors that do not map to
+        // AuthenticationFailed.
+        for error_type in [
+            "authentication_error",
+            "invalid_api_key",
+            "forbidden",
+            "permission_denied",
+        ] {
+            assert!(
+                config.is_key_rotation_eligible(&ApiError::ProviderError {
+                    provider: "openai".to_string(),
+                    error_type: error_type.to_string(),
+                    message: "nope".to_string(),
+                }),
+                "ProviderError type '{error_type}' must rotate"
+            );
+        }
+        assert!(
+            config.is_key_rotation_eligible(&ApiError::ProviderError {
+                provider: "openai".to_string(),
+                error_type: "invalid_request_error".to_string(),
+                message: "Incorrect API key provided".to_string(),
+            }),
+            "auth-ish message must rotate"
+        );
+    }
+
+    #[test]
+    fn key_rotation_not_eligible_for_other_errors() {
+        let config = RetryConfig::default();
+        // 5xx is server-side — another key cannot heal it (and failover owns it).
+        assert!(!config.is_key_rotation_eligible(&ApiError::ApiError {
+            status: 500,
+            message: "boom".to_string(),
+        }));
+        // Deterministic request problems.
+        assert!(!config.is_key_rotation_eligible(&ApiError::ApiError {
+            status: 400,
+            message: "bad request".to_string(),
+        }));
+        assert!(!config.is_key_rotation_eligible(&ApiError::ProviderError {
+            provider: "openai".to_string(),
+            error_type: "invalid_request_error".to_string(),
+            message: "max_tokens is required".to_string(),
+        }));
+        assert!(!config.is_key_rotation_eligible(&ApiError::InvalidResponse("bad".to_string())));
+        assert!(!config.is_key_rotation_eligible(&ApiError::Timeout));
     }
 
     #[test]
