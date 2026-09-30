@@ -35,8 +35,9 @@ import {
   type UsagePayload,
   type McpServerInfo,
   type SubAgentLive,
+  type QueryNoticeEvent,
 } from '@/types'
-import { ChatProvider, useChat, type ChatContextValue, type PromptQueueItem } from './ChatContext'
+import { ChatProvider, useChat, type ChatContextValue, type PromptQueueItem, type StreamNotice } from './ChatContext'
 import { SessionContext, useSessions, type SessionContextValue } from './SessionContext'
 import { CatalogContext, useCatalog, type CatalogContextValue } from './CatalogContext'
 
@@ -91,6 +92,18 @@ export function AppProvider({ children }: { children: ReactNode }) {
   // every new tool start (stale % from the previous tool must not label the
   // next one), and on new sends.
   const [toolProgress, setToolProgress] = useState<{ progress?: number; message?: string } | null>(null)
+  // R5-2: retry notices (failover / key rotation) observed per session's
+  // current turn — the engine continued after the notice, so this is
+  // informational, never an error banner. Bucketed per session like the
+  // stream text (§P2-18): the visible projection is `streamNotices`.
+  // Lifecycle: appended by QUERY_NOTICE, survives the run's completion (the
+  // user can still see how the answer was served), cleared on the session's
+  // next send, re-projected on session switch, dropped with the session.
+  // Capped per session — a pathological provider cannot grow it unbounded.
+  const streamNoticesBucketsRef = useRef<Map<string, StreamNotice[]>>(new Map())
+  const streamNoticeIdRef = useRef(0)
+  const STREAM_NOTICES_CAP = 20
+  const [streamNotices, setStreamNotices] = useState<StreamNotice[]>([])
   const [usage, setUsage] = useState<UsagePayload | null>(null)
   // B2: live registry state of the currently running sub-agent, from the
   // subagent:start / subagent:stop bridge. Single slot — one live spawn per
@@ -443,6 +456,10 @@ export function AppProvider({ children }: { children: ReactNode }) {
     const targetKey = targetSessionId ?? ''
     streamingBucketsRef.current.set(targetKey, '')
     thinkingBucketsRef.current.set(targetKey, '')
+    // R5-2: a new turn starts with a clean notice slate (the previous
+    // turn's failover lines must not bleed into this one).
+    streamNoticesBucketsRef.current.set(targetKey, [])
+    setStreamNotices([])
     cancelStreamFlush()
     setStreamingText('')
     setThinkingText('')
@@ -508,6 +525,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
       setMessages([])
       setStreamingText('')
       setThinkingText('')
+      setStreamNotices([])
       setActiveToolCalls([])
       setToolProgress(null)
       await refreshSessions()
@@ -525,6 +543,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
       setMessages(msgs)
       setStreamingText('')
       setThinkingText('')
+      setStreamNotices([])
       setActiveToolCalls([])
       setToolProgress(null)
       await refreshSessions()
@@ -563,6 +582,8 @@ export function AppProvider({ children }: { children: ReactNode }) {
       cancelStreamFlush()
       setStreamingText(streamingBucketsRef.current.get(id) ?? '')
       setThinkingText(thinkingBucketsRef.current.get(id) ?? '')
+      // R5-2: the notice list is the switched-to session's own bucket.
+      setStreamNotices(streamNoticesBucketsRef.current.get(id) ?? [])
       setActiveToolCalls([])
       // P2-19: single visible-session value — switching drops the previous
       // session's pill (background progress was never captured anyway).
@@ -588,10 +609,13 @@ export function AppProvider({ children }: { children: ReactNode }) {
       // §P2-18: drop the deleted session's stream buckets.
       streamingBucketsRef.current.delete(id)
       thinkingBucketsRef.current.delete(id)
+      // R5-2: its retry notices die with it too.
+      streamNoticesBucketsRef.current.delete(id)
       // B1 §4-9: its queued prompts die with the session too.
       dropPromptQueue(id)
       if (currentSessionId === id) {
         setMessages([])
+        setStreamNotices([])
         setCurrentSessionId(null)
       }
       await refreshSessions()
@@ -677,6 +701,9 @@ export function AppProvider({ children }: { children: ReactNode }) {
       setMessages(msgs)
       streamingBucketsRef.current.set(currentSessionId, '')
       thinkingBucketsRef.current.set(currentSessionId, '')
+      // R5-2: the turn history they replace carries the old notices too.
+      streamNoticesBucketsRef.current.set(currentSessionId, [])
+      setStreamNotices([])
       cancelStreamFlush()
       setStreamingText('')
       setThinkingText('')
@@ -696,6 +723,9 @@ export function AppProvider({ children }: { children: ReactNode }) {
       setMessages(result.messages)
       streamingBucketsRef.current.set(currentSessionId, '')
       thinkingBucketsRef.current.set(currentSessionId, '')
+      // R5-2: the turn history they replace carries the old notices too.
+      streamNoticesBucketsRef.current.set(currentSessionId, [])
+      setStreamNotices([])
       cancelStreamFlush()
       setStreamingText('')
       setThinkingText('')
@@ -799,6 +829,24 @@ export function AppProvider({ children }: { children: ReactNode }) {
                 : undefined,
             message: p.message,
           })
+        }),
+        listen(EVENT_NAMES.QUERY_NOTICE, (e) => {
+          // R5-2: failover / key-rotation notices (engine continued —
+          // informational). Per-session bucket like the stream text; only
+          // the visible session's bucket is projected into state.
+          const p = e.payload as QueryNoticeEvent
+          if (!isEventForCurrentWindow(p.session_id, windowSessionId)) return
+          const visibleKey = visibleSessionIdRef.current ?? ''
+          const key = p.session_id ?? visibleKey
+          const notice: StreamNotice = {
+            id: ++streamNoticeIdRef.current,
+            kind: p.kind === 'key_rotation' ? 'key_rotation' : 'failover',
+            message: p.message,
+          }
+          const bucket = [...(streamNoticesBucketsRef.current.get(key) ?? []), notice]
+          if (bucket.length > STREAM_NOTICES_CAP) bucket.splice(0, bucket.length - STREAM_NOTICES_CAP)
+          streamNoticesBucketsRef.current.set(key, bucket)
+          if (key === visibleKey) setStreamNotices(bucket)
         }),
         listen(EVENT_NAMES.SUBAGENT_START, (e) => {
           const p = e.payload as SubAgentLive
@@ -1022,14 +1070,14 @@ export function AppProvider({ children }: { children: ReactNode }) {
 
   const visibleKey = windowSessionId ?? currentSessionId ?? ''
   const chatValue = useMemo<ChatContextValue>(() => ({
-    messages, streamingText, thinkingText, isQuerying, activeToolCalls, toolProgress, usage,
+    messages, streamingText, thinkingText, isQuerying, activeToolCalls, toolProgress, streamNotices, usage,
     sendMessage, cancelQuery,
     promptQueue: promptQueues[visibleKey] ?? [],
     enqueuePrompt, dequeuePrompt, removeQueuedPrompt,
     contextPanelOpen, toggleContextPanel, setContextPanelOpen: updateContextPanelOpen,
     checkpoints, rewindSession: rewindSessionAction, compactSession: compactSessionAction,
     feedback, recordFeedback: recordFeedbackAction,
-  }), [messages, streamingText, thinkingText, isQuerying, activeToolCalls, toolProgress, usage, sendMessage, cancelQuery,
+  }), [messages, streamingText, thinkingText, isQuerying, activeToolCalls, toolProgress, streamNotices, usage, sendMessage, cancelQuery,
     promptQueues, visibleKey, enqueuePrompt, dequeuePrompt, removeQueuedPrompt,
     contextPanelOpen, toggleContextPanel, updateContextPanelOpen, checkpoints, rewindSessionAction, compactSessionAction, feedback, recordFeedbackAction])
 

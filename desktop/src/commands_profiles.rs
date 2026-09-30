@@ -11,10 +11,14 @@
 //! cross-process flock second, reload → mutate → persist inside the
 //! critical section, unconditional restore into the guard).
 //!
-//! Scope (approved slice): list (name, provider count, active marker),
-//! switch (the UI confirms when the target profile is empty), create.
-//! NO rename/delete UI this batch — the store already has
-//! `rename_model_profile` / `remove_model_profile` for the follow-up.
+//! Scope (R5 batch): list (name, provider count, active marker), switch
+//! (the UI confirms when the target profile is empty), create, and — the
+//! R3-2 deferred slice — rename + delete. The store mutators
+//! (`rename_model_profile` / `remove_model_profile(name, force)`) existed
+//! all along; the desktop commands now drive them with the same UI
+//! contract: rename surfaces engine duplicates/not-found inline, delete
+//! passes `force = true` (the UI's ConfirmDialog is the consent) and
+//! reports which profile the engine's active-pointer fallback picked.
 //!
 //! Switching is a pure pointer move in `providers.toml`
 //! (`set_active_profile_key`) + a `rebuild_client_config_from_store`
@@ -87,7 +91,10 @@ pub(crate) fn summarize_profiles(
 /// the reentrancy contract on `acquire_exclusive_lock`). When the
 /// service-level profile APIs land, this helper should collapse into
 /// `with_engine_store`.
-async fn with_model_profile_store<R, F>(
+///
+/// R5: shared with `commands_keys`, which needs the same raw-store
+/// critical section for the R4-3 first-key credential-ref flip.
+pub(crate) async fn with_model_profile_store<R, F>(
     state: &tauri::State<'_, AppState>,
     f: F,
 ) -> Result<R, String>
@@ -235,6 +242,150 @@ pub async fn set_active_provider_profile(
     list_provider_profiles_body(&state).await
 }
 
+/// Rename a model profile (R3-2 deferred slice). The engine mutator moves
+/// the `profiles` map entry, rewrites the profile's own `name` field, and
+/// **follows the active pointer** when the renamed profile was the active
+/// one — a rename never changes which profile is live. Duplicates and
+/// unknown source names are engine errors, surfaced to the UI verbatim
+/// (the inline form validates the same contract client-side first).
+///
+/// When the renamed profile was active, the global default is re-resolved
+/// (a content-preserving rebuild — the pointer now carries the new name)
+/// and the `active_model_profile` event re-announces it so open windows
+/// refresh their profile label.
+#[tauri::command]
+#[tracing::instrument(skip_all)]
+pub async fn rename_provider_profile(
+    state: tauri::State<'_, AppState>,
+    app_handle: tauri::AppHandle,
+    old: String,
+    new: String,
+) -> Result<Vec<ProviderProfileSummary>, String> {
+    use tauri::Emitter;
+
+    let old = shannon_types::provider_config::validate_profile_name(&old)
+        .map_err(|e| format!("rename_provider_profile: {e}"))?;
+    let new = shannon_types::provider_config::validate_profile_name(&new)
+        .map_err(|e| format!("rename_provider_profile: {e}"))?;
+    if old == new {
+        // Content-preserving no-op — cheaper than an engine round trip and
+        // it keeps the UI's success path honest ("renamed" to itself).
+        return list_provider_profiles_body(&state).await;
+    }
+
+    let was_active = with_model_profile_store(&state, |store| {
+        let was_active = store.config().active_profile_key() == old;
+        store.rename_model_profile(&old, &new).map_err(|e| {
+            if e.kind() == std::io::ErrorKind::AlreadyExists {
+                format!("A profile named '{new}' already exists")
+            } else {
+                format!("could not rename profile '{old}': {e}")
+            }
+        })?;
+        Ok(was_active)
+    })
+    .await?;
+
+    if was_active {
+        // The active target is unchanged in content, but every surface that
+        // displays the profile NAME must follow the pointer. Never blocks on
+        // resolution failure (same contract as the switch command).
+        if let Err(e) = crate::commands_config::rebuild_client_config_from_store(&state).await {
+            tracing::warn!("profile rename: client config rebuild failed: {e}");
+        }
+        let _ = app_handle.emit(
+            event_names::CONFIG_UPDATED,
+            events::ConfigUpdatedPayload {
+                key: "active_model_profile".into(),
+                value: new.clone(),
+            },
+        );
+    }
+    let _ = app_handle.emit(
+        event_names::CONFIG_UPDATED,
+        events::ConfigUpdatedPayload {
+            key: "provider_profiles".into(),
+            value: new,
+        },
+    );
+    list_provider_profiles_body(&state).await
+}
+
+/// Delete a model profile (R3-2 deferred slice). `force = true` is the
+/// desktop's standing posture — the UI's ConfirmDialog is the consent, and
+/// the dialog names the fallback when the target is the ACTIVE profile —
+/// so the command never refuses on the engine's "refusing to delete the
+/// active profile" guard. The parameter stays on the wire for symmetry
+/// with the store/CLI contract.
+///
+/// Deleting the ACTIVE profile moves the pointer per the engine's
+/// fallback: `"default"` when it survives, else the first remaining
+/// profile alphabetically, else the pointer clears (resolution degrades
+/// to synthesis). The fallback name is returned in
+/// [`DeleteProfileOutcome::became_active`] so the UI can say out loud
+/// which profile took over, and the client config is rebuilt (a real
+/// target change this time).
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct DeleteProfileOutcome {
+    /// The fresh profile list, exactly like the other profile commands —
+    /// the active marker already reflects the engine's fallback.
+    pub profiles: Vec<ProviderProfileSummary>,
+    /// `Some(name)` when the deleted profile was the active one and the
+    /// pointer moved to the engine's fallback; `None` when the deleted
+    /// profile was not active (or the pointer cleared — an empty store).
+    pub became_active: Option<String>,
+}
+
+#[tauri::command]
+#[tracing::instrument(skip_all)]
+pub async fn delete_provider_profile(
+    state: tauri::State<'_, AppState>,
+    app_handle: tauri::AppHandle,
+    name: String,
+    force: Option<bool>,
+) -> Result<DeleteProfileOutcome, String> {
+    use tauri::Emitter;
+
+    let name = shannon_types::provider_config::validate_profile_name(&name)
+        .map_err(|e| format!("delete_provider_profile: {e}"))?;
+    let force = force.unwrap_or(true);
+
+    let became_active = with_model_profile_store(&state, |store| {
+        store.remove_model_profile(&name, force).map_err(|e| {
+            // The engine's two `InvalidData` refusals (last-remaining
+            // profile; active-profile-without-force) read fine verbatim.
+            format!("could not delete profile '{name}': {e}")
+        })
+    })
+    .await?;
+
+    if became_active.is_some() {
+        // The active profile changed — re-point the global default (same
+        // rebuild the switch command performs) and announce the takeover.
+        if let Err(e) = crate::commands_config::rebuild_client_config_from_store(&state).await {
+            tracing::warn!("profile delete: client config rebuild failed: {e}");
+        }
+        let _ = app_handle.emit(
+            event_names::CONFIG_UPDATED,
+            events::ConfigUpdatedPayload {
+                key: "active_model_profile".into(),
+                value: became_active.clone().unwrap_or_default(),
+            },
+        );
+    }
+    let _ = app_handle.emit(
+        event_names::CONFIG_UPDATED,
+        events::ConfigUpdatedPayload {
+            key: "provider_profiles".into(),
+            value: name,
+        },
+    );
+    Ok(DeleteProfileOutcome {
+        profiles: list_provider_profiles_body(&state).await?,
+        became_active,
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -364,5 +515,152 @@ mod tests {
         let reloaded = ProviderConfigStore::load_or_default_at(&path);
         assert_eq!(reloaded.config().active_profile_key(), "work");
         assert!(reloaded.config().profiles.contains_key("default"));
+    }
+
+    // ── R5: rename / delete (the R3-2 deferred slice) ───────────────────
+
+    async fn seed_two_profiles(state: &AppState, tmp: &tempfile::TempDir) {
+        let path = tmp.path().join("providers.toml");
+        let mut store = state.provider_store.lock().await;
+        *store = ProviderConfigStore::load_or_default_at(&path);
+        store.insert_model_profile("default").unwrap();
+        store.insert_model_profile("work").unwrap();
+        store.insert_model_profile("zzz").unwrap();
+        // Active = "work" (non-default) so the fallback and pointer-follow
+        // paths are both observable against the same fixture.
+        store.set_active_profile_key("work");
+        store.save().unwrap();
+    }
+
+    #[tokio::test]
+    async fn rename_moves_the_entry_and_follows_the_active_pointer() {
+        use crate::commands::AppState;
+
+        let state = AppState::new();
+        let tmp = tempfile::TempDir::new().unwrap();
+        seed_two_profiles(&state, &tmp).await;
+
+        {
+            let mut store = state.provider_store.lock().await;
+            // The exact mutator `rename_provider_profile` drives, driven the
+            // same way (rename of the ACTIVE profile).
+            store.rename_model_profile("work", "client-a").unwrap();
+            store.save().unwrap();
+        }
+
+        let config = {
+            let store = state.provider_store.lock().await;
+            store.config().clone()
+        };
+        assert!(!config.profiles.contains_key("work"), "old key gone");
+        let renamed = config.profiles.get("client-a").expect("new key present");
+        assert_eq!(renamed.name, "client-a", "profile's own name rewritten");
+        assert_eq!(
+            config.active_profile_key(),
+            "client-a",
+            "rename follows the active pointer — no silent profile switch"
+        );
+        let rows = summarize_profiles(&config);
+        let names: Vec<&str> = rows.iter().map(|r| r.name.as_str()).collect();
+        assert_eq!(names, vec!["default", "client-a", "zzz"]);
+
+        // The rename survives a reload.
+        let reloaded = ProviderConfigStore::load_or_default_at(&tmp.path().join("providers.toml"));
+        assert_eq!(reloaded.config().active_profile_key(), "client-a");
+    }
+
+    #[tokio::test]
+    async fn rename_errors_map_to_the_engine_kinds() {
+        use crate::commands::AppState;
+
+        let state = AppState::new();
+        let tmp = tempfile::TempDir::new().unwrap();
+        seed_two_profiles(&state, &tmp).await;
+
+        let mut store = state.provider_store.lock().await;
+        // Duplicate target → AlreadyExists (the command rewrites this one
+        // into "A profile named 'zzz' already exists").
+        let dup = store.rename_model_profile("default", "zzz").unwrap_err();
+        assert_eq!(dup.kind(), std::io::ErrorKind::AlreadyExists);
+        // Unknown source → NotFound (surfaced verbatim by the command).
+        let missing = store.rename_model_profile("ghost", "x").unwrap_err();
+        assert_eq!(missing.kind(), std::io::ErrorKind::NotFound);
+        // Neither failed call may leave a partial mutation behind.
+        assert!(store.config().profiles.contains_key("default"));
+        assert!(store.config().profiles.contains_key("zzz"));
+        assert!(!store.config().profiles.contains_key("x"));
+    }
+
+    #[tokio::test]
+    async fn delete_active_profile_falls_back_to_default_and_reports_it() {
+        use crate::commands::AppState;
+
+        let state = AppState::new();
+        let tmp = tempfile::TempDir::new().unwrap();
+        seed_two_profiles(&state, &tmp).await;
+
+        // force = true is what the command passes (the UI dialog consented).
+        let became_active = {
+            let mut store = state.provider_store.lock().await;
+            let fallback = store.remove_model_profile("work", true).unwrap();
+            store.save().unwrap();
+            fallback
+        };
+        assert_eq!(
+            became_active.as_deref(),
+            Some("default"),
+            "engine fallback prefers 'default' when it survives"
+        );
+
+        let config = {
+            let store = state.provider_store.lock().await;
+            store.config().clone()
+        };
+        assert!(!config.profiles.contains_key("work"));
+        assert_eq!(config.active_profile_key(), "default");
+        let rows = summarize_profiles(&config);
+        assert!(rows.iter().find(|r| r.name == "default").unwrap().active);
+        // The outcome wire type would carry exactly this fallback so the UI
+        // can say which profile took over.
+        assert_eq!(
+            DeleteProfileOutcome {
+                profiles: rows,
+                became_active: became_active.clone(),
+            }
+            .became_active
+            .as_deref(),
+            Some("default")
+        );
+
+        // The pointer move survives a reload.
+        let reloaded = ProviderConfigStore::load_or_default_at(&tmp.path().join("providers.toml"));
+        assert_eq!(reloaded.config().active_profile_key(), "default");
+    }
+
+    #[tokio::test]
+    async fn delete_non_active_profile_reports_none_and_keeps_the_pointer() {
+        use crate::commands::AppState;
+
+        let state = AppState::new();
+        let tmp = tempfile::TempDir::new().unwrap();
+        seed_two_profiles(&state, &tmp).await;
+
+        let mut store = state.provider_store.lock().await;
+        let fallback = store.remove_model_profile("zzz", false).unwrap();
+        assert_eq!(fallback, None, "inactive delete moves nothing");
+        assert_eq!(store.config().active_profile_key(), "work");
+
+        // The two engine refusals the UI must surface:
+        // 1. deleting the ACTIVE profile without force is refused;
+        let refused = store.remove_model_profile("work", false).unwrap_err();
+        assert_eq!(refused.kind(), std::io::ErrorKind::InvalidData);
+        // 2. deleting the LAST remaining profile is refused.
+        store.remove_model_profile("default", true).unwrap();
+        let last = store.remove_model_profile("work", true).unwrap_err();
+        assert_eq!(last.kind(), std::io::ErrorKind::InvalidData);
+        assert!(
+            store.config().profiles.contains_key("work"),
+            "refusal leaves the profile in place"
+        );
     }
 }

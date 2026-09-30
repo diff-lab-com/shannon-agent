@@ -174,6 +174,11 @@ pub mod commands_mcp;
 pub mod commands_profiles;
 
 #[cfg(feature = "tauri")]
+/// R4-3 (desktop slice) — per-provider multi-key management (list/add/
+/// remove/activate against the engine credential manager).
+pub mod commands_keys;
+
+#[cfg(feature = "tauri")]
 pub mod commands_notifications;
 
 #[cfg(feature = "tauri")]
@@ -208,6 +213,10 @@ pub mod commands_tasks;
 
 #[cfg(feature = "tauri")]
 pub mod session_registry;
+
+// R5-1 — durable sidecar for session-level model overrides (restart survive).
+#[cfg(feature = "tauri")]
+pub mod session_override_store;
 
 // P1-1 — session multi-window commands/registry/restore.
 #[cfg(feature = "tauri")]

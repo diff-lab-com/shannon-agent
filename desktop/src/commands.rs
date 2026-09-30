@@ -92,6 +92,15 @@ pub struct AppState {
     /// `registry.resolve_explicit_or_active` (multi-window), so they never
     /// read or move the pointer when a sessionId is supplied.
     pub(crate) registry: Arc<SessionRegistry>,
+    /// R5-1 — durable session-model-override sidecar
+    /// (`~/.shannon/desktop/session-model-overrides.json`). Loaded once here
+    /// (graceful on missing/corrupt), pruned memory-only against the L0
+    /// session log, and hydrated into `registry` so restored overrides are
+    /// live immediately; `set_session_model` / `clear_session_model` write
+    /// through it. `std::sync::Mutex` — the critical sections are pure
+    /// map edits + one small atomic file write, no `await` inside.
+    pub(crate) session_overrides:
+        std::sync::Mutex<crate::session_override_store::SessionOverrideSidecar>,
     /// LLM client config — used to build clients on demand. P1.2-B:
     /// this is the single source of truth for the active `model` /
     /// `provider`; the legacy `Arc<Mutex<String>>` mirrors were
@@ -493,14 +502,48 @@ impl AppState {
         )
         .expect("Failed to register preview_screenshot tool");
 
+        // R5-1 — restore session model overrides across restarts (the R2-1
+        // deferred item). Load the sidecar (graceful on missing/corrupt),
+        // prune entries whose session no longer has an L0 log
+        // (`<sessions>/<uuid>/events.jsonl` — every desktop session gets one
+        // at `new_session`, so a missing log means the session was deleted),
+        // then hydrate the survivors into the registry so `get_session_model`
+        // and query-time resolution see them without any UI change.
+        //
+        // Strictly read-only: the prune is memory-only at load — the pruned
+        // set reaches disk on the next set/clear write-through (which
+        // re-prunes before saving). `AppState::new` also runs in unit tests;
+        // it must never write to the user's HOME.
+        let registry = Arc::new(SessionRegistry::new());
+        let state_manager = Arc::new(StateManager::new());
+        let mut override_sidecar =
+            crate::session_override_store::SessionOverrideSidecar::load_default();
+        if !override_sidecar.is_empty() {
+            let sessions_dir = state_manager.sessions_dir().to_path_buf();
+            // `prune` itself rejects non-UUID keys, so the liveness probe
+            // only checks the session's L0 log.
+            let pruned = override_sidecar.prune(|id| {
+                shannon_core::session_log::session_log_container_path(&sessions_dir, id).exists()
+            });
+            if pruned > 0 {
+                tracing::info!(
+                    pruned,
+                    kept = override_sidecar.len(),
+                    "pruned session model overrides for deleted sessions"
+                );
+            }
+            override_sidecar.apply_to_registry(&registry);
+        }
+
         Self {
-            registry: Arc::new(SessionRegistry::new()),
+            registry,
+            session_overrides: std::sync::Mutex::new(override_sidecar),
             client_config: Arc::new(RwLock::new(client_config)),
             agent_tool_context: agent_context_handle,
             provider_store: Arc::new(tokio::sync::Mutex::new(provider_store)),
             tools: Arc::new(tool_registry),
             permissions: Arc::new(RwLock::new(PermissionManager::new())),
-            state_manager: Arc::new(StateManager::new()),
+            state_manager,
             qe_config: Arc::new(RwLock::new(
                 shannon_core::query_engine::QueryEngineConfig::default(),
             )),
@@ -1258,6 +1301,29 @@ pub async fn send_message(
                             payload.clone(),
                         ));
                         let _ = app.emit(event_names::QUERY_TOOL_RESULT, payload);
+                    }
+                    QueryEvent::Progress { query_id: _, message } => {
+                        // R5-2: the engine's retry observer (R3-1 failover /
+                        // R4-3 key rotation) renders its notices into
+                        // Progress events; they used to be dropped here, so
+                        // a successful failover looked like a silent stall.
+                        // Recognized notices ride the desktop-local
+                        // `query:notice` event with a machine-readable kind;
+                        // the UI renders them as subtle system lines (the
+                        // request continued — NOT an error). Plain progress
+                        // (API retries, bookkeeping) stays dropped.
+                        if let Some(kind) = crate::events::classify_retry_notice(&message) {
+                            let payload = crate::events::QueryNoticePayload {
+                                query_id: qid_str.clone(),
+                                kind,
+                                message,
+                                session_id: Some(session_id_str.clone()),
+                            };
+                            route_event(crate::session_registry::SessionEvent::Notice(
+                                payload.clone(),
+                            ));
+                            let _ = app.emit(crate::events::QUERY_NOTICE_EVENT, payload);
+                        }
                     }
                     QueryEvent::ToolProgress {
                         tool_use_id,

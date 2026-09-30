@@ -129,6 +129,10 @@ pub enum SessionEvent {
     Usage(crate::events::UsagePayload),
     /// `event_names::QUERY_TOOL_PROGRESS` payload.
     ToolProgress(crate::events::ToolProgressPayload),
+    /// R5-2: `query:notice` payload — a retry-notice progress line
+    /// (failover / key rotation) the desktop recognized and surfaced.
+    /// In-process mirror of the Tauri wire event, like the variants above.
+    Notice(crate::events::QueryNoticePayload),
     /// Coarse-grained status update (idle, cancelled, completed, failed).
     /// In-process only — see the type's docstring.
     Status(SessionEventStatus),
@@ -159,11 +163,13 @@ pub enum SessionEventStatus {
 /// without an override inherits the global default, so a new chat tracks
 /// whatever the user set in Settings or "Set as default".
 ///
-/// Lifetime: in-memory for the app's lifetime -- `SessionState` already dies
-/// with the registry entry and the desktop layer has no on-disk per-session
-/// metadata extension point, so a restart re-inherits the global default.
-/// The composer chip renders a "session" suffix while an override is active
-/// so the state is never silent.
+/// Lifetime: R5-1 — persisted across restarts in the desktop-owned sidecar
+/// `~/.shannon/desktop/session-model-overrides.json`
+/// ([`crate::session_override_store`]): loaded and hydrated into the
+/// registry at `AppState` construction (pruned against the L0 session log),
+/// written through by `set_session_model` / `clear_session_model`. The
+/// composer chip renders a "session" suffix while an override is active so
+/// the state is never silent — including the restored-after-restart case.
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct SessionModelOverride {
     pub provider: String,

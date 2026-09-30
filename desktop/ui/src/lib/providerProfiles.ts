@@ -51,3 +51,49 @@ export function isDuplicateName(rows: ReadonlyArray<ProviderProfileSummary>, raw
 export function activeProfileName(rows: ReadonlyArray<ProviderProfileSummary>): string | null {
   return rows.find((r) => r.active)?.name ?? null
 }
+
+// ── R5: rename / delete (the R3-2 deferred slice) ────────────────────────
+
+/**
+ * Does `newName` collide with an existing row OTHER than `currentName`
+ * (the rename form's duplicate rule — renaming a profile to its own
+ * current name, possibly re-cased, is allowed and short-circuits to a
+ * no-op)? Case-insensitive, matching `isDuplicateName`.
+ */
+export function isDuplicateRename(
+  rows: ReadonlyArray<ProviderProfileSummary>,
+  currentName: string,
+  newName: string,
+): boolean {
+  const next = newName.trim().toLowerCase()
+  return rows.some((r) => r.name !== currentName && r.name.toLowerCase() === next)
+}
+
+/**
+ * Which profile the engine's active pointer falls back to when `name` is
+ * deleted — the client mirror of `remove_model_profile`'s fallback rule,
+ * so the delete confirmation can say out loud who takes over BEFORE the
+ * destructive call:
+ *
+ * 1. `"default"` when it survives (the deleted profile is not `"default"`
+ *    and `"default"` still exists);
+ * 2. else the alphabetically-first remaining profile
+ *    (`profile_names()` is sorted engine-side);
+ * 3. else null (nothing remains — the engine refuses deleting the LAST
+ *    profile outright, so this arm only matters for display symmetry).
+ */
+export function profileFallbackAfterDelete(
+  rows: ReadonlyArray<ProviderProfileSummary>,
+  name: string,
+): string | null {
+  const remaining = rows.filter((r) => r.name !== name).map((r) => r.name)
+  if (name !== 'default' && remaining.includes('default')) return 'default'
+  return [...remaining].sort()[0] ?? null
+}
+
+/** True when the engine would refuse the delete (the LAST profile cannot
+ *  be removed — a config must keep at least one). The UI disables the
+ *  affordance instead of surfacing the backend error. */
+export function isLastRemainingProfile(rows: ReadonlyArray<ProviderProfileSummary>): boolean {
+  return rows.length <= 1
+}

@@ -9,6 +9,7 @@ import WelcomeState from '@/components/WelcomeState'
 import { MessageBubble, type RegeneratePayload } from '@/components/chat/MessageBubble'
 import StreamingResponse from '@/components/chat/StreamingResponse'
 import { useChat } from '@/context/ChatContext'
+import type { StreamNotice } from '@/context/ChatContext'
 import { useCatalog } from '@/context/CatalogContext'
 import { useSessions } from '@/context/SessionContext'
 import { useComposer } from './ComposerContext'
@@ -70,6 +71,41 @@ export function StreamStatusRegion({ active }: { active: boolean }) {
   return (
     <div role="status" aria-live="polite" className="sr-only" data-testid="stream-status-region">
       {message}
+    </div>
+  )
+}
+
+/**
+ * R5-2: one in-stream retry notice — failover (R3-1) or key rotation
+ * (R4-3) — rendered as a subtle system-style line, NOT an error banner:
+ * the engine continued on the new target, so the run never failed. Muted,
+ * small, distinct icon per kind (`alt_route` vs `vpn_key`); the verbatim
+ * engine line rides as the secondary detail (it is replayable from the L0
+ * log, so showing it raw keeps the UI honest without re-parsing it).
+ * Exported for direct testability.
+ */
+export function StreamNoticeLine({ notice }: { notice: StreamNotice }) {
+  const t = useT()
+  const failover = notice.kind === 'failover'
+  const label = failover ? t('chat.notice.failover') : t('chat.notice.keyRotation')
+  return (
+    <div
+      data-testid={`stream-notice-${notice.kind}`}
+      className="flex items-center gap-xs px-md py-xs rounded-lg border border-outline-variant/20 bg-surface-container-lowest/60 max-w-[90%]"
+    >
+      <span
+        className={`material-symbols-outlined icon-md shrink-0 ${failover ? 'text-secondary' : 'text-tertiary'}`}
+        aria-hidden="true"
+      >
+        {failover ? 'alt_route' : 'vpn_key'}
+      </span>
+      <span className="font-label-sm text-on-surface-variant shrink-0">{label}</span>
+      <span
+        className="font-label-sm text-on-surface-variant/70 truncate min-w-0"
+        title={notice.message}
+      >
+        {notice.message}
+      </span>
     </div>
   )
 }
@@ -173,7 +209,7 @@ export default function MessageArea({
   searchFlashIndex,
   onEditMessage,
 }: MessageAreaProps) {
-  const { messages, streamingText, thinkingText, activeToolCalls, toolProgress, checkpoints, rewindSession, isQuerying } = useChat()
+  const { messages, streamingText, thinkingText, activeToolCalls, toolProgress, streamNotices, checkpoints, rewindSession, isQuerying } = useChat()
   const { currentSessionId, sessionActivity, switchingSession } = useSessions()
   const durationLookup = useToolDurationLookup(currentSessionId)
   const checkpointTurns = useMemo(() => checkpoints.map(c => c.turn_index), [checkpoints])
@@ -271,6 +307,19 @@ export default function MessageArea({
             <div key={messageKeys[i]} data-message-index={i} className="pb-lg">
               <MessageBubble message={msg} messageIndex={i} {...bubbleProps(i)} />
             </div>
+          ))}
+        </div>
+      )}
+
+      {/* R5-2: in-stream retry notices (failover / key rotation) — subtle
+          system lines for recoveries the engine already handled. They are
+          NOT errors (the request continued), so they render muted above the
+          streaming reply and survive the run's completion until the session's
+          next send, letting the user see how the last answer was served. */}
+      {streamNotices.length > 0 && (
+        <div data-testid="stream-notices" className="space-y-xs pt-lg">
+          {streamNotices.map(n => (
+            <StreamNoticeLine key={n.id} notice={n} />
           ))}
         </div>
       )}

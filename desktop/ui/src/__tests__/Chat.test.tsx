@@ -12,6 +12,8 @@ const ctx = vi.hoisted(() => ({
   thinkingText: '',
   isQuerying: false,
   activeToolCalls: [] as any[],
+  // R5-2 — in-stream retry notices (failover / key rotation).
+  streamNotices: [] as any[],
   usage: null as any,
   sessions: [] as any[],
   currentSessionId: null as string | null,
@@ -56,6 +58,7 @@ function resetCtx() {
   ctx.thinkingText = ''
   ctx.isQuerying = false
   ctx.activeToolCalls = []
+  ctx.streamNotices = []
   ctx.usage = null
   ctx.sessions = []
   ctx.currentSessionId = null

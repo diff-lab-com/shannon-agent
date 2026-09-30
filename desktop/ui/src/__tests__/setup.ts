@@ -178,6 +178,14 @@ vi.mock('@/lib/tauri-api', async (importOriginal) => ({
   ]),
   createProviderProfile: vi.fn(),
   setActiveProviderProfile: vi.fn(),
+  // R5: profile rename/delete (Settings → Models "Profiles").
+  renameProviderProfile: vi.fn(),
+  deleteProviderProfile: vi.fn(),
+  // R4-3 (desktop slice): per-provider multi-key management panel.
+  listProviderKeys: vi.fn().mockResolvedValue([]),
+  addProviderKey: vi.fn(),
+  removeProviderKey: vi.fn(),
+  activateProviderKey: vi.fn(),
   // P0-③/P1-⑤: plan dock + tool-duration lookup (both opportunistic reads).
   getSessionPlan: vi.fn().mockResolvedValue(null),
   getTraceTimeline: vi.fn().mockResolvedValue({ session_id: 's', turns: [], cumulative: [] }),

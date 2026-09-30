@@ -276,9 +276,32 @@ pub async fn list_tools(state: tauri::State<'_, AppState>) -> Result<Vec<ToolInf
 /// store since the override was written) degrades to the global config with
 /// a warning — a stale override must never block a send.
 ///
-/// R3-3 precedence: **session override > phase tier > global default** —
-/// the phase tier (`plan_tier` / `act_tier` desktop config keys) only kicks
-/// in when THIS session has no explicit override.
+/// R5-5 — precedence table across the three run classes (pinned by tests
+/// here and in `session_override_tests`):
+///
+/// ```text
+/// run class            config source                              override/tier applied?
+/// ───────────────────  ─────────────────────────────────────────  ──────────────────────
+/// interactive session  resolve_client_config_for_session (HERE)   session override (R2-1)
+///                                                                 > phase tier (R3-3)
+///                                                                 > global default
+/// unattended           `state.client_config` read DIRECTLY by     NONE — global default only;
+/// (goal / batch /      the run constructors                       overrides and phase tiers
+/// routine / dream /    (GoalRunDeps, BatchRunDeps,                are intentionally invisible:
+/// skill loop)          RoutineRunDeps, commands_skill_loop,       an unattended run must track
+///                      commands_dream)                            the user's global target, not
+///                                                                 whatever chat happened to be
+///                                                                 focused when it fired
+/// desktop global       AppState::client_config (the store's       —
+///                      active_target, rebuilt by `configure`)
+/// ```
+///
+/// The unattended pin holds because (a) `set_session_model` never writes
+/// `state.client_config` (session state only — see the write-through below),
+/// (b) phase tiers are consulted exclusively inside this function (and its
+/// `apply_phase_tier_to_base` helper), and (c) the unattended constructors
+/// clone the `client_config` Arc without resolving through here. The
+/// `unattended_paths_pin_global_config` test in this file pins (a)+(b)+(c).
 pub(crate) async fn resolve_client_config_for_session(
     state: &AppState,
     session: &crate::session_registry::SessionState,
@@ -484,20 +507,54 @@ pub async fn set_session_model(
     };
     let model_id = crate::commands_config::normalize_model_id(engine_provider, &model);
 
+    let ov = crate::session_registry::SessionModelOverride {
+        provider: provider_clean,
+        model: model_id,
+    };
     *session
         .model_override
         .lock()
-        .map_err(|_| "session model override lock poisoned".to_string())? =
-        Some(crate::session_registry::SessionModelOverride {
-            provider: provider_clean,
-            model: model_id,
-        });
+        .map_err(|_| "session model override lock poisoned".to_string())? = Some(ov.clone());
+    // R5-1: write through to the durable sidecar so the override survives a
+    // restart. Best-effort — the in-memory override is already live, and a
+    // failed save must not make the UI revert a working switch; the next
+    // successful write-through persists it.
+    if let Err(e) = persist_session_override(&state, session.session_id, Some(ov)) {
+        tracing::warn!(
+            session = %session.session_id,
+            error = %e,
+            "session model override could not be persisted — survives in memory only"
+        );
+    }
     Ok(())
+}
+
+/// R5-1 — durable write-through for the session model override sidecar.
+/// `override_value = None` clears the entry. Re-prunes the whole map
+/// against the L0 session log before saving (the documented prune policy:
+/// load-time prune is memory-only, writes reconcile), so deleted sessions'
+/// stale entries eventually reach disk too.
+fn persist_session_override(
+    state: &AppState,
+    session_id: uuid::Uuid,
+    override_value: Option<crate::session_registry::SessionModelOverride>,
+) -> Result<(), String> {
+    let sessions_dir = state.state_manager.sessions_dir().to_path_buf();
+    let mut store = state
+        .session_overrides
+        .lock()
+        .map_err(|_| "session override sidecar lock poisoned".to_string())?;
+    store.record(session_id, override_value, |id| {
+        shannon_core::session_log::session_log_container_path(&sessions_dir, id).exists()
+    })
 }
 
 /// Clear the session-level model override — the session goes back to
 /// inheriting the global default (including future default changes).
 /// Idempotent: clearing a session without an override is a no-op.
+///
+/// R5-1: the cleared state is written through to the sidecar so a restart
+/// doesn't resurrect the override.
 #[tauri::command]
 #[tracing::instrument(skip_all)]
 pub async fn clear_session_model(
@@ -511,6 +568,14 @@ pub async fn clear_session_model(
         .model_override
         .lock()
         .map_err(|_| "session model override lock poisoned".to_string())? = None;
+    // R5-1 write-through (best-effort, same contract as the set path).
+    if let Err(e) = persist_session_override(&state, session.session_id, None) {
+        tracing::warn!(
+            session = %session.session_id,
+            error = %e,
+            "session model override clear could not be persisted — in-memory only"
+        );
+    }
     Ok(())
 }
 
@@ -984,6 +1049,169 @@ mod tests {
             let base = base_config();
             assert!(
                 super::super::apply_tier_override(&base, store.config(), PhaseTier::Fast).is_none()
+            );
+        }
+
+        // === R5-1: sidecar persistence (write-through) ===
+
+        /// The full set → restart → clear story at the command layer: the
+        /// same `persist_session_override` helper `set_session_model` /
+        /// `clear_session_model` call, against stores redirected into a
+        /// temp dir (the command bodies themselves need `tauri::State`).
+        /// The store-level round-trip/prune/corrupt matrix lives in
+        /// `session_override_store::tests`.
+        #[tokio::test]
+        async fn session_override_sidecar_write_through_survives_restart() {
+            let dir = std::env::temp_dir().join(format!(
+                "shannon-chat-override-{}",
+                uuid::Uuid::new_v4().simple()
+            ));
+            std::fs::create_dir_all(&dir).expect("temp dir");
+            let sidecar_path = dir.join("overrides.json");
+
+            // AppState with the sessions dir + sidecar redirected off the
+            // real HOME (tests must never write the user's files).
+            let mut state = AppState::new();
+            state.state_manager = std::sync::Arc::new(
+                shannon_engine::state::StateManager::with_sessions_dir(dir.join("sessions"))
+                    .expect("temp sessions dir"),
+            );
+            state.session_overrides = std::sync::Mutex::new(
+                crate::session_override_store::SessionOverrideSidecar::load_from(
+                    sidecar_path.clone(),
+                ),
+            );
+
+            let session_id = uuid::Uuid::new_v4();
+            // Mirror `new_session`: the L0 log is the session-existence
+            // marker the write-through prune checks.
+            shannon_core::session_log::SessionTee::open_in_container(
+                state.state_manager.sessions_dir(),
+                &session_id.to_string(),
+                "test-model",
+                None,
+            )
+            .close();
+            state.registry.insert(session_id);
+            let session = state
+                .registry
+                .get(crate::session_registry::SessionKey(session_id))
+                .expect("registered");
+
+            // set_session_model's write-through (in-memory + disk).
+            let ov = crate::session_registry::SessionModelOverride {
+                provider: "openai".into(),
+                model: "gpt-5".into(),
+            };
+            *session.model_override.lock().unwrap() = Some(ov.clone());
+            super::super::persist_session_override(&state, session_id, Some(ov.clone()))
+                .expect("write-through");
+
+            // "Restart": a fresh registry hydrated from disk (the
+            // `AppState::new` startup path) must see the override.
+            let fresh_registry = crate::session_registry::SessionRegistry::new();
+            let reloaded = crate::session_override_store::SessionOverrideSidecar::load_from(
+                sidecar_path.clone(),
+            );
+            assert_eq!(reloaded.len(), 1, "one persisted entry");
+            reloaded.apply_to_registry(&fresh_registry);
+            assert_eq!(
+                fresh_registry
+                    .get(crate::session_registry::SessionKey(session_id))
+                    .expect("hydrated")
+                    .model_override_snapshot(),
+                Some(ov),
+                "the override survives the restart"
+            );
+
+            // clear_session_model's write-through empties the sidecar.
+            super::super::persist_session_override(&state, session_id, None)
+                .expect("write-through clear");
+            assert!(
+                crate::session_override_store::SessionOverrideSidecar::load_from(sidecar_path)
+                    .is_empty(),
+                "the cleared override must not resurrect after a restart"
+            );
+
+            std::fs::remove_dir_all(dir).ok();
+        }
+
+        // === R5-5: unattended-path precedence pin ===
+
+        /// Goal / batch / routine (unattended) runs use the **global default
+        /// only** — no session overrides, no phase tiers. Pins the three
+        /// facts the precedence table in `resolve_client_config_for_session`
+        /// documents: (a) override + phase prefs never write the global
+        /// `client_config`, (b) the unattended run constructors read exactly
+        /// that global Arc, and (c) only the interactive resolution path
+        /// applies them. If a future unattended path starts routing through
+        /// `resolve_client_config_for_session`, the table and this test must
+        /// be revisited together.
+        #[tokio::test]
+        async fn unattended_paths_pin_global_config() {
+            let state = AppState::new();
+            let global_model_before = state.client_config.read().await.model.clone();
+            let global_provider_before = state.client_config.read().await.provider.clone();
+
+            // Every interactive-layer preference, set at once:
+            let key = state.registry.create();
+            *state
+                .registry
+                .get(key)
+                .unwrap()
+                .model_override
+                .lock()
+                .unwrap() = Some(crate::session_registry::SessionModelOverride {
+                provider: "anthropic".into(),
+                model: "claude-opus-4-7".into(),
+            });
+            {
+                let mut cfg = state.desktop_config.write().await;
+                cfg.approval_mode = Some("plan".into());
+                cfg.plan_tier = Some("pro".into());
+                cfg.act_tier = Some("fast".into());
+            }
+
+            // (a) the global target the unattended paths read is untouched…
+            assert_eq!(
+                state.client_config.read().await.model,
+                global_model_before,
+                "session overrides + phase prefs must never rewrite the global default"
+            );
+            assert_eq!(
+                state.client_config.read().await.provider,
+                global_provider_before
+            );
+
+            // (b) …and the goal runner's config source IS that global Arc
+            // (`GoalRunDeps::from_state` clones `state.client_config`, same
+            // as BatchRunDeps / RoutineRunDeps) — its LlmClient therefore
+            // sees the global default, override and tier invisible.
+            let deps = crate::goal_commands::GoalRunDeps::from_state(&state);
+            let run_config = deps.client_config.read().await;
+            assert_eq!(
+                run_config.model, global_model_before,
+                "unattended goal runs build their client from the global default only"
+            );
+            assert_eq!(run_config.provider, global_provider_before);
+            drop(run_config);
+
+            // (c) contrast: the INTERACTIVE resolution path does apply the
+            // prefs — override > tier — proving the pin is about the path,
+            // not missing preferences.
+            *state.client_config.write().await = base_config();
+            {
+                let mut store = state.provider_store.lock().await;
+                *store = fixture_store();
+            }
+            let resolved = super::super::resolve_client_config_for_session(
+                &state,
+                state.registry.get(key).unwrap().as_ref(),
+            )
+            .await;
+            assert_eq!(
+                resolved.model, "claude-opus-4-7",
+                "the session override applies on the interactive path"
             );
         }
     }

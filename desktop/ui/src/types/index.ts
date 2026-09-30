@@ -54,6 +54,21 @@ export interface UsagePayload {
   session_id?: string
 }
 
+/** R5-2: which retry the engine surfaced on `query:notice`. Both kinds mean
+ *  the request CONTINUED — these are informational, never errors. */
+export type QueryNoticeKind = 'failover' | 'key_rotation'
+
+/** R5-2 wire payload for QUERY_NOTICE (`query:notice`). `message` is the
+ *  verbatim engine line (e.g. "falling back to glm-5.3-flash@zhipu (rate
+ *  limited)") — shown as the notice detail; `kind` drives icon + localized
+ *  label. */
+export interface QueryNoticeEvent {
+  query_id: string
+  kind: QueryNoticeKind
+  message: string
+  session_id?: string
+}
+
 export interface QueryCompletedPayload {
   query_id: string
 }
@@ -582,6 +597,27 @@ export interface ProviderProfileSummary {
   active: boolean
   /** The profile's `active_target.model_id` when set; null for an empty profile. */
   model?: string | null
+}
+
+/** R5 (profile rename/delete): result of `delete_provider_profile`. The
+ *  fresh list rides along (its `active` marker reflects the engine's
+ *  fallback) and `became_active` names the profile that took over when the
+ *  deleted one was active. */
+export interface DeleteProfileOutcome {
+  profiles: ProviderProfileSummary[]
+  became_active?: string | null
+}
+
+/**
+ * R4-3 (desktop slice): one row of the per-provider "API keys" list — the
+ * credential store's rotation order for that provider. `index` 0 is the
+ * ACTIVE key; `masked_hint` is display-only (`sk-pri…aaaa`-style) and never
+ * carries full key material.
+ */
+export interface ProviderKeySummary {
+  index: number
+  active: boolean
+  masked_hint: string
 }
 
 /** P2-5: `offpeak` config payload. Empty/missing `model_override` = disabled. */
@@ -1375,6 +1411,14 @@ export const EVENT_NAMES = {
   QUERY_TOOL_PROGRESS: 'query:tool-progress',
   QUERY_THINKING: 'query:thinking',
   QUERY_USAGE: 'query:usage',
+  /**
+   * R5-2: the engine failed over to a fallback model/provider (R3-1) or
+   * rotated the provider's API key (R4-3) and the request CONTINUED.
+   * Payload: QueryNoticeEvent { query_id, kind, message, session_id? } —
+   * rendered as a subtle system line in the conversation, never an error
+   * banner.
+   */
+  QUERY_NOTICE: 'query:notice',
   QUERY_COMPLETED: 'query:completed',
   QUERY_FAILED: 'query:failed',
   QUERY_CANCELLED: 'query:cancelled',

@@ -622,22 +622,27 @@ fn parse_yaml_paths(yaml: &str) -> Option<Vec<String>> {
 
 /// Check if a file path matches any of the given glob patterns.
 fn matches_any_pattern(file_path: &Path, project_dir: &Path, patterns: &[String]) -> bool {
+    // Normalize via string logic, not `Path::is_absolute`/`join`: those are
+    // platform-relative (on unix, a `C:\...` path is relative, so `join`
+    // double-prefixes it — see test_matches_any_pattern_windows_separators,
+    // which deliberately runs on unix CI too). Everything becomes `/`-sep-
+    // arated first; the candidate is used as-is when it already sits under
+    // the directory, and prefixed with it otherwise.
+    let norm = |p: &Path| p.to_string_lossy().replace('\\', "/");
+    let dir_s = norm(project_dir);
+    let dir_s = dir_s.trim_end_matches('/');
+
     let mut builder = globset::GlobSetBuilder::new();
 
     for pattern in patterns {
-        // Patterns are `/`-separated globs, but `project_dir` renders with
-        // `\` on Windows. `format!("{}/{}", dir, pattern)` therefore built
-        // patterns containing backslashes, which globset never matched
-        // against its `/`-normalized candidates — `paths:` rules silently
-        // never fired on Windows. Join via Path and normalize both the
-        // glob and the candidate to `/` before matching.
-        let abs_pattern = if Path::new(pattern).is_absolute() {
-            pattern.replace('\\', "/")
+        let pat_s = pattern.replace('\\', "/");
+        // A pattern is absolute when it starts with `/` or a drive letter
+        // (`C:/`-style) after normalization; everything else is relative to
+        // the project directory.
+        let abs_pattern = if pat_s.starts_with('/') || pat_s.contains(":/") {
+            pat_s
         } else {
-            project_dir
-                .join(pattern)
-                .to_string_lossy()
-                .replace('\\', "/")
+            format!("{dir_s}/{pat_s}")
         };
 
         if let Ok(glob) = globset::GlobBuilder::new(&abs_pattern)
@@ -654,13 +659,13 @@ fn matches_any_pattern(file_path: &Path, project_dir: &Path, patterns: &[String]
         Err(_) => return false,
     };
 
-    let abs_path = if file_path.is_absolute() {
-        file_path.to_path_buf()
+    let file_s = norm(file_path);
+    let candidate = if file_s.starts_with('/') || file_s.contains(":/") {
+        file_s
     } else {
-        project_dir.join(file_path)
+        format!("{dir_s}/{file_s}")
     };
 
-    let candidate = abs_path.to_string_lossy().replace('\\', "/");
     globset.is_match(candidate)
 }
 
