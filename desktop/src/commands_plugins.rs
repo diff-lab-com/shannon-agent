@@ -801,8 +801,11 @@ mod lifecycle_tests {
                 .is_file()
         );
         assert!(homes.commands_root.join("go.md").is_file());
-        let store = std::fs::read_to_string(&homes.mcp_store_path).expect("mcp store materialized");
-        assert!(store.contains("bundle-relay"), "{store}");
+        let servers = crate::config::load_mcp_servers_from(&homes.mcp_settings_path);
+        assert!(
+            servers.iter().any(|s| s.name == "bundle-relay"),
+            "{servers:?}"
+        );
 
         // disable: reverse-materialize, keep plugin dir + sidecar (shared tail)
         let disabled = disable_tail(&mut registry, "bundle", &homes).unwrap();

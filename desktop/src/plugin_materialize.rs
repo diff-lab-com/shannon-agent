@@ -76,10 +76,10 @@ pub struct PluginHomes {
     pub agents_root: PathBuf,
     /// `~/.shannon/commands`
     pub commands_root: PathBuf,
-    /// `~/.shannon/desktop/mcp-servers.json` (top-level JSON **array** of
-    /// `McpServerConfig`, same store `crate::config::load_mcp_servers` and
-    /// the migration importer read/write).
-    pub mcp_store_path: PathBuf,
+    /// `~/.shannon/settings.json` — the unified `mcpServers` store (G1
+    /// split-brain fix: materialized plugin servers land in the same store
+    /// the CLI, the MCP page and the chat tool assembly read).
+    pub mcp_settings_path: PathBuf,
 }
 
 impl PluginHomes {
@@ -90,7 +90,7 @@ impl PluginHomes {
             skills_root: shannon.join("skills"),
             agents_root: shannon.join("agents"),
             commands_root: shannon.join("commands"),
-            mcp_store_path: shannon.join("desktop").join("mcp-servers.json"),
+            mcp_settings_path: shannon.join("settings.json"),
         }
     }
 
@@ -363,7 +363,7 @@ pub fn materialize_plugin(
                 };
                 let value = serde_json::to_value(&config)
                     .map_err(|e| format!("mcp server '{key}' serialize: {e}"))?;
-                match upsert_mcp_store(&homes.mcp_store_path, &key, &value) {
+                match upsert_mcp_store(&homes.mcp_settings_path, &key, &value) {
                     Ok(()) => outcome.record.mcp_servers.push(key),
                     Err(e) => outcome.warnings.push(format!("mcp server '{key}': {e}")),
                 }
@@ -398,7 +398,7 @@ pub fn reverse_materialize(record: &MaterializedRecord, homes: &PluginHomes) -> 
         remove_recorded(raw, &homes.commands_root, "command", &mut warnings);
     }
     for key in &record.mcp_servers {
-        if let Err(e) = remove_mcp_store_entry(&homes.mcp_store_path, key) {
+        if let Err(e) = remove_mcp_store_entry(&homes.mcp_settings_path, key) {
             warnings.push(format!("mcp server '{key}': {e}"));
         }
     }
@@ -464,47 +464,22 @@ pub fn read_sidecar(plugin_dir: &Path) -> Result<Option<MaterializedRecord>, Str
         .map_err(|e| format!("parse {}: {e}", path.display()))
 }
 
-// ─── mcp-servers.json store (top-level JSON array of McpServerConfig) ──────
+// ─── unified settings.json#mcpServers store (G1 Imp-4b) ────────────────────
 
-/// Load the store as raw JSON values (untyped on purpose: a foreign entry
-/// missing a field must survive untouched, not nuke the file).
-fn load_mcp_store(path: &Path) -> Result<Vec<serde_json::Value>, String> {
-    if !path.exists() {
-        return Ok(Vec::new());
-    }
-    let text =
-        std::fs::read_to_string(path).map_err(|e| format!("read {}: {e}", path.display()))?;
-    serde_json::from_str(&text).map_err(|e| format!("parse {}: {e}", path.display()))
-}
-
-fn save_mcp_store(path: &Path, servers: &[serde_json::Value]) -> Result<(), String> {
-    if let Some(parent) = path.parent() {
-        std::fs::create_dir_all(parent).map_err(|e| format!("create {}: {e}", parent.display()))?;
-    }
-    let text =
-        serde_json::to_string_pretty(servers).map_err(|e| format!("serialize store: {e}"))?;
-    std::fs::write(path, text).map_err(|e| format!("write {}: {e}", path.display()))?;
-    crate::file_permissions::restrict_to_owner(path);
-    Ok(())
-}
-
-/// Upsert one namespaced key. Collision = overwrite that key only.
+/// Upsert one namespaced key into the unified store. Collision = overwrite
+/// that key only; every other entry (and every other settings.json key)
+/// survives. Writes go through the shared atomic path.
 pub fn upsert_mcp_store(path: &Path, key: &str, config: &serde_json::Value) -> Result<(), String> {
-    let mut servers = load_mcp_store(path)?;
-    servers.retain(|s| s.get("name").and_then(|n| n.as_str()) != Some(key));
-    servers.push(config.clone());
-    save_mcp_store(path, &servers)
+    let mut typed: crate::config::McpServerConfig = serde_json::from_value(config.clone())
+        .map_err(|e| format!("mcp server '{key}' config: {e}"))?;
+    typed.name = key.to_string();
+    crate::config::save_mcp_servers_to(path, &[typed])
 }
 
-/// Remove one namespaced key. Missing key = Ok (idempotent).
+/// Remove one namespaced key from the unified store. Missing key = Ok
+/// (idempotent).
 pub fn remove_mcp_store_entry(path: &Path, key: &str) -> Result<(), String> {
-    let mut servers = load_mcp_store(path)?;
-    let before = servers.len();
-    servers.retain(|s| s.get("name").and_then(|n| n.as_str()) != Some(key));
-    if servers.len() != before {
-        save_mcp_store(path, &servers)?;
-    }
-    Ok(())
+    crate::config::remove_mcp_server_entry_from(path, key).map(|_| ())
 }
 
 // ─── Trust preview (inspect_plugin_source) ─────────────────────────────────
@@ -789,10 +764,13 @@ mod tests {
         let command = homes.commands_root.join("ship.md");
         assert!(command.is_file());
 
-        // namespaced mcp key landed in the array store
-        let store = std::fs::read_to_string(&homes.mcp_store_path).unwrap();
-        assert!(store.contains("\"demo-relay\""), "{store}");
-        assert!(store.contains("\"command\": \"npx\""), "{store}");
+        // namespaced mcp key landed in the unified settings store
+        let servers = crate::config::load_mcp_servers_from(&homes.mcp_settings_path);
+        let relay = servers
+            .iter()
+            .find(|s| s.name == "demo-relay")
+            .expect("namespaced key present");
+        assert_eq!(relay.command, "npx");
 
         let sidecar = read_sidecar(&plugin_dir).unwrap().unwrap();
         assert_eq!(sidecar.plugin, "demo");
@@ -866,8 +844,11 @@ mod tests {
         assert!(!homes.agents_root.join("demo").exists());
         assert!(!homes.commands_root.join("ship.md").exists());
         assert!(foreign.is_file(), "foreign command must survive");
-        let store = std::fs::read_to_string(&homes.mcp_store_path).unwrap();
-        assert!(!store.contains("demo-relay"), "{store}");
+        let servers = crate::config::load_mcp_servers_from(&homes.mcp_settings_path);
+        assert!(
+            servers.iter().all(|s| s.name != "demo-relay"),
+            "{servers:?}"
+        );
     }
 
     #[test]
@@ -1103,11 +1084,12 @@ mod tests {
     fn mcp_collision_overwrites_only_the_namespaced_key() {
         let tmp = tempfile::tempdir().unwrap();
         let homes = home(tmp.path());
-        // pre-existing store with a foreign server and an older demo-relay
-        std::fs::create_dir_all(homes.mcp_store_path.parent().unwrap()).unwrap();
+        // Pre-existing unified store with a foreign server and an older
+        // demo-relay, plus a foreign top-level key that must survive.
+        std::fs::create_dir_all(homes.mcp_settings_path.parent().unwrap()).unwrap();
         std::fs::write(
-            &homes.mcp_store_path,
-            r#"[{"name":"user-own","command":"uvx","args":[],"env":{},"enabled":true},{"name":"demo-relay","command":"old","args":[],"env":{},"enabled":false}]"#,
+            &homes.mcp_settings_path,
+            r#"{"permissions":{"allow":["Bash"]},"mcpServers":{"user-own":{"command":"uvx","args":[],"env":{},"enabled":true},"demo-relay":{"command":"old","args":[],"env":{},"enabled":false}}}"#,
         )
         .unwrap();
 
@@ -1121,20 +1103,24 @@ mod tests {
         .unwrap();
         assert!(outcome.warnings.is_empty());
 
-        let store: Vec<serde_json::Value> =
-            serde_json::from_str(&std::fs::read_to_string(&homes.mcp_store_path).unwrap()).unwrap();
-        assert_eq!(store.len(), 2);
-        let relay = store
+        let servers = crate::config::load_mcp_servers_from(&homes.mcp_settings_path);
+        assert_eq!(servers.len(), 2);
+        let relay = servers
             .iter()
-            .find(|s| s["name"] == "demo-relay")
+            .find(|s| s.name == "demo-relay")
             .expect("namespaced key present");
         assert_eq!(
-            relay["command"], "npx",
+            relay.command, "npx",
             "collision overwrites the namespaced key"
         );
-        assert_eq!(relay["enabled"], true);
-        let own = store.iter().find(|s| s["name"] == "user-own").unwrap();
-        assert_eq!(own["command"], "uvx", "foreign entry untouched");
+        assert!(relay.enabled);
+        let own = servers.iter().find(|s| s.name == "user-own").unwrap();
+        assert_eq!(own.command, "uvx", "foreign entry untouched");
+        // Foreign top-level settings key untouched.
+        let root: serde_json::Value =
+            serde_json::from_str(&std::fs::read_to_string(&homes.mcp_settings_path).unwrap())
+                .unwrap();
+        assert_eq!(root["permissions"]["allow"][0], "Bash");
     }
 
     #[test]
@@ -1158,31 +1144,36 @@ mod tests {
         assert!(!homes.skills_root.exists(), "nothing materialized");
     }
 
-    // ── mcp store helpers ───────────────────────────────────────────────
+    // ── unified mcp store helpers ───────────────────────────────────────
 
     #[test]
     fn remove_mcp_store_entry_is_idempotent() {
         let tmp = tempfile::tempdir().unwrap();
-        let path = tmp.path().join("mcp-servers.json");
+        let path = tmp.path().join("settings.json");
         let cfg = serde_json::json!({"name":"a-b","command":"x","args":[],"env":{},"enabled":true});
         upsert_mcp_store(&path, "a-b", &cfg).unwrap();
         upsert_mcp_store(&path, "a-b", &cfg).unwrap(); // upsert, not duplicate
-        let store = load_mcp_store(&path).unwrap();
-        assert_eq!(store.len(), 1);
+        let servers = crate::config::load_mcp_servers_from(&path);
+        assert_eq!(servers.len(), 1);
         remove_mcp_store_entry(&path, "a-b").unwrap();
         remove_mcp_store_entry(&path, "a-b").unwrap(); // gone twice = ok
-        assert!(load_mcp_store(&path).unwrap().is_empty());
+        assert!(crate::config::load_mcp_servers_from(&path).is_empty());
     }
 
     #[test]
     fn corrupt_mcp_store_is_reported_not_truncated() {
         let tmp = tempfile::tempdir().unwrap();
-        let path = tmp.path().join("mcp-servers.json");
-        std::fs::write(&path, "[{broken").unwrap();
-        let err = upsert_mcp_store(&path, "k", &serde_json::json!({"name":"k"})).unwrap_err();
+        let path = tmp.path().join("settings.json");
+        std::fs::write(&path, "{broken").unwrap();
+        let err = upsert_mcp_store(
+            &path,
+            "k",
+            &serde_json::json!({"name":"k","command":"x","args":[],"env":{},"enabled":true}),
+        )
+        .unwrap_err();
         assert!(err.contains("parse"), "{err}");
         // the corrupt bytes are left for the user to inspect
-        assert_eq!(std::fs::read_to_string(&path).unwrap(), "[{broken");
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), "{broken");
     }
 
     // ── inspect: dir + archive summaries ────────────────────────────────
