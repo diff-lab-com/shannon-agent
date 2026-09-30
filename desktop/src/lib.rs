@@ -52,8 +52,50 @@ impl std::fmt::Display for WorkingDirScopeError {
     }
 }
 
+/// The pasted-image cache directory (`$SHANNON_HOME/cache/pasted/`, default
+/// `~/.shannon/cache/pasted/`) — the single narrow exception to the
+/// working-dir attachment boundary, shared by `save_pasted_image` (writer)
+/// and [`classify_path_in_working_dir`] (reader gate) so the two can never
+/// disagree about where pasted images live.
+pub(crate) fn pasted_image_cache_dir() -> Option<PathBuf> {
+    if let Ok(home) = std::env::var("SHANNON_HOME") {
+        return Some(PathBuf::from(home).join("cache").join("pasted"));
+    }
+    dirs::home_dir().map(|home| home.join(".shannon").join("cache").join("pasted"))
+}
+
+/// Whether the canonicalized `path` sits inside the pasted-image cache
+/// directory. Both sides are canonicalized (symlinks resolved), and
+/// `Path::starts_with` compares whole components — so a sibling like
+/// `cache/pasted-evil` or a planted symlink pointing elsewhere can never
+/// match.
+fn is_in_pasted_image_cache(canonical: &Path) -> bool {
+    pasted_image_cache_dir()
+        .and_then(|dir| dir.canonicalize().ok())
+        .is_some_and(|dir| canonical.starts_with(dir))
+}
+
 /// Typed variant of [`resolve_path_in_working_dir`] — same resolution and
 /// the same security boundary, but the caller can classify the rejection.
+///
+/// G3b P1-6 fix — one NARROW exception to the boundary: files under
+/// `$SHANNON_HOME/cache/pasted/` classify as in-scope even though they are
+/// outside the working directory. This is safe by construction, not a
+/// widened hole:
+///   1. That directory's contents are written ONLY by the backend's
+///      `save_pasted_image` from the user's own clipboard — bytes the
+///      webview already holds — so allowing the attachment pipeline to read
+///      them back grants no access the frontend did not already have
+///      (no arbitrary-path read escalation).
+///   2. The check runs on the fully CANONICALIZED path (symlinks resolved):
+///      a symlink planted in the cache pointing at `~/.ssh/id_rsa` resolves
+///      outside and is still refused.
+///   3. The allow-domain is exactly this one directory — sibling caches
+///      (`cache/extracted/…`) and every other `$SHANNON_HOME` path remain
+///      outside and refused.
+///
+/// Both the `check_attachment_paths` preflight and the `send_message` gate
+/// go through this one classifier, so they stay in agreement automatically.
 pub(crate) fn classify_path_in_working_dir(
     path: &str,
     working_dir: &Path,
@@ -70,6 +112,12 @@ pub(crate) fn classify_path_in_working_dir(
     let canonical = resolved
         .canonicalize()
         .map_err(|e| WorkingDirScopeError::Unresolvable(format!("{e}")))?;
+    // Pasted-image cache exception FIRST: it is in scope regardless of the
+    // configured working directory (see the doc comment for why this is
+    // safe and narrow).
+    if is_in_pasted_image_cache(&canonical) {
+        return Ok(canonical);
+    }
     let canonical_cwd = working_dir
         .canonicalize()
         .map_err(|e| WorkingDirScopeError::InvalidWorkingDir(format!("{e}")))?;
@@ -292,6 +340,112 @@ pub mod inbox_session_events;
 /// P0-2 — desktop goal runner + Tasks-page run-card commands.
 #[cfg(feature = "tauri")]
 pub mod goal_commands;
+
+/// G3b fix round 1 (C1) — tests for the pasted-image cache allow-domain in
+/// [`classify_path_in_working_dir`].
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// These three tests all redirect `SHANNON_HOME`; cargo runs them in
+    /// parallel threads of one process, so they serialize on this lock (a
+    /// module-local version of the repo-wide SHANNON_HOME test convention —
+    /// cross-module serialization with the document_parse/commands tests is
+    /// the recorded backlog item, untouched here).
+    static SHANNON_HOME_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+    /// Redirect `SHANNON_HOME` at a tempdir for the duration of `f` and
+    /// restore it afterwards (same save/restore pattern as the
+    /// commands.rs / document_parse tests). The pasted-image allow-domain is
+    /// derived from this variable, so the tests control it end to end.
+    fn with_temp_shannon_home<T>(f: impl FnOnce(&Path) -> T) -> T {
+        let _guard = SHANNON_HOME_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let home = tempfile::tempdir().expect("shannon home tempdir");
+        let prev = std::env::var("SHANNON_HOME").ok();
+        unsafe { std::env::set_var("SHANNON_HOME", home.path()) };
+        let out = f(home.path());
+        match prev {
+            Some(p) => unsafe { std::env::set_var("SHANNON_HOME", p) },
+            None => unsafe { std::env::remove_var("SHANNON_HOME") },
+        }
+        out
+    }
+
+    /// G3b fix round 1 (C1) — a file inside `$SHANNON_HOME/cache/pasted/`
+    /// classifies as in-scope even with a completely different working
+    /// directory configured: this is what makes a pasted image usable
+    /// end-to-end (preflight chip + send gate go through this classifier).
+    #[test]
+    fn pasted_image_cache_is_in_scope_outside_the_working_dir() {
+        with_temp_shannon_home(|home| {
+            let pasted = home.join("cache").join("pasted");
+            std::fs::create_dir_all(&pasted).expect("mkdir pasted");
+            let img = pasted.join("1730000000-deadbeef.png");
+            std::fs::write(&img, b"png").expect("write image");
+
+            let workdir = tempfile::tempdir().expect("workdir");
+            let got = classify_path_in_working_dir(&img.to_string_lossy(), workdir.path())
+                .expect("pasted cache path must classify in-scope");
+            assert_eq!(got, img.canonicalize().expect("canonical"));
+        });
+    }
+
+    /// The allow-domain is EXACTLY `cache/pasted`: the sibling extracted-text
+    /// cache, sibling directories (even `pasted-evil`), the cache root itself
+    /// and any other `$SHANNON_HOME` path stay outside the boundary.
+    #[test]
+    fn allow_domain_is_exactly_cache_pasted() {
+        with_temp_shannon_home(|home| {
+            let extracted = home.join("cache").join("extracted");
+            std::fs::create_dir_all(&extracted).expect("mkdir extracted");
+            let txt = extracted.join("abc.txt");
+            std::fs::write(&txt, b"text").expect("write");
+            let settings = home.join("settings.json");
+            std::fs::write(&settings, b"{}").expect("write");
+            let sibling = home.join("cache").join("pasted-evil");
+            std::fs::create_dir_all(&sibling).expect("mkdir sibling");
+            let evil = sibling.join("x.png");
+            std::fs::write(&evil, b"png").expect("write");
+            let loose = home.join("cache").join("loose.png");
+            std::fs::write(&loose, b"png").expect("write");
+
+            let workdir = tempfile::tempdir().expect("workdir");
+            for path in [&txt, &settings, &evil, &loose] {
+                let err = classify_path_in_working_dir(&path.to_string_lossy(), workdir.path())
+                    .expect_err("outside the narrow pasted domain must stay refused");
+                assert!(
+                    matches!(err, WorkingDirScopeError::OutsideWorkingDir(_)),
+                    "{path:?} -> {err:?}"
+                );
+            }
+        });
+    }
+
+    /// The check runs on the CANONICALIZED path: a symlink planted inside
+    /// the pasted cache that points at a file outside the domain resolves to
+    /// its target and stays refused (no planted-symlink read escalation).
+    #[cfg(unix)]
+    #[test]
+    fn symlink_inside_pasted_cache_escaping_outside_is_refused() {
+        with_temp_shannon_home(|home| {
+            let pasted = home.join("cache").join("pasted");
+            std::fs::create_dir_all(&pasted).expect("mkdir pasted");
+            let secret_dir = tempfile::tempdir().expect("secret dir");
+            let secret = secret_dir.path().join("id_rsa");
+            std::fs::write(&secret, b"PRIVATE KEY").expect("write secret");
+            let link = pasted.join("innocent.png");
+            std::os::unix::fs::symlink(&secret, &link).expect("plant symlink");
+
+            let workdir = tempfile::tempdir().expect("workdir");
+            let err = classify_path_in_working_dir(&link.to_string_lossy(), workdir.path())
+                .expect_err("symlink escape must stay refused");
+            assert!(
+                matches!(err, WorkingDirScopeError::OutsideWorkingDir(_)),
+                "{err:?}"
+            );
+        });
+    }
+}
 
 /// P1-2 — desktop best-of-N batch runs: parallel worktree orchestration
 /// commands (start/list/diff/adopt/discard) + the `batch:updated` source.

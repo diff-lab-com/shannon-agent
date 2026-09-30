@@ -866,7 +866,11 @@ pub(crate) fn collect_attachments(
         // Security: reject any attachment path that resolves outside the
         // working directory. A compromised frontend must not be able to
         // exfiltrate `~/.ssh/id_rsa`, `~/.shannon/desktop/config.json`, or
-        // any other sensitive file via the attachment pipeline.
+        // any other sensitive file via the attachment pipeline. (One narrow,
+        // documented exception: `$SHANNON_HOME/cache/pasted/` — where the
+        // backend itself persists clipboard images the webview already
+        // holds. See `classify_path_in_working_dir` in lib.rs for why that
+        // is safe and how narrowly it is scoped.)
         let canonical = match crate::classify_path_in_working_dir(path, working_dir) {
             Ok(c) => c,
             Err(crate::WorkingDirScopeError::OutsideWorkingDir(_)) => {

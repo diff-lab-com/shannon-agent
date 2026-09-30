@@ -367,21 +367,11 @@ pub(crate) fn extraction_report_for_path(
 
 // ── G3b P1-6: composer clipboard-image paste ────────────────────────────────
 
-/// Directory pasted images are persisted to, honoring `SHANNON_HOME` (same
-/// convention as `document_parse::extracted_cache_dir`). `None` when no home
-/// can be resolved — the command then fails with an explicit error instead
-/// of guessing a location.
-fn pasted_image_dir() -> Option<PathBuf> {
-    if let Ok(home) = std::env::var("SHANNON_HOME") {
-        return Some(PathBuf::from(home).join("cache").join("pasted"));
-    }
-    Some(
-        dirs::home_dir()?
-            .join(".shannon")
-            .join("cache")
-            .join("pasted"),
-    )
-}
+// The pasted-image directory is `crate::pasted_image_cache_dir()` (lib.rs):
+// ONE definition shared with `classify_path_in_working_dir`, so the writer
+// (this command) and the attachment boundary (preflight + send gate) can
+// never disagree about where pasted images live — that agreement is exactly
+// what makes the boundary exception safe.
 
 /// Normalize a pasted-image extension to the canonical form used for the
 /// persisted file name. Only formats the multimodal pipeline accepts are
@@ -413,8 +403,13 @@ fn pasted_image_magic_matches(ext: &str, bytes: &[u8]) -> bool {
 /// Core of [`save_pasted_image`] — pure over `(base_dir, data, ext)` so the
 /// validation ladder is unit-testable without a Tauri runtime. Order:
 /// extension allow-list → shared 10 MiB image cap (pre-decode estimate,
-/// same helper as every attachment entry path) → base64 decode → magic-byte
-/// check → write `<millis>-<rand8>.<ext>` into `base_dir`.
+/// same helper as every attachment entry path) → base64 decode → post-decode
+/// exact re-check on the REAL bytes (`validate_decoded_size` — the estimate
+/// above is deliberately padded; this is the authoritative gate, mirroring
+/// the other entry paths' post-read re-check; refusing here happens BEFORE
+/// any file is created, so an over-limit payload can never leave even a
+/// partial artifact on disk) → magic-byte check → write
+/// `<millis>-<rand8>.<ext>` into `base_dir`.
 fn save_pasted_image_inner(
     base_dir: &Path,
     data_base64: &str,
@@ -433,6 +428,11 @@ fn save_pasted_image_inner(
     if bytes.is_empty() {
         return Err("pasted image is empty".into());
     }
+    // Post-decode exact-size re-check (G3b fix round 1 / M1). Runs before
+    // any I/O: over-limit means NOTHING is written, so no half-written file
+    // needs cleanup.
+    shannon_core::attachments::validate_decoded_size(bytes.len())
+        .map_err(|e| format!("pasted image rejected: {e}"))?;
     if !pasted_image_magic_matches(ext, &bytes) {
         return Err(format!(
             "pasted image data does not match its declared {ext} format"
@@ -459,7 +459,7 @@ fn save_pasted_image_inner(
 /// only calls it for `image/*` clipboard items.
 #[tauri::command]
 pub async fn save_pasted_image(data_base64: String, ext: String) -> Result<String, String> {
-    let dir = pasted_image_dir()
+    let dir = crate::pasted_image_cache_dir()
         .ok_or_else(|| "cannot resolve a home directory for the pasted-image cache".to_string())?;
     let path =
         tokio::task::spawn_blocking(move || save_pasted_image_inner(&dir, &data_base64, &ext))
@@ -511,7 +511,10 @@ pub(crate) fn check_attachment_paths_inner(
 /// Shared verdict logic of the preflight: `None` = `send_message` will
 /// accept this path; `Some(reason)` = the refusal the user will (now) see.
 /// Mirrors `collect_attachments` gate-for-gate on purpose — the two must
-/// never disagree about a path.
+/// never disagree about a path. Both go through
+/// `classify_path_in_working_dir`, so the one narrow boundary exception
+/// (`$SHANNON_HOME/cache/pasted/` — pasted clipboard images; see its doc in
+/// lib.rs) applies to preflight and send alike.
 fn classify_attachment_path(
     path: &str,
     working_dir: &Path,
@@ -1708,6 +1711,31 @@ mod tests {
             std::fs::read_dir(dir.path()).expect("read dir").count(),
             0,
             "nothing may be written for an oversized payload"
+        );
+    }
+
+    #[test]
+    fn save_pasted_image_post_decode_recheck_catches_estimate_slack() {
+        // G3b fix round 1 (M1) — the pre-decode estimate is deliberately
+        // padded, so a payload can slip past it while its REAL decoded size
+        // is over the cap: `MAX_IMAGE_BYTES + 1` bytes encode to a base64
+        // length whose estimate is exactly at/under the limit. The exact
+        // `validate_decoded_size` re-check (the same post-read gate every
+        // other attachment entry path applies) must catch it — and because
+        // it runs before any I/O, not even a partial file may exist.
+        let dir = tempfile::tempdir().expect("tempdir");
+        let bytes = vec![0x89u8; shannon_core::attachments::MAX_IMAGE_BYTES + 1];
+        let encoded = b64(&bytes);
+        // Sanity: this payload genuinely passes the padded estimate.
+        shannon_core::attachments::validate_base64_size(encoded.len())
+            .expect("estimate must pass for this payload");
+        let err = save_pasted_image_inner(dir.path(), &encoded, "png")
+            .expect_err("decoded size over the cap");
+        assert!(err.contains("pasted image rejected"), "{err}");
+        assert_eq!(
+            std::fs::read_dir(dir.path()).expect("read dir").count(),
+            0,
+            "no partial artifact may survive a rejected payload"
         );
     }
 
