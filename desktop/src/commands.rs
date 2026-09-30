@@ -428,6 +428,13 @@ impl AppState {
         )
     }
 
+    /// G1 P0-1.2 — the shared MCP process pool handle. `pub` accessor so the
+    /// bin crate's `main.rs` setup can seed the pool at startup (the field
+    /// itself stays crate-private).
+    pub fn mcp_pool(&self) -> Arc<McpProcessPool> {
+        self.mcp_pool.clone()
+    }
+
     /// Create a new AppState, initializing the LLM client from env/config.
     pub fn new() -> Self {
         let desktop_config = config::load_config();
@@ -986,6 +993,19 @@ pub async fn send_message(
     let effective_provider = client_config.provider.to_string();
     let client = LlmClient::new(client_config);
     let tools = state.tools.clone();
+
+    // G1 P0-1.3 — chat tool assembly: register every connected MCP server's
+    // tools (`tools/list`) into the shared registry as
+    // `mcp__<server>__<tool>`. The pool is seeded at app setup; when it is
+    // cold or has no healthy servers this is a zero-cost no-op (identical
+    // behavior to before). Repeat turns skip already-registered names.
+    let mcp_tools_registered = crate::mcp::assemble_mcp_tools(&state.mcp_pool, &tools).await;
+    if mcp_tools_registered > 0 {
+        tracing::debug!(
+            count = mcp_tools_registered,
+            "assembled MCP tools into chat registry"
+        );
+    }
 
     // Create PermissionManager from shared state with config-based approval mode
     let desktop_cfg = state.desktop_config.read().await;
