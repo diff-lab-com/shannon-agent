@@ -84,6 +84,17 @@ const COMPOSER_PREFILL_EVENT = 'shannon:composer-prefill';
 const DEFAULT_FONT_SIZE = 12;
 const DEFAULT_SCROLLBACK = 5000;
 
+/**
+ * US6 follow-up: in-stream dim notice written BEFORE the replayed history
+ * bytes when the backend's snapshot reports `truncated: true` (the 1 MiB
+ * replay ring evicted older scrollback). Mirrors the backend's own
+ * in-stream notices (ASCII text + SGR-dim wrap, established pattern in
+ * `terminal_commands.rs`) — deliberately NOT baked into `data`, whose
+ * decoded length keys the replay drop predicate.
+ */
+const REPLAY_TRUNCATION_NOTICE =
+  '\r\n\u{1b}[2m[shannon: replayed only the most recent output — earlier scrollback was dropped]\u{1b}[0m\r\n';
+
 /** Monospace fallback stack (brief: 字体回退等宽栈). */
 const FONT_FAMILY =
   "'JetBrains Mono', 'Fira Code', 'Cascadia Code', Menlo, Consolas, 'DejaVu Sans Mono', monospace";
@@ -355,19 +366,30 @@ export function TerminalPanel({ projectDir }: TerminalPanelProps) {
     // be processed after the listeners attached, landing the same bytes
     // in both the snapshot and the queue). The real invariant:
     // history ⊕ (queued events with seq > endSeq), in order, no loss, no
-    // duplication. Events without a seq (demo backend, legacy payloads)
-    // or a snapshot without endSeq fall back to flush-everything.
+    // duplication. Events without a seq (demo backend, legacy payloads),
+    // a snapshot without endSeq, or an EMPTY snapshot (the `("", 0)`
+    // reaped-session shape — nothing replayed, so nothing may be
+    // dropped) fall back to flush-everything.
     void (async () => {
       await Promise.all([outputReady, exitReady]);
       if (disposed) return;
-      let history: { data: string; endSeq?: number } | null = null;
+      let history: { data: string; endSeq?: number; truncated?: boolean } | null = null;
       try {
         history = await api.terminalHistory(info.terminalId);
       } catch {
         /* no replay backend — live stream only */
       }
       if (disposed) return;
-      if (history && history.data) term.write(decodeTerminalOutput(history.data));
+      // `data` stays pure bytes: the drop predicate below keys off the
+      // DECODED length (base64 of "" decodes to zero bytes).
+      const decodedHistory = history
+        ? decodeTerminalOutput(history.data)
+        : new Uint8Array(0);
+      // Truncated ring (additive flag): announce the evicted scrollback
+      // BEFORE the replayed tail — in-stream, mirroring the backend's own
+      // dim notices, never baked into `data`.
+      if (history?.truncated) term.write(REPLAY_TRUNCATION_NOTICE);
+      if (decodedHistory.length > 0) term.write(decodedHistory);
       const endSeq = history?.endSeq;
       const queued = entry.pendingLive;
       entry.pendingLive = [];
@@ -375,7 +397,17 @@ export function TerminalPanel({ projectDir }: TerminalPanelProps) {
       for (const { bytes, seq } of queued) {
         // Already replayed by the snapshot → drop; strictly-newer events
         // (or anything unsequenced) flush in arrival order.
-        if (seq != null && endSeq != null && seq <= endSeq) continue;
+        //
+        // seq-0 overload: the predicate applies ONLY to a non-empty
+        // snapshot. An empty snapshot also reports `endSeq: 0` (unknown
+        // id / reaped session) but contains none of the queued bytes —
+        // dropping a queued seq-0 event there would lose the terminal's
+        // final output. A non-empty snapshot with `endSeq: 0` (exactly
+        // chunk 0) keeps dropping it.
+        if (
+          decodedHistory.length > 0
+          && seq != null && endSeq != null && seq <= endSeq
+        ) continue;
         term.write(bytes);
       }
       term.scrollToBottom();
@@ -665,6 +697,12 @@ export function TerminalPanel({ projectDir }: TerminalPanelProps) {
   const tabButtonRefs = useRef<Map<string, HTMLButtonElement>>(new Map());
 
   const onTablistKeyDown = useCallback((e: ReactKeyboardEvent) => {
+    // APG scoping: the tablist container also hosts the per-tab close
+    // buttons, and the WAI-ARIA tabs pattern scopes arrow/Home/End to the
+    // TAB buttons. A keydown on anything else (a focused close button,
+    // the scroll container itself) must neither switch tabs nor yank
+    // focus onto the roving-tabindex target.
+    if ((e.target as HTMLElement).getAttribute('role') !== 'tab') return;
     if (visibleTabs.length === 0) return;
     const ids = visibleTabs.map(tab => tab.info.terminalId);
     const current = activeId ? ids.indexOf(activeId) : -1;

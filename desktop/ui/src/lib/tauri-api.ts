@@ -2850,8 +2850,13 @@ export async function terminalSetSettings(settings: TerminalSettings): Promise<T
  * events with `seq <= endSeq` and flushes the rest, so the snapshot and
  * the live stream stitch without loss or duplication. Absent on the demo
  * backend → flush-everything fallback.
+ *
+ * `truncated` (additive) is true when the backend's 1 MiB replay ring
+ * evicted older bytes: `data` is only the newest tail, and the replay
+ * consumer prepends an in-stream dim notice so the gap is visible.
+ * Absent on legacy/demo payloads → treated as false (nothing known lost).
  */
-export async function terminalHistory(terminalId: string): Promise<{ data: string; endSeq?: number }> {
+export async function terminalHistory(terminalId: string): Promise<{ data: string; endSeq?: number; truncated?: boolean }> {
   return invoke('terminal_history', { terminalId })
 }
 

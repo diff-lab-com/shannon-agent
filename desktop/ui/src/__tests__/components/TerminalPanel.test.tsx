@@ -433,6 +433,26 @@ describe('TerminalPanel (tab management)', () => {
     await waitFor(() => expect(tabC.getAttribute('aria-selected')).toBe('true'))
   })
 
+  it('does not move the selection when arrow keys land on a close button', async () => {
+    // P2-3 follow-up (APG scoping): the tablist container also hosts the
+    // per-tab close buttons — the WAI-ARIA tabs pattern scopes the
+    // arrow/Home/End keys to the TAB buttons. ArrowRight on a focused
+    // close button must neither switch tabs nor yank focus.
+    vi.mocked(api.terminalList).mockResolvedValue([info('t-a'), info('t-b', '/other')])
+    render(<TerminalPanel projectDir={null} />)
+    fireEvent.keyDown(window, { key: '`', ctrlKey: true })
+    const tabB = await screen.findByRole('tab', { name: /other/ })
+    expect(tabB.getAttribute('aria-selected')).toBe('true')
+    const closeA = screen.getAllByRole('button', { name: /close terminal:/i })[0]!
+    closeA.focus()
+    expect(closeA).toHaveFocus()
+    fireEvent.keyDown(closeA, { key: 'ArrowRight' })
+    // Let any (wrongful) rAF focus steal settle.
+    await new Promise((r) => setTimeout(r, 25))
+    expect(tabB.getAttribute('aria-selected')).toBe('true')
+    expect(closeA).toHaveFocus()
+  })
+
   it('wires the active tab to the terminal surface via aria-controls/aria-labelledby', async () => {
     // P2-3: the terminal surface is the tabpanel; the active tab names it
     // and it names the active tab back. projectDir={null} keeps both tabs
@@ -799,6 +819,44 @@ describe('TerminalPanel (scrollback replay — US6)', () => {
     expect(rendered(h.terminals[0])).not.toContain('DUP-2')
   })
 
+  it('flushes a queued seq-0 event when the snapshot is EMPTY (reaped-session shape)', async () => {
+    // seq-0 overload, regression: `("", endSeq: 0)` is the shape history()
+    // answers for an unknown id / reaped session — an EMPTY snapshot. seq 0
+    // is also a legitimate watermark (see the guard-rail test below), but
+    // an empty snapshot contains none of the queued event's bytes, so the
+    // event must be WRITTEN (it used to be dropped as "already replayed",
+    // losing the terminal's final output).
+    let resolveHistory: (v: { data: string; endSeq?: number }) => void = () => {}
+    vi.mocked(api.terminalHistory).mockImplementation(
+      () => new Promise((resolve) => { resolveHistory = resolve }),
+    )
+    await openPanel()
+    await waitFor(() => expect(h.terminals.length).toBe(1))
+    const { terminalId } = await vi.mocked(api.terminalSpawn).mock.results[0]!.value
+    h.outputHandler?.({ terminalId, data: encode('FINAL-CHUNK'), seq: 0 })
+    expect(rendered(h.terminals[0])).toBe('')
+    resolveHistory({ data: '', endSeq: 0 })
+    await waitFor(() => expect(rendered(h.terminals[0])).toBe('FINAL-CHUNK'))
+  })
+
+  it('still drops a queued seq-0 event when a NON-EMPTY snapshot covers chunk 0', async () => {
+    // seq-0 overload, guard-rail: a snapshot with bytes and endSeq 0
+    // legitimately contains exactly chunk 0 — the drop predicate must keep
+    // applying there (writing the queued seq-0 event would duplicate it).
+    let resolveHistory: (v: { data: string; endSeq?: number }) => void = () => {}
+    vi.mocked(api.terminalHistory).mockImplementation(
+      () => new Promise((resolve) => { resolveHistory = resolve }),
+    )
+    await openPanel()
+    await waitFor(() => expect(h.terminals.length).toBe(1))
+    const { terminalId } = await vi.mocked(api.terminalSpawn).mock.results[0]!.value
+    h.outputHandler?.({ terminalId, data: encode('CHUNK-ZERO'), seq: 0 })
+    h.outputHandler?.({ terminalId, data: encode('CHUNK-ONE'), seq: 1 })
+    expect(rendered(h.terminals[0])).toBe('')
+    resolveHistory({ data: encode('CHUNK-ZERO'), endSeq: 0 })
+    await waitFor(() => expect(rendered(h.terminals[0])).toBe('CHUNK-ZEROCHUNK-ONE'))
+  })
+
   it('flushes seq-marked queued events when the snapshot carries no endSeq (legacy backend)', async () => {
     // No endSeq on the response (demo backend, legacy payload): the
     // conservative fallback keeps the old flush-everything behavior.
@@ -812,6 +870,26 @@ describe('TerminalPanel (scrollback replay — US6)', () => {
     h.outputHandler?.({ terminalId, data: encode('SEQD-LEGACY'), seq: 5 })
     resolveHistory({ data: encode('HIST') })
     await waitFor(() => expect(rendered(h.terminals[0])).toBe('HISTSEQD-LEGACY'))
+  })
+
+  it('writes the replay truncation notice BEFORE the history bytes when truncated', async () => {
+    // Additive `truncated` flag: the backend ring evicted older scrollback,
+    // so the replay must not restore silently — the dim in-stream notice
+    // goes out as its own write BEFORE the history bytes (order observable
+    // per mocked write call), and `data` stays pure bytes (never baked into
+    // the notice).
+    vi.mocked(api.terminalHistory).mockResolvedValue({
+      data: encode('TAIL-ONLY'), endSeq: 9, truncated: true,
+    })
+    await openPanel()
+    await waitFor(() => expect(h.terminals.length).toBe(1))
+    await waitFor(() => expect(h.terminals[0].written.length).toBe(2))
+    const notice = new TextDecoder().decode(h.terminals[0].written[0]!)
+    const history = new TextDecoder().decode(h.terminals[0].written[1]!)
+    expect(notice).toBe(
+      '\r\n\u{1b}[2m[shannon: replayed only the most recent output — earlier scrollback was dropped]\u{1b}[0m\r\n',
+    )
+    expect(history).toBe('TAIL-ONLY')
   })
 
   it('issues the history fetch only after both terminal listeners resolved', async () => {
