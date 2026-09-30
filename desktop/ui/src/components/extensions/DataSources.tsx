@@ -2,15 +2,18 @@ import { useCallback, useEffect, useState } from "react";
 import { useOutletContext } from "react-router-dom";
 import { useIntl } from 'react-intl'
 import { useNavigate } from 'react-router-dom'
+import { toast } from 'sonner'
 import {
   listDataSourceCatalog,
   listInstalledDataSources,
   installDataSource,
   uninstallDataSource,
+  queryDataSource,
   type DataSourceCatalogEntry,
   type DataSourceField,
   type InstalledDataSource,
 } from "@/lib/tauri-api";
+import { toastError } from "@/lib/errorToast";
 import DataSourcesQuery from "./DataSourcesQuery";
 import { ConfirmDialog } from "@/components/ui/confirm-dialog";
 import LoadingState from "@/components/ui/loading-state";
@@ -76,6 +79,8 @@ export default function DataSources() {
   const [feedback, setFeedback] = useState<{ slug: string; msg: string; ok: boolean } | null>(null);
   const [busySlug, setBusySlug] = useState<string | null>(null);
   const [removeTarget, setRemoveTarget] = useState<string | null>(null);
+  // Office Wave 2 B3 — "Fetch now" on installed obsidian/email_imap rows.
+  const [fetchingSlug, setFetchingSlug] = useState<string | null>(null);
 
   const refreshCatalog = useCallback(() => {
     let cancelled = false;
@@ -177,6 +182,21 @@ export default function DataSources() {
       setFeedback({ slug: `uninstall:${slug}`, msg: String(err), ok: false });
     } finally {
       setBusySlug(null);
+    }
+  }
+
+  // Office Wave 2 B3 — same command the query panel issues
+  // (query_data_source); an empty query means "list everything" in the
+  // fetcher convention (`if !query.is_empty()` filters).
+  async function handleFetchNow(row: InstalledDataSource) {
+    setFetchingSlug(row.slug);
+    try {
+      const result = await queryDataSource(row.slug, '');
+      toast.success(t('extensions.datasources.query.resultsCount', { count: result.total }));
+    } catch (err) {
+      toastError(t('extensions.datasources.query.errorTitle'), err);
+    } finally {
+      setFetchingSlug(null);
     }
   }
 
@@ -348,16 +368,31 @@ export default function DataSources() {
                     {row.path}
                   </div>
                 </div>
-                <Button
-                  variant="destructive"
-                  size="sm"
-                  type="button"
-                  onClick={() => setRemoveTarget(row.slug)}
-                  disabled={busySlug === `uninstall:${row.slug}`}
-                  className="bg-error-container/40 text-on-error-container hover:bg-error-container/70"
-                >
-                  {busySlug === `uninstall:${row.slug}` ? "…" : t('extensions.datasources.remove')}
-                </Button>
+                <div className="flex gap-xs shrink-0">
+                  {FETCHABLE_KINDS.has(row.kind) && (
+                    <Button
+                      variant="secondary"
+                      size="sm"
+                      type="button"
+                      onClick={() => void handleFetchNow(row)}
+                      disabled={fetchingSlug === row.slug}
+                      data-testid={`fetch-now-${row.slug}`}
+                    >
+                      <span className="material-symbols-outlined icon-sm" aria-hidden="true">sync</span>
+                      {fetchingSlug === row.slug ? "…" : t('office.sources.fetchNow')}
+                    </Button>
+                  )}
+                  <Button
+                    variant="destructive"
+                    size="sm"
+                    type="button"
+                    onClick={() => setRemoveTarget(row.slug)}
+                    disabled={busySlug === `uninstall:${row.slug}`}
+                    className="bg-error-container/40 text-on-error-container hover:bg-error-container/70"
+                  >
+                    {busySlug === `uninstall:${row.slug}` ? "…" : t('extensions.datasources.remove')}
+                  </Button>
+                </div>
               </div>
             ))}
           </div>
@@ -410,8 +445,12 @@ function AdapterCard({
   const fields: DataSourceField[] = entry.metadata.fields ?? [];
   const kind = (entry.metadata.kind as string | undefined) ?? "";
   const accent = ACCENT_BY_KIND[kind] ?? ACCENT_DEFAULT;
-  const isQueryPending = CONFIG_ONLY_KINDS.has(kind) || QUERY_IN_DEV_KINDS.has(kind);
-  const isQueryInDev = QUERY_IN_DEV_KINDS.has(kind);
+  // Office Wave 2 B3 — only the config-only kinds (slack/discord/telegram/
+  // rss/ical) still lack a Rust fetcher. obsidian/email_imap graduated from
+  // Wave 1's QUERY_IN_DEV_KINDS: dispatch() handles them now, so they wear
+  // the Verified badge again and pre-install no longer shows the coming-soon
+  // hint.
+  const isQueryPending = CONFIG_ONLY_KINDS.has(kind);
   return (
     <div className="relative overflow-hidden rounded-2xl border border-outline-variant/30 bg-surface-container-lowest hover:border-primary/40 hover:shadow-e3 transition-all flex flex-col group">
       <div className={cn("h-1 w-full bg-gradient-to-r", accent.bar)} />
@@ -428,14 +467,6 @@ function AdapterCard({
             <span className="text-label-xs px-xs py-[1px] rounded-full font-bold bg-secondary-container text-on-secondary-container shrink-0 inline-flex items-center gap-[4px]" title={t('extensions.datasources.queryComingSoonHint')}>
               <span className="material-symbols-outlined icon-xs">schedule</span>
               {t('extensions.datasources.queryComingSoon')}
-            </span>
-          ) : isQueryInDev && isInstalled ? (
-            // Office Wave 1 A4' — configured but the Rust dispatch has no
-            // fetcher for this kind yet (falls through to UnknownKind).
-            // Same secondary palette as the coming-soon badge, distinct copy.
-            <span className="text-label-xs px-xs py-[1px] rounded-full font-bold bg-secondary/15 text-secondary shrink-0 inline-flex items-center gap-[4px]" title={t('extensions.datasources.queryComingSoonHint')}>
-              <span className="material-symbols-outlined icon-xs">schedule</span>
-              {t('extensions.datasources.queryInDev')}
             </span>
           ) : (
             <span className="text-label-xs px-xs py-[1px] rounded-full font-bold bg-primary-container text-on-primary-container shrink-0">
@@ -533,16 +564,15 @@ function AdapterCard({
 
 /// Kinds whose query path is stubbed (config-only). Surfaced as a "coming
 /// soon" badge in the card header so users know install works today.
+/// Office Wave 2 B3 — obsidian/email_imap no longer belong here: the Rust
+/// dispatch() ships real fetchers for them, so Wave 1 A4's QUERY_IN_DEV
+/// honesty family is retired and both kinds wear Verified again.
 const CONFIG_ONLY_KINDS = new Set(["slack", "discord", "telegram", "rss", "ical"]);
 
-/// Office Wave 1 A4' honesty fix — obsidian/email_imap install and persist
-/// config fine, but the Rust `dispatch()` has no fetcher for them yet: the
-/// query falls through to `UnknownKind`. They join the query-not-ready
-/// family (pre-install: "Query coming soon" + hint instead of a bare
-/// "Verified"), and once installed they show "Configured · query in
-/// development" instead of "Verified" so the badge never promises a working
-/// query path.
-const QUERY_IN_DEV_KINDS = new Set(["obsidian", "email_imap"]);
+/// Office Wave 2 B3 — kinds with a real query fetcher behind
+/// query_data_source. Installed rows of these kinds get a "Fetch now"
+/// button (empty query = list everything, the fetcher convention).
+const FETCHABLE_KINDS = new Set(["obsidian", "email_imap"]);
 
 const ACCENT_DEFAULT = {
   bar: "from-primary/60 to-primary/20",

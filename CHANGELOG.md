@@ -4,6 +4,64 @@ All notable changes to Shannon Code are documented here. Entries are grouped by 
 
 ## [Unreleased] — §4.14 W1-P2 · OTLP bridge + full RedactionPolicy + desktop Turn Timeline
 
+### Office Wave 3 — differentiation pass (2026-09-29)
+
+- **C2** batch table runs: CSV file cards gain "Batch run" — a per-row
+  instruction dialog that drafts a structured row-by-row prompt (results land
+  in `<name>-enriched.<ext>`).
+- **C3** companion window (Quick Capture): tray-menu-launched always-on-top
+  420x320 window; prompts cross to the main window via targeted Tauri events
+  and land as composer drafts. Minimal capability (`core:event`) for the
+  companion window; ACL coverage extended. Global hotkey wiring left for the
+  existing shortcuts system.
+- **C4** session sources: RightDock context tab gains a per-session source
+  list (paths/URLs) with one-click cited references into the composer.
+- **C5** `style-extract` bundled skill: extracts theme fonts / color scheme /
+  layouts / header-footer facts from an existing .pptx or .docx into brand
+  notes (python-stdlib read-only, honest degradation; v1 extracts, does not
+  restyle).
+- **C6** timeline HTML export: self-contained standalone export of a turn
+  timeline (inline styles, escaped content) via the save dialog.
+- **C7** Extensions skills page: Productivity grouping pinned to the top of
+  the catalog grid.
+- **C8** citation pills: `[Source: name] (ref)` lines render as clickable
+  pills (path → open, URL → browser), quote/code contexts untouched.
+- **C1** product narrative: `docs/product/office-agent-story.md` plus a
+  website feature entry and README office sections (no email-sending claims).
+- Per review decision, per-page PPT regeneration (C9) remains future work.
+
+### Office Wave 2 — delivery loop: generation, data sources, routing, files (2026-09-29)
+
+- **B1** native `write_xlsx` tool (rust_xlsxwriter 0.99, pure-Rust deflate):
+  model writes real spreadsheets with formulas and typed cells — no host
+  Python required. `xlsx-table` skill now prefers the tool and keeps the
+  stdlib runbook as fallback.
+- **B2 v1** PPT outline builder: composer "+" menu dialog (editable outline,
+  one slide per line) that drops a structured draft into the composer for
+  the user to send — generation itself stays with the ppt skill.
+- **B3 v1** data sources go live: real Obsidian fetcher (vault walk,
+  keyword/recency ranking, hidden-dir/symlink guards) and IMAP fetcher
+  (rustls via rustls-connector on the workspace rustls 0.23 line, timeouts
+  at the socket layer, mailparse body decoding, draft RFC822 builder).
+  Query dispatch now reads `kind` from the `[data_source]` section —
+  previously it read `[config]`, so every data-source query failed with
+  "missing kind" (pre-existing bug, all kinds). Badges: Obsidian/IMAP are
+  genuinely "Verified" again; results gain "Add to chat" (context block
+  into the composer draft) and installed cards a "Fetch now" action.
+- **B4'** `meeting-minutes` bundled skill: .srt/.vtt/.txt transcripts →
+  minutes with decisions/action items (recording pipelines explicitly out
+  of scope).
+- **B5** three productivity routine templates: weekly-report,
+  daily-news-briefing, meeting-notes-archive.
+- **B6'** scheduled routines can notify a configured webhook on completion
+  (`notify_webhook` flag, reuses the desktop webhook config; skipped with
+  a run-log note when unconfigured).
+- **B7'** generated-file cards gain a "Review changes" action wired to the
+  existing RightDock diff view.
+- **B9'** reference-style file library: `/files` page over an append-only
+  index (`~/.shannon/desktop/file-index.json`, scoped + atomic), favorite
+  toggles, missing-file detection, zero data duplication.
+
 ### Office Wave 1.5 — minimal document parsing + paginated injection + PDF preview (2026-09-29)
 
 - **A2'** new `document_parse` module: extracts sectioned text from

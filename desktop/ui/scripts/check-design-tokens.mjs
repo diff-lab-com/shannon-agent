@@ -62,6 +62,7 @@ const ALLOWLIST = [
   'components/terminal/',   // xterm.js API consumes raw hex palettes by contract
   'components/editor/cmTheme.ts', // same contract: CodeMirror's theme extension needs literal palette floors (mirrors xtermTheme)
   'components/artifact/MermaidRenderer.tsx', // hex lives inside a standalone iframe document — parent vars cannot cross
+  'lib/timelineExport.ts', // same contract: standalone exported HTML document — parent vars cannot cross (office Wave 3 C6)
   'components/CommandPalette.tsx', // synonyms field preserves retired terms during the migration window (audit §6.1)
   'lib/mock/',              // demo-mode runtime cssText (not part of the design system)
   // G7 chip migration deferred: files are owned by in-flight parallel PRs

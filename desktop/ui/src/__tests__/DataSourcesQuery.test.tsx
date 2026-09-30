@@ -3,13 +3,31 @@ import { render, screen, waitFor } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import DataSourcesQuery from '@/components/extensions/DataSourcesQuery'
 import * as api from '@/lib/tauri-api'
+import { pushComposerDraft } from '@/lib/composerBridge'
+import { toast } from 'sonner'
 
 // Mock the tauri-api module
 vi.mock('@/lib/tauri-api')
 
+// Office Wave 2 B3 — the composer bridge (window CustomEvent
+// 'shannon:composer-draft') is a sibling deliverable on this branch; mocking
+// it here keeps these tests hermetic either way.
+vi.mock('@/lib/composerBridge', () => ({
+  pushComposerDraft: vi.fn(),
+}))
+
+vi.mock('sonner', () => ({
+  toast: {
+    success: vi.fn(),
+    error: vi.fn(),
+  },
+}))
+
 describe('DataSourcesQuery', () => {
   const mockListInstalledDataSources = vi.mocked(api.listInstalledDataSources)
   const mockQueryDataSource = vi.mocked(api.queryDataSource)
+  const mockPushComposerDraft = vi.mocked(pushComposerDraft)
+  const mockToastSuccess = vi.mocked(toast.success)
 
   beforeEach(() => {
     vi.clearAllMocks()
@@ -242,8 +260,9 @@ describe('DataSourcesQuery', () => {
       await user.type(input, 'test')
       await user.click(searchButton)
 
+      // Office Wave 2 B3 — empty results use the shared office.sources.noResults copy.
       await waitFor(() => {
-        expect(screen.getByText(/no results found/i)).toBeInTheDocument()
+        expect(screen.getByText(/no results for this query/i)).toBeInTheDocument()
       })
     })
   })
@@ -330,6 +349,102 @@ describe('DataSourcesQuery', () => {
         expect(screen.getByText('markdown')).toBeInTheDocument()
         expect(screen.getByRole('link', { name: /open/i })).toHaveAttribute('href', 'https://example.com/react')
       })
+    })
+  })
+
+  // Office Wave 2 B3 — result cards hand their content to the chat composer
+  // as source-attributed context blocks:
+  //   [Source: <title|name>] (<url|path>)
+  //   <body excerpt capped at 2000 chars>
+  describe('Add to chat (Office Wave 2 B3)', () => {
+    beforeEach(() => {
+      mockListInstalledDataSources.mockResolvedValue([
+        {
+          slug: 'obsidian-vault',
+          kind: 'obsidian',
+          name: 'My Notes',
+          path: '/path/to/vault',
+          installed_at: '2024-01-01',
+        },
+      ])
+    })
+
+    async function queryWithItem(item: {
+      id: string
+      title: string
+      body?: string | null
+      url?: string | null
+      kind: string
+      updated_at?: string | null
+    }) {
+      const user = userEvent.setup()
+      mockQueryDataSource.mockResolvedValue({ items: [item], total: 1, has_more: false })
+      render(<DataSourcesQuery />)
+
+      await waitFor(() => {
+        expect(screen.getByLabelText(/select data source/i)).toBeInTheDocument()
+      })
+
+      await user.selectOptions(screen.getByLabelText(/select data source/i), 'obsidian-vault')
+      await user.type(screen.getByPlaceholderText(/enter your search query/i), 'test')
+      await user.click(screen.getByRole('button', { name: /search/i }))
+
+      await waitFor(() => {
+        expect(screen.getByRole('button', { name: /add to chat/i })).toBeInTheDocument()
+      })
+    }
+
+    it('pushes a source-attributed context block into the composer draft', async () => {
+      await queryWithItem({
+        id: 'n1',
+        title: 'Test Note',
+        body: 'This is a test note content',
+        url: 'https://example.com/note',
+        kind: 'markdown',
+        updated_at: null,
+      })
+
+      await userEvent.setup().click(screen.getByRole('button', { name: /add to chat/i }))
+
+      expect(mockPushComposerDraft).toHaveBeenCalledTimes(1)
+      const pushed = mockPushComposerDraft.mock.calls[0][0]
+      expect(pushed).toContain('[Source: Test Note]')
+      expect(pushed).toContain('(https://example.com/note)')
+      expect(pushed).toContain('This is a test note content')
+      expect(mockToastSuccess).toHaveBeenCalledWith('Added to the chat draft')
+    })
+
+    it('falls back to the installed source path when the item has no url', async () => {
+      await queryWithItem({
+        id: 'n2',
+        title: 'Local note',
+        body: 'hello world',
+        url: null,
+        kind: 'markdown',
+        updated_at: null,
+      })
+
+      await userEvent.setup().click(screen.getByRole('button', { name: /add to chat/i }))
+
+      const pushed = mockPushComposerDraft.mock.calls[0][0]
+      expect(pushed).toContain('[Source: Local note] (/path/to/vault)')
+      expect(pushed).toContain('hello world')
+    })
+
+    it('truncates the excerpt at 2000 characters', async () => {
+      await queryWithItem({
+        id: 'n3',
+        title: 'Big Note',
+        body: 'a'.repeat(2500),
+        url: 'https://example.com/big',
+        kind: 'markdown',
+        updated_at: null,
+      })
+
+      await userEvent.setup().click(screen.getByRole('button', { name: /add to chat/i }))
+
+      const pushed = mockPushComposerDraft.mock.calls[0][0]
+      expect(pushed).toBe(`[Source: Big Note] (https://example.com/big)\n${'a'.repeat(2000)}`)
     })
   })
 })

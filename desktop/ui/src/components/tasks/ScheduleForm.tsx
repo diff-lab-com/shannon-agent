@@ -73,6 +73,19 @@ export default function ScheduleForm({ onSubmit, onCancel }: ScheduleFormProps) 
   // cadence, so a duplicate is a recurring cost, not a one-off).
   const [submitting, setSubmitting] = useState(false)
 
+  // B6' routing: copy the run-finished notification to the configured
+  // webhook. Default off; the "no webhook configured" hint only renders on
+  // a CONFIRMED negative probe — not while the probe is in flight.
+  const [notifyWebhook, setNotifyWebhook] = useState(false)
+  const [webhookConfigured, setWebhookConfigured] = useState<boolean | null>(null)
+  useEffect(() => {
+    let cancelled = false
+    api.getWebhookConfig()
+      .then(cfg => { if (!cancelled) setWebhookConfigured(Boolean(cfg?.url?.trim())) })
+      .catch(() => { if (!cancelled) setWebhookConfigured(false) })
+    return () => { cancelled = true }
+  }, [])
+
   // Live cron preview (debounced via requestIdleCallback-free simple effect)
   useEffect(() => {
     if (triggerType !== 'cron' || !cronExpr.trim()) {
@@ -125,6 +138,9 @@ export default function ScheduleForm({ onSubmit, onCancel }: ScheduleFormProps) 
       ...(triggerType === 'cron' ? { cron_expr: cronExpr.trim() } : {}),
       ...(maxFires !== '' ? { max_fires: maxFires } : {}),
       policy: buildPolicy(),
+      // B6' routing — always explicit (false = no webhook copy) so the
+      // backend never guesses the default.
+      notify_webhook: notifyWebhook,
     }
     setSubmitting(true)
     try {
@@ -349,6 +365,27 @@ export default function ScheduleForm({ onSubmit, onCancel }: ScheduleFormProps) 
           className="bg-surface-container-low rounded-lg border border-outline-variant/30 px-sm py-sm text-body-sm focus:outline-none focus:ring-2 focus:ring-primary/30"
         />
       </label>
+
+      {/* B6' routing — copy the run-finished notification to the configured
+          webhook. The setup hint only shows on a confirmed "no webhook"
+          probe (see getWebhookConfig above). */}
+      <div className="flex flex-col gap-xs">
+        <label className="flex items-center gap-sm cursor-pointer">
+          <input
+            type="checkbox"
+            checked={notifyWebhook}
+            onChange={e => setNotifyWebhook(e.target.checked)}
+            data-testid="notify-webhook-checkbox"
+            className="cursor-pointer"
+          />
+          <span className="font-label-md text-on-surface">{t('office.routing.notifyWebhook')}</span>
+        </label>
+        {webhookConfigured === false && (
+          <span className="font-label-sm text-label-xs text-on-surface-variant">
+            {t('office.routing.webhookNone')}
+          </span>
+        )}
+      </div>
 
       {showPolicy ? (
         <div id="schedule-policy" className="grid grid-cols-1 md:grid-cols-2 gap-md p-md bg-surface-container-low/60 rounded-lg border border-outline-variant/20">

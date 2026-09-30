@@ -10,16 +10,19 @@ import { FileCard } from '../FileCard'
 // wrappers FileCard touches are directly assertable. `save` keeps the global
 // setup mock (@tauri-apps/plugin-dialog) — default resolution is null, i.e.
 // the user cancels the dialog.
-const { openWithDefaultApp, revealInFolder, copyFile } = vi.hoisted(() => ({
+const { openWithDefaultApp, revealInFolder, copyFile, registerFileIndexEntry } = vi.hoisted(() => ({
   openWithDefaultApp: vi.fn(),
   revealInFolder: vi.fn(),
   copyFile: vi.fn(),
+  // office Wave 2 B9': the card indexes itself on mount (fire-and-forget).
+  registerFileIndexEntry: vi.fn(),
 }))
 
 vi.mock('@/lib/tauri-api', () => ({
   openWithDefaultApp,
   revealInFolder,
   copyFile,
+  registerFileIndexEntry,
 }))
 
 // B8b: FileCard lazy-loads PdfPreview — stub the chunk so the click test
@@ -44,6 +47,7 @@ beforeEach(() => {
   openWithDefaultApp.mockResolvedValue(undefined)
   revealInFolder.mockResolvedValue(undefined)
   copyFile.mockResolvedValue(undefined)
+  registerFileIndexEntry.mockResolvedValue(undefined)
 })
 
 afterEach(() => {
@@ -126,5 +130,18 @@ describe('FileCard', () => {
   it('non-pdf cards keep the three-action layout without a preview button', () => {
     render(<FileCard {...PROPS} />)
     expect(screen.queryByRole('button', { name: 'Preview' })).not.toBeInTheDocument()
+  })
+
+  // ── office Wave 3 C2: csv-only "Batch run" affordance ──
+
+  it('a csv card shows the Batch run button', () => {
+    render(<FileCard name="inventory.csv" path="/tmp/shannon/inventory.csv" />)
+    expect(screen.getByTestId('file-card-batch-run')).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'Batch run over table rows' })).toBeInTheDocument()
+  })
+
+  it('a docx card has no Batch run button', () => {
+    render(<FileCard {...PROPS} />)
+    expect(screen.queryByTestId('file-card-batch-run')).not.toBeInTheDocument()
   })
 })

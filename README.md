@@ -123,6 +123,14 @@ Hand your agent an objective, not just a prompt:
 - **IM channels** — Telegram / Discord / Slack / 飞书 / 钉钉 inbound: DMs answer directly, group chats respond to @mentions; progress and results push back to the original chat
 - **Mobile dispatch** — pair by QR code, dispatch and approve tasks from your phone
 
+### Office & Knowledge-Worker Workflows
+
+For non-coders, the same engine delivers finished documents, not just chat ([product story](docs/product/office-agent-story.md)):
+
+- **Built-in document skills** — `/docx-report`, `/xlsx-table`, `/ppt-outline`, `/meeting-minutes`, and `/style-extract` (extract brand fonts/colors/layouts from an existing .pptx/.docx) produce real files with zero dependencies; engine-native `write_xlsx` generates spreadsheets with formulas even without python3
+- **Scheduled delivery** — routines hand finished .docx/.xlsx/.pptx artifacts to the triage inbox and route them via IM webhooks or IMAP drafts; Shannon does not send email directly
+- **Data-source grounded** — configured IMAP/Obsidian sources feed briefings with source attribution; transcript files (.srt/.vtt/.txt) become structured meeting minutes
+
 ### Multi-Agent Orchestration
 
 - **Team coordination** — `TeamCreate`, `SendMessage`, task assignment and tracking

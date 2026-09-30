@@ -84,4 +84,15 @@ ignore = [
     # Same crate/family as RUSTSEC-2026-0002; same per-tool situation as
     # RUSTSEC-2026-0221 above (deny.toml dropped it, cargo-audit still hits).
     "RUSTSEC-2026-0253",
+    # `imap` 2.4.1 — unmaintained (office Wave 2 B3, IMAP data-source
+    # fetcher). Accepted deliberately: the protocol surface in use
+    # (LOGIN/SELECT/SEARCH/FETCH/APPEND) is stable, TLS terminates
+    # out-of-crate in rustls-connector on the workspace-pinned rustls
+    # 0.23 line, and the dependency is optional (only active when a user
+    # configures the IMAP data source). Per-tool note: cargo-deny 0.20
+    # does not flag it on this tree (verified `cargo deny check
+    # advisories` green with the dep present), so per the 2026-09-16
+    # policy above this entry lives HERE only. Re-evaluate if
+    # async-imap stabilizes.
+    "RUSTSEC-2023-0086",
 ]

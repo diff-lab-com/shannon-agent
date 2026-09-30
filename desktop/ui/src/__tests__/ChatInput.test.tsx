@@ -2,6 +2,7 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { render, screen, fireEvent, waitFor, act } from '@testing-library/react'
 import { I18nProvider } from '@/i18n'
 import ChatInput from '@/components/chat/ChatInput'
+import { pushComposerDraft } from '@/lib/composerBridge'
 import * as api from '@/lib/tauri-api'
 import { toast } from 'sonner'
 import type * as ReactRouterDom from 'react-router-dom'
@@ -280,6 +281,47 @@ describe('ChatInput', () => {
     fireEvent.click(screen.getByRole('menuitem', { name: 'Editor' }))
 
     expect(onOpenEditor).toHaveBeenCalledTimes(1)
+  })
+
+  // office Wave 2 B2 — "Build a presentation" opens the outline dialog and
+  // Generate inserts the draft into the composer. The composer receives the
+  // text via pushComposerDraft's event; nothing is auto-sent (trust theme).
+  it('opens the PPT outline dialog from the "+" menu and inserts the draft into the composer', () => {
+    const onChange = vi.fn()
+    renderChatInput({ onChange })
+
+    fireEvent.click(screen.getByLabelText('Attachments and tools'))
+    fireEvent.click(screen.getByRole('menuitem', { name: 'Build a presentation' }))
+
+    const outline = screen.getByTestId('ppt-outline-input')
+    expect(outline).toBeInTheDocument()
+    fireEvent.change(outline, { target: { value: 'Slide 1\nSlide 2' } })
+    fireEvent.click(screen.getByRole('button', { name: 'Generate with agent' }))
+
+    expect(onChange).toHaveBeenCalledTimes(1)
+    expect(onChange.mock.calls[0][0]).toContain('Build a presentation from exactly this outline (one slide per line):')
+    expect(onChange.mock.calls[0][0]).toContain('Slide 1\nSlide 2')
+    // Dialog closed after Generate.
+    expect(screen.queryByTestId('ppt-outline-input')).not.toBeInTheDocument()
+  })
+
+  it('appends a pushed composer draft after existing text without sending', () => {
+    const onChange = vi.fn()
+    renderChatInput({ value: 'existing draft', onChange })
+
+    act(() => pushComposerDraft('PUSHED DRAFT'))
+    expect(onChange).toHaveBeenCalledTimes(1)
+    expect(onChange).toHaveBeenCalledWith('existing draft\n\nPUSHED DRAFT')
+    // The send button state is irrelevant here — the point is pushComposerDraft
+    // only ever reaches onChange (the composer), never onSend.
+  })
+
+  it('replaces the empty composer value with a pushed draft', () => {
+    const onChange = vi.fn()
+    renderChatInput({ value: '', onChange })
+
+    act(() => pushComposerDraft('DRAFT'))
+    expect(onChange).toHaveBeenCalledWith('DRAFT')
   })
 
   it('renders attached files as chips', () => {

@@ -640,8 +640,8 @@ pub async fn query_data_source(
     query: String,
 ) -> Result<extensions::data_source_fetchers::DataSourceResult, String> {
     let config = extensions::read_data_source_config(&slug).map_err(|e| e.to_string())?;
-    let kind = config.get("kind").ok_or("missing kind in config")?;
-    let fetcher = extensions::data_source_fetchers::dispatch(kind).map_err(|e| e.to_string())?;
+    let kind = extensions::read_data_source_kind(&slug).map_err(|e| e.to_string())?;
+    let fetcher = extensions::data_source_fetchers::dispatch(&kind).map_err(|e| e.to_string())?;
     fetcher
         .fetch(&config, &query)
         .await

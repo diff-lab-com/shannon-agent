@@ -1487,6 +1487,15 @@
       }
     },
     {
+      "identifier": "allow-list-file-index",
+      "description": "Enables the list_file_index command without any pre-configured scope.",
+      "commands": {
+        "allow": [
+          "list_file_index"
+        ]
+      }
+    },
+    {
       "identifier": "allow-lsp-code-actions",
       "description": "Enables the lsp_code_actions command without any pre-configured scope.",
       "commands": {
@@ -1591,6 +1600,15 @@
       "commands": {
         "allow": [
           "open_artifact_externally"
+        ]
+      }
+    },
+    {
+      "identifier": "allow-open-companion-window",
+      "description": "Enables the open_companion_window command without any pre-configured scope.",
+      "commands": {
+        "allow": [
+          "open_companion_window"
         ]
       }
     },
@@ -2099,6 +2117,15 @@
       }
     },
     {
+      "identifier": "allow-register-file-index-entry",
+      "description": "Enables the register_file_index_entry command without any pre-configured scope.",
+      "commands": {
+        "allow": [
+          "register_file_index_entry"
+        ]
+      }
+    },
+    {
       "identifier": "allow-run-file-diagnostics",
       "description": "Enables the run_file_diagnostics command without any pre-configured scope.",
       "commands": {
@@ -2131,6 +2158,24 @@
       "commands": {
         "allow": [
           "save_stt_config"
+        ]
+      }
+    },
+    {
+      "identifier": "allow-set-companion-always-on-top",
+      "description": "Enables the set_companion_always_on_top command without any pre-configured scope.",
+      "commands": {
+        "allow": [
+          "set_companion_always_on_top"
+        ]
+      }
+    },
+    {
+      "identifier": "allow-set-file-index-favorite",
+      "description": "Enables the set_file_index_favorite command without any pre-configured scope.",
+      "commands": {
+        "allow": [
+          "set_file_index_favorite"
         ]
       }
     },
@@ -2843,14 +2888,17 @@
         "allow-get-file-diff",
         "allow-get-file-tree",
         "allow-get-working-dir-info",
+        "allow-list-file-index",
         "allow-lsp-code-actions",
         "allow-path-exists",
         "allow-read-attachment",
         "allow-read-attachments",
         "allow-read-source-file",
         "allow-read-text-file",
+        "allow-register-file-index-entry",
         "allow-run-file-diagnostics",
-        "allow-save-text-file"
+        "allow-save-text-file",
+        "allow-set-file-index-favorite"
       ]
     },
     {
@@ -2998,8 +3046,10 @@
       "permissions": [
         "allow-close-session-window",
         "allow-list-session-windows",
+        "allow-open-companion-window",
         "allow-open-session-window",
-        "allow-reveal-session-in-main"
+        "allow-reveal-session-in-main",
+        "allow-set-companion-always-on-top"
       ]
     },
     {

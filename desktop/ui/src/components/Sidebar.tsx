@@ -378,6 +378,9 @@ export const Sidebar = memo(function Sidebar({ mobile, open = true }: { mobile?:
         <ScrollArea className="h-full">
           <div className="space-y-0.5">
             <NavRow to="/chat" icon="chat_bubble" labelId="nav.chat" titleId="nav.chat" kbd={`${mod}1`} onNavigate={handleNavClick} />
+            {/* office Wave 2 B9' — the reference-style file library (attached
+                + generated files, favorites, missing detection). */}
+            <NavRow to="/files" icon="folder_open" labelId="nav.files" titleId="nav.files" onNavigate={handleNavClick} />
             {/* IA 2026-09 (T1 去重): /tasks no longer has a nav row — the
                 top 自动化 button (Ctrl+2) is its single sidebar entry, so
                 the page is labeled one way ("自动化") everywhere. */}
