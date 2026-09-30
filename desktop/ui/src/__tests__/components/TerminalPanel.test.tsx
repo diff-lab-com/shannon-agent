@@ -433,6 +433,26 @@ describe('TerminalPanel (tab management)', () => {
     await waitFor(() => expect(tabC.getAttribute('aria-selected')).toBe('true'))
   })
 
+  it('does not move the selection when arrow keys land on a close button', async () => {
+    // P2-3 follow-up (APG scoping): the tablist container also hosts the
+    // per-tab close buttons — the WAI-ARIA tabs pattern scopes the
+    // arrow/Home/End keys to the TAB buttons. ArrowRight on a focused
+    // close button must neither switch tabs nor yank focus.
+    vi.mocked(api.terminalList).mockResolvedValue([info('t-a'), info('t-b', '/other')])
+    render(<TerminalPanel projectDir={null} />)
+    fireEvent.keyDown(window, { key: '`', ctrlKey: true })
+    const tabB = await screen.findByRole('tab', { name: /other/ })
+    expect(tabB.getAttribute('aria-selected')).toBe('true')
+    const closeA = screen.getAllByRole('button', { name: /close terminal:/i })[0]!
+    closeA.focus()
+    expect(closeA).toHaveFocus()
+    fireEvent.keyDown(closeA, { key: 'ArrowRight' })
+    // Let any (wrongful) rAF focus steal settle.
+    await new Promise((r) => setTimeout(r, 25))
+    expect(tabB.getAttribute('aria-selected')).toBe('true')
+    expect(closeA).toHaveFocus()
+  })
+
   it('wires the active tab to the terminal surface via aria-controls/aria-labelledby', async () => {
     // P2-3: the terminal surface is the tabpanel; the active tab names it
     // and it names the active tab back. projectDir={null} keeps both tabs

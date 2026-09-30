@@ -697,6 +697,12 @@ export function TerminalPanel({ projectDir }: TerminalPanelProps) {
   const tabButtonRefs = useRef<Map<string, HTMLButtonElement>>(new Map());
 
   const onTablistKeyDown = useCallback((e: ReactKeyboardEvent) => {
+    // APG scoping: the tablist container also hosts the per-tab close
+    // buttons, and the WAI-ARIA tabs pattern scopes arrow/Home/End to the
+    // TAB buttons. A keydown on anything else (a focused close button,
+    // the scroll container itself) must neither switch tabs nor yank
+    // focus onto the roving-tabindex target.
+    if ((e.target as HTMLElement).getAttribute('role') !== 'tab') return;
     if (visibleTabs.length === 0) return;
     const ids = visibleTabs.map(tab => tab.info.terminalId);
     const current = activeId ? ids.indexOf(activeId) : -1;
