@@ -301,8 +301,8 @@ pub(crate) async fn save_text_file_inner(
 /// destinations work. `resolve_write_target_in_working_dir` is left
 /// untouched for its other callers.
 ///
-/// Split into the dialog half ([`pick_save_path_via_dialog`], needs an
-/// `AppHandle`) and the write half ([`write_text_file_at`], plain fs) so
+/// Split into the dialog half (`pick_save_path_via_dialog`, needs an
+/// `AppHandle`) and the write half (`write_text_file_at`, plain fs) so
 /// unit tests can cover the write path without mocking Tauri dialogs.
 ///
 /// Returns the final path written, or `None` when the user cancelled the
