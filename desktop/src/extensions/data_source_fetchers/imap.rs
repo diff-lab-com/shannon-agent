@@ -17,8 +17,9 @@
 //!
 //! Everything testable offline lives in pure functions:
 //! [`build_imap_search_query`], [`select_and_decode`] (mailparse MIME
-//! decoding), and [`build_draft_rfc822`]. Only [`fetch_sync`] and
-//! [`append_draft`] touch the network, so unit tests never open a socket.
+//! decoding), and [`build_draft_rfc822`]. Only the private `fetch_sync` and
+//! `append_draft` helpers touch the network, so unit tests never open a
+//! socket.
 //!
 //! # TLS and timeouts
 //!
