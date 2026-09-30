@@ -993,6 +993,12 @@ export function AppProvider({ children }: { children: ReactNode }) {
           // Provider saves/activations emit CONFIG_UPDATED — keep the
           // gating snapshot (active provider / has_api_key) in lockstep.
           void refreshProviderStatus()
+          // P1-12: provider edits from outside this window (CLI / a session
+          // window) can change the chat model catalog — refresh it so the
+          // model picker reflects the new providers.toml without a restart.
+          // refreshModels is the CatalogContext-exposed refresh; the event
+          // is low-frequency so no debounce is needed.
+          void refreshModels()
         }),
         // B3 P1-25: a background-task change can also mean a new/finished
         // agent run — refresh the agents inventory alongside the tasks so
