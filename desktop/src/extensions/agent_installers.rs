@@ -43,6 +43,11 @@ fn resolve_agents_root(override_: Option<&Path>) -> PathBuf {
         .unwrap_or_else(shannon_agents_root)
 }
 
+/// Sidecar written into a repo-installed plugin directory listing the flat
+/// `<root>/<name>.toml` files the install materialized (G1 fix round 1,
+/// Imp-4a), so the uninstall path removes exactly those and nothing else.
+const FLAT_AGENTS_SIDECAR: &str = ".shannon-flat-agents.json";
+
 /// Repo-based agent installer — clones into `~/.shannon/agents/<plugin>/`.
 pub struct AgentRepoInstaller {
     pub plugin_name: String,
@@ -141,6 +146,86 @@ impl AddonInstaller for AgentRepoInstaller {
             )));
         }
 
+        // G1 fix round 1 (Imp-4a): the runtime loader only reads FLAT
+        // `<root>/<name>.toml` definitions — a cloned collection alone would
+        // stay invisible. Materialize every collected agent as a flat
+        // `<plugin>-<agent>.toml` (same native shape, system_prompt mapped),
+        // recording the file names in a sidecar so uninstall removes exactly
+        // what this install wrote.
+        let root = resolve_agents_root(self.root_override.as_deref());
+        let mut flat_files = Vec::new();
+        if has_agent_md {
+            if let Ok(rd) = agents_dir.read_dir() {
+                for file in rd.flatten() {
+                    let path = file.path();
+                    if path.extension().is_none_or(|x| x != "md") {
+                        continue;
+                    }
+                    let Some(agent_name) = path.file_stem().and_then(|s| s.to_str()) else {
+                        continue;
+                    };
+                    let Ok(def) = shannon_agents::AgentDefinition::from_markdown_file(&path) else {
+                        tracing::warn!(
+                            path = %path.display(),
+                            "repo agent.md unreadable — skipping"
+                        );
+                        continue;
+                    };
+                    if write_flat_agent_toml(
+                        &root,
+                        &plugin,
+                        agent_name,
+                        &if def.description.is_empty() {
+                            agent_name.to_string()
+                        } else {
+                            def.description
+                        },
+                        def.system_prompt.as_deref().unwrap_or(""),
+                        def.model.as_deref(),
+                        &def.capabilities,
+                    ) {
+                        flat_files.push(format!("{plugin}-{agent_name}.toml"));
+                    }
+                }
+            }
+        }
+        if manifest.exists() {
+            match std::fs::read_to_string(&manifest)
+                .map_err(|e| InstallError::Io(e.to_string()))
+                .and_then(|text| {
+                    serde_json::from_str::<super::agent_catalog::AgentManifest>(&text)
+                        .map_err(|e| InstallError::Format(format!("shannon-agents.json: {e}")))
+                }) {
+                Ok(manifest) => {
+                    for agent in manifest.agents {
+                        if write_flat_agent_toml(
+                            &root,
+                            &plugin,
+                            &agent.name,
+                            &agent.description,
+                            agent.system_prompt.as_deref().unwrap_or(""),
+                            agent.model.as_deref(),
+                            &agent.tools,
+                        ) {
+                            flat_files.push(format!("{plugin}-{}.toml", agent.name));
+                        }
+                    }
+                }
+                Err(e) => {
+                    tracing::warn!(error = %e, "shannon-agents.json unreadable — skipping manifest agents")
+                }
+            }
+        }
+        if !flat_files.is_empty() {
+            let sidecar = json_sidecar(&flat_files);
+            let _ = std::fs::write(target_dir.join(FLAT_AGENTS_SIDECAR), sidecar);
+            tracing::info!(
+                plugin = %plugin,
+                agents = flat_files.len(),
+                "materialized repo agents as flat definitions"
+            );
+        }
+
         progress.emit(super::types::ProgressEvent::Finished).await;
 
         Ok(InstalledAddon {
@@ -155,11 +240,12 @@ impl AddonInstaller for AgentRepoInstaller {
     }
 
     async fn uninstall(&self, addon_id: &str) -> Result<(), InstallError> {
-        let dir = resolve_agents_root(self.root_override.as_deref()).join(addon_id);
-        if dir.exists() {
-            std::fs::remove_dir_all(&dir)?;
-        }
-        Ok(())
+        // Shared path: removes the cloned dir AND the flat tomls this
+        // install materialized (recorded in the sidecar).
+        remove_installed_agent_in(
+            &resolve_agents_root(self.root_override.as_deref()),
+            addon_id,
+        )
     }
 
     async fn update(&self, addon_id: &str) -> Result<InstalledAddon, InstallError> {
@@ -409,9 +495,72 @@ pub fn remove_installed_agent(name: &str) -> Result<(), InstallError> {
     remove_installed_agent_in(&shannon_agents_root(), name)
 }
 
+/// Write one flat `<root>/<plugin>-<agent>.toml` definition (G1 Imp-4a).
+/// Existing flat files win (idempotent); unsafe agent names are rejected.
+/// Returns `true` when a file was written.
+fn write_flat_agent_toml(
+    root: &Path,
+    plugin: &str,
+    agent_name: &str,
+    description: &str,
+    system_prompt: &str,
+    model: Option<&str>,
+    tools: &[String],
+) -> bool {
+    let agent_slug = match safe_plugin_name(agent_name) {
+        Ok(s) => s,
+        Err(e) => {
+            tracing::warn!(agent = %agent_name, error = %e, "unsafe repo agent name — skipping");
+            return false;
+        }
+    };
+    let flat_name = format!("{plugin}-{agent_slug}");
+    let target = root.join(format!("{flat_name}.toml"));
+    if target.exists() {
+        return false; // existing definition wins
+    }
+    let body = agent_definition_toml(&flat_name, description, system_prompt, model, tools);
+    if let Err(e) = std::fs::write(&target, body) {
+        tracing::warn!(path = %target.display(), error = %e, "flat agent write failed");
+        return false;
+    }
+    true
+}
+
+/// Serialize the sidecar listing (`Vec<String>` of file names, basename
+/// only).
+fn json_sidecar(files: &[String]) -> String {
+    serde_json::to_string_pretty(files).unwrap_or_else(|_| "[]".to_string())
+}
+
+/// Remove the flat tomls a repo install recorded in its sidecar, best
+/// effort. Entries are reduced to file basenames joined under `root`, so a
+/// tampered sidecar cannot reach outside the agents root.
+fn remove_sidecar_flat_agents(root: &Path, dir: &Path) {
+    let Ok(text) = std::fs::read_to_string(dir.join(FLAT_AGENTS_SIDECAR)) else {
+        return;
+    };
+    let Ok(files) = serde_json::from_str::<Vec<String>>(&text) else {
+        tracing::warn!(dir = %dir.display(), "flat-agents sidecar unreadable — leaving flat files");
+        return;
+    };
+    for file in files {
+        let Some(file_name) = Path::new(&file).file_name() else {
+            continue;
+        };
+        let target = root.join(file_name);
+        if target.is_file() {
+            if let Err(e) = std::fs::remove_file(&target) {
+                tracing::warn!(path = %target.display(), error = %e, "flat agent removal failed");
+            }
+        }
+    }
+}
+
 /// `remove_installed_agent` against an explicit agents `root`. Removes the
-/// flat `<name>.toml` and/or the legacy `<name>/` subdirectory; an unknown
-/// name is an error.
+/// flat `<name>.toml` and/or the legacy `<name>/` subdirectory (including
+/// the flat files a repo install recorded in its sidecar); an unknown name
+/// is an error.
 pub fn remove_installed_agent_in(root: &Path, name: &str) -> Result<(), InstallError> {
     let toml_path = root.join(format!("{name}.toml"));
     let dir = root.join(name);
@@ -421,6 +570,10 @@ pub fn remove_installed_agent_in(root: &Path, name: &str) -> Result<(), InstallE
     let canonical_root = root
         .canonicalize()
         .map_err(|e| InstallError::Io(format!("canonicalize root: {e}")))?;
+    if dir.is_dir() {
+        // Sidecar cleanup BEFORE the dir itself disappears.
+        remove_sidecar_flat_agents(root, &dir);
+    }
     if toml_path.exists() {
         let canonical_target = toml_path
             .canonicalize()
@@ -658,6 +811,103 @@ mod tests {
         std::fs::write(root.join("flat.toml"), "name = \"flat\"\n").unwrap();
         remove_installed_agent_in(&root, "flat").expect("remove");
         assert!(!root.join("flat.toml").exists());
+    }
+
+    /// Imp-4a: the flat materialization helper — writes a loader-readable
+    /// toml under `<plugin>-<agent>.toml`, existing files win, unsafe agent
+    /// names are rejected.
+    #[test]
+    fn write_flat_agent_toml_writes_loader_readable_definitions() {
+        let tmp = tempfile::tempdir().expect("tmp");
+        let root = tmp.path().join("agents");
+        std::fs::create_dir_all(&root).unwrap();
+
+        assert!(write_flat_agent_toml(
+            &root,
+            "myrepo",
+            "Code Reviewer",
+            "Reviews code.",
+            "You are a code reviewer.",
+            Some("claude-sonnet-4-6"),
+            &["read".to_string(), "grep".to_string()],
+        ));
+        let def =
+            shannon_agents::AgentDefinition::from_file(&root.join("myrepo-code-reviewer.toml"))
+                .expect("flat toml loads");
+        assert_eq!(def.name, "myrepo-code-reviewer");
+        assert_eq!(
+            def.system_prompt.as_deref(),
+            Some("You are a code reviewer.")
+        );
+        assert_eq!(def.capabilities, vec!["read", "grep"]);
+
+        // Existing flat file wins (idempotent).
+        assert!(!write_flat_agent_toml(
+            &root,
+            "myrepo",
+            "code-reviewer",
+            "other",
+            "other prompt",
+            None,
+            &[],
+        ));
+        let def =
+            shannon_agents::AgentDefinition::from_file(&root.join("myrepo-code-reviewer.toml"))
+                .unwrap();
+        assert_eq!(
+            def.system_prompt.as_deref(),
+            Some("You are a code reviewer.")
+        );
+
+        // Unsafe agent names are rejected without writing.
+        assert!(!write_flat_agent_toml(
+            &root,
+            "myrepo",
+            "../../escape",
+            "x",
+            "",
+            None,
+            &[],
+        ));
+        assert!(!root.join("myrepo-escape.toml").exists());
+    }
+
+    /// Imp-4a: uninstalling a repo plugin removes the flat tomls recorded in
+    /// its sidecar (and only those), then the plugin dir itself.
+    #[test]
+    fn remove_installed_agent_cleans_sidecar_flat_files() {
+        let tmp = tempfile::tempdir().expect("tmp");
+        let root = tmp.path().join("agents");
+        let plugin_dir = root.join("myrepo");
+        std::fs::create_dir_all(&plugin_dir).unwrap();
+        std::fs::write(root.join("myrepo-alpha.toml"), "name = \"myrepo-alpha\"\n").unwrap();
+        std::fs::write(root.join("myrepo-beta.toml"), "name = \"myrepo-beta\"\n").unwrap();
+        std::fs::write(root.join("unrelated.toml"), "name = \"unrelated\"\n").unwrap();
+        std::fs::write(
+            plugin_dir.join(FLAT_AGENTS_SIDECAR),
+            json_sidecar(&["myrepo-alpha.toml".into(), "myrepo-beta.toml".into()]),
+        )
+        .unwrap();
+
+        remove_installed_agent_in(&root, "myrepo").expect("remove");
+        assert!(!root.join("myrepo-alpha.toml").exists());
+        assert!(!root.join("myrepo-beta.toml").exists());
+        assert!(!plugin_dir.exists());
+        // Unrelated definitions survive.
+        assert!(root.join("unrelated.toml").exists());
+
+        // A tampered sidecar with path escapes stays inside the root.
+        let plugin_dir = root.join("evil");
+        std::fs::create_dir_all(&plugin_dir).unwrap();
+        std::fs::write(
+            plugin_dir.join(FLAT_AGENTS_SIDECAR),
+            json_sidecar(&["../../outside.toml".into()]),
+        )
+        .unwrap();
+        let outside = tmp.path().join("outside.toml");
+        std::fs::write(&outside, "name = \"outside\"\n").unwrap();
+        remove_installed_agent_in(&root, "evil").expect("remove");
+        assert!(outside.exists(), "sidecar must not remove outside the root");
     }
 
     #[test]
