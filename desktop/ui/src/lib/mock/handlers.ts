@@ -7,8 +7,6 @@ import { MOCK_SCHEDULED_ROUTINES, MOCK_TRIGGERED_ROUTINES, MOCK_HOOK_EVENTS, MOC
 import { MOCK_INBOX_ITEMS, MOCK_OPC_METRICS, MOCK_PERF_TRACES, MOCK_DIAGNOSTICS,
   MOCK_CODE_ACTIONS, MOCK_GOALS } from './data/analytics'
 import { MOCK_CONFIG, MOCK_MODELS, MOCK_STATUS, MOCK_TOOLS, MOCK_PROVIDERS } from './data/config'
-import type { InboxItem, ProviderInput, SessionInfo, TerminalInfo, TerminalSettings, FileIndexEntry } from '@/types'
-import { MOCK_CONFIG, MOCK_MODELS, MOCK_STATUS, MOCK_TOOLS, MOCK_PROVIDERS, MOCK_PROVIDER_PROFILES } from './data/config'
 import type { InboxItem, ProviderInput, SessionInfo, TerminalInfo, TerminalSettings } from '@/types'
 import { MOCK_TERMINAL_OUTPUT_EVENT, MOCK_TERMINAL_EXIT_EVENT } from '../runtime/terminalEvents'
 import { MOCK_MEMORIES, MOCK_MEMORY_PROJECTS, MOCK_MEMORY_STATS, MOCK_FEATURED_VENDORS } from './data/memory'
@@ -54,37 +52,6 @@ let nextInboxId = Math.max(...MOCK_INBOX_ITEMS.map(i => i.id)) + 1
 
 // P0-4: demo session budget — null = no cap; set via the budget control.
 let demoBudgetUsd: number | null = null
-
-// office Wave 2 B9' — demo file index (list_file_index / register /
-// favorite). Newest first is enforced by the list handler; this seed is
-// already ordered that way. `old-deck.md` intentionally dangles so the
-// missing-file state is demoable.
-const demoFileIndex: FileIndexEntry[] = [
-  {
-    path: '/Users/demo/Documents/q3-review.pptx',
-    name: 'q3-review.pptx',
-    size_bytes: 2_483_112,
-    registered_at: new Date(Date.now() - 2 * 3600_000).toISOString(),
-    favorite: true,
-    source: 'generated',
-  },
-  {
-    path: '/Users/demo/Downloads/notes.md',
-    name: 'notes.md',
-    size_bytes: 8_210,
-    registered_at: new Date(Date.now() - 26 * 3600_000).toISOString(),
-    favorite: false,
-    source: 'attachment',
-  },
-  {
-    path: '/Users/demo/Documents/old-deck.md',
-    name: 'old-deck.md',
-    size_bytes: null,
-    registered_at: new Date(Date.now() - 72 * 3600_000).toISOString(),
-    favorite: false,
-    source: 'generated',
-  },
-]
 
 // P1-5 C-1: demo live-preview lifecycle (single instance, like the backend).
 const demoPreview = {
@@ -312,31 +279,6 @@ function findTask(id: string) {
   return state.tasks.find(t => t.id === id)
 }
 
-// R2-1: per-session model override demo state — mirrors the backend's
-// `SessionState.model_override` (in-memory, keyed by session id). The
-// composer chip writes via set_session_model and reads back via
-// get_session_model, so demo switches stay visible per session. A null
-// sessionId resolves to the active session backend-side; demo mirrors that
-// with an `__active__` bucket.
-const demoSessionModels = new Map<string, { provider: string; model: string }>()
-const demoSessionKey = (id?: string | null) => id ?? '__active__'
-
-// R2-2: fake models.dev overlay generation — bumped on every demo refresh so
-// the Settings button's success payload visibly changes.
-let demoCatalogGeneration = 1
-
-// R3-2: demo model-profile roster — same ordering contract as the backend
-// ("default" pinned first, rest alphabetical).
-const demoProviderProfiles = clone(MOCK_PROVIDER_PROFILES)
-function sortDemoProfiles() {
-  demoProviderProfiles.sort((a, b) => {
-    const aDefault = a.name === 'default' ? 1 : 0
-    const bDefault = b.name === 'default' ? 1 : 0
-    if (aDefault !== bDefault) return bDefault - aDefault
-    return a.name.localeCompare(b.name)
-  })
-}
-
 // Mutable notification prefs so DND/quiet-hours toggling feels live in demo mode.
 // Audit §P2-3 (round 6): start with events off so the new empty-state
 // guidance card is visible on first visit — instead of the page looking
@@ -353,26 +295,6 @@ let notificationPrefs = {
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 type MockHandler = (args: any) => unknown | Promise<unknown>
 export const handlers: Record<string, MockHandler> = {
-  // --- Office Wave 1: host runtime probe + file copy (save-as) ---
-  async probe_host_runtime() {
-    await delay(40)
-    return { python3: true, pythonVersion: 'Python 3.12.3', pandoc: false, libreoffice: false }
-  },
-  async copy_file() {
-    await delay(60)
-    return null
-  },
-  // --- Office Wave 3 C3: companion Quick Capture window ---
-  // Demo mode has no real webview to spawn — the mock just reports the
-  // fixed label the Rust command would return.
-  async open_companion_window() {
-    await delay(40)
-    return { label: 'companion' }
-  },
-  async set_companion_always_on_top() {
-    await delay(30)
-    return null
-  },
   // --- Chat ---
   async send_message() {
     await delay(120)
@@ -407,18 +329,6 @@ export const handlers: Record<string, MockHandler> = {
     } else if (key === 'effort_level') {
       // Audit D8: reasoning-effort picker persists the same key as the CLI.
       (demoConfig as Record<string, unknown>).effort_level = value
-    } else if (key === 'plan_tier' || key === 'act_tier') {
-      // R3-3: plan/act phase tiers — 'inherit'/empty clears (stored null),
-      // canonical tier names store verbatim, anything else is rejected
-      // (the backend validates the same way).
-      const tier = String(value ?? '').trim().toLowerCase()
-      if (tier === '' || tier === 'inherit') {
-        demoConfig[key] = null
-      } else if (tier === 'fast' || tier === 'standard' || tier === 'pro') {
-        demoConfig[key] = tier
-      } else {
-        throw new Error(`invalid phase tier \`${value}\` — expected inherit, fast, standard or pro`)
-      }
     } else if (key === 'offpeak.model_override') {
       // P2-5: frozen config key — empty value disables the override.
       const trimmed = String(value ?? '').trim()
@@ -502,68 +412,8 @@ export const handlers: Record<string, MockHandler> = {
     state.providers.active_provider_id = args.id
   },
 
-  // --- R3-2: provider model profiles (Settings → Models "Profiles") ---
-  // Demo mirror of the engine providers.toml v2 profiles map + the
-  // active_profile pointer: list / create / switch against mutable demo
-  // state, with the same validation contract as the backend (shared
-  // validate_profile_name rules; empty-profile switch allowed).
-  async list_provider_profiles() {
-    await delay()
-    return clone(demoProviderProfiles)
-  },
-  async create_provider_profile(args: { name: string }) {
-    await delay(120)
-    const name = String(args.name ?? '').trim()
-    if (!name) throw new Error('profile name must not be empty')
-    if (name.length > 64) throw new Error(`profile name is too long (max 64): '${name}'`)
-    if (/\s/.test(name)) throw new Error(`profile name must not contain whitespace: '${name}'`)
-    if (demoProviderProfiles.some((p) => p.name.toLowerCase() === name.toLowerCase())) {
-      throw new Error(`A profile named '${name}' already exists`)
-    }
-    demoProviderProfiles.push({ name, provider_count: 0, active: false, model: null })
-    sortDemoProfiles()
-    return clone(demoProviderProfiles)
-  },
-  async set_active_provider_profile(args: { name: string }) {
-    await delay(150)
-    const row = demoProviderProfiles.find((p) => p.name === args.name)
-    if (!row) {
-      throw new Error(
-        `profile '${args.name}' not found; available profiles: ${demoProviderProfiles.map((p) => p.name).join(', ')}`,
-      )
-    }
-    demoProviderProfiles.forEach((p) => { p.active = p.name === row.name })
-    // Mirrors the backend's client-config rebuild: the global default model
-    // follows the switched profile (null when it has none — get_status then
-    // falls back to the seeded status model).
-    if (row.model) demoConfig.model = row.model
-    return clone(demoProviderProfiles)
-  },
-
   // --- Models & Status ---
   async list_models() { await delay(); return clone(MOCK_MODELS) },
-  // R2-1: session-scoped model override (composer chip). Writes/reads the
-  // per-session demo map; null sessionId → the active-session bucket, like
-  // the backend's `resolve_explicit_or_active(None)` fallback.
-  async set_session_model(args: { sessionId?: string | null; provider: string; model: string }) {
-    await delay(60)
-    demoSessionModels.set(demoSessionKey(args.sessionId), { provider: args.provider, model: args.model })
-  },
-  async clear_session_model(args: { sessionId?: string | null }) {
-    await delay(30)
-    demoSessionModels.delete(demoSessionKey(args.sessionId))
-  },
-  async get_session_model(args: { sessionId?: string | null }) {
-    await delay()
-    return demoSessionModels.get(demoSessionKey(args.sessionId)) ?? null
-  },
-  // R2-2: demo refresh pretends to re-fetch models.dev — reports the seeded
-  // catalog size and bumps the generation so the success line moves.
-  async refresh_model_catalog() {
-    await delay(600)
-    demoCatalogGeneration += 1
-    return { count: MOCK_MODELS.length, generation: demoCatalogGeneration }
-  },
   // Status mirrors demoConfig so model switching (composer chip / header)
   // visibly updates both selectors in the demo — they stay in sync the way
   // the real engine does.
@@ -780,46 +630,6 @@ export const handlers: Record<string, MockHandler> = {
     }
   },
   async apply_diff() { await delay(100) },
-  // office Wave 2 B9' — reference-style file index. Mutable demo state so
-  // favorite toggles and attach-time registrations feel live; the third
-  // entry points at a path that does not exist so the "moved or deleted"
-  // treatment is visible in the demo Files page.
-  async list_file_index() {
-    await delay()
-    return clone(
-      [...demoFileIndex].sort(
-        (a, b) => new Date(b.registered_at).getTime() - new Date(a.registered_at).getTime(),
-      ),
-    )
-  },
-  async register_file_index_entry(args: { path: string; source: string }) {
-    await delay(20)
-    const existing = demoFileIndex.find(f => f.path === args.path)
-    if (existing) {
-      existing.source = args.source
-      return
-    }
-    const name = args.path.split('/').pop() ?? args.path
-    demoFileIndex.push({
-      path: args.path,
-      name,
-      size_bytes: 12_400,
-      registered_at: new Date().toISOString(),
-      favorite: false,
-      source: args.source,
-    })
-  },
-  async set_file_index_favorite(args: { path: string; favorite: boolean }) {
-    await delay(20)
-    const entry = demoFileIndex.find(f => f.path === args.path)
-    if (entry) entry.favorite = args.favorite
-  },
-  // office Wave 2: the Files page's missing-detection probe (and FileRefChip's
-  // anti-hallucination backstop) — in demo mode only indexed demo paths exist.
-  async path_exists(args: { path: string }) {
-    await delay(10)
-    return demoFileIndex.some(f => f.path === args.path)
-  },
   async get_file_tree() {
     await delay()
     return {
