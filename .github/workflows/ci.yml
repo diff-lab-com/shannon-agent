@@ -62,6 +62,16 @@ jobs:
   #     never a push. A desktop/ui-only or gateway-only direct push to dev
   #     therefore still runs desktop-unit (lint + vitest), Desktop E2E and
   #     Desktop Visual Audit alongside every Rust job.
+  #
+  #     GOTCHA (fixed 2026-09-30, silent since this matrix landed): on a
+  #     push/dispatch this job is SKIPPED (`if:` is PR-only), and GitHub
+  #     implicitly ANDs every dependent job's `if:` with a `success()` gate
+  #     over its `needs` — a skipped `needs` job fails that gate and the
+  #     explicit `if:` is never evaluated. Every downstream `if:` therefore
+  #     needs a leading `always()` to opt out of the implicit gate, or the
+  #     whole matrix silently degenerates to "push runs do nothing" (every
+  #     push/dispatch run concluded all-jobs-skipped between 2026-09-27 and
+  #     this fix). Community discussion #26945 documents the semantics.
   #   • pull_request: this job classifies changed paths and each downstream
   #     job runs only when its output matched:
   #       rust        → facade-facts, test, test-features, eval-dry-run,
@@ -123,7 +133,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 15
     needs: changes
-    if: github.event_name != 'pull_request' || needs.changes.result != 'success' || needs.changes.outputs.rust == 'true' || needs.changes.outputs.ci == 'true'
+    if: always() && (github.event_name != 'pull_request' || needs.changes.result != 'success' || needs.changes.outputs.rust == 'true' || needs.changes.outputs.ci == 'true')
     steps:
       - uses: actions/checkout@f548e57e544e1ff5a4c46bf1e1b8685f8e4a348a
       - name: Generated facade facts are fresh
@@ -162,7 +172,7 @@ jobs:
     name: Test
     runs-on: ubuntu-latest
     needs: changes
-    if: github.event_name != 'pull_request' || needs.changes.result != 'success' || needs.changes.outputs.rust == 'true' || needs.changes.outputs.ci == 'true'
+    if: always() && (github.event_name != 'pull_request' || needs.changes.result != 'success' || needs.changes.outputs.rust == 'true' || needs.changes.outputs.ci == 'true')
     # review §P3-E2: hang-on-build job would burn 6 hours of runner quota
     # without a hard cap. 60 min is generous for our 11.7k-test suite.
     timeout-minutes: 60
@@ -253,7 +263,7 @@ jobs:
     name: Feature Matrix & Doctests
     runs-on: ubuntu-latest
     needs: changes
-    if: github.event_name != 'pull_request' || needs.changes.result != 'success' || needs.changes.outputs.rust == 'true' || needs.changes.outputs.ci == 'true'
+    if: always() && (github.event_name != 'pull_request' || needs.changes.result != 'success' || needs.changes.outputs.rust == 'true' || needs.changes.outputs.ci == 'true')
     timeout-minutes: 40
     steps:
       - uses: actions/checkout@f548e57e544e1ff5a4c46bf1e1b8685f8e4a348a
@@ -331,7 +341,7 @@ jobs:
     name: Eval Dry-Run Gate
     runs-on: ubuntu-latest
     needs: changes
-    if: github.event_name != 'pull_request' || needs.changes.result != 'success' || needs.changes.outputs.rust == 'true' || needs.changes.outputs.ci == 'true'
+    if: always() && (github.event_name != 'pull_request' || needs.changes.result != 'success' || needs.changes.outputs.rust == 'true' || needs.changes.outputs.ci == 'true')
     timeout-minutes: 20
     steps:
       - uses: actions/checkout@f548e57e544e1ff5a4c46bf1e1b8685f8e4a348a
@@ -369,7 +379,7 @@ jobs:
     name: Desktop E2E
     runs-on: ubuntu-latest
     needs: changes
-    if: github.event_name != 'pull_request' || needs.changes.result != 'success' || needs.changes.outputs.rust == 'true' || needs.changes.outputs['desktop-ui'] == 'true' || needs.changes.outputs.ci == 'true'
+    if: always() && (github.event_name != 'pull_request' || needs.changes.result != 'success' || needs.changes.outputs.rust == 'true' || needs.changes.outputs['desktop-ui'] == 'true' || needs.changes.outputs.ci == 'true')
     timeout-minutes: 20
     steps:
       - uses: actions/checkout@f548e57e544e1ff5a4c46bf1e1b8685f8e4a348a
@@ -399,7 +409,7 @@ jobs:
     name: Desktop Visual Audit (walkthrough)
     runs-on: ubuntu-latest
     needs: changes
-    if: github.event_name != 'pull_request' || needs.changes.result != 'success' || needs.changes.outputs.rust == 'true' || needs.changes.outputs['desktop-ui'] == 'true' || needs.changes.outputs.ci == 'true'
+    if: always() && (github.event_name != 'pull_request' || needs.changes.result != 'success' || needs.changes.outputs.rust == 'true' || needs.changes.outputs['desktop-ui'] == 'true' || needs.changes.outputs.ci == 'true')
     timeout-minutes: 20
     steps:
       - uses: actions/checkout@f548e57e544e1ff5a4c46bf1e1b8685f8e4a348a
@@ -439,7 +449,7 @@ jobs:
     name: Desktop Unit Tests
     runs-on: ubuntu-latest
     needs: changes
-    if: github.event_name != 'pull_request' || needs.changes.result != 'success' || needs.changes.outputs.rust == 'true' || needs.changes.outputs['desktop-ui'] == 'true' || needs.changes.outputs.ci == 'true'
+    if: always() && (github.event_name != 'pull_request' || needs.changes.result != 'success' || needs.changes.outputs.rust == 'true' || needs.changes.outputs['desktop-ui'] == 'true' || needs.changes.outputs.ci == 'true')
     timeout-minutes: 45
     steps:
       - uses: actions/checkout@f548e57e544e1ff5a4c46bf1e1b8685f8e4a348a
@@ -499,7 +509,7 @@ jobs:
     name: Clippy
     runs-on: ubuntu-latest
     needs: changes
-    if: github.event_name != 'pull_request' || needs.changes.result != 'success' || needs.changes.outputs.rust == 'true' || needs.changes.outputs.ci == 'true'
+    if: always() && (github.event_name != 'pull_request' || needs.changes.result != 'success' || needs.changes.outputs.rust == 'true' || needs.changes.outputs.ci == 'true')
     timeout-minutes: 30
     steps:
       - uses: actions/checkout@f548e57e544e1ff5a4c46bf1e1b8685f8e4a348a
@@ -543,7 +553,7 @@ jobs:
     name: Gateway (TS typecheck + vitest)
     runs-on: ubuntu-latest
     needs: changes
-    if: github.event_name != 'pull_request' || needs.changes.result != 'success' || needs.changes.outputs.rust == 'true' || needs.changes.outputs.gateway == 'true' || needs.changes.outputs.ci == 'true'
+    if: always() && (github.event_name != 'pull_request' || needs.changes.result != 'success' || needs.changes.outputs.rust == 'true' || needs.changes.outputs.gateway == 'true' || needs.changes.outputs.ci == 'true')
     timeout-minutes: 15
     steps:
       - uses: actions/checkout@f548e57e544e1ff5a4c46bf1e1b8685f8e4a348a
@@ -571,7 +581,7 @@ jobs:
     name: Website Build
     runs-on: ubuntu-latest
     needs: changes
-    if: github.event_name != 'pull_request' || needs.changes.result != 'success' || needs.changes.outputs.website == 'true' || needs.changes.outputs.ci == 'true'
+    if: always() && (github.event_name != 'pull_request' || needs.changes.result != 'success' || needs.changes.outputs.website == 'true' || needs.changes.outputs.ci == 'true')
     timeout-minutes: 15
     steps:
       - uses: actions/checkout@f548e57e544e1ff5a4c46bf1e1b8685f8e4a348a
@@ -593,7 +603,7 @@ jobs:
     name: Format
     runs-on: ubuntu-latest
     needs: changes
-    if: github.event_name != 'pull_request' || needs.changes.result != 'success' || needs.changes.outputs.rust == 'true' || needs.changes.outputs.ci == 'true'
+    if: always() && (github.event_name != 'pull_request' || needs.changes.result != 'success' || needs.changes.outputs.rust == 'true' || needs.changes.outputs.ci == 'true')
     timeout-minutes: 15
     steps:
       - uses: actions/checkout@f548e57e544e1ff5a4c46bf1e1b8685f8e4a348a
@@ -611,7 +621,7 @@ jobs:
     name: Headless purity (ADR-0011)
     runs-on: ubuntu-latest
     needs: changes
-    if: github.event_name != 'pull_request' || needs.changes.result != 'success' || needs.changes.outputs.rust == 'true' || needs.changes.outputs.ci == 'true'
+    if: always() && (github.event_name != 'pull_request' || needs.changes.result != 'success' || needs.changes.outputs.rust == 'true' || needs.changes.outputs.ci == 'true')
     timeout-minutes: 15
     steps:
       - uses: actions/checkout@f548e57e544e1ff5a4c46bf1e1b8685f8e4a348a
@@ -628,7 +638,7 @@ jobs:
     # whose upstream fix is blocked on Tauri / plist / syntax ecosystem.
     runs-on: ubuntu-latest
     needs: changes
-    if: github.event_name != 'pull_request' || needs.changes.result != 'success' || needs.changes.outputs.rust == 'true' || needs.changes.outputs.ci == 'true'
+    if: always() && (github.event_name != 'pull_request' || needs.changes.result != 'success' || needs.changes.outputs.rust == 'true' || needs.changes.outputs.ci == 'true')
     timeout-minutes: 15
     steps:
       - uses: actions/checkout@f548e57e544e1ff5a4c46bf1e1b8685f8e4a348a
@@ -649,7 +659,7 @@ jobs:
     name: RustSec Advisory Audit
     runs-on: ubuntu-latest
     needs: changes
-    if: github.event_name != 'pull_request' || needs.changes.result != 'success' || needs.changes.outputs.rust == 'true' || needs.changes.outputs.ci == 'true'
+    if: always() && (github.event_name != 'pull_request' || needs.changes.result != 'success' || needs.changes.outputs.rust == 'true' || needs.changes.outputs.ci == 'true')
     timeout-minutes: 20
     steps:
       - uses: actions/checkout@f548e57e544e1ff5a4c46bf1e1b8685f8e4a348a
@@ -687,7 +697,7 @@ jobs:
     name: Doc Build
     runs-on: ubuntu-latest
     needs: changes
-    if: github.event_name != 'pull_request' || needs.changes.result != 'success' || needs.changes.outputs.rust == 'true' || needs.changes.outputs.ci == 'true'
+    if: always() && (github.event_name != 'pull_request' || needs.changes.result != 'success' || needs.changes.outputs.rust == 'true' || needs.changes.outputs.ci == 'true')
     timeout-minutes: 20
     steps:
       - uses: actions/checkout@f548e57e544e1ff5a4c46bf1e1b8685f8e4a348a
@@ -717,7 +727,7 @@ jobs:
     name: Generate Metrics
     runs-on: ubuntu-latest
     needs: changes
-    if: github.event_name != 'pull_request' || needs.changes.result != 'success' || needs.changes.outputs.rust == 'true' || needs.changes.outputs.ci == 'true'
+    if: always() && (github.event_name != 'pull_request' || needs.changes.result != 'success' || needs.changes.outputs.rust == 'true' || needs.changes.outputs.ci == 'true')
     timeout-minutes: 30
     # Report generation, NOT a merge gate (the exact-count README gate was
     # removed in PR #116). Starts immediately in parallel: clippy/audit are
@@ -776,7 +786,7 @@ jobs:
     name: Cross-platform Check
     runs-on: ${{ matrix.os }}
     needs: changes
-    if: github.event_name != 'pull_request' || needs.changes.result != 'success' || needs.changes.outputs.rust == 'true' || needs.changes.outputs.ci == 'true'
+    if: always() && (github.event_name != 'pull_request' || needs.changes.result != 'success' || needs.changes.outputs.rust == 'true' || needs.changes.outputs.ci == 'true')
     timeout-minutes: 40
     strategy:
       fail-fast: false
@@ -922,7 +932,7 @@ jobs:
     name: Linux musl Check
     runs-on: ubuntu-latest
     needs: changes
-    if: github.event_name != 'pull_request' || needs.changes.result != 'success' || needs.changes.outputs.rust == 'true' || needs.changes.outputs.ci == 'true'
+    if: always() && (github.event_name != 'pull_request' || needs.changes.result != 'success' || needs.changes.outputs.rust == 'true' || needs.changes.outputs.ci == 'true')
     timeout-minutes: 40
     continue-on-error: true
     steps:
@@ -957,7 +967,7 @@ jobs:
     name: Semver Check
     runs-on: ubuntu-latest
     needs: changes
-    if: github.event_name != 'pull_request' || needs.changes.result != 'success' || needs.changes.outputs.rust == 'true' || needs.changes.outputs.ci == 'true'
+    if: always() && (github.event_name != 'pull_request' || needs.changes.result != 'success' || needs.changes.outputs.rust == 'true' || needs.changes.outputs.ci == 'true')
     timeout-minutes: 20
     # Semver is a required gate (flipped from advisory in the v0.8.0 cycle).
     # Previously advisory because breaking changes are routine before 1.0 — they
