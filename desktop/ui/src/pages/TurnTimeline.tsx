@@ -278,6 +278,7 @@ export default function TurnTimeline({ sessionId }: TurnTimelineProps) {
 function SummaryChip({ icon, label }: { icon: string; label: string }) {
   return (
     <span
+      role="listitem"
       className="inline-flex items-center gap-xs rounded-full bg-surface-container-low px-sm py-xs font-label-sm text-label-sm text-on-surface-variant border border-outline-variant/30"
     >
       <Icon name={icon} size="xs" />
