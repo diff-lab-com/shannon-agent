@@ -212,7 +212,10 @@ export default function TurnTimeline({ sessionId }: TurnTimelineProps) {
             })}
           </p>
         </div>
-        <div className="ml-auto flex items-center gap-1.5 shrink-0">
+        <div
+          className="ml-auto flex items-center gap-1.5 shrink-0"
+          aria-label={t('timeline.summary.aria')}
+        >
           {/* C6: self-contained HTML export of the loaded projection. */}
           <Button
             variant="ghost"
