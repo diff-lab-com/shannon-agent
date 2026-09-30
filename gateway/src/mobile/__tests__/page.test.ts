@@ -79,7 +79,6 @@ describe("vendored TweetNaCl ↔ node:crypto Ed25519 interop", () => {
   it("node-signed messages verify under nacl (round trip)", () => {
     const nacl = loadNacl();
     const seed = randomBytes(32);
-    const d = Buffer.from(seed).toString("base64url");
     const priv = createPrivateKey({
       key: nodeKeyPairFromSeed(new Uint8Array(seed)).privateJwk,
       format: "jwk",
