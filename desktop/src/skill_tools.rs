@@ -6,7 +6,7 @@
 //! chat. This module ports the REPL bridge
 //! (`crates/shannon-ui/src/skill_bridge.rs`) to the desktop crate, which
 //! cannot depend on the TUI crate: each user-invocable skill becomes a
-//! `skill_<id>` [`Tool`] backed by the shared [`SkillExecutor`].
+//! `skill_<id>` `Tool` backed by the shared `SkillExecutor`.
 
 use async_trait::async_trait;
 use serde_json::{Value, json};

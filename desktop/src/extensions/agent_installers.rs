@@ -891,8 +891,7 @@ mod tests {
         // Simulate the install path: write via the helper, record exactly
         // what it returned (this is what install now does for both the .md
         // and the manifest routes).
-        let mut flat_files = Vec::new();
-        flat_files.push(
+        let flat_files = vec![
             write_flat_agent_toml(
                 &root,
                 "myrepo",
@@ -903,8 +902,6 @@ mod tests {
                 &[],
             )
             .expect("Code Reviewer must materialize"),
-        );
-        flat_files.push(
             write_flat_agent_toml(
                 &root,
                 "myrepo",
@@ -915,7 +912,7 @@ mod tests {
                 &[],
             )
             .expect("QA Tester v2! must materialize"),
-        );
+        ];
         assert_eq!(
             flat_files,
             vec![
