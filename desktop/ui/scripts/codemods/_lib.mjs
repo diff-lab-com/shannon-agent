@@ -15,8 +15,10 @@
 import ts from 'typescript'
 import { readFileSync, writeFileSync, readdirSync, statSync } from 'node:fs'
 import { join, relative } from 'node:path'
+import { fileURLToPath } from 'node:url'
 
-export const SRC = new URL('../../src', import.meta.url).pathname
+// fileURLToPath: the raw URL pathname is `/C:/…` on Windows (see i18n-check.mjs).
+export const SRC = fileURLToPath(new URL('../../src', import.meta.url))
 
 const EXT = /\.(tsx?|css)$/
 

@@ -108,9 +108,9 @@ impl HeaderSource {
                     return Err(format!("Refusing to execute header command: {desc}"));
                 }
                 warn!("Executing header command: {command}");
-                let output = tokio::process::Command::new("sh")
-                    .arg("-c")
-                    .arg(command)
+                let (program, args) = shannon_types::shell::local_shell(command);
+                let output = tokio::process::Command::new(program)
+                    .args(&args)
                     .output()
                     .await
                     .map_err(|e| format!("Header command failed: {e}"))?;

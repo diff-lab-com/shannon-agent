@@ -142,7 +142,14 @@ fn is_workspace_member(resolved: &Path) -> bool {
     resolved.join("Cargo.toml").exists()
         && resolved
             .canonicalize()
-            .map(|p| p.starts_with(workspace_root().join("crates")))
+            .map(|p| {
+                // Canonicalize the root too: on Windows canonicalize yields
+                // verbatim `\\?\C:\…` paths, which never prefix-match a
+                // plain root.
+                let root = workspace_root().join("crates");
+                let root = root.canonicalize().unwrap_or(root);
+                p.starts_with(root)
+            })
             .unwrap_or(false)
 }
 
@@ -256,9 +263,15 @@ fn dead_code_allow_keep_markers() {
                     continue;
                 }
                 if !line.contains("KEEP:") {
+                    // Normalize to `/` so the keys match the baseline on
+                    // Windows, where `Path::display` renders `\`.
                     let key = format!(
                         "{}:{}",
-                        path.strip_prefix(&crate_root).unwrap().display(),
+                        path.strip_prefix(&crate_root)
+                            .unwrap()
+                            .display()
+                            .to_string()
+                            .replace('\\', "/"),
                         idx + 1
                     );
                     if baseline.contains(key.as_str()) {

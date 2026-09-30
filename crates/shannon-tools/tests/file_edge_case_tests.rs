@@ -555,8 +555,15 @@ async fn test_symlink_read_follows() {
     }
     #[cfg(windows)]
     {
-        std::os::windows::fs::symlink_file(&real_path, &link_path)
-            .expect("Failed to create symlink");
+        // Windows needs SeCreateSymbolicLink (admin / Developer Mode);
+        // skip rather than panic on stock machines.
+        if std::os::windows::fs::symlink_file(&real_path, &link_path).is_err() {
+            eprintln!(
+                "skipping: symlink creation requires privilege (Windows without \
+                 Developer Mode/admin)"
+            );
+            return;
+        }
     }
 
     // Read through the symlink using the raw execute (bypasses sandbox)

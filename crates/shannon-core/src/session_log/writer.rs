@@ -162,9 +162,10 @@ impl SessionLogWriter {
         }
 
         // One handle, opened read+append+create. The read right lets the
-        // recovery scan share this handle's lifetime; the flock below makes
-        // the ownership of the file exclusive to this writer.
-        let file = OpenOptions::new()
+        // recovery scan share this handle's lifetime (see `scan_tail`); the
+        // flock below makes the ownership of the file exclusive to this
+        // writer.
+        let mut file = OpenOptions::new()
             .read(true)
             .append(true)
             .create(true)
@@ -176,7 +177,7 @@ impl SessionLogWriter {
         })?;
 
         // Tail recovery while we hold the exclusive lock (plan §4.1 ③).
-        let scan = scan_tail(&path)?;
+        let scan = scan_tail(&mut file)?;
         if scan.trailing_bytes > 0 {
             file.set_len(scan.complete_bytes)?;
         }
@@ -560,17 +561,17 @@ fn now_ts_ns() -> u64 {
 /// Scan a log file, counting complete lines and detecting a trailing partial
 /// line (a crash-window write that never finished). Returns zeros for a
 /// missing file (fresh session).
-fn scan_tail(path: &Path) -> Result<TailScan, SessionLogError> {
-    if !path.exists() {
-        return Ok(TailScan {
-            complete_lines: 0,
-            complete_bytes: 0,
-            trailing_bytes: 0,
-            last_turn: None,
-        });
-    }
-    let file = File::open(path)?;
-    let mut reader = std::io::BufReader::new(file);
+///
+/// Reads through the writer's **own** handle: the caller holds the exclusive
+/// byte-range lock at this point, and on Windows those locks are mandatory —
+/// a second handle (the old `File::open(path)` here) gets os error 33
+/// (ERROR_LOCK_VIOLATION) even for the lock owner's own file. The lock owner
+/// reading through the locked handle is always permitted, and this keeps the
+/// recovery scan inside the lock on every platform.
+fn scan_tail(file: &mut File) -> Result<TailScan, SessionLogError> {
+    use std::io::{Seek, SeekFrom};
+    let mut reader = std::io::BufReader::new(&mut *file);
+    reader.seek(SeekFrom::Start(0))?;
     let mut buf = Vec::new();
     let mut last_complete_line: Vec<u8> = Vec::new();
     let mut complete_lines = 0u64;
@@ -599,6 +600,11 @@ fn scan_tail(path: &Path) -> Result<TailScan, SessionLogError> {
         .ok()
         .and_then(|line| serde_json::from_str::<SessionEvent>(line).ok())
         .map(|event| event.turn);
+    // Park the shared handle back at EOF. Writes are append-mode (they go
+    // to EOF regardless of the pointer on both Windows and POSIX), but a
+    // defined position keeps any future non-append use honest.
+    drop(reader);
+    file.seek(SeekFrom::End(0))?;
     Ok(TailScan {
         complete_lines,
         complete_bytes,

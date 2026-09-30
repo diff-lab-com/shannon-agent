@@ -24,7 +24,11 @@ import {
   InlinePanelModal,
   MessageArea,
   ComposerContext,
-} from './chat'
+  // `/index` is load-bearing: bare `./chat` resolves case-insensitively to
+  // this file (Chat.tsx) on Windows — a self-import that leaves every
+  // barrel binding undefined. Only observable on case-insensitive
+  // filesystems, i.e. never on the Linux CI that runs the vitest suite.
+} from './chat/index'
 import { VIRTUALIZE_THRESHOLD } from './chat/MessageArea'
 import type { EditingMessageState } from './chat/ComposerContext'
 import type { ProviderStatus } from '@/types'

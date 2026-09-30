@@ -1371,6 +1371,10 @@ mod tests {
     /// decision ([`prunable_since`] on `None`) fail closed. Root ignores
     /// directory permission bits, so the chmod simulation is skipped when
     /// the stat still succeeds.
+    // unix-only: the "unreadable dir" simulation relies on mode bits, which
+    // Windows does not honor for stat — the test body would degenerate to
+    // its early-return anyway, and `PermissionsExt` does not compile there.
+    #[cfg(unix)]
     #[test]
     fn unreadable_session_dirs_are_never_deleted_by_archived_gc() {
         let tmp = tempfile::tempdir().unwrap();

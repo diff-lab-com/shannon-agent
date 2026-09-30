@@ -188,7 +188,7 @@ async fn run_shell_captured(
 /// Windows that needs Git Bash (or WSL) on PATH, and without it every Bash
 /// call dies with a bare "program not found" — point the model at the
 /// PowerShell tool instead (always present on Windows).
-fn shell_spawn_error(program: &str, e: &std::io::Error) -> std::io::Error {
+pub(crate) fn shell_spawn_error(program: &str, e: &std::io::Error) -> std::io::Error {
     let text = e.to_string();
     let not_found = matches!(e.kind(), std::io::ErrorKind::NotFound)
         || text.contains("not found")
@@ -1878,7 +1878,11 @@ impl BashTool {
             .direct_process
             .spawn_piped(&spec)
             .await
-            .map_err(|e| ToolError::ExecutionFailed(format!("Failed to spawn command: {e}")))?;
+            // The streaming path is the default Bash-tool path on Windows
+            // (no sandbox backend ⇒ use_streaming is always true), so a
+            // missing Git Bash must get the same guidance as the captured
+            // path instead of a bare "program not found".
+            .map_err(|e| ToolError::ExecutionFailed(shell_spawn_error("bash", &e).to_string()))?;
 
         let stdout = child
             .take_stdout()
@@ -2076,11 +2080,26 @@ impl PowerShellTool {
         env: Option<&std::collections::HashMap<String, String>>,
         timeout_ms: Option<u64>,
     ) -> Result<CommandOutput, std::io::Error> {
+        // Windows consoles default to the OEM code page (CP936 on zh-CN,
+        // CP437/850 elsewhere) for piped PowerShell output, which the
+        // captured path then decodes as UTF-8 — every non-ASCII byte
+        // mojibakes. Force UTF-8 in both directions before the user
+        // command; the console assignment is guarded because console-less
+        // (headless) hosts can reject it and would otherwise abort the
+        // command itself.
+        let effective = if cfg!(target_os = "windows") {
+            format!(
+                "try {{ [Console]::OutputEncoding = [System.Text.Encoding]::UTF8 }} catch {{ }}; \
+                 $OutputEncoding = [System.Text.Encoding]::UTF8; {command}"
+            )
+        } else {
+            command.to_string()
+        };
         run_shell_captured(
             self.process.as_ref(),
             "powershell",
             "-Command",
-            command,
+            &effective,
             cwd,
             env,
             timeout_ms,

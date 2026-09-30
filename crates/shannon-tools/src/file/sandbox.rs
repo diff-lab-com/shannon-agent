@@ -963,17 +963,25 @@ mod tests {
             path
         }
 
-        fn create_symlink(&self, link: &str, target: &Path) -> PathBuf {
+        /// Create `link` → `target`. `None` when the OS refuses — Windows
+        /// needs SeCreateSymbolicLink (admin or Developer Mode), so tests
+        /// that depend on the link existing must skip instead of panicking.
+        fn create_symlink(&self, link: &str, target: &Path) -> Option<PathBuf> {
             let link_path = self.file(link);
             if let Some(parent) = link_path.parent() {
                 fs::create_dir_all(parent).expect("Failed to create parent dirs");
             }
             #[cfg(unix)]
-            std::os::unix::fs::symlink(target, &link_path).expect("Failed to create symlink");
+            {
+                std::os::unix::fs::symlink(target, &link_path).expect("Failed to create symlink");
+                Some(link_path)
+            }
             #[cfg(windows)]
-            std::os::windows::fs::symlink_file(target, &link_path)
-                .expect("Failed to create symlink");
-            link_path
+            {
+                std::os::windows::fs::symlink_file(target, &link_path)
+                    .map(|_| link_path)
+                    .ok()
+            }
         }
     }
 
@@ -1465,7 +1473,13 @@ mod tests {
     async fn test_symlink_inside_allowed_root() {
         let td = TestDir::new();
         let target = td.create_file("real.txt", "real content");
-        let link = td.create_symlink("link.txt", &target);
+        let Some(link) = td.create_symlink("link.txt", &target) else {
+            eprintln!(
+                "skipping: symlink creation requires privilege (Windows without \
+                 Developer Mode/admin)"
+            );
+            return;
+        };
 
         let sandbox = PathSandbox::with_config(SandboxConfig {
             allowed_roots: vec![td.path().to_path_buf()],
@@ -1493,7 +1507,14 @@ mod tests {
         fs::write(&outside_file, "secret data").expect("Failed to write outside file");
 
         // Create a symlink inside the sandbox pointing outside
-        let link = td.create_symlink("escape.txt", &outside_file);
+        let Some(link) = td.create_symlink("escape.txt", &outside_file) else {
+            eprintln!(
+                "skipping: symlink creation requires privilege (Windows without \
+                 Developer Mode/admin)"
+            );
+            let _ = fs::remove_dir_all(&outside_dir);
+            return;
+        };
 
         let sandbox = PathSandbox::with_config(SandboxConfig {
             allowed_roots: vec![td.path().to_path_buf()],
@@ -1507,6 +1528,9 @@ mod tests {
         let _ = fs::remove_dir_all(&outside_dir);
     }
 
+    // unix-only: the simulated attack links /etc/passwd, which does not
+    // exist (and means nothing) on Windows.
+    #[cfg(unix)]
     #[tokio::test]
     async fn test_symlink_to_system_file_blocked() {
         let td = TestDir::new();
@@ -1514,7 +1538,6 @@ mod tests {
         // Try to create a symlink to /etc/passwd (a common attack vector)
         // Note: This test doesn't create the actual symlink (would need privileges)
         // but verifies that even if such a symlink existed, it would be blocked
-        #[cfg(unix)]
         {
             let etc_passwd = PathBuf::from("/etc/passwd");
             if etc_passwd.exists() {
@@ -1552,7 +1575,14 @@ mod tests {
         fs::write(&outside_file, "secret data").expect("Failed to write outside file");
 
         // Create first symlink (outside)
-        let _link2 = td.create_symlink("link2", &outside_file);
+        let Some(_link2) = td.create_symlink("link2", &outside_file) else {
+            eprintln!(
+                "skipping: symlink creation requires privilege (Windows without \
+                 Developer Mode/admin)"
+            );
+            let _ = fs::remove_dir_all(&outside_dir);
+            return;
+        };
 
         #[cfg(unix)]
         {

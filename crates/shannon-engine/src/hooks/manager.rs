@@ -8,6 +8,17 @@ use super::config::{HookDecision, HookDef, HookResult, HookType, HooksFile};
 use super::events::{HookEvent, HookEventType};
 use super::types::HookError;
 
+/// Hook commands are `sh -c` scripts by contract (Claude Code compatible).
+/// On `sh`-less Windows this falls back to `cmd /C` (see
+/// [`shannon_types::shell::local_shell`]) so hooks do not all fail with a
+/// spawn NotFound.
+fn hook_shell_command(command: &str) -> tokio::process::Command {
+    let (program, args) = shannon_types::shell::local_shell(command);
+    let mut cmd = tokio::process::Command::new(program);
+    cmd.args(&args);
+    cmd
+}
+
 /// The hook manager that loads configs and executes hooks on events
 pub struct HookManager {
     /// Combined hooks configuration (user + project level)
@@ -263,9 +274,7 @@ impl HookManager {
         }
 
         let result = tokio::time::timeout(timeout, async {
-            let mut child = tokio::process::Command::new("sh")
-                .arg("-c")
-                .arg(command)
+            let mut child = hook_shell_command(command)
                 .stdin(std::process::Stdio::piped())
                 .stdout(std::process::Stdio::piped())
                 .stderr(std::process::Stdio::piped())
@@ -344,9 +353,7 @@ impl HookManager {
         let command = command.to_string();
 
         tokio::spawn(async move {
-            match tokio::process::Command::new("sh")
-                .arg("-c")
-                .arg(&command)
+            match hook_shell_command(&command)
                 .stdin(std::process::Stdio::piped())
                 .stdout(std::process::Stdio::null())
                 .stderr(std::process::Stdio::null())
@@ -549,9 +556,7 @@ impl HookManager {
         let command = &hook_def.command;
 
         let result = tokio::time::timeout(timeout, async {
-            let mut child = tokio::process::Command::new("sh")
-                .arg("-c")
-                .arg(command)
+            let mut child = hook_shell_command(command)
                 .stdin(std::process::Stdio::piped())
                 .stdout(std::process::Stdio::piped())
                 .stderr(std::process::Stdio::piped())

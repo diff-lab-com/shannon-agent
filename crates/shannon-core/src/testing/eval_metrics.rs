@@ -1262,8 +1262,14 @@ mod tests {
         write_log(dir.path(), "aaa", Vec::new());
         let found = find_event_logs(dir.path());
         assert_eq!(found.len(), 2);
-        assert!(found[0].display().to_string().ends_with("aaa/events.jsonl"));
-        assert!(found[1].display().to_string().ends_with("bbb/events.jsonl"));
+        // Compare path components, not a `/` string suffix — Windows
+        // renders `\`.
+        let ends_with_log = |p: &std::path::Path, id: &str| {
+            p.file_name() == Some(std::ffi::OsStr::new("events.jsonl"))
+                && p.parent().and_then(|d| d.file_name()) == Some(std::ffi::OsStr::new(id))
+        };
+        assert!(ends_with_log(&found[0], "aaa"), "{:?}", found[0]);
+        assert!(ends_with_log(&found[1], "bbb"), "{:?}", found[1]);
     }
 
     #[test]
