@@ -799,6 +799,44 @@ describe('TerminalPanel (scrollback replay — US6)', () => {
     expect(rendered(h.terminals[0])).not.toContain('DUP-2')
   })
 
+  it('flushes a queued seq-0 event when the snapshot is EMPTY (reaped-session shape)', async () => {
+    // seq-0 overload, regression: `("", endSeq: 0)` is the shape history()
+    // answers for an unknown id / reaped session — an EMPTY snapshot. seq 0
+    // is also a legitimate watermark (see the guard-rail test below), but
+    // an empty snapshot contains none of the queued event's bytes, so the
+    // event must be WRITTEN (it used to be dropped as "already replayed",
+    // losing the terminal's final output).
+    let resolveHistory: (v: { data: string; endSeq?: number }) => void = () => {}
+    vi.mocked(api.terminalHistory).mockImplementation(
+      () => new Promise((resolve) => { resolveHistory = resolve }),
+    )
+    await openPanel()
+    await waitFor(() => expect(h.terminals.length).toBe(1))
+    const { terminalId } = await vi.mocked(api.terminalSpawn).mock.results[0]!.value
+    h.outputHandler?.({ terminalId, data: encode('FINAL-CHUNK'), seq: 0 })
+    expect(rendered(h.terminals[0])).toBe('')
+    resolveHistory({ data: '', endSeq: 0 })
+    await waitFor(() => expect(rendered(h.terminals[0])).toBe('FINAL-CHUNK'))
+  })
+
+  it('still drops a queued seq-0 event when a NON-EMPTY snapshot covers chunk 0', async () => {
+    // seq-0 overload, guard-rail: a snapshot with bytes and endSeq 0
+    // legitimately contains exactly chunk 0 — the drop predicate must keep
+    // applying there (writing the queued seq-0 event would duplicate it).
+    let resolveHistory: (v: { data: string; endSeq?: number }) => void = () => {}
+    vi.mocked(api.terminalHistory).mockImplementation(
+      () => new Promise((resolve) => { resolveHistory = resolve }),
+    )
+    await openPanel()
+    await waitFor(() => expect(h.terminals.length).toBe(1))
+    const { terminalId } = await vi.mocked(api.terminalSpawn).mock.results[0]!.value
+    h.outputHandler?.({ terminalId, data: encode('CHUNK-ZERO'), seq: 0 })
+    h.outputHandler?.({ terminalId, data: encode('CHUNK-ONE'), seq: 1 })
+    expect(rendered(h.terminals[0])).toBe('')
+    resolveHistory({ data: encode('CHUNK-ZERO'), endSeq: 0 })
+    await waitFor(() => expect(rendered(h.terminals[0])).toBe('CHUNK-ZEROCHUNK-ONE'))
+  })
+
   it('flushes seq-marked queued events when the snapshot carries no endSeq (legacy backend)', async () => {
     // No endSeq on the response (demo backend, legacy payload): the
     // conservative fallback keeps the old flush-everything behavior.

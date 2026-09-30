@@ -355,8 +355,10 @@ export function TerminalPanel({ projectDir }: TerminalPanelProps) {
     // be processed after the listeners attached, landing the same bytes
     // in both the snapshot and the queue). The real invariant:
     // history ⊕ (queued events with seq > endSeq), in order, no loss, no
-    // duplication. Events without a seq (demo backend, legacy payloads)
-    // or a snapshot without endSeq fall back to flush-everything.
+    // duplication. Events without a seq (demo backend, legacy payloads),
+    // a snapshot without endSeq, or an EMPTY snapshot (the `("", 0)`
+    // reaped-session shape — nothing replayed, so nothing may be
+    // dropped) fall back to flush-everything.
     void (async () => {
       await Promise.all([outputReady, exitReady]);
       if (disposed) return;
@@ -367,7 +369,12 @@ export function TerminalPanel({ projectDir }: TerminalPanelProps) {
         /* no replay backend — live stream only */
       }
       if (disposed) return;
-      if (history && history.data) term.write(decodeTerminalOutput(history.data));
+      // `data` stays pure bytes: the drop predicate below keys off the
+      // DECODED length (base64 of "" decodes to zero bytes).
+      const decodedHistory = history
+        ? decodeTerminalOutput(history.data)
+        : new Uint8Array(0);
+      if (decodedHistory.length > 0) term.write(decodedHistory);
       const endSeq = history?.endSeq;
       const queued = entry.pendingLive;
       entry.pendingLive = [];
@@ -375,7 +382,17 @@ export function TerminalPanel({ projectDir }: TerminalPanelProps) {
       for (const { bytes, seq } of queued) {
         // Already replayed by the snapshot → drop; strictly-newer events
         // (or anything unsequenced) flush in arrival order.
-        if (seq != null && endSeq != null && seq <= endSeq) continue;
+        //
+        // seq-0 overload: the predicate applies ONLY to a non-empty
+        // snapshot. An empty snapshot also reports `endSeq: 0` (unknown
+        // id / reaped session) but contains none of the queued bytes —
+        // dropping a queued seq-0 event there would lose the terminal's
+        // final output. A non-empty snapshot with `endSeq: 0` (exactly
+        // chunk 0) keeps dropping it.
+        if (
+          decodedHistory.length > 0
+          && seq != null && endSeq != null && seq <= endSeq
+        ) continue;
         term.write(bytes);
       }
       term.scrollToBottom();
