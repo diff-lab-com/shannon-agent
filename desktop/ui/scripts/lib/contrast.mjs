@@ -53,6 +53,14 @@ export const PAIRS = [
   ['color-on-secondary-container', 'color-secondary-container', 4.5, 'MD3 secondary-container label'],
   ['color-on-tertiary-container', 'color-tertiary-container', 4.5, 'MD3 tertiary-container label'],
   ['color-on-error-container', 'color-error-container', 4.5, 'MD3 error-container label'],
+  // Status hues (success/warning/info) complete the error template — every
+  // theme must pass the same four-role AA contract (2026-09 status-tokens PR).
+  ['color-on-success', 'color-success', 4.5, 'MD3 success label'],
+  ['color-on-success-container', 'color-success-container', 4.5, 'MD3 success-container label'],
+  ['color-on-warning', 'color-warning', 4.5, 'MD3 warning label'],
+  ['color-on-warning-container', 'color-warning-container', 4.5, 'MD3 warning-container label'],
+  ['color-on-info', 'color-info', 4.5, 'MD3 info label'],
+  ['color-on-info-container', 'color-info-container', 4.5, 'MD3 info-container label'],
   ['color-link', 'background', 4.5, 'link text on background'],
   ['color-link', 'color-surface-container-lowest', 4.5, 'link text on markdown surfaces'],
   ['outline', 'background', 3.0, 'borders / iconography vs background'],
@@ -87,6 +95,23 @@ export const CHIP_COMPOSITES = [
   ['color-secondary', 0.10, 'color-surface-container-low', 4.5, 'secondary chip label on secondary/10 tint'],
   ['color-secondary', 0.15, 'color-surface-container-low', 4.5, 'secondary chip label on secondary/15 tint'],
   ['color-secondary', 0.20, 'color-surface-container-low', 4.5, 'secondary chip label on secondary/20 tint'],
+  // Status hues (success/warning/info): the status-tokens PR (2026-09) put
+  // `bg-success/10`-style chips on the same footing as the accent family.
+  // Like the entries above they are usage-conditioned — the paired call
+  // sites were migrated to the container roles, so these stay dormant until
+  // a literal pairs `text-success` (…) with a rest-state `bg-success/<n>`.
+  ['color-success', 0.05, 'color-surface-container-low', 4.5, 'success text on success/5 tint'],
+  ['color-success', 0.10, 'color-surface-container-low', 4.5, 'success chip label on success/10 tint'],
+  ['color-success', 0.15, 'color-surface-container-low', 4.5, 'success chip label on success/15 tint'],
+  ['color-success', 0.20, 'color-surface-container-low', 4.5, 'success chip label on success/20 tint'],
+  ['color-warning', 0.05, 'color-surface-container-low', 4.5, 'warning text on warning/5 tint'],
+  ['color-warning', 0.10, 'color-surface-container-low', 4.5, 'warning chip label on warning/10 tint'],
+  ['color-warning', 0.15, 'color-surface-container-low', 4.5, 'warning chip label on warning/15 tint'],
+  ['color-warning', 0.20, 'color-surface-container-low', 4.5, 'warning chip label on warning/20 tint'],
+  ['color-info', 0.05, 'color-surface-container-low', 4.5, 'info text on info/5 tint'],
+  ['color-info', 0.10, 'color-surface-container-low', 4.5, 'info chip label on info/10 tint'],
+  ['color-info', 0.15, 'color-surface-container-low', 4.5, 'info chip label on info/15 tint'],
+  ['color-info', 0.20, 'color-surface-container-low', 4.5, 'info chip label on info/20 tint'],
 ]
 
 // Files where the pattern is still present on purpose: owned by in-flight
@@ -123,7 +148,9 @@ export function chipCompositesInUse(srcDir) {
     ts.forEachChild(sf, visit)
   }
   const scanText = text => {
-    for (const hue of ['primary', 'secondary', 'tertiary', 'error']) {
+    // Keep in sync with check-design-tokens.mjs HUES and the
+    // migrate-accent-chips codemod HUES map.
+    for (const hue of ['primary', 'secondary', 'tertiary', 'error', 'success', 'warning', 'info']) {
       if (!TEXT_RE(hue).test(text)) continue
       for (const m of text.matchAll(BG_RE(hue))) used.add(`${hue}/${Number(m[1])}`)
     }

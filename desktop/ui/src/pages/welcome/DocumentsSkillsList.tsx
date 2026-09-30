@@ -1,94 +1,81 @@
-// Optional P2.4 documents skills recommendations. Gated behind
-// DOCUMENTS_SKILLS_AVAILABLE — the section is hidden until the skill repos
-// are published. Extracted from Welcome.tsx (T3.1).
+// Office Wave 1 A3' — honest documents-capabilities card. The three community
+// skill repos this section used to offer (pandoc / python-docx / markdown
+// beautify) are still unpublished, so install buttons are gone for good;
+// instead the card surfaces the document skills that ARE built into the
+// engine, gated on a real host probe: python3 present → list the slash
+// commands; missing → say so and how to fix it. Renders nothing while the
+// probe is in flight or failed — the card never claims anything it cannot
+// verify (docs/research/2026-09-29-office-scenario-competitive-research.md
+// §10 v2 A3').
+import { useEffect, useState } from 'react'
 import { useIntl } from 'react-intl'
-import { Spinner } from '@/components/ui/loading-state'
-import { Button } from '@/components/ui/button'
-import { DOCUMENTS_SKILLS, type DocumentsSkill } from './constants'
+import { probeHostRuntime } from '@/lib/tauri-api'
 
-interface SkillState {
-  status: 'idle' | 'installing' | 'installed' | 'failed'
-  error?: string
-}
+const BUILTIN_DOCUMENT_SKILLS = ['/docx-report', '/xlsx-table', '/ppt-outline'] as const
 
-interface DocumentsSkillsListProps {
-  skillState: Record<string, SkillState>
-  onInstall: (skill: DocumentsSkill) => void
-  onBrowseLater: () => void
-}
-
-export function DocumentsSkillsList({ skillState, onInstall, onBrowseLater }: DocumentsSkillsListProps) {
+export function DocumentsSkillsList() {
   const intl = useIntl()
+  // null = probe still in flight or failed → stay silent rather than guess.
+  const [python3Ready, setPython3Ready] = useState<boolean | null>(null)
+
+  useEffect(() => {
+    let cancelled = false
+    probeHostRuntime()
+      .then(probe => {
+        if (!cancelled) setPython3Ready(Boolean(probe?.python3))
+      })
+      .catch(() => {
+        if (!cancelled) setPython3Ready(false)
+      })
+    return () => {
+      cancelled = true
+    }
+  }, [])
+
+  if (python3Ready === null) return null
+
   return (
-    <div className="mt-md p-md rounded-xl border border-outline-variant/50 bg-surface-container-low">
+    <div
+      className="mt-md p-md rounded-xl border border-outline-variant/50 bg-surface-container-low"
+      data-testid="welcome-documents-skills"
+    >
       <div className="flex items-center gap-xs mb-xs">
         <span className="material-symbols-outlined text-primary icon-md">extension</span>
         <span className="font-headline-md text-on-surface">
           {intl.formatMessage({ id: 'welcome.skills.title' })}
         </span>
       </div>
-      <p className="font-body-sm text-on-surface-variant mb-md">
-        {intl.formatMessage({ id: 'welcome.skills.subtitle' })}
-      </p>
-      <ul className="space-y-sm">
-        {DOCUMENTS_SKILLS.map(skill => {
-          const state = skillState[skill.id] ?? { status: 'idle' as const }
-          return (
-            <li
-              key={skill.id}
-              className="flex items-start gap-sm p-sm rounded-lg bg-surface-container-lowest border border-outline-variant/30"
-            >
-              <span className="material-symbols-outlined text-on-surface-variant icon-md mt-[2px] shrink-0">
-                {skill.icon}
-              </span>
-              <div className="flex-1 min-w-0">
-                <div className="font-label-md text-on-surface">{intl.formatMessage({ id: skill.labelKey })}</div>
-                <div className="font-body-sm text-on-surface-variant mt-[2px]">
-                  {intl.formatMessage({ id: skill.descKey })}
-                </div>
-                {state.status === 'failed' && state.error && (
-                  <div className="font-body-sm text-error mt-xs">{state.error}</div>
-                )}
-              </div>
-              <Button
-                type="button"
-                variant="outline"
-                onClick={() => onInstall(skill)}
-                disabled={state.status === 'installing' || state.status === 'installed'}
-                className="shrink-0 px-md py-xs rounded-lg font-label-md text-label-sm bg-surface-container-high hover:bg-surface-container-highest border border-outline-variant/50 text-on-surface cursor-pointer transition-colors disabled:opacity-50 disabled:cursor-not-allowed flex items-center gap-xs"
-                aria-label={intl.formatMessage({ id: 'welcome.skills.install.aria' }, { name: intl.formatMessage({ id: skill.labelKey }) })}
+      {python3Ready ? (
+        <>
+          <p className="font-body-sm text-on-surface-variant mb-sm">
+            {intl.formatMessage({ id: 'welcome.skills.builtinIntro' })}
+          </p>
+          <ul className="flex flex-wrap gap-sm" aria-label={intl.formatMessage({ id: 'welcome.skills.title' })}>
+            {BUILTIN_DOCUMENT_SKILLS.map(cmd => (
+              <li
+                key={cmd}
+                className="px-sm py-xs rounded-lg bg-surface-container-lowest border border-outline-variant/30 font-mono text-body-sm text-on-surface"
               >
-                {state.status === 'installing' && (
-                  <Spinner className="text-body-sm" />
-                )}
-                {state.status === 'installed' ? (
-                  <span className="material-symbols-outlined icon-sm">check</span>
-                ) : state.status === 'installing' ? (
-                  intl.formatMessage({ id: 'welcome.skills.installing' })
-                ) : (
-                  intl.formatMessage({ id: 'welcome.skills.install' })
-                )}
-              </Button>
-            </li>
-          )
-        })}
-      </ul>
-      <p className="font-body-sm text-on-surface-variant mt-md">
-        {intl.formatMessage(
-          { id: 'welcome.skills.later' },
-          {
-            link: (chunks: React.ReactNode) => (
-              <Button
-                variant="link"
-                onClick={onBrowseLater}
-                className="text-primary hover:underline cursor-pointer p-0 h-auto"
-              >
-                {chunks}
-              </Button>
-            ),
-          },
-        )}
-      </p>
+                {cmd}
+              </li>
+            ))}
+          </ul>
+        </>
+      ) : (
+        <div className="flex items-start gap-sm">
+          <span className="material-symbols-outlined text-on-surface-variant icon-md mt-[2px]" aria-hidden="true">
+            info
+          </span>
+          <div>
+            <div className="font-label-md text-on-surface">
+              {intl.formatMessage({ id: 'welcome.skills.hostMissing.title' })}
+            </div>
+            <div className="font-body-sm text-on-surface-variant mt-[2px]">
+              {intl.formatMessage({ id: 'welcome.skills.hostMissing.desc' })}
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   )
 }

@@ -42,22 +42,47 @@ test.describe('Select interactions', () => {
     await expect(trigger).toContainText(/·\s*Deep/i, { timeout: 10000 })
   })
 
-  test('model chip commit syncs the header selector on non-chat pages', async ({ page }) => {
+  test('model chip switch is session-scoped; the global default stays untouched (R2-1)', async ({ page }) => {
     await page.goto('/chat')
     await page.getByRole('textbox', { name: 'Message' }).waitFor({ timeout: 15000 })
     await page.waitForTimeout(800)
 
     const chip = page.getByRole('combobox', { name: 'Model' })
     await chip.click()
-    await page.getByRole('option', { name: 'GPT-5', exact: true }).click()
+    // R2-3: model rows carry context/price meta, so locators use the stable
+    // per-model test id instead of the accessible name.
+    await page.getByTestId('model-option-gpt-5').click()
+    // The chip reflects the SESSION override, never silently: "· session".
     await expect(chip).toContainText('GPT-5', { timeout: 10000 })
-    // Both surfaces write the same config keys; the Header selector (hidden
-    // on /chat) reflects the commit on the next page. Navigate via the SPA
-    // link — a full page reload would reset the mock backend's in-memory
-    // demoConfig and lose the commit.
+    await expect(chip).toContainText('session', { timeout: 10000 })
+    // The Header selector (hidden on /chat) still shows the GLOBAL default —
+    // R2-1 kept the chip switch session-local. Navigate via the SPA link — a
+    // full page reload resets the mock backend's in-memory state.
     await page.getByRole('link', { name: 'Settings' }).click()
     await expect(page.getByRole('button', { name: 'Select model' })).toContainText(
-      'GPT-5',
+      /claude-sonnet-4-6/i,
+      { timeout: 10000 },
+    )
+  })
+
+  test('"Set as default" in the chip menu promotes the session pick to the global default (R2-1)', async ({ page }) => {
+    await page.goto('/chat')
+    await page.getByRole('textbox', { name: 'Message' }).waitFor({ timeout: 15000 })
+    await page.waitForTimeout(800)
+
+    const chip = page.getByRole('combobox', { name: 'Model' })
+    await chip.click()
+    await page.getByTestId('model-option-gpt-5').click()
+    await expect(chip).toContainText('GPT-5', { timeout: 10000 })
+
+    // The menu's "Set as default" performs the pre-R2-1 global write.
+    await chip.click()
+    await page.getByTestId('model-action-set-default').click()
+    await page.getByRole('link', { name: 'Settings' }).click()
+    // Demo get_status mirrors the demo config, so the promoted model id
+    // (gpt-5, the canonical catalog id) shows on the non-chat header.
+    await expect(page.getByRole('button', { name: 'Select model' })).toContainText(
+      /gpt-5/i,
       { timeout: 10000 },
     )
   })

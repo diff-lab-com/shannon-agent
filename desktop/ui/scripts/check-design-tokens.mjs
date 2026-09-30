@@ -62,6 +62,7 @@ const ALLOWLIST = [
   'components/terminal/',   // xterm.js API consumes raw hex palettes by contract
   'components/editor/cmTheme.ts', // same contract: CodeMirror's theme extension needs literal palette floors (mirrors xtermTheme)
   'components/artifact/MermaidRenderer.tsx', // hex lives inside a standalone iframe document — parent vars cannot cross
+  'lib/timelineExport.ts', // same contract: standalone exported HTML document — parent vars cannot cross (office Wave 3 C6)
   'components/CommandPalette.tsx', // synonyms field preserves retired terms during the migration window (audit §6.1)
   'lib/mock/',              // demo-mode runtime cssText (not part of the design system)
   // G7 chip migration deferred: files are owned by in-flight parallel PRs
@@ -89,7 +90,9 @@ const isAllowed = p => ALLOWLIST.some(a => rel(p).startsWith(a))
 // Same rule as scripts/lib/contrast.mjs chipCompositesInUse and the
 // migrate-accent-chips codemod: a hue's `text-<hue>` (any variant prefix)
 // plus an UNPREFIXED rest-state `bg-<hue>/<n>` in one class string.
-const HUES = ['primary', 'secondary', 'tertiary', 'error']
+// success/warning/info joined when the status hues became real tokens
+// (2026-09) — keep the three lists in sync.
+const HUES = ['primary', 'secondary', 'tertiary', 'error', 'success', 'warning', 'info']
 const TINT_TEXT_RE = hue => new RegExp(`(?:[\\w@/\\[\\].-]+:)?text-${hue}(?![\\w/-])`)
 const TINT_BG_RE = new RegExp(`(?<![\\w./:-])bg-(${HUES.join('|')})/(\\d+)(?![\\w-])`, 'g')
 

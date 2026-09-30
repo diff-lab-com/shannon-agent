@@ -456,6 +456,7 @@ async fn seed_anthropic_profile(state: &AppState, model_id: &str) {
         fallback_models: Vec::new(),
         quirks: Default::default(),
         tiers: ProviderTiers::default(),
+        models: Vec::new(),
     };
     let model_profile = ModelProfile {
         name: "default".to_string(),

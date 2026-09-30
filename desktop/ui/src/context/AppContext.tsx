@@ -131,6 +131,28 @@ export function AppProvider({ children }: { children: ReactNode }) {
   const [sessionActivity, setSessionActivity] = useState<Record<string, SessionActivity>>({})
   const sessionActivityRef = useRef<Map<string, SessionActivity>>(new Map())
   const [currentSessionId, setCurrentSessionId] = useState<string | null>(null)
+  // office Wave 3 C4: per-session scratchpad of source refs (paths/URLs) for
+  // the Context tab's "Session sources" block. In-memory draft board —
+  // deliberately NOT persisted and NOT wired into the send pipeline.
+  const [sessionSources, setSessionSources] = useState<Record<string, string[]>>({})
+  const addSessionSource = useCallback((sessionId: string, item: string) => {
+    const trimmed = item.trim()
+    if (!sessionId || !trimmed) return
+    setSessionSources(prev => {
+      const list = prev[sessionId] ?? []
+      if (list.includes(trimmed)) return prev
+      return { ...prev, [sessionId]: [...list, trimmed] }
+    })
+  }, [])
+  const removeSessionSource = useCallback((sessionId: string, item: string) => {
+    setSessionSources(prev => {
+      const list = (prev[sessionId] ?? []).filter(s => s !== item)
+      const next = { ...prev }
+      if (list.length === 0) delete next[sessionId]
+      else next[sessionId] = list
+      return next
+    })
+  }, [])
   // P1-1 window mode: this webview was opened as a dedicated session window
   // (`/?windowSession=<id>`). In-memory only — parsed from the URL once,
   // never persisted, so the main window is unaffected.
@@ -1014,8 +1036,9 @@ export function AppProvider({ children }: { children: ReactNode }) {
   const sessionValue = useMemo<SessionContextValue>(() => ({
     sessions, sessionActivity, goalRunsBySession, subagentLive, currentSessionId, windowSessionId, switchingSession, createSession, createSessionInWorktree, switchSession: switchToSession,
     deleteSession: deleteSessionAction, renameSession: renameSessionAction, refreshSessions,
+    sessionSources, addSessionSource, removeSessionSource,
   }), [sessions, sessionActivity, goalRunsBySession, subagentLive, currentSessionId, windowSessionId, switchingSession, createSession, createSessionInWorktree, switchToSession,
-    deleteSessionAction, renameSessionAction, refreshSessions])
+    deleteSessionAction, renameSessionAction, refreshSessions, sessionSources, addSessionSource, removeSessionSource])
 
   const catalogValue = useMemo<CatalogContextValue>(() => ({
     status, config, providerStatus, models, agents, tasks, mcpServers, backgroundTasks, permissionRequest,

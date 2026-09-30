@@ -163,3 +163,12 @@ rename_symbol: Rename a symbol (variable, function, class, etc.) across the enti
 window_focus: Bring a window to the foreground by title or process substring. Restores it if minimized.
 window_list: List visible top-level windows: title, owning process, and handle id. Use the title with `window_focus` or `computer` ui actions.
 workspace_symbol: Search for symbols across the entire workspace by name. Uses the language server to find functions, classes, structs, etc. matching a query pattern across all files in the project.
+write_xlsx: Writes a native Microsoft Excel .xlsx file (real binary workbook — no Python or external tooling involved).
+
+`path` is the target file (same scope rules as Write; missing parent
+directories are created). `sheets` lists the worksheets in order; every cell
+is a string and is smart-typed: a value starting with `=` becomes a live
+spreadsheet formula, a numeric value becomes a real number cell, everything
+else is stored as text. Sheet names must be unique, at most 31 characters,
+and free of []:*?/\ characters. Styling, merged cells and charts are not
+supported — keep tables plain.

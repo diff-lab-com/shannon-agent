@@ -123,6 +123,14 @@ BYOK、无中间商：连接一次提供商，Shannon 即在本地保存密钥�
 - **IM 渠道** —— Telegram / Discord / Slack / 飞书 / 钉钉 入站：私聊直接响应，群聊 @ 触发；进度与结果回推原会话
 - **手机派发** —— 扫码配对，手机上派活与审批
 
+### Office 与知识工作者工作流
+
+面向非开发者，同一个引擎交付的是成品文档，而不只是对话（[产品叙事](docs/product/office-agent-story.md)）：
+
+- **内置文档技能** —— `/docx-report`、`/xlsx-table`、`/ppt-outline`、`/meeting-minutes`、`/style-extract`（从已有 .pptx/.docx 反提品牌字体/配色/版式笔记）零依赖产出真文件；引擎原生 `write_xlsx` 在没有 python3 时也能生成带公式的表格
+- **定时交付** —— routine 把 .docx/.xlsx/.pptx 成品送进 Triage 收件箱，并经 IM webhook 或 IMAP 草稿箱路由；Shannon 不直接发邮件
+- **数据源引用** —— 已配置的 IMAP/Obsidian 数据源可生成带来源标注的简报；.srt/.vtt/.txt 转写一键整理成结构化会议纪要
+
 ### 多 Agent 协作
 
 - **团队协调** —— `TeamCreate`、`SendMessage`、任务分配和跟踪

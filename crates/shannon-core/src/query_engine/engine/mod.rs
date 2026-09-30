@@ -281,9 +281,16 @@ pub struct QueryEngine {
 
 impl QueryEngine {
     /// Resolve effective max context tokens from priority chain:
-    /// user config > Ollama num_ctx (queried later) > model registry > fallback (128K).
+    /// user config > declared model metadata (R2-4, providers.toml v2) >
+    /// model registry > fallback (200K). A live Ollama `num_ctx` still wins
+    /// over the declared value via `pre_resolve_context` /
+    /// `resolved_context_window_opt` — it reports what the server will
+    /// actually use.
     fn resolve_max_context_tokens(model: &str, user_override: Option<usize>) -> usize {
         if let Some(tokens) = user_override {
+            return tokens;
+        }
+        if let Some(tokens) = crate::declared_models::context_window_for(model) {
             return tokens;
         }
         crate::model_registry::context_window_for(model)
@@ -315,7 +322,9 @@ impl QueryEngine {
                 }
             }
         }
-        crate::model_registry::context_window_for_opt(self.client.model())
+        // R2-4: declared context_window (providers.toml v2) beats the registry.
+        crate::declared_models::context_window_for(self.client.model())
+            .or_else(|| crate::model_registry::context_window_for_opt(self.client.model()))
     }
 
     /// Pre-query provider for real context window size.
@@ -1178,7 +1187,7 @@ impl QueryEngine {
 
     /// Update the model used for API calls.
     pub fn set_model(&mut self, model: String) {
-        self.effective_max_context_tokens = crate::model_registry::context_window_for(&model);
+        self.effective_max_context_tokens = Self::resolve_max_context_tokens(&model, None);
         // Clear stale Ollama cache so pre_resolve_context() re-queries
         if *self.client.provider() == shannon_engine::api::LlmProvider::Ollama {
             self.client.clear_ollama_cache();
@@ -1190,7 +1199,7 @@ impl QueryEngine {
 
     /// Update the model AND switch provider (including base_url).
     pub fn set_model_for_provider(&mut self, model: String, provider: LlmProvider) {
-        self.effective_max_context_tokens = crate::model_registry::context_window_for(&model);
+        self.effective_max_context_tokens = Self::resolve_max_context_tokens(&model, None);
         // Clear stale Ollama cache so pre_resolve_context() re-queries
         if provider == shannon_engine::api::LlmProvider::Ollama {
             self.client.clear_ollama_cache();

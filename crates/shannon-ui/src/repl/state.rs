@@ -52,6 +52,50 @@ pub struct HelpOverlayState {
     pub search_query: String,
 }
 
+/// How often the main loop redraws while fully idle (review §P2-5).
+///
+/// When nothing is dirty, animating, or streaming, frames are skipped — but
+/// never for longer than one heartbeat, so any state change the dirty flag
+/// missed cannot stay invisible indefinitely.
+pub(crate) const IDLE_HEARTBEAT: std::time::Duration = std::time::Duration::from_millis(500);
+
+/// Inputs to the main-loop redraw gate ([`should_draw_frame`]).
+///
+/// Pure data so the skip/skip/draw matrix is unit-testable without a
+/// terminal (review §P2-5: no visual regressions allowed).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct FrameGate {
+    /// A state change (input event, background drain, tick mutation)
+    /// explicitly marked the frame dirty.
+    pub dirty: bool,
+    /// Spinner or progress-bar animation is active — keep today's per-tick
+    /// (20 FPS) cadence.
+    pub animating: bool,
+    /// A query/stream render may still be mutating the chat area — keep
+    /// today's per-tick cadence.
+    pub streaming: bool,
+    /// Committed scrollback lines wait to be flushed by the next draw
+    /// (`draw_frame` is also what inserts them into terminal history).
+    pub scrollback_pending: bool,
+    /// Time since the last completed draw. `None` = never drawn (always
+    /// draw the first frame).
+    pub since_last_draw: Option<std::time::Duration>,
+}
+
+/// Decide whether the main loop should draw a frame this tick.
+///
+/// Draws when anything can have changed (dirty flag, animation, streaming,
+/// pending scrollback) or when the idle heartbeat is due; otherwise the
+/// frame is skipped. Never restructures the event loop — this only gates
+/// the `draw_frame` call.
+pub(crate) fn should_draw_frame(gate: FrameGate) -> bool {
+    gate.dirty
+        || gate.animating
+        || gate.streaming
+        || gate.scrollback_pending
+        || gate.since_last_draw.is_none_or(|d| d >= IDLE_HEARTBEAT)
+}
+
 /// Application state for the REPL
 #[derive(Debug)]
 pub struct ReplState {
@@ -139,7 +183,11 @@ pub struct ReplState {
     pub theme: Theme,
     /// Accessibility mode: replace decorative chars with plain text
     pub accessibility_mode: bool,
-    /// Reduced motion: disables animations (spinner, shimmer) for accessibility
+    /// Reduced motion: disables animations (spinner, shimmer) for
+    /// accessibility. Defaults from motion-specific env signals only —
+    /// `SHANNON_REDUCED_MOTION=1|true|yes` or the legacy `REDUCED_MOTION` /
+    /// `NO_GRAPHICS` / `ACCESSIBILITY`; `NO_COLOR` must not affect it
+    /// (review §P2-6). Toggle per session via `/accessibility`.
     pub reduced_motion: bool,
     /// Configurable keybindings
     pub keybindings: crate::keybindings::KeyBindings,
@@ -314,6 +362,11 @@ pub struct ReplState {
     pub active_elicitation: Option<PendingElicitation>,
     /// /help modal overlay state. When `Some`, overlay is open.
     pub help_overlay: Option<HelpOverlayState>,
+    /// In-flight inline `!shell` job (P0-1). `Some` while a background shell
+    /// command runs: the main loop polls its outcome channel without
+    /// blocking, and Esc kills the child's whole process group. See
+    /// `repl::commands::{ShellJob, start_inline_shell, poll_inline_shell_jobs}`.
+    pub shell_job: Option<super::commands::ShellJob>,
     /// R1-6 (decision ② step 1): whether the one-time `/profile` →
     /// `/permissions` migration hint has been shown this REPL session.
     /// Printed above `/profile`'s output exactly once, never repeated.
@@ -581,10 +634,7 @@ impl Default for ReplState {
             theme: Theme::detect(),
             accessibility_mode: std::env::var("NO_GRAPHICS").is_ok()
                 || std::env::var("ACCESSIBILITY").is_ok(),
-            reduced_motion: std::env::var("NO_COLOR").is_ok()
-                || std::env::var("REDUCED_MOTION").is_ok()
-                || std::env::var("NO_GRAPHICS").is_ok()
-                || std::env::var("ACCESSIBILITY").is_ok(),
+            reduced_motion: Self::reduced_motion_from_env(),
             keybindings: crate::keybindings::load_keybindings(),
             sidebar_visible: true,
             diff_viewer: None,
@@ -666,7 +716,61 @@ impl Default for ReplState {
             pending_elicitation_rx: None,
             active_elicitation: None,
             help_overlay: None,
+            shell_job: None,
         }
+    }
+}
+
+impl ReplState {
+    /// True while the spinner or a progress indicator is animating — the
+    /// main loop must keep today's per-tick frame cadence (review §P2-5).
+    ///
+    /// The status check mirrors the Tick handler's spinner gate plus the
+    /// localized ready string, so a non-English UI (`status.ready` is
+    /// translated) does not read as permanently busy and pin the loop at
+    /// 20 FPS. When in doubt this returns true (over-drawing is today's
+    /// behavior; under-drawing would regress visuals).
+    pub(crate) fn animation_active(&self) -> bool {
+        // `t!` without args is a Cow<str>; String compares against it directly.
+        let busy_status = self.status != "Ready" && self.status != rust_i18n::t!("status.ready");
+        busy_status || self.progress_bar_visible || self.multi_progress_visible
+    }
+
+    /// True while a query/stream may still be mutating the chat area — the
+    /// main loop keeps today's per-tick frame cadence while it renders
+    /// (review §P2-5). Conservatively includes every streaming flag so a
+    /// missed transition can only cause extra frames, never stalled ones.
+    pub(crate) fn render_in_progress(&self) -> bool {
+        self.streaming_active || self.thinking_phase || self.active_tool.is_some()
+    }
+
+    /// Motion preference from the process environment (review §P2-6).
+    pub(crate) fn reduced_motion_from_env() -> bool {
+        Self::reduced_motion_from(|key| std::env::var(key).ok())
+    }
+
+    /// Pure decision core of [`Self::reduced_motion_from_env`], parameterized
+    /// over an env lookup so tests never touch process-global state.
+    ///
+    /// Color preference is not motion preference: `NO_COLOR` deliberately
+    /// does NOT appear here (review §P2-6). Opt in with
+    /// `SHANNON_REDUCED_MOTION=1|true|yes` (case-insensitive); the legacy
+    /// accessibility signals (`REDUCED_MOTION`, `NO_GRAPHICS`,
+    /// `ACCESSIBILITY`) keep their set-means-on behavior.
+    pub(crate) fn reduced_motion_from(get: impl Fn(&str) -> Option<String>) -> bool {
+        Self::env_flag_on(get("SHANNON_REDUCED_MOTION"))
+            || get("REDUCED_MOTION").is_some()
+            || get("NO_GRAPHICS").is_some()
+            || get("ACCESSIBILITY").is_some()
+    }
+
+    /// `SHANNON_REDUCED_MOTION` accepts `1` / `true` / `yes`
+    /// case-insensitively (surrounding whitespace tolerated); any other
+    /// value — `0`, `false`, garbage, empty — leaves motion untouched.
+    fn env_flag_on(value: Option<String>) -> bool {
+        value
+            .map(|v| v.trim().to_ascii_lowercase())
+            .is_some_and(|v| matches!(v.as_str(), "1" | "true" | "yes"))
     }
 }
 
@@ -846,6 +950,199 @@ mod tests {
         assert_eq!(s.selected_category_idx, 0);
         assert_eq!(s.selected_command_idx, 0);
         assert!(s.search_query.is_empty());
+    }
+
+    // -- Idle-redraw gate (review §P2-5) ------------------------------------
+
+    /// Fully idle gate: nothing dirty, nothing animating, just drawn.
+    fn idle_gate(since_last_draw: Option<std::time::Duration>) -> super::FrameGate {
+        super::FrameGate {
+            dirty: false,
+            animating: false,
+            streaming: false,
+            scrollback_pending: false,
+            since_last_draw,
+        }
+    }
+
+    #[test]
+    fn frame_gate_skips_when_idle_and_recently_drawn() {
+        let recent = std::time::Duration::from_millis(50);
+        assert!(
+            !super::should_draw_frame(idle_gate(Some(recent))),
+            "idle + fresh frame must skip the redraw"
+        );
+    }
+
+    #[test]
+    fn frame_gate_heartbeat_redraws_when_idle_too_long() {
+        let stale = super::IDLE_HEARTBEAT;
+        let longer = super::IDLE_HEARTBEAT + std::time::Duration::from_millis(1);
+        assert!(super::should_draw_frame(idle_gate(Some(stale))));
+        assert!(super::should_draw_frame(idle_gate(Some(longer))));
+    }
+
+    #[test]
+    fn frame_gate_always_draws_the_first_frame() {
+        assert!(
+            super::should_draw_frame(idle_gate(None)),
+            "never-drawn must draw immediately"
+        );
+    }
+
+    #[test]
+    fn frame_gate_dirty_flag_forces_draw() {
+        let mut gate = idle_gate(Some(std::time::Duration::from_millis(10)));
+        gate.dirty = true;
+        assert!(super::should_draw_frame(gate));
+    }
+
+    #[test]
+    fn frame_gate_animation_forces_draw() {
+        let mut gate = idle_gate(Some(std::time::Duration::from_millis(10)));
+        gate.animating = true;
+        assert!(
+            super::should_draw_frame(gate),
+            "spinner/progress cadence kept"
+        );
+    }
+
+    #[test]
+    fn frame_gate_streaming_forces_draw() {
+        let mut gate = idle_gate(Some(std::time::Duration::from_millis(10)));
+        gate.streaming = true;
+        assert!(super::should_draw_frame(gate), "streaming cadence kept");
+    }
+
+    #[test]
+    fn frame_gate_pending_scrollback_forces_draw() {
+        let mut gate = idle_gate(Some(std::time::Duration::from_millis(10)));
+        gate.scrollback_pending = true;
+        assert!(
+            super::should_draw_frame(gate),
+            "scrollback flush rides on draw_frame and must not be skipped"
+        );
+    }
+
+    #[test]
+    fn animation_active_false_for_default_ready_state() {
+        let state = ReplState::default();
+        assert!(
+            !state.animation_active(),
+            "fresh Ready state is not animating"
+        );
+        assert!(!state.render_in_progress(), "fresh state is not rendering");
+    }
+
+    #[test]
+    fn animation_active_true_for_progress_widgets() {
+        let state = ReplState {
+            progress_bar_visible: true,
+            ..Default::default()
+        };
+        assert!(state.animation_active());
+        let state = ReplState {
+            multi_progress_visible: true,
+            ..Default::default()
+        };
+        assert!(state.animation_active());
+    }
+
+    #[test]
+    fn animation_active_true_for_busy_status() {
+        let state = ReplState {
+            status: "Tool: bash".to_string(),
+            ..Default::default()
+        };
+        assert!(state.animation_active());
+    }
+
+    #[test]
+    fn render_in_progress_flags() {
+        let state = ReplState {
+            streaming_active: true,
+            ..Default::default()
+        };
+        assert!(state.render_in_progress());
+        let state = ReplState {
+            thinking_phase: true,
+            ..Default::default()
+        };
+        assert!(state.render_in_progress());
+        let state = ReplState {
+            active_tool: Some("bash".to_string()),
+            ..Default::default()
+        };
+        assert!(state.render_in_progress());
+    }
+
+    // -- Reduced motion env parsing (review §P2-6) ---------------------------
+
+    /// Build an env lookup closure over a fixed pair list (no process env).
+    fn env_map<'a>(pairs: &'a [(&'a str, &'a str)]) -> impl Fn(&str) -> Option<String> + 'a {
+        move |key| {
+            pairs
+                .iter()
+                .find(|(k, _)| *k == key)
+                .map(|(_, v)| v.to_string())
+        }
+    }
+
+    #[test]
+    fn shannon_reduced_motion_truthy_values_enable() {
+        for value in ["1", "true", "TRUE", "True", "yes", "YES", " yes "] {
+            let pairs = [("SHANNON_REDUCED_MOTION", value)];
+            assert!(
+                ReplState::reduced_motion_from(env_map(&pairs)),
+                "SHANNON_REDUCED_MOTION={value:?} must enable reduced motion"
+            );
+        }
+    }
+
+    #[test]
+    fn shannon_reduced_motion_falsy_or_garbage_values_do_not_enable() {
+        for value in ["0", "false", "no", "off", "sure", "", "  "] {
+            let pairs = [("SHANNON_REDUCED_MOTION", value)];
+            assert!(
+                !ReplState::reduced_motion_from(env_map(&pairs)),
+                "SHANNON_REDUCED_MOTION={value:?} must not enable reduced motion"
+            );
+        }
+    }
+
+    #[test]
+    fn no_color_alone_leaves_reduced_motion_off() {
+        // P2-6: color preference is not motion preference.
+        let pairs = [("NO_COLOR", "1")];
+        assert!(!ReplState::reduced_motion_from(env_map(&pairs)));
+    }
+
+    #[test]
+    fn unset_env_leaves_reduced_motion_off() {
+        assert!(!ReplState::reduced_motion_from(|_| None));
+    }
+
+    #[test]
+    fn legacy_accessibility_env_vars_still_enable_reduced_motion() {
+        for (key, value) in [
+            ("REDUCED_MOTION", "1"),
+            ("REDUCED_MOTION", ""),
+            ("NO_GRAPHICS", "1"),
+            ("ACCESSIBILITY", "anything"),
+        ] {
+            let pairs = [(key, value)];
+            assert!(
+                ReplState::reduced_motion_from(env_map(&pairs)),
+                "{key}={value:?} must keep enabling reduced motion"
+            );
+        }
+    }
+
+    #[test]
+    fn shannon_reduced_motion_enables_without_legacy_vars() {
+        // Explicit opt-in works without any legacy var set.
+        let pairs = [("SHANNON_REDUCED_MOTION", "yes")];
+        assert!(ReplState::reduced_motion_from(env_map(&pairs)));
     }
 }
 

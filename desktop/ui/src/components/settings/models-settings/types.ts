@@ -3,6 +3,7 @@
 // import them without dragging the orchestrator along.
 
 import type { useIntl } from 'react-intl'
+import type { ModelInfo } from '@/types'
 
 export interface KindInfo {
   labelKey: string
@@ -36,6 +37,20 @@ export function formatPrice(value: number | null | undefined): string {
     return '—'
   }
   return value.toFixed(2)
+}
+
+/**
+ * R2-3 — compact single-line meta suffix for the composer picker's model
+ * rows: context window ("200k") + per-million-token prices ("$3.00/$15.00"),
+ * reusing `formatPrice` so the picker and the Settings catalog list render
+ * identically. Unknown values render as "—" on their side — never fabricated
+ * (ADR-0005 P0-2 honest cost/context). Pure — vitest-covered.
+ */
+export function modelPickerMeta(
+  m: Pick<ModelInfo, 'context_window' | 'price_in' | 'price_out'>,
+): string {
+  const context = m.context_window > 0 ? `${(m.context_window / 1000).toFixed(0)}k` : '—'
+  return `${context} · $${formatPrice(m.price_in)}/$${formatPrice(m.price_out)}`
 }
 
 // === Provider visibility (ADR-0005 P4.9) ===

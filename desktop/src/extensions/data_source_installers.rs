@@ -291,6 +291,39 @@ pub fn read_data_source_config(slug: &str) -> Result<BTreeMap<String, String>, I
     read_data_source_config_in(&shannon_data_sources_root(), slug)
 }
 
+/// Read the `kind` of an installed data source from its `[data_source]`
+/// section. `query_data_source` dispatches on this; the config map returned
+/// by [`read_data_source_config`] deliberately holds only `[config]` (the
+/// install form prefills from it and must not see meta keys), so the kind
+/// has to come from here.
+pub fn read_data_source_kind(slug: &str) -> Result<String, InstallError> {
+    read_data_source_kind_in(&shannon_data_sources_root(), slug)
+}
+
+fn read_data_source_kind_in(root: &Path, slug: &str) -> Result<String, InstallError> {
+    let file = root.join(format!("{slug}.toml"));
+    let body = std::fs::read_to_string(&file)
+        .map_err(|e| InstallError::Io(format!("read {}: {e}", file.display())))?;
+    let mut in_meta = false;
+    for line in body.lines() {
+        let trimmed = line.trim();
+        if trimmed.starts_with('[') {
+            in_meta = trimmed == "[data_source]";
+            continue;
+        }
+        if !in_meta {
+            continue;
+        }
+        if let Some(rest) = trimmed.strip_prefix("kind = ") {
+            return Ok(toml_decode(rest.trim()));
+        }
+    }
+    Err(InstallError::Io(format!(
+        "missing kind in [data_source] of {}",
+        file.display()
+    )))
+}
+
 /// `read_data_source_config` against an explicit `root` (see
 /// [`install_data_source_in`] for why tests avoid `$HOME`).
 fn read_data_source_config_in(
@@ -452,5 +485,33 @@ include_attachments = "true"
         assert_eq!(config.get("vault_path").unwrap(), "/vault");
         assert_eq!(config.get("include_attachments").unwrap(), "true");
         assert!(!config.contains_key("slug"));
+    }
+
+    #[test]
+    fn read_data_source_kind_reads_meta_section() {
+        let root = tempfile::tempdir().expect("tempdir");
+        std::fs::write(
+            root.path().join("obsidian-vault.toml"),
+            r#"[data_source]
+slug = "obsidian-vault"
+kind = "obsidian"
+
+[config]
+vault_path = "/vault"
+kind = "should-not-win"
+"#,
+        )
+        .expect("write toml");
+        // Section-aware: the `[config]` decoy must not win over `[data_source]`.
+        assert_eq!(
+            read_data_source_kind_in(root.path(), "obsidian-vault").expect("kind"),
+            "obsidian"
+        );
+        // Missing kind → explicit error naming the file.
+        std::fs::write(root.path().join("no-kind.toml"), "[config]\nx = \"1\"\n").expect("write");
+        let err = read_data_source_kind_in(root.path(), "no-kind")
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains("missing kind"), "got: {err}");
     }
 }

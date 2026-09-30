@@ -35,6 +35,8 @@ vi.mock('@/lib/tauri-api', () => ({
   configure: vi.fn().mockResolvedValue(undefined),
   seedSampleData: vi.fn().mockResolvedValue({ tasks_seeded: 3 }),
   detectProviderFromEnv: vi.fn().mockResolvedValue(null),
+  // Office Wave 1 A3' — DocumentsSkillsList probes the host on mount.
+  probeHostRuntime: vi.fn().mockResolvedValue({ python3: true, pythonVersion: 'Python 3.12.3', pandoc: false, libreoffice: false }),
   listProviders: vi.fn().mockResolvedValue({ active_provider_id: null, providers: [] }),
   saveProvider: vi.fn().mockResolvedValue({
     active_provider_id: 'anthropic-main',

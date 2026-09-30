@@ -36,9 +36,11 @@ mod common;
 use common::{desktop_dir, handler_inventory};
 
 /// Window label patterns the app is allowed to target in capability files:
-/// the `main` window from tauri.conf.json and the `session-{uuid}` windows
-/// created by `session_window_commands` (`SESSION_WINDOW_PREFIX = "session-"`).
-const KNOWN_WINDOW_PATTERNS: [&str; 2] = ["main", "session-*"];
+/// the `main` window from tauri.conf.json, the `session-{uuid}` windows
+/// created by `session_window_commands` (`SESSION_WINDOW_PREFIX = "session-"`),
+/// and the fixed-label `companion` Quick Capture window created by
+/// `companion_window_commands` (`COMPANION_WINDOW_LABEL = "companion"`).
+const KNOWN_WINDOW_PATTERNS: [&str; 3] = ["main", "session-*", "companion"];
 
 /// Plugin manifests `desktop/build.rs` actually defines. `build.rs` fails
 /// the compile on anything else via `Resolved::resolve`; this mirror keeps
@@ -451,9 +453,10 @@ fn capabilities_reference_only_defined_permissions() {
     }
 }
 
-/// Every command must be granted to BOTH window groups: `main` and a
-/// `session-*` window (the same SPA bundle runs in both), and no unknown
-/// window label may match anything.
+/// Every command must be granted to each full-SPA window group: `main`, a
+/// `session-*` window, and the `companion` Quick Capture window (the same
+/// SPA bundle runs in all three), and no unknown window label may match
+/// anything.
 #[test]
 fn every_command_is_allowed_on_main_and_session_windows() {
     let inventory = handler_inventory();
@@ -461,7 +464,7 @@ fn every_command_is_allowed_on_main_and_session_windows() {
     let capabilities = load_capabilities();
 
     let session_window = "session-00000000-0000-0000-0000-000000000000";
-    for window in ["main", session_window] {
+    for window in ["main", session_window, "companion"] {
         let allowed = app_commands_allowed_for_window(&manifest, &capabilities, window);
         let missing: Vec<String> = inventory.difference(&allowed).cloned().collect();
         assert!(

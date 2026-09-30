@@ -56,6 +56,7 @@ mod config_precedence_tests {
             fallback_models: Vec::new(),
             quirks: Default::default(),
             tiers: ProviderTiers::default(),
+            models: Vec::new(),
         };
         let mut profiles = HashMap::new();
         profiles.insert(

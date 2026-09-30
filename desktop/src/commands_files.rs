@@ -64,6 +64,28 @@ pub(crate) async fn extract_pdf_text_best_effort(path: &Path) -> String {
     }
 }
 
+/// Best-effort PDF page count via `pdfinfo` (poppler). `None` when poppler
+/// is missing, the file is unreadable, or the probe fails — callers must
+/// omit the metadata rather than guess. (Office Wave A2': the send_message
+/// entry point carries no page-range request yet, so `pdftotext` stays
+/// whole-document; this is the honest per-document metadata for the
+/// injection block, and a `-f`/`-l` range plugs in here once a page
+/// parameter exists.)
+pub(crate) async fn pdf_page_count_best_effort(path: &Path) -> Option<u32> {
+    use std::process::Command;
+
+    let path_str = path.to_string_lossy().into_owned();
+    let output = Command::new("pdfinfo").arg(&path_str).output().ok()?;
+    if !output.status.success() {
+        return None;
+    }
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    stdout.lines().find_map(|line| {
+        line.strip_prefix("Pages:")
+            .and_then(|rest| rest.trim().parse::<u32>().ok())
+    })
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AttachmentPayload {
     pub mime: String,
@@ -99,6 +121,19 @@ fn attachment_mime(path: &Path) -> String {
         "json" => "application/json",
         "yaml" | "yml" => "application/yaml",
         "toml" => "application/toml",
+        // Office Wave 1 — word processor / spreadsheet / presentation formats
+        // so attachment classification (and downstream tool routing) can tell
+        // office documents apart instead of lumping them into
+        // `application/octet-stream`.
+        "doc" => "application/msword",
+        "docx" => "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+        "xls" => "application/vnd.ms-excel",
+        "xlsx" => "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        "ppt" => "application/vnd.ms-powerpoint",
+        "pptx" => "application/vnd.openxmlformats-officedocument.presentationml.presentation",
+        "odt" => "application/vnd.oasis.opendocument.text",
+        "rtf" => "application/rtf",
+        "csv" => "text/csv",
         _ => "application/octet-stream",
     }
     .to_string()
@@ -257,6 +292,265 @@ pub(crate) async fn save_text_file_inner(
     }
     std::fs::write(&target, content)
         .map_err(|e| FileCommandError::Plain(format!("Failed to write {}: {e}", target.display())))
+}
+
+/// Copy a local file to a caller-chosen destination (office Wave 1
+/// "save-as"). Scope rules are aligned with `open_with_default_app`
+/// (`commands_surface::canonicalized_in_scope`): the source must exist and
+/// canonicalize inside `$HOME/**` or `$TEMP/**` (rejecting `..` traversal
+/// and symlink escapes); the destination must land in the same bases, but
+/// may not exist yet — see the private `destination_in_scope` helper. Overwriting an
+/// existing destination is allowed; copying onto the source is not.
+#[tauri::command]
+pub async fn copy_file(src_path: String, dest_path: String) -> Result<(), String> {
+    copy_file_inner(&src_path, &dest_path).await
+}
+
+/// Internal helper for [`copy_file`]. Splits out so tests can exercise the
+/// scope + copy logic without a Tauri app handle.
+pub(crate) async fn copy_file_inner(src_path: &str, dest_path: &str) -> Result<(), String> {
+    if src_path == dest_path {
+        return Err(format!(
+            "copy source and destination are the same file: {src_path}"
+        ));
+    }
+    // Same scope contract as the surface side's `open_with_default_app`:
+    // canonicalize + `$HOME`/`$TEMP` base check (also rejects `..` and
+    // symlink escapes, and implies the source exists).
+    let src = crate::commands_surface::canonicalized_in_scope(src_path)?;
+    if !src.is_file() {
+        return Err(format!(
+            "copy source is not a regular file: {}",
+            src.display()
+        ));
+    }
+    let dest = destination_in_scope(dest_path)?;
+    if dest == src {
+        return Err(format!(
+            "copy source and destination are the same file: {src_path}"
+        ));
+    }
+    // A large copy must not occupy an async executor thread — same
+    // spawn_blocking pattern as `get_file_tree`.
+    tokio::task::spawn_blocking(move || {
+        // `std::fs::copy` overwrites an existing destination, which is the
+        // intended save-as semantics.
+        std::fs::copy(&src, &dest).map(|_| ()).map_err(|e| {
+            format!(
+                "failed to copy {} to {}: {e}",
+                src.display(),
+                dest.display()
+            )
+        })
+    })
+    .await
+    .map_err(|e| format!("file copy task failed: {e}"))?
+}
+
+/// Scope check for a copy destination that may not exist yet (save-as
+/// target). For an existing path this is exactly the surface-side check
+/// (`commands_surface::canonicalized_in_scope`, i.e. the
+/// `open_with_default_app` semantics). For a not-yet-existing path the
+/// deepest existing ancestor is canonicalized + scope-checked and the
+/// non-existing tail is appended back; the tail itself is checked
+/// lexically (absolute, no `..`), so a traversal can never smuggle the
+/// destination out of the `$HOME`/`$TEMP` bases.
+fn destination_in_scope(dest: &str) -> Result<std::path::PathBuf, String> {
+    let p = std::path::Path::new(dest);
+    if p.exists() {
+        // Exists → identical semantics to `open_with_default_app`.
+        return crate::commands_surface::canonicalized_in_scope(dest);
+    }
+    if !p.is_absolute() {
+        return Err(format!("path must be absolute: {dest}"));
+    }
+    if p.components().any(|c| c == std::path::Component::ParentDir) {
+        return Err(format!("path must not contain '..': {dest}"));
+    }
+    let mut ancestor = p.parent();
+    while let Some(dir) = ancestor {
+        if dir.exists() {
+            let canonical =
+                crate::commands_surface::canonicalized_in_scope(&dir.to_string_lossy())?;
+            let tail = p
+                .strip_prefix(dir)
+                .expect("existing ancestor is always a prefix of the path");
+            return Ok(canonical.join(tail));
+        }
+        ancestor = dir.parent();
+    }
+    Err(format!(
+        "path outside allowed scope ($HOME/**, $TEMP/**): {dest}"
+    ))
+}
+
+// ---------------------------------------------------------------------------
+// File index (office Wave 2 B9') — the user's registered-files shelf.
+// ---------------------------------------------------------------------------
+
+/// One registered file in `~/.shannon/desktop/file-index.json`.
+///
+/// Wire shape is a frozen frontend contract: the desktop UI lists, registers,
+/// and favorites files through `list_file_index` /
+/// `register_file_index_entry` / `set_file_index_favorite` with exactly
+/// these field names.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct FileIndexEntry {
+    /// Canonical absolute path of the registered file.
+    pub path: String,
+    /// File name (last path component).
+    pub name: String,
+    /// Size in bytes at the last (re-)registration; `None` when the file
+    /// vanished before its metadata could be read.
+    pub size_bytes: Option<u64>,
+    /// First-registration time, RFC 3339.
+    pub registered_at: String,
+    /// User-set favorite flag.
+    pub favorite: bool,
+    /// Free-form origin tag supplied by the caller (e.g. `"attachment"`,
+    /// `"export"`).
+    pub source: String,
+}
+
+/// Resolve the index file path: `~/.shannon/desktop/file-index.json` — same
+/// `~/.shannon/desktop/` convention as `config::config_path`.
+fn file_index_path() -> std::path::PathBuf {
+    let home = std::env::var("HOME")
+        .or_else(|_| std::env::var("USERPROFILE"))
+        .map(std::path::PathBuf::from)
+        .unwrap_or_else(|_| std::path::PathBuf::from("."));
+    home.join(".shannon")
+        .join("desktop")
+        .join("file-index.json")
+}
+
+/// Load the index. A missing file is an empty shelf; a **corrupt** file is
+/// recovered as empty too (the next successful write replaces it) — a broken
+/// index must never take the file commands down.
+fn load_file_index_inner(path: &Path) -> Vec<FileIndexEntry> {
+    let Ok(content) = std::fs::read_to_string(path) else {
+        return Vec::new();
+    };
+    serde_json::from_str(&content).unwrap_or_default()
+}
+
+/// Persist the index atomically (temp file in the same directory + rename),
+/// then apply the owner-only permission convention used by the other
+/// `~/.shannon` stores.
+fn save_file_index_inner(path: &Path, entries: &[FileIndexEntry]) -> Result<(), String> {
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent).map_err(|e| format!("mkdir {}: {e}", parent.display()))?;
+    }
+    let content = serde_json::to_string_pretty(entries).map_err(|e| format!("serialize: {e}"))?;
+    let tmp = tempfile::NamedTempFile::new_in(path.parent().unwrap_or_else(|| Path::new(".")))
+        .map_err(|e| format!("temp file: {e}"))?;
+    std::fs::write(tmp.path(), content).map_err(|e| format!("write temp: {e}"))?;
+    tmp.persist(path)
+        .map_err(|e| format!("persist {}: {e}", path.display()))?;
+    crate::file_permissions::restrict_to_owner(path);
+    Ok(())
+}
+
+/// Sort key: `registered_at` descending (newest first). Unparseable stamps
+/// sort last and are kept stable among themselves.
+fn sort_by_registered_at_desc(entries: &mut [FileIndexEntry]) {
+    let key = |e: &FileIndexEntry| {
+        chrono::DateTime::parse_from_rfc3339(&e.registered_at)
+            .map(|t| t.timestamp_millis())
+            .unwrap_or(i64::MIN)
+    };
+    entries.sort_by_key(|e| std::cmp::Reverse(key(e)));
+}
+
+/// `list_file_index` command: the shelf, newest registration first.
+#[tauri::command]
+pub async fn list_file_index() -> Result<Vec<FileIndexEntry>, String> {
+    let mut entries = load_file_index_inner(&file_index_path());
+    sort_by_registered_at_desc(&mut entries);
+    Ok(entries)
+}
+
+/// `register_file_index_entry` command: canonicalize + scope-check `path`
+/// (exactly the `open_with_default_app` / `copy_file` rules), then upsert.
+#[tauri::command]
+pub async fn register_file_index_entry(path: String, source: String) -> Result<(), String> {
+    register_file_index_entry_inner(&file_index_path(), &path, &source)
+}
+
+/// Internal helper for [`register_file_index_entry`] — takes the index path
+/// so tests can run against a tempdir instead of the real `$HOME`.
+pub(crate) fn register_file_index_entry_inner(
+    index_path: &Path,
+    path: &str,
+    source: &str,
+) -> Result<(), String> {
+    // Same scope contract as the surface side: must exist and canonicalize
+    // inside `$HOME/**` / `$TEMP/**` (rejects `..`, symlink escapes, and
+    // directories-masquerading-as-files are rejected below).
+    let canonical = crate::commands_surface::canonicalized_in_scope(path)?;
+    if !canonical.is_file() {
+        return Err(format!(
+            "registered path is not a regular file: {}",
+            canonical.display()
+        ));
+    }
+    let size = std::fs::metadata(&canonical).ok().map(|m| m.len());
+    let entry_path = canonical.to_string_lossy().to_string();
+    let name = canonical
+        .file_name()
+        .and_then(|n| n.to_str())
+        .unwrap_or_default()
+        .to_string();
+
+    let mut entries = load_file_index_inner(index_path);
+    match entries.iter_mut().find(|e| e.path == entry_path) {
+        // Duplicate registration: refresh the metadata that can drift
+        // (size — and with it the file's mtime story), keep the original
+        // registration stamp and the user's favorite flag, and update the
+        // origin tag to the latest caller.
+        Some(entry) => {
+            entry.size_bytes = size;
+            entry.source = source.to_string();
+            if !entry.name.is_empty() {
+                entry.name = name;
+            }
+        }
+        None => entries.push(FileIndexEntry {
+            path: entry_path,
+            name,
+            size_bytes: size,
+            registered_at: chrono::Utc::now().to_rfc3339(),
+            favorite: false,
+            source: source.to_string(),
+        }),
+    }
+    save_file_index_inner(index_path, &entries)
+}
+
+/// `set_file_index_favorite` command: toggle the favorite flag of a
+/// registered file (matched by canonical path).
+#[tauri::command]
+pub async fn set_file_index_favorite(path: String, favorite: bool) -> Result<(), String> {
+    set_file_index_favorite_inner(&file_index_path(), &path, favorite)
+}
+
+/// Internal helper for [`set_file_index_favorite`]. The path is
+/// canonicalized for matching but must already be registered — favoriting is
+/// a shelf operation, not a registration.
+pub(crate) fn set_file_index_favorite_inner(
+    index_path: &Path,
+    path: &str,
+    favorite: bool,
+) -> Result<(), String> {
+    let canonical = crate::commands_surface::canonicalized_in_scope(path)?;
+    let entry_path = canonical.to_string_lossy().to_string();
+    let mut entries = load_file_index_inner(index_path);
+    let entry = entries
+        .iter_mut()
+        .find(|e| e.path == entry_path)
+        .ok_or_else(|| format!("path is not registered in the file index: {entry_path}"))?;
+    entry.favorite = favorite;
+    save_file_index_inner(index_path, &entries)
 }
 
 // ---------------------------------------------------------------------------
@@ -986,6 +1280,39 @@ mod tests {
         assert_eq!(attachment_mime(Path::new("a")), "application/octet-stream");
     }
 
+    /// Office Wave 1 — the office-format rows of the MIME table. Extension
+    /// matching is case-insensitive (same code path as the base table).
+    #[test]
+    fn attachment_mime_office_table() {
+        assert_eq!(attachment_mime(Path::new("a.doc")), "application/msword");
+        assert_eq!(
+            attachment_mime(Path::new("a.docx")),
+            "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+        );
+        assert_eq!(
+            attachment_mime(Path::new("a.xls")),
+            "application/vnd.ms-excel"
+        );
+        assert_eq!(
+            attachment_mime(Path::new("a.XLSX")),
+            "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+        );
+        assert_eq!(
+            attachment_mime(Path::new("a.ppt")),
+            "application/vnd.ms-powerpoint"
+        );
+        assert_eq!(
+            attachment_mime(Path::new("a.pptx")),
+            "application/vnd.openxmlformats-officedocument.presentationml.presentation"
+        );
+        assert_eq!(
+            attachment_mime(Path::new("a.odt")),
+            "application/vnd.oasis.opendocument.text"
+        );
+        assert_eq!(attachment_mime(Path::new("a.rtf")), "application/rtf");
+        assert_eq!(attachment_mime(Path::new("a.csv")), "text/csv");
+    }
+
     #[test]
     fn file_diff_round_trips_through_serde() {
         let diff = FileDiff {
@@ -1271,6 +1598,277 @@ mod tests {
             .await
             .expect("empty expected_mtime must skip the conflict check");
         assert_eq!(std::fs::read_to_string(&target).unwrap(), "hello");
+    }
+
+    // ---- office Wave 1: copy_file (save-as) ----
+    //
+    // The scope bases are `$HOME`/`$TEMP` (same as open_with_default_app),
+    // so every disk-touching test stages inside a tempdir, which is always
+    // in scope.
+
+    #[tokio::test]
+    async fn copy_file_copies_within_scope() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let src = dir.path().join("report.docx");
+        std::fs::write(&src, b"office bytes").expect("write src");
+        let dest = dir.path().join("copy-of-report.docx");
+
+        copy_file_inner(&src.to_string_lossy(), &dest.to_string_lossy())
+            .await
+            .expect("in-scope copy must succeed");
+        assert_eq!(std::fs::read(&dest).expect("read dest"), b"office bytes");
+        // Copy, not move.
+        assert!(src.is_file(), "source must survive the copy");
+    }
+
+    #[tokio::test]
+    async fn copy_file_allows_overwriting_existing_destination() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let src = dir.path().join("new.odt");
+        std::fs::write(&src, "fresh").expect("write src");
+        let dest = dir.path().join("existing.odt");
+        std::fs::write(&dest, "stale").expect("write dest");
+
+        copy_file_inner(&src.to_string_lossy(), &dest.to_string_lossy())
+            .await
+            .expect("overwrite copy must succeed");
+        assert_eq!(std::fs::read_to_string(&dest).unwrap(), "fresh");
+    }
+
+    #[tokio::test]
+    async fn copy_file_creates_not_yet_existing_destination_name() {
+        // The save-as case: the destination file itself does not exist yet;
+        // scope is decided on the existing parent directory.
+        let dir = tempfile::tempdir().expect("tempdir");
+        let src = dir.path().join("a.csv");
+        std::fs::write(&src, "x,y").expect("write src");
+        let dest = dir.path().join("brand-new-name.csv");
+
+        copy_file_inner(&src.to_string_lossy(), &dest.to_string_lossy())
+            .await
+            .expect("save-as copy must succeed");
+        assert_eq!(std::fs::read_to_string(&dest).unwrap(), "x,y");
+    }
+
+    #[tokio::test]
+    async fn copy_file_rejects_out_of_scope_source() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let dest = dir.path().join("out.png");
+        // Exists, but outside $HOME/$TEMP — the open_with_default_app
+        // rejection. (`/etc/hosts` exists on macOS and Linux; on Windows the
+        // scope check rejects it just the same.)
+        let err = copy_file_inner("/etc/hosts", &dest.to_string_lossy())
+            .await
+            .expect_err("out-of-scope source must be rejected");
+        assert!(err.contains("outside"), "got: {err}");
+        assert!(!dest.exists(), "nothing may be written");
+    }
+
+    #[tokio::test]
+    async fn copy_file_rejects_out_of_scope_destination() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let src = dir.path().join("a.txt");
+        std::fs::write(&src, "secret").expect("write src");
+        let err = copy_file_inner(
+            &src.to_string_lossy(),
+            "/etc/shannon-copy-should-never-land-here.txt",
+        )
+        .await
+        .expect_err("out-of-scope destination must be rejected");
+        assert!(err.contains("outside"), "got: {err}");
+        assert!(
+            !std::path::Path::new("/etc/shannon-copy-should-never-land-here.txt").exists(),
+            "nothing may be written outside the scope"
+        );
+    }
+
+    #[tokio::test]
+    async fn copy_file_rejects_traversal_in_destination() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let src = dir.path().join("a.txt");
+        std::fs::write(&src, "x").expect("write src");
+        let traversal = dir
+            .path()
+            .join("sub/../../escape.txt")
+            .to_string_lossy()
+            .into_owned();
+        let err = copy_file_inner(&src.to_string_lossy(), &traversal)
+            .await
+            .expect_err("'..' in the destination must be rejected");
+        assert!(err.contains("'..'"), "got: {err}");
+    }
+
+    #[tokio::test]
+    async fn copy_file_rejects_missing_source() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let missing = dir.path().join("ghost.docx");
+        let dest = dir.path().join("out.docx");
+        let err = copy_file_inner(&missing.to_string_lossy(), &dest.to_string_lossy())
+            .await
+            .expect_err("missing source must be rejected");
+        assert!(err.contains("not accessible"), "got: {err}");
+    }
+
+    #[tokio::test]
+    async fn copy_file_rejects_same_source_and_destination() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let src = dir.path().join("same.txt");
+        std::fs::write(&src, "x").expect("write src");
+        let p = src.to_string_lossy().into_owned();
+        let err = copy_file_inner(&p, &p)
+            .await
+            .expect_err("dest == src must be rejected");
+        assert!(err.contains("same"), "got: {err}");
+    }
+
+    // ---- office Wave 2 B9': file index (registered-files shelf) ----
+    //
+    // The scope bases are `$HOME`/`$TEMP`, so tests stage inside a tempdir
+    // (always in scope) and point the index functions at a tempdir JSON.
+
+    #[test]
+    fn file_index_register_dedupes_and_lists_newest_first() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let index = dir.path().join("file-index.json");
+        let a = dir.path().join("minutes.md");
+        std::fs::write(&a, "minutes").expect("write a");
+        let b = dir.path().join("table.xlsx");
+        std::fs::write(&b, "workbook").expect("write b");
+
+        register_file_index_entry_inner(&index, &a.to_string_lossy(), "attachment")
+            .expect("register a");
+        std::thread::sleep(std::time::Duration::from_millis(5));
+        register_file_index_entry_inner(&index, &b.to_string_lossy(), "export")
+            .expect("register b");
+
+        let mut entries = load_file_index_inner(&index);
+        assert_eq!(entries.len(), 2);
+        let a_path = std::fs::canonicalize(&a)
+            .unwrap()
+            .to_string_lossy()
+            .into_owned();
+        let b_path = std::fs::canonicalize(&b)
+            .unwrap()
+            .to_string_lossy()
+            .into_owned();
+        // `list_file_index` sorts newest-registration-first; mirror it here.
+        sort_by_registered_at_desc(&mut entries);
+        assert_eq!(entries[0].path, b_path, "newest registration first");
+        assert_eq!(entries[0].name, "table.xlsx");
+        assert_eq!(entries[0].source, "export");
+        assert_eq!(entries[0].size_bytes, Some("workbook".len() as u64));
+        assert!(!entries[0].favorite);
+        assert_eq!(entries[1].path, a_path);
+        chrono::DateTime::parse_from_rfc3339(&entries[0].registered_at)
+            .expect("registered_at must be RFC 3339");
+
+        // Duplicate registration dedupes by canonical path and refreshes
+        // size + source, keeping the original stamp and favorite flag.
+        std::fs::write(&b, "workbook-with-more-data").expect("grow b");
+        set_file_index_favorite_inner(&index, &b.to_string_lossy(), true).expect("favorite b");
+        register_file_index_entry_inner(&index, &b.to_string_lossy(), "re-export")
+            .expect("re-register b");
+
+        let entries = load_file_index_inner(&index);
+        assert_eq!(entries.len(), 2, "no duplicate row for the same path");
+        let b_entry = entries.iter().find(|e| e.path == b_path).unwrap();
+        assert_eq!(
+            b_entry.size_bytes,
+            Some("workbook-with-more-data".len() as u64)
+        );
+        assert_eq!(b_entry.source, "re-export");
+        assert!(b_entry.favorite, "favorite must survive a re-register");
+    }
+
+    #[test]
+    fn file_index_favorite_roundtrip() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let index = dir.path().join("file-index.json");
+        let f = dir.path().join("notes.txt");
+        std::fs::write(&f, "notes").expect("write");
+        register_file_index_entry_inner(&index, &f.to_string_lossy(), "attachment")
+            .expect("register");
+
+        set_file_index_favorite_inner(&index, &f.to_string_lossy(), true).expect("favorite");
+        let entries = load_file_index_inner(&index);
+        assert!(entries[0].favorite);
+
+        set_file_index_favorite_inner(&index, &f.to_string_lossy(), false).expect("unfavorite");
+        let entries = load_file_index_inner(&index);
+        assert!(!entries[0].favorite);
+    }
+
+    #[test]
+    fn file_index_favorite_rejects_unregistered_path() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let index = dir.path().join("file-index.json");
+        let f = dir.path().join("never-registered.txt");
+        std::fs::write(&f, "x").expect("write");
+        let err = set_file_index_favorite_inner(&index, &f.to_string_lossy(), true)
+            .expect_err("unregistered path must be rejected");
+        assert!(err.contains("not registered"), "got: {err}");
+    }
+
+    #[test]
+    fn file_index_rejects_out_of_scope_paths() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let index = dir.path().join("file-index.json");
+
+        // Exists, but outside $HOME/$TEMP (same rejection as copy_file's
+        // source check).
+        let err = register_file_index_entry_inner(&index, "/etc/hosts", "attachment")
+            .expect_err("out-of-scope path must be rejected");
+        assert!(err.contains("outside"), "got: {err}");
+
+        // Inside the tempdir but missing on disk.
+        let missing = dir.path().join("ghost.txt");
+        let err = register_file_index_entry_inner(&index, &missing.to_string_lossy(), "attachment")
+            .expect_err("missing path must be rejected");
+        assert!(err.contains("not accessible"), "got: {err}");
+
+        // A directory is not a file.
+        let subdir = dir.path().join("a-directory");
+        std::fs::create_dir(&subdir).expect("mkdir");
+        let err = register_file_index_entry_inner(&index, &subdir.to_string_lossy(), "attachment")
+            .expect_err("directories must be rejected");
+        assert!(err.contains("not a regular file"), "got: {err}");
+
+        assert!(
+            load_file_index_inner(&index).is_empty(),
+            "nothing may be registered by rejected calls"
+        );
+    }
+
+    #[test]
+    fn file_index_corrupt_json_recovers_as_empty() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let index = dir.path().join("file-index.json");
+        std::fs::write(&index, "{not json at all").expect("write garbage");
+
+        assert!(
+            load_file_index_inner(&index).is_empty(),
+            "corrupt index must read as an empty shelf"
+        );
+
+        // The next successful write replaces the corrupt file wholesale.
+        let f = dir.path().join("fresh.txt");
+        std::fs::write(&f, "fresh").expect("write");
+        register_file_index_entry_inner(&index, &f.to_string_lossy(), "attachment")
+            .expect("register after corruption");
+        let entries = load_file_index_inner(&index);
+        assert_eq!(entries.len(), 1);
+        assert_eq!(entries[0].name, "fresh.txt");
+    }
+
+    #[test]
+    fn file_index_missing_file_reads_as_empty_shelf() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let index = dir.path().join("does-not-exist.json");
+        assert!(load_file_index_inner(&index).is_empty());
+        // And a list over an empty shelf sorts without panicking.
+        let mut entries = load_file_index_inner(&index);
+        sort_by_registered_at_desc(&mut entries);
+        assert!(entries.is_empty());
     }
 
     #[test]

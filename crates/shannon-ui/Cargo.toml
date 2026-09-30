@@ -39,6 +39,11 @@ reqwest = { workspace = true }
 textwrap = "0.16"
 parking_lot = "0.12"
 
+# Process-group kill for inline `!shell` jobs (P0-1): Esc/timeout must
+# SIGKILL the whole group, which needs kill(2) — std has no equivalent.
+[target.'cfg(unix)'.dependencies]
+libc = "0.2"
+
 [dev-dependencies]
 tempfile = "3"
 insta = { workspace = true }

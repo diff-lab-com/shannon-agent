@@ -124,6 +124,20 @@ pub fn load(path: Option<&Path>) -> Option<ProviderModelConfig> {
     let content = fs::read_to_string(&path).ok()?;
     match toml::from_str::<ProviderModelConfig>(&content) {
         Ok(cfg) => {
+            // R2-4: semantic validation of the per-model declarations beyond
+            // what serde checks (duplicate ids, zero limits, bad prices).
+            // Same graceful-degradation contract as a parse error: the file
+            // is ignored for reads and refuses writes until fixed.
+            if let Err(e) = cfg.validate_models() {
+                warn!(
+                    path = %path.display(),
+                    error = %e,
+                    "providers.toml has invalid per-model metadata declarations; \
+                     ignoring the file (reads fall back to synthesis, writes are \
+                     refused) until the declarations are fixed"
+                );
+                return None;
+            }
             debug!(path = %path.display(), "loaded v2 provider config");
             Some(cfg)
         }
@@ -224,7 +238,25 @@ fn ensure_safe_to_overwrite(path: &Path) -> io::Result<()> {
         return Ok(());
     }
     match toml::from_str::<ProviderModelConfig>(&existing) {
-        Ok(_) => Ok(()),
+        Ok(cfg) => {
+            // R2-4: parseable but semantically invalid model declarations get
+            // the same protection — `load` ignores such a file, so a write
+            // would rebuild from an empty config and silently drop the user's
+            // (nearly-valid) hand edit.
+            if let Err(e) = cfg.validate_models() {
+                return Err(io::Error::new(
+                    io::ErrorKind::InvalidData,
+                    format!(
+                        "refusing to overwrite {}: the file's per-model metadata \
+                         declarations are invalid, and rewriting it would silently \
+                         destroy user content. Validation error: {e}. Fix the file \
+                         (or rename/remove it) and retry; it was left untouched.",
+                        path.display()
+                    ),
+                ));
+            }
+            Ok(())
+        }
         Err(e) => Err(io::Error::new(
             io::ErrorKind::InvalidData,
             format!(
@@ -570,6 +602,68 @@ impl ProviderConfigStore {
         self
     }
 
+    /// Insert or replace one per-model metadata declaration (R2-4) on the
+    /// provider slot whose stored id is `provider_id` (the raw
+    /// `ProviderProfile.id` string — an openai-compatible slot may carry a
+    /// custom slug like `glm`). Existing entries with the same model id are
+    /// replaced wholesale, so ids stay unique by construction; other entries
+    /// are preserved.
+    ///
+    /// Errors (`NotFound`) when no provider slot with that id exists — model
+    /// metadata hangs off a real provider profile, unlike `ensure_provider`,
+    /// which would synthesize one from an [`LlmProvider`]. The spec itself is
+    /// validated here (`InvalidData`) so an invalid entry can never reach
+    /// disk through this path.
+    pub fn set_model_meta(
+        &mut self,
+        provider_id: &str,
+        spec: shannon_types::provider_config::ModelSpec,
+    ) -> io::Result<()> {
+        if let Err(e) = spec.validate() {
+            return Err(io::Error::new(io::ErrorKind::InvalidData, e));
+        }
+        let profile = self
+            .config
+            .profiles
+            .get_mut("default")
+            .and_then(|mp| mp.providers.iter_mut().find(|p| p.id == provider_id))
+            .ok_or_else(|| {
+                io::Error::new(
+                    io::ErrorKind::NotFound,
+                    format!(
+                        "no provider slot with id '{provider_id}' in providers.toml; \
+                         run `shannon list-providers` to see configured ids"
+                    ),
+                )
+            })?;
+        if let Some(existing) = profile.models.iter_mut().find(|m| m.id == spec.id) {
+            *existing = spec;
+        } else {
+            profile.models.push(spec);
+        }
+        Ok(())
+    }
+
+    /// Remove the per-model declaration `model_id` from provider slot
+    /// `provider_id`. Returns whether an entry was removed (idempotent
+    /// otherwise, matching [`Self::remove_profile`]'s contract).
+    pub fn remove_model_meta(&mut self, provider_id: &str, model_id: &str) -> io::Result<bool> {
+        let profile = self
+            .config
+            .profiles
+            .get_mut("default")
+            .and_then(|mp| mp.providers.iter_mut().find(|p| p.id == provider_id))
+            .ok_or_else(|| {
+                io::Error::new(
+                    io::ErrorKind::NotFound,
+                    format!("no provider slot with id '{provider_id}' in providers.toml"),
+                )
+            })?;
+        let before = profile.models.len();
+        profile.models.retain(|m| m.id != model_id);
+        Ok(profile.models.len() != before)
+    }
+
     /// Insert or replace a fully-built [`ProviderProfile`] under the
     /// `"default"` model profile, keyed by `profile.id`. The desktop uses
     /// this to land managed connections (e.g. two distinct
@@ -719,6 +813,7 @@ fn synthesize_provider_profile(
         fallback_models: Vec::new(),
         quirks: Default::default(),
         tiers: ProviderTiers::default(),
+        models: Vec::new(),
     }
 }
 
@@ -766,6 +861,7 @@ mod tests {
             fallback_models: Vec::new(),
             quirks: Default::default(),
             tiers: ProviderTiers::default(),
+            models: Vec::new(),
         };
         let mut profiles = HashMap::new();
         profiles.insert(
@@ -1065,6 +1161,201 @@ mod tests {
         let _ = fs::remove_file(&path);
     }
 
+    // ---- Per-model metadata declarations (R2-4) ----
+
+    fn meta_spec(id: &str) -> shannon_types::provider_config::ModelSpec {
+        shannon_types::provider_config::ModelSpec {
+            id: id.to_string(),
+            display_name: Some(id.to_string()),
+            context_window: Some(65_536),
+            max_output: Some(8_192),
+            cost_per_m_input: Some(0.5),
+            cost_per_m_output: Some(2.0),
+            capabilities: vec![shannon_types::provider_config::ModelCapability::Vision],
+        }
+    }
+
+    #[test]
+    fn set_model_meta_round_trips_through_save_load() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("providers.toml");
+        let mut store = ProviderConfigStore::default();
+        store.upsert_profile(
+            sample_profile(
+                "glm",
+                ProviderKind::OpenAiCompatible,
+                "https://open.bigmodel.cn/api/paas/v4",
+            ),
+            "glm-5.3-flash",
+        );
+        store
+            .set_model_meta("glm", meta_spec("glm-5.3-flash"))
+            .unwrap();
+        store.save_at(&path).unwrap();
+
+        let loaded = load(Some(&path)).expect("should parse back");
+        let glm = loaded.profiles["default"]
+            .providers
+            .iter()
+            .find(|p| p.id == "glm")
+            .unwrap();
+        assert_eq!(glm.models.len(), 1);
+        assert_eq!(glm.models[0].id, "glm-5.3-flash");
+        assert_eq!(glm.models[0].context_window, Some(65_536));
+        assert_eq!(glm.models[0].cost_per_m_input, Some(0.5));
+        let _ = fs::remove_file(&path);
+    }
+
+    #[test]
+    fn set_model_meta_replaces_matching_id_and_keeps_others() {
+        let mut store = ProviderConfigStore::default();
+        store.upsert_profile(
+            sample_profile(
+                "glm",
+                ProviderKind::OpenAiCompatible,
+                "https://open.bigmodel.cn/api/paas/v4",
+            ),
+            "glm-5.3-flash",
+        );
+        store.set_model_meta("glm", meta_spec("a")).unwrap();
+        store.set_model_meta("glm", meta_spec("b")).unwrap();
+        // Replace "a" with different numbers — ids must stay unique.
+        let mut replaced = meta_spec("a");
+        replaced.context_window = Some(1_000);
+        store.set_model_meta("glm", replaced).unwrap();
+
+        let glm = &store.config().profiles["default"].providers[0];
+        assert_eq!(glm.models.len(), 2, "replace, not append");
+        let a = glm.models.iter().find(|m| m.id == "a").unwrap();
+        assert_eq!(a.context_window, Some(1_000));
+        assert_eq!(
+            glm.models.iter().filter(|m| m.id == "a").count(),
+            1,
+            "ids must stay unique"
+        );
+    }
+
+    #[test]
+    fn set_model_meta_unknown_provider_errors_without_mutation() {
+        let mut store = ProviderConfigStore::default();
+        store.upsert_profile(
+            sample_profile(
+                "glm",
+                ProviderKind::OpenAiCompatible,
+                "https://open.bigmodel.cn/api/paas/v4",
+            ),
+            "glm-5.3-flash",
+        );
+        let err = store.set_model_meta("ghost", meta_spec("m")).unwrap_err();
+        assert_eq!(err.kind(), io::ErrorKind::NotFound);
+        assert!(err.to_string().contains("ghost"));
+        let glm = &store.config().profiles["default"].providers[0];
+        assert!(glm.models.is_empty(), "failed set must not mutate");
+    }
+
+    #[test]
+    fn set_model_meta_rejects_invalid_spec() {
+        let mut store = ProviderConfigStore::default();
+        store.upsert_profile(
+            sample_profile(
+                "glm",
+                ProviderKind::OpenAiCompatible,
+                "https://open.bigmodel.cn/api/paas/v4",
+            ),
+            "glm-5.3-flash",
+        );
+        let mut bad = meta_spec("m");
+        bad.context_window = Some(0);
+        let err = store.set_model_meta("glm", bad).unwrap_err();
+        assert_eq!(err.kind(), io::ErrorKind::InvalidData);
+        let glm = &store.config().profiles["default"].providers[0];
+        assert!(glm.models.is_empty(), "invalid spec must not be stored");
+    }
+
+    #[test]
+    fn remove_model_meta_is_idempotent_and_reports() {
+        let mut store = ProviderConfigStore::default();
+        store.upsert_profile(
+            sample_profile(
+                "glm",
+                ProviderKind::OpenAiCompatible,
+                "https://open.bigmodel.cn/api/paas/v4",
+            ),
+            "glm-5.3-flash",
+        );
+        store.set_model_meta("glm", meta_spec("m")).unwrap();
+        assert!(store.remove_model_meta("glm", "m").unwrap());
+        assert!(!store.remove_model_meta("glm", "m").unwrap(), "idempotent");
+        assert!(store.remove_model_meta("ghost", "m").is_err());
+        let glm = &store.config().profiles["default"].providers[0];
+        assert!(glm.models.is_empty());
+    }
+
+    /// A file whose declarations parse but fail semantic validation (dup
+    /// ids) must degrade reads to None AND refuse writes — byte-identical
+    /// preservation, same contract as a parse error.
+    #[test]
+    fn invalid_model_declarations_degrade_reads_and_refuse_writes() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("providers.toml");
+        fs::write(
+            &path,
+            r#"version = 2
+
+[profiles.default]
+name = "default"
+credential_scope = "shared"
+
+[profiles.default.active_target]
+provider_id = "glm"
+model_id = "glm-5.3-flash"
+scope = "global"
+
+[[profiles.default.providers]]
+id = "glm"
+kind = "openai-compatible"
+display_name = "glm"
+base_url = "https://open.bigmodel.cn/api/paas/v4"
+
+[profiles.default.providers.credential]
+backend = "store"
+service = "glm"
+
+[[profiles.default.providers.models]]
+id = "dup"
+context_window = 1000
+
+[[profiles.default.providers.models]]
+id = "dup"
+context_window = 2000
+"#,
+        )
+        .unwrap();
+
+        assert!(
+            load(Some(&path)).is_none(),
+            "duplicate model ids must degrade the file to None"
+        );
+
+        // And the write side must refuse, preserving the bytes.
+        let mut store = ProviderConfigStore::load_or_default_at(&path);
+        store.upsert_profile(
+            sample_profile(
+                "anthropic",
+                ProviderKind::Anthropic,
+                "https://api.anthropic.com",
+            ),
+            "claude-sonnet-4-20250514",
+        );
+        let result = store.save();
+        assert!(result.is_err(), "write must be refused");
+        assert!(result.unwrap_err().to_string().contains("duplicate"));
+        let on_disk = fs::read_to_string(&path).unwrap();
+        assert!(on_disk.contains("id = \"dup\""), "file left untouched");
+
+        let _ = fs::remove_dir_all(dir.path());
+    }
+
     // ---- ProviderConfigStore::upsert_profile + remove_profile (Phase 2 task 4) ----
     //
     // These back the desktop's managed-provider write path. The contract
@@ -1091,6 +1382,7 @@ mod tests {
             fallback_models: Vec::new(),
             quirks: Default::default(),
             tiers: ProviderTiers::default(),
+            models: Vec::new(),
         }
     }
 

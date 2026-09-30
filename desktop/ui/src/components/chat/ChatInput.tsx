@@ -1,6 +1,7 @@
 import { useState, useRef, useEffect, useLayoutEffect, useId, useCallback } from 'react'
 import { useIntl } from 'react-intl'
 import { open } from '@tauri-apps/plugin-dialog'
+import { toast } from 'sonner'
 import { Button } from '@/components/ui/button'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 import { DropdownMenu, type DropdownMenuItem } from '@/components/ui/dropdown-menu'
@@ -10,12 +11,32 @@ import { MicButton } from '@/components/voice/MicButton'
 import { VoiceOrb } from '@/components/voice/VoiceOrb'
 import AttachmentChip from '@/components/chat/AttachmentChip'
 import SessionUsageDialog from '@/components/chat/SessionUsageDialog'
+import PptOutlineDialog from '@/components/chat/PptOutlineDialog'
+import { useComposerDraftListener } from '@/lib/composerBridge'
 import { isSlashQuery, filterSlashCommands, type SlashCommand } from '@/lib/slash/commands'
 import * as api from '@/lib/tauri-api'
 import { toastError } from '@/lib/errorToast'
 import { cn } from '@/lib/utils'
+import { modelPickerMeta } from '@/components/settings/models-settings/types'
 
 const IMAGE_EXTENSIONS = new Set(['png', 'jpg', 'jpeg', 'gif', 'webp', 'bmp', 'svg'])
+
+/**
+ * Office Wave 1 A1a — extensions whose content the attachment pipeline does
+ * NOT parse today (the Rust reader returns opaque bytes for them). The chip
+ * is still attached and the path is still sent (parsing lands in the next
+ * wave), but the composer must say out loud that the file's CONTENT never
+ * reaches the model — attaching a .docx used to look like context when it
+ * wasn't. Keep in sync with the reader's supported set.
+ */
+export const UNPARSED_EXTENSIONS = new Set(['doc', 'docx', 'xls', 'xlsx', 'ppt', 'pptx', 'odt', 'rtf'])
+
+/** Lowercased extension without the dot ('' for dotfiles/no extension). */
+export function pathExtension(path: string): string {
+  const name = path.replace(/\\/g, '/').split('/').pop() ?? ''
+  const dot = name.lastIndexOf('.')
+  return dot > 0 ? name.slice(dot + 1).toLowerCase() : ''
+}
 
 /** Last path segment, no extension — used by the contextual placeholder so a
  *  repo named "shannon-desktop" reads as "Working in shannon-desktop …". */
@@ -56,12 +77,21 @@ interface ChatInputProps {
   sessionWorkingDir?: string
   /** 最近一次流式 Usage payload — composer 侧会话用量弹框跟随刷新。 */
   usageTick?: unknown
+  /** R2-1: the session this composer targets. When present, model-chip
+   *  switches are SESSION-scoped (`set_session_model`) and the chip shows a
+   *  "· session" suffix while an override is active; "Set as default" in the
+   *  chip menu performs the global configure. Omitted → legacy global
+   *  behavior (no session context to scope to). */
+  sessionId?: string | null
 }
 
 // U2 removed the composer's model Select; the ZCode delta P0-③ brings a
-// model chip back (per-message switching without reaching for the Header)
-// while the global Header selector stays in sync — both write the same
-// engine config keys (`model` holds a model NAME, not the catalog id).
+// model chip back (per-message switching without reaching for the Header).
+// R2-1 splits the two intents: a chip switch now re-targets only the CURRENT
+// session, while the menu's "Set as default" action writes the global
+// config — the Header selector keeps showing that global default.
+import { promoteSessionModelToDefault } from './sessionModelPromotion'
+
 export default function ChatInput({
   value,
   onChange,
@@ -77,6 +107,7 @@ export default function ChatInput({
   onOpenEditor,
   sessionWorkingDir,
   usageTick,
+  sessionId,
 }: ChatInputProps) {
   const intl = useIntl()
   const t = (id: string) => intl.formatMessage({ id })
@@ -102,6 +133,17 @@ export default function ChatInput({
   const slashQuery = isSlashQuery(value) ? value.trim() : null
   const slashMatches = slashQuery && !slashDismissed ? filterSlashCommands(slashQuery) : []
   const slashOpen = slashMatches.length > 0
+
+  // Office Wave 1 A1a — honest notice while an unparseable attachment
+  // (.docx/.xlsx/…) rides along. Dismissible, but re-arming: once every
+  // unsupported file is removed the dismissal resets, so a NEW .docx warns
+  // again instead of relying on a stale dismiss.
+  const hasUnparsedAttachment = attachedFiles.some(p => UNPARSED_EXTENSIONS.has(pathExtension(p)))
+  const [unparsedDismissed, setUnparsedDismissed] = useState(false)
+  useEffect(() => {
+    if (!hasUnparsedAttachment) setUnparsedDismissed(false)
+  }, [hasUnparsedAttachment])
+  const showUnparsedNotice = hasUnparsedAttachment && !unparsedDismissed
 
   useEffect(() => {
     setSlashActive(0)
@@ -141,20 +183,86 @@ export default function ChatInput({
     }
   }
 
-  // P0-③ (ZCode delta): composer model chip. Mirrors Header.handleModelSwitch
-  // exactly — configure the model NAME plus its provider, then refresh both
-  // config and status so the two selectors stay in sync.
-  const currentModel = modelList.find(m => m.name === status?.model || m.id === status?.model)
+  // P0-③ (ZCode delta): composer model chip. R2-1 — with a session context
+  // the switch is session-scoped (`set_session_model`); without one the
+  // legacy global configure applies. "Set as default" always goes global.
+  // R2-1: the session's model override — mirrors the backend's
+  // `SessionState.model_override`. Re-read whenever the focused session
+  // changes so the chip never shows a stale override after a switch.
+  // Presence of the prop (not truthiness) gates session-scoping: `null`
+  // means "no focused id — the backend resolves the ACTIVE session", which
+  // is exactly what a brand-new chat is.
+  const sessionScoped = sessionId !== undefined
+  const [sessionOverride, setSessionOverride] = useState<api.SessionModelOverride | null>(null)
+  useEffect(() => {
+    let cancelled = false
+    if (!sessionScoped) {
+      setSessionOverride(null)
+      return
+    }
+    api.getSessionModel(sessionId ?? null)
+      .then(ov => { if (!cancelled) setSessionOverride(ov ?? null) })
+      .catch(() => { if (!cancelled) setSessionOverride(null) })
+    return () => { cancelled = true }
+  }, [sessionScoped, sessionId])
+
+  // R2-1: the chip reflects the SESSION override when one is active — the
+  // global `status` stays untouched so the Header keeps showing the default.
+  const currentModel =
+    (sessionOverride
+      ? modelList.find(m => m.id === sessionOverride.model || m.name === sessionOverride.model)
+      : undefined) ??
+    modelList.find(m => m.name === status?.model || m.id === status?.model)
   const handleModelSwitch = async (modelId: string | null) => {
     const model = modelList.find(m => m.id === modelId)
     if (!model) return
     try {
-      await api.configure({ key: 'model', value: model.name })
-      await api.configure({ key: 'provider', value: model.provider })
-      await refreshConfig()
-      await refreshStatus()
+      if (sessionScoped) {
+        // R2-1: chip switch is session-scoped. Writes the canonical catalog
+        // id (same normalization contract as `configure('model')`); a null
+        // session id resolves to the active session backend-side.
+        await api.setSessionModel(sessionId ?? null, model.provider, model.id)
+        setSessionOverride({ provider: model.provider, model: model.id })
+      } else {
+        // No session context (tests / degraded catalogs) — legacy global write.
+        await api.configure({ key: 'model', value: model.id })
+        await api.configure({ key: 'provider', value: model.provider })
+        await refreshConfig()
+        await refreshStatus()
+      }
     } catch (err) {
       toastError(t('chat.input.model.failed'), err)
+    }
+  }
+
+  // R2-1: promote the chip's CURRENT effective target (session override when
+  // active, else the displayed global model) to the engine-global default —
+  // exactly the configure('model') + configure('provider') pair the chip
+  // performed before R2-1.
+  const handleSetAsDefault = async () => {
+    const target = currentModel
+    if (!target) return
+    try {
+      await promoteSessionModelToDefault(target, {
+        configure: api.configure,
+        refreshConfig,
+        refreshStatus,
+      })
+      toast.success(intl.formatMessage({ id: 'chat.input.model.setDefault.toast' }, { model: target.name }))
+    } catch (err) {
+      toastError(t('chat.input.model.setDefault.failed'), err)
+    }
+  }
+
+  // R2-1: drop the session override — the session re-inherits the global
+  // default (including future default changes).
+  const handleClearSessionOverride = async () => {
+    if (!sessionScoped) return
+    try {
+      await api.clearSessionModel(sessionId ?? null)
+      setSessionOverride(null)
+    } catch (err) {
+      toastError(t('chat.input.model.resetSession.failed'), err)
     }
   }
 
@@ -189,6 +297,12 @@ export default function ChatInput({
       return
     }
     onAttach(merged)
+    // B9' Files page: index the attachment references so they surface in the
+    // reference-style library. Fire-and-forget — a failed index write must
+    // never interrupt the attach flow (offline, scope errors, demo mode).
+    for (const p of paths) {
+      api.registerFileIndexEntry(p, 'attachment').catch(() => {})
+    }
   }
   // B0 P0-2: the drag-drop subscription outlives single renders, so it
   // dispatches through a latest-ref instead of re-subscribing on every
@@ -394,6 +508,22 @@ export default function ChatInput({
 
   /* "+" menu — attachments and the two inline tools, one click each. */
   const [plusOpen, setPlusOpen] = useState(false)
+  // B2 v1: "Build a presentation" — outline confirmation dialog. Generate
+  // pushes a draft into THIS composer (below) and never sends by itself.
+  const [pptOpen, setPptOpen] = useState(false)
+
+  // B2 v1: composer drafts from surface components (PPT outline today).
+  // Insertion appends after any existing draft text; the ref keeps the
+  // listener from re-subscribing on every keystroke.
+  const valueRef = useRef(value)
+  useEffect(() => {
+    valueRef.current = value
+  })
+  useComposerDraftListener(text => {
+    const current = valueRef.current
+    onChange(current.trim() ? `${current.replace(/\s+$/, '')}\n\n${text}` : text)
+    textareaRef.current?.focus()
+  })
 
   // SessionUsageDialog — composer 模型 chip 旁的会话用量入口(2026-09
   // 三项 UX 修复 #3)。弹框点击后才挂载,首屏零开销;打开期间跟随父
@@ -401,6 +531,7 @@ export default function ChatInput({
   const [usageOpen, setUsageOpen] = useState(false)
   const plusItems: DropdownMenuItem[] = [
     { id: 'attach', label: t('chat.input.attach.aria'), icon: 'attach_file', onSelect: () => { setPlusOpen(false); void handleAttachClick() } },
+    { id: 'ppt', label: t('office.ppt.title'), icon: 'slideshow', onSelect: () => { setPlusOpen(false); setPptOpen(true) } },
     { id: 'quickfix', label: t('nav.quickFix'), icon: 'build', onSelect: () => { setPlusOpen(false); onOpenQuickFix() } },
     { id: 'editor', label: t('nav.editor'), icon: 'code', onSelect: () => { setPlusOpen(false); onOpenEditor() } },
   ]
@@ -500,6 +631,34 @@ export default function ChatInput({
       {voice.state !== 'idle' && (
         <div className="flex items-center justify-center py-sm bg-primary/5 rounded-t-2xl">
           <VoiceOrb state={voice.state} />
+        </div>
+      )}
+
+      {/* A1a — sits above the input box so the honest "content was NOT sent"
+          line is read before the user hits send. Same banner shape as the
+          plan-mode strip, warning palette. */}
+      {showUnparsedNotice && (
+        <div
+          role="status"
+          className="flex items-start gap-xs px-md py-xs bg-warning-container/60 border-b border-warning/30 rounded-t-2xl text-on-warning-container"
+        >
+          <span className="material-symbols-outlined icon-sm shrink-0 mt-[2px]">info</span>
+          <div className="flex-1 min-w-0">
+            <div className="font-label-sm">{t('chat.input.attach.unsupportedType')}</div>
+            <div className="font-label-xs text-on-warning-container/80 mt-[1px]">
+              {t('chat.input.attach.unsupportedHint')}
+            </div>
+          </div>
+          <Button
+            variant="ghost"
+            size="icon-xs"
+            onClick={() => setUnparsedDismissed(true)}
+            aria-label={t('chat.message.attachment.close')}
+            title={t('chat.message.attachment.close')}
+            className="rounded-sm hover:bg-warning/20 shrink-0"
+          >
+            <span className="material-symbols-outlined icon-sm">close</span>
+          </Button>
         </div>
       )}
 
@@ -628,10 +787,19 @@ export default function ChatInput({
             <Select
               value={currentModel?.id ?? ''}
               onValueChange={value => {
-                // Reasoning effort is folded into the model dropdown as a
-                // namespaced section — one pill instead of two.
+                // Namespaced menu values never become the Select value:
+                // reasoning effort (`effort:`) and the R2-1 session actions
+                // (`set-default` / `clear-override`) commit and return.
                 if (value && value.startsWith('effort:')) {
                   void handleEffortChange(value.slice('effort:'.length))
+                  return
+                }
+                if (value === 'set-default') {
+                  void handleSetAsDefault()
+                  return
+                }
+                if (value === 'clear-override') {
+                  void handleClearSessionOverride()
                   return
                 }
                 if (value) void handleModelSwitch(value)
@@ -640,12 +808,18 @@ export default function ChatInput({
               <SelectTrigger
                 size="sm"
                 aria-label={t('chat.input.model.label')}
-                title={t('chat.input.model.title')}
+                title={sessionOverride
+                  ? intl.formatMessage(
+                      { id: 'chat.input.model.sessionTitle' },
+                      { model: currentModel?.name ?? sessionOverride.model },
+                    )
+                  : t('chat.input.model.title')}
                 className="max-w-[170px] rounded-full border border-outline-variant/50 bg-transparent hover:bg-surface-container-low/50 transition-colors"
               >
                 <span className="material-symbols-outlined icon-sm">smart_toy</span>
-                {/* Render the model NAME (what config `model` stores and what
-                    the Header displays), not the catalog id. */}
+                {/* Render the effective model NAME — the session override's
+                    model when one is active (with a "· session" suffix so the
+                    override is never silent), else the global default. */}
                 <SelectValue placeholder={status?.model || t('chat.input.model.label')}>
                   {(value: unknown) => {
                     // Reflect a non-default reasoning effort on the chip —
@@ -654,22 +828,70 @@ export default function ChatInput({
                     // the Select value), so read it from config directly.
                     const eff = effortOptions.find(e => e.value === currentEffort)
                     const m = modelList.find(x => x.id === value)
-                    const name = m?.name ?? status?.model ?? t('chat.input.model.label')
+                    const name = m?.name
+                      ?? sessionOverride?.model
+                      ?? status?.model
+                      ?? t('chat.input.model.label')
+                    let label = name
                     if (eff && eff.value !== 'medium') {
-                      return `${name} · ${eff.label}`
+                      label = `${label} · ${eff.label}`
                     }
-                    return name
+                    if (sessionOverride) {
+                      label = `${label} · ${t('chat.input.model.sessionSuffix')}`
+                    }
+                    return label
                   }}
                 </SelectValue>
               </SelectTrigger>
-              <SelectContent>
+              {/* R2-3: widened past the chip's anchor width so the context/
+                  price meta fits on the model rows. */}
+              <SelectContent className="w-[320px]">
                 {modelList.map(m => (
-                  <SelectItem key={m.id} value={m.id}>
-                    <span className="font-mono">{m.name}</span>
+                  <SelectItem key={m.id} value={m.id} data-testid={`model-option-${m.id}`}>
+                    <span className="flex w-full min-w-0 items-center gap-xs">
+                      <span className="font-mono truncate">{m.name}</span>
+                      {/* R2-3: vision dot — rendered only from real catalog
+                          metadata; unknown renders nothing (never guessed). */}
+                      {m.vision === true && (
+                        <span
+                          aria-label={t('chat.input.model.vision')}
+                          title={t('chat.input.model.vision')}
+                          className="inline-block size-1.5 shrink-0 rounded-full bg-primary"
+                        />
+                      )}
+                      <span className="ml-auto shrink-0 whitespace-nowrap font-label-xs text-on-surface-variant tabular-nums">
+                        {modelPickerMeta(m)}
+                      </span>
+                    </span>
                   </SelectItem>
                 ))}
                 {modelList.length > 0 && (
                   <div role="presentation" className="mx-sm my-xs border-t border-outline-variant/20" />
+                )}
+                {/* R2-1: session model actions — "Set as default" promotes
+                    the chip's current model to the engine-global default
+                    (the pre-R2-1 chip behavior); "Reset to default" (shown
+                    only while an override is active) re-inherits it. */}
+                {sessionScoped && (
+                  <>
+                    <div role="presentation" className="px-sm pt-0 pb-xs font-label-xs uppercase tracking-wider text-on-surface-variant">
+                      {t('chat.input.model.sessionSection')}
+                    </div>
+                    <SelectItem value="set-default" data-testid="model-action-set-default">
+                      <span className="flex items-center gap-xs">
+                        <span className="material-symbols-outlined icon-sm" aria-hidden="true">push_pin</span>
+                        {t('chat.input.model.setDefault')}
+                      </span>
+                    </SelectItem>
+                    {sessionOverride && (
+                      <SelectItem value="clear-override" data-testid="model-action-clear-override">
+                        <span className="flex items-center gap-xs">
+                          <span className="material-symbols-outlined icon-sm" aria-hidden="true">restart_alt</span>
+                          {t('chat.input.model.resetSession')}
+                        </span>
+                      </SelectItem>
+                    )}
+                  </>
                 )}
                 <div role="presentation" className="px-sm pt-0 pb-xs font-label-xs uppercase tracking-wider text-on-surface-variant">
                   {t('chat.input.effort.section')}
@@ -745,6 +967,9 @@ export default function ChatInput({
       {usageOpen && (
         <SessionUsageDialog open onClose={() => setUsageOpen(false)} usageTick={usageTick} />
       )}
+      {/* B2 v1 — PPT outline confirmation. Generate pushes a composer draft
+          (review-then-send); close/cancel pushes nothing. */}
+      {pptOpen && <PptOutlineDialog open onClose={() => setPptOpen(false)} />}
     </div>
   )
 }

@@ -72,6 +72,16 @@ const repoSkill = {
   tags: ['discovery'],
 }
 
+// office Wave 3 C7: a research/dev skill with no office tags — must stay in
+// the ungrouped list, not under the Productivity heading.
+const devSkill = {
+  ...repoSkill,
+  id: 'gh:anthropics/skills/main/repomap',
+  name: 'repomap',
+  description: 'Repo map generation for large codebases.',
+  tags: ['code', 'rust'],
+}
+
 const installedSkill = {
   name: 'pdf-toolkit',
   path: '/home/user/.shannon/skills/pdf-toolkit',
@@ -307,5 +317,45 @@ describe('Skills (P3 federated catalog)', () => {
     fireEvent.click(screen.getByRole('tab', { name: /Agent-authored · 1/ }))
     expect(screen.queryByText('Human-skill')).not.toBeInTheDocument()
     expect(screen.getByText('Auto-skill')).toBeInTheDocument()
+  })
+})
+
+// ─── office Wave 3 C7: Productivity group pinned atop the catalog ───
+
+describe('Skills — Productivity grouping (office Wave 3 C7)', () => {
+  it('shows the Productivity heading with the office-tagged skill under it', async () => {
+    listSkillCatalog.mockResolvedValue([nativeSkill, devSkill])
+    listInstalledSkillPlugins.mockResolvedValue([])
+    const { container } = renderWithRouter()
+    await waitFor(() => {
+      expect(screen.getByText('pdf-toolkit')).toBeInTheDocument()
+    })
+    expect(screen.getByTestId('skills-productivity-group')).toBeInTheDocument()
+    expect(screen.getByText('Productivity')).toBeInTheDocument()
+
+    // Pinned: the productivity card renders before the dev card in DOM order.
+    const cards = container.textContent ?? ''
+    expect(cards.indexOf('pdf-toolkit')).toBeLessThan(cards.indexOf('repomap'))
+  })
+
+  it('keeps non-office skills out of the group', async () => {
+    listSkillCatalog.mockResolvedValue([devSkill])
+    listInstalledSkillPlugins.mockResolvedValue([])
+    renderWithRouter()
+    await waitFor(() => {
+      expect(screen.getByText('repomap')).toBeInTheDocument()
+    })
+    expect(screen.queryByTestId('skills-productivity-group')).not.toBeInTheDocument()
+    expect(screen.queryByText('Productivity')).not.toBeInTheDocument()
+  })
+
+  it('shows no heading when the catalog is empty', async () => {
+    listSkillCatalog.mockResolvedValue([])
+    listInstalledSkillPlugins.mockResolvedValue([])
+    renderWithRouter()
+    await waitFor(() => {
+      expect(screen.getByText('No skills found.')).toBeInTheDocument()
+    })
+    expect(screen.queryByTestId('skills-productivity-group')).not.toBeInTheDocument()
   })
 })

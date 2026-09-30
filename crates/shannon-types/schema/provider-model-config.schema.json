@@ -139,6 +139,17 @@
       },
       "type": "object"
     },
+    "ModelCapability": {
+      "description": "R2-4 mirror — must match src/provider_config.rs exactly.",
+      "enum": [
+        "reasoning",
+        "coding",
+        "speed",
+        "cheap",
+        "vision"
+      ],
+      "type": "string"
+    },
     "ModelProfile": {
       "properties": {
         "active_target": {
@@ -173,6 +184,61 @@
       },
       "required": [
         "active_target"
+      ],
+      "type": "object"
+    },
+    "ModelSpec": {
+      "additionalProperties": false,
+      "description": "R2-4 mirror — must match src/provider_config.rs exactly.",
+      "properties": {
+        "capabilities": {
+          "items": {
+            "$ref": "#/definitions/ModelCapability"
+          },
+          "type": "array"
+        },
+        "context_window": {
+          "format": "uint32",
+          "minimum": 0.0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "cost_per_m_input": {
+          "format": "double",
+          "type": [
+            "number",
+            "null"
+          ]
+        },
+        "cost_per_m_output": {
+          "format": "double",
+          "type": [
+            "number",
+            "null"
+          ]
+        },
+        "display_name": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "id": {
+          "type": "string"
+        },
+        "max_output": {
+          "format": "uint32",
+          "minimum": 0.0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "id"
       ],
       "type": "object"
     },
@@ -268,6 +334,13 @@
         },
         "kind": {
           "$ref": "#/definitions/ProviderKind"
+        },
+        "models": {
+          "description": "R2-4: per-model metadata declarations (must mirror src/).",
+          "items": {
+            "$ref": "#/definitions/ModelSpec"
+          },
+          "type": "array"
         },
         "models_url": {
           "type": [

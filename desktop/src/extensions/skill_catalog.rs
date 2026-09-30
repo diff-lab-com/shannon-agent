@@ -228,7 +228,7 @@ fn builtin_skills() -> Vec<CatalogEntry> {
     vec![
         native(
             "pdf",
-            "Read, search, and extract content from PDF documents.",
+            "[In development] Read, search, and extract content from PDF documents.",
             "/pdf",
             &["pdf", "native", "documents"],
         ),
@@ -288,31 +288,31 @@ fn builtin_skills() -> Vec<CatalogEntry> {
         ),
         native(
             "plotly-charts",
-            "Generate Plotly figures from data. Returns a JSON chart spec compatible with the chat chart renderer, or an interactive HTML file for richer figures.",
+            "[In development] Generate Plotly figures from data. Returns a JSON chart spec compatible with the chat chart renderer, or an interactive HTML file for richer figures.",
             "/plotly",
             &["python", "plotly", "charts", "data-analysis"],
         ),
         native(
             "data-analysis",
-            "Load CSV/JSON/parquet via pandas, summarise distributions, surface outliers, and produce a markdown report with embedded charts.",
+            "[In development] Load CSV/JSON/parquet via pandas, summarise distributions, surface outliers, and produce a markdown report with embedded charts.",
             "/analyze",
             &["python", "pandas", "data-analysis", "statistics"],
         ),
         native(
             "jupyter-session",
-            "Persistent Python kernel session: keep variables across turns, render matplotlib/plotly figures inline.",
+            "[In development] Persistent Python kernel session: keep variables across turns, render matplotlib/plotly figures inline.",
             "/py",
             &["python", "jupyter", "kernel", "data-analysis"],
         ),
         native(
             "documents-open",
-            "Open DOCX/PPTX/XLSX/PDF documents in the host's installed editor (LibreOffice, Word, Excel). Detects editors via `which`/`where`; if none is found, recommends `apt install libreoffice` (Linux), `brew install --cask libreoffice` (macOS), or `winget install TheDocumentFoundation.LibreOffice` (Windows) instead of aborting.",
+            "[In development] Open DOCX/PPTX/XLSX/PDF documents in the host's installed editor (LibreOffice, Word, Excel). Detects editors via `which`/`where`; if none is found, recommends `apt install libreoffice` (Linux), `brew install --cask libreoffice` (macOS), or `winget install TheDocumentFoundation.LibreOffice` (Windows) instead of aborting.",
             "/documents-open",
             &["documents", "native", "host"],
         ),
         native(
             "documents-convert",
-            "Convert between document formats (md↔docx, docx↔pdf, html↔pdf) via the host's pandoc. If pandoc is missing, the skill recommends installation and returns the input unchanged rather than aborting the agent run.",
+            "[In development] Convert between document formats (md↔docx, docx↔pdf, html↔pdf) via the host's pandoc. If pandoc is missing, the skill recommends installation and returns the input unchanged rather than aborting the agent run.",
             "/documents-convert",
             &["documents", "native", "pandoc"],
         ),

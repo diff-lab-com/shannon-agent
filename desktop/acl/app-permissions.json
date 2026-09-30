@@ -137,6 +137,15 @@
       }
     },
     {
+      "identifier": "allow-clear-session-model",
+      "description": "Enables the clear_session_model command without any pre-configured scope.",
+      "commands": {
+        "allow": [
+          "clear_session_model"
+        ]
+      }
+    },
+    {
       "identifier": "allow-clear-webhook-config",
       "description": "Enables the clear_webhook_config command without any pre-configured scope.",
       "commands": {
@@ -178,6 +187,15 @@
       "commands": {
         "allow": [
           "continue_inbox_item_session"
+        ]
+      }
+    },
+    {
+      "identifier": "allow-copy-file",
+      "description": "Enables the copy_file command without any pre-configured scope.",
+      "commands": {
+        "allow": [
+          "copy_file"
         ]
       }
     },
@@ -763,6 +781,15 @@
       "commands": {
         "allow": [
           "get_session_git_diff"
+        ]
+      }
+    },
+    {
+      "identifier": "allow-get-session-model",
+      "description": "Enables the get_session_model command without any pre-configured scope.",
+      "commands": {
+        "allow": [
+          "get_session_model"
         ]
       }
     },
@@ -1460,6 +1487,15 @@
       }
     },
     {
+      "identifier": "allow-list-file-index",
+      "description": "Enables the list_file_index command without any pre-configured scope.",
+      "commands": {
+        "allow": [
+          "list_file_index"
+        ]
+      }
+    },
+    {
       "identifier": "allow-lsp-code-actions",
       "description": "Enables the lsp_code_actions command without any pre-configured scope.",
       "commands": {
@@ -1568,6 +1604,15 @@
       }
     },
     {
+      "identifier": "allow-open-companion-window",
+      "description": "Enables the open_companion_window command without any pre-configured scope.",
+      "commands": {
+        "allow": [
+          "open_companion_window"
+        ]
+      }
+    },
+    {
       "identifier": "allow-open-external",
       "description": "Enables the open_external command without any pre-configured scope.",
       "commands": {
@@ -1600,6 +1645,15 @@
       "commands": {
         "allow": [
           "path_exists"
+        ]
+      }
+    },
+    {
+      "identifier": "allow-probe-host-runtime",
+      "description": "Enables the probe_host_runtime command without any pre-configured scope.",
+      "commands": {
+        "allow": [
+          "probe_host_runtime"
         ]
       }
     },
@@ -1847,6 +1901,15 @@
       }
     },
     {
+      "identifier": "allow-refresh-model-catalog",
+      "description": "Enables the refresh_model_catalog command without any pre-configured scope.",
+      "commands": {
+        "allow": [
+          "refresh_model_catalog"
+        ]
+      }
+    },
+    {
       "identifier": "allow-register-project",
       "description": "Enables the register_project command without any pre-configured scope.",
       "commands": {
@@ -2054,6 +2117,15 @@
       }
     },
     {
+      "identifier": "allow-register-file-index-entry",
+      "description": "Enables the register_file_index_entry command without any pre-configured scope.",
+      "commands": {
+        "allow": [
+          "register_file_index_entry"
+        ]
+      }
+    },
+    {
       "identifier": "allow-run-file-diagnostics",
       "description": "Enables the run_file_diagnostics command without any pre-configured scope.",
       "commands": {
@@ -2086,6 +2158,24 @@
       "commands": {
         "allow": [
           "save_stt_config"
+        ]
+      }
+    },
+    {
+      "identifier": "allow-set-companion-always-on-top",
+      "description": "Enables the set_companion_always_on_top command without any pre-configured scope.",
+      "commands": {
+        "allow": [
+          "set_companion_always_on_top"
+        ]
+      }
+    },
+    {
+      "identifier": "allow-set-file-index-favorite",
+      "description": "Enables the set_file_index_favorite command without any pre-configured scope.",
+      "commands": {
+        "allow": [
+          "set_file_index_favorite"
         ]
       }
     },
@@ -2216,6 +2306,15 @@
       }
     },
     {
+      "identifier": "allow-set-session-model",
+      "description": "Enables the set_session_model command without any pre-configured scope.",
+      "commands": {
+        "allow": [
+          "set_session_model"
+        ]
+      }
+    },
+    {
       "identifier": "allow-set-session-working-dir",
       "description": "Enables the set_session_working_dir command without any pre-configured scope.",
       "commands": {
@@ -2315,6 +2414,24 @@
       }
     },
     {
+      "identifier": "allow-terminal-get-settings",
+      "description": "Enables the terminal_get_settings command without any pre-configured scope.",
+      "commands": {
+        "allow": [
+          "terminal_get_settings"
+        ]
+      }
+    },
+    {
+      "identifier": "allow-terminal-history",
+      "description": "Enables the terminal_history command without any pre-configured scope.",
+      "commands": {
+        "allow": [
+          "terminal_history"
+        ]
+      }
+    },
+    {
       "identifier": "allow-terminal-kill",
       "description": "Enables the terminal_kill command without any pre-configured scope.",
       "commands": {
@@ -2338,6 +2455,15 @@
       "commands": {
         "allow": [
           "terminal_resize"
+        ]
+      }
+    },
+    {
+      "identifier": "allow-terminal-set-settings",
+      "description": "Enables the terminal_set_settings command without any pre-configured scope.",
+      "commands": {
+        "allow": [
+          "terminal_set_settings"
         ]
       }
     },
@@ -2592,24 +2718,6 @@
           "verify_signature"
         ]
       }
-    },
-    {
-      "identifier": "allow-workspace-get-layout",
-      "description": "Enables the workspace_get_layout command without any pre-configured scope.",
-      "commands": {
-        "allow": [
-          "workspace_get_layout"
-        ]
-      }
-    },
-    {
-      "identifier": "allow-workspace-set-layout",
-      "description": "Enables the workspace_set_layout command without any pre-configured scope.",
-      "commands": {
-        "allow": [
-          "workspace_set_layout"
-        ]
-      }
     }
   ],
   "set": [
@@ -2619,13 +2727,16 @@
       "permissions": [
         "allow-cancel-background-task",
         "allow-cancel-query",
+        "allow-clear-session-model",
         "allow-get-background-tasks",
         "allow-get-conversation",
         "allow-get-provider-allowlist",
+        "allow-get-session-model",
         "allow-get-status",
         "allow-list-models",
         "allow-list-tools",
         "allow-send-message",
+        "allow-set-session-model",
         "allow-start-background-task"
       ]
     },
@@ -2640,6 +2751,7 @@
         "allow-get-config",
         "allow-get-provider-status",
         "allow-list-providers",
+        "allow-refresh-model-catalog",
         "allow-save-provider",
         "allow-set-active-provider",
         "allow-test-all-providers",
@@ -2690,6 +2802,7 @@
         "allow-open-external",
         "allow-open-release-page",
         "allow-open-with-default-app",
+        "allow-probe-host-runtime",
         "allow-probe-url-frameable",
         "allow-register-interactive-artifact",
         "allow-reveal-in-folder",
@@ -2771,17 +2884,21 @@
       "permissions": [
         "allow-apply-code-action",
         "allow-apply-diff",
+        "allow-copy-file",
         "allow-get-file-diff",
         "allow-get-file-tree",
         "allow-get-working-dir-info",
+        "allow-list-file-index",
         "allow-lsp-code-actions",
         "allow-path-exists",
         "allow-read-attachment",
         "allow-read-attachments",
         "allow-read-source-file",
         "allow-read-text-file",
+        "allow-register-file-index-entry",
         "allow-run-file-diagnostics",
-        "allow-save-text-file"
+        "allow-save-text-file",
+        "allow-set-file-index-favorite"
       ]
     },
     {
@@ -2925,14 +3042,14 @@
     },
     {
       "identifier": "app-window-management",
-      "description": "Session multi-window lifecycle and draggable workspace layout commands.",
+      "description": "Session multi-window lifecycle commands.",
       "permissions": [
         "allow-close-session-window",
         "allow-list-session-windows",
+        "allow-open-companion-window",
         "allow-open-session-window",
         "allow-reveal-session-in-main",
-        "allow-workspace-get-layout",
-        "allow-workspace-set-layout"
+        "allow-set-companion-always-on-top"
       ]
     },
     {
@@ -2964,9 +3081,12 @@
         "allow-preview-start",
         "allow-preview-status",
         "allow-preview-stop",
+        "allow-terminal-get-settings",
+        "allow-terminal-history",
         "allow-terminal-kill",
         "allow-terminal-list",
         "allow-terminal-resize",
+        "allow-terminal-set-settings",
         "allow-terminal-spawn",
         "allow-terminal-write"
       ]
