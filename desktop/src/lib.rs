@@ -17,6 +17,9 @@ pub mod file_permissions;
 pub mod mcp;
 pub mod provider_read_snapshot;
 pub mod routine_templates;
+/// G1 P0-2.1 — skill → chat-tool bridge (installed skills become
+/// model-callable `skill_<id>` tools).
+pub mod skill_tools;
 
 /// Resolve `path` relative to `working_dir` (or use it as-is if absolute),
 /// then canonicalize both and ensure the resolved path is inside the working
