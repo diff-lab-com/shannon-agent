@@ -383,7 +383,10 @@ pub(crate) fn allowed_path_bases() -> Vec<std::path::PathBuf> {
             bases.push(p);
         }
     };
-    for raw in [dirs::home_dir(), Some(std::env::temp_dir())].into_iter().flatten() {
+    for raw in [dirs::home_dir(), Some(std::env::temp_dir())]
+        .into_iter()
+        .flatten()
+    {
         push(strip_windows_verbatim(&raw));
         push(normalized_base(&raw));
     }

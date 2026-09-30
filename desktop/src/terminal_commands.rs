@@ -1443,8 +1443,7 @@ mod tests {
         {
             let mut status: libc::c_int = 0;
             let rc = unsafe { libc::waitpid(pid as libc::pid_t, &mut status, libc::WNOHANG) };
-            rc == pid as libc::pid_t
-                || (rc < 0 && unsafe { *libc::__error() } == libc::ECHILD)
+            rc == pid as libc::pid_t || (rc < 0 && unsafe { *libc::__error() } == libc::ECHILD)
         }
         #[cfg(not(any(target_os = "linux", target_os = "macos")))]
         {

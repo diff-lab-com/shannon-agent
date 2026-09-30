@@ -2428,7 +2428,9 @@ mod tests {
         // state (cwd, SHANNON_HOME) and detach finish tasks; serialize them so
         // shared-process `cargo test` runs are order-independent (nextest
         // already isolates per process).
-        let _guard = CWD_LOCK.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+        let _guard = CWD_LOCK
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         let app = tauri::test::mock_app();
         let tmp = tempfile::tempdir().unwrap();
         // The spawned engine resolves providers/credentials under
@@ -2475,7 +2477,9 @@ mod tests {
         // cwd-mutating bucket tests serialize through CWD_LOCK, and this
         // test must hold it too so no concurrent test moves the cwd under
         // the run.
-        let _guard = CWD_LOCK.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+        let _guard = CWD_LOCK
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         let app = tauri::test::mock_app();
         let tmp = tempfile::tempdir().unwrap();
         // Same SHANNON_HOME isolation as the stamps test above.
@@ -2873,7 +2877,9 @@ mod tests {
 
     #[test]
     fn test_collect_daily_buckets_walks_team_dirs() {
-        let _guard = CWD_LOCK.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+        let _guard = CWD_LOCK
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         let tmp = tempfile::tempdir().unwrap();
         let orig = std::env::current_dir().unwrap();
         std::env::set_current_dir(tmp.path()).unwrap();
@@ -2905,7 +2911,9 @@ mod tests {
 
     #[test]
     fn test_collect_daily_buckets_no_tasks_dir_returns_empty_buckets() {
-        let _guard = CWD_LOCK.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+        let _guard = CWD_LOCK
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         let tmp = tempfile::tempdir().unwrap();
         let orig = std::env::current_dir().unwrap();
         std::env::set_current_dir(tmp.path()).unwrap();
@@ -2923,7 +2931,9 @@ mod tests {
 
     #[test]
     fn test_append_routine_to_project_toml_creates_file() {
-        let _guard = CWD_LOCK.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+        let _guard = CWD_LOCK
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         let tmp = tempfile::tempdir().unwrap();
         let orig = std::env::current_dir().unwrap();
         std::env::set_current_dir(tmp.path()).unwrap();
@@ -2954,7 +2964,9 @@ mod tests {
 
     #[test]
     fn test_append_routine_to_project_toml_appends_to_existing() {
-        let _guard = CWD_LOCK.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+        let _guard = CWD_LOCK
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         let tmp = tempfile::tempdir().unwrap();
         let orig = std::env::current_dir().unwrap();
         std::env::set_current_dir(tmp.path()).unwrap();

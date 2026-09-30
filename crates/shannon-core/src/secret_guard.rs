@@ -753,10 +753,13 @@ fn enabled_mode() -> Option<SecretGuardMode> {
 
 fn set_enabled_mode(mode: SecretGuardMode) {
     use std::sync::atomic::Ordering::Relaxed;
-    ENABLED.store(match mode {
-        SecretGuardMode::Audit => 1,
-        SecretGuardMode::Redact => 2,
-    }, Relaxed);
+    ENABLED.store(
+        match mode {
+            SecretGuardMode::Audit => 1,
+            SecretGuardMode::Redact => 2,
+        },
+        Relaxed,
+    );
 }
 
 /// Parse `$SHANNON_SECRET_GUARD` (`audit` | `redact`; anything else = off).

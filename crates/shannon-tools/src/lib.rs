@@ -1098,7 +1098,9 @@ mod tests {
             // compare resolved forms rather than raw spellings.
             assert_eq!(
                 std::path::Path::new(&echoed).canonicalize().unwrap(),
-                std::path::Path::new(host_str.as_str()).canonicalize().unwrap(),
+                std::path::Path::new(host_str.as_str())
+                    .canonicalize()
+                    .unwrap(),
                 "without a relocating backend the host path is the sandbox view"
             );
         }
