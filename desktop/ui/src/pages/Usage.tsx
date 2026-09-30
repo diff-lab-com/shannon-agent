@@ -21,6 +21,8 @@ import StatCard from '@/components/ui/stat-card'
 import { cn } from '@/lib/utils'
 import type { UsageStats, UsageBucket, SessionUsageRow } from '@/types'
 import CurrentSessionCostPanel from '@/components/usage/CurrentSessionCostPanel'
+import UsageBudgetCard from '@/components/usage/UsageBudgetCard'
+import { useUsageGovernance } from '@/hooks/useUsageGovernance'
 import { BarChart, DonutChart, type BarSeriesDef } from '@/components/usage/BarChart'
 import { DataTable } from '@/components/ui/data-table'
 import type { ColumnDef } from '@tanstack/react-table'
@@ -276,6 +278,9 @@ export default function Usage() {
   // so the action stays close to the primary surface.
   const [mode, setMode] = useState<DisplayMode>('overview')
   const [sessionRows, setSessionRows] = useState<SessionUsageRow[] | null>(null)
+  // P2-1 — usage governance: budget % + threshold state (the sidebar's data
+  // source; here it drives the banner and the budget card).
+  const { governance, refresh: refreshGovernance } = useUsageGovernance()
 
   useEffect(() => {
     let cancelled = false
@@ -353,6 +358,44 @@ export default function Usage() {
     <div className="p-lg max-w-medium mx-auto">
       <p className="text-on-surface-variant font-body-md mb-lg">{t('usage.subtitle')}</p>
 
+      {/* P2-1 — threshold banner. Derived from the live percent (not the
+          once-per-month notification markers), so it stays up while the
+          state persists and disappears the month the budget resets. */}
+      {governance?.thresholdReached && governance.budgetUsd != null && (
+        <div
+          role="alert"
+          data-testid="usage-budget-banner"
+          className={cn(
+            'flex items-start gap-sm rounded-xl border p-md mb-lg',
+            governance.thresholdReached === '100'
+              ? 'bg-error-container border-error/30 text-on-error-container'
+              : 'bg-warning-container border-warning/30 text-on-warning-container',
+          )}
+        >
+          <span className="material-symbols-outlined icon-md shrink-0" aria-hidden="true">
+            {governance.thresholdReached === '100' ? 'error' : 'warning'}
+          </span>
+          <p className="font-label-md text-body-sm font-semibold">
+            {governance.thresholdReached === '100'
+              ? intl.formatMessage(
+                  { id: 'usage.governance.banner100' },
+                  {
+                    spent: fmtCost(intl.locale, governance.monthCostUsd),
+                    budget: fmtCost(intl.locale, governance.budgetUsd),
+                  },
+                )
+              : intl.formatMessage(
+                  { id: 'usage.governance.banner80' },
+                  {
+                    percent: Math.round(governance.percent ?? 0),
+                    spent: fmtCost(intl.locale, governance.monthCostUsd),
+                    budget: fmtCost(intl.locale, governance.budgetUsd),
+                  },
+                )}
+          </p>
+        </div>
+      )}
+
       <div className="flex items-center gap-xs mb-lg flex-wrap">
         {/* 2026-09: two-mode toggle — Overview (charts) is the default;
             Audit (tables) sits next to it for precise reconciliation.
@@ -409,6 +452,15 @@ export default function Usage() {
           </Button>
         ))}
       </div>
+
+      {/* P2-1 — monthly-budget card: the % bar visualization + the budget
+            input (configure('monthly_budget_usd')). Sits above the stats so
+            the spend context is the first thing the page answers. */}
+      {governance && (
+        <div className="mb-lg">
+          <UsageBudgetCard governance={governance} onSaved={refreshGovernance} />
+        </div>
+      )}
 
       <CurrentSessionCostPanel />
       {loading ? (

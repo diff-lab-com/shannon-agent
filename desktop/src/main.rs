@@ -52,6 +52,7 @@ fn main() {
     use shannon_desktop::session_window_commands;
     use shannon_desktop::skill_pattern_detection;
     use shannon_desktop::terminal_commands;
+    use shannon_desktop::usage_governance;
     use tauri::{Emitter, Listener, Manager};
     use tauri::{
         menu::{MenuBuilder, MenuItemBuilder},
@@ -497,6 +498,10 @@ fn main() {
             commands_billing::get_billing_history,
             // Usage statistics — local usage ledger aggregation
             commands_usage::get_usage_stats,
+            // P2-1/P2-6 — usage governance (monthly budget % + 80/100%
+            // threshold alerts) + pre-task cost estimate
+            usage_governance::get_usage_governance,
+            usage_governance::estimate_task_cost,
             // P2.1 — persistent memory layer (wraps shannon_core::memory::MemoryStore)
             commands_memory::list_memory_projects,
             commands_memory::list_memories,

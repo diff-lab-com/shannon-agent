@@ -191,6 +191,13 @@ pub struct DesktopConfig {
     /// for the execution phase (every approval mode except `plan`).
     #[serde(default)]
     pub act_tier: Option<String>,
+    /// P2-1: user-set monthly spend budget in USD, covering every source the
+    /// Usage page counts (chat + scheduled routines). `None` = unset: the
+    /// sidebar falls back to the trailing 7-day cost and no threshold
+    /// alert fires. Written via `configure('monthly_budget_usd')`; consumed
+    /// by `usage_governance::get_usage_governance`.
+    #[serde(default)]
+    pub monthly_budget_usd: Option<f64>,
 }
 
 /// P2-5: payload of the desktop `offpeak.model_override` config key.
@@ -622,6 +629,7 @@ impl Default for DesktopConfig {
             session_retention_days: None,
             plan_tier: None,
             act_tier: None,
+            monthly_budget_usd: None,
         }
     }
 }

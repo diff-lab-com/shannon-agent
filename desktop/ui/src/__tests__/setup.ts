@@ -428,6 +428,13 @@ vi.mock('@/lib/tauri-api', async (importOriginal) => ({
   listAgents: vi.fn().mockResolvedValue([]),
   listTasks: vi.fn().mockResolvedValue([]),
   getUsageStats: vi.fn().mockResolvedValue({ days: 30, totals: { label: 'total', input_tokens: 0, output_tokens: 0, cache_creation_tokens: 0, cache_read_tokens: 0, cost_usd: 0, requests: 0 }, by_model: [], by_provider: [], by_day: [] }),
+  // P2-1 — usage governance: default null keeps the sidebar % meter and the
+  // /usage budget card unmounted in tests that don't care; per-test
+  // overrides cover the budgeted / threshold paths.
+  getUsageGovernance: vi.fn().mockResolvedValue(null),
+  // P2-6 — pre-task cost estimate: default "no history" so the hint renders
+  // its first-run copy without per-test mocking.
+  estimateTaskCost: vi.fn().mockResolvedValue({ hasHistory: false, runsCounted: 0, minUsd: null, maxUsd: null, avgUsd: null, lastUsd: null }),
   requestPermission: vi.fn().mockResolvedValue(true),
   featuredVendorToEntry: vi.fn().mockResolvedValue({ id: 'test', kind: 'mcp', name: 'Test', description: '', trust: 'community', homepage_url: null, source: null, metadata: {}, tags: [] }),
   sendNotification: vi.fn().mockResolvedValue(undefined),

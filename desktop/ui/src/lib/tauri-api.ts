@@ -79,6 +79,8 @@ import type {
   TaskWorktreeDto,
   AgentMessageEntry,
   UsageStats,
+  UsageGovernance,
+  TaskCostEstimate,
   SessionUsageRow,
   ContextBreakdown,
   ExtensionStats,
@@ -1788,6 +1790,23 @@ export async function updateTask(payload: UpdateTaskPayload): Promise<TaskItem> 
 
 export async function getUsageStats(days: number): Promise<UsageStats> {
   return invoke('get_usage_stats', { days })
+}
+
+// --- P2-1/P2-6 Usage governance + pre-task cost estimate ---
+//
+// Rust: shannon-desktop/src/usage_governance.rs.
+
+/** Sidebar % bar / budget-card snapshot: month spend, budget, threshold state.
+ *  Side effect on the backend: fires the once-per-month 80/100% desktop
+ *  notification when a threshold is newly reached — safe to poll. */
+export async function getUsageGovernance(): Promise<UsageGovernance> {
+  return invoke('get_usage_governance')
+}
+
+/** Historical run-cost range for a routine; `taskId = null` aggregates across
+ *  all routines (the "similar tasks" baseline for a brand-new one). */
+export async function estimateTaskCost(taskId?: string | null): Promise<TaskCostEstimate> {
+  return invoke('estimate_task_cost', { taskId: taskId ?? null })
 }
 
 // --- P0-4 Cost observability ---
