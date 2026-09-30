@@ -266,6 +266,10 @@ export interface ModelInfo {
   /** Whether this entry comes from the dynamic models.dev overlay (vs the
    *  static catalog). Surfaces a freshness indicator in the UI. */
   dynamic?: boolean
+  /** Vision (image input) capability from the catalog metadata. `undefined`
+   *  / null = unknown — the UI renders no capability dot rather than
+   *  guessing (R2-3, honest metadata). */
+  vision?: boolean | null
 }
 
 export interface ToolInfo {

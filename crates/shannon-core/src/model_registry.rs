@@ -465,6 +465,12 @@ pub fn model_info_for_alias(alias: &str) -> Option<&'static ModelInfo> {
 /// `"claude-sonnet-4-20250514"`), mirroring [`context_window_for`]'s lookup
 /// strategy. Returns [`TierLabel::Unknown`] for anything not in the catalog.
 ///
+/// R2-4: a per-model declaration from the active `providers.toml` v2 profile
+/// wins first — its declared capabilities feed the same heuristic the catalog
+/// entries use, so a custom openai-compatible model can be classified at all
+/// (the static catalog has no entry for it). A declaration without
+/// capabilities defers to the catalog below.
+///
 /// UI layers (status bar, status card) call this instead of maintaining their
 /// own string-heuristic copies.
 pub fn tier_label_for_id(model_id: &str) -> TierLabel {
@@ -472,6 +478,9 @@ pub fn tier_label_for_id(model_id: &str) -> TierLabel {
     // (`m.id.starts_with("")` is always true) — guard it explicitly.
     if model_id.is_empty() {
         return TierLabel::Unknown;
+    }
+    if let Some(label) = crate::declared_models::tier_label_for(model_id) {
+        return label;
     }
     if let Some(info) = model_info_for(model_id) {
         return info.tier_label();
@@ -494,7 +503,53 @@ pub fn tier_label_for_id(model_id: &str) -> TierLabel {
 mod tests {
     use super::*;
     use shannon_engine::api::types::WireFormat;
-    use shannon_types::provider_config::{ProviderTiers, TierName};
+    use shannon_types::provider_config::{ModelCapability, ModelSpec, ProviderTiers, TierName};
+
+    #[test]
+    fn tier_label_for_id_honors_declared_capabilities() {
+        // R2-4: an openai-compatible model absent from the catalog can only
+        // be classified through its declared capabilities.
+        let mut spec = ModelSpec {
+            id: "shannon-declared-tier-model".to_string(),
+            display_name: None,
+            context_window: None,
+            max_output: None,
+            cost_per_m_input: None,
+            cost_per_m_output: None,
+            capabilities: vec![ModelCapability::Coding, ModelCapability::Reasoning],
+        };
+        crate::declared_models::clear();
+        crate::declared_models::replace_from_specs(&[spec.clone()]);
+        assert_eq!(
+            tier_label_for_id("shannon-declared-tier-model"),
+            TierLabel::Standard,
+            "declared coding/reasoning classifies as Standard"
+        );
+
+        // Cheap flips it to Fast (same heuristic as catalog entries).
+        spec.capabilities = vec![ModelCapability::Cheap];
+        crate::declared_models::replace_from_specs(&[spec.clone()]);
+        assert_eq!(
+            tier_label_for_id("shannon-declared-tier-model"),
+            TierLabel::Fast
+        );
+
+        // A declaration without capabilities defers to the catalog.
+        spec.capabilities = vec![];
+        crate::declared_models::replace_from_specs(&[spec]);
+        assert_eq!(
+            tier_label_for_id("shannon-declared-tier-model"),
+            TierLabel::Unknown,
+            "capability-less declaration must not fabricate a tier"
+        );
+        crate::declared_models::clear();
+
+        // Catalog classification still works for catalog ids.
+        assert_eq!(
+            tier_label_for_id("claude-sonnet-4-20250514"),
+            TierLabel::Standard
+        );
+    }
 
     #[test]
     fn resolve_tier_anthropic_fast_uses_haiku() {

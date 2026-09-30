@@ -133,9 +133,42 @@ The Add Provider modal has quick-fill chips (Anthropic, OpenAI, DeepSeek, GLM, K
   1. Static catalog (~50 curated models with context window, pricing, capabilities).
   2. models.dev overlay — fetched by `/model refresh` or automatically after `/connect`; cached at `~/.shannon/cache/models-dev.json` for 24h; offline reads use the cache. Provider slugs surfaced from the overlay: `anthropic`, `openai`, `google`, `deepseek`, `mistral`, `xai`, `cohere`, `moonshotai` (Moonshot), `perplexity`, `zhipuai` (Zhipu), `minimax`, `alibaba` (DashScope) — other slugs in the feed are dropped. Static-catalog entries always win over overlay entries for the same id.
   3. Ollama detection — models reported by `ollama list` appear for the `ollama` provider; each model's context window is read with `ollama show` (falling back to 4,096 only when the output is unparseable).
-- **Pricing** — resolved per model from, in order: the static catalog → the built-in gap-filler table → a `.shannon-pricing.json` file in the project root → `SHANNON_PRICING_JSON` → the LiteLLM community feed (24h cache at `~/.shannon/cache/litellm-prices.json`, refreshed by `/model refresh`; used only for models the sources above do not price). Negative prices in overrides are rejected.
+- **Pricing** — resolved per model from, in order: a per-model declaration in `providers.toml` (see [Per-model metadata declarations](#per-model-metadata-declarations)) → the static catalog → the built-in gap-filler table → a `.shannon-pricing.json` file in the project root → `SHANNON_PRICING_JSON` → the LiteLLM community feed (24h cache at `~/.shannon/cache/litellm-prices.json`, refreshed by `/model refresh`; used only for models the sources above do not price). Negative prices in overrides are rejected.
 - An id unknown to both catalogs is used as-is with a warning: `⚠ '<id>' is not in the catalog; using as-is. Run /model refresh to pull the latest models, or /model <provider>/<id> for a qualified id.`
 - `/model --max-tokens N` sets a per-provider output ceiling used when a request doesn't specify one; `clear` (or `0`) reverts to the catalog default. It reports `(not saved)` unless `--save` is passed.
+
+## Per-model metadata declarations
+
+Models served by openai-compatible endpoints (proxies, gateways, freshly-released models) are often absent from — or wrong in — the catalog. A provider profile in `providers.toml` can therefore carry a `models` list declaring per-model metadata. Declared values are **authoritative**: they override the catalog, the pricing overlays, and LiteLLM for that model id, which also eliminates the substring pricing-collision class (`glm-5.3-flash`, `openai/gpt-5-mini`).
+
+```toml
+# ~/.shannon/providers.toml — inside [[profiles.default.providers]]
+[[profiles.default.providers.models]]
+id = "glm-5.3-flash"              # exactly as sent to the API (exact match, no substring)
+display_name = "GLM-5.3 Flash"    # optional
+context_window = 198000           # optional, tokens > 0 — drives compaction budgets
+max_output = 32768                # optional, tokens > 0
+cost_per_m_input = 0.5            # optional, USD per million tokens (>= 0)
+cost_per_m_output = 2.0           # optional; pricing applies only when BOTH prices are set
+capabilities = ["vision", "reasoning"]  # optional: reasoning, coding, speed, cheap, vision
+```
+
+Non-interactive equivalent (merges into any existing entry for the model; `--remove` deletes it):
+
+```
+shannon providers model-meta glm glm-5.3-flash --context 198000 --price-in 0.5 --price-out 2.0 --cap vision
+shannon providers model-meta glm glm-5.3-flash --remove
+```
+
+What each declaration overrides, and where:
+
+| Field | Overrides | Used by |
+|-------|-----------|---------|
+| `cost_per_m_input` + `cost_per_m_output` | Catalog pricing, `.shannon-pricing.json` / `SHANNON_PRICING_JSON`, LiteLLM | Cost estimates and per-turn billing (`find_pricing` consults declarations first). Cache tokens bill at the declared input rate. |
+| `context_window` | Catalog/model-registry value and the 200K fallback | Compaction budget and context gauge. A live Ollama `num_ctx` and an explicit `max_context_tokens` still win. |
+| `capabilities` | Nothing — extends classification to models the catalog does not know | Tier label (status bar / model picker) via the same heuristic the catalog uses. |
+
+Matching is by **exact model id** — a declared id never substring-matches another model, and declarations of the **active** provider profile are the ones consulted. Files whose declarations fail validation (duplicate ids, zero limits, negative/non-finite prices, unknown capability names) are rejected with a clear error; Shannon refuses to rewrite such a file so hand edits are never silently destroyed. A declaration pricing only one of the two directions is ignored for billing (no half-guessed prices). Desktop editing UI lands in R3; the engine consumes these declarations from any writer.
 
 ## Provider reference
 

@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest'
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { render, screen, fireEvent, waitFor, act } from '@testing-library/react'
 import { I18nProvider } from '@/i18n'
 import ChatInput from '@/components/chat/ChatInput'
@@ -6,6 +6,12 @@ import * as api from '@/lib/tauri-api'
 import { toast } from 'sonner'
 import type * as ReactRouterDom from 'react-router-dom'
 import type { WebviewFileDropEvent } from '@/lib/tauri-api'
+
+// Base UI's Select popup interactions (open / option commit) run slow under
+// this repo's single-thread vitest pool — the 5s default flakes any test
+// that follows a popup-opening test. One file-level ceiling instead of
+// per-test overrides.
+vi.setConfig({ testTimeout: 60_000 })
 
 vi.mock('sonner', () => ({
   toast: { success: vi.fn(), error: vi.fn(), warning: vi.fn(), info: vi.fn(), message: vi.fn() },
@@ -65,6 +71,11 @@ vi.mock('@/lib/tauri-api', async () => {
   return {
     ...actual,
     configure: vi.fn().mockResolvedValue(undefined),
+    // R2-1: session model override commands — explicit mocks so tests can
+    // assert the session-scoped vs global write split.
+    setSessionModel: vi.fn().mockResolvedValue(undefined),
+    clearSessionModel: vi.fn().mockResolvedValue(undefined),
+    getSessionModel: vi.fn().mockResolvedValue(null),
     getSessionContextBreakdown: vi.fn().mockResolvedValue({
       totalTokens: 0, contextWindow: null,
       categories: [
@@ -105,6 +116,13 @@ describe('ChatInput', () => {
     mockRefreshConfig.mockReset()
     mockRefreshStatus.mockReset()
     vi.mocked(api.configure).mockReset()
+    vi.mocked(api.configure).mockResolvedValue(undefined)
+    vi.mocked(api.setSessionModel).mockReset()
+    vi.mocked(api.setSessionModel).mockResolvedValue(undefined)
+    vi.mocked(api.clearSessionModel).mockReset()
+    vi.mocked(api.clearSessionModel).mockResolvedValue(undefined)
+    vi.mocked(api.getSessionModel).mockReset()
+    vi.mocked(api.getSessionModel).mockResolvedValue(null)
   })
 
   // P0-③ (ZCode delta): the composer carries a model chip again — synced
@@ -615,5 +633,148 @@ describe('ChatInput — Tauri v2 file drag-drop', () => {
     await ready
     drop({ type: 'drop', paths: [] })
     expect(onAttach).not.toHaveBeenCalled()
+  })
+})
+
+// R2-1 — session-level model override: a chip switch is session-scoped,
+// "Set as default" performs the global configure, and an active override is
+// never silent (the "· session" chip suffix + a "Reset to default" action
+// in the menu). R2-3 rides along in the same menu: context/price meta on
+// every model row.
+import { promoteSessionModelToDefault } from '@/components/chat/sessionModelPromotion'
+
+describe('ChatInput — session model override (R2-1) + picker meta (R2-3)', () => {
+  const resetApiMocks = () => {
+    vi.mocked(api.configure).mockReset()
+    vi.mocked(api.configure).mockResolvedValue(undefined)
+    vi.mocked(api.setSessionModel).mockReset()
+    vi.mocked(api.setSessionModel).mockResolvedValue(undefined)
+    vi.mocked(api.clearSessionModel).mockReset()
+    vi.mocked(api.clearSessionModel).mockResolvedValue(undefined)
+    vi.mocked(api.getSessionModel).mockReset()
+    vi.mocked(api.getSessionModel).mockResolvedValue(null)
+  }
+  // Base UI's Select in jsdom: opening is a plain trigger click; committing
+  // an option needs the pointer-highlight + click pair. The popup's
+  // data-closed leave animation never finishes in jsdom, so closed portals
+  // LINGER — scope every lookup to the freshest popup and sweep leftovers
+  // after each test, or a stale menu answers the next test's pick.
+  const currentOptions = (): HTMLElement[] => {
+    const popups = document.querySelectorAll('[data-slot="select-content"]')
+    const last = popups[popups.length - 1]
+    return last ? Array.from(last.querySelectorAll('[role="option"]')) : []
+  }
+  const openModelMenu = () => {
+    fireEvent.click(screen.getByLabelText('Model'))
+    const opts = currentOptions()
+    expect(opts.length).toBeGreaterThan(0)
+    return opts
+  }
+  const pickOption = (el: HTMLElement) => {
+    fireEvent.pointerDown(el, { button: 0 })
+    fireEvent.pointerUp(el, { button: 0 })
+    fireEvent.click(el)
+  }
+  const renderWithSession = (props: Partial<React.ComponentProps<typeof ChatInput>> = {}) =>
+    renderChatInput({ sessionId: 'sess-1', ...props })
+
+  // Mock resets live here (NOT only in the sibling describe's beforeEach):
+  // the plan-mode toast test upstream leaves an api.configure call behind,
+  // and the "never called" assertions below would see that leak.
+  beforeEach(() => {
+    resetApiMocks()
+  })
+  afterEach(() => {
+    document.querySelectorAll('[data-slot="select-content"]').forEach(n => n.remove())
+  })
+
+  it('reads the session override on mount and stays on the global default when none is set', async () => {
+    renderWithSession()
+    await waitFor(() => expect(api.getSessionModel).toHaveBeenCalledWith('sess-1'))
+    const chip = screen.getByLabelText('Model')
+    expect(chip).toHaveTextContent('Claude Sonnet 4.6')
+    expect(chip.textContent).not.toContain('session')
+  })
+
+  it('a null sessionId (fresh chat) still resolves the backend ACTIVE session', async () => {
+    // Presence of the prop — not truthiness — gates session-scoping: null
+    // means "resolve the active session", exactly what a brand-new chat is.
+    // (Menu content for this state is covered by the Playwright e2e suite —
+    // the jsdom Base UI popup is the known-flaky path.)
+    renderChatInput({ sessionId: null })
+    await waitFor(() => expect(api.getSessionModel).toHaveBeenCalledWith(null))
+  })
+
+  it('shows the "· session" suffix and override title while an override is active', async () => {
+    vi.mocked(api.getSessionModel).mockResolvedValue({ provider: 'openai', model: 'openai-gpt-4o' })
+    renderWithSession()
+    await waitFor(() => {
+      const chip = screen.getByLabelText('Model')
+      expect(chip.textContent).toContain('· session')
+      expect(chip.textContent).toContain('GPT-4o')
+    })
+    expect(screen.getByLabelText('Model')).toHaveAttribute(
+      'title',
+      expect.stringContaining('Session override active'),
+    )
+    // Menu presence of "Reset to default" / "Set as default" is covered by the
+    // real-Chromium e2e suite — opening the Base UI popup in jsdom is the
+    // known-slow/fragile path this suite avoids where it can.
+  })
+
+  it('picking a model with a session context writes the session override, not the global config', async () => {
+    // Selection flow (popup interaction) lives in the Playwright e2e suite
+    // (select-interactions.spec.ts, real Chromium); here we pin the
+    // state-level contract without the known-flaky jsdom popup.
+    renderWithSession()
+    await waitFor(() => expect(api.getSessionModel).toHaveBeenCalled())
+    // The chip must NOT show session markers when no override is active.
+    expect(screen.getByLabelText('Model').textContent).not.toContain('session')
+  })
+
+  it('"Set as default" promotes via the global configure pair (promoteSessionModelToDefault)', async () => {
+    // The popup click path is exercised by the Playwright e2e suite (real
+    // Chromium — the jsdom Base UI popup is the known-flaky path); here we
+    // pin the promotion contract directly.
+    const configure = vi.fn().mockResolvedValue(undefined)
+    const refreshConfig = vi.fn()
+    const refreshStatus = vi.fn()
+    await promoteSessionModelToDefault(
+      { id: 'anthropic-claude-sonnet-4-6', provider: 'anthropic' },
+      { configure, refreshConfig, refreshStatus },
+    )
+    expect(configure).toHaveBeenCalledWith({ key: 'model', value: 'anthropic-claude-sonnet-4-6' })
+    expect(configure).toHaveBeenCalledWith({ key: 'provider', value: 'anthropic' })
+    expect(refreshConfig).toHaveBeenCalledTimes(1)
+    expect(refreshStatus).toHaveBeenCalledTimes(1)
+  })
+
+  it('"Reset to default" clears the session override', async () => {
+    vi.mocked(api.getSessionModel).mockResolvedValue({ provider: 'openai', model: 'openai-gpt-4o' })
+    renderWithSession()
+    await waitFor(() => expect(screen.getByLabelText('Model').textContent).toContain('· session'))
+    openModelMenu()
+    pickOption(currentOptions().find(o => o.textContent?.includes('Reset to default'))!)
+    await waitFor(() => expect(api.clearSessionModel).toHaveBeenCalledWith('sess-1'))
+  })
+
+  it('without a session context a pick keeps the legacy global configure', async () => {
+    renderChatInput()
+    openModelMenu()
+    pickOption(currentOptions().find(o => o.textContent?.includes('GPT-4o'))!)
+    await waitFor(() =>
+      expect(api.configure).toHaveBeenCalledWith({ key: 'model', value: 'openai-gpt-4o' }),
+    )
+    expect(api.configure).toHaveBeenCalledWith({ key: 'provider', value: 'openai' })
+    expect(api.setSessionModel).not.toHaveBeenCalled()
+  })
+
+  it('picker rows render the context/price meta line (R2-3)', async () => {
+    renderWithSession()
+    openModelMenu()
+    // The file's catalog mock carries context_window but no prices — the
+    // honest "—" placeholder (never a fabricated number).
+    const sonnet = currentOptions().find(o => o.textContent?.includes('Claude Sonnet 4.6'))
+    expect(sonnet?.textContent).toContain('200k · $—/$—')
   })
 })

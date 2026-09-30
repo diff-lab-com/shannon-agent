@@ -405,20 +405,35 @@ fn apply_pricing_overrides(table: &mut HashMap<String, ModelPricing>, json: &str
     }
 }
 
-/// Find a curated or overridden price for `model`, without falling back to the
-/// estimate. Exact match wins; otherwise substring (`contains`) against known
-/// keys, mirroring the original semantics. Returns `None` when only the
-/// [`DEFAULT_PRICING_FALLBACK`] estimate would apply (dynamic/custom models).
-fn find_pricing(model: &str) -> Option<&ModelPricing> {
-    // Exact match first (catalog id/alias, and env/file overrides use exact keys).
-    if let Some(pricing) = PRICING_TABLE.get(model) {
+/// Find a curated, declared, or overridden price for `model`, without falling
+/// back to the estimate. Resolution order:
+///
+/// 1. Per-model declaration from the active `providers.toml` v2 profile
+///    (R2-4) — authoritative, exact-id match only. This is what retires the
+///    pricing dual-table drift (review 2026-09-29 §2 item 22): the declared
+///    price IS the billing price, so the substring scan below can never
+///    override it (the glm-5.3-flash / openai/gpt-5-mini collision class).
+/// 2. Static table (catalog ids/aliases + env/file overlays) — exact match,
+///    then substring (`contains`), mirroring the original semantics.
+///
+/// Returns `None` when only the [`DEFAULT_PRICING_FALLBACK`] estimate would
+/// apply (dynamic/custom models).
+fn find_pricing(model: &str) -> Option<ModelPricing> {
+    // 1. Declared per-model metadata (R2-4) — authoritative, exact match.
+    if let Some(pricing) = crate::declared_models::pricing_for(model) {
         return Some(pricing);
+    }
+
+    // 2. Exact match against the static table (catalog id/alias, and
+    //    env/file overrides use exact keys).
+    if let Some(pricing) = PRICING_TABLE.get(model) {
+        return Some(pricing.clone());
     }
 
     // Substring matching against known patterns (mirrors original logic).
     for (key, pricing) in PRICING_TABLE.iter() {
         if model.contains(key.as_str()) {
-            return Some(pricing);
+            return Some(pricing.clone());
         }
     }
 
@@ -1219,6 +1234,73 @@ pub struct ConversationStats {
 #[allow(clippy::unwrap_used)]
 mod tests {
     use super::*;
+
+    // ── R2-4: declared per-model pricing precedence ──────────────────────
+
+    /// A model id that substring-collides with a built-in pricing key
+    /// (`"shannon-test-gpt-4o-mini"` contains `"gpt-4o-mini"`) must bill at
+    /// its **declared** price, not the substring-matched catalog one. This is
+    /// the pin for the dual-table-drift fix (review §2 item 22; same failure
+    /// class as the glm-5.3-flash / openai/gpt-5-mini precedents).
+    #[test]
+    fn declared_model_pricing_beats_substring_collision() {
+        use shannon_types::provider_config::ModelSpec;
+        let spec = ModelSpec {
+            id: "shannon-test-gpt-4o-mini".to_string(),
+            display_name: None,
+            context_window: None,
+            max_output: None,
+            cost_per_m_input: Some(0.99),
+            cost_per_m_output: Some(0.99),
+            capabilities: vec![],
+        };
+        crate::declared_models::clear();
+        crate::declared_models::replace_from_specs(&[spec]);
+
+        // 1M input tokens at the declared $0.99 — any other outcome means the
+        // substring scan or LiteLLM leaked through.
+        let cost = CostTracker::calculate_cost("shannon-test-gpt-4o-mini", 1_000_000, 0);
+        crate::declared_models::clear();
+        assert!(
+            (cost - 0.99).abs() < 1e-9,
+            "declared price must win, got {cost}"
+        );
+
+        // Exact-match catalog ids remain untouched once the declaration is
+        // gone (sanity: the table still resolves normally).
+        let cost = CostTracker::calculate_cost("gpt-4o-mini", 1_000_000, 0);
+        assert!(
+            (cost - 0.15).abs() < 1e-9,
+            "catalog price intact, got {cost}"
+        );
+    }
+
+    /// A declaration pricing only ONE direction must not poison billing —
+    /// the model falls through to the normal chain (substring/catalog match)
+    /// instead of mixing a declared half with a guessed one.
+    #[test]
+    fn half_declared_pricing_falls_through() {
+        use shannon_types::provider_config::ModelSpec;
+        let spec = ModelSpec {
+            id: "shannon-test-collides-gpt-4o".to_string(),
+            display_name: None,
+            context_window: None,
+            max_output: None,
+            cost_per_m_input: Some(0.99),
+            cost_per_m_output: None,
+            capabilities: vec![],
+        };
+        crate::declared_models::clear();
+        crate::declared_models::replace_from_specs(&[spec]);
+        let cost = CostTracker::calculate_cost("shannon-test-collides-gpt-4o", 1_000_000, 0);
+        crate::declared_models::clear();
+        // Whatever the substring scan resolves to (gpt-4o or gpt-4o-mini
+        // pricing), it must NOT bill the lone declared input half of $0.99.
+        assert!(
+            (cost - 0.99).abs() > 1e-9,
+            "half-declared pricing must fall through, got {cost}"
+        );
+    }
 
     // -- EffortLevel (effort dial) --
 

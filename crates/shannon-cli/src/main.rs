@@ -1132,6 +1132,67 @@ enum ProvidersSubcommand {
         #[arg(value_name = "ID")]
         id: String,
     },
+
+    /// Declare per-model metadata (R2-4) on a provider profile.
+    ///
+    /// `shannon providers model-meta <PROVIDER> <MODEL> --context 65536
+    /// --price-in 0.5 --price-out 2.0 --cap vision` upserts one entry in the
+    /// provider's `models` list in `~/.shannon/providers.toml`. Declared
+    /// values are authoritative for pricing, the context window and tier
+    /// classification — they win over the model catalog and the LiteLLM
+    /// pricing feed. Omitted flags keep the existing entry's values;
+    /// `--remove` deletes the entry.
+    ModelMeta(ProvidersModelMetaArgs),
+}
+
+/// Args for `shannon providers model-meta <PROVIDER> <MODEL> [--flags]`.
+///
+/// Mirrors the schema of
+/// `shannon_types::provider_config::ModelSpec`; validation (positive
+/// limits, non-negative prices, known capability names) lives in
+/// `crates/shannon-cli/src/commands_providers.rs`.
+#[derive(clap::Args, Debug)]
+struct ProvidersModelMetaArgs {
+    /// Provider id (positional) — the raw stored `ProviderProfile.id`
+    /// (e.g. `glm` for an openai-compatible slot), as shown by
+    /// `shannon list-providers`.
+    #[arg(value_name = "PROVIDER")]
+    provider: String,
+
+    /// Model id (positional) — exactly as sent to the API. Matching is
+    /// exact; this is what prevents substring pricing collisions.
+    #[arg(value_name = "MODEL")]
+    model: String,
+
+    /// Human-readable display name for the model.
+    #[arg(long = "display-name", value_name = "NAME")]
+    display_name: Option<String>,
+
+    /// Total context window in tokens (> 0). Drives compaction budgets.
+    #[arg(long = "context", value_name = "TOKENS")]
+    context: Option<u32>,
+
+    /// Maximum output tokens per request (> 0).
+    #[arg(long = "max-output", value_name = "TOKENS")]
+    max_output: Option<u32>,
+
+    /// Input price in USD per million tokens (>= 0). Pricing takes effect
+    /// when BOTH --price-in and --price-out are declared.
+    #[arg(long = "price-in", value_name = "USD_PER_MTOK")]
+    price_in: Option<f64>,
+
+    /// Output price in USD per million tokens (>= 0). Pricing takes effect
+    /// when BOTH --price-in and --price-out are declared.
+    #[arg(long = "price-out", value_name = "USD_PER_MTOK")]
+    price_out: Option<f64>,
+
+    /// Capability flag. Repeatable: vision, reasoning, coding, speed, cheap.
+    #[arg(long = "cap", value_name = "CAP")]
+    cap: Vec<String>,
+
+    /// Remove this model's declaration instead of upserting one.
+    #[arg(long = "remove")]
+    remove: bool,
 }
 
 /// Args for `shannon providers add <ID> --kind <KIND> [--base-url …] --model …`.
@@ -6063,6 +6124,27 @@ fn run_with_cli(cli: Cli) -> Result<()> {
                 commands_providers::warn_if_providers_toml_unparseable();
                 if let Err(e) = commands_providers::run_providers_remove(&mut store, &remove_args) {
                     eprintln!("providers remove failed: {e:?}");
+                    std::process::exit(1);
+                }
+            }
+            ProvidersSubcommand::ModelMeta(args) => {
+                let meta_args = commands_providers::ModelMetaArgs {
+                    provider: args.provider.clone(),
+                    model: args.model.clone(),
+                    display_name: args.display_name.clone(),
+                    context: args.context,
+                    max_output: args.max_output,
+                    price_in: args.price_in,
+                    price_out: args.price_out,
+                    cap: args.cap.clone(),
+                    remove: args.remove,
+                };
+                let mut store =
+                    shannon_core::provider_config_store::ProviderConfigStore::load_or_default();
+                commands_providers::warn_if_providers_toml_unparseable();
+                if let Err(e) = commands_providers::run_providers_model_meta(&mut store, &meta_args)
+                {
+                    eprintln!("providers model-meta failed: {e:?}");
                     std::process::exit(1);
                 }
             }

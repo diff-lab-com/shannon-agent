@@ -380,6 +380,12 @@ pub struct ModelInfo {
     /// than the static catalog. Surfaces a freshness indicator in the UI.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub dynamic: Option<bool>,
+    /// Vision (image input) capability from the merged catalog metadata
+    /// (static `MODEL_CATALOG` capabilities or the models.dev overlay's
+    /// input modalities). `None` = unknown — the UI renders no capability
+    /// dot rather than guessing (R2-3 honest metadata).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub vision: Option<bool>,
 }
 
 /// Tool info for the tools panel.
@@ -928,7 +934,13 @@ pub async fn send_message(
     let qid_str = query_id.to_string();
 
     // Build the query engine
-    let client_config = state.client_config.read().await.clone();
+    // R2-1: session-level model override — a chip override on THIS session
+    // re-resolves provider/model/base_url/credential against the engine
+    // store; no override inherits the global `client_config` (the default).
+    let client_config =
+        crate::commands_chat::resolve_client_config_for_session(&state, &active_session).await;
+    let effective_model = client_config.model.clone();
+    let effective_provider = client_config.provider.to_string();
     let client = LlmClient::new(client_config);
     let tools = state.tools.clone();
 
@@ -1009,7 +1021,9 @@ pub async fn send_message(
     }
 
     // Create query context
-    let model = state.client_config.read().await.model.clone();
+    // R2-1: metadata carries the EFFECTIVE model (override-aware), not the
+    // global one, so usage/billing rows attribute to what actually served.
+    let model = effective_model.clone();
     let message_for_skill_loop = message.clone();
     let context = QueryContext {
         query_id,
@@ -1030,7 +1044,11 @@ pub async fn send_message(
     // P0-4: per-session flags live on the `Arc<SessionState>` clone.
     let app = app_handle.clone();
     let cancel_token_clone = cancel_token.clone();
-    let client_config_arc = state.client_config.clone();
+    // R2-1: usage attribution reads the snapshot taken for THIS query
+    // (override-aware) instead of the mutable global config — a mid-stream
+    // default switch elsewhere must not relabel the stream's usage rows.
+    let usage_model = effective_model.clone();
+    let usage_provider = effective_provider.clone();
     let usage_store_arc = state.usage_store.clone();
     let notifier_arc = state.notifier.clone();
     let session_for_task = active_session.clone();
@@ -1288,10 +1306,8 @@ pub async fn send_message(
                         }
                         // Persist to the local usage ledger. Best-effort:
                         // a log write failure must never break the stream.
-                        let cc_now = client_config_arc.read().await;
-                        let model_now = cc_now.model.clone();
-                        let provider_now = cc_now.provider.to_string();
-                        drop(cc_now);
+                        let model_now = usage_model.clone();
+                        let provider_now = usage_provider.clone();
                         let _ = usage_store_arc.append(&crate::commands_usage::record_event(
                             &model_now,
                             &provider_now,
@@ -2129,6 +2145,7 @@ mod tests {
             price_out: None,
             tier: None,
             dynamic: None,
+            vision: Some(false),
         };
         let json = serde_json::to_string(&info).unwrap();
         let deserialized: ModelInfo = serde_json::from_str(&json).unwrap();
@@ -2861,6 +2878,7 @@ mod build_client_config_tests {
             fallback_models: Vec::new(),
             quirks: Default::default(),
             tiers: ProviderTiers::default(),
+            models: Vec::new(),
         }
     }
 
@@ -2993,6 +3011,7 @@ mod build_client_config_tests {
             fallback_models: Vec::new(),
             quirks: Default::default(),
             tiers: ProviderTiers::default(),
+            models: Vec::new(),
         };
         let store = store_with_active(profile, "llama3");
         let cfg = ShannonConfig::default();

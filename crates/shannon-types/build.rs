@@ -557,6 +557,37 @@ pub struct ProviderTiers {
     pub pro: Option<String>,
 }
 
+/// R2-4 mirror — must match src/provider_config.rs exactly.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, JsonSchema, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+#[non_exhaustive]
+pub enum ModelCapability {
+    Reasoning,
+    Coding,
+    Speed,
+    Cheap,
+    Vision,
+}
+
+/// R2-4 mirror — must match src/provider_config.rs exactly.
+#[derive(Debug, Clone, PartialEq, JsonSchema, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ModelSpec {
+    pub id: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub display_name: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub context_window: Option<u32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub max_output: Option<u32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cost_per_m_input: Option<f64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cost_per_m_output: Option<f64>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub capabilities: Vec<ModelCapability>,
+}
+
 #[derive(Debug, Clone, PartialEq, JsonSchema, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct ProviderProfile {
@@ -577,6 +608,9 @@ pub struct ProviderProfile {
     pub quirks: ProviderQuirks,
     #[serde(default)]
     pub tiers: ProviderTiers,
+    /// R2-4: per-model metadata declarations (must mirror src/).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub models: Vec<ModelSpec>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, JsonSchema, Serialize, Deserialize)]

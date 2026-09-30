@@ -140,11 +140,20 @@ fn main() {
             commands_chat::get_status,
             commands_chat::cancel_query,
             commands_chat::list_tools,
+            // R2-1 — session-level model override (composer chip): picking a
+            // model in the chip only re-targets the current session; the
+            // chip's "Set as default" keeps using the global `configure`.
+            commands_chat::set_session_model,
+            commands_chat::clear_session_model,
+            commands_chat::get_session_model,
             commands_config::configure,
             commands_config::get_config,
             commands_config::detect_provider_from_env,
             commands_config::test_provider_connection,
             commands_config::test_all_providers,
+            // R2-2 — Settings "Refresh model catalog" (models.dev overlay,
+            // same path as the CLI `/model refresh`).
+            commands_config::refresh_model_catalog,
             // 2026-09-29 provider review §3-A/B — reliable activation signal
             // for the UI gates (config.provider is dead, ADR-0005), in-modal
             // credential test, and live /models listing for the modal.

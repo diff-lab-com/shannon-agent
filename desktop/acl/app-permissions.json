@@ -137,6 +137,15 @@
       }
     },
     {
+      "identifier": "allow-clear-session-model",
+      "description": "Enables the clear_session_model command without any pre-configured scope.",
+      "commands": {
+        "allow": [
+          "clear_session_model"
+        ]
+      }
+    },
+    {
       "identifier": "allow-clear-webhook-config",
       "description": "Enables the clear_webhook_config command without any pre-configured scope.",
       "commands": {
@@ -772,6 +781,15 @@
       "commands": {
         "allow": [
           "get_session_git_diff"
+        ]
+      }
+    },
+    {
+      "identifier": "allow-get-session-model",
+      "description": "Enables the get_session_model command without any pre-configured scope.",
+      "commands": {
+        "allow": [
+          "get_session_model"
         ]
       }
     },
@@ -1865,6 +1883,15 @@
       }
     },
     {
+      "identifier": "allow-refresh-model-catalog",
+      "description": "Enables the refresh_model_catalog command without any pre-configured scope.",
+      "commands": {
+        "allow": [
+          "refresh_model_catalog"
+        ]
+      }
+    },
+    {
       "identifier": "allow-register-project",
       "description": "Enables the register_project command without any pre-configured scope.",
       "commands": {
@@ -2230,6 +2257,15 @@
       "commands": {
         "allow": [
           "set_session_budget"
+        ]
+      }
+    },
+    {
+      "identifier": "allow-set-session-model",
+      "description": "Enables the set_session_model command without any pre-configured scope.",
+      "commands": {
+        "allow": [
+          "set_session_model"
         ]
       }
     },
@@ -2646,13 +2682,16 @@
       "permissions": [
         "allow-cancel-background-task",
         "allow-cancel-query",
+        "allow-clear-session-model",
         "allow-get-background-tasks",
         "allow-get-conversation",
         "allow-get-provider-allowlist",
+        "allow-get-session-model",
         "allow-get-status",
         "allow-list-models",
         "allow-list-tools",
         "allow-send-message",
+        "allow-set-session-model",
         "allow-start-background-task"
       ]
     },
@@ -2667,6 +2706,7 @@
         "allow-get-config",
         "allow-get-provider-status",
         "allow-list-providers",
+        "allow-refresh-model-catalog",
         "allow-save-provider",
         "allow-set-active-provider",
         "allow-test-all-providers",
