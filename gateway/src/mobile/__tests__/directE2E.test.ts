@@ -696,8 +696,12 @@ describe("ensureDirectE2EKey persistence", () => {
     expect(existsSync(paths.keyPath)).toBe(true);
     expect(existsSync(paths.infoPath)).toBe(true);
     // Private key + info file must not be world/group readable.
-    expect(statSync(paths.keyPath).mode & 0o777).toBe(0o600);
-    expect(statSync(paths.infoPath).mode & 0o777).toBe(0o600);
+    // (POSIX mode bits only — Windows NTFS has no chmod semantics, so the
+    // check would read arbitrary values there.)
+    if (process.platform !== "win32") {
+      expect(statSync(paths.keyPath).mode & 0o777).toBe(0o600);
+      expect(statSync(paths.infoPath).mode & 0o777).toBe(0o600);
+    }
 
     const info = JSON.parse(readFileSync(paths.infoPath, "utf8")) as { hostE2EPubKey: string };
     expect(info.hostE2EPubKey).toBe(first.pubB64);

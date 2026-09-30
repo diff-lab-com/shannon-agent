@@ -13,7 +13,7 @@
     "test:e2e": "playwright test",
     "gallery:shoot": "node scripts/shoot-theme-gallery.mjs",
     "test:coverage": "vitest --coverage",
-    "test:ci": "CI=1 vitest --run",
+    "test:ci": "vitest run",
     "lint": "tsc --noEmit && eslint src --max-warnings 0 && node scripts/check-design-tokens.mjs && node scripts/i18n-check.mjs && node scripts/check-import-case-collisions.mjs",
     "check:fs": "node scripts/check-import-case-collisions.mjs",
     "check:tokens": "node scripts/check-design-tokens.mjs",

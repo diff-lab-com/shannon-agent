@@ -478,78 +478,6 @@ impl FileSystemProvider for SshFs {
     }
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn meta_projection_defaults_are_safe() {
-        // len/mtime may be absent from the server response; the projection
-        // contract degrades to zero/None instead of panicking.
-        let fm = FileMeta {
-            len: 0,
-            is_dir: true,
-            modified: None,
-        };
-        assert!(fm.is_dir);
-        assert_eq!(fm.len, 0);
-        assert!(fm.modified.is_none());
-    }
-
-    #[cfg(unix)]
-    #[test]
-    fn ignore_missing_tolerates_absent_targets() {
-        let absent =
-            openssh_sftp_client::Error::IOError(io::Error::new(io::ErrorKind::NotFound, "gone"));
-        assert!(ignore_missing(absent).is_ok());
-        let fatal = openssh_sftp_client::Error::UnsupportedExtension(&"hardlink");
-        assert!(ignore_missing(fatal).is_err());
-    }
-
-    // Ignored integration test: requires a reachable sshd (see
-    // session::tests::test_ssh_target for the env knobs).
-    #[cfg(unix)]
-    #[tokio::test]
-    #[ignore = "requires a reachable sshd (SHANNON_TEST_SSH_HOST/PORT/USER)"]
-    async fn sftp_full_roundtrip_on_localhost() {
-        let target = crate::ssh::test_ssh_target();
-        let rt = SshRuntime::connect(&target).await.unwrap();
-        let fs = SshFs::connect(rt).await.unwrap();
-        // The workspace lives on the REMOTE: create a unique subdir there
-        // (local tempdir paths do not exist on the target).
-        let base = target.workspace_dir.clone();
-        let dir = base.join(format!("shannon-it-{}", std::process::id()));
-        fs.create_dir_all(&dir).await.unwrap();
-        let file = dir.join("roundtrip.txt");
-
-        fs.write_bytes(&file, b"hello shannon").await.unwrap();
-        assert_eq!(fs.read_text(&file).await.unwrap(), "hello shannon");
-
-        let md = fs.metadata(&file).await.unwrap();
-        assert_eq!(md.len, 13);
-        assert!(!md.is_dir);
-
-        let entries = fs.list_dir_blocking(&dir).unwrap();
-        assert!(entries.iter().any(|e| e.path == file));
-
-        // Overwriting rename (posix-rename or fallback).
-        let dst = dir.join("dst.txt");
-        fs.write_bytes(&dst, b"old").await.unwrap();
-        let src = dir.join("src.txt");
-        fs.write_bytes(&src, b"new").await.unwrap();
-        fs.rename(&src, &dst).await.unwrap();
-        assert_eq!(fs.read_text(&dst).await.unwrap(), "new");
-
-        let prefix = fs.read_prefix_blocking(&file, 5).unwrap();
-        assert_eq!(prefix, b"hello");
-
-        fs.canonicalize(&file).await.unwrap();
-        fs.remove_file_blocking(&file).unwrap();
-        // Best-effort cleanup of the unique workspace subdir.
-        let _ = fs.remove_file_blocking(&dst);
-    }
-}
-
 // Non-unix stand-in: same type/trait surface, every operation reports
 // `Unsupported` (see `ssh::unsupported_transport`).
 #[cfg(not(unix))]
@@ -638,5 +566,77 @@ impl FileSystemProvider for SshFs {
 
     fn list_dir_blocking(&self, _path: &Path) -> io::Result<Vec<DirEntryInfo>> {
         Err(super::unsupported_transport())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn meta_projection_defaults_are_safe() {
+        // len/mtime may be absent from the server response; the projection
+        // contract degrades to zero/None instead of panicking.
+        let fm = FileMeta {
+            len: 0,
+            is_dir: true,
+            modified: None,
+        };
+        assert!(fm.is_dir);
+        assert_eq!(fm.len, 0);
+        assert!(fm.modified.is_none());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn ignore_missing_tolerates_absent_targets() {
+        let absent =
+            openssh_sftp_client::Error::IOError(io::Error::new(io::ErrorKind::NotFound, "gone"));
+        assert!(ignore_missing(absent).is_ok());
+        let fatal = openssh_sftp_client::Error::UnsupportedExtension(&"hardlink");
+        assert!(ignore_missing(fatal).is_err());
+    }
+
+    // Ignored integration test: requires a reachable sshd (see
+    // session::tests::test_ssh_target for the env knobs).
+    #[cfg(unix)]
+    #[tokio::test]
+    #[ignore = "requires a reachable sshd (SHANNON_TEST_SSH_HOST/PORT/USER)"]
+    async fn sftp_full_roundtrip_on_localhost() {
+        let target = crate::ssh::test_ssh_target();
+        let rt = SshRuntime::connect(&target).await.unwrap();
+        let fs = SshFs::connect(rt).await.unwrap();
+        // The workspace lives on the REMOTE: create a unique subdir there
+        // (local tempdir paths do not exist on the target).
+        let base = target.workspace_dir.clone();
+        let dir = base.join(format!("shannon-it-{}", std::process::id()));
+        fs.create_dir_all(&dir).await.unwrap();
+        let file = dir.join("roundtrip.txt");
+
+        fs.write_bytes(&file, b"hello shannon").await.unwrap();
+        assert_eq!(fs.read_text(&file).await.unwrap(), "hello shannon");
+
+        let md = fs.metadata(&file).await.unwrap();
+        assert_eq!(md.len, 13);
+        assert!(!md.is_dir);
+
+        let entries = fs.list_dir_blocking(&dir).unwrap();
+        assert!(entries.iter().any(|e| e.path == file));
+
+        // Overwriting rename (posix-rename or fallback).
+        let dst = dir.join("dst.txt");
+        fs.write_bytes(&dst, b"old").await.unwrap();
+        let src = dir.join("src.txt");
+        fs.write_bytes(&src, b"new").await.unwrap();
+        fs.rename(&src, &dst).await.unwrap();
+        assert_eq!(fs.read_text(&dst).await.unwrap(), "new");
+
+        let prefix = fs.read_prefix_blocking(&file, 5).unwrap();
+        assert_eq!(prefix, b"hello");
+
+        fs.canonicalize(&file).await.unwrap();
+        fs.remove_file_blocking(&file).unwrap();
+        // Best-effort cleanup of the unique workspace subdir.
+        let _ = fs.remove_file_blocking(&dst);
     }
 }

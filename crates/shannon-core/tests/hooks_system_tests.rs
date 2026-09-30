@@ -1456,13 +1456,19 @@ mod hook_manager_tests {
                 .unwrap()
                 .ends_with("hooks.json")
         );
-        // Project config should be .shannon/hooks.json (now absolute via base_dir)
-        assert!(
-            manager
-                .project_config_path()
-                .to_str()
-                .unwrap()
-                .ends_with(".shannon/hooks.json")
+        // Project config should be .shannon/hooks.json (now absolute via
+        // base_dir). Compare components, not a `/` string suffix — Windows
+        // renders `\`.
+        let project = manager.project_config_path();
+        assert_eq!(
+            project.file_name().map(|f| f.to_string_lossy()),
+            Some("hooks.json".into())
+        );
+        assert_eq!(
+            project
+                .parent()
+                .map(|p| p.file_name().map(|f| f.to_string_lossy())),
+            Some(Some(".shannon".into()))
         );
     }
 

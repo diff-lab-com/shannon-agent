@@ -125,14 +125,16 @@ async fn execute_shell_command(
     cwd: &Path,
     timeout_secs: u64,
 ) -> CommandResult<String> {
-    let output = tokio::time::timeout(
-        Duration::from_secs(timeout_secs),
-        tokio::process::Command::new("sh")
-            .arg("-c")
-            .arg(command)
-            .current_dir(cwd)
-            .output(),
-    )
+    let output = {
+        let (program, args) = shannon_types::shell::local_shell(command);
+        tokio::time::timeout(
+            Duration::from_secs(timeout_secs),
+            tokio::process::Command::new(program)
+                .args(&args)
+                .current_dir(cwd)
+                .output(),
+        )
+    }
     .await
     .map_err(|_| {
         CommandError::ExecutionError(format!(

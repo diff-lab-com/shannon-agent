@@ -30,8 +30,11 @@
 
 import fs from 'node:fs'
 import path from 'node:path'
+import { fileURLToPath } from 'node:url'
 
-const SCRIPT_DIR = path.dirname(new URL(import.meta.url).pathname)
+// fileURLToPath, not `.pathname`: the URL form yields `/C:/…` on Windows,
+// which path.resolve then anchors into a bogus `C:C:…` directory.
+const SCRIPT_DIR = path.dirname(fileURLToPath(import.meta.url))
 
 function parseArgs(argv) {
   const args = { dir: null, report: false }

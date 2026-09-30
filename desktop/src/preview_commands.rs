@@ -1090,6 +1090,8 @@ impl shannon_tools::preview::PreviewAccess for ManagerPreviewAccess {
 #[cfg(test)]
 mod tests {
     use super::*;
+    // Only the unix-gated PreviewManager tests decode the base64 fixture.
+    #[cfg(unix)]
     use base64::Engine as _;
     use std::net::TcpListener;
     use std::sync::Arc;

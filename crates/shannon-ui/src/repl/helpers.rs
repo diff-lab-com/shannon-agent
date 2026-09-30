@@ -443,9 +443,11 @@ fn run_statusline_command(
     payload: &str,
     timeout: std::time::Duration,
 ) -> Option<String> {
-    let mut child = std::process::Command::new("sh")
-        .arg("-c")
-        .arg(cmd)
+    // Windows fallback (PR #166): resolve the platform shell instead of a
+    // hardcoded `sh`, which does not exist on stock Windows.
+    let (program, args) = shannon_types::shell::local_shell(cmd);
+    let mut child = std::process::Command::new(program)
+        .args(&args)
         .stdin(std::process::Stdio::piped())
         .stdout(std::process::Stdio::piped())
         .stderr(std::process::Stdio::null())

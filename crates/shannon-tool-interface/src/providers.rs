@@ -224,6 +224,12 @@ pub trait PipedChild: Send {
     async fn kill(&mut self);
     /// Reap the child and return its exit status (`Child::wait`).
     async fn wait(&mut self) -> io::Result<ProcessExit>;
+    /// Raw OS process handle (`HANDLE` as `isize`, Windows only) so callers
+    /// can attach the child to a Job Object. `None` off Windows and for
+    /// non-OS children (remote/fake providers).
+    fn raw_process_handle(&self) -> Option<isize> {
+        None
+    }
 }
 
 /// Request rewriting hook invoked immediately before OS spawn.

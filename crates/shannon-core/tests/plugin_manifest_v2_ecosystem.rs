@@ -15,6 +15,8 @@
 use shannon_core::plugin::{
     DENY_PREFIX, PluginKind, PluginPermission, PluginPermissionPolicy, admit_prompt_based_extension,
 };
+// Only the unix-gated stdio-server leg exercises the Tool trait directly.
+#[cfg(unix)]
 use shannon_tool_interface::Tool as _;
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -165,7 +167,9 @@ async fn claude_command_installs_and_overreach_is_refused() {
 }
 
 // ── Leg 3 · tool, legacy v1 TOML over a real stdio MCP server ─────────────
+// unix-only: the fake server is a `sh` script spawned over stdio.
 
+#[cfg(unix)]
 const V1_TOOL_TOML_TEMPLATE: &str = r#"
 name = "svg-lint"
 version = "1.0.0"
@@ -180,6 +184,7 @@ command = "sh"
 args = [__SCRIPT__]
 "#;
 
+#[cfg(unix)]
 const FAKE_SERVER_SH: &str = r#"#!/bin/sh
 while IFS= read -r line; do
   case "$line" in
@@ -196,6 +201,7 @@ while IFS= read -r line; do
 done
 "#;
 
+#[cfg(unix)]
 fn manifest_toml(perms_line: &str, script: &Path) -> String {
     V1_TOOL_TOML_TEMPLATE
         .replace("__PERMISSIONS__\n", perms_line)

@@ -902,6 +902,36 @@ impl SandboxProvider for NoSandbox {
 // Windows Job Object baseline
 // ============================================================================
 
+/// Windows baseline sandbox provider (lifecycle confinement only).
+///
+/// [`SandboxProvider`] counterpart of [`SandboxType::WindowsJob]: command
+/// wrapping is a pass-through (there is no fs/net isolation to inject), the
+/// Job Object assignment happens at spawn time via [`windows_job::confine_child`]
+/// / [`windows_job::confine_tokio_child`]. Without this provider,
+/// `detect_sandbox_provider` fell through to "unsupported platform" and
+/// reported `NoSandbox` even though `detect_sandboxer` reports `WindowsJob` —
+/// the two detection paths disagreed about the same machine.
+#[cfg(target_os = "windows")]
+pub struct WindowsJobSandbox;
+
+#[cfg(target_os = "windows")]
+impl SandboxProvider for WindowsJobSandbox {
+    fn is_available(&self) -> bool {
+        true
+    }
+
+    fn wrap_command(&self, command: &str, _config: &SandboxConfig) -> Result<String, SandboxError> {
+        // Lifecycle-only: descendants die with the Shannon process, but the
+        // command string itself is unmodified. The permission system (audit
+        // + confirmation) remains the primary boundary.
+        Ok(command.to_string())
+    }
+
+    fn name(&self) -> &str {
+        "windows-job"
+    }
+}
+
 /// Windows baseline sandbox: sandboxed command spawns are assigned to a Job
 /// Object with `JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE`, so no descendant process
 /// outlives the Shannon process. The historical Windows behavior was a
@@ -1575,6 +1605,18 @@ impl SandboxExecutor {
 
 /// Detect the best available sandbox provider for the current platform.
 pub fn detect_sandbox_provider() -> Box<dyn SandboxProvider> {
+    // Windows: the Job Object baseline is always present (no external
+    // binary). Checked before Docker, matching `detect_sandboxer` — the
+    // Docker command template is bash-based and cannot run on stock
+    // Windows anyway. Compile-time gated: `WindowsJobSandbox` only exists
+    // on Windows targets, so a runtime `cfg!` here would break the
+    // linux/macos builds (E0425) — the exact class of defect the
+    // cross-platform CI gate exists for.
+    #[cfg(target_os = "windows")]
+    {
+        tracing::info!("Sandbox: using windows-job (kill-on-close lifecycle confinement)");
+        return Box::new(WindowsJobSandbox);
+    }
     if DockerSandbox::docker_available() {
         tracing::info!("Sandbox: using Docker");
         return Box::new(DockerSandbox::new(DockerSandboxConfig::default()));
@@ -2435,7 +2477,7 @@ mod tests {
         let provider = detect_sandbox_provider();
         assert!(provider.is_available());
         let name = provider.name();
-        assert!(["docker", "bubblewrap", "seatbelt", "none"].contains(&name));
+        assert!(["docker", "bubblewrap", "seatbelt", "windows-job", "none"].contains(&name));
     }
 
     // ------------------------------------------------------------------

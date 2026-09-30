@@ -264,10 +264,12 @@ pub(crate) fn start_inline_shell(repl: &mut Repl, shell_cmd: &str, timeout_secs:
     // Spawn (fork/exec — never the command duration) on the UI thread so the
     // process-group id is known immediately for the Esc path. A failed spawn
     // posts the legacy message synchronously, exactly like the old code.
-    let mut command = std::process::Command::new("sh");
+    // Windows fallback (PR #166): `sh` does not exist on stock Windows —
+    // pick the platform shell via local_shell (cmd.exe wrapper) instead.
+    let (program, args) = shannon_types::shell::local_shell(shell_cmd);
+    let mut command = std::process::Command::new(program);
     command
-        .arg("-c")
-        .arg(shell_cmd)
+        .args(&args)
         .current_dir(&repl.state.working_directory)
         .stdin(std::process::Stdio::null())
         .stdout(std::process::Stdio::piped())

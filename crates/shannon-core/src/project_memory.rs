@@ -625,14 +625,24 @@ fn matches_any_pattern(file_path: &Path, project_dir: &Path, patterns: &[String]
     let mut builder = globset::GlobSetBuilder::new();
 
     for pattern in patterns {
-        let abs_pattern = if pattern.starts_with('/') {
-            pattern.clone()
+        // Patterns are `/`-separated globs, but `project_dir` renders with
+        // `\` on Windows. `format!("{}/{}", dir, pattern)` therefore built
+        // patterns containing backslashes, which globset never matched
+        // against its `/`-normalized candidates — `paths:` rules silently
+        // never fired on Windows. Join via Path and normalize both the
+        // glob and the candidate to `/` before matching.
+        let abs_pattern = if Path::new(pattern).is_absolute() {
+            pattern.replace('\\', "/")
         } else {
-            format!("{}/{}", project_dir.display(), pattern)
+            project_dir
+                .join(pattern)
+                .to_string_lossy()
+                .replace('\\', "/")
         };
 
         if let Ok(glob) = globset::GlobBuilder::new(&abs_pattern)
             .literal_separator(false)
+            .case_insensitive(cfg!(windows))
             .build()
         {
             builder.add(glob);
@@ -650,7 +660,8 @@ fn matches_any_pattern(file_path: &Path, project_dir: &Path, patterns: &[String]
         project_dir.join(file_path)
     };
 
-    globset.is_match(&abs_path)
+    let candidate = abs_path.to_string_lossy().replace('\\', "/");
+    globset.is_match(candidate)
 }
 
 /// Resolve `@import` directives in content.
@@ -1106,6 +1117,40 @@ Another instruction"#;
             Path::new("/project/Cargo.toml"),
             dir,
             &["*.toml".to_string()]
+        ));
+    }
+
+    /// Windows-style paths must match `/`-separated globs: the project dir
+    /// renders with `\`, so both the built glob and the candidate are
+    /// normalized to `/` before matching. Pure string logic — also runs on
+    /// unix CI.
+    #[test]
+    fn test_matches_any_pattern_windows_separators() {
+        let dir = Path::new("C:\\repo");
+        assert!(matches_any_pattern(
+            Path::new("C:\\repo\\src\\main.rs"),
+            dir,
+            &["src/**/*.rs".to_string()]
+        ));
+        if cfg!(windows) {
+            // Windows path comparison is case-insensitive (NTFS default).
+            assert!(matches_any_pattern(
+                Path::new("c:\\REPO\\src\\lib.rs"),
+                dir,
+                &["SRC/**".to_string()]
+            ));
+        }
+        assert!(!matches_any_pattern(
+            Path::new("C:\\repo\\docs\\guide.md"),
+            dir,
+            &["src/**".to_string()]
+        ));
+        // Absolute pattern with a drive letter must not be joined onto the
+        // project dir.
+        assert!(matches_any_pattern(
+            Path::new("C:\\other\\a.rs"),
+            dir,
+            &["C:/other/**/*.rs".to_string()]
         ));
     }
 

@@ -27,8 +27,11 @@ import {
   FileLoadForm,
   QuickFixDrawer,
   normalizeSeverity,
-} from './editor'
-import type { AutoDiagnostic, DrawerDiag, ManualDiagnostic, MixedDiagnostic } from './editor'
+  // `/index` is load-bearing on case-insensitive filesystems — bare
+  // `./editor` resolves to this file (Editor.tsx) on Windows and
+  // self-imports (see the matching comment in Chat.tsx).
+} from './editor/index'
+import type { AutoDiagnostic, DrawerDiag, ManualDiagnostic, MixedDiagnostic } from './editor/index'
 
 type EditorProps = {
   /** P0-B: pre-load this file (chat file-ref chips deep-link into the editor). */
