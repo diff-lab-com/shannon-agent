@@ -213,6 +213,10 @@ pub mod session_registry;
 #[cfg(feature = "tauri")]
 pub mod session_window_commands;
 
+// Office Wave 3 C3 — companion Quick Capture window (open/toggle commands).
+#[cfg(feature = "tauri")]
+pub mod companion_window_commands;
+
 #[cfg(feature = "tauri")]
 pub mod commands_usage;
 

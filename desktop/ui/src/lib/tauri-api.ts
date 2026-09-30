@@ -22,6 +22,7 @@ import type {
   MobilePairToken,
   ContainerInfo,
   SessionWindowInfo,
+  CompanionWindowInfo,
   RemoteHealth,
   RemoteTargetListItem,
   SshHostCandidate,
@@ -52,6 +53,7 @@ import type {
   MobileTlsStatus,
   ProjectRecord,
   ProviderStatus,
+  FileIndexEntry,
 } from '@/types'
 import type {
   ScheduledRoutine,
@@ -784,6 +786,18 @@ export async function revealSessionInMain(sessionId: string): Promise<void> {
   await invoke('reveal_session_in_main', { sessionId })
 }
 
+// --- Office Wave 3 C3 companion Quick Capture window (frozen backend contract) ---
+
+/** Create (or focus) the always-on-top-capable `companion` window. */
+export async function openCompanionWindow(): Promise<CompanionWindowInfo> {
+  return invoke('open_companion_window')
+}
+
+/** Toggle the companion window's stay-on-top flag (only acts on `companion`). */
+export async function setCompanionAlwaysOnTop(enabled: boolean): Promise<void> {
+  await invoke('set_companion_always_on_top', { enabled })
+}
+
 export async function setSessionWorkingDir(id: string, path: string): Promise<void> {
   await invoke('set_session_working_dir', { id, path })
 }
@@ -927,6 +941,27 @@ export async function probeUrlFrameable(url: string): Promise<FrameProbe> {
 /** Existence probe for chat file references (anti-hallucination backstop). */
 export async function pathExists(path: string): Promise<boolean> {
   return invoke('path_exists', { path })
+}
+
+// --- 2026-09-30 office Wave 2 (B9' Files page): reference-style file index.
+// The Rust side owns the on-disk index; these wrappers are the whole
+// frontend contract. Registration is fire-and-forget from the UI (attach
+// flow / FileCard render) — callers swallow rejections so a failed index
+// write can never interrupt a chat.
+
+/** Every indexed file, `registered_at` descending. */
+export async function listFileIndex(): Promise<FileIndexEntry[]> {
+  return invoke('list_file_index')
+}
+
+/** Upsert one file into the index (`source`: 'attachment' | 'generated'). */
+export async function registerFileIndexEntry(path: string, source: string): Promise<void> {
+  await invoke('register_file_index_entry', { path, source })
+}
+
+/** Toggle an entry's favorite flag (persisted Rust-side). */
+export async function setFileIndexFavorite(path: string, favorite: boolean): Promise<void> {
+  await invoke('set_file_index_favorite', { path, favorite })
 }
 
 export interface TextFileContent {
