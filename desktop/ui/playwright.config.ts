@@ -7,6 +7,10 @@ export default defineConfig({
   retries: process.env.CI ? 2 : 0,
   use: {
     baseURL: 'http://localhost:1420',
+    // Pin the app language: locators anchor on en-locale aria-labels
+    // ("Message" / "Send message"), and a dev machine with a non-English OS
+    // locale would otherwise render zh-CN and break every name-based query.
+    locale: 'en-US',
     trace: 'on-first-retry',
     // Lock CI viewport to a wide desktop profile so the rail-vs-drawer
     // decision (matchMedia) is deterministic — the mobile drawer would
