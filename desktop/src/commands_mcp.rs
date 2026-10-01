@@ -268,7 +268,7 @@ fn skill_roots() -> Result<Vec<(std::path::PathBuf, shannon_skills::SkillSource)
 ///
 /// W1-2 (R2-P0-2): opening this menu also hot-registers the matching
 /// `skill_<id>` chat tools, so a skill installed while the app is running
-/// is model-callable on the very next turn — see [`list_skills_inner`].
+/// is model-callable on the very next turn — see the private `list_skills_inner`.
 #[tauri::command]
 pub async fn list_skills(state: tauri::State<'_, AppState>) -> Result<Vec<SkillInfo>, String> {
     list_skills_inner(&state.skill_registry, &state.tools, &skill_roots()?)
