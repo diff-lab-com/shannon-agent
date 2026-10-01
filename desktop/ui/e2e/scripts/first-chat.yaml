@@ -1,0 +1,35 @@
+# ChatScript: first-chat — journey #1（矩阵#1，R2 扩展 happy-path）。
+#
+# welcome 空态 → 点击示例卡（composer 预填）→ 发送 → ≥5 个中英混排+emoji 分片
+# 流式 → StreamStatusRegion aria-live 播报 busy→complete → usage → completed
+# → composer 复位。断言在 spec（chat-script.first-chat.spec.ts）。
+#
+# chunkDelayMs 250 × 6 chunks ≈ 1.25s 流式窗口，足以稳定断言流中状态。
+name: first-chat
+description: 首聊 journey — welcome 示例点击 → 预填 → 中英+emoji 6 分片流式 → status 播报 → completed
+seed:
+  config:
+    hasKey: true
+  sessions:
+    - id: script-sess-first-chat
+      title: First chat
+      messages: []
+turns:
+  # turn.user 必须与 welcome 示例卡的 en 文案一致（welcomeExamples[0]，locale 固定 en-US）。
+  - user: "Draft a friendly follow-up email to a candidate who went silent after the onsite. Keep it short and warm."
+    script:
+      - event: query:text
+        chunks:
+          - "好的！Here's a "
+          - "warm follow-up email ✉️:\n\nHi Jamie,"
+          - "\n\nI hope you've been well since "
+          - "the onsite last week! 我们"
+          - "都很想继续推进你的流程 🌟"
+          - "\n\n— Best, Dana"
+        chunkDelayMs: 250
+      - event: query:usage
+        payload:
+          input_tokens: 96
+          output_tokens: 64
+          cost_usd: 0.0018
+      - event: query:completed

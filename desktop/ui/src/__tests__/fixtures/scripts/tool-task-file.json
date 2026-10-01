@@ -1,0 +1,79 @@
+{
+  "name": "tool-task-file",
+  "description": "工具任务 journey — 文本流 → Bash 工具 + 进度 → ok 结果 → 文本 → completed",
+  "seed": {
+    "config": {
+      "hasKey": true
+    },
+    "sessions": [
+      {
+        "id": "script-sess-tool",
+        "title": "Write todo.md",
+        "messages": []
+      }
+    ]
+  },
+  "turns": [
+    {
+      "user": "用 Bash 写一个 todo.md，然后告诉我结果",
+      "script": [
+        {
+          "event": "query:text",
+          "chunks": [
+            "好的，我先创建 ",
+            "todo.md："
+          ],
+          "chunkDelayMs": 200
+        },
+        {
+          "event": "query:tool-start",
+          "payload": {
+            "tool_use_id": "tool-todo-1",
+            "tool_name": "Bash",
+            "tool_input": {
+              "command": "printf 'buy milk\\nwrite tests\\n' > todo.md"
+            }
+          }
+        },
+        {
+          "event": "query:tool-progress",
+          "payload": {
+            "tool_use_id": "tool-todo-1",
+            "progress": 0.4,
+            "message": "writing todo.md"
+          }
+        },
+        {
+          "waitFor": "ui"
+        },
+        {
+          "event": "query:tool-progress",
+          "payload": {
+            "tool_use_id": "tool-todo-1",
+            "progress": 0.8,
+            "message": "flushing buffer"
+          }
+        },
+        {
+          "event": "query:tool-result",
+          "payload": {
+            "tool_use_id": "tool-todo-1",
+            "result": "wrote 2 lines to todo.md",
+            "is_error": false
+          }
+        },
+        {
+          "event": "query:text",
+          "chunks": [
+            "完成！todo.md 已写入 ",
+            "2 行待办 ✅"
+          ],
+          "chunkDelayMs": 200
+        },
+        {
+          "event": "query:completed"
+        }
+      ]
+    }
+  ]
+}

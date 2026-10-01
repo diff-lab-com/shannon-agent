@@ -444,3 +444,87 @@ describe('seed and reset semantics', () => {
     expect(player.handleSendMessage({})).toEqual({ query_id: 'q-0' })
   })
 })
+
+// R2 chat-testing plan §A — the knownIssue marker anchors tracked bugs in a
+// journey: the marked step is SKIPPED (no emission) and annotated via
+// console.info; removing the marker (after the fix lands) flips the journey
+// and the spec assertions around it.
+describe('knownIssue markers (R2 §A)', () => {
+  it('accepts the marker in the schema (turn steps and onCancel steps)', () => {
+    expect(validateScript({
+      name: 'marked',
+      turns: [{ user: 'u', script: [{ event: 'query:completed', knownIssue: 'A-1' }] }],
+      onCancel: { emit: [{ event: 'query:cancelled', knownIssue: 'A-19' }] },
+    }).ok).toBe(true)
+    expect(validateScript({
+      name: 'bad-marker',
+      turns: [{ user: 'u', script: [{ event: 'query:completed', knownIssue: '' }] }],
+    }).ok).toBe(false)
+  })
+
+  it('skips a marked step, annotates via console.info, and keeps the rest', () => {
+    const info = vi.spyOn(console, 'info').mockImplementation(() => {})
+    try {
+      const { player, names } = makeHarness()
+      player.load({
+        name: 'marked',
+        turns: [{
+          user: 'u',
+          script: [
+            { event: 'query:text', chunks: ['before'] },
+            { event: 'query:text', chunks: ['A-3 翻转后恢复'], knownIssue: 'A-3' },
+            { event: 'query:completed' },
+          ],
+        }],
+      })
+      player.handleSendMessage({})
+      expect(names()).toEqual(['query:text', 'query:completed'])
+      expect(info).toHaveBeenCalledWith(expect.stringContaining('knownIssue A-3'))
+      expect(info).toHaveBeenCalledWith(expect.stringContaining('skipped'))
+    } finally {
+      info.mockRestore()
+    }
+  })
+
+  it('skips a marked onCancel step; the terminal fallback still settles', () => {
+    const info = vi.spyOn(console, 'info').mockImplementation(() => {})
+    try {
+      const { player, names } = makeHarness()
+      player.load({
+        name: 'cancel-marked',
+        turns: [{ user: 'u', script: [{ event: 'query:text', chunks: ['half', 'more'], chunkDelayMs: 10_000 }] }],
+        onCancel: { emit: [{ event: 'query:cancelled', knownIssue: 'A-19' }] },
+      })
+      player.handleSendMessage({})
+      expect(player.handleCancelQuery()).toBe(true)
+      // The marked query:cancelled never emits; the player's settle fallback
+      // produces an identical terminal so the journey behavior is unchanged.
+      expect(names()).toEqual(['query:text', 'query:cancelled'])
+      expect(player.snapshot().phase).toBe('done')
+      expect(info).toHaveBeenCalledWith(expect.stringContaining('knownIssue A-19'))
+    } finally {
+      info.mockRestore()
+    }
+  })
+
+  it('snapshot() counts scripted send_message consumption in sentTurns', () => {
+    const { player } = makeHarness()
+    expect(player.snapshot().sentTurns).toBe(0)
+    player.load({
+      name: 'counted',
+      turns: [
+        { user: 'one', script: [{ event: 'query:completed' }] },
+        { user: 'two', script: [{ event: 'query:completed' }] },
+      ],
+    })
+    player.handleSendMessage({ sessionId: 's' })
+    expect(player.snapshot().sentTurns).toBe(1)
+    player.handleSendMessage({ sessionId: 's' })
+    expect(player.snapshot().sentTurns).toBe(2)
+    // Post-exhaustion sends fall through — they are not scripted turns.
+    expect(player.handleSendMessage({})).toBeNull()
+    expect(player.snapshot().sentTurns).toBe(2)
+    player.reset()
+    expect(player.snapshot().sentTurns).toBe(0)
+  })
+})

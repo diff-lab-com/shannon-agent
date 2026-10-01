@@ -229,6 +229,8 @@ export class ScriptPlayer {
     phase: PlayerPhase
     turnIndex: number | null
     stepIndex: number | null
+    /** send_message count consumed by the script since load (R2). */
+    sentTurns: number
     permissionLog: Array<Record<string, unknown>>
     speed: number
   } {
@@ -236,6 +238,7 @@ export class ScriptPlayer {
       phase: this.phase,
       turnIndex: this.turn?.turnIndex ?? null,
       stepIndex: this.turn?.stepIndex ?? null,
+      sentTurns: this.turnCounter,
       permissionLog: [...this.permissionLog],
       speed: this.speedValue,
     }
@@ -309,6 +312,17 @@ export class ScriptPlayer {
       }
       const step = steps[turn.stepIndex]
 
+      if (step.knownIssue != null) {
+        // Known-bug anchor (schema §A): skip execution, leave a console
+        // trace so a live demo session shows why the step didn't run.
+        console.info(
+          `[shannon-mock] knownIssue ${step.knownIssue}: turn ${turn.turnIndex} step ${turn.stepIndex}`
+            + ` (${step.event ?? 'waitFor'}${step.chunks ? ` ×${step.chunks.length}` : ''}) skipped`
+            + ' — anchored known bug; remove the marker to flip the journey',
+        )
+        turn.stepIndex += 1
+        continue
+      }
       if (step.waitFor === 'ui') {
         this.parkKind = 'waitFor'
         this.phase = 'waitingUi'
@@ -376,6 +390,15 @@ export class ScriptPlayer {
     this.phase = 'playing'
     // Flatten to emissions first so the delay of each item is known up front.
     const flat = steps.flatMap(step => {
+      if (step.knownIssue != null) {
+        // Known-bug anchor: skipped like turn steps; if that drops the only
+        // terminal event, the fallback below still settles the turn.
+        console.info(
+          `[shannon-mock] knownIssue ${step.knownIssue}: onCancel step (${step.event ?? 'waitFor'}) skipped`
+            + ' — anchored known bug; remove the marker to flip the journey',
+        )
+        return []
+      }
       if (step.chunks && step.chunks.length > 0) {
         const gap = step.chunkDelayMs ?? DEFAULT_CHUNK_DELAY_MS
         return step.chunks.map((content, i) => ({
