@@ -6,6 +6,7 @@ import { toast } from 'sonner'
 import { toastError } from '@/lib/errorToast'
 import { Button } from '@/components/ui/button'
 import * as api from '@/lib/tauri-api'
+import { formatInterval } from '@/lib/formatInterval'
 import type { ScheduledRoutine } from '@/types'
 
 interface Props {
@@ -23,7 +24,7 @@ const CATEGORY_ICONS: Record<string, string> = {
 
 export default function RoutineTemplatesBrowser({ onInstantiated }: Props) {
   const intl = useIntl()
-  const t = (id: string) => intl.formatMessage({ id })
+  const t = useCallback((id: string) => intl.formatMessage({ id }), [intl])
 
   const [templates, setTemplates] = useState<api.RoutineTemplate[]>([])
   const [loading, setLoading] = useState(true)
@@ -76,6 +77,27 @@ export default function RoutineTemplatesBrowser({ onInstantiated }: Props) {
     }
     setInstantiating(null)
   }
+
+  // W2-7: humanize the trigger chip — cron keeps its expression, github
+  // triggers show event/repo/action semantics instead of a bare "0s", and
+  // intervals render as human durations instead of raw seconds.
+  const triggerLabel = useCallback(
+    (tmpl: api.RoutineTemplate): string => {
+      if (tmpl.trigger_type === 'cron') return tmpl.cron_expr ?? ''
+      if (tmpl.trigger_type === 'github') {
+        const parts = [
+          tmpl.github_event,
+          tmpl.github_repo === '*' ? t('routines.templates.trigger.anyRepo') : tmpl.github_repo,
+          tmpl.github_action,
+        ].filter((p): p is string => Boolean(p))
+        return parts.length > 0 ? parts.join(' · ') : t('routines.templates.trigger.onEvent')
+      }
+      return formatInterval(tmpl.interval_secs ?? 0, (id, values) =>
+        intl.formatMessage({ id }, values),
+      )
+    },
+    [intl, t],
+  )
 
   if (loading) {
     return (
@@ -160,10 +182,11 @@ export default function RoutineTemplatesBrowser({ onInstantiated }: Props) {
               {tmpl.description}
             </p>
             <div className="flex items-center justify-between gap-sm pt-xs">
-              <code className="font-mono text-label-xs text-on-surface-variant bg-surface-container-high px-xs py-xs rounded-sm">
-                {tmpl.trigger_type === 'cron'
-                  ? tmpl.cron_expr ?? ''
-                  : `${tmpl.interval_secs ?? 0}s`}
+              <code
+                className="font-mono text-label-xs text-on-surface-variant bg-surface-container-high px-xs py-xs rounded-sm"
+                title={triggerLabel(tmpl)}
+              >
+                {triggerLabel(tmpl)}
               </code>
               <Button
                 onClick={() => handleInstantiate(tmpl)}

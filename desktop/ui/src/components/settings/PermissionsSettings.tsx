@@ -619,7 +619,9 @@ function BuiltinCard({
           </span>
         )}
       </div>
-      <p className="text-body-sm text-on-surface-variant">{profile.description}</p>
+      <p className="text-body-sm text-on-surface-variant">
+        {profileDescription(t, profile.id, profile.description)}
+      </p>
       <ul className="text-label-md text-on-surface-variant space-y-xs">
         {flags.map(([on, key]) => (
           <li key={key} className="flex items-center gap-xs">
@@ -647,6 +649,25 @@ function BuiltinCard({
       </Button>
     </div>
   )
+}
+
+// R2-P2-14: the engine ships English profile descriptions; map the well-known
+// builtin ids to i18n keys so every locale renders localized text. Unknown
+// ids (future engine profiles) fall back to the engine-provided string.
+function profileDescription(
+  t: (id: string) => string,
+  id: string,
+  engineDescription: string,
+): string {
+  const known: Record<string, string> = {
+    strict: 'settings.permissions.builtin.desc.strict',
+    balanced: 'settings.permissions.builtin.desc.balanced',
+    permissive: 'settings.permissions.builtin.desc.permissive',
+  }
+  const key = known[id]
+  if (!key) return engineDescription
+  const translated = t(key)
+  return translated === key ? engineDescription : translated
 }
 
 function ProfileEditorModal({

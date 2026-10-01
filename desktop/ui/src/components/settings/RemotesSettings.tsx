@@ -123,6 +123,24 @@ function RemotesSettings(): React.JSX.Element {
         <p className="text-body-sm text-on-surface-variant">{t('settings.remotes.description')}</p>
       </div>
 
+      {/* R2-P2-15: surface the known remote-execution boundaries up front —
+          PTY interactive commands and remote git worktrees are local-only. */}
+      <Card className="border-outline-variant/20 bg-surface-container-lowest/60">
+        <CardHeader className="pb-xs">
+          <CardTitle className="flex items-center gap-sm font-label-lg">
+            <Icon name="info" className="text-on-surface-variant" />
+            {t('settings.remotes.limits.title')}
+          </CardTitle>
+          <CardDescription>{t('settings.remotes.limits.subtitle')}</CardDescription>
+        </CardHeader>
+        <CardContent>
+          <ul className="text-body-sm text-on-surface-variant list-disc pl-lg space-y-xs">
+            <li>{t('settings.remotes.limits.pty')}</li>
+            <li>{t('settings.remotes.limits.worktree')}</li>
+          </ul>
+        </CardContent>
+      </Card>
+
       {loaded && targets.length === 0 && (
         <Card>
           <CardContent>
