@@ -394,6 +394,21 @@ export function AppProvider({ children }: { children: ReactNode }) {
     setPromptQueues(Object.fromEntries(promptQueuesRef.current))
   }, [])
 
+  // GB P2-10a: reorder one queued prompt within the visible session's FIFO
+  // (queue chips' up/down). Out-of-range moves are no-ops.
+  const moveQueuedPrompt = useCallback((id: number, delta: -1 | 1) => {
+    const key = visibleSessionIdRef.current ?? ''
+    const queue = promptQueuesRef.current.get(key) ?? []
+    const from = queue.findIndex(item => item.id === id)
+    const to = from + delta
+    if (from < 0 || to < 0 || to >= queue.length) return
+    const next = [...queue]
+    const [item] = next.splice(from, 1)
+    next.splice(to, 0, item)
+    promptQueuesRef.current.set(key, next)
+    setPromptQueues(Object.fromEntries(promptQueuesRef.current))
+  }, [])
+
   const dropPromptQueue = useCallback((sessionId: string) => {
     if (!promptQueuesRef.current.has(sessionId)) return
     promptQueuesRef.current.delete(sessionId)
@@ -1084,12 +1099,12 @@ export function AppProvider({ children }: { children: ReactNode }) {
     messages, streamingText, thinkingText, isQuerying, activeToolCalls, toolProgress, streamNotices, usage,
     sendMessage, cancelQuery,
     promptQueue: promptQueues[visibleKey] ?? [],
-    enqueuePrompt, dequeuePrompt, removeQueuedPrompt,
+    enqueuePrompt, dequeuePrompt, removeQueuedPrompt, moveQueuedPrompt,
     contextPanelOpen, toggleContextPanel, setContextPanelOpen: updateContextPanelOpen,
     checkpoints, rewindSession: rewindSessionAction, compactSession: compactSessionAction,
     feedback, recordFeedback: recordFeedbackAction,
   }), [messages, streamingText, thinkingText, isQuerying, activeToolCalls, toolProgress, streamNotices, usage, sendMessage, cancelQuery,
-    promptQueues, visibleKey, enqueuePrompt, dequeuePrompt, removeQueuedPrompt,
+    promptQueues, visibleKey, enqueuePrompt, dequeuePrompt, removeQueuedPrompt, moveQueuedPrompt,
     contextPanelOpen, toggleContextPanel, updateContextPanelOpen, checkpoints, rewindSessionAction, compactSessionAction, feedback, recordFeedbackAction])
 
   const sessionValue = useMemo<SessionContextValue>(() => ({

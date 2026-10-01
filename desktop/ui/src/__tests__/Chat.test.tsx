@@ -160,7 +160,7 @@ describe('Chat page', () => {
     resetCtx()
     ctx.isQuerying = true
     renderChat()
-    const input = screen.getByPlaceholderText('Reply generating — press Enter to queue your message')
+    const input = screen.getByPlaceholderText(/Reply generating — press Enter to queue/)
     fireEvent.change(input, { target: { value: 'queued hello' } })
     fireEvent.keyDown(input, { key: 'Enter' })
     expect(ctx.sendMessage).not.toHaveBeenCalled()
@@ -174,7 +174,7 @@ describe('Chat page', () => {
     ctx.isQuerying = true
     ctx.enqueuePrompt = vi.fn().mockReturnValue(false)
     renderChat()
-    const input = screen.getByPlaceholderText('Reply generating — press Enter to queue your message')
+    const input = screen.getByPlaceholderText(/Reply generating — press Enter to queue/)
     fireEvent.change(input, { target: { value: 'never queued' } })
     fireEvent.keyDown(input, { key: 'Enter' })
     expect(ctx.enqueuePrompt).toHaveBeenCalled()
@@ -185,7 +185,7 @@ describe('Chat page', () => {
     resetCtx()
     ctx.isQuerying = true
     renderChat()
-    const input = screen.getByPlaceholderText('Reply generating — press Enter to queue your message')
+    const input = screen.getByPlaceholderText(/Reply generating — press Enter to queue/)
     fireEvent.keyDown(input, { key: 'Escape' })
     expect(ctx.cancelQuery).toHaveBeenCalled()
   })

@@ -411,7 +411,7 @@ describe('ChatInput', () => {
 
     // B1 §4-9 — the textarea is no longer disabled while streaming; the
     // placeholder advertises queueing instead of a hard block.
-    const textarea = screen.getByPlaceholderText('Reply generating — press Enter to queue your message')
+    const textarea = screen.getByPlaceholderText(/Reply generating — press Enter to queue/)
     expect(textarea).toBeInTheDocument()
     expect(textarea).not.toBeDisabled()
   })

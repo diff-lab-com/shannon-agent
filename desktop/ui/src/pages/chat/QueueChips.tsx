@@ -2,13 +2,15 @@
 // streaming. Rendered by ComposerPanel above the input — the queue itself
 // lives in AppContext keyed by session and drains automatically when the
 // run finishes.
+// GB P2-10a: the FIFO is steerable — each chip carries up/down controls
+// (move toward the head = sends sooner) next to its dismiss button.
 import { Button } from '@/components/ui/button'
 import { useT } from '@/i18n'
 import { cn } from '@/lib/utils'
 import { useChat } from '@/context/ChatContext'
 
 export default function QueueChips({ className }: { className?: string }) {
-  const { promptQueue, removeQueuedPrompt } = useChat()
+  const { promptQueue, removeQueuedPrompt, moveQueuedPrompt } = useChat()
   const t = useT()
   if (promptQueue.length === 0) return null
   return (
@@ -22,7 +24,7 @@ export default function QueueChips({ className }: { className?: string }) {
         <span className="material-symbols-outlined icon-sm" aria-hidden="true">low_priority</span>
         {t('chat.queue.title', { count: promptQueue.length })}
       </span>
-      {promptQueue.map(item => (
+      {promptQueue.map((item, i) => (
         <span
           key={item.id}
           role="listitem"
@@ -33,6 +35,32 @@ export default function QueueChips({ className }: { className?: string }) {
           <span className="truncate" title={item.text}>
             {item.text.trim() || t('chat.queue.attachmentsOnly', { count: item.attachments.length })}
           </span>
+          {promptQueue.length > 1 && (
+            <span className="flex items-center shrink-0">
+              <Button
+                variant="ghost"
+                size="icon-xs"
+                disabled={i === 0}
+                aria-label={t('chat.queue.up.aria')}
+                title={t('chat.queue.up.aria')}
+                className="size-4 rounded-full hover:bg-surface-container-high"
+                onClick={() => moveQueuedPrompt(item.id, -1)}
+              >
+                <span className="material-symbols-outlined icon-xs" aria-hidden="true">keyboard_arrow_up</span>
+              </Button>
+              <Button
+                variant="ghost"
+                size="icon-xs"
+                disabled={i === promptQueue.length - 1}
+                aria-label={t('chat.queue.down.aria')}
+                title={t('chat.queue.down.aria')}
+                className="size-4 rounded-full hover:bg-surface-container-high"
+                onClick={() => moveQueuedPrompt(item.id, 1)}
+              >
+                <span className="material-symbols-outlined icon-xs" aria-hidden="true">keyboard_arrow_down</span>
+              </Button>
+            </span>
+          )}
           <Button
             variant="ghost"
             size="icon-xs"

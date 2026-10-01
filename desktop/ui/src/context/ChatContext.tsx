@@ -92,6 +92,9 @@ export interface ChatContextValue {
   dequeuePrompt: () => PromptQueueItem | null
   /** Remove one queued item by id (queue chip dismiss). */
   removeQueuedPrompt: (id: number) => void
+  /** GB P2-10a: move one queued item within the FIFO (chips' up/down);
+   *  `delta` −1 = toward the head (sends sooner), +1 = toward the tail. */
+  moveQueuedPrompt: (id: number, delta: -1 | 1) => void
   /** /rewind: completed checkpoints for the current session (turn indices). */
   checkpoints: CheckpointInfo[]
   /** Rewind to before `turnIndex`: drops that turn and everything after. */

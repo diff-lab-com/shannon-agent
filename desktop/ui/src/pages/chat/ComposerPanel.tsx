@@ -24,7 +24,7 @@ interface ComposerPanelProps {
 // Cmd/Ctrl+D WD-picker shortcut is handled by this panel too — it owns the
 // picker button).
 export default function ComposerPanel({ setQuickFixOpen, setEditorOpen }: ComposerPanelProps) {
-  const { input, setInput, handleSend, attachedFiles, handleAttach, handleDetachAll, executeSlash, slashResult, dismissSlashResult, editing, cancelEdit } = useComposer()
+  const { input, setInput, handleSend, handleSteer, attachedFiles, handleAttach, handleDetachAll, executeSlash, slashResult, dismissSlashResult, editing, cancelEdit } = useComposer()
   const { isQuerying, cancelQuery, usage } = useChat()
   const { sessions, currentSessionId } = useSessions()
   const { config } = useCatalog()
@@ -57,6 +57,9 @@ export default function ComposerPanel({ setQuickFixOpen, setEditorOpen }: Compos
             value={input}
             onChange={setInput}
             onSend={handleSend}
+            // GB P2-10a: the interrupt-now send — bolt button / Ctrl+Enter
+            // while this session streams (Enter keeps queueing).
+            onSteer={handleSteer}
             onExecuteSlash={executeSlash}
             attachedFiles={attachedFiles}
             onAttach={handleAttach}

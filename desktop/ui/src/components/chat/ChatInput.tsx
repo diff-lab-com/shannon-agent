@@ -76,6 +76,9 @@ interface ChatInputProps {
    *  stop/send swap and the Escape-cancels-run affordance. */
   isQuerying: boolean
   onCancelQuery: () => void
+  /** GB P2-10a: the interrupt-now send (bolt button / Ctrl+Enter while
+   *  streaming). Enter keeps queueing; absent → Enter/Ctrl+Enter both send. */
+  onSteer?: () => void
   /** B1 §4-8: present only while a message edit is in flight — Escape
    *  cancels the edit (restores the pre-edit draft) instead. */
   onCancelEdit?: () => void
@@ -113,6 +116,7 @@ export default function ChatInput({
   onCancelEdit,
   onOpenQuickFix,
   onOpenEditor,
+  onSteer,
   sessionWorkingDir,
   usageTick,
   sessionId,
@@ -535,14 +539,17 @@ export default function ChatInput({
         return
       }
     }
-    // Enter -> send; Shift/Ctrl+Enter -> newline. Matches VS Code's
-    // Ctrl+Enter convention; preserves the legacy Enter-to-send UX.
+    // Enter -> send (while streaming: queue, GB P2-10a); Shift+Enter ->
+    // newline; Ctrl/Cmd+Enter -> send — or, while streaming, the IMMEDIATE
+    // steer tier (interrupt now). Matches VS Code's Ctrl+Enter convention;
+    // preserves the legacy Enter-to-send UX.
     if (e.key === 'Enter' && !e.shiftKey && !(e.ctrlKey || e.metaKey)) {
       e.preventDefault()
       onSend()
     } else if (e.key === 'Enter' && (e.ctrlKey || e.metaKey) && !e.shiftKey) {
       e.preventDefault()
-      onSend()
+      if (isQuerying && onSteer) onSteer()
+      else onSend()
     }
     // Escape priority: exit message edit > cancel the running query.
     if (e.key === 'Escape') {
@@ -680,6 +687,10 @@ export default function ChatInput({
   const charCount = value.length
   const showCharCount = charCount >= CHAR_SHOW_AT
   const isOverSoftWarn = charCount >= CHAR_SOFT_WARN_AT
+
+  // GB P2-10a: same gate as the idle send button — the queue/steer buttons
+  // only appear when there is something to deliver.
+  const hasSteerableContent = value.trim().length > 0 || attachedFiles.length > 0
 
   return (
     <div
@@ -1153,13 +1164,43 @@ export default function ChatInput({
             )}
 
             {isQuerying ? (
-              <Button
-                aria-label={t('chat.input.stop.aria')}
-                className="bg-error/80 text-on-error p-3 rounded-xl active:scale-95 transition-all"
-                onClick={onCancelQuery}
-              >
-                <span className="material-symbols-outlined icon-md">stop</span>
-              </Button>
+              <>
+                {/* GB P2-10a: while streaming the send slot becomes the
+                    QUEUE button (Enter does the same) — the label says the
+                    message goes out after the current turn ends. Only shown
+                    when there is something to queue. */}
+                {hasSteerableContent && (
+                  <Button
+                    aria-label={t('chat.input.queue.aria')}
+                    title={t('chat.input.queue.title')}
+                    className="bg-primary text-on-primary p-3 rounded-xl active:scale-95 hover:shadow-md hover:shadow-primary/30 transition-all"
+                    onClick={onSend}
+                  >
+                    <span className="material-symbols-outlined icon-md">low_priority</span>
+                  </Button>
+                )}
+                {hasSteerableContent && onSteer && (
+                  // The second tier: interrupt the running turn and deliver
+                  // now (also Ctrl/Cmd+Enter). Secondary styling — queueing
+                  // stays the default path.
+                  <Button
+                    variant="outline"
+                    aria-label={t('chat.input.steer.aria')}
+                    title={t('chat.input.steer.title')}
+                    className="p-3 rounded-xl active:scale-95 transition-all text-primary border-primary/40 hover:bg-primary/10"
+                    onClick={onSteer}
+                  >
+                    <span className="material-symbols-outlined icon-md">bolt</span>
+                  </Button>
+                )}
+                <Button
+                  aria-label={t('chat.input.stop.aria')}
+                  className="bg-error/80 text-on-error p-3 rounded-xl active:scale-95 transition-all"
+                  onClick={onCancelQuery}
+                >
+                  <span className="material-symbols-outlined icon-md">stop</span>
+                </Button>
+              </>
             ) : (
               <Button
                 aria-label={t('chat.input.send.aria')}
