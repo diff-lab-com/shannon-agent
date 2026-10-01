@@ -1145,7 +1145,10 @@ export async function applyDiff(filePath: string, hunks: HunkAction[]): Promise<
   return invoke('apply_diff', { filePath, hunks })
 }
 
-export async function getFileTree(path: string): Promise<FileNode> {
+// GB P2-10b: the backend returns Vec<FileTreeNode> (root entries with
+// nested children, walk bounded at depth 12 / 5000 entries) — the old
+// single-node signature never matched the Rust command and had no callers.
+export async function getFileTree(path: string): Promise<FileNode[]> {
   return invoke('get_file_tree', { path })
 }
 

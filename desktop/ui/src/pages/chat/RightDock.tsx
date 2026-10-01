@@ -44,11 +44,13 @@ import { registerLinkPanelRouter } from '@/lib/openLink'
 import { projectOf } from '@/components/SidebarSessions'
 import DiffReviewBody from '@/components/diff/DiffReviewBody'
 import type { ToolCall, UsagePayload } from '@/types'
+import { initialRunProcess, type RunProcessState } from '@/lib/runProcess'
 import { ContextPanelContent } from './ContextPanel'
 import PlanPanel from './PlanPanel'
+import RunPanel from './RunPanel'
 import { LivePreview } from '@/components/artifact/LivePreview'
 
-type UtilityTab = 'context' | 'plan' | 'live' | 'diff'
+type UtilityTab = 'context' | 'plan' | 'run' | 'live' | 'diff'
 /** Utility tabs use bare keys; artifact tabs are `a:<artifactId>`. */
 type DockTab = UtilityTab | `a:${string}`
 
@@ -60,7 +62,7 @@ const MAX_WIDTH = 720
 const DEFAULT_WIDTH = 340
 /** B3 §P2-21: resizer keyboard step (ArrowLeft/ArrowRight). */
 const RESIZE_STEP_PX = 16
-const UTILITY_TABS: readonly UtilityTab[] = ['context', 'plan', 'live', 'diff']
+const UTILITY_TABS: readonly UtilityTab[] = ['context', 'plan', 'run', 'live', 'diff']
 
 /** Batch D4: dock fullscreen — the reading position from the dead-code
  *  ArtifactPanel, revived inside the unified dock. */
@@ -131,6 +133,10 @@ interface RightDockProps {
   /** Single-file diff review target; null closes the diff tab. */
   diffPath: string | null
   onCloseDiff: () => void
+  /** GB P2-3: the visible session's run aggregation — its non-idle status
+   *  is what makes the 运行 tab appear; content survives until the next send.
+   *  Optional: hosts that don't track runs (tests) get the idle default. */
+  runProcess?: RunProcessState
 }
 
 export default function RightDock({
@@ -143,6 +149,7 @@ export default function RightDock({
   planModeActive,
   diffPath,
   onCloseDiff,
+  runProcess = initialRunProcess(),
 }: RightDockProps) {
   const t = useT()
   const { artifacts, activeId, setActive, open: openArtifact, close: closeArtifact } = useArtifact()
@@ -255,17 +262,36 @@ export default function RightDock({
     if (!hintDismissed) dismissHint()
   }, [hintDismissed, dismissHint])
 
+  // GB P2-3: a NEW run activates the 运行 tab — but only when the dock is
+  // already open (a send must never yank the panel open over the user's
+  // reading position; the tab simply appears in the strip otherwise).
+  const prevRunStatus = useRef(runProcess.status)
+  useEffect(() => {
+    const becameRunning = prevRunStatus.current === 'idle' && runProcess.status === 'running'
+    prevRunStatus.current = runProcess.status
+    if (becameRunning && open) setTab('run')
+  }, [runProcess.status, open])
+
   // §P2-21: WAI-ARIA tabs pattern — Left/Right step through tabs (skipping
   // the disabled Diff tab), Home/End jump, selection follows focus
   // (automatic activation), and only the selected tab is in the page Tab
   // order (roving tabIndex).
+  // GB P2-3: the 运行 tab exists only once a run has happened on this
+  // session (idle hides it); it then persists — even in the done/failed
+  // snapshot — until the next send resets the aggregation.
+  const runVisible = runProcess.status !== 'idle'
   const orderedTabs = useMemo<DockTab[]>(
     () => [
-      ...UTILITY_TABS.filter(key => !(key === 'diff' && !diffPath)),
+      ...UTILITY_TABS.filter(key => !(key === 'diff' && !diffPath) && !(key === 'run' && !runVisible)),
       ...artifacts.map(a => `a:${a.id}` as DockTab),
     ],
-    [diffPath, artifacts],
+    [diffPath, artifacts, runVisible],
   )
+
+  // A hidden run tab must not stay active — fall back to context.
+  useEffect(() => {
+    if (tab === 'run' && !runVisible) setTab('context')
+  }, [runVisible, tab])
 
   const onTablistKeyDown = useCallback((e: React.KeyboardEvent) => {
     if (e.key !== 'ArrowRight' && e.key !== 'ArrowLeft' && e.key !== 'Home' && e.key !== 'End') return
@@ -332,6 +358,7 @@ export default function RightDock({
   const utilityLabels: Record<UtilityTab, { icon: string; label: string }> = {
     context: { icon: 'data_usage', label: t('chat.dock.tab.context') },
     plan: { icon: 'route', label: t('chat.dock.tab.plan') },
+    run: { icon: 'monitoring', label: t('chat.dock.tab.run') },
     live: { icon: 'web', label: t('chat.dock.tab.live') },
     diff: { icon: 'difference', label: t('chat.dock.tab.diff') },
   }
@@ -425,6 +452,7 @@ export default function RightDock({
               className="flex items-center gap-xs flex-1 min-w-0 overflow-x-auto"
             >
               {(Object.keys(utilityLabels) as UtilityTab[]).map(key => {
+                if (key === 'run' && !runVisible) return null
                 const meta = utilityLabels[key]
                 const disabled = key === 'diff' && !diffPath
                 return (
@@ -529,6 +557,9 @@ export default function RightDock({
           >
             {tab === 'context' && <ContextPanelContent usage={usage} activeToolCalls={activeToolCalls} />}
             {tab === 'plan' && <PlanPanel workingDir={workingDir} planModeActive={planModeActive} />}
+            {tab === 'run' && (
+              <RunPanel run={runProcess} workingDir={workingDir} onOpenPlan={() => handleTabPick('plan')} />
+            )}
             {tab === 'live' && <LivePreview />}
             {tab === 'diff' && (
               diffPath ? (

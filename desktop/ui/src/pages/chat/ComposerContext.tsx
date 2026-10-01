@@ -23,6 +23,10 @@ export interface ComposerContextValue {
   input: string
   setInput: (s: string) => void
   handleSend: () => void
+  /** GB P2-10a: the interrupt-now send — cancels the running turn and
+   *  delivers the composer text when it settles (ahead of the FIFO queue).
+   *  A no-op on an empty composer. */
+  handleSteer: () => void
   attachedFiles: string[]
   handleAttach: (files: string[]) => void
   handleDetachAll: () => void

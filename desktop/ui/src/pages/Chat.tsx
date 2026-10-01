@@ -13,6 +13,8 @@ import { setActiveWorkingDir } from '@/lib/fileRefs'
 import { useDiskArtifacts } from '@/hooks/useDiskArtifacts'
 import { useArtifact } from '@/components/artifact/ArtifactContext'
 import { useBudgetGuard } from '@/hooks/useBudgetGuard'
+import { useSteerSend } from '@/hooks/useSteerSend'
+import { toast } from 'sonner'
 import BudgetBanner from '@/components/chat/BudgetBanner'
 import { ConfirmDialog } from '@/components/ui/confirm-dialog'
 import { TerminalPanel } from '@/components/terminal/TerminalPanel'
@@ -94,8 +96,8 @@ export function shouldShowApiKeyBanner(status: ProviderStatus | null | undefined
 export default function Chat() {
   const {
     messages, streamingText, isQuerying, usage, activeToolCalls,
-    sendMessage, contextPanelOpen, setContextPanelOpen, compactSession,
-    promptQueue, dequeuePrompt, enqueuePrompt, rewindSession, checkpoints,
+    sendMessage, cancelQuery, contextPanelOpen, setContextPanelOpen, compactSession,
+    promptQueue, dequeuePrompt, enqueuePrompt, rewindSession, checkpoints, runProcess,
   } = useChat()
   const { sessions, currentSessionId, windowSessionId, createSession } = useSessions()
   const { config, providerStatus } = useCatalog()
@@ -451,6 +453,51 @@ export default function Chat() {
     if (visibleSessionId) clearDraft(visibleSessionId)
   }
 
+  // GB P2-10a — the "interrupt now" send (composer bolt button /
+  // Ctrl+Enter while streaming). Cancel the running turn, then deliver this
+  // message the moment the cancel settles — ahead of any FIFO-queued
+  // prompts. Slash commands never interrupt (nothing streams for them):
+  // they run locally right away, exactly like Enter does.
+  const handleSteer = () => {
+    const trimmed = input.trim()
+    const hasAttachments = attachedFiles.length > 0
+    if (!trimmed && !hasAttachments) return
+    // A steer is a manual send — re-arms the drain breaker like handleSend.
+    drainBlockedRef.current = false
+    const slashCommand = trimmed ? parseSlashInput(trimmed) : null
+    if (slashCommand) {
+      executeSlash(slashCommand)
+      setInput('')
+      return
+    }
+    const accepted = steer(trimmed, hasAttachments ? attachedFiles : [])
+    if (accepted) {
+      setInput('')
+      setAttachedFiles([])
+      if (visibleSessionId) clearDraft(visibleSessionId)
+    }
+  }
+
+  // GB P2-10a — two-tier steering. Declared ABOVE the queue-drain effect so
+  // an interrupted steer flushes first on the same isQuerying→false commit;
+  // the drain below also gates on hasPendingSteer so both never send in one
+  // commit (the drain would otherwise burn a queued item against the
+  // backend's concurrent-query guard). Round-1 review: the pending steer is
+  // parked under its session key (a settle observed on another session
+  // never receives it) and a cancel that never settles hands the draft back
+  // after 15s with a notice instead of waiting forever.
+  const { steer, hasPendingSteer } = useSteerSend({
+    visibleSessionId,
+    isQuerying,
+    cancelQuery,
+    sendMessage,
+    onSendRejected: (pending, reason) => {
+      setInput(pending.text)
+      setAttachedFiles(pending.attachments)
+      if (reason === 'timeout') toast.error(t('chat.steer.timeout'))
+    },
+  })
+
   // B1 §4-9: drain — when this session's run settles and prompts are still
   // queued, auto-send the head. Queued slash commands (if any land here)
   // execute locally like normal; the dequeue ref in AppContext keeps this
@@ -461,6 +508,9 @@ export default function Chat() {
   const drainBlockedRef = useRef(false)
   useEffect(() => {
     if (isQuerying || promptQueue.length === 0) return
+    // GB P2-10a: an interrupted steer owns this settle — it sends first and
+    // flips isQuerying back on; the queue drains when THAT run finishes.
+    if (hasPendingSteer()) return
     if (drainBlockedRef.current) return
     const item = dequeuePrompt()
     if (!item) return
@@ -473,7 +523,7 @@ export default function Chat() {
       .then(ok => { if (!ok) drainBlockedRef.current = true })
     // `promptQueue` re-triggers the drain for the next item once the new run
     // settles; sendMessage flips isQuerying synchronously during the send.
-  }, [isQuerying, promptQueue, dequeuePrompt, executeSlash, sendMessage])
+  }, [isQuerying, promptQueue, dequeuePrompt, executeSlash, sendMessage, hasPendingSteer])
 
   // Attach files via Tauri's native dialog so the backend receives real
   // absolute paths (the backend reads bytes via std::fs and base64-encodes).
@@ -488,7 +538,7 @@ export default function Chat() {
   }
 
   const composerValue = {
-    input, setInput, handleSend,
+    input, setInput, handleSend, handleSteer,
     attachedFiles, handleAttach, handleDetachAll,
     executeSlash, slashResult, dismissSlashResult,
     editing, cancelEdit,
@@ -634,6 +684,7 @@ export default function Chat() {
             planModeActive={config?.approval_mode === 'plan'}
             diffPath={diffPath}
             onCloseDiff={() => setDiffPath(null)}
+            runProcess={runProcess}
           />
           <DiffDialogMulti open={diffPaths !== null} filePaths={diffPaths ?? []} onClose={() => setDiffPaths(null)} />
 

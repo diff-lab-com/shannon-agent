@@ -14,6 +14,14 @@ import { messageFor } from '@/i18n'
 import { listen, type UnlistenFn } from '@tauri-apps/api/event'
 import { isEventForCurrentWindow, parseWindowSession } from '@/lib/windowSession'
 import { reportRejectedAttachments } from '@/lib/attachmentFeedback'
+import {
+  beginRun as runBegin,
+  endRun as runEnd,
+  initialRunProcess,
+  noteToolProgress as runToolProgress,
+  noteToolStart as runToolStart,
+  type RunProcessState,
+} from '@/lib/runProcess'
 import * as api from '@/lib/tauri-api'
 import { toast } from 'sonner'
 import { toastError } from '@/lib/errorToast'
@@ -83,6 +91,21 @@ export function AppProvider({ children }: { children: ReactNode }) {
   // entry, so gating/stop/error UI all key off the session on screen.
   const [queryingSessions, setQueryingSessions] = useState<Record<string, true>>({})
   const [activeToolCalls, setActiveToolCalls] = useState<ToolCall[]>([])
+  // GB P2-3: 「过程四要素」 aggregation for the VISIBLE session's run —
+  // fed by the same query events that fill activeToolCalls, reduced by
+  // lib/runProcess. Cleared on new sends (beginRun), settled on
+  // completed/failed/cancelled (endRun), reset on session switch — the run
+  // tab's content survives between those points exactly like the brief's
+  // "结束保留至下一轮开始".
+  const [runProcess, setRunProcess] = useState<RunProcessState>(initialRunProcess)
+  // Round-1 review (Minor-4): synchronous mirror of runProcess — a send the
+  // backend REJECTS before recording the user message (budget/concurrent/
+  // goal guards) must restore the pre-send snapshot, not leave a phantom
+  // "Running" tab. (A setState-updater stash would still be unflushed when
+  // the rejection's catch runs, so the mirror is kept during render, the
+  // same pattern as visibleSessionIdRef below.)
+  const runProcessRef = useRef<RunProcessState>(runProcess)
+  runProcessRef.current = runProcess
   // P2-19: live progress of the VISIBLE session's currently-running tool
   // (QUERY_TOOL_PROGRESS {progress, progress_message}). The raw fields also
   // land on the matching activeToolCalls card; this dedicated slot feeds the
@@ -394,6 +417,21 @@ export function AppProvider({ children }: { children: ReactNode }) {
     setPromptQueues(Object.fromEntries(promptQueuesRef.current))
   }, [])
 
+  // GB P2-10a: reorder one queued prompt within the visible session's FIFO
+  // (queue chips' up/down). Out-of-range moves are no-ops.
+  const moveQueuedPrompt = useCallback((id: number, delta: -1 | 1) => {
+    const key = visibleSessionIdRef.current ?? ''
+    const queue = promptQueuesRef.current.get(key) ?? []
+    const from = queue.findIndex(item => item.id === id)
+    const to = from + delta
+    if (from < 0 || to < 0 || to >= queue.length) return
+    const next = [...queue]
+    const [item] = next.splice(from, 1)
+    next.splice(to, 0, item)
+    promptQueuesRef.current.set(key, next)
+    setPromptQueues(Object.fromEntries(promptQueuesRef.current))
+  }, [])
+
   const dropPromptQueue = useCallback((sessionId: string) => {
     if (!promptQueuesRef.current.has(sessionId)) return
     promptQueuesRef.current.delete(sessionId)
@@ -467,6 +505,14 @@ export function AppProvider({ children }: { children: ReactNode }) {
     setActiveToolCalls([])
     // P2-19: a new turn starts with no progress chip (fresh run, fresh tool).
     setToolProgress(null)
+    // GB P2-3: the new run's 四要素 slate — previous run's content is kept
+    // until exactly this point (「结束保留至下一轮开始」).
+    const prevRun = runProcessRef.current
+    setRunProcess(runBegin({
+      at: Date.now(),
+      message,
+      attachments: filePaths ?? [],
+    }))
     // B1 P1-5: the run is tracked on ITS session — other sessions keep a
     // usable composer while this one streams.
     setSessionQuerying(targetSessionId, true)
@@ -505,6 +551,10 @@ export function AppProvider({ children }: { children: ReactNode }) {
       })
       setChatError(String(e))
       setSessionQuerying(targetSessionId, false)
+      // Round-1 review (Minor-4): the send was rejected BEFORE recording the
+      // user message — no run ever started, so the pre-send snapshot (with
+      // its sources/outputs) comes back instead of a phantom "Running".
+      if (prevRun) setRunProcess(prevRun)
       return false
     }
   }, [currentSessionId, goalOwnedSessionIds, windowSessionId, setSessionQuerying, cancelStreamFlush, setChatError])
@@ -533,6 +583,8 @@ export function AppProvider({ children }: { children: ReactNode }) {
       setStreamNotices([])
       setActiveToolCalls([])
       setToolProgress(null)
+      // GB P2-3: a fresh session starts with an empty run tab.
+      setRunProcess(initialRunProcess())
       await refreshSessions()
     } catch (e) { setChatError(String(e)) }
   }, [refreshSessions, setChatError])
@@ -551,6 +603,8 @@ export function AppProvider({ children }: { children: ReactNode }) {
       setStreamNotices([])
       setActiveToolCalls([])
       setToolProgress(null)
+      // GB P2-3: a fresh session starts with an empty run tab.
+      setRunProcess(initialRunProcess())
       await refreshSessions()
     } catch (e) {
       setChatError(String(e))
@@ -593,6 +647,8 @@ export function AppProvider({ children }: { children: ReactNode }) {
       // P2-19: single visible-session value — switching drops the previous
       // session's pill (background progress was never captured anyway).
       setToolProgress(null)
+      // GB P2-3: the run tab belongs to the session that ran it.
+      setRunProcess(initialRunProcess())
       // Batch B2: opening the session marks a prior failure as seen.
       const prev = sessionActivityRef.current.get(id)
       if (prev?.failed) {
@@ -714,6 +770,8 @@ export function AppProvider({ children }: { children: ReactNode }) {
       setThinkingText('')
       setActiveToolCalls([])
       setToolProgress(null)
+      // GB P2-3: a fresh session starts with an empty run tab.
+      setRunProcess(initialRunProcess())
       await refreshSessions()
       await refreshCheckpoints()
     } catch (e) {
@@ -736,6 +794,8 @@ export function AppProvider({ children }: { children: ReactNode }) {
       setThinkingText('')
       setActiveToolCalls([])
       setToolProgress(null)
+      // GB P2-3: a fresh session starts with an empty run tab.
+      setRunProcess(initialRunProcess())
       await refreshSessions()
       await refreshCheckpoints()
       return result
@@ -788,6 +848,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
           // tool's last percentage/message must not label this one until it
           // reports its own progress.
           setToolProgress(null)
+          setRunProcess(prev => runToolStart(prev, p.tool_name, p.tool_input, Date.now()))
           setActiveToolCalls(prev => [...prev, {
             tool_use_id: p.tool_use_id,
             tool_name: p.tool_name,
@@ -834,6 +895,8 @@ export function AppProvider({ children }: { children: ReactNode }) {
                 : undefined,
             message: p.message,
           })
+          // GB P2-3: the progress line doubles as the run tab's summary.
+          setRunProcess(prev => runToolProgress(prev, p.message))
         }),
         listen(EVENT_NAMES.QUERY_NOTICE, (e) => {
           // R5-2: failover / key-rotation notices (engine continued —
@@ -917,6 +980,9 @@ export function AppProvider({ children }: { children: ReactNode }) {
             setActiveToolCalls([])
             // P2-19: the run ended — no progress chip may outlive it.
             setToolProgress(null)
+            // GB P2-3: the run tab settles into its "done" snapshot (kept
+            // until the next send).
+            setRunProcess(prev => runEnd(prev, Date.now(), false))
             refreshStatus()
           }
         }),
@@ -949,6 +1015,8 @@ export function AppProvider({ children }: { children: ReactNode }) {
             setActiveToolCalls([])
             // P2-19: run failed — clear the progress pill with the cards.
             setToolProgress(null)
+            // GB P2-3: the run tab marks the failure (content still kept).
+            setRunProcess(prev => runEnd(prev, Date.now(), true))
           }
         }),
         listen(EVENT_NAMES.QUERY_CANCELLED, (e) => {
@@ -969,6 +1037,8 @@ export function AppProvider({ children }: { children: ReactNode }) {
             setActiveToolCalls([])
             // P2-19: run cancelled — clear the progress pill with the cards.
             setToolProgress(null)
+            // GB P2-3: settle the run tab (not a failure — the user stopped it).
+            setRunProcess(prev => runEnd(prev, Date.now(), false))
           }
         }),
         listen(EVENT_NAMES.PERMISSION_REQUEST, (e) => {
@@ -1081,15 +1151,15 @@ export function AppProvider({ children }: { children: ReactNode }) {
 
   const visibleKey = windowSessionId ?? currentSessionId ?? ''
   const chatValue = useMemo<ChatContextValue>(() => ({
-    messages, streamingText, thinkingText, isQuerying, activeToolCalls, toolProgress, streamNotices, usage,
+    messages, streamingText, thinkingText, isQuerying, activeToolCalls, toolProgress, streamNotices, usage, runProcess,
     sendMessage, cancelQuery,
     promptQueue: promptQueues[visibleKey] ?? [],
-    enqueuePrompt, dequeuePrompt, removeQueuedPrompt,
+    enqueuePrompt, dequeuePrompt, removeQueuedPrompt, moveQueuedPrompt,
     contextPanelOpen, toggleContextPanel, setContextPanelOpen: updateContextPanelOpen,
     checkpoints, rewindSession: rewindSessionAction, compactSession: compactSessionAction,
     feedback, recordFeedback: recordFeedbackAction,
-  }), [messages, streamingText, thinkingText, isQuerying, activeToolCalls, toolProgress, streamNotices, usage, sendMessage, cancelQuery,
-    promptQueues, visibleKey, enqueuePrompt, dequeuePrompt, removeQueuedPrompt,
+  }), [messages, streamingText, thinkingText, isQuerying, activeToolCalls, toolProgress, streamNotices, usage, runProcess, sendMessage, cancelQuery,
+    promptQueues, visibleKey, enqueuePrompt, dequeuePrompt, removeQueuedPrompt, moveQueuedPrompt,
     contextPanelOpen, toggleContextPanel, updateContextPanelOpen, checkpoints, rewindSessionAction, compactSessionAction, feedback, recordFeedbackAction])
 
   const sessionValue = useMemo<SessionContextValue>(() => ({

@@ -6,11 +6,15 @@
 // demoConfig, and `get_status` mirrors it — so a successful commit is
 // visible in both selectors.
 //
-// UI notes (模型名去重 / audit D8):
+// UI notes (模型名去重 / audit D8 / GB round-1 R3):
 //  - the composer placeholder is context-aware, so waits target the
 //    textarea's stable aria-label ("Message") instead of placeholder text;
 //  - reasoning effort is FOLDED into the model chip's dropdown as a
 //    namespaced section — there is no separate Reasoning combobox;
+//  - the permission dropdown offers the FOUR shared tiers
+//    (Strict/Balanced/Permissive/Full) — `plan` is owned by the composer's
+//    plan toggle and `confirm` is an out-of-table engine value, so neither
+//    is a dropdown option;
 //  - the Header model selector is hidden on /chat (the composer chip is the
 //    single surface there), so chip→header sync is verified cross-page.
 import { test, expect } from '@playwright/test'
@@ -23,9 +27,12 @@ test.describe('Select interactions', () => {
 
     const trigger = page.getByRole('combobox', { name: 'Permission mode' })
     await trigger.click()
-    await page.getByRole('option', { name: 'Plan' }).click()
-    // The selected item's label renders lowercase ('plan') — case-insensitive.
-    await expect(trigger).toContainText(/plan/i, { timeout: 10000 })
+    // GB round-1 R3: the shared four-tier table (the demo mock's legacy
+    // 'standard' value shows as the raw readout with nothing selected).
+    // Permissive writes `auto_edit` — a REAL state change the demo
+    // configure persists.
+    await page.getByRole('option', { name: 'Permissive' }).click()
+    await expect(trigger).toContainText(/permissive/i, { timeout: 10000 })
   })
 
   test('reasoning effort commits from the model chip dropdown', async ({ page }) => {

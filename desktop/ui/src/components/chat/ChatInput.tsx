@@ -1,4 +1,4 @@
-import { useState, useRef, useEffect, useLayoutEffect, useId, useCallback } from 'react'
+import { useState, useRef, useEffect, useLayoutEffect, useId, useCallback, useMemo } from 'react'
 import { useIntl } from 'react-intl'
 import { useNavigate } from 'react-router-dom'
 import { open } from '@tauri-apps/plugin-dialog'
@@ -16,12 +16,21 @@ import PptOutlineDialog from '@/components/chat/PptOutlineDialog'
 import { useComposerDraftListener } from '@/lib/composerBridge'
 import { isSlashQuery, type SlashCommand } from '@/lib/slash/commands'
 import { fetchSlashSkills, mergeSlashMenu, type SlashMenuItem, type SlashSkillEntry } from '@/lib/slash/skills'
+import {
+  activeMentionQuery,
+  caretAfterMentionInsert,
+  filterMentionCandidates,
+  flattenFileTree,
+  insertMention,
+  relativeToWorkingDir,
+} from '@/lib/fileMention'
 import { imageFilesFromClipboard, blobToBase64, PASTE_IMAGE_MIME_TO_EXT, MAX_PASTED_IMAGE_BYTES } from '@/lib/pasteImage'
 import * as api from '@/lib/tauri-api'
 import type { RejectedAttachmentReason, AttachmentExtractionReport } from '@/types'
 import { toastError } from '@/lib/errorToast'
 import { cn } from '@/lib/utils'
 import { modelPickerMeta } from '@/components/settings/models-settings/types'
+import { APPROVAL_MODES, approvalModeOption } from '@/lib/approvalModes'
 
 const IMAGE_EXTENSIONS = new Set(['png', 'jpg', 'jpeg', 'gif', 'webp', 'bmp', 'svg'])
 
@@ -75,6 +84,9 @@ interface ChatInputProps {
    *  stop/send swap and the Escape-cancels-run affordance. */
   isQuerying: boolean
   onCancelQuery: () => void
+  /** GB P2-10a: the interrupt-now send (bolt button / Ctrl+Enter while
+   *  streaming). Enter keeps queueing; absent → Enter/Ctrl+Enter both send. */
+  onSteer?: () => void
   /** B1 §4-8: present only while a message edit is in flight — Escape
    *  cancels the edit (restores the pre-edit draft) instead. */
   onCancelEdit?: () => void
@@ -112,6 +124,7 @@ export default function ChatInput({
   onCancelEdit,
   onOpenQuickFix,
   onOpenEditor,
+  onSteer,
   sessionWorkingDir,
   usageTick,
   sessionId,
@@ -130,6 +143,8 @@ export default function ChatInput({
   // the slash listbox via aria-controls/aria-activedescendant.
   const slashListboxId = useId()
   const slashOptionId = (name: string) => `${slashListboxId}-opt-${name}`
+  // GB P2-10b: the @-mention listbox gets its own namespace of ids.
+  const mentionListboxId = useId()
 
   // Slash-command autocomplete: open while the input is a single `/token`.
   // Escape hides it until the query changes again; a space or newline closes
@@ -156,6 +171,44 @@ export default function ChatInput({
     slashQuery && !slashDismissed ? mergeSlashMenu(skills, slashQuery) : []
   const slashMatches = slashItems
   const slashOpen = slashMatches.length > 0
+
+  // GB P2-10b — @ file reference. The candidate universe loads once per
+  // working dir: the working-dir tree (backend-bounded walk) plus the
+  // session file index (attachments/favorites). Both fail soft — the menu
+  // just stays empty, never breaks the composer.
+  const [mentionCandidates, setMentionCandidates] = useState<string[]>([])
+  useEffect(() => {
+    let cancelled = false
+    const tree: Promise<string[]> = sessionWorkingDir
+      ? api.getFileTree(sessionWorkingDir).then(nodes => flattenFileTree(nodes)).catch(() => [])
+      : Promise.resolve([])
+    const index: Promise<string[]> = api.listFileIndex()
+      .then(rows => rows.map(r => r.path).filter((p): p is string => typeof p === 'string'))
+      .catch(() => [])
+    Promise.all([tree, index]).then(([treePaths, indexPaths]) => {
+      if (cancelled) return
+      setMentionCandidates([...new Set([...treePaths, ...indexPaths])])
+    })
+    return () => { cancelled = true }
+  }, [sessionWorkingDir])
+
+  // The live `@query` — detected in the text BEFORE the caret (tracked on
+  // every change/keyup/select so a mid-text mention works). Slash queries
+  // and mentions are mutually exclusive by construction (`/^\/token$/` vs
+  // whitespace-anchored `@token`).
+  const caretRef = useRef(value.length)
+  const mentionQuery = useMemo(
+    () => activeMentionQuery(value.slice(0, caretRef.current)),
+    [value],
+  )
+  const [mentionDismissed, setMentionDismissed] = useState(false)
+  const [mentionActive, setMentionActive] = useState(0)
+  const mentionMatches = mentionQuery && !mentionDismissed
+    ? filterMentionCandidates(mentionCandidates, mentionQuery.token)
+    : []
+  const trackCaret = (el: HTMLTextAreaElement) => {
+    caretRef.current = el.selectionStart ?? el.value.length
+  }
 
   // Office Wave 1 A1a — honest notice while an unparseable attachment
   // (.doc/.xls/… legacy format) rides along. Dismissible, but re-arming:
@@ -205,8 +258,35 @@ export default function ChatInput({
 
   useEffect(() => {
     setSlashActive(0)
+    setMentionActive(0)
     if (!isSlashQuery(value)) setSlashDismissed(false)
+    // Mention dismissal re-arms when the query dissolves (whitespace after
+    // the token) — same protocol as the slash menu: Escape holds the menu
+    // closed for the query it dismissed, a NEW @query opens fresh.
+    if (!activeMentionQuery(value.slice(0, caretRef.current))) setMentionDismissed(false)
+    // External value writes (draft push, skill/slash fill) move the caret to
+    // the end — keep the mention detector's caret from going stale.
+    if (document.activeElement !== textareaRef.current) caretRef.current = value.length
   }, [value])
+
+  /** GB P2-10b: replace the live `@query` with the picked path (plain text,
+   *  TUI-style reference — no attachment semantics). */
+  const commitMention = (path: string) => {
+    if (!mentionQuery) return
+    const next = insertMention(value, mentionQuery, path, sessionWorkingDir)
+    const caret = caretAfterMentionInsert(mentionQuery, path, sessionWorkingDir)
+    caretRef.current = caret
+    onChange(next)
+    // Dismiss for THIS query; re-arms automatically once the text stops
+    // matching (same protocol as the slash menu).
+    setMentionDismissed(true)
+    requestAnimationFrame(() => {
+      const el = textareaRef.current
+      if (!el) return
+      el.focus()
+      el.setSelectionRange(caret, caret)
+    })
+  }
 
   const executeSlash = (cmd: SlashCommand) => {
     onChange('')
@@ -511,6 +591,27 @@ export default function ChatInput({
       if (e.key === 'Enter' || e.key === 'Tab') e.preventDefault()
       return
     }
+    // GB P2-10b: the @-mention menu captures the navigation keys while open
+    // (checked before the slash menu — the two never match simultaneously).
+    if (mentionMatches.length > 0) {
+      if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
+        e.preventDefault()
+        const delta = e.key === 'ArrowDown' ? 1 : -1
+        setMentionActive(i => (i + delta + mentionMatches.length) % mentionMatches.length)
+        return
+      }
+      if (e.key === 'Enter' || e.key === 'Tab') {
+        e.preventDefault()
+        const picked = mentionMatches[mentionActive] ?? mentionMatches[0]
+        if (picked) commitMention(picked)
+        return
+      }
+      if (e.key === 'Escape') {
+        e.preventDefault()
+        setMentionDismissed(true)
+        return
+      }
+    }
     // Slash menu captures the navigation keys while it is open.
     if (slashMatches.length > 0) {
       if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
@@ -534,14 +635,17 @@ export default function ChatInput({
         return
       }
     }
-    // Enter -> send; Shift/Ctrl+Enter -> newline. Matches VS Code's
-    // Ctrl+Enter convention; preserves the legacy Enter-to-send UX.
+    // Enter -> send (while streaming: queue, GB P2-10a); Shift+Enter ->
+    // newline; Ctrl/Cmd+Enter -> send — or, while streaming, the IMMEDIATE
+    // steer tier (interrupt now). Matches VS Code's Ctrl+Enter convention;
+    // preserves the legacy Enter-to-send UX.
     if (e.key === 'Enter' && !e.shiftKey && !(e.ctrlKey || e.metaKey)) {
       e.preventDefault()
       onSend()
     } else if (e.key === 'Enter' && (e.ctrlKey || e.metaKey) && !e.shiftKey) {
       e.preventDefault()
-      onSend()
+      if (isQuerying && onSteer) onSteer()
+      else onSend()
     }
     // Escape priority: exit message edit > cancel the running query.
     if (e.key === 'Escape') {
@@ -576,6 +680,10 @@ export default function ChatInput({
 
   const currentMode = config?.approval_mode || 'suggest'
   const planModeActive = currentMode === 'plan'
+  // GB P2-4: the pill reads the SHARED five-tier table (same source as
+  // Settings → General). Values outside the table (engine-only aliases)
+  // render honestly via the fallback instead of masquerading as Suggest.
+  const selectedMode = approvalModeOption(currentMode)
 
   // The composer owns ONE mode surface (the unified pill below); the
   // keyboard shortcut and the plan banner's exit button both funnel here.
@@ -635,16 +743,6 @@ export default function ChatInput({
     autosizeTextarea()
   }, [value, autosizeTextarea])
 
-  const modeOptions = [
-    { value: 'readonly', label: t('chat.input.mode.readonly'), desc: t('chat.input.mode.readonly.desc'), icon: 'lock', color: 'border-success/50' },
-    { value: 'plan', label: t('chat.input.mode.plan'), desc: t('chat.input.mode.plan.desc'), icon: 'description', color: 'border-success/50' },
-    { value: 'suggest', label: t('chat.input.mode.suggest'), desc: t('chat.input.mode.suggest.desc'), icon: 'shield', color: 'border-warning/50' },
-    { value: 'auto', label: t('chat.input.mode.auto'), desc: t('chat.input.mode.auto.desc'), icon: 'flash_auto', color: 'border-warning/50' },
-    { value: 'full_auto', label: t('chat.input.mode.full_auto'), desc: t('chat.input.mode.full_auto.desc'), icon: 'bolt', color: 'border-error/50' },
-  ]
-
-  const selectedMode = modeOptions.find(m => m.value === currentMode) || modeOptions[2]
-
   /* "+" menu — attachments and the two inline tools, one click each. */
   const [plusOpen, setPlusOpen] = useState(false)
   // B2 v1: "Build a presentation" — outline confirmation dialog. Generate
@@ -685,6 +783,10 @@ export default function ChatInput({
   const charCount = value.length
   const showCharCount = charCount >= CHAR_SHOW_AT
   const isOverSoftWarn = charCount >= CHAR_SOFT_WARN_AT
+
+  // GB P2-10a: same gate as the idle send button — the queue/steer buttons
+  // only appear when there is something to deliver.
+  const hasSteerableContent = value.trim().length > 0 || attachedFiles.length > 0
 
   return (
     <div
@@ -764,6 +866,56 @@ export default function ChatInput({
                     : slashMatches[slashActive].skill.trigger
                   : '',
             },
+          )}
+        </span>
+      )}
+
+      {/* GB P2-10b — @ file-reference popover. Same shape and protocol as
+          the slash menu: keyboard-first listbox, Escape dismisses until the
+          query changes, selection inserts plain text. */}
+      {mentionMatches.length > 0 && (
+        <div
+          id={`${mentionListboxId}`}
+          role="listbox"
+          aria-label={t('chat.input.mention.menu.aria')}
+          className="absolute left-0 right-0 bottom-full mb-sm z-modal rounded-2xl border border-outline-variant/30 bg-surface-container-low shadow-e3 overflow-hidden"
+        >
+          <ul className="max-h-64 overflow-y-auto py-xs">
+            {mentionMatches.map((path, i) => (
+              <li key={path}>
+                <button
+                  type="button"
+                  role="option"
+                  id={`${mentionListboxId}-opt-${i}`}
+                  aria-selected={i === mentionActive}
+                  onMouseDown={e => {
+                    e.preventDefault()
+                    commitMention(path)
+                  }}
+                  onMouseEnter={() => setMentionActive(i)}
+                  className={cn(
+                    'w-full flex items-center gap-sm px-md py-xs text-left cursor-pointer transition-colors',
+                    i === mentionActive ? 'bg-surface-container-high' : 'hover:bg-surface-container',
+                  )}
+                >
+                  <span className="material-symbols-outlined icon-sm text-primary shrink-0">description</span>
+                  <span className="font-mono text-label-md text-on-surface truncate flex-1" title={path}>
+                    {relativeToWorkingDir(path, sessionWorkingDir)}
+                  </span>
+                </button>
+              </li>
+            ))}
+          </ul>
+          <div className="px-md py-xs border-t border-outline-variant/20 text-label-xs text-on-surface-variant">
+            {t('chat.input.mention.hint')}
+          </div>
+        </div>
+      )}
+      {mentionMatches.length > 0 && (
+        <span role="status" className="sr-only">
+          {intl.formatMessage(
+            { id: 'chat.input.mention.status' },
+            { count: mentionMatches.length, current: mentionMatches[mentionActive] ?? '' },
           )}
         </span>
       )}
@@ -898,7 +1050,13 @@ export default function ChatInput({
             }
             aria-label={t('chat.input.ariaLabel')}
             value={value}
-            onChange={e => onChange(e.target.value)}
+            onChange={e => {
+              trackCaret(e.currentTarget)
+              onChange(e.target.value)
+            }}
+            onKeyUp={e => trackCaret(e.currentTarget)}
+            onClick={e => trackCaret(e.currentTarget)}
+            onSelect={e => trackCaret(e.currentTarget)}
             onKeyDown={handleKeyDown}
             onPaste={handlePaste}
             onCompositionStart={() => {
@@ -946,34 +1104,43 @@ export default function ChatInput({
               )}
             </span>
 
-            <Select value={currentMode} onValueChange={handleModeChange}>
+            <Select value={selectedMode.value} onValueChange={handleModeChange}>
               <SelectTrigger
                 size="sm"
                 aria-label={t('chat.input.mode.label')}
-                title={selectedMode.desc}
-                className={cn('rounded-full border', selectedMode.color, 'bg-transparent hover:bg-surface-container-low/50 transition-colors')}
+                title={`${selectedMode.rawLabel ? selectedMode.rawLabel : t(selectedMode.descriptionKey)} · ${t('chat.input.mode.highRiskNote')}`}
+                className={cn('rounded-full border', selectedMode.tone, 'bg-transparent hover:bg-surface-container-low/50 transition-colors')}
               >
                 <span className="material-symbols-outlined icon-sm">{selectedMode.icon}</span>
                 {/* Render the matched mode's local label, not the raw value
-                    — an unknown approval_mode (e.g. legacy 'standard') now
-                    falls back to the Suggest label instead of bleeding into
-                    the pill chrome. */}
+                    — an unknown approval_mode (e.g. a CLI-only alias) shows
+                    verbatim via rawLabel instead of bleeding into the pill
+                    chrome as a translated label it doesn't have. */}
                 <SelectValue placeholder={t('chat.input.mode.label')}>
-                  {() => <span className="truncate">{selectedMode.label}</span>}
+                  {() => <span className="truncate">{selectedMode.rawLabel ?? t(selectedMode.labelKey)}</span>}
                 </SelectValue>
               </SelectTrigger>
               <SelectContent>
-                {modeOptions.map(mode => (
+                {APPROVAL_MODES.map(mode => (
                   <SelectItem key={mode.value} value={mode.value}>
                     <div className="flex items-start gap-xs py-0.5">
                       <span className="material-symbols-outlined icon-sm mt-0.5" aria-hidden="true">{mode.icon}</span>
                       <span className="min-w-0">
-                        <span className="block font-label-md text-on-surface whitespace-nowrap">{mode.label}</span>
-                        <span className="block font-label-xs text-on-surface-variant whitespace-normal">{mode.desc}</span>
+                        <span className="block font-label-md text-on-surface whitespace-nowrap">{t(mode.labelKey)}</span>
+                        <span className="block font-label-xs text-on-surface-variant whitespace-normal">{t(mode.descriptionKey)}</span>
                       </span>
                     </div>
                   </SelectItem>
                 ))}
+                {/* GB P2-4: the danger note travels with the switcher — the
+                    tier only moves the auto-approve baseline; High-risk
+                    actions keep their confirmation prompt regardless. */}
+                <div
+                  role="note"
+                  className="mx-sm my-xs border-t border-outline-variant/20 pt-xs font-label-xs text-on-surface-variant whitespace-normal"
+                >
+                  {t('chat.input.mode.highRiskNote')}
+                </div>
               </SelectContent>
             </Select>
 
@@ -1149,13 +1316,43 @@ export default function ChatInput({
             )}
 
             {isQuerying ? (
-              <Button
-                aria-label={t('chat.input.stop.aria')}
-                className="bg-error/80 text-on-error p-3 rounded-xl active:scale-95 transition-all"
-                onClick={onCancelQuery}
-              >
-                <span className="material-symbols-outlined icon-md">stop</span>
-              </Button>
+              <>
+                {/* GB P2-10a: while streaming the send slot becomes the
+                    QUEUE button (Enter does the same) — the label says the
+                    message goes out after the current turn ends. Only shown
+                    when there is something to queue. */}
+                {hasSteerableContent && (
+                  <Button
+                    aria-label={t('chat.input.queue.aria')}
+                    title={t('chat.input.queue.title')}
+                    className="bg-primary text-on-primary p-3 rounded-xl active:scale-95 hover:shadow-e2 transition-all"
+                    onClick={onSend}
+                  >
+                    <span className="material-symbols-outlined icon-md">low_priority</span>
+                  </Button>
+                )}
+                {hasSteerableContent && onSteer && (
+                  // The second tier: interrupt the running turn and deliver
+                  // now (also Ctrl/Cmd+Enter). Secondary styling — queueing
+                  // stays the default path.
+                  <Button
+                    variant="outline"
+                    aria-label={t('chat.input.steer.aria')}
+                    title={t('chat.input.steer.title')}
+                    className="p-3 rounded-xl active:scale-95 transition-all text-primary border-primary/40 hover:bg-primary/10"
+                    onClick={onSteer}
+                  >
+                    <span className="material-symbols-outlined icon-md">bolt</span>
+                  </Button>
+                )}
+                <Button
+                  aria-label={t('chat.input.stop.aria')}
+                  className="bg-error/80 text-on-error p-3 rounded-xl active:scale-95 transition-all"
+                  onClick={onCancelQuery}
+                >
+                  <span className="material-symbols-outlined icon-md">stop</span>
+                </Button>
+              </>
             ) : (
               <Button
                 aria-label={t('chat.input.send.aria')}

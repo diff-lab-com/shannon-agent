@@ -380,8 +380,9 @@ describe('ChatInput', () => {
     expect(modeSelect).toBeInTheDocument()
     // The trigger renders the selected item's label via Select.Value (plus
     // the option's icon ligature text). Case-insensitive: the ligature/icon
-    // rendering differs between jsdom environments.
-    expect(modeSelect).toHaveTextContent(/suggest/i)
+    // rendering differs between jsdom environments. Round-1 R3: suggest is
+    // the Balanced tier of the shared four-tier table.
+    expect(modeSelect).toHaveTextContent(/balanced/i)
   })
 
   it('shows correct icons for querying states', () => {
@@ -411,7 +412,7 @@ describe('ChatInput', () => {
 
     // B1 §4-9 — the textarea is no longer disabled while streaming; the
     // placeholder advertises queueing instead of a hard block.
-    const textarea = screen.getByPlaceholderText('Reply generating — press Enter to queue your message')
+    const textarea = screen.getByPlaceholderText(/Reply generating — press Enter to queue/)
     expect(textarea).toBeInTheDocument()
     expect(textarea).not.toBeDisabled()
   })

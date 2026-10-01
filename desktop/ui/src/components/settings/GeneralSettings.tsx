@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react'
+import { useState } from 'react'
 import { Spinner } from '@/components/ui/loading-state'
 import { useNavigate } from 'react-router-dom'
 import { toast } from 'sonner'
@@ -13,21 +13,18 @@ import { readDensityPref, setDensityPref, type DensityPref } from '@/lib/density
 import { getLinkTarget, setLinkTarget as setLinkTargetPref, type LinkTarget } from '@/lib/openLink'
 import { Switch } from '@/components/ui/switch'
 import { useArtifact } from '@/components/artifact/ArtifactContext'
-import type { ApprovalMode } from '@/types'
+import { APPROVAL_MODES, approvalModeOption } from '@/lib/approvalModes'
 import { WELCOME_SEEN_KEY } from '@/pages/Welcome'
 import MigrationWizard from '@/components/migration/MigrationWizard'
 import PersonaPackSettings from './PersonaPackSettings'
 import { FeedbackSummaryCard } from './FeedbackSummaryCard'
 
-type ApprovalModeKey = ApprovalMode
-
-const APPROVAL_MODE_KEYS: { value: ApprovalModeKey; labelKey: string; descriptionKey: string }[] = [
-  { value: 'suggest', labelKey: 'settings.general.approvalMode.suggest.label', descriptionKey: 'settings.general.approvalMode.suggest.description' },
-  { value: 'confirm', labelKey: 'settings.general.approvalMode.confirm.label', descriptionKey: 'settings.general.approvalMode.confirm.description' },
-  { value: 'plan', labelKey: 'settings.general.approvalMode.plan.label', descriptionKey: 'settings.general.approvalMode.plan.description' },
-  { value: 'auto_edit', labelKey: 'settings.general.approvalMode.autoEdit.label', descriptionKey: 'settings.general.approvalMode.autoEdit.description' },
-  { value: 'full_auto', labelKey: 'settings.general.approvalMode.fullAuto.label', descriptionKey: 'settings.general.approvalMode.fullAuto.description' },
-]
+// GB P2-4: the tiers come from the SHARED table (lib/approvalModes) — the
+// same values, labels and descriptions the composer's quick switcher
+// renders, over the same `approval_mode` config key. Round-2: the READ also
+// goes through the shared resolver (approvalModeOption), so out-of-table
+// engine values like the factory default "confirm" show the raw value with
+// no tier selected instead of masquerading as a pickable tier.
 
 export default function GeneralSettings() {
   const { config, providerStatus, refreshConfig } = useCatalog()
@@ -60,7 +57,6 @@ export default function GeneralSettings() {
     setLinkTargetPref(next)
   }
   const { locale, setLocale } = useI18n()
-  const [approvalMode, setApprovalMode] = useState<number>(2) // default to "plan"
   const [saving, setSaving] = useState(false)
   // P1-6 — migration wizard (import from Claude Code / ZCode).
   const [migrationOpen, setMigrationOpen] = useState(false)
@@ -75,27 +71,31 @@ export default function GeneralSettings() {
     toast.success(intl.formatMessage({ id: 'settings.language.label' }))
   }
 
-  useEffect(() => {
-    if (config?.approval_mode) {
-      const idx = APPROVAL_MODE_KEYS.findIndex(m => m.value === config.approval_mode)
-      if (idx >= 0) setApprovalMode(idx)
-    }
-  }, [config])
+  // Round-2 review: the read side goes through the SAME honest resolver the
+  // composer pill uses. The factory default is `confirm` — an engine alias
+  // of suggest (R3) the four-tier table deliberately does not list — and the
+  // old index-based read (findIndex miss → stale `useState(2)` default)
+  // showed Permissive: a LOOSER tier than the engine's actual
+  // ask-per-action, contradicting the composer's raw "confirm" readout.
+  // Derived state instead: in-table values select their radio; out-of-table
+  // values select NOTHING and name the raw engine value.
+  const currentMode = approvalModeOption(config?.approval_mode)
+  const selectedIndex = currentMode.rawLabel == null
+    ? APPROVAL_MODES.findIndex(m => m.value === currentMode.value)
+    : -1
 
-  const handleModeChange = async (idx: number) => {
+  const handleModeChange = async (option: (typeof APPROVAL_MODES)[number]) => {
     setSaving(true)
     try {
-      await api.configure({ key: 'approval_mode', value: APPROVAL_MODE_KEYS[idx].value })
+      await api.configure({ key: 'approval_mode', value: option.value })
       await refreshConfig()
-      // Approval mode is a safety switch — the UI only moves after the
-      // write has actually landed (P1-10: no optimistic update here).
-      setApprovalMode(idx)
-      toast.success(intl.formatMessage({ id: 'settings.general.approvalMode.updated' }, { label: t(APPROVAL_MODE_KEYS[idx].labelKey) }))
+      // Approval mode is a safety switch — the read above re-derives from
+      // config once the write has actually landed (P1-10: no optimistic
+      // update here, and no separate selection state to go stale).
+      toast.success(intl.formatMessage({ id: 'settings.general.approvalMode.updated' }, { label: t(option.labelKey) }))
     } catch (e) { toastError(t('settings.general.approvalMode.updateFailed'), e) }
     setSaving(false)
   }
-
-  const currentMode = APPROVAL_MODE_KEYS[approvalMode]
 
   return (
     <div className="max-w-narrow">
@@ -111,27 +111,28 @@ export default function GeneralSettings() {
           </div>
           <p className="font-body-sm text-on-surface-variant mb-xl">
             {intl.formatMessage({ id: 'settings.general.approvalMode.current' }, {
-              label: t(currentMode.labelKey),
+              label: currentMode.rawLabel ?? t(currentMode.labelKey),
               description: t(currentMode.descriptionKey),
             })}
           </p>
           {/* Segmented control replaces the old range slider whose 5 label
               columns overlapped at common widths (audit P0 §3.10). Equal
               flex segments carry the short label only; the selected mode's
-              description moves to a single helper line below. */}
+              description moves to a single helper line below. An out-of-table
+              engine value (confirm / dont_ask / …) selects NO segment. */}
           <div role="radiogroup" aria-label={intl.formatMessage({ id: 'settings.general.approvalMode.sliderAria' })}>
             <div className="flex rounded-xl bg-surface-container-low p-xs gap-xs border border-outline-variant/30">
-              {APPROVAL_MODE_KEYS.map((m, i) => (
+              {APPROVAL_MODES.map((m, i) => (
                 <button
                   key={m.value}
                   type="button"
                   role="radio"
-                  aria-checked={i === approvalMode}
-                  onClick={() => handleModeChange(i)}
+                  aria-checked={i === selectedIndex}
+                  onClick={() => handleModeChange(m)}
                   className={cn(
                     'flex-1 min-w-0 px-xs py-sm rounded-lg font-label-md text-center cursor-pointer transition-all duration-(--duration-normal)',
                     'focus-visible:outline focus-visible:outline-2 focus-visible:outline-primary',
-                    i === approvalMode
+                    i === selectedIndex
                       ? 'bg-primary text-on-primary font-bold shadow-e1'
                       : 'text-on-surface-variant hover:text-primary hover:bg-surface-container-high',
                   )}
@@ -140,8 +141,26 @@ export default function GeneralSettings() {
                 </button>
               ))}
             </div>
-            <p className="font-body-sm text-on-surface-variant mt-sm px-xs">
-              {t(currentMode.descriptionKey)}
+            {currentMode.rawLabel != null ? (
+              // Out-of-table engine value: say what it is instead of pasting
+              // a tier description that doesn't apply.
+              <p
+                className="font-body-sm text-on-surface-variant mt-sm px-xs"
+                data-testid="approval-mode-raw-hint"
+              >
+                {intl.formatMessage({ id: 'settings.general.approvalMode.rawHint' }, { value: currentMode.rawLabel })}
+              </p>
+            ) : (
+              <p className="font-body-sm text-on-surface-variant mt-sm px-xs">
+                {t(currentMode.descriptionKey)}
+              </p>
+            )}
+            {/* GB P2-4: the tier only moves the auto-approve baseline —
+                High-risk actions keep their confirmation prompt regardless
+                (same note the composer's switcher carries). */}
+            <p className="font-body-xs text-on-surface-variant/80 mt-xs px-xs flex items-start gap-xs">
+              <span className="material-symbols-outlined icon-sm shrink-0 mt-[2px]" aria-hidden="true">gpp_maybe</span>
+              {t('chat.input.mode.highRiskNote')}
             </p>
           </div>
         </section>
