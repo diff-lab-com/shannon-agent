@@ -1325,7 +1325,7 @@ export default function ChatInput({
                   <Button
                     aria-label={t('chat.input.queue.aria')}
                     title={t('chat.input.queue.title')}
-                    className="bg-primary text-on-primary p-3 rounded-xl active:scale-95 hover:shadow-md hover:shadow-primary/30 transition-all"
+                    className="bg-primary text-on-primary p-3 rounded-xl active:scale-95 hover:shadow-e2 transition-all"
                     onClick={onSend}
                   >
                     <span className="material-symbols-outlined icon-md">low_priority</span>

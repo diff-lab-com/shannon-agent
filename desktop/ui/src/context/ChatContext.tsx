@@ -13,6 +13,7 @@
 
 import { createContext, useContext, type ReactNode } from 'react'
 import type { CheckpointInfo, CompactSessionResult, FeedbackRating } from '@/lib/tauri-api'
+import type { RunProcessState } from '@/lib/runProcess'
 import type { ChatMessage, ToolCall, UsagePayload } from '@/types'
 
 /** B1 §4-9: a prompt held back while its session was still streaming. */
@@ -67,6 +68,14 @@ export interface ChatContextValue {
    */
   streamNotices: StreamNotice[]
   usage: UsagePayload | null
+  /**
+   * GB P2-3: 「过程四要素」 aggregation of the visible session's current/most
+   * recent run (summary line, @refs/attachments/tool-read sources, produced
+   * files, plan is fetched by the panel). Pure-event-stream derived —
+   * see lib/runProcess. `status !== 'idle'` is what makes the dock's 运行
+   * tab appear; content survives until the session's next send.
+   */
+  runProcess: RunProcessState
   /**
    * `options.budgetBypass` is the "continue (ignore once)" choice from the
    * budget-exceeded banner — it exempts exactly that send's pre-turn

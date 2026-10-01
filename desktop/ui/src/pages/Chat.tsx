@@ -96,7 +96,7 @@ export default function Chat() {
   const {
     messages, streamingText, isQuerying, usage, activeToolCalls,
     sendMessage, cancelQuery, contextPanelOpen, setContextPanelOpen, compactSession,
-    promptQueue, dequeuePrompt, enqueuePrompt, rewindSession, checkpoints,
+    promptQueue, dequeuePrompt, enqueuePrompt, rewindSession, checkpoints, runProcess,
   } = useChat()
   const { sessions, currentSessionId, windowSessionId, createSession } = useSessions()
   const { config, providerStatus } = useCatalog()
@@ -678,6 +678,7 @@ export default function Chat() {
             planModeActive={config?.approval_mode === 'plan'}
             diffPath={diffPath}
             onCloseDiff={() => setDiffPath(null)}
+            runProcess={runProcess}
           />
           <DiffDialogMulti open={diffPaths !== null} filePaths={diffPaths ?? []} onClose={() => setDiffPaths(null)} />
 
