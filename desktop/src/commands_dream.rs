@@ -3463,7 +3463,7 @@ mod tests {
         let sessions = tempdir().unwrap();
         let dreams = tempdir().unwrap();
 
-        let plain = write_recent_session(sessions.path(), "regular: deploy the service");
+        let _plain = write_recent_session(sessions.path(), "regular: deploy the service");
         let bypassed = write_recent_session(sessions.path(), "secret: my api_key: sk-42");
 
         let prompts: Arc<std::sync::Mutex<Vec<String>>> = Arc::default();
