@@ -1,20 +1,33 @@
-// approvalModes — GB P2-4: the single source for the five approval tiers.
+// approvalModes — GB P2-4: the single source for the approval tiers.
 //
 // The composer's quick switcher and Settings → General's segmented control
 // used to carry two DIFFERENT five-value tables over the same
 // `approval_mode` config key (composer: readonly/plan/suggest/auto/full_auto;
 // settings: suggest/confirm/plan/auto_edit/full_auto) — two controls that
-// never agreed on what the five tiers are. Both now render this one table,
-// so a tier picked in either surface is the same tier the other one shows
+// never agreed on what the tiers are. Both now render this one table, so a
+// tier picked in either surface is the same tier the other one shows
 // (「解锁式」语义: Settings keeps the full descriptions, the composer is the
 // fast switcher; the storage — config `approval_mode` — never changed).
 //
-// The engine still accepts the wider alias set (crates/shannon-engine
-// permissions.rs `ApprovalMode::from_str_ci`; desktop/src/commands.rs maps
-// legacy names like "confirm" → Suggest), and a mode that was set OUTSIDE
-// these five (e.g. `readonly` via a permission profile, or an engine-only
-// alias) still renders honestly in the composer via `approvalModeOption`'s
-// fallbacks — it is just not offered for quick-pick, per the five-tier spec.
+// Round-1 review (controller ruling R3): the table is FOUR tiers, named by
+// REAL engine semantics. The old settings-page pair suggest/confirm was a
+// no-op — the engine maps `"confirm" => ApprovalMode::Suggest`
+// (desktop/src/commands.rs), so switching between the two changed nothing.
+// The four tiers below are four DISTINCT engine behaviors:
+//
+//   strict     → `readonly`   (nothing is ever modified)
+//   balanced   → `suggest`    (asks before every action)
+//   permissive → `auto_edit`  (file edits auto-approved, commands ask;
+//                               the engine's "auto" alias)
+//   full       → `full_auto`  (approves everything except critical)
+//
+// Engine-only values outside the table — `confirm` (≡ suggest, kept for
+// config compat and surfaced via the honest raw-value fallback), `plan`
+// (own composer toggle), `auto` (alias of auto_edit), dont_ask /
+// bypass_permissions / plan_ro — still render truthfully via
+// `approvalModeOption`'s fallbacks; they are just not offered for
+// quick-pick. Distinguishing confirm from suggest engine-side stays on the
+// backlog (not a UI fix).
 
 import type { ApprovalMode } from '@/types'
 
@@ -34,75 +47,66 @@ export interface ApprovalModeOption {
 }
 
 /**
- * The five quick-switch tiers — deliberately the SAME values, labels and
- * descriptions Settings → General has always shown (「General 页那 5 档」).
- * Order runs from most to least supervised.
+ * The four quick-switch tiers — deliberately the SAME values, labels and
+ * descriptions Settings → General shows (one shared table), ordered from
+ * most to least supervised. Each maps to a distinct engine approval
+ * behavior, so switching always changes something.
  */
 export const APPROVAL_MODES: readonly ApprovalModeOption[] = [
   {
+    value: 'readonly',
+    labelKey: 'settings.general.approvalMode.strict.label',
+    descriptionKey: 'settings.general.approvalMode.strict.description',
+    icon: 'lock',
+    tone: 'border-success/50',
+  },
+  {
     value: 'suggest',
-    labelKey: 'settings.general.approvalMode.suggest.label',
-    descriptionKey: 'settings.general.approvalMode.suggest.description',
+    labelKey: 'settings.general.approvalMode.balanced.label',
+    descriptionKey: 'settings.general.approvalMode.balanced.description',
     icon: 'shield',
     tone: 'border-warning/50',
   },
   {
-    value: 'confirm',
-    labelKey: 'settings.general.approvalMode.confirm.label',
-    descriptionKey: 'settings.general.approvalMode.confirm.description',
-    icon: 'verified_user',
-    tone: 'border-warning/50',
-  },
-  {
-    value: 'plan',
-    labelKey: 'settings.general.approvalMode.plan.label',
-    descriptionKey: 'settings.general.approvalMode.plan.description',
-    icon: 'description',
-    tone: 'border-success/50',
-  },
-  {
     value: 'auto_edit',
-    labelKey: 'settings.general.approvalMode.autoEdit.label',
-    descriptionKey: 'settings.general.approvalMode.autoEdit.description',
+    labelKey: 'settings.general.approvalMode.permissive.label',
+    descriptionKey: 'settings.general.approvalMode.permissive.description',
     icon: 'flash_auto',
     tone: 'border-warning/50',
   },
   {
     value: 'full_auto',
-    labelKey: 'settings.general.approvalMode.fullAuto.label',
-    descriptionKey: 'settings.general.approvalMode.fullAuto.description',
+    labelKey: 'settings.general.approvalMode.full.label',
+    descriptionKey: 'settings.general.approvalMode.full.description',
     icon: 'bolt',
     tone: 'border-error/50',
   },
 ]
 
 /**
- * Honest display fallbacks for engine modes the quick switcher doesn't list.
- * They reuse the composer's existing translations so a user whose mode was
- * set elsewhere (permission profiles, CLI /mode) still reads a real label.
+ * Honest display fallbacks for engine values the quick switcher doesn't
+ * list. `auto` is the engine's ALIAS of auto_edit (from_str_ci maps both to
+ * AutoEdit) — it shows the permissive tier's labels, which is the truth.
+ * `plan` is a real distinct mode owned by the composer's plan toggle.
  */
 const FALLBACK_OPTIONS: Readonly<Record<string, ApprovalModeOption>> = {
-  readonly: {
-    value: 'readonly',
-    labelKey: 'chat.input.mode.readonly',
-    descriptionKey: 'chat.input.mode.readonly.desc',
-    icon: 'lock',
+  auto: APPROVAL_MODES[2],
+  plan: {
+    value: 'plan',
+    labelKey: 'chat.input.mode.plan',
+    descriptionKey: 'chat.input.mode.plan.desc',
+    icon: 'route',
     tone: 'border-success/50',
-  },
-  auto: {
-    value: 'auto',
-    labelKey: 'chat.input.mode.auto',
-    descriptionKey: 'chat.input.mode.auto.desc',
-    icon: 'flash_auto',
-    tone: 'border-warning/50',
   },
 }
 
 /**
  * Resolve the config's `approval_mode` to a displayable option. Unknown or
- * blank values fall back to the Suggest tier for PICKING, but an unknown
+ * blank values fall back to the Balanced tier for PICKING, but an unknown
  * NON-blank value keeps its raw string as the pill label — the pill must
- * never claim a safer mode than the engine is actually in.
+ * never claim a safer (or different) mode than the engine is actually in.
+ * `confirm` lands here by design (R3): it IS suggest engine-side, and the
+ * raw readout says so instead of pretending there are two tiers.
  */
 export function approvalModeOption(value: string | null | undefined): ApprovalModeOption {
   if (value) {
@@ -110,9 +114,9 @@ export function approvalModeOption(value: string | null | undefined): ApprovalMo
     if (listed) return listed
     const fallback = FALLBACK_OPTIONS[value]
     if (fallback) return fallback
-    // Engine-only alias (dont_ask / bypass_permissions / plan_ro …): show
-    // the raw value, described as the permission mode, so the user can see
-    // (and switch away from) a mode this UI doesn't manage.
+    // Engine-only alias (confirm / dont_ask / bypass_permissions / plan_ro
+    // …): show the raw value, described as the permission mode, so the user
+    // can see (and switch away from) a mode this UI doesn't manage.
     return {
       value: value as ApprovalMode,
       labelKey: 'chat.input.mode.label',
@@ -122,8 +126,7 @@ export function approvalModeOption(value: string | null | undefined): ApprovalMo
       rawLabel: value,
     }
   }
-  // No mode configured: the engine default (desktop config seeds "confirm",
-  // the engine treats unparseable as Suggest) — surface Suggest, the tier
-  // the composer has always shown for a blank value.
-  return APPROVAL_MODES[0]
+  // No mode configured: the engine treats unparseable as Suggest — surface
+  // Balanced, the tier the composer has always shown for a blank value.
+  return APPROVAL_MODES[1]
 }

@@ -1,9 +1,10 @@
-// GB P2-4 — composer approval-tier switcher tests.
+// GB P2-4 — composer approval-tier switcher tests (round-1 R3: four tiers).
 //
 // Pins the composer↔settings sync contract: the pill renders the SHARED
 // table's label for the current `config.approval_mode`, switching commits
-// the same configure('approval_mode') write the General page performs, and
-// the High-risk note travels with the menu.
+// the same configure('approval_mode') write the General page performs, the
+// High-risk note travels with the menu, and `confirm` reads out as the raw
+// engine value instead of pretending to be a pickable tier.
 
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { render, screen, fireEvent, waitFor } from '@testing-library/react'
@@ -102,7 +103,7 @@ const currentOptions = (): HTMLElement[] => {
   return last ? Array.from(last.querySelectorAll('[role="option"]')) : []
 }
 
-describe('ChatInput approval-mode switcher (GB P2-4)', () => {
+describe('ChatInput approval-mode switcher (GB P2-4, round-1 R3)', () => {
   beforeEach(() => {
     vi.clearAllMocks()
     configOverride = makeConfig('suggest')
@@ -114,41 +115,46 @@ describe('ChatInput approval-mode switcher (GB P2-4)', () => {
     document.querySelectorAll('[data-slot="select-content"]').forEach(n => n.remove())
   })
 
-  it('renders the SHARED table label for the current config mode (Auto Edit, not the old composer set)', () => {
+  it('renders the SHARED table label for the current config mode (auto_edit → Permissive)', () => {
     configOverride = makeConfig('auto_edit')
     renderChatInput()
     const pill = screen.getByLabelText('Permission mode')
-    // 'auto_edit' is a General-page tier — the pill shows ITS label, proving
+    // 'auto_edit' is the permissive tier — the pill shows ITS label, proving
     // the composer reads the same table the settings page writes.
-    expect(pill).toHaveTextContent(/auto edit/i)
+    expect(pill).toHaveTextContent(/permissive/i)
   })
 
-  it('renders out-of-table engine modes honestly via the raw value', () => {
-    configOverride = makeConfig('dont_ask')
+  it('suggest renders as the Balanced tier (R3 naming by engine semantics)', () => {
     renderChatInput()
-    expect(screen.getByLabelText('Permission mode')).toHaveTextContent('dont_ask')
+    expect(screen.getByLabelText('Permission mode')).toHaveTextContent(/balanced/i)
+  })
+
+  it('renders out-of-table engine values honestly via the raw string (R3: confirm)', () => {
+    configOverride = makeConfig('confirm')
+    renderChatInput()
+    // confirm ≡ suggest engine-side; the pill shows the raw value instead of
+    // dressing it up as a tier the user could meaningfully pick.
+    expect(screen.getByLabelText('Permission mode')).toHaveTextContent('confirm')
   })
 
   it('picking a tier commits configure(approval_mode) + refreshConfig — the General-page write', async () => {
     renderChatInput()
     fireEvent.click(screen.getByLabelText('Permission mode'))
     const opts = currentOptions()
-    expect(opts.length).toBeGreaterThanOrEqual(5)
-    const planOption = opts.find(o => /plan/i.test(o.textContent ?? ''))
-    expect(planOption).toBeTruthy()
-    fireEvent.pointerDown(planOption!, { button: 0 })
-    fireEvent.pointerUp(planOption!, { button: 0 })
-    fireEvent.click(planOption!)
-    await waitFor(() => expect(api.configure).toHaveBeenCalledWith({ key: 'approval_mode', value: 'plan' }))
+    expect(opts.length).toBe(4)
+    const permissive = opts.find(o => /permissive/i.test(o.textContent ?? ''))
+    expect(permissive).toBeTruthy()
+    fireEvent.pointerDown(permissive!, { button: 0 })
+    fireEvent.pointerUp(permissive!, { button: 0 })
+    fireEvent.click(permissive!)
+    await waitFor(() => expect(api.configure).toHaveBeenCalledWith({ key: 'approval_mode', value: 'auto_edit' }))
     await waitFor(() => expect(mockRefreshConfig).toHaveBeenCalled())
   })
 
   it('the High-risk note travels with the switcher menu', async () => {
     renderChatInput()
     fireEvent.click(screen.getByLabelText('Permission mode'))
-    await waitFor(() => expect(currentOptions().length).toBeGreaterThanOrEqual(5))
-    // The note explains the tier only moves the auto-approve baseline; the
-    // en copy mentions confirmation for high-risk actions.
+    await waitFor(() => expect(currentOptions().length).toBe(4))
     const popups = document.querySelectorAll('[data-slot="select-content"]')
     const last = popups[popups.length - 1]
     expect(last?.textContent).toMatch(/high-risk actions/i)
@@ -156,12 +162,10 @@ describe('ChatInput approval-mode switcher (GB P2-4)', () => {
   })
 
   it('an out-of-table current value never hides the listed tiers (pill is display-only)', () => {
-    // Rendering-level pin only — popup option-count assertions run in the
-    // tests above; the Base UI popup in jsdom is the known-slow path.
-    configOverride = makeConfig('readonly')
+    configOverride = makeConfig('dont_ask')
     renderChatInput()
     const pill = screen.getByLabelText('Permission mode')
-    expect(pill).toHaveTextContent(/read-only/i)
+    expect(pill).toHaveTextContent('dont_ask')
     // The title still carries the honest description + the high-risk note.
     expect(pill).toHaveAttribute('title', expect.stringContaining('High-risk actions'))
   })

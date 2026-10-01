@@ -34,13 +34,15 @@ describe('GeneralSettings', () => {
     expect(screen.getByText('Approval Mode')).toBeInTheDocument()
   })
 
-  it('renders all approval mode options', () => {
+  it('renders the four shared approval tiers (round-1 R3: strict/balanced/permissive/full)', () => {
     render(wrap(<GeneralSettings />))
-    expect(screen.getAllByText('Suggest').length).toBeGreaterThanOrEqual(1)
-    expect(screen.getAllByText('Confirm').length).toBeGreaterThanOrEqual(1)
-    expect(screen.getAllByText('Plan').length).toBeGreaterThanOrEqual(1)
-    expect(screen.getAllByText('Auto Edit').length).toBeGreaterThanOrEqual(1)
-    expect(screen.getAllByText('Full Auto').length).toBeGreaterThanOrEqual(1)
+    expect(screen.getAllByText('Strict').length).toBeGreaterThanOrEqual(1)
+    expect(screen.getAllByText('Balanced').length).toBeGreaterThanOrEqual(1)
+    expect(screen.getAllByText('Permissive').length).toBeGreaterThanOrEqual(1)
+    expect(screen.getAllByText('Full').length).toBeGreaterThanOrEqual(1)
+    // R3: the no-op suggest/confirm pair left the table — the settings page
+    // can no longer offer two tiers that behave identically.
+    expect(screen.queryByText('Confirm')).not.toBeInTheDocument()
   })
 
   it('renders provider section', () => {
