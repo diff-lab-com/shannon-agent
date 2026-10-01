@@ -14,6 +14,7 @@ import { useDiskArtifacts } from '@/hooks/useDiskArtifacts'
 import { useArtifact } from '@/components/artifact/ArtifactContext'
 import { useBudgetGuard } from '@/hooks/useBudgetGuard'
 import { useSteerSend } from '@/hooks/useSteerSend'
+import { toast } from 'sonner'
 import BudgetBanner from '@/components/chat/BudgetBanner'
 import { ConfirmDialog } from '@/components/ui/confirm-dialog'
 import { TerminalPanel } from '@/components/terminal/TerminalPanel'
@@ -481,14 +482,19 @@ export default function Chat() {
   // an interrupted steer flushes first on the same isQuerying→false commit;
   // the drain below also gates on hasPendingSteer so both never send in one
   // commit (the drain would otherwise burn a queued item against the
-  // backend's concurrent-query guard).
+  // backend's concurrent-query guard). Round-1 review: the pending steer is
+  // parked under its session key (a settle observed on another session
+  // never receives it) and a cancel that never settles hands the draft back
+  // after 15s with a notice instead of waiting forever.
   const { steer, hasPendingSteer } = useSteerSend({
+    visibleSessionId,
     isQuerying,
     cancelQuery,
     sendMessage,
-    onSendRejected: (pending) => {
+    onSendRejected: (pending, reason) => {
       setInput(pending.text)
       setAttachedFiles(pending.attachments)
+      if (reason === 'timeout') toast.error(t('chat.steer.timeout'))
     },
   })
 

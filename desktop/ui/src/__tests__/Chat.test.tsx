@@ -40,6 +40,13 @@ const ctx = vi.hoisted(() => ({
   enqueuePrompt: vi.fn().mockReturnValue(true),
   dequeuePrompt: vi.fn().mockReturnValue(null),
   removeQueuedPrompt: vi.fn(),
+  moveQueuedPrompt: vi.fn(),
+  // P2-19 / GB P2-3 — live while a run streams.
+  toolProgress: null as any,
+  runProcess: null as any,
+  // P0 sidebar telemetry (SessionContext) — read by MessageArea's
+  // RunStatusLine while isQuerying.
+  sessionActivity: {} as Record<string, any>,
 }))
 
 vi.mock('@/context/ChatContext', () => ({
@@ -78,11 +85,19 @@ function resetCtx() {
   ctx.enqueuePrompt = vi.fn().mockReturnValue(true)
   ctx.dequeuePrompt = vi.fn().mockReturnValue(null)
   ctx.removeQueuedPrompt = vi.fn()
+  ctx.moveQueuedPrompt = vi.fn()
+  ctx.toolProgress = null
+  ctx.runProcess = { status: 'idle', startedAt: null, endedAt: null, sources: [], outputs: [], summary: null, lastTool: null, toolCount: 0 }
+  ctx.sessionActivity = {}
   localStorage.clear()
 }
 
-function renderChat() {
-  return render(
+// A fresh element per render: rerendering with the SAME element reference
+// bails React out (identical props → no re-render → no effect re-run), which
+// the steering-integration suite below relies on to settle a run via ctx
+// mutation + rerender.
+function ChatTree() {
+  return (
     <I18nProvider>
       <MemoryRouter>
         {/* Batch D4: the artifact context moved to the app level — mirror
@@ -93,6 +108,10 @@ function renderChat() {
       </MemoryRouter>
     </I18nProvider>
   )
+}
+
+function renderChat() {
+  return render(<ChatTree />)
 }
 
 describe('Chat page', () => {
@@ -305,13 +324,7 @@ describe('Chat page', () => {
     ctx.currentSessionId = 'sess-b'
     await act(async () => {
       view.rerender(
-        <I18nProvider>
-          <MemoryRouter>
-            <ArtifactProvider>
-              <Chat />
-            </ArtifactProvider>
-          </MemoryRouter>
-        </I18nProvider>,
+        <ChatTree />,
       )
     })
     expect(screen.queryByText('$0.01')).not.toBeInTheDocument()
@@ -585,13 +598,7 @@ describe('Chat page', () => {
       ctx.currentSessionId = 'sess-2'
       act(() => {
         view.rerender(
-          <I18nProvider>
-            <MemoryRouter>
-              <ArtifactProvider>
-                <Chat />
-              </ArtifactProvider>
-            </MemoryRouter>
-          </I18nProvider>,
+        <ChatTree />,
         )
       })
       expect(input).toHaveValue('')
@@ -600,13 +607,7 @@ describe('Chat page', () => {
       ctx.currentSessionId = 'sess-1'
       act(() => {
         view.rerender(
-          <I18nProvider>
-            <MemoryRouter>
-              <ArtifactProvider>
-                <Chat />
-              </ArtifactProvider>
-            </MemoryRouter>
-          </I18nProvider>,
+        <ChatTree />,
         )
       })
       expect(input).toHaveValue('sess-1 draft')
@@ -759,6 +760,87 @@ describe('Chat page', () => {
       renderChat()
       expect(screen.queryByTestId('auth-error-banner')).not.toBeInTheDocument()
       expect(screen.getByText('Network unreachable')).toBeInTheDocument()
+    })
+  })
+
+
+  // ── GB P2-10a round-1 review (Imp-1/Imp-2) — steering ↔ drain integration ──
+  //
+  // Full-page harness: the mocked contexts feed real Chat wiring (composer →
+  // handleSteer → useSteerSend, effects → queue drain), so these pin the
+  // exact race the review flagged.
+  describe('steering integration (round-1)', () => {
+    function renderChatRerenderable() {
+      const view = render(<ChatTree />)
+      return { view, settle: () => view.rerender(<ChatTree />) }
+    }
+
+    it('Imp-1: queued prompts are NOT burned when a steer settles — the drain stays gated until the delivery resolves', async () => {
+      resetCtx()
+      ctx.currentSessionId = 'sess-1'
+      ctx.isQuerying = true
+      // Two prompts already queued behind the running turn.
+      ctx.promptQueue = [
+        { id: 1, text: 'queued one', attachments: [] },
+        { id: 2, text: 'queued two', attachments: [] },
+      ]
+      let resolveDelivery!: (ok: boolean) => void
+      ctx.sendMessage = vi.fn(() => new Promise<boolean>(res => { resolveDelivery = res }))
+      const { settle } = renderChatRerenderable()
+
+      // The user interrupts while the turn streams (Ctrl+Enter).
+      const input = screen.getByPlaceholderText(/Reply generating/)
+      fireEvent.change(input, { target: { value: 'interrupt: use Rust' } })
+      fireEvent.keyDown(input, { key: 'Enter', ctrlKey: true })
+      expect(ctx.cancelQuery).toHaveBeenCalledTimes(1)
+      expect(ctx.sendMessage).not.toHaveBeenCalled()
+      expect(ctx.dequeuePrompt).not.toHaveBeenCalled()
+
+      // The interrupted run settles (QUERY_CANCELLED → isQuerying false).
+      ctx.isQuerying = false
+      act(() => { settle() })
+
+      // The STEER text goes out; the queue head stays queued — the drain
+      // effect ran in this very commit but was gated by hasPendingSteer.
+      await waitFor(() => expect(ctx.sendMessage).toHaveBeenCalledWith('interrupt: use Rust', undefined))
+      expect(ctx.sendMessage).toHaveBeenCalledTimes(1)
+      expect(ctx.dequeuePrompt).not.toHaveBeenCalled()
+      expect(ctx.promptQueue).toHaveLength(2)
+
+      // Once the delivery resolves, the gate drops — the queue drains on the
+      // NEXT settle, not inside this one.
+      await act(async () => { resolveDelivery(true) })
+      expect(ctx.dequeuePrompt).not.toHaveBeenCalled()
+    })
+
+    it('Imp-2: a steer parked for session A is never delivered to session B; returning to A delivers it', async () => {
+      resetCtx()
+      ctx.currentSessionId = 'sess-A'
+      ctx.isQuerying = true
+      ctx.promptQueue = [{ id: 9, text: 'queued for B', attachments: [] }]
+      const { settle } = renderChatRerenderable()
+
+      const input = screen.getByPlaceholderText(/Reply generating/)
+      fireEvent.change(input, { target: { value: 'belongs to A' } })
+      fireEvent.keyDown(input, { key: 'Enter', ctrlKey: true })
+      expect(ctx.cancelQuery).toHaveBeenCalledTimes(1)
+
+      // The user switches to session B (which has its OWN, empty queue) and
+      // the run settles while B is up.
+      ctx.currentSessionId = 'sess-B'
+      ctx.promptQueue = []
+      ctx.isQuerying = false
+      act(() => { settle() })
+      await act(async () => { await Promise.resolve() })
+      // A's text must not land in B — and B's drain must not be gated by
+      // A's parked steer (B has nothing queued: no dequeue attempt either).
+      expect(ctx.sendMessage).not.toHaveBeenCalled()
+      expect(ctx.dequeuePrompt).not.toHaveBeenCalled()
+
+      // Back on A: the parked steer delivers to A.
+      ctx.currentSessionId = 'sess-A'
+      act(() => { settle() })
+      await waitFor(() => expect(ctx.sendMessage).toHaveBeenCalledWith('belongs to A', undefined))
     })
   })
 })
