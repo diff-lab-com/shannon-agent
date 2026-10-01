@@ -1014,9 +1014,11 @@ mod tests {
 
         let dir = tempfile::TempDir::new().unwrap();
         let shared = open_shared_store_at(dir.path().to_path_buf());
-        // Seed through the shared handle with the engine's project key so the
-        // selection scopes to it (same trick as
-        // `attach_shared_memory_attaches_one_shared_handle`).
+        // Pin the project key explicitly (with_working_directory) instead of
+        // reading the process cwd: parallel tests legitimately flip the
+        // process cwd, and the key must not race between the engine freeze
+        // and the seeding below.
+        const PROJECT_KEY: &str = "/fixed/w3c-project";
         let engine = attach_shared_memory(
             QueryEngine::with_defaults_arc(
                 LlmClient::new(LlmClientConfig::default()),
@@ -1025,11 +1027,9 @@ mod tests {
                 StateManager::new(),
             ),
             &shared,
-        );
-        let project = std::env::current_dir()
-            .map(|p| p.display().to_string())
-            .unwrap_or_else(|_| "default".to_string());
-        let mut entry = MemoryEntry::new(&project, MemoryCategory::Preference, "use pnpm");
+        )
+        .with_working_directory(PROJECT_KEY);
+        let mut entry = MemoryEntry::new(PROJECT_KEY, MemoryCategory::Preference, "use pnpm");
         entry.source_session_id = Some("sess-9".to_string());
         shared.write().unwrap().add(entry).unwrap();
 
