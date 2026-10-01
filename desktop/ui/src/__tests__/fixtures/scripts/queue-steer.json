@@ -10,6 +10,11 @@
         "id": "script-sess-queue",
         "title": "Queue and steer",
         "messages": []
+      },
+      {
+        "id": "script-sess-queue-b",
+        "title": "Queue spare",
+        "messages": []
       }
     ]
   },

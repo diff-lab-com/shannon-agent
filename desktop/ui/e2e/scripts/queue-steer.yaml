@@ -18,6 +18,9 @@ seed:
     - id: script-sess-queue
       title: Queue and steer
       messages: []
+    - id: script-sess-queue-b
+      title: Queue spare
+      messages: []
 turns:
   - user: 写一篇关于潮汐的长文
     script:

@@ -34,7 +34,12 @@ test.describe('scripted chat backend — budget-exceeded (journey #7)', () => {
     await expect(page.getByRole('heading', { name: 'Over budget' })).toBeVisible({ timeout: 10_000 })
 
     // Red exceeded banner with the frozen three actions (scoping: other
-    // role=alert regions can coexist on the page).
+    // role=alert regions can coexist on the page). Finding anchor
+    // (provider review §3-A1): the ApiKeyBanner now shows ONLY on a genuine
+    // missing-key/missing-provider snapshot — the armed seed's hasKey:true
+    // keeps it absent here, which the filtered alert queries below pin
+    // implicitly; the four-quadrant gating itself is pinned by
+    // src/__tests__/ApiKeyBanner.test.tsx (R2).
     const banner = page.getByRole('alert').filter({ hasText: 'Session budget exceeded' })
     await expect(banner).toBeVisible({ timeout: 10_000 })
     await expect(banner.getByText(/\$6\.40 of \$5\.00 used/)).toBeVisible()
@@ -50,9 +55,12 @@ test.describe('scripted chat backend — budget-exceeded (journey #7)', () => {
     // The turn: budget:exceeded mid-stream → the cap auto-cancels (same
     // token as Stop) — cancelled settles, no assistant bubble, no error.
     await chat.send(script.turns[0]!.user)
-    await chat.expectStreamingCursor()
+    // Wide mid-run window (3 × 800ms chunks) — the full suite runs workers
+    // in parallel and the first ticks after a send can be slow.
+    await expect(page.locator('.streaming-cursor')).toBeVisible({ timeout: 15_000 })
     await expect(chat.sendButton()).toBeVisible({ timeout: 15_000 })
-    await expect(chat.bubbles()).toHaveCount(1) // only the user bubble
+    // Seeded history (2) + the new user bubble; cancelled commits no reply.
+    await expect(chat.bubbles()).toHaveCount(3)
     await expect(page.getByRole('img', { name: 'Last run failed' })).toHaveCount(0)
 
     // Continue once: clearExceeded + resend with the bypass flag — snapshot
@@ -67,8 +75,8 @@ test.describe('scripted chat backend — budget-exceeded (journey #7)', () => {
       sessionId: 'script-sess-budget',
     })
     // The bypass turn streams to completion.
-    await expect(chat.bubbles()).toHaveCount(3, { timeout: 15_000 })
-    await expect(chat.bubbleAt(2)).toContainText('数据来源已补充')
+    await expect(chat.bubbles()).toHaveCount(5, { timeout: 15_000 })
+    await expect(chat.bubbleAt(4)).toContainText('数据来源已补充')
     await expectNoConsoleErrors(page)
   })
 })

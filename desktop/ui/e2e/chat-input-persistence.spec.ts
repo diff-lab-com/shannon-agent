@@ -22,6 +22,10 @@ const ROW_B = 'desktop-session-row-script-sess-draft-b'
 
 async function openDraftSession(page: import('@playwright/test').Page, row: string, heading: string): Promise<ChatPage> {
   const chat = new ChatPage(page)
+  // Mount guard: the draft-restore effect keys on the visible-session
+  // CHANGE — clicking before the Chat page mounted would skip the restore
+  // (and the debounced empty-write would clear the stored draft).
+  await expect(chat.composer()).toBeVisible({ timeout: 10_000 })
   await page.getByTestId(row).click()
   await expect(page.getByRole('heading', { name: heading })).toBeVisible({ timeout: 10_000 })
   return chat
@@ -61,12 +65,14 @@ test.describe('scripted chat backend — input persistence (§4.2)', () => {
     await loadChatScript(page, 'input-persistence', test.info())
     const chat = await openDraftSession(page, ROW_A, 'Drafts A')
     await chat.composer().fill('发出去的一条')
-    await page.waitForTimeout(400) // past the debounce — the draft is on disk
-    await expect(page.evaluate(k => localStorage.getItem(k), DRAFT_A)).toContain('发出去的一条')
+    // Past the debounce — the draft is on disk (poll: the 300ms timer plus
+    // React's effect scheduling do not bound to a fixed sleep).
+    await expect.poll(async () => page.evaluate(k => localStorage.getItem(k), DRAFT_A), { timeout: 5_000 })
+      .toContain('发出去的一条')
 
     await chat.composer().press('Enter')
     await expect(chat.composer()).toHaveValue('')
-    await expect(page.evaluate(k => localStorage.getItem(k), DRAFT_A)).toBeNull()
+    await expect(await page.evaluate(k => localStorage.getItem(k), DRAFT_A)).toBeNull()
     // The scripted turn completes normally.
     await expect(chat.bubbles()).toHaveCount(2, { timeout: 15_000 })
     await expectNoConsoleErrors(page)
@@ -77,7 +83,8 @@ test.describe('scripted chat backend — input persistence (§4.2)', () => {
     await loadChatScript(page, 'input-persistence', test.info())
     const chat = await openDraftSession(page, ROW_A, 'Drafts A')
     await chat.composer().fill('重启后仍在')
-    await page.waitForTimeout(400) // debounce write
+    await expect.poll(async () => page.evaluate(k => localStorage.getItem(k), DRAFT_A), { timeout: 5_000 })
+      .toContain('重启后仍在') // debounce write landed
     await page.reload()
     await openDraftSession(page, ROW_A, 'Drafts A')
     await expect(chat.composer()).toHaveValue('重启后仍在')
@@ -95,7 +102,9 @@ test.describe('scripted chat backend — input persistence (§4.2)', () => {
     await loadChatScript(page, 'input-persistence', test.info())
     const chat = await openDraftSession(page, ROW_A, 'Drafts A')
     await chat.composer().fill('大'.repeat(40_000) + '字'.repeat(30_000)) // > 64KB JSON
-    await page.waitForTimeout(400) // the debounced write runs — and skips
+    // The debounced write runs — and skips the oversized payload. Settle
+    // past any write attempt, then assert the key never appeared.
+    await page.waitForTimeout(900)
     expect(await page.evaluate(k => localStorage.getItem(k), DRAFT_A)).toBeNull()
     await page.reload()
     await openDraftSession(page, ROW_A, 'Drafts A')

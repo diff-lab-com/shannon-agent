@@ -37,17 +37,24 @@ test.describe('scripted chat backend — subagent-run (journey #12)', () => {
     await block.getByRole('button').first().click() // collapse again
 
     // The script parks at its waitFor while the spawn is live; resume into
-    // tool-result + subagent:stop.
+    // tool-result + subagent:stop (which parks again).
     await expectMockPhase(page, 'waitingUi')
     await page.evaluate(() => {
       (window as unknown as { __shannonMock: { control: { resume(): void } } }).__shannonMock.control.resume()
     })
 
-    // Convergence: the live registry badge clears; the block settles into
-    // the completed form (duration label from the client-side wall clock).
+    // Convergence: the live registry badge clears and the block settles
+    // into the completed form (client-measured duration label; the running
+    // spinner is gone) — observable thanks to the second park.
     await expect(block).not.toContainText('registry sa-research-1', { timeout: 10_000 })
+    await expect(block.locator('.animate-spin')).toHaveCount(0)
 
-    // Completion: the card leaves with the run (P2-4); the reply commits.
+    // Final resume → completion: the card leaves with the run (P2-4); the
+    // reply commits.
+    await expectMockPhase(page, 'waitingUi')
+    await page.evaluate(() => {
+      (window as unknown as { __shannonMock: { control: { resume(): void } } }).__shannonMock.control.resume()
+    })
     await expect(block).toHaveCount(0, { timeout: 15_000 })
     await expect(chat.sendButton()).toBeVisible({ timeout: 15_000 })
     await expect(chat.bubbles()).toHaveCount(2)

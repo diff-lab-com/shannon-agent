@@ -30,6 +30,10 @@ test.describe('scripted chat backend — attachments (journey #8)', () => {
       localStorage.setItem(key, JSON.stringify({ text: '总结这个文件', attachments: [path], updatedAt: Date.now() }))
     }, [DRAFT_KEY, OUTSIDE_PATH] as const)
     await loadChatScript(page, 'attachments', test.info())
+    // The Chat page must be mounted BEFORE the row click: the draft-restore
+    // effect keys on the visible-session CHANGE, and a click landing before
+    // the page's prev-ref initialized would skip the restore entirely.
+    await expect(chat.composer()).toBeVisible({ timeout: 10_000 })
 
     // Opening the session restores the draft: chip + text in the composer.
     await page.getByTestId('desktop-session-row-script-sess-attach').click()

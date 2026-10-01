@@ -1077,6 +1077,14 @@ export const handlers: Record<string, MockHandler> = {
     await delay(10)
     return demoFileIndex.some(f => f.path === args.path)
   },
+  // Capped text read for disk artifacts (the dock's file tabs read the
+  // produced file's content — ArtifactLinkHost.openDiskArtifact). Demo mode
+  // has no disk: return a plausible in-memory body for any path.
+  async read_text_file(args: { path: string; maxBytes?: number | null }) {
+    await delay(20)
+    const content = `[demo] ${args.path.split('/').pop() ?? args.path}\n\nMock content served by the demo backend.`
+    return { path: args.path, content, sizeBytes: content.length }
+  },
   async get_file_tree() {
     await delay()
     return {

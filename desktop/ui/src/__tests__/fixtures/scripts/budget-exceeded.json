@@ -35,9 +35,10 @@
           "event": "query:text",
           "chunks": [
             "先看一下当前花销……",
-            "已经超过预算上限了。"
+            "已经超过预算上限了。",
+            "预算守卫即将中断本轮。"
           ],
-          "chunkDelayMs": 300
+          "chunkDelayMs": 800
         },
         {
           "event": "budget:exceeded",

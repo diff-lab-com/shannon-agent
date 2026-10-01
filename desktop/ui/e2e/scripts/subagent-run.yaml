@@ -47,4 +47,7 @@ turns:
       - event: subagent:stop
         payload:
           agentId: sa-research-1
+      # Park once more so the completed block form is observable (the card
+      # leaves with the run — P2-4 — so this is the last window).
+      - waitFor: ui
       - event: query:completed

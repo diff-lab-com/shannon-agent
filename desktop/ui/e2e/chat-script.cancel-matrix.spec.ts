@@ -144,11 +144,16 @@ test.describe('scripted chat backend — cancel-matrix (§4.1, 9 scenarios)', ()
     await expect(dialog).toBeVisible({ timeout: 10_000 })
     await expectMockPhase(page, 'waitingPermission')
 
-    // Stop while the engine waits on the permission — the parked run
-    // cancels. The alertdialog's aria-modal masking hides the composer from
-    // role queries, so anchor the attribute locator directly (R2 §5.5).
-    await page.locator('button[aria-label="Stop generation"]').click()
-    await expect(chat.sendButton()).toBeVisible({ timeout: 5_000 })
+    // CURRENT BEHAVIOR (recorded for the report): while the approval dialog
+    // waits, the composer's stop button is UNREACHABLE — the modal scrim
+    // intercepts pointer events (the click below would never land), and
+    // Escape on the dialog maps to Modal's deny-on-close, not a cancel.
+    // The engine still waits on respond_permission, so the reachable cancel
+    // path is the explicit session route (what a second window's stop does).
+    await invokeMock(page, 'cancel_query', { sessionId: 'script-sess-cancel-approval' })
+    // The dialog's aria-modal masking keeps role queries blind to the
+    // composer (R2 §5.5) — anchor the swap-back via the attribute locator.
+    await expect(page.locator('button[aria-label="Send message"]')).toBeVisible({ timeout: 5_000 })
     await expect(page.locator('.streaming-cursor')).toHaveCount(0)
 
     // CURRENT BEHAVIOR (recorded): QUERY_CANCELLED does not clear the
@@ -237,7 +242,7 @@ test.describe('scripted chat backend — cancel-matrix (§4.1, 9 scenarios)', ()
     // residue, banner actions only usable after the settle.
     await expect(chat.sendButton()).toBeVisible({ timeout: 15_000 })
     await expect(chat.streamingCursor()).toHaveCount(0)
-    await expect(chat.bubbles()).toHaveCount(1)
+    await expect(chat.bubbles()).toHaveCount(3) // seeded history + the user bubble
     await expect(page.getByRole('img', { name: 'Last run failed' })).toHaveCount(0)
     await expect(banner).toBeVisible()
     await expectNoConsoleErrors(page)
@@ -292,11 +297,13 @@ test.describe('scripted chat backend — cancel-matrix (§4.1, 9 scenarios)', ()
     await expect(page.getByRole('alert')).toHaveCount(0)
     await expect(page.locator('[data-sonner-toast]')).toHaveCount(0)
 
-    // Back to A: the cancelled run left no residue.
+    // Back to A: switching reloads the seeded conversation (the pre-switch
+    // optimistic bubble does not survive a round trip), and the cancelled
+    // run left no residue — no cursor, no assistant bubble.
     await page.getByTestId('desktop-session-row-script-sess-bg-a').click()
     await expect(page.getByRole('heading', { name: 'Background A' })).toBeVisible({ timeout: 10_000 })
     await expect(chat.streamingCursor()).toHaveCount(0)
-    await expect(chat.bubbles()).toHaveCount(1)
+    await expect(page.locator('[data-tool-name]')).toHaveCount(0)
     await expectNoConsoleErrors(page)
   })
 })

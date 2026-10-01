@@ -25,8 +25,10 @@ async function openSeededSession(page: import('@playwright/test').Page): Promise
 
 /** Hover a user bubble to reveal its hover toolbar, then click Edit. */
 async function startEdit(page: import('@playwright/test').Page, index: number): Promise<void> {
-  await page.locator(`[data-message-index="${index}"]`).hover()
-  await page.getByRole('button', { name: 'Edit message' }).first().click()
+  const bubble = page.locator(`[data-message-index="${index}"]`)
+  await bubble.hover()
+  // Scope to the bubble — every user message carries an Edit button.
+  await bubble.getByRole('button', { name: 'Edit message' }).click()
   await expect(page.getByTestId('edit-banner')).toBeVisible()
 }
 
@@ -49,7 +51,8 @@ test.describe('scripted chat backend — edit-rewind (journey #10)', () => {
     await expect(page.getByTestId('edit-banner')).toHaveCount(0)
     // The rewind truncated everything; the resend appends user + reply.
     await expect(chat.bubbles()).toHaveCount(2, { timeout: 20_000 })
-    await chat.expectBubbleText(0, EDITED)
+    // User bubbles carry chrome (You · time + actions) — assert containment.
+    await expect(chat.bubbleAt(0)).toContainText(EDITED)
     await chat.expectBubbleText(1, '编辑后的回答：潮汐按周期可分为半日潮、全日潮和混合潮。')
     await expectNoConsoleErrors(page)
   })
