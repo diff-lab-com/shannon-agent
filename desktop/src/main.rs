@@ -836,21 +836,27 @@ fn main() {
             // current desktop config, and a background task refreshes the tray
             // whenever the provider/model changes (`configure('model')` and
             // `set_active_provider` both emit `CONFIG_UPDATED`).
-            let initial_label = tray_status_label(app.handle());
-            let show_item = MenuItemBuilder::with_id("show", "Show Shannon").build(app)?;
+            // G7 i18n (P1-8): tray labels follow the OS language (the in-app
+            // locale switch lives in the webview's localStorage, which the
+            // backend cannot see — see tray_texts below). The in-app switch
+            // taking effect in the tray requires an app restart; accepted
+            // trade-off, documented in the journey-fixes report.
+            let tray_strs = tray_texts(&detect_tray_lang());
+            let initial_label = tray_status_label(app.handle(), &tray_strs);
+            let show_item = MenuItemBuilder::with_id("show", tray_strs.show).build(app)?;
             let new_session_item =
-                MenuItemBuilder::with_id("new-session", "New Session").build(app)?;
+                MenuItemBuilder::with_id("new-session", tray_strs.new_session).build(app)?;
             // Office Wave 3 C3 — companion Quick Capture entry. The frontend
             // has no main-window chrome surface for it this wave (the global
             // shortcut belongs to useKeyboardShortcuts, another owner), so
             // the tray is the summon path; `open_companion_window` stays
             // invocable for the future shortcut/UI wiring.
             let companion_item =
-                MenuItemBuilder::with_id("companion", "Quick Capture").build(app)?;
+                MenuItemBuilder::with_id("companion", tray_strs.companion).build(app)?;
             let status_item = MenuItemBuilder::with_id("status", initial_label.clone())
                 .enabled(false)
                 .build(app)?;
-            let quit_item = MenuItemBuilder::with_id("quit", "Quit").build(app)?;
+            let quit_item = MenuItemBuilder::with_id("quit", tray_strs.quit).build(app)?;
 
             let menu = MenuBuilder::new(app)
                 .items(&[
@@ -863,7 +869,7 @@ fn main() {
                 .build()?;
 
             let _tray = TrayIconBuilder::with_id(TRAY_ID)
-                .tooltip(format!("Shannon AI Assistant — {initial_label}"))
+                .tooltip(format!("{} — {initial_label}", tray_strs.tooltip_app))
                 .menu(&menu)
                 .on_menu_event(move |app, event| match event.id().as_ref() {
                     "show" => {
@@ -922,8 +928,9 @@ fn main() {
             let _ = app.listen(
                 shannon_desktop::events::event_names::CONFIG_UPDATED,
                 move |_| {
-                    let label = tray_status_label(&refresh_handle);
-                    if let Err(e) = rebuild_tray_menu(&refresh_handle, &label) {
+                    let texts = tray_texts(&detect_tray_lang());
+                    let label = tray_status_label(&refresh_handle, &texts);
+                    if let Err(e) = rebuild_tray_menu(&refresh_handle, &texts, &label) {
                         tracing::warn!(error = %e, "tray refresh: failed to rebuild menu");
                     }
                 },
@@ -955,6 +962,171 @@ fn main() {
 #[cfg(feature = "tauri")]
 const TRAY_ID: &str = "main";
 
+// ---------------------------------------------------------------------------
+// Tray i18n (G7 / P1-8)
+// ---------------------------------------------------------------------------
+//
+// The tray is a native menu the webview i18n layer cannot reach. The in-app
+// locale lives in the webview's `localStorage` (`shannon.locale`), invisible
+// to the backend, so instead of inventing a config round-trip the tray
+// follows the OS language (env override first, matching
+// `shannon_core::i18n::detect_system_locale`'s priority). A user who switches
+// the language in-app sees the tray update after restarting the app — an
+// accepted trade-off, noted in the journey-fixes report.
+
+/// All tray strings for one language. `&'static str` tables, no allocation.
+#[cfg(feature = "tauri")]
+struct TrayTexts {
+    show: &'static str,
+    new_session: &'static str,
+    companion: &'static str,
+    quit: &'static str,
+    /// Prepended to `"{provider} / {model}"` in the disabled status row.
+    status_prefix: &'static str,
+    /// App name portion of the tray tooltip.
+    tooltip_app: &'static str,
+}
+
+/// Tray languages the desktop UI also supports (`src/i18n` SUPPORTED_LOCALES):
+/// en, zh-CN, zh-TW, ja, ko, es, fr, de, pt-BR, ru. [`tray_texts`] matches on
+/// these strings directly; the constant backs the test that walks them all.
+#[cfg(all(test, feature = "tauri"))]
+const TRAY_LANGS: &[&str] = &[
+    "en", "zh-CN", "zh-TW", "ja", "ko", "es", "fr", "de", "pt-BR", "ru",
+];
+
+/// Normalize a BCP-47/POSIX locale tag to a tray language, or `None` when the
+/// language is not supported (the caller falls through / defaults to `en`).
+/// Handles `zh_CN.UTF-8`, `zh-Hant-TW`, `pt-BR`, `fr`, … — zh picks
+/// Traditional for TW/HK/MO/Hant, Simplified otherwise.
+#[cfg(feature = "tauri")]
+fn normalize_tray_lang(raw: &str) -> Option<String> {
+    let lowered = raw.to_lowercase();
+    let mut subs = lowered.split(['_', '-', '.']);
+    let primary = subs.next()?.to_string();
+    if primary == "zh" {
+        for sub in subs {
+            match sub {
+                "hant" | "tw" | "hk" | "mo" => return Some("zh-TW".to_string()),
+                "hans" | "cn" | "sg" => return Some("zh-CN".to_string()),
+                _ => {}
+            }
+        }
+        return Some("zh-CN".to_string());
+    }
+    match primary.as_str() {
+        "en" | "ja" | "ko" | "es" | "fr" | "de" | "ru" => Some(primary),
+        "pt" => Some("pt-BR".to_string()),
+        _ => None,
+    }
+}
+
+/// Detect the tray language: `SHANNON_LANG` env override → OS locale → `en`.
+#[cfg(feature = "tauri")]
+fn detect_tray_lang() -> String {
+    if let Ok(lang) = std::env::var("SHANNON_LANG") {
+        if let Some(normalized) = normalize_tray_lang(&lang) {
+            return normalized;
+        }
+    }
+    if let Some(loc) = sys_locale::get_locale() {
+        if let Some(normalized) = normalize_tray_lang(&loc) {
+            return normalized;
+        }
+    }
+    "en".to_string()
+}
+
+/// Localized tray strings for one of [`TRAY_LANGS`] (unknown → English).
+#[cfg(feature = "tauri")]
+fn tray_texts(lang: &str) -> TrayTexts {
+    let texts = match lang {
+        "zh-CN" => TrayTexts {
+            show: "显示 Shannon",
+            new_session: "新建会话",
+            companion: "快速记录",
+            quit: "退出",
+            status_prefix: "状态：",
+            tooltip_app: "Shannon AI 助手",
+        },
+        "zh-TW" => TrayTexts {
+            show: "顯示 Shannon",
+            new_session: "新增會話",
+            companion: "快速擷取",
+            quit: "結束",
+            status_prefix: "狀態：",
+            tooltip_app: "Shannon AI 助理",
+        },
+        "ja" => TrayTexts {
+            show: "Shannon を表示",
+            new_session: "新規セッション",
+            companion: "クイックキャプチャ",
+            quit: "終了",
+            status_prefix: "状態: ",
+            tooltip_app: "Shannon AI アシスタント",
+        },
+        "ko" => TrayTexts {
+            show: "Shannon 표시",
+            new_session: "새 세션",
+            companion: "빠른 캡처",
+            quit: "종료",
+            status_prefix: "상태: ",
+            tooltip_app: "Shannon AI 어시스턴트",
+        },
+        "es" => TrayTexts {
+            show: "Mostrar Shannon",
+            new_session: "Nueva sesión",
+            companion: "Captura rápida",
+            quit: "Salir",
+            status_prefix: "Estado: ",
+            tooltip_app: "Asistente de IA Shannon",
+        },
+        "fr" => TrayTexts {
+            show: "Afficher Shannon",
+            new_session: "Nouvelle session",
+            companion: "Capture rapide",
+            quit: "Quitter",
+            status_prefix: "État : ",
+            tooltip_app: "Assistant IA Shannon",
+        },
+        "de" => TrayTexts {
+            show: "Shannon anzeigen",
+            new_session: "Neue Sitzung",
+            companion: "Schnellerfassung",
+            quit: "Beenden",
+            status_prefix: "Status: ",
+            tooltip_app: "Shannon KI-Assistent",
+        },
+        "pt-BR" => TrayTexts {
+            show: "Mostrar Shannon",
+            new_session: "Nova sessão",
+            companion: "Captura rápida",
+            quit: "Sair",
+            status_prefix: "Status: ",
+            tooltip_app: "Assistente de IA Shannon",
+        },
+        "ru" => TrayTexts {
+            show: "Показать Shannon",
+            new_session: "Новая сессия",
+            companion: "Быстрая заметка",
+            quit: "Выход",
+            status_prefix: "Состояние: ",
+            tooltip_app: "ИИ-ассистент Shannon",
+        },
+        // "en" and every unknown tag (normalize_tray_lang never emits an
+        // unsupported tag, so reaching here means "unknown" — English it is).
+        _ => TrayTexts {
+            show: "Show Shannon",
+            new_session: "New Session",
+            companion: "Quick Capture",
+            quit: "Quit",
+            status_prefix: "Status: ",
+            tooltip_app: "Shannon AI Assistant",
+        },
+    };
+    texts
+}
+
 /// Build the human-readable status label shown in the tray menu and tooltip.
 ///
 /// Reads `provider` / `model` from the live `state.client_config` (which
@@ -966,8 +1138,10 @@ const TRAY_ID: &str = "main";
 /// P1.2-B (ADR-0005): the previous implementation read the singular
 /// `DesktopConfig.{provider,model}` fields, which are gone — the engine
 /// store is now the source of truth.
+///
+/// G7 (P1-8): the `"Status: "` prefix is localized via [`TrayTexts`].
 #[cfg(feature = "tauri")]
-fn tray_status_label(app: &tauri::AppHandle) -> String {
+fn tray_status_label(app: &tauri::AppHandle, texts: &TrayTexts) -> String {
     use shannon_desktop::commands;
     use tauri::Manager;
     let cc = app
@@ -977,10 +1151,7 @@ fn tray_status_label(app: &tauri::AppHandle) -> String {
         Some(c) => (c.provider.to_string(), c.model),
         None => (String::from("anthropic"), String::from("claude-sonnet-4-6")),
     };
-    if provider.is_empty() || model.is_empty() {
-        return format!("Status: {provider} / {model}");
-    }
-    format!("Status: {provider} / {model}")
+    format!("{}{provider} / {model}", texts.status_prefix)
 }
 
 /// Rebuild the tray's menu and tooltip with an updated status label. Looks up
@@ -989,6 +1160,7 @@ fn tray_status_label(app: &tauri::AppHandle) -> String {
 #[cfg(feature = "tauri")]
 fn rebuild_tray_menu(
     app: &tauri::AppHandle,
+    texts: &TrayTexts,
     label: &str,
 ) -> Result<(), Box<dyn std::error::Error>> {
     use tauri::menu::{MenuBuilder, MenuItemBuilder};
@@ -998,18 +1170,92 @@ fn rebuild_tray_menu(
         .tray_by_id(TRAY_ID)
         .ok_or_else(|| "tray icon not found".to_string())?;
 
-    let show_item = MenuItemBuilder::with_id("show", "Show Shannon").build(app)?;
-    let new_session_item = MenuItemBuilder::with_id("new-session", "New Session").build(app)?;
+    let show_item = MenuItemBuilder::with_id("show", texts.show).build(app)?;
+    let new_session_item = MenuItemBuilder::with_id("new-session", texts.new_session).build(app)?;
+    // G7 fix: the refresh path previously dropped the companion item, so the
+    // Quick Capture entry vanished from the tray after the first config
+    // update — the rebuilt menu now mirrors the initial one item-for-item.
+    let companion_item = MenuItemBuilder::with_id("companion", texts.companion).build(app)?;
     let status_item = MenuItemBuilder::with_id("status", label)
         .enabled(false)
         .build(app)?;
-    let quit_item = MenuItemBuilder::with_id("quit", "Quit").build(app)?;
+    let quit_item = MenuItemBuilder::with_id("quit", texts.quit).build(app)?;
 
     let menu = MenuBuilder::new(app)
-        .items(&[&status_item, &show_item, &new_session_item, &quit_item])
+        .items(&[
+            &status_item,
+            &show_item,
+            &new_session_item,
+            &companion_item,
+            &quit_item,
+        ])
         .build()?;
 
     tray.set_menu(Some(menu))?;
-    tray.set_tooltip(Some(format!("Shannon AI Assistant — {label}")))?;
+    tray.set_tooltip(Some(format!("{} — {label}", texts.tooltip_app)))?;
     Ok(())
+}
+
+#[cfg(all(test, feature = "tauri"))]
+mod tray_i18n_tests {
+    use super::*;
+
+    /// Every supported language gets a full, distinct label set.
+    #[test]
+    fn tray_texts_covers_all_ui_locales() {
+        for lang in TRAY_LANGS {
+            let t = tray_texts(lang);
+            assert!(!t.show.is_empty(), "{lang}: empty show");
+            assert!(!t.new_session.is_empty(), "{lang}: empty new_session");
+            assert!(!t.companion.is_empty(), "{lang}: empty companion");
+            assert!(!t.quit.is_empty(), "{lang}: empty quit");
+            assert!(!t.status_prefix.is_empty(), "{lang}: empty status_prefix");
+            assert!(!t.tooltip_app.is_empty(), "{lang}: empty tooltip_app");
+        }
+    }
+
+    #[test]
+    fn tray_texts_english_fallback_for_unknown() {
+        let t = tray_texts("klingon");
+        assert_eq!(t.show, "Show Shannon");
+        assert_eq!(t.quit, "Quit");
+    }
+
+    #[test]
+    fn normalize_maps_posix_and_bcp47_tags() {
+        assert_eq!(normalize_tray_lang("en_US.UTF-8").as_deref(), Some("en"));
+        assert_eq!(normalize_tray_lang("zh_CN").as_deref(), Some("zh-CN"));
+        assert_eq!(normalize_tray_lang("zh-Hant-TW").as_deref(), Some("zh-TW"));
+        assert_eq!(normalize_tray_lang("zh-HK").as_deref(), Some("zh-TW"));
+        assert_eq!(normalize_tray_lang("zh-Hans").as_deref(), Some("zh-CN"));
+        assert_eq!(normalize_tray_lang("zh").as_deref(), Some("zh-CN"));
+        assert_eq!(normalize_tray_lang("pt-BR").as_deref(), Some("pt-BR"));
+        assert_eq!(normalize_tray_lang("pt").as_deref(), Some("pt-BR"));
+        assert_eq!(normalize_tray_lang("ja-JP").as_deref(), Some("ja"));
+        assert_eq!(normalize_tray_lang("fr").as_deref(), Some("fr"));
+        assert_eq!(normalize_tray_lang("de-AT").as_deref(), Some("de"));
+        assert_eq!(normalize_tray_lang("ru_RU").as_deref(), Some("ru"));
+    }
+
+    #[test]
+    fn normalize_rejects_unsupported_languages() {
+        assert_eq!(normalize_tray_lang("ar"), None);
+        assert_eq!(normalize_tray_lang("hi"), None);
+        assert_eq!(normalize_tray_lang(""), None);
+    }
+
+    #[test]
+    fn detect_env_override_wins() {
+        // Edition 2024: set_var/remove_var are unsafe (env is process-global).
+        // This module is the only reader/writer of SHANNON_LANG.
+        // SAFETY: no other test thread reads SHANNON_LANG concurrently.
+        unsafe { std::env::set_var("SHANNON_LANG", "zh_TW") };
+        assert_eq!(detect_tray_lang(), "zh-TW");
+        // Unsupported override falls through to the OS locale (unknown in
+        // CI, so the documented `en` fallback).
+        unsafe { std::env::set_var("SHANNON_LANG", "not-a-lang") };
+        let lang = detect_tray_lang();
+        assert!(TRAY_LANGS.contains(&lang.as_str()));
+        unsafe { std::env::remove_var("SHANNON_LANG") };
+    }
 }
