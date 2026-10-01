@@ -152,10 +152,13 @@ describe('Tasks Enhanced', () => {
     expect(screen.getByLabelText('Cancel task')).toBeInTheDocument()
   })
 
-  it('renders Run Now button', () => {
+  it('hides Run Now on catalog (non-routine) task cards', () => {
+    // R2-P1-4: only routine-backed cards offer RunNow — the old catalog
+    // fallback fed the card title to the engine as a fake
+    // "Execute task: X" prompt (and bypassed the allocation form).
     setContext({ tasks: [{ id: '1', title: 'Task', status: 'pending' }], backgroundTasks: [], agents: [] })
     renderTasks()
-    expect(screen.getByText('Run Now')).toBeInTheDocument()
+    expect(screen.queryByText('Run Now')).not.toBeInTheDocument()
   })
 
   it('renders background tasks in execution log', () => {

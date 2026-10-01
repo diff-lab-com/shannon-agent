@@ -32,10 +32,11 @@ import { useBatchRuns } from '@/hooks/batchRuns'
 import { useProjectDeepLink } from '@/hooks/projectDeepLink'
 import ProjectFilterChip from '@/components/ProjectFilterChip'
 import { projectKeyOf } from '@/components/SidebarSessions'
-import type { CreateTaskPayload } from '@/types'
+import type { CreateTaskPayload, ScheduledRoutine } from '@/types'
 import { type FilterStatus, statusMatchesFilter, TASKS_PER_PAGE } from '@/components/tasks/shared'
 import { useSidebarMode } from '@/components/Sidebar'
 import { Banner } from '@/components/ui/banner'
+import { ConfirmDialog } from '@/components/ui/confirm-dialog'
 import TasksHeader from '@/components/tasks/TasksHeader'
 import RoutineTemplatesBrowser from '@/components/routines/RoutineTemplatesBrowser'
 import TasksFilters from '@/components/tasks/TasksFilters'
@@ -124,6 +125,9 @@ export default function Tasks() {
   const [newTaskPrompt, setNewTaskPrompt] = useState('')
   const [taskPage, setTaskPage] = useState(1)
   const [cancelTarget, setCancelTarget] = useState<string | null>(null)
+  // R2-P1-4: routine the user asked to run while it is paused — held here
+  // until the confirm dialog resolves.
+  const [pausedRunTarget, setPausedRunTarget] = useState<ScheduledRoutine | null>(null)
 
   const selectedTask = selectedTaskId
     ? tasks.find(t => t.id === selectedTaskId) ?? backgroundTasks.find(t => t.task_id === selectedTaskId) ?? null
@@ -252,24 +256,34 @@ export default function Tasks() {
   // P1-23: `running` is a real pending flag now — it tracks the in-flight
   // trigger call and clears when it settles (previously a fixed 1.5s
   // setTimeout faked success and leaked a timer across unmounts).
-  const handleRunNow = async (id: string) => {
-    setRunning(id)
+  //
+  // R2-P1-4: RunNow is routine-only. Catalog (board) cards hide the entry
+  // entirely — the old fallback fed the card title to the engine as a fake
+  // "Execute task: X" prompt while bypassing the assign/allocation form.
+  // A paused routine asks for confirmation before a manual run.
+  const routineIds = useMemo(() => new Set(scheduledTasks.map(r => r.id)), [scheduledTasks])
+
+  const runRoutineNow = async (routine: ScheduledRoutine) => {
+    setRunning(routine.id)
     try {
       setErrorMsg(null)
-      const routine = scheduledTasks.find(task => task.id === id)
-      if (routine) {
-        await api.triggerTaskNow(id)
-        toast.success(intl.formatMessage({ id: 'tasks.toast.triggered' }, { name: routine.name }))
-      } else {
-        const fallbackTitle = tasks.find(task => task.id === id)?.title ?? id
-        await api.startBackgroundTask(intl.formatMessage({ id: 'tasks.toast.executeTask' }, { name: fallbackTitle }))
-        toast.success(t('tasks.toast.started'))
-      }
+      await api.triggerTaskNow(routine.id)
+      toast.success(intl.formatMessage({ id: 'tasks.toast.triggered' }, { name: routine.name }))
       await refreshTasks()
     } catch (e) { setErrorMsg(e instanceof Error ? e.message : t('tasks.error.run')); toastError(t('tasks.toast.failed.run'), e) }
     finally {
       setRunning(null)
     }
+  }
+
+  const handleRunNow = async (id: string) => {
+    const routine = scheduledTasks.find(task => task.id === id)
+    if (!routine) return
+    if (!routine.enabled) {
+      setPausedRunTarget(routine)
+      return
+    }
+    await runRoutineNow(routine)
   }
 
   // P0-2: open the session a goal run is driving in the chat page.
@@ -461,6 +475,7 @@ export default function Tasks() {
               totalPages={taskTotalPages}
               onPageChange={setTaskPage}
               runningId={running}
+              runnableIds={routineIds}
               onSelectTask={setSelectedTaskId}
               onRunNow={handleRunNow}
               onCancelTask={setCancelTarget}
@@ -507,6 +522,24 @@ export default function Tasks() {
         open={cancelTarget !== null}
         onCancel={() => setCancelTarget(null)}
         onConfirm={() => cancelTarget && handleCancelTask(cancelTarget)}
+      />
+      {/* R2-P1-4: a paused routine must opt in to a manual run — say so
+          before the engine fires it off-schedule. */}
+      <ConfirmDialog
+        open={pausedRunTarget !== null}
+        title={t('tasks.runNow.pausedTitle')}
+        message={intl.formatMessage(
+          { id: 'tasks.runNow.pausedMessage' },
+          { name: pausedRunTarget?.name ?? '' },
+        )}
+        confirmLabel={t('tasks.runNow.pausedConfirm')}
+        cancelLabel={t('tasks.runNow.pausedCancel')}
+        onConfirm={() => {
+          const routine = pausedRunTarget
+          setPausedRunTarget(null)
+          if (routine) void runRoutineNow(routine)
+        }}
+        onCancel={() => setPausedRunTarget(null)}
       />
     </div>
   )
