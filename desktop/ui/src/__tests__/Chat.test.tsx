@@ -5,6 +5,7 @@ import * as dialog from '@tauri-apps/plugin-dialog'
 import { I18nProvider } from '@/i18n'
 import { ArtifactProvider } from '@/components/artifact/ArtifactContext'
 import Chat from '@/pages/Chat'
+import * as api from '@/lib/tauri-api'
 
 const ctx = vi.hoisted(() => ({
   messages: [] as any[],
@@ -64,6 +65,9 @@ vi.mock('@/context/SessionContext', async (importOriginal) => {
 vi.mock('@/context/CatalogContext', () => ({
   useCatalog: () => ctx,
 }))
+// R2 W2-4: `api` is imported so the budget-continue tests can drive the
+// setup.ts mock defaults (getSessionBudget → null = banners hidden) per
+// scenario via vi.mocked(api.getSessionBudget…).
 
 function resetCtx() {
   ctx.messages = []
@@ -140,13 +144,16 @@ describe('Chat page', () => {
     expect(screen.queryByText('New Chat')).not.toBeInTheDocument()
   })
 
-  it('sends message on Enter key and clears input', () => {
+  // R2 W2-4: the composer clears once the send is ACCEPTED — the send is
+  // awaited now, so the clear lands a microtask after Enter.
+  it('sends message on Enter key and clears input', async () => {
     resetCtx()
     renderChat()
     const input = screen.getByPlaceholderText(/Try: "Explain this repo"/)
     fireEvent.change(input, { target: { value: 'Hello agent' } })
     fireEvent.keyDown(input, { key: 'Enter' })
     expect(ctx.sendMessage).toHaveBeenCalledWith('Hello agent', undefined)
+    await waitFor(() => expect(input).toHaveValue(''))
   })
 
   it('does not send empty message on Enter', () => {
@@ -622,7 +629,7 @@ describe('Chat page', () => {
     }
   })
 
-  it('clears the draft key on send', () => {
+  it('clears the draft key on send', async () => {
     vi.useFakeTimers()
     try {
       resetCtx()
@@ -635,6 +642,9 @@ describe('Chat page', () => {
 
       fireEvent.keyDown(input, { key: 'Enter' })
       expect(ctx.sendMessage).toHaveBeenCalledWith('to be sent', undefined)
+      // R2 W2-4: the draft is cleared once the send is accepted — flush the
+      // confirmation microtask (real-timer waits would fight the fake ones).
+      await act(async () => {})
       expect(localStorage.getItem('shannon.draft.sess-1')).toBeNull()
     } finally {
       vi.useRealTimers()
@@ -847,6 +857,111 @@ describe('Chat page', () => {
       ctx.currentSessionId = 'sess-A'
       act(() => { settle() })
       await waitFor(() => expect(ctx.sendMessage).toHaveBeenCalledWith('belongs to A', undefined))
+    })
+  })
+
+  // ── R2 W2-4: budget block → return-to-composer + honest "Continue once" ──
+  //
+  // The pre-turn budget guard rejects a send AFTER the optimistic append
+  // (AppContext rolls that back); the page used to clear the composer
+  // unconditionally AND "Continue once" reverse-found the last remaining
+  // user message — an EARLIER turn — so "continue" replayed an old question
+  // and the blocked draft (with its attachments) vanished. These pin the
+  // contract: the blocked payload goes back to the composer, the banner's
+  // Continue re-sends exactly that payload, and a first-turn block (nothing
+  // recorded yet) still has a working — or absent, never dead — action.
+  describe('budget continue (R2 W2-4)', () => {
+    const CONTINUE_BLOCKED = 'Continue — send the blocked message (ignore once)'
+    const CONTINUE_LAST = 'Continue — resend the last message (ignore once)'
+
+    beforeEach(() => {
+      // Defaults: no cap → banners hidden (the setup.ts mock baseline).
+      // Over-cap scenarios opt in via overCapSession().
+      vi.mocked(api.getSessionBudget).mockResolvedValue(null)
+      vi.mocked(api.getSessionUsage).mockResolvedValue({
+        input_tokens: 0, output_tokens: 0, cache_creation_tokens: 0,
+        cache_read_tokens: 0, cost_usd: 0, events: 0,
+      } as any)
+    })
+
+    function overCapSession() {
+      ctx.currentSessionId = 'sess-1'
+      ctx.sessions = [{ id: 'sess-1', title: 'S' }]
+      // spent >= cap → the exceeded banner re-derives on mount (B4 P2-8).
+      vi.mocked(api.getSessionBudget).mockResolvedValue(5)
+      vi.mocked(api.getSessionUsage).mockResolvedValue({ cost_usd: 5.2 } as any)
+    }
+
+    // 失真① — a blocked send is returned to the composer, attachments included.
+    it('returns the blocked draft — text and attachment chip — to the composer on rejection', async () => {
+      resetCtx()
+      overCapSession()
+      ctx.sendMessage = vi.fn().mockResolvedValue(false)
+      renderChat()
+      vi.mocked(dialog.open).mockResolvedValueOnce('/home/alice/Downloads/report.pdf')
+      fireEvent.click(screen.getByLabelText('Attachments and tools'))
+      fireEvent.click(screen.getByRole('menuitem', { name: 'Attach file' }))
+      await screen.findByText('report.pdf')
+
+      const input = screen.getByPlaceholderText(/Try: "Explain this repo"/)
+      fireEvent.change(input, { target: { value: 'blocked question' } })
+      fireEvent.keyDown(input, { key: 'Enter' })
+      expect(ctx.sendMessage).toHaveBeenCalledWith('blocked question', ['/home/alice/Downloads/report.pdf'])
+      // The whole draft survives the rejection: text AND the chip.
+      await waitFor(() => expect(input).toHaveValue('blocked question'))
+      expect(screen.getByText('report.pdf')).toBeInTheDocument()
+    })
+
+    // 失真② — Continue once delivers the blocked payload, never an earlier turn.
+    it('Continue once re-sends the blocked payload, not an earlier recorded turn', async () => {
+      resetCtx()
+      overCapSession()
+      ctx.messages = [{ id: '1', role: 'user', content: 'older question', timestamp: 1 }]
+      ctx.sendMessage = vi.fn()
+        .mockResolvedValueOnce(false) // the pre-turn guard refuses this one
+        .mockResolvedValue(true)      // the bypassed continue goes through
+      renderChat()
+      await screen.findByText('Session budget exceeded')
+
+      const input = screen.getByPlaceholderText(/Try: "Explain this repo"/)
+      fireEvent.change(input, { target: { value: 'fresh blocked question' } })
+      fireEvent.keyDown(input, { key: 'Enter' })
+      await waitFor(() => expect(ctx.sendMessage).toHaveBeenCalledWith('fresh blocked question', undefined))
+
+      // The banner now holds the blocked payload — its label says so.
+      fireEvent.click(await screen.findByRole('button', { name: CONTINUE_BLOCKED }))
+      await waitFor(() =>
+        expect(ctx.sendMessage).toHaveBeenLastCalledWith('fresh blocked question', undefined, { budgetBypass: true }))
+      // The old reverse-find would have replayed the earlier turn instead.
+      expect(ctx.sendMessage).not.toHaveBeenCalledWith('older question', undefined)
+      expect(ctx.sendMessage).not.toHaveBeenCalledWith('older question')
+    })
+
+    // 失真③ — a first-turn block has a working action, and with nothing to
+    // deliver the action hides (no clickable no-op).
+    it('first-turn block keeps Continue alive; with no payload and no recorded turn it hides', async () => {
+      resetCtx()
+      overCapSession()
+      ctx.messages = [] // first turn — nothing recorded yet
+      ctx.sendMessage = vi.fn()
+        .mockResolvedValueOnce(false)
+        .mockResolvedValue(true)
+      renderChat()
+      await screen.findByText('Session budget exceeded')
+      // Nothing refused yet and no user turn recorded → the dead button of
+      // the old UI is now simply not there.
+      expect(screen.queryByRole('button', { name: CONTINUE_BLOCKED })).not.toBeInTheDocument()
+      expect(screen.queryByRole('button', { name: CONTINUE_LAST })).not.toBeInTheDocument()
+
+      const input = screen.getByPlaceholderText(/Try: "Explain this repo"/)
+      fireEvent.change(input, { target: { value: 'first ever message' } })
+      fireEvent.keyDown(input, { key: 'Enter' })
+      await waitFor(() => expect(ctx.sendMessage).toHaveBeenCalledTimes(1))
+
+      // The blocked first message becomes the continue target — alive again.
+      fireEvent.click(await screen.findByRole('button', { name: CONTINUE_BLOCKED }))
+      await waitFor(() =>
+        expect(ctx.sendMessage).toHaveBeenLastCalledWith('first ever message', undefined, { budgetBypass: true }))
     })
   })
 })

@@ -118,7 +118,7 @@ describe('BudgetBanner', () => {
     const clearWarning = vi.fn()
     render(
       <BudgetBanner warning={payload} exceeded={null} clearWarning={clearWarning}
-        clearExceeded={vi.fn()} onContinueOnce={vi.fn()} sessionId="s1" />,
+        clearExceeded={vi.fn()} onContinueOnce={vi.fn()} continueTarget={null} sessionId="s1" />,
       { wrapper },
     )
     expect(screen.getByText('Approaching the budget limit')).toBeTruthy()
@@ -127,17 +127,22 @@ describe('BudgetBanner', () => {
     expect(clearWarning).toHaveBeenCalledTimes(1)
   })
 
+  // R2 W2-4: the Continue action is labeled by what it actually delivers —
+  // the held blocked payload ('blocked') or, as the labeled fallback, the
+  // recorded last user turn ('last-message'). With neither, it hides
+  // instead of staying a clickable no-op.
   it('offers the three exceeded actions and dispatches them', () => {
     const onContinueOnce = vi.fn()
     const clearExceeded = vi.fn()
     render(
       <BudgetBanner warning={null} exceeded={payload} clearWarning={vi.fn()}
-        clearExceeded={clearExceeded} onContinueOnce={onContinueOnce} sessionId="s1" />,
+        clearExceeded={clearExceeded} onContinueOnce={onContinueOnce}
+        continueTarget="blocked" sessionId="s1" />,
       { wrapper },
     )
     expect(screen.getByText('Session budget exceeded')).toBeTruthy()
 
-    fireEvent.click(screen.getByRole('button', { name: 'Continue (ignore once)' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Continue — send the blocked message (ignore once)' }))
     expect(onContinueOnce).toHaveBeenCalledTimes(1)
     expect(clearExceeded).toHaveBeenCalledTimes(1)
 
@@ -149,6 +154,30 @@ describe('BudgetBanner', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Raise budget…' }))
     expect(screen.getByText('Set session budget')).toBeTruthy()
     expect((screen.getByPlaceholderText('e.g. 5.00') as HTMLInputElement).value).toBe('5')
+  })
+
+  it('labels the fallback continue honestly as a resend of the last message', () => {
+    const onContinueOnce = vi.fn()
+    render(
+      <BudgetBanner warning={null} exceeded={payload} clearWarning={vi.fn()}
+        clearExceeded={vi.fn()} onContinueOnce={onContinueOnce}
+        continueTarget="last-message" sessionId="s1" />,
+      { wrapper },
+    )
+    fireEvent.click(screen.getByRole('button', { name: 'Continue — resend the last message (ignore once)' }))
+    expect(onContinueOnce).toHaveBeenCalledTimes(1)
+  })
+
+  it('hides the continue action when there is nothing to deliver', () => {
+    render(
+      <BudgetBanner warning={null} exceeded={payload} clearWarning={vi.fn()}
+        clearExceeded={vi.fn()} onContinueOnce={vi.fn()} continueTarget={null} sessionId="s1" />,
+      { wrapper },
+    )
+    expect(screen.queryByRole('button', { name: /Continue —/ })).not.toBeTruthy()
+    // Raise/Stop remain.
+    expect(screen.getByRole('button', { name: 'Raise budget…' })).toBeTruthy()
+    expect(screen.getByRole('button', { name: 'Stop' })).toBeTruthy()
   })
 })
 
