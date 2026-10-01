@@ -10,9 +10,6 @@ import { MemoryRouter } from 'react-router-dom'
 
 import ComposerPanel from '@/pages/chat/ComposerPanel'
 import { ComposerContext, type ComposerContextValue } from '@/pages/chat/ComposerContext'
-import { useChat } from '@/context/ChatContext'
-import { useSessions } from '@/context/SessionContext'
-import { useCatalog } from '@/context/CatalogContext'
 
 const ctx = vi.hoisted(() => ({
   isQuerying: false,

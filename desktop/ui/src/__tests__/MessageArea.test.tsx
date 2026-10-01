@@ -12,9 +12,6 @@ import type { Virtualizer } from '@tanstack/react-virtual'
 
 import MessageArea, { VIRTUALIZE_THRESHOLD } from '@/pages/chat/MessageArea'
 import { ComposerContext } from '@/pages/chat/ComposerContext'
-import { useChat } from '@/context/ChatContext'
-import { useSessions } from '@/context/SessionContext'
-import { useCatalog } from '@/context/CatalogContext'
 
 const ctx = vi.hoisted(() => ({
   messages: [] as any[],

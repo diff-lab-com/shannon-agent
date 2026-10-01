@@ -17,9 +17,6 @@ import { I18nProvider } from '@/i18n'
 import { MessageBubble } from '@/components/chat/MessageBubble'
 import { ArtifactProvider } from '@/components/artifact/ArtifactContext'
 import { clearDiffStatsCache } from '@/components/chat/diffStats'
-import { useChat } from '@/context/ChatContext'
-import { useSessions } from '@/context/SessionContext'
-import { useCatalog } from '@/context/CatalogContext'
 import type { ChatMessage } from '@/types'
 
 vi.mock('@/lib/tauri-api', async importOriginal => {
