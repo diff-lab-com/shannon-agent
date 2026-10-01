@@ -537,7 +537,7 @@
   "tasks.scheduleForm.maxRetries": "Max retries",
   "tasks.scheduleForm.maxRetriesHint": "Auto-retry on failure (0 disables)",
   "tasks.scheduleForm.timeout": "Timeout (seconds)",
-  "tasks.scheduleForm.budget": "Budget (USD, optional)",
+  "tasks.scheduleForm.budget": "Budget cap USD (auto-abort at cap)",
   "tasks.scheduleForm.budgetPlaceholder": "No cap",
   "tasks.scheduleForm.worktreePath": "Worktree path (optional)",
   "tasks.scheduleForm.worktreePlaceholder": "/path/to/worktree",

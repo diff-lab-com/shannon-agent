@@ -537,7 +537,7 @@
   "tasks.scheduleForm.maxRetries": "最大重试次数",
   "tasks.scheduleForm.maxRetriesHint": "失败时自动重试（0 表示禁用）",
   "tasks.scheduleForm.timeout": "超时（秒）",
-  "tasks.scheduleForm.budget": "预算（美元，可选）",
+  "tasks.scheduleForm.budget": "预算上限（美元，超限自动中止）",
   "tasks.scheduleForm.budgetPlaceholder": "无上限",
   "tasks.scheduleForm.worktreePath": "工作区路径（可选）",
   "tasks.scheduleForm.worktreePlaceholder": "/path/to/worktree",
