@@ -1,0 +1,30 @@
+# ChatScript: cancel-tool-run — cancel-matrix 场景 2（工具执行中 stop）。
+#
+# text → tool-start → waitFor 停点（= 工具执行中，无 progress 事件——正是
+# A-18 的盲区形态）→ 用户 stop → query:cancelled 收敛：RunStatusLine/进度/
+# 工具卡全部退场。迟到 tool-result 用 control.emitNow 注入（模拟旧查询
+# 事件边界迟到投递）→ 卡片不得复活（activeToolCalls 已随 run 清空，
+# QUERY_TOOL_RESULT 的 map 找不到目标 id → no-op）。
+name: cancel-tool-run
+description: cancel-matrix #2 — 工具执行中 stop → 卡片收敛；迟到 tool-result 不复活卡片
+seed:
+  config:
+    hasKey: true
+  sessions:
+    - id: script-sess-cancel-tool
+      title: Cancel tool run
+      messages: []
+turns:
+  - user: 跑一个很慢的命令
+    script:
+      - event: query:text
+        chunks:
+          - "好的，命令跑起来了。"
+      - event: query:tool-start
+        payload:
+          tool_use_id: tool-slow-1
+          tool_name: Bash
+          tool_input:
+            command: "sleep 300"
+      # Park = 工具执行中（无 progress 事件可发——A-18 的取消盲区形态）。
+      - waitFor: ui

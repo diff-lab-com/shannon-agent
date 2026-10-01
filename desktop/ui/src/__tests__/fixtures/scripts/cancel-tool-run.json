@@ -1,0 +1,42 @@
+{
+  "name": "cancel-tool-run",
+  "description": "cancel-matrix",
+  "seed": {
+    "config": {
+      "hasKey": true
+    },
+    "sessions": [
+      {
+        "id": "script-sess-cancel-tool",
+        "title": "Cancel tool run",
+        "messages": []
+      }
+    ]
+  },
+  "turns": [
+    {
+      "user": "跑一个很慢的命令",
+      "script": [
+        {
+          "event": "query:text",
+          "chunks": [
+            "好的，命令跑起来了。"
+          ]
+        },
+        {
+          "event": "query:tool-start",
+          "payload": {
+            "tool_use_id": "tool-slow-1",
+            "tool_name": "Bash",
+            "tool_input": {
+              "command": "sleep 300"
+            }
+          }
+        },
+        {
+          "waitFor": "ui"
+        }
+      ]
+    }
+  ]
+}
