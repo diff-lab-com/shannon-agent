@@ -1294,13 +1294,15 @@ export interface TriageStats {
 /// `session_failed` (the session's last turn failed), and `skill_candidate`
 /// (a detected skill pattern awaits review). `dream_report` is the daily
 /// dream-distillation summary card (at most one per day, deduped by the
-/// backend writer).
+/// backend writer). `background_task` is a failed desktop background task
+/// (R2-P1-5) — successes/cancels never write an item.
 export type InboxSource =
   | 'routine'
   | 'scheduled_task'
   | 'goal'
   | 'trigger'
   | 'batch'
+  | 'background_task'
   | 'session_approval'
   | 'session_failed'
   | 'skill_candidate'

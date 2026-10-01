@@ -3,6 +3,8 @@ import { render, screen, fireEvent, waitFor } from '@testing-library/react'
 import BackgroundTasksPanel, {
   formatElapsed,
   runningBackgroundTasks,
+  terminalBackgroundTasks,
+  MAX_TERMINAL_ROWS,
 } from '@/components/tasks/BackgroundTasksPanel'
 import type { BackgroundTaskInfo } from '@/types'
 
@@ -52,8 +54,8 @@ afterEach(() => {
 })
 
 describe('BackgroundTasksPanel', () => {
-  it('renders nothing when no background task is in flight', () => {
-    catalogBackgroundTasks.mockReturnValue([makeTask({ status: 'completed', completed_at: Date.now() })])
+  it('renders nothing when there are no tasks at all', () => {
+    catalogBackgroundTasks.mockReturnValue([])
     const { container } = render(<BackgroundTasksPanel />)
     expect(container).toBeEmptyDOMElement()
   })
@@ -62,19 +64,86 @@ describe('BackgroundTasksPanel', () => {
     catalogBackgroundTasks.mockReturnValue([
       makeTask({ task_id: 'bt-1', prompt: 'Refactor the parser module', started_at: Date.now() - 65_000 }),
       makeTask({ task_id: 'bt-2', prompt: 'Write release notes', started_at: Date.now() - 5_000 }),
-      // A finished task never shows up (only the in-flight slice).
-      makeTask({ task_id: 'bt-3', status: 'cancelled', completed_at: Date.now() }),
     ])
     render(<BackgroundTasksPanel />)
     expect(screen.getByTestId('background-tasks-panel')).toBeInTheDocument()
     expect(screen.getByText('Refactor the parser module')).toBeInTheDocument()
     expect(screen.getByText('Write release notes')).toBeInTheDocument()
-    expect(screen.queryByText('Ghost task')).not.toBeInTheDocument()
     // Two running rows, each with a stop button.
     expect(screen.getAllByTestId('background-task-row')).toHaveLength(2)
     expect(screen.getAllByRole('button', { name: 'Stop background task' })).toHaveLength(2)
     // Elapsed is rendered as m:ss (65s → "1:05").
     expect(screen.getByText('1:05')).toBeInTheDocument()
+  })
+
+  it('keeps recent terminal rows visible with status, duration and error summary (R2-P1-5)', () => {
+    const finished = Date.now()
+    catalogBackgroundTasks.mockReturnValue([
+      makeTask({
+        task_id: 'bt-done',
+        prompt: 'Summarize the changelog',
+        status: 'completed',
+        started_at: finished - 95_000,
+        completed_at: finished - 30_000,
+        output: 'All done',
+      }),
+      makeTask({
+        task_id: 'bt-fail',
+        prompt: 'Migrate the database',
+        status: 'failed',
+        started_at: finished - 60_000,
+        completed_at: finished - 10_000,
+        output: 'engine stream broke\nfinal error: connection reset by peer',
+      }),
+    ])
+    render(<BackgroundTasksPanel />)
+    // Terminal segment exists; running segment does not.
+    expect(screen.getByTestId('background-tasks-terminal')).toBeInTheDocument()
+    expect(screen.queryByTestId('background-task-row')).not.toBeInTheDocument()
+    // Status is a text label per row — not colour-only (a11y).
+    expect(screen.getByText('Completed')).toBeInTheDocument()
+    expect(screen.getByText('Failed')).toBeInTheDocument()
+    // Duration from started_at → completed_at (65s → "1:05").
+    expect(screen.getByText('1:05')).toBeInTheDocument()
+    // Failed row carries the error headline (last non-empty output line).
+    expect(screen.getByText('final error: connection reset by peer')).toBeInTheDocument()
+    expect(screen.queryByText('engine stream broke')).not.toBeInTheDocument()
+    // Completed rows show no error line.
+    expect(screen.queryByText('All done')).not.toBeInTheDocument()
+  })
+
+  it('shows a cancelled task in the recent slice without an error line', () => {
+    catalogBackgroundTasks.mockReturnValue([
+      makeTask({
+        task_id: 'bt-cancel',
+        status: 'cancelled',
+        completed_at: Date.now() - 1_000,
+        output: 'Task cancelled by user',
+      }),
+    ])
+    render(<BackgroundTasksPanel />)
+    expect(screen.getByTestId('background-task-terminal-row')).toBeInTheDocument()
+    expect(screen.getByText('Cancelled')).toBeInTheDocument()
+    expect(screen.queryByText('Failed')).not.toBeInTheDocument()
+  })
+
+  it('caps the recent-terminal slice at the newest MAX_TERMINAL_ROWS rows', () => {
+    const now = Date.now()
+    const tasks: BackgroundTaskInfo[] = []
+    for (let i = 0; i < MAX_TERMINAL_ROWS + 3; i++) {
+      tasks.push(makeTask({
+        task_id: `bt-${i}`,
+        prompt: `task ${i}`,
+        status: 'completed',
+        started_at: now - (i + 2) * 60_000,
+        completed_at: now - (i + 1) * 60_000,
+      }))
+    }
+    const slice = terminalBackgroundTasks(tasks)
+    expect(slice).toHaveLength(MAX_TERMINAL_ROWS)
+    // Newest first: bt-0 finished most recently.
+    expect(slice[0].task_id).toBe('bt-0')
+    expect(slice[MAX_TERMINAL_ROWS - 1].task_id).toBe(`bt-${MAX_TERMINAL_ROWS - 1}`)
   })
 
   it('stops a task through cancel_background_task', async () => {
@@ -128,5 +197,6 @@ describe('BackgroundTasksPanel', () => {
       makeTask({ status: 'failed', completed_at: 3 }),
     ]
     expect(runningBackgroundTasks(tasks)).toHaveLength(1)
+    expect(terminalBackgroundTasks(tasks)).toHaveLength(3)
   })
 })

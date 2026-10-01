@@ -3,7 +3,8 @@
 // `get_inbox_stats` / `rerun_inbox_item` / `continue_inbox_item_session`).
 // Items are produced by scheduled routine runs (`routine`/`scheduled_task`),
 // goal events, the external trigger endpoint, parallel batch-run
-// completions (`batch`), session permission prompts / failed turns
+// completions (`batch`), failed desktop background tasks (`background_task`,
+// R2-P1-5), session permission prompts / failed turns
 // (`session_approval`/`session_failed`) and detected skill candidates
 // (`skill_candidate`) — see `inbox_commands.rs` / `inbox_session_events.rs`.
 //
@@ -76,6 +77,10 @@ export function sourceMeta(source: InboxSource): { icon: string; color: string; 
       // Parallel batch run's aggregate completion record (T3) — same visual
       // language as the batch runner panel (call_split icon, tertiary color).
       return { icon: 'call_split', color: 'text-tertiary', labelKey: 'inbox.source.batch' }
+    case 'background_task':
+      // R2-P1-5: a failed desktop background task (bolt-on-error mirrors the
+      // Runs panel's in-flight icon + the failure severity of `trigger`).
+      return { icon: 'bolt', color: 'text-error', labelKey: 'inbox.source.background_task' }
     case 'session_approval':
       // T5: a session permission prompt is waiting on the user (lock_open =
       // an action is gated); secondary color reads "needs your action".
@@ -97,7 +102,7 @@ export function sourceMeta(source: InboxSource): { icon: string; color: string; 
 }
 
 export const STATUS_OPTIONS: readonly (InboxItemStatus | 'all')[] = ['all', 'pending', 'read', 'archived']
-export const SOURCE_OPTIONS: readonly (InboxSource | 'all')[] = ['all', 'routine', 'scheduled_task', 'goal', 'trigger', 'batch', 'session_approval', 'session_failed', 'skill_candidate', 'dream_report']
+export const SOURCE_OPTIONS: readonly (InboxSource | 'all')[] = ['all', 'routine', 'scheduled_task', 'goal', 'trigger', 'batch', 'background_task', 'session_approval', 'session_failed', 'skill_candidate', 'dream_report']
 
 // ─── B4 #28: URL-persisted view state ──────────────────────────────────────
 // Filters, sort and grouping live in the search params (?status=&source=
