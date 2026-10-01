@@ -1041,6 +1041,14 @@ export const handlers: Record<string, MockHandler> = {
     const srv = MOCK_MCP_SERVERS.find(s => s.name === args.name)
     return srv ? { ...clone(srv), enabled: args.enabled, connected: args.enabled } : null
   },
+  // W3-B (A2): re-auth flips a needs_auth OAuth row back to connected.
+  async reauthenticate_mcp_server(args: { name: string }) {
+    await delay(400)
+    const srv = MOCK_MCP_SERVERS.find(s => s.name === args.name)
+    return srv
+      ? { ...clone(srv), connected: true, failure_kind: null, last_error: null, last_connected: Date.now() }
+      : null
+  },
   async get_mcp_server_config(args: { name: string }) {
     await delay()
     const srv = MOCK_MCP_SERVERS.find(s => s.name === args.name)

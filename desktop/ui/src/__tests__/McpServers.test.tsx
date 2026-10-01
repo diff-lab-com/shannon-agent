@@ -14,6 +14,7 @@ const installMcpMcpb = vi.hoisted(() => vi.fn())
 const uninstallMcpServer = vi.hoisted(() => vi.fn())
 const restartMcpServer = vi.hoisted(() => vi.fn())
 const setMcpServerEnabled = vi.hoisted(() => vi.fn())
+const reauthenticateMcpServer = vi.hoisted(() => vi.fn())
 
 vi.mock('@/lib/tauri-api', () => ({
   default: {},
@@ -24,6 +25,7 @@ vi.mock('@/lib/tauri-api', () => ({
   uninstallMcpServer: (...a: unknown[]) => uninstallMcpServer(...a),
   restartMcpServer: (...a: unknown[]) => restartMcpServer(...a),
   setMcpServerEnabled: (...a: unknown[]) => setMcpServerEnabled(...a),
+  reauthenticateMcpServer: (...a: unknown[]) => reauthenticateMcpServer(...a),
 }))
 
 function renderWithRouter() {
@@ -62,8 +64,8 @@ const sampleInstalled = {
   has_auth_headers: false,
 }
 
-// W1-A honest state: an OAuth-product url-only row (headers on the store
-// blob) — backend verdict `has_auth_headers: true`.
+// W3-B (A2): an OAuth url-only row in the NeedsAuth state — stored
+// credential rejected even after a refresh; the backend classifies it.
 const sampleRemote = {
   name: 'notion',
   command: '',
@@ -73,6 +75,22 @@ const sampleRemote = {
   tools: [],
   last_connected: null,
   url: 'https://mcp.notion.com/mcp',
+  has_auth_headers: true,
+  failure_kind: 'needs_auth',
+  last_error: "Remote MCP server 'notion' returned HTTP 401 (unauthorized).",
+}
+
+// W3-B (A2): a connected OAuth row — renders isomorphic to stdio (Online +
+// tool chip, restart enabled).
+const sampleOAuthConnected = {
+  name: 'linear-oauth',
+  command: '',
+  enabled: true,
+  connected: true,
+  tool_count: 4,
+  tools: [],
+  last_connected: 1735689600000,
+  url: 'https://mcp.linear.app/sse',
   has_auth_headers: true,
 }
 
@@ -112,7 +130,24 @@ const sampleFailedRemote = {
   last_connected: null,
   url: 'http://127.0.0.1:1/mcp',
   has_auth_headers: false,
-  last_error: "Remote MCP server 'flaky-remote' returned HTTP 500",
+  failure_kind: 'unreachable',
+  last_error: "Remote MCP server 'flaky-remote' HTTP request failed: connection refused",
+}
+
+// W3-B (A2): a server-side failure (5xx) — red badge, retry plus a
+// "view details" expander over the full error text.
+const sampleServerErrorRemote = {
+  name: 'erroring-remote',
+  command: '',
+  enabled: true,
+  connected: false,
+  tool_count: 0,
+  tools: [],
+  last_connected: null,
+  url: 'https://mcp.example.com/mcp',
+  has_auth_headers: false,
+  failure_kind: 'server_error',
+  last_error: "Remote MCP server 'erroring-remote' returned HTTP 503",
 }
 
 const sampleDisabled = {
@@ -134,6 +169,7 @@ beforeEach(() => {
   uninstallMcpServer.mockReset()
   restartMcpServer.mockReset()
   setMcpServerEnabled.mockReset()
+  reauthenticateMcpServer.mockReset()
   // Default: registry returns empty so any test opening the modal won't crash.
   listMcpRegistryServers.mockResolvedValue([])
 })
@@ -402,29 +438,69 @@ describe('McpServers (Cursor-style UX)', () => {
     expect(screen.getByTestId('probe').dataset.search).toBe('?scope=mcp%3Afilesystem')
   })
 
-  // W1-1 (R2-P0-1(B)): url-only OAuth/HTTP installs show an honest Remote
-  // state + hint (never the Offline bad state), the remote endpoint as the
-  // preview, and a disabled Restart with an explanatory label.
-  it('renders url-only servers as Remote with restart disabled', async () => {
+  // W3-B (A2): a needs_auth OAuth row shows the amber "Login expired"
+  // badge, the Re-authenticate action, and a restart that is disabled with
+  // an explanatory label (restart can never fake success on a dead
+  // credential). Never the Offline bad state.
+  it('renders a needs_auth OAuth row with re-authenticate and restart disabled', async () => {
     listMcpServers.mockResolvedValue([sampleRemote])
     renderWithRouter()
     await waitFor(() => {
-      expect(screen.getByText('Remote')).toBeInTheDocument()
+      expect(screen.getByText('Login expired')).toBeInTheDocument()
     })
-    // Honest hint, not the Offline badge.
+    // The class-specific hint, not the Offline badge.
     expect(
-      screen.getByText('Remote server · Desktop support coming soon — use the CLI for now.'),
+      screen.getByText(
+        'The saved sign-in is no longer valid. Re-authenticate to reconnect.',
+      ),
     ).toBeInTheDocument()
     expect(screen.queryByText('Offline')).not.toBeInTheDocument()
-    // The remote endpoint is shown as the row preview.
+    // The remote endpoint is shown as the row preview (context preserved).
     expect(screen.getByText('https://mcp.notion.com/mcp')).toBeInTheDocument()
+    // Re-authenticate is enabled and calls the backend with the row name.
+    const reauth = screen.getByTestId('mcp-reauth-notion')
+    expect(reauth).toBeEnabled()
     // Restart is disabled and its accessible name explains why.
     const restart = screen.getByRole('button', {
-      name: "Remote servers can't be restarted from the desktop yet — use the CLI.",
+      name: 'Restart is unavailable while the login is expired — re-authenticate instead.',
     })
     expect(restart).toBeDisabled()
     // Remove still works on remote rows.
     expect(screen.getByText('Remove')).toBeEnabled()
+  })
+
+  // W3-B (A2): the re-authenticate action replays the OAuth loopback flow
+  // via `reauthenticate_mcp_server` and refreshes the list afterwards.
+  it('re-authenticates a needs_auth row from its action button', async () => {
+    listMcpServers.mockResolvedValue([sampleRemote])
+    reauthenticateMcpServer.mockResolvedValue({ ...sampleRemote, connected: true })
+    renderWithRouter()
+    await waitFor(() => {
+      expect(screen.getByTestId('mcp-reauth-notion')).toBeEnabled()
+    })
+    fireEvent.click(screen.getByTestId('mcp-reauth-notion'))
+    await waitFor(() => {
+      expect(reauthenticateMcpServer).toHaveBeenCalledWith('notion')
+    })
+    // The refresh re-reads the installed list.
+    await waitFor(() => {
+      expect(listMcpServers.mock.calls.length).toBeGreaterThanOrEqual(2)
+    })
+  })
+
+  // W3-B (A2): a connected OAuth row renders exactly like a stdio row —
+  // Online pill, separate tool chip, enabled restart (the pool reconnects
+  // OAuth rows from their stored credential).
+  it('renders a connected OAuth row like stdio with restart enabled', async () => {
+    listMcpServers.mockResolvedValue([sampleOAuthConnected])
+    renderWithRouter()
+    await waitFor(() => {
+      expect(screen.getByText('Online')).toBeInTheDocument()
+    })
+    expect(screen.getByText('4 tools')).toBeInTheDocument()
+    const restart = screen.getByRole('button', { name: 'Restart linear-oauth' })
+    expect(restart).toBeEnabled()
+    expect(screen.queryByText('Login expired')).not.toBeInTheDocument()
   })
 
   // W1-7 (R2-P1-6): a failed stdio server shows the pool's concrete error,
@@ -473,34 +549,79 @@ describe('McpServers (Cursor-style UX)', () => {
     expect(screen.queryByText('Remote')).not.toBeInTheDocument()
   })
 
-  // W2-A honesty kept: the OAuth-product row still shows the W1-A Remote
-  // badge + hint and a disabled restart; the header-less sibling would not.
-  it('keeps the honest Remote badge for auth-gated url-only rows', async () => {
-    listMcpServers.mockResolvedValue([sampleRemote])
+  // W2-A honesty kept through A2: an OAuth row with a stored credential
+  // but no pool verdict yet (fresh seed) renders NeedsAuth, not Offline.
+  it('treats an unconnected OAuth row without a verdict as needs_auth', async () => {
+    const { failure_kind: _fk, last_error: _le, ...noVerdict } = sampleRemote
+    listMcpServers.mockResolvedValue([noVerdict])
     renderWithRouter()
     await waitFor(() => {
-      expect(screen.getByText('Remote')).toBeInTheDocument()
+      expect(screen.getByText('Login expired')).toBeInTheDocument()
     })
-    expect(
-      screen.getByText('Remote server · Desktop support coming soon — use the CLI for now.'),
-    ).toBeInTheDocument()
-    const restart = screen.getByRole('button', {
-      name: "Remote servers can't be restarted from the desktop yet — use the CLI.",
-    })
-    expect(restart).toBeDisabled()
+    expect(screen.queryByText('Offline')).not.toBeInTheDocument()
   })
 
-  // W2-A: a failed remote connection surfaces the pool's last_error inline,
-  // same as failed stdio rows.
-  it('shows the concrete error of a failed remote connection', async () => {
-    listMcpServers.mockResolvedValue([sampleFailedRemote])
+  // W1-7 (R2-P1-6): a failed stdio server shows the pool's concrete error,
+  // not just a colour-only Offline pill.
+  it('shows the concrete error of a failed server', async () => {
+    listMcpServers.mockResolvedValue([sampleFailed])
     renderWithRouter()
     await waitFor(() => {
-      expect(
-        screen.getByText("Remote MCP server 'flaky-remote' returned HTTP 500"),
-      ).toBeInTheDocument()
+      expect(screen.getByText('spawn /nonexistent ENOENT')).toBeInTheDocument()
     })
     expect(screen.getByText('Offline')).toBeInTheDocument()
+  })
+
+  // W3-B (A2), failure class ②: an unreachable remote row shows the amber
+  // "Can't connect" badge, the concrete error inline, and an ENABLED retry
+  // (restart = real reconnect). No re-authenticate button.
+  it('renders an unreachable remote row with retry enabled', async () => {
+    listMcpServers.mockResolvedValue([sampleFailedRemote])
+    restartMcpServer.mockResolvedValue({ ...sampleFailedRemote, connected: true })
+    renderWithRouter()
+    await waitFor(() => {
+      expect(screen.getByText("Can't connect")).toBeInTheDocument()
+    })
+    expect(
+      screen.getByText(
+        "Remote MCP server 'flaky-remote' HTTP request failed: connection refused",
+      ),
+    ).toBeInTheDocument()
+    expect(screen.queryByText('Offline')).not.toBeInTheDocument()
+    // Retry is a real restart for remote rows since A2.
+    const restart = screen.getByRole('button', { name: 'Restart flaky-remote' })
+    expect(restart).toBeEnabled()
+    expect(screen.queryByTestId('mcp-reauth-flaky-remote')).not.toBeInTheDocument()
+  })
+
+  // W3-B (A2), failure class ③: a server-error remote row shows the red
+  // "Server error" badge, retry, and a "View details" expander carrying the
+  // full error text.
+  it('renders a server_error remote row with retry and view details', async () => {
+    listMcpServers.mockResolvedValue([sampleServerErrorRemote])
+    renderWithRouter()
+    await waitFor(() => {
+      expect(screen.getByText('Server error')).toBeInTheDocument()
+    })
+    expect(
+      screen.getByText("Remote MCP server 'erroring-remote' returned HTTP 503"),
+    ).toBeInTheDocument()
+    expect(screen.queryByText('Offline')).not.toBeInTheDocument()
+    const restart = screen.getByRole('button', { name: 'Restart erroring-remote' })
+    expect(restart).toBeEnabled()
+
+    // The detail expander reveals the full error text; toggle hides it.
+    fireEvent.click(screen.getByRole('button', { name: 'View details' }))
+    await waitFor(() => {
+      expect(screen.getByRole('button', { name: 'Hide details' })).toBeInTheDocument()
+    })
+    expect(
+      screen.getAllByText("Remote MCP server 'erroring-remote' returned HTTP 503").length,
+    ).toBeGreaterThanOrEqual(2)
+    fireEvent.click(screen.getByRole('button', { name: 'Hide details' }))
+    await waitFor(() => {
+      expect(screen.getByRole('button', { name: 'View details' })).toBeInTheDocument()
+    })
   })
 
   // W2-A 顺手①: a disabled row shows a Disabled badge (not Offline) and an
