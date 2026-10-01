@@ -3296,9 +3296,15 @@ fn collect_attachments_refuses_unsupported_image_types() {
     // the old behavior collected them and dropped them from the image
     // blocks silently (no rejected_attachments entry at all).
     assert_eq!(rejected.len(), 2, "svg + bmp must be reported");
-    assert_eq!(rejected[0].reason, RejectedAttachmentReason::UnsupportedType);
+    assert_eq!(
+        rejected[0].reason,
+        RejectedAttachmentReason::UnsupportedType
+    );
     assert!(rejected[0].path.ends_with("logo.svg"));
-    assert_eq!(rejected[1].reason, RejectedAttachmentReason::UnsupportedType);
+    assert_eq!(
+        rejected[1].reason,
+        RejectedAttachmentReason::UnsupportedType
+    );
     assert!(rejected[1].path.ends_with("scan.BMP"));
 }
 
