@@ -7,8 +7,12 @@
 // fields are sent, mirroring how DependsOnEditor / OffpeakWindowEditor save.
 // On failure the local edits are kept (nothing resets), so the user can
 // retry or copy their work out.
+//
+// W3-1: saving is a two-step flow, mirroring creation — "Save" opens a
+// structured review of the edited routine and an explicit Activate issues
+// the update. "Back to edit" returns with every local edit intact.
 
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState, type ReactNode } from 'react'
 import { useIntl } from 'react-intl'
 import { toast } from 'sonner'
 import { Button } from '@/components/ui/button'
@@ -39,6 +43,10 @@ export default function RoutineBasicsEditor({ routine, onUpdated }: RoutineBasic
   const [intervalSecs, setIntervalSecs] = useState(routine.interval_secs || 3600)
   const [cronExpr, setCronExpr] = useState(routine.cron_expr ?? '0 9 * * *')
   const [saving, setSaving] = useState(false)
+  // W3-1: the edit path confirms too — `save` only opens the review step;
+  // Activate is the sole path to `update_scheduled_task`.
+  const [step, setStep] = useState<'edit' | 'review'>('edit')
+  const reviewHeadingRef = useRef<HTMLHeadingElement>(null)
 
   // Live cron validity — same debounce + preview command as ScheduleForm.
   const [cronPreview, setCronPreview] = useState<{ valid: boolean; error?: string } | null>(null)
@@ -96,8 +104,68 @@ export default function RoutineBasicsEditor({ routine, onUpdated }: RoutineBasic
     }
   }
 
+  // W3-1: focus lands on the review heading when the confirm step opens, so
+  // keyboard and screen-reader users meet the summary before any button.
+  useEffect(() => {
+    if (step === 'review') reviewHeadingRef.current?.focus()
+  }, [step])
+
   return (
     <div className="rounded-xl border border-primary/20 bg-primary/5 p-md flex flex-col gap-sm">
+      {step === 'review' ? (
+        /* W3-1: the edit path confirms too — this preview is built from the
+            same live state Activate submits to update_scheduled_task. */
+        <section
+          aria-labelledby="routine-review-title"
+          aria-describedby="routine-review-intro"
+          data-testid="routine-basics-review"
+          className="flex flex-col gap-sm"
+        >
+          <h3
+            id="routine-review-title"
+            ref={reviewHeadingRef}
+            tabIndex={-1}
+            className="font-label-md text-on-surface font-semibold focus:outline-none"
+          >
+            {t('tasks.scheduleForm.reviewTitle')}
+          </h3>
+          <p id="routine-review-intro" className="font-label-sm text-label-sm text-on-surface-variant">
+            {t('tasks.scheduleForm.reviewIntro')}
+          </p>
+          <dl className="flex flex-col gap-sm">
+            <EditorReviewRow label={t('tasks.scheduleForm.reviewSection.name')}>
+              <span className="font-body-sm font-medium text-on-surface break-words">{name.trim()}</span>
+            </EditorReviewRow>
+            <EditorReviewRow label={t('tasks.scheduleForm.reviewSection.trigger')}>
+              <div className="flex flex-col gap-xs">
+                <span className="font-body-sm font-medium text-on-surface">
+                  {t(`tasks.scheduleForm.type.${triggerType}`)}
+                </span>
+                {triggerType === 'interval' && (
+                  <span className="font-label-sm text-label-xs text-on-surface-variant">
+                    {intervalSecs}s ·{' '}
+                    {intl.formatMessage({ id: 'tasks.scheduleForm.intervalHint' }, { mins: Math.round(intervalSecs / 60), hrs: Math.round(intervalSecs / 3600) })}
+                  </span>
+                )}
+                {triggerType === 'cron' && (
+                  <>
+                    <span className="font-body-sm font-mono text-on-surface break-all">{cronExpr.trim()}</span>
+                    {cronPreview?.valid && (
+                      <span className="font-label-sm text-label-xs text-on-surface-variant">
+                        {t('tasks.scheduleForm.validCron')}
+                      </span>
+                    )}
+                  </>
+                )}
+              </div>
+            </EditorReviewRow>
+            <EditorReviewRow label={t('tasks.scheduleForm.reviewSection.prompt')}>
+              <span className="font-body-sm text-on-surface whitespace-pre-wrap break-words">{prompt.trim()}</span>
+            </EditorReviewRow>
+          </dl>
+        </section>
+      ) : (
+        <>
       <span className="font-label-md text-on-surface font-semibold">
         {t('tasks.routineBasicsEditor.title')}
       </span>
@@ -209,20 +277,63 @@ export default function RoutineBasicsEditor({ routine, onUpdated }: RoutineBasic
         </div>
       ) : null}
 
+        </>
+      )}
+
+      {step === 'edit' ? (
       <div className="flex justify-end">
+        {/* W3-1: "Save" opens the structured review step; it never persists
+            by itself — Activate below issues the update. */}
         <Button
           type="button"
           size="sm"
-          onClick={() => void save()}
+          onClick={() => setStep('review')}
           disabled={!dirty || !valid || saving}
           aria-busy={saving || undefined}
           data-testid="routine-basics-save"
           className="rounded-lg"
         >
           <span className="material-symbols-outlined icon-md" aria-hidden="true">save</span>
-          {saving ? t('tasks.routineBasicsEditor.saving') : t('tasks.routineBasicsEditor.save')}
+          {t('tasks.routineBasicsEditor.save')}
         </Button>
       </div>
+      ) : (
+      <div className="flex justify-end gap-sm">
+        {/* All edits live in this component's state — going back keeps them. */}
+        <Button
+          type="button"
+          size="sm"
+          variant="ghost"
+          onClick={() => setStep('edit')}
+          data-testid="routine-basics-back"
+          className="rounded-lg"
+        >
+          {t('tasks.scheduleForm.backToEdit')}
+        </Button>
+        <Button
+          type="button"
+          size="sm"
+          onClick={() => void save()}
+          disabled={saving}
+          aria-busy={saving || undefined}
+          data-testid="routine-basics-activate"
+          className="rounded-lg"
+        >
+          <span className="material-symbols-outlined icon-md" aria-hidden="true">bolt</span>
+          {saving ? t('tasks.routineBasicsEditor.saving') : t('tasks.scheduleForm.activate')}
+        </Button>
+      </div>
+      )}
+    </div>
+  )
+}
+
+/** W3-1: one label/value row of the editor's structured review grid. */
+function EditorReviewRow({ label, children }: { label: string; children: ReactNode }) {
+  return (
+    <div className="grid grid-cols-[minmax(6rem,auto)_1fr] gap-sm items-start">
+      <dt className="font-label-sm text-label-xs text-on-surface-variant uppercase tracking-wider pt-0.5">{label}</dt>
+      <dd className="min-w-0 flex flex-col gap-xs">{children}</dd>
     </div>
   )
 }

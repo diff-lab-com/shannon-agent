@@ -23,16 +23,16 @@ describe('ScheduleForm', () => {
     expect(screen.getByPlaceholderText(/Describe what this routine/)).toBeInTheDocument()
   })
 
-  it('disables Create Routine when required fields missing', () => {
+  it('disables Review when required fields missing', () => {
     render(<ScheduleForm onSubmit={() => {}} onCancel={() => {}} />)
-    expect(screen.getByRole('button', { name: /^Create Routine$/ })).toBeDisabled()
+    expect(screen.getByRole('button', { name: /^Review$/ })).toBeDisabled()
   })
 
-  it('enables Create Routine when name + prompt + interval filled', () => {
+  it('enables Review when name + prompt + interval filled', () => {
     render(<ScheduleForm onSubmit={() => {}} onCancel={() => {}} />)
     fireEvent.change(screen.getByPlaceholderText(/Daily standup/), { target: { value: 'Standup' } })
     fireEvent.change(screen.getByPlaceholderText(/Describe what this routine/), { target: { value: 'Run summary' } })
-    expect(screen.getByRole('button', { name: /^Create Routine$/ })).toBeEnabled()
+    expect(screen.getByRole('button', { name: /^Review$/ })).toBeEnabled()
   })
 
   it('shows cron input when cron trigger selected', async () => {
@@ -76,7 +76,8 @@ describe('ScheduleForm', () => {
     render(<ScheduleForm onSubmit={onSubmit} onCancel={() => {}} />)
     fireEvent.change(screen.getByPlaceholderText(/Daily standup/), { target: { value: 'Daily' } })
     fireEvent.change(screen.getByPlaceholderText(/Describe what this routine/), { target: { value: 'Run' } })
-    fireEvent.click(screen.getByRole('button', { name: /^Create Routine$/ }))
+    fireEvent.click(screen.getByRole('button', { name: /^Review$/ }))
+    fireEvent.click(screen.getByRole('button', { name: /^Activate routine$/ }))
     expect(onSubmit).toHaveBeenCalledWith(expect.objectContaining({
       name: 'Daily',
       prompt: 'Run',
@@ -95,7 +96,8 @@ describe('ScheduleForm', () => {
     fireEvent.click(screen.getByRole('radio', { name: /Cron/ }))
     fireEvent.change(screen.getByPlaceholderText('0 9 * * *'), { target: { value: '0 9 * * *' } })
     await waitFor(() => expect(previewCron).toHaveBeenCalled())
-    fireEvent.click(screen.getByRole('button', { name: /^Create Routine$/ }))
+    fireEvent.click(screen.getByRole('button', { name: /^Review$/ }))
+    fireEvent.click(screen.getByRole('button', { name: /^Activate routine$/ }))
     expect(onSubmit).toHaveBeenCalledWith(expect.objectContaining({
       trigger_type: 'cron',
       cron_expr: '0 9 * * *',
@@ -123,5 +125,56 @@ describe('ScheduleForm', () => {
     const retryInput = screen.getByDisplayValue(2)
     fireEvent.change(retryInput, { target: { value: '5' } })
     expect(retryInput).toHaveValue(5)
+  })
+})
+
+// ── W3-1: two-step review → activate ───────────────────────────────────────
+describe('ScheduleForm review step (W3-1)', () => {
+  it('does not create anything until Activate is pressed', () => {
+    const onSubmit = vi.fn()
+    render(<ScheduleForm onSubmit={onSubmit} onCancel={() => {}} />)
+    fireEvent.change(screen.getByPlaceholderText(/Daily standup/), { target: { value: 'Daily' } })
+    fireEvent.change(screen.getByPlaceholderText(/Describe what this routine/), { target: { value: 'Run' } })
+    fireEvent.click(screen.getByRole('button', { name: /^Review$/ }))
+    // The structured preview is up, but no routine exists yet.
+    expect(screen.getByTestId('schedule-review')).toBeInTheDocument()
+    expect(onSubmit).not.toHaveBeenCalled()
+  })
+
+  it('Activate submits the exact configuration shown in the preview', () => {
+    const onSubmit = vi.fn()
+    render(<ScheduleForm onSubmit={onSubmit} onCancel={() => {}} />)
+    fireEvent.change(screen.getByPlaceholderText(/Daily standup/), { target: { value: 'Previewed' } })
+    fireEvent.change(screen.getByPlaceholderText(/Describe what this routine/), { target: { value: 'Run it' } })
+    fireEvent.click(screen.getByRole('button', { name: /Policy options/ }))
+    const retryInput = screen.getByDisplayValue(2)
+    fireEvent.change(retryInput, { target: { value: '4' } })
+    fireEvent.click(screen.getByRole('button', { name: /^Review$/ }))
+    // The preview carries the same name/prompt the payload will.
+    expect(screen.getByTestId('schedule-review')).toHaveTextContent('Previewed')
+    expect(screen.getByTestId('schedule-review')).toHaveTextContent('Run it')
+    fireEvent.click(screen.getByRole('button', { name: /^Activate routine$/ }))
+    expect(onSubmit).toHaveBeenCalledTimes(1)
+    expect(onSubmit.mock.calls[0][0]).toMatchObject({
+      name: 'Previewed',
+      prompt: 'Run it',
+      policy: expect.objectContaining({ max_retries: 4 }),
+    })
+  })
+
+  it('Back to edit keeps every filled field', () => {
+    const onSubmit = vi.fn()
+    render(<ScheduleForm onSubmit={onSubmit} onCancel={() => {}} />)
+    fireEvent.change(screen.getByPlaceholderText(/Daily standup/), { target: { value: 'Kept' } })
+    fireEvent.change(screen.getByPlaceholderText(/Describe what this routine/), { target: { value: 'Still here' } })
+    fireEvent.click(screen.getByRole('button', { name: /^Review$/ }))
+    fireEvent.click(screen.getByRole('button', { name: /^Back to edit$/ }))
+    expect(screen.queryByTestId('schedule-review')).not.toBeInTheDocument()
+    expect(screen.getByPlaceholderText(/Daily standup/)).toHaveValue('Kept')
+    expect(screen.getByPlaceholderText(/Describe what this routine/)).toHaveValue('Still here')
+    // And the kept state still flows through Review → Activate unchanged.
+    fireEvent.click(screen.getByRole('button', { name: /^Review$/ }))
+    fireEvent.click(screen.getByRole('button', { name: /^Activate routine$/ }))
+    expect(onSubmit.mock.calls[0][0]).toMatchObject({ name: 'Kept', prompt: 'Still here' })
   })
 })

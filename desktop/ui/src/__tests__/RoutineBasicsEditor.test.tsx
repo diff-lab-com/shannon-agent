@@ -56,6 +56,8 @@ describe('RoutineBasicsEditor', () => {
       target: { value: 'Weekly Standup' },
     })
     fireEvent.click(screen.getByTestId('routine-basics-save'))
+    // W3-1: save opens the confirm step; Activate persists.
+    fireEvent.click(screen.getByTestId('routine-basics-activate'))
     await waitFor(() =>
       expect(updateScheduledTask).toHaveBeenCalledWith({
         id: 'r1',
@@ -76,10 +78,14 @@ describe('RoutineBasicsEditor', () => {
       target: { value: 'Edited prompt kept on failure' },
     })
     fireEvent.click(screen.getByTestId('routine-basics-save'))
+    fireEvent.click(screen.getByTestId('routine-basics-activate'))
     await waitFor(() => expect(updateScheduledTask).toHaveBeenCalled())
     await waitFor(() => expect(toastErrorFn).toHaveBeenCalled())
     // Failure keeps the local edits (retryable), and onUpdated never fired.
-    expect(screen.getByTestId('routine-basics-save')).toBeEnabled()
+    expect(screen.getByTestId('routine-basics-activate')).toBeEnabled()
+    // Back to edit still shows the kept values.
+    fireEvent.click(screen.getByTestId('routine-basics-back'))
+    expect(screen.getByTestId('routine-basics-prompt')).toHaveValue('Edited prompt kept on failure')
     expect(onUpdated).not.toHaveBeenCalled()
   })
 
@@ -100,6 +106,7 @@ describe('RoutineBasicsEditor', () => {
       expect(screen.getByTestId('routine-basics-save')).toBeEnabled(),
     )
     fireEvent.click(screen.getByTestId('routine-basics-save'))
+    fireEvent.click(screen.getByTestId('routine-basics-activate'))
     await waitFor(() =>
       expect(updateScheduledTask).toHaveBeenCalledWith({
         id: 'r1',
@@ -118,12 +125,48 @@ describe('RoutineBasicsEditor', () => {
     )
     render(<RoutineBasicsEditor routine={makeRoutine()} />)
     fireEvent.change(screen.getByTestId('routine-basics-name'), { target: { value: 'Renamed' } })
-    const save = screen.getByTestId('routine-basics-save')
-    fireEvent.click(save)
+    fireEvent.click(screen.getByTestId('routine-basics-save'))
+    const activate = screen.getByTestId('routine-basics-activate')
+    fireEvent.click(activate)
     await waitFor(() => expect(updateScheduledTask).toHaveBeenCalledTimes(1))
-    expect(save).toBeDisabled()
-    fireEvent.click(save)
+    expect(activate).toBeDisabled()
+    fireEvent.click(activate)
     expect(updateScheduledTask).toHaveBeenCalledTimes(1)
     resolveSave(makeRoutine())
+  })
+
+  // ── W3-1: the edit path confirms too ──────────────────────────────────
+  it('Save only opens the confirm step — Activate issues the update', async () => {
+    const onUpdated = vi.fn()
+    render(<RoutineBasicsEditor routine={makeRoutine()} onUpdated={onUpdated} />)
+    fireEvent.change(screen.getByTestId('routine-basics-name'), {
+      target: { value: 'Renamed Routine' },
+    })
+    fireEvent.click(screen.getByTestId('routine-basics-save'))
+    // Review step is up with the edited values; nothing was persisted yet.
+    expect(screen.getByTestId('routine-basics-review')).toBeInTheDocument()
+    expect(screen.getByTestId('routine-basics-review')).toHaveTextContent('Renamed Routine')
+    expect(updateScheduledTask).not.toHaveBeenCalled()
+    fireEvent.click(screen.getByTestId('routine-basics-activate'))
+    await waitFor(() => expect(updateScheduledTask).toHaveBeenCalledWith({
+      id: 'r1',
+      name: 'Renamed Routine',
+      prompt: 'Summarize the day',
+      trigger_type: 'interval',
+      interval_secs: 3600,
+    }))
+    await waitFor(() => expect(onUpdated).toHaveBeenCalled())
+  })
+
+  it('Back from the confirm step keeps every local edit', () => {
+    render(<RoutineBasicsEditor routine={makeRoutine()} />)
+    fireEvent.change(screen.getByTestId('routine-basics-prompt'), {
+      target: { value: 'Draft edit' },
+    })
+    fireEvent.click(screen.getByTestId('routine-basics-save'))
+    fireEvent.click(screen.getByTestId('routine-basics-back'))
+    expect(screen.queryByTestId('routine-basics-review')).not.toBeInTheDocument()
+    expect(screen.getByTestId('routine-basics-prompt')).toHaveValue('Draft edit')
+    expect(updateScheduledTask).not.toHaveBeenCalled()
   })
 })

@@ -373,7 +373,9 @@ describe('/tasks &new=routine marker (I2 review fix)', () => {
     fireEvent.change(screen.getByRole('textbox', { name: 'Prompt *' }), {
       target: { value: 'Do the sweep' },
     })
-    fireEvent.click(screen.getByRole('button', { name: 'Create Routine' }))
+    // W3-1: Review opens the confirm step; Activate creates.
+    fireEvent.click(screen.getByRole('button', { name: 'Review' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Activate routine' }))
     await waitFor(() => expect(api.createScheduledTask).toHaveBeenCalledTimes(1))
     // The form sets no working_dir; the page defaults it to the normalized
     // ?project= key — the routine lands housed instead of vanishing from

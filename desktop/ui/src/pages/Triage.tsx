@@ -59,6 +59,24 @@ function canOpenSource(item: InboxItem): boolean {
   return RERUNNABLE_SOURCES.includes(item.source) && item.sourceId != null
 }
 
+/// Sources whose card IS a run result (W3-2 needs-action): the card leads
+/// with the run's outcome, derived from the recorded error — the run path
+/// records `error` only for failures, so `error != null` ⟺ failed.
+/// Session-scoped sources carry their own semantics (the source label already
+/// reads "failed"/"approval"); goal/skill/dream items are not run results.
+const RUN_OUTCOME_SOURCES: readonly InboxSource[] = [
+  'routine',
+  'scheduled_task',
+  'trigger',
+  'batch',
+  'background_task',
+]
+
+function runOutcomeOf(item: InboxItem): 'failed' | 'succeeded' | null {
+  if (!RUN_OUTCOME_SOURCES.includes(item.source)) return null
+  return item.error != null ? 'failed' : 'succeeded'
+}
+
 /// Exported for tests (source → icon/colour/label mapping is a contract the
 /// i18n keys depend on).
 export function sourceMeta(source: InboxSource): { icon: string; color: string; labelKey: string } {
@@ -152,13 +170,18 @@ function InboxCard({ item, selected, focused, highlighted, onToggleSelected, onM
   // (评审裁决 #2: 收件箱只放发现条目，不做卡内审批).
   const reviewable = item.source === 'skill_candidate' && item.sourceId != null
   // Dream pass: the report + the proposal review both live on the Memory
-  // page's distillation section, so the card's action is a single jump.
+  // page, so the card's action is a single jump.
   const isDreamReport = item.source === 'dream_report'
+  // W3-2 needs-action: run-result cards lead with the run outcome; a failed
+  // run reads as "needs action" (icon + words + tinted chip + error border —
+  // never colour alone) so a burned routine can't pass as clear.
+  const runOutcome = runOutcomeOf(item)
+  const needsAction = runOutcome === 'failed' && item.status !== 'archived'
 
   return (
     // G1: list items are content cards — solid surface per the material
     // doctrine (glass carries floating chrome only); shadow-e1 keeps the lift.
-    <div role="listitem" data-focused={focused ? 'true' : undefined} data-highlight={highlighted ? 'true' : undefined} className={cn('triage-card bg-surface-container-lowest border rounded-xl p-md shadow-e1 hover:shadow-e2 transition-all group', isPending ? 'border-primary/20' : 'border-outline-variant/10', focused ? 'ring-2 ring-primary' : highlighted ? 'ring-2 ring-tertiary' : selected ? 'ring-2 ring-primary/40' : '')}>
+    <div role="listitem" data-focused={focused ? 'true' : undefined} data-highlight={highlighted ? 'true' : undefined} className={cn('triage-card bg-surface-container-lowest border rounded-xl p-md shadow-e1 hover:shadow-e2 transition-all group', needsAction ? 'border-error/40' : isPending ? 'border-primary/20' : 'border-outline-variant/10', focused ? 'ring-2 ring-primary' : highlighted ? 'ring-2 ring-tertiary' : selected ? 'ring-2 ring-primary/40' : '')}>
       <div className="flex items-start gap-sm">
         <label className="flex items-center pt-xs cursor-pointer shrink-0" aria-label={t('inbox.select.aria', { id: item.id })}>
           <input
@@ -174,6 +197,24 @@ function InboxCard({ item, selected, focused, highlighted, onToggleSelected, onM
           </div>
           <div className="min-w-0 flex-1">
             <div className="flex items-center gap-sm mb-xs flex-wrap">
+              {runOutcome === 'failed' && (
+                <span
+                  data-testid="inbox-run-status"
+                  className="inline-flex items-center gap-xs px-xs py-0.5 rounded-full bg-error-container text-on-error-container font-label-sm text-label-xs font-bold uppercase tracking-wider"
+                >
+                  <span className="material-symbols-outlined icon-sm" aria-hidden="true">priority_high</span>
+                  {t('tasks.status.failed.label')} · {t('inbox.needsAction')}
+                </span>
+              )}
+              {runOutcome === 'succeeded' && (
+                <span
+                  data-testid="inbox-run-status"
+                  className="inline-flex items-center gap-xs font-label-sm text-label-xs text-on-surface-variant uppercase tracking-wider"
+                >
+                  <span className="material-symbols-outlined icon-sm text-tertiary" aria-hidden="true">check_circle</span>
+                  {t('inbox.runStatus.succeeded')}
+                </span>
+              )}
               <span className={cn("font-label-sm text-label-xs font-bold uppercase tracking-wider", meta.color)}>{t(meta.labelKey)}</span>
               {isPending && <span className="w-2 h-2 rounded-full bg-primary shrink-0" title={t('inbox.pending.title')} />}
               {item.status === 'archived' && <span className="font-label-sm text-label-xs text-on-surface-variant">{t('inbox.status.archived')}</span>}

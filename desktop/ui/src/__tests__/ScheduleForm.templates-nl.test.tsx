@@ -32,8 +32,9 @@ describe('ScheduleForm templates (P3.2)', () => {
     render(<ScheduleForm onSubmit={onSubmit} onCancel={() => {}} />)
     fireEvent.click(screen.getByText('Nightly Test Suite'))
     // Wait for the async cron preview to load before submit (validity gate).
-    await waitFor(() => expect(screen.getByText('Create Routine')).not.toBeDisabled())
-    fireEvent.click(screen.getByText('Create Routine'))
+    await waitFor(() => expect(screen.getByRole('button', { name: /^Review$/ })).not.toBeDisabled())
+    fireEvent.click(screen.getByRole('button', { name: /^Review$/ }))
+    fireEvent.click(screen.getByRole('button', { name: /^Activate routine$/ }))
     await waitFor(() => expect(onSubmit).toHaveBeenCalledTimes(1))
     const payload: CreateTaskPayload = onSubmit.mock.calls[0][0]
     expect(payload.trigger_type).toBe('cron')
@@ -44,7 +45,8 @@ describe('ScheduleForm templates (P3.2)', () => {
     const onSubmit = vi.fn()
     render(<ScheduleForm onSubmit={onSubmit} onCancel={() => {}} />)
     fireEvent.click(screen.getByText('PR Auto-Review'))
-    fireEvent.click(screen.getByText('Create Routine'))
+    fireEvent.click(screen.getByRole('button', { name: /^Review$/ }))
+    fireEvent.click(screen.getByRole('button', { name: /^Activate routine$/ }))
     await waitFor(() => expect(onSubmit).toHaveBeenCalledTimes(1))
     const payload: CreateTaskPayload = onSubmit.mock.calls[0][0]
     expect(payload.trigger_type).toBe('interval')

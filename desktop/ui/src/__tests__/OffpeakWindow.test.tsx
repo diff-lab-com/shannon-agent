@@ -97,7 +97,8 @@ describe('P2-5 ScheduleForm off-peak window payload', () => {
     fireEvent.change(screen.getByLabelText('End hour (inclusive)'), { target: { value: '5' } })
     fireEvent.change(screen.getByLabelText('Timezone'), { target: { value: 'UTC' } })
 
-    fireEvent.click(screen.getByText('Create Routine'))
+    fireEvent.click(screen.getByRole('button', { name: /^Review$/ }))
+    fireEvent.click(screen.getByRole('button', { name: /^Activate routine$/ }))
     await waitFor(() => expect(onSubmit).toHaveBeenCalledTimes(1))
 
     const payload: CreateTaskPayload = onSubmit.mock.calls[0][0]
@@ -114,7 +115,8 @@ describe('P2-5 ScheduleForm off-peak window payload', () => {
 
     fillRequiredFields()
     fireEvent.click(screen.getByText('Policy options'))
-    fireEvent.click(screen.getByText('Create Routine'))
+    fireEvent.click(screen.getByRole('button', { name: /^Review$/ }))
+    fireEvent.click(screen.getByRole('button', { name: /^Activate routine$/ }))
     await waitFor(() => expect(onSubmit).toHaveBeenCalledTimes(1))
 
     const payload: CreateTaskPayload = onSubmit.mock.calls[0][0]
@@ -129,7 +131,8 @@ describe('P2-5 ScheduleForm off-peak window payload', () => {
     fireEvent.click(screen.getByText('Policy options'))
     fireEvent.click(screen.getByLabelText('Toggle off-peak execution window'))
     fireEvent.change(screen.getByLabelText('Start hour (inclusive)'), { target: { value: '99' } })
-    fireEvent.click(screen.getByText('Create Routine'))
+    fireEvent.click(screen.getByRole('button', { name: /^Review$/ }))
+    fireEvent.click(screen.getByRole('button', { name: /^Activate routine$/ }))
     await waitFor(() => expect(onSubmit).toHaveBeenCalledTimes(1))
 
     const payload: CreateTaskPayload = onSubmit.mock.calls[0][0]
