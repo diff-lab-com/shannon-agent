@@ -28,7 +28,9 @@ function fillRequired() {
 
 async function submit(onSubmit: ReturnType<typeof vi.fn>) {
   fillRequired()
-  fireEvent.click(screen.getByRole('button', { name: /^Create Routine$/ }))
+  // W3-1: Review opens the confirm step; Activate is what creates.
+  fireEvent.click(screen.getByRole('button', { name: /^Review$/ }))
+  fireEvent.click(screen.getByRole('button', { name: /^Activate routine$/ }))
   await waitFor(() => expect(onSubmit).toHaveBeenCalledTimes(1))
   return onSubmit.mock.calls[0][0] as CreateTaskPayload
 }
