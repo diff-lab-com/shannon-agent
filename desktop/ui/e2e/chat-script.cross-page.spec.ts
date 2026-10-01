@@ -22,8 +22,24 @@ test.describe('scripted chat backend — journey-cross-page (#13)', () => {
     const fileCard = page.getByText('todo.md', { exact: true }).first()
     await expect(fileCard).toBeVisible({ timeout: 10_000 })
 
-    // Mock-store linkage: the FileCard's mount registered the path — the
-    // sidebar Files page lists it.
+    // Mock-store linkage, made deterministic: the entry reaches the index
+    // through FileCard's fire-and-forget register_file_index_entry
+    // (FileCard.tsx:117-119 → handlers.ts delay(20) mutate) — card DOM
+    // visible does NOT prove that invoke landed, and the /files page reads
+    // the index ONCE on mount (FilesPage.tsx:63-66). Poll the index through
+    // the same route the app uses BEFORE navigating.
+    await expect
+      .poll(async () =>
+        page.evaluate(async (path) => {
+          const rows = (await (window as unknown as {
+            __TAURI_INTERNALS__: { invoke(cmd: string, args?: Record<string, unknown>): Promise<unknown> }
+          }).__TAURI_INTERNALS__.invoke('list_file_index', {})) as Array<{ path: string }>
+          return rows.some(r => r.path === path)
+        }, FILE_PATH),
+      )
+      .toBe(true, { timeout: 15_000 })
+
+    // The sidebar Files page lists it.
     await page.getByRole('link', { name: 'Files' }).click()
     await expect(page).toHaveURL(/\/files$/)
     await expect(page.getByText(FILE_PATH)).toBeVisible({ timeout: 10_000 })

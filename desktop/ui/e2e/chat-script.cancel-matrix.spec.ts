@@ -233,7 +233,9 @@ test.describe('scripted chat backend — cancel-matrix (§4.1, 9 scenarios)', ()
     await expect(page.getByRole('heading', { name: 'Over budget' })).toBeVisible({ timeout: 10_000 })
 
     // The banner is already up (seed re-derivation) when the run starts.
-    const banner = page.getByRole('alert').filter({ hasText: 'Session budget exceeded' })
+    // Exceeded-only body suffix — variant anchor (see chat-script.budget
+    // spec: the $-body prefix is shared with the warning variant).
+    const banner = page.getByRole('alert').filter({ hasText: 'Choose how to proceed' })
     await expect(banner).toBeVisible({ timeout: 10_000 })
     await chat.send('再补充一下数据来源部分')
     await chat.expectStreamingCursor()

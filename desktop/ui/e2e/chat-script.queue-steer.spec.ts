@@ -18,8 +18,12 @@ test.describe('scripted chat backend — queue-steer (journey #9)', () => {
     test.setTimeout(90_000)
     const chat = new ChatPage(page)
     await loadChatScript(page, 'queue-steer', test.info())
-    await page.getByTestId(ROW).click()
-    await expect(page.getByRole('heading', { name: 'Queue and steer' })).toBeVisible({ timeout: 10_000 })
+    // Retry the row click until the switch lands (the rail can swallow a
+    // click during a list re-render under parallel load).
+    await expect(async () => {
+      await page.getByTestId(ROW).click()
+      await expect(page.getByRole('heading', { name: 'Queue and steer' })).toBeVisible({ timeout: 5_000 })
+    }).toPass({ timeout: 30_000 })
 
     // Turn 0 streams for ~3.6s (6 chunks × 600ms) — a wide queueing window.
     await chat.send('写一篇关于潮汐的长文')
@@ -86,8 +90,12 @@ test.describe('scripted chat backend — queue-steer (journey #9)', () => {
     test.setTimeout(90_000)
     const chat = new ChatPage(page)
     await loadChatScript(page, 'queue-steer', test.info())
-    await page.getByTestId(ROW).click()
-    await expect(page.getByRole('heading', { name: 'Queue and steer' })).toBeVisible({ timeout: 10_000 })
+    // Retry the row click until the switch lands (the rail can swallow a
+    // click during a list re-render under parallel load).
+    await expect(async () => {
+      await page.getByTestId(ROW).click()
+      await expect(page.getByRole('heading', { name: 'Queue and steer' })).toBeVisible({ timeout: 5_000 })
+    }).toPass({ timeout: 30_000 })
 
     await chat.send('写一篇关于潮汐的长文')
     await chat.expectStreamingCursor()

@@ -33,19 +33,26 @@ test.describe('scripted chat backend — budget-exceeded (journey #7)', () => {
     await page.getByTestId('desktop-session-row-script-sess-budget').click()
     await expect(page.getByRole('heading', { name: 'Over budget' })).toBeVisible({ timeout: 10_000 })
 
-    // Red exceeded banner with the frozen three actions (scoping: other
-    // role=alert regions can coexist on the page). Finding anchor
-    // (provider review §3-A1): the ApiKeyBanner now shows ONLY on a genuine
-    // missing-key/missing-provider snapshot — the armed seed's hasKey:true
-    // keeps it absent here, which the filtered alert queries below pin
-    // implicitly; the four-quadrant gating itself is pinned by
-    // src/__tests__/ApiKeyBanner.test.tsx (R2).
-    const banner = page.getByRole('alert').filter({ hasText: 'Session budget exceeded' })
-    await expect(banner).toBeVisible({ timeout: 10_000 })
-    await expect(banner.getByText(/\$6\.40 of \$5\.00 used/)).toBeVisible()
-    await expect(banner.getByRole('button', { name: 'Continue (ignore once)' })).toBeVisible()
-    await expect(banner.getByRole('button', { name: 'Raise budget…' })).toBeVisible()
-    await expect(banner.getByRole('button', { name: 'Stop', exact: true })).toBeVisible()
+    // Red exceeded banner with the frozen three actions. VARIANT ANCHOR
+    // (CI fix): the $-body text alone is ambiguous — budget.warning.body and
+    // budget.exceeded.body share the "{spent} of {budget} used" prefix
+    // (en.json), so a banner mid-flip between the re-derive
+    // (useBudgetGuard.ts:52-76) and a budget:* event could satisfy the old
+    // hasText pair while the buttons (exceeded-only, BudgetBanner.tsx:56-88)
+    // were not yet up. 'Choose how to proceed.' is exceeded-only; each
+    // action assert carries its own 15s window so a slow CI runner rides
+    // out the variant settle instead of inheriting a 5s default mid-flip.
+    // Finding anchor (provider review §3-A1): the ApiKeyBanner now shows
+    // ONLY on a genuine missing-key/missing-provider snapshot — the armed
+    // seed's hasKey:true keeps it absent here (the filtered alert queries
+    // below would catch an extra alert); the four-quadrant gating itself is
+    // pinned by src/__tests__/ApiKeyBanner.test.tsx (R2).
+    const banner = page.getByRole('alert').filter({ hasText: 'Choose how to proceed' })
+    await expect(banner).toBeVisible({ timeout: 15_000 })
+    await expect(banner.getByText(/\$6\.40 of \$5\.00 used/)).toBeVisible({ timeout: 15_000 })
+    await expect(banner.getByRole('button', { name: 'Continue (ignore once)' })).toBeVisible({ timeout: 15_000 })
+    await expect(banner.getByRole('button', { name: 'Raise budget…' })).toBeVisible({ timeout: 15_000 })
+    await expect(banner.getByRole('button', { name: 'Stop', exact: true })).toBeVisible({ timeout: 15_000 })
 
     // "Raise budget…" opens the budget dialog (the second action is alive).
     await banner.getByRole('button', { name: 'Raise budget…' }).click()

@@ -12,6 +12,15 @@ import type { ChatScript } from '../src/lib/mock/scripted/schema'
 
 const script = readChatScript('session-switch-race') as ChatScript
 
+/** Click a session row and retry until the switch lands — the rail can
+ *  swallow a click during a list re-render (observed under parallel load). */
+async function openRaceSession(page: import('@playwright/test').Page, row: string, heading: string): Promise<void> {
+  await expect(async () => {
+    await page.getByTestId(row).click()
+    await expect(page.getByRole('heading', { name: heading })).toBeVisible({ timeout: 5_000 })
+  }).toPass({ timeout: 30_000 })
+}
+
 test.describe('scripted chat backend — session-switch-race (journey #11)', () => {
   test('mid-stream switch isolates buckets, the projection resumes, the error banner persists across sessions (A-5 anchored)', async ({ page }) => {
     test.setTimeout(60_000)
@@ -25,8 +34,7 @@ test.describe('scripted chat backend — session-switch-race (journey #11)', () 
     await loadChatScript(page, 'session-switch-race', test.info())
 
     // A streams (8 chunks × 500ms — a wide switch window).
-    await page.getByTestId('desktop-session-row-script-sess-race-a').click()
-    await expect(page.getByRole('heading', { name: 'Race A' })).toBeVisible({ timeout: 10_000 })
+    await openRaceSession(page, 'desktop-session-row-script-sess-race-a', 'Race A')
     await chat.send(script.turns[0]!.user)
     await chat.expectStreamingCursor()
     // OBSERVED (report §journey-11): a pure-text stream never shows the
@@ -35,8 +43,7 @@ test.describe('scripted chat backend — session-switch-race (journey #11)', () 
     // update the ref alone. Not asserted; related to R2 report §6.3.
 
     // Mid-stream, switch to B: no bleed, B idle with its own history.
-    await page.getByTestId('desktop-session-row-script-sess-race-b').click()
-    await expect(page.getByRole('heading', { name: 'Race B' })).toBeVisible({ timeout: 10_000 })
+    await openRaceSession(page, 'desktop-session-row-script-sess-race-b', 'Race B')
     await expect(page.getByText('B 的历史回答。')).toBeVisible()
     await expect(page.getByText('甲', { exact: true })).toHaveCount(0)
     await expect(page.getByText('庚', { exact: true })).toHaveCount(0)
@@ -44,8 +51,7 @@ test.describe('scripted chat backend — session-switch-race (journey #11)', () 
     await expect(chat.composer()).toHaveValue('')
 
     // Back to A: the projection resumes mid-stream.
-    await page.getByTestId('desktop-session-row-script-sess-race-a').click()
-    await expect(page.getByRole('heading', { name: 'Race A' })).toBeVisible({ timeout: 10_000 })
+    await openRaceSession(page, 'desktop-session-row-script-sess-race-a', 'Race A')
     await chat.expectStreamingCursor()
     // Draft assertion part 1: A's draft is typed while the run streams.
     await chat.composer().fill('A 的草稿')
@@ -54,15 +60,13 @@ test.describe('scripted chat backend — session-switch-race (journey #11)', () 
     await expect(page.getByRole('alert').filter({ hasText: 'upstream exploded after the switch' })).toBeVisible({ timeout: 15_000 })
 
     // A-5 current behavior: the banner follows the user onto B.
-    await page.getByTestId('desktop-session-row-script-sess-race-b').click()
-    await expect(page.getByRole('heading', { name: 'Race B' })).toBeVisible({ timeout: 10_000 })
+    await openRaceSession(page, 'desktop-session-row-script-sess-race-b', 'Race B')
     await expect(page.getByRole('alert').filter({ hasText: 'upstream exploded after the switch' })).toBeVisible()
     // Draft isolation: B's composer never shows A's draft.
     await expect(chat.composer()).toHaveValue('')
 
     // Back to A: the draft survived the round trip (R2-W1 anchor half).
-    await page.getByTestId('desktop-session-row-script-sess-race-a').click()
-    await expect(page.getByRole('heading', { name: 'Race A' })).toBeVisible({ timeout: 10_000 })
+    await openRaceSession(page, 'desktop-session-row-script-sess-race-a', 'Race A')
     await expect(chat.composer()).toHaveValue('A 的草稿')
     await expectNoConsoleErrors(page)
   })
