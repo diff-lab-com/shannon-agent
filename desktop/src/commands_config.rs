@@ -1182,9 +1182,13 @@ pub enum TestConnectionResult {
     /// (the key itself is fine — the billing isn't) and from
     /// [`TestConnectionResult::RateLimited`] (no amount of waiting fixes it).
     QuotaExhausted,
-    ProviderError { status: u16 },
+    ProviderError {
+        status: u16,
+    },
     NetworkUnreachable,
-    Unknown { message: String },
+    Unknown {
+        message: String,
+    },
 }
 
 /// Validate + normalize a user-supplied provider base_url.
@@ -3410,7 +3414,8 @@ mod tests {
             .create_async()
             .await;
 
-        let result = probe_and_map("openai-compatible", "sk-test", Some(server.url().as_str())).await;
+        let result =
+            probe_and_map("openai-compatible", "sk-test", Some(server.url().as_str())).await;
         assert_eq!(result, TestConnectionResult::QuotaExhausted, "{result:?}");
         mock.assert();
     }
