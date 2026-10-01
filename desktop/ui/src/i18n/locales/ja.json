@@ -2457,6 +2457,7 @@
   "settings.general.approvalMode.permissive.description": "ファイル編集は自動実行、コマンドは確認を求めます",
   "settings.general.approvalMode.full.label": "フル",
   "settings.general.approvalMode.full.description": "重要操作以外をすべて承認 — 信頼されたサンドボックス環境向け",
+  "settings.general.approvalMode.rawHint": "エンジン管理値「{value}」 — 上のレベルを選ぶと切り替わります",
   "settings.general.approvalMode.confirm.label": "Confirm",
   "settings.general.approvalMode.confirm.description": "High supervision, approve every action",
   "settings.general.approvalMode.plan.label": "Plan",

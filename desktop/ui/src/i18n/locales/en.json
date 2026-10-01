@@ -2488,6 +2488,7 @@
   "settings.general.approvalMode.permissive.description": "File edits run automatically; commands still ask",
   "settings.general.approvalMode.full.label": "Full",
   "settings.general.approvalMode.full.description": "Approves everything except critical — for trusted, sandboxed workspaces",
+  "settings.general.approvalMode.rawHint": "Engine-managed value \"{value}\" — pick a tier above to switch",
   "settings.general.approvalMode.confirm.label": "Confirm",
   "settings.general.approvalMode.confirm.description": "High supervision, approve every action",
   "settings.general.approvalMode.plan.label": "Plan",

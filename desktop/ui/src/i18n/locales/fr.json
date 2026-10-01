@@ -2457,6 +2457,7 @@
   "settings.general.approvalMode.permissive.description": "Les modifications de fichiers s'exécutent seules ; les commandes demandent encore",
   "settings.general.approvalMode.full.label": "Complet",
   "settings.general.approvalMode.full.description": "Approuve tout sauf le critique — pour des espaces de confiance isolés",
+  "settings.general.approvalMode.rawHint": "Valeur gérée par le moteur « {value} » — choisissez un niveau ci-dessus pour changer",
   "settings.general.approvalMode.confirm.label": "Confirm",
   "settings.general.approvalMode.confirm.description": "High supervision, approve every action",
   "settings.general.approvalMode.plan.label": "Plan",

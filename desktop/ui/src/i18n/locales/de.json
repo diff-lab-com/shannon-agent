@@ -2457,6 +2457,7 @@
   "settings.general.approvalMode.permissive.description": "Dateibearbeitungen laufen automatisch; Befehle fragen weiterhin",
   "settings.general.approvalMode.full.label": "Voll",
   "settings.general.approvalMode.full.description": "Genehmigt alles außer Kritischem — für vertrauenswürdige, sandboxierte Umgebungen",
+  "settings.general.approvalMode.rawHint": "Engine-verwalteter Wert „{value}“ — zum Wechseln eine Stufe oben wählen",
   "settings.general.approvalMode.confirm.label": "Confirm",
   "settings.general.approvalMode.confirm.description": "High supervision, approve every action",
   "settings.general.approvalMode.plan.label": "Plan",

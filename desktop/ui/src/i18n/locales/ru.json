@@ -2457,6 +2457,7 @@
   "settings.general.approvalMode.permissive.description": "Правки файлов выполняются автоматически; команды спрашивают",
   "settings.general.approvalMode.full.label": "Полный",
   "settings.general.approvalMode.full.description": "Одобряет всё, кроме критичного — для доверенных изолированных сред",
+  "settings.general.approvalMode.rawHint": "Значение, управляемое движком: «{value}» — выберите уровень выше, чтобы сменить",
   "settings.general.approvalMode.confirm.label": "Confirm",
   "settings.general.approvalMode.confirm.description": "High supervision, approve every action",
   "settings.general.approvalMode.plan.label": "Plan",

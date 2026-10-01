@@ -2457,6 +2457,7 @@
   "settings.general.approvalMode.permissive.description": "Edições de arquivo executam sozinhas; comandos ainda pedem confirmação",
   "settings.general.approvalMode.full.label": "Total",
   "settings.general.approvalMode.full.description": "Aprova tudo, exceto o crítico — para ambientes confiáveis e isolados",
+  "settings.general.approvalMode.rawHint": "Valor gerenciado pelo motor \"{value}\" — escolha um nível acima para mudar",
   "settings.general.approvalMode.confirm.label": "Confirm",
   "settings.general.approvalMode.confirm.description": "High supervision, approve every action",
   "settings.general.approvalMode.plan.label": "Plan",

@@ -2488,6 +2488,7 @@
   "settings.general.approvalMode.permissive.description": "文件编辑自动执行，命令仍需确认",
   "settings.general.approvalMode.full.label": "全自动",
   "settings.general.approvalMode.full.description": "批准除高危外的全部操作——仅建议在可信且隔离的工作区使用",
+  "settings.general.approvalMode.rawHint": "引擎侧当前取值“{value}”——点选上方档位即可切换",
   "settings.general.approvalMode.confirm.label": "确认",
   "settings.general.approvalMode.confirm.description": "高监督，每次操作均需批准",
   "settings.general.approvalMode.plan.label": "计划",

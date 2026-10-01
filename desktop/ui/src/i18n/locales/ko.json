@@ -2457,6 +2457,7 @@
   "settings.general.approvalMode.permissive.description": "파일 편집은 자동 실행, 명령은 확인을 요청합니다",
   "settings.general.approvalMode.full.label": "전체",
   "settings.general.approvalMode.full.description": "중요 작업을 제외한 모든 것을 승인 — 신뢰할 수 있는 샌드박스 환경용",
+  "settings.general.approvalMode.rawHint": "엔진 관리 값 \"{value}\" — 위의 단계를 선택하면 변경됩니다",
   "settings.general.approvalMode.confirm.label": "Confirm",
   "settings.general.approvalMode.confirm.description": "High supervision, approve every action",
   "settings.general.approvalMode.plan.label": "Plan",
