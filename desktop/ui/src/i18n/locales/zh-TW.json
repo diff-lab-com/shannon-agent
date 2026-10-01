@@ -1528,6 +1528,9 @@
   "settings.models.addProvider.tierClear": "清除",
   "extensions.mcp.toolCount": "{count} 個工具",
   "extensions.mcp.offline": "Offline",
+  "extensions.mcp.statusRemote": "遠端",
+  "extensions.mcp.remoteHint": "遠端伺服器 · 桌面端即將支援，請使用 CLI。",
+  "extensions.mcp.restartRemoteDisabled": "遠端伺服器暫不支援在桌面端重新啟動，請使用 CLI。",
   "conversations.list.filterAll": "All",
   "conversations.list.filterAgentRun": "Agent-run",
   "conversations.list.filterScheduled": "Scheduled",
@@ -3894,5 +3897,6 @@
   "settings.theme.name.solarizedLight": "Solarized Light",
   "settings.theme.name.dracula": "Dracula",
   "settings.theme.name.gruvbox": "Gruvbox",
-  "settings.theme.name.gruvboxLight": "Gruvbox Light"
+  "settings.theme.name.gruvboxLight": "Gruvbox Light",
+  "extensions.pending.errors.loadFailed": "無法載入 MCP 錯誤"
 }

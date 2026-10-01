@@ -23,6 +23,17 @@ pub struct McpServerInfo {
     pub tool_count: usize,
     pub tools: Vec<ToolInfo>,
     pub last_connected: Option<i64>,
+    /// W1-1 (R2-P0-1(B)): remote (HTTP/SSE) endpoint of url-only entries.
+    /// `None` on stdio rows. Url-only servers cannot be started by the
+    /// desktop process pool yet — the UI renders an honest "remote" state
+    /// pointing at the CLI instead of a forever-Offline badge.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub url: Option<String>,
+    /// W1-7 (R2-P1-6): the pool's last start/connection failure for this
+    /// server, so a dead server is diagnosable instead of just colored
+    /// Offline. `None` = the pool never reported a failure.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub last_error: Option<String>,
 }
 
 /// Skill information for the skill browser UI.
@@ -71,6 +82,7 @@ pub async fn add_mcp_server(
         args: args.clone(),
         env: env.clone(),
         enabled: true,
+        url: None,
     };
 
     // G1: single source of truth is `~/.shannon/settings.json#mcpServers`
@@ -78,12 +90,13 @@ pub async fn add_mcp_server(
     // this one row — other entries in the unified store are untouched.
     config::save_mcp_servers(std::slice::from_ref(&server_config)).map_err(|e| e.to_string())?;
 
-    // Start the server process
+    // Start the server process. W1-7: a failed start keeps its error so the
+    // UI can say *why* the server is down, not just that it is.
     let pool = state.mcp_pool.clone();
-    let connected = pool
-        .start_server(&name, &command, &args, &env)
-        .await
-        .is_ok();
+    let (connected, last_error) = match pool.start_server(&name, &command, &args, &env).await {
+        Ok(()) => (true, None),
+        Err(e) => (false, Some(e)),
+    };
 
     Ok(McpServerInfo {
         name: server_config.name,
@@ -97,6 +110,8 @@ pub async fn add_mcp_server(
         } else {
             None
         },
+        url: None,
+        last_error,
     })
 }
 
@@ -135,18 +150,32 @@ pub async fn restart_mcp_server(
         .find(|s| s.name == name)
         .ok_or_else(|| format!("Server not found: {name}"))?;
 
+    // W1-1: url-only remote entries have no stdio process to restart — the
+    // desktop pool cannot start them yet. Fail with an honest reason
+    // instead of a guaranteed empty-command spawn error.
+    if server.command.is_empty() {
+        return Err(if server.url.is_some() {
+            format!(
+                "'{name}' is a remote (url-only) MCP server — restarting it from the \
+                 desktop is not supported yet; use the CLI"
+            )
+        } else {
+            format!("Server '{name}' has no command to restart")
+        });
+    }
+
     let command = server.command.clone();
     let args = server.args.clone();
     let env = server.env.clone();
 
     let pool = state.mcp_pool.clone();
 
-    // Stop then start
+    // Stop then start. W1-7: keep the start error for the UI.
     let _ = pool.stop_server(&name).await;
-    let connected = pool
-        .start_server(&name, &command, &args, &env)
-        .await
-        .is_ok();
+    let (connected, last_error) = match pool.start_server(&name, &command, &args, &env).await {
+        Ok(()) => (true, None),
+        Err(e) => (false, Some(e)),
+    };
 
     Ok(McpServerInfo {
         name: name.clone(),
@@ -160,6 +189,8 @@ pub async fn restart_mcp_server(
         } else {
             None
         },
+        url: None,
+        last_error,
     })
 }
 
@@ -192,10 +223,31 @@ pub async fn list_mcp_servers(
 
     let mut server_infos = Vec::new();
     for s in servers {
-        let connected = state_map
-            .get(&s.name)
+        let pool_state = state_map.get(&s.name);
+        let connected = pool_state
             .map(|st| matches!(st, ServerState::Healthy))
             .unwrap_or(false);
+
+        // W1-7 (R2-P1-6): the pool's Unhealthy state carries the failure
+        // reason (spawn error, failed health check) — surface it instead of
+        // leaving a dead server indistinguishable from a paused one.
+        let last_error = match pool_state {
+            Some(ServerState::Unhealthy(err)) => Some(err.clone()),
+            _ => None,
+        };
+
+        // W1-7: derive a real last-connected timestamp from the pool's
+        // uptime clock (process start = now − uptime). Previously this was
+        // hardcoded to `None`, so the UI field was dead weight.
+        let last_connected = if connected {
+            let now = chrono_timestamp();
+            pool.server_status(&s.name)
+                .await
+                .and_then(|st| st.uptime)
+                .map(|up| now - up.as_millis() as i64)
+        } else {
+            None
+        };
 
         let (tool_count, tools) = if connected {
             match pool.refresh_tools_for_server(&s.name).await {
@@ -224,7 +276,9 @@ pub async fn list_mcp_servers(
             connected,
             tool_count,
             tools,
-            last_connected: None,
+            last_connected,
+            url: s.url,
+            last_error,
         });
     }
 

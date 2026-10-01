@@ -1528,6 +1528,9 @@
   "settings.models.addProvider.tierClear": "지우기",
   "extensions.mcp.toolCount": "도구 {count}개",
   "extensions.mcp.offline": "Offline",
+  "extensions.mcp.statusRemote": "원격",
+  "extensions.mcp.remoteHint": "원격 서버 · 데스크톱 지원이 곧 제공될 예정입니다. 지금은 CLI를 사용하세요.",
+  "extensions.mcp.restartRemoteDisabled": "원격 서버는 데스크톱에서 아직 재시작할 수 없습니다. CLI를 사용하세요.",
   "conversations.list.filterAll": "All",
   "conversations.list.filterAgentRun": "Agent-run",
   "conversations.list.filterScheduled": "Scheduled",
@@ -3894,5 +3897,6 @@
   "settings.theme.name.solarizedLight": "Solarized Light",
   "settings.theme.name.dracula": "Dracula",
   "settings.theme.name.gruvbox": "Gruvbox",
-  "settings.theme.name.gruvboxLight": "Gruvbox Light"
+  "settings.theme.name.gruvboxLight": "Gruvbox Light",
+  "extensions.pending.errors.loadFailed": "MCP 오류를 불러올 수 없습니다"
 }

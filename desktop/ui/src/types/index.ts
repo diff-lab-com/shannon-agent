@@ -778,6 +778,8 @@ export interface McpServerConfig {
   args: string[]
   env: Record<string, string>
   enabled: boolean
+  /** Remote (HTTP/SSE) endpoint. Present on url-only entries, absent on stdio. */
+  url?: string | null
 }
 
 export interface McpServerInfo {
@@ -787,7 +789,12 @@ export interface McpServerInfo {
   connected: boolean
   tool_count: number
   tools: ToolInfo[]
-  last_connected: string | null
+  /** Epoch millis of the last successful connection (backend `chrono_timestamp`). */
+  last_connected: number | null
+  /** W1-1: remote endpoint of url-only (OAuth/HTTP) entries — `null` on stdio rows. */
+  url?: string | null
+  /** W1-7: pool-reported failure reason, so a dead server is diagnosable. */
+  last_error?: string | null
 }
 
 // --- Skill Types ---

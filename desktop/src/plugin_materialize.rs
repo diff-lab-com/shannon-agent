@@ -360,6 +360,7 @@ pub fn materialize_plugin(
                     args: server.args.clone(),
                     env: Default::default(),
                     enabled: true,
+                    url: None,
                 };
                 let value = serde_json::to_value(&config)
                     .map_err(|e| format!("mcp server '{key}' serialize: {e}"))?;

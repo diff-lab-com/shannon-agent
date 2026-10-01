@@ -1034,7 +1034,7 @@ export const handlers: Record<string, MockHandler> = {
   async restart_mcp_server(args: { name: string }) {
     await delay(400)
     const srv = MOCK_MCP_SERVERS.find(s => s.name === args.name)
-    return srv ? { ...clone(srv), connected: true, last_connected: new Date().toISOString() } : null
+    return srv ? { ...clone(srv), connected: true, last_connected: Date.now() } : null
   },
   async get_mcp_server_config(args: { name: string }) {
     await delay()

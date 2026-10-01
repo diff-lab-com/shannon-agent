@@ -1528,6 +1528,9 @@
   "settings.models.addProvider.tierClear": "Limpar",
   "extensions.mcp.toolCount": "{count} ferramentas",
   "extensions.mcp.offline": "Offline",
+  "extensions.mcp.statusRemote": "Remoto",
+  "extensions.mcp.remoteHint": "Servidor remoto · O suporte ao desktop chega em breve — use a CLI por enquanto.",
+  "extensions.mcp.restartRemoteDisabled": "Servidores remotos ainda não podem ser reiniciados pelo desktop — use a CLI.",
   "conversations.list.filterAll": "All",
   "conversations.list.filterAgentRun": "Agent-run",
   "conversations.list.filterScheduled": "Scheduled",
@@ -3894,5 +3897,6 @@
   "settings.theme.name.solarizedLight": "Solarized Light",
   "settings.theme.name.dracula": "Dracula",
   "settings.theme.name.gruvbox": "Gruvbox",
-  "settings.theme.name.gruvboxLight": "Gruvbox Light"
+  "settings.theme.name.gruvboxLight": "Gruvbox Light",
+  "extensions.pending.errors.loadFailed": "Não foi possível carregar os erros de MCP"
 }
