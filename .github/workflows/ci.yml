@@ -74,9 +74,8 @@ jobs:
   #     this fix). Community discussion #26945 documents the semantics.
   #   • pull_request: this job classifies changed paths and each downstream
   #     job runs only when its output matched:
-  #       rust        → facade-facts, test, test-features, eval-dry-run,
-  #                     clippy, fmt, guard-headless, audit, rustsec-audit,
-  #                     doc, cross-platform, check-linux-musl,
+  #       rust        → test, test-features, eval-dry-run, clippy,
+  #                     fast-checks, doc, cross-platform, check-linux-musl,
   #                     semver-check
   #       desktop-ui  → desktop-e2e, desktop-visual-audit, desktop-unit
   #       gateway     → gateway
@@ -134,14 +133,36 @@ jobs:
               - 'website/**'
             ci:
               - '.github/workflows/**'
-  facade-facts:
-    name: Facade facts & hygiene
+  fast-checks:
+    # The five "seconds, not minutes" checks (facade-facts, fmt,
+    # guard-headless, audit, rustsec-audit) used to be five separate jobs.
+    # Merged 2026-10-01 (P4 of the CI speed plan): each paid ~1 min of
+    # checkout/toolchain setup on its own runner (~7 runner-min total and,
+    # the real cost, 5 of the ~20 concurrency slots a full run occupies —
+    # on the free plan ONE CI run already saturates the 20-job limit, so
+    # two concurrent PRs queue). Serial inside one job they total ~3-4 min;
+    # none of them was ever on the critical path (all ran parallel to Test).
+    #
+    # Required-for-merge on `dev` and `main`: the branch protection was
+    # switched from the old job names (Format / Headless purity (ADR-0011) /
+    # Dependency Audit) to `Fast checks` in the same change. RustSec
+    # Advisory Audit rides along REQUIRED here — its old job header claimed
+    # required-for-merge on dev and main, but neither branch's protection
+    # actually listed it (drift found and fixed 2026-10-01; the comment's
+    # intent won over the status quo).
+    name: Fast checks
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    timeout-minutes: 20
     needs: changes
     if: always() && (github.event_name != 'pull_request' || needs.changes.result != 'success' || needs.changes.outputs.rust == 'true' || needs.changes.outputs.ci == 'true')
     steps:
       - uses: actions/checkout@f548e57e544e1ff5a4c46bf1e1b8685f8e4a348a
+      - uses: dtolnay/rust-toolchain@2c7215f132e9ebf062739d9130488b56d53c060c
+        with:
+          toolchain: "1.88"
+          components: rustfmt
+      - name: Format check
+        run: cargo fmt --all -- --check
       - name: Generated facade facts are fresh
         run: node scripts/gen-facts.mjs --check
       - name: No stale/banned phrases in facade surfaces
@@ -174,6 +195,37 @@ jobs:
         # 2026-09-28), which release.yml's prep guard only catches at tag
         # time, after `just release-prep` can no longer self-heal.
         run: bash scripts/check-version-lockstep.sh
+      - name: Headless purity (ADR-0011)
+        # The headless `shannon` CLI must never link GUI libraries.
+        # Metadata-only check (no compile) — fails the moment shannon-cli
+        # grows a tauri/webkit dependency edge.
+        run: scripts/check-headless-purity.sh
+      - name: Install cargo-deny
+        uses: taiki-e/install-action@67729d5c413db75907f0ad1e39bb04b9c868ff60
+        with:
+          tool: cargo-deny
+      - name: Check dependencies (cargo-deny)
+        # Required-for-merge gate (inside Fast checks). Tracks `deny.toml`:
+        # license allowlist + curated advisory ignores for transitive crates
+        # whose upstream fix is blocked on Tauri / plist / syntax ecosystem.
+        run: cargo deny check --hide-inclusion-graph
+      - name: Install cargo-audit
+        # Same pinned taiki-e/install-action cargo-deny uses: prebuilt
+        # release binary, download-cached, version-consistent. Replaces an
+        # unpinned `cargo install cargo-audit --locked` that recompiled the
+        # crate from the latest crates.io release on every run.
+        uses: taiki-e/install-action@67729d5c413db75907f0ad1e39bb04b9c868ff60
+        with:
+          tool: cargo-audit
+      - name: Audit dependencies (RustSec)
+        # The ignore list lives in `.cargo/audit.toml` (cargo-audit 0.22+
+        # discovers project config there, NOT at the repo root — moving it
+        # back silently re-enables every suppressed advisory). It mirrors
+        # `deny.toml`'s `[advisories].ignore`; keep the two in sync.
+        # `--deny warnings` escalates unsound/unmaintained informational
+        # advisories to errors; the ignored IDs are each vetted as
+        # non-exploitable + ecosystem-blocked (see audit.toml rationale).
+        run: cargo audit --deny warnings
   test:
     name: Test
     runs-on: ubuntu-latest
@@ -606,93 +658,6 @@ jobs:
         run: |
           pnpm install --frozen-lockfile
           pnpm build
-
-  fmt:
-    name: Format
-    runs-on: ubuntu-latest
-    needs: changes
-    if: always() && (github.event_name != 'pull_request' || needs.changes.result != 'success' || needs.changes.outputs.rust == 'true' || needs.changes.outputs.ci == 'true')
-    timeout-minutes: 15
-    steps:
-      - uses: actions/checkout@f548e57e544e1ff5a4c46bf1e1b8685f8e4a348a
-      - uses: dtolnay/rust-toolchain@2c7215f132e9ebf062739d9130488b56d53c060c
-        with:
-          toolchain: "1.88"
-          components: rustfmt
-      - name: Format check
-        run: cargo fmt --all -- --check
-
-  # ADR-0011 red line 1: the headless `shannon` CLI must never link GUI
-  # libraries. Metadata-only check (no compile) — fails the moment
-  # shannon-cli grows a tauri/webkit dependency edge.
-  guard-headless:
-    name: Headless purity (ADR-0011)
-    runs-on: ubuntu-latest
-    needs: changes
-    if: always() && (github.event_name != 'pull_request' || needs.changes.result != 'success' || needs.changes.outputs.rust == 'true' || needs.changes.outputs.ci == 'true')
-    timeout-minutes: 15
-    steps:
-      - uses: actions/checkout@f548e57e544e1ff5a4c46bf1e1b8685f8e4a348a
-      - uses: dtolnay/rust-toolchain@2c7215f132e9ebf062739d9130488b56d53c060c
-        with:
-          toolchain: "1.88"
-      - name: Headless purity check
-        run: scripts/check-headless-purity.sh
-
-  audit:
-    name: Dependency Audit
-    # Required-for-merge gate on `dev` and `main`. Tracks `deny.toml`:
-    # license allowlist + curated advisory ignores for transitive crates
-    # whose upstream fix is blocked on Tauri / plist / syntax ecosystem.
-    runs-on: ubuntu-latest
-    needs: changes
-    if: always() && (github.event_name != 'pull_request' || needs.changes.result != 'success' || needs.changes.outputs.rust == 'true' || needs.changes.outputs.ci == 'true')
-    timeout-minutes: 15
-    steps:
-      - uses: actions/checkout@f548e57e544e1ff5a4c46bf1e1b8685f8e4a348a
-      - uses: dtolnay/rust-toolchain@2c7215f132e9ebf062739d9130488b56d53c060c
-        with:
-          toolchain: "1.88"
-      - name: Install cargo-deny
-        uses: taiki-e/install-action@67729d5c413db75907f0ad1e39bb04b9c868ff60
-        with:
-          tool: cargo-deny
-      - name: Check dependencies
-        run: cargo deny check --hide-inclusion-graph
-
-  rustsec-audit:
-    # Required-for-merge gate on `dev` and `main`. RustSec advisory DB
-    # covers vulnerabilities not in the Open Rust Database that
-    # cargo-deny reads (rustsec.org advisory-db is the broader feed).
-    name: RustSec Advisory Audit
-    runs-on: ubuntu-latest
-    needs: changes
-    if: always() && (github.event_name != 'pull_request' || needs.changes.result != 'success' || needs.changes.outputs.rust == 'true' || needs.changes.outputs.ci == 'true')
-    timeout-minutes: 20
-    steps:
-      - uses: actions/checkout@f548e57e544e1ff5a4c46bf1e1b8685f8e4a348a
-      - uses: dtolnay/rust-toolchain@2c7215f132e9ebf062739d9130488b56d53c060c
-        with:
-          toolchain: "1.88"
-      - name: Install cargo-audit
-        # Same pinned taiki-e/install-action the cargo-deny (audit) and
-        # metrics jobs use: prebuilt release binary, download-cached, and
-        # version-consistent across jobs. Replaces the unpinned
-        # `cargo install cargo-audit --locked`, which recompiled the crate
-        # from whatever the latest crates.io release was on every run
-        # (minutes of runner time, no reproducibility).
-        uses: taiki-e/install-action@67729d5c413db75907f0ad1e39bb04b9c868ff60
-        with:
-          tool: cargo-audit
-      - name: Audit dependencies
-        # The ignore list lives in `.cargo/audit.toml` (cargo-audit 0.22+
-        # discovers project config there, NOT at the repo root — moving it
-        # back silently re-enables every suppressed advisory). It mirrors
-        # `deny.toml`'s `[advisories].ignore`; keep the two in sync.
-        # `--deny warnings` escalates unsound/unmaintained informational
-        # advisories to errors; the ignored IDs are each vetted as
-        # non-exploitable + ecosystem-blocked (see audit.toml rationale).
-        run: cargo audit --deny warnings
 
   doc:
     # Required-for-merge gate. The workspace's intra-doc-link debt (~96
