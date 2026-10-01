@@ -3894,5 +3894,7 @@
   "tasks.scheduleForm.reviewNotifyOnFailureOff": "静默——失败仅记录在案，不发送通知。",
   "tasks.scheduleForm.activate": "激活例行任务",
   "tasks.scheduleForm.activating": "激活中…",
-  "tasks.scheduleForm.backToEdit": "返回修改"
+  "tasks.scheduleForm.backToEdit": "返回修改",
+  "inbox.needsAction": "需要处理",
+  "inbox.runStatus.succeeded": "已成功"
 }

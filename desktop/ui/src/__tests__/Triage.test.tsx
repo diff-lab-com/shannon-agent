@@ -85,6 +85,9 @@ const testMessages: Record<string, string> = {
   'inbox.empty.project.cta': 'Clear project filter',
   'project.filter.chip.aria': 'Filtered by project: {name}',
   'project.filter.remove.aria': 'Remove project filter',
+  'tasks.status.failed.label': 'Failed',
+  'inbox.needsAction': 'Needs action',
+  'inbox.runStatus.succeeded': 'Succeeded',
 }
 
 // Hook spies — useInboxItems returns
@@ -804,5 +807,47 @@ describe('Triage — B4 URL view state and error state (§7-28)', () => {
     renderPage()
     expect(screen.getByRole('alert')).toHaveTextContent("Couldn't load the inbox")
     expect(screen.getByText('Item 1')).toBeInTheDocument()
+  })
+})
+
+// ── W3-2: needs-action run status on triage cards ──────────────────────────
+describe('W3-2 run outcome on triage cards', () => {
+  it('leads a failed run card with Failed · Needs action and an error border', () => {
+    setItems([makeItem({ id: 1, source: 'routine', error: 'provider unreachable' })])
+    const { container } = renderPage()
+    const chip = screen.getByTestId('inbox-run-status')
+    expect(chip).toHaveTextContent('Failed')
+    expect(chip).toHaveTextContent('Needs action')
+    // needs-action semantics beyond colour: priority icon + words on a
+    // tinted chip, plus the card's error-tinted border.
+    expect(chip.querySelector('.material-symbols-outlined')).toHaveTextContent('priority_high')
+    expect(container.querySelector('[role="listitem"]')?.className).toContain('border-error/40')
+  })
+
+  it('leads a succeeded run card with the succeeded status word', () => {
+    setItems([makeItem({ id: 2, source: 'routine', error: null })])
+    renderPage()
+    const chip = screen.getByTestId('inbox-run-status')
+    expect(chip).toHaveTextContent('Succeeded')
+    expect(chip).not.toHaveTextContent('Needs action')
+  })
+
+  it('derives the outcome for trigger results too', () => {
+    setItems([
+      makeItem({ id: 3, source: 'trigger', error: 'boom' }),
+      makeItem({ id: 4, source: 'trigger', error: null }),
+    ])
+    renderPage()
+    expect(screen.getAllByTestId('inbox-run-status')).toHaveLength(2)
+  })
+
+  it('carries no run-status chip on non-run sources', () => {
+    setItems([
+      makeItem({ id: 5, source: 'session_failed', error: 'turn failed' }),
+      makeItem({ id: 6, source: 'skill_candidate', error: null }),
+      makeItem({ id: 7, source: 'dream_report', error: null }),
+    ])
+    renderPage()
+    expect(screen.queryByTestId('inbox-run-status')).not.toBeInTheDocument()
   })
 })

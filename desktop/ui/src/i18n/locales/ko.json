@@ -3894,5 +3894,7 @@
   "tasks.scheduleForm.reviewNotifyOnFailureOff": "조용함 — 실패는 기록만 되며 알림이 전송되지 않습니다.",
   "tasks.scheduleForm.activate": "루틴 활성화",
   "tasks.scheduleForm.activating": "활성화 중…",
-  "tasks.scheduleForm.backToEdit": "편집으로 돌아가기"
+  "tasks.scheduleForm.backToEdit": "편집으로 돌아가기",
+  "inbox.needsAction": "조치 필요",
+  "inbox.runStatus.succeeded": "성공"
 }

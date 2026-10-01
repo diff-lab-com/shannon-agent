@@ -3894,5 +3894,7 @@
   "tasks.scheduleForm.reviewNotifyOnFailureOff": "Still — Fehlschläge werden nur aufgezeichnet, keine Benachrichtigung gesendet.",
   "tasks.scheduleForm.activate": "Routine aktivieren",
   "tasks.scheduleForm.activating": "Wird aktiviert…",
-  "tasks.scheduleForm.backToEdit": "Zurück zum Bearbeiten"
+  "tasks.scheduleForm.backToEdit": "Zurück zum Bearbeiten",
+  "inbox.needsAction": "Handlung erforderlich",
+  "inbox.runStatus.succeeded": "Erfolgreich"
 }

@@ -3894,5 +3894,7 @@
   "tasks.scheduleForm.reviewNotifyOnFailureOff": "靜音——失敗僅會記錄，不會發送通知。",
   "tasks.scheduleForm.activate": "啟用例行程序",
   "tasks.scheduleForm.activating": "啟用中…",
-  "tasks.scheduleForm.backToEdit": "返回修改"
+  "tasks.scheduleForm.backToEdit": "返回修改",
+  "inbox.needsAction": "需要處理",
+  "inbox.runStatus.succeeded": "已成功"
 }

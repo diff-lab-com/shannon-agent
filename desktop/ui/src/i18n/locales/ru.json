@@ -3894,5 +3894,7 @@
   "tasks.scheduleForm.reviewNotifyOnFailureOff": "Тихо — сбои только записываются, уведомления не отправляются.",
   "tasks.scheduleForm.activate": "Активировать процедуру",
   "tasks.scheduleForm.activating": "Активация…",
-  "tasks.scheduleForm.backToEdit": "Вернуться к правке"
+  "tasks.scheduleForm.backToEdit": "Вернуться к правке",
+  "inbox.needsAction": "Требуется действие",
+  "inbox.runStatus.succeeded": "Успешно"
 }

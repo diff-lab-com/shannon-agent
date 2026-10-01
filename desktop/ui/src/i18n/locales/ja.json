@@ -3894,5 +3894,7 @@
   "tasks.scheduleForm.reviewNotifyOnFailureOff": "サイレント — 失敗は記録のみで、通知は送信されません。",
   "tasks.scheduleForm.activate": "ルーティンを有効化",
   "tasks.scheduleForm.activating": "有効化中…",
-  "tasks.scheduleForm.backToEdit": "編集に戻る"
+  "tasks.scheduleForm.backToEdit": "編集に戻る",
+  "inbox.needsAction": "要対応",
+  "inbox.runStatus.succeeded": "成功"
 }

@@ -3894,5 +3894,7 @@
   "tasks.scheduleForm.reviewNotifyOnFailureOff": "Silencieux — les échecs sont uniquement consignés, aucune notification n'est envoyée.",
   "tasks.scheduleForm.activate": "Activer la routine",
   "tasks.scheduleForm.activating": "Activation…",
-  "tasks.scheduleForm.backToEdit": "Retour à la modification"
+  "tasks.scheduleForm.backToEdit": "Retour à la modification",
+  "inbox.needsAction": "Action requise",
+  "inbox.runStatus.succeeded": "Réussi"
 }

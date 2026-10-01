@@ -3894,5 +3894,7 @@
   "tasks.scheduleForm.reviewNotifyOnFailureOff": "Silent — failures are only recorded, no notification is sent.",
   "tasks.scheduleForm.activate": "Activate routine",
   "tasks.scheduleForm.activating": "Activating…",
-  "tasks.scheduleForm.backToEdit": "Back to edit"
+  "tasks.scheduleForm.backToEdit": "Back to edit",
+  "inbox.needsAction": "Needs action",
+  "inbox.runStatus.succeeded": "Succeeded"
 }

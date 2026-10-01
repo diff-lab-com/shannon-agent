@@ -3894,5 +3894,7 @@
   "tasks.scheduleForm.reviewNotifyOnFailureOff": "Silencioso: los fallos solo se registran, no se envía ninguna notificación.",
   "tasks.scheduleForm.activate": "Activar rutina",
   "tasks.scheduleForm.activating": "Activando…",
-  "tasks.scheduleForm.backToEdit": "Volver a editar"
+  "tasks.scheduleForm.backToEdit": "Volver a editar",
+  "inbox.needsAction": "Requiere acción",
+  "inbox.runStatus.succeeded": "Con éxito"
 }
