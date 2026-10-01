@@ -59,6 +59,21 @@ const SCRIPT_NAMES = [
   'auth-error',
   'mid-stream-fail',
   'cancel-text-stream',
+  // R3 journeys (#7-#14) + the cancel-matrix scripts (§4.1) + the
+  // input-persistence double-session seed (§4.2).
+  'budget-exceeded',
+  'attachments',
+  'queue-steer',
+  'edit-rewind',
+  'session-switch-race',
+  'subagent-run',
+  'cross-page',
+  'context-panels',
+  'input-persistence',
+  'cancel-tool-run',
+  'cancel-approval-wait',
+  'cancel-then-resend',
+  'cancel-background',
 ] as const
 
 type ScriptName = (typeof SCRIPT_NAMES)[number]
@@ -493,5 +508,380 @@ describe('L1 state machine — cancel-text-stream (journey #6)', () => {
     expect(h.result.current.messages.filter(m => m.role === 'assistant')).toHaveLength(0)
     expect(h.result.current.error).toBeNull()
     expect(h.player.snapshot().phase).toBe('done')
+  })
+})
+
+// ───────────────────────── R3 journeys (#7 – #14) ─────────────────────────
+
+describe('L1 state machine — budget-exceeded (journey #7)', () => {
+  it('budget:exceeded auto-cancels the run; Continue once resends with budgetBypass and drops attachments (A-2 anchored)', async () => {
+    const script = loadFixture('budget-exceeded')
+    const h = await makeHarness()
+    h.player.load(script)
+
+    await sendAndPlay(h, { text: script.turns[0]!.user, expectedQueryId: 'q-0' })
+    // The exceeded event carries the seeded over-budget pair in the frozen
+    // camelCase budget shape — the payload the page's BudgetBanner listener
+    // (useBudgetGuard) filters by sessionId.
+    await waitFor(() => {
+      const budgetEvent = h.events.find(e => e.event === 'budget:exceeded')
+      expect(budgetEvent?.payload).toEqual({ sessionId: SESSION_A, spentUsd: 6.4, budgetUsd: 5 })
+    })
+    // Budget-cap auto-cancel (same cancel token as Stop, commands.rs:2199):
+    // the run settles via query:cancelled — no ghost bubble, no error state.
+    await awaitSettled(h)
+    expect(h.result.current.streamingText).toBe('')
+    expect(h.result.current.messages.filter(m => m.role === 'assistant')).toHaveLength(0)
+    expect(h.result.current.error).toBeNull()
+    expect(h.player.snapshot().sentTurns).toBe(1)
+
+    // "Continue once" — exactly what Chat.tsx's continuePastBudget does:
+    // resend the last user message with the bypass flag. The harness passes
+    // the same invoke args the real send_message carries.
+    await act(async () => {
+      await h.result.current.sendMessage(script.turns[0]!.user, undefined, { budgetBypass: true })
+    })
+    await act(async () => {
+      expect(h.player.handleSendMessage({
+        sessionId: SESSION_A,
+        message: script.turns[0]!.user,
+        filePaths: null,
+        budgetBypass: true,
+      })).toEqual({ query_id: 'q-1' })
+    })
+    await awaitSettled(h)
+    const sends = h.player.snapshot().sends
+    expect(sends[1]).toMatchObject({ turnIndex: 1, budgetBypass: true, sessionId: SESSION_A })
+    // A-2 current behavior: the budget-bypass resend DROPS the original
+    // message's attachments (seeded user message carries one). Flip to
+    // `attachments: ['/Users/demo/Downloads/report-draft.md']` when R4 lands.
+    expect(sends[1]!.attachments).toBeNull()
+    expect(h.result.current.messages.filter(m => m.role === 'assistant')).toHaveLength(1)
+  })
+})
+
+describe('L1 state machine — attachments (journey #8)', () => {
+  it('sends ride attachment paths; the turn returns rejected receipts (P0 anchor) and the optimistic bubble stays bare (A-4 anchored)', async () => {
+    const script = loadFixture('attachments')
+    const outsidePath = script.turns[0]!.rejectedAttachments![0]!.path
+    const h = await makeHarness()
+    h.player.load(script)
+
+    await act(async () => {
+      await h.result.current.sendMessage(script.turns[0]!.user, [outsidePath])
+    })
+    expect(api.sendMessage).toHaveBeenLastCalledWith(
+      script.turns[0]!.user,
+      [outsidePath],
+      undefined,
+      SESSION_A,
+    )
+    let resp: { query_id: string; rejected_attachments?: unknown[] } | null = null
+    await act(async () => {
+      resp = h.player.handleSendMessage({ sessionId: SESSION_A })
+    })
+    // P0-3 partial success: the send stands, the refusal rides the response
+    // (AppContext toasts one "«file» was not sent: «reason»" per path —
+    // the R2 walkthrough's out-of-working-dir finding anchor).
+    expect(resp).toEqual({
+      query_id: 'q-0',
+      rejected_attachments: [{ path: outsidePath, reason: 'out_of_working_dir' }],
+    })
+    await awaitSettled(h)
+    // A-4 current behavior: the optimistic user message carries NO
+    // file_attachments — attachment previews only come back on reload.
+    // Flip to `user.file_attachments` being present when R4 lands.
+    const user = h.result.current.messages.find(m => m.role === 'user')
+    expect(user?.file_attachments).toBeUndefined()
+    expect(h.result.current.messages.filter(m => m.role === 'assistant')).toHaveLength(1)
+  })
+})
+
+describe('L1 state machine — queue-steer (journey #9)', () => {
+  it('queue caps at 3, reorders, and drains FIFO after settle (the steer order is pinned E2E-side + by the hook\'s own tests)', async () => {
+    const script = loadFixture('queue-steer')
+    const h = await makeHarness()
+    h.player.load(script)
+
+    await sendAndPlay(h, { text: script.turns[0]!.user, expectedQueryId: 'q-0' })
+    expect(h.result.current.isQuerying).toBe(true)
+    // Three queued prompts fit; the fourth overflows (enqueue returns false
+    // and keeps the caller's draft — Chat.tsx keeps the composer text).
+    await act(async () => {
+      expect(h.result.current.enqueuePrompt('队列第一条', [])).toBe(true)
+      expect(h.result.current.enqueuePrompt('队列第二条', [])).toBe(true)
+      expect(h.result.current.enqueuePrompt('队列第三条', [])).toBe(true)
+    })
+    expect(h.result.current.promptQueue.map(i => i.text)).toEqual(['队列第一条', '队列第二条', '队列第三条'])
+    await act(async () => {
+      expect(h.result.current.enqueuePrompt('第四条（应溢出）', [])).toBe(false)
+    })
+    expect(h.result.current.promptQueue).toHaveLength(3)
+
+    // The chips' up-control moves 第二条 to the head (sends sooner).
+    const secondId = h.result.current.promptQueue[1]!.id
+    act(() => { h.result.current.moveQueuedPrompt(secondId, -1) })
+    expect(h.result.current.promptQueue.map(i => i.text)).toEqual(['队列第二条', '队列第一条', '队列第三条'])
+
+    // The turn settles; the Chat-page drain effect consumes the FIFO head
+    // first (page-level loop — its ordering contract is pinned here through
+    // dequeuePrompt and E2E-side through the reply-bubble order).
+    await awaitSettled(h)
+    await act(async () => {
+      expect(h.result.current.dequeuePrompt()!.text).toBe('队列第二条')
+      expect(h.result.current.dequeuePrompt()!.text).toBe('队列第一条')
+      expect(h.result.current.dequeuePrompt()!.text).toBe('队列第三条')
+      expect(h.result.current.dequeuePrompt()).toBeNull()
+    })
+  })
+})
+
+describe('L1 state machine — edit-rewind (journey #10)', () => {
+  it('edit commit rewinds to the checkpoint boundary (A-14: equality included) and the resend streams', async () => {
+    vi.mocked(api.rewindSession).mockResolvedValue([])
+    vi.mocked(api.listCheckpoints).mockResolvedValue([])
+    const script = loadFixture('edit-rewind')
+    const h = await makeHarness()
+    h.player.load(script)
+
+    // Seeded history = 2 user turns; the armed list_checkpoints derives one
+    // checkpoint per turn (shape pinned in seed-handlers.test). A-14
+    // boundary evidence: rewindInfoFor accepts a checkpoint whose
+    // turn_index EQUALS the edited message's turn (`>=`), so turn 1's own
+    // checkpoint makes message index 2 editable. Commit mechanics:
+    await act(async () => { await h.result.current.rewindSession(1) })
+    expect(api.rewindSession).toHaveBeenCalledWith(SESSION_A, 1)
+    expect(h.result.current.error).toBeNull()
+
+    // The rewind+resend flow streams the edited text as a fresh turn.
+    await sendAndPlay(h, { text: script.turns[0]!.user, expectedQueryId: 'q-0' })
+    await awaitSettled(h)
+    expect(h.result.current.messages.filter(m => m.role === 'assistant')[0]!.content)
+      .toBe(textChunksOf(script, 0).join(''))
+  })
+})
+
+describe('L1 state machine — session-switch-race (journey #11)', () => {
+  it('buckets stay per-session across a switch; the projection resumes on return; the error banner persists across sessions (A-5 anchored)', async () => {
+    const script = loadFixture('session-switch-race')
+    const h = await makeHarness()
+    h.player.load(script)
+
+    // Park before the failed step so the whole switch dance happens with a
+    // deterministic live stream (no event-timing races).
+    h.player.pauseAt(1)
+    await sendAndPlay(h, { text: script.turns[0]!.user, expectedQueryId: 'q-0' })
+    await waitFor(() => expect(h.result.current.streamingText).toContain('甲乙'))
+    await waitFor(() => expect(h.player.snapshot().phase).toBe('waitingUi'))
+
+    // Switching away parks A's projection: B's own (empty) bucket answers.
+    // (The context value renames switchToSession → switchSession.)
+    await act(async () => { await h.result.current.switchSession(SESSION_B) })
+    expect(h.result.current.currentSessionId).toBe(SESSION_B)
+    expect(h.result.current.streamingText).not.toContain('甲乙')
+    expect(h.result.current.streamingText).toBe('')
+    // A keeps streaming off-screen: its chunk lands in A's bucket and must
+    // NOT bleed onto B's screen (per-session isolation, §P2-18).
+    act(() => { flush(EVENT_NAMES.QUERY_TEXT, { content: '丁', session_id: SESSION_A }) })
+    expect(h.result.current.streamingText).toBe('')
+
+    // Switch back: the OWN bucket re-projects, late chunk included (the
+    // resume-the-projection half).
+    await act(async () => { await h.result.current.switchSession(SESSION_A) })
+    await waitFor(() => expect(h.result.current.streamingText).toContain('丁'))
+    expect(h.result.current.streamingText).toContain('甲乙')
+
+    // The turn fails while A is visible → classified error banner on A.
+    await act(async () => { h.player.resume() })
+    await waitFor(() => expect(h.result.current.error).toBe('upstream exploded after the switch'))
+    expect(h.result.current.errorKind).toBe('other')
+
+    // A-5 current behavior: switchToSession does NOT clear error/errorKind —
+    // A's failure banner follows the user onto B. Flip BOTH expects to
+    // `toBeNull()` when R4 lands.
+    await act(async () => { await h.result.current.switchSession(SESSION_B) })
+    expect(h.result.current.error).toBe('upstream exploded after the switch')
+    expect(h.result.current.errorKind).toBe('other')
+  })
+})
+
+describe('L1 state machine — subagent-run (journey #12)', () => {
+  it('subagent:start/stop drive the live registry; the agent_spawn card converges and leaves with the run', async () => {
+    const script = loadFixture('subagent-run')
+    const h = await makeHarness()
+    h.player.load(script)
+
+    await sendAndPlay(h, { text: script.turns[0]!.user, expectedQueryId: 'q-0' })
+    // The registry bridge goes live while the spawn card is running (the
+    // block renders "registry <id>" from exactly this state, page-side).
+    await waitFor(() => expect(h.result.current.subagentLive).toEqual({
+      agentId: 'sa-research-1', agentName: 'researcher', team: 'alpha',
+    }))
+    await waitFor(() => expect(h.result.current.activeToolCalls[0]).toMatchObject({
+      tool_use_id: 'tool-spawn-1',
+      tool_name: 'agent_spawn',
+      status: 'running',
+    }))
+
+    await drainWaits(h.player)
+    await awaitSettled(h)
+    // subagent:stop + completion: the registry clears and the card leaves
+    // with the run (P2-4 — no lingering cards under the committed reply).
+    expect(h.result.current.subagentLive).toBeNull()
+    expect(h.result.current.activeToolCalls).toHaveLength(0)
+    expect(h.result.current.messages.filter(m => m.role === 'assistant')).toHaveLength(1)
+  })
+})
+
+describe('L1 state machine — journey-cross-page (#13) + context-panels (#14)', () => {
+  it('cross-page: the seeded write_file history is the FileCard/source the pages read', async () => {
+    const script = loadFixture('cross-page')
+    const h = await makeHarness()
+    h.player.load(script)
+    // The /files and /timeline pages are pure views over the backend
+    // records this journey's seed produces: the armed register_file_index
+    // gains the FileCard's path (fired on card mount, browser-side) and
+    // trace_timeline keeps its demo projection. At L1 we pin the
+    // conversation state the chat half commits.
+    await sendAndPlay(h, { text: script.turns[0]!.user, expectedQueryId: 'q-0' })
+    await awaitSettled(h)
+    // The preloaded write_file tool_calls ride the seeded history (A-layer
+    // mapping pinned in seed-handlers.test): the user sees the file card
+    // WITHOUT any new run — the reply appends after it.
+    const assistants = h.result.current.messages.filter(m => m.role === 'assistant')
+    expect(assistants).toHaveLength(1) // seeded assistant stays out of live state; reply committed
+    expect(assistants[0]!.content).toBe(textChunksOf(script, 0).join(''))
+  })
+
+  it('context-panels: query:usage projects onto the visible session and is the usageTick the panels refetch on', async () => {
+    const script = loadFixture('context-panels')
+    const h = await makeHarness()
+    h.player.load(script)
+
+    await sendAndPlay(h, { text: script.turns[0]!.user, expectedQueryId: 'q-0' })
+    await waitFor(() => expect(h.result.current.usage).toMatchObject({
+      input_tokens: 1200, output_tokens: 300, cost_usd: 0.012,
+    }))
+    // Every usage event hands the panels a NEW tick → SessionUsageDialog /
+    // ContextBreakdownCard refetch get_session_usage (seeded spentUsd
+    // 0.0731 answers; handler level pinned in seed-handlers.test).
+    await drainWaits(h.player)
+    await awaitSettled(h)
+    // The projection survives the settle (usage is a session readout, not
+    // run state); the panels' refetch-on-tick is exercised E2E-side, where
+    // the dialog actually mounts.
+    expect(h.result.current.usage).toMatchObject({ input_tokens: 1200 })
+  })
+})
+
+// ───────────────────── cancel-matrix L1 view (§4.1) ─────────────────────
+
+describe('L1 state machine — cancel-matrix #2 (tool execution stop)', () => {
+  it('cancel during a tool run converges the card; a late tool-result does not resurrect it', async () => {
+    const script = loadFixture('cancel-tool-run')
+    const h = await makeHarness()
+    h.player.load(script)
+
+    h.player.pauseAt(2) // park before the waitFor — tool "executing", no progress events (the A-18 blind spot)
+    await sendAndPlay(h, { text: script.turns[0]!.user, expectedQueryId: 'q-0' })
+    await waitFor(() => expect(h.result.current.activeToolCalls[0]).toMatchObject({
+      tool_use_id: 'tool-slow-1', tool_name: 'Bash', status: 'running',
+    }))
+
+    await act(async () => { await h.result.current.cancelQuery() })
+    await act(async () => { expect(h.player.handleCancelQuery()).toBe(true) })
+    await awaitSettled(h)
+    // Everything the run held converges away.
+    expect(h.result.current.activeToolCalls).toHaveLength(0)
+    expect(h.result.current.toolProgress).toBeNull()
+    expect(h.result.current.streamingText).toBe('')
+
+    // The old query's tool-result arrives at its next event boundary —
+    // AFTER the new idle state. The result's map finds no matching card id
+    // → no-op; the card must NOT resurrect.
+    act(() => {
+      flush(EVENT_NAMES.QUERY_TOOL_RESULT, {
+        tool_use_id: 'tool-slow-1', result: 'done much later', is_error: false, session_id: SESSION_A,
+      })
+    })
+    expect(h.result.current.activeToolCalls).toHaveLength(0)
+    expect(h.result.current.error).toBeNull()
+  })
+})
+
+describe('L1 state machine — cancel-matrix #4 (approval-wait stop)', () => {
+  it('stop while a permission prompt waits settles the run; the prompt itself stays up (current behavior recorded)', async () => {
+    const script = loadFixture('cancel-approval-wait')
+    const h = await makeHarness()
+    h.player.load(script)
+
+    await sendAndPlay(h, { text: script.turns[0]!.user, expectedQueryId: 'q-0' })
+    await waitFor(() => expect(h.player.snapshot().phase).toBe('waitingPermission'))
+    expect(h.result.current.permissionRequest).toMatchObject({ request_id: 'pr-cancel-1', risk: 'critical' })
+
+    // Stop (Escape tier 2 / stop button) — the parked turn cancels.
+    await act(async () => { await h.result.current.cancelQuery() })
+    await act(async () => { expect(h.player.handleCancelQuery()).toBe(true) })
+    await awaitSettled(h)
+    expect(h.result.current.activeToolCalls).toHaveLength(0)
+    expect(h.result.current.error).toBeNull()
+
+    // CURRENT BEHAVIOR (recorded for the report): QUERY_CANCELLED does not
+    // touch permissionRequest — the dialog stays up after the run is gone.
+    expect(h.result.current.permissionRequest).toMatchObject({ request_id: 'pr-cancel-1' })
+    // A late Allow still goes through: the command resolves and the prompt
+    // clears (respondPermissionAction clears it on success).
+    await act(async () => { await h.result.current.respondPermission('pr-cancel-1', false) })
+    expect(h.result.current.permissionRequest).toBeNull()
+    expect(api.respondPermission).toHaveBeenCalledWith('pr-cancel-1', false, undefined)
+  })
+})
+
+describe('L1 state machine — cancel-matrix #3 (stop → instant resend, A-17)', () => {
+  it('a late old-turn cancelled WIPES the new turn\'s stream and idles the composer (A-17 pollution, recorded)', async () => {
+    const script = loadFixture('cancel-then-resend')
+    const h = await makeHarness()
+    h.player.load(script)
+
+    // Turn 0 streams; stop settles it (the mock's cancel is synchronous —
+    // the RACE is modeled by the late events below, which is exactly how
+    // the real backend delivers them: after the latch reopens).
+    h.player.pauseAt(1)
+    await sendAndPlay(h, { text: script.turns[0]!.user, expectedQueryId: 'q-0' })
+    await waitFor(() => expect(h.result.current.streamingText).toContain('旧流'))
+    await act(async () => { await h.result.current.cancelQuery() })
+    await act(async () => { expect(h.player.handleCancelQuery()).toBe(true) })
+    await awaitSettled(h)
+
+    // Instant resend — the new turn streams (its own query id).
+    await sendAndPlay(h, { text: script.turns[1]!.user, expectedQueryId: 'q-1' })
+    await waitFor(() => expect(h.result.current.streamingText).toContain('新流甲'))
+    expect(h.result.current.isQuerying).toBe(true)
+
+    // The old query's boundary events land INSIDE the new turn's window:
+    // a late text chunk (q-0) + the late query:cancelled (q-0), same
+    // session — indistinguishable from the new turn's events without
+    // query_id filtering (the A-17 gap).
+    act(() => { flush(EVENT_NAMES.QUERY_TEXT, { content: '[旧流迟到]', query_id: 'q-0', session_id: SESSION_A }) })
+    act(() => { flush(EVENT_NAMES.QUERY_CANCELLED, { query_id: 'q-0', session_id: SESSION_A }) })
+
+    // A-17 CURRENT BEHAVIOR — pollution. The late cancelled clears the
+    // SESSION bucket (new stream's text gone), flips isQuerying false while
+    // q-1 is still streaming, and the committed reply loses every chunk
+    // emitted before the pollution point (and the injected late chunk —
+    // both were in the wiped bucket). Flip these to the no-pollution
+    // asserts (stream intact, isQuerying stays true, full reply) when R4
+    // lands.
+    expect(h.result.current.streamingText).not.toContain('新流甲')
+    expect(h.result.current.isQuerying).toBe(false)
+    // q-1 keeps streaming into the wiped bucket — it commits WITHOUT the
+    // pre-pollution chunks.
+    await waitFor(() => {
+      const reply = h.result.current.messages.filter(m => m.role === 'assistant').at(-1)
+      expect(reply?.content ?? '').toContain('新流丁')
+    })
+    const reply = h.result.current.messages.filter(m => m.role === 'assistant').at(-1)
+    expect(reply!.content).not.toContain('新流甲')
+    expect(reply!.content).not.toContain('旧流迟到')
   })
 })

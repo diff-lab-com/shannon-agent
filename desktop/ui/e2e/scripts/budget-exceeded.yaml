@@ -1,0 +1,49 @@
+# ChatScript: budget-exceeded — journey #7（矩阵#7）。
+#
+# 超支 seed（spentUsd 6.4 ≥ budgetUsd 5）→ 切入会话即由 useBudgetGuard 的
+# 挂载/切换重推导（B4 P2-8）看到 exceeded 红横幅三动作；新 turn 流中
+# budget:exceeded 事件 + 预算触顶自动取消（真实后端复用同一 cancel token，
+# commands.rs:2199）→ Continue once 以 budgetBypass:true 重发（snapshot
+# sends 断言）。Continue 后附件按 knownIssue: "A-2" 锚现状——重发
+# lastUser.content 时丢弃附件，断言写在 spec（sends.attachments === null），
+# R4 修复后翻转为「附件保留」。
+#
+# 回归锚点：A-2（Chat.tsx continuePastBudget 丢附件）· findings「预算续发」。
+name: budget-exceeded
+description: 预算超支 journey — 超支 seed 红横幅三动作 → 自动取消 → Continue once 带 budgetBypass（A-2 锚点）
+seed:
+  config:
+    hasKey: true
+    budgetUsd: 5
+    spentUsd: 6.4
+  sessions:
+    - id: script-sess-budget
+      title: Over budget
+      messages:
+        - role: user
+          content: 帮我总结这份报告
+          attachments:
+            - /Users/demo/Downloads/report-draft.md
+        - role: assistant
+          content: 报告要点已整理完毕。
+turns:
+  - user: 再补充一下数据来源部分
+    script:
+      - event: query:text
+        chunks:
+          - "先看一下当前花销……"
+          - "已经超过预算上限了。"
+        chunkDelayMs: 300
+      - event: budget:exceeded
+        payload:
+          spentUsd: 6.4
+      # 预算触顶自动取消：cancelled 收敛本轮（「cancelled 先于横幅动作」）。
+      - event: query:cancelled
+  # Continue once 的续发（budgetBypass）消费这一轮：短回复即可。
+  - user: 再补充一下数据来源部分
+    script:
+      - event: query:text
+        chunks:
+          - "数据来源已补充：引用列表见附录。"
+        chunkDelayMs: 200
+      - event: query:completed

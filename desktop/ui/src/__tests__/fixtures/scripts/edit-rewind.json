@@ -1,0 +1,51 @@
+{
+  "name": "edit-rewind",
+  "description": "编辑重发 journey — 预置历史 + checkpoints → edit banner → commit（rewind_session + 新流）；cancel 保稿；A-14 边界证据",
+  "seed": {
+    "config": {
+      "hasKey": true
+    },
+    "sessions": [
+      {
+        "id": "script-sess-edit",
+        "title": "Edit and rewind",
+        "messages": [
+          {
+            "role": "user",
+            "content": "第一轮：先介绍潮汐的成因"
+          },
+          {
+            "role": "assistant",
+            "content": "潮汐主要由月球和太阳的引力差驱动。"
+          },
+          {
+            "role": "user",
+            "content": "第二轮：再讲讲风暴潮"
+          },
+          {
+            "role": "assistant",
+            "content": "风暴潮是极端天气引起的海面异常升高现象。"
+          }
+        ]
+      }
+    ]
+  },
+  "turns": [
+    {
+      "user": "第一轮（编辑后）：潮汐的成因和周期",
+      "script": [
+        {
+          "event": "query:text",
+          "chunks": [
+            "编辑后的回答：",
+            "潮汐按周期可分为半日潮、全日潮和混合潮。"
+          ],
+          "chunkDelayMs": 250
+        },
+        {
+          "event": "query:completed"
+        }
+      ]
+    }
+  ]
+}

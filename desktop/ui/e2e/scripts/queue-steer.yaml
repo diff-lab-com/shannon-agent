@@ -1,0 +1,57 @@
+# ChatScript: queue-steer — journey #9★（矩阵#9）。
+#
+# 长流式中连发 3 条 → prompt-queue chips 渲染/上移/移除、第 4 条满 toast →
+# 本轮完成后 drain 按 FIFO 顺序续发（回复气泡顺序 === 队列顺序）。
+# steer 测试（同 spec 第二个 test）：流中先排一条，再 Ctrl+Enter 发加急
+# 消息 → stop→settle→发送顺序（steer 抢在 drain 之前，snapshot sentTurns
+# + chip 存续断言事件序）。
+#
+# turn 0 的分片用 600ms 间隔拉出稳定的流中窗口；turns 1..4 是 drain/steer
+# 消费的短回复轮，回复文本带序号（第一条/第二条/第三条/第四条），
+# drain 顺序断言锚定在这些气泡上。
+name: queue-steer
+description: 排队与 steer journey — 队列 chips 增删排序/满 toast → drain 顺序 → Ctrl+Enter steer 停车后优先发送
+seed:
+  config:
+    hasKey: true
+  sessions:
+    - id: script-sess-queue
+      title: Queue and steer
+      messages: []
+turns:
+  - user: 写一篇关于潮汐的长文
+    script:
+      - event: query:text
+        chunks:
+          - "潮汐之一，"
+          - "潮汐之二，"
+          - "潮汐之三，"
+          - "潮汐之四，"
+          - "潮汐之五，"
+          - "潮汐之六。"
+        chunkDelayMs: 600
+      - event: query:completed
+  - user: 队列第一条
+    script:
+      - event: query:text
+        chunks:
+          - "回复：第一条"
+      - event: query:completed
+  - user: 队列第二条
+    script:
+      - event: query:text
+        chunks:
+          - "回复：第二条"
+      - event: query:completed
+  - user: 队列第三条
+    script:
+      - event: query:text
+        chunks:
+          - "回复：第三条"
+      - event: query:completed
+  - user: 队列第四条
+    script:
+      - event: query:text
+        chunks:
+          - "回复：第四条"
+      - event: query:completed

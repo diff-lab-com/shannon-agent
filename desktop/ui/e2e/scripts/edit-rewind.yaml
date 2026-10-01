@@ -1,0 +1,38 @@
+# ChatScript: edit-rewind — journey #10（矩阵#10）。
+#
+# 预置 2 轮历史（seed 派生 checkpoints：每个 user turn 一个，list_checkpoints
+# armed 分支）→ 用户气泡 hover 出 edit 按钮 → edit-banner → 改文发送 →
+# commitEdit: rewind_session(turnIndex)（armed 分支截断 seed 会话到边界）
+# + 重发 → 新流（turn 0）。cancel 编辑（Escape/横幅 ✕）恢复 pre-edit 草稿。
+#
+# A-14 证据（记录进报告，不改行为）：checkpoint.turn_index 恰等于被编辑
+# 消息的 turnIndex 时也判 rewindable（rewindInfoFor 的 `>=` 边界）——第二
+# 个测试特意编辑第 2 条用户消息（turnIndex 1，checkpoint 恰等），编辑按钮
+# 可用即边界语义的现状证据。
+name: edit-rewind
+description: 编辑重发 journey — 预置历史 + checkpoints → edit banner → commit（rewind_session + 新流）；cancel 保稿；A-14 边界证据
+seed:
+  config:
+    hasKey: true
+  sessions:
+    - id: script-sess-edit
+      title: Edit and rewind
+      messages:
+        - role: user
+          content: "第一轮：先介绍潮汐的成因"
+        - role: assistant
+          content: 潮汐主要由月球和太阳的引力差驱动。
+        - role: user
+          content: "第二轮：再讲讲风暴潮"
+        - role: assistant
+          content: 风暴潮是极端天气引起的海面异常升高现象。
+turns:
+  # 编辑提交后的重发消费这一轮。
+  - user: "第一轮（编辑后）：潮汐的成因和周期"
+    script:
+      - event: query:text
+        chunks:
+          - "编辑后的回答："
+          - "潮汐按周期可分为半日潮、全日潮和混合潮。"
+        chunkDelayMs: 250
+      - event: query:completed

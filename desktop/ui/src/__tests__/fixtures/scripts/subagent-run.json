@@ -1,0 +1,71 @@
+{
+  "name": "subagent-run",
+  "description": "子代理 journey — agent_spawn 工具卡 + subagent:start/stop 注册桥 → SubagentBlock 出现/收敛",
+  "seed": {
+    "config": {
+      "hasKey": true
+    },
+    "sessions": [
+      {
+        "id": "script-sess-subagent",
+        "title": "Subagent run",
+        "messages": []
+      }
+    ]
+  },
+  "turns": [
+    {
+      "user": "派一个子代理调研潮汐能",
+      "script": [
+        {
+          "event": "query:text",
+          "chunks": [
+            "好的，我先派一个研究子代理。"
+          ]
+        },
+        {
+          "event": "query:tool-start",
+          "payload": {
+            "tool_use_id": "tool-spawn-1",
+            "tool_name": "agent_spawn",
+            "tool_input": {
+              "name": "researcher",
+              "model": "glm-4",
+              "team": "alpha",
+              "max_turns": 8,
+              "system_prompt": "You research tidal energy and summarize findings."
+            }
+          }
+        },
+        {
+          "event": "subagent:start",
+          "payload": {
+            "agentId": "sa-research-1",
+            "agentName": "researcher",
+            "team": "alpha"
+          }
+        },
+        {
+          "waitFor": "ui"
+        },
+        {
+          "event": "query:tool-result",
+          "payload": {
+            "tool_use_id": "tool-spawn-1",
+            "result": "researcher finished: 6 key findings",
+            "is_error": false
+          }
+        },
+        {
+          "event": "subagent:stop",
+          "payload": {
+            "agentId": "sa-research-1"
+          }
+        },
+        {
+          "event": "query:completed"
+        }
+      ]
+    }
+  ]
+}

@@ -1,0 +1,40 @@
+# ChatScript: cross-page — journey #13（矩阵#13）。
+#
+# 跨页旅程：chat 的 write_file 工具历史（seed toolCalls → get_conversation
+# 带 tool_calls，MessageBubble 对「completed 且非 error 的文件变更工具」
+# 渲染 FileCard）→ FileCard 挂载时 register_file_index_entry 进 mock 索引
+# → 侧栏导航 /files 该文件可见（mock store 联动）→ /timeline/<id> 深链
+# 打开（复用 demo trace_timeline handler 的既有形状）。
+#
+# tool_name 必须是 FILE_MUTATING_TOOLS 成员（write_file/edit_file/…）且
+# tool_input 带路径字段（file_path），FileCard/Diff 门控才放行（fileRefs）。
+name: cross-page
+description: 跨页旅程 — write_file 工具历史 → FileCard → /files 可见该文件 → /timeline/<id> 深链
+seed:
+  config:
+    hasKey: true
+  sessions:
+    - id: script-sess-cross
+      title: Cross page
+      messages:
+        - role: user
+          content: 帮我建一个待办清单文件
+        - role: assistant
+          content: 已创建 todo.md，共 3 条待办。
+          toolCalls:
+            - toolUseId: tool-write-todo
+              toolName: write_file
+              toolInput:
+                file_path: /Users/demo/workspace/shannon-demo/todo.md
+                content: "buy milk\nwrite tests\nship it"
+              result: "wrote 3 lines"
+              isError: false
+turns:
+  - user: 再检查一下这个文件
+    script:
+      - event: query:text
+        chunks:
+          - "文件内容确认无误："
+          - "3 条待办都在。"
+        chunkDelayMs: 250
+      - event: query:completed

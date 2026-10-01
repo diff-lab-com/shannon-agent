@@ -1,0 +1,94 @@
+{
+  "name": "queue-steer",
+  "description": "排队与 steer journey — 队列 chips 增删排序/满 toast → drain 顺序 → Ctrl+Enter steer 停车后优先发送",
+  "seed": {
+    "config": {
+      "hasKey": true
+    },
+    "sessions": [
+      {
+        "id": "script-sess-queue",
+        "title": "Queue and steer",
+        "messages": []
+      }
+    ]
+  },
+  "turns": [
+    {
+      "user": "写一篇关于潮汐的长文",
+      "script": [
+        {
+          "event": "query:text",
+          "chunks": [
+            "潮汐之一，",
+            "潮汐之二，",
+            "潮汐之三，",
+            "潮汐之四，",
+            "潮汐之五，",
+            "潮汐之六。"
+          ],
+          "chunkDelayMs": 600
+        },
+        {
+          "event": "query:completed"
+        }
+      ]
+    },
+    {
+      "user": "队列第一条",
+      "script": [
+        {
+          "event": "query:text",
+          "chunks": [
+            "回复：第一条"
+          ]
+        },
+        {
+          "event": "query:completed"
+        }
+      ]
+    },
+    {
+      "user": "队列第二条",
+      "script": [
+        {
+          "event": "query:text",
+          "chunks": [
+            "回复：第二条"
+          ]
+        },
+        {
+          "event": "query:completed"
+        }
+      ]
+    },
+    {
+      "user": "队列第三条",
+      "script": [
+        {
+          "event": "query:text",
+          "chunks": [
+            "回复：第三条"
+          ]
+        },
+        {
+          "event": "query:completed"
+        }
+      ]
+    },
+    {
+      "user": "队列第四条",
+      "script": [
+        {
+          "event": "query:text",
+          "chunks": [
+            "回复：第四条"
+          ]
+        },
+        {
+          "event": "query:completed"
+        }
+      ]
+    }
+  ]
+}
