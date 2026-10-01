@@ -70,15 +70,53 @@ The mock will throw `[mock] unhandled command: <name>` in the console for any mi
 
 ## Mocking async events (Tauri event listeners)
 
-`AppContext.tsx` listens to Tauri events for streaming tokens and tool calls. In mock mode these are not emitted automatically. To test streaming UI:
+R1 chat-testing infra replaced the old (broken) advice — `emit('query_text', …)`
+in the console never worked, because the real `@tauri-apps/api/event` module
+walks `window.__TAURI_INTERNALS__` (not the aliased core module) and none of
+the `plugin:event|*` commands had handlers. They do now:
 
-```ts
-import { emit } from '@tauri-apps/api/event'
-emit('query_text', { content: 'Hello ' })
-emit('query_text', { content: 'world' })
+- `src/lib/mock/eventBridge.ts` installs `window.__TAURI_INTERNALS__` /
+  `window.__TAURI_EVENT_PLUGIN_INTERNALS__` and registers
+  `plugin:event|listen|unlisten|emit`, so `listen()` from
+  `@tauri-apps/api/event` works in demo mode exactly like in the real shell
+  (callbacks receive `{ event, id, payload }`).
+- `src/lib/mock/scripted/` adds a **scripted player** that replays full AI
+  conversation flows — streaming chunks, thinking, tool calls, permission
+  pauses, budget events, errors, cancellation — from a declarative script.
+
+### Driving a conversation by script (ScriptedBackend)
+
+Scripts live in `desktop/ui/e2e/scripts/*.yaml` (schema:
+`src/lib/mock/scripted/schema.ts`). In a browser console you can drive the
+player by hand:
+
+```js
+// Emit one event exactly like the player does (auto query_id/session_id are
+// NOT filled here — you control the raw payload):
+__shannonMock.emit('query:text', { content: 'Hello ', session_id: null })
+
+// Load a script object (or JSON string), then just send a message in the UI:
+__shannonMock.loadScript({ name: 'demo', turns: [{ user: 'hi', script: [
+  { event: 'query:text', chunks: ['a', 'b', 'c'], chunkDelayMs: 100 },
+  { event: 'query:completed' },
+] }] })
+
+// Step controls:
+__shannonMock.control.pauseAt(1)   // park when the turn reaches step 1
+__shannonMock.control.resume()     // release a waitFor / permission park
+__shannonMock.control.speed = 2    // stream twice as fast
+__shannonMock.snapshot()           // { phase, turnIndex, stepIndex, … }
+__shannonMock.reset()              // back to the default demo seed data
 ```
 
-This is rarely needed for screenshots; the static `MOCK_MESSAGES` array already gives the Chat page a populated state.
+While a script is armed, `send_message` replays the next turn's events
+instead of the default instant no-op; `respond_permission` resumes a
+permission pause (and is recorded in `snapshot().permissionLog`);
+`cancel_query` emits the script's `onCancel` steps (default: an immediate
+`query:cancelled`). After the last turn the mock falls back to its standard
+behavior. E2E should use the Playwright helpers instead
+(`e2e/helpers/` — `loadChatScript(page, 'happy-path')`), which seed the
+script before the app boots via `window.__SHANNON_SCRIPT__`.
 
 ## Tests
 

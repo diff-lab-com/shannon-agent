@@ -1,7 +1,15 @@
 // Drop-in replacement for @tauri-apps/api/core when running in mock mode.
 // Vite alias swaps '@tauri-apps/api/core' → this module when VITE_MOCK_MODE=1.
 // See vite.config.ts and src/lib/mock/README.md.
+//
+// R1 chat-testing infra: besides command interception this module now also
+// wires the Tauri v2 EVENT bridge (src/lib/mock/eventBridge.ts — the real
+// @tauri-apps/api/event walks window.__TAURI_INTERNALS__, which the alias
+// can't reach) and the scripted player (src/lib/mock/scripted/) that replays
+// ChatScript turns through it. See scripted/index.ts for the console API.
 import { handlers } from './handlers'
+import { registerEventCallback } from './eventBridge'
+import { chatPlayer, initScriptedBackend } from './scripted'
 
 export interface InvokeArgs {
   [key: string]: unknown
@@ -9,6 +17,17 @@ export interface InvokeArgs {
 
 export async function invoke<T = unknown>(cmd: string, args?: InvokeArgs): Promise<T> {
   if (cmd === 'configure') console.log('[mock] invoke configure', JSON.stringify(args))
+  // Scripted-backend hooks — notify the player of lifecycle commands, and
+  // let it OWN `send_message` while a script is armed (it replays the next
+  // turn's events; returning null falls through to the default handler).
+  if (cmd === 'send_message') {
+    const scripted = chatPlayer.handleSendMessage(args as { sessionId?: string | null } | undefined)
+    if (scripted) return scripted as T
+  } else if (cmd === 'cancel_query') {
+    chatPlayer.handleCancelQuery()
+  } else if (cmd === 'respond_permission') {
+    chatPlayer.handleRespondPermission(args ?? {})
+  }
   const handler = handlers[cmd]
   if (handler) {
     try {
@@ -37,9 +56,20 @@ export async function convertFileSrc(filePath: string): Promise<string> {
   return `file://${filePath}`
 }
 
-export function transformCallback(): number {
-  return Math.floor(Math.random() * 1_000_000)
+// R1: real registration (was: random number — every demo-mode listen()
+// silently failed). Same signature as core.js v2.11: (callback?, once?) → id,
+// and the id now resolves a callback that eventBridge.dispatchEvent invokes
+// with `{ event, id, payload }` (the shape the real backend delivers, and
+// what `once()` needs for its self-unlisten).
+export function transformCallback(callback?: (response: unknown) => void, once?: boolean): number {
+  return registerEventCallback(callback ?? null, once)
 }
+
+// Wire the event bridge + scripted backend (idempotent). Must run at module
+// init — before React mounts — so `plugin:event|listen` handlers exist when
+// AppContext first subscribes and a `__SHANNON_SCRIPT__` boot script seeds
+// the store before the app's first fetch.
+initScriptedBackend(invoke)
 
 // Install the visible DEMO MODE badge once on module load (browser only).
 // Audit §P2-1 (round 6): restyled from a loud violet pill to a low-contrast
