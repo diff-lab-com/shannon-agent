@@ -42,3 +42,64 @@ jobs:
         # the workspace (file ops, shell, grep, permissions). No Tauri/GTK
         # system deps needed — desktop packaging is covered by release.yml.
         run: cargo nextest run -p shannon-core -p shannon-tools --profile ci
+
+  linux-feature-shapes:
+    # Moved here from ci.yml's Cross-platform ubuntu leg (2026-10-01, P2 of
+    # the CI speed plan): the exotic Linux feature shapes cost ~13 of that
+    # job's ~15.5 min on EVERY Rust PR while only occasionally rotting. The
+    # PR gate keeps the workspace + landlock checks; computer-use /
+    # computer-use-libei / local-browser stay PR-covered by ci.yml's
+    # test-features job (build + test, stronger than check). This job
+    # re-checks the remaining shapes daily — the nightly's declared
+    # contract: surface drift within a day instead of at release.
+    name: Linux feature shapes
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@f548e57e544e1ff5a4c46bf1e1b8685f8e4a348a
+      - uses: dtolnay/rust-toolchain@2c7215f132e9ebf062739d9130488b56d53c060c
+        with:
+          toolchain: "1.88"
+      - uses: Swatinem/rust-cache@72d126e709cad40056a62344eee609d696d62d33
+        with:
+          # Joins the ci-v3 workspace-compile cache family (see the rationale
+          # on ci.yml's Test job); rust-cache scopes the entry to this job.
+          shared-key: ci-v3
+      - name: Install system headers
+        # Same set the ci.yml cross-platform ubuntu leg installs, plus the
+        # two tools the moved steps need: libxdo-dev (enigo's default Linux
+        # backend — cargo check type-checks the FFI surface) and jq (the
+        # per-member --all-features loop drives its member list through it).
+        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends libdbus-1-dev libgbm-dev libdrm-dev libwayland-dev libpipewire-0.3-dev libegl-dev libxdo-dev jq
+      - name: Check all features (per workspace member)
+        # Feature-universe compile: --all-features unions optional deps no
+        # default-features gate ever sees. Three carve-outs, each with its
+        # own legs below: shannon-desktop (Tauri system deps, built in
+        # release.yml), shannon-tools + shannon-cli — the latter forwards
+        # shannon-tools' computer-use input backends, which are mutually
+        # exclusive by design (compile_error!s), so `--workspace
+        # --all-features` can never hold for them even with --exclude
+        # (feature unification follows dependency edges, not the member
+        # list). The member list is jq-driven so new crates join
+        # automatically. shannon-server's swagger feature uses
+        # utoipa-swagger-ui/vendored so this stays network-free and
+        # deterministic.
+        run: |
+          for p in $(cargo metadata --no-deps --format-version 1 | jq -r '.packages[].name' | grep -vx -e shannon-desktop -e shannon-tools -e shannon-cli); do
+            cargo check -p "$p" --all-features
+          done
+      - name: Check computer-use-wayland
+        run: |
+          cargo check -p shannon-tools --features computer-use-wayland
+          cargo check -p shannon-cli --features computer-use-wayland
+      - name: Check computer-use-x11rb
+        run: |
+          cargo check -p shannon-tools --features computer-use-x11rb
+          cargo check -p shannon-cli --features computer-use-x11rb
+      - name: Check computer-use-wayland-capture (alone + combined)
+        # The alone shape went red on dev while every other leg stayed
+        # green (see the history note in ci.yml's test-features job); the
+        # combined shape is the one that actually ships.
+        run: |
+          cargo check -p shannon-tools --features computer-use-wayland-capture
+          cargo check -p shannon-tools --features computer-use-wayland,computer-use-wayland-capture
