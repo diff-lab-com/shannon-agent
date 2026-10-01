@@ -2288,6 +2288,8 @@
   "chat.context.injectedMemories.jump": "Ir para a sessão de origem",
   "chat.context.injectedMemories.source": "Origem",
   "chat.context.injectedMemories.unsourced": "Manual / importado",
+  "chat.message.memoryCitations.title": "Das suas memórias",
+  "chat.message.memoryCitations.jumpAria": "Ir para a origem da memória",
   "chat.context.breakdown.ofWindow": "{pct}% of the {window} window",
   "chat.context.breakdown.unknownWindow": "of an unknown context window",
   "chat.context.breakdown.cat.system": "System prompt",

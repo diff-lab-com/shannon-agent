@@ -2346,6 +2346,8 @@
   "chat.context.injectedMemories.jump": "Jump to the source session",
   "chat.context.injectedMemories.source": "Source",
   "chat.context.injectedMemories.unsourced": "Manual / imported",
+  "chat.message.memoryCitations.title": "From your memories",
+  "chat.message.memoryCitations.jumpAria": "Jump to the memory source",
   "chat.context.breakdown.ofWindow": "{pct}% of the {window} window",
   "chat.context.breakdown.unknownWindow": "of an unknown context window",
   "chat.context.breakdown.cat.system": "System prompt",

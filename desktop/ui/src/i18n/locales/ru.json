@@ -2288,6 +2288,8 @@
   "chat.context.injectedMemories.jump": "Перейти к исходной сессии",
   "chat.context.injectedMemories.source": "Источник",
   "chat.context.injectedMemories.unsourced": "Вручную / импортировано",
+  "chat.message.memoryCitations.title": "Из вашей памяти",
+  "chat.message.memoryCitations.jumpAria": "Перейти к источнику памяти",
   "chat.context.breakdown.ofWindow": "{pct}% of the {window} window",
   "chat.context.breakdown.unknownWindow": "of an unknown context window",
   "chat.context.breakdown.cat.system": "System prompt",

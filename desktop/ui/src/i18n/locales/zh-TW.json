@@ -2288,6 +2288,8 @@
   "chat.context.injectedMemories.jump": "跳轉到來源會話",
   "chat.context.injectedMemories.source": "來源",
   "chat.context.injectedMemories.unsourced": "手動 / 匯入",
+  "chat.message.memoryCitations.title": "來自記憶",
+  "chat.message.memoryCitations.jumpAria": "跳轉到記憶來源",
   "chat.context.breakdown.ofWindow": "{pct}% of the {window} window",
   "chat.context.breakdown.unknownWindow": "of an unknown context window",
   "chat.context.breakdown.cat.system": "System prompt",

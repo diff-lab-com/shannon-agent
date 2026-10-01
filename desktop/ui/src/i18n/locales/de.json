@@ -2287,6 +2287,8 @@
   "chat.context.injectedMemories.jump": "Zur Ursprungssitzung springen",
   "chat.context.injectedMemories.source": "Quelle",
   "chat.context.injectedMemories.unsourced": "Manuell / importiert",
+  "chat.message.memoryCitations.title": "Aus deinen Erinnerungen",
+  "chat.message.memoryCitations.jumpAria": "Zur Quelle der Erinnerung springen",
   "chat.context.breakdown.ofWindow": "{pct}% of the {window} window",
   "chat.context.breakdown.unknownWindow": "of an unknown context window",
   "chat.context.breakdown.cat.system": "System prompt",
