@@ -89,10 +89,19 @@ jobs:
         # speed plan). Tradeoff, accepted by review: a coverage regression
         # surfaces on this nightly (or any manual dispatch) at most a day
         # late instead of blocking the desktop PR that caused it.
+        #
+        # ChatInputApprovalMode is EXCLUDED from this run only: under V8
+        # instrumentation the Base UI select callbacks in ChatInput amplify
+        # (same mechanism as the tooltip.prim.tsx exclusion in
+        # vitest.config.ts) and the file's real-timer polling loop starved
+        # the whole event loop — the 2026-10-01 06:14 dispatch saw the
+        # 60s test timeout fire 15 minutes into the run. The test still
+        # runs on the PR gate (uninstrumented), so behaviour coverage is
+        # not lost; only this threshold run skips it.
         working-directory: desktop/ui
         env:
           CI: "1"
-        run: pnpm exec vitest run --coverage
+        run: pnpm exec vitest run --coverage --exclude 'src/__tests__/ChatInputApprovalMode.test.tsx'
       - name: Upload coverage report
         if: always()
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
