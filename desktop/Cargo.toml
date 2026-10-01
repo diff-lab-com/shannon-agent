@@ -68,6 +68,10 @@ gethostname = "1"  # QR pairing endpoint: advertise the desktop as <hostname>.lo
 keyring = { version = "3", default-features = false, features = ["apple-native", "windows-native", "sync-secret-service"] }
 libc = "0.2"  # macOS launchctl probe (gateway_service_probe::default_probe) + dev e2e
 toml = "0.8"
+# G7 i18n (P1-8) — tray menu labels follow the OS language. sys-locale 0.3 is
+# already resolved in Cargo.lock via shannon-core, so this direct dep
+# introduces no new package (same pattern as tar/flate2/regex above).
+sys-locale = { workspace = true }
 lsp-types = "0.95"
 url = "2"
 async-trait = "0.1"

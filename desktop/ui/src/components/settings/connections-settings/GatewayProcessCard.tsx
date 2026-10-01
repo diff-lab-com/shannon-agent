@@ -49,7 +49,7 @@ export function GatewayProcessCard({ procState, onProcStateChange }: GatewayProc
       onProcStateChange(s)
       toast.success(t('settings.connections.process.started'))
     } catch (e) {
-      toastError('gateway supervisor: start failed', e)
+      toastError(t('settings.connections.process.startFailed'), e)
     } finally {
       setProcBusy(null)
     }
@@ -62,7 +62,7 @@ export function GatewayProcessCard({ procState, onProcStateChange }: GatewayProc
       onProcStateChange(s)
       toast.success(t('settings.connections.process.stopped'))
     } catch (e) {
-      toastError('gateway supervisor: stop failed', e)
+      toastError(t('settings.connections.process.stopFailed'), e)
     } finally {
       setProcBusy(null)
     }
@@ -75,7 +75,7 @@ export function GatewayProcessCard({ procState, onProcStateChange }: GatewayProc
       onProcStateChange(s)
       toast.success(t('settings.connections.process.managedSaved'))
     } catch (e) {
-      toastError('gateway supervisor: set managed failed', e)
+      toastError(t('settings.connections.process.managedSaveFailed'), e)
     } finally {
       setProcBusy(null)
     }

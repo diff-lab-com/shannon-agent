@@ -15,7 +15,7 @@ interface ThemeContextValue {
   theme: ThemeName
   setTheme: (theme: ThemeName) => void
   resolvedTheme: ResolvedTheme
-  themes: { id: ThemeName; label: string }[]
+  themes: { id: ThemeName; labelKey: string }[]
   fontScale: number
   setFontScale: (scale: number) => void
 }
@@ -50,21 +50,31 @@ type RegistryExtra = [Exclude<RegistryTheme, ResolvedTheme>] extends [never] ? t
 const REGISTRY_ALIGNED: [RegistryMissing, RegistryExtra] = [true, true]
 void REGISTRY_ALIGNED
 
-const THEMES: { id: ThemeName; label: string }[] = [
-  { id: 'system', label: 'System' },
-  { id: 'material', label: 'Material' },
-  { id: 'tokyo-night', label: 'Tokyo Night' },
-  { id: 'tokyo-night-light', label: 'Tokyo Night Light' },
-  { id: 'catppuccin', label: 'Catppuccin' },
-  { id: 'nord', label: 'Nord' },
-  { id: 'ember', label: 'Ember' },
-  { id: 'slate', label: 'Slate' },
-  { id: 'solarized', label: 'Solarized Dark' },
-  { id: 'solarized-light', label: 'Solarized Light' },
-  { id: 'dracula', label: 'Dracula' },
-  { id: 'gruvbox', label: 'Gruvbox' },
-  { id: 'gruvbox-light', label: 'Gruvbox Light' },
-]
+// G7 i18n (P1-8): theme display names are intl message ids
+// (`settings.theme.name.*`) resolved by the consumer (ThemeSettings) — the
+// provider renders outside <IntlProvider>, so it carries keys, not strings.
+// Built from the literal ids so the compiler flags any drift with ThemeName.
+const THEMES: { id: ThemeName; labelKey: string }[] = (
+  [
+    'system',
+    'material',
+    'tokyo-night',
+    'tokyo-night-light',
+    'catppuccin',
+    'nord',
+    'ember',
+    'slate',
+    'solarized',
+    'solarized-light',
+    'dracula',
+    'gruvbox',
+    'gruvbox-light',
+  ] as const
+).map((id) => ({
+  id,
+  // kebab-case theme id → camelCase message-id suffix ('tokyo-night' → tokyoNight).
+  labelKey: `settings.theme.name.${id.replace(/-([a-z])/g, (_, c: string) => c.toUpperCase())}`,
+}))
 
 function getSystemTheme(): ResolvedTheme {
   if (typeof window === 'undefined') return 'material'

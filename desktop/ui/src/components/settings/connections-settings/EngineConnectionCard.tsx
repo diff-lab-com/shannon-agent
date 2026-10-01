@@ -37,7 +37,7 @@ export function EngineConnectionCard({
       onConfigChange(written)
       toast.success(t('settings.connections.engineSaved'))
     } catch (e) {
-      toastError('gateway config: write failed', e)
+      toastError(t('settings.connections.configWriteFailed'), e)
     } finally {
       setSavingEngine(false)
     }

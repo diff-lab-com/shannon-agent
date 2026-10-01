@@ -7330,6 +7330,7 @@ dependencies = [
  "shannon-tools",
  "shannon-types",
  "shell-words",
+ "sys-locale",
  "tar",
  "tauri",
  "tauri-build",

@@ -24,7 +24,10 @@ describe('ConnectionsSettings', () => {
     // title; here we pin the subtitle as the page's distinctive marker.
     await waitFor(() => expect(screen.getByText(/Wire chat platforms and external systems/)).toBeInTheDocument())
     expect(screen.getByText('Slack')).toBeInTheDocument()
-    expect(screen.getByText('DingTalk (钉钉)')).toBeInTheDocument()
+    // G7 i18n (P1-8): platform names resolve through `settings.connections.platform.*`
+    // — in en the Chinese-market platforms carry their English brand names.
+    expect(screen.getByText('DingTalk')).toBeInTheDocument()
+    expect(screen.getByText('WeCom (WeChat Work)')).toBeInTheDocument()
     // P1-4 status model: no credentials stored → every platform is 未配置.
     await waitFor(() => expect(screen.getAllByText('Not configured').length).toBe(8))
   })
