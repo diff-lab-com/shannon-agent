@@ -502,6 +502,18 @@ describe('payload auto-fill', () => {
     })
     expect(events[1].payload).toMatchObject({ agentId: 'sa-1' })
   })
+
+  it('budget events report the seeded spentUsd (R3 journey #7 over-budget shape)', () => {
+    const { player, events } = makeHarness()
+    player.load({
+      name: 'over-budget',
+      seed: { config: { budgetUsd: 5, spentUsd: 6.4 } },
+      turns: [{ user: 'u', script: [{ event: 'budget:exceeded' }, { event: 'query:cancelled' }] }],
+    })
+    player.handleSendMessage({ sessionId: 'sess-b' })
+    expect(events[0].payload).toEqual({ sessionId: 'sess-b', spentUsd: 6.4, budgetUsd: 5 })
+    // A payload override still wins over the seed.
+  })
 })
 
 describe('seed and reset semantics', () => {

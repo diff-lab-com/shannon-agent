@@ -322,7 +322,11 @@ export class ScriptPlayer {
     const seed = this.script?.seed?.config
     const base: Record<string, unknown> = {
       sessionId: this.turn?.sessionId ?? null,
-      spentUsd: seed?.budgetUsd != null ? seed.budgetUsd * 0.84 : DEFAULT_BUDGET_SPENT,
+      // R3: an explicitly seeded spend wins (the over-budget journey's
+      // events must agree with what get_session_usage reports); otherwise
+      // the 84%-of-cap warning default, then the neutral pair.
+      spentUsd: seed?.spentUsd
+        ?? (seed?.budgetUsd != null ? seed.budgetUsd * 0.84 : DEFAULT_BUDGET_SPENT),
       budgetUsd: seed?.budgetUsd ?? DEFAULT_BUDGET_CAP,
     }
     return extra ? { ...base, ...extra } : base
