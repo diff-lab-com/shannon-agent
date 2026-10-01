@@ -4,7 +4,7 @@
 // OAuth 2.0 PKCE and API key authentication.
 
 use async_trait::async_trait;
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::collections::HashMap;
 use thiserror::Error;
@@ -65,6 +65,18 @@ pub struct OAuth2Provider {
     code_verifier: std::sync::Arc<tokio::sync::RwLock<Option<String>>>,
     /// Stored CSRF state for validation during token exchange
     csrf_state: std::sync::Arc<tokio::sync::RwLock<Option<String>>>,
+}
+
+/// Point-in-time copy of the OAuth tokens a provider currently holds.
+///
+/// Callers use it to persist the (possibly refreshed) credentials after a
+/// successful connect so the next session reconnects without re-running the
+/// authorization-code flow.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct OAuthTokenSnapshot {
+    pub access_token: String,
+    pub refresh_token: Option<String>,
+    pub expires_at: Option<chrono::DateTime<chrono::Utc>>,
 }
 
 /// Internal token storage with expiry
@@ -139,10 +151,60 @@ impl OAuth2Provider {
         self
     }
 
+    /// Create a provider pre-seeded with tokens persisted from an earlier
+    /// authorization-code flow (remote MCP reconnect without re-consent).
+    ///
+    /// Only the refresh path (`refresh_access_token` / `get_token`) is
+    /// meaningful on such a provider — `auth_url` and `redirect_url` are
+    /// consumed solely by `get_authorization_url`, which a reconnect never
+    /// calls, so they are left empty.
+    pub fn new_stored(
+        client_id: impl Into<String>,
+        token_url: impl Into<String>,
+        access_token: impl Into<String>,
+        refresh_token: Option<String>,
+        expires_at: Option<chrono::DateTime<chrono::Utc>>,
+    ) -> Self {
+        Self {
+            client_id: client_id.into(),
+            client_secret: None,
+            auth_url: String::new(),
+            token_url: token_url.into(),
+            redirect_url: String::new(),
+            scopes: Vec::new(),
+            tokens: std::sync::Arc::new(tokio::sync::RwLock::new(OAuth2Tokens {
+                // An empty stored access token means "none" — the refresh
+                // path must be the bootstrap, not a doomed empty Bearer.
+                access_token: {
+                    let t = access_token.into();
+                    if t.is_empty() { None } else { Some(t) }
+                },
+                refresh_token,
+                expires_at,
+            })),
+            code_verifier: std::sync::Arc::new(tokio::sync::RwLock::new(None)),
+            csrf_state: std::sync::Arc::new(tokio::sync::RwLock::new(None)),
+        }
+    }
+
     /// Add OAuth scopes
     pub fn with_scopes(mut self, scopes: Vec<String>) -> Self {
         self.scopes = scopes;
         self
+    }
+
+    /// Current token snapshot (access + refresh + expiry).
+    ///
+    /// The caller compares it against what it persisted before connecting
+    /// and writes back a diff, so a token refreshed mid-handshake survives
+    /// the next process start.
+    pub async fn token_snapshot(&self) -> OAuthTokenSnapshot {
+        let tokens = self.tokens.read().await;
+        OAuthTokenSnapshot {
+            access_token: tokens.access_token.clone().unwrap_or_default(),
+            refresh_token: tokens.refresh_token.clone(),
+            expires_at: tokens.expires_at,
+        }
     }
 
     /// Generate the authorization URL with PKCE
@@ -363,9 +425,20 @@ impl OAuth2Provider {
 #[async_trait]
 impl AuthProvider for OAuth2Provider {
     async fn get_token(&self) -> Result<String, AuthError> {
-        // Auto-refresh if expired
-        if self.is_expired().await {
-            if self.tokens.read().await.refresh_token.is_some() {
+        // Refresh when expired — or when no usable access token is held at
+        // all but a refresh token can bootstrap one (reconnect from a
+        // persisted refresh-only credential). Without a refresh token the
+        // failure is terminal: expired/absent access tokens never leak.
+        let has_access = self
+            .tokens
+            .read()
+            .await
+            .access_token
+            .as_ref()
+            .is_some_and(|t| !t.is_empty());
+        if !has_access || self.is_expired().await {
+            let has_refresh = self.tokens.read().await.refresh_token.is_some();
+            if has_refresh {
                 info!("OAuth2 token expired, refreshing...");
                 self.refresh_access_token().await?;
             } else {
@@ -974,5 +1047,133 @@ mod tests {
                 || msg.contains("connection refused")
                 || msg.contains("discovery failed")
         );
+    }
+
+    // ── Stored-token providers (desktop A2 reconnect path) ─────────────
+
+    /// Minimal OAuth token endpoint speaking just enough HTTP to answer a
+    /// refresh POST with a fixed JSON token payload.
+    async fn spawn_mock_token_endpoint(payload: &'static str) -> String {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        tokio::spawn(async move {
+            loop {
+                let Ok((mut socket, _)) = listener.accept().await else {
+                    break;
+                };
+                let mut buf = Vec::with_capacity(1024);
+                let mut chunk = [0u8; 512];
+                let header_end = loop {
+                    match socket.read(&mut chunk).await {
+                        Ok(0) | Err(_) => break None,
+                        Ok(n) => {
+                            buf.extend_from_slice(&chunk[..n]);
+                            if let Some(pos) = buf.windows(4).position(|w| w == b"\r\n\r\n") {
+                                break Some(pos);
+                            }
+                        }
+                    }
+                };
+                let Some(header_end) = header_end else {
+                    continue;
+                };
+                let head = String::from_utf8_lossy(&buf[..header_end]).to_lowercase();
+                let content_length = head
+                    .lines()
+                    .find_map(|l| l.strip_prefix("content-length:"))
+                    .and_then(|v| v.trim().parse::<usize>().ok())
+                    .unwrap_or(0);
+                let mut body = buf[header_end + 4..].to_vec();
+                while body.len() < content_length {
+                    match socket.read(&mut chunk).await {
+                        Ok(0) | Err(_) => break,
+                        Ok(n) => body.extend_from_slice(&chunk[..n]),
+                    }
+                }
+                let http = format!(
+                    "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\n\
+                     Content-Length: {}\r\nConnection: close\r\n\r\n{}",
+                    payload.len(),
+                    payload
+                );
+                let _ = socket.write_all(http.as_bytes()).await;
+                let _ = socket.flush().await;
+            }
+        });
+        format!("http://{addr}/token")
+    }
+
+    #[tokio::test]
+    async fn stored_provider_holds_seeded_tokens() {
+        let expires = chrono::Utc::now() + chrono::Duration::seconds(3600);
+        let provider = OAuth2Provider::new_stored(
+            "client",
+            "https://auth.example.com/token",
+            "stored-access",
+            Some("stored-refresh".to_string()),
+            Some(expires),
+        );
+        assert!(provider.is_valid().await);
+        assert_eq!(provider.get_token().await.unwrap(), "stored-access");
+        let snap = provider.token_snapshot().await;
+        assert_eq!(snap.access_token, "stored-access");
+        assert_eq!(snap.refresh_token.as_deref(), Some("stored-refresh"));
+        assert_eq!(snap.expires_at, Some(expires));
+    }
+
+    #[tokio::test]
+    async fn stored_provider_refresh_updates_snapshot() {
+        let token_url = spawn_mock_token_endpoint(
+            r#"{"access_token":"fresh-access","refresh_token":"fresh-refresh","expires_in":3600,"token_type":"Bearer"}"#,
+        )
+        .await;
+        let provider = OAuth2Provider::new_stored(
+            "client",
+            token_url,
+            "stale-access",
+            Some("stale-refresh".to_string()),
+            None,
+        );
+
+        let token = provider.refresh_access_token().await.unwrap();
+        assert_eq!(token, "fresh-access");
+        let snap = provider.token_snapshot().await;
+        assert_eq!(snap.access_token, "fresh-access");
+        assert_eq!(snap.refresh_token.as_deref(), Some("fresh-refresh"));
+        assert!(snap.expires_at.is_some());
+    }
+
+    #[tokio::test]
+    async fn refresh_only_provider_bootstraps_access_token() {
+        let token_url = spawn_mock_token_endpoint(
+            r#"{"access_token":"bootstrapped","refresh_token":"rotated","expires_in":60,"token_type":"Bearer"}"#,
+        )
+        .await;
+        // No access token at all — get_token must trigger the refresh path
+        // instead of failing with TokenExpired.
+        let provider = OAuth2Provider::new_stored(
+            "client",
+            token_url,
+            "",
+            Some("persisted-refresh".to_string()),
+            None,
+        );
+        assert_eq!(provider.get_token().await.unwrap(), "bootstrapped");
+        assert_eq!(
+            provider.token_snapshot().await.refresh_token.as_deref(),
+            Some("rotated")
+        );
+    }
+
+    #[tokio::test]
+    async fn stored_provider_without_any_token_fails_cleanly() {
+        let provider =
+            OAuth2Provider::new_stored("client", "https://auth.example.com/token", "", None, None);
+        assert!(matches!(
+            provider.get_token().await,
+            Err(AuthError::TokenExpired)
+        ));
     }
 }

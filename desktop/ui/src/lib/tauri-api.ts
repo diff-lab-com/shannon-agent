@@ -1204,6 +1204,12 @@ export async function setMcpServerEnabled(name: string, enabled: boolean): Promi
   return invoke('set_mcp_server_enabled', { name, enabled })
 }
 
+// W3-B (A2): replay the OAuth loopback flow for an existing remote entry
+// (the NeedsAuth state's recovery action) and reconnect the pool.
+export async function reauthenticateMcpServer(name: string): Promise<McpServerInfo> {
+  return invoke('reauthenticate_mcp_server', { name })
+}
+
 export async function getMcpServerConfig(name: string): Promise<McpServerConfig> {
   return invoke('get_mcp_server_config', { name })
 }

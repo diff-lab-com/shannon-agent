@@ -793,19 +793,27 @@ export interface McpServerInfo {
   connected: boolean
   tool_count: number
   tools: ToolInfo[]
-  /** Epoch millis of the last successful connection (backend `chrono_timestamp`). */
+  /** Epoch millis of the last successful connection (uptime-derived). */
   last_connected: number | null
   /** W1-1: remote endpoint of url-only (OAuth/HTTP) entries — `null` on stdio rows. */
   url?: string | null
   /**
-   * W2-A (R4/A1): the backend's single-source auth verdict — true on
-   * url-only rows carrying HTTP headers (OAuth products). Those stay on
-   * the honest "Remote" badge with restart disabled; header-less remote
-   * rows render like stdio.
+   * W2-A (R4/A1) / W3-B (A2): the backend's single-source auth verdict —
+   * since A2 its semantics are "OAuth entry" (url-only row carrying a
+   * credential). Those rows connect through the stored-credential OAuth
+   * path; failures render the classified failure state instead of a
+   * generic Offline badge. Header-less remote rows render like stdio.
    */
   has_auth_headers: boolean
   /** W1-7: pool-reported failure reason, so a dead server is diagnosable. */
   last_error?: string | null
+  /**
+   * W3-B (A2): classified failure state of a url-only row (backend
+   * `shannon_mcp::classify_remote_failure`) — `needs_auth` offers
+   * re-authentication, `unreachable` a retry, `server_error` retry plus a
+   * detail view. `null`/absent on stdio rows and healthy remotes.
+   */
+  failure_kind?: 'needs_auth' | 'unreachable' | 'server_error' | null
 }
 
 // --- Skill Types ---

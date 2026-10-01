@@ -515,6 +515,36 @@ export const MOCK_MCP_SERVERS: McpServerInfo[] = [
     last_connected: null,
     has_auth_headers: false,
   },
+  {
+    // W3-B (A2): an OAuth remote entry in the NeedsAuth state — the row
+    // keeps its endpoint context and offers Re-authenticate.
+    name: 'notion-oauth',
+    command: '',
+    enabled: true,
+    connected: false,
+    tool_count: 0,
+    tools: [],
+    last_connected: null,
+    url: 'https://mcp.notion.com/mcp',
+    has_auth_headers: true,
+    failure_kind: 'needs_auth',
+  },
+  {
+    // W3-B (A2): an OAuth remote entry connected through its stored token.
+    name: 'linear-oauth',
+    command: '',
+    enabled: true,
+    connected: true,
+    tool_count: 3,
+    tools: [
+      { name: 'create_issue', description: 'Create a Linear issue', enabled: true },
+      { name: 'list_projects', description: 'List Linear projects', enabled: true },
+      { name: 'search_issues', description: 'Search Linear issues', enabled: true },
+    ],
+    last_connected: now - 30_000,
+    url: 'https://mcp.linear.app/sse',
+    has_auth_headers: true,
+  },
 ]
 
 export const MOCK_PLUGINS: PluginInfo[] = [

@@ -31,11 +31,13 @@ the desktop binary. No backend server is required — the loopback TCP listener
 │   port)    │    6. POST /token (code,
 │            │       code_verifier, …)
 │            │ ───────────────────────────► ┌──────────────┐
-│            │    7. { access_token }       │   Vendor     │
-│            │ ◄─────────────────────────── │   Token EP   │
-│            │                              └──────────────┘
+│            │    7. { access_token,        │   Vendor     │
+│            │       refresh_token }        │   Token EP   │
+│            │ ◄─────────────────────────── └──────────────┘
 │            │    8. write settings.json
 │            │       mcpServers.<slug>-oauth
+│            │       (headers.Authorization +
+│            │        shannonOAuth token block)
 └────────────┘
 ```
 
@@ -169,10 +171,20 @@ or `extensions_commands.rs::install_mcp_oauth_loopback`.
      "notion-oauth": {
        "url": "https://mcp.notion.com/mcp",
        "headers": { "Authorization": "Bearer ntn_…" },
+       "shannonOAuth": {
+         "client_id": "…", "token_url": "https://api.notion.com/v1/oauth/token",
+         "access_token": "ntn_…", "refresh_token": "…", "expires_at": 1735689600
+       },
        "shannon:transport": "oauth_remote"
      }
    }
    ```
+
+   W3-B (A2): the desktop connects OAuth entries from this block
+   (reconnect without re-consent), refreshes on 401 and writes the rotated
+   pair back, and offers a **Re-authenticate** action (the
+   `reauthenticate_mcp_server` command replays this same flow against the
+   existing entry) when even the refresh fails.
 
 ### 4.3 Failure modes
 
@@ -208,17 +220,23 @@ account is not compromised.
 (`tauri-plugin-stronghold` or `keyring` crate) with a surrogate key in
 settings.json.
 
-### 5.2 No refresh token handling
+### 5.2 Refresh token handling (W3-B / A2)
 
-Most vendors return `refresh_token` alongside `access_token`. Shannon
-**discards** the refresh token — the current `TokenResponse` struct only
-deserializes `access_token` (`extensions_commands.rs:313`).
+Since W3-B, Shannon **captures** `refresh_token` + `expires_in` from the
+token response and persists them in the entry's `shannonOAuth` block
+(`extensions_commands.rs::run_oauth_loopback_flow`). On connect a 401
+triggers one refresh-and-retry inside the pool provider, and the rotated
+pair is written back (ruling R6: inside the existing settings.json entry —
+the keychain migration stays on the R2-P2-12 backlog). When the refresh
+also fails, the row lands in the "needs re-authentication" state and the
+desktop offers re-running the flow.
 
-**Impact**: Access tokens typically expire in ~1 hour. After expiry, the MCP
-server returns 401 and the user must re-run the OAuth flow.
+**Impact**: Expired access tokens self-heal while the refresh token is
+valid; a revoked refresh token surfaces as an actionable Re-authenticate
+action instead of a dead row.
 
-**Future**: Phase 2 will capture `refresh_token` + `expires_at`, store in
-keychain, and add a background refresh task.
+**Future**: OS keychain migration (R2-P2-12 backlog); background refresh
+before expiry (today the refresh happens lazily on connect/tool-call 401).
 
 ### 5.3 No client_secret support
 

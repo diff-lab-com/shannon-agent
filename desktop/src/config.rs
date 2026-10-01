@@ -286,6 +286,48 @@ fn default_true() -> bool {
     true
 }
 
+/// Persisted OAuth credentials for one `mcpServers` entry (W3-B, A2 token
+/// lifecycle; ruling R6: they live inside the existing
+/// `settings.json#mcpServers` blob — the same domain and file permissions
+/// as the other hub-installed credentials — rather than a new keychain
+/// dependency, which stays on the R2-P2-12 backlog).
+///
+/// Written by the OAuth installers and updated in place after every
+/// successful token refresh, so a restart reconnects without re-consent.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct McpStoredOAuth {
+    /// OAuth client id the original authorization flow used.
+    #[serde(default)]
+    pub client_id: String,
+    /// Token endpoint the refresh grant is POSTed to. Empty on legacy
+    /// entries that only carry a static `Authorization` header — those
+    /// connect with the stored token but cannot refresh.
+    #[serde(default)]
+    pub token_url: String,
+    /// Refresh token, when the vendor issued one.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub refresh_token: Option<String>,
+    /// Current access token (mirrored into `headers.Authorization`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub access_token: Option<String>,
+    /// Access-token expiry as unix epoch seconds.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub expires_at: Option<i64>,
+}
+
+impl McpStoredOAuth {
+    /// True when this block can drive a token refresh (needs an endpoint
+    /// and a refresh token).
+    pub fn can_refresh(&self) -> bool {
+        !self.token_url.is_empty() && self.refresh_token.as_deref().is_some_and(|t| !t.is_empty())
+    }
+
+    /// True when at least one credential is present (access or refresh).
+    pub fn has_credential(&self) -> bool {
+        self.access_token.as_deref().is_some_and(|t| !t.is_empty()) || self.can_refresh()
+    }
+}
+
 /// MCP server configuration.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct McpServerConfig {
@@ -302,16 +344,24 @@ pub struct McpServerConfig {
     /// cannot round-trip `type`/`headers` (see [`save_mcp_servers_to`]).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub url: Option<String>,
-    /// W2-A (R4/A1) — the single-source auth verdict for a url-only row:
-    /// `true` when the store entry carries HTTP `headers` (today always the
-    /// OAuth remote installer's `Authorization: Bearer …` product). Such
-    /// entries stay in the W1-A honest "remote" state — the desktop pool
-    /// connects them only once OAuth lands (A2) — while url-only rows
-    /// **without** headers are pure remote servers the pool wires up
-    /// directly. Computed by the private `mcp_server_config_from_json`; the
-    /// seeder, restart and the UI all follow this one verdict.
+    /// W2-A (R4/A1) — the single-source auth verdict for a url-only row;
+    /// since W3-B (A2) its semantics are "OAuth entry": `true` when the
+    /// store entry carries HTTP `headers` or a `shannonOAuth` token block
+    /// (today always the OAuth remote installer's product). Such entries
+    /// connect through the pool's stored-credential OAuth path — the W2-A
+    /// honest "remote" skip is gone — while url-only rows **without**
+    /// credentials are pure remote servers wired up header-less. Computed
+    /// by the private `mcp_server_config_from_json`; the seeder, restart
+    /// and the UI all follow this one verdict.
     #[serde(default)]
     pub has_auth_headers: bool,
+    /// W3-B (A2): stored OAuth credentials parsed from the entry's
+    /// `shannonOAuth` block. Legacy installs (header-only) get an
+    /// in-memory block derived from the `Authorization: Bearer …` header so
+    /// they connect without rewriting the store. Never serialized back out
+    /// — tokens must not reach the UI wire (see the `skip_serializing`).
+    #[serde(default, skip_serializing)]
+    pub oauth: Option<McpStoredOAuth>,
 }
 
 /// A managed LLM provider connection (Models P2). Users may configure several
@@ -674,7 +724,7 @@ fn mcp_servers_path() -> PathBuf {
 }
 
 /// Resolve the unified MCP store path: `~/.shannon/settings.json`.
-fn user_settings_path() -> PathBuf {
+pub(crate) fn user_settings_path() -> PathBuf {
     let home = dirs_home().unwrap_or_else(|| PathBuf::from("."));
     home.join(".shannon").join("settings.json")
 }
@@ -760,11 +810,11 @@ pub fn load_mcp_servers_from(path: &std::path::Path) -> Result<Vec<McpServerConf
 /// url-only servers are surfaced too (`command` empty, `enabled` from the
 /// `enabled` flag) so `list_mcp_servers` shows what the user installed.
 ///
-/// W2-A (R4/A1) — the auth verdict lives here (single source): an entry
-/// with a non-empty `headers` object is auth-bearing (the OAuth remote
-/// installer writes `headers.Authorization`), so the desktop keeps it on
-/// the honest badge instead of trying to connect without credentials.
-/// Header-less url-only entries are pure remote servers the pool wires up.
+/// W2-A (R4/A1) introduced the auth verdict; since W3-B (A2) it reads
+/// "OAuth entry": an entry with a non-empty `headers` object **or** a
+/// `shannonOAuth` token block. OAuth entries connect through the pool's
+/// stored-credential path; header-less entries without a token block are
+/// pure remote servers the pool wires up anonymously.
 fn mcp_server_config_from_json(name: &str, value: &serde_json::Value) -> Option<McpServerConfig> {
     let obj = value.as_object()?;
     let command = obj
@@ -795,14 +845,20 @@ fn mcp_server_config_from_json(name: &str, value: &serde_json::Value) -> Option<
     // install into an anonymous empty-command row the UI could only show
     // as "Offline".
     let url = obj.get("url").and_then(|u| u.as_str()).map(str::to_string);
+    // W3-B (A2): the persisted token block, then a legacy fallback —
+    // pre-A2 installs carry only `headers.Authorization: Bearer …`, so
+    // derive an in-memory block from it (never written back verbatim; a
+    // refresh landing a new token upgrades the entry to a real block).
+    let oauth = parse_stored_oauth(obj).or_else(|| oauth_from_bearer_header(obj));
     // W2-A: headers (static or command-sourced) are credentials in every
-    // store shape the hub writes — flag any of them. The struct cannot
-    // represent the values anyway, so a header-bearing row must never be
-    // started header-less.
-    let has_auth_headers = obj
+    // store shape the hub writes; A2 adds the `shannonOAuth` block as an
+    // equivalent verdict source. Either way the row is an OAuth entry and
+    // must never be started header-less/anonymously.
+    let has_headers = obj
         .get("headers")
         .and_then(|h| h.as_object())
         .is_some_and(|h| !h.is_empty());
+    let has_auth_headers = has_headers || oauth.is_some();
     Some(McpServerConfig {
         name: name.to_string(),
         command,
@@ -811,6 +867,59 @@ fn mcp_server_config_from_json(name: &str, value: &serde_json::Value) -> Option<
         enabled,
         url,
         has_auth_headers,
+        oauth,
+    })
+}
+
+/// Parse the `shannonOAuth` token block of an entry, if present.
+fn parse_stored_oauth(obj: &serde_json::Map<String, serde_json::Value>) -> Option<McpStoredOAuth> {
+    let block = obj.get("shannonOAuth")?.as_object()?;
+    let str_field = |key: &str| {
+        block
+            .get(key)
+            .and_then(|v| v.as_str())
+            .filter(|s| !s.is_empty())
+            .map(str::to_string)
+    };
+    Some(McpStoredOAuth {
+        client_id: str_field("client_id").unwrap_or_default(),
+        token_url: str_field("token_url").unwrap_or_default(),
+        refresh_token: str_field("refresh_token"),
+        access_token: str_field("access_token"),
+        expires_at: block
+            .get("expires_at")
+            .and_then(|v| v.as_i64())
+            .or_else(|| {
+                block
+                    .get("expires_at")
+                    .and_then(|v| v.as_str())
+                    .and_then(|s| s.parse().ok())
+            }),
+    })
+}
+
+/// Derive an in-memory [`McpStoredOAuth`] from a legacy
+/// `headers.Authorization: Bearer <token>` entry so A2 can connect it
+/// without rewriting the store. Returns `None` when no bearer token is
+/// recoverable.
+fn oauth_from_bearer_header(
+    obj: &serde_json::Map<String, serde_json::Value>,
+) -> Option<McpStoredOAuth> {
+    let headers = obj.get("headers")?.as_object()?;
+    let bearer = headers
+        .get("Authorization")
+        .or_else(|| headers.get("authorization"))
+        .and_then(|v| v.as_str())?;
+    let token = bearer.strip_prefix("Bearer ").map(str::trim)?;
+    if token.is_empty() {
+        return None;
+    }
+    Some(McpStoredOAuth {
+        client_id: String::new(),
+        token_url: String::new(),
+        refresh_token: None,
+        access_token: Some(token.to_string()),
+        expires_at: None,
     })
 }
 
@@ -960,6 +1069,50 @@ pub fn set_mcp_server_enabled_to(
     Ok(true)
 }
 
+/// Persist refreshed OAuth credentials for one `mcpServers.<name>` entry
+/// (W3-B, A2 token lifecycle; ruling R6: inside the existing entry blob,
+/// no keychain). Writes the `shannonOAuth` block and mirrors the new
+/// access token into `headers.Authorization` so every consumer of the
+/// shared store sees the live credential. Edits the raw JSON in place —
+/// url-only rows keep the rest of their blob — and writes atomically.
+/// Returns `Ok(false)` when no entry with that name exists.
+pub fn update_mcp_server_oauth_tokens(name: &str, tokens: &McpStoredOAuth) -> Result<bool, String> {
+    update_mcp_server_oauth_tokens_to(&user_settings_path(), name, tokens)
+}
+
+/// `update_mcp_server_oauth_tokens` against an explicit `settings.json` path.
+pub fn update_mcp_server_oauth_tokens_to(
+    path: &std::path::Path,
+    name: &str,
+    tokens: &McpStoredOAuth,
+) -> Result<bool, String> {
+    let mut root = read_settings_json_root(path)?;
+    let Some(entry) = root
+        .get_mut("mcpServers")
+        .and_then(|m| m.as_object_mut())
+        .and_then(|m| m.get_mut(name))
+    else {
+        return Ok(false);
+    };
+    let Some(entry_obj) = entry.as_object_mut() else {
+        return Err(format!("settings.json#mcpServers.{name} is not an object"));
+    };
+    entry_obj.insert(
+        "shannonOAuth".to_string(),
+        serde_json::to_value(tokens).map_err(|e| format!("oauth tokens serialize: {e}"))?,
+    );
+    if let Some(access) = tokens.access_token.as_deref().filter(|t| !t.is_empty()) {
+        if let Some(headers) = entry_obj.get_mut("headers").and_then(|h| h.as_object_mut()) {
+            headers.insert(
+                "Authorization".to_string(),
+                serde_json::Value::String(format!("Bearer {access}")),
+            );
+        }
+    }
+    write_settings_json_atomic(path, &root)?;
+    Ok(true)
+}
+
 /// One-time, idempotent migration of the legacy
 /// `~/.shannon/desktop/mcp-servers.json` store into the unified
 /// `~/.shannon/settings.json#mcpServers`. Entries already present in the
@@ -1035,6 +1188,7 @@ pub fn migrate_legacy_mcp_servers_to(
             enabled: row.get("enabled").and_then(|e| e.as_bool()).unwrap_or(true),
             url: None,
             has_auth_headers: false,
+            oauth: None,
         });
     }
     if configs.is_empty() {
@@ -1623,6 +1777,7 @@ mod tests {
                 enabled: true,
                 url: None,
                 has_auth_headers: false,
+                oauth: None,
             }],
         )
         .unwrap();
@@ -1685,6 +1840,7 @@ mod tests {
                 enabled: true,
                 url: None,
                 has_auth_headers: false,
+                oauth: None,
             }],
         )
         .unwrap();
@@ -1738,6 +1894,7 @@ mod tests {
                 enabled: true,
                 url: None,
                 has_auth_headers: false,
+                oauth: None,
             }],
         );
         assert!(result.is_err(), "corrupt settings.json must fail the save");
@@ -1767,6 +1924,7 @@ mod tests {
                 enabled: true,
                 url: None,
                 has_auth_headers: false,
+                oauth: None,
             }],
         )
         .unwrap();
@@ -1803,6 +1961,7 @@ mod tests {
                 enabled: true,
                 url: Some("https://mcp.example".into()),
                 has_auth_headers: false,
+                oauth: None,
             }],
         )
         .unwrap();
@@ -1816,6 +1975,91 @@ mod tests {
                 .is_none(),
             "private list_only marker must not exist"
         );
+    }
+
+    /// W3-B (A2): the `shannonOAuth` block parses into the struct, makes
+    /// the row an OAuth entry even without `headers`, and legacy
+    /// header-only entries derive an in-memory token (never persisted back
+    /// verbatim). Tokens never serialize back out (UI wire safety).
+    #[test]
+    fn oauth_blocks_parse_and_legacy_bearer_derives() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = tmp_settings(dir.path());
+        std::fs::write(
+            &path,
+            r#"{"mcpServers":{
+                "modern":{"type":"http","url":"https://mcp.example","shannonOAuth":{"client_id":"cid","token_url":"https://t/token","refresh_token":"rt","access_token":"at","expires_at":1735689600}},
+                "legacy":{"type":"http","url":"https://mcp.example","headers":{"Authorization":"Bearer leg"}},
+                "neither":{"type":"http","url":"https://mcp.example"}
+            }}"#,
+        )
+        .unwrap();
+
+        let servers = load_mcp_servers_from(&path).unwrap();
+        let modern = servers.iter().find(|s| s.name == "modern").unwrap();
+        let oauth = modern.oauth.as_ref().unwrap();
+        assert_eq!(oauth.client_id, "cid");
+        assert_eq!(oauth.token_url, "https://t/token");
+        assert_eq!(oauth.refresh_token.as_deref(), Some("rt"));
+        assert_eq!(oauth.access_token.as_deref(), Some("at"));
+        assert_eq!(oauth.expires_at, Some(1735689600));
+        assert!(oauth.can_refresh());
+        assert!(modern.has_auth_headers, "token block alone is a verdict");
+
+        let legacy = servers.iter().find(|s| s.name == "legacy").unwrap();
+        let derived = legacy.oauth.as_ref().expect("legacy bearer derived");
+        assert_eq!(derived.access_token.as_deref(), Some("leg"));
+        assert!(!derived.can_refresh(), "legacy entries cannot refresh");
+        assert!(legacy.has_auth_headers);
+
+        let neither = servers.iter().find(|s| s.name == "neither").unwrap();
+        assert!(neither.oauth.is_none());
+        assert!(!neither.has_auth_headers, "pure remote stays pure");
+
+        // Tokens must never reach the UI wire: the field is
+        // `skip_serializing` on the desktop config struct.
+        let json = serde_json::to_value(modern).unwrap();
+        assert!(json.get("oauth").is_none(), "{json}");
+        assert!(json.get("shannonOAuth").is_none(), "{json}");
+    }
+
+    /// W3-B (A2): `update_mcp_server_oauth_tokens_to` writes the refresh
+    /// result in place — the `shannonOAuth` block plus the mirrored
+    /// `Authorization` header — without disturbing the rest of the entry
+    /// or other rows, and reports a missing entry as `Ok(false)`.
+    #[test]
+    fn update_oauth_tokens_edits_entry_in_place() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = tmp_settings(dir.path());
+        std::fs::write(
+            &path,
+            r#"{"other":1,"mcpServers":{
+                "linear":{"type":"http","url":"https://mcp.linear.app/sse","enabled":false,"headers":{"Authorization":"Bearer old"},"shannonOAuth":{"client_id":"cid","token_url":"https://t/token","refresh_token":"rt1","access_token":"old"}}
+            }}"#,
+        )
+        .unwrap();
+
+        let updated = McpStoredOAuth {
+            client_id: "cid".into(),
+            token_url: "https://t/token".into(),
+            refresh_token: Some("rt2".into()),
+            access_token: Some("new".into()),
+            expires_at: Some(1735689600),
+        };
+        assert!(update_mcp_server_oauth_tokens_to(&path, "linear", &updated).unwrap());
+
+        let root: serde_json::Value =
+            serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
+        let entry = &root["mcpServers"]["linear"];
+        assert_eq!(entry["shannonOAuth"]["access_token"], "new");
+        assert_eq!(entry["shannonOAuth"]["refresh_token"], "rt2");
+        assert_eq!(entry["headers"]["Authorization"], "Bearer new");
+        // Untouched blob fields and unrelated top-level keys survive.
+        assert_eq!(entry["url"], "https://mcp.linear.app/sse");
+        assert_eq!(entry["enabled"], false);
+        assert_eq!(root["other"], 1);
+
+        assert!(!update_mcp_server_oauth_tokens_to(&path, "ghost", &updated).unwrap());
     }
 
     /// W1-1 (R2-P0-1(B)): url-only store entries keep their `url` on load,

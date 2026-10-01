@@ -6,6 +6,7 @@ import { useIntl } from "react-intl";
 import { toast } from "sonner";
 import {
   listMcpServers,
+  reauthenticateMcpServer,
   restartMcpServer,
   setMcpServerEnabled,
   uninstallMcpServer,
@@ -127,6 +128,26 @@ export default function McpServers() {
     }
   }
 
+  // W3-B (A2): the NeedsAuth recovery action — replay the OAuth loopback
+  // flow for this entry and reconnect, without a restart.
+  async function handleReauthenticate(name: string) {
+    setBusyId(`reauth:${name}`);
+    try {
+      await reauthenticateMcpServer(name);
+      toast.success(t("extensions.mcp.reauthSuccess", { name }));
+    } catch (err) {
+      toast.error(
+        intl.formatMessage(
+          { id: "extensions.mcp.reauthFailed" },
+          { error: safeErrorMessage(err, "re-authentication failed") },
+        ),
+      );
+    } finally {
+      setBusyId(null);
+      refreshInstalled();
+    }
+  }
+
   // G1 P0-1.4 — per-server restart wired to the existing
   // `restart_mcp_server` backend (stop + start, tool list re-probed by the
   // refresh below).
@@ -192,6 +213,7 @@ export default function McpServers() {
         onUninstall={(name) => setRemoveTarget(name)}
         onRestart={handleRestart}
         onToggle={handleToggle}
+        onReauthenticate={handleReauthenticate}
         onOpenPermissions={(name) =>
           // X3 权限就近直达 — deep link into the permissions page pre-filtered
           // to this server. The page matches rules against `mcp__<name>__*`;
@@ -240,6 +262,29 @@ export default function McpServers() {
 // Installed servers (with uninstall) — shown at the TOP of the page
 // ---------------------------------------------------------------------------
 
+/** W3-B (A2): the failure presentation of a remote row. The three failure
+ *  classes (assessment draft W3-3) each get their own semantics — they
+ *  never collapse into one generic Offline badge. */
+type RemoteFailureState = 'needs_auth' | 'unreachable' | 'server_error'
+
+function remoteFailureState(srv: McpServerInfo): RemoteFailureState | null {
+  if (srv.enabled && srv.connected) return null
+  if (!srv.enabled) return null
+  switch (srv.failure_kind) {
+    case 'needs_auth':
+      return 'needs_auth'
+    case 'unreachable':
+      return 'unreachable'
+    case 'server_error':
+      return 'server_error'
+    default:
+      // Not connected, no classified error yet (fresh seed or legacy row):
+      // an OAuth entry that is up-but-unreachable-by-credential renders as
+      // NeedsAuth; anything else stays neutral (null → stdio Offline path).
+      return srv.has_auth_headers && srv.url ? 'needs_auth' : null
+  }
+}
+
 function InstalledSection({
   servers,
   loading,
@@ -249,6 +294,7 @@ function InstalledSection({
   onUninstall,
   onRestart,
   onToggle,
+  onReauthenticate,
   onOpenPermissions,
 }: {
   servers: McpServerInfo[];
@@ -261,11 +307,14 @@ function InstalledSection({
   onUninstall: (name: string) => void;
   onRestart: (name: string) => void;
   onToggle: (name: string, enabled: boolean) => void;
+  onReauthenticate: (name: string) => void;
   onOpenPermissions: (name: string) => void;
 }) {
   const intl = useIntl();
   const t = (id: string, values?: Record<string, string | number>) =>
     intl.formatMessage({ id }, values);
+  // W3-B: per-row expanded detail (ServerError's "view details" action).
+  const [detailsFor, setDetailsFor] = useState<string | null>(null);
 
   return (
     <section>
@@ -298,19 +347,74 @@ function InstalledSection({
             const isBusy = busyId === `uninstall:${srv.name}`;
             const isToggling = busyId === `toggle:${srv.name}`;
             const isRestarting = busyId === `restart:${srv.name}`;
-            // W2-A (R4/A1): the backend classifies url-only rows —
-            // header-bearing ones (OAuth products) stay on the W1-A honest
-            // "Remote" badge until A2; header-less pure remote rows are
-            // wired into the pool and render exactly like stdio rows.
-            const isAuthRemote = !srv.command && !!srv.url && !!srv.has_auth_headers;
-            const isDisabled = !srv.enabled;
+            const isReauthing = busyId === `reauth:${srv.name}`;
+            const failure = remoteFailureState(srv);
             // Build a mono preview: command + args, or the remote endpoint.
             const preview = srv.command || srv.url || "";
-            const rowStatusTitle = isDisabled
-              ? undefined
-              : isAuthRemote
-                ? t("extensions.mcp.remoteHint")
-                : (srv.last_error ?? undefined);
+            const statusBadge = (() => {
+              if (!srv.enabled) {
+                return (
+                  <span
+                    className="text-label-xs px-xs py-[1px] rounded-full font-bold shrink-0 bg-surface-container-highest text-on-surface-variant"
+                    title={t("extensions.mcp.toggleAria", { name: srv.name })}
+                  >
+                    {t("extensions.mcp.statusDisabled")}
+                  </span>
+                );
+              }
+              if (srv.connected) {
+                return (
+                  <span
+                    className="text-label-xs px-xs py-[1px] rounded-full font-bold shrink-0 bg-primary-container text-on-primary-container"
+                    title={srv.last_error ?? undefined}
+                  >
+                    {t("extensions.mcp.statusOnline")}
+                  </span>
+                );
+              }
+              switch (failure) {
+                case 'needs_auth':
+                  // amber: login expired — distinct from Offline, points at
+                  // re-authentication.
+                  return (
+                    <span
+                      className="text-label-xs px-xs py-[1px] rounded-full font-bold shrink-0 bg-tertiary-container text-on-tertiary-container"
+                      title={t("extensions.mcp.needsAuthHint")}
+                    >
+                      {t("extensions.mcp.statusNeedsAuth")}
+                    </span>
+                  );
+                case 'unreachable':
+                  // amber: network-level failure — retryable.
+                  return (
+                    <span
+                      className="text-label-xs px-xs py-[1px] rounded-full font-bold shrink-0 bg-tertiary-container text-on-tertiary-container"
+                      title={srv.last_error ?? t("extensions.mcp.unreachableHint")}
+                    >
+                      {t("extensions.mcp.statusUnreachable")}
+                    </span>
+                  );
+                case 'server_error':
+                  // red: the server answered with an error — retry later.
+                  return (
+                    <span
+                      className="text-label-xs px-xs py-[1px] rounded-full font-bold shrink-0 bg-error-container text-on-error-container"
+                      title={srv.last_error ?? t("extensions.mcp.serverErrorHint")}
+                    >
+                      {t("extensions.mcp.statusServerError")}
+                    </span>
+                  );
+                default:
+                  return (
+                    <span
+                      className="text-label-xs px-xs py-[1px] rounded-full font-bold shrink-0 bg-surface-container-highest text-on-surface-variant"
+                      title={srv.last_error ?? undefined}
+                    >
+                      {t("extensions.mcp.offline")}
+                    </span>
+                  );
+              }
+            })();
             return (
               <div
                 key={srv.name}
@@ -330,40 +434,10 @@ function InstalledSection({
                     {/* W2-A: connection status and tool count are two
                         separate elements — the status pill says *whether*
                         the server is up, the chip says *what* it offers. */}
-                    {isDisabled ? (
-                      <span
-                        className="text-label-xs px-xs py-[1px] rounded-full font-bold shrink-0 bg-surface-container-highest text-on-surface-variant"
-                        title={t("extensions.mcp.toggleAria", { name: srv.name })}
-                      >
-                        {t("extensions.mcp.statusDisabled")}
-                      </span>
-                    ) : srv.connected ? (
-                      <span
-                        className="text-label-xs px-xs py-[1px] rounded-full font-bold shrink-0 bg-primary-container text-on-primary-container"
-                        title={srv.last_error ?? undefined}
-                      >
-                        {t("extensions.mcp.statusOnline")}
-                      </span>
-                    ) : isAuthRemote ? (
-                      // W1-A honest remote state — distinct from the
-                      // Offline bad state, kept until OAuth lands (A2).
-                      <span
-                        className="text-label-xs px-xs py-[1px] rounded-full font-bold shrink-0 bg-tertiary-container text-on-tertiary-container"
-                        title={t("extensions.mcp.remoteHint")}
-                      >
-                        {t("extensions.mcp.statusRemote")}
-                      </span>
-                    ) : (
-                      <span
-                        className="text-label-xs px-xs py-[1px] rounded-full font-bold shrink-0 bg-surface-container-highest text-on-surface-variant"
-                        title={rowStatusTitle}
-                      >
-                        {t("extensions.mcp.offline")}
-                      </span>
-                    )}
+                    {statusBadge}
                     {/* Tool count chip — its own element next to the
                         status pill (was fused into it before W2-A). */}
-                    {!isDisabled && srv.connected && (
+                    {srv.enabled && srv.connected && (
                       <span className="text-label-xs px-xs py-[1px] rounded-full font-bold shrink-0 bg-secondary-container text-on-secondary-container">
                         {t("extensions.mcp.toolCount", {
                           count: srv.tool_count,
@@ -376,25 +450,66 @@ function InstalledSection({
                       {preview}
                     </div>
                   )}
-                  {isAuthRemote ? (
+                  {/* W3-B failure lines — each class gets its own copy and
+                      actions; NeedsAuth additionally keeps the url/endpoint
+                      context. Never a colour-only dead end. */}
+                  {srv.enabled && failure === 'needs_auth' && (
                     <div className="text-label-xs text-on-surface-variant truncate">
-                      {t("extensions.mcp.remoteHint")}
+                      {t("extensions.mcp.needsAuthHint")}
                     </div>
-                  ) : (
-                    // W1-7 (R2-P1-6): a failed server shows its concrete
-                    // error inline (full text on hover) — no more
-                    // colour-only "Offline" dead ends. W2-A: remote
-                    // connection failures flow through the same path.
-                    !isDisabled &&
-                    srv.last_error && (
+                  )}
+                  {srv.enabled && failure === 'unreachable' && srv.last_error && (
+                    <div
+                      className="text-label-xs text-error font-mono truncate"
+                      title={srv.last_error}
+                    >
+                      {srv.last_error}
+                    </div>
+                  )}
+                  {srv.enabled && failure === 'server_error' && srv.last_error && (
+                    <div className="flex items-center gap-xs min-w-0">
                       <div
                         className="text-label-xs text-error font-mono truncate"
                         title={srv.last_error}
                       >
                         {srv.last_error}
                       </div>
-                    )
+                      <Button
+                        variant="ghost"
+                        size="sm"
+                        type="button"
+                        className="text-on-surface-variant hover:text-primary shrink-0 !px-1 !py-0 h-auto"
+                        onClick={() =>
+                          setDetailsFor(detailsFor === srv.name ? null : srv.name)
+                        }
+                      >
+                        {detailsFor === srv.name
+                          ? t("extensions.mcp.hideDetails")
+                          : t("extensions.mcp.viewDetails")}
+                      </Button>
+                    </div>
                   )}
+                  {srv.enabled &&
+                    failure === 'server_error' &&
+                    detailsFor === srv.name &&
+                    srv.last_error && (
+                      <pre className="text-label-xs text-error font-mono whitespace-pre-wrap break-all mt-xs p-xs rounded-lg bg-error-container/40 border border-outline-variant/30">
+                        {srv.last_error}
+                      </pre>
+                    )}
+                  {srv.enabled &&
+                    !failure &&
+                    srv.last_error && (
+                      // W1-7 (R2-P1-6): a failed stdio server shows its
+                      // concrete error inline (full text on hover) — no
+                      // colour-only "Offline" dead ends.
+                      <div
+                        className="text-label-xs text-error font-mono truncate"
+                        title={srv.last_error}
+                      >
+                        {srv.last_error}
+                      </div>
+                    )}
                 </div>
                 {/* W2-A: inline enable/disable — the backend persists the
                     flag and reconciles the pool (stop on disable, start on
@@ -423,26 +538,47 @@ function InstalledSection({
                   </span>
                   {t("extensions.mcp.toolPermissions")}
                 </Button>
-                {/* G1 P0-1.4 — restart the server process (stop + start)
-                    without leaving the page. W2-A: pure remote rows restart
-                    for real; only auth-gated OAuth rows keep the disabled
-                    restart with its honest tooltip. */}
+                {/* W3-B (A2): the failure-classes' recovery actions.
+                    NeedsAuth → "Re-authenticate" (replays the OAuth loopback
+                    flow); restart is disabled and points there, so a dead
+                    credential can never fake success. Unreachable /
+                    ServerError → "Retry" (a real pool reconnect). */}
+                {failure === 'needs_auth' ? (
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    type="button"
+                    aria-label={t("extensions.mcp.reauthAria", { name: srv.name })}
+                    title={t("extensions.mcp.reauthAria", { name: srv.name })}
+                    onClick={() => onReauthenticate(srv.name)}
+                    disabled={isBusy || isRestarting || isToggling || isReauthing}
+                    className="shrink-0"
+                    data-testid={`mcp-reauth-${srv.name}`}
+                  >
+                    <span className="material-symbols-outlined icon-sm" aria-hidden="true">
+                      lock_open
+                    </span>
+                    {isReauthing ? "…" : t("extensions.mcp.reauth")}
+                  </Button>
+                ) : null}
                 <Button
                   variant="ghost"
                   size="sm"
                   type="button"
                   aria-label={
-                    isAuthRemote
-                      ? t("extensions.mcp.restartRemoteDisabled")
+                    failure === 'needs_auth'
+                      ? t("extensions.mcp.restartNeedsAuthDisabled")
                       : t("extensions.mcp.restartAria", { name: srv.name })
                   }
                   title={
-                    isAuthRemote
-                      ? t("extensions.mcp.restartRemoteDisabled")
+                    failure === 'needs_auth'
+                      ? t("extensions.mcp.restartNeedsAuthDisabled")
                       : t("extensions.mcp.restartAria", { name: srv.name })
                   }
                   onClick={() => onRestart(srv.name)}
-                  disabled={isBusy || isRestarting || isToggling || isAuthRemote}
+                  disabled={
+                    isBusy || isRestarting || isToggling || isReauthing || failure === 'needs_auth'
+                  }
                   className="text-on-surface-variant hover:text-primary shrink-0"
                 >
                   <span className="material-symbols-outlined icon-sm" aria-hidden="true">

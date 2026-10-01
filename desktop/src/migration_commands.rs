@@ -1522,6 +1522,7 @@ fn read_source_mcp_spec(asset: &MigrationAsset) -> Result<McpServerConfig, Strin
         enabled: true,
         url: None,
         has_auth_headers: false,
+        oauth: None,
     })
 }
 
