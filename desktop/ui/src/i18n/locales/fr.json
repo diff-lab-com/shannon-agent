@@ -1736,6 +1736,7 @@
   "chat.attach.reason.unresolvable": "le fichier n’a pas pu être lu (absent ou illisible)",
   "chat.attach.reason.tooLarge": "il dépasse la limite de taille pour ce type de fichier",
   "chat.attach.reason.noWorkingDir": "aucun répertoire de travail défini — choisis-en d’abord un dans les réglages",
+  "chat.attach.reason.unsupportedType": "ce format d’image n’est pas envoyé au modèle (pris en charge : PNG, JPG, GIF, WebP)",
   "chat.attach.issue.tooltip": "Sera refusé à l’envoi : {reason}",
   "chat.attach.extraction.office": "{total} sections extraites, premières {inlined} intégrées",
   "chat.attach.extraction.pdfTruncated": "Le PDF n'intègre que les premiers 50 KiB — le modèle peut lire la suite depuis le cache d'extraction",

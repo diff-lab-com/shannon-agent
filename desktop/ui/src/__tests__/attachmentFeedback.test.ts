@@ -48,6 +48,7 @@ describe('reportRejectedAttachments (G3 P0-3)', () => {
       unresolvable: 'could not be read',
       too_large: 'size limit',
       no_working_dir: 'working directory is set',
+      unsupported_type: 'image format',
     })) {
       const msg = rejectionReasonMessage(reason as RejectedAttachment['reason'])
       expect(msg, reason).toContain(key)

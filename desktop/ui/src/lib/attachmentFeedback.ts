@@ -19,6 +19,9 @@ export const REJECT_REASON_MESSAGE_KEYS: Record<RejectedAttachmentReason, string
   unresolvable: 'chat.attach.reason.unresolvable',
   too_large: 'chat.attach.reason.tooLarge',
   no_working_dir: 'chat.attach.reason.noWorkingDir',
+  // R2-P1-2 — image formats the multimodal whitelist never sends
+  // (svg/bmp/…), flagged by the preflight and refused on send.
+  unsupported_type: 'chat.attach.reason.unsupportedType',
 }
 
 /** i18n message for one rejection reason (falls back to the raw tag). */
