@@ -98,6 +98,38 @@ describe('OPCRunsTable', () => {
     expect(screen.queryByRole('button', { name: /Open session: Legacy run/ })).not.toBeInTheDocument()
   })
 
+  it('hides the cost/token columns entirely when no run carries data (R2-P0-3a)', async () => {
+    // The backend never tracked cost/tokens in routine_runs — until W2 wires
+    // the data through, the two columns must degrade away instead of showing
+    // a wall of "—" placeholders. The expanded row's colSpan shrinks in sync
+    // (7 base − 2 hidden = 5) so the table shape can't desync.
+    mockedRuns.mockResolvedValue([
+      row({ cost_usd: undefined, token_usage: undefined }),
+      row({ run_id: 'run-2', task_name: 'Legacy run', status: 'failed', error_message: 'boom', session_id: undefined, cost_usd: undefined, token_usage: undefined }),
+    ])
+    renderTable()
+    await waitFor(() => expect(screen.getByText('Security Scanner')).toBeInTheDocument())
+    expect(screen.queryByText('Cost')).not.toBeInTheDocument()
+    expect(screen.queryByText('Tokens')).not.toBeInTheDocument()
+    fireEvent.click(screen.getByText('Security Scanner'))
+    await waitFor(() => expect(mockedDetail).toHaveBeenCalledWith('run-1'))
+    expect(document.querySelector('td[colspan="5"]')).not.toBeNull()
+  })
+
+  it('keeps the cost/token columns (with — placeholders) when any run has data', async () => {
+    mockedRuns.mockResolvedValue([
+      row(),
+      row({ run_id: 'run-2', task_name: 'Legacy run', cost_usd: undefined, token_usage: undefined }),
+    ])
+    renderTable()
+    await waitFor(() => expect(screen.getByText('Legacy run')).toBeInTheDocument())
+    expect(screen.getByText('Cost')).toBeInTheDocument()
+    expect(screen.getByText('Tokens')).toBeInTheDocument()
+    expect(screen.getByText('$0.1234')).toBeInTheDocument()
+    // The run without usage reads as an em dash in both columns.
+    expect(screen.getAllByText('—').length).toBeGreaterThanOrEqual(2)
+  })
+
   it('jumps into the run session (switchSession + /chat) on click', async () => {
     mockedRuns.mockResolvedValue([row()])
     renderTable()

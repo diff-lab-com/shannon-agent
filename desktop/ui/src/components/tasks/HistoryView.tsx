@@ -127,6 +127,13 @@ export default function HistoryView({
     return rows.filter(r => projectKeyOf({ working_dir: routineDirById?.[r.task_id] }) === projectDir)
   }, [rows, projectDir, routineDirById])
 
+  // R2-P0-3(a): aligned with OPCRunsTable — while NO row carries cost/token
+  // data (the backend never tracked them in routine_runs), drop the '—'
+  // placeholder spans entirely instead of showing two dead slots per row.
+  // Once any row has data, rows without values fall back to '—' as before.
+  const hasCostData = visibleRows.some(r => r.cost_usd != null)
+  const hasTokenData = visibleRows.some(r => r.token_usage != null)
+
   // IA T2: jump to the run's inbox card on /triage (highlighted via router
   // state); with no matching item, fall back to the plain inbox list.
   const openInInbox = (row: TaskExecution) => {
@@ -190,12 +197,12 @@ export default function HistoryView({
                   <span className="font-label-md text-label-sm font-bold truncate flex-1">{row.task_name}</span>
                   <span className="font-label-sm text-label-xs text-on-surface-variant whitespace-nowrap">{formatUnixDateTime(row.started_at)}</span>
                   <span className="font-label-sm text-label-xs text-on-surface-variant whitespace-nowrap">{durationLabel(row.started_at, row.finished_at)}</span>
-                  {row.cost_usd != null ? (
+                  {hasCostData && (row.cost_usd != null ? (
                     <span className="font-label-sm text-label-xs text-on-surface-variant whitespace-nowrap">${row.cost_usd.toFixed(4)}</span>
-                  ) : <span className="font-label-sm text-label-xs text-on-surface-variant/60">—</span>}
-                  {row.token_usage != null ? (
+                  ) : <span className="font-label-sm text-label-xs text-on-surface-variant/60">—</span>)}
+                  {hasTokenData && (row.token_usage != null ? (
                     <span className="font-label-sm text-label-xs text-on-surface-variant whitespace-nowrap">{row.token_usage.toLocaleString()} tok</span>
-                  ) : <span className="font-label-sm text-label-xs text-on-surface-variant/60">—</span>}
+                  ) : <span className="font-label-sm text-label-xs text-on-surface-variant/60">—</span>)}
                   <span className={cn('material-symbols-outlined icon-sm text-on-surface-variant transition-transform', isExpanded ? 'rotate-180' : '')}>expand_more</span>
                 </Button>
                 {/* IA T2: secondary action — the run's result card lives on

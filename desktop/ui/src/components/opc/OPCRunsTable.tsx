@@ -140,6 +140,15 @@ export default function OPCRunsTable({ limit = 100 }: { limit?: number }) {
   const th = 'px-md py-xs text-left font-label-sm text-label-xs text-on-surface-variant uppercase tracking-wider font-bold'
   const td = 'px-md py-sm text-label-sm'
 
+  // R2-P0-3(a): the cost/token cells read "—" forever while the backend
+  // doesn't track them in routine_runs — degrade by hiding the whole column
+  // until ANY run carries data (W2 wiring restores them automatically).
+  // Header, cells and the expanded row's colSpan all derive from the same
+  // flags, so hiding can never desync the table shape.
+  const hasCostData = rows.some(r => r.cost_usd != null)
+  const hasTokenData = rows.some(r => r.token_usage != null)
+  const columnCount = 7 - (hasCostData ? 0 : 1) - (hasTokenData ? 0 : 1)
+
   return (
     <section aria-label={t('opc.runs.title')} className="bg-surface-container-lowest/70 border border-outline-variant/20 rounded-xl overflow-hidden">
       <div className="overflow-x-auto">
@@ -150,8 +159,8 @@ export default function OPCRunsTable({ limit = 100 }: { limit?: number }) {
               <th scope="col" className={th}>{t('opc.runs.col.time')}</th>
               <th scope="col" className={th}>{t('opc.runs.col.task')}</th>
               <th scope="col" className={th}>{t('opc.runs.col.status')}</th>
-              <th scope="col" className={cn(th, 'text-right')}>{t('opc.runs.col.cost')}</th>
-              <th scope="col" className={cn(th, 'text-right')}>{t('opc.runs.col.tokens')}</th>
+              {hasCostData && <th scope="col" className={cn(th, 'text-right')}>{t('opc.runs.col.cost')}</th>}
+              {hasTokenData && <th scope="col" className={cn(th, 'text-right')}>{t('opc.runs.col.tokens')}</th>}
               <th scope="col" className={th}>{t('opc.runs.col.model')}</th>
               <th scope="col" className={cn(th, 'text-right')}>{t('opc.runs.col.session')}</th>
             </tr>
@@ -169,6 +178,9 @@ export default function OPCRunsTable({ limit = 100 }: { limit?: number }) {
                   td={td}
                   detail={detail}
                   detailLoading={detailLoading}
+                  showCost={hasCostData}
+                  showToken={hasTokenData}
+                  columnCount={columnCount}
                 />
               )
             })}
@@ -187,6 +199,9 @@ function FragmentRow({
   td,
   detail,
   detailLoading,
+  showCost,
+  showToken,
+  columnCount,
 }: {
   row: AgentRunRow
   isExpanded: boolean
@@ -195,6 +210,10 @@ function FragmentRow({
   td: string
   detail: TaskExecutionDetail | null
   detailLoading: boolean
+  /** R2-P0-3(a): column visibility decided by the table (any run has data). */
+  showCost: boolean
+  showToken: boolean
+  columnCount: number
 }) {
   const t = useT()
   return (
@@ -216,14 +235,18 @@ function FragmentRow({
         <td className={td}>
           <StatusPill status={row.status} />
         </td>
-        <td className={cn(td, 'text-right tabular-nums whitespace-nowrap')}>
-          {row.cost_usd != null ? `$${row.cost_usd.toFixed(4)}` : <span className="text-on-surface-variant/60">—</span>}
-        </td>
-        <td className={cn(td, 'text-right tabular-nums whitespace-nowrap')}>
-          {row.token_usage != null
-            ? `${row.token_usage.toLocaleString()} tok`
-            : <span className="text-on-surface-variant/60">—</span>}
-        </td>
+        {showCost && (
+          <td className={cn(td, 'text-right tabular-nums whitespace-nowrap')}>
+            {row.cost_usd != null ? `$${row.cost_usd.toFixed(4)}` : <span className="text-on-surface-variant/60">—</span>}
+          </td>
+        )}
+        {showToken && (
+          <td className={cn(td, 'text-right tabular-nums whitespace-nowrap')}>
+            {row.token_usage != null
+              ? `${row.token_usage.toLocaleString()} tok`
+              : <span className="text-on-surface-variant/60">—</span>}
+          </td>
+        )}
         <td className={cn(td, 'font-mono text-label-xs text-on-surface-variant max-w-[180px] truncate')} title={row.model ?? undefined}>
           {row.model ?? <span className="text-on-surface-variant/60">—</span>}
         </td>
@@ -254,7 +277,7 @@ function FragmentRow({
       </tr>
       {isExpanded && (
         <tr className="border-b border-outline-variant/10">
-          <td colSpan={7} className="px-md pb-md pt-sm">
+          <td colSpan={columnCount} className="px-md pb-md pt-sm">
             {detailLoading ? (
               <p className="font-label-sm text-on-surface-variant py-sm">{t('tasks.historyView.loadingDetails')}</p>
             ) : detail ? (
