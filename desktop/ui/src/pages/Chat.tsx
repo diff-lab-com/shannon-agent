@@ -202,6 +202,9 @@ export default function Chat() {
     setAttachedFiles(draft?.attachments ?? [])
     setEditing(null)
     drainBlockedRef.current = false
+    // R2 W2-4: the blocked payload is this session's held continue target —
+    // it never follows the user into another session.
+    setBlockedPayload(null)
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [visibleSessionId])
 
@@ -284,14 +287,53 @@ export default function Chat() {
 
   const [bannerDismissed, setBannerDismissed] = useState(false)
 
-  // P0-4: session-budget advisory/choice bars. "Continue once" resends the
-  // last user message with the budget-bypass flag (exempts exactly that
-  // send's pre-turn check backend-side).
+  // P0-4: session-budget advisory/choice bars. "Continue once" exempts
+  // exactly one send's pre-turn budget check backend-side (budgetBypass).
   const budgetGuard = useBudgetGuard(currentSessionId)
+
+  // R2 W2-4: the payload the pre-turn guard last refused, held until it is
+  // actually delivered. A blocked send hands its full payload (text +
+  // attachments) back to the composer AND parks it here, so "Continue once"
+  // re-sends the BLOCKED message — never a reverse-found earlier turn (the
+  // old behavior replayed an older question once the optimistic rollback
+  // had erased the blocked one), and a first-turn block — where no earlier
+  // user message exists at all — still has a working action.
+  const [blockedPayload, setBlockedPayload] = useState<{ text: string; attachments: string[] } | null>(null)
+
   const continuePastBudget = useCallback(() => {
+    if (blockedPayload) {
+      const { text, attachments } = blockedPayload
+      setBlockedPayload(null)
+      void sendMessage(text, attachments.length > 0 ? attachments : undefined, { budgetBypass: true })
+        .then(ok => {
+          if (!ok) {
+            // Still refused (a different pre-turn guard) — hand the payload
+            // back to the composer and the banner, same as a blocked send.
+            setInput(text)
+            setAttachedFiles(attachments)
+            setBlockedPayload({ text, attachments })
+          }
+        })
+      return
+    }
+    // Degraded fallback (mid-turn cap hit with nothing refused in this UI
+    // session): explicitly re-send the last RECORDED user turn — the banner
+    // labels this action "resend the last message". Its attachments travel
+    // along. An earlier turn is never replayed silently.
     const lastUser = [...messages].reverse().find(m => m.role === 'user')
-    if (lastUser) void sendMessage(lastUser.content, undefined, { budgetBypass: true })
-  }, [messages, sendMessage])
+    if (lastUser) {
+      const attachments = (lastUser.file_attachments ?? []).map(a => a.path)
+      void sendMessage(lastUser.content, attachments.length > 0 ? attachments : undefined, { budgetBypass: true })
+    }
+  }, [blockedPayload, messages, sendMessage])
+
+  // W2-4: what the banner's Continue will actually deliver. `null` = nothing
+  // to deliver (no refused payload held, no recorded user turn) — the action
+  // hides instead of staying a clickable no-op.
+  const continueTarget: 'blocked' | 'last-message' | null = blockedPayload
+    ? 'blocked'
+    : messages.some(m => m.role === 'user') ? 'last-message' : null
+
   const messagesEndRef = useRef<HTMLDivElement>(null)
   const scrollParentRef = useRef<HTMLDivElement>(null)
 
@@ -436,10 +478,10 @@ export default function Chat() {
     const filePaths = hasAttachments ? attachedFiles : undefined
     // B1 §4-9: while THIS session streams, sends join its FIFO queue instead
     // of being dropped. Accepted items clear the draft (they render as
-    // removable chips); an overflow keeps it. The pre-existing edge stands:
-    // attachments-only input still no-ops while querying.
+    // removable chips); an overflow keeps it. Attachments-only sends join
+    // too (R2 W2-4): the queue already renders an attachments-only chip, so
+    // the old text-only gate was a silent no-op, not a policy.
     if (isQuerying) {
-      if (!trimmed) return
       const accepted = enqueuePrompt(trimmed, hasAttachments ? attachedFiles : [])
       if (accepted) {
         setInput('')
@@ -447,10 +489,22 @@ export default function Chat() {
       }
       return
     }
-    sendMessage(trimmed, filePaths)
-    setInput('')
-    setAttachedFiles([])
-    if (visibleSessionId) clearDraft(visibleSessionId)
+    // R2 W2-4: the composer clears only once the send is ACCEPTED. A pre-turn
+    // rejection (budget guard, concurrent-query guard, …) rolls the whole
+    // draft — text AND attachment chips — back into the composer and parks it
+    // as the banner's continue target, instead of the message vanishing.
+    void sendMessage(trimmed, filePaths).then(ok => {
+      if (ok) {
+        setInput('')
+        setAttachedFiles([])
+        setBlockedPayload(null)
+        if (visibleSessionId) clearDraft(visibleSessionId)
+      } else {
+        setInput(trimmed)
+        setAttachedFiles(filePaths ?? [])
+        setBlockedPayload({ text: trimmed, attachments: filePaths ?? [] })
+      }
+    })
   }
 
   // GB P2-10a — the "interrupt now" send (composer bolt button /
@@ -520,7 +574,17 @@ export default function Chat() {
       return
     }
     void sendMessage(item.text, item.attachments.length > 0 ? item.attachments : undefined)
-      .then(ok => { if (!ok) drainBlockedRef.current = true })
+      .then(ok => {
+        if (!ok) {
+          drainBlockedRef.current = true
+          // R2 W2-4: the dequeued head was refused before recording — return
+          // it to the composer and hold it for the banner's continue instead
+          // of silently dropping user content.
+          setInput(item.text)
+          setAttachedFiles(item.attachments)
+          setBlockedPayload({ text: item.text, attachments: item.attachments })
+        }
+      })
     // `promptQueue` re-triggers the drain for the next item once the new run
     // settles; sendMessage flips isQuerying synchronously during the send.
   }, [isQuerying, promptQueue, dequeuePrompt, executeSlash, sendMessage, hasPendingSteer])
@@ -616,6 +680,7 @@ export default function Chat() {
               clearWarning={budgetGuard.clearWarning}
               clearExceeded={budgetGuard.clearExceeded}
               onContinueOnce={continuePastBudget}
+              continueTarget={continueTarget}
               sessionId={currentSessionId}
             />
 

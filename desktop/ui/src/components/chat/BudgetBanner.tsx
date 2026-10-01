@@ -2,8 +2,10 @@
 //
 // Rendered inside the chat page, directly under the header area. The
 // warning bar is dismissible; the exceeded bar offers the frozen three
-// actions — continue once (resends the last user message with the
-// budget-bypass flag), raise the budget (opens BudgetDialog), stop.
+// actions — continue once (R2 W2-4: labeled by what it actually delivers —
+// the held blocked payload, or the recorded last user turn as the explicit
+// fallback — and sent with the budget-bypass flag), raise the budget
+// (opens BudgetDialog), stop.
 
 import { useState } from 'react'
 import { useIntl } from 'react-intl'
@@ -18,8 +20,16 @@ export interface BudgetBannerProps {
   exceeded: BudgetStatusPayload | null
   clearWarning: () => void
   clearExceeded: () => void
-  /** Resend the last user message with the budget-bypass flag. */
+  /** Deliver one budget-exempt send (the continue target held by the page). */
   onContinueOnce: () => void
+  /**
+   * R2 W2-4: what "Continue once" will actually send —
+   *   - 'blocked': the payload the pre-turn guard refused (held by the page);
+   *   - 'last-message': the recorded last user turn (labeled fallback);
+   *   - null: nothing to deliver — the action hides instead of staying a
+   *     clickable no-op.
+   */
+  continueTarget: 'blocked' | 'last-message' | null
   sessionId: string | null
 }
 
@@ -29,6 +39,7 @@ export default function BudgetBanner({
   clearWarning,
   clearExceeded,
   onContinueOnce,
+  continueTarget,
   sessionId,
 }: BudgetBannerProps) {
   const t = useT()
@@ -62,12 +73,16 @@ export default function BudgetBanner({
               {t('budget.exceeded.body', { spent: fmt(exceeded.spentUsd), budget: fmt(exceeded.budgetUsd) })}
             </p>
             <div className="flex flex-wrap gap-sm mt-sm">
-              <Button
-                className="px-md py-xs rounded-full bg-primary text-on-primary font-label-md hover:bg-primary/90"
-                onClick={() => { clearExceeded(); onContinueOnce() }}
-              >
-                {t('budget.exceeded.continue')}
-              </Button>
+              {continueTarget !== null && (
+                <Button
+                  className="px-md py-xs rounded-full bg-primary text-on-primary font-label-md hover:bg-primary/90"
+                  onClick={() => { clearExceeded(); onContinueOnce() }}
+                >
+                  {continueTarget === 'blocked'
+                    ? t('budget.exceeded.continue')
+                    : t('budget.exceeded.continueLast')}
+                </Button>
+              )}
               <Button
                 variant="outline"
                 className="px-md py-xs rounded-full font-label-md border-outline-variant/40 bg-surface-container-lowest/70"
