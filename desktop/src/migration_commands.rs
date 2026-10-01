@@ -1520,6 +1520,7 @@ fn read_source_mcp_spec(asset: &MigrationAsset) -> Result<McpServerConfig, Strin
         args,
         env,
         enabled: true,
+        url: None,
     })
 }
 

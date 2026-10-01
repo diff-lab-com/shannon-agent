@@ -186,6 +186,7 @@ mod tests {
                     args: vec![],
                     env: Default::default(),
                     enabled: false,
+                    url: None,
                 },
                 crate::config::McpServerConfig {
                     name: "oauth-remote".into(),
@@ -193,6 +194,7 @@ mod tests {
                     args: vec![],
                     env: Default::default(),
                     enabled: true,
+                    url: Some("https://mcp.example/mcp".into()),
                 },
             ],
         )
@@ -215,6 +217,7 @@ mod tests {
                 args: vec![],
                 env: Default::default(),
                 enabled: true,
+                url: None,
             }],
         )
         .await;
@@ -235,6 +238,7 @@ mod tests {
             ],
             env: [("KEY".to_string(), "v".to_string())].into_iter().collect(),
             enabled: true,
+            url: None,
         };
         let shannon = ShannonMcpServerConfig::Stdio {
             command: desktop.command.clone(),

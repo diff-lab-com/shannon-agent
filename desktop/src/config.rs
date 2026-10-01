@@ -294,6 +294,14 @@ pub struct McpServerConfig {
     pub args: Vec<String>,
     pub env: std::collections::HashMap<String, String>,
     pub enabled: bool,
+    /// Remote (HTTP/SSE) endpoint for url-only entries installed by the
+    /// extensions hub (OAuth remote / `.mcpb` http bundles). `None` for
+    /// stdio rows. W1-1 (R2-P0-1(B)): the loader keeps the url so the UI
+    /// can show a truthful "remote" state instead of a dead Offline badge.
+    /// Parse-only — saves still skip url-only rows because the struct
+    /// cannot round-trip `type`/`headers` (see [`save_mcp_servers_to`]).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub url: Option<String>,
 }
 
 /// A managed LLM provider connection (Models P2). Users may configure several
@@ -754,19 +762,25 @@ fn mcp_server_config_from_json(name: &str, value: &serde_json::Value) -> Option<
         })
         .unwrap_or_default();
     let enabled = obj.get("enabled").and_then(|e| e.as_bool()).unwrap_or(true);
+    // W1-1: keep the remote endpoint — dropping it turned every url-only
+    // install into an anonymous empty-command row the UI could only show
+    // as "Offline".
+    let url = obj.get("url").and_then(|u| u.as_str()).map(str::to_string);
     Some(McpServerConfig {
         name: name.to_string(),
         command,
         args,
         env,
         enabled,
+        url,
     })
 }
 
 /// Serialize a [`McpServerConfig`] into the `mcpServers.<name>` JSON entry
 /// shape shared with the CLI. Only stdio rows are serializable — url-only
-/// entries (`url`/`type` fields) never enter this lossy struct, so saves
-/// skip them and their original JSON blob in the store stays untouched.
+/// entries (`type`/`url`/`headers` fields, the latter carrying OAuth bearer
+/// tokens) cannot round-trip through this struct, so saves skip them and
+/// their original JSON blob in the store stays untouched.
 fn mcp_server_config_to_json(config: &McpServerConfig) -> serde_json::Value {
     serde_json::json!({
         "command": config.command,
@@ -846,9 +860,10 @@ pub fn save_mcp_servers_to(
     };
     for config in servers {
         if config.command.is_empty() {
-            // Url-only row: the struct cannot round-trip `url`/`type`, so
-            // writing it would replace the real entry with a lossy stub.
-            // Skip — whatever the store already holds stays intact.
+            // Url-only row: the struct cannot round-trip `type`/`headers`
+            // (OAuth bearer tokens), so writing it would replace the real
+            // entry with a lossy stub. Skip — whatever the store already
+            // holds stays intact.
             continue;
         }
         mcp_obj.insert(config.name.clone(), mcp_server_config_to_json(config));
@@ -939,6 +954,7 @@ pub fn migrate_legacy_mcp_servers_to(
                 .map(|e| serde_json::from_value(e.clone()).unwrap_or_default())
                 .unwrap_or_default(),
             enabled: row.get("enabled").and_then(|e| e.as_bool()).unwrap_or(true),
+            url: None,
         });
     }
     if configs.is_empty() {
@@ -1525,6 +1541,7 @@ mod tests {
                 ],
                 env: [("K".to_string(), "v".to_string())].into_iter().collect(),
                 enabled: true,
+                url: None,
             }],
         )
         .unwrap();
@@ -1534,7 +1551,8 @@ mod tests {
         assert_eq!(root["permissions"]["allow"][0], "Bash");
         assert_eq!(root["mcpServers"]["notion"]["url"], "https://mcp.example");
 
-        // Load sees both entries (url-only listed with empty command).
+        // Load sees both entries (url-only listed with empty command, its
+        // url preserved — W1-1: it is no longer dropped).
         let servers = load_mcp_servers_from(&path);
         assert_eq!(servers.len(), 2);
         let everything = servers.iter().find(|s| s.name == "everything").unwrap();
@@ -1542,8 +1560,10 @@ mod tests {
         assert_eq!(everything.args.len(), 2);
         assert_eq!(everything.env.get("K").map(String::as_str), Some("v"));
         assert!(everything.enabled);
+        assert!(everything.url.is_none());
         let notion = servers.iter().find(|s| s.name == "notion").unwrap();
         assert!(notion.command.is_empty());
+        assert_eq!(notion.url.as_deref(), Some("https://mcp.example"));
 
         // Removal drops only the target row.
         assert!(remove_mcp_server_entry_from(&path, "everything").unwrap());
@@ -1582,6 +1602,7 @@ mod tests {
                 args: vec![],
                 env: Default::default(),
                 enabled: true,
+                url: None,
             }],
         )
         .unwrap();
@@ -1633,6 +1654,7 @@ mod tests {
                 args: vec![],
                 env: Default::default(),
                 enabled: true,
+                url: None,
             }],
         );
         assert!(result.is_err(), "corrupt settings.json must fail the save");
@@ -1660,6 +1682,7 @@ mod tests {
                 args: vec![],
                 env: Default::default(),
                 enabled: true,
+                url: None,
             }],
         )
         .unwrap();
@@ -1694,6 +1717,7 @@ mod tests {
                 args: vec![],
                 env: Default::default(),
                 enabled: true,
+                url: Some("https://mcp.example".into()),
             }],
         )
         .unwrap();
@@ -1707,5 +1731,45 @@ mod tests {
                 .is_none(),
             "private list_only marker must not exist"
         );
+    }
+
+    /// W1-1 (R2-P0-1(B)): url-only store entries keep their `url` on load,
+    /// and pre-existing configs without a `url` field still parse (serde
+    /// default — backward compatibility).
+    #[test]
+    fn url_only_entries_keep_url_and_legacy_rows_parse_without_it() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = tmp_settings(dir.path());
+        std::fs::write(
+            &path,
+            r#"{"mcpServers":{
+                "notion":{"type":"http","url":"https://mcp.example","headers":{"Authorization":"Bearer x"}},
+                "fs":{"command":"npx","args":["-y","fs"],"env":{},"enabled":true}
+            }}"#,
+        )
+        .unwrap();
+
+        let servers = load_mcp_servers_from(&path);
+        assert_eq!(servers.len(), 2);
+
+        let notion = servers.iter().find(|s| s.name == "notion").unwrap();
+        assert!(notion.command.is_empty());
+        assert_eq!(notion.url.as_deref(), Some("https://mcp.example"));
+
+        // A stdio row from an older store (no `url` key anywhere) parses
+        // with `url: None` — the new field is fully backward compatible.
+        let fs = servers.iter().find(|s| s.name == "fs").unwrap();
+        assert_eq!(fs.command, "npx");
+        assert!(fs.url.is_none());
+
+        // A non-string `url` value is ignored rather than poisoning the row.
+        std::fs::write(
+            &path,
+            r#"{"mcpServers":{"weird":{"url":42,"enabled":true}}}"#,
+        )
+        .unwrap();
+        let servers = load_mcp_servers_from(&path);
+        assert_eq!(servers.len(), 1);
+        assert!(servers[0].url.is_none());
     }
 }
