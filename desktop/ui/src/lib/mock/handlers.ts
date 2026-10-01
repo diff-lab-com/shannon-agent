@@ -18,6 +18,12 @@ import {
   MOCK_INSTALLED_AGENTS,
   MOCK_INSTALLED_ADDONS,
 } from './data/catalog'
+// R1 chat-testing infra: when a ChatScript is loaded (scripted/player.ts →
+// setScriptSeed) these accessors answer with the script's seed data instead
+// of the global demo singletons; unarmed they all return null/undefined and
+// every handler below behaves exactly as before.
+import { seededBudget, seededConfigPatch, seededMessages, seededProviderStatusPatch,
+  seededSessions, seededUsage } from './scripted/seed'
 
 const clone = <T,>(v: T): T => JSON.parse(JSON.stringify(v))
 const delay = (ms = 80) => new Promise<void>(r => setTimeout(r, ms + Math.random() * 40))
@@ -412,18 +418,35 @@ export const handlers: Record<string, MockHandler> = {
     return null
   },
   // --- Chat ---
+  // (send_message interception when a script is armed happens in coreMock —
+  // the scripted player owns the command and replays the turn's events.)
   async send_message() {
     await delay(120)
     return { query_id: `q-${Date.now()}` }
   },
   async get_conversation() {
     await delay()
+    // R1 scripted-backend: a loaded script's first seeded session answers
+    // (the scripted "current conversation"); unarmed → demo default.
+    const seeded = seededMessages()
+    if (seeded) return clone(seeded)
     return clone(MOCK_MESSAGES)
   },
   async cancel_query() { await delay(30) },
 
   // --- Config ---
-  async get_config() { await delay(); return clone(demoConfig) },
+  async get_config() {
+    await delay()
+    const config = clone(demoConfig)
+    // R1 scripted-backend: seed.config can retarget the provider and strip
+    // the API key (hasKey:false → the "no key" shape).
+    const patch = seededConfigPatch()
+    if (patch) {
+      if (patch.provider != null) config.provider = patch.provider
+      if (patch.api_key === null) config.api_key = undefined
+    }
+    return config
+  },
   // Wire shape note: the desktop command takes `{ update: { key, value } }`
   // (tauri-api configure wraps it); the flat shape is accepted too so older
   // callers keep working. Before this was fixed, EVERY configure in demo
@@ -483,7 +506,7 @@ export const handlers: Record<string, MockHandler> = {
   async get_provider_status() {
     await delay()
     const active = MOCK_PROVIDERS.providers.find(p => p.id === MOCK_PROVIDERS.active_provider_id)
-    return {
+    const status = {
       active_provider_id: MOCK_PROVIDERS.active_provider_id,
       display_name: active ? active.display_name : null,
       kind: active ? active.kind : null,
@@ -491,6 +514,10 @@ export const handlers: Record<string, MockHandler> = {
       model: MOCK_CONFIG.model ?? null,
       env_provider: null,
     }
+    // R1 scripted-backend: seed.config.provider / hasKey flip the snapshot
+    // (hasKey:false keeps the provider but reports keyless → "no-key" banner).
+    const patch = seededProviderStatusPatch()
+    return patch ? { ...status, ...patch } : status
   },
   async fetch_provider_models() {
     await delay(200)
@@ -707,6 +734,9 @@ export const handlers: Record<string, MockHandler> = {
   },
   async get_session_model(args: { sessionId?: string | null }) {
     await delay()
+    // R1 scripted-backend: seeded sessions intentionally resolve to null
+    // (a fresh scripted session has no model override) — the existing
+    // demoSessionModels Map-miss already produces exactly that shape.
     return demoSessionModels.get(demoSessionKey(args.sessionId)) ?? null
   },
   // P2-5: session-level "temporary chat" — demo mirrors the backend's
@@ -746,8 +776,17 @@ export const handlers: Record<string, MockHandler> = {
   // Deleted ids / renamed titles are tracked so the demo build and e2e flows
   // observe their own mutations (list/search reflect them on refresh).
   async new_session() { await delay(60); return `sess-${Date.now()}` },
+  // R1 chat-script e2e: the sidebar fetches archived rows on every boot —
+  // without a handler demo mode console.error'd 5× on /chat (the coverage
+  // tripwire allowlisted it as "never reached", which the /chat boot proves
+  // false). Demo keeps no archived sessions.
+  async list_archived_sessions() { await delay(30); return [] },
   async list_sessions() {
     await delay()
+    // R1 scripted-backend: a loaded script's seeded sessions replace the
+    // demo roster wholesale (deletions/renames apply to the demo list only).
+    const seeded = seededSessions()
+    if (seeded) return clone(seeded)
     return clone(MOCK_SESSIONS)
       .filter(s => !deletedSessions.has(s.id))
       .map(s => renamedSessions.get(s.id) ?? s)
@@ -877,14 +916,25 @@ export const handlers: Record<string, MockHandler> = {
     await delay(30)
     return { estimated_tokens: 4820, context_window: 200000 }
   },
-  async get_session_usage() {
+  async get_session_usage(args: { sessionId?: string | null }) {
     await delay(30)
+    // R1 scripted-backend: seeded sessions report a pristine ledger — spend
+    // arrives via budget:* events, not history. Unknown/unarmed → demo data.
+    const seeded = seededUsage(args?.sessionId)
+    if (seeded) return seeded
     return { input_tokens: 12400, output_tokens: 3150, cache_creation_tokens: 0, cache_read_tokens: 9800, cost_usd: 0.0731, events: 6 }
   },
   // P0-4 cost observability: demo budget (mutable so the banner flow is
   // explorable), a fixed six-category breakdown and two attributed
   // sessions for the Usage page's per-session view.
-  async get_session_budget() { await delay(30); return demoBudgetUsd },
+  async get_session_budget(args: { sessionId?: string | null }) {
+    await delay(30)
+    // R1 scripted-backend: seed.config.budgetUsd answers for the active
+    // fallback or a seeded session id; undefined → demo budget (default null).
+    const budget = seededBudget(args?.sessionId)
+    if (budget !== undefined) return budget
+    return demoBudgetUsd
+  },
   async set_session_budget(args: { budgetUsd: number | null }) {
     await delay(30)
     demoBudgetUsd = args.budgetUsd

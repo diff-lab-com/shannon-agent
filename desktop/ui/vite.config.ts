@@ -26,6 +26,18 @@ export default defineConfig({
       ...(mockMode ? { '@tauri-apps/api/core': path.resolve(__dirname, 'src/lib/mock/coreMock.ts') } : {}),
     }
   },
+  optimizeDeps: {
+    // Mock mode only: the dep optimizer APPLIES resolve.alias while
+    // pre-bundling, so it folds the aliased coreMock.ts INTO the
+    // @tauri-apps/plugin-dialog chunk — a second module instance of the
+    // whole mock layer, whose late module init re-runs the scripted
+    // backend's boot (`loadScript`) and wipes player state mid-session.
+    // (Measured in vite 6.4.3: every demo page evaluated coreMock twice —
+    // once from /src, once from node_modules/.vite/deps.) Excluding the
+    // plugin serves it as source, so its `@tauri-apps/api/core` import
+    // resolves through the same alias — one coreMock instance per page.
+    ...(mockMode ? { exclude: ['@tauri-apps/plugin-dialog'] } : {}),
+  },
   build: {
     target: 'es2020',
     outDir: 'dist'
