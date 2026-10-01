@@ -11,6 +11,7 @@
 
 import { useState, useEffect, useCallback, useMemo, useRef, type ReactNode } from 'react'
 import { messageFor } from '@/i18n'
+import { describeBackendError } from '@/lib/backendError'
 import { listen, type UnlistenFn } from '@tauri-apps/api/event'
 import { isEventForCurrentWindow, parseWindowSession } from '@/lib/windowSession'
 import { reportRejectedAttachments } from '@/lib/attachmentFeedback'
@@ -562,7 +563,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
         }
         return prev
       })
-      setChatError(String(e))
+      setChatError(describeBackendError(String(e), messageFor))
       setSessionQuerying(targetSessionId, false)
       // Round-1 review (Minor-4): the send was rejected BEFORE recording the
       // user message — no run ever started, so the pre-send snapshot (with
