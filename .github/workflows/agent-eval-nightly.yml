@@ -70,6 +70,16 @@ jobs:
           SHANNON_EVAL_BIN: ${{ github.workspace }}/target/debug/shannon
         run: |
           mkdir -p eval-out
+          # The real-model eval is a no-op without the repo secret. Until an
+          # admin configures SHANNON_API_KEY, skip loudly instead of failing
+          # every weekday — same guard and rationale as shannon-review.yml
+          # (this is the actual 2026-10-01 failure: the build fix landed,
+          # then the run died on an empty key).
+          if [ -z "$SHANNON_API_KEY" ]; then
+            echo "::notice title=eval skipped::SHANNON_API_KEY secret is not configured on this repo — the real-model eval ran nothing. Configure it (repo settings → secrets and variables → actions) to enable this nightly."
+            echo "skipped=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
           # `just eval-real` already passes --real + --tasks internally;
           # we layer the per-tier filter and override --out. Per-task
           # budgets live in the TOML suite — there is no CLI budget knob.
@@ -85,6 +95,7 @@ jobs:
 
       - name: Locate report.json
         id: locate
+        if: steps.eval.outputs.skipped != 'true'
         run: |
           report="$(find "$GITHUB_WORKSPACE/eval-out" -name 'report.json' | head -1)"
           if [ -z "$report" ]; then
