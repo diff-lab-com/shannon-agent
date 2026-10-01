@@ -3413,6 +3413,9 @@ mod tests {
             inbox: inbox.clone(),
             runs_store: std::sync::Arc::new(runs.clone()),
             webhook: std::sync::Arc::new(crate::inbox_commands::DesktopWebhookPort),
+            notify: std::sync::Arc::new(crate::inbox_commands::DesktopRunNotifier(
+                std::sync::Arc::new(shannon_core::notifier::Notifier::new()),
+            )),
             usage_store: std::sync::Arc::new(crate::commands_usage::UsageStore::with_path(
                 tmp.join("usage.jsonl"),
             )),

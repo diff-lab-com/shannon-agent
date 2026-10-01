@@ -258,7 +258,9 @@ fn apply_jitter(delay_secs: u64, jitter_ratio: f64) -> Duration {
 /// with a custom matcher.
 pub fn is_retryable_error(msg: &str) -> bool {
     let lower = msg.to_ascii_lowercase();
-    // Hard-fail signatures: auth, malformed input, missing config.
+    // Hard-fail signatures: auth, malformed input, missing config, and the
+    // routine budget stop (R2-W2-3 — a spent-up cap is not transient; the
+    // desktop marks its aborted runs with this prefix).
     const HARD_FAIL_MARKERS: &[&str] = &[
         "401",
         "403",
@@ -272,6 +274,7 @@ pub fn is_retryable_error(msg: &str) -> bool {
         "not found",
         "404",
         "schema validation",
+        "budget_exceeded",
     ];
     if HARD_FAIL_MARKERS.iter().any(|m| lower.contains(m)) {
         return false;
@@ -310,6 +313,24 @@ mod tests {
     fn auth_errors_are_not_retried() {
         let policy = fast_policy();
         let out = decide_retry(&policy, 1, "401 Unauthorized: invalid api key");
+        assert_eq!(
+            out.decision,
+            RetryDecision::GiveUp {
+                reason: GiveUpReason::NonRetryableError
+            }
+        );
+    }
+
+    #[test]
+    fn budget_stop_is_not_retried() {
+        // R2-W2-3: the desktop's mid-run budget abort marks its errors with
+        // this prefix — a spent-up cap is not transient.
+        let policy = fast_policy();
+        let out = decide_retry(
+            &policy,
+            1,
+            "budget_exceeded: monthly budget $5.00 reached — run aborted at $5.01",
+        );
         assert_eq!(
             out.decision,
             RetryDecision::GiveUp {

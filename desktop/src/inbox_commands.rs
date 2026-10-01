@@ -447,42 +447,120 @@ impl RunExecutionPolicy {
     }
 }
 
-/// Await one engine attempt, converting a panic **or a policy timeout** into
-/// a failed [`RunOutcome`] instead of leaving the run `running` forever.
+/// Error prefix carried by a budget-aborted attempt's outcome so the outer
+/// run task (and `scheduled_retry::is_retryable_error`) recognizes the stop
+/// as terminal (R2-W2-3).
+pub(crate) const BUDGET_ABORT_MARKER: &str = "budget_exceeded";
+
+/// Poll cadence of the mid-run budget guard (R2-W2-3). Billing resolution of
+/// the abort — Usage events land in the tracker as the engine emits them, so
+/// the stop trails the cap by at most one poll plus one stream chunk.
+const BUDGET_ABORT_POLL: Duration = Duration::from_secs(2);
+
+/// Await one engine attempt, converting a panic, a policy timeout, **or a
+/// mid-run budget trip** into a failed [`RunOutcome`] instead of leaving the
+/// run `running` forever.
 ///
-/// On timeout the spawned engine task is aborted (dropping a `JoinHandle`
-/// alone only detaches — the query stream would keep running and billing),
-/// the task is reaped, and the timeout becomes the recorded failure reason.
-async fn run_with_timeout<F>(engine_future: F, timeout: Option<Duration>) -> RunOutcome
+/// On timeout or budget trip the spawned engine task is aborted (dropping a
+/// `JoinHandle` alone only detaches — the query stream would keep running
+/// and billing), the task is reaped, and the reason becomes the recorded
+/// failure. The budget arm shares the timeout's abort channel: a `watch`
+/// signal trips the same abort-the-`JoinHandle` path.
+async fn run_with_timeout<F>(
+    engine_future: F,
+    timeout: Option<Duration>,
+    budget_abort: Option<tokio::sync::watch::Receiver<bool>>,
+) -> RunOutcome
 where
     F: std::future::Future<Output = RunOutcome> + Send + 'static,
 {
     let mut handle = tokio::spawn(engine_future);
-    match timeout {
-        None => match handle.await {
-            Ok(outcome) => outcome,
-            Err(join_error) => RunOutcome::panicked(join_error.to_string()),
-        },
-        Some(limit) => match tokio::time::timeout(limit, &mut handle).await {
-            Ok(Ok(outcome)) => outcome,
-            Ok(Err(join_error)) => RunOutcome::panicked(join_error.to_string()),
-            Err(_elapsed) => {
-                handle.abort();
-                let _ = handle.await;
-                tracing::warn!(
-                    timeout_secs = limit.as_secs(),
-                    "routine run: execution timed out — attempt aborted"
-                );
-                RunOutcome {
-                    failed: true,
-                    error: Some(format!("routine run timed out after {}s", limit.as_secs())),
-                    output: String::new(),
-                    session_id: None,
-                    cost_usd: None,
-                    token_usage: None,
-                }
+    match race_attempt(&mut handle, timeout, budget_abort).await {
+        AttemptRace::Finished(Ok(outcome)) => outcome,
+        AttemptRace::Finished(Err(join_error)) => RunOutcome::panicked(join_error.to_string()),
+        AttemptRace::BudgetTripped => {
+            handle.abort();
+            let _ = handle.await;
+            tracing::warn!(
+                marker = BUDGET_ABORT_MARKER,
+                "routine run: budget cap reached mid-execution — attempt aborted"
+            );
+            RunOutcome {
+                failed: true,
+                error: Some(format!(
+                    "{BUDGET_ABORT_MARKER}: monthly budget cap reached mid-run"
+                )),
+                output: String::new(),
+                session_id: None,
+                cost_usd: None,
+                token_usage: None,
             }
-        },
+        }
+    }
+}
+
+/// Verdict of one attempt's race between completion and the budget stop.
+enum AttemptRace {
+    Finished(Result<RunOutcome, tokio::task::JoinError>),
+    BudgetTripped,
+}
+
+/// Race the attempt `JoinHandle` against the timeout and the budget stop
+/// signal. Borrows the handle only for the race — the caller keeps ownership
+/// so it can abort and reap the task after the verdict.
+async fn race_attempt(
+    handle: &mut tokio::task::JoinHandle<RunOutcome>,
+    timeout: Option<Duration>,
+    mut budget_abort: Option<tokio::sync::watch::Receiver<bool>>,
+) -> AttemptRace {
+    // Resolves only when the shared budget flag trips. With `None` (no
+    // budget) — or a sender gone without tripping (the run task finished and
+    // dropped the watcher) — the arm stays pending forever and never wins.
+    let budget_fired = async {
+        match budget_abort.as_mut() {
+            Some(rx) => loop {
+                if *rx.borrow_and_update() {
+                    break;
+                }
+                if rx.changed().await.is_err() {
+                    std::future::pending::<()>().await;
+                }
+            },
+            None => std::future::pending::<()>().await,
+        }
+    };
+    let attempt = async {
+        match timeout {
+            None => handle.await,
+            Some(limit) => match tokio::time::timeout(limit, &mut *handle).await {
+                Ok(res) => res,
+                Err(_elapsed) => {
+                    handle.abort();
+                    let _ = handle.await;
+                    tracing::warn!(
+                        timeout_secs = limit.as_secs(),
+                        "routine run: execution timed out — attempt aborted"
+                    );
+                    Ok(RunOutcome {
+                        failed: true,
+                        error: Some(format!("routine run timed out after {}s", limit.as_secs())),
+                        output: String::new(),
+                        session_id: None,
+                        cost_usd: None,
+                        token_usage: None,
+                    })
+                }
+            },
+        }
+    };
+    // `biased` with the attempt arm first: when the engine completes at the
+    // same tick the watcher trips, the finished outcome wins — a completed
+    // run is not retroactively aborted (its spend lands on the record either
+    // way, and the finalize path still annotates the trip).
+    tokio::select! {
+        biased;
+        res = attempt => AttemptRace::Finished(res),
+        _ = budget_fired => AttemptRace::BudgetTripped,
     }
 }
 
@@ -492,9 +570,15 @@ where
 /// `scheduled_retry` backoff while the retry budget allows and the error
 /// looks transient. The final outcome carries the give-up context so the
 /// run record shows how many attempts were made and why they stopped.
+///
+/// W2-3: when `budget_abort` is `Some`, a trip aborts the attempt (see
+/// [`run_with_timeout`]) and ends the whole run — a spent-up cap is not
+/// transient, so the retry loop returns the budget outcome untouched
+/// instead of scheduling another paid attempt.
 pub(crate) async fn execute_with_policy<F, Fut>(
     mut engine: F,
     policy: &RunExecutionPolicy,
+    budget_abort: Option<tokio::sync::watch::Receiver<bool>>,
 ) -> RunOutcome
 where
     F: FnMut() -> Fut,
@@ -502,8 +586,11 @@ where
 {
     let mut attempt: u32 = 1;
     loop {
-        let outcome = run_with_timeout(engine(), policy.timeout).await;
+        let outcome = run_with_timeout(engine(), policy.timeout, budget_abort.clone()).await;
         if !outcome.failed {
+            return outcome;
+        }
+        if budget_abort.as_ref().is_some_and(|rx| *rx.borrow()) {
             return outcome;
         }
         let error = outcome.error.clone().unwrap_or_default();
@@ -593,6 +680,24 @@ pub(crate) fn routine_month_spend(
         })
         .map(|record| record.cost_usd)
         .sum()
+}
+
+/// One poll of the mid-run budget guard (W2-3): `true` once the routine's
+/// month aggregate plus the in-flight run's last-known spend has reached the
+/// configured cap. Same aggregation basis as [`budget_skip_reason`] (month,
+/// session-attributed) plus the in-flight increment that aggregation cannot
+/// see yet — the run's inbox item (and with it the session back-link the
+/// aggregation walks) only exists after finalize.
+pub(crate) fn budget_live_exceeded(
+    usage: &crate::commands_usage::UsageStore,
+    inbox: &InboxStore,
+    task_id: &str,
+    cap: f64,
+    in_flight_usd: Option<f64>,
+    now: chrono::DateTime<chrono::Utc>,
+) -> bool {
+    let spent = routine_month_spend(usage, inbox, task_id, now) + in_flight_usd.unwrap_or(0.0);
+    spent >= cap
 }
 
 /// The P1-2 budget gate: `Some(reason)` when the routine has a monthly
@@ -777,6 +882,48 @@ impl RoutineWebhookPort for DesktopWebhookPort {
     }
 }
 
+/// The mid-run budget-abort notification seam (W2-3): fire-and-forget
+/// delivery of the desktop notification. Object-safe so tests can record
+/// dispatches instead of wiring the platform notifier.
+pub(crate) trait RunNotifyPort: Send + Sync {
+    fn notify(&self, notification: &shannon_core::notifier::Notification);
+}
+
+/// Production port: the shared `Notifier` attached to `AppState` at startup
+/// — the exact pipeline query notifications use (desktop popup handler +
+/// webhook fan-out, master switch / DND prefs applied by the handler).
+pub(crate) struct DesktopRunNotifier(pub(crate) std::sync::Arc<shannon_core::notifier::Notifier>);
+
+impl RunNotifyPort for DesktopRunNotifier {
+    fn notify(&self, notification: &shannon_core::notifier::Notification) {
+        if let Err(e) = self.0.notify(notification) {
+            tracing::warn!(error = %e, "routine budget: abort notification dispatch failed");
+        }
+    }
+}
+
+/// Desktop notification for a mid-run budget stop — the user-facing half of
+/// the dual channel; the run record's `budget_exceeded` error is the other
+/// (History + inbox show it without any extra wiring).
+fn notify_budget_abort(port: &dyn RunNotifyPort, task_name: &str, cap: f64, spent: f64) {
+    let notification = shannon_core::notifier::Notification {
+        title: format!("Shannon — {task_name}: budget reached"),
+        body: format!("Monthly budget ${cap:.2} reached — the run was aborted at ${spent:.2}."),
+        level: shannon_core::notifier::NotificationLevel::Error,
+        id: uuid::Uuid::new_v4().to_string(),
+        timestamp: chrono::Utc::now(),
+        source: Some("routine_budget_abort".to_string()),
+        action_id: None,
+    };
+    port.notify(&notification);
+    tracing::info!(
+        task_name,
+        cap,
+        spent,
+        "routine budget: abort notification dispatched"
+    );
+}
+
 /// The state slices `spawn_routine_run` needs, Arc-cloned so the spawned
 /// task owns its inputs. Constructed from [`AppState`] (Tauri commands) or
 /// from the loopback trigger endpoint's state.
@@ -787,6 +934,9 @@ pub(crate) struct RoutineRunDeps {
     /// Routine-finish webhook routing (B6'). Production default is
     /// [`DesktopWebhookPort`]; tests inject recording mocks.
     pub(crate) webhook: std::sync::Arc<dyn RoutineWebhookPort>,
+    /// Budget-abort desktop notification routing (W2-3). Production default
+    /// is [`DesktopRunNotifier`]; tests inject recording mocks.
+    pub(crate) notify: std::sync::Arc<dyn RunNotifyPort>,
     pub(crate) usage_store: std::sync::Arc<crate::commands_usage::UsageStore>,
     pub(crate) client_config: std::sync::Arc<RwLock<shannon_engine::api::types::LlmClientConfig>>,
     pub(crate) desktop_config: std::sync::Arc<RwLock<DesktopConfig>>,
@@ -810,6 +960,7 @@ impl RoutineRunDeps {
             inbox: state.inbox_store(),
             runs_store: state.scheduled_runs_store.clone(),
             webhook: std::sync::Arc::new(DesktopWebhookPort),
+            notify: std::sync::Arc::new(DesktopRunNotifier(state.notifier.clone())),
             usage_store: state.usage_store.clone(),
             client_config: state.client_config.clone(),
             desktop_config: state.desktop_config.clone(),
@@ -843,6 +994,72 @@ pub(crate) struct RunFinishContext {
 pub(crate) struct RunSpend {
     pub(crate) cost_usd: Option<f64>,
     pub(crate) token_usage: Option<u64>,
+}
+
+impl RunSpend {
+    /// Last-known-wins merge used at finalize time: a non-`None` value from
+    /// the cross-attempt tracker beats the engine outcome's own single-
+    /// attempt sum; a `None` on either side keeps the other's value.
+    pub(crate) fn merge(self, tracker: RunSpend) -> RunSpend {
+        RunSpend {
+            cost_usd: tracker.cost_usd.or(self.cost_usd),
+            token_usage: tracker.token_usage.or(self.token_usage),
+        }
+    }
+}
+
+/// In-flight spend tracker for one routine run (W2-3). The engine future
+/// feeds every Usage event into it; the budget watcher polls the totals and
+/// the finalize path records them. Interior-mutable and `Send + Sync`, so
+/// the attempt task and the watcher share one `Arc`.
+///
+/// # 花费口径 (accounting rule)
+///
+/// The tracker holds the **last-known cumulative totals of the Usage events
+/// the engine actually emitted** — the honest known spend at abort time.
+/// Known partial spend is recorded verbatim; when no Usage event arrived
+/// yet, the totals stay `None` (never an estimate). Known gaps, by design:
+///
+/// - events are observed per stream chunk, so the recorded abort spend can
+///   trail the provider's true spend by one unflushed chunk — the last
+///   known value is kept rather than guessing;
+/// - each retry attempt mints a fresh engine session; only the live
+///   attempt's session id is exposed, so the finalized run record links the
+///   last attempt. Earlier attempts' ledger lines keep their own session
+///   ids but are not back-linked from the run — the W1 ledger backlog
+///   "retried runs under-count in the per-routine month aggregation"; the
+///   month spend in the budget guard carries the same under-count.
+#[derive(Debug, Default)]
+pub(crate) struct RunSpendTracker {
+    totals: std::sync::Mutex<RunSpend>,
+    session: std::sync::Mutex<Option<uuid::Uuid>>,
+}
+
+impl RunSpendTracker {
+    /// Fold one Usage event into the cumulative totals.
+    pub(crate) fn add_usage(&self, cost_usd: f64, tokens: u64) {
+        let mut totals = self.totals.lock().expect("run spend tracker poisoned");
+        totals.cost_usd = Some(totals.cost_usd.unwrap_or(0.0) + cost_usd);
+        totals.token_usage = Some(totals.token_usage.unwrap_or(0) + tokens);
+    }
+
+    /// Pin the session the live attempt opened (spend attribution).
+    pub(crate) fn set_session(&self, session_id: uuid::Uuid) {
+        *self.session.lock().expect("run spend tracker poisoned") = Some(session_id);
+    }
+
+    /// The last-known cumulative totals (`None` before the first event).
+    pub(crate) fn snapshot(&self) -> RunSpend {
+        *self.totals.lock().expect("run spend tracker poisoned")
+    }
+
+    /// The live attempt's session id, for linking the aborted run's spend.
+    pub(crate) fn session_id(&self) -> Option<String> {
+        self.session
+            .lock()
+            .expect("run spend tracker poisoned")
+            .map(|s| s.to_string())
+    }
 }
 
 /// What the engine phase of a run produced. `session_id` is `None` when the
@@ -925,6 +1142,7 @@ pub(crate) async fn spawn_routine_run<R: tauri::Runtime>(
         inbox: deps.inbox.clone(),
         runs_store: deps.runs_store.clone(),
         webhook: deps.webhook.clone(),
+        notify: deps.notify.clone(),
         usage_store: deps.usage_store.clone(),
         client_config: deps.client_config.clone(),
         desktop_config: deps.desktop_config.clone(),
@@ -999,6 +1217,20 @@ pub(crate) async fn spawn_routine_run<R: tauri::Runtime>(
     let usage_store = deps.usage_store.clone();
     let tools = deps.tools.clone();
     let memory_store = deps.memory_store.clone();
+
+    // W2-3 mid-run budget guard. `policy_budget` is `None` when no budget is
+    // configured — the whole guard (tracker polling, abort signal, abort
+    // rewrite) compiles down to the legacy behavior. The tracker accumulates
+    // across retry attempts so the run record's spend covers every attempt;
+    // the `watch` channel is the same abort channel the attempt timeout uses.
+    let policy_budget = routine
+        .policy
+        .as_ref()
+        .and_then(|p| p.budget_usd)
+        .filter(|cap| cap.is_finite() && *cap > 0.0);
+    let spend_tracker = std::sync::Arc::new(RunSpendTracker::default());
+    let (budget_tx, budget_rx) = tokio::sync::watch::channel(false);
+
     // P-E1: the routine's project directory, when it has one. Best-effort —
     // a vanished task dir or unreadable sidecar degrades to "no project".
     let sidecar_working_dir = deps
@@ -1024,6 +1256,9 @@ pub(crate) async fn spawn_routine_run<R: tauri::Runtime>(
     // Owned copy for the engine future (the closure must be 'static; `deps`
     // is only borrowed here).
     let run_sessions_dir = deps.sessions_dir.clone();
+    // W2-3: the engine-future factory gets its own handle on the shared
+    // tracker; the run task keeps the original for the watcher and finalize.
+    let engine_spend_tracker = spend_tracker.clone();
 
     // P1-2: the engine phase is a *factory* — query streams are single-shot,
     // so the retry policy needs a fresh engine per attempt. The closure
@@ -1040,6 +1275,7 @@ pub(crate) async fn spawn_routine_run<R: tauri::Runtime>(
         let usage_store = usage_store.clone();
         let tools = tools.clone();
         let model_for_usage = model_for_usage.clone();
+        let spend_tracker = engine_spend_tracker.clone();
         async move {
             let client = LlmClient::new(client_config);
 
@@ -1092,6 +1328,9 @@ pub(crate) async fn spawn_routine_run<R: tauri::Runtime>(
             };
 
             let session_id = uuid::Uuid::new_v4();
+            // W2-3: pin the live attempt's session on the shared tracker so a
+            // budget abort can link the in-flight spend back to this run.
+            spend_tracker.set_session(session_id);
             // P-E1: stamp the session's durable metadata before the engine's
             // tee opens the (fresh) log — session/start with the routine's
             // working dir as `cwd`, the field the session store projects to
@@ -1151,6 +1390,15 @@ pub(crate) async fn spawn_routine_run<R: tauri::Runtime>(
                                 + output_tokens
                                 + cache_creation_tokens
                                 + cache_read_tokens;
+                            // W2-3: feed the cross-attempt tracker (budget
+                            // guard + finalize spend source of truth).
+                            spend_tracker.add_usage(
+                                cost_usd,
+                                input_tokens
+                                    + output_tokens
+                                    + cache_creation_tokens
+                                    + cache_read_tokens,
+                            );
                             // Best-effort ledger write, mirroring background tasks.
                             // P1-2: the write is attributed to this run's session so
                             // the routine budget gate can aggregate per-routine spend
@@ -1199,13 +1447,78 @@ pub(crate) async fn spawn_routine_run<R: tauri::Runtime>(
     // `routine_runs` row — the final state plus the give-up annotation (how
     // many attempts, why they stopped) is what History shows.
     let run_policy = RunExecutionPolicy::of(&routine);
+    // Copied out of `ctx` for the watcher/abort rewrite — `ctx` itself moves
+    // into `finalize_run` at the end of the task.
+    let ctx_task_id = ctx.task_id.clone();
+    let ctx_task_name = ctx.task_name.clone();
     tokio::spawn(async move {
-        let outcome = execute_with_policy(make_engine_future, &run_policy).await;
-        // R2-W2-2: persist the run's observed spend on both run records.
+        // W2-3: poll month aggregate + this run's last-known in-flight spend
+        // against the cap while the engine runs; a trip sends the abort
+        // signal the attempt race is parked on.
+        let budget_watcher = policy_budget.map(|cap| {
+            let usage = finish_deps.usage_store.clone();
+            let inbox = finish_deps.inbox.clone();
+            let task_id = ctx_task_id.clone();
+            let tracker = spend_tracker.clone();
+            let tx = budget_tx.clone();
+            tokio::spawn(async move {
+                loop {
+                    let in_flight = tracker.snapshot().cost_usd;
+                    if budget_live_exceeded(
+                        &usage,
+                        &inbox,
+                        &task_id,
+                        cap,
+                        in_flight,
+                        chrono::Utc::now(),
+                    ) {
+                        tracing::warn!(
+                            task_id = %task_id,
+                            cap_usd = cap,
+                            in_flight_usd = ?in_flight,
+                            "routine budget: cap reached mid-run — tripping abort"
+                        );
+                        let _ = tx.send(true);
+                        return;
+                    }
+                    tokio::time::sleep(BUDGET_ABORT_POLL).await;
+                }
+            })
+        });
+
+        let mut outcome =
+            execute_with_policy(make_engine_future, &run_policy, Some(budget_rx.clone())).await;
+        if let Some(watcher) = budget_watcher {
+            watcher.abort();
+        }
+
+        // R2-W2-2/W2-3 花费口径: prefer the cross-attempt tracker (covers
+        // retried attempts the engine outcome cannot see); fall back to the
+        // outcome's own single-attempt sum. `None` stays `None` — no
+        // estimates on the run record.
         let spend = RunSpend {
             cost_usd: outcome.cost_usd,
             token_usage: outcome.token_usage,
-        };
+        }
+        .merge(spend_tracker.snapshot());
+
+        // Budget stop: terminal failure with the machine-readable reason, the
+        // in-flight session linked (so the aborted spend stays attributable to
+        // this routine in later month aggregations), and the desktop
+        // notification — the run-record error is the second channel.
+        let tripped = *budget_rx.borrow();
+        if tripped {
+            if let Some(cap) = policy_budget {
+                let spent = spend.cost_usd.unwrap_or(0.0);
+                outcome.failed = true;
+                outcome.error = Some(format!(
+                    "{BUDGET_ABORT_MARKER}: monthly budget ${cap:.2} reached — run aborted at ${spent:.2}"
+                ));
+                outcome.session_id = spend_tracker.session_id();
+                notify_budget_abort(finish_deps.notify.as_ref(), &ctx_task_name, cap, spent);
+            }
+        }
+
         finalize_run(&finish_deps, &app, ctx, outcome, spend);
     });
 
@@ -1729,6 +2042,7 @@ mod tests {
             inbox: inbox.clone(),
             runs_store: std::sync::Arc::new(FailingRunMirror::new()),
             webhook: std::sync::Arc::new(RecordingWebhookPort::default()),
+            notify: std::sync::Arc::new(RecordingNotifyPort::default()),
             usage_store: std::sync::Arc::new(crate::commands_usage::UsageStore::with_path(
                 tmp.join("usage.jsonl"),
             )),
@@ -1988,6 +2302,25 @@ mod tests {
         }
     }
 
+    /// Records budget-abort notifications instead of touching the platform
+    /// notifier (W2-3 test seam for [`RunNotifyPort`]).
+    #[derive(Default)]
+    struct RecordingNotifyPort {
+        dispatches: std::sync::Mutex<Vec<shannon_core::notifier::Notification>>,
+    }
+
+    impl RecordingNotifyPort {
+        fn dispatches(&self) -> Vec<shannon_core::notifier::Notification> {
+            self.dispatches.lock().unwrap().clone()
+        }
+    }
+
+    impl RunNotifyPort for RecordingNotifyPort {
+        fn notify(&self, notification: &shannon_core::notifier::Notification) {
+            self.dispatches.lock().unwrap().push(notification.clone());
+        }
+    }
+
     /// Deps with a recording webhook port under the caller's control.
     fn webhook_deps(
         tmp: &std::path::Path,
@@ -2004,6 +2337,7 @@ mod tests {
             inbox: inbox.clone(),
             runs_store: std::sync::Arc::new(ScheduledRunsStore::with_base(tmp.join("runs"))),
             webhook: port,
+            notify: std::sync::Arc::new(RecordingNotifyPort::default()),
             usage_store: std::sync::Arc::new(crate::commands_usage::UsageStore::with_path(
                 tmp.join("usage.jsonl"),
             )),
@@ -2205,7 +2539,7 @@ mod tests {
 
         // P1-2: the panic guard lives inside run_with_timeout now (the
         // spawned attempt's JoinError maps to a failed outcome).
-        let outcome = run_with_timeout(async { panicking_engine_outcome() }, None).await;
+        let outcome = run_with_timeout(async { panicking_engine_outcome() }, None, None).await;
 
         std::panic::set_hook(prev_hook);
 
@@ -2254,10 +2588,21 @@ mod tests {
 
     /// Drive [`execute_with_policy`] with a counting engine factory whose
     /// per-attempt outcomes come from `results` (last one repeats).
+    #[allow(clippy::too_many_arguments)]
     async fn drive_policy(
         results: Vec<RunOutcome>,
         retry: RetryPolicy,
         timeout: Option<Duration>,
+    ) -> (RunOutcome, usize) {
+        drive_policy_with_budget(results, retry, timeout, None).await
+    }
+
+    /// [`drive_policy`] variant that also arms the mid-run budget guard.
+    async fn drive_policy_with_budget(
+        results: Vec<RunOutcome>,
+        retry: RetryPolicy,
+        timeout: Option<Duration>,
+        budget: Option<tokio::sync::watch::Receiver<bool>>,
     ) -> (RunOutcome, usize) {
         use std::sync::atomic::AtomicUsize;
         let calls = std::sync::Arc::new(AtomicUsize::new(0));
@@ -2266,7 +2611,11 @@ mod tests {
         let policy = RunExecutionPolicy { timeout, retry };
         let outcome = execute_with_policy(
             move || {
-                let calls = calls_for_closure.clone();
+                // Counted at factory time — one increment per attempt MINTED,
+                // so a budget-aborted attempt that is cancelled before its
+                // first poll still counts (the abort means "no second paid
+                // attempt", not "the attempt never existed").
+                calls_for_closure.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
                 let results = results.clone();
                 async move {
                     let idx = {
@@ -2279,11 +2628,11 @@ mod tests {
                             r.remove(0)
                         }
                     };
-                    calls.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
                     idx
                 }
             },
             &policy,
+            budget,
         )
         .await;
         let count = calls.load(std::sync::atomic::Ordering::SeqCst);
@@ -2303,6 +2652,7 @@ mod tests {
                 ok_outcome()
             },
             &policy,
+            None,
         )
         .await;
         assert!(outcome.failed, "timeout must map to a failed outcome");
@@ -2316,8 +2666,190 @@ mod tests {
             timeout: None,
             retry: RetryPolicy::disabled(),
         };
-        let outcome = execute_with_policy(|| async { ok_outcome() }, &policy).await;
+        let outcome = execute_with_policy(|| async { ok_outcome() }, &policy, None).await;
         assert!(!outcome.failed);
+    }
+
+    // ── W2-3: mid-run budget guard ──────────────────────────────────────
+
+    #[tokio::test]
+    async fn budget_trip_aborts_a_running_attempt() {
+        let (tx, rx) = tokio::sync::watch::channel(false);
+        // Trip the stop from a side task — the engine future never finishes
+        // on its own, so without this the attempt (and the test) would park
+        // forever.
+        let stop = tx.clone();
+        tokio::spawn(async move {
+            tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+            let _ = stop.send(true);
+        });
+        let outcome = run_with_timeout(
+            async {
+                std::future::pending::<()>().await;
+                ok_outcome()
+            },
+            None,
+            Some(rx),
+        )
+        .await;
+        assert!(outcome.failed, "a budget trip must fail the attempt");
+        let error = outcome.error.expect("abort reason recorded");
+        assert!(
+            error.starts_with(BUDGET_ABORT_MARKER),
+            "machine-readable reason expected: {error}"
+        );
+        assert!(outcome.session_id.is_none(), "abort outcome has no session");
+        drop(tx);
+    }
+
+    #[tokio::test]
+    async fn untripped_budget_channel_never_fires() {
+        // Same shape as above but the sender never trips — the engine future
+        // completing wins the race (no budget configured behavior is
+        // byte-for-byte the legacy one).
+        let (tx, rx) = tokio::sync::watch::channel(false);
+        let outcome = run_with_timeout(async { ok_outcome() }, None, Some(rx)).await;
+        assert!(!outcome.failed);
+        drop(tx);
+    }
+
+    #[tokio::test]
+    async fn budget_trip_ends_the_whole_run_without_retries() {
+        // Retry-allowing policy + a channel already tripped: the first
+        // attempt's abort must end the run — no second paid attempt.
+        let (tx, rx) = tokio::sync::watch::channel(false);
+        tx.send(true).expect("trip");
+        let (outcome, calls) = drive_policy_with_budget(
+            vec![failed_outcome("connection reset")],
+            fast_retry_policy(3),
+            None,
+            Some(rx),
+        )
+        .await;
+        assert!(outcome.failed);
+        assert_eq!(calls, 1, "a budget stop is never retried");
+        let error = outcome.error.expect("error");
+        assert!(error.contains(BUDGET_ABORT_MARKER), "{error}");
+    }
+
+    #[test]
+    fn run_spend_tracker_accumulates_and_merges_last_known() {
+        let tracker = RunSpendTracker::default();
+        assert_eq!(tracker.snapshot(), RunSpend::default(), "nothing yet");
+        assert!(tracker.session_id().is_none());
+
+        tracker.add_usage(0.01, 100);
+        tracker.add_usage(0.02, 23);
+        assert_eq!(
+            tracker.snapshot(),
+            RunSpend {
+                cost_usd: Some(0.03),
+                token_usage: Some(123),
+            }
+        );
+
+        let session = uuid::Uuid::new_v4();
+        tracker.set_session(session);
+        assert_eq!(
+            tracker.session_id().as_deref(),
+            Some(session.to_string()).as_deref()
+        );
+
+        // Last-known-wins merge: tracker totals beat the engine outcome's
+        // own sum; `None`s keep the other side.
+        let outcome_spend = RunSpend {
+            cost_usd: Some(0.01),
+            token_usage: None,
+        };
+        assert_eq!(
+            outcome_spend.merge(tracker.snapshot()),
+            RunSpend {
+                cost_usd: Some(0.03),
+                token_usage: Some(123),
+            }
+        );
+        assert_eq!(
+            RunSpend::default().merge(RunSpend::default()),
+            RunSpend::default()
+        );
+    }
+
+    #[test]
+    fn budget_live_exceeded_uses_month_plus_in_flight() {
+        let tmp = tempfile::tempdir().unwrap();
+        let (inbox, usage) = budget_fixture(tmp.path());
+        // The fixture run's spend: $1.50 attributed to "task-budget" via the
+        // back-linked session "s-routine" (budget_fixture itself only wires
+        // the run → item → session chain; the ledger line is ours to add).
+        let now = chrono::Utc::now();
+        let month_start_ms = chrono::Utc
+            .from_utc_datetime(
+                &now.date_naive()
+                    .with_day(1)
+                    .unwrap()
+                    .and_hms_opt(0, 0, 0)
+                    .unwrap(),
+            )
+            .timestamp_millis();
+        let _ = usage.append(&usage_record(
+            Some("s-routine"),
+            1.5,
+            month_start_ms + 1_000,
+        ));
+        // Month alone below the cap → run.
+        assert!(!budget_live_exceeded(
+            &usage,
+            &inbox,
+            "task-budget",
+            2.0,
+            None,
+            now
+        ));
+        // Month + in-flight reaches the cap → trip.
+        assert!(budget_live_exceeded(
+            &usage,
+            &inbox,
+            "task-budget",
+            2.0,
+            Some(0.5),
+            now
+        ));
+        // Exactly at the cap counts as reached (same >= rule as the
+        // pre-execution gate).
+        assert!(budget_live_exceeded(
+            &usage,
+            &inbox,
+            "task-budget",
+            1.5,
+            None,
+            now
+        ));
+        // A routine without history never trips on in-flight alone.
+        assert!(!budget_live_exceeded(
+            &usage,
+            &inbox,
+            "ghost",
+            1.0,
+            Some(0.5),
+            now
+        ));
+    }
+
+    #[test]
+    fn budget_abort_notification_fires_through_the_port() {
+        let port = RecordingNotifyPort::default();
+        notify_budget_abort(&port, "Nightly Scan", 5.0, 5.01);
+        let dispatches = port.dispatches();
+        assert_eq!(dispatches.len(), 1, "exactly one desktop notification");
+        let n = &dispatches[0];
+        assert!(n.title.contains("Nightly Scan"), "{}", n.title);
+        assert!(n.body.contains("$5.00"), "{}", n.body);
+        assert!(n.body.contains("$5.01"), "{}", n.body);
+        assert!(matches!(
+            n.level,
+            shannon_core::notifier::NotificationLevel::Error
+        ));
+        assert_eq!(n.source.as_deref(), Some("routine_budget_abort"));
     }
 
     #[tokio::test]
@@ -2499,6 +3031,7 @@ mod tests {
             inbox: std::sync::Arc::new(inbox),
             runs_store: std::sync::Arc::new(ScheduledRunsStore::with_base(tmp.path().join("runs"))),
             webhook: std::sync::Arc::new(RecordingWebhookPort::default()),
+            notify: std::sync::Arc::new(RecordingNotifyPort::default()),
             usage_store: std::sync::Arc::new(usage),
             client_config: std::sync::Arc::new(RwLock::new(
                 shannon_engine::api::types::LlmClientConfig::default(),
