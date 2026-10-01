@@ -39,9 +39,9 @@
 |------|----------|----------|------|
 | 安装 | hub oauth_remote 安装成功，落盘为 `url`-only 条目（`command` 为空） | 检查 `settings.json#mcpServers` | 已自动化：`desktop/src/extensions/mcp_installers.rs`（`shannon:transport: oauth_remote`） |
 | 重启/热加载 | **当前无传输层**：不存在「重启后可用」的承诺；`load_mcp_servers` 如实列出（`command` 空） | 读配置 / `get_mcp_server_config` | 已自动化：`desktop/src/config.rs`（url-only 行加载 + 保存不覆盖，`save_skips_url_only_rows_instead_of_clobbering_them` 等） |
-| 列表态 | 列表如实显示不可连接（`connected=false`/offline，0 工具），**不得假装可用**；seed 明确跳过 url-only 行 | MCP 设置页看徽章 | 已自动化：`desktop/src/mcp.rs::seed_skips_disabled_and_url_only_entries` |
+| 列表态 | 列表如实显示不可连接，**不得假装可用**；url-only 行显示 Remote 徽章（非 Offline 坏态）+ endpoint 预览；seed 明确跳过 url-only 行 | MCP 设置页看徽章 | 已自动化：`desktop/src/mcp.rs::seed_skips_disabled_and_url_only_entries`；UI 侧见 `McpServers.tsx`（Remote 徽章 + restart 禁用，W1-A 落地） |
 | 聊天内可见 | **不出现**在工具 schema——系统提示/注册表不向模型承诺不存在的工具 | 聊天让模型列工具，应无该 server 条目 | 已自动化（反面）：同上 seed 测试 |
-| 可调用 | 当前预期=不可调用（诚实态）。W2-1 接通 remote 传输后本行改写为「装完即可调用」 | — | **待自动化（W2-1）**。注：UI 侧 restart 按钮目前仅按 busy 态禁用，尚无 url-only 专属禁用/徽章；W2-1 一并补齐并更新本行 |
+| 可调用 | 当前预期=不可调用（诚实态）。W2-1 接通 remote 传输后本行改写为「装完即可调用」 | — | **待自动化（W2-1）**。UI 侧诚实化（Remote 徽章/restart 禁用）已由 W1-A 落地；W2-1 只需接通传输并更新本行 |
 
 ## 3. 技能（skill：装 → 不重启、下一 turn 即可触发）——本分支已自动化
 
