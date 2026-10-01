@@ -84,6 +84,9 @@ pub(crate) struct TriggerState<R: tauri::Runtime = tauri::Wry> {
     /// `[notifications.webhook] secret` resolved once at spawn time.
     /// `None` disables the endpoint (403) — safe default.
     pub(crate) secret: Option<String>,
+    /// Shared notifier (W2-3): the budget-abort notification routes through
+    /// the same pipeline as query notifications.
+    pub(crate) notifier: Arc<shannon_core::notifier::Notifier>,
 }
 
 // Manual impl: `derive(Clone)` would add an unnecessary `R: Clone` bound
@@ -102,6 +105,7 @@ impl<R: tauri::Runtime> Clone for TriggerState<R> {
             memory_store: self.memory_store.clone(),
             sessions_dir: self.sessions_dir.clone(),
             secret: self.secret.clone(),
+            notifier: self.notifier.clone(),
         }
     }
 }
@@ -127,6 +131,7 @@ impl<R: tauri::Runtime> TriggerState<R> {
                 state.state_manager.sessions_dir(),
             ),
             secret,
+            notifier: state.notifier.clone(),
         }
     }
 
@@ -135,6 +140,9 @@ impl<R: tauri::Runtime> TriggerState<R> {
             inbox: self.inbox.clone(),
             runs_store: self.runs_store.clone(),
             webhook: std::sync::Arc::new(crate::inbox_commands::DesktopWebhookPort),
+            notify: std::sync::Arc::new(crate::inbox_commands::DesktopRunNotifier(
+                self.notifier.clone(),
+            )),
             usage_store: self.usage_store.clone(),
             client_config: self.client_config.clone(),
             desktop_config: self.desktop_config.clone(),
@@ -476,6 +484,7 @@ mod tests {
             memory_store: crate::commands_memory::open_shared_store_at(tmp.join("memories")),
             sessions_dir: tmp.join("sessions"),
             secret,
+            notifier: Arc::new(shannon_core::notifier::Notifier::new()),
         }
     }
 

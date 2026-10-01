@@ -185,6 +185,16 @@ pub struct RunRecord {
     pub finished_at_ms: Option<i64>,
     pub duration_ms: Option<i64>,
     pub inbox_item_id: Option<i64>,
+    /// R2-W2-2: total USD cost the run's Usage events reported. `None` when
+    /// the run predates cost tracking (or never emitted usage) — consumers
+    /// render "no data", never an estimate.
+    #[serde(default)]
+    pub cost_usd: Option<f64>,
+    /// R2-W2-2: total tokens the run's Usage events reported — the sum of
+    /// input, output, cache creation, and cache read tokens. `None` under
+    /// the same rule as the cost field above.
+    #[serde(default)]
+    pub token_usage: Option<u64>,
 }
 
 /// Legacy `triage.jsonl` line shape (subset — unknown fields are ignored).
@@ -231,7 +241,9 @@ CREATE TABLE IF NOT EXISTS routine_runs (
     started_at_ms INTEGER,
     finished_at_ms INTEGER,
     duration_ms INTEGER,
-    inbox_item_id INTEGER
+    inbox_item_id INTEGER,
+    cost_usd REAL,
+    token_usage INTEGER
 );
 CREATE INDEX IF NOT EXISTS idx_routine_runs_started ON routine_runs (started_at_ms DESC);
 
@@ -291,6 +303,7 @@ impl InboxStore {
         // the pragma is a no-op.
         let _ = conn.pragma_update(None, "busy_timeout", "2000");
         conn.execute_batch(SCHEMA_SQL)?;
+        Self::migrate_routine_runs_cost_columns(&conn)?;
         let store = Self {
             conn: Mutex::new(conn),
         };
@@ -300,6 +313,32 @@ impl InboxStore {
 
     fn lock_conn(&self) -> Result<MutexGuard<'_, Connection>, InboxStoreError> {
         self.conn.lock().map_err(|_| InboxStoreError::Poisoned)
+    }
+
+    /// R2-W2-2 migration: add the run cost/token columns to a `routine_runs`
+    /// table created before cost tracking existed. `CREATE TABLE IF NOT
+    /// EXISTS` above is a no-op on such databases, so the columns are added
+    /// with `ALTER TABLE` when (and only when) `PRAGMA table_info` shows them
+    /// missing. Pre-existing rows read back `NULL` → `None` — the UI hides
+    /// the cost cell instead of inventing a number.
+    fn migrate_routine_runs_cost_columns(conn: &Connection) -> Result<(), InboxStoreError> {
+        let existing = {
+            let mut stmt = conn.prepare("PRAGMA table_info(routine_runs)")?;
+            let names = stmt.query_map([], |row| row.get::<_, String>(1))?;
+            let mut names: std::collections::HashSet<String> = names.flatten().collect();
+            names.shrink_to_fit();
+            names
+        };
+        if !existing.contains("cost_usd") {
+            conn.execute("ALTER TABLE routine_runs ADD COLUMN cost_usd REAL", [])?;
+        }
+        if !existing.contains("token_usage") {
+            conn.execute(
+                "ALTER TABLE routine_runs ADD COLUMN token_usage INTEGER",
+                [],
+            )?;
+        }
+        Ok(())
     }
 
     /// `PRAGMA integrity_check` for diagnostics (`shannon doctor --deep`).
@@ -591,7 +630,10 @@ impl InboxStore {
     }
 
     /// Complete a run: sets status/error, computes `duration_ms` from the
-    /// start timestamp, and links the inbox item produced by the run.
+    /// start timestamp, links the inbox item produced by the run, and
+    /// persists the run's cost/token totals (R2-W2-2 — `None` keeps the
+    /// columns NULL for runs that tracked nothing, so the UI keeps hiding
+    /// their cost cells).
     ///
     /// P2-7 fix round: retried on SQLITE_BUSY (busy_timeout + one short
     /// backoff) so a serve↔desktop writer collision cannot leave a routine
@@ -602,6 +644,8 @@ impl InboxStore {
         status: &str,
         error: Option<&str>,
         inbox_item_id: Option<i64>,
+        cost_usd: Option<f64>,
+        token_usage: Option<u64>,
     ) -> Result<(), InboxStoreError> {
         let conn = self.lock_conn()?;
         let now = now_ms();
@@ -610,9 +654,17 @@ impl InboxStore {
                 "UPDATE routine_runs
                  SET status = ?1, error = ?2, finished_at_ms = ?3,
                      duration_ms = ?3 - COALESCE(started_at_ms, ?3),
-                     inbox_item_id = ?4
-                 WHERE id = ?5",
-                params![status, error, now, inbox_item_id, run_id],
+                     inbox_item_id = ?4, cost_usd = ?5, token_usage = ?6
+                 WHERE id = ?7",
+                params![
+                    status,
+                    error,
+                    now,
+                    inbox_item_id,
+                    cost_usd,
+                    token_usage,
+                    run_id
+                ],
             )?;
             Ok(())
         })?;
@@ -671,8 +723,8 @@ impl InboxStore {
         let inserted = self.with_busy_retry(|| {
             let changed = conn.execute(
                 "INSERT OR IGNORE INTO routine_runs
-                    (id, task_id, task_name, status, error, started_at_ms, finished_at_ms, duration_ms, inbox_item_id)
-                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
+                    (id, task_id, task_name, status, error, started_at_ms, finished_at_ms, duration_ms, inbox_item_id, cost_usd, token_usage)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)",
                 params![
                     run.id,
                     run.task_id,
@@ -683,6 +735,8 @@ impl InboxStore {
                     run.finished_at_ms,
                     run.duration_ms,
                     run.inbox_item_id,
+                    run.cost_usd,
+                    run.token_usage,
                 ],
             )?;
             Ok(changed > 0)
@@ -795,7 +849,7 @@ impl std::fmt::Debug for InboxStore {
 // ── Helpers ─────────────────────────────────────────────────────────────
 
 const ITEM_COLUMNS: &str = "id, source, source_id, session_id, title, summary, error, status, created_at_ms, updated_at_ms";
-const RUN_COLUMNS: &str = "id, task_id, task_name, status, error, started_at_ms, finished_at_ms, duration_ms, inbox_item_id";
+const RUN_COLUMNS: &str = "id, task_id, task_name, status, error, started_at_ms, finished_at_ms, duration_ms, inbox_item_id, cost_usd, token_usage";
 
 /// Shared list tail for [`InboxStore::list`]: newest first (created_at DESC,
 /// id DESC as tiebreaker for same-millisecond inserts). `limit` is a trusted
@@ -845,6 +899,8 @@ fn row_to_run(row: &rusqlite::Row<'_>) -> rusqlite::Result<RunRecord> {
         finished_at_ms: row.get(6)?,
         duration_ms: row.get(7)?,
         inbox_item_id: row.get(8)?,
+        cost_usd: row.get(9)?,
+        token_usage: row.get(10)?,
     })
 }
 
@@ -1269,7 +1325,7 @@ mod tests {
 
         let item = store.append_item(item_new("run output")).unwrap();
         store
-            .record_run_finish(&run_id, "succeeded", None, Some(item.id))
+            .record_run_finish(&run_id, "succeeded", None, Some(item.id), None, None)
             .unwrap();
 
         let done = &store.list_runs(10).unwrap()[0];
@@ -1285,7 +1341,7 @@ mod tests {
         let store = InboxStore::open_in_memory().unwrap();
         let run_id = store.record_run_start("t", "T").unwrap();
         store
-            .record_run_finish(&run_id, "failed", Some("boom"), None)
+            .record_run_finish(&run_id, "failed", Some("boom"), None, None, None)
             .unwrap();
         let run = &store.list_runs(10).unwrap()[0];
         assert_eq!(run.status, "failed");
@@ -1299,7 +1355,7 @@ mod tests {
         let first = store.record_run_start("t", "T").unwrap();
         let second = store.record_run_start("t", "T").unwrap();
         store
-            .record_run_finish(&first, "succeeded", None, None)
+            .record_run_finish(&first, "succeeded", None, None, None, None)
             .unwrap(); // keeps start older
         let runs = store.list_runs(10).unwrap();
         assert_eq!(runs.len(), 2);
@@ -1316,10 +1372,10 @@ mod tests {
         let b1 = store.record_run_start("b", "B").unwrap();
         let a2 = store.record_run_start("a", "A").unwrap();
         store
-            .record_run_finish(&a1, "succeeded", None, None)
+            .record_run_finish(&a1, "succeeded", None, None, None, None)
             .unwrap();
         store
-            .record_run_finish(&b1, "failed", Some("x"), None)
+            .record_run_finish(&b1, "failed", Some("x"), None, None, None)
             .unwrap();
 
         let a_runs = store.list_runs_by_task("a", 10).unwrap();
@@ -1347,6 +1403,8 @@ mod tests {
             finished_at_ms: None,
             duration_ms: None,
             inbox_item_id: None,
+            cost_usd: None,
+            token_usage: None,
         };
         assert!(store.import_run(&record).unwrap(), "first import inserts");
 
@@ -1368,6 +1426,8 @@ mod tests {
             finished_at_ms: Some(1_700_000_005_000),
             duration_ms: Some(5_000),
             inbox_item_id: None,
+            cost_usd: Some(0.25),
+            token_usage: Some(4_096),
         };
         assert!(store.import_run(&record).unwrap());
         // A second pass (e.g. the next startup's backfill) must neither
@@ -1385,6 +1445,77 @@ mod tests {
         // record_run_start and import_run coexist on the same table.
         store.record_run_start("task-2", "Two").unwrap();
         assert_eq!(store.list_runs(10).unwrap().len(), 2);
+    }
+
+    #[test]
+    fn record_run_finish_persists_cost_and_tokens() {
+        let store = InboxStore::open_in_memory().unwrap();
+        let run_id = store.record_run_start("t", "T").unwrap();
+        store
+            .record_run_finish(&run_id, "succeeded", None, None, Some(0.1234), Some(9_876))
+            .unwrap();
+
+        let runs = store.list_runs(10).unwrap();
+        assert_eq!(runs.len(), 1);
+        assert_eq!(runs[0].cost_usd, Some(0.1234));
+        assert_eq!(runs[0].token_usage, Some(9_876));
+
+        // A run that tracked nothing keeps both columns NULL (the UI hides
+        // the cost cell — no fabricated zeros).
+        let bare = store.record_run_start("t", "T").unwrap();
+        store
+            .record_run_finish(&bare, "failed", Some("boom"), None, None, None)
+            .unwrap();
+        let runs = store.list_runs(10).unwrap();
+        let bare_row = runs.iter().find(|r| r.id == bare).unwrap();
+        assert_eq!(bare_row.cost_usd, None);
+        assert_eq!(bare_row.token_usage, None);
+    }
+
+    #[test]
+    fn migration_adds_cost_columns_to_a_pre_cost_database() {
+        let tmp = tempfile::tempdir().unwrap();
+        let db = tmp.path().join("inbox.db");
+        // Simulate a database written by a pre-cost build: the routine_runs
+        // table exists WITHOUT the cost/token columns and already holds a row.
+        {
+            let conn = Connection::open(&db).unwrap();
+            conn.execute_batch(
+                "CREATE TABLE routine_runs (
+                    id TEXT PRIMARY KEY,
+                    task_id TEXT NOT NULL,
+                    task_name TEXT,
+                    status TEXT NOT NULL,
+                    error TEXT,
+                    started_at_ms INTEGER,
+                    finished_at_ms INTEGER,
+                    duration_ms INTEGER,
+                    inbox_item_id INTEGER
+                );
+                INSERT INTO routine_runs (id, task_id, task_name, status, started_at_ms)
+                VALUES ('old-1', 't', 'T', 'succeeded', 1_700_000_000_000);",
+            )
+            .unwrap();
+        }
+
+        let store = InboxStore::open_with_legacy(&db, None).unwrap();
+
+        // The old row survived the migration and reads back cost-less.
+        let runs = store.list_runs(10).unwrap();
+        assert_eq!(runs.len(), 1);
+        assert_eq!(runs[0].id, "old-1");
+        assert_eq!(runs[0].cost_usd, None);
+        assert_eq!(runs[0].token_usage, None);
+
+        // And the migrated table accepts cost-bearing finishes.
+        let run_id = store.record_run_start("t", "T").unwrap();
+        store
+            .record_run_finish(&run_id, "succeeded", None, None, Some(0.5), Some(1_000))
+            .unwrap();
+        let runs = store.list_runs(10).unwrap();
+        let fresh = runs.iter().find(|r| r.id == run_id).unwrap();
+        assert_eq!(fresh.cost_usd, Some(0.5));
+        assert_eq!(fresh.token_usage, Some(1_000));
     }
 
     // ── legacy triage migration ─────────────────────────────────────────
@@ -1700,7 +1831,14 @@ mod tests {
                         // SQLITE_BUSY even when desktop writers are
                         // pounding the file concurrently.
                         serve
-                            .record_run_finish(&run_id, "succeeded", None, Some(item.id))
+                            .record_run_finish(
+                                &run_id,
+                                "succeeded",
+                                None,
+                                Some(item.id),
+                                None,
+                                None,
+                            )
                             .unwrap();
                     }
                 }));
