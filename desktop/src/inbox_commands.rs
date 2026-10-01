@@ -27,15 +27,18 @@
 //! The legacy triage commands in `scheduled_commands.rs` are untouched (the
 //! UI migration to this store happens in the frontend task).
 
+use chrono::{Datelike as _, TimeZone as _};
 use shannon_core::inbox_store::{
     InboxItem, InboxItemNew, InboxStats, InboxStatus, InboxStore, InboxStoreError, RunRecord,
 };
 use shannon_core::query_engine::{QueryContext, QueryEngine, QueryEvent, QueryMetadata};
+use shannon_core::scheduled_retry::{RetryDecision, RetryPolicy};
 use shannon_core::scheduled_routines::ScheduledRoutine;
 use shannon_core::scheduled_runs::{RunStatus, ScheduledRun, ScheduledRunsStore};
 use shannon_engine::api::client::LlmClient;
 use shannon_engine::permissions::{PermissionManager, PermissionRuleChecker};
 use shannon_engine::state::StateManager;
+use std::time::Duration;
 use tauri::Emitter;
 use tokio::sync::RwLock;
 
@@ -402,6 +405,288 @@ pub(crate) fn resolve_offpeak_model(
     }
 }
 
+// ── P1-2: ExecutionPolicy wiring (timeout / retries / budget / worktree) ──
+
+/// Scan cap for the budget aggregation. A routine firing every minute for a
+/// year produces ~5×10⁵ runs; the budget check only needs a broad "how much
+/// has this routine already spent" figure, so the newest 500 runs are plenty
+/// and the SQL stays cheap.
+const BUDGET_RUN_SCAN: u32 = 500;
+
+/// The executor-side slice of a routine's `ExecutionPolicy`
+/// (`shannon_core::scheduled_routines`) — the fields `spawn_routine_run`
+/// actually enforces now that the wiring exists:
+///
+/// - `timeout_secs > 0` → each attempt is aborted after that long and the
+///   run finalizes as failed with the timeout as the recorded reason
+///   (`0` = unlimited, the legacy behavior);
+/// - `max_retries` → failed attempts are retried with the
+///   `scheduled_retry` exponential-backoff + jitter policy. Per core's
+///   convention the number counts **total attempts** (original run
+///   included): `max_retries: 3` runs the prompt up to three times.
+pub(crate) struct RunExecutionPolicy {
+    timeout: Option<Duration>,
+    retry: RetryPolicy,
+}
+
+impl RunExecutionPolicy {
+    /// Derive from the routine's stored policy; a missing policy keeps the
+    /// fully legacy behavior (no timeout, no retries).
+    pub(crate) fn of(routine: &ScheduledRoutine) -> Self {
+        let policy = routine.policy.as_ref();
+        Self {
+            timeout: match policy.map(|p| p.timeout_secs).unwrap_or(0) {
+                0 => None,
+                secs => Some(Duration::from_secs(secs)),
+            },
+            retry: RetryPolicy::from_max_retries(policy.map(|p| p.max_retries).unwrap_or(0)),
+        }
+    }
+}
+
+/// Await one engine attempt, converting a panic **or a policy timeout** into
+/// a failed [`RunOutcome`] instead of leaving the run `running` forever.
+///
+/// On timeout the spawned engine task is aborted (dropping a `JoinHandle`
+/// alone only detaches — the query stream would keep running and billing),
+/// the task is reaped, and the timeout becomes the recorded failure reason.
+async fn run_with_timeout<F>(engine_future: F, timeout: Option<Duration>) -> RunOutcome
+where
+    F: std::future::Future<Output = RunOutcome> + Send + 'static,
+{
+    let mut handle = tokio::spawn(engine_future);
+    match timeout {
+        None => match handle.await {
+            Ok(outcome) => outcome,
+            Err(join_error) => RunOutcome::panicked(join_error.to_string()),
+        },
+        Some(limit) => match tokio::time::timeout(limit, &mut handle).await {
+            Ok(Ok(outcome)) => outcome,
+            Ok(Err(join_error)) => RunOutcome::panicked(join_error.to_string()),
+            Err(_elapsed) => {
+                handle.abort();
+                let _ = handle.await;
+                tracing::warn!(
+                    timeout_secs = limit.as_secs(),
+                    "routine run: execution timed out — attempt aborted"
+                );
+                RunOutcome {
+                    failed: true,
+                    error: Some(format!("routine run timed out after {}s", limit.as_secs())),
+                    output: String::new(),
+                    session_id: None,
+                }
+            }
+        },
+    }
+}
+
+/// Execute the engine phase under the routine's timeout/retry policy
+/// (P1-2). Each attempt gets a fresh engine future (streams are
+/// single-shot) and its own timeout; a failed attempt is retried with the
+/// `scheduled_retry` backoff while the retry budget allows and the error
+/// looks transient. The final outcome carries the give-up context so the
+/// run record shows how many attempts were made and why they stopped.
+pub(crate) async fn execute_with_policy<F, Fut>(
+    mut engine: F,
+    policy: &RunExecutionPolicy,
+) -> RunOutcome
+where
+    F: FnMut() -> Fut,
+    Fut: std::future::Future<Output = RunOutcome> + Send + 'static,
+{
+    let mut attempt: u32 = 1;
+    loop {
+        let outcome = run_with_timeout(engine(), policy.timeout).await;
+        if !outcome.failed {
+            return outcome;
+        }
+        let error = outcome.error.clone().unwrap_or_default();
+        let verdict = shannon_core::scheduled_retry::decide_retry(&policy.retry, attempt, &error);
+        match verdict.decision {
+            RetryDecision::Retry {
+                next_attempt,
+                run_at: _,
+            } => {
+                tracing::warn!(
+                    attempt,
+                    next_attempt,
+                    delay_ms = verdict.delay.as_millis() as u64,
+                    error = %error,
+                    "routine run: attempt failed — retrying with backoff"
+                );
+                tokio::time::sleep(verdict.delay).await;
+                attempt = next_attempt;
+            }
+            RetryDecision::GiveUp { reason } => {
+                let mut final_outcome = outcome;
+                final_outcome.error = Some(format!(
+                    "{error} (gave up after {attempt} attempt(s): {reason:?})"
+                ));
+                return final_outcome;
+            }
+        }
+    }
+}
+
+/// Cumulative usage-ledger spend attributed to `task_id`'s runs within the
+/// current calendar month (UTC) — the routine dimension of the budget gate.
+///
+/// Attribution path: run row → back-linked inbox item → session id → usage
+/// ledger lines carrying that session id. Runs whose usage predates the
+/// session attribution fix are invisible here (their ledger lines carry no
+/// session id); the budget gate under-counts rather than over-counts.
+pub(crate) fn routine_month_spend(
+    usage: &crate::commands_usage::UsageStore,
+    inbox: &InboxStore,
+    task_id: &str,
+    now: chrono::DateTime<chrono::Utc>,
+) -> f64 {
+    let runs = match inbox.list_runs_by_task(task_id, BUDGET_RUN_SCAN) {
+        Ok(runs) => runs,
+        Err(e) => {
+            tracing::warn!(
+                task_id = task_id,
+                error = %e,
+                "routine budget: run history unreadable — spend reported as 0"
+            );
+            return 0.0;
+        }
+    };
+    let mut sessions: std::collections::HashSet<String> = std::collections::HashSet::new();
+    for run in runs {
+        let Some(item_id) = run.inbox_item_id else {
+            continue;
+        };
+        if let Ok(Some(item)) = inbox.get_item(item_id) {
+            if let Some(session_id) = item.session_id.filter(|s| !s.trim().is_empty()) {
+                sessions.insert(session_id);
+            }
+        }
+    }
+    if sessions.is_empty() {
+        return 0.0;
+    }
+    let month_start = now
+        .date_naive()
+        .with_day(1)
+        .unwrap_or_else(|| now.date_naive())
+        .and_hms_opt(0, 0, 0)
+        .unwrap_or_else(|| now.naive_utc());
+    let month_start_ms = chrono::Utc
+        .from_utc_datetime(&month_start)
+        .timestamp_millis();
+    usage
+        .load()
+        .iter()
+        .filter(|record| record.timestamp_ms as i64 >= month_start_ms)
+        .filter(|record| {
+            record
+                .session_id
+                .as_deref()
+                .is_some_and(|s| sessions.contains(s))
+        })
+        .map(|record| record.cost_usd)
+        .sum()
+}
+
+/// The P1-2 budget gate: `Some(reason)` when the routine has a monthly
+/// budget configured and the attributed spend has reached it — the caller
+/// skips execution and records the reason on the run. A missing policy, a
+/// zero cap (treated as "no budget"), or spend below the cap yields `None`.
+pub(crate) fn budget_skip_reason(
+    deps: &RoutineRunDeps,
+    routine: &ScheduledRoutine,
+) -> Option<String> {
+    let cap = routine
+        .policy
+        .as_ref()?
+        .budget_usd
+        .filter(|cap| *cap > 0.0)?;
+    let spent = routine_month_spend(
+        &deps.usage_store,
+        &deps.inbox,
+        &routine.id,
+        chrono::Utc::now(),
+    );
+    if spent >= cap {
+        Some(format!(
+            "skipped: monthly budget ${spent:.2} of ${cap:.2} exceeded"
+        ))
+    } else {
+        None
+    }
+}
+
+/// Resolve the effective per-run working directory (P1-2 `worktree` wiring).
+///
+/// With the policy flag unset this is the routine's `working_dir` sidecar
+/// (P-E1 behavior, unchanged). With `policy.worktree` set, the run is pinned
+/// to the task's scheduled-worktree directory under `base_dir` (the same
+/// `.shannon/scheduled-worktrees/<slug>-<id>/` layout the Workspaces tab's
+/// management surface lists and prunes):
+///
+/// 1. existing directory → used as-is (created earlier via the Workspaces
+///    tab or a previous run);
+/// 2. missing but the routine has a project dir → the worktree is forked
+///    from that repo's `HEAD` (auto-create);
+/// 3. missing and nothing to fork from (or git fails) → warning logged and
+///    the run degrades to the plain sidecar dir (no isolation).
+///
+/// The engine's per-run working directory is used — the process cwd is
+/// never touched (background threads must not move global state).
+pub(crate) fn resolve_run_working_dir(
+    routine: &ScheduledRoutine,
+    sidecar_dir: Option<&str>,
+    base_dir: &std::path::Path,
+) -> Option<String> {
+    let sidecar = sidecar_dir
+        .map(str::trim)
+        .filter(|d| !d.is_empty())
+        .map(str::to_string);
+    let worktree_requested = routine
+        .policy
+        .as_ref()
+        .and_then(|p| p.worktree.as_deref())
+        .map(|w| !w.trim().is_empty())
+        .unwrap_or(false);
+    if !worktree_requested {
+        return sidecar;
+    }
+    let dir_name =
+        shannon_core::scheduled_worktree::ScheduledWorktree::dir_name(&routine.id, &routine.name);
+    let worktree_dir = base_dir.join(&dir_name);
+    if worktree_dir.is_dir() {
+        return Some(worktree_dir.to_string_lossy().into_owned());
+    }
+    if let Some(repo) = sidecar.as_deref() {
+        let repo = crate::commands_projects::normalize_path(repo);
+        match shannon_core::scheduled_worktree::create_named(
+            std::path::Path::new(repo),
+            base_dir,
+            &dir_name,
+            &shannon_core::scheduled_worktree::ScheduledWorktree::branch_name(
+                &routine.id,
+                &routine.name,
+            ),
+            "HEAD",
+        ) {
+            Ok(path) => return Some(path.to_string_lossy().into_owned()),
+            Err(e) => tracing::warn!(
+                task_id = %routine.id,
+                error = %e,
+                "routine run: worktree creation failed — running without isolation"
+            ),
+        }
+    } else {
+        tracing::warn!(
+            task_id = %routine.id,
+            "routine run: worktree policy set but the routine has no project dir to fork from — running without isolation"
+        );
+    }
+    sidecar
+}
+
 /// The legacy JSONL mirror seam. Object-safe on purpose: tests inject a
 /// failing implementation to prove a mirror outage can never wedge the
 /// SQLite `routine_runs` row (review fix round 1, Important 1).
@@ -558,19 +843,6 @@ impl RunOutcome {
     }
 }
 
-/// Await the engine future, converting a panic in the unattended task into a
-/// failed [`RunOutcome`] instead of silently leaving the run `running`
-/// forever (review fix round 1, Important 1 — panic half).
-async fn run_with_panic_guard<F>(engine_future: F) -> RunOutcome
-where
-    F: std::future::Future<Output = RunOutcome> + Send + 'static,
-{
-    match tokio::spawn(engine_future).await {
-        Ok(outcome) => outcome,
-        Err(join_error) => RunOutcome::panicked(join_error.to_string()),
-    }
-}
-
 /// Kick off an unattended routine execution and return its run id.
 ///
 /// Mirrors `commands::start_background_task`: fresh engine, configured
@@ -586,8 +858,13 @@ where
 ///   finish), we log a warning and continue. SQLite is the system of record,
 ///   so a mirror outage must neither abort the run nor leave the SQLite row
 ///   stuck in `running`.
-/// - The engine phase runs under [`run_with_panic_guard`]; a panic still
-///   reaches [`finalize_run`], which marks the run failed.
+/// - The engine phase runs under [`execute_with_policy`] (P1-2): each
+///   attempt is guarded against panics and honours the routine's
+///   `timeout_secs`; failed attempts retry with `scheduled_retry` backoff
+///   while the `max_retries` budget allows. Every terminal path reaches
+///   [`finalize_run`], which marks the run succeeded/failed — a panic,
+///   timeout, or exhausted retry budget can never leave the SQLite row
+///   stuck in `running`.
 pub(crate) async fn spawn_routine_run<R: tauri::Runtime>(
     deps: &RoutineRunDeps,
     app: tauri::AppHandle<R>,
@@ -612,6 +889,53 @@ pub(crate) async fn spawn_routine_run<R: tauri::Runtime>(
             error = %e,
             "inbox: legacy JSONL run mirror unavailable; continuing with SQLite only"
         );
+    }
+
+    let finish_deps = RoutineRunDeps {
+        inbox: deps.inbox.clone(),
+        runs_store: deps.runs_store.clone(),
+        webhook: deps.webhook.clone(),
+        usage_store: deps.usage_store.clone(),
+        client_config: deps.client_config.clone(),
+        desktop_config: deps.desktop_config.clone(),
+        tools: deps.tools.clone(),
+        memory_store: deps.memory_store.clone(),
+        scheduled_tasks: deps.scheduled_tasks.clone(),
+        sessions_dir: deps.sessions_dir.clone(),
+    };
+    let ctx = RunFinishContext {
+        run_id: run_id.clone(),
+        task_id: routine.id.clone(),
+        task_name: routine.name.clone(),
+        source: inbox_source.to_string(),
+        note,
+        started_ms: chrono::Utc::now().timestamp_millis(),
+        notify_webhook: routine.notify_webhook,
+    };
+
+    // P1-2 budget gate: a routine past its configured monthly budget is
+    // skipped entirely — the run finalizes as failed carrying the reason, so
+    // History and the inbox show why nothing executed (instead of silently
+    // not firing or burning more money).
+    if let Some(reason) = budget_skip_reason(deps, &routine) {
+        tracing::info!(
+            run_id = %run_id,
+            task_id = %routine.id,
+            reason = %reason,
+            "routine run skipped: monthly budget exhausted"
+        );
+        finalize_run(
+            &finish_deps,
+            &app,
+            ctx,
+            RunOutcome {
+                failed: true,
+                error: Some(reason),
+                output: String::new(),
+                session_id: None,
+            },
+        );
+        return Ok(run_id);
     }
 
     let client_config = deps.client_config.read().await.clone();
@@ -644,7 +968,7 @@ pub(crate) async fn spawn_routine_run<R: tauri::Runtime>(
     let memory_store = deps.memory_store.clone();
     // P-E1: the routine's project directory, when it has one. Best-effort —
     // a vanished task dir or unreadable sidecar degrades to "no project".
-    let routine_working_dir = deps
+    let sidecar_working_dir = deps
         .scheduled_tasks
         .working_dir_of(&routine.id)
         .unwrap_or_else(|e| {
@@ -656,170 +980,180 @@ pub(crate) async fn spawn_routine_run<R: tauri::Runtime>(
             None
         })
         .filter(|d| !d.trim().is_empty());
-
-    let finish_deps = RoutineRunDeps {
-        inbox: deps.inbox.clone(),
-        runs_store: deps.runs_store.clone(),
-        webhook: deps.webhook.clone(),
-        usage_store: deps.usage_store.clone(),
-        client_config: deps.client_config.clone(),
-        desktop_config: deps.desktop_config.clone(),
-        tools: deps.tools.clone(),
-        memory_store: deps.memory_store.clone(),
-        scheduled_tasks: deps.scheduled_tasks.clone(),
-        sessions_dir: deps.sessions_dir.clone(),
-    };
-    let ctx = RunFinishContext {
-        run_id: run_id.clone(),
-        task_id: routine.id.clone(),
-        task_name: routine.name.clone(),
-        source: inbox_source.to_string(),
-        note,
-        started_ms: chrono::Utc::now().timestamp_millis(),
-        notify_webhook: routine.notify_webhook,
-    };
+    // P1-2 `worktree` wiring: when the policy flag is set the run is pinned
+    // to the task's scheduled-worktree directory (created on demand from the
+    // routine's project), falling back to the plain sidecar dir with a
+    // warning when no worktree can be provided.
+    let worktree_base = shannon_core::scheduled_worktree::default_base_dir();
+    let routine_working_dir =
+        resolve_run_working_dir(&routine, sidecar_working_dir.as_deref(), &worktree_base);
 
     // Owned copy for the engine future (the closure must be 'static; `deps`
     // is only borrowed here).
     let run_sessions_dir = deps.sessions_dir.clone();
 
-    let engine_future = async move {
-        let client = LlmClient::new(client_config);
+    // P1-2: the engine phase is a *factory* — query streams are single-shot,
+    // so the retry policy needs a fresh engine per attempt. The closure
+    // clones its (cheap Arc/String) inputs per call and stays `FnMut`.
+    let make_engine_future = move || {
+        let client_config = client_config.clone();
+        let approval_mode_str = approval_mode_str.clone();
+        let run_sessions_dir = run_sessions_dir.clone();
+        let memory_store = memory_store.clone();
+        let routine_working_dir = routine_working_dir.clone();
+        let model = model.clone();
+        let provider = provider.clone();
+        let prompt = prompt.clone();
+        let usage_store = usage_store.clone();
+        let tools = tools.clone();
+        let model_for_usage = model_for_usage.clone();
+        async move {
+            let client = LlmClient::new(client_config);
 
-        // Same policy as background tasks: run unattended under the
-        // configured approval mode plus persisted rules. review §P1-2:
-        // the previous default of FullAuto silently bypassed the user's
-        // global approval mode for every unattended path. SECURITY.md
-        // promises that unattended paths honour the user's mode; FullAuto
-        // must require an explicit opt-in via the routine's approval_mode
-        // field, and we default to Suggest otherwise.
-        let mut permissions = PermissionManager::new();
-        let mode = crate::commands::unattended_approval_mode(approval_mode_str.as_deref());
-        permissions.set_approval_mode(mode);
-        let mut settings = shannon_core::settings::SettingsManager::new();
-        if settings.load_from_files().is_ok() {
-            let rules = &settings.settings_mut().permissions;
-            permissions.set_rule_checker(PermissionRuleChecker::from_rule_strings(
-                &rules.deny,
-                &rules.ask,
-                &rules.allow,
-            ));
-        }
-
-        // P-E1: pin the run's engine to the SAME sessions container the L0
-        // tee will resolve (`effective_log_container`), so the working-dir
-        // stamp below lands in the log the engine actually opens. Falls back
-        // to the default manager if the custom dir cannot be created.
-        let state_manager =
-            shannon_engine::state::StateManager::with_sessions_dir(run_sessions_dir.clone())
-                .unwrap_or_else(|e| {
-                    tracing::warn!(
-                        error = %e,
-                        "routine run: custom sessions dir unusable, using default"
-                    );
-                    StateManager::new()
-                });
-        let engine = crate::commands_memory::attach_shared_memory(
-            QueryEngine::with_defaults_arc(client, tools, permissions, state_manager),
-            &memory_store,
-        );
-        // P-E1: the routine's project drives the engine's host-dependent
-        // reads (memory injection/extraction project key) — an existing
-        // per-run working-directory parameter, so it is threaded here
-        // instead of ever touching the process cwd (global state).
-        let engine = match &routine_working_dir {
-            Some(dir) => {
-                engine.with_working_directory(crate::commands_projects::normalize_path(dir))
+            // Same policy as background tasks: run unattended under the
+            // configured approval mode plus persisted rules. review §P1-2:
+            // the previous default of FullAuto silently bypassed the user's
+            // global approval mode for every unattended path. SECURITY.md
+            // promises that unattended paths honour the user's mode; FullAuto
+            // must require an explicit opt-in via the routine's approval_mode
+            // field, and we default to Suggest otherwise.
+            let mut permissions = PermissionManager::new();
+            let mode = crate::commands::unattended_approval_mode(approval_mode_str.as_deref());
+            permissions.set_approval_mode(mode);
+            let mut settings = shannon_core::settings::SettingsManager::new();
+            if settings.load_from_files().is_ok() {
+                let rules = &settings.settings_mut().permissions;
+                permissions.set_rule_checker(PermissionRuleChecker::from_rule_strings(
+                    &rules.deny,
+                    &rules.ask,
+                    &rules.allow,
+                ));
             }
-            None => engine,
-        };
 
-        let session_id = uuid::Uuid::new_v4();
-        // P-E1: stamp the session's durable metadata before the engine's
-        // tee opens the (fresh) log — session/start with the routine's
-        // working dir as `cwd`, the field the session store projects to
-        // `project_path` / `SessionMeta.working_dir`. `None` keeps today's
-        // behavior byte-for-byte (the tee writes its own row).
-        if let Some(dir) = &routine_working_dir {
-            stamp_session_working_dir(
-                &shannon_core::session_log::effective_log_container(&run_sessions_dir),
-                session_id,
-                &model,
-                &provider,
-                dir,
+            // P-E1: pin the run's engine to the SAME sessions container the L0
+            // tee will resolve (`effective_log_container`), so the working-dir
+            // stamp below lands in the log the engine actually opens. Falls back
+            // to the default manager if the custom dir cannot be created.
+            let state_manager =
+                shannon_engine::state::StateManager::with_sessions_dir(run_sessions_dir.clone())
+                    .unwrap_or_else(|e| {
+                        tracing::warn!(
+                            error = %e,
+                            "routine run: custom sessions dir unusable, using default"
+                        );
+                        StateManager::new()
+                    });
+            let engine = crate::commands_memory::attach_shared_memory(
+                QueryEngine::with_defaults_arc(client, tools, permissions, state_manager),
+                &memory_store,
             );
-        }
-        let context = QueryContext {
-            query_id: uuid::Uuid::new_v4(),
-            session_id,
-            user_message: prompt.clone(),
-            metadata: QueryMetadata {
-                timestamp: chrono::Utc::now(),
-                tools_allowed: true,
-                max_tokens: None,
-                model,
-                temperature: None,
-                top_p: None,
-            },
-            attachments: Vec::new(),
-        };
+            // P-E1: the routine's project drives the engine's host-dependent
+            // reads (memory injection/extraction project key) — an existing
+            // per-run working-directory parameter, so it is threaded here
+            // instead of ever touching the process cwd (global state).
+            let engine = match &routine_working_dir {
+                Some(dir) => {
+                    engine.with_working_directory(crate::commands_projects::normalize_path(dir))
+                }
+                None => engine,
+            };
 
-        let mut final_output = String::new();
-        let mut failure: Option<String> = None;
+            let session_id = uuid::Uuid::new_v4();
+            // P-E1: stamp the session's durable metadata before the engine's
+            // tee opens the (fresh) log — session/start with the routine's
+            // working dir as `cwd`, the field the session store projects to
+            // `project_path` / `SessionMeta.working_dir`. `None` keeps today's
+            // behavior byte-for-byte (the tee writes its own row).
+            if let Some(dir) = &routine_working_dir {
+                stamp_session_working_dir(
+                    &shannon_core::session_log::effective_log_container(&run_sessions_dir),
+                    session_id,
+                    &model,
+                    &provider,
+                    dir,
+                );
+            }
+            let context = QueryContext {
+                query_id: uuid::Uuid::new_v4(),
+                session_id,
+                user_message: prompt.clone(),
+                metadata: QueryMetadata {
+                    timestamp: chrono::Utc::now(),
+                    tools_allowed: true,
+                    max_tokens: None,
+                    model,
+                    temperature: None,
+                    top_p: None,
+                },
+                attachments: Vec::new(),
+            };
 
-        let stream = engine.process_query(context, None).await;
-        use futures::StreamExt;
-        let mut pin_stream = std::pin::pin!(stream);
-        while let Some(event_result) = pin_stream.next().await {
-            match event_result {
-                Ok(event) => match event {
-                    QueryEvent::Text { content, .. } => final_output.push_str(&content),
-                    QueryEvent::Usage {
-                        input_tokens,
-                        output_tokens,
-                        cost_usd,
-                        cache_creation_tokens,
-                        cache_read_tokens,
-                        ..
-                    } => {
-                        // Best-effort ledger write, mirroring background tasks.
-                        let _ = usage_store.append(&crate::commands_usage::record_event(
-                            &model_for_usage,
-                            &provider,
-                            crate::commands_usage::UsageTotals {
-                                input_tokens,
-                                output_tokens,
-                                cache_creation_tokens,
-                                cache_read_tokens,
-                                cost_usd,
-                            },
-                            None,
-                        ));
-                    }
-                    QueryEvent::Completed { .. } => break,
-                    QueryEvent::Failed { error, .. } => {
-                        failure = Some(error);
+            let mut final_output = String::new();
+            let mut failure: Option<String> = None;
+
+            let stream = engine.process_query(context, None).await;
+            use futures::StreamExt;
+            let mut pin_stream = std::pin::pin!(stream);
+            while let Some(event_result) = pin_stream.next().await {
+                match event_result {
+                    Ok(event) => match event {
+                        QueryEvent::Text { content, .. } => final_output.push_str(&content),
+                        QueryEvent::Usage {
+                            input_tokens,
+                            output_tokens,
+                            cost_usd,
+                            cache_creation_tokens,
+                            cache_read_tokens,
+                            ..
+                        } => {
+                            // Best-effort ledger write, mirroring background tasks.
+                            // P1-2: the write is attributed to this run's session so
+                            // the routine budget gate can aggregate per-routine spend
+                            // (pre-attribution runs wrote `None` and were invisible
+                            // to the aggregation).
+                            let _ = usage_store.append(&crate::commands_usage::record_event(
+                                &model_for_usage,
+                                &provider,
+                                crate::commands_usage::UsageTotals {
+                                    input_tokens,
+                                    output_tokens,
+                                    cache_creation_tokens,
+                                    cache_read_tokens,
+                                    cost_usd,
+                                },
+                                Some(session_id.to_string()).as_deref(),
+                            ));
+                        }
+                        QueryEvent::Completed { .. } => break,
+                        QueryEvent::Failed { error, .. } => {
+                            failure = Some(error);
+                            break;
+                        }
+                        _ => {}
+                    },
+                    Err(e) => {
+                        failure = Some(e.to_string());
                         break;
                     }
-                    _ => {}
-                },
-                Err(e) => {
-                    failure = Some(e.to_string());
-                    break;
                 }
             }
-        }
 
-        RunOutcome {
-            failed: failure.is_some(),
-            error: failure,
-            output: final_output,
-            session_id: Some(session_id.to_string()),
+            RunOutcome {
+                failed: failure.is_some(),
+                error: failure,
+                output: final_output,
+                session_id: Some(session_id.to_string()),
+            }
         }
     };
 
+    // P1-2: the whole engine phase (panic guard included) now runs under the
+    // routine's timeout/retry policy. A retried run keeps its single SQLite
+    // `routine_runs` row — the final state plus the give-up annotation (how
+    // many attempts, why they stopped) is what History shows.
+    let run_policy = RunExecutionPolicy::of(&routine);
     tokio::spawn(async move {
-        let outcome = run_with_panic_guard(engine_future).await;
+        let outcome = execute_with_policy(make_engine_future, &run_policy).await;
         finalize_run(&finish_deps, &app, ctx, outcome);
     });
 
@@ -1096,7 +1430,8 @@ fn first_line_snapshot(output: &str, failed: bool) -> String {
 mod tests {
     use super::*;
 
-    use chrono::TimeZone as _;
+    // (`chrono::TimeZone`/`Datelike` trait scopes flow in through the
+    // parent's anonymous imports via `use super::*`.)
 
     // ── pure helpers ────────────────────────────────────────────────────
 
@@ -1738,7 +2073,9 @@ mod tests {
         let prev_hook = std::panic::take_hook();
         std::panic::set_hook(Box::new(|_| {}));
 
-        let outcome = run_with_panic_guard(async { panicking_engine_outcome() }).await;
+        // P1-2: the panic guard lives inside run_with_timeout now (the
+        // spawned attempt's JoinError maps to a failed outcome).
+        let outcome = run_with_timeout(async { panicking_engine_outcome() }, None).await;
 
         std::panic::set_hook(prev_hook);
 
@@ -1748,6 +2085,443 @@ mod tests {
             "error should mention the panic"
         );
         assert!(outcome.session_id.is_none(), "no session was opened");
+    }
+
+    // ── P1-2: ExecutionPolicy wiring (timeout / retries / budget / worktree)
+
+    fn fast_retry_policy(max_attempts: u32) -> RetryPolicy {
+        // Deterministic zero-delay retries so the tests exercise the loop,
+        // not the wall clock.
+        RetryPolicy {
+            max_attempts,
+            base_delay_secs: 0,
+            max_delay_secs: 0,
+            jitter_ratio: 0.0,
+        }
+    }
+
+    fn ok_outcome() -> RunOutcome {
+        RunOutcome {
+            failed: false,
+            error: None,
+            output: "done".into(),
+            session_id: Some("0195abcd-0000-7000-8000-00000000ffff".into()),
+        }
+    }
+
+    fn failed_outcome(error: &str) -> RunOutcome {
+        RunOutcome {
+            failed: true,
+            error: Some(error.into()),
+            output: String::new(),
+            session_id: None,
+        }
+    }
+
+    /// Drive [`execute_with_policy`] with a counting engine factory whose
+    /// per-attempt outcomes come from `results` (last one repeats).
+    async fn drive_policy(
+        results: Vec<RunOutcome>,
+        retry: RetryPolicy,
+        timeout: Option<Duration>,
+    ) -> (RunOutcome, usize) {
+        use std::sync::atomic::AtomicUsize;
+        let calls = std::sync::Arc::new(AtomicUsize::new(0));
+        let calls_for_closure = calls.clone();
+        let results = std::sync::Arc::new(std::sync::Mutex::new(results));
+        let policy = RunExecutionPolicy { timeout, retry };
+        let outcome = execute_with_policy(
+            move || {
+                let calls = calls_for_closure.clone();
+                let results = results.clone();
+                async move {
+                    let idx = {
+                        let mut r = results.lock().unwrap();
+                        // Consume the fixture list; an exhausted list repeats
+                        // the sentinel failure.
+                        if r.is_empty() {
+                            failed_outcome("exhausted fixtures")
+                        } else {
+                            r.remove(0)
+                        }
+                    };
+                    calls.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                    idx
+                }
+            },
+            &policy,
+        )
+        .await;
+        let count = calls.load(std::sync::atomic::Ordering::SeqCst);
+        (outcome, count)
+    }
+
+    #[tokio::test]
+    async fn policy_timeout_aborts_a_runaway_attempt() {
+        let policy = RunExecutionPolicy {
+            timeout: Some(Duration::from_millis(30)),
+            retry: RetryPolicy::disabled(),
+        };
+        let outcome = execute_with_policy(
+            || async {
+                // Far beyond the 30ms budget — the attempt must be aborted.
+                tokio::time::sleep(Duration::from_secs(30)).await;
+                ok_outcome()
+            },
+            &policy,
+        )
+        .await;
+        assert!(outcome.failed, "timeout must map to a failed outcome");
+        let error = outcome.error.expect("timeout reason recorded");
+        assert!(error.contains("timed out"), "{error}");
+    }
+
+    #[tokio::test]
+    async fn policy_without_timeout_is_unlimited() {
+        let policy = RunExecutionPolicy {
+            timeout: None,
+            retry: RetryPolicy::disabled(),
+        };
+        let outcome = execute_with_policy(|| async { ok_outcome() }, &policy).await;
+        assert!(!outcome.failed);
+    }
+
+    #[tokio::test]
+    async fn policy_retries_until_success_and_counts_attempts() {
+        let (outcome, calls) = drive_policy(
+            vec![failed_outcome("connection reset"), ok_outcome()],
+            fast_retry_policy(3),
+            None,
+        )
+        .await;
+        assert!(!outcome.failed, "second attempt should succeed");
+        assert_eq!(calls, 2, "original + one retry");
+    }
+
+    #[tokio::test]
+    async fn policy_gives_up_after_the_retry_budget_and_annotates_the_error() {
+        let (outcome, calls) = drive_policy(vec![], fast_retry_policy(2), None).await;
+        // drive_policy's empty fixture list repeats `failed_outcome("exhausted fixtures")`.
+        assert!(outcome.failed);
+        assert_eq!(
+            calls, 2,
+            "core convention: max_retries counts total attempts"
+        );
+        let error = outcome.error.expect("final error");
+        assert!(error.contains("gave up after 2 attempt"), "{error}");
+        assert!(
+            error.contains("AttemptsExhausted"),
+            "give-up reason recorded: {error}"
+        );
+    }
+
+    #[tokio::test]
+    async fn policy_zero_retries_never_retries() {
+        let (outcome, calls) = drive_policy(
+            vec![failed_outcome("connection reset")],
+            fast_retry_policy(0),
+            None,
+        )
+        .await;
+        assert!(outcome.failed);
+        assert_eq!(calls, 1, "no retry budget → single attempt");
+        assert!(outcome.error.unwrap().contains("RetriesDisabled"));
+    }
+
+    #[tokio::test]
+    async fn policy_non_retryable_errors_stop_immediately() {
+        let (outcome, calls) = drive_policy(
+            vec![failed_outcome("401 unauthorized: invalid api key")],
+            fast_retry_policy(3),
+            None,
+        )
+        .await;
+        assert!(outcome.failed);
+        assert_eq!(calls, 1, "auth errors are hard failures");
+        assert!(outcome.error.unwrap().contains("NonRetryableError"));
+    }
+
+    #[test]
+    fn run_execution_policy_maps_fields() {
+        let mut routine = ScheduledRoutine::new("t".into(), "p".into(), 60);
+        // No policy → fully legacy behavior.
+        let bare = RunExecutionPolicy::of(&routine);
+        assert!(bare.timeout.is_none());
+        assert!(!bare.retry.allows_retry());
+
+        routine.policy = Some(shannon_core::scheduled_routines::ExecutionPolicy {
+            max_retries: 3,
+            timeout_secs: 90,
+            ..Default::default()
+        });
+        let wired = RunExecutionPolicy::of(&routine);
+        assert_eq!(wired.timeout, Some(Duration::from_secs(90)));
+        assert_eq!(wired.retry.max_attempts, 3);
+
+        // timeout_secs = 0 means "no timeout", not "time out instantly".
+        routine.policy = Some(shannon_core::scheduled_routines::ExecutionPolicy {
+            timeout_secs: 0,
+            ..Default::default()
+        });
+        assert!(RunExecutionPolicy::of(&routine).timeout.is_none());
+    }
+
+    /// Inbox + usage fixture for the budget tests: one routine run whose
+    /// usage is attributed to session `s-routine` via the back-linked item.
+    fn budget_fixture(tmp: &std::path::Path) -> (InboxStore, crate::commands_usage::UsageStore) {
+        let inbox = InboxStore::open_in_memory().unwrap();
+        let run_id = inbox.record_run_start("task-budget", "Budgeted").unwrap();
+        let item = inbox
+            .append_item(InboxItemNew {
+                source: shannon_core::inbox_store::SOURCE_ROUTINE.into(),
+                source_id: Some("task-budget".into()),
+                session_id: Some("s-routine".into()),
+                title: "Budgeted".into(),
+                summary: String::new(),
+                error: None,
+            })
+            .unwrap();
+        inbox
+            .record_run_finish(&run_id, "succeeded", None, Some(item.id))
+            .unwrap();
+        let usage = crate::commands_usage::UsageStore::with_path(tmp.join("usage.jsonl"));
+        (inbox, usage)
+    }
+
+    fn usage_record(
+        session: Option<&str>,
+        cost: f64,
+        timestamp_ms: i64,
+    ) -> crate::commands_usage::UsageRecord {
+        crate::commands_usage::UsageRecord {
+            timestamp_ms: timestamp_ms as u64,
+            model: "m".into(),
+            provider: "prov".into(),
+            input_tokens: 1,
+            output_tokens: 1,
+            cache_creation_tokens: 0,
+            cache_read_tokens: 0,
+            cost_usd: cost,
+            session_id: session.map(str::to_string),
+        }
+    }
+
+    #[test]
+    fn routine_month_spend_sums_only_this_routine_this_month() {
+        let tmp = tempfile::tempdir().unwrap();
+        let (inbox, usage) = budget_fixture(tmp.path());
+        let now = chrono::Utc::now();
+        let month_start_ms = chrono::Utc
+            .from_utc_datetime(
+                &now.date_naive()
+                    .with_day(1)
+                    .unwrap()
+                    .and_hms_opt(0, 0, 0)
+                    .unwrap(),
+            )
+            .timestamp_millis();
+        let _ = usage.append(&usage_record(
+            Some("s-routine"),
+            1.5,
+            month_start_ms + 1_000,
+        ));
+        // Other routine's session — ignored.
+        let _ = usage.append(&usage_record(Some("s-other"), 9.0, month_start_ms + 2_000));
+        // Same session, last month — outside the monthly window.
+        let _ = usage.append(&usage_record(
+            Some("s-routine"),
+            40.0,
+            month_start_ms - 5_000,
+        ));
+        // Unattributed legacy line — invisible to the aggregation.
+        let _ = usage.append(&usage_record(None, 100.0, month_start_ms + 3_000));
+
+        let spend = routine_month_spend(&usage, &inbox, "task-budget", now);
+        assert!((spend - 1.5).abs() < 1e-9, "{spend}");
+    }
+
+    #[test]
+    fn routine_month_spend_tolerates_store_failures_and_empty_history() {
+        let tmp = tempfile::tempdir().unwrap();
+        let inbox = InboxStore::open_in_memory().unwrap();
+        let usage = crate::commands_usage::UsageStore::with_path(tmp.path().join("usage.jsonl"));
+        // No runs for the task → zero spend, no panic.
+        assert_eq!(
+            routine_month_spend(&usage, &inbox, "ghost", chrono::Utc::now()),
+            0.0
+        );
+    }
+
+    #[test]
+    fn budget_skip_reason_triggers_only_at_the_configured_cap() {
+        let tmp = tempfile::tempdir().unwrap();
+        let (inbox, usage) = budget_fixture(tmp.path());
+        let _ = usage.append(&usage_record(
+            Some("s-routine"),
+            1.5,
+            chrono::Utc::now().timestamp_millis(),
+        ));
+        let deps = RoutineRunDeps {
+            inbox: std::sync::Arc::new(inbox),
+            runs_store: std::sync::Arc::new(ScheduledRunsStore::with_base(tmp.path().join("runs"))),
+            webhook: std::sync::Arc::new(RecordingWebhookPort::default()),
+            usage_store: std::sync::Arc::new(usage),
+            client_config: std::sync::Arc::new(RwLock::new(
+                shannon_engine::api::types::LlmClientConfig::default(),
+            )),
+            desktop_config: std::sync::Arc::new(RwLock::new(DesktopConfig::default())),
+            tools: std::sync::Arc::new(shannon_core::tools::ToolRegistry::new()),
+            memory_store: std::sync::Arc::new(std::sync::RwLock::new(
+                shannon_core::MemoryStore::new(tmp.path().join("memories")),
+            )),
+            scheduled_tasks: std::sync::Arc::new(
+                shannon_core::scheduled_task_store::ScheduledTaskStore::with_base(
+                    tmp.path().join("tasks"),
+                ),
+            ),
+            sessions_dir: tmp.path().join("sessions"),
+        };
+        let policy = |cap: Option<f64>| -> ScheduledRoutine {
+            let mut r = ScheduledRoutine::new("Budgeted".into(), "p".into(), 60);
+            // The spend aggregation keys on the routine id.
+            r.id = "task-budget".into();
+            r.policy = Some(shannon_core::scheduled_routines::ExecutionPolicy {
+                budget_usd: cap,
+                ..Default::default()
+            });
+            r
+        };
+
+        // Over the cap → skip with the reason carrying both numbers.
+        let reason = budget_skip_reason(&deps, &policy(Some(1.0))).expect("over budget");
+        assert!(reason.contains("$1.50"), "{reason}");
+        assert!(reason.contains("$1.00"), "{reason}");
+
+        // Under the cap → run.
+        assert!(budget_skip_reason(&deps, &policy(Some(50.0))).is_none());
+        // Zero cap is "no budget configured".
+        assert!(budget_skip_reason(&deps, &policy(Some(0.0))).is_none());
+        // No budget field at all.
+        let mut no_budget = ScheduledRoutine::new("Budgeted".into(), "p".into(), 60);
+        no_budget.id = "task-budget".into();
+        no_budget.policy = None;
+        assert!(budget_skip_reason(&deps, &no_budget).is_none());
+    }
+
+    #[test]
+    fn resolve_run_working_dir_disabled_keeps_the_sidecar() {
+        let routine = ScheduledRoutine::new("abc12345".into(), "p".into(), 60);
+        let tmp = tempfile::tempdir().unwrap();
+        assert_eq!(
+            resolve_run_working_dir(&routine, Some("/proj/x"), tmp.path()).as_deref(),
+            Some("/proj/x")
+        );
+        assert_eq!(resolve_run_working_dir(&routine, None, tmp.path()), None);
+        // Blank sidecar entries are treated as "no project".
+        assert_eq!(
+            resolve_run_working_dir(&routine, Some("   "), tmp.path()),
+            None
+        );
+    }
+
+    #[test]
+    fn resolve_run_working_dir_uses_an_existing_worktree_dir() {
+        let mut routine = ScheduledRoutine::new("Daily Scan".into(), "p".into(), 60);
+        routine.id = "abc12345".into();
+        routine.policy = Some(shannon_core::scheduled_routines::ExecutionPolicy {
+            worktree: Some("on".into()),
+            ..Default::default()
+        });
+        let tmp = tempfile::tempdir().unwrap();
+        let base = tmp.path().join("scheduled-worktrees");
+        let existing = base.join(
+            shannon_core::scheduled_worktree::ScheduledWorktree::dir_name(
+                &routine.id,
+                "Daily Scan",
+            ),
+        );
+        std::fs::create_dir_all(&existing).unwrap();
+
+        let resolved =
+            resolve_run_working_dir(&routine, Some("/proj/y"), base.as_path()).expect("worktree");
+        assert_eq!(std::path::Path::new(&resolved), existing);
+    }
+
+    #[test]
+    fn resolve_run_working_dir_forks_a_worktree_from_the_project_repo() {
+        let mut routine = ScheduledRoutine::new("Scan".into(), "p".into(), 60);
+        routine.id = "abc12345".into();
+        routine.policy = Some(shannon_core::scheduled_routines::ExecutionPolicy {
+            worktree: Some("true".into()),
+            ..Default::default()
+        });
+
+        // Real throw-away repo, mirroring scheduled_worktree's own tests.
+        let tmp = tempfile::tempdir().unwrap();
+        let repo = tmp.path().join("repo");
+        std::fs::create_dir_all(&repo).unwrap();
+        let run = |dir: &std::path::Path, args: &[&str]| {
+            let out = std::process::Command::new("git")
+                .current_dir(dir)
+                .args(args)
+                .output()
+                .expect("git available");
+            assert!(
+                out.status.success(),
+                "git {args:?} failed: {}",
+                String::from_utf8_lossy(&out.stderr)
+            );
+        };
+        run(&repo, &["init"]);
+        run(
+            &repo,
+            &["config", "user.email", "routine-test@shannon.local"],
+        );
+        run(&repo, &["config", "user.name", "Routine Test"]);
+        std::fs::write(repo.join("f.txt"), "v1\n").unwrap();
+        run(&repo, &["add", "-A"]);
+        run(&repo, &["commit", "-q", "-m", "init"]);
+
+        let base = tmp.path().join("scheduled-worktrees");
+        let resolved =
+            resolve_run_working_dir(&routine, Some(repo.to_str().unwrap()), base.as_path())
+                .expect("auto-created worktree");
+        let expected = base.join(
+            shannon_core::scheduled_worktree::ScheduledWorktree::dir_name(&routine.id, "Scan"),
+        );
+        assert_eq!(std::path::Path::new(&resolved), expected);
+        assert!(expected.is_dir(), "worktree directory forked from HEAD");
+    }
+
+    #[test]
+    fn resolve_run_working_dir_falls_back_with_warning_without_a_repo() {
+        let mut routine = ScheduledRoutine::new("Scan".into(), "p".into(), 60);
+        routine.id = "abc12345".into();
+        routine.policy = Some(shannon_core::scheduled_routines::ExecutionPolicy {
+            worktree: Some("true".into()),
+            ..Default::default()
+        });
+        let tmp = tempfile::tempdir().unwrap();
+        let base = tmp.path().join("scheduled-worktrees");
+
+        // No project dir at all → degrade to no isolation, no creation.
+        assert_eq!(
+            resolve_run_working_dir(&routine, None, base.as_path()),
+            None
+        );
+        assert!(!base.exists(), "nothing forked without a repo");
+
+        // A non-repo "project" → git fails → degrade to the sidecar dir.
+        let not_a_repo = tempfile::tempdir().unwrap();
+        assert_eq!(
+            resolve_run_working_dir(
+                &routine,
+                Some(not_a_repo.path().to_str().unwrap()),
+                base.as_path()
+            )
+            .as_deref(),
+            Some(not_a_repo.path().to_str().unwrap())
+        );
     }
 
     // ── T7: authoritative history read path ─────────────────────────────

@@ -65,7 +65,19 @@ export default function OPCKanbanBoard({ tasks, refreshTasks }: Props) {
     const trimmed = quickTask.trim()
     if (!trimmed) return
     try {
-      await api.startBackgroundTask(trimmed)
+      const taskId = await api.startBackgroundTask(trimmed)
+      // P1-3 created-then-invisible: the run alone never showed up on the
+      // board (`.claude/tasks` was never written). Mint the board card
+      // through update_task's adhoc path and refresh, so the card is in the
+      // active column the moment the toast fires.
+      try {
+        await api.updateTask({ id: taskId, title: trimmed, status: 'in_progress' })
+        await refreshTasks()
+      } catch (e) {
+        // The run itself is alive; only the board card failed — say so
+        // instead of pretending everything (or nothing) worked.
+        toastError(t('opc.kanban.boardSyncFailed'), e)
+      }
       setQuickTask('')
       toast.success(t('opc.kanban.taskCreated'))
     } catch (e) {

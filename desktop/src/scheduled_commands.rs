@@ -770,18 +770,25 @@ pub async fn delete_scheduled_task(
         .map_err(|e| e.to_string())
 }
 
-/// Toggle a task on/off. Returns the new enabled state.
+/// Toggle a task on/off. Returns the persisted enabled state.
+///
+/// P1-1 lifecycle UI: `enabled` makes the target state explicit — the
+/// desktop switch sends the state the user asked for and the returned bool
+/// is read back as the persisted truth (a flip-only contract would race a
+/// stale list and silently invert the user's click). `None` keeps the
+/// legacy flip semantics.
 #[tauri::command]
 pub async fn toggle_scheduled_task(
     state: tauri::State<'_, AppState>,
     id: String,
+    enabled: Option<bool>,
 ) -> Result<bool, String> {
     let store = state.scheduled_task_store();
     let mut routine = store
         .load(&id)
         .map_err(|e| e.to_string())?
         .ok_or_else(|| format!("task not found: {id}"))?;
-    routine.enabled = !routine.enabled;
+    routine.enabled = enabled.unwrap_or(!routine.enabled);
     let enabled = routine.enabled;
     store.save(&routine).map_err(|e| e.to_string())?;
     Ok(enabled)

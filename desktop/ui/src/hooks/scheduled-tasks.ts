@@ -83,12 +83,15 @@ export function useScheduledTasks() {
     }
   }, [refresh, t])
 
-  const toggle = useCallback(async (id: string, enabled: boolean): Promise<ScheduledRoutine | null> => {
+  // P1-1: the backend persists the requested state and returns the persisted
+  // bool — the toast (and the caller's follow-up) keys off the persisted
+  // truth, not the requested value.
+  const toggle = useCallback(async (id: string, enabled: boolean): Promise<boolean | null> => {
     try {
-      const task = await api.toggleScheduledTask(id, enabled)
-      toast.success(t(enabled ? 'tasks.toast.enabled' : 'tasks.toast.disabled'))
+      const persisted = await api.toggleScheduledTask(id, enabled)
+      toast.success(t(persisted ? 'tasks.toast.enabled' : 'tasks.toast.disabled'))
       await refresh()
-      return task
+      return persisted
     } catch (e) {
       const msg = e instanceof Error ? e.message : t('tasks.toast.failed.toggle')
       setError(msg)

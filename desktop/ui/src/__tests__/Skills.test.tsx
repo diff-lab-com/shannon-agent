@@ -72,6 +72,17 @@ const repoSkill = {
   tags: ['discovery'],
 }
 
+// G1 P0-2.3: a native entry flagged in_development — rendered as "Planned"
+// with NO install button (the runtime does not exist yet).
+const plannedSkill = {
+  ...nativeSkill,
+  id: 'native:plotly-charts',
+  name: 'plotly-charts',
+  description: 'Generate Plotly figures from data.',
+  metadata: { in_development: true },
+  tags: ['python', 'plotly', 'data-analysis'],
+}
+
 // office Wave 3 C7: a research/dev skill with no office tags — must stay in
 // the ungrouped list, not under the Productivity heading.
 const devSkill = {
@@ -188,6 +199,23 @@ describe('Skills (P3 federated catalog)', () => {
       expect(screen.getByText(/unsafe skill name/i)).toBeInTheDocument()
     })
     expect(installNativeSkill).not.toHaveBeenCalled()
+  })
+
+  it('renders planned (in-development) skills as non-installable', async () => {
+    listSkillCatalog.mockResolvedValue([plannedSkill, nativeSkill])
+    listInstalledSkillPlugins.mockResolvedValue([])
+    renderWithRouter()
+    await waitFor(() => {
+      expect(screen.getByText('plotly-charts')).toBeInTheDocument()
+    })
+    // Badge + honest hint instead of an Install button.
+    expect(screen.getByText('Planned')).toBeInTheDocument()
+    expect(
+      screen.getByText(/Planned — the runtime for this skill is not implemented yet/),
+    ).toBeInTheDocument()
+    // Only the installable entry still offers Install.
+    expect(screen.getAllByText('Install')).toHaveLength(1)
+    expect(screen.queryByText('Installed')).not.toBeInTheDocument()
   })
 
   it('installs repo skill via installSkillFromRepo', async () => {

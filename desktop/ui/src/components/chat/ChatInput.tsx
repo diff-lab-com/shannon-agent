@@ -14,7 +14,8 @@ import AttachmentChip from '@/components/chat/AttachmentChip'
 import SessionUsageDialog from '@/components/chat/SessionUsageDialog'
 import PptOutlineDialog from '@/components/chat/PptOutlineDialog'
 import { useComposerDraftListener } from '@/lib/composerBridge'
-import { isSlashQuery, filterSlashCommands, type SlashCommand } from '@/lib/slash/commands'
+import { isSlashQuery, type SlashCommand } from '@/lib/slash/commands'
+import { fetchSlashSkills, mergeSlashMenu, type SlashMenuItem, type SlashSkillEntry } from '@/lib/slash/skills'
 import { imageFilesFromClipboard, blobToBase64, PASTE_IMAGE_MIME_TO_EXT, MAX_PASTED_IMAGE_BYTES } from '@/lib/pasteImage'
 import * as api from '@/lib/tauri-api'
 import type { RejectedAttachmentReason, AttachmentExtractionReport } from '@/types'
@@ -137,8 +138,23 @@ export default function ChatInput({
   // slash commands never need to queue.
   const [slashDismissed, setSlashDismissed] = useState(false)
   const [slashActive, setSlashActive] = useState(0)
+  // G1 P0-2.2 — installed skills join the menu as slash-triggered entries.
+  // Fetched once on mount; error/timeout degrades to [] (static table only).
+  const [skills, setSkills] = useState<SlashSkillEntry[]>([])
+  useEffect(() => {
+    let cancelled = false
+    fetchSlashSkills().then(entries => {
+      if (!cancelled) setSkills(entries)
+    }).catch(() => {
+      // fetchSlashSkills already swallows; this is belt-and-braces.
+      if (!cancelled) setSkills([])
+    })
+    return () => { cancelled = true }
+  }, [])
   const slashQuery = isSlashQuery(value) ? value.trim() : null
-  const slashMatches = slashQuery && !slashDismissed ? filterSlashCommands(slashQuery) : []
+  const slashItems: SlashMenuItem[] =
+    slashQuery && !slashDismissed ? mergeSlashMenu(skills, slashQuery) : []
+  const slashMatches = slashItems
   const slashOpen = slashMatches.length > 0
 
   // Office Wave 1 A1a — honest notice while an unparseable attachment
@@ -196,6 +212,15 @@ export default function ChatInput({
     onChange('')
     setSlashDismissed(false)
     onExecuteSlash(cmd)
+  }
+  // G1 P0-2.2 — selecting a skill fills the composer with its slash trigger
+  // (REPL-style `/name` semantics) so the user can add args and send; the
+  // message reaches the model, which can invoke the registered skill tool.
+  const executeSkill = (skill: SlashSkillEntry) => {
+    onChange(`${skill.trigger} `)
+    // Keep the menu closed while the text is still a bare `/name` query —
+    // dismissal re-arms automatically once the input stops matching.
+    setSlashDismissed(true)
   }
   const voice = useVoice({
     onTranscript: (text) => {
@@ -496,7 +521,11 @@ export default function ChatInput({
       }
       if (e.key === 'Enter' || e.key === 'Tab') {
         e.preventDefault()
-        executeSlash(slashMatches[slashActive] ?? slashMatches[0])
+        const picked = slashMatches[slashActive] ?? slashMatches[0]
+        if (picked) {
+          if (picked.kind === 'command') executeSlash(picked.command)
+          else executeSkill(picked.skill)
+        }
         return
       }
       if (e.key === 'Escape') {
@@ -671,26 +700,44 @@ export default function ChatInput({
           className="absolute left-0 right-0 bottom-full mb-sm z-modal rounded-2xl border border-outline-variant/30 bg-surface-container-low shadow-e3 overflow-hidden"
         >
           <ul className="max-h-64 overflow-y-auto py-xs">
-            {slashMatches.map((cmd, i) => (
-              <li key={cmd.name}>
-                <button
-                  type="button"
-                  role="option"
-                  id={slashOptionId(cmd.name)}
-                  aria-selected={i === slashActive}
-                  onMouseDown={e => { e.preventDefault(); executeSlash(cmd) }}
-                  onMouseEnter={() => setSlashActive(i)}
-                  className={cn(
-                    'w-full flex items-center gap-sm px-md py-xs text-left cursor-pointer transition-colors',
-                    i === slashActive ? 'bg-surface-container-high' : 'hover:bg-surface-container',
-                  )}
-                >
-                  <span className="material-symbols-outlined icon-sm text-primary shrink-0">{cmd.icon}</span>
-                  <span className="font-mono text-label-md text-on-surface shrink-0">/{cmd.name}</span>
-                  <span className="font-label-sm text-on-surface-variant truncate flex-1">{t(cmd.descriptionKey)}</span>
-                </button>
-              </li>
-            ))}
+            {slashMatches.map((item, i) => {
+              const key = item.kind === 'command' ? `cmd-${item.command.name}` : `skill-${item.skill.name}`
+              const icon = item.kind === 'command' ? item.command.icon : 'auto_fix'
+              const trigger = item.kind === 'command' ? `/${item.command.name}` : item.skill.trigger
+              const description =
+                item.kind === 'command'
+                  ? t(item.command.descriptionKey)
+                  : item.skill.description
+              return (
+                <li key={key}>
+                  <button
+                    type="button"
+                    role="option"
+                    id={slashOptionId(key)}
+                    aria-selected={i === slashActive}
+                    onMouseDown={e => {
+                      e.preventDefault()
+                      if (item.kind === 'command') executeSlash(item.command)
+                      else executeSkill(item.skill)
+                    }}
+                    onMouseEnter={() => setSlashActive(i)}
+                    className={cn(
+                      'w-full flex items-center gap-sm px-md py-xs text-left cursor-pointer transition-colors',
+                      i === slashActive ? 'bg-surface-container-high' : 'hover:bg-surface-container',
+                    )}
+                  >
+                    <span className="material-symbols-outlined icon-sm text-primary shrink-0">{icon}</span>
+                    <span className="font-mono text-label-md text-on-surface shrink-0">{trigger}</span>
+                    {item.kind === 'skill' && (
+                      <span className="text-label-xs px-xs py-[1px] rounded-full bg-tertiary-container/50 text-on-tertiary-container font-bold shrink-0">
+                        {t('slash.menu.skillTag')}
+                      </span>
+                    )}
+                    <span className="font-label-sm text-on-surface-variant truncate flex-1">{description}</span>
+                  </button>
+                </li>
+              )
+            })}
           </ul>
           <div className="px-md py-xs border-t border-outline-variant/20 text-label-xs text-on-surface-variant">
             {t('slash.menu.hint')}
@@ -708,7 +755,15 @@ export default function ChatInput({
         <span role="status" className="sr-only">
           {intl.formatMessage(
             { id: 'chat.input.slashMenu.status' },
-            { count: slashMatches.length, current: `/${slashMatches[slashActive]?.name ?? ''}` },
+            {
+              count: slashMatches.length,
+              current:
+                slashMatches[slashActive] !== undefined
+                  ? slashMatches[slashActive].kind === 'command'
+                    ? `/${slashMatches[slashActive].command.name}`
+                    : slashMatches[slashActive].skill.trigger
+                  : '',
+            },
           )}
         </span>
       )}

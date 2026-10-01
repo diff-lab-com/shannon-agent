@@ -12,6 +12,7 @@ const listMcpServers = vi.hoisted(() => vi.fn())
 const installMcpStdio = vi.hoisted(() => vi.fn())
 const installMcpMcpb = vi.hoisted(() => vi.fn())
 const uninstallMcpServer = vi.hoisted(() => vi.fn())
+const restartMcpServer = vi.hoisted(() => vi.fn())
 
 vi.mock('@/lib/tauri-api', () => ({
   default: {},
@@ -20,6 +21,7 @@ vi.mock('@/lib/tauri-api', () => ({
   installMcpStdio: (...a: unknown[]) => installMcpStdio(...a),
   installMcpMcpb: (...a: unknown[]) => installMcpMcpb(...a),
   uninstallMcpServer: (...a: unknown[]) => uninstallMcpServer(...a),
+  restartMcpServer: (...a: unknown[]) => restartMcpServer(...a),
 }))
 
 function renderWithRouter() {
@@ -63,6 +65,7 @@ beforeEach(() => {
   installMcpStdio.mockReset()
   installMcpMcpb.mockReset()
   uninstallMcpServer.mockReset()
+  restartMcpServer.mockReset()
   // Default: registry returns empty so any test opening the modal won't crash.
   listMcpRegistryServers.mockResolvedValue([])
 })
@@ -277,6 +280,25 @@ describe('McpServers (Cursor-style UX)', () => {
     fireEvent.click(within(dialog).getByRole('button', { name: /^Remove$/ }))
     await waitFor(() => {
       expect(uninstallMcpServer).toHaveBeenCalledWith('filesystem')
+    })
+  })
+
+  // G1 P0-1.4 — the row's Restart button wires to the existing
+  // `restart_mcp_server` backend and refreshes the list afterwards.
+  it('restarts a server from its row', async () => {
+    listMcpServers.mockResolvedValue([sampleInstalled])
+    restartMcpServer.mockResolvedValue({ ...sampleInstalled, connected: true })
+    renderWithRouter()
+    await waitFor(() => {
+      expect(screen.getByRole('button', { name: 'Restart filesystem' })).toBeInTheDocument()
+    })
+    fireEvent.click(screen.getByRole('button', { name: 'Restart filesystem' }))
+    await waitFor(() => {
+      expect(restartMcpServer).toHaveBeenCalledWith('filesystem')
+    })
+    // The refresh re-reads the installed list.
+    await waitFor(() => {
+      expect(listMcpServers.mock.calls.length).toBeGreaterThanOrEqual(2)
     })
   })
 

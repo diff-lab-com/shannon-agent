@@ -1447,11 +1447,20 @@ export async function installAgentFromRepo(
   return invoke('install_agent_from_repo', { pluginName, repo, ref_ })
 }
 
+/**
+ * G1 P1-9: install a native agent as a FLAT `~/.shannon/agents/<name>.toml`
+ * `AgentDefinition` (the shape the runtime loader reads). The catalog
+ * entry's description/system_prompt map onto the definition fields; tool
+ * hints become capabilities.
+ */
 export async function installNativeAgent(
   pluginName: string,
-  body: string,
+  description: string,
+  systemPrompt: string,
+  model: string | null,
+  tools: string[],
 ): Promise<InstallResult> {
-  return invoke('install_native_agent', { pluginName, body })
+  return invoke('install_native_agent', { pluginName, description, systemPrompt, model, tools })
 }
 
 export async function listInstalledAgentPlugins(): Promise<InstalledAgent[]> {
@@ -1845,7 +1854,9 @@ export async function deleteScheduledTask(id: string): Promise<boolean> {
   return invoke('delete_scheduled_task', { id })
 }
 
-export async function toggleScheduledTask(id: string, enabled: boolean): Promise<ScheduledRoutine> {
+// P1-1: the backend persists the requested state and returns the persisted
+// bool (read-back fool-proofing — see toggle_scheduled_task).
+export async function toggleScheduledTask(id: string, enabled: boolean): Promise<boolean> {
   return invoke('toggle_scheduled_task', { id, enabled })
 }
 
