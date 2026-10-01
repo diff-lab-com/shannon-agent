@@ -544,12 +544,21 @@ jobs:
           CI: "1"
         run: pnpm exec playwright test -c playwright.walkthrough.config.ts --workers=1
 
-  desktop-unit:
-    name: Desktop Unit Tests
+  desktop-unit-shards:
+    # UI suite split across two runners (R5 of the round-2 CI plan,
+    # 2026-10-01): vitest's file sharding cut the ~9.5 min suite to ~5 min
+    # per shard. Lint + the static design guards run in shard 1 only —
+    # the aggregate `desktop-unit` job below gates the merge on BOTH
+    # shards, so nothing escapes.
+    name: Desktop Unit Tests (shard ${{ matrix.shard }}/2)
     runs-on: ubuntu-latest
     needs: changes
     if: always() && (github.event_name != 'pull_request' || needs.changes.result != 'success' || needs.changes.outputs.rust == 'true' || needs.changes.outputs['desktop-ui'] == 'true' || needs.changes.outputs.ci == 'true')
-    timeout-minutes: 45
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [1, 2]
     steps:
       - uses: actions/checkout@f548e57e544e1ff5a4c46bf1e1b8685f8e4a348a
       - uses: actions/setup-node@e51e5fe84fc33b4c73ebe40526b2694712b5b858
@@ -568,11 +577,13 @@ jobs:
         # the 2026-08-26 audit, R10, R11 and B1; all consistent-type-imports
         # have been migrated to top-level `import type`); raise only with
         # ed sign-off.
+        if: matrix.shard == 1
         working-directory: desktop/ui
         run: pnpm lint
       - name: Overlay whitelist check
         # R2's tripwire against hand-rolled `fixed inset-0` overlays —
         # see desktop/ui/scripts/check-overlays.sh for the whitelist.
+        if: matrix.shard == 1
         working-directory: desktop/ui
         run: bash scripts/check-overlays.sh
       - name: Design-token guard
@@ -580,31 +591,58 @@ jobs:
         # reappear in src, and raw palette classes / hard-coded hex are
         # blocked in favour of theme tokens. Already invoked by pnpm lint
         # too — duplicated here so CI logs identify the failure clearly.
+        if: matrix.shard == 1
         working-directory: desktop/ui
         run: node scripts/check-design-tokens.mjs
       - name: Theme source drift check
         # src/theme/generated/{themes.css,registry.ts} must match
         # scripts/theme-source.json — blocks hand-edits to generated files.
+        if: matrix.shard == 1
         working-directory: desktop/ui
         run: node scripts/generate-themes.mjs --check
       - name: Theme contrast audit
         # WCAG 2.x AA check over every [data-theme] token block in the
         # generated themes.css (scripts/contrast-audit.mjs) — fails on any
         # pair below 4.5:1 (text) / 3:1 (UI).
+        if: matrix.shard == 1
         working-directory: desktop/ui
         run: node scripts/contrast-audit.mjs
       - name: Run unit tests
         # `pnpm test` is vitest in watch mode; `vitest run` is the one-shot
-        # form. CI=1 keeps workers deterministic. Coverage moved to the
-        # Nightly Coverage workflow (2026-10-01, P3 of the CI speed plan):
-        # V8 instrumentation tripled this job (~13.5 of ~14 min) and UI PRs
+        # form. CI=1 keeps workers deterministic. `--shard` (R5) splits the
+        # suite deterministically by test-file hash; the aggregate job below
+        # gates the merge on both shards. Coverage moved to the Nightly
+        # Coverage workflow (2026-10-01, P3 of the CI speed plan): V8
+        # instrumentation tripled this job (~13.5 of ~14 min) and UI PRs
         # paid it on every run. The vitest.config.ts thresholds
         # (80/75/60/80; actual 83.28/80.64/69.44/83.28) are now enforced by
         # the desktop-coverage job in coverage.yml — see it for the tradeoff.
         working-directory: desktop/ui
         env:
           CI: "1"
-        run: pnpm exec vitest run
+        run: pnpm exec vitest run --shard=${{ matrix.shard }}/2
+
+  desktop-unit:
+    # Aggregate required check (R5, 2026-10-01). "Desktop Unit Tests" is a
+    # required context on `main`; this no-op job carries that context and
+    # fails unless BOTH shards concluded success — the shards themselves
+    # are plain checks, so branch protection never had to change. Skips
+    # exactly like the old single job did when the path gate doesn't match.
+    name: Desktop Unit Tests
+    runs-on: ubuntu-latest
+    needs: [changes, desktop-unit-shards]
+    if: always() && (github.event_name != 'pull_request' || needs.changes.result != 'success' || needs.changes.outputs.rust == 'true' || needs.changes.outputs['desktop-ui'] == 'true' || needs.changes.outputs.ci == 'true')
+    timeout-minutes: 5
+    steps:
+      - name: Aggregate shard results
+        run: |
+          result="${{ needs.desktop-unit-shards.result }}"
+          if [ "$result" = "success" ]; then
+            echo "both desktop unit shards green"
+          else
+            echo "::error::desktop unit shards concluded: $result (expected success)"
+            exit 1
+          fi
 
   clippy:
     name: Clippy
