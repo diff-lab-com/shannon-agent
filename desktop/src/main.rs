@@ -1130,8 +1130,7 @@ fn tray_texts(lang: &str) -> TrayTexts {
             status_prefix: "Status: ",
             tooltip_app: "Shannon AI Assistant",
         },
-    };
-    texts
+    }
 }
 
 /// Build the human-readable status label shown in the tray menu and tooltip.
