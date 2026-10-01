@@ -972,6 +972,18 @@ impl AppState {
 /// banner offers the Settings deep link.
 pub(crate) const NO_WORKING_DIR_ATTACHMENT_ERROR: &str = "No working directory is set — choose one in Settings before attaching files (attachments are restricted to the working directory)";
 
+/// R2-P2-2 — structured-tag protocol for the send-path hard errors that land
+/// in the chat error banner. The `String` invoke-rejection channel is frozen,
+/// so a tagged error carries a machine-readable kind on the SAME string:
+/// `shannon-error:<kind>|<original text>`. The frontend maps a known kind to
+/// localized copy; an unknown kind (or an untagged string from any other
+/// backend error — the tag is deliberately NOT rolled out beyond the send
+/// path) falls back to the original text verbatim, and an old frontend sees
+/// the unmodified original sentence after the prefix.
+pub(crate) fn tagged_error(kind: &str, original: &str) -> String {
+    format!("shannon-error:{kind}|{original}")
+}
+
 /// P0-3 — the working directory the attachment pipeline reads from.
 ///
 /// Deliberately NO process-CWD fallback (unlike
@@ -986,7 +998,7 @@ pub(crate) fn require_attachment_working_dir(
 ) -> Result<std::path::PathBuf, String> {
     configured
         .map(std::path::PathBuf::from)
-        .ok_or_else(|| NO_WORKING_DIR_ATTACHMENT_ERROR.to_string())
+        .ok_or_else(|| tagged_error("no_working_dir", NO_WORKING_DIR_ATTACHMENT_ERROR))
 }
 
 /// P0-3 — resolve, gate and read the requested attachment paths.
@@ -1168,10 +1180,10 @@ pub async fn send_message(
     // gates on the same condition via `get_goal_run`; this is the backend
     // backstop. (Defence in depth; not a drive-by change.)
     if state.goal_runs.blocks_session(&session_id) {
-        return Err(
-            "A goal run is active on this session — pause or stop it from the Tasks page before sending messages"
-                .into(),
-        );
+        return Err(tagged_error(
+            "goal_run_active",
+            "A goal run is active on this session — pause or stop it from the Tasks page before sending messages",
+        ));
     }
 
     // P0-4: session-budget pre-turn guard (logic in the generic helper so
@@ -1211,7 +1223,10 @@ pub async fn send_message(
     {
         let mut querying = active_session.querying.lock().await;
         if *querying {
-            return Err("A query is already in progress".into());
+            return Err(tagged_error(
+                "query_in_progress",
+                "A query is already in progress",
+            ));
         }
         *querying = true;
     }
@@ -2800,9 +2815,11 @@ mod tests {
         // P0-3: the reason serializes as a snake_case tag the frontend can
         // switch on.
         assert!(json.contains("\"reason\":\"out_of_working_dir\""));
-        // W3-4: the citation list rides camelCase (InjectedMemoryDto) so the
-        // chips render the same shape the RightDock introspection returns.
-        assert!(json.contains("\"injectedMemories\":[{"));
+        // W3-4: the citation list rides on the response (snake_case field,
+        // like query_id/rejected_attachments); each DTO's own fields are
+        // camelCase (InjectedMemoryDto) so the chips render the same shape
+        // the RightDock introspection returns.
+        assert!(json.contains("\"injected_memories\":[{"));
         assert!(json.contains("\"sourceSessionId\":\"sess-9\""));
         let deserialized: SendMessageResponse = serde_json::from_str(&json).unwrap();
         assert_eq!(deserialized.query_id, "abc-123");
@@ -3492,10 +3509,36 @@ fn require_attachment_working_dir_rejects_unset_without_cwd_fallback() {
         err.contains("Settings"),
         "error must point at Settings, got: {err}"
     );
+    // R2-P2-2: the same string carries the structured kind the frontend
+    // localizes — `shannon-error:<kind>|<original text>` — so an unknown
+    // kind / old frontend still shows the original sentence verbatim.
+    assert!(
+        err.starts_with("shannon-error:no_working_dir|"),
+        "missing structured tag, got: {err}"
+    );
     // A configured value passes through untouched.
     assert_eq!(
         require_attachment_working_dir(Some("/tmp/proj")).unwrap(),
         std::path::PathBuf::from("/tmp/proj")
+    );
+}
+
+#[test]
+fn tagged_error_keeps_the_original_text_after_the_kind() {
+    // R2-P2-2 protocol shape: kind is machine-only ([a-z0-9_]), the original
+    // text survives verbatim after the first `|` (the frontend's unknown-kind
+    // fallback and old frontends both render it unchanged).
+    let err = tagged_error("query_in_progress", "A query is already in progress");
+    assert_eq!(
+        err,
+        "shannon-error:query_in_progress|A query is already in progress"
+    );
+    // A `|` inside the original text only ever splits on the FIRST one —
+    // the remainder stays part of the human-readable text.
+    let piped = tagged_error("goal_run_active", "pause | stop it");
+    assert_eq!(
+        piped.strip_prefix("shannon-error:goal_run_active|"),
+        Some("pause | stop it")
     );
 }
 
