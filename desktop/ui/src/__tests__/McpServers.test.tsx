@@ -13,6 +13,7 @@ const installMcpStdio = vi.hoisted(() => vi.fn())
 const installMcpMcpb = vi.hoisted(() => vi.fn())
 const uninstallMcpServer = vi.hoisted(() => vi.fn())
 const restartMcpServer = vi.hoisted(() => vi.fn())
+const setMcpServerEnabled = vi.hoisted(() => vi.fn())
 
 vi.mock('@/lib/tauri-api', () => ({
   default: {},
@@ -22,6 +23,7 @@ vi.mock('@/lib/tauri-api', () => ({
   installMcpMcpb: (...a: unknown[]) => installMcpMcpb(...a),
   uninstallMcpServer: (...a: unknown[]) => uninstallMcpServer(...a),
   restartMcpServer: (...a: unknown[]) => restartMcpServer(...a),
+  setMcpServerEnabled: (...a: unknown[]) => setMcpServerEnabled(...a),
 }))
 
 function renderWithRouter() {
@@ -57,8 +59,11 @@ const sampleInstalled = {
   tool_count: 5,
   tools: [],
   last_connected: null,
+  has_auth_headers: false,
 }
 
+// W1-A honest state: an OAuth-product url-only row (headers on the store
+// blob) — backend verdict `has_auth_headers: true`.
 const sampleRemote = {
   name: 'notion',
   command: '',
@@ -68,6 +73,21 @@ const sampleRemote = {
   tools: [],
   last_connected: null,
   url: 'https://mcp.notion.com/mcp',
+  has_auth_headers: true,
+}
+
+// W2-A (R4/A1): a header-less url-only row — pure remote, wired into the
+// pool, rendering exactly like stdio.
+const samplePureRemote = {
+  name: 'deepwiki',
+  command: '',
+  enabled: true,
+  connected: true,
+  tool_count: 3,
+  tools: [],
+  last_connected: 1735689600000,
+  url: 'https://mcp.deepwiki.com/mcp',
+  has_auth_headers: false,
 }
 
 const sampleFailed = {
@@ -78,7 +98,32 @@ const sampleFailed = {
   tool_count: 0,
   tools: [],
   last_connected: null,
+  has_auth_headers: false,
   last_error: 'spawn /nonexistent ENOENT',
+}
+
+const sampleFailedRemote = {
+  name: 'flaky-remote',
+  command: '',
+  enabled: true,
+  connected: false,
+  tool_count: 0,
+  tools: [],
+  last_connected: null,
+  url: 'http://127.0.0.1:1/mcp',
+  has_auth_headers: false,
+  last_error: "Remote MCP server 'flaky-remote' returned HTTP 500",
+}
+
+const sampleDisabled = {
+  name: 'paused',
+  command: 'npx',
+  enabled: false,
+  connected: false,
+  tool_count: 0,
+  tools: [],
+  last_connected: null,
+  has_auth_headers: false,
 }
 
 beforeEach(() => {
@@ -88,6 +133,7 @@ beforeEach(() => {
   installMcpMcpb.mockReset()
   uninstallMcpServer.mockReset()
   restartMcpServer.mockReset()
+  setMcpServerEnabled.mockReset()
   // Default: registry returns empty so any test opening the modal won't crash.
   listMcpRegistryServers.mockResolvedValue([])
 })
@@ -405,6 +451,91 @@ describe('McpServers (Cursor-style UX)', () => {
     fireEvent.keyDown(document, { key: 'Escape' })
     await waitFor(() => {
       expect(screen.queryByText('Add MCP Server')).not.toBeInTheDocument()
+    })
+  })
+
+  // W2-A (R4/A1): a connected pure remote row renders isomorphic to stdio —
+  // an Online status pill and a *separate* tool-count chip — and its
+  // Restart button is enabled (the pool restarts remote rows for real).
+  it('renders a connected pure remote row like stdio with restart enabled', async () => {
+    listMcpServers.mockResolvedValue([samplePureRemote])
+    renderWithRouter()
+    await waitFor(() => {
+      expect(screen.getByText('Online')).toBeInTheDocument()
+    })
+    // The tool count is its own element next to the status pill.
+    expect(screen.getByText('3 tools')).toBeInTheDocument()
+    expect(screen.getByText('https://mcp.deepwiki.com/mcp')).toBeInTheDocument()
+    // Restart is NOT disabled for pure remote rows.
+    const restart = screen.getByRole('button', { name: 'Restart deepwiki' })
+    expect(restart).toBeEnabled()
+    // No honest badge / hint on a wired pure remote row.
+    expect(screen.queryByText('Remote')).not.toBeInTheDocument()
+  })
+
+  // W2-A honesty kept: the OAuth-product row still shows the W1-A Remote
+  // badge + hint and a disabled restart; the header-less sibling would not.
+  it('keeps the honest Remote badge for auth-gated url-only rows', async () => {
+    listMcpServers.mockResolvedValue([sampleRemote])
+    renderWithRouter()
+    await waitFor(() => {
+      expect(screen.getByText('Remote')).toBeInTheDocument()
+    })
+    expect(
+      screen.getByText('Remote server · Desktop support coming soon — use the CLI for now.'),
+    ).toBeInTheDocument()
+    const restart = screen.getByRole('button', {
+      name: "Remote servers can't be restarted from the desktop yet — use the CLI.",
+    })
+    expect(restart).toBeDisabled()
+  })
+
+  // W2-A: a failed remote connection surfaces the pool's last_error inline,
+  // same as failed stdio rows.
+  it('shows the concrete error of a failed remote connection', async () => {
+    listMcpServers.mockResolvedValue([sampleFailedRemote])
+    renderWithRouter()
+    await waitFor(() => {
+      expect(
+        screen.getByText("Remote MCP server 'flaky-remote' returned HTTP 500"),
+      ).toBeInTheDocument()
+    })
+    expect(screen.getByText('Offline')).toBeInTheDocument()
+  })
+
+  // W2-A 顺手①: a disabled row shows a Disabled badge (not Offline) and an
+  // inline switch; flipping it calls the toggle backend with the row name.
+  it('shows Disabled badge and wires the inline enable toggle', async () => {
+    listMcpServers.mockResolvedValue([sampleDisabled])
+    setMcpServerEnabled.mockResolvedValue({ ...sampleDisabled, enabled: true })
+    renderWithRouter()
+    await waitFor(() => {
+      expect(screen.getByText('Disabled')).toBeInTheDocument()
+    })
+    expect(screen.queryByText('Offline')).not.toBeInTheDocument()
+    const toggle = screen.getByTestId('mcp-toggle-paused')
+    expect(toggle.getAttribute('aria-checked')).toBe('false')
+    fireEvent.click(toggle)
+    await waitFor(() => {
+      expect(setMcpServerEnabled).toHaveBeenCalledWith('paused', true)
+    })
+  })
+
+  // W2-A 顺手①: disabling a running row through its switch.
+  it('disables an enabled server through its inline switch', async () => {
+    listMcpServers.mockResolvedValue([sampleInstalled])
+    setMcpServerEnabled.mockResolvedValue({ ...sampleInstalled, enabled: false })
+    renderWithRouter()
+    await waitFor(() => {
+      expect(screen.getByTestId('mcp-toggle-filesystem')).toBeInTheDocument()
+    })
+    fireEvent.click(screen.getByTestId('mcp-toggle-filesystem'))
+    await waitFor(() => {
+      expect(setMcpServerEnabled).toHaveBeenCalledWith('filesystem', false)
+    })
+    // The refresh re-reads the installed list.
+    await waitFor(() => {
+      expect(listMcpServers.mock.calls.length).toBeGreaterThanOrEqual(2)
     })
   })
 })

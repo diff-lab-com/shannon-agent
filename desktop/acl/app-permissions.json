@@ -2432,6 +2432,15 @@
       }
     },
     {
+      "identifier": "allow-set-mcp-server-enabled",
+      "description": "Enables the set_mcp_server_enabled command without any pre-configured scope.",
+      "commands": {
+        "allow": [
+          "set_mcp_server_enabled"
+        ]
+      }
+    },
+    {
       "identifier": "allow-set-notification-prefs",
       "description": "Enables the set_notification_prefs command without any pre-configured scope.",
       "commands": {
@@ -3132,6 +3141,7 @@
         "allow-restart-mcp-server",
         "allow-scan-prompt-injection",
         "allow-scan-prompt-injection-with-readme",
+        "allow-set-mcp-server-enabled",
         "allow-uninstall-agent-plugin",
         "allow-uninstall-data-source",
         "allow-uninstall-mcp-server",

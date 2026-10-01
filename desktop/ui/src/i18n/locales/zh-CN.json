@@ -2070,6 +2070,7 @@
   "inbox.source.goal": "目标",
   "inbox.source.trigger": "触发器",
   "inbox.source.batch": "多方案",
+  "inbox.source.background_task": "后台任务",
   "inbox.source.session_approval": "审批请求",
   "inbox.source.session_failed": "会话失败",
   "inbox.source.skill_candidate": "技能候选",
@@ -3821,6 +3822,12 @@
   "tasks.backgroundPanel.stopAria": "停止后台任务",
   "tasks.backgroundPanel.stopFailed": "停止任务失败",
   "tasks.backgroundPanel.elapsedAria": "已用时",
+  "tasks.backgroundPanel.recent": "最近",
+  "tasks.backgroundPanel.statusCompleted": "已完成",
+  "tasks.backgroundPanel.statusFailed": "失败",
+  "tasks.backgroundPanel.statusCancelled": "已取消",
+  "tasks.backgroundPanel.durationAria": "耗时",
+  "tasks.backgroundPanel.errorSummaryAria": "错误摘要",
   "opc.kanban.boardSyncFailed": "任务已启动，但创建看板卡片失败",
   "settings.remotes.loadFailed": "无法加载远程目标",
   "settings.remotes.testFailed": "无法测试该目标",
@@ -3871,5 +3878,9 @@
   "settings.remotes.limits.title": "已知限制",
   "settings.remotes.limits.subtitle": "依赖远程执行前，先了解这些边界。",
   "settings.remotes.limits.pty": "远程目标不支持交互式 PTY 命令（全屏 REPL、编辑器）——命令以捕获方式执行，没有 TTY。",
-  "settings.remotes.limits.worktree": "git worktree 仅限本地：远程目标暂不支持 worktree 隔离执行。"
+  "settings.remotes.limits.worktree": "git worktree 仅限本地：远程目标暂不支持 worktree 隔离执行。",
+  "extensions.mcp.statusOnline": "在线",
+  "extensions.mcp.statusDisabled": "已停用",
+  "extensions.mcp.toggleAria": "启用或停用 {name}",
+  "extensions.mcp.toggleFailed": "更新 {name} 失败：{error}"
 }

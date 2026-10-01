@@ -2051,6 +2051,7 @@
   "inbox.source.goal": "Goal",
   "inbox.source.trigger": "觸發器",
   "inbox.source.batch": "Best-of-N",
+  "inbox.source.background_task": "背景任務",
   "inbox.source.session_approval": "Approval",
   "inbox.source.session_failed": "Session failed",
   "inbox.source.skill_candidate": "Skill candidate",
@@ -3821,6 +3822,12 @@
   "tasks.backgroundPanel.stopAria": "停止背景任務",
   "tasks.backgroundPanel.stopFailed": "停止任務失敗",
   "tasks.backgroundPanel.elapsedAria": "已用時間",
+  "tasks.backgroundPanel.recent": "最近",
+  "tasks.backgroundPanel.statusCompleted": "已完成",
+  "tasks.backgroundPanel.statusFailed": "失敗",
+  "tasks.backgroundPanel.statusCancelled": "已取消",
+  "tasks.backgroundPanel.durationAria": "耗時",
+  "tasks.backgroundPanel.errorSummaryAria": "錯誤摘要",
   "opc.kanban.boardSyncFailed": "任務已啟動，但建立看板卡片失敗",
   "settings.remotes.loadFailed": "無法載入遠端目標",
   "settings.remotes.testFailed": "無法測試該目標",
@@ -3871,5 +3878,9 @@
   "settings.remotes.limits.title": "已知限制",
   "settings.remotes.limits.subtitle": "依賴遠端執行前，先了解這些邊界。",
   "settings.remotes.limits.pty": "遠端目標不支援互動式 PTY 命令（全螢幕 REPL、編輯器）——命令以擷取方式執行，沒有 TTY。",
-  "settings.remotes.limits.worktree": "git worktree 僅限本機：遠端目標暫不支援 worktree 隔離執行。"
+  "settings.remotes.limits.worktree": "git worktree 僅限本機：遠端目標暫不支援 worktree 隔離執行。",
+  "extensions.mcp.statusOnline": "線上",
+  "extensions.mcp.statusDisabled": "已停用",
+  "extensions.mcp.toggleAria": "啟用或停用 {name}",
+  "extensions.mcp.toggleFailed": "更新 {name} 失敗：{error}"
 }

@@ -2051,6 +2051,7 @@
   "inbox.source.goal": "Goal",
   "inbox.source.trigger": "Trigger",
   "inbox.source.batch": "Best-of-N",
+  "inbox.source.background_task": "Tâche d'arrière-plan",
   "inbox.source.session_approval": "Approval",
   "inbox.source.session_failed": "Session failed",
   "inbox.source.skill_candidate": "Skill candidate",
@@ -3821,6 +3822,12 @@
   "tasks.backgroundPanel.stopAria": "Arrêter la tâche en arrière-plan",
   "tasks.backgroundPanel.stopFailed": "Échec de l'arrêt de la tâche",
   "tasks.backgroundPanel.elapsedAria": "Temps écoulé",
+  "tasks.backgroundPanel.recent": "Récentes",
+  "tasks.backgroundPanel.statusCompleted": "Terminé",
+  "tasks.backgroundPanel.statusFailed": "Échec",
+  "tasks.backgroundPanel.statusCancelled": "Annulé",
+  "tasks.backgroundPanel.durationAria": "Durée",
+  "tasks.backgroundPanel.errorSummaryAria": "Résumé de l'erreur",
   "opc.kanban.boardSyncFailed": "La tâche a démarré, mais la création de sa carte sur le tableau a échoué",
   "settings.remotes.loadFailed": "Impossible de charger les cibles distantes",
   "settings.remotes.testFailed": "Impossible de tester la cible",
@@ -3871,5 +3878,9 @@
   "settings.remotes.limits.title": "Limitations connues",
   "settings.remotes.limits.subtitle": "Ces limites sont bonnes à connaître avant de compter sur l'exécution distante.",
   "settings.remotes.limits.pty": "Les commandes PTY interactives (REPL plein écran, éditeurs) ne sont pas prises en charge sur les cibles distantes — les commandes s'exécutent en mode capturé, sans TTY.",
-  "settings.remotes.limits.worktree": "Les git worktrees sont locaux uniquement : les cibles distantes ne peuvent pas encore héberger d'exécutions isolées en worktree."
+  "settings.remotes.limits.worktree": "Les git worktrees sont locaux uniquement : les cibles distantes ne peuvent pas encore héberger d'exécutions isolées en worktree.",
+  "extensions.mcp.statusOnline": "En ligne",
+  "extensions.mcp.statusDisabled": "Désactivé",
+  "extensions.mcp.toggleAria": "Activer ou désactiver {name}",
+  "extensions.mcp.toggleFailed": "Échec de la mise à jour de {name} : {error}"
 }

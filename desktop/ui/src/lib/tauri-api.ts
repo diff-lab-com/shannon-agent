@@ -1198,6 +1198,12 @@ export async function restartMcpServer(name: string): Promise<McpServerInfo> {
   return invoke('restart_mcp_server', { name })
 }
 
+// W2-A: inline enable/disable toggle — persists to settings.json and
+// reconciles the pool (stop on disable, start on enable).
+export async function setMcpServerEnabled(name: string, enabled: boolean): Promise<McpServerInfo> {
+  return invoke('set_mcp_server_enabled', { name, enabled })
+}
+
 export async function getMcpServerConfig(name: string): Promise<McpServerConfig> {
   return invoke('get_mcp_server_config', { name })
 }

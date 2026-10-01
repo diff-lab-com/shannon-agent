@@ -24,11 +24,17 @@ pub struct McpServerInfo {
     pub tools: Vec<ToolInfo>,
     pub last_connected: Option<i64>,
     /// W1-1 (R2-P0-1(B)): remote (HTTP/SSE) endpoint of url-only entries.
-    /// `None` on stdio rows. Url-only servers cannot be started by the
-    /// desktop process pool yet — the UI renders an honest "remote" state
-    /// pointing at the CLI instead of a forever-Offline badge.
+    /// `None` on stdio rows. Header-less url-only servers are wired into
+    /// the desktop process pool since W2-A (R4/A1).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub url: Option<String>,
+    /// W2-A (R4/A1) — the backend's single-source auth verdict, mirrored
+    /// from `config::McpServerConfig::has_auth_headers`: `true` on
+    /// url-only rows that carry HTTP headers (OAuth products). The UI
+    /// keeps those on the W1-A honest "remote" badge and disables their
+    /// restart; header-less remote rows render like stdio.
+    #[serde(default)]
+    pub has_auth_headers: bool,
     /// W1-7 (R2-P1-6): the pool's last start/connection failure for this
     /// server, so a dead server is diagnosable instead of just colored
     /// Offline. `None` = the pool never reported a failure.
@@ -58,6 +64,69 @@ pub struct SkillDetail {
     pub category: Option<String>,
 }
 
+/// Build the UI row for a server plus its live pool status. Shared by the
+/// add/restart/toggle commands, which all return the fresh row.
+fn mcp_server_info(
+    server: &crate::config::McpServerConfig,
+    connected: bool,
+    last_error: Option<String>,
+) -> McpServerInfo {
+    McpServerInfo {
+        name: server.name.clone(),
+        command: server.command.clone(),
+        enabled: server.enabled,
+        connected,
+        tool_count: 0,
+        tools: Vec::new(),
+        last_connected: if connected {
+            Some(chrono_timestamp())
+        } else {
+            None
+        },
+        url: server.url.clone(),
+        has_auth_headers: server.has_auth_headers,
+        last_error,
+    }
+}
+
+/// Start one server in the pool according to its config row: stdio rows
+/// spawn a process, header-less url-only rows connect as remote HTTP/SSE
+/// (W2-A R4/A1), auth-gated rows are never started header-less (A2 scope).
+/// Returns `(connected, last_error)`.
+async fn start_for_config(
+    pool: &shannon_mcp::McpProcessPool,
+    server: &crate::config::McpServerConfig,
+) -> (bool, Option<String>) {
+    if server.command.is_empty() {
+        let Some(url) = server.url.clone() else {
+            return (
+                false,
+                Some(format!(
+                    "Server '{}' has neither command nor url",
+                    server.name
+                )),
+            );
+        };
+        if server.has_auth_headers {
+            return (false, None);
+        }
+        return match pool
+            .start_remote_server(&server.name, &url, HashMap::new(), None)
+            .await
+        {
+            Ok(()) => (true, None),
+            Err(e) => (false, Some(e)),
+        };
+    }
+    match pool
+        .start_server(&server.name, &server.command, &server.args, &server.env)
+        .await
+    {
+        Ok(()) => (true, None),
+        Err(e) => (false, Some(e)),
+    }
+}
+
 /// Add an MCP server configuration and start the process.
 #[tauri::command]
 pub async fn add_mcp_server(
@@ -83,6 +152,7 @@ pub async fn add_mcp_server(
         env: env.clone(),
         enabled: true,
         url: None,
+        has_auth_headers: false,
     };
 
     // G1: single source of truth is `~/.shannon/settings.json#mcpServers`
@@ -93,26 +163,9 @@ pub async fn add_mcp_server(
     // Start the server process. W1-7: a failed start keeps its error so the
     // UI can say *why* the server is down, not just that it is.
     let pool = state.mcp_pool.clone();
-    let (connected, last_error) = match pool.start_server(&name, &command, &args, &env).await {
-        Ok(()) => (true, None),
-        Err(e) => (false, Some(e)),
-    };
+    let (connected, last_error) = start_for_config(&pool, &server_config).await;
 
-    Ok(McpServerInfo {
-        name: server_config.name,
-        command: server_config.command,
-        enabled: server_config.enabled,
-        connected,
-        tool_count: 0,
-        tools: Vec::new(),
-        last_connected: if connected {
-            Some(chrono_timestamp())
-        } else {
-            None
-        },
-        url: None,
-        last_error,
-    })
+    Ok(mcp_server_info(&server_config, connected, last_error))
 }
 
 /// Remove an MCP server configuration and stop its process.
@@ -137,6 +190,10 @@ pub async fn remove_mcp_server(
 }
 
 /// Restart an MCP server (stop then start).
+///
+/// W2-A (R4/A1): pure remote (header-less url-only) rows restart for real
+/// via the pool's remote transport; auth-gated rows (OAuth products) stay
+/// disabled with the honest W1-A reason until A2.
 #[tauri::command]
 pub async fn restart_mcp_server(
     state: tauri::State<'_, AppState>,
@@ -144,54 +201,70 @@ pub async fn restart_mcp_server(
 ) -> Result<McpServerInfo, String> {
     use crate::config;
 
-    let servers = config::load_mcp_servers();
+    let servers = config::load_mcp_servers()?;
     let server = servers
         .iter()
         .find(|s| s.name == name)
+        .cloned()
         .ok_or_else(|| format!("Server not found: {name}"))?;
 
-    // W1-1: url-only remote entries have no stdio process to restart — the
-    // desktop pool cannot start them yet. Fail with an honest reason
-    // instead of a guaranteed empty-command spawn error.
     if server.command.is_empty() {
-        return Err(if server.url.is_some() {
-            format!(
-                "'{name}' is a remote (url-only) MCP server — restarting it from the \
-                 desktop is not supported yet; use the CLI"
-            )
-        } else {
-            format!("Server '{name}' has no command to restart")
-        });
+        if server.url.is_none() {
+            return Err(format!("Server '{name}' has no command to restart"));
+        }
+        if server.has_auth_headers {
+            return Err(format!(
+                "'{name}' is an authenticated remote (OAuth) MCP server — desktop \
+                 restart arrives with OAuth support; use the CLI"
+            ));
+        }
     }
-
-    let command = server.command.clone();
-    let args = server.args.clone();
-    let env = server.env.clone();
 
     let pool = state.mcp_pool.clone();
 
     // Stop then start. W1-7: keep the start error for the UI.
     let _ = pool.stop_server(&name).await;
-    let (connected, last_error) = match pool.start_server(&name, &command, &args, &env).await {
-        Ok(()) => (true, None),
-        Err(e) => (false, Some(e)),
+    let (connected, last_error) = start_for_config(&pool, &server).await;
+
+    Ok(mcp_server_info(&server, connected, last_error))
+}
+
+/// Enable or disable one MCP server (W2-A inline toggle) and reconcile the
+/// pool: disabling stops the server, enabling starts it (except auth-gated
+/// remote rows, which stay in the honest W1-A state until A2).
+#[tauri::command]
+pub async fn set_mcp_server_enabled(
+    state: tauri::State<'_, AppState>,
+    name: String,
+    enabled: bool,
+) -> Result<McpServerInfo, String> {
+    use crate::config;
+
+    // Persist first — the store is the single source of truth; the pool is
+    // reconciled after. The in-place JSON edit keeps url-only rows
+    // (`type`/`url`/`headers`) intact.
+    if !config::set_mcp_server_enabled(&name, enabled)? {
+        return Err(format!("Server not found: {name}"));
+    }
+
+    let servers = config::load_mcp_servers()?;
+    let server = servers
+        .iter()
+        .find(|s| s.name == name)
+        .cloned()
+        .ok_or_else(|| format!("Server not found: {name}"))?;
+
+    let pool = state.mcp_pool.clone();
+    let (connected, last_error) = if enabled {
+        start_for_config(&pool, &server).await
+    } else {
+        // Not running is fine — a never-started (seed-failed) server has a
+        // pool handle but stop is still the right reconcile step.
+        let _ = pool.stop_server(&name).await;
+        (false, None)
     };
 
-    Ok(McpServerInfo {
-        name: name.clone(),
-        command,
-        enabled: true,
-        connected,
-        tool_count: 0,
-        tools: Vec::new(),
-        last_connected: if connected {
-            Some(chrono_timestamp())
-        } else {
-            None
-        },
-        url: None,
-        last_error,
-    })
+    Ok(mcp_server_info(&server, connected, last_error))
 }
 
 /// Get MCP server configuration details.
@@ -199,7 +272,7 @@ pub async fn restart_mcp_server(
 pub async fn get_mcp_server_config(name: String) -> Result<crate::config::McpServerConfig, String> {
     use crate::config;
 
-    let servers = config::load_mcp_servers();
+    let servers = config::load_mcp_servers()?;
     servers
         .into_iter()
         .find(|s| s.name == name)
@@ -214,7 +287,9 @@ pub async fn list_mcp_servers(
     use crate::config;
     use shannon_mcp::ServerState;
 
-    let servers = config::load_mcp_servers();
+    // W2-A: a corrupt settings.json is an error — the UI renders its error
+    // state instead of a fake "nothing installed".
+    let servers = config::load_mcp_servers()?;
     let pool = state.mcp_pool.clone();
 
     let pool_states = pool.list_servers().await;
@@ -278,6 +353,7 @@ pub async fn list_mcp_servers(
             tools,
             last_connected,
             url: s.url,
+            has_auth_headers: s.has_auth_headers,
             last_error,
         });
     }

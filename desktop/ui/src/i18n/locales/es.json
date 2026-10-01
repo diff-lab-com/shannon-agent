@@ -2051,6 +2051,7 @@
   "inbox.source.goal": "Goal",
   "inbox.source.trigger": "Trigger",
   "inbox.source.batch": "Best-of-N",
+  "inbox.source.background_task": "Tarea en segundo plano",
   "inbox.source.session_approval": "Approval",
   "inbox.source.session_failed": "Session failed",
   "inbox.source.skill_candidate": "Skill candidate",
@@ -3821,6 +3822,12 @@
   "tasks.backgroundPanel.stopAria": "Detener tarea en segundo plano",
   "tasks.backgroundPanel.stopFailed": "No se pudo detener la tarea",
   "tasks.backgroundPanel.elapsedAria": "Tiempo transcurrido",
+  "tasks.backgroundPanel.recent": "Recientes",
+  "tasks.backgroundPanel.statusCompleted": "Completada",
+  "tasks.backgroundPanel.statusFailed": "Fallida",
+  "tasks.backgroundPanel.statusCancelled": "Cancelada",
+  "tasks.backgroundPanel.durationAria": "Duración",
+  "tasks.backgroundPanel.errorSummaryAria": "Resumen del error",
   "opc.kanban.boardSyncFailed": "La tarea se inició, pero falló la creación de su tarjeta en el tablero",
   "settings.remotes.loadFailed": "No se pudieron cargar los destinos remotos",
   "settings.remotes.testFailed": "No se pudo probar el destino",
@@ -3871,5 +3878,9 @@
   "settings.remotes.limits.title": "Limitaciones conocidas",
   "settings.remotes.limits.subtitle": "Conoce estos límites antes de confiar en la ejecución remota.",
   "settings.remotes.limits.pty": "Los comandos PTY interactivos (REPL a pantalla completa, editores) no están soportados en destinos remotos; los comandos se ejecutan capturados, sin TTY.",
-  "settings.remotes.limits.worktree": "Los git worktree son solo locales: los destinos remotos aún no alojan ejecuciones aisladas en worktree."
+  "settings.remotes.limits.worktree": "Los git worktree son solo locales: los destinos remotos aún no alojan ejecuciones aisladas en worktree.",
+  "extensions.mcp.statusOnline": "En línea",
+  "extensions.mcp.statusDisabled": "Desactivado",
+  "extensions.mcp.toggleAria": "Activar o desactivar {name}",
+  "extensions.mcp.toggleFailed": "No se pudo actualizar {name}: {error}"
 }

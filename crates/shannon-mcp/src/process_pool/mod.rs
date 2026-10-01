@@ -369,7 +369,18 @@ impl McpProcessPool {
             )),
         });
 
-        handle.start().await?;
+        let start_result = handle.start().await;
+        if let Err(e) = start_result {
+            // W2-A: a failed start used to drop the handle, making the
+            // failure invisible to `list_servers`/`server_status` (the UI
+            // could only show a bare Offline). Keep the handle in the pool
+            // carrying the failure reason — W1-7's `last_error` contract —
+            // so consumers can diagnose (and stop/restart) it, while the
+            // error still propagates to the caller.
+            *handle.state.write().await = ServerState::Unhealthy(e.clone());
+            self.handles.insert(name.to_string(), handle);
+            return Err(e);
+        }
         self.handles.insert(name.to_string(), handle);
         self.fire_event(McpEvent::new(
             McpEventType::ServerConnected,
@@ -482,7 +493,15 @@ impl McpProcessPool {
             notification_tx: self.notification_tx.clone(),
         });
 
-        handle.start().await?;
+        if let Err(e) = handle.start().await {
+            // W2-A: same observability contract as `start_server` — a
+            // failed remote handshake stays in the pool as Unhealthy(err)
+            // so the desktop UI can render the concrete `last_error`
+            // instead of a bare Offline badge. The error still propagates.
+            *handle.state.write().await = ServerState::Unhealthy(e.clone());
+            self.remote_handles.insert(name.to_string(), handle);
+            return Err(e);
+        }
         self.remote_handles.insert(name.to_string(), handle);
         self.fire_event(McpEvent::new(
             McpEventType::ServerConnected,

@@ -332,6 +332,7 @@ fn main() {
             commands_mcp::add_mcp_server,
             commands_mcp::remove_mcp_server,
             commands_mcp::restart_mcp_server,
+            commands_mcp::set_mcp_server_enabled,
             commands_mcp::get_mcp_server_config,
             commands_mcp::list_mcp_servers,
             commands_mcp::list_skills,
@@ -659,7 +660,19 @@ fn main() {
                 // next turn after the pool is up registers them.
                 let pool = state_ref.mcp_pool();
                 tauri::async_runtime::spawn(async move {
-                    let mcp_servers = shannon_desktop::config::load_mcp_servers();
+                    // W2-A: a corrupt settings.json is an error, never a
+                    // silent empty list — log loudly (the MCP settings page
+                    // surfaces the same error in its UI state).
+                    let mcp_servers = match shannon_desktop::config::load_mcp_servers() {
+                        Ok(servers) => servers,
+                        Err(e) => {
+                            tracing::error!(
+                                error = %e,
+                                "Skipping MCP pool seed: settings.json failed to load"
+                            );
+                            return;
+                        }
+                    };
                     if mcp_servers.is_empty() {
                         return;
                     }

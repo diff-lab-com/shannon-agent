@@ -361,6 +361,7 @@ pub fn materialize_plugin(
                     env: Default::default(),
                     enabled: true,
                     url: None,
+                    has_auth_headers: false,
                 };
                 let value = serde_json::to_value(&config)
                     .map_err(|e| format!("mcp server '{key}' serialize: {e}"))?;
@@ -766,7 +767,7 @@ mod tests {
         assert!(command.is_file());
 
         // namespaced mcp key landed in the unified settings store
-        let servers = crate::config::load_mcp_servers_from(&homes.mcp_settings_path);
+        let servers = crate::config::load_mcp_servers_from(&homes.mcp_settings_path).unwrap();
         let relay = servers
             .iter()
             .find(|s| s.name == "demo-relay")
@@ -845,7 +846,7 @@ mod tests {
         assert!(!homes.agents_root.join("demo").exists());
         assert!(!homes.commands_root.join("ship.md").exists());
         assert!(foreign.is_file(), "foreign command must survive");
-        let servers = crate::config::load_mcp_servers_from(&homes.mcp_settings_path);
+        let servers = crate::config::load_mcp_servers_from(&homes.mcp_settings_path).unwrap();
         assert!(
             servers.iter().all(|s| s.name != "demo-relay"),
             "{servers:?}"
@@ -1104,7 +1105,7 @@ mod tests {
         .unwrap();
         assert!(outcome.warnings.is_empty());
 
-        let servers = crate::config::load_mcp_servers_from(&homes.mcp_settings_path);
+        let servers = crate::config::load_mcp_servers_from(&homes.mcp_settings_path).unwrap();
         assert_eq!(servers.len(), 2);
         let relay = servers
             .iter()
@@ -1154,11 +1155,15 @@ mod tests {
         let cfg = serde_json::json!({"name":"a-b","command":"x","args":[],"env":{},"enabled":true});
         upsert_mcp_store(&path, "a-b", &cfg).unwrap();
         upsert_mcp_store(&path, "a-b", &cfg).unwrap(); // upsert, not duplicate
-        let servers = crate::config::load_mcp_servers_from(&path);
+        let servers = crate::config::load_mcp_servers_from(&path).unwrap();
         assert_eq!(servers.len(), 1);
         remove_mcp_store_entry(&path, "a-b").unwrap();
         remove_mcp_store_entry(&path, "a-b").unwrap(); // gone twice = ok
-        assert!(crate::config::load_mcp_servers_from(&path).is_empty());
+        assert!(
+            crate::config::load_mcp_servers_from(&path)
+                .unwrap()
+                .is_empty()
+        );
     }
 
     #[test]

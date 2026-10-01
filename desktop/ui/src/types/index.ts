@@ -797,6 +797,13 @@ export interface McpServerInfo {
   last_connected: number | null
   /** W1-1: remote endpoint of url-only (OAuth/HTTP) entries — `null` on stdio rows. */
   url?: string | null
+  /**
+   * W2-A (R4/A1): the backend's single-source auth verdict — true on
+   * url-only rows carrying HTTP headers (OAuth products). Those stay on
+   * the honest "Remote" badge with restart disabled; header-less remote
+   * rows render like stdio.
+   */
+  has_auth_headers: boolean
   /** W1-7: pool-reported failure reason, so a dead server is diagnosable. */
   last_error?: string | null
 }
@@ -1294,13 +1301,15 @@ export interface TriageStats {
 /// `session_failed` (the session's last turn failed), and `skill_candidate`
 /// (a detected skill pattern awaits review). `dream_report` is the daily
 /// dream-distillation summary card (at most one per day, deduped by the
-/// backend writer).
+/// backend writer). `background_task` is a failed desktop background task
+/// (R2-P1-5) — successes/cancels never write an item.
 export type InboxSource =
   | 'routine'
   | 'scheduled_task'
   | 'goal'
   | 'trigger'
   | 'batch'
+  | 'background_task'
   | 'session_approval'
   | 'session_failed'
   | 'skill_candidate'
