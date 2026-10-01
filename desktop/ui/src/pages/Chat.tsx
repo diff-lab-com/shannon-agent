@@ -478,10 +478,10 @@ export default function Chat() {
     const filePaths = hasAttachments ? attachedFiles : undefined
     // B1 §4-9: while THIS session streams, sends join its FIFO queue instead
     // of being dropped. Accepted items clear the draft (they render as
-    // removable chips); an overflow keeps it. The pre-existing edge stands:
-    // attachments-only input still no-ops while querying.
+    // removable chips); an overflow keeps it. Attachments-only sends join
+    // too (R2 W2-4): the queue already renders an attachments-only chip, so
+    // the old text-only gate was a silent no-op, not a policy.
     if (isQuerying) {
-      if (!trimmed) return
       const accepted = enqueuePrompt(trimmed, hasAttachments ? attachedFiles : [])
       if (accepted) {
         setInput('')

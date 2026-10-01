@@ -963,5 +963,26 @@ describe('Chat page', () => {
       await waitFor(() =>
         expect(ctx.sendMessage).toHaveBeenLastCalledWith('first ever message', undefined, { budgetBypass: true }))
     })
+
+    // 顺手 — attachments-only Enter while streaming joins the FIFO queue
+    // instead of silently no-oping (the queue already renders such chips).
+    it('enqueues attachments-only input while querying', async () => {
+      resetCtx()
+      ctx.currentSessionId = 'sess-1'
+      ctx.sessions = [{ id: 'sess-1', title: 'S' }]
+      ctx.isQuerying = true
+      renderChat()
+      vi.mocked(dialog.open).mockResolvedValueOnce('/home/alice/Downloads/report.pdf')
+      fireEvent.click(screen.getByLabelText('Attachments and tools'))
+      fireEvent.click(screen.getByRole('menuitem', { name: 'Attach file' }))
+      await screen.findByText('report.pdf')
+
+      const input = screen.getByPlaceholderText(/Reply generating — press Enter to queue/)
+      fireEvent.keyDown(input, { key: 'Enter' })
+      expect(ctx.sendMessage).not.toHaveBeenCalled()
+      expect(ctx.enqueuePrompt).toHaveBeenCalledWith('', ['/home/alice/Downloads/report.pdf'])
+      // an accepted enqueue clears the draft, like any queued send
+      await waitFor(() => expect(input).toHaveValue(''))
+    })
   })
 })
