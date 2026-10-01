@@ -133,7 +133,7 @@
   "shortcuts.help.toggle": "Toggle sidebar",
   "shortcuts.help.toggleTerminal": "切換終端機面板",
   "settings.language.label": "Language",
-  "settings.language.help": "Choose the interface language. Changes apply immediately.",
+  "settings.language.help": "選擇介面語言。變更會立即生效。托盤選單跟隨系統語言，重新啟動應用程式後生效。",
   "settings.language.en": "English",
   "settings.language.zhCN": "简体中文",
   "settings.notifications.testButton": "傳送測試通知",

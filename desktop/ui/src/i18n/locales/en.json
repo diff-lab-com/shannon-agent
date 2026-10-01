@@ -134,7 +134,7 @@
   "shortcuts.help.toggle": "Toggle sidebar",
   "shortcuts.help.toggleTerminal": "Toggle the terminal panel",
   "settings.language.label": "Language",
-  "settings.language.help": "Choose the interface language. Changes apply immediately.",
+  "settings.language.help": "Choose the interface language. Changes apply immediately. The tray menu follows the system language and updates after an app restart.",
   "settings.language.en": "English",
   "settings.language.zhCN": "简体中文",
   "settings.notifications.testButton": "Send test notification",
