@@ -1,0 +1,46 @@
+{
+  "name": "first-chat",
+  "description": "首聊 journey — welcome 示例点击 → 预填 → 中英+emoji 6 分片流式 → status 播报 → completed",
+  "seed": {
+    "config": {
+      "hasKey": true
+    },
+    "sessions": [
+      {
+        "id": "script-sess-first-chat",
+        "title": "First chat",
+        "messages": []
+      }
+    ]
+  },
+  "turns": [
+    {
+      "user": "Draft a friendly follow-up email to a candidate who went silent after the onsite. Keep it short and warm.",
+      "script": [
+        {
+          "event": "query:text",
+          "chunks": [
+            "好的！Here's a ",
+            "warm follow-up email ✉️:\n\nHi Jamie,",
+            "\n\nI hope you've been well since ",
+            "the onsite last week! 我们",
+            "都很想继续推进你的流程 🌟",
+            "\n\n— Best, Dana"
+          ],
+          "chunkDelayMs": 250
+        },
+        {
+          "event": "query:usage",
+          "payload": {
+            "input_tokens": 96,
+            "output_tokens": 64,
+            "cost_usd": 0.0018
+          }
+        },
+        {
+          "event": "query:completed"
+        }
+      ]
+    }
+  ]
+}

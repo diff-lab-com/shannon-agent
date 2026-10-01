@@ -1,0 +1,40 @@
+{
+  "name": "cancel-text-stream",
+  "description": "流中取消 — stop → query:cancelled 收敛 + 半截文本丢弃现状（A-19 锚点）",
+  "seed": {
+    "config": {
+      "hasKey": true
+    },
+    "sessions": [
+      {
+        "id": "script-sess-cancel",
+        "title": "Cancel stream",
+        "messages": []
+      }
+    ]
+  },
+  "turns": [
+    {
+      "user": "写一首关于海的长诗，慢慢写",
+      "script": [
+        {
+          "event": "query:text",
+          "chunks": [
+            "海浪拍岸，",
+            "月光洒落，",
+            "风起云涌，"
+          ],
+          "chunkDelayMs": 5000
+        }
+      ]
+    }
+  ],
+  "onCancel": {
+    "emit": [
+      {
+        "event": "query:cancelled",
+        "knownIssue": "A-19"
+      }
+    ]
+  }
+}

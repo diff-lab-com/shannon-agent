@@ -1,0 +1,53 @@
+{
+  "name": "mid-stream-fail",
+  "description": "流中失败 — 横幅 + Retry → 重发（A-3 附件丢失现状锚定）→ 会话继续",
+  "seed": {
+    "config": {
+      "hasKey": true
+    },
+    "sessions": [
+      {
+        "id": "script-sess-fail",
+        "title": "Mid-stream failure",
+        "messages": []
+      }
+    ]
+  },
+  "turns": [
+    {
+      "user": "给我讲一个关于海的故事",
+      "attachments": [
+        "/Users/demo/Downloads/story-notes.md"
+      ],
+      "script": [
+        {
+          "event": "query:text",
+          "chunks": [
+            "从前有一片海，",
+            "海面上…"
+          ],
+          "chunkDelayMs": 300
+        },
+        {
+          "event": "query:failed",
+          "payload": {
+            "error": "upstream connection reset while streaming",
+            "error_kind": "other"
+          }
+        }
+      ]
+    },
+    {
+      "user": "给我讲一个关于海的故事",
+      "script": [
+        {
+          "event": "query:text",
+          "chunks": [
+            "（A-3 翻转后此段恢复）重试后的流式回复"
+          ],
+          "knownIssue": "A-3"
+        }
+      ]
+    }
+  ]
+}

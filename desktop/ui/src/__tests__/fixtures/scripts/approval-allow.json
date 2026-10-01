@@ -1,0 +1,70 @@
+{
+  "name": "approval-allow",
+  "description": "审批 Allow Once — 权限弹窗 → respond_permission 记账 → 恢复 → 工具执行 → completed",
+  "seed": {
+    "config": {
+      "hasKey": true
+    },
+    "sessions": [
+      {
+        "id": "script-sess-approval",
+        "title": "Approval flow",
+        "messages": []
+      }
+    ]
+  },
+  "turns": [
+    {
+      "user": "运行 ls -la 看看当前目录里有什么",
+      "script": [
+        {
+          "event": "query:text",
+          "chunks": [
+            "我需要先获得你的许可，",
+            "然后运行这条命令。"
+          ],
+          "chunkDelayMs": 250
+        },
+        {
+          "event": "permission-request",
+          "payload": {
+            "request_id": "pr-allow-1",
+            "tool": "Bash",
+            "risk": "high",
+            "input": {
+              "command": "ls -la"
+            },
+            "reason": {
+              "source": "rule",
+              "ruleName": "shell-command"
+            }
+          }
+        },
+        {
+          "event": "query:tool-start",
+          "payload": {
+            "tool_use_id": "tool-ls-1",
+            "tool_name": "Bash",
+            "tool_input": {
+              "command": "ls -la"
+            }
+          }
+        },
+        {
+          "event": "query:tool-result",
+          "payload": {
+            "tool_use_id": "tool-ls-1",
+            "result": "total 0",
+            "is_error": false
+          }
+        },
+        {
+          "waitFor": "ui"
+        },
+        {
+          "event": "query:completed"
+        }
+      ]
+    }
+  ]
+}
