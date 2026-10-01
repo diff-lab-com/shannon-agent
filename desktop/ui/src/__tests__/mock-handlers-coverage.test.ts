@@ -60,10 +60,11 @@ const SRC_ROOT = resolve(process.cwd(), 'src')
 const UNMOCKED_ALLOWLIST: Record<string, string> = {
   // Session/worktree lifecycle — static demo sessions are never archived,
   // branched, or attached to real worktrees/session windows.
+  // (list_archived_sessions left this list: the /chat boot fetches it every
+  // time, so R1 gave it a real handler instead — see handlers.ts.)
   archive_session: 'session mutation on a live engine session',
-  unarchive_session: 'session mutation on a live engine session',
   branch_session: 'session mutation on a live engine session',
-  list_archived_sessions: 'session mutation on a live engine session',
+  unarchive_session: 'session mutation on a live engine session',
   set_session_working_dir: 'session mutation on a live engine session',
   reveal_session_in_main: 'multi-window navigation (demo has one window)',
   open_session_window: 'session windows need the real Tauri shell',
