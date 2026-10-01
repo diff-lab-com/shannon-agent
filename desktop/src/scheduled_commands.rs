@@ -1784,9 +1784,18 @@ const OPC_WINDOW_DAYS: usize = 7;
 
 #[tauri::command]
 #[tracing::instrument(skip_all)]
-pub async fn get_opc_metrics() -> Result<OpcMetrics, String> {
-    let tasks = crate::commands_tasks::list_tasks().await?;
-    let daily = collect_daily_buckets()?;
+pub async fn get_opc_metrics(state: tauri::State<'_, AppState>) -> Result<OpcMetrics, String> {
+    // R2-P1-3: read the SAME anchored `.claude/tasks` root the board's
+    // list_tasks/update_task resolve (`working_dir`/home) — never the
+    // desktop process CWD.
+    let tasks_dir = crate::commands_tasks::anchored_tasks_dir_base(
+        crate::commands_tasks::configured_working_dir(&state)
+            .await
+            .as_deref(),
+    )?;
+    let root = tasks_dir.join(".claude").join("tasks");
+    let tasks = crate::commands_tasks::list_tasks_in(&root)?;
+    let daily = collect_daily_buckets_in(&root)?;
     Ok(compute_opc_metrics(&tasks, daily))
 }
 
@@ -1880,8 +1889,10 @@ fn is_in_progress_status(s: &str) -> bool {
     )
 }
 
-fn collect_daily_buckets() -> Result<Vec<OpcDayBucket>, String> {
-    let tasks_dir = std::path::Path::new(".claude/tasks");
+/// Daily-bucket walk over an explicit tasks root — the filesystem half of
+/// [`get_opc_metrics`]. Public so the `bench_opc` example can time the same
+/// walk + aggregation composition without Tauri state.
+pub fn collect_daily_buckets_in(tasks_dir: &std::path::Path) -> Result<Vec<OpcDayBucket>, String> {
     if !tasks_dir.is_dir() {
         return Ok(empty_daily_buckets());
     }
@@ -3182,12 +3193,8 @@ mod tests {
 
     #[test]
     fn test_collect_daily_buckets_walks_team_dirs() {
-        let _guard = CWD_LOCK
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        // R2-P1-3: path-parameterised core — no process-CWD dependency.
         let tmp = tempfile::tempdir().unwrap();
-        let orig = std::env::current_dir().unwrap();
-        std::env::set_current_dir(tmp.path()).unwrap();
 
         // Two task JSONs under .claude/tasks/<team>/ — both today by mtime.
         let team_dir = tmp.path().join(".claude/tasks/Default");
@@ -3203,8 +3210,7 @@ mod tests {
         )
         .unwrap();
 
-        let buckets = collect_daily_buckets().unwrap();
-        std::env::set_current_dir(orig).unwrap();
+        let buckets = collect_daily_buckets_in(&tmp.path().join(".claude/tasks")).unwrap();
 
         // 7-day window, oldest-first ordering.
         assert_eq!(buckets.len(), OPC_WINDOW_DAYS);
@@ -3216,15 +3222,10 @@ mod tests {
 
     #[test]
     fn test_collect_daily_buckets_no_tasks_dir_returns_empty_buckets() {
-        let _guard = CWD_LOCK
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        // R2-P1-3: path-parameterised core — no process-CWD dependency.
         let tmp = tempfile::tempdir().unwrap();
-        let orig = std::env::current_dir().unwrap();
-        std::env::set_current_dir(tmp.path()).unwrap();
 
-        let buckets = collect_daily_buckets().unwrap();
-        std::env::set_current_dir(orig).unwrap();
+        let buckets = collect_daily_buckets_in(&tmp.path().join(".claude/tasks")).unwrap();
 
         // No .claude/tasks dir — returns 7 empty buckets.
         assert_eq!(buckets.len(), OPC_WINDOW_DAYS);

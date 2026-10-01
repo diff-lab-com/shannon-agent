@@ -15,9 +15,13 @@ interface TaskCardProps {
   onSelect: () => void
   onRunNow: () => void
   onCancel: () => void
+  /** R2-P1-4: catalog (non-routine) cards hide the entry — RunNow on a
+   *  catalog task used to feed the card title to the engine as a fake
+   *  "Execute task: X" prompt. Only routine-backed cards can run now. */
+  showRunNow?: boolean
 }
 
-export default function TaskCard({ task, isRunning, onSelect, onRunNow, onCancel }: TaskCardProps) {
+export default function TaskCard({ task, isRunning, onSelect, onRunNow, onCancel, showRunNow = true }: TaskCardProps) {
   const intl = useIntl()
   const t = (id: string) => intl.formatMessage({ id })
 
@@ -88,23 +92,25 @@ export default function TaskCard({ task, isRunning, onSelect, onRunNow, onCancel
                 <span className="material-symbols-outlined" aria-hidden="true">stop_circle</span>
               </Button>
             ) : null}
-            <Button
-              className={cn('text-on-primary px-md py-sm rounded-lg font-label-md flex items-center gap-xs hover:brightness-110 active:scale-95 transition-all cursor-pointer', isRunning ? 'bg-tertiary' : 'bg-primary')}
-              onClick={e => { e.stopPropagation(); onRunNow() }}
-              disabled={isRunning}
-            >
-              {isRunning ? (
-                <>
-                  <span className="material-symbols-outlined icon-md">check_circle</span>
-                  {t('tasks.taskCard.success')}
-                </>
-              ) : (
-                <>
-                  <span className="material-symbols-outlined icon-md">play_arrow</span>
-                  {t('tasks.taskCard.runNow')}
-                </>
-              )}
-            </Button>
+            {showRunNow ? (
+              <Button
+                className={cn('text-on-primary px-md py-sm rounded-lg font-label-md flex items-center gap-xs hover:brightness-110 active:scale-95 transition-all cursor-pointer', isRunning ? 'bg-tertiary' : 'bg-primary')}
+                onClick={e => { e.stopPropagation(); onRunNow() }}
+                disabled={isRunning}
+              >
+                {isRunning ? (
+                  <>
+                    <span className="material-symbols-outlined icon-md">check_circle</span>
+                    {t('tasks.taskCard.success')}
+                  </>
+                ) : (
+                  <>
+                    <span className="material-symbols-outlined icon-md">play_arrow</span>
+                    {t('tasks.taskCard.runNow')}
+                  </>
+                )}
+              </Button>
+            ) : null}
           </div>
         </div>
       </div>

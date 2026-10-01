@@ -44,7 +44,12 @@ export function useScheduledTasks() {
   const create = useCallback(async (payload: CreateTaskPayload): Promise<ScheduledRoutine | null> => {
     try {
       const task = await api.createScheduledTask(payload)
-      toast.success(t('tasks.toast.created'))
+      // R2-P1-4: no success toast here — the creating page owns the single
+      // announcement (Tasks.tsx distinguishes webhook-ready vs scheduled),
+      // so the user no longer gets two stacked success toasts for one
+      // routine. The error toast stays: the hook swallows the rejection,
+      // so this is the only failure signal a caller that ignores `null`
+      // will ever see.
       await refresh()
       return task
     } catch (e) {
