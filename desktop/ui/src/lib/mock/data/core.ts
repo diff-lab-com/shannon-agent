@@ -473,7 +473,7 @@ export const MOCK_MCP_SERVERS: McpServerInfo[] = [
       { name: 'list_directory', description: 'List directory contents', enabled: true },
       { name: 'search_files', description: 'Search files by pattern', enabled: true },
     ],
-    last_connected: new Date(now - 60_000).toISOString(),
+    last_connected: now - 60_000,
   },
   {
     name: 'github',
@@ -487,7 +487,7 @@ export const MOCK_MCP_SERVERS: McpServerInfo[] = [
       { name: 'search_repos', description: 'Search public repositories', enabled: true },
       { name: 'get_file_contents', description: 'Fetch a file from a repo', enabled: true },
     ],
-    last_connected: new Date(now - 120_000).toISOString(),
+    last_connected: now - 120_000,
   },
   {
     name: 'playwright',

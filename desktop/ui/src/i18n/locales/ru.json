@@ -1528,6 +1528,9 @@
   "settings.models.addProvider.tierClear": "Очистить",
   "extensions.mcp.toolCount": "инструментов: {count}",
   "extensions.mcp.offline": "Offline",
+  "extensions.mcp.statusRemote": "Удалённый",
+  "extensions.mcp.remoteHint": "Удалённый сервер · Поддержка в десктопе появится позже — пока используйте CLI.",
+  "extensions.mcp.restartRemoteDisabled": "Удалённые серверы пока нельзя перезапускать из десктопа — используйте CLI.",
   "conversations.list.filterAll": "All",
   "conversations.list.filterAgentRun": "Agent-run",
   "conversations.list.filterScheduled": "Scheduled",
@@ -3894,5 +3897,6 @@
   "settings.theme.name.solarizedLight": "Solarized Light",
   "settings.theme.name.dracula": "Dracula",
   "settings.theme.name.gruvbox": "Gruvbox",
-  "settings.theme.name.gruvboxLight": "Gruvbox Light"
+  "settings.theme.name.gruvboxLight": "Gruvbox Light",
+  "extensions.pending.errors.loadFailed": "Не удалось загрузить ошибки MCP"
 }

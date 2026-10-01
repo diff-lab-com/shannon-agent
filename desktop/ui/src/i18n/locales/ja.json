@@ -1528,6 +1528,9 @@
   "settings.models.addProvider.tierClear": "クリア",
   "extensions.mcp.toolCount": "{count} 個のツール",
   "extensions.mcp.offline": "Offline",
+  "extensions.mcp.statusRemote": "リモート",
+  "extensions.mcp.remoteHint": "リモートサーバー · デスクトップ対応は近日公開予定です。当面は CLI をご利用ください。",
+  "extensions.mcp.restartRemoteDisabled": "リモートサーバーはデスクトップからの再起動にまだ対応していません。CLI をご利用ください。",
   "conversations.list.filterAll": "All",
   "conversations.list.filterAgentRun": "Agent-run",
   "conversations.list.filterScheduled": "Scheduled",
@@ -3894,5 +3897,6 @@
   "settings.theme.name.solarizedLight": "Solarized Light",
   "settings.theme.name.dracula": "Dracula",
   "settings.theme.name.gruvbox": "Gruvbox",
-  "settings.theme.name.gruvboxLight": "Gruvbox Light"
+  "settings.theme.name.gruvboxLight": "Gruvbox Light",
+  "extensions.pending.errors.loadFailed": "MCP エラーを読み込めませんでした"
 }

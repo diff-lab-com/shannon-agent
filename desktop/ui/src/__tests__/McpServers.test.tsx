@@ -59,6 +59,28 @@ const sampleInstalled = {
   last_connected: null,
 }
 
+const sampleRemote = {
+  name: 'notion',
+  command: '',
+  enabled: true,
+  connected: false,
+  tool_count: 0,
+  tools: [],
+  last_connected: null,
+  url: 'https://mcp.notion.com/mcp',
+}
+
+const sampleFailed = {
+  name: 'broken',
+  command: 'npx',
+  enabled: true,
+  connected: false,
+  tool_count: 0,
+  tools: [],
+  last_connected: null,
+  last_error: 'spawn /nonexistent ENOENT',
+}
+
 beforeEach(() => {
   listMcpRegistryServers.mockReset()
   listMcpServers.mockReset()
@@ -332,6 +354,42 @@ describe('McpServers (Cursor-style UX)', () => {
     })
     // The scope param must survive URL encoding of the `mcp:` prefix.
     expect(screen.getByTestId('probe').dataset.search).toBe('?scope=mcp%3Afilesystem')
+  })
+
+  // W1-1 (R2-P0-1(B)): url-only OAuth/HTTP installs show an honest Remote
+  // state + hint (never the Offline bad state), the remote endpoint as the
+  // preview, and a disabled Restart with an explanatory label.
+  it('renders url-only servers as Remote with restart disabled', async () => {
+    listMcpServers.mockResolvedValue([sampleRemote])
+    renderWithRouter()
+    await waitFor(() => {
+      expect(screen.getByText('Remote')).toBeInTheDocument()
+    })
+    // Honest hint, not the Offline badge.
+    expect(
+      screen.getByText('Remote server · Desktop support coming soon — use the CLI for now.'),
+    ).toBeInTheDocument()
+    expect(screen.queryByText('Offline')).not.toBeInTheDocument()
+    // The remote endpoint is shown as the row preview.
+    expect(screen.getByText('https://mcp.notion.com/mcp')).toBeInTheDocument()
+    // Restart is disabled and its accessible name explains why.
+    const restart = screen.getByRole('button', {
+      name: "Remote servers can't be restarted from the desktop yet — use the CLI.",
+    })
+    expect(restart).toBeDisabled()
+    // Remove still works on remote rows.
+    expect(screen.getByText('Remove')).toBeEnabled()
+  })
+
+  // W1-7 (R2-P1-6): a failed stdio server shows the pool's concrete error,
+  // not just a colour-only Offline pill.
+  it('shows the concrete error of a failed server', async () => {
+    listMcpServers.mockResolvedValue([sampleFailed])
+    renderWithRouter()
+    await waitFor(() => {
+      expect(screen.getByText('spawn /nonexistent ENOENT')).toBeInTheDocument()
+    })
+    expect(screen.getByText('Offline')).toBeInTheDocument()
   })
 
   it('closes modal on Escape key', async () => {

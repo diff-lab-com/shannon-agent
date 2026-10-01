@@ -1564,6 +1564,9 @@
   "settings.models.addProvider.tierClear": "Clear",
   "extensions.mcp.toolCount": "{count} tools",
   "extensions.mcp.offline": "Offline",
+  "extensions.mcp.statusRemote": "Remote",
+  "extensions.mcp.remoteHint": "Remote server · Desktop support coming soon — use the CLI for now.",
+  "extensions.mcp.restartRemoteDisabled": "Remote servers can't be restarted from the desktop yet — use the CLI.",
   "conversations.list.filterAll": "All",
   "conversations.list.filterAgentRun": "Agent-run",
   "conversations.list.filterScheduled": "Scheduled",
@@ -3894,5 +3897,6 @@
   "tasks.backgroundPanel.stopAria": "Stop background task",
   "tasks.backgroundPanel.stopFailed": "Failed to stop task",
   "tasks.backgroundPanel.elapsedAria": "Elapsed time",
-  "opc.kanban.boardSyncFailed": "Task started, but creating its board card failed"
+  "opc.kanban.boardSyncFailed": "Task started, but creating its board card failed",
+  "extensions.pending.errors.loadFailed": "Couldn't load MCP errors"
 }

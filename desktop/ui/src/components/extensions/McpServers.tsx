@@ -272,8 +272,15 @@ function InstalledSection({
           {servers.map((srv, i) => {
             const isBusy = busyId === `uninstall:${srv.name}`;
             const isRestarting = busyId === `restart:${srv.name}`;
-            // Build a mono preview: command + args (truncated)
-            const preview = [srv.command].filter(Boolean).join(" ");
+            // W1-1 (R2-P0-1(B)): url-only OAuth/HTTP installs (the hub writes
+            // `{"url":...}` with no command) are remote servers the desktop
+            // pool cannot start yet — shown as Remote, never as Offline.
+            const isRemote = !srv.command && !!srv.url;
+            // Build a mono preview: command + args, or the remote endpoint.
+            const preview = srv.command || srv.url || "";
+            const rowStatusTitle = isRemote
+              ? t("extensions.mcp.remoteHint")
+              : srv.last_error ?? undefined;
             return (
               <div
                 key={srv.name}
@@ -290,25 +297,52 @@ function InstalledSection({
                     <div className="font-bold text-label-md text-on-surface truncate">
                       {srv.name}
                     </div>
-                    <span
-                      className={cn(
-                        "text-label-xs px-xs py-[1px] rounded-full font-bold shrink-0",
-                        srv.connected
-                          ? "bg-primary-container text-on-primary-container"
-                          : "bg-surface-container-highest text-on-surface-variant",
-                      )}
-                    >
-                      {srv.connected
-                        ? t("extensions.mcp.toolCount", {
-                            count: srv.tool_count,
-                          })
-                        : t("extensions.mcp.offline")}
-                    </span>
+                    {srv.connected ? (
+                      <span className="text-label-xs px-xs py-[1px] rounded-full font-bold shrink-0 bg-primary-container text-on-primary-container">
+                        {t("extensions.mcp.toolCount", {
+                          count: srv.tool_count,
+                        })}
+                      </span>
+                    ) : isRemote ? (
+                      // W1-1: honest remote state — distinct from the Offline
+                      // bad state, pointing at the CLI until desktop support
+                      // for remote transports ships.
+                      <span
+                        className="text-label-xs px-xs py-[1px] rounded-full font-bold shrink-0 bg-tertiary-container text-on-tertiary-container"
+                        title={t("extensions.mcp.remoteHint")}
+                      >
+                        {t("extensions.mcp.statusRemote")}
+                      </span>
+                    ) : (
+                      <span
+                        className="text-label-xs px-xs py-[1px] rounded-full font-bold shrink-0 bg-surface-container-highest text-on-surface-variant"
+                        title={rowStatusTitle}
+                      >
+                        {t("extensions.mcp.offline")}
+                      </span>
+                    )}
                   </div>
                   {preview && (
                     <div className="text-label-xs text-on-surface-variant font-mono truncate">
                       {preview}
                     </div>
+                  )}
+                  {isRemote ? (
+                    <div className="text-label-xs text-on-surface-variant truncate">
+                      {t("extensions.mcp.remoteHint")}
+                    </div>
+                  ) : (
+                    // W1-7 (R2-P1-6): a failed server shows its concrete
+                    // error inline (full text on hover) — no more
+                    // colour-only "Offline" dead ends.
+                    srv.last_error && (
+                      <div
+                        className="text-label-xs text-error font-mono truncate"
+                        title={srv.last_error}
+                      >
+                        {srv.last_error}
+                      </div>
+                    )
                   )}
                 </div>
                 {/* X3: per-server jump to the permissions page, pre-filtered
@@ -328,15 +362,25 @@ function InstalledSection({
                   {t("extensions.mcp.toolPermissions")}
                 </Button>
                 {/* G1 P0-1.4 — restart the server process (stop + start)
-                    without leaving the page. */}
+                    without leaving the page. W1-1: disabled for url-only
+                    remote servers (no stdio process to restart) with a
+                    tooltip explaining why. */}
                 <Button
                   variant="ghost"
                   size="sm"
                   type="button"
-                  aria-label={t("extensions.mcp.restartAria", { name: srv.name })}
-                  title={t("extensions.mcp.restartAria", { name: srv.name })}
+                  aria-label={
+                    isRemote
+                      ? t("extensions.mcp.restartRemoteDisabled")
+                      : t("extensions.mcp.restartAria", { name: srv.name })
+                  }
+                  title={
+                    isRemote
+                      ? t("extensions.mcp.restartRemoteDisabled")
+                      : t("extensions.mcp.restartAria", { name: srv.name })
+                  }
                   onClick={() => onRestart(srv.name)}
-                  disabled={isBusy || isRestarting}
+                  disabled={isBusy || isRestarting || isRemote}
                   className="text-on-surface-variant hover:text-primary shrink-0"
                 >
                   <span className="material-symbols-outlined icon-sm" aria-hidden="true">

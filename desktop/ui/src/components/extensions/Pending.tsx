@@ -6,9 +6,10 @@
 //      task-loop proposal drafts (the former global toast/panel UI, now
 //      embedded here);
 //   2. 错误区 — failed MCP connections / install errors (Claude Code Errors
-//      tab semantics). No subscribable error source exists yet, so the
-//      section ships as an empty-state placeholder (data source tracked for
-//      a later task — no backend invented here).
+//      tab semantics). W1-7 (R2-P1-6): the backend now reports each MCP
+//      server's pool-level failure via `list_mcp_servers` (`last_error`),
+//      so this section renders the real error list; the empty state is only
+//      the honest "nothing failed" fallback.
 //
 // Triage's skill-candidate cards hand over `skillCandidateId` via router
 // state; like the inbox highlight (IA T2) it is a one-shot focus and the
@@ -20,6 +21,8 @@ import { useIntl } from 'react-intl'
 import EmptyState from '@/components/ui/empty-state'
 import SkillCandidateReviewQueue from '@/components/skills/SkillCandidateReviewQueue'
 import SkillProposalReviewPanel from '@/components/skills/SkillProposalReviewPanel'
+import { listMcpServers } from '@/lib/tauri-api'
+import type { McpServerInfo } from '@/types'
 
 export default function Pending() {
   const intl = useIntl()
@@ -35,6 +38,27 @@ export default function Pending() {
     navigate(location.pathname, { replace: true })
     // Run once per mount — the point is to drain the router state.
     // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [])
+
+  // W1-7 (R2-P1-6): real MCP connection failures. The backend `last_error`
+  // is the process pool's own failure reason (spawn error, failed health
+  // check) — no invented data, just what the pool reported.
+  const [mcpFailures, setMcpFailures] = useState<McpServerInfo[]>([])
+  const [mcpErrorsLoadFailed, setMcpErrorsLoadFailed] = useState(false)
+  useEffect(() => {
+    let cancelled = false
+    listMcpServers()
+      .then((rows) => {
+        if (cancelled) return
+        setMcpFailures(rows.filter((srv) => !!srv.last_error && !srv.connected))
+        setMcpErrorsLoadFailed(false)
+      })
+      .catch(() => {
+        if (!cancelled) setMcpErrorsLoadFailed(true)
+      })
+    return () => {
+      cancelled = true
+    }
   }, [])
 
   return (
@@ -53,8 +77,9 @@ export default function Pending() {
         <SkillProposalReviewPanel variant="inline" open onClose={() => {}} />
       </section>
 
-      {/* Section 2 — errors (Claude Code Errors tab semantics). Placeholder
-          until a subscribable MCP/install error source exists. */}
+      {/* Section 2 — errors (Claude Code Errors tab semantics). W1-7: real
+          MCP connection failures when there are any; the empty state is the
+          true "nothing failed" fallback. */}
       <section aria-labelledby="extensions-pending-errors-title">
         <div className="mb-md">
           <h2 id="extensions-pending-errors-title" className="font-headline-md text-headline-sm font-bold text-on-surface leading-tight">
@@ -62,11 +87,30 @@ export default function Pending() {
           </h2>
           <p className="font-body-sm text-on-surface-variant mt-xs">{t('extensions.pending.errors.subtitle')}</p>
         </div>
-        <EmptyState
-          icon="error"
-          title={t('extensions.pending.errors.empty.title')}
-          description={t('extensions.pending.errors.empty.description')}
-        />
+        {mcpErrorsLoadFailed ? (
+          <p className="font-body-sm text-on-surface-variant">{t('extensions.pending.errors.loadFailed')}</p>
+        ) : mcpFailures.length === 0 ? (
+          <EmptyState
+            icon="error"
+            title={t('extensions.pending.errors.empty.title')}
+            description={t('extensions.pending.errors.empty.description')}
+          />
+        ) : (
+          <ul className="space-y-sm" data-testid="mcp-error-list">
+            {mcpFailures.map((srv) => (
+              <li
+                key={srv.name}
+                className="border border-error/30 rounded-xl bg-error/5 px-md py-sm"
+              >
+                <div className="flex items-center gap-xs">
+                  <span className="material-symbols-outlined icon-sm text-error" aria-hidden="true">dns</span>
+                  <span className="font-bold text-label-md text-on-surface">{srv.name}</span>
+                </div>
+                <p className="font-body-sm text-error mt-xs break-words font-mono">{srv.last_error}</p>
+              </li>
+            ))}
+          </ul>
+        )}
       </section>
     </div>
   )
