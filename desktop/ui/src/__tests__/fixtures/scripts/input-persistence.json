@@ -1,0 +1,37 @@
+{
+  "name": "input-persistence",
+  "description": "输入缓存锚点 — 双会话草稿隔离/flush/清空/重启恢复 + 队列 parked/重启丢失（A-20/A-21 锚点）",
+  "seed": {
+    "config": {
+      "hasKey": true
+    },
+    "sessions": [
+      {
+        "id": "script-sess-draft-a",
+        "title": "Drafts A",
+        "messages": []
+      },
+      {
+        "id": "script-sess-draft-b",
+        "title": "Drafts B",
+        "messages": []
+      }
+    ]
+  },
+  "turns": [
+    {
+      "user": "发出去的一条",
+      "script": [
+        {
+          "event": "query:text",
+          "chunks": [
+            "已发送。"
+          ]
+        },
+        {
+          "event": "query:completed"
+        }
+      ]
+    }
+  ]
+}
