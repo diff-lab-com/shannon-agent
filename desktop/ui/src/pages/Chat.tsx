@@ -489,14 +489,18 @@ export default function Chat() {
       }
       return
     }
-    // R2 W2-4: the composer clears only once the send is ACCEPTED. A pre-turn
-    // rejection (budget guard, concurrent-query guard, …) rolls the whole
-    // draft — text AND attachment chips — back into the composer and parks it
-    // as the banner's continue target, instead of the message vanishing.
+    // A-1 fix on the R2 W2-4 accepted-flow: the clear happens SYNCHRONOUSLY
+    // (a deferred clear would let a double-Enter race a second identical send
+    // through the still-empty gate), but the send's result still decides the
+    // draft's fate. Accepted → the draft key is cleared. Rejected (budget /
+    // concurrent-query / goal guards — sendMessage resolves false) → the
+    // whole draft — text AND attachment chips — comes back to the composer
+    // AND parks as the banner's continue target, instead of the message
+    // vanishing; the debounced draft write re-persists the key.
+    setInput('')
+    setAttachedFiles([])
     void sendMessage(trimmed, filePaths).then(ok => {
       if (ok) {
-        setInput('')
-        setAttachedFiles([])
         setBlockedPayload(null)
         if (visibleSessionId) clearDraft(visibleSessionId)
       } else {

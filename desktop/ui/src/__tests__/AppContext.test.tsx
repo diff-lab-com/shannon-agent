@@ -163,6 +163,38 @@ describe('AppContext', () => {
     spy.mockRestore()
   })
 
+  // A-11 fix: two identical texts in flight at once (double-Enter before
+  // isQuerying flips, drain vs manual send) — the first send's FAILURE must
+  // roll back only its own optimistic bubble. The old role+content matcher
+  // deleted the LAST same-text message, i.e. the second send's bubble,
+  // while the failed one stayed on screen.
+  it('rolls back only the failed send when two identical sends race (A-11)', async () => {
+    const { result } = renderHook(() => useApp(), { wrapper })
+    await waitFor(() => expect(result.current.loading).toBe(false))
+    const sendSpy = vi.spyOn(api, 'sendMessage')
+      .mockRejectedValueOnce(new Error('another query is already running for this session'))
+      .mockResolvedValueOnce({ query_id: 'q2' })
+    let first!: Promise<boolean>
+    let second!: Promise<boolean>
+    await act(async () => {
+      // Fired without awaiting either: both optimistic bubbles exist before
+      // either send settles.
+      first = result.current.sendMessage('Hello')
+      second = result.current.sendMessage('Hello', ['/tmp/a.txt'])
+    })
+    await act(async () => { await Promise.all([first, second]) })
+
+    const hellos = result.current.messages.filter(m => m.role === 'user' && m.content === 'Hello')
+    expect(hellos).toHaveLength(1)
+    // The survivor is the SECOND send's bubble (the one that succeeded) —
+    // its attachment paths ride along; content matching would have kept the
+    // attachmentless failed one instead.
+    expect(hellos[0]!.file_attachments).toEqual([
+      { name: 'a.txt', path: '/tmp/a.txt', size: 0 },
+    ])
+    sendSpy.mockRestore()
+  })
+
   it('cancelQuery calls api', async () => {
     const spy = vi.spyOn(api, 'cancelQuery').mockResolvedValue(undefined)
     const { result } = renderHook(() => useApp(), { wrapper })

@@ -58,6 +58,7 @@ const SCRIPT_NAMES = [
   'approval-deny',
   'auth-error',
   'mid-stream-fail',
+  'send-rejected',
   'cancel-text-stream',
   // R3 journeys (#7-#14) + the cancel-matrix scripts (§4.1) + the
   // input-persistence double-session seed (§4.2).

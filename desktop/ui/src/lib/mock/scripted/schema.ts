@@ -135,6 +135,14 @@ export interface ChatScript {
     attachments?: string[]
     script: ScriptStep[]
     /**
+     * A-1 anchor (R4 group 2, send-failure integrity): when true, THIS
+     * turn's `send_message` invoke REJECTS — the scripted counterpart of
+     * the real backend's pre-turn guards (budget / concurrent-query /
+     * goal-owned) that throw before any query exists. No events are played
+     * and the turn is consumed, so the next send plays the following turn.
+     */
+    sendRejects?: boolean
+    /**
      * R3 (journey #8): attachment-refusal receipts returned with THIS
      * turn's `send_message` response (`rejected_attachments`) — the
      * partial-success P0-3 shape. The player merges them into its return
@@ -222,6 +230,7 @@ export const chatScriptSchema = {
         properties: {
           user: { type: 'string' },
           attachments: { type: 'array', items: { type: 'string' } },
+          sendRejects: { type: 'boolean' },
           rejectedAttachments: {
             type: 'array',
             items: {

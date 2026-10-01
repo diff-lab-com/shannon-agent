@@ -166,6 +166,12 @@ export class ScriptPlayer {
    * backend's P0-3 partial-success shape) and every scripted send's args
    * land on the snapshot's `sends` log — the assertion surface the
    * budget-bypass / attachment-preservation anchors read.
+   *
+   * A-1 anchor (R4 group 2): a `sendRejects` turn makes the invoke REJECT —
+   * the scripted counterpart of the real backend's pre-turn guards (budget
+   * / concurrent-query / goal-owned). The throw happens BEFORE any turn
+   * starts, so no events are emitted and no query id is allocated; the turn
+   * still counts as consumed, so the next send plays the following one.
    */
   handleSendMessage(args: SendArgs | undefined): { query_id: string; rejected_attachments?: unknown[] } | null {
     if (!this.script || this.phase === 'idle' || this.phase === 'done') return null
@@ -185,6 +191,11 @@ export class ScriptPlayer {
       sessionId: (args?.sessionId ?? null) as string | null,
     })
     const sessionId = (args?.sessionId ?? null) as string | null
+    if (this.script.turns[turnIndex]?.sendRejects) {
+      this.turnCounter += 1
+      if (this.turnCounter >= this.script.turns.length) this.phase = 'done'
+      throw new Error(`send rejected by scripted backend guard (turn ${turnIndex})`)
+    }
     // startTurn returns the id up front — a turn whose steps settle
     // synchronously (e.g. a lone query:completed) is already finished by the
     // time startTurn returns, so this.turn is no longer readable.
