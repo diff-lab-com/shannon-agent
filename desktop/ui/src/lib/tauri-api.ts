@@ -402,6 +402,8 @@ export type TestConnectionResult =
   | { kind: 'success' }
   | { kind: 'invalid_key' }
   | { kind: 'rate_limited' }
+  // R2-P1-10: HTTP 402 — account out of credits / over plan quota.
+  | { kind: 'quota_exhausted' }
   | { kind: 'provider_error'; status: number }
   | { kind: 'network_unreachable' }
   | { kind: 'unknown'; message: string }

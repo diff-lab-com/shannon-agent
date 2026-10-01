@@ -1036,6 +1036,7 @@
   "settings.models.testResult.successLatency": "连接成功（{ms} ms）",
   "settings.models.testResult.failed": "连接测试失败。",
   "settings.models.testResult.invalidKey": "API 密钥无效 — 请检查提供商控制台中的密钥。",
+  "settings.models.testResult.quotaExhausted": "额度已用尽 — 请前往服务商充值或核对套餐。",
   "settings.models.testResult.rateLimited": "请求频率受限 — 请稍候重试。",
   "settings.models.testResult.networkUnreachable": "无法连接 {provider} — 请检查网络连接。",
   "settings.models.testResult.providerError": "{provider} 返回错误（HTTP {status}）。",

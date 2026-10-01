@@ -1032,6 +1032,7 @@
   "settings.models.testResult.successLatency": "Conectado ({ms} ms)",
   "settings.models.testResult.failed": "Falha no teste de conexão.",
   "settings.models.testResult.invalidKey": "Chave de API inválida — confira a chave no painel do seu provedor.",
+  "settings.models.testResult.quotaExhausted": "Cota esgotada — adicione créditos ou verifique seu plano com o provedor.",
   "settings.models.testResult.rateLimited": "Limite de requisições atingido — espere um momento e tente novamente.",
   "settings.models.testResult.networkUnreachable": "Não foi possível acessar {provider} — verifique sua conexão com a internet.",
   "settings.models.testResult.providerError": "{provider} retornou um erro (HTTP {status}).",

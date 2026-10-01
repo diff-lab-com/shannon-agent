@@ -1032,6 +1032,7 @@
   "settings.models.testResult.successLatency": "Connecté ({ms} ms)",
   "settings.models.testResult.failed": "Échec du test de connexion.",
   "settings.models.testResult.invalidKey": "Clé d'API invalide — vérifie la clé dans le tableau de bord de ton fournisseur.",
+  "settings.models.testResult.quotaExhausted": "Quota épuisé — ajoute des crédits ou vérifie ton offre auprès du fournisseur.",
   "settings.models.testResult.rateLimited": "Limite de requêtes atteinte — attends un instant puis réessaie.",
   "settings.models.testResult.networkUnreachable": "Impossible de joindre {provider} — vérifie ta connexion internet.",
   "settings.models.testResult.providerError": "{provider} a renvoyé une erreur (HTTP {status}).",

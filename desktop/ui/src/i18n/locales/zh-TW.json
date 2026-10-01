@@ -1032,6 +1032,7 @@
   "settings.models.testResult.successLatency": "連線成功（{ms} ms）",
   "settings.models.testResult.failed": "連線測試失敗。",
   "settings.models.testResult.invalidKey": "API 金鑰無效——請檢查服務商控制台中的金鑰。",
+  "settings.models.testResult.quotaExhausted": "額度已用盡——請前往服務商儲值或確認方案。",
   "settings.models.testResult.rateLimited": "請求頻率受限——請稍候再試。",
   "settings.models.testResult.networkUnreachable": "無法連上 {provider}——請檢查網路連線。",
   "settings.models.testResult.providerError": "{provider} 回傳錯誤（HTTP {status}）。",

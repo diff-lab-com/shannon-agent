@@ -1032,6 +1032,7 @@
   "settings.models.testResult.successLatency": "연결됨 ({ms} ms)",
   "settings.models.testResult.failed": "연결 테스트에 실패했습니다.",
   "settings.models.testResult.invalidKey": "API 키가 잘못되었습니다 — 프로바이더 대시보드에서 키를 확인하세요.",
+  "settings.models.testResult.quotaExhausted": "쿼터가 소진되었습니다 — 프로바이더에서 크레딧을 추가하거나 요금제를 확인하세요.",
   "settings.models.testResult.rateLimited": "요청 한도 초과 — 잠시 후 다시 시도하세요.",
   "settings.models.testResult.networkUnreachable": "{provider}에 연결할 수 없습니다 — 인터넷 연결을 확인하세요.",
   "settings.models.testResult.providerError": "{provider}에서 오류를 반환했습니다 (HTTP {status}).",

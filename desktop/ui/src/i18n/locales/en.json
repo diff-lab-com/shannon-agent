@@ -1036,6 +1036,7 @@
   "settings.models.testResult.successLatency": "Connected ({ms} ms)",
   "settings.models.testResult.failed": "Connection test failed.",
   "settings.models.testResult.invalidKey": "Invalid API key — check the key from your provider dashboard.",
+  "settings.models.testResult.quotaExhausted": "Quota exhausted — add credits or check your plan with the provider.",
   "settings.models.testResult.rateLimited": "Rate limited — wait a moment and try again.",
   "settings.models.testResult.networkUnreachable": "Can't reach {provider} — check your internet connection.",
   "settings.models.testResult.providerError": "{provider} returned an error (HTTP {status}).",

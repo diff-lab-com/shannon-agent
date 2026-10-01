@@ -118,4 +118,14 @@ describe('ProvidersSection — card-level Test connection (P0-7)', () => {
     await waitFor(() => expect(toast.error).toHaveBeenCalled())
     expect(toast.success).not.toHaveBeenCalled()
   })
+
+  it('surfaces an exhausted quota (HTTP 402) through the categorized toast (R2-P1-10)', async () => {
+    const { toast } = await import('sonner')
+    testCredentials.mockResolvedValue({ kind: 'quota_exhausted' })
+    renderRoster([KEYED])
+    fireEvent.click(screen.getByRole('button', { name: 'Test connection' }))
+    await waitFor(() =>
+      expect(toast.error).toHaveBeenCalledWith(expect.stringContaining('Quota exhausted')),
+    )
+  })
 })

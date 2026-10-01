@@ -364,6 +364,16 @@ describe('AddProviderModal — fetch models + test connection', () => {
     expect(status.textContent).toContain('Invalid API key')
   })
 
+  it('renders the categorized verdict for an exhausted quota (HTTP 402, R2-P1-10)', async () => {
+    vi.mocked(api.testProviderCredentials).mockResolvedValue({ kind: 'quota_exhausted' })
+    renderModal()
+    fillRequiredFields()
+    fireEvent.change(screen.getByPlaceholderText('sk-…'), { target: { value: 'sk-test' } })
+    fireEvent.click(screen.getByTestId('test-provider-connection'))
+    const status = await waitFor(() => screen.getByTestId('provider-test-status'))
+    expect(status.textContent).toContain('Quota exhausted')
+  })
+
   it('clears stale fetch results when the base URL changes', async () => {
     vi.mocked(api.fetchProviderModels).mockResolvedValue(['model-a'])
     renderModal()

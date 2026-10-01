@@ -1032,6 +1032,7 @@
   "settings.models.testResult.successLatency": "Verbunden ({ms} ms)",
   "settings.models.testResult.failed": "Verbindungstest fehlgeschlagen.",
   "settings.models.testResult.invalidKey": "Ungültiger API-Schlüssel — prüfe den Schlüssel im Dashboard deines Providers.",
+  "settings.models.testResult.quotaExhausted": "Kontingent erschöpft — lade Guthaben auf oder prüfe deinen Tarif beim Provider.",
   "settings.models.testResult.rateLimited": "Rate-Limit erreicht — warte einen Moment und versuche es erneut.",
   "settings.models.testResult.networkUnreachable": "{provider} ist nicht erreichbar — prüfe deine Internetverbindung.",
   "settings.models.testResult.providerError": "{provider} hat einen Fehler zurückgegeben (HTTP {status}).",

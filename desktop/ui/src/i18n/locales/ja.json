@@ -1032,6 +1032,7 @@
   "settings.models.testResult.successLatency": "接続済み（{ms} ms）",
   "settings.models.testResult.failed": "接続テストに失敗しました。",
   "settings.models.testResult.invalidKey": "API キーが無効です — プロバイダーのダッシュボードでキーを確認してください。",
+  "settings.models.testResult.quotaExhausted": "クォータを使い切りました — プロバイダーでクレジットを追加するかプランを確認してください。",
   "settings.models.testResult.rateLimited": "レート制限中 — 少し待ってから再試行してください。",
   "settings.models.testResult.networkUnreachable": "{provider} に接続できません — インターネット接続を確認してください。",
   "settings.models.testResult.providerError": "{provider} がエラーを返しました（HTTP {status}）。",
