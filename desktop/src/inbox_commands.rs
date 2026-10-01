@@ -1756,9 +1756,10 @@ fn finalize_run<R: tauri::Runtime>(
 
     // 5. W3-2 failure aftermath: flip enabled at the threshold (the bool
     // reports the actual transition — notifications fire once), then the
-    // failure notification, then the dual-channel auto-pause alert. All of
-    // it is gated by the routine's `policy.notify_on_failure`; false keeps
-    // the failure silent (run record + triage card only).
+    // failure notification, then the auto-pause alert (the shared Notifier
+    // fans it out to desktop + webhook). All of it is gated by the routine's
+    // `policy.notify_on_failure`; false keeps the failure silent (run record
+    // + triage card only).
     let paused_now = if auto_pause {
         pause_routine_after_consecutive_failures(deps, &task_id)
     } else {
@@ -1767,7 +1768,7 @@ fn finalize_run<R: tauri::Runtime>(
     if notify_on_failure && outcome.failed {
         notify_run_failed(deps.notify.as_ref(), &task_name, run_error.as_deref());
         if paused_now {
-            notify_auto_paused(deps.notify.as_ref(), deps.webhook.as_ref(), &task_name);
+            notify_auto_paused(deps.notify.as_ref(), &task_name);
         }
     }
 
@@ -1882,34 +1883,29 @@ fn notify_run_failed(port: &dyn RunNotifyPort, task_name: &str, error: Option<&s
     tracing::debug!(task_name, "routine failure notification dispatched");
 }
 
-/// Dual-channel auto-pause alert (W3-2): the desktop notification plus the
-/// configured webhook sink. The copy always names the self-heal path —
-/// re-enable the routine from its task card.
-fn notify_auto_paused(
-    notify: &dyn RunNotifyPort,
-    webhook: &dyn RoutineWebhookPort,
-    task_name: &str,
-) {
+/// Auto-pause alert (W3-2). One dispatch through the run-notify port covers
+/// both channels: the shared `Notifier` fans out to the desktop popup handler
+/// AND the webhook handler when a webhook is configured (review round 1 — an
+/// explicit second webhook delivery here double-posted the same alert). The
+/// copy always names the self-heal path — re-enable the routine from its task
+/// card.
+fn notify_auto_paused(notify: &dyn RunNotifyPort, task_name: &str) {
     let title = format!("Shannon — {task_name}: auto-paused");
     let body = format!(
         "Paused automatically after {AUTO_PAUSE_FAILURE_THRESHOLD} consecutive scheduled \
          failures. To resume, re-enable it from its task card."
     );
-    let build = |source: &str| shannon_core::notifier::Notification {
-        title: title.clone(),
-        body: body.clone(),
+    let notification = shannon_core::notifier::Notification {
+        title,
+        body,
         level: shannon_core::notifier::NotificationLevel::Error,
         id: uuid::Uuid::new_v4().to_string(),
         timestamp: chrono::Utc::now(),
-        source: Some(source.to_string()),
+        source: Some("routine_auto_pause".to_string()),
         action_id: None,
     };
-    notify.notify(&build("routine_auto_pause"));
-    webhook.deliver(&build("routine_auto_pause_webhook"));
-    tracing::info!(
-        task_name,
-        "routine auto-pause notification dispatched (desktop + webhook)"
-    );
+    notify.notify(&notification);
+    tracing::info!(task_name, "routine auto-pause notification dispatched");
 }
 
 /// Cap on the run-output summary forwarded in the webhook body. The handler
@@ -3841,7 +3837,10 @@ mod tests {
         let items = deps.inbox.list(None, None, 10).unwrap();
         assert!(items[0].summary.contains("re-enable it from the task card"));
         // …and the notifications went out: a failure alert per failed run
-        // plus ONE dual-channel pause alert (transition-only).
+        // plus ONE pause alert (transition-only). The pause alert rides the
+        // same run-notify port — in production the shared Notifier fans it out
+        // to desktop + webhook, so there is no separate webhook delivery
+        // (review round 1: the explicit second post double-delivered).
         let dispatched = notify.dispatches();
         assert_eq!(dispatched.len(), 4, "3 failure alerts + 1 pause alert");
         assert_eq!(
@@ -3852,16 +3851,16 @@ mod tests {
             1,
             "exactly one desktop pause alert"
         );
-        let deliveries = webhook.deliveries();
-        assert_eq!(deliveries.len(), 1, "exactly one webhook pause alert");
-        assert_eq!(
-            deliveries[0].source.as_deref(),
-            Some("routine_auto_pause_webhook")
-        );
         assert!(
-            deliveries[0]
+            dispatched[3]
                 .body
-                .contains("re-enable it from its task card")
+                .contains("re-enable it from its task card"),
+            "pause alert names the self-heal path"
+        );
+        assert_eq!(
+            webhook.deliveries().len(),
+            0,
+            "no direct webhook delivery — the Notifier owns the webhook fan-out"
         );
 
         // A 4th failure after the pause: still one pause alert total
@@ -3873,8 +3872,11 @@ mod tests {
             5,
             "one more failure alert, no second pause"
         );
-        let deliveries = webhook.deliveries();
-        assert_eq!(deliveries.len(), 1, "no duplicate pause webhook");
+        assert_eq!(
+            webhook.deliveries().len(),
+            0,
+            "still no direct webhook delivery"
+        );
         let routine = deps.scheduled_tasks.load("task-1").unwrap().unwrap();
         assert!(!routine.enabled);
     }
