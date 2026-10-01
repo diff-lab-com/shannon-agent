@@ -1,4 +1,4 @@
-import { useState, useRef, useEffect, useLayoutEffect, useId, useCallback } from 'react'
+import { useState, useRef, useEffect, useLayoutEffect, useId, useCallback, useMemo } from 'react'
 import { useIntl } from 'react-intl'
 import { useNavigate } from 'react-router-dom'
 import { open } from '@tauri-apps/plugin-dialog'
@@ -16,6 +16,14 @@ import PptOutlineDialog from '@/components/chat/PptOutlineDialog'
 import { useComposerDraftListener } from '@/lib/composerBridge'
 import { isSlashQuery, type SlashCommand } from '@/lib/slash/commands'
 import { fetchSlashSkills, mergeSlashMenu, type SlashMenuItem, type SlashSkillEntry } from '@/lib/slash/skills'
+import {
+  activeMentionQuery,
+  caretAfterMentionInsert,
+  filterMentionCandidates,
+  flattenFileTree,
+  insertMention,
+  relativeToWorkingDir,
+} from '@/lib/fileMention'
 import { imageFilesFromClipboard, blobToBase64, PASTE_IMAGE_MIME_TO_EXT, MAX_PASTED_IMAGE_BYTES } from '@/lib/pasteImage'
 import * as api from '@/lib/tauri-api'
 import type { RejectedAttachmentReason, AttachmentExtractionReport } from '@/types'
@@ -135,6 +143,8 @@ export default function ChatInput({
   // the slash listbox via aria-controls/aria-activedescendant.
   const slashListboxId = useId()
   const slashOptionId = (name: string) => `${slashListboxId}-opt-${name}`
+  // GB P2-10b: the @-mention listbox gets its own namespace of ids.
+  const mentionListboxId = useId()
 
   // Slash-command autocomplete: open while the input is a single `/token`.
   // Escape hides it until the query changes again; a space or newline closes
@@ -161,6 +171,44 @@ export default function ChatInput({
     slashQuery && !slashDismissed ? mergeSlashMenu(skills, slashQuery) : []
   const slashMatches = slashItems
   const slashOpen = slashMatches.length > 0
+
+  // GB P2-10b — @ file reference. The candidate universe loads once per
+  // working dir: the working-dir tree (backend-bounded walk) plus the
+  // session file index (attachments/favorites). Both fail soft — the menu
+  // just stays empty, never breaks the composer.
+  const [mentionCandidates, setMentionCandidates] = useState<string[]>([])
+  useEffect(() => {
+    let cancelled = false
+    const tree: Promise<string[]> = sessionWorkingDir
+      ? api.getFileTree(sessionWorkingDir).then(nodes => flattenFileTree(nodes)).catch(() => [])
+      : Promise.resolve([])
+    const index: Promise<string[]> = api.listFileIndex()
+      .then(rows => rows.map(r => r.path).filter((p): p is string => typeof p === 'string'))
+      .catch(() => [])
+    Promise.all([tree, index]).then(([treePaths, indexPaths]) => {
+      if (cancelled) return
+      setMentionCandidates([...new Set([...treePaths, ...indexPaths])])
+    })
+    return () => { cancelled = true }
+  }, [sessionWorkingDir])
+
+  // The live `@query` — detected in the text BEFORE the caret (tracked on
+  // every change/keyup/select so a mid-text mention works). Slash queries
+  // and mentions are mutually exclusive by construction (`/^\/token$/` vs
+  // whitespace-anchored `@token`).
+  const caretRef = useRef(value.length)
+  const mentionQuery = useMemo(
+    () => activeMentionQuery(value.slice(0, caretRef.current)),
+    [value],
+  )
+  const [mentionDismissed, setMentionDismissed] = useState(false)
+  const [mentionActive, setMentionActive] = useState(0)
+  const mentionMatches = mentionQuery && !mentionDismissed
+    ? filterMentionCandidates(mentionCandidates, mentionQuery.token)
+    : []
+  const trackCaret = (el: HTMLTextAreaElement) => {
+    caretRef.current = el.selectionStart ?? el.value.length
+  }
 
   // Office Wave 1 A1a — honest notice while an unparseable attachment
   // (.doc/.xls/… legacy format) rides along. Dismissible, but re-arming:
@@ -210,8 +258,35 @@ export default function ChatInput({
 
   useEffect(() => {
     setSlashActive(0)
+    setMentionActive(0)
     if (!isSlashQuery(value)) setSlashDismissed(false)
+    // Mention dismissal re-arms when the query dissolves (whitespace after
+    // the token) — same protocol as the slash menu: Escape holds the menu
+    // closed for the query it dismissed, a NEW @query opens fresh.
+    if (!activeMentionQuery(value.slice(0, caretRef.current))) setMentionDismissed(false)
+    // External value writes (draft push, skill/slash fill) move the caret to
+    // the end — keep the mention detector's caret from going stale.
+    if (document.activeElement !== textareaRef.current) caretRef.current = value.length
   }, [value])
+
+  /** GB P2-10b: replace the live `@query` with the picked path (plain text,
+   *  TUI-style reference — no attachment semantics). */
+  const commitMention = (path: string) => {
+    if (!mentionQuery) return
+    const next = insertMention(value, mentionQuery, path, sessionWorkingDir)
+    const caret = caretAfterMentionInsert(mentionQuery, path, sessionWorkingDir)
+    caretRef.current = caret
+    onChange(next)
+    // Dismiss for THIS query; re-arms automatically once the text stops
+    // matching (same protocol as the slash menu).
+    setMentionDismissed(true)
+    requestAnimationFrame(() => {
+      const el = textareaRef.current
+      if (!el) return
+      el.focus()
+      el.setSelectionRange(caret, caret)
+    })
+  }
 
   const executeSlash = (cmd: SlashCommand) => {
     onChange('')
@@ -516,6 +591,27 @@ export default function ChatInput({
       if (e.key === 'Enter' || e.key === 'Tab') e.preventDefault()
       return
     }
+    // GB P2-10b: the @-mention menu captures the navigation keys while open
+    // (checked before the slash menu — the two never match simultaneously).
+    if (mentionMatches.length > 0) {
+      if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
+        e.preventDefault()
+        const delta = e.key === 'ArrowDown' ? 1 : -1
+        setMentionActive(i => (i + delta + mentionMatches.length) % mentionMatches.length)
+        return
+      }
+      if (e.key === 'Enter' || e.key === 'Tab') {
+        e.preventDefault()
+        const picked = mentionMatches[mentionActive] ?? mentionMatches[0]
+        if (picked) commitMention(picked)
+        return
+      }
+      if (e.key === 'Escape') {
+        e.preventDefault()
+        setMentionDismissed(true)
+        return
+      }
+    }
     // Slash menu captures the navigation keys while it is open.
     if (slashMatches.length > 0) {
       if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
@@ -774,6 +870,56 @@ export default function ChatInput({
         </span>
       )}
 
+      {/* GB P2-10b — @ file-reference popover. Same shape and protocol as
+          the slash menu: keyboard-first listbox, Escape dismisses until the
+          query changes, selection inserts plain text. */}
+      {mentionMatches.length > 0 && (
+        <div
+          id={`${mentionListboxId}`}
+          role="listbox"
+          aria-label={t('chat.input.mention.menu.aria')}
+          className="absolute left-0 right-0 bottom-full mb-sm z-modal rounded-2xl border border-outline-variant/30 bg-surface-container-low shadow-e3 overflow-hidden"
+        >
+          <ul className="max-h-64 overflow-y-auto py-xs">
+            {mentionMatches.map((path, i) => (
+              <li key={path}>
+                <button
+                  type="button"
+                  role="option"
+                  id={`${mentionListboxId}-opt-${i}`}
+                  aria-selected={i === mentionActive}
+                  onMouseDown={e => {
+                    e.preventDefault()
+                    commitMention(path)
+                  }}
+                  onMouseEnter={() => setMentionActive(i)}
+                  className={cn(
+                    'w-full flex items-center gap-sm px-md py-xs text-left cursor-pointer transition-colors',
+                    i === mentionActive ? 'bg-surface-container-high' : 'hover:bg-surface-container',
+                  )}
+                >
+                  <span className="material-symbols-outlined icon-sm text-primary shrink-0">description</span>
+                  <span className="font-mono text-label-md text-on-surface truncate flex-1" title={path}>
+                    {relativeToWorkingDir(path, sessionWorkingDir)}
+                  </span>
+                </button>
+              </li>
+            ))}
+          </ul>
+          <div className="px-md py-xs border-t border-outline-variant/20 text-label-xs text-on-surface-variant">
+            {t('chat.input.mention.hint')}
+          </div>
+        </div>
+      )}
+      {mentionMatches.length > 0 && (
+        <span role="status" className="sr-only">
+          {intl.formatMessage(
+            { id: 'chat.input.mention.status' },
+            { count: mentionMatches.length, current: mentionMatches[mentionActive] ?? '' },
+          )}
+        </span>
+      )}
+
       {isDragging && (
         // Scrim-style drag veil (遮罩) over the composer while a file drag is
         // in flight — intentional direct backdrop-blur, G1 exempt.
@@ -904,7 +1050,13 @@ export default function ChatInput({
             }
             aria-label={t('chat.input.ariaLabel')}
             value={value}
-            onChange={e => onChange(e.target.value)}
+            onChange={e => {
+              trackCaret(e.currentTarget)
+              onChange(e.target.value)
+            }}
+            onKeyUp={e => trackCaret(e.currentTarget)}
+            onClick={e => trackCaret(e.currentTarget)}
+            onSelect={e => trackCaret(e.currentTarget)}
             onKeyDown={handleKeyDown}
             onPaste={handlePaste}
             onCompositionStart={() => {
