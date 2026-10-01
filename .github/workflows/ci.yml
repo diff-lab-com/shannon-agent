@@ -701,6 +701,14 @@ jobs:
     # before a release build fails on a maintainer's laptop. We
     # only run `cargo check` (not build) per matrix leg — full builds
     # already run in release.yml — so the cost stays bounded.
+    #
+    # Scope note (2026-10-01 CI speed plan, P2): the exotic Linux feature
+    # shapes (computer-use-wayland / -x11rb / -wayland-capture and the
+    # per-crate --all-features universe) moved to the Nightly Platform
+    # Tests workflow — they were ~13 of this leg's ~15.5 min on every Rust
+    # PR while only rotting occasionally. computer-use / -libei /
+    # local-browser stay PR-covered via the test-features job above;
+    # the moved shapes are re-checked daily by the nightly.
     name: Cross-platform Check
     runs-on: ${{ matrix.os }}
     needs: changes
@@ -728,13 +736,14 @@ jobs:
       # native keychain backends and skip dbus entirely.
       - name: Install system headers (Linux only)
         if: runner.os == 'Linux'
-        # libdbus-1-dev: keyring → dbus-secret-service (shannon-mcp-saas).
-        # libgbm-dev/libdrm-dev/libwayland-dev/libpipewire-0.3-dev/libegl-dev:
-        # xcap's Linux capture stack (xcap → libwayshot-xcap → gbm →
-        # wayland-backend → wayland-sys, khronos-egl[static] pkg-config
-        # probe "egl", plus pipewire/libspa-sys) — without these the
-        # computer-use feature legs below die in build.rs panics. Same set
-        # the Test/Clippy jobs already install for the same dependency chain.
+        # libdbus-1-dev is the load-bearing entry: keyring →
+        # dbus-secret-service (shannon-mcp-saas) probes pkg-config for
+        # dbus-1 at build time; macOS/Windows use native keychain backends
+        # and skip dbus entirely. The gbm/drm/wayland/pipewire/egl set was
+        # installed for the computer-use feature shapes that moved to the
+        # nightly (2026-10-01); it is kept because it costs ~15 s and is
+        # cheap insurance against a red dev run from an unprobed
+        # Linux-only system header in some default-feature dep.
         run: sudo apt-get update && sudo apt-get install -y --no-install-recommends libdbus-1-dev libgbm-dev libdrm-dev libwayland-dev libpipewire-0.3-dev libegl-dev
       - name: Check workspace (all platforms)
         # shannon-desktop requires Tauri/webview system libs that are
@@ -766,79 +775,6 @@ jobs:
         run: |
           cargo check -p shannon-tools --features computer-use,local-browser
           cargo check -p shannon-cli --features computer-use,local-browser
-      - name: Check all features (Linux only)
-        # Feature-universe compile: --all-features unions optional deps no
-        # default-features gate ever sees. Three carve-outs, each with its
-        # own legs below: shannon-desktop (Tauri system deps, built in
-        # release.yml), shannon-tools + shannon-cli — the latter forwards
-        # shannon-tools' computer-use input backends, which are mutually
-        # exclusive by design (compile_error!s), so `--workspace
-        # --all-features` can never hold for them even with --exclude
-        # (feature unification follows dependency edges, not the member
-        # list). The member list is jq-driven so new crates join
-        # automatically. shannon-server's swagger feature uses
-        # utoipa-swagger-ui/vendored so this stays network-free and
-        # deterministic.
-        if: runner.os == 'Linux'
-        run: |
-          for p in $(cargo metadata --no-deps --format-version 1 | jq -r '.packages[].name' | grep -vx -e shannon-desktop -e shannon-tools -e shannon-cli); do
-            cargo check -p "$p" --all-features
-          done
-      # One step per feature shape so a red run names the exact shape that
-      # broke instead of a 10-command blob (the 2026-09-21 dev red took a
-      # full static-audit pass because the failing command was unlogged).
-      # libxdo-dev: enigo's default Linux backend needs libxdo headers on
-      # a fresh runner (cargo check type-checks the FFI surface); jq is
-      # needed by the per-member loop above and this job has no other
-      # step installing it.
-      - name: Install computer-use check deps (Linux only)
-        if: runner.os == 'Linux'
-        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends jq libxdo-dev
-      - name: Check computer-use (Linux only)
-        if: runner.os == 'Linux'
-        run: |
-          cargo check -p shannon-tools --features computer-use
-          cargo check -p shannon-cli --features computer-use
-      - name: Check computer-use-libei (Linux only)
-        if: runner.os == 'Linux'
-        run: |
-          cargo check -p shannon-tools --features computer-use-libei
-          cargo check -p shannon-cli --features computer-use-libei
-      - name: Check computer-use-wayland (Linux only)
-        if: runner.os == 'Linux'
-        run: |
-          cargo check -p shannon-tools --features computer-use-wayland
-          cargo check -p shannon-cli --features computer-use-wayland
-      - name: Check computer-use-x11rb (Linux only)
-        if: runner.os == 'Linux'
-        run: |
-          cargo check -p shannon-tools --features computer-use-x11rb
-          cargo check -p shannon-cli --features computer-use-x11rb
-      - name: Check computer-use-wayland-capture (Linux only)
-        # This is the shape that went red on dev while every other leg
-        # stayed green; the rustc error tail is re-emitted as a ::error::
-        # annotation so the failure is diagnosable through the public
-        # check-runs API without an authenticated log download.
-        if: runner.os == 'Linux'
-        run: |
-          set -o pipefail
-          if cargo check -p shannon-tools --features computer-use-wayland-capture 2>&1 | tee /tmp/wc-alone.log; then
-            echo "wayland-capture alone: OK"
-          else
-            tail=$(tail -30 /tmp/wc-alone.log | cut -c1-160 | sed 's/%/%25/g;s/\r/%0D/g' | tr '\n' '\001' | sed 's/\x01/%0A/g' | cut -c1-3600)
-            echo "::error::wayland-capture (alone) error tail: ${tail:-none captured}"
-            exit 1
-          fi
-          if cargo check -p shannon-tools --features computer-use-wayland,computer-use-wayland-capture 2>&1 | tee /tmp/wc-combined.log; then
-            echo "wayland+wayland-capture combined: OK"
-          else
-            tail=$(tail -30 /tmp/wc-combined.log | cut -c1-160 | sed 's/%/%25/g;s/\r/%0D/g' | tr '\n' '\001' | sed 's/\x01/%0A/g' | cut -c1-3600)
-            echo "::error::wayland+wayland-capture (combined) error tail: ${tail:-none captured}"
-            exit 1
-          fi
-      - name: Check local-browser (Linux only)
-        if: runner.os == 'Linux'
-        run: cargo check -p shannon-tools --features local-browser
 
   check-linux-musl:
     # Linux-only musl smoke test. Renamed from `check-cross-platform` so
