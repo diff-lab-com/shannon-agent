@@ -75,7 +75,7 @@ export function PairingRequestsCard({ config, procState }: PairingRequestsCardPr
       await refresh()
     } catch (e) {
       // The gateway's reason (unknown/expired code) lands in the error toast.
-      toastError('gateway pairing: approve failed', e)
+      toastError(t('settings.connections.imPairing.approveFailed'), e)
     } finally {
       setApproving(null)
     }

@@ -14,7 +14,7 @@ function ThemeConsumer() {
       </button>
       {themes.map(t => (
         <button key={t.id} data-testid={`btn-${t.id}`} onClick={() => setTheme(t.id)}>
-          {t.label}
+          {t.labelKey}
         </button>
       ))}
     </div>
@@ -45,6 +45,24 @@ describe('ThemeContext', () => {
       </ThemeProvider>
     )
     expect(screen.getByTestId('theme-count')).toHaveTextContent('13')
+  })
+
+  // G7 i18n (P1-8): the provider carries message ids, not strings — every
+  // id must sit in the `settings.theme.name.*` namespace the locale files
+  // define, or ThemeSettings renders a raw key.
+  it('maps every theme to a settings.theme.name.* message id', () => {
+    render(
+      <ThemeProvider>
+        <ThemeConsumer />
+      </ThemeProvider>
+    )
+    for (const id of [
+      'system', 'material', 'tokyo-night', 'tokyo-night-light', 'catppuccin',
+      'nord', 'ember', 'slate', 'solarized', 'solarized-light', 'dracula',
+      'gruvbox', 'gruvbox-light',
+    ]) {
+      expect(screen.getByTestId(`btn-${id}`).textContent).toMatch(/^settings\.theme\.name\./)
+    }
   })
 
   it('switches to solarized-light theme and sets data-theme', () => {

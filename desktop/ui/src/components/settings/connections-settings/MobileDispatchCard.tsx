@@ -120,7 +120,7 @@ export function MobileDispatchCard({ config, procState, onConfigChange }: Mobile
       setTlsStatus(await api.mobileTlsStatus())
       toast.success(t('settings.connections.mobile.tlsSaved'))
     } catch (e) {
-      toastError('mobile: TLS toggle failed', e)
+      toastError(t('settings.connections.mobile.tlsToggleFailed'), e)
     } finally {
       setTlsBusy(false)
     }
@@ -173,7 +173,7 @@ export function MobileDispatchCard({ config, procState, onConfigChange }: Mobile
       setPairedDevices((ds) => ds.filter((d) => d.deviceId !== target.deviceId))
       toast.success(t('settings.connections.mobile.revoked'))
     } catch (e) {
-      toastError('mobile: revoke failed', e)
+      toastError(t('settings.connections.mobile.revokeFailed'), e)
     } finally {
       setRevokeBusy(false)
       setRevokeTarget(null)

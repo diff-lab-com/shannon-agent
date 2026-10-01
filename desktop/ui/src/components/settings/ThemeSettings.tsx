@@ -60,7 +60,7 @@ export default function ThemeSettings() {
                 </div>
                 <p className={cn('text-center font-label-md', theme === opt.id ? 'text-on-surface font-bold' : 'text-on-surface')}>
                   {opt.id === 'system' && <span className="material-symbols-outlined icon-sm align-middle mr-xs">monitor</span>}
-                  {opt.label}
+                  {t(opt.labelKey)}
                 </p>
               </Button>
             ))}
@@ -101,7 +101,7 @@ export default function ThemeSettings() {
           <div className="flex items-center justify-between">
             <div>
               <h3 className="font-headline-md text-headline-md">{t('settings.theme.activeTheme')}</h3>
-              <p className="font-body-sm text-on-surface-variant mt-xs">{intl.formatMessage({ id: 'settings.theme.usingTheme' }, { theme: (themes.find(opt => opt.id === theme)?.label ?? theme) })}</p>
+              <p className="font-body-sm text-on-surface-variant mt-xs">{intl.formatMessage({ id: 'settings.theme.usingTheme' }, { theme: t(themes.find(opt => opt.id === theme)?.labelKey ?? 'settings.theme.name.system') })}</p>
             </div>
             <div className="flex gap-sm">
               <div className="w-8 h-8 rounded-full bg-primary ring-2 ring-primary/30" title={t('settings.theme.colorPrimary')} />

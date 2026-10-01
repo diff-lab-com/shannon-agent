@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { useCallback, useEffect, useState } from 'react'
 import { useIntl } from 'react-intl'
 import { toast } from 'sonner'
 
@@ -15,6 +15,10 @@ import { ConfirmDialog } from '@/components/ui/confirm-dialog'
 import { Icon } from '@/components/ui/icon'
 import { Input } from '@/components/ui/input'
 import { Modal, ModalBody, ModalFooter } from '@/components/ui/modal'
+// G7 i18n: `useT()` (stable per locale) instead of the inline intl shorthand —
+// `reload()` now toasts with `t` inside the mount effect, and a fresh arrow
+// per render would trip react-hooks/exhaustive-deps on that effect.
+import { useT } from '@/i18n'
 import { toastError } from '@/lib/errorToast'
 import * as api from '@/lib/tauri-api'
 import type { RemoteHealth, RemoteTarget as RemoteTargetItem } from './remotes-settings/types'
@@ -31,7 +35,7 @@ type HealthByTarget = Record<string, RemoteHealth>
 
 function RemotesSettings(): React.JSX.Element {
   const intl = useIntl()
-  const t = (id: string): string => intl.formatMessage({ id })
+  const t = useT()
   const tVal = (id: string, values: Record<string, string | number>): string =>
     intl.formatMessage({ id }, values)
 
@@ -43,7 +47,10 @@ function RemotesSettings(): React.JSX.Element {
   const [health, setHealth] = useState<HealthByTarget>({})
   const [testing, setTesting] = useState<string | null>(null)
 
-  async function reload(): Promise<void> {
+  // Memoized so the mount effect can list `reload` honestly in its deps now
+  // that the function toasts through `t` (G7 i18n). useT's callback is stable
+  // per locale, so this only re-fires on a language switch.
+  const reload = useCallback(async (): Promise<void> => {
     try {
       // P1-16: the list response now carries the persisted default target,
       // so a reload reflects reality instead of the previous explicit no-op
@@ -53,14 +60,14 @@ function RemotesSettings(): React.JSX.Element {
       setDefaultTarget(list.defaultTarget)
       setLoaded(true)
     } catch (e) {
-      toastError('remotes: load failed', e)
+      toastError(t('settings.remotes.loadFailed'), e)
       setLoaded(true)
     }
-  }
+  }, [t])
 
   useEffect(() => {
     void reload()
-  }, [])
+  }, [reload])
 
   async function runTest(target: RemoteTargetItem): Promise<void> {
     setTesting(target.name)
@@ -71,7 +78,7 @@ function RemotesSettings(): React.JSX.Element {
         toast.error(tVal('settings.remotes.testFailedToast', { name: target.name }))
       }
     } catch (e) {
-      toastError('remotes: test failed', e)
+      toastError(t('settings.remotes.testFailed'), e)
     } finally {
       setTesting(null)
     }
@@ -83,7 +90,7 @@ function RemotesSettings(): React.JSX.Element {
       setDefaultTarget(target.name)
       toast.success(tVal('settings.remotes.defaultSet', { name: target.name }))
     } catch (e) {
-      toastError('remotes: set default failed', e)
+      toastError(t('settings.remotes.setDefaultFailed'), e)
     }
   }
 
@@ -93,7 +100,7 @@ function RemotesSettings(): React.JSX.Element {
       setDefaultTarget(null)
       toast.success(t('settings.remotes.defaultCleared'))
     } catch (e) {
-      toastError('remotes: clear default failed', e)
+      toastError(t('settings.remotes.clearDefaultFailed'), e)
     }
   }
 
@@ -105,7 +112,7 @@ function RemotesSettings(): React.JSX.Element {
       setRemoveTarget(null)
       await reload()
     } catch (e) {
-      toastError('remotes: remove failed', e)
+      toastError(t('settings.remotes.removeFailed'), e)
     }
   }
 
@@ -312,7 +319,7 @@ function AddRemoteDialog({ open, onClose, onAdded }: AddRemoteDialogProps): Reac
       reset()
       onAdded()
     } catch (e) {
-      toastError('remotes: add failed', e)
+      toastError(t('settings.remotes.addFailed'), e)
     } finally {
       setBusy(false)
     }

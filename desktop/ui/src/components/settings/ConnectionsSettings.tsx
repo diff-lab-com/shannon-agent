@@ -1,8 +1,11 @@
 import { useEffect, useState } from 'react'
-import { useIntl } from 'react-intl'
 import { useNavigate } from 'react-router-dom'
 
 import { useTauriEvent } from '@/hooks/useTauriEvent'
+// G7 i18n: `useT()` (not the inline `t = (id) => intl.formatMessage(...)`
+// shorthand) so the two mount effects below can list `t` in their deps
+// without re-firing every render — the useT callback is stable per locale.
+import { useT } from '@/i18n'
 import { toastError } from '@/lib/errorToast'
 import * as api from '@/lib/tauri-api'
 import type { GatewayConfig, GatewayProcessState } from '@/types'
@@ -15,8 +18,7 @@ import { PlatformsCard } from './connections-settings/PlatformsCard'
 import { ALL_SLOTS, type Platform } from './connections-settings/types'
 
 export default function ConnectionsSettings() {
-  const intl = useIntl()
-  const t = (id: string): string => intl.formatMessage({ id })
+  const t = useT()
   // X3 互链 — gateway page points to Data Sources for external-data queries.
   const navigate = useNavigate()
 
@@ -34,8 +36,8 @@ export default function ConnectionsSettings() {
     api
       .gatewaySupervisorStatus()
       .then(setProcState)
-      .catch((e) => toastError('gateway supervisor: status failed', e))
-  }, [])
+      .catch((e) => toastError(t('settings.connections.process.statusFailed'), e))
+  }, [t])
 
   // When the supervisor reports the child exited (crash, clean exit, or our own
   // stop), re-poll the status so the badge reflects the new state.
@@ -47,8 +49,8 @@ export default function ConnectionsSettings() {
     api
       .gatewayReadConfig()
       .then((cfg) => setConfig(cfg))
-      .catch((e) => toastError('gateway config: load failed', e))
-  }, [])
+      .catch((e) => toastError(t('settings.connections.configLoadFailed'), e))
+  }, [t])
 
   // Seed the engine inputs once the config is in.
   useEffect(() => {

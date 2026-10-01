@@ -18,15 +18,19 @@ export const PLATFORMS = [
 ] as const
 export type Platform = (typeof PLATFORMS)[number]
 
-export const PLATFORM_LABEL: Record<Platform, string> = {
-  slack: 'Slack',
-  telegram: 'Telegram',
-  discord: 'Discord',
-  matrix: 'Matrix',
-  whatsapp: 'WhatsApp',
-  wecom: 'WeCom (企业微信)',
-  feishu: 'Feishu (飞书)',
-  dingtalk: 'DingTalk (钉钉)',
+// G7 i18n (P1-8): display names are message ids resolved through intl —
+// `settings.connections.platform.<platform>` in every locale file — so the
+// Chinese-market platforms (WeCom/Feishu/DingTalk) render with the right
+// native/brand mix per locale instead of a hardcoded bilingual label.
+export const PLATFORM_LABEL_KEY: Record<Platform, string> = {
+  slack: 'settings.connections.platform.slack',
+  telegram: 'settings.connections.platform.telegram',
+  discord: 'settings.connections.platform.discord',
+  matrix: 'settings.connections.platform.matrix',
+  whatsapp: 'settings.connections.platform.whatsapp',
+  wecom: 'settings.connections.platform.wecom',
+  feishu: 'settings.connections.platform.feishu',
+  dingtalk: 'settings.connections.platform.dingtalk',
 }
 
 // One credential slot the gateway reads from the OS keyring at adapter
