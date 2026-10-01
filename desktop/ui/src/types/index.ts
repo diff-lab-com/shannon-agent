@@ -1,6 +1,6 @@
 // TypeScript types matching Rust structs in shannon-desktop/src/events.rs and commands.rs
 
-import type { VoiceLocalConfig } from '@/lib/tauri-api'
+import type { VoiceLocalConfig, InjectedMemory } from '@/lib/tauri-api'
 
 // --- Event Payloads ---
 
@@ -113,6 +113,10 @@ export interface ChatMessage {
   thinking?: string
   file_attachments?: FileAttachment[]
   research_report?: ResearchReport
+  /** W3-4 — memories injected into the turn that produced this answer
+   *  (citation chips with a source jump). Live-turn only: the session log
+   *  does not persist the list, so reloaded history carries no chips. */
+  injected_memories?: InjectedMemory[]
 }
 
 export interface ToolCall {
@@ -707,6 +711,9 @@ export interface SendMessageResponse {
   query_id: string
   /** P0-3 — files that were NOT sent, reported per file instead of dropped. */
   rejected_attachments?: RejectedAttachment[]
+  /** W3-4 — memories injected into THIS turn's prompt (the answer bubble's
+   *  citation chips). Empty for the temporary-chat bypass / zero selections. */
+  injected_memories?: InjectedMemory[]
 }
 
 // --- Session multi-window (P1-1) ---

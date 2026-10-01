@@ -11,6 +11,7 @@
 
 import { useState, useEffect, useCallback, useMemo, useRef, type ReactNode } from 'react'
 import { messageFor } from '@/i18n'
+import { describeBackendError } from '@/lib/backendError'
 import { listen, type UnlistenFn } from '@tauri-apps/api/event'
 import { isEventForCurrentWindow, parseWindowSession } from '@/lib/windowSession'
 import { reportRejectedAttachments } from '@/lib/attachmentFeedback'
@@ -238,6 +239,11 @@ export function AppProvider({ children }: { children: ReactNode }) {
   // session's bucket (windowSessionId ?? currentSessionId).
   const streamingBucketsRef = useRef<Map<string, string>>(new Map())
   const thinkingBucketsRef = useRef<Map<string, string>>(new Map())
+  // W3-4: the per-turn citation snapshot each send receives on its
+  // SendMessageResponse, keyed by the owning session — QUERY_COMPLETED pops
+  // it onto the committed assistant message (citation chips). Live-turn
+  // only: cleared on fail/cancel/new send, never persisted.
+  const pendingInjectedMemoriesRef = useRef<Map<string, api.InjectedMemory[]>>(new Map())
   const visibleSessionIdRef = useRef<string | null>(windowSessionId)
   visibleSessionIdRef.current = windowSessionId ?? currentSessionId
   // B1 P1-5: the visible session's own run gates this session's composer,
@@ -532,6 +538,14 @@ export function AppProvider({ children }: { children: ReactNode }) {
       // dropping them silently. Partial success — the send itself stands;
       // each refusal gets its own "«file» was not sent: «reason»" toast.
       reportRejectedAttachments(resp.rejected_attachments)
+      // W3-4: stash this turn's injected-memory snapshot so QUERY_COMPLETED
+      // can attach it to the committed assistant message (citation chips).
+      // A new send to the same session overwrites — the stale list can never
+      // reach a later turn's bubble.
+      pendingInjectedMemoriesRef.current.set(
+        targetKey,
+        Array.isArray(resp.injected_memories) ? resp.injected_memories : [],
+      )
       return true
     } catch (e) {
       // P0-4 fix: the backend rejected the send BEFORE recording the user
@@ -549,7 +563,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
         }
         return prev
       })
-      setChatError(String(e))
+      setChatError(describeBackendError(String(e), messageFor))
       setSessionQuerying(targetSessionId, false)
       // Round-1 review (Minor-4): the send was rejected BEFORE recording the
       // user message — no run ever started, so the pre-send snapshot (with
@@ -968,10 +982,20 @@ export function AppProvider({ children }: { children: ReactNode }) {
           const finalText = streamingBucketsRef.current.get(key) ?? ''
           streamingBucketsRef.current.set(key, '')
           thinkingBucketsRef.current.set(key, '')
+          // W3-4: the run is over — pop its citation snapshot regardless of
+          // visibility so it can never leak onto a later turn's bubble.
+          const citations = pendingInjectedMemoriesRef.current.get(key)
+          pendingInjectedMemoriesRef.current.delete(key)
           if (key === visibleKey) {
             setSubagentLive(null)
             if (finalText) {
-              setMessages(msgs => [...msgs, { role: 'assistant', content: finalText, timestamp: Date.now() }])
+              setMessages(msgs => [...msgs, {
+                role: 'assistant',
+                content: finalText,
+                timestamp: Date.now(),
+                // W3-4: citation chips ride only a non-empty snapshot.
+                ...(citations && citations.length > 0 ? { injected_memories: citations } : {}),
+              }])
             }
             setStreamingText('')
             setThinkingText('')
@@ -1008,6 +1032,9 @@ export function AppProvider({ children }: { children: ReactNode }) {
           cancelStreamFlush()
           streamingBucketsRef.current.set(key, '')
           thinkingBucketsRef.current.set(key, '')
+          // W3-4: a failed run commits no bubble — drop its citation
+          // snapshot so it can't leak onto a later turn's.
+          pendingInjectedMemoriesRef.current.delete(key)
           if (key === visibleKey) {
             setChatError(p.error, p.error_kind === 'auth' ? 'auth' : 'other')
             setStreamingText('')
@@ -1031,6 +1058,8 @@ export function AppProvider({ children }: { children: ReactNode }) {
           cancelStreamFlush()
           streamingBucketsRef.current.set(key, '')
           thinkingBucketsRef.current.set(key, '')
+          // W3-4: a cancelled run commits no bubble — same snapshot drop.
+          pendingInjectedMemoriesRef.current.delete(key)
           if (key === visibleKey) {
             setStreamingText('')
             setThinkingText('')

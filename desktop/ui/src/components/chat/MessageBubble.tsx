@@ -32,6 +32,7 @@ import { FileRefChip } from '@/components/shared/FileRefChip'
 import { basenameOf, extractToolInputPath, FILE_MUTATING_TOOLS } from '@/lib/fileRefs'
 import { FileCard } from '@/components/chat/FileCard'
 import type { ChatMessage, ToolCall, FileAttachment } from '@/types'
+import type { InjectedMemory } from '@/lib/tauri-api'
 import { cn } from '@/lib/utils'
 
 /** B1 §4-7: payload for a TRUE regenerate — rewind to the checkpoint before
@@ -110,6 +111,63 @@ function MessageHeader({
           <time dateTime={new Date(timestamp!).toISOString()} className="font-mono">{time}</time>
         </>
       )}
+    </div>
+  )
+}
+
+/* ─────── W3-4 — memory citation chips on an assistant answer ─────── */
+
+/** "From your memories": one chip per memory the turn's prompt carried
+ *  (the per-turn snapshot `send_message` returns). A chip with provenance
+ *  jumps to the session that produced the memory — the same switchSession
+ *  jump ContextBreakdownCard uses; entries without a source session
+ *  (manual / imported) render as inert chips. Renders NOTHING when the
+ *  list is empty or missing (temporary-chat bypass, zero injections,
+ *  reloaded history). */
+function MemoryCitationChips({ memories }: { memories?: InjectedMemory[] }) {
+  const intl = useIntl()
+  const t = (id: string) => intl.formatMessage({ id })
+  const { currentSessionId, switchSession } = useSessions()
+  if (!memories || memories.length === 0) return null
+  return (
+    <div
+      className="flex flex-wrap items-center gap-xs mb-xs"
+      data-testid="memory-citations"
+    >
+      <span className="font-label-xs text-on-surface-variant/70 uppercase tracking-wide">
+        {t('chat.message.memoryCitations.title')}
+      </span>
+      {memories.map(m => {
+        const jumpable = Boolean(m.sourceSessionId) && m.sourceSessionId !== currentSessionId
+        const chipBody = (
+          <>
+            <span className="material-symbols-outlined icon-xs shrink-0" aria-hidden="true">psychology</span>
+            <span className="max-w-[200px] truncate">{m.title}</span>
+          </>
+        )
+        return jumpable ? (
+          <button
+            key={m.id}
+            type="button"
+            data-testid={`memory-citation-jump-${m.id}`}
+            title={t('chat.context.injectedMemories.jump')}
+            aria-label={`${t('chat.message.memoryCitations.jumpAria')}: ${m.title}`}
+            className="inline-flex items-center gap-1 px-xs py-[1px] rounded-full bg-primary-container/40 text-on-primary-container text-label-xs font-medium hover:bg-primary-container/70 transition-colors cursor-pointer max-w-full min-w-0"
+            onClick={() => { void switchSession(m.sourceSessionId!) }}
+          >
+            {chipBody}
+          </button>
+        ) : (
+          <span
+            key={m.id}
+            data-testid={`memory-citation-${m.id}`}
+            title={m.title}
+            className="inline-flex items-center gap-1 px-xs py-[1px] rounded-full bg-surface-container-high text-on-surface-variant text-label-xs max-w-full min-w-0"
+          >
+            {chipBody}
+          </span>
+        )
+      })}
     </div>
   )
 }
@@ -383,6 +441,9 @@ export const MessageBubble = memo(function MessageBubble({ message, messageIndex
       <MessageAvatar from="assistant" icon={isTool ? 'build' : 'smart_toy'} />
       <MessageContent className="space-y-md flex-1">
         <MessageHeader role={isTool ? 'tool' : 'assistant'} timestamp={message.timestamp} />
+        {/* W3-4: citation chips for the memories this turn's prompt carried —
+            hidden entirely for a bypass / zero-injection turn (empty list). */}
+        {!isTool && <MemoryCitationChips memories={message.injected_memories} />}
         <div className="bg-surface-container-lowest px-lg py-md rounded-2xl rounded-tl-none border border-outline-variant/20 shadow-e1 min-w-0 overflow-x-auto">
           <ResponseStream className="font-body-md text-on-surface prose prose-sm max-w-none prose-p:my-xs prose-pre:bg-surface-container prose-pre:p-md prose-pre:rounded-lg prose-code:text-primary prose-code:before:content-[''] prose-code:after:content-['']">
             <Markdown>{message.content}</Markdown>
