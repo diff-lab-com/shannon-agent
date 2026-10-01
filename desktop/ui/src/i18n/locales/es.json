@@ -3904,5 +3904,9 @@
   "settings.theme.name.dracula": "Dracula",
   "settings.theme.name.gruvbox": "Gruvbox",
   "settings.theme.name.gruvboxLight": "Gruvbox Light",
-  "extensions.pending.errors.loadFailed": "No se pudieron cargar los errores de MCP"
+  "extensions.pending.errors.loadFailed": "No se pudieron cargar los errores de MCP",
+  "extensions.mcp.statusOnline": "En línea",
+  "extensions.mcp.statusDisabled": "Desactivado",
+  "extensions.mcp.toggleAria": "Activar o desactivar {name}",
+  "extensions.mcp.toggleFailed": "No se pudo actualizar {name}: {error}"
 }

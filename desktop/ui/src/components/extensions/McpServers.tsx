@@ -7,6 +7,7 @@ import { toast } from "sonner";
 import {
   listMcpServers,
   restartMcpServer,
+  setMcpServerEnabled,
   uninstallMcpServer,
 } from "@/lib/tauri-api";
 import { safeErrorMessage } from "@/lib/packageValidation";
@@ -14,6 +15,7 @@ import type { McpServerInfo } from "@/types";
 import McpAddServerDialog from "./McpAddServerDialog";
 import { ConfirmDialog } from "@/components/ui/confirm-dialog";
 import LoadingState from "@/components/ui/loading-state";
+import { Switch } from "@/components/ui/switch";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
 
@@ -146,6 +148,26 @@ export default function McpServers() {
     }
   }
 
+  // W2-A (R4/A1) — inline enable/disable: persists to the unified
+  // settings.json store and reconciles the pool (stop on disable, start on
+  // enable; auth-gated remote rows stay in the honest state).
+  async function handleToggle(name: string, enabled: boolean) {
+    setBusyId(`toggle:${name}`);
+    try {
+      await setMcpServerEnabled(name, enabled);
+    } catch (err) {
+      toast.error(
+        intl.formatMessage(
+          { id: "extensions.mcp.toggleFailed" },
+          { name, error: safeErrorMessage(err, "update failed") },
+        ),
+      );
+    } finally {
+      setBusyId(null);
+      refreshInstalled();
+    }
+  }
+
   function handleInstalled() {
     refreshInstalled();
   }
@@ -169,6 +191,7 @@ export default function McpServers() {
         busyId={busyId}
         onUninstall={(name) => setRemoveTarget(name)}
         onRestart={handleRestart}
+        onToggle={handleToggle}
         onOpenPermissions={(name) =>
           // X3 权限就近直达 — deep link into the permissions page pre-filtered
           // to this server. The page matches rules against `mcp__<name>__*`;
@@ -225,6 +248,7 @@ function InstalledSection({
   busyId,
   onUninstall,
   onRestart,
+  onToggle,
   onOpenPermissions,
 }: {
   servers: McpServerInfo[];
@@ -236,6 +260,7 @@ function InstalledSection({
   busyId: string | null;
   onUninstall: (name: string) => void;
   onRestart: (name: string) => void;
+  onToggle: (name: string, enabled: boolean) => void;
   onOpenPermissions: (name: string) => void;
 }) {
   const intl = useIntl();
@@ -271,16 +296,21 @@ function InstalledSection({
         <div className="border border-outline-variant/30 rounded-2xl overflow-hidden bg-surface-container-lowest/50">
           {servers.map((srv, i) => {
             const isBusy = busyId === `uninstall:${srv.name}`;
+            const isToggling = busyId === `toggle:${srv.name}`;
             const isRestarting = busyId === `restart:${srv.name}`;
-            // W1-1 (R2-P0-1(B)): url-only OAuth/HTTP installs (the hub writes
-            // `{"url":...}` with no command) are remote servers the desktop
-            // pool cannot start yet — shown as Remote, never as Offline.
-            const isRemote = !srv.command && !!srv.url;
+            // W2-A (R4/A1): the backend classifies url-only rows —
+            // header-bearing ones (OAuth products) stay on the W1-A honest
+            // "Remote" badge until A2; header-less pure remote rows are
+            // wired into the pool and render exactly like stdio rows.
+            const isAuthRemote = !srv.command && !!srv.url && !!srv.has_auth_headers;
+            const isDisabled = !srv.enabled;
             // Build a mono preview: command + args, or the remote endpoint.
             const preview = srv.command || srv.url || "";
-            const rowStatusTitle = isRemote
-              ? t("extensions.mcp.remoteHint")
-              : srv.last_error ?? undefined;
+            const rowStatusTitle = isDisabled
+              ? undefined
+              : isAuthRemote
+                ? t("extensions.mcp.remoteHint")
+                : (srv.last_error ?? undefined);
             return (
               <div
                 key={srv.name}
@@ -297,16 +327,26 @@ function InstalledSection({
                     <div className="font-bold text-label-md text-on-surface truncate">
                       {srv.name}
                     </div>
-                    {srv.connected ? (
-                      <span className="text-label-xs px-xs py-[1px] rounded-full font-bold shrink-0 bg-primary-container text-on-primary-container">
-                        {t("extensions.mcp.toolCount", {
-                          count: srv.tool_count,
-                        })}
+                    {/* W2-A: connection status and tool count are two
+                        separate elements — the status pill says *whether*
+                        the server is up, the chip says *what* it offers. */}
+                    {isDisabled ? (
+                      <span
+                        className="text-label-xs px-xs py-[1px] rounded-full font-bold shrink-0 bg-surface-container-highest text-on-surface-variant"
+                        title={t("extensions.mcp.toggleAria", { name: srv.name })}
+                      >
+                        {t("extensions.mcp.statusDisabled")}
                       </span>
-                    ) : isRemote ? (
-                      // W1-1: honest remote state — distinct from the Offline
-                      // bad state, pointing at the CLI until desktop support
-                      // for remote transports ships.
+                    ) : srv.connected ? (
+                      <span
+                        className="text-label-xs px-xs py-[1px] rounded-full font-bold shrink-0 bg-primary-container text-on-primary-container"
+                        title={srv.last_error ?? undefined}
+                      >
+                        {t("extensions.mcp.statusOnline")}
+                      </span>
+                    ) : isAuthRemote ? (
+                      // W1-A honest remote state — distinct from the
+                      // Offline bad state, kept until OAuth lands (A2).
                       <span
                         className="text-label-xs px-xs py-[1px] rounded-full font-bold shrink-0 bg-tertiary-container text-on-tertiary-container"
                         title={t("extensions.mcp.remoteHint")}
@@ -321,20 +361,31 @@ function InstalledSection({
                         {t("extensions.mcp.offline")}
                       </span>
                     )}
+                    {/* Tool count chip — its own element next to the
+                        status pill (was fused into it before W2-A). */}
+                    {!isDisabled && srv.connected && (
+                      <span className="text-label-xs px-xs py-[1px] rounded-full font-bold shrink-0 bg-secondary-container text-on-secondary-container">
+                        {t("extensions.mcp.toolCount", {
+                          count: srv.tool_count,
+                        })}
+                      </span>
+                    )}
                   </div>
                   {preview && (
                     <div className="text-label-xs text-on-surface-variant font-mono truncate">
                       {preview}
                     </div>
                   )}
-                  {isRemote ? (
+                  {isAuthRemote ? (
                     <div className="text-label-xs text-on-surface-variant truncate">
                       {t("extensions.mcp.remoteHint")}
                     </div>
                   ) : (
                     // W1-7 (R2-P1-6): a failed server shows its concrete
                     // error inline (full text on hover) — no more
-                    // colour-only "Offline" dead ends.
+                    // colour-only "Offline" dead ends. W2-A: remote
+                    // connection failures flow through the same path.
+                    !isDisabled &&
                     srv.last_error && (
                       <div
                         className="text-label-xs text-error font-mono truncate"
@@ -345,6 +396,17 @@ function InstalledSection({
                     )
                   )}
                 </div>
+                {/* W2-A: inline enable/disable — the backend persists the
+                    flag and reconciles the pool (stop on disable, start on
+                    enable). */}
+                <Switch
+                  size="sm"
+                  checked={srv.enabled}
+                  disabled={isToggling}
+                  onCheckedChange={(next) => onToggle(srv.name, next === true)}
+                  aria-label={t("extensions.mcp.toggleAria", { name: srv.name })}
+                  data-testid={`mcp-toggle-${srv.name}`}
+                />
                 {/* X3: per-server jump to the permissions page, pre-filtered
                     to this server's `mcp__<name>__*` rules. */}
                 <Button
@@ -362,25 +424,25 @@ function InstalledSection({
                   {t("extensions.mcp.toolPermissions")}
                 </Button>
                 {/* G1 P0-1.4 — restart the server process (stop + start)
-                    without leaving the page. W1-1: disabled for url-only
-                    remote servers (no stdio process to restart) with a
-                    tooltip explaining why. */}
+                    without leaving the page. W2-A: pure remote rows restart
+                    for real; only auth-gated OAuth rows keep the disabled
+                    restart with its honest tooltip. */}
                 <Button
                   variant="ghost"
                   size="sm"
                   type="button"
                   aria-label={
-                    isRemote
+                    isAuthRemote
                       ? t("extensions.mcp.restartRemoteDisabled")
                       : t("extensions.mcp.restartAria", { name: srv.name })
                   }
                   title={
-                    isRemote
+                    isAuthRemote
                       ? t("extensions.mcp.restartRemoteDisabled")
                       : t("extensions.mcp.restartAria", { name: srv.name })
                   }
                   onClick={() => onRestart(srv.name)}
-                  disabled={isBusy || isRestarting || isRemote}
+                  disabled={isBusy || isRestarting || isToggling || isAuthRemote}
                   className="text-on-surface-variant hover:text-primary shrink-0"
                 >
                   <span className="material-symbols-outlined icon-sm" aria-hidden="true">

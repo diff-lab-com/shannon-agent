@@ -301,6 +301,75 @@ async fn test_pool_list_servers_empty() {
     assert!(servers.is_empty());
 }
 
+// W2-A: a failed start (stdio spawn or remote handshake) must stay
+// observable in the pool — the handle is kept carrying `Unhealthy(reason)`
+// — so consumers (desktop `list_mcp_servers`) can render a concrete
+// `last_error` instead of a bare Offline. The error itself still
+// propagates to the caller.
+#[tokio::test]
+async fn test_failed_stdio_start_stays_observable_as_unhealthy() {
+    let pool = McpProcessPool::new();
+    let err = pool
+        .start_server(
+            "broken-stdio",
+            "/nonexistent/shannon-mcp-test-binary",
+            &[],
+            &HashMap::new(),
+        )
+        .await
+        .unwrap_err();
+    assert!(err.contains("failed to spawn"), "{err}");
+
+    let state = pool
+        .list_servers()
+        .await
+        .into_iter()
+        .find(|(name, _)| name == "broken-stdio")
+        .map(|(_, state)| state);
+    assert!(
+        matches!(&state, Some(ServerState::Unhealthy(msg)) if msg.contains("failed to spawn")),
+        "failed start must be observable, got {state:?}"
+    );
+}
+
+#[tokio::test]
+async fn test_failed_remote_start_stays_observable_as_unhealthy() {
+    let mut pool = McpProcessPool::new();
+    pool.set_request_timeout(Duration::from_millis(100));
+    pool.set_connection_timeout(Duration::from_millis(100));
+    let err = pool
+        .start_remote_server(
+            "dead-remote",
+            "http://127.0.0.1:1/mcp",
+            HashMap::new(),
+            None,
+        )
+        .await
+        .unwrap_err();
+    assert!(!err.is_empty());
+
+    let state = pool
+        .list_servers()
+        .await
+        .into_iter()
+        .find(|(name, _)| name == "dead-remote")
+        .map(|(_, state)| state);
+    assert!(
+        matches!(&state, Some(ServerState::Unhealthy(msg)) if !msg.is_empty()),
+        "failed remote start must be observable, got {state:?}"
+    );
+
+    // stop_server cleans the failed handle up (the toggle/restart flow
+    // relies on this).
+    assert!(pool.stop_server("dead-remote").await.is_ok());
+    assert!(
+        pool.list_servers()
+            .await
+            .into_iter()
+            .all(|(name, _)| name != "dead-remote")
+    );
+}
+
 #[tokio::test]
 async fn test_pool_call_tool_not_found() {
     let pool = McpProcessPool::new();

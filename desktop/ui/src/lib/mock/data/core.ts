@@ -474,6 +474,7 @@ export const MOCK_MCP_SERVERS: McpServerInfo[] = [
       { name: 'search_files', description: 'Search files by pattern', enabled: true },
     ],
     last_connected: now - 60_000,
+    has_auth_headers: false,
   },
   {
     name: 'github',
@@ -488,6 +489,7 @@ export const MOCK_MCP_SERVERS: McpServerInfo[] = [
       { name: 'get_file_contents', description: 'Fetch a file from a repo', enabled: true },
     ],
     last_connected: now - 120_000,
+    has_auth_headers: false,
   },
   {
     name: 'playwright',
@@ -501,6 +503,7 @@ export const MOCK_MCP_SERVERS: McpServerInfo[] = [
       { name: 'fill', description: 'Fill a form field', enabled: true },
     ],
     last_connected: null,
+    has_auth_headers: false,
   },
   {
     name: 'slack',
@@ -510,6 +513,7 @@ export const MOCK_MCP_SERVERS: McpServerInfo[] = [
     tool_count: 5,
     tools: [],
     last_connected: null,
+    has_auth_headers: false,
   },
 ]
 

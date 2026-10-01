@@ -302,6 +302,16 @@ pub struct McpServerConfig {
     /// cannot round-trip `type`/`headers` (see [`save_mcp_servers_to`]).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub url: Option<String>,
+    /// W2-A (R4/A1) — the single-source auth verdict for a url-only row:
+    /// `true` when the store entry carries HTTP `headers` (today always the
+    /// OAuth remote installer's `Authorization: Bearer …` product). Such
+    /// entries stay in the W1-A honest "remote" state — the desktop pool
+    /// connects them only once OAuth lands (A2) — while url-only rows
+    /// **without** headers are pure remote servers the pool wires up
+    /// directly. Computed by the private `mcp_server_config_from_json`; the
+    /// seeder, restart and the UI all follow this one verdict.
+    #[serde(default)]
+    pub has_auth_headers: bool,
 }
 
 /// A managed LLM provider connection (Models P2). Users may configure several
@@ -705,29 +715,42 @@ pub fn save_config(config: &DesktopConfig) -> Result<(), String> {
 /// `~/.shannon/settings.json#mcpServers` — servers installed from the hub
 /// never showed up (and vice versa). Entries that are not stdio-startable
 /// (no `command`, e.g. `url`-only OAuth/HTTP servers) are still listed so
-/// the UI shows them; the process pool skips them.
-pub fn load_mcp_servers() -> Vec<McpServerConfig> {
+/// the UI shows them; W2-A wires the header-less (pure remote) ones into
+/// the process pool and leaves the auth-bearing ones on the honest badge.
+///
+/// A missing file starts empty; a present-but-corrupt file is an
+/// `Err` — W2-A read/write symmetry: the save side already refuses to
+/// reset a corrupt store, so the load side must not silently swallow it
+/// as an empty list either (that masqueraded as "nothing installed").
+pub fn load_mcp_servers() -> Result<Vec<McpServerConfig>, String> {
     load_mcp_servers_from(&user_settings_path())
 }
 
 /// `load_mcp_servers` against an explicit `settings.json` path (tests inject
 /// a tempdir so they never touch the user's HOME).
-pub fn load_mcp_servers_from(path: &std::path::Path) -> Vec<McpServerConfig> {
-    let Ok(content) = std::fs::read_to_string(path) else {
-        return Vec::new();
+pub fn load_mcp_servers_from(path: &std::path::Path) -> Result<Vec<McpServerConfig>, String> {
+    let root = read_settings_json_root(path)?;
+    let Some(root_obj) = root.as_object() else {
+        return Err(format!(
+            "settings.json is not a JSON object: {}",
+            path.display()
+        ));
     };
-    let Ok(root) = serde_json::from_str::<serde_json::Value>(&content) else {
-        return Vec::new();
+    let Some(map) = root_obj.get("mcpServers") else {
+        return Ok(Vec::new());
     };
-    let Some(map) = root.get("mcpServers").and_then(|m| m.as_object()) else {
-        return Vec::new();
+    let Some(map) = map.as_object() else {
+        return Err(format!(
+            "settings.json#mcpServers is not an object: {}",
+            path.display()
+        ));
     };
     let mut servers: Vec<McpServerConfig> = map
         .iter()
         .filter_map(|(name, value)| mcp_server_config_from_json(name, value))
         .collect();
     servers.sort_by(|a, b| a.name.cmp(&b.name));
-    servers
+    Ok(servers)
 }
 
 /// Convert one `mcpServers.<name>` JSON entry into a [`McpServerConfig`].
@@ -736,6 +759,12 @@ pub fn load_mcp_servers_from(path: &std::path::Path) -> Vec<McpServerConfig> {
 /// Stdio `command` is the only hard requirement for the *pool*, but
 /// url-only servers are surfaced too (`command` empty, `enabled` from the
 /// `enabled` flag) so `list_mcp_servers` shows what the user installed.
+///
+/// W2-A (R4/A1) — the auth verdict lives here (single source): an entry
+/// with a non-empty `headers` object is auth-bearing (the OAuth remote
+/// installer writes `headers.Authorization`), so the desktop keeps it on
+/// the honest badge instead of trying to connect without credentials.
+/// Header-less url-only entries are pure remote servers the pool wires up.
 fn mcp_server_config_from_json(name: &str, value: &serde_json::Value) -> Option<McpServerConfig> {
     let obj = value.as_object()?;
     let command = obj
@@ -766,6 +795,14 @@ fn mcp_server_config_from_json(name: &str, value: &serde_json::Value) -> Option<
     // install into an anonymous empty-command row the UI could only show
     // as "Offline".
     let url = obj.get("url").and_then(|u| u.as_str()).map(str::to_string);
+    // W2-A: headers (static or command-sourced) are credentials in every
+    // store shape the hub writes — flag any of them. The struct cannot
+    // represent the values anyway, so a header-bearing row must never be
+    // started header-less.
+    let has_auth_headers = obj
+        .get("headers")
+        .and_then(|h| h.as_object())
+        .is_some_and(|h| !h.is_empty());
     Some(McpServerConfig {
         name: name.to_string(),
         command,
@@ -773,6 +810,7 @@ fn mcp_server_config_from_json(name: &str, value: &serde_json::Value) -> Option<
         env,
         enabled,
         url,
+        has_auth_headers,
     })
 }
 
@@ -891,6 +929,37 @@ pub fn remove_mcp_server_entry_from(path: &std::path::Path, name: &str) -> Resul
     Ok(removed)
 }
 
+/// Flip the `enabled` flag of one `mcpServers.<name>` entry in the unified
+/// store (W2-A inline toggle). Edits the raw JSON entry in place, so
+/// url-only rows keep their `type`/`url`/`headers` blob — unlike
+/// [`save_mcp_servers_to`], which must skip rows the struct cannot
+/// round-trip. Returns `Ok(false)` when no entry with that name exists.
+pub fn set_mcp_server_enabled(name: &str, enabled: bool) -> Result<bool, String> {
+    set_mcp_server_enabled_to(&user_settings_path(), name, enabled)
+}
+
+/// `set_mcp_server_enabled` against an explicit `settings.json` path.
+pub fn set_mcp_server_enabled_to(
+    path: &std::path::Path,
+    name: &str,
+    enabled: bool,
+) -> Result<bool, String> {
+    let mut root = read_settings_json_root(path)?;
+    let Some(entry) = root
+        .get_mut("mcpServers")
+        .and_then(|m| m.as_object_mut())
+        .and_then(|m| m.get_mut(name))
+    else {
+        return Ok(false);
+    };
+    let Some(entry_obj) = entry.as_object_mut() else {
+        return Err(format!("settings.json#mcpServers.{name} is not an object"));
+    };
+    entry_obj.insert("enabled".to_string(), serde_json::Value::Bool(enabled));
+    write_settings_json_atomic(path, &root)?;
+    Ok(true)
+}
+
 /// One-time, idempotent migration of the legacy
 /// `~/.shannon/desktop/mcp-servers.json` store into the unified
 /// `~/.shannon/settings.json#mcpServers`. Entries already present in the
@@ -924,11 +993,21 @@ pub fn migrate_legacy_mcp_servers_to(
         return 0;
     };
 
-    // Existing unified entries win (idempotent re-runs are no-ops).
-    let existing: std::collections::HashSet<String> = load_mcp_servers_from(settings_path)
-        .into_iter()
-        .map(|s| s.name)
-        .collect();
+    // Existing unified entries win (idempotent re-runs are no-ops). A
+    // corrupt unified store skips the migration entirely — W2-A made the
+    // load honest (Err), and writing into a corrupt file would fail the
+    // save anyway.
+    let existing: std::collections::HashSet<String> = match load_mcp_servers_from(settings_path) {
+        Ok(servers) => servers.into_iter().map(|s| s.name).collect(),
+        Err(e) => {
+            tracing::warn!(
+                path = %settings_path.display(),
+                error = %e,
+                "unified settings.json is corrupt — skipping legacy MCP migration"
+            );
+            return 0;
+        }
+    };
 
     let mut configs = Vec::new();
     for row in rows {
@@ -955,6 +1034,7 @@ pub fn migrate_legacy_mcp_servers_to(
                 .unwrap_or_default(),
             enabled: row.get("enabled").and_then(|e| e.as_bool()).unwrap_or(true),
             url: None,
+            has_auth_headers: false,
         });
     }
     if configs.is_empty() {
@@ -1542,6 +1622,7 @@ mod tests {
                 env: [("K".to_string(), "v".to_string())].into_iter().collect(),
                 enabled: true,
                 url: None,
+                has_auth_headers: false,
             }],
         )
         .unwrap();
@@ -1553,7 +1634,7 @@ mod tests {
 
         // Load sees both entries (url-only listed with empty command, its
         // url preserved — W1-1: it is no longer dropped).
-        let servers = load_mcp_servers_from(&path);
+        let servers = load_mcp_servers_from(&path).unwrap();
         assert_eq!(servers.len(), 2);
         let everything = servers.iter().find(|s| s.name == "everything").unwrap();
         assert_eq!(everything.command, "npx");
@@ -1568,7 +1649,7 @@ mod tests {
         // Removal drops only the target row.
         assert!(remove_mcp_server_entry_from(&path, "everything").unwrap());
         assert!(!remove_mcp_server_entry_from(&path, "everything").unwrap());
-        let servers = load_mcp_servers_from(&path);
+        let servers = load_mcp_servers_from(&path).unwrap();
         assert_eq!(servers.len(), 1);
         assert_eq!(servers[0].name, "notion");
         // Foreign key still intact after removal.
@@ -1603,6 +1684,7 @@ mod tests {
                 env: Default::default(),
                 enabled: true,
                 url: None,
+                has_auth_headers: false,
             }],
         )
         .unwrap();
@@ -1610,7 +1692,7 @@ mod tests {
         let migrated = migrate_legacy_mcp_servers_to(&settings, &legacy);
         assert_eq!(migrated, 1, "only 'fs' migrates; 'shared' already exists");
 
-        let servers = load_mcp_servers_from(&settings);
+        let servers = load_mcp_servers_from(&settings).unwrap();
         assert_eq!(servers.len(), 2);
         let shared = servers.iter().find(|s| s.name == "shared").unwrap();
         assert_eq!(shared.command, "unified-cmd");
@@ -1655,6 +1737,7 @@ mod tests {
                 env: Default::default(),
                 enabled: true,
                 url: None,
+                has_auth_headers: false,
             }],
         );
         assert!(result.is_err(), "corrupt settings.json must fail the save");
@@ -1683,6 +1766,7 @@ mod tests {
                 env: Default::default(),
                 enabled: true,
                 url: None,
+                has_auth_headers: false,
             }],
         )
         .unwrap();
@@ -1718,6 +1802,7 @@ mod tests {
                 env: Default::default(),
                 enabled: true,
                 url: Some("https://mcp.example".into()),
+                has_auth_headers: false,
             }],
         )
         .unwrap();
@@ -1749,12 +1834,15 @@ mod tests {
         )
         .unwrap();
 
-        let servers = load_mcp_servers_from(&path);
+        let servers = load_mcp_servers_from(&path).unwrap();
         assert_eq!(servers.len(), 2);
 
         let notion = servers.iter().find(|s| s.name == "notion").unwrap();
         assert!(notion.command.is_empty());
         assert_eq!(notion.url.as_deref(), Some("https://mcp.example"));
+        // W2-A: the `headers.Authorization` blob makes this row auth-gated —
+        // the single-source verdict the seeder and the UI follow.
+        assert!(notion.has_auth_headers);
 
         // A stdio row from an older store (no `url` key anywhere) parses
         // with `url: None` — the new field is fully backward compatible.
@@ -1768,8 +1856,119 @@ mod tests {
             r#"{"mcpServers":{"weird":{"url":42,"enabled":true}}}"#,
         )
         .unwrap();
-        let servers = load_mcp_servers_from(&path);
+        let servers = load_mcp_servers_from(&path).unwrap();
         assert_eq!(servers.len(), 1);
         assert!(servers[0].url.is_none());
+    }
+
+    /// W2-A (R4/A1) — the auth verdict: a url-only entry with headers (the
+    /// OAuth installer product) is auth-gated; a header-less url-only entry
+    /// is pure remote and wireable; an empty `headers` object is not auth.
+    #[test]
+    fn auth_verdict_follows_store_headers() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = tmp_settings(dir.path());
+        std::fs::write(
+            &path,
+            r#"{"mcpServers":{
+                "oauth":{"type":"http","url":"https://mcp.example","headers":{"Authorization":"Bearer t"}},
+                "pure":{"type":"http","url":"https://plain.example/mcp"},
+                "empty-headers":{"url":"https://h.example","headers":{}},
+                "cmd-header":{"url":"https://c.example","headers":{"X-Key":{"command":"op read x"}}}
+            }}"#,
+        )
+        .unwrap();
+
+        let servers = load_mcp_servers_from(&path).unwrap();
+        let verdict = |name: &str| {
+            servers
+                .iter()
+                .find(|s| s.name == name)
+                .unwrap_or_else(|| panic!("{name} missing"))
+                .has_auth_headers
+        };
+        assert!(verdict("oauth"), "Authorization header → auth-gated");
+        assert!(verdict("cmd-header"), "command-sourced header → auth-gated");
+        assert!(
+            !verdict("pure"),
+            "header-less url-only row is pure remote (wireable)"
+        );
+        assert!(
+            !verdict("empty-headers"),
+            "empty headers object is not auth"
+        );
+    }
+
+    /// W2-A read/write symmetry: the save side already refused to reset a
+    /// corrupt settings.json — the load side now reports it instead of
+    /// silently masquerading as "nothing installed". Missing file and a
+    /// store without `mcpServers` stay ordinary empty lists.
+    #[test]
+    fn load_honestly_reports_corrupt_settings() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = tmp_settings(dir.path());
+
+        // Missing file: ordinary empty start.
+        assert!(load_mcp_servers_from(&path).unwrap().is_empty());
+
+        // Corrupt JSON: Err, never a silent empty list.
+        std::fs::write(&path, "{broken").unwrap();
+        let err = load_mcp_servers_from(&path).unwrap_err();
+        assert!(err.contains("settings.json parse"), "{err}");
+
+        // Valid JSON but wrong shape (root not an object / mcpServers not
+        // an object): equally corrupt as far as the store contract goes.
+        std::fs::write(&path, "[1,2,3]").unwrap();
+        assert!(load_mcp_servers_from(&path).is_err());
+        std::fs::write(&path, r#"{"mcpServers":[1]}"#).unwrap();
+        assert!(load_mcp_servers_from(&path).is_err());
+
+        // Valid object without `mcpServers`: ordinary empty list.
+        std::fs::write(&path, r#"{"permissions":{"allow":[]}}"#).unwrap();
+        assert!(load_mcp_servers_from(&path).unwrap().is_empty());
+    }
+
+    /// W2-A inline toggle: the enabled flag flips in place — url-only rows
+    /// keep their `type`/`url`/`headers` blob untouched — and a missing or
+    /// corrupt store is reported, never invented.
+    #[test]
+    fn set_mcp_server_enabled_toggles_rows_in_place() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = tmp_settings(dir.path());
+        std::fs::write(
+            &path,
+            r#"{"mcpServers":{
+                "notion":{"type":"http","url":"https://mcp.example","headers":{"Authorization":"Bearer t"},"enabled":true},
+                "fs":{"command":"npx","args":[],"env":{},"enabled":true}
+            }}"#,
+        )
+        .unwrap();
+
+        // Toggle the url-only row off…
+        assert!(set_mcp_server_enabled_to(&path, "notion", false).unwrap());
+        let root: serde_json::Value =
+            serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
+        let notion = &root["mcpServers"]["notion"];
+        assert_eq!(notion["enabled"], false);
+        assert_eq!(notion["url"], "https://mcp.example");
+        assert_eq!(notion["headers"]["Authorization"], "Bearer t");
+        assert_eq!(notion["type"], "http");
+
+        // …and the stdio row too; the first row is untouched.
+        assert!(set_mcp_server_enabled_to(&path, "fs", false).unwrap());
+        let servers = load_mcp_servers_from(&path).unwrap();
+        assert!(servers.iter().all(|s| !s.enabled));
+
+        // Back on.
+        assert!(set_mcp_server_enabled_to(&path, "notion", true).unwrap());
+        let servers = load_mcp_servers_from(&path).unwrap();
+        assert!(servers.iter().find(|s| s.name == "notion").unwrap().enabled);
+
+        // Unknown name → Ok(false), no write.
+        assert!(!set_mcp_server_enabled_to(&path, "ghost", true).unwrap());
+
+        // Corrupt store → Err.
+        std::fs::write(&path, "{broken").unwrap();
+        assert!(set_mcp_server_enabled_to(&path, "fs", true).is_err());
     }
 }

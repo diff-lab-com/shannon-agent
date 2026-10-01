@@ -3904,5 +3904,9 @@
   "settings.theme.name.dracula": "Dracula",
   "settings.theme.name.gruvbox": "Gruvbox",
   "settings.theme.name.gruvboxLight": "Gruvbox Light",
-  "extensions.pending.errors.loadFailed": "MCP 오류를 불러올 수 없습니다"
+  "extensions.pending.errors.loadFailed": "MCP 오류를 불러올 수 없습니다",
+  "extensions.mcp.statusOnline": "온라인",
+  "extensions.mcp.statusDisabled": "비활성화됨",
+  "extensions.mcp.toggleAria": "{name} 켜기 또는 끄기",
+  "extensions.mcp.toggleFailed": "{name} 업데이트 실패: {error}"
 }
