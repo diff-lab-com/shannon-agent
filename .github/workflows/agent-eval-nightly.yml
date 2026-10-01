@@ -1,9 +1,9 @@
 name: Agent Eval (nightly)
 
 # T2.3 — nightly real-model L1 eval. Catches capability regressions the
-# dry-run gate (ci.yml's eval-dry-run job) can't see — that gate
-# exercises the harness without a real model. This workflow runs the
-# cheapest tier subset (read/edit/search) against the live API and
+# dry-run gate (the eval steps of ci.yml's Fast checks job) can't see —
+# that gate exercises the harness without a real model. This workflow runs
+# the cheapest tier subset (read/edit/search) against the live API and
 # uploads the report as a workflow artifact for human review.
 #
 # Cost guard: tier subset (3 of 5 tiers), single run per cron. ~$1-2 per
@@ -54,7 +54,14 @@ jobs:
           tool: just
 
       - name: Build
-        run: cargo build --workspace
+        # Only the two crates the eval needs: the CLI binary (eval target)
+        # and shannon-core (the eval_runner example compiles from it).
+        # A `--workspace` build here pulls in shannon-desktop (Tauri →
+        # glib-sys/webkit headers), which has no system deps installed in
+        # this job and turned the nightly red (2026-10-01: glib-sys build
+        # script failure). The dry-run gate proves `-p shannon-cli` needs
+        # no extra system packages on ubuntu.
+        run: cargo build -p shannon-cli -p shannon-core
 
       - name: Run real-model L1 eval (tier-filtered)
         id: eval
