@@ -52,8 +52,24 @@ jobs:
         uses: taiki-e/install-action@67729d5c413db75907f0ad1e39bb04b9c868ff60
         with:
           tool: cargo-llvm-cov
+      - name: Install cargo-nextest
+        uses: taiki-e/install-action@67729d5c413db75907f0ad1e39bb04b9c868ff60
+        with:
+          tool: cargo-nextest
       - name: Generate coverage
-        run: cargo llvm-cov --workspace --lcov --output-path lcov.info
+        # Run via cargo-nextest with the repo's `ci` profile (R7,
+        # 2026-10-01): llvm-cov's instrumentation amplifies timing-
+        # sensitive tests the same way V8 amplification breaks the UI
+        # coverage nightly — three consecutive nightly failures (from
+        # 2026-09-29) were three DIFFERENT tests each night (shannon-tools
+        # git tests, then the api_server query-budget test), i.e. flaky
+        # under instrumentation, not broken tests. nextest's ci profile
+        # (retries=2, exponential backoff) absorbs that class; in nextest
+        # mode `--profile ci` passes through to cargo-nextest (llvm-cov's
+        # build profile knob is --cargo-profile). The ci profile also
+        # terminates tests at 3x the 60s slow threshold, bounding a hung
+        # test instead of stalling the nightly.
+        run: cargo llvm-cov nextest --workspace --profile ci --lcov --output-path lcov.info
       - name: Upload coverage
         uses: codecov/codecov-action@b9fd7d16f6d7d1b5d2bec1a2887e65ceed900238
         with:
