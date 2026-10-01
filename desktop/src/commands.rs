@@ -260,6 +260,78 @@ fn is_terminal_task_status(status: &str) -> bool {
     matches!(status, "completed" | "failed" | "cancelled")
 }
 
+/// Cap for the prompt-as-title and error-as-`error` fields of the triage
+/// inbox item a failed background task writes (mirrors the inbox module's
+/// 500-char summary budget).
+const BACKGROUND_TASK_INBOX_MAX_CHARS: usize = 500;
+
+/// Truncate to at most `max` chars without splitting a UTF-8 codepoint
+/// (ellipsis-marked).
+fn truncate_chars(s: &str, max: usize) -> String {
+    if s.chars().count() <= max {
+        return s.to_string();
+    }
+    let cut: String = s.chars().take(max).collect();
+    format!("{cut}…")
+}
+
+/// Collapse to one line, then truncate to at most `max` chars — for fields
+/// rendered inline (the item title, the summary's error headline).
+fn inbox_single_line_truncated(s: &str, max: usize) -> String {
+    let joined = s.split_whitespace().collect::<Vec<_>>().join(" ");
+    truncate_chars(&joined, max)
+}
+
+/// R2-P1-5 (W2-5) — terminal side effect of a background task that
+/// [`finalize_background_task`] reported as transitioned: **only a `failed`
+/// task** lands one triage inbox item (`source = background_task`), so the
+/// failure keeps a cross-page entry in the Triage inbox after it scrolls out
+/// of the Runs panel's recent-history slice. Successes and user cancels
+/// never write (the panel is their only surface — avoids noise); callers
+/// pass the terminal status straight through, which this gate re-checks.
+///
+/// The write is sync (SQLite store, mutex-guarded) so the spawned runner can
+/// call it inline; it returns whether an item was written (the runner emits
+/// `inbox-updated` only then).
+pub(crate) fn record_background_task_terminal(
+    inbox: &shannon_core::inbox_store::InboxStore,
+    task_id: &str,
+    prompt: &str,
+    started_at: i64,
+    status: &str,
+    error: Option<&str>,
+    finished_at: i64,
+) -> Result<bool, shannon_core::inbox_store::InboxStoreError> {
+    if status != "failed" {
+        return Ok(false);
+    }
+    let Some(error) = error.map(str::trim).filter(|e| !e.is_empty()) else {
+        return Ok(false);
+    };
+    // Headline: the error's last non-empty line is where stream failures
+    // summarize ("...: connection reset"), same convention as routine runs.
+    let headline = error
+        .lines()
+        .rev()
+        .map(str::trim)
+        .find(|l| !l.is_empty())
+        .unwrap_or(error);
+    let duration_secs = (finished_at - started_at).max(0) / 1000;
+    let summary = format!(
+        "failed · took {duration_secs}s · {}",
+        inbox_single_line_truncated(headline, 200)
+    );
+    inbox.append_item(shannon_core::inbox_store::InboxItemNew {
+        source: shannon_core::inbox_store::SOURCE_BACKGROUND_TASK.to_string(),
+        source_id: Some(task_id.to_string()),
+        session_id: None,
+        title: inbox_single_line_truncated(prompt, 120),
+        summary,
+        error: Some(truncate_chars(error, BACKGROUND_TASK_INBOX_MAX_CHARS)),
+    })?;
+    Ok(true)
+}
+
 /// §P2-19 status guard: transition a background task into a terminal state
 /// (`completed` / `failed` / `cancelled`) — but only from `running`. A task
 /// already cancelled by the user must not be overwritten back to
@@ -2290,6 +2362,9 @@ pub async fn start_background_task(
     // P2-4b: hand the shared memory handle to the spawned task — the runner
     // attaches it to its engine instead of leaving memory: None.
     let memory_store = state.memory_store.clone();
+    // R2-P1-5: a failed task writes its triage inbox item through the same
+    // store the inbox commands serve, so the failure outlives the panel.
+    let inbox_store = state.inbox_store();
 
     tokio::spawn(async move {
         // Build query engine for this task
@@ -2439,6 +2514,32 @@ pub async fn start_background_task(
             )
         };
         if transitioned {
+            let finished_at = chrono_timestamp();
+            // R2-P1-5: a failed terminal state gets one triage inbox item
+            // (cross-page entry; the panel keeps only a recent slice).
+            // Successes/cancels are panel-only. Best-effort: a store failure
+            // warns and never breaks the finalize path below.
+            match record_background_task_terminal(
+                &inbox_store,
+                &task_id_clone,
+                &prompt,
+                now,
+                terminal_status,
+                task_error.as_deref(),
+                finished_at,
+            ) {
+                Ok(true) => {
+                    let _ =
+                        app_handle_clone.emit(event_names::INBOX_UPDATED, task_id_clone.clone());
+                }
+                Ok(false) => {}
+                Err(e) => tracing::warn!(
+                    task_id = %task_id_clone,
+                    error = %e,
+                    "background task: failed to write triage inbox item"
+                ),
+            }
+
             // Emit update event
             let _ = app_handle_clone.emit(
                 event_names::BACKGROUND_TASK_UPDATE,
@@ -2448,7 +2549,7 @@ pub async fn start_background_task(
                     prompt,
                     output: terminal_output,
                     started_at: now,
-                    completed_at: Some(chrono_timestamp()),
+                    completed_at: Some(finished_at),
                 },
             );
 
@@ -4299,6 +4400,134 @@ mod budget_enforcement_tests {
             "x".into()
         ));
         assert_eq!(tasks[0].status, "running");
+    }
+
+    // ── R2-P1-5: failed background task → triage inbox item ─────────────
+
+    fn bg_inbox() -> shannon_core::inbox_store::InboxStore {
+        shannon_core::inbox_store::InboxStore::open_in_memory().unwrap()
+    }
+
+    #[test]
+    fn failed_background_task_writes_one_inbox_item() {
+        let inbox = bg_inbox();
+        let wrote = record_background_task_terminal(
+            &inbox,
+            "bt-1",
+            "Refactor the parser module",
+            1_000,
+            "failed",
+            Some("engine stream broke\nfinal error: connection reset"),
+            61_000,
+        )
+        .unwrap();
+        assert!(wrote, "a failed terminal state must write an item");
+
+        let items = inbox
+            .list(
+                None,
+                Some(shannon_core::inbox_store::SOURCE_BACKGROUND_TASK),
+                10,
+            )
+            .unwrap();
+        assert_eq!(items.len(), 1, "exactly one item per failed task");
+        let item = &items[0];
+        assert_eq!(
+            item.source,
+            shannon_core::inbox_store::SOURCE_BACKGROUND_TASK
+        );
+        assert_eq!(item.source_id.as_deref(), Some("bt-1"));
+        assert_eq!(item.title, "Refactor the parser module");
+        // Duration (60s) + last-line error headline in the summary.
+        assert!(item.summary.contains("took 60s"), "{}", item.summary);
+        assert!(
+            item.summary.contains("connection reset"),
+            "{}",
+            item.summary
+        );
+        assert!(
+            !item.summary.contains("engine stream broke"),
+            "headline is the error's last line: {}",
+            item.summary
+        );
+        assert_eq!(
+            item.error.as_deref(),
+            Some("engine stream broke\nfinal error: connection reset")
+        );
+    }
+
+    #[test]
+    fn successful_or_cancelled_background_task_never_writes_inbox() {
+        let inbox = bg_inbox();
+        for status in ["completed", "cancelled"] {
+            let wrote =
+                record_background_task_terminal(&inbox, "bt-ok", "p", 0, status, None, 1_000)
+                    .unwrap();
+            assert!(!wrote, "{status} must not write an inbox item");
+        }
+        assert_eq!(
+            inbox
+                .list(
+                    None,
+                    Some(shannon_core::inbox_store::SOURCE_BACKGROUND_TASK),
+                    10
+                )
+                .unwrap()
+                .len(),
+            0
+        );
+    }
+
+    #[test]
+    fn failed_background_task_without_error_text_writes_no_item() {
+        // A failure whose error text is empty/whitespace has nothing useful
+        // to triage on — the panel row (status + output) still shows it.
+        let inbox = bg_inbox();
+        for error in [None, Some(""), Some("   ")] {
+            let wrote =
+                record_background_task_terminal(&inbox, "bt-err", "p", 0, "failed", error, 1_000)
+                    .unwrap();
+            assert!(!wrote, "error {error:?} must not write an item");
+        }
+        assert_eq!(
+            inbox
+                .list(
+                    None,
+                    Some(shannon_core::inbox_store::SOURCE_BACKGROUND_TASK),
+                    10
+                )
+                .unwrap()
+                .len(),
+            0
+        );
+    }
+
+    #[test]
+    fn background_task_inbox_fields_are_bounded_and_single_line() {
+        let inbox = bg_inbox();
+        let long_prompt = format!("{}\nsecond line", "x".repeat(500));
+        let long_error = "boom ".repeat(400);
+        record_background_task_terminal(
+            &inbox,
+            "bt-long",
+            &long_prompt,
+            0,
+            "failed",
+            Some(&long_error),
+            1_000,
+        )
+        .unwrap();
+        let item = &inbox
+            .list(
+                None,
+                Some(shannon_core::inbox_store::SOURCE_BACKGROUND_TASK),
+                10,
+            )
+            .unwrap()[0];
+        assert!(item.title.chars().count() <= 121, "{}", item.title);
+        assert!(!item.title.contains('\n'));
+        assert!(item.error.as_deref().unwrap().chars().count() <= 501);
+        assert!(!item.summary.contains('\n'));
     }
 
     #[test]

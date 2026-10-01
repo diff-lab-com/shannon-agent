@@ -23,6 +23,20 @@ describe('Triage — dream_report source mapping', () => {
   })
 })
 
+describe('Triage — background_task source mapping (R2-P1-5)', () => {
+  it('maps background_task to the bolt icon, error colour, and its label key', () => {
+    expect(sourceMeta('background_task')).toEqual({
+      icon: 'bolt',
+      color: 'text-error',
+      labelKey: 'inbox.source.background_task',
+    })
+  })
+
+  it('offers background_task in the source filter options', () => {
+    expect(SOURCE_OPTIONS).toContain('background_task')
+  })
+})
+
 function LocationProbe() {
   const location = useLocation()
   return <div data-testid="triage-location">{location.pathname}</div>
