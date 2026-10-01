@@ -443,6 +443,15 @@
       }
     },
     {
+      "identifier": "allow-estimate-task-cost",
+      "description": "Enables the estimate_task_cost command without any pre-configured scope.",
+      "commands": {
+        "allow": [
+          "estimate_task_cost"
+        ]
+      }
+    },
+    {
       "identifier": "allow-export-diagnostics",
       "description": "Enables the export_diagnostics command without any pre-configured scope.",
       "commands": {
@@ -821,6 +830,24 @@
       }
     },
     {
+      "identifier": "allow-get-session-injected-memories",
+      "description": "Enables the get_session_injected_memories command without any pre-configured scope.",
+      "commands": {
+        "allow": [
+          "get_session_injected_memories"
+        ]
+      }
+    },
+    {
+      "identifier": "allow-get-session-memory-bypass",
+      "description": "Enables the get_session_memory_bypass command without any pre-configured scope.",
+      "commands": {
+        "allow": [
+          "get_session_memory_bypass"
+        ]
+      }
+    },
+    {
       "identifier": "allow-get-session-model",
       "description": "Enables the get_session_model command without any pre-configured scope.",
       "commands": {
@@ -898,6 +925,15 @@
       "commands": {
         "allow": [
           "get_usage_by_session"
+        ]
+      }
+    },
+    {
+      "identifier": "allow-get-usage-governance",
+      "description": "Enables the get_usage_governance command without any pre-configured scope.",
+      "commands": {
+        "allow": [
+          "get_usage_governance"
         ]
       }
     },
@@ -1114,6 +1150,15 @@
       "commands": {
         "allow": [
           "list_agent_messages"
+        ]
+      }
+    },
+    {
+      "identifier": "allow-list-agent-runs",
+      "description": "Enables the list_agent_runs command without any pre-configured scope.",
+      "commands": {
+        "allow": [
+          "list_agent_runs"
         ]
       }
     },
@@ -2225,6 +2270,15 @@
       }
     },
     {
+      "identifier": "allow-save-pasted-image",
+      "description": "Enables the save_pasted_image command without any pre-configured scope.",
+      "commands": {
+        "allow": [
+          "save_pasted_image"
+        ]
+      }
+    },
+    {
       "identifier": "allow-save-provider",
       "description": "Enables the save_provider command without any pre-configured scope.",
       "commands": {
@@ -2266,6 +2320,15 @@
       "commands": {
         "allow": [
           "save_text_file"
+        ]
+      }
+    },
+    {
+      "identifier": "allow-save-text-file-via-dialog",
+      "description": "Enables the save_text_file_via_dialog command without any pre-configured scope.",
+      "commands": {
+        "allow": [
+          "save_text_file_via_dialog"
         ]
       }
     },
@@ -2392,6 +2455,15 @@
       "commands": {
         "allow": [
           "set_session_budget"
+        ]
+      }
+    },
+    {
+      "identifier": "allow-set-session-memory-bypass",
+      "description": "Enables the set_session_memory_bypass command without any pre-configured scope.",
+      "commands": {
+        "allow": [
+          "set_session_memory_bypass"
         ]
       }
     },
@@ -2599,6 +2671,15 @@
       "commands": {
         "allow": [
           "test_provider_credentials"
+        ]
+      }
+    },
+    {
+      "identifier": "allow-test-webhook",
+      "description": "Enables the test_webhook command without any pre-configured scope.",
+      "commands": {
+        "allow": [
+          "test_webhook"
         ]
       }
     },
@@ -2997,7 +3078,9 @@
         "allow-read-text-file",
         "allow-register-file-index-entry",
         "allow-run-file-diagnostics",
+        "allow-save-pasted-image",
         "allow-save-text-file",
+        "allow-save-text-file-via-dialog",
         "allow-set-file-index-favorite"
       ]
     },
@@ -3095,6 +3178,7 @@
         "allow-get-opc-metrics",
         "allow-get-triage-stats",
         "allow-instantiate-routine-template",
+        "allow-list-agent-runs",
         "allow-list-batch-runs",
         "allow-list-goal-runs",
         "allow-list-hook-events",
@@ -3129,6 +3213,7 @@
       "identifier": "app-usage",
       "description": "Usage statistics, session budgets/cost breakdown and billing commands.",
       "permissions": [
+        "allow-estimate-task-cost",
         "allow-get-billing-history",
         "allow-get-billing-plan",
         "allow-get-cost-history",
@@ -3136,6 +3221,7 @@
         "allow-get-session-context-breakdown",
         "allow-get-session-usage",
         "allow-get-usage-by-session",
+        "allow-get-usage-governance",
         "allow-get-usage-stats",
         "allow-set-session-budget"
       ]
@@ -3162,7 +3248,8 @@
         "allow-save-webhook-config",
         "allow-seed-sample-data",
         "allow-send-notification",
-        "allow-set-notification-prefs"
+        "allow-set-notification-prefs",
+        "allow-test-webhook"
       ]
     },
     {
@@ -3202,6 +3289,8 @@
         "allow-get-memory-graph",
         "allow-get-memory-source",
         "allow-get-memory-stats",
+        "allow-get-session-injected-memories",
+        "allow-get-session-memory-bypass",
         "allow-list-dream-proposals",
         "allow-list-memories",
         "allow-list-memory-projects",
@@ -3210,6 +3299,7 @@
         "allow-read-dream-state",
         "allow-run-dream-pass",
         "allow-search-memories",
+        "allow-set-session-memory-bypass",
         "allow-update-memory"
       ]
     }
