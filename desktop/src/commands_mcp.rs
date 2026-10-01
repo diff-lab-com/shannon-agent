@@ -292,18 +292,12 @@ pub async fn list_installed_addons() -> Result<Vec<crate::extensions::InstalledA
     Ok(crate::extensions::aggregate_installed())
 }
 
-/// List all available skills from shannon-skills registry.
-///
-/// G1 P0-2.2: merges the user-global home skill directory (where the
-/// extensions hub installs, `~/.shannon/skills`) with the cwd project
-/// directories. Previously only the cwd was read, so hub-installed skills
-/// never showed up in the slash completion.
-#[tauri::command]
-pub async fn list_skills(state: tauri::State<'_, AppState>) -> Result<Vec<SkillInfo>, String> {
+/// Default skill discovery roots for the list command: the user-global
+/// home skill directory (where the extensions hub installs,
+/// `~/.shannon/skills`) plus the cwd project directories.
+fn skill_roots() -> Result<Vec<(std::path::PathBuf, shannon_skills::SkillSource)>, String> {
     use shannon_skills::SkillSource;
     use std::path::PathBuf;
-
-    let registry = state.skill_registry.clone();
 
     let mut roots: Vec<(PathBuf, SkillSource)> = Vec::new();
     if let Some(home) = dirs::home_dir() {
@@ -316,12 +310,58 @@ pub async fn list_skills(state: tauri::State<'_, AppState>) -> Result<Vec<SkillI
         cwd.join(".claude").join("commands"),
         SkillSource::CommandsDeprecated,
     ));
+    Ok(roots)
+}
 
+/// List all available skills from shannon-skills registry.
+///
+/// G1 P0-2.2: merges the user-global home skill directory (where the
+/// extensions hub installs, `~/.shannon/skills`) with the cwd project
+/// directories. Previously only the cwd was read, so hub-installed skills
+/// never showed up in the slash completion.
+///
+/// W1-2 (R2-P0-2): opening this menu also hot-registers the matching
+/// `skill_<id>` chat tools, so a skill installed while the app is running
+/// is model-callable on the very next turn — see the private `list_skills_inner`.
+#[tauri::command]
+pub async fn list_skills(state: tauri::State<'_, AppState>) -> Result<Vec<SkillInfo>, String> {
+    list_skills_inner(&state.skill_registry, &state.tools, &skill_roots()?)
+}
+
+/// Core of [`list_skills`], split from the `#[tauri::command]` wrapper so
+/// the install→usable chain is unit-testable without a Tauri app handle.
+///
+/// Hydrates `registry` from `roots`, then hot-registers every not-yet-known
+/// user-invocable skill as a `skill_<id>` chat tool
+/// (`skill_tools::register_missing_skill_tools`). The system prompt
+/// (`skills_for_chat_prompt`) advertises `/name` ↔ `skill_<name>`, so
+/// without this pass a skill installed while the app runs would be
+/// advertised to the model on the next turn while its tool only existed
+/// after a restart. Idempotent: skills whose tool is already registered are
+/// skipped. Hydration and registration failures are logged and skipped —
+/// they never fail the listing.
+pub(crate) fn list_skills_inner(
+    registry: &shannon_skills::SkillRegistry,
+    tools: &shannon_core::tools::ToolRegistry,
+    roots: &[(std::path::PathBuf, shannon_skills::SkillSource)],
+) -> Result<Vec<SkillInfo>, String> {
     for (dir, source) in roots {
         if !dir.exists() {
             continue;
         }
-        let _ = registry.load_from_directory(&dir, &source);
+        let _ = registry.load_from_directory(dir, source);
+    }
+
+    // W1-2 (R2-P0-2) — the slash menu just made newly installed skills
+    // visible, and the next turn's system prompt will advertise their
+    // `/name` ↔ `skill_<name>` mapping; register the matching chat tools
+    // now so the model is never pointed at a tool that doesn't exist.
+    let hot_registered = crate::skill_tools::register_missing_skill_tools(tools, registry);
+    if hot_registered > 0 {
+        tracing::info!(
+            count = hot_registered,
+            "list_skills hot-registered new skill chat tools"
+        );
     }
 
     // Get all available skills
@@ -384,4 +424,105 @@ pub async fn get_skill_detail(
         source: skill.id.to_string(),
         category: None,
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// W1-2 core acceptance (R2-P0-2): a skill installed while the app is
+    /// running must become chat-callable the moment the slash menu lists it
+    /// — no restart. The chain proven here mirrors production exactly:
+    /// hub install lands a SKILL.md under a skill root (temp dir), the
+    /// `list_skills` path hydrates it into the SkillRegistry, the hot pass
+    /// registers its `skill_<id>` chat tool, and the system-prompt block
+    /// advertises the `/name` ↔ `skill_<name>` mapping. The registries are
+    /// fresh (never `AppState::new`), so nothing touches the real HOME.
+    #[tokio::test]
+    async fn installed_skill_becomes_chat_callable_without_restart() {
+        let tmp = tempfile::tempdir().unwrap();
+        let skills_dir = tmp.path().join("skills");
+        let skill_dir = skills_dir.join("freshly-installed");
+        std::fs::create_dir_all(&skill_dir).unwrap();
+        std::fs::write(
+            skill_dir.join("SKILL.md"),
+            "---\nname: freshly-installed\ndescription: Installed while the app was running\n\
+             ---\n\n# Freshly installed\n\nEcho body: ${0}\n",
+        )
+        .unwrap();
+
+        let skill_registry = shannon_skills::SkillRegistry::new();
+        let tools = shannon_core::tools::ToolRegistry::new();
+
+        // Pre-install state: no tool, no prompt advertisement.
+        assert!(tools.get("skill_freshly-installed").is_none());
+        assert!(
+            !crate::skill_tools::skills_for_chat_prompt(&skill_registry)
+                .contains("freshly-installed")
+        );
+
+        // The `list_skills` command path (hydration + hot registration).
+        let roots = vec![(skills_dir, shannon_skills::SkillSource::User)];
+        let infos = list_skills_inner(&skill_registry, &tools, &roots).unwrap();
+
+        // 列表态: the slash menu lists the new skill.
+        let info = infos
+            .iter()
+            .find(|i| i.name == "freshly-installed")
+            .unwrap_or_else(|| panic!("skill missing from list: {infos:?}"));
+        assert_eq!(info.trigger, "/freshly-installed");
+
+        // 聊天内可见: the system prompt advertises it with the tool mapping.
+        let prompt = crate::skill_tools::skills_for_chat_prompt(&skill_registry);
+        assert!(prompt.contains("/freshly-installed"), "{prompt}");
+        assert!(prompt.contains("skill_<name>"), "{prompt}");
+
+        // 可调用: the tool exists and executes through the shared registry.
+        let tool = tools
+            .get("skill_freshly-installed")
+            .unwrap_or_else(|| panic!("hot registration did not land the chat tool"));
+        let output = tool
+            .execute(serde_json::json!({ "args": "hello" }))
+            .await
+            .unwrap();
+        assert!(!output.is_error);
+        assert!(
+            output.content.contains("Echo body: hello"),
+            "{}",
+            output.content
+        );
+
+        // Idempotent: reopening the slash menu registers nothing new.
+        assert_eq!(
+            crate::skill_tools::register_missing_skill_tools(&tools, &skill_registry),
+            0
+        );
+        let again = list_skills_inner(&skill_registry, &tools, &roots).unwrap();
+        assert_eq!(again.len(), infos.len(), "listing must not duplicate");
+    }
+
+    /// W1-2 requirement: a hydration failure (unreadable/broken skill file)
+    /// is logged and skipped — the listing itself still succeeds.
+    #[tokio::test]
+    async fn broken_skill_file_does_not_fail_listing() {
+        let tmp = tempfile::tempdir().unwrap();
+        let skills_dir = tmp.path().join("skills");
+        let skill_dir = skills_dir.join("broken");
+        std::fs::create_dir_all(&skill_dir).unwrap();
+        // Unclosed frontmatter delimiter → the loader rejects the file and
+        // logs (F36); the listing itself must still succeed.
+        std::fs::write(
+            skill_dir.join("SKILL.md"),
+            "---\nname: broken\nno closing marker",
+        )
+        .unwrap();
+
+        let skill_registry = shannon_skills::SkillRegistry::new();
+        let tools = shannon_core::tools::ToolRegistry::new();
+        let roots = vec![(skills_dir, shannon_skills::SkillSource::User)];
+
+        let infos = list_skills_inner(&skill_registry, &tools, &roots).unwrap();
+        assert!(infos.is_empty());
+        assert!(tools.get("skill_broken").is_none());
+    }
 }

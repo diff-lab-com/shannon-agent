@@ -119,6 +119,49 @@ pub fn register_for_state(state: &crate::commands::AppState) -> usize {
     register_skills_as_chat_tools(&state.tools, &state.skill_registry)
 }
 
+/// State-side wrapper of [`register_missing_skill_tools`] for the hot path:
+/// registers chat tools for skills already hydrated into
+/// `state.skill_registry` but missing from `state.tools`. Returns the
+/// number of NEW tools registered.
+pub fn register_missing_for_state(state: &crate::commands::AppState) -> usize {
+    register_missing_skill_tools(&state.tools, &state.skill_registry)
+}
+
+/// W1-2 (R2-P0-2) — hot (re-)registration after an install, without an app
+/// restart. `list_skills` hydrates newly installed skills into the
+/// [`SkillRegistry`], and the next turn's system prompt advertises
+/// `/name` ↔ `skill_<name>` — but the chat [`ToolRegistry`] only learned
+/// about skills at startup, so the model was pointed at tools that did not
+/// exist until a relaunch. This pass closes that gap: every user-invocable
+/// skill in `skill_registry` whose `skill_<id>` tool is not registered yet
+/// gets registered. Idempotent — already-registered ids are skipped
+/// quietly, so re-running over the same registry set is free — and
+/// registration failures (duplicate id, poisoned state) are logged and
+/// skipped, never fatal. Returns the number of NEW tools registered.
+pub fn register_missing_skill_tools(
+    registry: &ToolRegistry,
+    skill_registry: &SkillRegistry,
+) -> usize {
+    let mut count = 0usize;
+    for skill in skill_registry.list() {
+        if !skill.is_user_invocable() {
+            continue;
+        }
+        let tool_name = format!("skill_{}", skill.id);
+        if registry.get(&tool_name).is_some() {
+            continue;
+        }
+        match registry.register(Box::new(DesktopSkillToolAdapter::new(skill))) {
+            Ok(()) => count += 1,
+            Err(e) => debug!("hot skill tool registration skipped for {tool_name}: {e}"),
+        }
+    }
+    if count > 0 {
+        info!("Hot-registered {count} new skill chat tool(s) without restart");
+    }
+    count
+}
+
 /// Imp-3 — the system-prompt block advertising installed skills: the same
 /// `format_skills_for_llm()` listing the REPL injects via its skill bridge,
 /// plus the `/name` ↔ `skill_<name>` tool mapping the desktop needs so a
@@ -269,5 +312,41 @@ mod tests {
     fn skills_for_chat_prompt_empty_when_no_skills() {
         let empty = SkillRegistry::new();
         assert_eq!(skills_for_chat_prompt(&empty), "");
+    }
+
+    /// W1-2: the hot path registers exactly the missing tools, counts only
+    /// new registrations, and is idempotent across re-runs.
+    #[test]
+    fn register_missing_skill_tools_is_idempotent_and_counts_new_only() {
+        let skill_registry = SkillRegistry::new();
+        let mut hot = Skill::new(
+            "hot-skill".to_string(),
+            "hot-skill".to_string(),
+            "Installed at runtime".to_string(),
+            "Body ${0}".to_string(),
+        );
+        hot.source = SkillSource::User;
+        skill_registry.register(hot).unwrap();
+        // Non-user-invocable skills must never become chat tools.
+        let mut hidden = Skill::new(
+            "hidden-skill".to_string(),
+            "hidden-skill".to_string(),
+            "Not user invocable".to_string(),
+            "Body".to_string(),
+        );
+        hidden.user_invocable = false;
+        skill_registry.register(hidden).unwrap();
+
+        let registry = ToolRegistry::new();
+        assert!(registry.get("skill_hot-skill").is_none());
+
+        let first = register_missing_skill_tools(&registry, &skill_registry);
+        assert_eq!(first, 1, "only the user-invocable skill registers");
+        assert!(registry.get("skill_hot-skill").is_some());
+        assert!(registry.get("skill_hidden-skill").is_none());
+
+        // Idempotent: a re-run over the same registry set adds nothing.
+        let second = register_missing_skill_tools(&registry, &skill_registry);
+        assert_eq!(second, 0, "re-registration must be a no-op");
     }
 }
