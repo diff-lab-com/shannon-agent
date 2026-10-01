@@ -2618,17 +2618,14 @@ mod tests {
                 calls_for_closure.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
                 let results = results.clone();
                 async move {
-                    let idx = {
-                        let mut r = results.lock().unwrap();
-                        // Consume the fixture list; an exhausted list repeats
-                        // the sentinel failure.
-                        if r.is_empty() {
-                            failed_outcome("exhausted fixtures")
-                        } else {
-                            r.remove(0)
-                        }
-                    };
-                    idx
+                    // Consume the fixture list; an exhausted list repeats
+                    // the sentinel failure.
+                    let mut r = results.lock().unwrap();
+                    if r.is_empty() {
+                        failed_outcome("exhausted fixtures")
+                    } else {
+                        r.remove(0)
+                    }
                 }
             },
             &policy,
