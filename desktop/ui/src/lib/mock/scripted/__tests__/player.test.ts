@@ -92,6 +92,44 @@ describe('schema validation', () => {
     }).ok).toBe(false)
   })
 
+  it('accepts the R3 schema surface (toolCalls seed, spentUsd, rejectedAttachments, subagent events)', () => {
+    expect(validateScript({
+      name: 'r3',
+      seed: {
+        config: { budgetUsd: 5, spentUsd: 6.4 },
+        sessions: [{
+          id: 's',
+          title: 't',
+          messages: [{
+            role: 'assistant',
+            content: 'done',
+            toolCalls: [{ toolUseId: 'tc-1', toolName: 'write_file', toolInput: { file_path: '/tmp/a.md' }, result: 'ok', isError: false }],
+          }],
+        }],
+      },
+      turns: [{
+        user: 'u',
+        attachments: ['/tmp/a.md'],
+        rejectedAttachments: [{ path: '/tmp/a.md', reason: 'out_of_working_dir' }],
+        script: [
+          { event: 'subagent:start', payload: { agentId: 'sa-1', agentName: 'r', team: null } },
+          { event: 'subagent:stop', payload: { agentId: 'sa-1' } },
+          { event: 'query:completed' },
+        ],
+      }],
+    }).ok).toBe(true)
+    // Malformed variants stay rejected.
+    expect(validateScript({
+      name: 'bad-tool',
+      turns: [{ user: 'u', script: [{ event: 'query:completed' }] }],
+      seed: { sessions: [{ id: 's', title: 't', messages: [{ role: 'assistant', content: 'x', toolCalls: [{ toolName: 'w' }] }] }] },
+    }).ok).toBe(false)
+    expect(validateScript({
+      name: 'bad-reject',
+      turns: [{ user: 'u', rejectedAttachments: [{ path: '/p' }], script: [{ event: 'query:completed' }] }],
+    }).ok).toBe(false)
+  })
+
   it('load() refuses invalid scripts without arming', () => {
     const { player, seeds } = makeHarness()
     const result = player.load({ name: 'bad' })
@@ -324,6 +362,50 @@ describe('fallback and multi-turn sequencing', () => {
     expect(player.handleSendMessage({})).toBeNull()
   })
 
+  it('send_message responses carry the turn\'s rejected_attachments (R3 journey #8)', () => {
+    const { player } = makeHarness()
+    player.load({
+      name: 'rejected',
+      turns: [
+        {
+          user: 'u',
+          rejectedAttachments: [{ path: '/outside/a.md', reason: 'out_of_working_dir' }],
+          script: [{ event: 'query:completed' }],
+        },
+        { user: 'clean', script: [{ event: 'query:completed' }] },
+      ],
+    })
+    const first = player.handleSendMessage({ message: 'u', filePaths: ['/outside/a.md'] })
+    expect(first).toEqual({
+      query_id: 'q-0',
+      rejected_attachments: [{ path: '/outside/a.md', reason: 'out_of_working_dir' }],
+    })
+    // A turn without refusals returns the bare shape (no empty-array noise).
+    expect(player.handleSendMessage({ message: 'clean' })).toEqual({ query_id: 'q-1' })
+  })
+
+  it('snapshot().sends logs each scripted send\'s args (R3 bypass/attachment anchors)', () => {
+    const { player } = makeHarness()
+    player.load({
+      name: 'logged',
+      turns: [
+        { user: 'first', script: [{ event: 'query:completed' }] },
+        { user: 'second', script: [{ event: 'query:completed' }] },
+      ],
+    })
+    player.handleSendMessage({ message: 'first', filePaths: ['/a.md'], budgetBypass: true, sessionId: 'sess-a' })
+    player.handleSendMessage({ message: 'second' })
+    expect(player.snapshot().sends).toEqual([
+      { turnIndex: 0, message: 'first', attachments: ['/a.md'], budgetBypass: true, sessionId: 'sess-a' },
+      { turnIndex: 1, message: 'second', attachments: null, budgetBypass: false, sessionId: null },
+    ])
+    // Post-exhaustion sends fall through — never logged.
+    player.handleSendMessage({ message: 'ghost' })
+    expect(player.snapshot().sends).toHaveLength(2)
+    player.reset()
+    expect(player.snapshot().sends).toEqual([])
+  })
+
   it('turns consume in order with incrementing query ids', () => {
     const { player, events } = makeHarness()
     player.load({
@@ -398,6 +480,27 @@ describe('payload auto-fill', () => {
     })
     player.handleSendMessage({})
     expect(events[0].payload).toEqual({ sessionId: null, spentUsd: 4.2, budgetUsd: 5 })
+  })
+
+  it('subagent:* events ride the auto payload (R3 journey #12) — consumers ignore the extra fields', () => {
+    const { player, events } = makeHarness()
+    player.load({
+      name: 'subagent',
+      turns: [{
+        user: 'u',
+        script: [
+          { event: 'subagent:start', payload: { agentId: 'sa-1', agentName: 'researcher', team: 'alpha' } },
+          { event: 'subagent:stop', payload: { agentId: 'sa-1' } },
+          { event: 'query:completed' },
+        ],
+      }],
+    })
+    player.handleSendMessage({ sessionId: 'sess-s' })
+    expect(events[0]).toMatchObject({
+      event: 'subagent:start',
+      payload: { agentId: 'sa-1', agentName: 'researcher', team: 'alpha', session_id: 'sess-s' },
+    })
+    expect(events[1].payload).toMatchObject({ agentId: 'sa-1' })
   })
 })
 

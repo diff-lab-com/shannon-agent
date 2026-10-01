@@ -51,6 +51,10 @@ export function seededSessions(): SessionInfo[] | null {
  * `sessionId` selects a seeded session; with no match (or no id — the
  * main window boots without one) the FIRST seeded session answers, which
  * is the "current conversation" in the scripted world.
+ *
+ * R3: seeded `toolCalls` map onto the wire's snake_case `tool_calls` with
+ * the derived `status` the UI's card renderer gates on (completed/error),
+ * so preloaded history renders tool cards / FileChangesCard / FileCard.
  */
 export function seededMessages(sessionId?: string | null): ChatMessage[] | null {
   const seed = seedState().seed
@@ -61,6 +65,19 @@ export function seededMessages(sessionId?: string | null): ChatMessage[] | null 
     role: m.role,
     content: m.content,
     timestamp: base + i * 60_000,
+    ...(m.toolCalls?.length
+      ? {
+          tool_calls: m.toolCalls.map(tc => ({
+            tool_use_id: tc.toolUseId,
+            tool_name: tc.toolName,
+            tool_input: tc.toolInput,
+            ...(tc.result != null ? { result: tc.result } : {}),
+            ...(tc.isError != null ? { is_error: tc.isError } : {}),
+            ...(tc.meta != null ? { meta: tc.meta } : {}),
+            status: tc.isError ? ('error' as const) : ('completed' as const),
+          })),
+        }
+      : {}),
     ...(m.attachments?.length
       ? {
           file_attachments: m.attachments.map(path => ({
@@ -84,10 +101,13 @@ export function seededBudget(sessionId?: string | null): number | null | undefin
 }
 
 /**
- * Zero ledger for a seeded session (`get_session_usage`): a scripted session
- * starts pristine — spending arrives via budget:* events, not history. Null
- * when the seed is unarmed or the id is not a seeded one (strict match,
- * unlike seededMessages' first-session fallback).
+ * Usage ledger for a seeded session (`get_session_usage`). R3: when the
+ * seed carries `config.spentUsd` the ledger reports it as `cost_usd` —
+ * the "already over budget" shape the budget banners re-derive on
+ * mount/switch (useBudgetGuard B4 P2-8). Otherwise a scripted session
+ * starts pristine (spend arrives via budget:* events, not history).
+ * Null when the seed is unarmed or the id is not a seeded one (strict
+ * match, unlike seededMessages' first-session fallback).
  */
 export function seededUsage(sessionId?: string | null): {
   input_tokens: number
@@ -108,9 +128,79 @@ export function seededUsage(sessionId?: string | null): {
     output_tokens: 0,
     cache_creation_tokens: 0,
     cache_read_tokens: 0,
-    cost_usd: 0,
+    cost_usd: seed.config?.spentUsd ?? 0,
     events: session.messages.length,
   }
+}
+
+/**
+ * R3 (journey #10): checkpoints for a seeded session (`list_checkpoints`).
+ * The demo mock has none (record_turn runs in the desktop Rust process),
+ * which hid the edit/rewind affordances from every scripted journey. While
+ * a seed is armed we derive one checkpoint per user turn — the pre-turn
+ * snapshot semantics the edit-commit flow assumes (rewind to
+ * `turnIndex`, then resend). Null when unarmed or the id is not seeded.
+ */
+export function seededCheckpoints(sessionId?: string | null): Array<{
+  turn_index: number
+  timestamp: number
+  description: string
+  files_changed: string[]
+  prompt_preview: string | null
+}> | null {
+  const seed = seedState().seed
+  if (!seed?.sessions?.length) return null
+  const session = sessionId == null
+    ? seed.sessions[0]
+    : seed.sessions.find(s => s.id === sessionId)
+  if (!session) return null
+  const base = Date.now() - session.messages.length * 60_000
+  const checkpoints: Array<{
+    turn_index: number
+    timestamp: number
+    description: string
+    files_changed: string[]
+    prompt_preview: string | null
+  }> = []
+  let turnIndex = 0
+  for (const m of session.messages) {
+    if (m.role !== 'user') continue
+    checkpoints.push({
+      turn_index: turnIndex,
+      timestamp: base + turnIndex * 60_000,
+      description: `Turn ${turnIndex + 1}`,
+      files_changed: [],
+      prompt_preview: m.content,
+    })
+    turnIndex += 1
+  }
+  return checkpoints
+}
+
+/**
+ * R3 (journey #10): the post-rewind conversation (`rewind_session`) —
+ * every seeded message BEFORE the `turnIndex`-th user turn, i.e. the
+ * conversation truncated to the checkpoint boundary. Null when unarmed or
+ * the id is not seeded (unknown sessions keep the demo handler).
+ */
+export function seededRewoundMessages(sessionId: string | null | undefined, turnIndex: number): ChatMessage[] | null {
+  const seed = seedState().seed
+  if (!seed?.sessions?.length) return null
+  const session = sessionId == null
+    ? seed.sessions[0]
+    : seed.sessions.find(s => s.id === sessionId)
+  if (!session) return null
+  const all = seededMessages(sessionId) ?? []
+  const out: ChatMessage[] = []
+  let turn = 0
+  for (let i = 0; i < session.messages.length; i++) {
+    const m = session.messages[i]!
+    if (m.role === 'user' && turn >= turnIndex) break
+    if (m.role === 'user') turn += 1
+    const wire = all[i]
+    if (wire) out.push(wire)
+  }
+  return out
 }
 
 /**

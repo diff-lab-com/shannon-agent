@@ -23,13 +23,22 @@ export function mockSnapshot(page: import('@playwright/test').Page): {
   stepIndex: number | null
   sentTurns: number
   permissionLog: Array<Record<string, unknown>>
+  /** Observed args of every scripted send since load (R3 — budget-bypass /
+   *  attachment-preservation anchors read this). */
+  sends: Array<{
+    turnIndex: number
+    message: string | null
+    attachments: string[] | null
+    budgetBypass: boolean
+    sessionId: string | null
+  }>
   speed: number
 } {
   return page.evaluate(() => {
     const mock = (window as unknown as {
-      __shannonMock?: { snapshot(): { phase: string; turnIndex: number | null; stepIndex: number | null; sentTurns: number; permissionLog: Array<Record<string, unknown>>; speed: number } }
+      __shannonMock?: { snapshot(): Record<string, unknown> }
     }).__shannonMock
     if (!mock) throw new Error('window.__shannonMock missing — demo mock build not active?')
-    return mock.snapshot()
+    return mock.snapshot() as never
   })
 }

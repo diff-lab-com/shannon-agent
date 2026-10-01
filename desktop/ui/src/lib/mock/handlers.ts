@@ -22,8 +22,8 @@ import {
 // setScriptSeed) these accessors answer with the script's seed data instead
 // of the global demo singletons; unarmed they all return null/undefined and
 // every handler below behaves exactly as before.
-import { seededBudget, seededConfigPatch, seededMessages, seededProviderStatusPatch,
-  seededSessions, seededUsage } from './scripted/seed'
+import { seededBudget, seededCheckpoints, seededConfigPatch, seededMessages, seededProviderStatusPatch,
+  seededRewoundMessages, seededSessions, seededUsage } from './scripted/seed'
 
 const clone = <T,>(v: T): T => JSON.parse(JSON.stringify(v))
 const delay = (ms = 80) => new Promise<void>(r => setTimeout(r, ms + Math.random() * 40))
@@ -919,11 +919,25 @@ export const handlers: Record<string, MockHandler> = {
   },
   // /rewind: demo has no checkpoints (record_turn runs in the desktop Rust
   // process), so the rewind affordance stays hidden and these are safety nets.
-  async list_checkpoints() { await delay(30); return [] },
+  // R3 scripted-backend: a seeded session derives one checkpoint per user
+  // turn (the pre-turn snapshot the edit-commit flow rewinds onto) and
+  // rewind_session truncates the seeded conversation to that boundary —
+  // unarmed both return their demo defaults, byte-identical.
+  async list_checkpoints(args: { sessionId?: string | null }) {
+    await delay(30)
+    const seeded = seededCheckpoints(args?.sessionId ?? null)
+    if (seeded) return clone(seeded)
+    return []
+  },
   async list_message_feedback() { await delay(30); return {} },
   async record_message_feedback() { await delay(30) },
   async list_feedback_sessions() { await delay(30); return [] },
-  async rewind_session() { await delay(80); return clone(MOCK_MESSAGES) },
+  async rewind_session(args: { sessionId?: string | null; turnIndex?: number }) {
+    await delay(80)
+    const seeded = seededRewoundMessages(args?.sessionId ?? null, args?.turnIndex ?? 0)
+    if (seeded) return clone(seeded)
+    return clone(MOCK_MESSAGES)
+  },
   // Slash-command backends: /context and /cost return readable demo numbers,
   // /diff reports a non-repo so the demo composer shows the calm notice.
   async get_session_context_stats() {
