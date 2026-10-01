@@ -1738,6 +1738,7 @@
   "chat.input.mode.full_auto": "Full Auto",
   "chat.input.mode.full_auto.desc": "Runs everything without asking — for trusted, sandboxed workspaces",
   "chat.input.mode.failed": "Failed to update approval mode",
+  "chat.input.mode.highRiskNote": "고위험 작업(예: 파일 삭제)은 단계와 관계없이 항상 확인을 요청합니다. 단계는 일반 작업의 자동 승인 기준만 변경합니다.",
   "chat.input.planMode.aria": "Toggle plan mode",
   "chat.input.planMode.label": "Plan mode",
   "chat.input.planMode.tooltip": "Agent proposes a plan before making changes. You approve before execution.",

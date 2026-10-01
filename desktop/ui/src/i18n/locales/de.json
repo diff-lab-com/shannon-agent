@@ -1738,6 +1738,7 @@
   "chat.input.mode.full_auto": "Full Auto",
   "chat.input.mode.full_auto.desc": "Runs everything without asking — for trusted, sandboxed workspaces",
   "chat.input.mode.failed": "Failed to update approval mode",
+  "chat.input.mode.highRiskNote": "Hochriskante Aktionen (z. B. Dateien löschen) fragen unabhängig von der Stufe immer nach Bestätigung – die Stufe legt nur die Basis für automatische Genehmigungen fest.",
   "chat.input.planMode.aria": "Toggle plan mode",
   "chat.input.planMode.label": "Plan mode",
   "chat.input.planMode.tooltip": "Agent proposes a plan before making changes. You approve before execution.",

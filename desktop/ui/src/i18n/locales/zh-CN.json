@@ -1757,6 +1757,7 @@
   "chat.input.mode.full_auto": "全自动",
   "chat.input.mode.full_auto.desc": "全自动执行、不再询问——仅建议在可信且隔离的工作区使用",
   "chat.input.mode.failed": "更新审批模式失败",
+  "chat.input.mode.highRiskNote": "高危操作（如删除文件）不受档位影响，始终弹出确认——档位只调整常规操作的自动批准基线。",
   "chat.input.planMode.aria": "切换计划模式",
   "chat.input.planMode.label": "计划模式",
   "chat.input.planMode.tooltip": "助手会在做出修改前先给出计划。你确认后才会执行。",

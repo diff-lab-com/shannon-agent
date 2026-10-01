@@ -1738,6 +1738,7 @@
   "chat.input.mode.full_auto": "Full Auto",
   "chat.input.mode.full_auto.desc": "Runs everything without asking — for trusted, sandboxed workspaces",
   "chat.input.mode.failed": "Failed to update approval mode",
+  "chat.input.mode.highRiskNote": "高危操作（如刪除檔案）不受檔位影響，始終彈出確認——檔位只調整一般操作的自動核准基準。",
   "chat.input.planMode.aria": "Toggle plan mode",
   "chat.input.planMode.label": "Plan mode",
   "chat.input.planMode.tooltip": "Agent proposes a plan before making changes. You approve before execution.",

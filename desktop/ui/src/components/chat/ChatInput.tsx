@@ -22,6 +22,7 @@ import type { RejectedAttachmentReason, AttachmentExtractionReport } from '@/typ
 import { toastError } from '@/lib/errorToast'
 import { cn } from '@/lib/utils'
 import { modelPickerMeta } from '@/components/settings/models-settings/types'
+import { APPROVAL_MODES, approvalModeOption } from '@/lib/approvalModes'
 
 const IMAGE_EXTENSIONS = new Set(['png', 'jpg', 'jpeg', 'gif', 'webp', 'bmp', 'svg'])
 
@@ -576,6 +577,10 @@ export default function ChatInput({
 
   const currentMode = config?.approval_mode || 'suggest'
   const planModeActive = currentMode === 'plan'
+  // GB P2-4: the pill reads the SHARED five-tier table (same source as
+  // Settings → General). Values outside the table (engine-only aliases)
+  // render honestly via the fallback instead of masquerading as Suggest.
+  const selectedMode = approvalModeOption(currentMode)
 
   // The composer owns ONE mode surface (the unified pill below); the
   // keyboard shortcut and the plan banner's exit button both funnel here.
@@ -634,16 +639,6 @@ export default function ChatInput({
   useLayoutEffect(() => {
     autosizeTextarea()
   }, [value, autosizeTextarea])
-
-  const modeOptions = [
-    { value: 'readonly', label: t('chat.input.mode.readonly'), desc: t('chat.input.mode.readonly.desc'), icon: 'lock', color: 'border-success/50' },
-    { value: 'plan', label: t('chat.input.mode.plan'), desc: t('chat.input.mode.plan.desc'), icon: 'description', color: 'border-success/50' },
-    { value: 'suggest', label: t('chat.input.mode.suggest'), desc: t('chat.input.mode.suggest.desc'), icon: 'shield', color: 'border-warning/50' },
-    { value: 'auto', label: t('chat.input.mode.auto'), desc: t('chat.input.mode.auto.desc'), icon: 'flash_auto', color: 'border-warning/50' },
-    { value: 'full_auto', label: t('chat.input.mode.full_auto'), desc: t('chat.input.mode.full_auto.desc'), icon: 'bolt', color: 'border-error/50' },
-  ]
-
-  const selectedMode = modeOptions.find(m => m.value === currentMode) || modeOptions[2]
 
   /* "+" menu — attachments and the two inline tools, one click each. */
   const [plusOpen, setPlusOpen] = useState(false)
@@ -946,34 +941,43 @@ export default function ChatInput({
               )}
             </span>
 
-            <Select value={currentMode} onValueChange={handleModeChange}>
+            <Select value={selectedMode.value} onValueChange={handleModeChange}>
               <SelectTrigger
                 size="sm"
                 aria-label={t('chat.input.mode.label')}
-                title={selectedMode.desc}
-                className={cn('rounded-full border', selectedMode.color, 'bg-transparent hover:bg-surface-container-low/50 transition-colors')}
+                title={`${selectedMode.rawLabel ? selectedMode.rawLabel : t(selectedMode.descriptionKey)} · ${t('chat.input.mode.highRiskNote')}`}
+                className={cn('rounded-full border', selectedMode.tone, 'bg-transparent hover:bg-surface-container-low/50 transition-colors')}
               >
                 <span className="material-symbols-outlined icon-sm">{selectedMode.icon}</span>
                 {/* Render the matched mode's local label, not the raw value
-                    — an unknown approval_mode (e.g. legacy 'standard') now
-                    falls back to the Suggest label instead of bleeding into
-                    the pill chrome. */}
+                    — an unknown approval_mode (e.g. a CLI-only alias) shows
+                    verbatim via rawLabel instead of bleeding into the pill
+                    chrome as a translated label it doesn't have. */}
                 <SelectValue placeholder={t('chat.input.mode.label')}>
-                  {() => <span className="truncate">{selectedMode.label}</span>}
+                  {() => <span className="truncate">{selectedMode.rawLabel ?? t(selectedMode.labelKey)}</span>}
                 </SelectValue>
               </SelectTrigger>
               <SelectContent>
-                {modeOptions.map(mode => (
+                {APPROVAL_MODES.map(mode => (
                   <SelectItem key={mode.value} value={mode.value}>
                     <div className="flex items-start gap-xs py-0.5">
                       <span className="material-symbols-outlined icon-sm mt-0.5" aria-hidden="true">{mode.icon}</span>
                       <span className="min-w-0">
-                        <span className="block font-label-md text-on-surface whitespace-nowrap">{mode.label}</span>
-                        <span className="block font-label-xs text-on-surface-variant whitespace-normal">{mode.desc}</span>
+                        <span className="block font-label-md text-on-surface whitespace-nowrap">{t(mode.labelKey)}</span>
+                        <span className="block font-label-xs text-on-surface-variant whitespace-normal">{t(mode.descriptionKey)}</span>
                       </span>
                     </div>
                   </SelectItem>
                 ))}
+                {/* GB P2-4: the danger note travels with the switcher — the
+                    tier only moves the auto-approve baseline; High-risk
+                    actions keep their confirmation prompt regardless. */}
+                <div
+                  role="note"
+                  className="mx-sm my-xs border-t border-outline-variant/20 pt-xs font-label-xs text-on-surface-variant whitespace-normal"
+                >
+                  {t('chat.input.mode.highRiskNote')}
+                </div>
               </SelectContent>
             </Select>
 

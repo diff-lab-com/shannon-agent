@@ -13,21 +13,18 @@ import { readDensityPref, setDensityPref, type DensityPref } from '@/lib/density
 import { getLinkTarget, setLinkTarget as setLinkTargetPref, type LinkTarget } from '@/lib/openLink'
 import { Switch } from '@/components/ui/switch'
 import { useArtifact } from '@/components/artifact/ArtifactContext'
-import type { ApprovalMode } from '@/types'
+import { APPROVAL_MODES } from '@/lib/approvalModes'
 import { WELCOME_SEEN_KEY } from '@/pages/Welcome'
 import MigrationWizard from '@/components/migration/MigrationWizard'
 import PersonaPackSettings from './PersonaPackSettings'
 import { FeedbackSummaryCard } from './FeedbackSummaryCard'
 
-type ApprovalModeKey = ApprovalMode
-
-const APPROVAL_MODE_KEYS: { value: ApprovalModeKey; labelKey: string; descriptionKey: string }[] = [
-  { value: 'suggest', labelKey: 'settings.general.approvalMode.suggest.label', descriptionKey: 'settings.general.approvalMode.suggest.description' },
-  { value: 'confirm', labelKey: 'settings.general.approvalMode.confirm.label', descriptionKey: 'settings.general.approvalMode.confirm.description' },
-  { value: 'plan', labelKey: 'settings.general.approvalMode.plan.label', descriptionKey: 'settings.general.approvalMode.plan.description' },
-  { value: 'auto_edit', labelKey: 'settings.general.approvalMode.autoEdit.label', descriptionKey: 'settings.general.approvalMode.autoEdit.description' },
-  { value: 'full_auto', labelKey: 'settings.general.approvalMode.fullAuto.label', descriptionKey: 'settings.general.approvalMode.fullAuto.description' },
-]
+// GB P2-4: the five tiers now come from the SHARED table (lib/approvalModes)
+// — the same values, labels and descriptions the composer's quick switcher
+// renders, over the same `approval_mode` config key. Previously this page
+// and the composer each carried their own five-value list and the two never
+// agreed; this import is the whole fix.
+const APPROVAL_MODE_KEYS = APPROVAL_MODES
 
 export default function GeneralSettings() {
   const { config, providerStatus, refreshConfig } = useCatalog()
@@ -142,6 +139,13 @@ export default function GeneralSettings() {
             </div>
             <p className="font-body-sm text-on-surface-variant mt-sm px-xs">
               {t(currentMode.descriptionKey)}
+            </p>
+            {/* GB P2-4: the tier only moves the auto-approve baseline —
+                High-risk actions keep their confirmation prompt regardless
+                (same note the composer's switcher carries). */}
+            <p className="font-body-xs text-on-surface-variant/80 mt-xs px-xs flex items-start gap-xs">
+              <span className="material-symbols-outlined icon-sm shrink-0 mt-[2px]" aria-hidden="true">gpp_maybe</span>
+              {t('chat.input.mode.highRiskNote')}
             </p>
           </div>
         </section>
