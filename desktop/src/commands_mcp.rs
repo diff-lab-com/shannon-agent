@@ -93,10 +93,7 @@ pub async fn add_mcp_server(
     // Start the server process. W1-7: a failed start keeps its error so the
     // UI can say *why* the server is down, not just that it is.
     let pool = state.mcp_pool.clone();
-    let (connected, last_error) = match pool
-        .start_server(&name, &command, &args, &env)
-        .await
-    {
+    let (connected, last_error) = match pool.start_server(&name, &command, &args, &env).await {
         Ok(()) => (true, None),
         Err(e) => (false, Some(e)),
     };
@@ -175,10 +172,7 @@ pub async fn restart_mcp_server(
 
     // Stop then start. W1-7: keep the start error for the UI.
     let _ = pool.stop_server(&name).await;
-    let (connected, last_error) = match pool
-        .start_server(&name, &command, &args, &env)
-        .await
-    {
+    let (connected, last_error) = match pool.start_server(&name, &command, &args, &env).await {
         Ok(()) => (true, None),
         Err(e) => (false, Some(e)),
     };
