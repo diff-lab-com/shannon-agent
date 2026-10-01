@@ -73,9 +73,7 @@ pub struct UpdateTaskPayload {
 ///
 /// Public so the `bench_opc` example can compose the same anchored walk
 /// without Tauri state.
-pub fn anchored_tasks_dir_base(
-    working_dir: Option<&str>,
-) -> Result<std::path::PathBuf, String> {
+pub fn anchored_tasks_dir_base(working_dir: Option<&str>) -> Result<std::path::PathBuf, String> {
     match working_dir.map(str::trim).filter(|s| !s.is_empty()) {
         Some(dir) => Ok(std::path::PathBuf::from(dir)),
         None => dirs::home_dir()
@@ -420,10 +418,7 @@ mod tests {
     #[test]
     fn anchored_base_blank_working_dir_falls_back_to_home() {
         let home = dirs::home_dir().expect("test requires $HOME");
-        assert_eq!(
-            anchored_tasks_dir_base(Some("   ")).expect("resolve"),
-            home
-        );
+        assert_eq!(anchored_tasks_dir_base(Some("   ")).expect("resolve"), home);
         assert_eq!(anchored_tasks_dir_base(None).expect("resolve"), home);
     }
 
@@ -468,10 +463,9 @@ mod tests {
         let info = update_task_in(&root, p).expect("update");
 
         assert_eq!(info.status, "completed");
-        let doc: serde_json::Value = serde_json::from_str(
-            &std::fs::read_to_string(team_dir.join("t7.json")).unwrap(),
-        )
-        .unwrap();
+        let doc: serde_json::Value =
+            serde_json::from_str(&std::fs::read_to_string(team_dir.join("t7.json")).unwrap())
+                .unwrap();
         assert_eq!(doc["status"], "completed");
         // Fields we don't manage survive the write-back.
         assert_eq!(doc["activeForm"], "Working");

@@ -22,10 +22,12 @@ async fn main() {
     let tasks = shannon_desktop::commands_tasks::list_tasks_in(&root).expect("list_tasks_in");
     let daily = shannon_desktop::scheduled_commands::collect_daily_buckets_in(&root)
         .expect("collect_daily_buckets_in");
-    let metrics =
-        shannon_desktop::scheduled_commands::compute_opc_metrics(&tasks, daily);
+    let metrics = shannon_desktop::scheduled_commands::compute_opc_metrics(&tasks, daily);
     let elapsed = start.elapsed();
-    println!("opc metrics pipeline (root={}): {elapsed:?}", root.display());
+    println!(
+        "opc metrics pipeline (root={}): {elapsed:?}",
+        root.display()
+    );
     println!(
         "  total={}, completion_rate={:.3}, by_status={}, by_assignee={}, daily={}",
         metrics.total,
