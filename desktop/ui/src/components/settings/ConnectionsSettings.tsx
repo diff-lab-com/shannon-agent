@@ -112,6 +112,16 @@ export default function ConnectionsSettings() {
         </button>
       </p>
 
+      {/* J4-5: the gateway delivers inbound IM traffic into the sidebar
+          session list — say so, or users configure a platform and then hunt
+          for a separate inbox page that does not exist. */}
+      <p className="text-on-surface-variant/80 font-body-sm max-w-prose flex flex-wrap items-center gap-xs">
+        <span className="material-symbols-outlined icon-sm" aria-hidden="true">
+          forum
+        </span>
+        {t('settings.connections.imSessionsNote')}
+      </p>
+
       <EngineConnectionCard
         config={config}
         engineDraft={engineDraft}

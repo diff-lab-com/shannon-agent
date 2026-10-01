@@ -263,39 +263,39 @@ describe('OPC page', () => {
     expect(card).toHaveAttribute('tabindex', '0')
   })
 
-  // C5: Spawn Agent button + modal
-  it('renders Spawn button on Active Agents heading', () => {
+  // C5: register-agent-template button + modal (ADR-0013 honest naming)
+  it('renders the register-template button on Active Agents heading', () => {
     resetCtx()
     renderOPC()
-    expect(screen.getByRole('button', { name: /Spawn new agent/ })).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: /Register a new agent template/ })).toBeInTheDocument()
   })
 
-  it('opens spawn-agent modal on Spawn click', () => {
+  it('opens the register-template modal on button click', () => {
     resetCtx()
     renderOPC()
-    fireEvent.click(screen.getByRole('button', { name: /Spawn new agent/ }))
-    expect(screen.getByRole('heading', { name: /Spawn New Agent/ })).toBeInTheDocument()
+    fireEvent.click(screen.getByRole('button', { name: /Register a new agent template/ }))
+    expect(screen.getByRole('heading', { name: /Register agent template/ })).toBeInTheDocument()
     expect(screen.getByPlaceholderText(/Research Agent/)).toBeInTheDocument()
   })
 
   it('validates name is required when creating agent', () => {
     resetCtx()
     renderOPC()
-    fireEvent.click(screen.getByRole('button', { name: /Spawn new agent/ }))
-    fireEvent.click(screen.getByRole('button', { name: /^Create Agent$/ }))
+    fireEvent.click(screen.getByRole('button', { name: /Register a new agent template/ }))
+    fireEvent.click(screen.getByRole('button', { name: /^Register$/ }))
     expect(screen.getByText(/Agent name is required/)).toBeInTheDocument()
   })
 
   it('closes modal on Cancel', async () => {
     resetCtx()
     renderOPC()
-    fireEvent.click(screen.getByRole('button', { name: /Spawn new agent/ }))
+    fireEvent.click(screen.getByRole('button', { name: /Register a new agent template/ }))
     fireEvent.click(screen.getByRole('button', { name: /^Cancel$/ }))
     // Base UI Dialog stays mounted during the close animation; wait for
     // the heading to disappear (or become hidden) instead of asserting
     // immediate detachment.
     await waitFor(() => {
-      expect(screen.queryByRole('heading', { name: /Spawn New Agent/ })).not.toBeInTheDocument()
+      expect(screen.queryByRole('heading', { name: /Register agent template/ })).not.toBeInTheDocument()
     })
   })
 })
