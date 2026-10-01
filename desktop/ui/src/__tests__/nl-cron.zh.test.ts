@@ -32,6 +32,13 @@ describe('parseNlCron — 中文 每 N 分钟 / 小时', () => {
     expect(parseNlCron('每90分钟')).toBeNull()
     expect(parseNlCron('每25小时')).toBeNull()
   })
+
+  it('Minor-5: 每半分钟 is 30 seconds — not expressible in 5-field cron → null', () => {
+    expect(parseNlCron('每半分钟')).toBeNull()
+    expect(parseNlCron('每半分鐘')).toBeNull()
+    // …while 每半小时 (30 minutes) stays the */30 case.
+    expect(parseNlCron('每半小时')?.expression).toBe('*/30 * * * *')
+  })
 })
 
 describe('parseNlCron — 中文 每天 + 时间', () => {

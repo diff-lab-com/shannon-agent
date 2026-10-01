@@ -98,6 +98,14 @@ export function AppProvider({ children }: { children: ReactNode }) {
   // tab's content survives between those points exactly like the brief's
   // "结束保留至下一轮开始".
   const [runProcess, setRunProcess] = useState<RunProcessState>(initialRunProcess)
+  // Round-1 review (Minor-4): synchronous mirror of runProcess — a send the
+  // backend REJECTS before recording the user message (budget/concurrent/
+  // goal guards) must restore the pre-send snapshot, not leave a phantom
+  // "Running" tab. (A setState-updater stash would still be unflushed when
+  // the rejection's catch runs, so the mirror is kept during render, the
+  // same pattern as visibleSessionIdRef below.)
+  const runProcessRef = useRef<RunProcessState>(runProcess)
+  runProcessRef.current = runProcess
   // P2-19: live progress of the VISIBLE session's currently-running tool
   // (QUERY_TOOL_PROGRESS {progress, progress_message}). The raw fields also
   // land on the matching activeToolCalls card; this dedicated slot feeds the
@@ -499,7 +507,8 @@ export function AppProvider({ children }: { children: ReactNode }) {
     setToolProgress(null)
     // GB P2-3: the new run's 四要素 slate — previous run's content is kept
     // until exactly this point (「结束保留至下一轮开始」).
-    setRunProcess(() => runBegin({
+    const prevRun = runProcessRef.current
+    setRunProcess(runBegin({
       at: Date.now(),
       message,
       attachments: filePaths ?? [],
@@ -542,6 +551,10 @@ export function AppProvider({ children }: { children: ReactNode }) {
       })
       setChatError(String(e))
       setSessionQuerying(targetSessionId, false)
+      // Round-1 review (Minor-4): the send was rejected BEFORE recording the
+      // user message — no run ever started, so the pre-send snapshot (with
+      // its sources/outputs) comes back instead of a phantom "Running".
+      if (prevRun) setRunProcess(prevRun)
       return false
     }
   }, [currentSessionId, goalOwnedSessionIds, windowSessionId, setSessionQuerying, cancelStreamFlush, setChatError])

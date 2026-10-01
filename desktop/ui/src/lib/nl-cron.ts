@@ -343,10 +343,12 @@ export function parseZhNlCron(input: string): NlCronResult | null {
   // 每分钟 / 每一分鐘
   if (/^每[一]?分[钟鐘]$/.test(raw)) return zhResult('* * * * *')
 
-  // 每 N 分钟 / 每半小时
+  // 每 N 分钟 — 「每半分钟」 is 30 SECONDS, which a 5-field cron cannot
+  // express → null (round-1 review Minor-5; 每半小时 is the */30 case).
   let m = raw.match(/^每\s*(半|(\d{1,2}|[零〇一二两三四五六七八九十]+))\s*分[钟鐘]$/)
   if (m) {
-    const n = m[1] === '半' ? 30 : zhNumeral(m[2])
+    if (m[1] === '半') return null
+    const n = zhNumeral(m[2])
     if (!zhNum(n) || n < 1 || n > 59) return null
     return zhResult(n === 1 || n === 0 ? '* * * * *' : `*/${n} * * * *`)
   }
