@@ -457,6 +457,21 @@ pub(crate) const BUDGET_ABORT_MARKER: &str = "budget_exceeded";
 /// the stop trails the cap by at most one poll plus one stream chunk.
 const BUDGET_ABORT_POLL: Duration = Duration::from_secs(2);
 
+// ── W3-2: consecutive-failure auto pause + failure notifications ──────────
+
+/// Consecutive scheduled-fire failures after which a routine pauses itself
+/// (W3-2, R2-P2-C). A constant by design — no new configuration surface.
+pub(crate) const AUTO_PAUSE_FAILURE_THRESHOLD: u32 = 3;
+
+/// Machine-readable run-record reason prefix for the pausing failure, in the
+/// [`BUDGET_ABORT_MARKER`] style (prefix survives summary truncation).
+pub(crate) const AUTO_PAUSE_MARKER: &str = "auto_paused_after_3_failures";
+
+/// Scan cap when re-deriving the failure streak from SQLite at finalize
+/// time. Only the newest few terminal runs matter; the cap bounds the query
+/// for pathological histories.
+const AUTO_PAUSE_RUN_SCAN: u32 = 25;
+
 /// Await one engine attempt, converting a panic, a policy timeout, **or a
 /// mid-run budget trip** into a failed [`RunOutcome`] instead of leaving the
 /// run `running` forever.
@@ -985,6 +1000,12 @@ pub(crate) struct RunFinishContext {
     /// The routine's `notify_webhook` flag (B6'). When true, the finish
     /// path routes a status notification through [`RoutineWebhookPort`].
     pub(crate) notify_webhook: bool,
+    /// The routine's `policy.notify_on_failure` flag (W3-2). When true a
+    /// failed run sends the failure notification (and the auto-pause alert,
+    /// dual-channel); when false the failure stays silent — run record +
+    /// triage card only. A routine without a stored policy defaults to
+    /// true, matching the create-form default.
+    pub(crate) notify_on_failure: bool,
 }
 
 /// A run's observed spend, as persisted on the run records (SQLite
@@ -1159,6 +1180,13 @@ pub(crate) async fn spawn_routine_run<R: tauri::Runtime>(
         note,
         started_ms: chrono::Utc::now().timestamp_millis(),
         notify_webhook: routine.notify_webhook,
+        // W3-2: thread the policy flag so finalize can honour it. No stored
+        // policy = the product default (true), same as the create form.
+        notify_on_failure: routine
+            .policy
+            .as_ref()
+            .map(|p| p.notify_on_failure)
+            .unwrap_or(true),
     };
 
     // P1-2 budget gate: a routine past its configured monthly budget is
@@ -1597,9 +1625,10 @@ fn stamp_session_working_dir(
 
 /// Close out a run: legacy JSONL finish (best-effort), inbox item, SQLite
 /// `routine_runs` finish (with `inbox_item_id` back-link and the run's
-/// cost/token totals, R2-W2-2), and the refresh event. Every path through
-/// here terminates the SQLite run — this is the single choke point that
-/// prevents `running` rows from wedging.
+/// cost/token totals, R2-W2-2), the W3-2 failure aftermath (failure
+/// notification, consecutive-failure auto pause), and the refresh event.
+/// Every path through here terminates the SQLite run — this is the single
+/// choke point that prevents `running` rows from wedging.
 fn finalize_run<R: tauri::Runtime>(
     deps: &RoutineRunDeps,
     app: &tauri::AppHandle<R>,
@@ -1614,10 +1643,36 @@ fn finalize_run<R: tauri::Runtime>(
     } else {
         "succeeded"
     };
+
+    // W3-2: decide the auto pause BEFORE any record is written, so the
+    // machine-readable pause reason can be folded into the persisted error.
+    // Only scheduler fires can complete the streak (manual triggers never
+    // pause a routine and never count toward it); the streak itself is
+    // re-derived from SQLite per finalize — stateless, so concurrent
+    // finalizes cannot double-count.
+    let auto_pause = outcome.failed
+        && ctx.source == shannon_core::inbox_store::SOURCE_ROUTINE
+        && scheduled_failure_streak(deps, &ctx.task_id, AUTO_PAUSE_FAILURE_THRESHOLD - 1)
+            == AUTO_PAUSE_FAILURE_THRESHOLD - 1;
+
     let run_error = outcome
         .error
         .as_deref()
         .map(|e| truncate_chars(e, SUMMARY_MAX_CHARS));
+    // W3-2: the pausing failure carries the reason prefix (budget-abort
+    // style) plus the self-heal path, in the run record AND the inbox card.
+    let run_error = if auto_pause {
+        let base = run_error.unwrap_or_default();
+        Some(truncate_chars(
+            &format!(
+                "{AUTO_PAUSE_MARKER}: paused automatically after {AUTO_PAUSE_FAILURE_THRESHOLD} \
+                 consecutive scheduled failures — re-enable it from the task card · {base}"
+            ),
+            SUMMARY_MAX_CHARS,
+        ))
+    } else {
+        run_error
+    };
 
     // 1. Legacy JSONL history (best-effort — never blocks the inbox).
     let jsonl_status = if outcome.failed {
@@ -1645,6 +1700,11 @@ fn finalize_run<R: tauri::Runtime>(
 
     // 3. Inbox item + 4. SQLite run back-link. The summary doubles as the
     // durable run record, so the skipped-webhook note lands in it.
+    // W3-2: capture what the aftermath needs before the item consumes the
+    // context's owned fields.
+    let task_name = ctx.task_name.clone();
+    let task_id = ctx.task_id.clone();
+    let notify_on_failure = ctx.notify_on_failure;
     let mut summary = build_summary(
         ctx.note.as_deref(),
         duration_secs,
@@ -1653,6 +1713,17 @@ fn finalize_run<R: tauri::Runtime>(
     );
     if let Some(note) = &webhook_note {
         summary = truncate_chars(&format!("{summary} · {note}"), SUMMARY_MAX_CHARS);
+    }
+    // W3-2: the triage card doubles as the recovery surface — say why the
+    // routine stopped and how to bring it back.
+    if auto_pause {
+        summary = truncate_chars(
+            &format!(
+                "{summary} · auto-paused after {AUTO_PAUSE_FAILURE_THRESHOLD} consecutive \
+                 failures — re-enable it from the task card"
+            ),
+            SUMMARY_MAX_CHARS,
+        );
     }
     let item = deps
         .inbox
@@ -1683,8 +1754,162 @@ fn finalize_run<R: tauri::Runtime>(
         tracing::warn!(run_id = %ctx.run_id, error = %e, "inbox: failed to finish run record");
     }
 
-    // 5. Refresh signal.
+    // 5. W3-2 failure aftermath: flip enabled at the threshold (the bool
+    // reports the actual transition — notifications fire once), then the
+    // failure notification, then the dual-channel auto-pause alert. All of
+    // it is gated by the routine's `policy.notify_on_failure`; false keeps
+    // the failure silent (run record + triage card only).
+    let paused_now = if auto_pause {
+        pause_routine_after_consecutive_failures(deps, &task_id)
+    } else {
+        false
+    };
+    if notify_on_failure && outcome.failed {
+        notify_run_failed(deps.notify.as_ref(), &task_name, run_error.as_deref());
+        if paused_now {
+            notify_auto_paused(deps.notify.as_ref(), deps.webhook.as_ref(), &task_name);
+        }
+    }
+
+    // 6. Refresh signal.
     let _ = app.emit(event_names::INBOX_UPDATED, ctx.run_id);
+}
+
+/// Length of the scheduled-fire failure streak among the terminal runs
+/// already recorded for `task_id` (newest first), stopping at the first
+/// success (any success clears the streak). Only scheduler-originated runs
+/// count — a run's linked inbox item decides (`source == routine`), so
+/// manual triggers and trigger-item reruns never advance the streak.
+/// Non-terminal rows (`running`, `queued`/`cancelled` tombstones) are
+/// invisible to it.
+///
+/// Stateless on purpose: the streak is re-derived from the authoritative
+/// SQLite `routine_runs` on every finalize instead of being accumulated in
+/// memory, so there is no counter that concurrent finalizes could
+/// double-increment — and no counter to lose across restarts.
+fn scheduled_failure_streak(deps: &RoutineRunDeps, task_id: &str, threshold: u32) -> u32 {
+    if threshold == 0 {
+        return 0;
+    }
+    let Ok(runs) = deps.inbox.list_runs_by_task(task_id, AUTO_PAUSE_RUN_SCAN) else {
+        return 0;
+    };
+    let mut streak = 0u32;
+    for run in runs {
+        match run.status.as_str() {
+            "succeeded" => return 0,
+            "failed" => {}
+            _ => continue,
+        }
+        let scheduled = run
+            .inbox_item_id
+            .and_then(|id| deps.inbox.get_item(id).ok().flatten())
+            .is_some_and(|item| item.source == shannon_core::inbox_store::SOURCE_ROUTINE);
+        if !scheduled {
+            continue;
+        }
+        streak += 1;
+        if streak >= threshold {
+            break;
+        }
+    }
+    streak
+}
+
+/// Disable a routine whose scheduled failures reached the threshold (W3-2).
+/// Fresh load + `enabled` check keeps the write idempotent: only the call
+/// that actually flips the flag returns true, so re-entrant or racing
+/// finalizes cannot duplicate the pause or its notification. The scheduler
+/// tick naturally respects `enabled == false` (`should_fire_at`).
+fn pause_routine_after_consecutive_failures(deps: &RoutineRunDeps, task_id: &str) -> bool {
+    let routine = match deps.scheduled_tasks.load(task_id) {
+        Ok(Some(r)) => r,
+        Ok(None) => {
+            tracing::warn!(
+                task_id = %task_id,
+                "auto pause: routine not found in the task store"
+            );
+            return false;
+        }
+        Err(e) => {
+            tracing::warn!(
+                task_id = %task_id,
+                error = %e,
+                "auto pause: routine unreadable — staying enabled this round"
+            );
+            return false;
+        }
+    };
+    if !routine.enabled {
+        // Already paused (manual toggle, budget stop, or a racing finalize).
+        return false;
+    }
+    let mut paused = routine;
+    paused.enabled = false;
+    if let Err(e) = deps.scheduled_tasks.save(&paused) {
+        tracing::warn!(
+            task_id = %task_id,
+            error = %e,
+            "auto pause: persisting enabled=false failed — routine stays enabled"
+        );
+        return false;
+    }
+    tracing::info!(
+        task_id = %task_id,
+        threshold = AUTO_PAUSE_FAILURE_THRESHOLD,
+        marker = AUTO_PAUSE_MARKER,
+        "routine auto-paused after consecutive scheduled failures"
+    );
+    true
+}
+
+/// Desktop notification for one failed run (W3-2 — this is the long-promised
+/// consumption of `policy.notify_on_failure`, previously UI-only).
+fn notify_run_failed(port: &dyn RunNotifyPort, task_name: &str, error: Option<&str>) {
+    let body = error
+        .map(|e| truncate_chars(e, 200))
+        .unwrap_or_else(|| "The run failed — details are in Triage.".to_string());
+    let notification = shannon_core::notifier::Notification {
+        title: format!("Shannon — {task_name}: run failed"),
+        body,
+        level: shannon_core::notifier::NotificationLevel::Error,
+        id: uuid::Uuid::new_v4().to_string(),
+        timestamp: chrono::Utc::now(),
+        source: Some("routine_run_failed".to_string()),
+        action_id: None,
+    };
+    port.notify(&notification);
+    tracing::debug!(task_name, "routine failure notification dispatched");
+}
+
+/// Dual-channel auto-pause alert (W3-2): the desktop notification plus the
+/// configured webhook sink. The copy always names the self-heal path —
+/// re-enable the routine from its task card.
+fn notify_auto_paused(
+    notify: &dyn RunNotifyPort,
+    webhook: &dyn RoutineWebhookPort,
+    task_name: &str,
+) {
+    let title = format!("Shannon — {task_name}: auto-paused");
+    let body = format!(
+        "Paused automatically after {AUTO_PAUSE_FAILURE_THRESHOLD} consecutive scheduled \
+         failures. To resume, re-enable it from its task card."
+    );
+    let build = |source: &str| shannon_core::notifier::Notification {
+        title: title.clone(),
+        body: body.clone(),
+        level: shannon_core::notifier::NotificationLevel::Error,
+        id: uuid::Uuid::new_v4().to_string(),
+        timestamp: chrono::Utc::now(),
+        source: Some(source.to_string()),
+        action_id: None,
+    };
+    notify.notify(&build("routine_auto_pause"));
+    webhook.deliver(&build("routine_auto_pause_webhook"));
+    tracing::info!(
+        task_name,
+        "routine auto-pause notification dispatched (desktop + webhook)"
+    );
 }
 
 /// Cap on the run-output summary forwarded in the webhook body. The handler
@@ -2073,6 +2298,7 @@ mod tests {
             note: None,
             started_ms,
             notify_webhook: false,
+            notify_on_failure: true,
         }
     }
 
@@ -3522,5 +3748,250 @@ mod tests {
         // The task-filtered authoritative read sees the same rows.
         let for_task = inbox.list_runs_by_task("task-1", 100).unwrap();
         assert_eq!(for_task.len(), 3, "2 terminal runs + queued tombstone");
+    }
+
+    // ── W3-2: consecutive-failure auto pause + notify_on_failure wiring ──
+
+    /// Deps for the auto-pause tests: the recording webhook port comes back
+    /// from [`webhook_deps`] itself (the stored Arc IS the passed one); the
+    /// desktop-notification seam is swapped for a fresh recording port the
+    /// test keeps a typed handle to.
+    fn auto_pause_deps(
+        tmp: &std::path::Path,
+        webhook: std::sync::Arc<RecordingWebhookPort>,
+    ) -> (RoutineRunDeps, std::sync::Arc<RecordingNotifyPort>) {
+        let (mut deps, _inbox) = webhook_deps(tmp, webhook);
+        let notify = std::sync::Arc::new(RecordingNotifyPort::default());
+        deps.notify = notify.clone();
+        (deps, notify)
+    }
+
+    /// A routine persisted in the deps' task store under `task-1` (enabled),
+    /// so the auto-pause path has something to flip.
+    fn stored_routine(deps: &RoutineRunDeps) {
+        let mut routine = ScheduledRoutine::new("Task One".into(), "p".into(), 3600);
+        routine.id = "task-1".into();
+        routine.enabled = true;
+        deps.scheduled_tasks.save(&routine).unwrap();
+    }
+
+    /// One failed scheduled fire through the real `finalize_run`.
+    fn finalize_scheduled_failure<R: tauri::Runtime>(
+        deps: &RoutineRunDeps,
+        app: &tauri::AppHandle<R>,
+        n: usize,
+        notify_on_failure: bool,
+    ) {
+        let run_id = deps.inbox.record_run_start("task-1", "Task One").unwrap();
+        let mut ctx = finish_ctx(&run_id, chrono::Utc::now().timestamp_millis() - 1_000);
+        ctx.source = shannon_core::inbox_store::SOURCE_ROUTINE.into();
+        ctx.notify_on_failure = notify_on_failure;
+        finalize_run(
+            deps,
+            app,
+            ctx,
+            RunOutcome {
+                failed: true,
+                error: Some(format!("attempt {n} blew up")),
+                output: String::new(),
+                session_id: None,
+                cost_usd: None,
+                token_usage: None,
+            },
+            RunSpend::default(),
+        );
+    }
+
+    #[test]
+    fn three_consecutive_scheduled_failures_auto_pause_and_annotate() {
+        let app = tauri::test::mock_app();
+        let tmp = tempfile::tempdir().unwrap();
+        let webhook = RecordingWebhookPort::with_configured(true);
+        let (deps, notify) = auto_pause_deps(tmp.path(), webhook.clone());
+        stored_routine(&deps);
+        let app_handle = app.handle().clone();
+
+        for n in 1..=3 {
+            finalize_scheduled_failure(&deps, &app_handle, n, true);
+        }
+
+        // The routine is paused…
+        let routine = deps.scheduled_tasks.load("task-1").unwrap().unwrap();
+        assert!(!routine.enabled, "3 consecutive failures must disable");
+        // …the pausing run record carries the machine-readable reason…
+        let runs = deps.inbox.list_runs_by_task("task-1", 10).unwrap();
+        assert_eq!(runs.len(), 3);
+        assert!(
+            runs[0]
+                .error
+                .as_deref()
+                .unwrap()
+                .starts_with(AUTO_PAUSE_MARKER),
+            "pause reason prefix on the newest (3rd) record: {:?}",
+            runs[0].error
+        );
+        assert!(
+            !runs[1]
+                .error
+                .as_deref()
+                .unwrap()
+                .contains(AUTO_PAUSE_MARKER)
+        );
+        // …the inbox card names the self-heal path…
+        let items = deps.inbox.list(None, None, 10).unwrap();
+        assert!(items[0].summary.contains("re-enable it from the task card"));
+        // …and the notifications went out: a failure alert per failed run
+        // plus ONE dual-channel pause alert (transition-only).
+        let dispatched = notify.dispatches();
+        assert_eq!(dispatched.len(), 4, "3 failure alerts + 1 pause alert");
+        assert_eq!(
+            dispatched
+                .iter()
+                .filter(|n| n.source.as_deref() == Some("routine_auto_pause"))
+                .count(),
+            1,
+            "exactly one desktop pause alert"
+        );
+        let deliveries = webhook.deliveries();
+        assert_eq!(deliveries.len(), 1, "exactly one webhook pause alert");
+        assert_eq!(
+            deliveries[0].source.as_deref(),
+            Some("routine_auto_pause_webhook")
+        );
+        assert!(
+            deliveries[0]
+                .body
+                .contains("re-enable it from its task card")
+        );
+
+        // A 4th failure after the pause: still one pause alert total
+        // (idempotent transition), the failure alert still fires.
+        finalize_scheduled_failure(&deps, &app_handle, 4, true);
+        let dispatched = notify.dispatches();
+        assert_eq!(
+            dispatched.len(),
+            5,
+            "one more failure alert, no second pause"
+        );
+        let deliveries = webhook.deliveries();
+        assert_eq!(deliveries.len(), 1, "no duplicate pause webhook");
+        let routine = deps.scheduled_tasks.load("task-1").unwrap().unwrap();
+        assert!(!routine.enabled);
+    }
+
+    #[test]
+    fn one_success_clears_the_consecutive_failure_streak() {
+        let app = tauri::test::mock_app();
+        let tmp = tempfile::tempdir().unwrap();
+        let (deps, _inbox) = webhook_deps(
+            tmp.path(),
+            std::sync::Arc::new(RecordingWebhookPort::default()),
+        );
+        stored_routine(&deps);
+        let app_handle = app.handle().clone();
+
+        for n in 1..=2 {
+            finalize_scheduled_failure(&deps, &app_handle, n, true);
+        }
+        // A successful scheduled run resets the streak.
+        let run_id = deps.inbox.record_run_start("task-1", "Task One").unwrap();
+        finalize_run(
+            &deps,
+            app.handle(),
+            finish_ctx(&run_id, chrono::Utc::now().timestamp_millis() - 1_000),
+            RunOutcome {
+                failed: false,
+                error: None,
+                output: "all good".into(),
+                session_id: None,
+                cost_usd: None,
+                token_usage: None,
+            },
+            RunSpend::default(),
+        );
+        finalize_scheduled_failure(&deps, &app_handle, 3, true);
+
+        let routine = deps.scheduled_tasks.load("task-1").unwrap().unwrap();
+        assert!(routine.enabled, "the success in between clears the streak");
+        let runs = deps.inbox.list_runs_by_task("task-1", 10).unwrap();
+        assert!(
+            !runs[0]
+                .error
+                .as_deref()
+                .unwrap()
+                .contains(AUTO_PAUSE_MARKER)
+        );
+    }
+
+    #[test]
+    fn manual_trigger_failures_do_not_count_toward_the_streak() {
+        let app = tauri::test::mock_app();
+        let tmp = tempfile::tempdir().unwrap();
+        let (deps, _inbox) = webhook_deps(
+            tmp.path(),
+            std::sync::Arc::new(RecordingWebhookPort::default()),
+        );
+        stored_routine(&deps);
+        let app_handle = app.handle().clone();
+
+        // Two scheduled failures, then THREE manual-trigger failures — the
+        // manual ones must neither pause nor advance the streak.
+        for n in 1..=2 {
+            finalize_scheduled_failure(&deps, &app_handle, n, true);
+        }
+        for n in 1..=3 {
+            let run_id = deps.inbox.record_run_start("task-1", "Task One").unwrap();
+            let mut ctx = finish_ctx(&run_id, chrono::Utc::now().timestamp_millis() - 1_000);
+            ctx.source = shannon_core::inbox_store::SOURCE_TRIGGER.into();
+            finalize_run(
+                &deps,
+                app.handle(),
+                ctx,
+                RunOutcome {
+                    failed: true,
+                    error: Some(format!("manual {n} blew up")),
+                    output: String::new(),
+                    session_id: None,
+                    cost_usd: None,
+                    token_usage: None,
+                },
+                RunSpend::default(),
+            );
+        }
+        let routine = deps.scheduled_tasks.load("task-1").unwrap().unwrap();
+        assert!(routine.enabled, "manual failures must not pause");
+
+        // The next scheduled failure is the THIRD scheduled one → pause.
+        finalize_scheduled_failure(&deps, &app_handle, 3, true);
+        let routine = deps.scheduled_tasks.load("task-1").unwrap().unwrap();
+        assert!(!routine.enabled);
+    }
+
+    #[test]
+    fn notify_on_failure_false_keeps_failures_silent_but_pauses() {
+        let app = tauri::test::mock_app();
+        let tmp = tempfile::tempdir().unwrap();
+        let webhook = RecordingWebhookPort::with_configured(true);
+        let (deps, notify) = auto_pause_deps(tmp.path(), webhook.clone());
+        stored_routine(&deps);
+        let app_handle = app.handle().clone();
+
+        for n in 1..=3 {
+            finalize_scheduled_failure(&deps, &app_handle, n, false);
+        }
+
+        // Paused + annotated, but completely silent.
+        let routine = deps.scheduled_tasks.load("task-1").unwrap().unwrap();
+        assert!(!routine.enabled);
+        assert_eq!(notify.dispatches().len(), 0, "no desktop alerts");
+        assert_eq!(webhook.deliveries().len(), 0, "no webhook alerts");
+        let runs = deps.inbox.list_runs_by_task("task-1", 10).unwrap();
+        assert!(
+            runs[0]
+                .error
+                .as_deref()
+                .unwrap()
+                .starts_with(AUTO_PAUSE_MARKER)
+        );
     }
 }
