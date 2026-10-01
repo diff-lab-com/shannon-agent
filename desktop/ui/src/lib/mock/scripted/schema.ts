@@ -50,6 +50,16 @@ export interface ScriptStep {
   payload?: Record<string, unknown>
   /** Explicit UI stop point — the player pauses until `control.resume()`. */
   waitFor?: 'ui'
+  /**
+   * Known-bug anchor (R2 chat-testing plan §A). A step carrying this marker
+   * is SKIPPED by the player (no event emitted) and annotated via
+   * console.info — it pins where the journey is shaped by a tracked bug
+   * (e.g. A-3 retry drops attachments, A-19 cancel discards partial text).
+   * The YAML comment at the step documents the flip condition; when the fix
+   * lands (R4), remove the marker — the step resumes executing and the
+   * spec/L1 assertions next to it flip to the fixed behavior.
+   */
+  knownIssue?: string
 }
 
 export interface ScriptSeedMessage {
@@ -159,6 +169,7 @@ export const chatScriptSchema = {
                 chunkDelayMs: { type: 'number', minimum: 0 },
                 payload: { type: 'object' },
                 waitFor: { enum: ['ui'] },
+                knownIssue: { type: 'string', minLength: 1 },
               },
               anyOf: [
                 { required: ['event'] },
@@ -184,6 +195,7 @@ export const chatScriptSchema = {
               chunks: { type: 'array', items: { type: 'string' }, minItems: 1 },
               chunkDelayMs: { type: 'number', minimum: 0 },
               payload: { type: 'object' },
+              knownIssue: { type: 'string', minLength: 1 },
             },
           },
         },
