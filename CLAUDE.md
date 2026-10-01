@@ -131,6 +131,15 @@ Titles / branch lineage persist in a `<uuid>/meta.json` sidecar.
 
 **YAML scenarios**: `tests/scenarios/*.yaml` — 10 declarative test scenarios
 
+### Install → usable acceptance
+
+Every installable surface (MCP stdio/remote, skills, agents, data sources) must
+pass the five-step chain in
+[docs/dev/install-to-usable-acceptance.md](./docs/dev/install-to-usable-acceptance.md) —
+安装 → 重启/热加载 → 列表态 → 聊天内可见 → 可调用 — before shipping an
+installer/loader change. Per-step unit tests passing is not enough; the whole
+chain must be asserted end-to-end (the R2 url-only lesson).
+
 ### Recording Real API Fixtures
 
 ```bash
