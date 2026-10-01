@@ -347,6 +347,7 @@ fn main() {
             extensions_commands::install_mcp_oauth_authorize_url,
             extensions_commands::install_mcp_oauth_complete,
             extensions_commands::install_mcp_oauth_loopback,
+            extensions_commands::reauthenticate_mcp_server,
             extensions_commands::uninstall_mcp_server,
             // Extensions hub P3 — Skills catalog + installer
             extensions_commands::list_skill_catalog,
@@ -640,6 +641,7 @@ fn main() {
             // binding isn't consumed by the block_on future (rustc's
             // `async move` capture moves the original by value).
             let app_handle_for_block = app_handle.clone();
+            let app_handle_for_seed = app_handle.clone();
             tauri::async_runtime::block_on(async move {
                 // G1 P0-1.1 / P1-9 — one-time, idempotent migrations before
                 // anything reads the stores: legacy
@@ -683,6 +685,23 @@ fn main() {
                         tools = seed.total_tools,
                         "MCP process pool seeded (background)"
                     );
+                    // W3-B (A2): one desktop notification when a stored OAuth
+                    // credential was rejected even after a refresh attempt —
+                    // the row sits in the "needs re-authentication" state and
+                    // the user gets an actionable ping instead of silence.
+                    if !seed.needs_auth_servers.is_empty() {
+                        use tauri_plugin_notification::NotificationExt;
+                        let names = seed.needs_auth_servers.join(", ");
+                        let _ = app_handle_for_seed
+                            .notification()
+                            .builder()
+                            .title("MCP sign-in expired")
+                            .body(format!(
+                                "{names} could not reconnect with the saved login. \
+                                 Open Extensions → MCP Servers → Re-authenticate."
+                            ))
+                            .show();
+                    }
                 });
 
                 // Q4-A — before hosting our own loopback engine API server,

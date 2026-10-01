@@ -298,6 +298,49 @@ impl OAuthRemoteMcpInstaller {
             "oauth_remote",
         )
     }
+
+    /// Render the final `mcpServers` config entry **including** the
+    /// `shannonOAuth` block (W3-B, A2 token lifecycle; ruling R6: the
+    /// refresh token lives inside the existing settings entry, same domain
+    /// and permissions as the rest of the blob — no keychain dependency).
+    ///
+    /// `expires_in` (seconds, when the vendor sent one) becomes an absolute
+    /// unix-epoch `expires_at`. With no refresh token the entry degrades to
+    /// the legacy header-only shape plus a token block without refresh —
+    /// it connects, and expiry routes the row to re-authentication.
+    pub fn server_config_with_oauth(
+        &self,
+        access_token: &str,
+        refresh_token: Option<&str>,
+        expires_in: Option<u64>,
+    ) -> Value {
+        let FeaturedInstallKind::OAuthRemote {
+            token_url,
+            client_id_env,
+            ..
+        } = &self.vendor.install_kind
+        else {
+            return json!({});
+        };
+        let client_id = std::env::var(client_id_env).unwrap_or_else(|_| "shannon-desktop".into());
+        let mut config = self.server_config(access_token);
+        if config.get("url").is_none() {
+            return config;
+        }
+        let mut block = json!({
+            "client_id": client_id,
+            "token_url": token_url,
+            "access_token": access_token,
+        });
+        if let Some(rt) = refresh_token.filter(|t| !t.is_empty()) {
+            block["refresh_token"] = json!(rt);
+        }
+        if let Some(secs) = expires_in {
+            block["expires_at"] = json!(chrono::Utc::now().timestamp() + secs as i64);
+        }
+        config["shannonOAuth"] = block;
+        config
+    }
 }
 
 #[async_trait]
@@ -797,6 +840,36 @@ mod tests {
         assert_eq!(cfg["url"], json!("https://mcp.example.com/mcp"));
         assert_eq!(cfg["headers"]["Authorization"], json!("Bearer abc123"));
         assert_eq!(cfg["shannon:transport"], json!("oauth_remote"));
+    }
+
+    /// W3-B (A2, ruling R6): the install entry embeds the `shannonOAuth`
+    /// token block — client id, token endpoint, access + refresh tokens,
+    /// absolute expiry — next to the mirrored bearer header, so the desktop
+    /// can reconnect and refresh without a keychain dependency.
+    #[test]
+    fn oauth_server_config_with_oauth_embeds_token_block() {
+        let vendor = oauth_vendor();
+        let installer = OAuthRemoteMcpInstaller { vendor };
+        let cfg = installer.server_config_with_oauth("access-1", Some("refresh-1"), Some(3600));
+        assert_eq!(cfg["headers"]["Authorization"], json!("Bearer access-1"));
+        let block = &cfg["shannonOAuth"];
+        assert_eq!(block["client_id"], json!("shannon-desktop"));
+        assert_eq!(block["token_url"], json!("https://example.com/oauth/token"));
+        assert_eq!(block["access_token"], json!("access-1"));
+        assert_eq!(block["refresh_token"], json!("refresh-1"));
+        let expires_at = block["expires_at"].as_i64().expect("absolute expiry");
+        let now = chrono::Utc::now().timestamp();
+        assert!(
+            (expires_at - (now + 3600)).abs() < 30,
+            "expires_at ≈ now + expires_in, got {expires_at} vs {now}"
+        );
+
+        // Without a refresh token the block degrades gracefully (connects,
+        // expiry routes to re-authentication).
+        let bare = installer.server_config_with_oauth("access-2", None, None);
+        assert_eq!(bare["shannonOAuth"]["access_token"], json!("access-2"));
+        assert!(bare["shannonOAuth"].get("refresh_token").is_none());
+        assert!(bare["shannonOAuth"].get("expires_at").is_none());
     }
 
     #[test]

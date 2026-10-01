@@ -179,7 +179,7 @@ pub async fn install_mcp_oauth_complete(
         .ok_or_else(|| format!("unknown vendor {vendor_slug}"))?;
     use crate::extensions::OAuthRemoteMcpInstaller;
     let installer = OAuthRemoteMcpInstaller { vendor };
-    let config = installer.server_config(&access_token);
+    let config = installer.server_config_with_oauth(&access_token, None, None);
     let server_name = format!("{vendor_slug}-oauth");
     let path =
         extensions::write_mcp_server_config(&server_name, config).map_err(|e| e.to_string())?;
@@ -190,23 +190,27 @@ pub async fn install_mcp_oauth_complete(
     })
 }
 
-/// Drive the full OAuth 2.1 PKCE loopback flow from the desktop binary.
+/// Tokens produced by one full loopback authorization-code flow.
+pub struct LoopbackTokens {
+    pub access_token: String,
+    pub refresh_token: Option<String>,
+    pub expires_in: Option<u64>,
+}
+
+/// Drive the shared OAuth 2.1 PKCE loopback flow: bind an ephemeral
+/// loopback listener, open the system browser, capture the `?code=…`
+/// callback, and exchange the code for tokens (access + refresh when the
+/// vendor issues one — W3-B persists the pair per ruling R6).
 ///
-/// Binds an ephemeral loopback listener on 127.0.0.1, opens the system
-/// browser via `tauri-plugin-shell`, captures the `?code=...&state=...`
-/// callback, exchanges the code for an access token, and writes the MCP
-/// server entry. The UI just calls this and awaits the `InstallResult`.
-///
-/// Architecture, RFC compliance, vendor setup, and the manual test plan
-/// live in `docs/extensions/oauth-loopback.md`. Read that before changing
-/// the flow or adding a vendor.
-#[tauri::command]
-pub async fn install_mcp_oauth_loopback(
-    app_handle: tauri::AppHandle,
-    vendor_slug: String,
-) -> Result<InstallResult, String> {
+/// Used by `install_mcp_oauth_loopback` (fresh install) and
+/// `reauthenticate_mcp_server` (expired-credential recovery) — both are the
+/// same flow writing under different entry names.
+async fn run_oauth_loopback_flow(
+    app_handle: &tauri::AppHandle,
+    vendor_slug: &str,
+) -> Result<LoopbackTokens, String> {
     use std::time::Duration;
-    use tokio::io::AsyncReadExt;
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
     use tokio::net::TcpListener;
 
     let vendor = extensions::featured_vendors()
@@ -281,7 +285,6 @@ pub async fn install_mcp_oauth_loopback(
         body.len(),
         body
     );
-    use tokio::io::AsyncWriteExt;
     let _ = sock.write_all(response.as_bytes()).await;
     let _ = sock.flush().await;
     let _ = sock.shutdown().await;
@@ -317,15 +320,51 @@ pub async fn install_mcp_oauth_loopback(
     #[derive(serde::Deserialize)]
     struct TokenResponse {
         access_token: String,
+        #[serde(default)]
+        refresh_token: Option<String>,
+        #[serde(default)]
+        expires_in: Option<u64>,
     }
     let token_json: TokenResponse = token_resp
         .json()
         .await
         .map_err(|e| format!("token response parse failed: {e}"))?;
 
+    Ok(LoopbackTokens {
+        access_token: token_json.access_token,
+        refresh_token: token_json.refresh_token,
+        expires_in: token_json.expires_in,
+    })
+}
+
+/// Drive the full OAuth 2.1 PKCE loopback flow from the desktop binary and
+/// write the resulting entry as `<vendor>-oauth`.
+///
+/// The UI just calls this and awaits the `InstallResult`. Architecture,
+/// RFC compliance, vendor setup, and the manual test plan live in
+/// `docs/extensions/oauth-loopback.md`. Read that before changing the flow
+/// or adding a vendor.
+#[tauri::command]
+pub async fn install_mcp_oauth_loopback(
+    app_handle: tauri::AppHandle,
+    vendor_slug: String,
+) -> Result<InstallResult, String> {
+    let tokens = run_oauth_loopback_flow(&app_handle, &vendor_slug).await?;
+
+    let vendor = extensions::featured_vendors()
+        .into_iter()
+        .find(|v| v.slug == vendor_slug)
+        .ok_or_else(|| format!("unknown vendor {vendor_slug}"))?;
+    use crate::extensions::OAuthRemoteMcpInstaller;
+    let installer = OAuthRemoteMcpInstaller { vendor };
+
     // Persist and return. Same write path as install_mcp_oauth_complete.
     let server_name = format!("{vendor_slug}-oauth");
-    let config = installer.server_config(&token_json.access_token);
+    let config = installer.server_config_with_oauth(
+        &tokens.access_token,
+        tokens.refresh_token.as_deref(),
+        tokens.expires_in,
+    );
     let path =
         extensions::write_mcp_server_config(&server_name, config).map_err(|e| e.to_string())?;
     Ok(InstallResult {
@@ -333,6 +372,79 @@ pub async fn install_mcp_oauth_loopback(
         name: server_name,
         install_path: Some(format!("{}#mcpServers.{}", path.display(), vendor_slug)),
     })
+}
+
+/// Re-run the OAuth authorization flow for an existing remote MCP entry
+/// (W3-B, A2 failure presentation: the "Re-authenticate" action of the
+/// NeedsAuth state).
+///
+/// Resolves the entry back to its featured vendor (hub installs are named
+/// `<vendor>-oauth`), replays the loopback flow, writes the fresh token
+/// pair into the **same** entry (preserving its `enabled` flag), and
+/// reconnects the pool so the row flips to Connected without a restart.
+#[tauri::command]
+pub async fn reauthenticate_mcp_server(
+    app_handle: tauri::AppHandle,
+    state: tauri::State<'_, crate::commands::AppState>,
+    name: String,
+) -> Result<crate::commands_mcp::McpServerInfo, String> {
+    use crate::config;
+    use crate::extensions::OAuthRemoteMcpInstaller;
+
+    let servers = config::load_mcp_servers()?;
+    let existing = servers
+        .iter()
+        .find(|s| s.name == name)
+        .cloned()
+        .ok_or_else(|| format!("Server not found: {name}"))?;
+    let Some(_url) = existing.url.clone() else {
+        return Err(format!("'{name}' is not a remote MCP server"));
+    };
+
+    // Hub installs are `<vendor>-oauth`; map back to the vendor catalog.
+    let vendor = extensions::featured_vendors()
+        .into_iter()
+        .find(|v| name == format!("{}-oauth", v.slug))
+        .ok_or_else(|| {
+            format!(
+                "'{name}' cannot be re-authenticated from the desktop — reinstall it \
+                 from the extensions catalog"
+            )
+        })?;
+
+    let tokens = run_oauth_loopback_flow(&app_handle, &vendor.slug).await?;
+    let installer = OAuthRemoteMcpInstaller { vendor };
+
+    let mut config = installer.server_config_with_oauth(
+        &tokens.access_token,
+        tokens.refresh_token.as_deref(),
+        tokens.expires_in,
+    );
+    // Full entry rewrite — preserve the user's enabled flag.
+    config["enabled"] = serde_json::Value::Bool(existing.enabled);
+    extensions::write_mcp_server_config(&name, config).map_err(|e| e.to_string())?;
+
+    // Reconnect now: stop the stale handle, start from the fresh tokens.
+    let pool = state.mcp_pool.clone();
+    let _ = pool.stop_server(&name).await;
+    let fresh = config::load_mcp_servers()?
+        .into_iter()
+        .find(|s| s.name == name)
+        .ok_or_else(|| format!("Server vanished after re-authentication: {name}"))?;
+    let (connected, last_error) = if fresh.enabled {
+        let outcome = crate::mcp::start_oauth_remote_row(&pool, &fresh).await;
+        (outcome.connected, outcome.error)
+    } else {
+        (false, None)
+    };
+    let connected_ts = crate::commands_mcp::pool_last_connected(&pool, &name, connected).await;
+
+    Ok(crate::commands_mcp::mcp_server_info(
+        &fresh,
+        connected,
+        connected_ts,
+        last_error,
+    ))
 }
 
 /// Remove an installed MCP server entry.

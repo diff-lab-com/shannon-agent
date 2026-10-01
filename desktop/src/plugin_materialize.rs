@@ -362,6 +362,7 @@ pub fn materialize_plugin(
                     enabled: true,
                     url: None,
                     has_auth_headers: false,
+                    oauth: None,
                 };
                 let value = serde_json::to_value(&config)
                     .map_err(|e| format!("mcp server '{key}' serialize: {e}"))?;

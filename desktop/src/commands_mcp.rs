@@ -24,15 +24,17 @@ pub struct McpServerInfo {
     pub tools: Vec<ToolInfo>,
     pub last_connected: Option<i64>,
     /// W1-1 (R2-P0-1(B)): remote (HTTP/SSE) endpoint of url-only entries.
-    /// `None` on stdio rows. Header-less url-only servers are wired into
-    /// the desktop process pool since W2-A (R4/A1).
+    /// `None` on stdio rows. Url-only servers are wired into the desktop
+    /// process pool since W2-A (R4/A1) — OAuth entries since W3-B (A2).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub url: Option<String>,
     /// W2-A (R4/A1) — the backend's single-source auth verdict, mirrored
-    /// from `config::McpServerConfig::has_auth_headers`: `true` on
-    /// url-only rows that carry HTTP headers (OAuth products). The UI
-    /// keeps those on the W1-A honest "remote" badge and disables their
-    /// restart; header-less remote rows render like stdio.
+    /// from `config::McpServerConfig::has_auth_headers`; since W3-B (A2)
+    /// its semantics are "OAuth entry" (url-only row carrying a
+    /// credential). Those rows connect through the stored-credential OAuth
+    /// path; when a connection fails they render the classified failure
+    /// state (with re-authentication for NeedsAuth) instead of a generic
+    /// Offline badge. Header-less remote rows render like stdio.
     #[serde(default)]
     pub has_auth_headers: bool,
     /// W1-7 (R2-P1-6): the pool's last start/connection failure for this
@@ -40,6 +42,12 @@ pub struct McpServerInfo {
     /// Offline. `None` = the pool never reported a failure.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub last_error: Option<String>,
+    /// W3-B (A2): classified failure state for url-only rows —
+    /// `needs_auth` | `unreachable` | `server_error` (the wire tokens of
+    /// `shannon_mcp::RemoteFailureKind`). The UI renders the three classes
+    /// differently (re-authenticate vs retry vs retry+details).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub failure_kind: Option<&'static str>,
 }
 
 /// Skill information for the skill browser UI.
@@ -66,11 +74,25 @@ pub struct SkillDetail {
 
 /// Build the UI row for a server plus its live pool status. Shared by the
 /// add/restart/toggle commands, which all return the fresh row.
-fn mcp_server_info(
+/// `last_connected` is the uptime-derived timestamp from the shared
+/// [`pool_last_connected`] helper — W3-B unified the two conventions
+/// (the add/restart path used "now", the list path derived from uptime).
+pub(crate) fn mcp_server_info(
     server: &crate::config::McpServerConfig,
     connected: bool,
+    last_connected: Option<i64>,
     last_error: Option<String>,
 ) -> McpServerInfo {
+    // W3-B (A2): classify remote failures so the UI can render the three
+    // failure classes distinctly. Stdio rows keep the plain Offline badge.
+    let failure_kind = if !connected && server.url.is_some() {
+        last_error
+            .as_deref()
+            .map(shannon_mcp::classify_remote_failure)
+            .map(|k| k.as_str())
+    } else {
+        None
+    };
     McpServerInfo {
         name: server.name.clone(),
         command: server.command.clone(),
@@ -78,21 +100,39 @@ fn mcp_server_info(
         connected,
         tool_count: 0,
         tools: Vec::new(),
-        last_connected: if connected {
-            Some(chrono_timestamp())
-        } else {
-            None
-        },
+        last_connected,
         url: server.url.clone(),
         has_auth_headers: server.has_auth_headers,
         last_error,
+        failure_kind,
     }
 }
 
+/// Derive a real last-connected timestamp from the pool's uptime clock
+/// (process start = now − uptime). W1-7 introduced this for the list
+/// command; W3-B unified the add/restart/toggle rows onto the same
+/// convention (they previously stamped "now", which was a lie for a server
+/// connected seconds ago during a past session).
+pub(crate) async fn pool_last_connected(
+    pool: &shannon_mcp::McpProcessPool,
+    name: &str,
+    connected: bool,
+) -> Option<i64> {
+    if !connected {
+        return None;
+    }
+    let now = chrono_timestamp();
+    pool.server_status(name)
+        .await
+        .and_then(|st| st.uptime)
+        .map(|up| now - up.as_millis() as i64)
+}
+
 /// Start one server in the pool according to its config row: stdio rows
-/// spawn a process, header-less url-only rows connect as remote HTTP/SSE
-/// (W2-A R4/A1), auth-gated rows are never started header-less (A2 scope).
-/// Returns `(connected, last_error)`.
+/// spawn a process, url-only rows connect as remote HTTP/SSE — pure
+/// remote (W2-A R4/A1) or OAuth with stored credentials (W3-B A2, which
+/// also persists handshake-time token refreshes). Returns
+/// `(connected, last_error)`.
 async fn start_for_config(
     pool: &shannon_mcp::McpProcessPool,
     server: &crate::config::McpServerConfig,
@@ -108,7 +148,8 @@ async fn start_for_config(
             );
         };
         if server.has_auth_headers {
-            return (false, None);
+            let outcome = crate::mcp::start_oauth_remote_row(pool, server).await;
+            return (outcome.connected, outcome.error);
         }
         return match pool
             .start_remote_server(&server.name, &url, HashMap::new(), None)
@@ -153,6 +194,7 @@ pub async fn add_mcp_server(
         enabled: true,
         url: None,
         has_auth_headers: false,
+        oauth: None,
     };
 
     // G1: single source of truth is `~/.shannon/settings.json#mcpServers`
@@ -164,8 +206,14 @@ pub async fn add_mcp_server(
     // UI can say *why* the server is down, not just that it is.
     let pool = state.mcp_pool.clone();
     let (connected, last_error) = start_for_config(&pool, &server_config).await;
+    let last_connected = pool_last_connected(&pool, &name, connected).await;
 
-    Ok(mcp_server_info(&server_config, connected, last_error))
+    Ok(mcp_server_info(
+        &server_config,
+        connected,
+        last_connected,
+        last_error,
+    ))
 }
 
 /// Remove an MCP server configuration and stop its process.
@@ -191,9 +239,11 @@ pub async fn remove_mcp_server(
 
 /// Restart an MCP server (stop then start).
 ///
-/// W2-A (R4/A1): pure remote (header-less url-only) rows restart for real
-/// via the pool's remote transport; auth-gated rows (OAuth products) stay
-/// disabled with the honest W1-A reason until A2.
+/// W2-A (R4/A1) restarted pure remote (header-less url-only) rows via the
+/// pool's remote transport. W3-B (A2) extends that to OAuth rows: they
+/// reconnect from the stored credential (a handshake-time refresh is
+/// persisted by [`crate::mcp::start_oauth_remote_row`]), so "Retry" in the
+/// UI is a real reconnect for every remote row.
 #[tauri::command]
 pub async fn restart_mcp_server(
     state: tauri::State<'_, AppState>,
@@ -208,16 +258,8 @@ pub async fn restart_mcp_server(
         .cloned()
         .ok_or_else(|| format!("Server not found: {name}"))?;
 
-    if server.command.is_empty() {
-        if server.url.is_none() {
-            return Err(format!("Server '{name}' has no command to restart"));
-        }
-        if server.has_auth_headers {
-            return Err(format!(
-                "'{name}' is an authenticated remote (OAuth) MCP server — desktop \
-                 restart arrives with OAuth support; use the CLI"
-            ));
-        }
+    if server.command.is_empty() && server.url.is_none() {
+        return Err(format!("Server '{name}' has no command to restart"));
     }
 
     let pool = state.mcp_pool.clone();
@@ -225,13 +267,19 @@ pub async fn restart_mcp_server(
     // Stop then start. W1-7: keep the start error for the UI.
     let _ = pool.stop_server(&name).await;
     let (connected, last_error) = start_for_config(&pool, &server).await;
+    let last_connected = pool_last_connected(&pool, &name, connected).await;
 
-    Ok(mcp_server_info(&server, connected, last_error))
+    Ok(mcp_server_info(
+        &server,
+        connected,
+        last_connected,
+        last_error,
+    ))
 }
 
 /// Enable or disable one MCP server (W2-A inline toggle) and reconcile the
-/// pool: disabling stops the server, enabling starts it (except auth-gated
-/// remote rows, which stay in the honest W1-A state until A2).
+/// pool: disabling stops the server, enabling starts it (OAuth rows start
+/// from their stored credential since W3-B/A2).
 #[tauri::command]
 pub async fn set_mcp_server_enabled(
     state: tauri::State<'_, AppState>,
@@ -242,7 +290,7 @@ pub async fn set_mcp_server_enabled(
 
     // Persist first — the store is the single source of truth; the pool is
     // reconciled after. The in-place JSON edit keeps url-only rows
-    // (`type`/`url`/`headers`) intact.
+    // (`type`/`url`/`headers`/`shannonOAuth`) intact.
     if !config::set_mcp_server_enabled(&name, enabled)? {
         return Err(format!("Server not found: {name}"));
     }
@@ -263,8 +311,14 @@ pub async fn set_mcp_server_enabled(
         let _ = pool.stop_server(&name).await;
         (false, None)
     };
+    let last_connected = pool_last_connected(&pool, &name, connected).await;
 
-    Ok(mcp_server_info(&server, connected, last_error))
+    Ok(mcp_server_info(
+        &server,
+        connected,
+        last_connected,
+        last_error,
+    ))
 }
 
 /// Get MCP server configuration details.
@@ -312,14 +366,19 @@ pub async fn list_mcp_servers(
         };
 
         // W1-7: derive a real last-connected timestamp from the pool's
-        // uptime clock (process start = now − uptime). Previously this was
-        // hardcoded to `None`, so the UI field was dead weight.
-        let last_connected = if connected {
-            let now = chrono_timestamp();
-            pool.server_status(&s.name)
-                .await
-                .and_then(|st| st.uptime)
-                .map(|up| now - up.as_millis() as i64)
+        // uptime clock (process start = now − uptime). W3-B unified the
+        // add/restart rows onto this same helper (they previously stamped
+        // "now", a different convention for the same field).
+        let last_connected = pool_last_connected(&pool, &s.name, connected).await;
+
+        // W3-B (A2): classify the failure of url-only rows so the UI can
+        // render NeedsAuth / Unreachable / ServerError distinctly. Stdio
+        // rows keep the plain Offline badge (no classification).
+        let failure_kind = if !connected && s.url.is_some() {
+            last_error
+                .as_deref()
+                .map(shannon_mcp::classify_remote_failure)
+                .map(|k| k.as_str())
         } else {
             None
         };
@@ -355,6 +414,7 @@ pub async fn list_mcp_servers(
             url: s.url,
             has_auth_headers: s.has_auth_headers,
             last_error,
+            failure_kind,
         });
     }
 
