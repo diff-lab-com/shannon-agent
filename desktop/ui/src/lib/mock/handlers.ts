@@ -1376,6 +1376,25 @@ export const handlers: Record<string, MockHandler> = {
       output_preview: 'Task output preview...',
     }))
   },
+  // P2-8: cross-agent run table — demo derives the rows from the same
+  // synthetic history, joining a session/model on the newer half so both the
+  // "open session" and the plain-detail paths are visible.
+  async list_agent_runs() {
+    await delay()
+    return Array.from({ length: 8 }).map((_, i) => ({
+      run_id: `exec-${1000 - i}`,
+      task_id: MOCK_SCHEDULED_ROUTINES[i % MOCK_SCHEDULED_ROUTINES.length].id,
+      task_name: MOCK_SCHEDULED_ROUTINES[i % MOCK_SCHEDULED_ROUTINES.length].name,
+      started_at: Math.floor((Date.now() - i * 86400_000) / 1000),
+      finished_at: Math.floor((Date.now() - i * 86400_000 + 600) / 1000),
+      status: i === 0 ? 'failed' : i === 3 ? 'queued' : 'succeeded',
+      error_message: i === 0 ? 'exit code 1' : undefined,
+      cost_usd: 0.25,
+      token_usage: 4200,
+      session_id: i % 2 === 0 ? `demo-sess-${i}` : undefined,
+      model: i % 2 === 0 ? 'claude-sonnet-4-6' : undefined,
+    }))
+  },
   async get_execution_detail(args: { id: string }) {
     await delay()
     return {

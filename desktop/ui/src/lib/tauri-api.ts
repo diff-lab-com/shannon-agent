@@ -74,6 +74,7 @@ import type {
   InboxStats,
   TaskExecution,
   TaskExecutionDetail,
+  AgentRunRow,
   TriggeredRoutineDto,
   TriggerResponse,
   TaskWorktreeDto,
@@ -2031,6 +2032,14 @@ export async function discardBatchRun(
 
 export async function listTaskExecutions(taskId?: string, limit?: number): Promise<TaskExecution[]> {
   return invoke('list_task_executions', { taskId: taskId ?? null, limit: limit ?? null })
+}
+
+// P2-8 — cross-agent run table (OPC "runs" view)
+
+/** The newest `limit` runs across ALL routines/agents, each joined with its
+ *  back-linked session id and that session's latest usage-ledger model. */
+export async function listAgentRuns(limit?: number): Promise<AgentRunRow[]> {
+  return invoke('list_agent_runs', { limit: limit ?? null })
 }
 
 export async function getExecutionDetail(id: string): Promise<TaskExecutionDetail> {

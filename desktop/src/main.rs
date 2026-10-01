@@ -427,6 +427,8 @@ fn main() {
             shannon_desktop::scheduled_commands::archive_triage_item,
             shannon_desktop::scheduled_commands::get_triage_stats,
             shannon_desktop::scheduled_commands::list_task_executions,
+            // P2-8 — cross-agent run table (OPC "runs" view).
+            shannon_desktop::scheduled_commands::list_agent_runs,
             shannon_desktop::scheduled_commands::get_execution_detail,
             shannon_desktop::scheduled_commands::list_triggered_routines,
             shannon_desktop::scheduled_commands::toggle_triggered_routine,
