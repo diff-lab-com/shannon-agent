@@ -1346,6 +1346,22 @@ export interface TaskExecutionDetail extends TaskExecution {
   next_fire_at?: number
 }
 
+/// One cross-agent run row for the OPC "runs" view (P2-8): the TaskExecution
+/// projection plus the session jump target and that session's latest model.
+export interface AgentRunRow {
+  run_id: string
+  task_id: string
+  task_name: string
+  started_at: number
+  finished_at?: number
+  status: string
+  error_message?: string
+  cost_usd?: number
+  token_usage?: number
+  session_id?: string
+  model?: string
+}
+
 /// Triggered routine row for the routines panel.
 export interface TriggeredRoutineDto {
   name: string

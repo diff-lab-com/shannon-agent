@@ -26,9 +26,15 @@ vi.mock('@/lib/tauri-api', async () => {
 
 // 可变句柄:无会话用例在渲染前置 null。
 const sessionCtx = vi.hoisted(() => ({ currentSessionId: 'sess-1' as string | null }))
-vi.mock('@/context/SessionContext', () => ({
-  useSessions: () => sessionCtx,
-}))
+// The real `SessionContext` export stays (ContextBreakdownCard consumes it
+// via useContext) — only the hook is overridden.
+vi.mock('@/context/SessionContext', async (importOriginal) => {
+  const actual = await importOriginal<object>()
+  return {
+    ...actual,
+    useSessions: () => sessionCtx,
+  }
+})
 
 const wrapper = ({ children }: { children: React.ReactNode }) => (
   <I18nProvider>

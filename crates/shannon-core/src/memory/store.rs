@@ -274,6 +274,25 @@ fn parse_jsonl_file(path: &Path) -> (Vec<MemoryEntry>, Vec<StoreTombstone>) {
 // Memory Store
 // ============================================================================
 
+/// One memory entry selected for system-prompt injection, with the scope
+/// section it belongs to (P2-5 introspection: the desktop's "which memories
+/// did this turn use" surface renders `entry` and links its source session).
+#[derive(Debug, Clone)]
+pub struct InjectedMemory {
+    /// The selected entry (id, content, provenance, category).
+    pub entry: MemoryEntry,
+    /// `true` = the `## Global Memories` section (cross-project scope),
+    /// `false` = the active project's `## Project Memories` section.
+    pub global: bool,
+}
+
+/// Result of the shared injection-selection pipeline: the kept entries in
+/// budget-consumption order plus the count dropped by the token budget.
+struct InjectionSelection {
+    kept: Vec<InjectedMemory>,
+    omitted: usize,
+}
+
 /// Persistent storage for memory entries, backed by per-project JSONL files.
 ///
 /// Each project's memories live in a separate append-only file:
@@ -631,6 +650,68 @@ impl MemoryStore {
     /// relevant facts survive truncation. Returns `None` when there is
     /// nothing to inject.
     pub fn format_for_injection(&self, project: &str, query: Option<&str>) -> Option<String> {
+        let selection = self.select_for_injection(project, query);
+        // `None` means "nothing in scope" — NOT "everything budget-dropped"
+        // (that still renders, as the omitted-count footer alone), matching
+        // the pre-refactor empty-scope guard exactly.
+        if selection.kept.is_empty() && selection.omitted == 0 {
+            return None;
+        }
+
+        let mut sections: std::collections::BTreeMap<
+            &str,
+            std::collections::BTreeMap<&MemoryCategory, Vec<&str>>,
+        > = std::collections::BTreeMap::new();
+        for selected in &selection.kept {
+            let section = if selected.global {
+                "## Global Memories\n"
+            } else {
+                "## Project Memories\n"
+            };
+            sections
+                .entry(section)
+                .or_default()
+                .entry(&selected.entry.category)
+                .or_default()
+                .push(&selected.entry.content);
+        }
+        let mut out = String::new();
+        for (section, by_cat) in &sections {
+            out.push_str(section);
+            for (cat, contents) in by_cat {
+                out.push_str(&format!("### {cat}\n"));
+                for c in contents {
+                    out.push_str(&format!("- {c}\n"));
+                }
+            }
+        }
+        if selection.omitted > 0 {
+            out.push_str(&format!(
+                "\n({} older memories not shown — use /recall to search the full store)\n",
+                selection.omitted
+            ));
+        }
+        Some(out)
+    }
+
+    /// The entries (and scope flags)
+    /// [`format_for_injection`](Self::format_for_injection) would inject,
+    /// plus how many were dropped by the token budget — the introspection
+    /// half of the P2-5 "which memories did this turn use" surface.
+    ///
+    /// Shared selection with the formatter (single source of truth): same
+    /// collect → rank → cap → budget pipeline, so the two can never drift.
+    /// Order is the budget-consumption order (project scope first, then
+    /// global) — grouping for display is the caller's job.
+    pub fn injected_entries(&self, project: &str, query: Option<&str>) -> Vec<InjectedMemory> {
+        self.select_for_injection(project, query).kept
+    }
+
+    /// Shared selection pipeline behind [`format_for_injection`] and
+    /// [`injected_entries`]. Splitting it out is behavior-preserving by
+    /// construction: the formatter consumes `kept` in the same order the
+    /// old inline loop consumed `project_entries` / `global_entries`.
+    fn select_for_injection(&self, project: &str, query: Option<&str>) -> InjectionSelection {
         let now = Utc::now();
         let mut project_entries: Vec<MemoryEntry> = self
             .entries
@@ -648,7 +729,10 @@ impl MemoryStore {
                 .collect()
         };
         if project_entries.is_empty() && global_entries.is_empty() {
-            return None;
+            return InjectionSelection {
+                kept: Vec::new(),
+                omitted: 0,
+            };
         }
 
         if let Some(q) = query {
@@ -680,18 +764,13 @@ impl MemoryStore {
         // budget are simply not injected — never deleted or expired here
         // (size control must not destroy data).
         let budget_tokens = MAX_INJECTED_TOKENS;
+        // The header cost is charged up front exactly as the formatter
+        // always has — even when only global entries survive (the section
+        // headers are shared between both scopes' budgets).
         let mut used = estimate_tokens("## Project Memories\n");
-        let mut sections: std::collections::BTreeMap<
-            &str,
-            std::collections::BTreeMap<&MemoryCategory, Vec<&str>>,
-        > = std::collections::BTreeMap::new();
+        let mut kept: Vec<InjectedMemory> = Vec::new();
         let mut omitted = 0usize;
-        for (scope, entries) in [("Project", &project_entries), ("Global", &global_entries)] {
-            let section = if scope == "Global" {
-                "## Global Memories\n"
-            } else {
-                "## Project Memories\n"
-            };
+        for (global, entries) in [(false, &project_entries), (true, &global_entries)] {
             for e in entries {
                 let cost = estimate_tokens(&format!("- {}\n", e.content)) + 1;
                 if used + cost > budget_tokens {
@@ -699,30 +778,13 @@ impl MemoryStore {
                     continue;
                 }
                 used += cost;
-                sections
-                    .entry(section)
-                    .or_default()
-                    .entry(&e.category)
-                    .or_default()
-                    .push(&e.content);
+                kept.push(InjectedMemory {
+                    entry: e.clone(),
+                    global,
+                });
             }
         }
-        let mut out = String::new();
-        for (section, by_cat) in &sections {
-            out.push_str(section);
-            for (cat, contents) in by_cat {
-                out.push_str(&format!("### {cat}\n"));
-                for c in contents {
-                    out.push_str(&format!("- {c}\n"));
-                }
-            }
-        }
-        if omitted > 0 {
-            out.push_str(&format!(
-                "\n({omitted} older memories not shown — use /recall to search the full store)\n"
-            ));
-        }
-        Some(out)
+        InjectionSelection { kept, omitted }
     }
 
     /// Delete a memory entry by ID.
@@ -2200,6 +2262,119 @@ mod tests {
         let out = store.format_for_injection("proj", None).unwrap();
         // 120 stored, but injection capped at MAX_INJECTED_MEMORIES (50).
         assert_eq!(out.lines().filter(|l| l.starts_with("- ")).count(), 50);
+    }
+
+    #[test]
+    fn test_injected_entries_matches_format_for_injection_exactly() {
+        // P2-5: the introspection half must agree with the formatter entry
+        // for entry (same ids, same count), or the UI's "which memories did
+        // this turn use" list would drift from what the model actually saw.
+        let dir = TempDir::new().unwrap();
+        let mut store = MemoryStore::new(dir.path().to_path_buf());
+        store
+            .add(make_entry("proj", MemoryCategory::Preference, "use tabs"))
+            .unwrap();
+        store
+            .add(make_entry("proj", MemoryCategory::Decision, "use rust"))
+            .unwrap();
+        let mut global = make_entry(GLOBAL_SCOPE, MemoryCategory::Context, "global fact");
+        global.source_session_id = Some("sess-9".into());
+        store.add(global).unwrap();
+
+        let injected = store.injected_entries("proj", None);
+        assert_eq!(injected.len(), 3);
+        assert_eq!(
+            injected.iter().filter(|s| s.global).count(),
+            1,
+            "exactly the global-scope entry is flagged global"
+        );
+        for selected in &injected {
+            let content = &selected.entry.content;
+            assert!(
+                format_for_injection_contains(&store, "proj", content),
+                "entry `{content}` selected but absent from the formatted text"
+            );
+        }
+        // Provenance rides along so the UI can build the source jump.
+        let global_sel = injected.iter().find(|s| s.global).unwrap();
+        assert_eq!(
+            global_sel.entry.source_session_id.as_deref(),
+            Some("sess-9")
+        );
+    }
+
+    #[test]
+    fn test_injected_entries_empty_and_query_ranking_parity() {
+        let dir = TempDir::new().unwrap();
+        let store = MemoryStore::new(dir.path().to_path_buf());
+        assert!(store.injected_entries("proj", None).is_empty());
+
+        let mut store = MemoryStore::new(dir.path().to_path_buf());
+        store
+            .add(make_entry(
+                "proj",
+                MemoryCategory::Context,
+                "kubernetes deploy pipeline",
+            ))
+            .unwrap();
+        store
+            .add(make_entry(
+                "proj",
+                MemoryCategory::Context,
+                "favorite editor theme",
+            ))
+            .unwrap();
+        // With a query, selection survives (ranking only reorders/filters);
+        // the same entry set must appear in both surfaces.
+        let injected = store.injected_entries("proj", Some("kubernetes deploy pipeline"));
+        assert_eq!(
+            injected.len(),
+            store
+                .format_for_injection("proj", Some("kubernetes deploy pipeline"))
+                .unwrap()
+                .lines()
+                .filter(|l| l.starts_with("- "))
+                .count()
+        );
+    }
+
+    #[test]
+    fn test_format_for_injection_all_budget_dropped_still_renders_footer() {
+        // Corner: entries IN scope but every one over the token budget —
+        // the old inline pipeline returned the omitted-count footer alone
+        // (Some), never None. `None` stays reserved for an empty scope.
+        let dir = TempDir::new().unwrap();
+        let mut store = MemoryStore::new(dir.path().to_path_buf());
+        // One CJK char = one estimated token, so ~2100 chars > the 2000 budget.
+        store
+            .add(make_entry(
+                "proj",
+                MemoryCategory::Context,
+                &"记".repeat(2100),
+            ))
+            .unwrap();
+        let out = store.format_for_injection("proj", None);
+        assert!(
+            out.is_some(),
+            "all-dropped scope still renders (footer alone)"
+        );
+        assert!(out.unwrap().contains("older memories not shown"));
+        // And the introspection half agrees: kept is empty.
+        assert!(store.injected_entries("proj", None).is_empty());
+        // A truly empty scope is still None.
+        assert!(
+            store
+                .format_for_injection("no-such-project", None)
+                .is_none()
+        );
+    }
+
+    /// Helper for the parity test: does the formatted injection text carry
+    /// this content string?
+    fn format_for_injection_contains(store: &MemoryStore, project: &str, content: &str) -> bool {
+        store
+            .format_for_injection(project, None)
+            .is_some_and(|out| out.contains(&format!("- {content}\n")))
     }
 
     // --- Write-time dedup (ADR-0010 C4') ---

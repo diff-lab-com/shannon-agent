@@ -90,6 +90,24 @@ pub(crate) fn attach_shared_memory(engine: QueryEngine, store: &SharedMemoryStor
     engine.with_working_directory(cwd)
 }
 
+/// [`attach_shared_memory`] with the session-level "temporary chat" bypass
+/// (P2-5): `disabled = true` returns the engine WITHOUT the shared store, so
+/// the per-turn injection (`agent_loop`'s `format_for_injection`) and the
+/// post-turn auto-extraction both skip — nothing enters or leaves the memory
+/// layer for this session. The working directory is still frozen so the
+/// engine config stays identical apart from the memory handle.
+pub(crate) fn attach_shared_memory_if(
+    engine: QueryEngine,
+    store: &SharedMemoryStore,
+    disabled: bool,
+) -> QueryEngine {
+    if disabled {
+        let cwd = std::env::current_dir().unwrap_or_default();
+        return engine.with_working_directory(cwd);
+    }
+    attach_shared_memory(engine, store)
+}
+
 /// Parse a category string ("preference" / "pattern" / "decision" / "error"
 /// / "context") into the engine enum. Case-insensitive. Unknown values fall
 /// back to [`MemoryCategory::Context`] rather than erroring so the UI doesn't
@@ -352,7 +370,6 @@ pub async fn search_memories(
 pub struct MemorySourceDto {
     pub session_id: String,
 }
-
 #[tauri::command]
 pub async fn get_memory_source(
     state: tauri::State<'_, AppState>,
@@ -364,6 +381,73 @@ pub async fn get_memory_source(
     refresh_shared_store(store);
     let guard = store.read().map_err(|e| e.to_string())?;
     Ok(source_session_of(&guard, &memory_id).map(|sid| MemorySourceDto { session_id: sid }))
+}
+
+// ─── Injected-memory introspection (P2-5: "which memories did this turn use") ─
+
+/// One injected memory as the ContextBreakdownCard renders it: a display
+/// title plus the provenance fields the source-jump needs.
+#[derive(Debug, Clone, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct InjectedMemoryDto {
+    pub id: String,
+    pub title: String,
+    /// `preference | pattern | decision | error | context`.
+    pub category: String,
+    /// Session that produced the entry — the jump target. `None` for
+    /// manual entries / legacy imports (no jump).
+    pub source_session_id: Option<String>,
+}
+
+/// The entries injected into THIS session's current context (same selection
+/// `send_message`'s system prompt uses), newest/relevant-first. The title is
+/// the entry's first line, capped — the full text stays in the Memory page.
+///
+/// Reuses the live/stashed engine via `restored_engine`, so the P2-5
+/// "temporary chat" bypass is naturally honored: a bypassed session's engine
+/// carries no memory store and this returns an empty list.
+#[tauri::command]
+pub async fn get_session_injected_memories(
+    state: tauri::State<'_, AppState>,
+    session_id: String,
+) -> Result<Vec<InjectedMemoryDto>, String> {
+    let uuid =
+        uuid::Uuid::parse_str(session_id.trim()).map_err(|e| format!("invalid sessionId: {e}"))?;
+    let engine = crate::commands_slash::restored_engine(&state, uuid).await?;
+    // The injection path ranks candidates against the CURRENT user message;
+    // mirror that with the restored history's last user turn (None for a
+    // brand-new session, where nothing is injected anyway).
+    let last_user_message = engine.conversation_messages().iter().rev().find_map(|m| {
+        match (m.role.as_str(), &m.content) {
+            ("user", shannon_engine::api::MessageContent::Text(text)) => Some(text.clone()),
+            _ => None,
+        }
+    });
+    Ok(engine
+        .injected_memories(last_user_message.as_deref())
+        .into_iter()
+        .map(|selected| InjectedMemoryDto {
+            id: selected.entry.id,
+            title: injected_memory_title(&selected.entry.content),
+            category: selected.entry.category.to_string(),
+            source_session_id: selected.entry.source_session_id,
+        })
+        .collect())
+}
+
+/// First line of a memory's content as the display title, char-capped at
+/// [`INJECTED_MEMORY_TITLE_MAX_CHARS`] on a char boundary (CJK-safe).
+fn injected_memory_title(content: &str) -> String {
+    const INJECTED_MEMORY_TITLE_MAX_CHARS: usize = 80;
+    let first_line = content.lines().next().unwrap_or("").trim();
+    if first_line.chars().count() <= INJECTED_MEMORY_TITLE_MAX_CHARS {
+        return first_line.to_string();
+    }
+    let mut end = INJECTED_MEMORY_TITLE_MAX_CHARS;
+    while !first_line.is_char_boundary(end) {
+        end -= 1;
+    }
+    format!("{}…", &first_line[..end])
 }
 
 /// Aggregate counts per category and per project. Used by the UI to render
@@ -758,6 +842,26 @@ mod tests {
     }
 
     #[test]
+    fn injected_memory_title_first_line_capped_cjk_safe() {
+        assert_eq!(
+            injected_memory_title("use pnpm not npm\nsecond line"),
+            "use pnpm not npm"
+        );
+        assert_eq!(injected_memory_title("  trimmed  "), "trimmed");
+        assert_eq!(injected_memory_title(""), "");
+        // >80 bytes: capped on a CHAR boundary with an ellipsis — the walk
+        // never splits a multi-byte char, so a 3-byte CJK char yields
+        // floor(80/3)=26 chars and a 2-byte Latin-1 char 40.
+        let long = "记".repeat(100);
+        let title = injected_memory_title(&long);
+        assert_eq!(title.chars().count(), 27, "26 capped chars + ellipsis");
+        assert!(title.ends_with('…'));
+        assert_eq!(injected_memory_title(&"é".repeat(90)).chars().count(), 41);
+        // Short multi-byte content is never truncated at all.
+        assert_eq!(injected_memory_title(&"记".repeat(10)), "记".repeat(10));
+    }
+
+    #[test]
     fn attach_shared_memory_attaches_one_shared_handle() {
         use shannon_core::query_engine::QueryEngine;
         use shannon_engine::api::client::LlmClient;
@@ -812,6 +916,42 @@ mod tests {
             .format_for_injection(&project, None)
             .expect("injection text");
         assert!(injected.contains("desktop injects this"));
+    }
+
+    #[test]
+    fn attach_shared_memory_if_disabled_leaves_engine_without_memory() {
+        use shannon_core::query_engine::QueryEngine;
+        use shannon_engine::api::client::LlmClient;
+        use shannon_engine::api::types::LlmClientConfig;
+        use shannon_engine::permissions::PermissionManager;
+        use shannon_engine::state::StateManager;
+
+        let dir = tempfile::TempDir::new().unwrap();
+        let shared = open_shared_store_at(dir.path().to_path_buf());
+
+        let build = || {
+            QueryEngine::with_defaults_arc(
+                LlmClient::new(LlmClientConfig::default()),
+                std::sync::Arc::new(shannon_core::tools::ToolRegistry::new()),
+                PermissionManager::new(),
+                StateManager::new(),
+            )
+        };
+        // P2-5: disabled → no store attached, so injection AND extraction
+        // skip for the session (agent_loop reads `self.memory`).
+        let bypassed = attach_shared_memory_if(build(), &shared, true);
+        assert!(
+            bypassed.memory().is_none(),
+            "bypassed engine must carry no memory store"
+        );
+
+        // enabled → same shared handle as attach_shared_memory (P2-4b).
+        let attached = attach_shared_memory_if(build(), &shared, false);
+        let handle = attached.memory().cloned().expect("attached");
+        assert!(
+            std::sync::Arc::ptr_eq(&handle, &shared),
+            "enabled path must attach the shared store instance"
+        );
     }
 
     #[test]

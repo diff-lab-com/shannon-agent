@@ -280,6 +280,42 @@ impl DreamPassResult {
     }
 }
 
+/// The sessions the dream pass may excerpt, as a pure function of the
+/// enumerated inputs (P2-5 fix seam — unit-tested): the recency window minus
+/// the memory-bypassed set, plus the explicit includes minus the same set.
+///
+/// The "temporary chat" promise covers every consumer of session content, so
+/// the filter sits ABOVE the window/exclude bookkeeping — an explicitly
+/// requested distill cannot resurrect a bypassed session. Bypassed explicit
+/// includes are logged (they represent a caller's specific request, so the
+/// skip is worth a warn line) and simply dropped.
+fn dream_window_sessions(
+    recent: Vec<SessionRef>,
+    extra_session_ids: &[uuid::Uuid],
+    bypassed: &std::collections::HashSet<uuid::Uuid>,
+) -> (Vec<SessionRef>, Vec<uuid::Uuid>) {
+    let window: Vec<SessionRef> = recent
+        .into_iter()
+        .filter(|s| !bypassed.contains(&s.session_id))
+        .collect();
+    let extras: Vec<uuid::Uuid> = extra_session_ids
+        .iter()
+        .copied()
+        .filter(|id| {
+            if bypassed.contains(id) {
+                tracing::warn!(
+                    session = %id,
+                    "dream: explicitly-included session has memory disabled — skipping"
+                );
+                false
+            } else {
+                true
+            }
+        })
+        .collect();
+    (window, extras)
+}
+
 /// Everything [`execute_dream_pass_inner`] produced: the user-facing result
 /// plus the pieces only the caller needs (full stats for the state file, the
 /// report timestamp for the inbox card).
@@ -1209,6 +1245,13 @@ async fn consult_llm(
 /// just flagged so the pass can distill it. Empty for every scheduled or
 /// manual entry point.
 ///
+/// `bypassed` (P2-5 fix) is the set of sessions carrying the "temporary
+/// chat" flag: they are filtered out of BOTH the window and the explicit
+/// includes. The UI promise "此会话不使用记忆" covers every consumer of
+/// session content — a bypassed session's body must never reach the dream
+/// consult prompt (and from there a proposal), no matter how it got into
+/// scope.
+///
 /// Seams:
 /// - `consult` — the L2 model call per project (transport errors abort).
 /// - `detect(days)` — the L3 heuristic detection + recording; returns the
@@ -1227,6 +1270,7 @@ pub(crate) async fn execute_dream_pass_inner<C, F, D, DF, R, RF>(
     sessions_dir: &Path,
     dreams_dir: &Path,
     extra_session_ids: &[uuid::Uuid],
+    bypassed: &std::collections::HashSet<uuid::Uuid>,
     client_config: shannon_engine::api::types::LlmClientConfig,
     consult: C,
     detect: D,
@@ -1264,14 +1308,19 @@ where
     // read through the core session-query adapter — the same single source
     // skill detection uses. Archived sessions are excluded at the input
     // layer (`include_archived = false`), except the explicit
-    // `extra_session_ids` below.
+    // `extra_session_ids` below. The memory-bypass filter runs on top of
+    // BOTH scopes (see [`dream_window_sessions`]).
     let query = SessionQuery::new(sessions_dir);
+    let (window, extra_ids) = dream_window_sessions(
+        query
+            .list_recent(days_back, false)
+            .map_err(|e| format!("session query: {e}"))?,
+        extra_session_ids,
+        bypassed,
+    );
     let mut excerpts: Vec<SessionExcerpt> = Vec::new();
     let mut scanned: HashSet<uuid::Uuid> = HashSet::new();
-    for session in query
-        .list_recent(days_back, false)
-        .map_err(|e| format!("session query: {e}"))?
-    {
+    for session in window {
         scanned.insert(session.session_id);
         match session_excerpt(
             &query,
@@ -1291,11 +1340,12 @@ where
     // archived flag (and possibly the age) would exclude them — the
     // post-archive callback distills the session it just flagged. Best-effort
     // per id (warn + skip), deduplicated against the window path.
-    for id in extra_session_ids {
-        if !scanned.insert(*id) {
+    // Memory-bypassed ids never get this far (filtered above, with a warn).
+    for id in extra_ids {
+        if !scanned.insert(id) {
             continue; // already excerpted via the window path
         }
-        match query.session_by_id(id) {
+        match query.session_by_id(&id) {
             Ok(Some(session)) => match session_excerpt(
                 &query,
                 &session,
@@ -1572,12 +1622,20 @@ pub(crate) async fn execute_dream_pass_in<R: tauri::Runtime>(
         })
         .collect();
 
+    // P2-5 fix: the "temporary chat" exclusion set, read from the registry
+    // (authoritative — the sidecar hydrates into it, set/clear keep it live).
+    // Both the window and the explicit includes are filtered against it, so
+    // a bypassed session's body never reaches the consult prompt or the L3
+    // skill-distill leg.
+    let bypassed = state.registry.memory_disabled_ids();
+
     let outcome = execute_dream_pass_inner(
         days_back,
         &state.memory_store,
         &sessions_dir,
         dreams,
         &extra_ids,
+        &bypassed,
         client_config,
         consult_llm,
         detect,
@@ -3248,6 +3306,12 @@ mod tests {
     }
 
     /// No-op L3 refine seam: every candidate unrefined.
+    /// P2-5 fix: empty exclusion set for tests that don't exercise the
+    /// bypass filter (the dedicated tests below build real ones).
+    fn no_bypass() -> std::collections::HashSet<uuid::Uuid> {
+        std::collections::HashSet::new()
+    }
+
     fn no_refine()
     -> impl Fn(crate::commands_skill_candidates::SkillCandidate) -> std::future::Ready<Option<String>>
     {
@@ -3300,6 +3364,7 @@ mod tests {
             sessions.path(),
             dreams.path(),
             &[],
+            &no_bypass(),
             shannon_engine::api::types::LlmClientConfig::default(),
             canned_consult(&canned),
             no_detect(),
@@ -3355,6 +3420,145 @@ mod tests {
         );
     }
 
+    #[test]
+    fn dream_window_sessions_filters_bypassed_from_both_scopes() {
+        // P2-5 fix seam: the "temporary chat" exclusion wins over both
+        // enumeration paths — the recency window AND the explicit includes.
+        let keep = uuid::Uuid::new_v4();
+        let bypassed_window = uuid::Uuid::new_v4();
+        let extra = uuid::Uuid::new_v4();
+        let bypassed_extra = uuid::Uuid::new_v4();
+        let recent = vec![
+            SessionRef {
+                session_id: keep,
+                dir: std::path::PathBuf::from("/s/keep"),
+                updated_at: Utc::now(),
+            },
+            SessionRef {
+                session_id: bypassed_window,
+                dir: std::path::PathBuf::from("/s/bypassed"),
+                updated_at: Utc::now(),
+            },
+        ];
+        let bypassed: std::collections::HashSet<uuid::Uuid> =
+            [bypassed_window, bypassed_extra].into();
+
+        let (window, extras) = dream_window_sessions(recent, &[extra, bypassed_extra], &bypassed);
+        assert_eq!(window.len(), 1, "the bypassed window session is dropped");
+        assert_eq!(window[0].session_id, keep);
+        assert_eq!(
+            extras,
+            vec![extra],
+            "the bypassed explicit include is dropped"
+        );
+    }
+
+    #[tokio::test]
+    async fn dream_pass_inner_skips_bypassed_window_sessions() {
+        // The privacy contract: a session whose UI says "此会话不使用记忆"
+        // must never have its body excerpted into the consult prompt — while
+        // a plain session in the same window is distilled exactly as before.
+        let mem_dir = tempdir().unwrap();
+        let store = seed_shared_store(mem_dir.path(), vec![dream_entry("/work/app", "solo", 0.9)]);
+        let sessions = tempdir().unwrap();
+        let dreams = tempdir().unwrap();
+
+        let _plain = write_recent_session(sessions.path(), "regular: deploy the service");
+        let bypassed = write_recent_session(sessions.path(), "secret: my api_key: sk-42");
+
+        let prompts: Arc<std::sync::Mutex<Vec<String>>> = Arc::default();
+        let consult =
+            |_cfg: shannon_engine::api::types::LlmClientConfig, _system: String, user: String| {
+                prompts.lock().unwrap().push(user);
+                std::future::ready(Ok::<String, String>("no proposals in here".to_string()))
+            };
+
+        let mut bypassed_set = std::collections::HashSet::new();
+        bypassed_set.insert(bypassed);
+        let outcome = execute_dream_pass_inner(
+            3,
+            &store,
+            sessions.path(),
+            dreams.path(),
+            &[],
+            &bypassed_set,
+            shannon_engine::api::types::LlmClientConfig::default(),
+            consult,
+            no_detect(),
+            no_refine(),
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(
+            outcome.result.scanned_sessions, 1,
+            "only the non-bypassed session is excerpted"
+        );
+        let prompt = prompts.lock().unwrap().join("\n");
+        assert!(
+            prompt.contains("deploy the service"),
+            "the plain session is still distilled: {prompt}"
+        );
+        assert!(
+            !prompt.contains("sk-42") && !prompt.contains("my api_key"),
+            "the bypassed session's body never reaches the consult prompt: {prompt}"
+        );
+    }
+
+    #[tokio::test]
+    async fn dream_pass_inner_skips_bypassed_explicit_include() {
+        // The post-archive callback names its session explicitly — but an
+        // explicit request cannot override the "temporary chat" promise.
+        let mem_dir = tempdir().unwrap();
+        let store = seed_shared_store(mem_dir.path(), vec![dream_entry("/work/app", "solo", 0.9)]);
+        let sessions = tempdir().unwrap();
+        let dreams = tempdir().unwrap();
+
+        let archived = write_recent_session(sessions.path(), "distill me: api_key: sk-1");
+        SessionQuery::new(sessions.path())
+            .save_curation(
+                &archived,
+                &shannon_core::session_log::SessionCuration { archived: true },
+            )
+            .unwrap();
+
+        // The consult still runs (one per project with entries), but the
+        // excerpt list must be empty — record the prompt and assert the
+        // bypassed session's body is absent.
+        let prompts: Arc<std::sync::Mutex<Vec<String>>> = Arc::default();
+        let consult =
+            |_cfg: shannon_engine::api::types::LlmClientConfig, _system: String, user: String| {
+                prompts.lock().unwrap().push(user);
+                std::future::ready(Ok::<String, String>("no proposals in here".to_string()))
+            };
+
+        let mut bypassed_set = std::collections::HashSet::new();
+        bypassed_set.insert(archived);
+        let outcome = execute_dream_pass_inner(
+            3,
+            &store,
+            sessions.path(),
+            dreams.path(),
+            &[archived],
+            &bypassed_set,
+            shannon_engine::api::types::LlmClientConfig::default(),
+            consult,
+            no_detect(),
+            no_refine(),
+        )
+        .await
+        .unwrap();
+        assert_eq!(
+            outcome.result.scanned_sessions, 0,
+            "the bypassed explicit include is filtered like any window session"
+        );
+        let prompt = prompts.lock().unwrap().join("\n");
+        assert!(
+            !prompt.contains("distill me") && !prompt.contains("sk-1"),
+            "the bypassed explicit include's body never reaches the consult prompt: {prompt}"
+        );
+    }
+
     #[tokio::test]
     async fn dream_pass_inner_extra_session_ids_distill_an_archived_session() {
         // Final review F1 (T4): the post-archive callback fires AFTER the
@@ -3394,6 +3598,7 @@ mod tests {
             sessions.path(),
             dreams.path(),
             &[],
+            &no_bypass(),
             shannon_engine::api::types::LlmClientConfig::default(),
             consult,
             no_detect(),
@@ -3414,6 +3619,7 @@ mod tests {
             sessions.path(),
             dreams.path(),
             &[archived],
+            &no_bypass(),
             shannon_engine::api::types::LlmClientConfig::default(),
             consult,
             no_detect(),
@@ -3442,6 +3648,7 @@ mod tests {
             sessions.path(),
             dreams.path(),
             &[],
+            &no_bypass(),
             shannon_engine::api::types::LlmClientConfig::default(),
             canned_consult("I would suggest merging some entries, honestly."),
             no_detect(),
@@ -3476,6 +3683,7 @@ mod tests {
             sessions.path(),
             dreams.path(),
             &[],
+            &no_bypass(),
             shannon_engine::api::types::LlmClientConfig::default(),
             consult,
             no_detect(),
@@ -3511,6 +3719,7 @@ mod tests {
                 sessions.path(),
                 dreams.path(),
                 &[],
+                &no_bypass(),
                 shannon_engine::api::types::LlmClientConfig::default(),
                 |_cfg, _system, _user| -> std::future::Ready<Result<String, String>> {
                     panic!("no consult may run without memory entries")
@@ -3572,6 +3781,7 @@ mod tests {
             sessions.path(),
             dreams.path(),
             &[],
+            &no_bypass(),
             shannon_engine::api::types::LlmClientConfig::default(),
             canned_consult("no proposals in here"),
             detect,
@@ -3634,6 +3844,7 @@ mod tests {
             sessions.path(),
             dreams.path(),
             &[],
+            &no_bypass(),
             shannon_engine::api::types::LlmClientConfig::default(),
             canned_consult("no proposals in here"),
             detect,
@@ -3671,6 +3882,7 @@ mod tests {
                 sessions.path(),
                 dreams.path(),
                 &[],
+                &no_bypass(),
                 shannon_engine::api::types::LlmClientConfig::default(),
                 canned_consult("no proposals in here"),
                 no_detect(),
