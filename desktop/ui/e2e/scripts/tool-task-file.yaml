@@ -1,0 +1,62 @@
+# ChatScript: tool-task-file — journey #3（矩阵#3）。
+#
+# text chunks → query:tool-start (Bash 写 todo.md) → query:tool-progress
+# (0.4 / 0.8, 带 message) → query:tool-result (ok) → text → completed。
+# 断言在 spec（chat-script.tool-task-file.spec.ts）：RunStatusLine 计时 +
+# 进度 pill（run-status-line / run-progress-pct / run-progress-message）、
+# 工具卡 running → completed 形态收敛（data-tool-status）、完成后的观察项
+# （工具卡退场 / FileChangesCard 不渲染——记录进报告）。
+#
+# FileChangesCard 说明：该卡片只从「已提交消息的 message.tool_calls」渲染，
+# 而 AppContext 在 query:completed 提交的 assistant 消息不带 tool_calls
+# （P2-4 语义：工具卡在完成时退场，等下次会话加载从持久层回来）。剧本层
+# 无法表达持久层回放，故 +x−y 渲染改由组件级测试
+# （src/__tests__/MessageBubbleFileChanges.test.tsx，mock get_file_diff 固定
+# diff）覆盖；demo 的 get_file_diff handler 已存在（R1 之前就有）。
+name: tool-task-file
+description: 工具任务 journey — 文本流 → Bash 工具 + 进度 → ok 结果 → 文本 → completed
+seed:
+  config:
+    hasKey: true
+  sessions:
+    - id: script-sess-tool
+      title: Write todo.md
+      messages: []
+turns:
+  - user: "用 Bash 写一个 todo.md，然后告诉我结果"
+    script:
+      - event: query:text
+        chunks:
+          - "好的，我先创建 "
+          - "todo.md："
+        chunkDelayMs: 200
+      - event: query:tool-start
+        payload:
+          tool_use_id: tool-todo-1
+          tool_name: Bash
+          tool_input:
+            command: "printf 'buy milk\\nwrite tests\\n' > todo.md"
+      - event: query:tool-progress
+        payload:
+          tool_use_id: tool-todo-1
+          progress: 0.4
+          message: "writing todo.md"
+      # Park so the 40% state is observable in a real browser (the two
+      # progress events would otherwise emit back-to-back); the spec resumes.
+      - waitFor: ui
+      - event: query:tool-progress
+        payload:
+          tool_use_id: tool-todo-1
+          progress: 0.8
+          message: "flushing buffer"
+      - event: query:tool-result
+        payload:
+          tool_use_id: tool-todo-1
+          result: "wrote 2 lines to todo.md"
+          is_error: false
+      - event: query:text
+        chunks:
+          - "完成！todo.md 已写入 "
+          - "2 行待办 ✅"
+        chunkDelayMs: 200
+      - event: query:completed

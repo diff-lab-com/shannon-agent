@@ -1,0 +1,48 @@
+# ChatScript: approval-deny — journey #4b（矩阵#4，与 approval-allow 共用 spec）。
+#
+# 与 allow 版同一审批弹窗；用户点 Deny → respond_permission(allow:false)
+# 落账 → 播放恢复 → 工具以 is_error=true 的 tool-result 收敛（denied 文案）
+# → completed → 会话可继续。断言在 spec（chat-script.approval.spec.ts）。
+name: approval-deny
+description: 审批 Deny — 权限弹窗 → respond_permission(false) → 工具卡错误形态 → completed
+seed:
+  config:
+    hasKey: true
+  sessions:
+    - id: script-sess-approval-deny
+      title: Approval deny
+      messages: []
+turns:
+  - user: "删除 build 目录"
+    script:
+      - event: query:text
+        chunks:
+          - "这条命令有风险，"
+          - "需要你的批准。"
+        chunkDelayMs: 250
+      - event: permission-request
+        payload:
+          request_id: pr-deny-1
+          tool: Bash
+          risk: critical
+          input:
+            command: "rm -rf build"
+          reason:
+            source: rule
+            ruleName: "destructive-command"
+      - event: query:tool-start
+        payload:
+          tool_use_id: tool-rm-1
+          tool_name: Bash
+          tool_input:
+            command: "rm -rf build"
+      - event: query:tool-result
+        payload:
+          tool_use_id: tool-rm-1
+          result: "Permission denied: user rejected the Bash command"
+          is_error: true
+      # Park so the error-form card is observable in the spec (error cards
+      # default open; without the park the turn settles in one tick and the
+      # card leaves with the run — P2-4 semantics).
+      - waitFor: ui
+      - event: query:completed

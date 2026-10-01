@@ -822,8 +822,22 @@ export const handlers: Record<string, MockHandler> = {
       ].join('\n'),
     }
   },
-  async load_session() { await delay(); return clone(MOCK_MESSAGES) },
-  async switch_session() { await delay(); return clone(MOCK_MESSAGES) },
+  // R2 scripted-backend: a seeded session's own messages answer (previously
+  // these returned the demo conversation unconditionally, so switching to a
+  // scripted session replaced it with demo data). Unarmed → demo default,
+  // byte-identical to before.
+  async load_session(args: { id?: string | null }) {
+    await delay()
+    const seeded = seededMessages(args?.id ?? null)
+    if (seeded) return clone(seeded)
+    return clone(MOCK_MESSAGES)
+  },
+  async switch_session(args: { id?: string | null }) {
+    await delay()
+    const seeded = seededMessages(args?.id ?? null)
+    if (seeded) return clone(seeded)
+    return clone(MOCK_MESSAGES)
+  },
   async delete_session(args: { id: string }) { await delay(60); deletedSessions.add(args.id); return true },
   async rename_session(args: { id: string; title: string }) {
     await delay(60)
