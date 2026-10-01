@@ -3860,5 +3860,16 @@
   "settings.theme.name.dracula": "Dracula",
   "settings.theme.name.gruvbox": "Gruvbox",
   "settings.theme.name.gruvboxLight": "Gruvbox Light",
-  "extensions.pending.errors.loadFailed": "Не удалось загрузить ошибки MCP"
+  "extensions.pending.errors.loadFailed": "Не удалось загрузить ошибки MCP",
+  "schedule.everySeconds": "Каждые {count} секунд",
+  "schedule.everyDays": "Каждые {count} дней",
+  "routines.templates.trigger.anyRepo": "любой репозиторий",
+  "routines.templates.trigger.onEvent": "по событию",
+  "settings.permissions.builtin.desc.strict": "Максимальная безопасность: автоматически одобряется только чтение, разрушительные инструменты отклоняются",
+  "settings.permissions.builtin.desc.balanced": "Чтение одобряется автоматически; запись/команды/удаление требуют подтверждения",
+  "settings.permissions.builtin.desc.permissive": "Чтение, запись и команды одобряются автоматически; критичные для системы операции по-прежнему отклоняются",
+  "settings.remotes.limits.title": "Известные ограничения",
+  "settings.remotes.limits.subtitle": "Границы удалённого выполнения полезно знать заранее.",
+  "settings.remotes.limits.pty": "Интерактивные PTY-команды (полноэкранные REPL, редакторы) на удалённых целях не поддерживаются — команды выполняются с захватом вывода, без TTY.",
+  "settings.remotes.limits.worktree": "git worktree работают только локально: удалённые цели пока не поддерживают выполнение в изолированном worktree."
 }

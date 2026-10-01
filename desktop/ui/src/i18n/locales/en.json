@@ -3860,5 +3860,16 @@
   "tasks.backgroundPanel.stopFailed": "Failed to stop task",
   "tasks.backgroundPanel.elapsedAria": "Elapsed time",
   "opc.kanban.boardSyncFailed": "Task started, but creating its board card failed",
-  "extensions.pending.errors.loadFailed": "Couldn't load MCP errors"
+  "extensions.pending.errors.loadFailed": "Couldn't load MCP errors",
+  "routines.templates.trigger.anyRepo": "any repo",
+  "routines.templates.trigger.onEvent": "on event",
+  "schedule.everySeconds": "Every {count} seconds",
+  "schedule.everyDays": "Every {count} days",
+  "settings.permissions.builtin.desc.strict": "Maximum safety: approve reads only, deny destructive tools",
+  "settings.permissions.builtin.desc.balanced": "Auto-approve reads, ask for writes/bash/delete",
+  "settings.permissions.builtin.desc.permissive": "Auto-approve reads, writes, bash; still deny system-critical ops",
+  "settings.remotes.limits.title": "Known limitations",
+  "settings.remotes.limits.subtitle": "Remote execution has boundaries worth knowing before you rely on it.",
+  "settings.remotes.limits.pty": "Interactive PTY commands (full-screen REPLs, editors) are not supported on remote targets — commands run captured, without a TTY.",
+  "settings.remotes.limits.worktree": "Git worktrees are local-only: remote targets cannot host worktree-isolated runs yet."
 }

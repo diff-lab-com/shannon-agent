@@ -3860,5 +3860,16 @@
   "settings.theme.name.dracula": "Dracula",
   "settings.theme.name.gruvbox": "Gruvbox",
   "settings.theme.name.gruvboxLight": "Gruvbox Light",
-  "extensions.pending.errors.loadFailed": "Impossible de charger les erreurs MCP"
+  "extensions.pending.errors.loadFailed": "Impossible de charger les erreurs MCP",
+  "schedule.everySeconds": "Toutes les {count} secondes",
+  "schedule.everyDays": "Tous les {count} jours",
+  "routines.templates.trigger.anyRepo": "tout dépôt",
+  "routines.templates.trigger.onEvent": "sur événement",
+  "settings.permissions.builtin.desc.strict": "Sécurité maximale : approuve uniquement les lectures, refuse les outils destructeurs",
+  "settings.permissions.builtin.desc.balanced": "Approuve automatiquement les lectures ; écritures/commandes/suppressions demandent confirmation",
+  "settings.permissions.builtin.desc.permissive": "Approuve automatiquement lectures, écritures et commandes ; refuse toujours les opérations système critiques",
+  "settings.remotes.limits.title": "Limitations connues",
+  "settings.remotes.limits.subtitle": "Ces limites sont bonnes à connaître avant de compter sur l'exécution distante.",
+  "settings.remotes.limits.pty": "Les commandes PTY interactives (REPL plein écran, éditeurs) ne sont pas prises en charge sur les cibles distantes — les commandes s'exécutent en mode capturé, sans TTY.",
+  "settings.remotes.limits.worktree": "Les git worktrees sont locaux uniquement : les cibles distantes ne peuvent pas encore héberger d'exécutions isolées en worktree."
 }
