@@ -292,6 +292,27 @@ describe('ModelsSettings', () => {
     expect(screen.getByText(/6001 ms/)).toBeInTheDocument()
   })
 
+  it('renders a quota_exhausted (HTTP 402) row with the categorized copy (R2-P1-10)', async () => {
+    // 402 used to fall through to `Unknown` with the raw provider body —
+    // the Test-all pill must show the localized quota copy instead.
+    vi.mocked(api.listProviders).mockResolvedValueOnce({
+      active_provider_id: 'p-anthropic',
+      providers: [
+        { id: 'p-anthropic', label: 'Anthropic', provider_kind: 'anthropic', api_key: '***', model: 'claude-sonnet-4-6' },
+      ],
+    })
+    vi.mocked(api.testAllProviders).mockResolvedValueOnce([
+      { id: 'p-anthropic', label: 'Anthropic', provider_kind: 'anthropic', result: { kind: 'quota_exhausted' }, latency_ms: 88 },
+    ])
+
+    render(wrap(<ModelsSettings />))
+    await new Promise((r) => setTimeout(r, 0))
+    fireEvent.click(screen.getByRole('button', { name: /Test all/i }))
+
+    await screen.findByTestId('test-all-results')
+    expect(screen.getByTestId('test-all-result-p-anthropic').textContent).toContain('Quota exhausted')
+  })
+
   it('handles a testAllProviders error by surfacing a toast and not rendering the panel', async () => {
     vi.mocked(api.listProviders).mockResolvedValueOnce({
       active_provider_id: 'p-1',

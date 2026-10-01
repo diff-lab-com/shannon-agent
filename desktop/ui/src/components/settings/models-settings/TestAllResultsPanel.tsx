@@ -45,6 +45,9 @@ export function TestAllResultsPanel({
                 return t('settings.models.testResult.invalidKey')
               case 'rate_limited':
                 return t('settings.models.testResult.rateLimited')
+              // R2-P1-10: HTTP 402 — quota/billing exhausted, not a bad key.
+              case 'quota_exhausted':
+                return t('settings.models.testResult.quotaExhausted')
               case 'network_unreachable':
                 return intl.formatMessage({ id: 'settings.models.testResult.networkUnreachable' }, { provider: r.provider_kind })
               case 'provider_error':

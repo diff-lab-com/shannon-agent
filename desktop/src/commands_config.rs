@@ -1177,9 +1177,18 @@ pub enum TestConnectionResult {
     Success,
     InvalidKey,
     RateLimited,
-    ProviderError { status: u16 },
+    /// HTTP 402 from the provider: the account is out of credits / over its
+    /// plan quota (R2-P1-10). Kept distinct from [`TestConnectionResult::InvalidKey`]
+    /// (the key itself is fine — the billing isn't) and from
+    /// [`TestConnectionResult::RateLimited`] (no amount of waiting fixes it).
+    QuotaExhausted,
+    ProviderError {
+        status: u16,
+    },
     NetworkUnreachable,
-    Unknown { message: String },
+    Unknown {
+        message: String,
+    },
 }
 
 /// Validate + normalize a user-supplied provider base_url.
@@ -1248,6 +1257,11 @@ async fn probe_and_map(
         Ok(()) => TestConnectionResult::Success,
         Err(ApiError::AuthenticationFailed) => TestConnectionResult::InvalidKey,
         Err(ApiError::RateLimitExceeded { .. }) => TestConnectionResult::RateLimited,
+        // R2-P1-10: the engine probe surfaces every non-401/429/5xx status as
+        // `ApiError::ApiError { status }`, so 402 (Payment Required —
+        // out-of-credits / over-plan) lands here and used to fall through to
+        // `Unknown` with the raw English provider message.
+        Err(ApiError::ApiError { status: 402, .. }) => TestConnectionResult::QuotaExhausted,
         Err(ApiError::ApiError { status, .. }) if (500..=599).contains(&status) => {
             TestConnectionResult::ProviderError { status }
         }
@@ -1268,8 +1282,8 @@ async fn probe_and_map(
 /// adds desktop's stricter `validate_base_url` and the typed
 /// `TestConnectionResult` mapping so the frontend keeps its existing
 /// response shape). 200 → Success, 401/403 → InvalidKey, 429 → RateLimited,
-/// 5xx → ProviderError, network/timeout failure → NetworkUnreachable,
-/// anything else → Unknown.
+/// 402 → QuotaExhausted, 5xx → ProviderError, network/timeout failure →
+/// NetworkUnreachable, anything else → Unknown.
 #[tauri::command]
 pub async fn test_provider_connection(
     provider: String,
@@ -1707,6 +1721,11 @@ pub async fn test_all_providers(
                 }
                 Ok(Err(shannon_engine::api::ApiError::RateLimitExceeded { .. })) => {
                     TestConnectionResult::RateLimited
+                }
+                // R2-P1-10: keep the Test-all fan-out in lockstep with
+                // `probe_and_map` (402 → quota exhausted, not "Unknown").
+                Ok(Err(shannon_engine::api::ApiError::ApiError { status: 402, .. })) => {
+                    TestConnectionResult::QuotaExhausted
                 }
                 Ok(Err(shannon_engine::api::ApiError::ApiError { status, .. }))
                     if (500..=599).contains(&status) =>
@@ -3373,5 +3392,40 @@ mod tests {
             resolve_probe_key(&None, &Some("nonexistent-id".into())),
             None
         );
+    }
+
+    #[tokio::test]
+    async fn probe_and_map_classifies_402_as_quota_exhausted() {
+        use mockito::Server;
+
+        // R2-P1-10: a provider answering 402 (Payment Required — account out
+        // of credits / over plan) must surface as the typed
+        // `QuotaExhausted` verdict shared by the saved-connection test, the
+        // in-modal test, and the Test-all fan-out — not `Unknown` with the
+        // raw English provider body. The engine probe maps the status before
+        // any body parsing, so the 402 survives even with a JSON error body.
+        let mut server = Server::new_async().await;
+        let mock = server
+            .mock("GET", "/models")
+            .with_status(402)
+            .with_body(
+                r#"{"error":{"message":"You have exceeded your billing quota","type":"insufficient_quota"}}"#,
+            )
+            .create_async()
+            .await;
+
+        let result =
+            probe_and_map("openai-compatible", "sk-test", Some(server.url().as_str())).await;
+        assert_eq!(result, TestConnectionResult::QuotaExhausted, "{result:?}");
+        mock.assert();
+    }
+
+    #[test]
+    fn test_connection_result_serializes_quota_exhausted_tag() {
+        // Wire contract with the frontend's discriminated union
+        // (`api.TestConnectionResult`): the serde tag must stay
+        // `quota_exhausted` or every test surface falls back to "Unknown".
+        let json = serde_json::to_value(TestConnectionResult::QuotaExhausted).unwrap();
+        assert_eq!(json, serde_json::json!({ "kind": "quota_exhausted" }));
     }
 }
