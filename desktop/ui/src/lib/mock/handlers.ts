@@ -1280,6 +1280,28 @@ export const handlers: Record<string, MockHandler> = {
       by_day: byDay,
     }
   },
+  // --- Usage governance (P2-1 — sidebar % bar + budget card, demo at 62%) ---
+  async get_usage_governance() {
+    await delay()
+    const monthCostUsd = 6.2
+    const budgetUsd = 10.0
+    const percent = (monthCostUsd / budgetUsd) * 100
+    return {
+      month: new Date().toISOString().slice(0, 7),
+      monthCostUsd,
+      last7dCostUsd: 1.84,
+      budgetUsd,
+      percent,
+      warned80: percent >= 80,
+      hit100: percent >= 100,
+      thresholdReached: percent >= 100 ? '100' : percent >= 80 ? '80' : null,
+    }
+  },
+  // --- Pre-task cost estimate (P2-6 — creation-confirm hints) ---
+  async estimate_task_cost() {
+    await delay()
+    return { hasHistory: true, runsCounted: 6, minUsd: 0.08, maxUsd: 0.41, avgUsd: 0.19, lastUsd: 0.14 }
+  },
   // --- Goal runs (P0-2 desktop goal runner) ---
   async list_goal_runs() {
     await delay()

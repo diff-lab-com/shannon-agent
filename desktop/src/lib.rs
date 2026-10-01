@@ -274,6 +274,11 @@ pub mod companion_window_commands;
 #[cfg(feature = "tauri")]
 pub mod commands_usage;
 
+/// P2-1/P2-6 — usage governance (monthly budget + 80/100% threshold alerts)
+/// and pre-task cost estimation from routine-run history.
+#[cfg(feature = "tauri")]
+pub mod usage_governance;
+
 #[cfg(feature = "tauri")]
 pub mod commands_voice;
 
