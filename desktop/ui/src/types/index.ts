@@ -797,6 +797,13 @@ export interface McpServerInfo {
   last_connected: number | null
   /** W1-1: remote endpoint of url-only (OAuth/HTTP) entries — `null` on stdio rows. */
   url?: string | null
+  /**
+   * W2-A (R4/A1): the backend's single-source auth verdict — true on
+   * url-only rows carrying HTTP headers (OAuth products). Those stay on
+   * the honest "Remote" badge with restart disabled; header-less remote
+   * rows render like stdio.
+   */
+  has_auth_headers: boolean
   /** W1-7: pool-reported failure reason, so a dead server is diagnosable. */
   last_error?: string | null
 }

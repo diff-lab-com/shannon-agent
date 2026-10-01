@@ -3904,5 +3904,9 @@
   "settings.theme.name.dracula": "Dracula",
   "settings.theme.name.gruvbox": "Gruvbox",
   "settings.theme.name.gruvboxLight": "Gruvbox Light",
-  "extensions.pending.errors.loadFailed": "MCP エラーを読み込めませんでした"
+  "extensions.pending.errors.loadFailed": "MCP エラーを読み込めませんでした",
+  "extensions.mcp.statusOnline": "オンライン",
+  "extensions.mcp.statusDisabled": "無効",
+  "extensions.mcp.toggleAria": "{name} を有効/無効にする",
+  "extensions.mcp.toggleFailed": "{name} の更新に失敗しました: {error}"
 }

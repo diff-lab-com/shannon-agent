@@ -3904,5 +3904,9 @@
   "tasks.backgroundPanel.stopFailed": "Failed to stop task",
   "tasks.backgroundPanel.elapsedAria": "Elapsed time",
   "opc.kanban.boardSyncFailed": "Task started, but creating its board card failed",
-  "extensions.pending.errors.loadFailed": "Couldn't load MCP errors"
+  "extensions.pending.errors.loadFailed": "Couldn't load MCP errors",
+  "extensions.mcp.statusOnline": "Online",
+  "extensions.mcp.statusDisabled": "Disabled",
+  "extensions.mcp.toggleAria": "Enable or disable {name}",
+  "extensions.mcp.toggleFailed": "Failed to update {name}: {error}"
 }
