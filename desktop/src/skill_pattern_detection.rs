@@ -27,7 +27,7 @@
 use std::collections::HashMap;
 use std::path::PathBuf;
 
-use tauri::Emitter;
+use tauri::{Emitter, Manager as _};
 
 use shannon_core::session_log::{SessionQuery, SessionRef};
 
@@ -75,6 +75,7 @@ pub fn run_detection(
     days_back: u32,
     min_sessions: usize,
     min_occurrences: u32,
+    bypassed: &std::collections::HashSet<uuid::Uuid>,
 ) -> Result<Vec<SkillCandidate>, String> {
     let candidates_dir = crate::commands_skill_candidates::desktop_dir()?;
     run_detection_in(
@@ -83,6 +84,7 @@ pub fn run_detection(
         days_back,
         min_sessions,
         min_occurrences,
+        bypassed,
     )
 }
 
@@ -90,20 +92,30 @@ pub fn run_detection(
 /// (the `desktop` dir the candidates JSONL lives in). Production resolves it
 /// from `~/.shannon/desktop`; tests pass a tempdir. Returns the appended
 /// candidates (T5: the caller mirrors them into the unified inbox).
+///
+/// `bypassed` (P2-5 fix) — session ids carrying the "temporary chat" flag
+/// are dropped from the input window before any log is read: their tool-call
+/// bodies must not feed skill candidates, exactly as they must not feed the
+/// dream consult.
 fn run_detection_in(
     candidates_dir: &std::path::Path,
     sessions_dir: &std::path::Path,
     days_back: u32,
     min_sessions: usize,
     min_occurrences: u32,
+    bypassed: &std::collections::HashSet<uuid::Uuid>,
 ) -> Result<Vec<SkillCandidate>, String> {
     let query = SessionQuery::new(sessions_dir);
     // Archived sessions are excluded at the input layer (include_archived =
     // false): a pattern is only worth distilling while its source sessions
-    // are live inputs.
+    // are live inputs. Memory-bypassed sessions are filtered on top — the
+    // input layer never even opens their logs.
     let recent: Vec<SessionRef> = query
         .list_recent(days_back, false)
-        .map_err(|e| format!("session query: {e}"))?;
+        .map_err(|e| format!("session query: {e}"))?
+        .into_iter()
+        .filter(|s| !bypassed.contains(&s.session_id))
+        .collect();
     let mut aggregates: HashMap<String, SignatureAgg> = HashMap::new();
 
     for session in recent {
@@ -227,11 +239,19 @@ pub(crate) async fn detect_and_record<R: tauri::Runtime>(
     if !cfg.skill_detection_enabled {
         return Ok(Vec::new());
     }
+    // P2-5 fix: sessions carrying the "temporary chat" flag are excluded
+    // from the detection window — same promise as the dream consult (their
+    // tool-call shapes must not surface as candidates either).
+    let bypassed = app
+        .try_state::<crate::commands::AppState>()
+        .map(|state| state.registry.memory_disabled_ids())
+        .unwrap_or_default();
     let appended = run_detection(
         sessions_dir,
         days,
         DEFAULT_MIN_SESSIONS,
         DEFAULT_MIN_OCCURRENCES,
+        &bypassed,
     )?;
     // T5 unified needs-attention stream: each newly appended candidate gets
     // (or refreshes — dedup keys on the candidate id) a `skill_candidate`
@@ -261,6 +281,12 @@ mod tests {
     };
     use tempfile::tempdir;
     use uuid::Uuid;
+
+    /// P2-5 fix: empty exclusion set for tests that don't exercise the
+    /// bypass filter (the dedicated test below builds a real one).
+    fn no_bypass() -> std::collections::HashSet<Uuid> {
+        std::collections::HashSet::new()
+    }
 
     /// Seed one session through the real writer: a framed turn with one user
     /// prompt and the given tool calls (each argument value is a dummy —
@@ -322,7 +348,7 @@ mod tests {
         // form set HOME to a throwaway dir, which is process-global and raced
         // with unrelated tests reading dirs::home_dir() under parallel --lib.
         let candidates_dir = tempdir().unwrap();
-        let result = run_detection_in(candidates_dir.path(), dir.path(), 7, 2, 3);
+        let result = run_detection_in(candidates_dir.path(), dir.path(), 7, 2, 3, &no_bypass());
         let appended = result.expect("detection ran");
         assert_eq!(appended.len(), 1, "expected exactly one new candidate");
         // T5: the returned candidates carry the fields the inbox mirror uses.
@@ -346,7 +372,7 @@ mod tests {
         seed_session(dir.path(), &[("bash", &["cmd"])]);
 
         let candidates_dir = tempdir().unwrap();
-        let result = run_detection_in(candidates_dir.path(), dir.path(), 7, 2, 3);
+        let result = run_detection_in(candidates_dir.path(), dir.path(), 7, 2, 3, &no_bypass());
         let appended = result.expect("detection ran");
         assert_eq!(
             appended.len(),
@@ -370,8 +396,8 @@ mod tests {
             .unwrap();
 
         let candidates_dir = tempdir().unwrap();
-        let appended =
-            run_detection_in(candidates_dir.path(), dir.path(), 7, 3, 3).expect("detection ran");
+        let appended = run_detection_in(candidates_dir.path(), dir.path(), 7, 3, 3, &no_bypass())
+            .expect("detection ran");
         assert_eq!(
             appended.len(),
             0,
@@ -393,8 +419,8 @@ mod tests {
         let candidates_dir = tempdir().unwrap();
         // days_back = 0 puts the window cutoff at "now" — every session was
         // written strictly before the call, so the input set is empty.
-        let appended =
-            run_detection_in(candidates_dir.path(), dir.path(), 0, 2, 3).expect("detection ran");
+        let appended = run_detection_in(candidates_dir.path(), dir.path(), 0, 2, 3, &no_bypass())
+            .expect("detection ran");
         assert_eq!(appended.len(), 0, "a zero-day window sees no sessions");
     }
 
@@ -402,9 +428,41 @@ mod tests {
     fn run_detection_returns_zero_when_sessions_dir_missing() {
         let candidates_dir = tempdir().unwrap();
         let bogus = PathBuf::from("/tmp/shannon-nope-does-not-exist-12345");
-        let result = run_detection_in(candidates_dir.path(), &bogus, 7, 2, 3);
+        let result = run_detection_in(candidates_dir.path(), &bogus, 7, 2, 3, &no_bypass());
         assert!(result.is_ok());
         assert_eq!(result.unwrap().len(), 0);
+    }
+
+    #[test]
+    fn run_detection_skips_bypassed_sessions() {
+        // P2-5 fix: a "temporary chat" session's tool-call shapes must not
+        // feed skill candidates — with it excluded, the remaining two
+        // sessions fall below both thresholds and nothing is appended. The
+        // control pass (empty exclusion set) still detects, so the filter —
+        // not the fixture — is what changed the outcome.
+        let dir = tempdir().unwrap();
+        for _ in 0..2 {
+            seed_session(dir.path(), &[("bash", &["cmd"])]);
+        }
+        let bypassed_session = seed_session(dir.path(), &[("bash", &["cmd"])]);
+
+        let candidates_dir = tempdir().unwrap();
+        let mut bypassed = std::collections::HashSet::new();
+        bypassed.insert(bypassed_session);
+        let filtered = run_detection_in(candidates_dir.path(), dir.path(), 7, 2, 3, &bypassed)
+            .expect("detection ran");
+        assert_eq!(
+            filtered.len(),
+            0,
+            "the bypassed session must not count toward the thresholds"
+        );
+
+        // Control: the same three sessions without the exclusion set detect
+        // exactly as before the fix.
+        let appended = run_detection_in(candidates_dir.path(), dir.path(), 7, 2, 3, &no_bypass())
+            .expect("detection ran");
+        assert_eq!(appended.len(), 1);
+        assert_eq!(appended[0].example_session_ids.len(), 3);
     }
 
     #[test]
@@ -423,7 +481,7 @@ mod tests {
         std::fs::write(&log, raw).unwrap();
 
         let candidates_dir = tempdir().unwrap();
-        let appended = run_detection_in(candidates_dir.path(), dir.path(), 7, 2, 3)
+        let appended = run_detection_in(candidates_dir.path(), dir.path(), 7, 2, 3, &no_bypass())
             .expect("a corrupt log must not fail the run");
         assert_eq!(appended.len(), 1, "the three healthy sessions still detect");
     }

@@ -1037,6 +1037,26 @@ impl QueryEngine {
         shannon_engine::context_breakdown::compute_breakdown(&input)
     }
 
+    /// The memory entries the current session state would inject (P2-5).
+    ///
+    /// The introspection half of [`context_breakdown`](Self::context_breakdown)'s
+    /// `memory` category: same store, same project key, same
+    /// `format_for_injection` selection (shared pipeline, so the two can
+    /// never drift) — exposed as entries (id / content / provenance) so the
+    /// desktop can render "which memories this turn used" with source jumps.
+    /// Empty when no memory store is attached (including the session-level
+    /// "temporary chat" bypass) or nothing qualified.
+    pub fn injected_memories(&self, query: Option<&str>) -> Vec<crate::memory::InjectedMemory> {
+        let Some(mem) = self.memory.as_ref() else {
+            return Vec::new();
+        };
+        let Ok(store) = mem.read() else {
+            return Vec::new();
+        };
+        let project = self.memory_project_key();
+        store.injected_entries(&project, query)
+    }
+
     /// Get the current conversation messages (for session persistence).
     pub fn conversation_messages(&self) -> &[shannon_engine::api::Message] {
         &self.conversation.messages

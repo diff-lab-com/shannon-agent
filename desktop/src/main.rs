@@ -150,6 +150,9 @@ fn main() {
             commands_chat::set_session_model,
             commands_chat::clear_session_model,
             commands_chat::get_session_model,
+            // P2-5 — session-level "temporary chat" (no-memory bypass).
+            commands_chat::set_session_memory_bypass,
+            commands_chat::get_session_memory_bypass,
             commands_config::configure,
             commands_config::get_config,
             commands_config::detect_provider_from_env,
@@ -428,6 +431,8 @@ fn main() {
             shannon_desktop::scheduled_commands::archive_triage_item,
             shannon_desktop::scheduled_commands::get_triage_stats,
             shannon_desktop::scheduled_commands::list_task_executions,
+            // P2-8 — cross-agent run table (OPC "runs" view).
+            shannon_desktop::scheduled_commands::list_agent_runs,
             shannon_desktop::scheduled_commands::get_execution_detail,
             shannon_desktop::scheduled_commands::list_triggered_routines,
             shannon_desktop::scheduled_commands::toggle_triggered_routine,
@@ -514,6 +519,8 @@ fn main() {
             commands_memory::search_memories,
             commands_memory::get_memory_stats,
             commands_memory::get_memory_source,
+            // P2-5 — "which memories did this turn use" (ContextBreakdownCard).
+            commands_memory::get_session_injected_memories,
             commands_memory::get_memory_graph,
             commands_memory::promote_memory_to_instruction,
             // P1-5 C-1 — dev-server preview (frozen contract) + log ring.

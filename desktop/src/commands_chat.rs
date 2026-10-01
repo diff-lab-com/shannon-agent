@@ -594,6 +594,68 @@ pub async fn get_session_model(
     Ok(session.model_override_snapshot())
 }
 
+/// P2-5 — session-level "temporary chat" toggle: `disabled = true` builds
+/// this session's subsequent queries WITHOUT the memory layer (no injection
+/// of past memories into the prompt, no auto-extraction of new ones). Other
+/// sessions are untouched. Takes effect on the next send (the engine is
+/// rebuilt per turn).
+#[tauri::command]
+#[tracing::instrument(skip_all)]
+pub async fn set_session_memory_bypass(
+    state: tauri::State<'_, AppState>,
+    session_id: Option<String>,
+    disabled: bool,
+) -> Result<(), String> {
+    let (_, session) = state
+        .registry
+        .resolve_explicit_or_active(session_id.as_deref())?;
+    session.set_memory_disabled(disabled);
+    // Durable write-through (best-effort, same contract as the model
+    // override paths): a failed save must not flip the toggle back in the
+    // UI; the next write-through retries the disk.
+    if let Err(e) = persist_memory_bypass(&state, session.session_id, disabled) {
+        tracing::warn!(
+            session = %session.session_id,
+            error = %e,
+            "session memory bypass flag could not be persisted — in-memory only"
+        );
+    }
+    Ok(())
+}
+
+/// Read the session's "temporary chat" flag (`false` = memory in use). The
+/// composer toggle polls this on session switch so the control never shows a
+/// stale state after a focus change.
+#[tauri::command]
+#[tracing::instrument(skip_all)]
+pub async fn get_session_memory_bypass(
+    state: tauri::State<'_, AppState>,
+    session_id: Option<String>,
+) -> Result<bool, String> {
+    let (_, session) = state
+        .registry
+        .resolve_explicit_or_active(session_id.as_deref())?;
+    Ok(session.memory_disabled_snapshot())
+}
+
+/// P2-5 — durable write-through for the memory-bypass sidecar (re-prunes the
+/// whole map against the L0 session log before saving; the documented policy
+/// is identical to the model-override sidecar's).
+fn persist_memory_bypass(
+    state: &AppState,
+    session_id: uuid::Uuid,
+    disabled: bool,
+) -> Result<(), String> {
+    let sessions_dir = state.state_manager.sessions_dir().to_path_buf();
+    let mut store = state
+        .session_memory_bypass
+        .lock()
+        .map_err(|_| "session memory bypass sidecar lock poisoned".to_string())?;
+    store.record(session_id, disabled, |id| {
+        shannon_core::session_log::session_log_container_path(&sessions_dir, id).exists()
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

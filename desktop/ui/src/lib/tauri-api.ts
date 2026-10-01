@@ -74,6 +74,7 @@ import type {
   InboxStats,
   TaskExecution,
   TaskExecutionDetail,
+  AgentRunRow,
   TriggeredRoutineDto,
   TriggerResponse,
   TaskWorktreeDto,
@@ -621,6 +622,27 @@ export async function getSessionModel(
   sessionId: string | null | undefined,
 ): Promise<SessionModelOverride | null> {
   return invoke<SessionModelOverride | null>('get_session_model', { sessionId: sessionId ?? null })
+}
+
+// --- P2-5: session-level "temporary chat" (no-memory bypass) ---
+
+/** Pin the CURRENT session's memory bypass: `disabled = true` builds this
+ *  session's subsequent queries without the memory layer (no injection of
+ *  past memories, no auto-extraction of new ones). Other sessions are
+ *  untouched; takes effect on the next send. Persisted per session
+ *  (Rust-side sidecar) so it survives a restart. */
+export async function setSessionMemoryBypass(
+  sessionId: string | null | undefined,
+  disabled: boolean,
+): Promise<void> {
+  await invoke('set_session_memory_bypass', { sessionId: sessionId ?? null, disabled })
+}
+
+/** Read the session's memory bypass flag (`false` = memory in use). */
+export async function getSessionMemoryBypass(
+  sessionId: string | null | undefined,
+): Promise<boolean> {
+  return invoke<boolean>('get_session_memory_bypass', { sessionId: sessionId ?? null })
 }
 
 // --- R2-2: Settings "Refresh model catalog" ---
@@ -2044,6 +2066,14 @@ export async function listTaskExecutions(taskId?: string, limit?: number): Promi
   return invoke('list_task_executions', { taskId: taskId ?? null, limit: limit ?? null })
 }
 
+// P2-8 — cross-agent run table (OPC "runs" view)
+
+/** The newest `limit` runs across ALL routines/agents, each joined with its
+ *  back-linked session id and that session's latest usage-ledger model. */
+export async function listAgentRuns(limit?: number): Promise<AgentRunRow[]> {
+  return invoke('list_agent_runs', { limit: limit ?? null })
+}
+
 export async function getExecutionDetail(id: string): Promise<TaskExecutionDetail> {
   return invoke('get_execution_detail', { id })
 }
@@ -2469,6 +2499,30 @@ export type MemorySourceKind = 'manual' | 'import' | 'auto-extract'
 /** Frozen contract payload of `get_memory_source`. */
 export interface MemorySource {
   sessionId: string
+}
+
+// --- P2-5: injected-memory introspection ("which memories did this turn use") ---
+
+/** One memory entry injected into a session's current context (P2-5). */
+export interface InjectedMemory {
+  id: string
+  /** First line of the entry's content, char-capped for display. */
+  title: string
+  /** `preference | pattern | decision | error | context`. */
+  category: MemoryCategory
+  /** Session that produced the entry — the jump target; null = no jump. */
+  sourceSessionId?: string | null
+}
+
+/** The memories injected into THIS session's current context (same selection
+ *  the system prompt uses). Empty when the memory layer is off (including the
+ *  session-level "temporary chat" bypass) or nothing qualified. */
+export async function getSessionInjectedMemories(
+  sessionId: string | null | undefined,
+): Promise<InjectedMemory[]> {
+  return invoke<InjectedMemory[]>('get_session_injected_memories', {
+    sessionId: sessionId ?? '',
+  })
 }
 
 export interface MemoryGraphNode {

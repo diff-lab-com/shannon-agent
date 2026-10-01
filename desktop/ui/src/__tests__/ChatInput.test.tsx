@@ -64,9 +64,15 @@ vi.mock('@/context/CatalogContext', () => ({
 // `configure` is explicitly overridden as a vi.fn() so existing tests that
 // call `vi.mocked(api.configure).mockReset()` keep working (vitest's
 // auto-spy only kicks in when the module is NOT mocked).
-vi.mock('@/context/SessionContext', () => ({
-  useSessions: () => ({ currentSessionId: 'sess-1' }),
-}))
+// P2-5: the real `SessionContext` export stays (ContextBreakdownCard in the
+// RightDock consumes it via useContext) — only the hook is overridden.
+vi.mock('@/context/SessionContext', async (importOriginal) => {
+  const actual = await importOriginal<object>()
+  return {
+    ...actual,
+    useSessions: () => ({ currentSessionId: 'sess-1' }),
+  }
+})
 vi.mock('@/lib/tauri-api', async () => {
   const actual = await vi.importActual<object>('@/lib/tauri-api')
   return {

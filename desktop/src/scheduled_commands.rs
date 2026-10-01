@@ -1407,6 +1407,169 @@ pub async fn get_execution_detail(
     })
 }
 
+// ─── P2-8: cross-agent run table (the OPC "runs" view) ──────────────────────
+
+/// Default row cap for [`list_agent_runs`] — the runs view's initial window.
+const AGENT_RUNS_DEFAULT_LIMIT: usize = 100;
+
+/// One cross-agent run row for the OPC "runs" view (P2-8).
+///
+/// The [`TaskExecution`] projection plus the two joins the view needs:
+/// the run's back-linked session (jump target) and that session's latest
+/// model (the "model" column).
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AgentRunRow {
+    pub run_id: String,
+    pub task_id: String,
+    pub task_name: String,
+    pub started_at: i64,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub finished_at: Option<i64>,
+    pub status: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub error_message: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub cost_usd: Option<f64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub token_usage: Option<u64>,
+    /// Run → inbox item → session id. `None` when the run predates the
+    /// session back-link (or the item was created without one) — the row
+    /// renders without the "open session" affordance.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub session_id: Option<String>,
+    /// Latest model observed in the usage ledger for `session_id`. `None`
+    /// when the session is unknown or its ledger lines predate attribution.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub model: Option<String>,
+}
+
+/// Pure join behind [`list_agent_runs`] (unit-tested empty + multi-state):
+/// threads each run through `session_of_run` (run id → session id) and then
+/// `model_of_session` (session id → model). Input order is preserved —
+/// callers hand in newest-first runs.
+pub(crate) fn join_agent_runs(
+    runs: &[TaskExecution],
+    session_of_run: &HashMap<String, String>,
+    model_of_session: &HashMap<String, String>,
+) -> Vec<AgentRunRow> {
+    runs.iter()
+        .map(|r| {
+            let session_id = session_of_run.get(&r.run_id).cloned();
+            let model = session_id
+                .as_deref()
+                .and_then(|s| model_of_session.get(s).cloned());
+            AgentRunRow {
+                run_id: r.run_id.clone(),
+                task_id: r.task_id.clone(),
+                task_name: r.task_name.clone(),
+                started_at: r.started_at,
+                finished_at: r.finished_at,
+                status: r.status.clone(),
+                error_message: r.error_message.clone(),
+                cost_usd: r.cost_usd,
+                token_usage: r.token_usage,
+                session_id,
+                model,
+            }
+        })
+        .collect()
+}
+
+/// Latest model per session from usage-ledger records — the "model" column's
+/// data source. Ties (identical timestamps) resolve to the last record read;
+/// records without a session attribution are invisible here by design (the
+/// by-session budget aggregation has the same rule).
+pub(crate) fn latest_model_by_session(
+    records: &[crate::commands_usage::UsageRecord],
+) -> HashMap<String, String> {
+    let mut latest: HashMap<String, &crate::commands_usage::UsageRecord> = HashMap::new();
+    for r in records {
+        let Some(sid) = r
+            .session_id
+            .as_deref()
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+        else {
+            continue;
+        };
+        match latest.get(sid) {
+            Some(cur) if cur.timestamp_ms > r.timestamp_ms => {}
+            _ => {
+                latest.insert(sid.to_string(), r);
+            }
+        }
+    }
+    latest
+        .into_iter()
+        .map(|(k, v)| (k, v.model.clone()))
+        .collect()
+}
+
+/// Cross-agent run list for the OPC "runs" view (P2-8): the newest `limit`
+/// runs across ALL routines/agents, each joined with its session id (via the
+/// run's back-linked inbox item) and that session's latest model (from the
+/// usage ledger). Read source mirrors [`list_task_executions`]: the SQLite
+/// `routine_runs` table first, the legacy JSONL store as the fallback —
+/// JSONL rows carry no inbox back-link, so their session/model columns stay
+/// empty (documented degradation, never an error).
+#[tauri::command]
+pub async fn list_agent_runs(
+    state: tauri::State<'_, AppState>,
+    limit: Option<usize>,
+) -> Result<Vec<AgentRunRow>, String> {
+    let cap = limit.unwrap_or(AGENT_RUNS_DEFAULT_LIMIT);
+    let cap_u32 = u32::try_from(cap).unwrap_or(u32::MAX);
+    let inbox = state.inbox_store();
+
+    let (runs, session_of_run) = match inbox.list_runs(cap_u32) {
+        Ok(records) => {
+            let mut session_of_run: HashMap<String, String> = HashMap::new();
+            for record in &records {
+                let Some(item_id) = record.inbox_item_id else {
+                    continue;
+                };
+                let session = inbox
+                    .get_item(item_id)
+                    .ok()
+                    .flatten()
+                    .and_then(|item| item.session_id)
+                    .map(|s| s.trim().to_string())
+                    .filter(|s| !s.is_empty());
+                if let Some(session) = session {
+                    session_of_run.insert(record.id.clone(), session);
+                }
+            }
+            (
+                records
+                    .iter()
+                    .map(crate::inbox_commands::run_record_to_execution)
+                    .collect::<Vec<_>>(),
+                session_of_run,
+            )
+        }
+        Err(e) => {
+            tracing::warn!(
+                error = %e,
+                "agent runs: inbox store read failed — falling back to the legacy JSONL runs store (no session/model join)"
+            );
+            let rows = state
+                .scheduled_runs_store()
+                .list_recent(cap)
+                .map_err(|e| e.to_string())?;
+            (
+                rows.iter()
+                    .map(crate::scheduled_commands::run_to_execution)
+                    .collect::<Vec<_>>(),
+                HashMap::new(),
+            )
+        }
+    };
+
+    let model_of_session = latest_model_by_session(&state.usage_store.load());
+    Ok(join_agent_runs(&runs, &session_of_run, &model_of_session))
+}
+
 /// List triggered routines, applying local overrides for enabled/disabled.
 #[tauri::command]
 pub async fn list_triggered_routines(
@@ -1969,6 +2132,115 @@ pub async fn prune_task_worktrees(
 mod tests {
     use super::*;
     use tauri::Manager as _;
+
+    // ── P2-8: cross-agent run table joins ────────────────────────────────
+
+    fn execution(run_id: &str, task_id: &str, name: &str) -> TaskExecution {
+        TaskExecution {
+            run_id: run_id.into(),
+            task_id: task_id.into(),
+            task_name: name.into(),
+            started_at: 1_700_000_000,
+            finished_at: None,
+            status: "succeeded".into(),
+            error_message: None,
+            cost_usd: Some(0.25),
+            token_usage: Some(1_500),
+        }
+    }
+
+    #[test]
+    fn join_agent_runs_empty_state_yields_no_rows() {
+        let out = join_agent_runs(&[], &HashMap::new(), &HashMap::new());
+        assert!(out.is_empty());
+    }
+
+    #[test]
+    fn join_agent_runs_threads_session_and_model_and_preserves_order() {
+        let runs = vec![
+            execution("run-1", "task-a", "Scanner"),
+            execution("run-2", "task-b", "Digest"),
+            execution("run-3", "task-c", "Legacy"),
+        ];
+        let mut session_of_run = HashMap::new();
+        session_of_run.insert("run-1".to_string(), "sess-1".to_string());
+        session_of_run.insert("run-2".to_string(), "sess-2".to_string());
+        let mut model_of_session = HashMap::new();
+        model_of_session.insert("sess-1".to_string(), "claude-sonnet-4-6".to_string());
+        model_of_session.insert("sess-2".to_string(), "glm-4.7".to_string());
+
+        let rows = join_agent_runs(&runs, &session_of_run, &model_of_session);
+        assert_eq!(rows.len(), 3);
+        // Input order preserved (callers hand in newest-first).
+        assert_eq!(rows[0].run_id, "run-1");
+        assert_eq!(rows[1].run_id, "run-2");
+        assert_eq!(rows[2].run_id, "run-3");
+        // Joined rows carry session + model.
+        assert_eq!(rows[0].session_id.as_deref(), Some("sess-1"));
+        assert_eq!(rows[0].model.as_deref(), Some("claude-sonnet-4-6"));
+        assert_eq!(rows[1].session_id.as_deref(), Some("sess-2"));
+        assert_eq!(rows[1].model.as_deref(), Some("glm-4.7"));
+        // A run with no back-link (legacy JSONL) renders without either.
+        assert_eq!(rows[2].session_id, None);
+        assert_eq!(rows[2].model, None);
+        // Base fields pass through.
+        assert_eq!(rows[0].task_name, "Scanner");
+        assert_eq!(rows[0].cost_usd, Some(0.25));
+        assert_eq!(rows[0].token_usage, Some(1_500));
+    }
+
+    #[test]
+    fn join_agent_runs_session_without_ledger_rows_has_no_model() {
+        // A session id that the usage ledger never saw → model stays None.
+        let runs = vec![execution("run-1", "task-a", "Scanner")];
+        let mut session_of_run = HashMap::new();
+        session_of_run.insert("run-1".to_string(), "sess-unknown".to_string());
+        let rows = join_agent_runs(&runs, &session_of_run, &HashMap::new());
+        assert_eq!(rows[0].session_id.as_deref(), Some("sess-unknown"));
+        assert_eq!(rows[0].model, None);
+    }
+
+    fn record(ts: u64, model: &str, session: Option<&str>) -> crate::commands_usage::UsageRecord {
+        crate::commands_usage::UsageRecord {
+            timestamp_ms: ts,
+            model: model.into(),
+            provider: "anthropic".into(),
+            input_tokens: 10,
+            output_tokens: 5,
+            cache_creation_tokens: 0,
+            cache_read_tokens: 0,
+            cost_usd: 0.01,
+            session_id: session.map(str::to_string),
+        }
+    }
+
+    #[test]
+    fn latest_model_by_session_picks_newest_per_session() {
+        let records = vec![
+            record(1_000, "old-model", Some("s1")),
+            record(2_000, "new-model", Some("s1")),
+            record(1_500, "other-model", Some("s2")),
+            record(500, "unattributed", None),
+        ];
+        let models = latest_model_by_session(&records);
+        assert_eq!(models.get("s1").map(String::as_str), Some("new-model"));
+        assert_eq!(models.get("s2").map(String::as_str), Some("other-model"));
+        assert!(!models.contains_key("unattributed"));
+    }
+
+    #[test]
+    fn latest_model_by_session_tie_breaks_to_last_read_and_trims_ids() {
+        let records = vec![
+            record(1_000, "first", Some(" s1 ")),
+            record(1_000, "second", Some("s1")),
+        ];
+        let models = latest_model_by_session(&records);
+        assert_eq!(
+            models.get("s1").map(String::as_str),
+            Some("second"),
+            "identical timestamps resolve to the last record read"
+        );
+    }
 
     // ── DTO round-trips ──────────────────────────────────────────────────
 
