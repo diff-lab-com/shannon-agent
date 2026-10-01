@@ -3871,5 +3871,16 @@
   "settings.remotes.limits.title": "Bekannte Einschränkungen",
   "settings.remotes.limits.subtitle": "Diese Grenzen solltest du kennen, bevor du dich auf Remote-Ausführung verlässt.",
   "settings.remotes.limits.pty": "Interaktive PTY-Befehle (Vollbild-REPLs, Editoren) werden auf Remote-Zielen nicht unterstützt — Befehle laufen erfasst, ohne TTY.",
-  "settings.remotes.limits.worktree": "git worktrees funktionieren nur lokal: Remote-Ziele können worktree-isolierte Läufe noch nicht hosten."
+  "settings.remotes.limits.worktree": "git worktrees funktionieren nur lokal: Remote-Ziele können worktree-isolierte Läufe noch nicht hosten.",
+  "inbox.source.background_task": "Hintergrundaufgabe",
+  "tasks.backgroundPanel.recent": "Kürzlich beendet",
+  "tasks.backgroundPanel.statusCompleted": "Abgeschlossen",
+  "tasks.backgroundPanel.statusFailed": "Fehlgeschlagen",
+  "tasks.backgroundPanel.statusCancelled": "Abgebrochen",
+  "tasks.backgroundPanel.durationAria": "Dauer",
+  "tasks.backgroundPanel.errorSummaryAria": "Fehlerzusammenfassung",
+  "extensions.mcp.statusOnline": "Online",
+  "extensions.mcp.statusDisabled": "Deaktiviert",
+  "extensions.mcp.toggleAria": "{name} aktivieren oder deaktivieren",
+  "extensions.mcp.toggleFailed": "Aktualisierung von {name} fehlgeschlagen: {error}"
 }

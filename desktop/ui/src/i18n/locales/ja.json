@@ -3871,5 +3871,16 @@
   "settings.remotes.limits.title": "既知の制限",
   "settings.remotes.limits.subtitle": "リモート実行に頼る前に、次の境界を把握しておいてください。",
   "settings.remotes.limits.pty": "リモートターゲットでは対話型 PTY コマンド（フルスクリーン REPL、エディター）は利用できません。コマンドは TTY なしのキャプチャ実行になります。",
-  "settings.remotes.limits.worktree": "git worktree はローカル限定です。リモートターゲットでの worktree 分離実行は未対応です。"
+  "settings.remotes.limits.worktree": "git worktree はローカル限定です。リモートターゲットでの worktree 分離実行は未対応です。",
+  "inbox.source.background_task": "バックグラウンドタスク",
+  "tasks.backgroundPanel.recent": "最近の終了タスク",
+  "tasks.backgroundPanel.statusCompleted": "完了",
+  "tasks.backgroundPanel.statusFailed": "失敗",
+  "tasks.backgroundPanel.statusCancelled": "キャンセル済み",
+  "tasks.backgroundPanel.durationAria": "所要時間",
+  "tasks.backgroundPanel.errorSummaryAria": "エラー概要",
+  "extensions.mcp.statusOnline": "オンライン",
+  "extensions.mcp.statusDisabled": "無効",
+  "extensions.mcp.toggleAria": "{name} を有効/無効にする",
+  "extensions.mcp.toggleFailed": "{name} の設定を更新できませんでした: {error}"
 }
