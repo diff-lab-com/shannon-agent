@@ -103,6 +103,37 @@ const currentOptions = (): HTMLElement[] => {
   return last ? Array.from(last.querySelectorAll('[role="option"]')) : []
 }
 
+// Round-3 CI hardening: the popup portal normally mounts synchronously
+// under fireEvent's act (and the pick below deliberately stays synchronous —
+// that timing is what the suite has always exercised). But on a saturated
+// single-thread CI runner the mount can lag; when the sync read finds no
+// popup yet, these bounded retries poll instead of failing. Same
+// determinism, no skip.
+const POPUP_TIMEOUT = 15_000
+
+const sleep = (ms: number) => new Promise(r => setTimeout(r, ms))
+
+/**
+ * Sync-first options read: returns the options when the popup is already
+ * mounted (the proven timing), otherwise re-clicks the trigger and polls —
+ * re-clicks only ever happen while the portal is ABSENT, so a mounted
+ * popup is never toggled closed.
+ */
+async function openSelectOptions(trigger: HTMLElement, count: number): Promise<HTMLElement[]> {
+  let opts = currentOptions()
+  if (opts.length >= count) return opts
+  const deadline = Date.now() + POPUP_TIMEOUT
+  for (;;) {
+    if (!document.querySelector('[data-slot="select-content"]')) fireEvent.click(trigger)
+    opts = currentOptions()
+    if (opts.length >= count) return opts
+    if (Date.now() + 80 > deadline) {
+      throw new Error(`select popup: expected >=${count} options, saw ${opts.length}`)
+    }
+    await sleep(60)
+  }
+}
+
 describe('ChatInput approval-mode switcher (GB P2-4, round-1 R3)', () => {
   beforeEach(() => {
     vi.clearAllMocks()
@@ -139,22 +170,27 @@ describe('ChatInput approval-mode switcher (GB P2-4, round-1 R3)', () => {
 
   it('picking a tier commits configure(approval_mode) + refreshConfig — the General-page write', async () => {
     renderChatInput()
-    fireEvent.click(screen.getByLabelText('Permission mode'))
-    const opts = currentOptions()
-    expect(opts.length).toBe(4)
+    const trigger = screen.getByLabelText('Permission mode')
+    fireEvent.click(trigger)
+    const opts = await openSelectOptions(trigger, 4)
     const permissive = opts.find(o => /permissive/i.test(o.textContent ?? ''))
     expect(permissive).toBeTruthy()
     fireEvent.pointerDown(permissive!, { button: 0 })
     fireEvent.pointerUp(permissive!, { button: 0 })
     fireEvent.click(permissive!)
-    await waitFor(() => expect(api.configure).toHaveBeenCalledWith({ key: 'approval_mode', value: 'auto_edit' }))
-    await waitFor(() => expect(mockRefreshConfig).toHaveBeenCalled())
+    // The commit chain is async (Base UI commit → onValueChange → await
+    // configure → await refreshConfig) — generous explicit timeouts replace
+    // waitFor's 1s default that the round-3 CI runner outran. Order-specific:
+    // refreshConfig is only asserted after configure landed.
+    await waitFor(() => expect(api.configure).toHaveBeenCalledWith({ key: 'approval_mode', value: 'auto_edit' }), { timeout: POPUP_TIMEOUT })
+    await waitFor(() => expect(mockRefreshConfig).toHaveBeenCalled(), { timeout: POPUP_TIMEOUT })
   })
 
   it('the High-risk note travels with the switcher menu', async () => {
     renderChatInput()
-    fireEvent.click(screen.getByLabelText('Permission mode'))
-    await waitFor(() => expect(currentOptions().length).toBe(4))
+    const trigger = screen.getByLabelText('Permission mode')
+    fireEvent.click(trigger)
+    await openSelectOptions(trigger, 4)
     const popups = document.querySelectorAll('[data-slot="select-content"]')
     const last = popups[popups.length - 1]
     expect(last?.textContent).toMatch(/high-risk actions/i)
