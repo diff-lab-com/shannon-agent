@@ -65,3 +65,38 @@ jobs:
           name: coverage-report
           path: lcov.info
           retention-days: 30
+
+  desktop-coverage:
+    name: Desktop UI coverage
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@f548e57e544e1ff5a4c46bf1e1b8685f8e4a348a
+      - uses: actions/setup-node@e51e5fe84fc33b4c73ebe40526b2694712b5b858
+        with:
+          node-version: "24"
+      # pnpm/action-setup v6.0.10, pinned by commit SHA (see ci.yml header).
+      - uses: pnpm/action-setup@ff378ebe6b225b0680b81c1ad4498ae0d1d3a5e3
+        with:
+          version: 10
+      - name: Install UI deps
+        working-directory: desktop/ui
+        run: pnpm install --frozen-lockfile
+      - name: Unit tests with coverage
+        # The vitest.config.ts threshold gate (80/75/60/80) is enforced
+        # HERE since 2026-10-01 — moved off the PR gate's Desktop Unit job,
+        # which paid ~13.5 min/run for V8 instrumentation (P3 of the CI
+        # speed plan). Tradeoff, accepted by review: a coverage regression
+        # surfaces on this nightly (or any manual dispatch) at most a day
+        # late instead of blocking the desktop PR that caused it.
+        working-directory: desktop/ui
+        env:
+          CI: "1"
+        run: pnpm exec vitest run --coverage
+      - name: Upload coverage report
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: desktop-ui-coverage
+          path: desktop/ui/coverage/
+          retention-days: 30
